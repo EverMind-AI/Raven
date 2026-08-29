@@ -1,17 +1,18 @@
-"""Cross-entrypoint parity for the ``AgentLoop(...)`` keyword arguments.
+"""Cross-entrypoint parity for the assembly-door call.
 
-Three entrypoints each hand-write their own ``AgentLoop(...)`` call: ``raven
-agent`` (REPL), ``raven gateway`` (long-running service behind the web UI), and
-``raven tui``. Nothing makes them agree, and a kwarg added to one and forgotten
-in the others fails *silently* -- the omitted feature simply does not exist in
-that surface. Two real instances of exactly that:
+Three entrypoints used to hand-write their own ``AgentLoop(...)`` call, and a
+kwarg added to one and forgotten in the others failed *silently* -- the omitted
+feature simply did not exist in that surface (``third_party_subagents`` missing
+from two surfaces and ``plugin_tools`` missing from the gateway both shipped
+that way). ``build_runtime`` dissolved the three copies: the cargo mapping now
+exists once, in ``raven/core/runtime.py``, and parity of everything derived
+from config holds by construction.
 
-* ``third_party_subagents`` was passed only by the gateway, so ``run_subagent_dag``
-  was never registered in the TUI or the REPL and the model had no way to call it.
-* ``plugin_tools`` was passed by ``agent`` and ``tui`` but not the gateway, so
-  plugin-contributed tools were absent from the web UI.
-
-Both are fixed; this file is what keeps them fixed.
+What can still drift is what the entrances still own -- the transport-side
+``TurnPolicy`` / ``HostWiring`` fields and the identity handles they pass to
+the door. This file keeps that remainder honest, and keeps the door singular:
+an ``AgentLoop(...)`` call reappearing in an entrance is the regression this
+guard exists to catch now.
 
 So every difference has to be *declared* here, with the reason. An undeclared
 one turns this red. Shrinking :data:`LEDGER` (i.e. fixing a gap) is also a
@@ -80,24 +81,34 @@ LEDGER: dict[str, Difference] = {
             "expose; the TUI has no such flag, so there is nothing to pass."
         ),
     ),
+    "deliverables": Difference(
+        absent_from=frozenset({"agent", "tui"}),
+        reason=(
+            "The gateway builds the store itself because the web surface needs "
+            "the same handle; agent and tui take the door's default, which is "
+            "the identical expression."
+        ),
+    ),
 }
 
 
-def _agent_loop_kwargs(relative_path: str) -> set[str]:
-    """Keyword names passed to the ``AgentLoop(...)`` call in one entrypoint."""
+def _call_kwargs(relative_path: str, callee: str) -> set[str]:
+    """Flattened keyword names passed to the ``callee(...)`` call in one file.
+
+    The wiring bundles are transparent: what a site really passes is the
+    flattened field set, so descend into each bundle constructor and collect
+    its keyword names.
+    """
     source = (_REPO_ROOT / relative_path).read_text(encoding="utf-8")
     for node in ast.walk(ast.parse(source)):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
         name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
-        if name == "AgentLoop":
+        if name == callee:
             # ``**kwargs`` forwarding would make the set unreadable statically;
-            # no entrypoint does that today, and this asserts it stays that way.
-            assert all(kw.arg for kw in node.keywords), f"{relative_path}: AgentLoop called with **kwargs"
-            # The wiring bundles are transparent to parity: what an entrance
-            # really passes is the flattened field set, so descend into each
-            # bundle constructor and collect its keyword names.
+            # no site does that today, and this asserts it stays that way.
+            assert all(kw.arg for kw in node.keywords), f"{relative_path}: {callee} called with **kwargs"
             flat: set[str] = set()
             for kw in node.keywords:
                 inner = kw.value
@@ -107,7 +118,20 @@ def _agent_loop_kwargs(relative_path: str) -> set[str]:
                 else:
                     flat.add(kw.arg)
             return flat
-    raise AssertionError(f"no AgentLoop(...) call found in {relative_path}")
+    raise AssertionError(f"no {callee}(...) call found in {relative_path}")
+
+
+def _agent_loop_kwargs(relative_path: str) -> set[str]:
+    """What one entrance passes through the assembly door."""
+    source = (_REPO_ROOT / relative_path).read_text(encoding="utf-8")
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Call):
+            name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", None)
+            assert name != "AgentLoop", (
+                f"{relative_path} constructs AgentLoop directly again; entrances "
+                "must assemble through raven.core.runtime.build_runtime."
+            )
+    return _call_kwargs(relative_path, "build_runtime")
 
 
 @pytest.fixture(scope="module")
@@ -122,7 +146,13 @@ def _all_kwargs(kwargs_by_entrypoint: dict[str, set[str]]) -> set[str]:
 @pytest.mark.parametrize("entrypoint", sorted(ENTRYPOINTS))
 def test_every_entrypoint_has_a_readable_call_site(entrypoint: str) -> None:
     """The parity check is only as good as its ability to find the call."""
-    assert len(_agent_loop_kwargs(ENTRYPOINTS[entrypoint])) > 10
+    assert len(_agent_loop_kwargs(ENTRYPOINTS[entrypoint])) >= 10
+
+
+def test_the_door_itself_stays_rich() -> None:
+    """The single ``AgentLoop(...)`` site in the door still wires the full
+    cargo surface; the old per-entrance floor moves here."""
+    assert len(_call_kwargs("raven/core/runtime.py", "AgentLoop")) >= 25
 
 
 def test_no_undeclared_asymmetry(kwargs_by_entrypoint: dict[str, set[str]]) -> None:
@@ -180,7 +210,7 @@ def test_the_shared_core_is_not_eroding(kwargs_by_entrypoint: dict[str, set[str]
     """
     shared = set.intersection(*kwargs_by_entrypoint.values())
 
-    assert len(shared) >= 25, f"only {len(shared)} kwargs are passed by all three entrypoints: {sorted(shared)}"
+    assert len(shared) >= 10, f"only {len(shared)} kwargs are passed by all three entrypoints: {sorted(shared)}"
 
 
 class _StubProvider:

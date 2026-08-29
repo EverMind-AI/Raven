@@ -61,7 +61,11 @@ def _sites() -> list[tuple[str, ast.Call]]:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "AgentLoop":
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
+            if name == "AgentLoop":
                 found.append((path.relative_to(RAVEN).as_posix(), node))
     return found
 
@@ -69,11 +73,9 @@ def _sites() -> list[tuple[str, ast.Call]]:
 def test_the_enumeration_still_finds_the_construction_sites():
     """The negative assertions below all pass over an empty list."""
     names = {rel for rel, _ in _sites()}
-    assert {
-        "cli/agent_commands.py",
-        "cli/gateway_commands.py",
-        "cli/tui_commands.py",
-    } <= names, f"a production surface stopped building an AgentLoop by name: {sorted(names)}"
+    assert "core/runtime.py" in names, (
+        f"the assembly door stopped building an AgentLoop by name: {sorted(names)}"
+    )
 
 
 @pytest.mark.parametrize("capability", _REQUIRED)

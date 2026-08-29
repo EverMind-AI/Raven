@@ -167,11 +167,11 @@ def _invoke_agent_capturing_session(
     # (bundled) everos backend / plugin tools inside the CliRunner (the
     # embedded everos runtime is heavy and not under test here).
     monkeypatch.setattr(
-        "raven.cli.agent_commands.maybe_build_memory_backend",
+        "raven.core.plugin_stack.maybe_build_memory_backend",
         lambda *a, **k: None,
     )
     monkeypatch.setattr(
-        "raven.cli.agent_commands.build_plugin_tools",
+        "raven.core.plugin_stack.build_plugin_tools",
         lambda *a, **k: [],
     )
     r = runner.invoke(app, ["agent", "-m", "hi", "--home", str(home), *extra_args])
@@ -464,8 +464,8 @@ def test_agent_auth_error_exit_nonzero_with_guidance(
     monkeypatch.setattr(_os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
     monkeypatch.setattr("raven.cli.agent_commands.make_provider", lambda _: object())
     monkeypatch.setattr("raven.agent.loop.AgentLoop", _AuthFailAgentLoop)
-    monkeypatch.setattr("raven.cli.agent_commands.maybe_build_memory_backend", lambda *a, **k: None)
-    monkeypatch.setattr("raven.cli.agent_commands.build_plugin_tools", lambda *a, **k: [])
+    monkeypatch.setattr("raven.core.plugin_stack.maybe_build_memory_backend", lambda *a, **k: None)
+    monkeypatch.setattr("raven.core.plugin_stack.build_plugin_tools", lambda *a, **k: [])
 
     ws = tmp_path / "ws"
     ws.mkdir()
@@ -679,8 +679,8 @@ def _invoke_agent_with_usage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *,
     monkeypatch.setattr(_os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
     monkeypatch.setattr("raven.cli.agent_commands.make_provider", lambda _: object())
     monkeypatch.setattr("raven.agent.loop.AgentLoop", _StubAgentLoop)
-    monkeypatch.setattr("raven.cli.agent_commands.maybe_build_memory_backend", lambda *a, **k: None)
-    monkeypatch.setattr("raven.cli.agent_commands.build_plugin_tools", lambda *a, **k: [])
+    monkeypatch.setattr("raven.core.plugin_stack.maybe_build_memory_backend", lambda *a, **k: None)
+    monkeypatch.setattr("raven.core.plugin_stack.build_plugin_tools", lambda *a, **k: [])
     return runner.invoke(app, ["agent", "-m", "hi", "-w", str(tmp_path / "ws")])
 
 

@@ -29,7 +29,6 @@ from raven.core.helpers import (
     print_config_migration_notices,
     print_deprecated_memory_window_notice,
 )
-from raven.core.plugin_stack import build_plugin_registry, build_plugin_tools, maybe_build_memory_backend
 from raven.utils import asyncio_runner as bounded_asyncio
 from raven.utils.helpers import sync_workspace_templates
 
@@ -238,8 +237,7 @@ def register(app: typer.Typer) -> None:
         ),
     ):
         """Start the Raven gateway."""
-        from raven.agent.loop import AgentLoop
-        from raven.agent.loop.bundles import EngineWiring, HostWiring, SubagentWiring, ToolWiring, TurnPolicy
+        from raven.agent.loop.bundles import HostWiring, TurnPolicy
         from raven.agent.loop.recovery import limits_from_defaults
         from raven.agent.workdir import WorkdirPolicy, WorkdirResolver, validate_override
         from raven.config.paths import get_cron_dir
@@ -282,7 +280,6 @@ def register(app: typer.Typer) -> None:
 
         ec_config = load_raven_config()
         sentinel_cfg = ec_config.sentinel
-        skill_forge_cfg = ec_config.skill_forge
         print_deprecated_memory_window_notice(config)
         print_config_migration_notices()
         port = port if port is not None else config.gateway.port
@@ -360,83 +357,34 @@ def register(app: typer.Typer) -> None:
         # stop) lands inside the run-loop coroutine below.
         # One registry shared by both contribution points, so plugins are
         # discovered and activated once rather than per consumer.
-        plugin_registry = build_plugin_registry(ec_config)
-        backend = maybe_build_memory_backend(config.workspace_path, ec_config, registry=plugin_registry)
-        # The ``tools`` contribution point, at parity with agent / tui. Without
-        # it a plugin-contributed tool (everos's understand_media, which reads
-        # the attachments only the web UI can upload) is missing from the web UI
-        # while present in both terminal surfaces.
-        plugin_tools = build_plugin_tools(config.workspace_path, ec_config, registry=plugin_registry)
-
-        # Built before AgentLoop (registration happens in its constructor) so
-        # the same instance can also be handed to the web JSON-RPC server
-        # further down, once it is built inside run().
-        deliverables = _build_deliverable_store(config)
-
-        # Create agent with cron service
-        from raven.core.token_wise_stack import caching_probe, install_from_config
+        from raven.core.runtime import build_runtime
         from raven.providers.pool import ProviderPool
 
-        strategies = install_from_config(
-            ec_config.token_wise,
-            supports_caching=caching_probe(provider),
+        deliverables = _build_deliverable_store(config)
+        runtime = build_runtime(
+            config,
+            ec_config,
+            provider=provider,
+            session_manager=session_manager,
+            provider_pool=ProviderPool(lambda: load_runtime_config(None, None)),
+            router=router,
+            workdir_resolver=workdir_resolver,
+            deliverables=deliverables,
+            policy=TurnPolicy(
+                max_iterations=config.agents.defaults.max_tool_iterations,
+                empty_recovery=limits_from_defaults(config.agents.defaults),
+                interactive=False,
+                now_fn=parse_fake_now(fake_now),
+                response_modifier=sentinel_response_modifier,
+            ),
+            host=HostWiring(
+                cron_service=cron,
+                channels_config=config.channels,
+                on_user_inbound=on_user_inbound,
+            ),
         )
-
-        agent = AgentLoop(
-                    provider_pool=ProviderPool(lambda: load_runtime_config(None, None)),
-                    provider=provider,
-                    workspace=config.workspace_path,
-                    model=config.agents.defaults.model,
-                    session_manager=session_manager,
-                    mcp_servers=config.tools.mcp_servers,
-                    sandbox_config=config.tools.sandbox,
-                    router=router,
-                    tools=ToolWiring(
-                        brave_api_key=config.tools.web.search.api_key or None,
-                        jina_api_key=config.tools.web.jina_api_key or None,
-                        web_proxy=config.tools.web.proxy or None,
-                        media_config=config.effective_media_config(),
-                        deep_research_config=config.tools.deep_research,
-                        exec_config=config.tools.exec,
-                        ask_user_config=config.tools.ask_user,
-                        restrict_to_workspace=config.tools.restrict_to_workspace,
-                        tool_search_config=config.tools.tool_search,
-                        deliverables=deliverables,
-                        plugin_tools=plugin_tools,
-                    ),
-                    subagents=SubagentWiring(
-                        max_concurrent_subagents=config.agents.defaults.max_concurrent_subagents,
-                        max_subagent_spawns_per_hour=config.agents.defaults.max_subagent_spawns_per_hour,
-                        workdir_resolver=workdir_resolver,
-                        subagent_dag_config=ec_config.subagent_dag,
-                        subagent_questions_config=ec_config.subagent_questions,
-                        agents=config.subagents.agents,
-                    ),
-                    engine=EngineWiring(
-                        strategies=strategies,
-                        context_window_tokens=config.agents.defaults.context_window_tokens,
-                        skill_forge_config=skill_forge_cfg,
-                        context_config=ec_config.context,
-                        runtime_config=ec_config.runtime,
-                        backend=backend,
-                        memory_config=ec_config.memory,
-                        skill_forge_router_config=ec_config.skill_forge.router,
-                        playbook_config=config.playbooks,
-                    ),
-                    policy=TurnPolicy(
-                        now_fn=parse_fake_now(fake_now),
-                        max_iterations=config.agents.defaults.max_tool_iterations,
-                        empty_recovery=limits_from_defaults(config.agents.defaults),
-                        interactive=True,
-                        response_modifier=sentinel_response_modifier,
-                    ),
-                    host=HostWiring(
-                        cron_service=cron,
-                        channels_config=config.channels,
-                        on_user_inbound=on_user_inbound,
-                    ),
-                )
-        agent.configure_personalization(config.agents.defaults.enable_personalization)
+        agent = runtime.loop
+        backend = runtime.backend
 
         # Sentinel's ProactiveSpawn wraps the AgentLoop's SubagentManager; wire it
         # now that agent is constructed.

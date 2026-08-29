@@ -885,9 +885,11 @@ different artifacts.
 
 **Assembly Root** (`core/`):
 The package that composes a running agent out of parts: one `*_stack` builder per assembly
-concern, shared by every entrance. Entrances own transport only; the stacks own discovery,
-admission and wiring order. Distinct from the retired transitional `raven.core` context
-home (`tests/test_package_skeleton.py` keeps the old meaning dead).
+concern, and `runtime.build_runtime` as the one door every entrance assembles through --
+an entrance brings its transport-side wiring (`TurnPolicy`, `HostWiring`) and takes back a
+`RavenRuntime`; deriving a cargo bundle by hand in an entrance is the regression
+`test_cli_agent_loop_parity.py` exists to catch. Distinct from the retired transitional
+`raven.core` context home (`tests/test_package_skeleton.py` keeps the old meaning dead).
 
 **Paper** (`contracts/`):
 A declared shape the layers hold each other to; papers export declared members only and

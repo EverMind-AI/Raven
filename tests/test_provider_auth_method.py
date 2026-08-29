@@ -445,10 +445,11 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         "raven/agent/tools/deep_research.py",
         "raven/agent/tools/media_gen.py",
         "raven/agent/tools/web.py",
-        "raven/cli/agent_commands.py",
         "raven/cli/deep_research_commands.py",
-        "raven/cli/gateway_commands.py",
-        "raven/cli/tui_commands.py",
+        # The assembly door carries the tool-key reads the three entrances used
+        # to make (web search, jina): still a tool's own key, no provider
+        # verdict -- the entrances themselves no longer read any key.
+        "raven/core/runtime.py",
         "raven/config/update_everos.py",
         # The RPC surface that renders that EverOS section: the same key,
         # reduced to a set/unset flag for the settings page. No verdict about
