@@ -22,6 +22,8 @@ from typing import Any
 
 from loguru import logger
 
+from raven.i18n import zh_lexicon
+
 TITLE_BUDGET = 24
 """Codepoints a generated title is asked (and clamped) to fit."""
 
@@ -40,7 +42,10 @@ _TOOL_NAME = "emit_session_title"
 # A model told to answer with a title still sometimes answers with a labelled,
 # quoted title. Both are recoverable formatting noise, so they are stripped
 # rather than counted as a failure to follow the instruction.
-_LABEL = re.compile(r"^\s*(?:title|session title|标题|会话标题)\s*[:：]\s*", re.IGNORECASE)
+_LABEL = re.compile(
+    r"^\s*(?:title|session title|" + "|".join(zh_lexicon.TITLE_LABELS) + r")\s*" + zh_lexicon.COLON_CLASS + r"\s*",
+    re.IGNORECASE,
+)
 _WRAPPING_PAIRS = (
     ('"', '"'),
     ("'", "'"),

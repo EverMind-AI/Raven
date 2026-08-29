@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from raven.memory_engine.consolidate.attention import (
+        DAILY_FIRE_PLAN_HEADER,
         parse_attention,
         upsert_section,
     )
@@ -68,6 +69,7 @@ if TYPE_CHECKING:
     from raven.memory_engine.store_pipeline import StorePipeline
 
 __all__ = [
+    "DAILY_FIRE_PLAN_HEADER",
     "BehaviorsExtractor",
     "BehaviorsOffsets",
     "EverosSkillSource",
@@ -113,6 +115,7 @@ _FACE: dict[str, str] = {
     "SkillRegistry": "raven.memory_engine.skill_local.registry",
     "StorePipeline": "raven.memory_engine.store_pipeline",
     "filter_by_required_tools": "raven.memory_engine.skill_local.registry",
+    "DAILY_FIRE_PLAN_HEADER": "raven.memory_engine.consolidate.attention",
     "parse_attention": "raven.memory_engine.consolidate.attention",
     "parse_behaviors": "raven.memory_engine.consolidate.behaviors",
     "parse_episode_line": "raven.memory_engine.consolidate.consolidator",

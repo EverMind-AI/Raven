@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from raven.i18n import zh_lexicon
 from raven.proactive_engine.sentinel.trigger_policy.prompts import (
     PLANNER_TOOL,
     SYSTEM_PROMPT,
@@ -20,41 +21,7 @@ from raven.proactive_engine.sentinel.types import PlannerContext, PlannerDecisio
 # topic signal.
 _AUTO_TAG_STOPWORDS = frozenset(
     {
-        "你",
-        "我",
-        "的",
-        "了",
-        "是",
-        "和",
-        "或",
-        "在",
-        "有",
-        "要",
-        "对",
-        "也",
-        "都",
-        "就",
-        "但",
-        "可以",
-        "可能",
-        "应该",
-        "需要",
-        "还是",
-        "如果",
-        "因为",
-        "所以",
-        "提醒",
-        "记得",
-        "建议",
-        "注意",
-        "另外",
-        "顺便",
-        "另",
-        "今天",
-        "明天",
-        "昨天",
-        "最近",
-        "马上",
+        *zh_lexicon.AUTO_TAG_STOPWORDS,
         "the",
         "a",
         "an",
@@ -104,7 +71,7 @@ def _derive_auto_tag(message: str | None, action: str) -> str:
     # vs "clawtrack v1.0 release due in 2 days") to collapse to the same auto-tag
     # so the per-topic dedup engages. The downside is unrelated content
     # sharing first-3-words collides, which is rare and harmless.
-    words = re.findall(r"[a-z0-9]+|[一-鿿]+", base)
+    words = re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", base)
     keep = [w for w in words if w not in _AUTO_TAG_STOPWORDS][:3]
     stem = "_".join(keep) if keep else f"hash_{hashlib.md5(base.encode()).hexdigest()[:6]}"
     return f"auto_{stem}"[:64]

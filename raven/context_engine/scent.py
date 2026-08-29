@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from raven.i18n import zh_lexicon
 from raven.security.trust import wrap_untrusted
 from raven.skill_hub.policy import SkillPolicy, is_blocked, refuses_low_safety
 
@@ -50,24 +51,7 @@ _BUILD_TIMEOUT_S = 2.0
 # nouns do not belong here — this list only strips what makes a turn *lean*,
 # the novelty test does the topic work.
 _FUNCTION_WORDS = (
-    "帮我",
-    "给我",
-    "请你",
-    "麻烦",
-    "一下",
-    "一个",
-    "这个",
-    "那个",
-    "可以",
-    "继续",
-    "接着",
-    "好的",
-    "好了",
-    "谢谢",
-    "不对",
-    "重新",
-    "再来",
-    "然后",
+    *zh_lexicon.FUNCTION_WORDS,
     "the",
     "please",
     "just",
@@ -80,20 +64,7 @@ _FUNCTION_WORDS = (
 # Openers that refer back to something already in the conversation; combined
 # with low novelty they mark a follow-up turn.
 _ANAPHORA_PREFIXES = (
-    "这",
-    "那",
-    "它",
-    "他",
-    "她",
-    "再",
-    "还",
-    "也",
-    "又",
-    "不对",
-    "换",
-    "改",
-    "继续",
-    "接着",
+    *zh_lexicon.ANAPHORA_PREFIXES,
     "and ",
     "also ",
     "then ",
@@ -102,21 +73,7 @@ _ANAPHORA_PREFIXES = (
 )
 
 _TASK_VERBS = (
-    "帮我",
-    "写",
-    "查",
-    "找",
-    "分析",
-    "生成",
-    "对比",
-    "整理",
-    "做",
-    "搭",
-    "修",
-    "调研",
-    "统计",
-    "翻译",
-    "总结",
+    *zh_lexicon.TASK_VERBS,
     "review",
     "write",
     "build",
@@ -139,7 +96,7 @@ def _strip_function_words(text: str) -> str:
     for w in _FUNCTION_WORDS:
         if not w.isascii():
             out = out.replace(w, "")
-    return re.sub(r"[\s,。，!！?？.]+", "", out)
+    return re.sub(r"[\s,!?." + zh_lexicon.PUNCTUATION_MARKS + r"]+", "", out)
 
 
 def _bigrams(text: str) -> set[str]:

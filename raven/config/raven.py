@@ -33,6 +33,7 @@ from raven.config.loader import (
 )
 from raven.config.loader import load_config as load_base_config
 from raven.config.schema import Config as BaseConfig
+from raven.i18n import zh_lexicon
 
 
 class _Base(BaseModel):
@@ -280,7 +281,7 @@ DEFAULT_PLANNER_ATTENTION_SECTIONS: tuple[str, ...] = (
     "## Predicted next 3 days",
     "## Currently focused on",
     "## Recent proactive decisions (14d)",
-    "## 今日 fire 计划",
+    "## Today's fire plan",
 )
 
 
@@ -629,12 +630,7 @@ class DailyAnalysisConfig(_Base):
             "i want ",
             "from now on",
             "going forward",
-            "请",
-            "别",
-            "不要",
-            "应该",
-            "总是",
-            "永远",
+            *zh_lexicon.DIRECTIVE_MARKERS,
         ]
     )
     """Prefix list scanned against the inbound window when the LLM call
