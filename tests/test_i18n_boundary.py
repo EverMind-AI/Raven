@@ -4,6 +4,14 @@
 Chinese literals is bypassing the catalog. The list below is the debt: files that
 still carry CJK text today. A file that loses its last CJK character has to leave
 the list, a file not on it may not gain any, and the list only shrinks.
+
+Two kinds are on the list by design rather than as debt. The onboarding language
+picker shows both languages before one is chosen. Model-facing tool descriptions
+(the cron tool, the decision router's classifiers, the title and task prompts)
+quote a user's request in Chinese next to its English form so the model
+recognises either phrasing; those quotes are recognition data, and moving them
+into the catalog would show an English user's model only one of the two forms
+it has to recognise.
 """
 
 from __future__ import annotations
