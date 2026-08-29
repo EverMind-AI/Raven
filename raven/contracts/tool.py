@@ -3,9 +3,36 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal, TypedDict
 
-from raven.utils.helpers import ContentPart
+
+class ImageURL(TypedDict):
+    url: str
+
+
+class ImagePart(TypedDict):
+    """An OpenAI-shaped image content part."""
+
+    type: Literal["image_url"]
+    image_url: ImageURL
+
+
+class TextPart(TypedDict):
+    """A text content part."""
+
+    type: Literal["text"]
+    text: str
+
+
+# What Raven *produces*. Deliberately not used to type what Raven *reads*:
+# inbound content legitimately contains parts this union does not model (an
+# Anthropic part carrying cache_control, an MCP audio block, a provider-specific
+# extension), and the pass-through code that forwards them unchanged would
+# otherwise become a type error for doing the right thing. So read-side helpers
+# keep taking ``Any`` and check shape at runtime.
+ContentPart = TextPart | ImagePart
+
+
 
 
 @dataclass(frozen=True)
