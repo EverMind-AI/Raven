@@ -42,8 +42,7 @@ def check_provider_credentials(config: Config, model: str | None = None) -> None
     if not provider_name:
         raise MissingCredentialsError(
             "no provider configured",
-            # A command, not a config path: the old text pointed at
-            # ~/.raven/config.json, the layout the CLI exists to hide.
+            # A command, not a config path: the CLI exists to hide the layout.
             remedy=(
                 "Run: raven provider set <name> --api-key <key>, then raven provider use <name>/<model>\n"
                 "Or run `raven onboard` for guided setup."

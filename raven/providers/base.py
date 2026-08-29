@@ -151,8 +151,7 @@ def send_max_tokens(generation: Any, model: str | None, *, pinned: int | None = 
 
     One function for both the request body and the agent loop's ceiling check.
     Computed separately the two would drift the moment either side grew a
-    bound, and the check would stop firing without ever failing -- which is
-    the exact shape of the defect this branch exists to remove.
+    bound, and the check would stop firing without ever failing.
 
     A pin is a call site asking for a deliberately short answer, so it wins --
     but never above what the model accepts. Every pin in the tree today is far
@@ -621,12 +620,11 @@ class LLMProvider(_LLMProviderPaper):
         retry ladder. When a model is exhausted with a fallback-worthy error
         (``error_classification.should_fallback``) and another model remains,
         the next model is tried; otherwise the error surfaces to the caller.
-        With ``fallback_models`` empty this is exactly the old single-model
-        retry behavior.
+        With ``fallback_models`` empty a single model runs the ladder.
 
-        Parameters default to ``self.generation`` when not explicitly passed,
-        so callers no longer need to thread temperature / max_tokens /
-        reasoning_effort through every layer.
+        Parameters default to ``self.generation`` when not explicitly passed, so
+        callers need not thread temperature / max_tokens / reasoning_effort
+        through every layer.
         """
         if max_tokens is self._SENTINEL:
             max_tokens = self.generation.max_tokens

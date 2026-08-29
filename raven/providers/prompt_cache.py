@@ -1,11 +1,8 @@
 """Whether a request may carry Anthropic-shaped ``cache_control`` breakpoints.
 
 One question, asked from three places -- the provider that builds the request,
-and the two token strategies that place breakpoints before it. It used to be
-answered by a copy of the same function in each, which is how the copies came to
-disagree: the provider's only ever marked the system message and the tool list,
-so fixing it there could not have changed what the strategies stamp onto the last
-conversation message, and that is where the doubling came from.
+and the two token strategies that place breakpoints before it -- and answered
+here once, so the three cannot disagree about where a breakpoint may go.
 
 The answer is **(wire x model family)**, not the wire alone:
 
@@ -72,15 +69,12 @@ def set_ttl(ttl: str | None) -> None:
 
 #: Key a request carries to say its breakpoints are already placed.
 #:
-#: Ownership is a fact about one request, not about the process. The first
-#: version of this was a process-wide switch, set once when the token strategies
-#: were installed, and it was wrong in the direction that costs money quietly:
-#: it turned the provider's own placement off for *every* caller in the process,
-#: while the strategy meant to place the marks instead runs at exactly one of
-#: them -- ``AgentLoop``'s own call. The Curator, subagents, Sentinel, the
-#: session titler and the memory consolidator all reach a provider directly, so
-#: they lost every breakpoint they used to have and went back to paying full
-#: price for prefixes that had been cached before.
+#: Ownership is a fact about one request, not about the process: a process-wide
+#: switch would turn the provider's own placement off for every caller, while
+#: the strategy that places the marks instead runs at exactly one of them
+#: (``AgentLoop``'s call). The Curator, subagents, Sentinel, the session titler
+#: and the memory consolidator all reach a provider directly, and each keeps the
+#: breakpoints the provider places for it.
 #:
 #: Asked of the request instead, the question answers itself: one that went
 #: through a strategy says so, and one that did not says nothing -- which is
@@ -141,8 +135,8 @@ def cache_control() -> dict[str, str]:
 #: are stable: identity and the bootstrap files are the same every turn, while
 #: the memory recall, the skill router's hits and the Curator's working state are
 #: all derived from what the user just said. A breakpoint keys its cache on
-#: everything up to itself, so one placed at the end of that message -- the only
-#: one there used to be -- carries the volatile tail into the key and misses on
+#: everything up to itself, so one placed at the end of that message carries
+#: the volatile tail into the key and misses on
 #: every new turn, re-billing the stable head along with it.
 #:
 #: Carried beside the content rather than expressed as a split content list,

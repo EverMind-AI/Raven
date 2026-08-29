@@ -577,10 +577,8 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
 # Name and model-id primitives
 #
 # Every comparison of a provider name or a model-id prefix in this codebase goes
-# through these. They exist because the same rule used to be spelled out at each
-# call site, and the spellings drifted -- one site lowercased, another did not;
-# one counted LiteLLM's name for a vendor as that vendor's prefix, another did
-# not. A fix then landed at one site and missed the rest.
+# through these, so the rule is spelled once: a rule spelled at each call site
+# drifts, and a fix then lands at one site and misses the rest.
 # ---------------------------------------------------------------------------
 
 
@@ -611,10 +609,8 @@ def credential_kind(provider: str | None) -> str:
 
     Every decision about how a provider is set up follows from this: whether to
     ask for a key, an address, both, or neither. It lives here because it is a
-    fact about the provider, and because the two places that need it -- the
-    wizard and the model picker -- had answered it separately, with the picker
-    knowing only two shapes: it offered a local deployment a key prompt it cannot
-    use and no address field, which is the one thing it needs.
+    fact about the provider, and because the wizard and the model picker both
+    need it and must not answer it separately.
 
     Derived rather than stored: a spec is optional metadata, and a vendor Raven
     holds no spec for is reached with a key like most others.
@@ -800,8 +796,9 @@ def find_gateway(
       2. api_key prefix — e.g. "sk-or-" → OpenRouter.
       3. api_base keyword — e.g. "aihubmix" in URL → AiHubMix.
 
-    A standard provider with a custom api_base (e.g. DeepSeek behind a proxy)
-    will NOT be mistaken for vLLM — the old fallback is gone.
+    A standard provider with a custom api_base (e.g. DeepSeek behind a proxy) is
+    not mistaken for vLLM: detection is by provider_name, key prefix or base
+    keyword only.
     """
     # 1. Direct match by config key
     if provider_name:

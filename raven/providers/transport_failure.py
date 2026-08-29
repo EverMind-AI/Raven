@@ -145,11 +145,9 @@ def _stripped(text: str | None) -> str:
 def _said_nothing(content: str | None, tool_calls: list["ToolCallRequest"]) -> bool:
     """Whether this response carries no reply for anyone.
 
-    Deliberately does not consult ``reasoning_content``. It used to, on the
-    grounds that a model which emitted only thought had done work an identical
-    retry would repeat -- but that premise is the one the accounting denies. A
-    prompt billed at a fraction of what was sent was never read, and nothing
-    that comes back from an unread prompt is thought about it.
+    Deliberately does not consult ``reasoning_content``: a prompt billed at a
+    fraction of what was sent was never read, and nothing that comes back from an
+    unread prompt is thought about it.
 
     The incident is that case: twelve recorded responses carrying
     ``reasoning_content`` of a single ``"#"`` and one completion token, beside
@@ -273,10 +271,9 @@ def flag_transport_failure(
 def transport_failure_message(evidence: str) -> str:
     """What the caller is told, worded so the blame lands where the fault is.
 
-    The caller used to receive a well-formed response holding nothing, and
-    could only read it as the model having chosen to stay silent -- so the
-    agent went off repairing its own prompt, a dimension unrelated to the
-    actual fault. Naming the upstream, and the evidence, is what stops that.
+    An empty well-formed response reads as the model choosing silence, which
+    sends the agent off repairing its own prompt -- a dimension unrelated to the
+    fault. Naming the upstream, and the evidence, is what stops that.
     """
     return (
         f"The upstream reported a failed call rather than an answer: {evidence}. "
