@@ -23,7 +23,7 @@ group. The actual implementations live in per-feature modules:
     - ``trajectory`` → ``raven/cli/trajectory_commands.py``
 
 Shared helpers used across multiple command modules live in
-``raven/cli/_helpers.py``.
+``raven/core/helpers.py``.
 """
 
 import os

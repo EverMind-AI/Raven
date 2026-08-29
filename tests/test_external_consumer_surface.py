@@ -5,7 +5,7 @@ INSTALLED raven package and import exactly these four functions to register
 themselves as third-party subagents. Those installers are not in this repo's
 CI, so this tripwire stands in for them: renaming or moving any of the four
 breaks four downstream products at their next install. Frozen for v0.2.0
-(see brief-fix-list: subagents freeze discipline, 2026-08-27); changes must
+(the subagents/ tree is frozen for v0.2.0; external consumers pin this surface); changes must
 be coordinated with the product teams first.
 """
 

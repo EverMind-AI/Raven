@@ -22,7 +22,7 @@ finishes and returning the summary as the tool result.
 Live progress (``dag_run_started`` / ``dag_node_updated`` / ``dag_run_completed``)
 rides a late-bound sink — NOT the spine. The turn's conversation is delivered
 per-turn via ``set_context`` (the loop calls it, like spawn/message); the sink
-(wired by the gateway to the web channel's emitter) fans the event to that
+(wired by the host to the page's emitter) fans the event to that
 conversation's subscribers, where the service translates it to an AgentScope
 CustomEvent the web UI's DAG graph already renders.
 """
@@ -67,7 +67,7 @@ if TYPE_CHECKING:
     from raven.agent.subagent.registry import AgentRegistry
 
 # Sink: (conversation_id, event_name, payload) -> awaitable. Late-bound by the
-# host (gateway wires it to the web channel's emitter).
+# host (the page mount wires it to the page's emitter).
 ProgressSink = Callable[[str, str, dict], Awaitable[None]]
 
 # (run_id, summary_text, origin) -> awaitable. How a backgrounded run's result

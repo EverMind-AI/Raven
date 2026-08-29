@@ -6,7 +6,7 @@ later will break a test and force this file to be revisited:
   (a) the import-time log filter drops only the two known LiteLLM
       botocore-preload warnings and nothing else;
   (b) there is no Bedrock code path — no `bedrock` provider spec, and the sole
-      bedrock touchpoint in cli/_helpers.py is the ``model.startswith("bedrock/")``
+      bedrock touchpoint in core/helpers.py is the ``model.startswith("bedrock/")``
       key-gate bypass that falls through to LiteLLM (no `converse` call).
 """
 

@@ -36,10 +36,13 @@ class LockInfo:
     pid: int
     started_at: float
     config_path: str
-    # Where this gateway answers RPC, published after the server binds. Carried
-    # here rather than in config because it is a runtime fact, not a setting:
-    # the port may be ephemeral and the token is minted per boot, so writing
-    # either into config.json would leave a stale secret behind on every exit.
+    # Where this gateway's control plane answers, published after the server
+    # binds. Carried here rather than in config because it is a runtime fact,
+    # not a setting: the port may be ephemeral and the token is minted per boot,
+    # so writing either into config.json would leave a stale secret behind on
+    # every exit. The keys keep their web_* spelling on purpose: older lock
+    # readers (a lingering raven serve, doctor) still parse them, and the
+    # payload is the one file two raven versions may read at once.
     web_host: str = ""
     web_port: int = 0
     web_token: str = ""

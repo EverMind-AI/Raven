@@ -206,7 +206,7 @@ class Tool(ABC):
     blocking_interaction: bool = False
 
     # Channels this tool works on; None means every channel. One gateway process
-    # serves the web channel and every enabled IM channel from a single registry,
+    # serves the page and every enabled IM channel from a single registry,
     # so a tool whose effect exists on only one of them (deliver_files needs the
     # web UI's download box) would otherwise be advertised everywhere and refuse
     # only once called. Declaring the set withholds it from the schema instead,

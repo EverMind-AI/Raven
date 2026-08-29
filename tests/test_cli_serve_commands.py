@@ -653,7 +653,7 @@ class TestTheSupervisor:
         exits on the lock -- and a supervisor would spend its whole crash budget
         finding that out, leaving no page at all. Standalone serve is the only
         child that CAN run, and it is not a downgrade: the page reaches the
-        incumbent's adapters over `channels.live_probe`, which finds it through
+        incumbent's adapters over `gateway.live_probe`, which finds it through
         that same lock.
         """
         argv = self.argv_with_lock(object(), 18999)

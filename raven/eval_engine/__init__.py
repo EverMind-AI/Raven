@@ -14,7 +14,7 @@ on AgentLoop's lifecycle phases to answer three orthogonal questions:
 
 All three are **off by default** (``EvalEngineConfig.enabled = False``).
 Mounting them onto AgentLoop happens via the CLI stack — see
-``cli/_eval_stack.py`` for the wire-up.
+``raven/core/eval_stack.py`` for the builder (unwired today; see CONTEXT.md).
 
 Layout:
     eval_engine/

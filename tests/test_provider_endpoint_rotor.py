@@ -344,7 +344,7 @@ async def test_all_endpoints_exhausted_logs_a_warning_naming_each_attempt(clock,
 
 async def test_generation_assigned_after_construction_propagates_to_every_inner(clock):
     """``make_provider`` builds the rotor, then assigns ``provider.generation =
-    GenerationSettings(...)`` from config -- see ``raven/cli/_helpers.py``.
+    GenerationSettings(...)`` from config -- see ``raven/core/helpers.py``.
     Without push-down each inner keeps the base class's untouched default
     (600s timeout, temperature 0.7, ...), so a configured timeout is silently
     ignored on every actual request."""

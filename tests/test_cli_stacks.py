@@ -1,16 +1,16 @@
-"""Tests for the CLI assembly helpers.
+"""Tests for the assembly root's optional stack builders.
 
-The three new stacks (``build_memory_stack`` / ``build_eval_stack`` /
-``build_hooks_stack``) are optional composition helpers — AgentLoop's
-own constructor still handles its assembly. These tests pin the
+``build_eval_stack`` / ``build_hooks_stack`` (raven/core) are composition
+helpers that no production path wires yet (see CONTEXT.md, EvalEngine);
+AgentLoop's own constructor handles its assembly. These tests pin the
 contract that:
 
 1. The helpers return correctly-typed objects ready to plug into
    AgentLoop.
 2. Default configs produce no-op outputs (mounting them into a hook
    chain does NOT change AgentLoop behavior).
-3. The legacy token_wise ``install_from_config`` helper relocated to
-   the CLI tier still constructs a valid registry.
+3. The token_wise ``install_from_config`` builder (raven/core) still
+   constructs a valid registry.
 """
 
 from __future__ import annotations

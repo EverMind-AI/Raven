@@ -404,9 +404,9 @@ source_modules = [
     # L3 shelf members that had no recorded layer. raven.core stays unlisted
     # only because its 18 imports of proactive_engine's sentinel machinery are
     # one knot with that package's surface seat -- ruled together (see the
-    # partition card), not half-cut here.
+    # Layer Seats entry in CONTEXT.md), not half-cut here.
     "raven.config", "raven.utils", "raven.mcp", "raven.playbook",
-    "raven.knowledge", "raven.skill_hub", "raven.trajectory",
+    "raven.knowledge", "raven.skill_hub", "raven.trajectory", "raven.eval_engine",
 ]
 forbidden_modules = ["raven.cli", "raven.rpc", "raven.proactive_engine", "raven.acp"]
 # Debt allowlist: may only SHRINK. Lazy machinery-at-surface-address edges,

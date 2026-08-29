@@ -401,7 +401,7 @@ history. Never carries file bytes.
 ### Token Efficiency
 
 **TokenWise**:
-The token-efficiency shelf (L3; "cross-cutting" here predates the partition cards'
+The token-efficiency shelf (L3; "cross-cutting" here predates the Layer Seats rulings'
 reserved use of that word for security/auth-style leaves): a set of independently toggled
 TokenStrategies, not a single module.
 
@@ -941,7 +941,7 @@ the set and the lazy debt edges; the raven-core wheel is this set as a build art
 Where every package sits, as the machine enforces it. Inner (may not import a surface):
 the seventeen w18 packages plus, seated by the 2026-08-29 structural audit, `config` and
 `utils` (cross-cutting leaves) and `mcp`, `playbook`, `knowledge`, `skill_hub`,
-`trajectory` (L3 shelf members). Surfaces: `cli`, `rpc`, `proactive_engine`,
+`trajectory`, `eval_engine` (L3 shelf members); `templates` is packaged data and takes no seat. Surfaces: `cli`, `rpc`, `proactive_engine`,
 and `acp` (an entrance: Raven serving as an agent for another host). Deliberately
 unseated, each awaiting its own ruling: `core` (its sentinel-machinery imports are one
 knot with proactive_engine's surface seat), `evolver` (zero inbound imports; product or
@@ -953,7 +953,9 @@ The package that composes a running agent out of parts: one `*_stack` builder pe
 concern, and `runtime.build_runtime` as the one door every entrance assembles through --
 an entrance brings its transport-side wiring (`TurnPolicy`, `HostWiring`) and takes back a
 `RavenRuntime`; deriving a cargo bundle by hand in an entrance is the regression
-`test_cli_agent_loop_parity.py` exists to catch. Distinct from the retired transitional
+`test_cli_agent_loop_parity.py` exists to catch. One deliberate bypass: `trajectory/replay.py`
+builds a loop by hand against a recorded run (fake provider, replaced registry) and drives it
+directly; it is a replay harness, not an entrance, and `test_cli_agent_loop_wiring.py` lists it. Distinct from the retired transitional
 `raven.core` context home (`tests/test_package_skeleton.py` keeps the old meaning dead).
 
 **Paper** (`contracts/`):

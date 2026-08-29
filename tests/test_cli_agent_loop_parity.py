@@ -69,8 +69,8 @@ LEDGER: dict[str, Difference] = {
         reason=(
             "Upstream removed the REPL from `agent`, so that process is never a "
             "cron runner and wiring a CronService would create jobs nothing "
-            "fires (see the comment at the AgentLoop call in "
-            "raven/cli/agent_commands.py). Scripted reminder creation is "
+            "fires (the agent entrance passes no cron_service to "
+            "build_runtime). Scripted reminder creation is "
             "`raven cron add` with an explicit --channel."
         ),
     ),
