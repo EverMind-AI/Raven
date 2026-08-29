@@ -3,7 +3,7 @@
 Why this exists
 ---------------
 
-hermes's fork-imported ``useSessionLifecycle.ts:127,206`` + ``setupHandoff.ts:43``
+hermes's fork-imported ``useSessionLifecycle.ts,206`` + ``setupHandoff.ts``
 hard-call ``setup.status`` on app boot. If the response is
 ``{provider_configured: false}`` the UI parks the user on a *Setup required*
 panel and refuses to start a new session. The contract therefore has to be

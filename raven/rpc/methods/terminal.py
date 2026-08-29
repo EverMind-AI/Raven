@@ -1,6 +1,6 @@
 """``terminal.resize`` RPC handler — record cols, return ok.
 
-ui-tui's ``useMainApp.ts:426`` calls ``terminal.resize`` with the new
+ui-tui's ``useMainApp.ts`` calls ``terminal.resize`` with the new
 ``{cols, rows}`` payload whenever Ink observes a SIGWINCH; the call is
 fire-and-forget. We need a handler that:
 

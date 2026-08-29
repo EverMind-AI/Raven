@@ -4,7 +4,7 @@ Goal: get a new user from ``pip install`` to a working agent in a few
 minutes, without ever opening ``~/.raven/config.json`` or
 ``~/.everos/raven/everos.toml``.
 
-Steps (mirrors ``my_docs/temp/onboard-flow.mermaid``):
+Steps:
   0. Welcome
   1. LLM provider (required; multi-provider, in-step connectivity + test probe)
   2. Sandbox / run location (optional, single-select)

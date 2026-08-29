@@ -158,7 +158,7 @@ class InternalError(RpcError):
     MESSAGE = "internal_error"
 
 
-# JSON-RPC pre-defined error codes (specs §2.3 / RFC).
+# JSON-RPC 2.0 pre-defined error codes.
 PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
 METHOD_NOT_FOUND = -32601

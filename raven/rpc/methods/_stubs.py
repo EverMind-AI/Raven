@@ -1,7 +1,7 @@
 """Hermes-only stub RPC handlers.
 
 These method names exist in the fork-imported hermes UI but Raven does not
-back them with real functionality in v0.1. Rather than physically remove the
+back with real functionality. Rather than physically remove the
 slash commands (which would inflate the fork-import diff and worsen future
 upstream merges), we wire each name to a stub that raises
 :class:`NotSupportedInV01Error` (JSON-RPC -32012). The hermes UI already has
@@ -10,7 +10,7 @@ the slash command and sees a transient "Not supported" toast.
 
 The stub group covers the original 6 logical hermes-only groups (10 names)
 plus the additional unaligned method names that ui-tui actually invokes but
-Raven v0.1 does not back with real functionality:
+Raven does not back with real functionality:
 
 * ``voice.toggle`` / ``voice.record`` — voice features (original)
 * ``browser.manage`` — browser automation (original)
@@ -33,11 +33,8 @@ Raven v0.1 does not back with real functionality:
 * ``sudo.respond`` / ``secret.respond`` — hermes interactive credential flows
 * ``image.attach`` — hermes image-paste attachment
 * ``prompt.submit`` / ``prompt.background`` — hermes "stash this prompt for
-  later" flow; Raven v0.1 only supports inline submit via the chat turn
+  later" flow; Raven only supports inline submit via the chat turn
   pipeline
-
-Dead-code cleanup (physical removal of the hermes slash commands) is a
-follow-up.
 """
 
 from __future__ import annotations

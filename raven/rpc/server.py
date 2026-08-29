@@ -13,7 +13,7 @@ dispatches concurrently via `asyncio.create_task` so a long-running streaming
 subscription doesn't block other RPC calls, and serializes writes with an
 `asyncio.Lock` so concurrent dispatch tasks can't interleave bytes on the wire.
 
-Frame size limit: 1 MiB (specs §2.5). Larger frames trigger immediate
+Frame size limit: 1 MiB. Larger frames trigger immediate
 shutdown of the connection.
 """
 

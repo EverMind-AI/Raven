@@ -557,6 +557,10 @@ this selects the *vendor* for an already-chosen model.
 The single transport between Runtime and any interactive client (stdio pipe / Unix socket
 for the TUI, a WebSocket for `raven serve`), carrying two message kinds: Request/Response
 (client → Runtime method calls) and Notification (Runtime → client one-way events).
+The rpc surface also hosts the CLI in-process: `cli.dispatch` runs Typer commands,
+`commands.catalog` reflects them into the slash catalog, and the console injection
+redirects their output — a surface-to-surface dependency the layer rule permits, recorded
+here so it is a seat and not a surprise.
 _Avoid_: calling it TUI-RPC — the terminal is one of its clients, not its owner; and calling
 a Notification "the bus" or "broadcast" — Spine events never cross into a client directly
 

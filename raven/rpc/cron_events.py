@@ -17,8 +17,8 @@ async def fanout_cron_delivered(emitter, *, job_id, name, text, fired_at) -> Non
 
     Fan-out (rather than a session-keyed emit) is required because a cron turn
     runs in the ``cron:<job_id>`` conversation, which matches no user
-    subscription key. TUI v0.1 is single-session per ``hermes-tui-rpc-architecture``
-    5-domain fallback.
+    subscription key, and the TUI is single-session, so fan-out is how the event
+    reaches it.
     """
     payload = {"job_id": job_id, "name": name, "text": text, "fired_at": fired_at}
     for session_key in list(emitter._by_session.keys()):
