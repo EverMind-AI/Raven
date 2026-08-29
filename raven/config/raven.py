@@ -1378,9 +1378,9 @@ class SessionTitleConfig(_Base):
 
     Columns rather than code points, because one threshold has to be fair to
     both scripts: at 6 code points "nihao" is skipped but the far more nameable
-    "你能做什么" would be too, while at 6 columns the greetings fall below and the
+    the five-character Chinese "what can you do" would be too, while at 6 columns the greetings fall below and the
     questions do not. Measured against 246 real openings, 6 columns separates
-    "?", "rpc", "hi", "nihao" and "你好" from "你是谁" and everything longer.
+    "?", "rpc", "hi", "nihao" and the two-character Chinese hello from the three-character "who are you" and everything longer.
 
     A message under the gate is not left waiting: `turn.send` reports that it
     did not start a namer, and the front end fills the mechanical title in at

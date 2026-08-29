@@ -15,7 +15,7 @@ import re
 
 # Match length-≥2 alphanumeric runs OR a single CJK ideograph.
 # ``re`` precompile is module-level to dodge per-call regex setup.
-_TOKEN_RE = re.compile(r"[a-z0-9]{2,}|[一-鿿]")
+_TOKEN_RE = re.compile(r"[a-z0-9]{2,}|[\u4e00-\u9fff]")
 
 
 def tokenize(text: str) -> list[str]:

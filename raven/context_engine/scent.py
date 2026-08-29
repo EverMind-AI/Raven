@@ -202,7 +202,7 @@ def build_scent_query(message: str, window: str) -> str:
     """The retrieval query for a fat turn.
 
     A fresh topic stands on its own; a task phrased against the conversation
-    ("再查下它的定价") needs the window so its referents resolve into
+    (a Chinese "look up its pricing again") needs the window so its referents resolve into
     retrievable words.
     """
     t = _normalize(message)
