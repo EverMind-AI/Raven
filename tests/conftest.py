@@ -320,8 +320,8 @@ def make_channel_config(channel: str, **overrides):
     ``overrides`` split between socket fields and cargo (cargo overrides run
     through the admission door, so an invalid test value bites here too)."""
     from raven.channels.registry import discover_specs
+    from raven.config.admission import DispensedSlice, admit_slice
     from raven.config.schema import ChannelSocket
-    from raven.core.admission import DispensedSlice, admit_slice
 
     schema = discover_specs()[channel].config_schema or {}
     socket_keys = {"enabled", "allow_from", "workspace"}
@@ -340,7 +340,7 @@ def make_channel_config(channel: str, **overrides):
 def with_channel_fields(view, **overrides):
     """A copy of a dispensed channel config with fields overridden -- the
     test-side mutation path now that the production view is frozen."""
-    from raven.core.admission import DispensedSlice
+    from raven.config.admission import DispensedSlice
 
     cargo = dict(object.__getattribute__(view, "_cargo"))
     section = object.__getattribute__(view, "_section")

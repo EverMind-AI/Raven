@@ -884,7 +884,7 @@ contributions into per-kind tables — deduping plugins by `id` and contribution
 (`PluginConflictError` on collision). `build_memory_backend()` / `build_tool()` construct a
 contribution with a fresh `PluginContext`.
 
-**Admission** (`core/admission.py`, `plugins/registry.py:_admit`, `agent/tools/registry.py:admit_tool`):
+**Admission** (`config/admission.py`, `plugins/registry.py:_admit`, `agent/tools/registry.py:admit_tool`):
 The declare-check-dispense pattern at a boundary: the owner declares its authored members
 (a manifest's `config_schema`, a tool's four authored members), the door checks the
 declaration once at entry, and dispenses a frozen result (an admitted config slice, a
@@ -963,7 +963,7 @@ and takes no seat. Surfaces: `cli`, `rpc`, and `acp` (an entrance: Raven serving
 agent for another host). Deliberately unseated, each awaiting its own ruling: `evolver`
 (zero inbound imports; product or engine is an open call), `browser` and `importer`
 (surface-side feature libraries). One ruled edge: `trajectory` (L3)
-reaches `core.admission` for the door vocabulary and builds a loop by hand for replay --
+reaches `config.admission` for the door vocabulary and builds a loop by hand for replay --
 legal, because it is a harness over recorded runs, not an entrance. One package holds two
 seats: in `agent/`, `agent/loop` is the L2 harness shell every entrance runs, and its
 siblings -- `tools`, `subagent`, `acp_client`, `context`, `hook`, `personalizer`,

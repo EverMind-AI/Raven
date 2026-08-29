@@ -301,7 +301,7 @@ def _walk_model(model: BaseModel, label: str) -> Iterator[KnownSecret]:
 
 def _normalized_channel_extras(extra: dict) -> dict:
     from raven.channels.registry import discover_specs
-    from raven.core.admission import normalize_slice_keys
+    from raven.config.admission import normalize_slice_keys
 
     specs = discover_specs()
     out: dict = {}

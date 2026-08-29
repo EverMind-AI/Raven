@@ -250,8 +250,8 @@ def _register_config_commands(channels_app: typer.Typer) -> None:
 
         from pydantic import ValidationError
 
+        from raven.config.admission import PluginConfigError
         from raven.config.update_channels import enable_channel
-        from raven.core.admission import PluginConfigError
 
         fields = _parse_channel_flags(ctx.args, name)
         missing = [k for k in _missing_required_fields(name) if fields.get(k) in ("", None, [])]
@@ -316,8 +316,8 @@ def _register_config_commands(channels_app: typer.Typer) -> None:
 
         from pydantic import ValidationError
 
+        from raven.config.admission import PluginConfigError
         from raven.config.update_channels import set_channel_fields
-        from raven.core.admission import PluginConfigError
 
         fields = _parse_channel_flags(ctx.args, name)
         if not fields:
@@ -526,7 +526,7 @@ def channels_login(
         return
     die_if_not_tty(f"raven channels login {channel_name} (from an interactive terminal)")
     console.print(f"{__logo__} {spec.display_name} Login\n")
-    from raven.core.admission import dispense_channel_config
+    from raven.config.admission import dispense_channel_config
 
     # Through the same admission door as the gateway and onboarding: the raw
     # section carries only socket fields, and the factory expects the
