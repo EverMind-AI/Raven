@@ -34,6 +34,11 @@ All notable changes to Raven are documented here.
   imports the loop shell it is consumed by. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- Security: the three URL policies (egress fetch, market trust, browser
+  navigation) read one address vocabulary, `raven/security/hosts.py`
+  (canonical and browser-legacy spellings, UTS-46 mapping, IPv4 embedded in
+  IPv6, the names that mean this machine); the market's public-address check
+  and the browser's link-local check see through every spelling now.
 - Security: a base URL or redirect host the WeChat login exchange hands back
   is adopted only over https and within the configured operator's domain;
   a Discord `resume_gateway_url` outside the configured gateway's operator

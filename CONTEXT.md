@@ -998,8 +998,10 @@ cross-cutting mechanism: a leaf consumed by inner layers and cargo, never the
 other way (enforced by the layer contracts in `pyproject.toml`).
 
 **Security** (`security/`):
-Outbound address policy (`network.py`: default-deny fetchability, the guarded
-per-hop fetch) and prompt-injection fences (`trust.py`). A cross-cutting
+The address vocabulary (`hosts.py`: what a host string denotes, in every
+spelling) that the outbound policy (`network.py`: default-deny fetchability, the
+guarded per-hop fetch), the market's trust checks and the browser's navigation
+policy all read; and prompt-injection fences (`trust.py`). A cross-cutting
 mechanism and a member of the channels' shared-services shelf -- cargo may
 depend on it (dingtalk and qq do). Same leaf rule as `auth`.
 
