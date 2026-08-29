@@ -85,6 +85,17 @@ function isPwshExecutable(shell: string): boolean {
   return /pwsh(\.exe)?$/i.test(shell)
 }
 
+export function resolveWindowsShellHint(
+  envShell: string | undefined,
+  defaultProfile: string | undefined,
+  profiles: Record<string, { path?: string }> | undefined
+): string | undefined {
+  if (envShell) {
+    return envShell
+  }
+  return (defaultProfile && profiles?.[defaultProfile]?.path) || undefined
+}
+
 function probeWindowsEnv(runner: ProbeRunner, shellHint: string | undefined): Record<string, string> | null {
   const script =
     '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; Get-ChildItem Env: | ForEach-Object { "$($_.Name)=$($_.Value)" }'

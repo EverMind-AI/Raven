@@ -48,6 +48,9 @@ function createFakeApi() {
       getConfiguration: vi.fn(() => ({ get: vi.fn() })),
       workspaceFolders: [{ uri: { fsPath: '/workspace/raven' } }]
     },
+    env: {
+      shell: undefined
+    },
     commands: {
       registerCommand: vi.fn(() => ({ dispose: vi.fn() }))
     }

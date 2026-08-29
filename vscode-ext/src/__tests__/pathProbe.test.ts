@@ -6,7 +6,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { findOnPath, probeLoginShellEnv, type ProbeResult } from '../pathProbe.js'
+import { findOnPath, probeLoginShellEnv, resolveWindowsShellHint, type ProbeResult } from '../pathProbe.js'
 
 function scriptedRunner(...results: ProbeResult[]) {
   let index = 0
@@ -159,5 +159,31 @@ describe('probeLoginShellEnv on win32', () => {
   it('returns null when both windows shells fail', () => {
     const runner = scriptedRunner({ status: 1, stdout: null }, { status: 1, stdout: null })
     expect(probeLoginShellEnv(runner, undefined, 'win32')).toBeNull()
+  })
+})
+
+describe('resolveWindowsShellHint', () => {
+  it('prefers the shell VS Code already resolved', () => {
+    expect(
+      resolveWindowsShellHint('C:\\Program Files\\PowerShell\\7\\pwsh.exe', 'PowerShell', {
+        PowerShell: { path: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe' }
+      })
+    ).toBe('C:\\Program Files\\PowerShell\\7\\pwsh.exe')
+  })
+
+  it('falls back to the configured profile path when env.shell is empty', () => {
+    expect(
+      resolveWindowsShellHint('', 'PowerShell', {
+        PowerShell: { path: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe' }
+      })
+    ).toBe('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
+  })
+
+  it('returns undefined for source-based profiles without a path', () => {
+    expect(resolveWindowsShellHint('', 'PowerShell', { PowerShell: { source: 'PowerShell' } })).toBeUndefined()
+  })
+
+  it('returns undefined when nothing is resolvable', () => {
+    expect(resolveWindowsShellHint(undefined, undefined, undefined)).toBeUndefined()
   })
 })
