@@ -281,7 +281,7 @@ async def _entries_off_loop(current_provider: str | None) -> list[dict[str, Any]
 
 
 def _current_selection() -> tuple[str, str | None]:
-    from raven.core.helpers import load_runtime_config
+    from raven.core.config_stack import load_runtime_config
 
     config = load_runtime_config(None, None)
     current_model = config.agents.defaults.model

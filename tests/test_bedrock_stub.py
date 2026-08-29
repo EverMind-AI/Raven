@@ -6,7 +6,7 @@ later will break a test and force this file to be revisited:
   (a) the import-time log filter drops only the two known LiteLLM
       botocore-preload warnings and nothing else;
   (b) there is no Bedrock code path — no `bedrock` provider spec, and the sole
-      bedrock touchpoint in core/helpers.py is the ``model.startswith("bedrock/")``
+      bedrock touchpoint in providers/factory.py is the ``model.startswith("bedrock/")``
       key-gate bypass that falls through to LiteLLM (no `converse` call).
 """
 
@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-import raven.core.helpers as helpers_mod
+import raven.providers.factory as helpers_mod
 from raven import _LiteLLMBotocorePreloadFilter
 from raven.providers.registry import PROVIDERS, find_by_model, find_by_name
 

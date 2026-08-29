@@ -148,8 +148,8 @@ def _display_says(case: dict[str, Any], path: Path) -> bool:
 
 def _startup_says(case: dict[str, Any], path: Path) -> bool:
     """Would `raven agent` start?"""
-    from raven.core.helpers import check_provider_credentials
     from raven.providers.auth import MissingCredentialsError
+    from raven.providers.factory import check_provider_credentials
 
     config = Config.model_validate(json.loads(path.read_text(encoding="utf-8")))
     try:
@@ -471,7 +471,8 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         "raven/agent/tools/capabilities.py",
         "raven/config/update_providers.py",
         "raven/providers/litellm_provider.py",
-        "raven/core/helpers.py",
+        "raven/providers/factory.py",
+        "raven/core/provider_stack.py",
         "raven/cli/onboard_commands.py",
         # Carries the wizard's EverOS cluster split out of onboard_commands --
         # same reads, same argument, new file name.

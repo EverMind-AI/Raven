@@ -198,8 +198,8 @@ def playbook_create(
         raise typer.Exit(code=1)
 
     from raven.agent.subagent.registry import AgentRegistry
-    from raven.core.helpers import make_provider
     from raven.playbook import PlaybookGenerator, agent_profiles_from_registry, live_inventory
+    from raven.providers.factory import make_provider
 
     registry = AgentRegistry()
     registry.apply(config.subagents.agents)
@@ -296,7 +296,6 @@ def playbook_run(
 
     from raven.agent.subagent.dag_tool import SubAgentDagTool
     from raven.agent.subagent.manager import SubagentManager
-    from raven.core.helpers import make_provider
     from raven.playbook import PlaybookExecutor, PlaybookRuntime, agent_profiles_from_registry
     from raven.playbook.mcp import (
         declared_mcp_names,
@@ -305,6 +304,7 @@ def playbook_run(
         unusable_servers,
     )
     from raven.playbook.params import resolve_params, secret_param_names
+    from raven.providers.factory import make_provider
 
     provider = make_provider(config)
     manager = SubagentManager(

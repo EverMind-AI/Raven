@@ -42,7 +42,7 @@ def test_agent_help_works() -> None:
 
 
 def test_home_flag_moves_agent_home(tmp_config: Path, tmp_path: Path):
-    from raven.core.helpers import load_runtime_config
+    from raven.core.config_stack import load_runtime_config
 
     config = load_runtime_config(None, home=str(tmp_path / "elsewhere"))
     assert config.agents.defaults.workspace == str(tmp_path / "elsewhere")

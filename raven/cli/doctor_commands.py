@@ -1,7 +1,7 @@
 """``raven doctor`` — health check (static + optional --probe).
 
 Default mode is zero-network, millisecond-fast. ``--probe`` sends one
-chat exchange via :func:`raven.core.helpers.send_probe`.
+chat exchange via :func:`raven.core.provider_stack.send_probe`.
 
 Exit codes:
   0  — all green (and probe ok if requested)
@@ -21,7 +21,8 @@ import typer
 from rich.console import Console
 
 from raven import __logo__
-from raven.core.helpers import print_probe_troubleshooting, send_probe
+from raven.cli._helpers import print_probe_troubleshooting
+from raven.core.provider_stack import send_probe
 
 if TYPE_CHECKING:
     from pathlib import Path

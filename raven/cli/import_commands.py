@@ -312,7 +312,7 @@ def _make_hermes_provider(config: Config) -> "LLMProvider | None":
     window. There is nothing to gain from laziness in a one-shot command.
     """
     from raven.cli._log_file import _strip_tty_stream_handlers
-    from raven.core.helpers import make_provider
+    from raven.providers.factory import make_provider
 
     try:
         provider = make_provider(config)

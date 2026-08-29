@@ -92,7 +92,7 @@ class ProviderPool:
         if cached is not None:
             return cached
 
-        from raven.core.helpers import make_provider
+        from raven.providers.factory import make_provider
 
         cfg = self.config.model_copy(deep=True)
         cfg.agents.defaults.model = model

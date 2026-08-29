@@ -431,7 +431,7 @@ def test_gateway_wires_missed_reminder_observer_behind_config() -> None:
 from types import SimpleNamespace
 
 from raven.config.schema import ModelEndpoint, ProvidersConfig, RoutingConfig
-from raven.core.helpers import build_model_routing
+from raven.core.provider_stack import build_model_routing
 from raven.providers.base import GenerationSettings
 from raven.providers.per_model_provider import PerModelProvider
 from raven.routing.knn_router import KNNModelRouter
@@ -505,7 +505,7 @@ def test_gateway_provider_resolves_vendors_per_call():
     """The gateway serves many sessions at once, so the provider it ends up
     holding must resolve a vendor per call rather than bake in the default
     model's vendor. Asserted on the actual composed object, not on source text."""
-    from raven.core.helpers import make_resolving_provider
+    from raven.providers.factory import make_resolving_provider
 
     cfg = _config()
     router, provider = build_model_routing(cfg, make_resolving_provider(cfg))
