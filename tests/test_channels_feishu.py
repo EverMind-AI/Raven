@@ -334,6 +334,15 @@ def test_reconnect_permanent_client_exception_also_backs_off():
     assert delays == [5.0, 10.0, 20.0]
 
 
+def test_reconnect_backoff_never_overflows_beyond_cap():
+    """Sustained failure must not overflow the backoff math: once the cap
+    is reached the delay stays flat and the supervisor keeps running."""
+    delays = _run_supervised_with_failures(_channel(), ClientException(99991440, "conn limit"), count=2000)
+    assert delays[:7] == [5.0, 10.0, 20.0, 40.0, 80.0, 160.0, 300.0]
+    assert delays[7:] == [300.0] * (len(delays) - 7)
+    assert len(delays) == 2000
+
+
 def test_backoff_sleep_cut_short_by_stop(monkeypatch):
     ch = _channel()
     ch._running = True

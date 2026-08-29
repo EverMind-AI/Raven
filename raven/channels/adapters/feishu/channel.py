@@ -122,7 +122,7 @@ class FeishuChannel(ChannelBase):
         asyncio.set_event_loop(ws_loop)
         lark_ws.loop = ws_loop
         try:
-            attempt = 0
+            delay = _RECONNECT_BACKOFF_INITIAL_S
             while self._running:
                 try:
                     self._ws_client.start()
@@ -133,12 +133,8 @@ class FeishuChannel(ChannelBase):
                 except Exception as e:
                     logger.warning("Feishu WebSocket error: {}", e)
                 if self._running:
-                    delay = min(
-                        _RECONNECT_BACKOFF_MAX_S,
-                        _RECONNECT_BACKOFF_INITIAL_S * (_RECONNECT_BACKOFF_FACTOR**attempt),
-                    )
-                    attempt += 1
                     self._sleep_interruptibly(delay)
+                    delay = min(_RECONNECT_BACKOFF_MAX_S, delay * _RECONNECT_BACKOFF_FACTOR)
         finally:
             ws_loop.close()
 
