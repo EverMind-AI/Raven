@@ -28,11 +28,6 @@ from raven.core.helpers import (
     print_config_migration_notices,
     print_deprecated_memory_window_notice,
 )
-from raven.core.plugin_stack import (
-    build_plugin_registry,
-    build_plugin_tools,
-    maybe_build_memory_backend,
-)
 from raven.utils.helpers import project_slug, sync_workspace_templates
 
 console = Console()
@@ -162,8 +157,7 @@ def register(app: typer.Typer) -> None:
 
         from loguru import logger
 
-        from raven.agent.loop import AgentLoop
-        from raven.agent.loop.bundles import EngineWiring, HostWiring, SubagentWiring, ToolWiring, TurnPolicy
+        from raven.agent.loop.bundles import HostWiring, TurnPolicy
         from raven.agent.loop.recovery import limits_from_defaults
         from raven.agent.workdir import WorkdirPolicy, WorkdirResolver, validate_override
         from raven.config.raven import load_raven_config
@@ -181,7 +175,6 @@ def register(app: typer.Typer) -> None:
         config = load_runtime_config(config, home=home)
         ec_config = load_raven_config()
         sentinel_cfg = ec_config.sentinel
-        skill_forge_cfg = ec_config.skill_forge
         print_deprecated_memory_window_notice(config)
         print_config_migration_notices()
         sync_workspace_templates(config.workspace_path)
@@ -261,85 +254,31 @@ def register(app: typer.Typer) -> None:
         # Build the plugin registry once and reuse it for both the memory
         # backend and the plugin-contributed tools so discovery/activation
         # runs a single time.
-        plugin_registry = build_plugin_registry(ec_config)
-        backend = maybe_build_memory_backend(
-            config.workspace_path,
-            ec_config,
-            registry=plugin_registry,
-        )
-        plugin_tools = build_plugin_tools(
-            config.workspace_path,
-            ec_config,
-            registry=plugin_registry,
-        )
-        from raven.agent.tools._deliverables import DeliverableStore
-        from raven.config.paths import get_deliverables_path
-        from raven.core.token_wise_stack import caching_probe, install_from_config
+        from raven.core.runtime import build_runtime
         from raven.providers.pool import ProviderPool
 
-        strategies = install_from_config(
-            ec_config.token_wise,
-            supports_caching=caching_probe(provider),
-        )
-
-        # No cron_service here: with the REPL gone this process is never a
-        # cron runner, so registering CronTool would create jobs nothing
-        # fires. Scripted reminder creation is `raven cron add` with an
-        # explicit --channel.
-        agent_loop = AgentLoop(
-                         provider_pool=ProviderPool(lambda: load_runtime_config(None, None)),
-                         provider=provider,
-                         workspace=config.workspace_path,
-                         model=config.agents.defaults.model,
-                         router=router,
-                         session_manager=session_manager,
-                         mcp_servers=config.tools.mcp_servers,
-                         sandbox_config=config.tools.sandbox,
-                         tools=ToolWiring(
-                             brave_api_key=config.tools.web.search.api_key or None,
-                             jina_api_key=config.tools.web.jina_api_key or None,
-                             web_proxy=config.tools.web.proxy or None,
-                             media_config=config.effective_media_config(),
-                             deep_research_config=config.tools.deep_research,
-                             exec_config=config.tools.exec,
-                             ask_user_config=config.tools.ask_user,
-                             restrict_to_workspace=config.tools.restrict_to_workspace,
-                             tool_search_config=config.tools.tool_search,
-                             plugin_tools=plugin_tools,
-                             deliverables=DeliverableStore(get_deliverables_path()),
-                         ),
-                         subagents=SubagentWiring(
-                             max_concurrent_subagents=config.agents.defaults.max_concurrent_subagents,
-                             max_subagent_spawns_per_hour=config.agents.defaults.max_subagent_spawns_per_hour,
-                             agents=config.subagents.agents,
-                             workdir_resolver=workdir_resolver,
-                             subagent_dag_config=ec_config.subagent_dag,
-                             subagent_questions_config=ec_config.subagent_questions,
-                         ),
-                         engine=EngineWiring(
-                             strategies=strategies,
-                             context_window_tokens=config.agents.defaults.context_window_tokens,
-                             playbook_config=config.playbooks,
-                             skill_forge_config=skill_forge_cfg,
-                             context_config=ec_config.context,
-                             runtime_config=ec_config.runtime,
-                             backend=backend,
-                             memory_config=ec_config.memory,
-                             skill_forge_router_config=ec_config.skill_forge.router,
-                         ),
-                         policy=TurnPolicy(
+        runtime = build_runtime(
+            config,
+            ec_config,
+            provider=provider,
+            session_manager=session_manager,
+            provider_pool=ProviderPool(lambda: load_runtime_config(None, None)),
+            router=router,
+            workdir_resolver=workdir_resolver,
+            policy=TurnPolicy(
                              now_fn=parse_fake_now(fake_now),
                              max_iterations=config.agents.defaults.max_tool_iterations,
                              empty_recovery=limits_from_defaults(config.agents.defaults),
                              interactive=False,
                              response_modifier=sentinel_response_modifier,
-                         ),
-                         host=HostWiring(
-                             channels_config=config.channels,
+            ),
+            host=HostWiring(
+                channels_config=config.channels,
                              on_user_inbound=sentinel_on_user_inbound,
-                         ),
-                     )
-        agent_loop.configure_personalization(config.agents.defaults.enable_personalization)
+            ),
+        )
+        agent_loop = runtime.loop
+        backend = runtime.backend
         attach_sentinel_spawn(sentinel_runner, agent_loop)
         attach_sentinel_decision_consumer(sentinel_runner, agent_loop, sentinel_cfg=sentinel_cfg)
         # One-shot mode has no real ChannelManager — provide a minimal shim

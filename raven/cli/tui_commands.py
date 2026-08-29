@@ -480,27 +480,19 @@ def _build_agent_loop(workspace: str | None = None, home: str | None = None):
     from raven.rpc.errors import InternalError
 
     try:
-        from raven.agent.loop import AgentLoop
-        from raven.agent.loop.bundles import EngineWiring, HostWiring, SubagentWiring, ToolWiring, TurnPolicy
+        from raven.agent.loop.bundles import HostWiring, TurnPolicy
         from raven.agent.loop.recovery import limits_from_defaults
-        from raven.agent.tools._deliverables import DeliverableStore
         from raven.agent.workdir import WorkdirPolicy, WorkdirResolver, validate_override
         from raven.cli._cron_handler import chain_cron_activity_reset
-        from raven.config.paths import get_cron_dir, get_deliverables_path
+        from raven.config.paths import get_cron_dir
         from raven.config.raven import load_raven_config
         from raven.core.helpers import build_model_routing, load_runtime_config, make_lazy_provider
-        from raven.core.plugin_stack import (
-            build_plugin_registry,
-            build_plugin_tools,
-            maybe_build_memory_backend,
-        )
         from raven.proactive_engine.schedulers.cron.service import CronService
         from raven.proactive_engine.schedulers.cron.tool import CronTool
         from raven.session.manager import SessionManager
 
         config = load_runtime_config(None, home=home)
         ec_config = load_raven_config()
-        skill_forge_cfg = ec_config.skill_forge
 
         provider = make_lazy_provider(config)
         # Model routing (config.routing). A no-op when routing is disabled; the
@@ -528,81 +520,29 @@ def _build_agent_loop(workspace: str | None = None, home: str | None = None):
             allowed_channels={"tui"},
         )
 
-        plugin_registry = build_plugin_registry(ec_config)
-        backend = maybe_build_memory_backend(
-            config.workspace_path,
-            ec_config,
-            registry=plugin_registry,
-        )
-        plugin_tools = build_plugin_tools(
-            config.workspace_path,
-            ec_config,
-            registry=plugin_registry,
-        )
-
-        from raven.core.token_wise_stack import caching_probe, install_from_config
+        from raven.core.runtime import build_runtime
         from raven.providers.pool import ProviderPool
 
-        strategies = install_from_config(
-            ec_config.token_wise,
-            supports_caching=caching_probe(provider),
+        runtime = build_runtime(
+            config,
+            ec_config,
+            provider=provider,
+            session_manager=session_manager,
+            provider_pool=ProviderPool(lambda: load_runtime_config(None, None)),
+            router=router,
+            workdir_resolver=workdir_resolver,
+            policy=TurnPolicy(
+                max_iterations=config.agents.defaults.max_tool_iterations,
+                empty_recovery=limits_from_defaults(config.agents.defaults),
+                interactive=True,
+            ),
+            host=HostWiring(
+                cron_service=cron,
+                channels_config=config.channels,
+                on_user_inbound=chain_cron_activity_reset(cron),
+            ),
         )
-
-        agent_loop = AgentLoop(
-                         provider_pool=ProviderPool(lambda: load_runtime_config(None, None)),
-                         provider=provider,
-                         workspace=config.workspace_path,
-                         model=config.agents.defaults.model,
-                         router=router,
-                         session_manager=session_manager,
-                         mcp_servers=config.tools.mcp_servers,
-                         sandbox_config=config.tools.sandbox,
-                         tools=ToolWiring(
-                             brave_api_key=config.tools.web.search.api_key or None,
-                             jina_api_key=config.tools.web.jina_api_key or None,
-                             web_proxy=config.tools.web.proxy or None,
-                             media_config=config.effective_media_config(),
-                             deep_research_config=config.tools.deep_research,
-                             exec_config=config.tools.exec,
-                             ask_user_config=config.tools.ask_user,
-                             restrict_to_workspace=config.tools.restrict_to_workspace,
-                             tool_search_config=config.tools.tool_search,
-                             plugin_tools=plugin_tools,
-                             deliverables=DeliverableStore(get_deliverables_path()),
-                         ),
-                         subagents=SubagentWiring(
-                             max_concurrent_subagents=config.agents.defaults.max_concurrent_subagents,
-                             max_subagent_spawns_per_hour=config.agents.defaults.max_subagent_spawns_per_hour,
-                             workdir_resolver=workdir_resolver,
-                             subagent_dag_config=ec_config.subagent_dag,
-                             subagent_questions_config=ec_config.subagent_questions,
-                             agents=config.subagents.agents,
-                         ),
-                         engine=EngineWiring(
-                             strategies=strategies,
-                             context_window_tokens=config.agents.defaults.context_window_tokens,
-                             skill_forge_config=skill_forge_cfg,
-                             skill_forge_router_config=ec_config.skill_forge.router,
-                             runtime_config=ec_config.runtime,
-                             context_config=ec_config.context,
-                             memory_config=ec_config.memory,
-                             backend=backend,
-                             playbook_config=config.playbooks,
-                         ),
-                         policy=TurnPolicy(
-                             max_iterations=config.agents.defaults.max_tool_iterations,
-                             empty_recovery=limits_from_defaults(config.agents.defaults),
-                             interactive=True,
-                         ),
-                         host=HostWiring(
-                             cron_service=cron,
-                             channels_config=config.channels,
-                             on_user_inbound=chain_cron_activity_reset(cron),
-                         ),
-                     )
-        agent_loop.configure_personalization(
-            config.agents.defaults.enable_personalization,
-        )
+        agent_loop = runtime.loop
 
         registered_cron_tool = agent_loop.tools.get("cron")
         if isinstance(registered_cron_tool, CronTool):
