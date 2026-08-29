@@ -612,20 +612,16 @@ class MemoryStore:
         workspace: Path,
         now_fn: Callable[[], datetime] | None = None,
     ):
-        # User profile + episodic log live under the ``user_memory``
-        # pillar. ``memory_dir`` is an alias of ``memory_file.parent``
-        # for callsites that derive sibling paths (lock file below).
+        # The profile and the episode log live under the ``user_memory`` pillar.
         self.memory_file = ensure_dir(workspace / "user_memory" / "profile") / "user.md"
         self.history_file = ensure_dir(workspace / "user_memory" / "episodic") / "episodes.md"
-        self.memory_dir = self.memory_file.parent
-        # Sibling lock file (`MEMORY.md.lock`). Shared across all processes
-        # that write MEMORY.md so Personalizer + MemoryConsolidator +
-        # SentinelMemoryWriter serialize on the same fcntl. POSIX-only —
-        # falls through to no-op on win32.
+        # Sibling lock file. Shared across every process that writes the
+        # profile, so Personalizer, MemoryConsolidator and SentinelMemoryWriter
+        # serialize on one portable file lock.
         self.memory_lock_path = self.memory_file.with_suffix(self.memory_file.suffix + ".lock")
 
         # attention.md + behaviors.md siblings at user_memory root.
-        # Independent fcntl locks: sentinel writes attention.md frequently
+        # Independent locks: sentinel writes attention.md frequently
         # and shouldn't contend with Personalizer/Consolidator on user.md.
         user_memory_root = ensure_dir(workspace / "user_memory")
         self.attention_file = user_memory_root / "attention.md"
@@ -649,29 +645,29 @@ class MemoryStore:
 
     @contextmanager
     def locked(self) -> Iterator[None]:
-        """Hold an exclusive fcntl lock on MEMORY.md so concurrent writers
-        across REPL + gateway processes don't clobber each other.
+        """Hold an exclusive file lock on the profile so concurrent writers
+        across processes don't clobber each other.
 
         Usage:
             with memory.locked():
                 cur = memory.read_long_term()
                 memory.write_long_term(cur + "...")
         """
-        yield from self._fcntl_locked(self.memory_lock_path)
+        yield from self._file_locked(self.memory_lock_path)
 
     @contextmanager
     def locked_attention(self) -> Iterator[None]:
         """Exclusive lock on ``attention.md.lock`` — independent of the
         user.md lock pool so sentinel writers don't block on Personalizer
         or MemoryConsolidator."""
-        yield from self._fcntl_locked(self.attention_lock_path)
+        yield from self._file_locked(self.attention_lock_path)
 
     @contextmanager
     def locked_behaviors(self) -> Iterator[None]:
         """Exclusive lock on ``behaviors.md.lock`` — separate from user.md
         and attention.md so the idle-triggered extractor's slow LLM call
         doesn't block hot-path writers on either of the other files."""
-        yield from self._fcntl_locked(self.behaviors_lock_path)
+        yield from self._file_locked(self.behaviors_lock_path)
 
     @contextmanager
     def locked_stance_log(self) -> Iterator[None]:
@@ -679,12 +675,11 @@ class MemoryStore:
         read-merge-write in StanceLogProducer so concurrent ticks
         (eval harness + gateway, REPL + gateway) don't resurrect
         FIFO-trimmed entries via lost-update races."""
-        yield from self._fcntl_locked(self.stance_log_lock_path)
+        yield from self._file_locked(self.stance_log_lock_path)
 
-    def _fcntl_locked(self, lock_path: Path) -> Iterator[None]:
-        # Cross-platform advisory lock (portalocker): real serialization on
-        # Windows too, instead of the previous win32 no-op that lost concurrent
-        # writes to MEMORY.md / attention.md / behaviors.md / stance_log.json.
+    def _file_locked(self, lock_path: Path) -> Iterator[None]:
+        # Cross-platform advisory lock (portalocker), so the serialization is
+        # real on Windows as well as POSIX.
         from raven.utils.portable_lock import file_lock
 
         with file_lock(lock_path):

@@ -304,7 +304,6 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         self.context = ContextBuilder(
             workspace,
             skill_forge_config=skill_forge_config,
-            llm_provider=provider,
             now_fn=now_fn,
         )
         self.sessions = session_manager or SessionManager(workspace)
