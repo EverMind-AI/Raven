@@ -295,7 +295,7 @@ def _safe_name(name: str) -> str:
 async def _fetch_capped(url: str, *, check, params: dict | None = None, what: str = "the download") -> tuple:
     """GET with a hard ceiling on bytes and on elapsed time.
 
-    Three properties the plain ``client.get`` did not have:
+    Three properties a plain ``client.get`` does not have:
 
     * streamed, so the size cap is a refusal rather than a measurement taken
       once the oversized body is already in memory;

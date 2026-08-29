@@ -4,8 +4,8 @@ Anthropic allows up to 4 ephemeral cache breakpoints per request. The cache
 key for each breakpoint is every block *up to and including* that breakpoint,
 so placement determines what is actually cacheable.
 
-v2 strategy (informed by head-to-head benchmarking against Hermes Agent's
-``system_and_3`` strategy — see ``EXPERIMENT_REPORT_HERMES_VS_RAVEN.md``):
+Placement, measured against the ``system_and_3`` strategy in
+:mod:`raven.token_wise.system_and_tail_cache`:
 
 When tools are present (common agent scenario):
     1. Tools list end — tool schemas rarely change; caching them saves the

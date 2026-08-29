@@ -1,13 +1,9 @@
 """The machines this instance can reach, named by their owner.
 
-A campaign used to carry its own ``host``/``port``/``key``, which put the way in
-inside the thing being run and left the agent to work the connection out for
-itself. Measured 2026-08-14 on two FEA tasks whose statement did not spell the
-port out: the loop tried port 22, then 2222, 8022, 10022, 443, read
-``~/.ssh/config``, pulled a stale port out of ``known_hosts`` and believed it,
-then read raven's own campaign directory to find the number -- a dozen rounds
-without submitting a single job, and one window ended up asking the owner
-whether a bastion was needed.
+A campaign that carries its own ``host``/``port``/``key`` puts the way in
+inside the thing being run, and leaves the agent to work the connection out for
+itself: a statement that does not spell the port out sends it guessing through
+22, 2222, 8022, ``~/.ssh/config`` and a stale ``known_hosts`` entry.
 
 None of that is the agent being slow. It had no way to reach a machine except to
 guess at one, so guessing is what it did.
@@ -30,9 +26,8 @@ wait until there is a platform that needs them (2026-08-17, deliberate): storing
 one means a keychain or a master password, and neither is worth building before
 something asks for it.
 
-Read-only by design for now. The file is written by hand; ``raven connection
-add`` is product work that can wait until the shape is confirmed against a real
-task.
+Read-only here: the file is written by hand or by
+``raven ops connection add`` (``raven/cli/ops_connection_commands.py``).
 """
 
 from __future__ import annotations
@@ -66,15 +61,13 @@ _WANTED = ("software", "budget_unit", "concurrency")
 
 _ID = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
-# Where a machine's budget is metered. Restated in every campaign's meta before
-# this field existed, which put a property of the machine inside the thing being
-# run on it.
+# Where a machine's budget is metered: a property of the machine, so it is not
+# restated in the meta of every campaign run on it.
 _BUDGET_UNITS = ("minute", "core-minute", "gpu-minute")
 
 # Names that mean a field this file reads, spelled the way someone writing the
-# file by hand reaches for first. Not hypothetical: this repo's own fixture in
-# tests/test_ops_gate.py writes ``name``, and that connection lists as its bare
-# id because ``describe`` reads ``display_name`` -- nothing reported it.
+# file by hand reaches for first: without them a row written with ``name``
+# lists as its bare id, and nothing says why.
 _MISSPELLED = {
     "name": "display_name",
     "hostname": "host",

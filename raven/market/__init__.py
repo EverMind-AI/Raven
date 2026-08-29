@@ -1,6 +1,6 @@
 """PlugHub — the plugin marketplace engine.
 
-A market "plugin" is a manifest, not a program: a catalog entry declaring
+A PlugHub plugin is a catalog entry, not a program: it declares
 0..n contributions, each landing at a different injection point (an
 ``mcp`` config stanza, a workspace skill, a python package). Installing is
 a ledger-backed transaction over those pieces; uninstalling replays the

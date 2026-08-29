@@ -50,7 +50,7 @@ pytestmark = pytest.mark.real_llm
 
 KEY_FILE = Path(__file__).resolve().parent.parent.parent / "raven" / "key.env"
 REPORT_PATH = (
-    Path(__file__).resolve().parent.parent.parent / "raven" / "token_wise" / "EXPERIMENT_REPORT_HERMES_VS_RAVEN.md"
+    Path(__file__).resolve().parent.parent.parent / "reports" / "token_wise" / "EXPERIMENT_REPORT_HERMES_VS_RAVEN.md"
 )
 MODEL = "anthropic/claude-sonnet-4-5"
 COST_GUARD_USD = 2.00

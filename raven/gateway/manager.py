@@ -186,10 +186,9 @@ class ChannelManager:
     async def start_one(self, name: str) -> str:
         """Build and start one channel that config now enables, without a restart.
 
-        The page enables an entrance by writing config in its own process, and
-        the adapter lives here -- so before this existed, turning a channel on
-        did nothing until the gateway was restarted: no QR was ever fetched, and
-        a scan-login entrance could not be signed into from the UI at all.
+        The page enables an entrance by writing config in its own process while
+        the adapter lives here, so the gateway builds and starts it on the spot
+        rather than at the next restart.
 
         Answers a word rather than raising, because every outcome is a state the
         caller draws: ``started``, ``already``, ``unknown`` (no such channel),
@@ -201,12 +200,11 @@ class ChannelManager:
         the snapshot this gateway launched with, and in it the channel is still
         off.
         """
-        # An adapter in the table is not the same as an adapter that works. A
-        # scan login nobody completed ends with the object still here and
-        # `is_running` false -- weixin gives up after the code expires three
-        # times -- and answering "already" to that made "connect" on a stopped
-        # entrance a no-op for the life of the process: the one press that could
-        # fix it was the one press that did nothing. A start still in flight is a
+        # An adapter in the table is not the same as an adapter that works: a
+        # scan login nobody completed leaves the object here with `is_running`
+        # false (weixin gives up after the code expires three times), and
+        # answering "already" to that would make "connect" on a stopped entrance
+        # a no-op for the life of the process. A start still in flight is a
         # different thing and keeps its "already": the launch path is a task per
         # channel that only returns when the adapter stops, so a page write
         # arriving mid-launch must not tear down what is coming up.

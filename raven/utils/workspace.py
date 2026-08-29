@@ -78,9 +78,10 @@ def sync_workspace_templates(
     _migrate(workspace / "SOUL.md", workspace / "agent_memory" / "profile" / "soul.md")
     _migrate(workspace / "AGENTS.md", workspace / "agent_memory" / "profile" / "agent.md")
     _migrate(workspace / "USER.md", workspace / "user_memory" / "profile" / "user.md")
-    # feat/auto attention + behaviors content lived at workspace root.
-    # Sentinel rewrites attention.md from its own producers each tick, so
-    # the migrated file mostly serves as a head-start for the next refresh.
+    # attention.md and behaviors.md are written under user_memory/; a copy left
+    # at the workspace root by an older install is migrated in. The Sentinel
+    # rewrites attention.md from its producers each tick, so the migrated file
+    # is a head start for the next refresh rather than the record.
     _migrate(workspace / "ATTENTION.md", workspace / "user_memory" / "attention.md")
     _migrate(workspace / "BEHAVIORS.md", workspace / "user_memory" / "behaviors.md")
     _migrate(workspace / "BEHAVIOR.md", workspace / "user_memory" / "behaviors.md")
