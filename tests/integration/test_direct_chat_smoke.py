@@ -80,12 +80,25 @@ def loop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AgentLoop:
     workspace.mkdir()
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
 
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+
+    # A row for the agent the tests address: the registry dispatches only to
+    # names on its table, and the tests swap the row's backend for a fake. A
+    # resume command makes the row stateful, which is what a direct chat needs.
+    coder = ThirdPartyCliSubagentConfig(
+        name="Coder",
+        kind="cli",
+        command="/usr/bin/true {agent_id}",
+        resume_command="/usr/bin/true {agent_id}",
+        enabled=True,
+    )
     return AgentLoop(
         provider=_EchoProvider(),
         workspace=workspace,
         model="stub",
         max_iterations=2,
         restrict_to_workspace=True,
+        agents=[coder],
     )
 
 
@@ -202,7 +215,7 @@ async def test_a_third_party_instance_answers_and_lands_in_the_handoff(loop: Age
     from raven.agent.subagent.direct_chat import direct_root
 
     backend = _LockTakingBackend()
-    loop.subagents._backends["Coder"] = backend
+    loop.subagents.registry._backends["Coder"] = backend
 
     replies: list[str] = []
     await asyncio.wait_for(_run(loop, _req("who are you", target=("Coder", "greet")), replies), timeout=5)

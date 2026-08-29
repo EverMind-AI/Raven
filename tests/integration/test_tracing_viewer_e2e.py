@@ -50,7 +50,7 @@ import pytest
 
 pytestmark = pytest.mark.integration
 
-VIEWER_DIR = Path(__file__).resolve().parents[2] / "raven" / "tracing" / "viewer"
+VIEWER_DIR = Path(__file__).resolve().parents[2] / "raven" / "cli" / "tracing_viewer"
 
 
 def _node() -> str:
