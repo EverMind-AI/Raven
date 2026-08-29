@@ -23,9 +23,6 @@ These tests exercise the bug directly without spawning Node:
 2. ``test_socket_no_asyncio_pipe_warnings`` — sends three requests in
    sequence and asserts the asyncio.unix_events logger emits no
    ``"pipe closed"`` warning.
-3. ``test_pipe_path_still_works`` — keeps the legacy bare ``os.pipe()``
-   transport path covered so non-socket callers (e.g. the v0.0.1 demo
-   runner) keep working.
 """
 
 from __future__ import annotations
@@ -33,7 +30,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import socket
 import tempfile
 from collections.abc import Iterator
@@ -53,9 +49,8 @@ from raven.rpc.server import RpcServer
 async def _wire_paired_socket() -> tuple[socket.socket, socket.socket, socket.socket, Path]:
     """Build the same fd topology that ``run_subprocess_with_rpc`` builds.
 
-    Returns ``(listening_sock, client_sock, server_conn, tmp_dir)``. The
-    caller still needs to ``os.dup(server_conn.fileno())`` twice to mirror
-    the production path.
+    Returns ``(listening_sock, client_sock, server_conn, tmp_dir)``; the caller
+    hands ``server_conn`` to ``RpcServer`` the way the production path does.
     """
     tmp = Path(tempfile.mkdtemp(prefix="eve-test-rpc-"))
     spath = tmp / "sock"
@@ -139,12 +134,9 @@ async def test_send_frame_waits_for_a_peer_that_stopped_reading() -> None:
     """
     server_sock, client, conn, tmp = await _wire_paired_socket()
     try:
-        req_fd = os.dup(conn.fileno())
-        notif_fd = os.dup(conn.fileno())
-
         disp = Dispatcher()
         register_aligned_methods(disp)
-        server = RpcServer(req_fd, notif_fd, disp)
+        server = RpcServer(disp, sock=conn)
         serve_task = asyncio.create_task(server.serve_forever())
         await server.started.wait()
 
@@ -210,12 +202,9 @@ async def test_socket_roundtrip_after_inbound_byte() -> None:
     """
     server_sock, client, conn, tmp = await _wire_paired_socket()
     try:
-        req_fd = os.dup(conn.fileno())
-        notif_fd = os.dup(conn.fileno())
-
         disp = Dispatcher()
         register_aligned_methods(disp)
-        server = RpcServer(req_fd, notif_fd, disp)
+        server = RpcServer(disp, sock=conn)
         serve_task = asyncio.create_task(server.serve_forever())
         await server.started.wait()
 
@@ -257,12 +246,9 @@ async def test_socket_no_asyncio_pipe_warnings(_capture_asyncio_warnings: list[s
     """
     server_sock, client, conn, tmp = await _wire_paired_socket()
     try:
-        req_fd = os.dup(conn.fileno())
-        notif_fd = os.dup(conn.fileno())
-
         disp = Dispatcher()
         register_aligned_methods(disp)
-        server = RpcServer(req_fd, notif_fd, disp)
+        server = RpcServer(disp, sock=conn)
         serve_task = asyncio.create_task(server.serve_forever())
         await server.started.wait()
 
@@ -285,72 +271,3 @@ async def test_socket_no_asyncio_pipe_warnings(_capture_asyncio_warnings: list[s
         client.close()
         conn.close()
         server_sock.close()
-
-
-@pytest.mark.asyncio
-async def test_pipe_path_still_works() -> None:
-    """Bare ``os.pipe()`` fds keep the legacy connect_*_pipe path alive.
-
-    The v0.0.1 demo runner and any future test that wires unidirectional
-    pipes (e.g. ``test_handshake_timeout_*``) depend on this fallback.
-    """
-    # Node→Python (requests)
-    req_r, req_w = os.pipe()
-    # Python→Node (responses)
-    notif_r, notif_w = os.pipe()
-
-    try:
-        disp = Dispatcher()
-        register_aligned_methods(disp)
-        server = RpcServer(req_r, notif_w, disp)
-        serve_task = asyncio.create_task(server.serve_forever())
-        await server.started.wait()
-
-        # Send a hello via the request pipe write end.
-        frame = (
-            json.dumps(
-                {
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "system.hello",
-                    "params": {"client_version": "0.0.2"},
-                }
-            )
-            + "\n"
-        ).encode()
-        os.write(req_w, frame)
-
-        loop = asyncio.get_running_loop()
-
-        # Read response from notif_r non-blockingly.
-        os.set_blocking(notif_r, False)
-        buf = bytearray()
-        deadline = loop.time() + 2.0
-        while not buf.endswith(b"\n") and loop.time() < deadline:
-            try:
-                chunk = os.read(notif_r, 65536)
-            except BlockingIOError:
-                await asyncio.sleep(0.02)
-                continue
-            if not chunk:
-                break
-            buf.extend(chunk)
-
-        assert buf, "no response on legacy pipe path"
-        obj = json.loads(buf.decode().strip())
-        assert obj["id"] == 1
-        assert obj["result"]["server_version"]
-
-        serve_task.cancel()
-        try:
-            await serve_task
-        except asyncio.CancelledError:
-            pass
-    finally:
-        # serve_forever owns req_r + notif_w via _shutdown; we still close
-        # the other ends.
-        for fd in (req_w, notif_r):
-            try:
-                os.close(fd)
-            except OSError:
-                pass

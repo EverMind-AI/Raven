@@ -34,6 +34,10 @@ All notable changes to Raven are documented here.
   imports the loop shell it is consumed by. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- `RpcServer` takes the connected socket and nothing else: the POSIX pipe
+  path (`request_fd` / `notify_fd`, kept for a demo runner that no longer
+  exists) is gone with the workaround comments it needed, and the tests
+  hand the accepted connection over the way `raven tui` does.
 - The three asking capabilities (`QuestionResponder`, `ApprovalResponder`,
   `Asker`) are papers in `raven/contracts/asking.py`; the tools and the ACP
   client type against them from there.
