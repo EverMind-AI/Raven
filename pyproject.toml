@@ -400,8 +400,15 @@ source_modules = [
     "raven.context_engine", "raven.providers", "raven.session", "raven.sandbox",
     "raven.routing", "raven.token_wise", "raven.plugins", "raven.channels",
     "raven.gateway", "raven.market", "raven.ops", "raven.security", "raven.auth",
+    # Seated by the 2026-08-29 structural audit: cross-cutting leaves and the
+    # L3 shelf members that had no recorded layer. raven.core stays unlisted
+    # only because its 18 imports of proactive_engine's sentinel machinery are
+    # one knot with that package's surface seat -- ruled together (see the
+    # partition card), not half-cut here.
+    "raven.config", "raven.utils", "raven.mcp", "raven.playbook",
+    "raven.knowledge", "raven.skill_hub", "raven.trajectory",
 ]
-forbidden_modules = ["raven.cli", "raven.rpc", "raven.web_rpc", "raven.proactive_engine"]
+forbidden_modules = ["raven.cli", "raven.rpc", "raven.web_rpc", "raven.proactive_engine", "raven.acp"]
 # Debt allowlist: may only SHRINK. Lazy machinery-at-surface-address edges,
 # each queued for relocation in the ledger: CronTool consumed by the loop
 # (turn path registers it, wiring builds it), and the skill install engine
@@ -422,13 +429,14 @@ type = "forbidden"
 # never calls, and the list may only shrink.
 source_modules = ["raven.contracts", "raven.spine", "raven.tracing"]
 forbidden_modules = [
-    "raven.agent", "raven.channels", "raven.cli", "raven.config",
-    "raven.context_engine", "raven.core", "raven.eval_engine", "raven.gateway",
-    "raven.market", "raven.mcp", "raven.memory_engine", "raven.ops",
-    "raven.playbook", "raven.plugins", "raven.proactive_engine",
-    "raven.providers", "raven.routing", "raven.rpc", "raven.sandbox",
-    "raven.security", "raven.session", "raven.skill_hub", "raven.token_wise",
-    "raven.utils", "raven.web_rpc",
+    "raven.acp", "raven.agent", "raven.auth", "raven.browser",
+    "raven.channels", "raven.cli", "raven.config", "raven.context_engine",
+    "raven.core", "raven.eval_engine", "raven.evolver", "raven.gateway",
+    "raven.importer", "raven.knowledge", "raven.market", "raven.mcp",
+    "raven.memory_engine", "raven.ops", "raven.playbook", "raven.plugins",
+    "raven.proactive_engine", "raven.providers", "raven.routing", "raven.rpc",
+    "raven.sandbox", "raven.security", "raven.session", "raven.skill_hub",
+    "raven.token_wise", "raven.trajectory", "raven.utils", "raven.web_rpc",
 ]
 ignore_imports = [
     "raven.contracts.llm_provider -> raven.providers.rates",
