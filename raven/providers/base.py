@@ -658,7 +658,7 @@ class LLMProvider(_LLMProviderPaper):
             if idx and not prompt_cache.accepts_cache_control(current_model or ""):
                 messages, tools = prompt_cache.strip(messages, tools)
             # One id for both the bound below and the check further down, and
-            # the id this request goes out under rather than the stored one --
+            # the Wire Model this request goes out under rather than the Model Ref --
             # a gateway spelling is its own catalogue row with its own ceiling.
             wire_id = self.wire_model_id(current_model or "")
             # Bounded here rather than inside each provider: a pin is per call

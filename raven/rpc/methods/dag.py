@@ -7,7 +7,8 @@ not listening for every frame is not stuck with whatever it happened to catch:
 * ``dag.get`` rebuilds (or repairs) a whole graph. An unfinalized run has no
   manifest, so the instance registry is overlaid on top -- see
   :func:`~raven.agent.subagent.dag_resume.read_run_reconciled`, shared with the
-  web surface so a resumed graph means the same thing on both.
+  sub-agent DAG control tools so a resumed graph reads the same from inside a
+  turn and from this method.
 * ``dag.node`` pulls one node's *rendered* prompt and its output, neither of
   which the graph carries: the manifest inlines only the leaf nodes' text, and
   the tool result the transcript keeps is clamped to 200 chars.

@@ -8,7 +8,7 @@ itself: a statement that does not spell the port out sends it guessing through
 None of that is the agent being slow. It had no way to reach a machine except to
 guess at one, so guessing is what it did.
 
-Here a connection is something the owner sets up once and names -- "my CPU box",
+Here a machine is something the owner sets up once and names -- "my CPU box",
 "the GPU machine" -- and the agent only ever sees the name and what the machine
 is. Three things follow:
 

@@ -188,7 +188,7 @@ def _make_service(
     interval_s: int = 60,
 ) -> HeartbeatService:
     return HeartbeatService(
-        workspace=workspace,
+        agent_home=workspace,
         provider=provider,  # type: ignore[arg-type]
         model="test-model",
         on_execute=on_execute,

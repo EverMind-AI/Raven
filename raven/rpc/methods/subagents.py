@@ -1,10 +1,10 @@
 """``subagents.*`` RPC handlers: configure third-party sub-agents from the TUI.
 
 Thin adapters only. The config write path, the preset templates, the probe and
-the persisted test verdicts all already exist and are shared with the web RPC
-(formerly the web dialect, since retired); duplicating any of that logic here would
-let the two surfaces disagree about what "installed" means or which fields a
-write is allowed to touch.
+the persisted test verdicts all live in ``raven.config`` / ``raven.agent.subagent``,
+and the served page reaches them through these same handlers; duplicating any of
+that logic here would let the TUI and the page disagree about what "installed"
+means or which fields a write is allowed to touch.
 
 The install group is computed here rather than in the client because a client
 that computes it is how the rule drifts: a second copy in the TUI, or in the

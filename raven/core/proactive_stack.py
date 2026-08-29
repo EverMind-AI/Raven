@@ -595,7 +595,7 @@ def build_heartbeat(
 
     hb_cfg = config.gateway.heartbeat
     return HeartbeatService(
-        workspace=config.workspace_path,
+        agent_home=config.workspace_path,
         provider=provider,
         model=model,
         on_execute=on_execute,

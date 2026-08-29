@@ -337,7 +337,7 @@ def register(app: typer.Typer) -> None:
 
         on_user_inbound = chain_cron_activity_reset(cron, inner=sentinel_on_user_inbound)
 
-        # Gateway-side memory-backend wiring. Mirrors the REPL
+        # Gateway-side memory-backend wiring. Mirrors the one-shot agent
         # bootstrap (cli/agent_commands.py). Returns ``None`` when no
         # plugin contributes the configured backend — AgentLoop then runs
         # without a memory backend. Lifecycle (start /
@@ -532,7 +532,7 @@ def register(app: typer.Typer) -> None:
                     wake=wake,
                     cron_service=cron,
                 )
-                # Missed-reminder observer: past-due tui/cli one-shots whose
+                # Missed-reminder observer: past-due tui one-shots whose
                 # session closed before firing surface once through the same
                 # system-event -> heartbeat wake path as cron completions.
                 # Needs the event-wake plumbing; without it there is no sink,

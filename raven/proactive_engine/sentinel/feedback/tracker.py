@@ -9,10 +9,10 @@ event.
 Persistence: append-only JSONL at ``{sentinel_dir}/feedback.jsonl``
 (default ``~/.raven/sentinel/feedback.jsonl``). The ledger feeds
 NudgePolicy's user-level acceptance-rate model, so it lives next to
-``state.json`` rather than under the workspace.
+``state.json`` rather than under agent home.
 
-Older installs that wrote to ``{workspace}/sentinel_feedback.jsonl`` are
-migrated on next sentinel start by
+Older installs that wrote it under agent home, at the literal path
+``{workspace}/sentinel_feedback.jsonl``, are migrated on next sentinel start by
 ``raven.core.proactive_stack._migrate_legacy_feedback_log``.
 
 Not a ring buffer: keeps every event. The file grows roughly

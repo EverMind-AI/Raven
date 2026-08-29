@@ -21,9 +21,8 @@ Semantics:
 
 - **Exceptions are isolated.** A hook that raises is logged and
   treated as a pass-through no-op; the chain continues with the next
-  hook. This mirrors the EventBus contract and is what lets a single
-  flaky hook (e.g. Personalizer's classifier hitting an LLM timeout)
-  not take down the whole turn.
+  hook, so a single flaky hook (e.g. Personalizer's classifier hitting
+  an LLM timeout) cannot take down the whole turn.
 """
 
 from __future__ import annotations

@@ -181,10 +181,10 @@ class InstanceRow(_Strict):
     """One sub-agent instance this session has used.
 
     camelCase field names, unlike every other model here, because a row is a
-    registry record verbatim (``raven/agent/subagent/instances.py``) and the web
-    RPC already serves it unchanged. Renaming the fields for this surface would
-    make the TUI and the web UI disagree about what an instance is, which is the
-    hardest class of bug to find later.
+    registry record verbatim (``raven/agent/subagent/instances.py``) and the
+    camelCase spelling is the registry's own. Renaming the fields here would
+    make this surface and the record disagree about what an instance is, which
+    is the hardest class of bug to find later.
 
     ``runId`` / ``nodeId`` name the DAG node an instance belongs to. They are on
     a ``dag-node`` row and also on the ordinary row of a stateful node, which is

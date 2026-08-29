@@ -122,11 +122,11 @@ def _make_gateway_sink(
     sends no reply -- unless ``cut_by_reload`` says a generation swap did the
     cancelling, in which case the channel is told the reply was cut.
 
-    notify fires on every origin (cron / sentinel / heartbeat / channel), a
-    superset of the bus drainer's user-turn-only _dispatch — benign and slightly
-    more correct: wake.on_turn_complete is a no-op unless a wake is parked, so the
-    extra fires just un-park any turn (the bus path could strand a wake parked
-    during a proactive turn)."""
+    notify fires on every origin (cron / sentinel / heartbeat / channel) rather
+    than on user turns only -- benign and slightly more correct:
+    wake.on_turn_complete is a no-op unless a wake is parked, so the extra fires
+    just un-park any turn, and a wake parked during a proactive turn is never
+    stranded."""
 
     async def sink(event: TurnEvent) -> None:
         if isinstance(event, TurnStarted):

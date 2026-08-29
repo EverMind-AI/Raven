@@ -124,7 +124,7 @@ class ContextConfig(_Base):
 
 
 # ---------------------------------------------------------------------------
-# Feature 2 — Proactivity (Sentinel)
+# Feature 2 — Proactivity (sentinel block)
 # ---------------------------------------------------------------------------
 
 
@@ -282,7 +282,7 @@ DEFAULT_PLANNER_ATTENTION_SECTIONS: tuple[str, ...] = (
 
 
 class SentinelConfig(_Base):
-    """Sentinel proactivity configuration."""
+    """Proactive Engine configuration, under the sentinel key."""
 
     enabled: bool = False
     """Master switch — nothing runs until this is True."""

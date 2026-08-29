@@ -1,6 +1,6 @@
-"""What the market is allowed to fetch, and what a catalogue entry may ask for.
+"""What PlugHub is allowed to fetch, and what a catalogue entry may ask for.
 
-Two trust boundaries meet in the market, and neither is the user:
+Two trust boundaries meet in PlugHub, and neither is the user:
 
 * the **hub endpoint** (``RAVEN_PLUGHUB_URL`` / ``RAVEN_SKILLHUB_URL``): whoever
   answers it dictates the catalogue, so a plaintext or non-HTTP endpoint hands
@@ -300,7 +300,7 @@ def _check_runner_args(args: Any) -> None:
             if word == "--":
                 continue
             if word.split("=", 1)[0].lower() not in _ARG_LEADING_ALLOW:
-                raise HubTrustError(f"catalog entry passes the runner flag {word!r}, which the market does not allow")
+                raise HubTrustError(f"catalog entry passes the runner flag {word!r}, which PlugHub does not allow")
             continue
         if not _PACKAGE_SPEC_RE.match(word):
             raise HubTrustError(f"catalog entry names {word!r}, which is not a plain package name")
@@ -357,8 +357,8 @@ def validate_mcp_connection(cfg: dict) -> dict:
 
     A remote server's ``url`` must be public https: the catalogue is remote
     content, and a server it points at is connected to with the user's keys. A
-    user's own local server is configured directly, not installed from the
-    market.
+    user's own local server is configured directly, not installed from
+    PlugHub.
     """
     _check_env(cfg.get("env"))
     _check_headers(cfg.get("headers"))
@@ -369,7 +369,7 @@ def validate_mcp_connection(cfg: dict) -> dict:
         command = str(cfg.get("command") or "")
         if command not in ALLOWED_COMMANDS:
             raise HubTrustError(
-                f"catalog entry wants to run {command!r}; the market only launches "
+                f"catalog entry wants to run {command!r}; PlugHub only launches "
                 f"package runners ({', '.join(sorted(ALLOWED_COMMANDS))})"
             )
         _check_runner_args(cfg.get("args") or [])

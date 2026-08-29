@@ -140,7 +140,7 @@ class LazyProvider(LLMProvider):
 
         Answering identity here rather than forwarding is not a missing method
         but a wrong answer: the base class supplies one, so the caller sizes a
-        request against the stored id while the inner sends the gateway
+        request against the Model Ref while the inner sends the gateway
         spelling, and the two are separate catalogue rows.
 
         Post-materialization like ``emits_unparsed_reasoning``, and for the same

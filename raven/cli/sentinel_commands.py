@@ -40,8 +40,8 @@ sentinel_app = typer.Typer(help="Inspect and drive the proactivity subsystem")
 async def _headless_nudge_sink(_out: object) -> None:
     """Accept a Sentinel nudge when no channel outlet is wired.
 
-    The spine DeliveryHub + outlets are built only inside the gateway/REPL run
-    loops (where ``dispatcher.set_post(hub.post)`` is called). The headless
+    The spine DeliveryHub + outlets are built only inside the gateway run loop
+    (where ``dispatcher.set_post(hub.post)`` is called). The headless
     ``sentinel tick``/``ticks`` CLI has no channel to deliver to, so this sink
     lets the executor finish dispatch and report ``delivered=True``. Without it
     every policy-approved nudge dies as ``no_post`` — which silently zeroed
@@ -182,7 +182,7 @@ def _build_tick_runner(ec_config, *, workspace: str | None, now_fn, live: bool):
         runner.task_discoverer = None
     elif runner.dispatcher is not None:
         # build_sentinel_stack leaves the dispatcher's hub post unbound (the hub
-        # lives in the gateway/REPL loop, not here); wire a headless sink so
+        # lives in the gateway loop, not here); wire a headless sink so
         # live nudges actually report delivered.
         runner.dispatcher.set_post(_headless_nudge_sink)
     return runner
