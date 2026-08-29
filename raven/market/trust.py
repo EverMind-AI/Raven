@@ -18,18 +18,16 @@ own file is the trusted party. The checks apply to what arrives over the wire.
 
 from __future__ import annotations
 
-import ipaddress
 import re
-import socket
 from typing import Any
 from urllib.parse import urlsplit
+
+from raven.security.hosts import as_ip, is_legacy_ip_form, is_local_name, names_this_machine, not_public
 
 
 class HubTrustError(ValueError):
     """An endpoint or catalogue entry failed a trust check."""
 
-
-_LOCAL_NAMES = frozenset({"localhost", "localhost.localdomain"})
 
 # Package runners: the payload they execute is a package name sitting in `args`,
 # which the install confirm shows the user verbatim. A shell, an interpreter, or
@@ -156,50 +154,14 @@ _HEADER_NAME_RE = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]+$")
 
 
 def _host_is_local(host: str) -> bool:
-    """Whether a URL host names this machine.
-
-    ``*.localhost`` is deliberately *not* treated as local: hostile DNS can point
-    ``evil.localhost`` at a public address, and treating it as loopback would let
-    it serve a catalogue over plaintext.
-    """
-    if host.lower() in _LOCAL_NAMES:
+    """Whether a URL host may buy the plaintext exemption: one of the names that
+    mean this machine outright, or a loopback address in canonical form."""
+    if is_local_name(host):
         return True
-    if _is_legacy_ip_form(host):
+    if is_legacy_ip_form(host):
         return False
-    addr = _as_ip(host)
+    addr = as_ip(host)
     return addr is not None and addr.is_loopback
-
-
-def _as_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
-    """The address a host denotes, if it is written in canonical form."""
-    try:
-        return ipaddress.ip_address(host.strip("[]"))
-    except ValueError:
-        return None
-
-
-def _is_legacy_ip_form(host: str) -> bool:
-    """Whether a host is an address written in a form nobody agrees on.
-
-    ``ipaddress`` parses only dotted quads, but a resolver also accepts
-    ``127.1``, ``2130706433``, ``0x7f000001``, ``0`` and ``010.0.0.1`` -- and
-    those disagree about what they mean: ``inet_aton`` reads ``010`` as octal 8
-    while ``getaddrinfo`` on some platforms reads it as decimal 10. Classifying
-    such a host is therefore guesswork, so these are refused rather than
-    interpreted; the dotted-quad spelling of the same address still works.
-    """
-    bare = host.strip("[]")
-    if _as_ip(bare) is not None:
-        return False
-    try:
-        socket.inet_aton(bare)
-        return True
-    except OSError:
-        pass
-    # inet_aton is stricter than some resolvers about leading zeros, so also
-    # refuse anything whose labels are purely numeric -- no real hostname is.
-    labels = bare.split(".")
-    return bool(bare) and all(label.isdigit() for label in labels if label != "")
 
 
 def _split(url: str, what: str) -> Any:
@@ -227,19 +189,6 @@ def _wire_host(url: str, parts: Any) -> str:
         return httpx.URL(url).host or (parts.hostname or "")
     except Exception:  # noqa: BLE001 -- a URL httpx cannot even parse is refused below
         return parts.hostname or ""
-
-
-def _names_this_machine(host: str) -> bool:
-    """Whether a host resolves to this machine by name rather than by address.
-
-    Wider than the plaintext exemption on purpose: ``*.localhost`` is loopback by
-    RFC 6761, so a hub handing back ``https://evil.localhost/x`` is pointing raven
-    at itself -- but hostile DNS can also point that name at a public address,
-    which is why it must not *buy* the http exemption. One name, two answers,
-    depending on which question is being asked.
-    """
-    h = host.lower().rstrip(".")
-    return h in _LOCAL_NAMES or h.endswith(".localhost")
 
 
 def require_https(url: str, *, what: str) -> str:
@@ -271,14 +220,14 @@ def require_public_https(url: str, *, what: str) -> str:
     if parts.scheme != "https":
         raise HubTrustError(f"{what} must use https: {url!r}")
     host = _wire_host(url, parts)
-    if _host_is_local(host) or _names_this_machine(host):
+    if _host_is_local(host) or names_this_machine(host):
         raise HubTrustError(f"{what} must not point at this machine: {url!r}")
-    if _is_legacy_ip_form(host):
+    if is_legacy_ip_form(host):
         raise HubTrustError(f"{what} must write an address as a dotted quad, not {host!r}: {url!r}")
-    addr = _as_ip(host)
+    addr = as_ip(host)
     if addr is None:
         return url
-    if addr.is_private or addr.is_link_local or addr.is_reserved or addr.is_multicast:
+    if not_public(addr):
         raise HubTrustError(f"{what} must not point inside a private network: {url!r}")
     return url
 
