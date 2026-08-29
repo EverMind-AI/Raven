@@ -91,7 +91,7 @@ class ChannelsConfig(Base):
             if isinstance(value, dict):
                 # Sticky coercion: the socket materializes into the extras on
                 # first access, so mutations persist and every reader sees one
-                # object -- the mutable semantics the named fields used to have.
+                # object.
                 socket = ChannelSocket.model_validate(value)
                 extra[name] = socket
                 return socket
@@ -267,8 +267,7 @@ class ProviderConfig(Base):
     # vendor reachable by more than one account or region. Meaningful only for
     # a plain API-key provider reached through the litellm client -- a section
     # whose auth is OAuth, or that needs more than a key and an address (Azure
-    # OpenAI, Codex), gets this rejected at `make_provider` construction time
-    # (wired in a later stage; this field exists regardless). Set and non-empty,
+    # OpenAI, Codex), gets this rejected at `make_provider`. Set and non-empty,
     # it replaces the flat `api_key` outright rather than merging with it; an
     # entry inherits the flat `api_base`/`extra_headers` for whichever it does
     # not name itself -- see `raven.providers.endpoints.provider_endpoints` for the
@@ -314,14 +313,10 @@ class AzureProviderConfig(ProviderConfig):
     """Azure OpenAI, whose connection needs more than a key and an address.
 
     A deployment is a name the tenant gives one model, and it goes into the
-    request URL's path. It used to be read off ``agents.defaults.model``, which
-    made a model id double as a connection parameter: the id could carry no
-    prefix without the prefix landing in the path, so Azure was the one provider
-    whose ids had to be spelled differently from everyone else's. Declared here,
-    the model id is free to be a model id.
+    request URL's path; declared here, it is a connection parameter separate
+    from the model id, so Azure ids are spelled like every other provider's.
 
-    ``api_version`` was hardcoded in the client, so a tenant on a different one
-    had no way to say so.
+    ``api_version`` is configurable because tenants run different ones.
     """
 
     deployment: str = ""  # falls back to the model id, for configs written before this field
@@ -337,14 +332,8 @@ class GeminiProviderConfig(ProviderConfig):
             - "key1"
             - "key2"
 
-    A ``vertex`` flag used to sit here, documented as setting
-    ``GOOGLE_GENAI_USE_VERTEXAI``. Nothing read it, and it could not have worked:
-    that variable belongs to the google-genai SDK, while requests go through
-    LiteLLM, which does not read it and reaches Vertex as a separate provider
-    (``vertex_ai``) needing ``VERTEXAI_PROJECT`` and ``VERTEXAI_LOCATION``. It was
-    settable from the CLI and covered by tests, so it read as a supported feature
-    while doing nothing at all. Reaching Vertex is a change to how a request is
-    routed, not a boolean on a key.
+    Vertex is a separate provider (``vertex_ai``) reached through LiteLLM with
+    ``VERTEXAI_PROJECT`` and ``VERTEXAI_LOCATION``; it is not a flag on this one.
     """
 
     #: Several keys may be listed; the first is used. Round-robin rotation was
@@ -1892,10 +1881,11 @@ class Config(BaseSettings):
 
     @property
     def skill_forge(self):
-        """Returns the default SkillForgeConfig. Extension blocks are
-        loaded via ``load_raven_config``, not through the base
-        Config. This property exists for backward compat with code that
-        accesses ``config.skill_forge`` on a plain ``Config`` instance.
+        """The default SkillForgeConfig.
+
+        Extension blocks live on ``RavenConfig`` (``load_raven_config``); a plain
+        ``Config`` answers with defaults so code that reads ``config.skill_forge``
+        works on either.
         """
         from raven.config.raven import SkillForgeConfig
 

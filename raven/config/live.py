@@ -45,13 +45,12 @@ class LiveConfig:
     Not a cache with a timeout: a timeout answers staleness with a delay, and the
     question here has an exact answer available for the price of one small read.
 
-    The comparison is the file's bytes and not a ``stat`` fingerprint, which is
-    what this started as. ``(mtime_ns, size)`` is not a fingerprint of the
-    content: two writes of equal length land on the same pair wherever the clock
-    granularity is coarser than the gap between them, and the second one is then
-    invisible for good. That is not hypothetical -- one CI filesystem could not
-    separate "exec" from "grep". Reading a config-sized file is cheap next to the
-    LLM call it precedes; being wrong about it is not.
+    The comparison is the file's bytes, not a ``stat`` fingerprint:
+    ``(mtime_ns, size)`` is not a fingerprint of the content, because two writes
+    of equal length land on the same pair wherever the clock granularity is
+    coarser than the gap between them, and the second one is then invisible for
+    good. Reading a config-sized file is cheap next to the LLM call it precedes;
+    being wrong about it is not.
     """
 
     def __init__(self, path: Path | None = None):

@@ -409,3 +409,46 @@ class TestTheLegacyRootBelongsToTheDefaultInstall:
         monkeypatch.setattr(ue, "default_everos_root", lambda: mine)
 
         assert ue.fallback_everos_root() == mine
+
+
+# ---------------------------------------------------------------------------
+# borrow_provider_credentials: the three documented outcomes
+# ---------------------------------------------------------------------------
+
+
+def _config_with_provider(name: str, api_key: str, api_base: str = ""):
+    from raven.config.schema import Config
+
+    cfg = Config()
+    section = cfg.providers.get(name)
+    section.api_key = api_key
+    if api_base:
+        section.api_base = api_base
+    return cfg
+
+
+def test_borrow_raises_key_error_for_an_unknown_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    import raven.config
+
+    monkeypatch.setattr(raven.config, "load_config", lambda: _config_with_provider("openai", "sk-lend"))
+    with pytest.raises(KeyError):
+        ue.borrow_provider_credentials("no-such-vendor")
+
+
+def test_borrow_raises_value_error_when_the_provider_holds_no_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    import raven.config
+
+    monkeypatch.setattr(raven.config, "load_config", lambda: _config_with_provider("openai", ""))
+    with pytest.raises(ValueError):
+        ue.borrow_provider_credentials("openai")
+
+
+def test_borrow_copies_the_key_and_the_address(monkeypatch: pytest.MonkeyPatch) -> None:
+    import raven.config
+
+    monkeypatch.setattr(
+        raven.config, "load_config", lambda: _config_with_provider("openai", "sk-lend", "https://api.example.test/v1")
+    )
+    borrowed = ue.borrow_provider_credentials("openai")
+    assert borrowed["api_key"] == "sk-lend"
+    assert borrowed["base_url"] == "https://api.example.test/v1"

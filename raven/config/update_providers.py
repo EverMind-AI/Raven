@@ -617,8 +617,7 @@ def list_providers(*, config_path: Path | None = None) -> list[dict[str, Any]]:
         api_key_list = list(getattr(instance, "api_key_list", []) or [])
         endpoints = list(getattr(instance, "endpoints", []) or [])
 
-        # One rule for every gate: this used to accept a Gemini section holding
-        # only `api_key_list` that routing then skipped and startup refused.
+        # One rule for every gate: credential_status decides.
         from raven.providers.auth import credential_status
 
         configured = credential_status(fname, instance, spec=spec, include_external=True).ok

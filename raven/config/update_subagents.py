@@ -1,4 +1,4 @@
-"""Atomic write path for ``subagents.agents`` config (req5 / P4).
+"""Atomic write path for ``subagents.agents`` config.
 
 The only supported write path for agent config. Every entry point (CLI, the
 WebUI "configure Raven" page) must go through here. Entries are validated against
