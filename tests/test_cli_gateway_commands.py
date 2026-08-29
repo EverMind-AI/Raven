@@ -519,37 +519,46 @@ def test_gateway_provider_resolves_vendors_per_call():
 
 
 # ---------------------------------------------------------------------------
-# _build_deliverable_store — every gateway channel can deliver files
+# Deliverables — the store now rides the assembly door
 # ---------------------------------------------------------------------------
 #
-# The gateway's build path (agent + channel + cron + heartbeat stack) hangs
-# under unit-level mocking (see the note above test_gateway_refuses_second_instance),
-# so ``_build_deliverable_store`` is extracted as a small, directly-testable
-# helper rather than asserted on through the full ``gateway()`` command.
+# build_runtime defaults deliverables to DeliverableStore(get_deliverables_path())
+# and the gateway takes the handle back via RavenRuntime.deliverables (the web
+# surface serves the same store). This pins the door default, replacing the
+# retired _build_deliverable_store helper.
 
 
-def test_gateway_builds_deliverables_store_when_web_enabled(tmp_config: Path) -> None:
+def test_the_door_defaults_a_deliverables_store(tmp_path, monkeypatch) -> None:
+    import raven.core.runtime as runtime_mod
     from raven.agent.tools._deliverables import DeliverableStore
-    from raven.cli.gateway_commands import _build_deliverable_store
+
+    captured = {}
+
+    class _Spy:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            self.tools = {}
+
+        def configure_personalization(self, *_a, **_k):
+            pass
+
+    monkeypatch.setattr("raven.agent.loop.AgentLoop", _Spy)
+    monkeypatch.setattr(runtime_mod.plugin_stack, "build_plugin_registry", lambda *a, **k: None)
+    monkeypatch.setattr(runtime_mod.plugin_stack, "maybe_build_memory_backend", lambda *a, **k: None)
+    monkeypatch.setattr(runtime_mod.plugin_stack, "build_plugin_tools", lambda *a, **k: [])
+    monkeypatch.setattr(runtime_mod.token_wise_stack, "install_from_config", lambda *a, **k: None)
+    monkeypatch.setattr(runtime_mod.token_wise_stack, "caching_probe", lambda *a, **k: False)
+
+    from raven.config.raven import RavenConfig
     from raven.config.schema import Config
 
-    cfg = Config()
-    cfg.gateway.web.enabled = True
+    class _P:
+        def get_default_model(self):
+            return "fake/default"
 
-    store = _build_deliverable_store(cfg)
+    rt = runtime_mod.build_runtime(Config(), RavenConfig(), provider=_P())
 
-    assert isinstance(store, DeliverableStore)
-
-
-def test_gateway_builds_deliverables_store_when_web_disabled(tmp_config: Path) -> None:
-    from raven.agent.tools._deliverables import DeliverableStore
-    from raven.cli.gateway_commands import _build_deliverable_store
-    from raven.config.schema import Config
-
-    cfg = Config()
-    cfg.gateway.web.enabled = False
-
-    assert isinstance(_build_deliverable_store(cfg), DeliverableStore)
+    assert isinstance(rt.deliverables, DeliverableStore)
 
 
 # ---------------------------------------------------------------------------

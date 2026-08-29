@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 
 import typer
 
-from raven.cli import onboard_commands as oc
+from raven.cli import _onboard_shared as oc
 
 
 def _set_memory_backend(backend: Optional[str]) -> None:

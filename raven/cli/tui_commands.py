@@ -521,14 +521,12 @@ def _build_agent_loop(workspace: str | None = None, home: str | None = None):
         )
 
         from raven.core.runtime import build_runtime
-        from raven.providers.pool import ProviderPool
 
         runtime = build_runtime(
             config,
             ec_config,
             provider=provider,
             session_manager=session_manager,
-            provider_pool=ProviderPool(lambda: load_runtime_config(None, None)),
             router=router,
             workdir_resolver=workdir_resolver,
             policy=TurnPolicy(

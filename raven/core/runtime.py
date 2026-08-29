@@ -74,6 +74,13 @@ def build_runtime(
     from raven.agent.tools._deliverables import DeliverableStore
     from raven.config.paths import get_deliverables_path
 
+    if provider_pool is None:
+        from raven.core.helpers import load_runtime_config
+        from raven.providers.pool import ProviderPool
+
+        # Every entrance wants the same pool over the same loader; deriving
+        # it here is what keeps it out of the entrances' hands.
+        provider_pool = ProviderPool(lambda: load_runtime_config(None, None))
     plugin_registry = plugin_stack.build_plugin_registry(ec_config)
     backend = plugin_stack.maybe_build_memory_backend(config.workspace_path, ec_config, registry=plugin_registry)
     plugin_tools = plugin_stack.build_plugin_tools(config.workspace_path, ec_config, registry=plugin_registry)

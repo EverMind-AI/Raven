@@ -255,14 +255,12 @@ def register(app: typer.Typer) -> None:
         # backend and the plugin-contributed tools so discovery/activation
         # runs a single time.
         from raven.core.runtime import build_runtime
-        from raven.providers.pool import ProviderPool
 
         runtime = build_runtime(
             config,
             ec_config,
             provider=provider,
             session_manager=session_manager,
-            provider_pool=ProviderPool(lambda: load_runtime_config(None, None)),
             router=router,
             workdir_resolver=workdir_resolver,
             policy=TurnPolicy(

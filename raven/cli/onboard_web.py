@@ -37,7 +37,7 @@ from typing import Optional
 
 import typer
 
-from raven.cli import onboard_commands as oc
+from raven.cli import _onboard_shared as oc
 from raven.config.env_file import write_env_file
 
 #: Trailing comment on the line appended to the rc, and the marker that makes a
