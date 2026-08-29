@@ -392,8 +392,23 @@ def _stash_channel_slices(data: dict) -> None:
     for name, section in channels.items():
         if isinstance(section, dict):
             _channel_slices[name] = dict(section)
-        else:
+        elif name not in _CHANNELS_SECTION_FIELDS:
             logging.getLogger(__name__).warning("channels.%s is not a table; its cargo reads as unset", name)
+
+
+def _channels_section_fields() -> frozenset[str]:
+    """The section-wide scalar keys of ``channels`` (``sendProgress`` and its
+    kin), in both spellings, so a setting is never mistaken for a channel
+    whose cargo failed to parse."""
+    from pydantic.alias_generators import to_camel
+
+    from raven.config.schema import ChannelsConfig
+
+    names = set(ChannelsConfig.model_fields)
+    return frozenset(names | {to_camel(n) for n in names})
+
+
+_CHANNELS_SECTION_FIELDS = _channels_section_fields()
 
 
 def load_config(config_path: Path | None = None) -> Config:

@@ -108,6 +108,14 @@ def test_everos_declaration_is_zero_behavior_for_valid_config(tmp_path):
     with pytest.raises(PluginConfigError):
         admit_slice(schema, {"base_url": 9}, plugin_id="everos-memory")
 
+    # What the onboarding wizard records is declared too, so a boot no longer
+    # warns about every key it wrote; the values pass through unchanged.
+    recorded = {"root": "/data/everos", "owned": True, "agent_id": "a1", "user_id": "u1"}
+    assert set(recorded) <= set(schema)
+    assert admit_slice(schema, recorded, plugin_id="everos-memory") == recorded
+    with pytest.raises(PluginConfigError):
+        admit_slice(schema, {"owned": "yes"}, plugin_id="everos-memory")
+
 
 def test_container_types_are_shape_checked_at_the_door():
     """array/object check the container shape only; element and member

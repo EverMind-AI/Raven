@@ -762,3 +762,23 @@ def test_the_retired_gateway_web_table_is_dropped_once_with_a_notice():
     loader._migrate_config(untouched, from_version=3)
     assert "web" in untouched["gateway"]
     assert loader.drain_migration_notices() == []
+
+
+def test_channels_section_settings_are_not_mistaken_for_channels(tmp_path: Path, caplog) -> None:
+    """``channels.sendProgress`` is a setting of the section, not a channel whose
+    table failed to parse; only an unknown scalar under ``channels`` warns."""
+    import logging
+
+    p = tmp_path / "config.json"
+    p.write_text(
+        json.dumps(
+            {"channels": {"sendProgress": False, "sendToolHints": True, "telegram": {"enabled": True}, "oddity": 5}}
+        ),
+        encoding="utf-8",
+    )
+    with caplog.at_level(logging.WARNING, logger="raven.config.loader"):
+        cfg = load_config(p)
+
+    warned = [r.getMessage() for r in caplog.records if "is not a table" in r.getMessage()]
+    assert warned == ["channels.oddity is not a table; its cargo reads as unset"]
+    assert cfg.channels.send_progress is False
