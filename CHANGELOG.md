@@ -34,6 +34,11 @@ All notable changes to Raven are documented here.
   imports the loop shell it is consumed by. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- `raven.i18n` translates user-facing text by its English source (`t("Back")`),
+  with the Chinese catalog in `raven/i18n/zh.py`; the onboarding wizard and
+  the CLI screens that carried `(en, zh)` pairs speak through it, and a test
+  keeps Chinese literals out of every other module (the files still carrying
+  them are listed, and the list only shrinks).
 - `AgentLoop` takes its five wiring bundles and nothing else: the flat
   keyword shim that folded legacy names into them (used by tests only) is
   gone, and the tests construct the bundles they mean.

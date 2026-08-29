@@ -23,7 +23,7 @@ of these keys have to refresh it for "config is the single source of truth" to
 hold. This module owns the screen and the shell wiring; the rc only ever gains a
 guarded ``source`` line, never a credential.
 
-Shared wizard UI state (``console``, ``_t``, ``_QMARK``, ...) lives in
+Shared wizard UI state (``console``, ``_QMARK``, ...) lives in
 ``onboard_commands`` and is reached through the ``oc`` module reference, as in
 ``onboard_channels`` -- so a test monkeypatching an attribute there still takes
 effect here.
@@ -39,6 +39,7 @@ import typer
 
 from raven.cli import _onboard_shared as oc
 from raven.config.env_file import write_env_file
+from raven.i18n import t
 
 #: Trailing comment on the line appended to the rc, and the marker that makes a
 #: second ``raven onboard`` run leave the file alone.
@@ -114,7 +115,7 @@ def _prompt_key(*, label: str, obtain_from: str, current: str, optional_note: st
     questionary = oc._require_questionary()
     from raven.cli._styles import RAVEN_STYLE
 
-    state = oc._t("configured, Enter keeps it", "已配置,回车沿用") if current else oc._t("Enter skips", "回车跳过")
+    state = t("configured, Enter keeps it") if current else t("Enter skips")
     return questionary.password(
         f"{label} ({obtain_from}) [{state}]:",
         style=RAVEN_STYLE,
@@ -127,16 +128,11 @@ def _confirm_rc(targets: list[Path]) -> bool:
     """Ask before touching the user's shell files, having shown the exact line."""
     listed = "\n".join(f"    [dim]{path}[/dim]" for path in targets)
     oc.console.print()
-    oc.console.print(
-        oc._t(
-            "  [dim]To hand these to new shells and to cli/acp sub-agents, this line goes in:[/dim]",
-            "  [dim]要让新开的终端和 cli/acp 子代理拿到这两个 key,需要加这一行:[/dim]",
-        )
-    )
+    oc.console.print(t("  [dim]To hand these to new shells and to cli/acp sub-agents, this line goes in:[/dim]"))
     oc.console.print(listed, highlight=False)
     oc.console.print(f"    [accent]{SOURCE_LINE}[/accent]", highlight=False)
     return typer.confirm(
-        oc._t(f"  Append it to {len(targets)} file(s)?", f"  追加到这 {len(targets)} 个文件?"),
+        t("  Append it to {a0} file(s)?", a0=len(targets)),
         default=False,
     )
 
@@ -155,22 +151,12 @@ def _write_keys(serper: str, jina: str) -> Optional[Path]:
 def _report(path: Optional[Path]) -> None:
     if path is None:
         return
-    oc.console.print(
-        oc._t(
-            f"  [green]✓ Keys written to config and mirrored to {path} (owner-only).[/green]",
-            f"  [green]✓ key 已写入配置,并镜像到 {path}(仅本人可读)。[/green]",
-        )
-    )
+    oc.console.print(t("  [green]✓ Keys written to config and mirrored to {path} (owner-only).[/green]", path=path))
     # Both are surprising enough to be worth a line each. The capture is cached
     # per process, so a gateway already running keeps the environment it started
     # with; and a Debian ~/.bashrc returns early for non-interactive shells, so
     # a plain `bash script.sh` never reaches an appended line.
-    oc.console.print(
-        oc._t(
-            "  [dim]A running gateway / TUI picks these up on its next restart.[/dim]",
-            "  [dim]正在运行的 gateway / TUI 需重启后生效。[/dim]",
-        )
-    )
+    oc.console.print(t("  [dim]A running gateway / TUI picks these up on its next restart.[/dim]"))
 
 
 def _step5_web(
@@ -187,31 +173,22 @@ def _step5_web(
     non-interactive run auto-skips, and dropping a key the caller passed
     explicitly would be the wrong reading of ``--non-interactive``.
     """
-    oc._step_header(5, oc._t("Web access", "联网能力"))
+    oc._step_header(5, t("Web access"))
 
     if serper_api_key or jina_api_key:
         _report(_write_keys(serper_api_key or "", jina_api_key or ""))
         return None
 
     if skip or non_interactive:
-        oc.console.print(
-            oc._t(
-                "  [dim]Skipping the web tool keys (set them up later: raven onboard).[/dim]",
-                "  [dim]跳过联网 key(以后可用 raven onboard 设置)。[/dim]",
-            )
-        )
+        oc.console.print(t("  [dim]Skipping the web tool keys (set them up later: raven onboard).[/dim]"))
         return None
 
     oc.console.print(
-        oc._t(
+        t(
             "  [dim]web_search[/dim]  Search the web — needs a Serper key; without one the\n"
             "              tool is not offered to the model at all.\n"
             "  [dim]web_fetch [/dim]  Read a page — works with no key at a lower rate limit;\n"
-            "              a Jina key raises it.",
-            "  [dim]web_search[/dim]  搜索网页 — 需要 Serper key;没有 key 时这个工具\n"
-            "              根本不会提供给模型。\n"
-            "  [dim]web_fetch [/dim]  读取网页 — 没有 key 也能用,只是限流更低;\n"
-            "              填 Jina key 可提高限额。",
+            "              a Jina key raises it."
         ),
         highlight=False,
     )
@@ -219,18 +196,18 @@ def _step5_web(
 
     stored_serper, stored_jina = _stored_keys()
     serper = _prompt_key(
-        label=oc._t("Serper API key", "Serper API key"),
+        label=t("Serper API key"),
         obtain_from=_SERPER_SIGNUP,
         current=stored_serper,
-        optional_note=oc._t(" enables web_search", " 启用 web_search"),
+        optional_note=t(" enables web_search"),
     )
     if serper is None:
         raise typer.Exit(1)
     jina = _prompt_key(
-        label=oc._t("Jina API key", "Jina API key"),
+        label=t("Jina API key"),
         obtain_from=_JINA_SIGNUP,
         current=stored_jina,
-        optional_note=oc._t(" optional", " 可选"),
+        optional_note=t(" optional"),
     )
     if jina is None:
         raise typer.Exit(1)
@@ -243,9 +220,9 @@ def _step5_web(
     targets = rc_targets()
     if not targets:
         oc.console.print(
-            oc._t(
-                f"  [dim]$SHELL is not bash or zsh; add this line yourself:[/dim]\n    {SOURCE_LINE}",
-                f"  [dim]$SHELL 不是 bash / zsh,请自行加这一行:[/dim]\n    {SOURCE_LINE}",
+            t(
+                "  [dim]$SHELL is not bash or zsh; add this line yourself:[/dim]\n    {SOURCE_LINE}",
+                SOURCE_LINE=SOURCE_LINE,
             ),
             highlight=False,
         )
@@ -258,19 +235,9 @@ def _step5_web(
         return None
     touched = [target for target in targets if ensure_rc_source_line(target)]
     for target in touched:
-        oc.console.print(
-            oc._t(
-                f"  [green]✓ Added to {target}[/green]",
-                f"  [green]✓ 已加入 {target}[/green]",
-            )
-        )
+        oc.console.print(t("  [green]✓ Added to {target}[/green]", target=target))
     if touched:
-        oc.console.print(
-            oc._t(
-                "  [dim]New shells pick it up; sub-agents on the next raven restart.[/dim]",
-                "  [dim]新开的终端立即生效;子代理需 raven 重启后生效。[/dim]",
-            )
-        )
+        oc.console.print(t("  [dim]New shells pick it up; sub-agents on the next raven restart.[/dim]"))
     return None
 
 

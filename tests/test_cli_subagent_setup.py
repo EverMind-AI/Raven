@@ -454,22 +454,26 @@ def test_prune_reports_an_unreadable_config(tmp_path: Path) -> None:
 
 
 def test_prune_summary_goes_through_the_wizard_language(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Every line in this step renders one language per _LANG; the summary must
+    # Every line in this step renders in the UI language; the summary must
     # not be the one line that prints both at once.
     _folder(tmp_path, "raven-research", display="Raven-Research")
     config = _stale_config(tmp_path, [{"name": "Raven-Research", "kind": "cli", "enabled": True}])
     folders = subagent_setup.discover(tmp_path)
     console = _RecordingConsole()
-    rendered: list[tuple[str, str]] = []
-    monkeypatch.setattr(onboard_commands, "_t", lambda en, zh: rendered.append((en, zh)) or "RENDERED")
+    rendered: list[str] = []
+    monkeypatch.setattr(
+        subagent_setup,
+        "t",
+        lambda text, **arguments: rendered.append(text.format(**arguments) if arguments else text) or "RENDERED",
+    )
 
     removed = subagent_setup._prune_shadowing_rows(
         folders, tmp_path, console, _AlwaysConfirm(True), [], config_path=config
     )
 
     assert removed == 1
-    assert any("Removed 1 shadowing" in en for en, _ in rendered)
-    assert any("Backed up the previous list" in en for en, _ in rendered)
+    assert any("Removed 1 shadowing" in text for text in rendered)
+    assert any("Backed up the previous list" in text for text in rendered)
     assert console.lines[-1] == "RENDERED"
 
 
