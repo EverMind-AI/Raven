@@ -34,6 +34,11 @@ All notable changes to Raven are documented here.
   imports the loop shell it is consumed by. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- Config version floor 4 retires three legacy leaves in the file instead of
+  in the schema: `skillForge.skillsDir` becomes the first `skillForge.localDirs`
+  entry, `skillForge.massLibraryDb` and `context.engine` are removed, each
+  with a notice on the first load. The model validators and the
+  DeprecationWarning that used to paper over them are gone.
 - The nine terminal-dialect RPC methods that had handlers but no contract
   entry (`clipboard.paste`, `command.dispatch`, `delegation.status/pause`,
   `input.detect_drop`, `session.interrupt`, `shell.exec`, `skills.manage`,

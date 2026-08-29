@@ -154,7 +154,6 @@ def test_config_safe_defaults():
     # Risky/novel auto-* features must default to OFF so a fresh install
     # behaves like vanilla raven; the baseline retrieval pipeline
     # (context engine, skill_forge retrieval/injection) defaults ON as of R8.
-    assert cfg.context.engine == "unified"
     assert cfg.sentinel.enabled is False
     assert cfg.skill_forge.enabled is True  # R8: retrieval/injection pipeline on by default
     assert cfg.skill_forge.auto_detect is False

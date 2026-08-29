@@ -17,7 +17,7 @@ from raven.utils.atomic_io import atomic_replace, atomic_update
 # than on every load -- the watermark is what lets a user re-set by hand
 # whatever a migration cleared. Kept out of the schema on purpose: see
 # ``_stamp_path``.
-CURRENT_CONFIG_VERSION = 3
+CURRENT_CONFIG_VERSION = 4
 
 # The generation that introduced each run-once migration. Each is gated on its
 # own floor rather than on "is this config current", because those are not the
@@ -30,6 +30,7 @@ CURRENT_CONFIG_VERSION = 3
 _CONTEXT_WINDOW_MIGRATION = 1
 _AUTO_PROVIDER_MIGRATION = 2
 _RETIRED_GATEWAY_WEB_MIGRATION = 3
+_LEGACY_LEAVES_MIGRATION = 4
 
 # The context window every pre-0.1.11 bootstrap wrote to disk verbatim: back
 # then ``AgentDefaults.context_window_tokens`` defaulted to this number and
@@ -362,6 +363,8 @@ def _persist_migrations(path: Path, from_version: int = 0) -> None:
                 changed = _migrate_auto_provider(raw) or changed
             if from_version < _RETIRED_GATEWAY_WEB_MIGRATION:
                 changed = _migrate_retired_gateway_web(raw) or changed
+            if from_version < _LEGACY_LEAVES_MIGRATION:
+                changed = _migrate_legacy_leaves(raw) or changed
         if not changed:
             return None, True
         return json.dumps(raw, indent=2, ensure_ascii=False), True
@@ -535,6 +538,56 @@ def _migrate_retired_gateway_web(data: dict[str, Any], *, notify: bool = False) 
     return True
 
 
+def _migrate_legacy_leaves(data: dict[str, Any], *, notify: bool = False) -> bool:
+    """Retire the three leaves the schema kept accepting after their meaning left.
+
+    ``skillForge.skillsDir`` becomes the first ``skillForge.localDirs`` entry (the
+    model used to convert it on every load, with a DeprecationWarning nobody
+    saw); ``skillForge.massLibraryDb`` is dropped (the mass pool is retired; the
+    remote library is the Hub source); ``context.engine`` is dropped (one context
+    engine exists, the selector had no effect). Run once per config through the
+    version floor and persisted, so the file loses the keys and the model needs
+    no shim for them.
+    """
+    changed = False
+    notices: list[str] = []
+    for key in ("skillForge", "skill_forge"):
+        block = data.get(key)
+        if not isinstance(block, dict):
+            continue
+        for old in ("skills_dir", "skillsDir"):
+            if old not in block:
+                continue
+            path = block.pop(old)
+            changed = True
+            if path and "local_dirs" not in block and "localDirs" not in block:
+                block["localDirs" if key == "skillForge" else "local_dirs"] = [{"path": path}]
+                notices.append(
+                    f"Moved `{key}.{old}` in your config to `{key}.localDirs`: the single skills directory "
+                    "became a list of local skill sources."
+                )
+        for old in ("mass_library_db", "massLibraryDb"):
+            if old in block:
+                block.pop(old)
+                changed = True
+                notices.append(
+                    f"Removed `{key}.{old}` from your config: the mass pool is retired. The remote skill "
+                    "library is the Hub source, configured at `skillForge.router.hub.endpoint`."
+                )
+    context = data.get("context")
+    if isinstance(context, dict) and "engine" in context:
+        context.pop("engine")
+        changed = True
+        notices.append(
+            "Removed `context.engine` from your config: there is one context engine now, so the selector had no effect."
+        )
+    if notify:
+        for notice in notices:
+            if notice not in _migration_notices:
+                _migration_notices.append(notice)
+    return changed
+
+
 def _migrate_config(data: dict, *, pop_extension_keys: bool = True, from_version: int = CURRENT_CONFIG_VERSION) -> dict:
     """Migrate old config formats to current.
 
@@ -559,6 +612,8 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True, from_version
         _migrate_auto_provider(data, notify=True)
     if from_version < _RETIRED_GATEWAY_WEB_MIGRATION:
         _migrate_retired_gateway_web(data, notify=True)
+    if from_version < _LEGACY_LEAVES_MIGRATION:
+        _migrate_legacy_leaves(data, notify=True)
 
     # Move tools.exec.restrictToWorkspace → tools.restrictToWorkspace
     tools = data.get("tools", {})
