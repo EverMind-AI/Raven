@@ -40,7 +40,7 @@ import httpx
 
 from raven.memory_engine import Memory
 from raven.plugins import PluginContext
-from raven.plugins.memory.everos._server import DEFAULT_EVEROS_BASE_URL
+from raven.plugins.memory.everos.server import DEFAULT_EVEROS_BASE_URL
 
 logger = logging.getLogger("raven.plugins.memory.everos")
 
@@ -248,7 +248,7 @@ class _HttpEverosAdapter:
         return self._caps
 
     async def _probe_capabilities(self) -> dict[str, bool]:
-        from raven.plugins.memory.everos._health import HEALTH_TIMEOUT_S, parse_capabilities
+        from raven.plugins.memory.everos.health import HEALTH_TIMEOUT_S, parse_capabilities
 
         try:
             # Same headers as every other call on this client: everos ships no
@@ -459,7 +459,7 @@ class EverosBackend:
         wait, or stop and report. The child's exit code separates them; there is
         no timing heuristic that does.
         """
-        from raven.plugins.memory.everos._server import ProbeResult
+        from raven.plugins.memory.everos.server import ProbeResult
 
         if self._state in _TERMINAL_STATES:
             return
@@ -529,7 +529,7 @@ class EverosBackend:
             self._probe_task = None
 
     async def _probe_once(self) -> None:
-        from raven.plugins.memory.everos._server import probe_health
+        from raven.plugins.memory.everos.server import probe_health
 
         base_url = self._config.get("base_url") or DEFAULT_EVEROS_BASE_URL
         result = await asyncio.to_thread(probe_health, base_url)
@@ -544,7 +544,7 @@ class EverosBackend:
         """
         import httpx
 
-        from raven.plugins.memory.everos._server import ProbeResult
+        from raven.plugins.memory.everos.server import ProbeResult
 
         if isinstance(exc, (httpx.TimeoutException, asyncio.TimeoutError)):
             self._apply_probe(ProbeResult.TIMEOUT)
@@ -633,7 +633,7 @@ class EverosBackend:
             from rich.console import Console
 
             from raven.config.update_everos import everos_owned
-            from raven.plugins.memory.everos._server import (
+            from raven.plugins.memory.everos.server import (
                 EverosBinaryMissingError,
                 EverosNotConfiguredError,
                 ensure_everos_server,
@@ -646,7 +646,7 @@ class EverosBackend:
                 # A root the user manages: connect if a server is up, never start
                 # one. Starting it would take the OME jobstore lock exclusively,
                 # which is theirs to grant, not raven's to assume.
-                from raven.plugins.memory.everos._server import ProbeResult, probe_health
+                from raven.plugins.memory.everos.server import ProbeResult, probe_health
 
                 if await asyncio.to_thread(probe_health, base_url) is ProbeResult.OK:
                     self._state = ServiceState.READY
@@ -758,7 +758,7 @@ class EverosBackend:
         repeating it every start would be noise.
         """
         from raven.config.update_everos import everos_owned
-        from raven.plugins.memory.everos._health import probe_capabilities
+        from raven.plugins.memory.everos.health import probe_capabilities
 
         report = probe_capabilities(base_url)
         if not everos_owned():
@@ -775,7 +775,7 @@ class EverosBackend:
             return
         from rich.console import Console
 
-        from raven.plugins.memory.everos._server import server_log_path
+        from raven.plugins.memory.everos.server import server_log_path
 
         Console(stderr=True).print(
             "[yellow]EverOS is running but embedding is unavailable: recall falls back to "

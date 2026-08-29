@@ -111,7 +111,9 @@ _Avoid_: conflating with a Turn — a Subagent lives outside the main turn and r
 The one list of agents raven can dispatch to, materialized once per process as an
 `AgentRegistry` that `spawn`, `run_subagent_dag` and the playbook generator all read.
 A row is a name plus a `kind` (`builtin` / `cli` / `acp` / `openai`) plus that kind's
-connection fields; `AgentCaps` and `Injectable` are *derived* from it, and are what a
+connection fields; the `kind` set is closed -- a new kind is a new backend module plus a
+branch in `agent/subagent/backends/__init__.py:build_third_party_backend`, and no plugin
+door for subagent kinds exists (recorded, not promised); `AgentCaps` and `Injectable` are *derived* from it, and are what a
 consumer branches on so that nothing has to switch on the transport.
 Three sources compose it, weakest first: **vendored** rows discovered on the
 filesystem, then `builtin` package seeds, then config. `builtin` rows are package seeds
@@ -254,6 +256,11 @@ _Avoid_: "function" — a Tool is the agent-facing capability, not a Python func
 **Tool Registry** (`agent/tools/registry.py`):
 The name→`Tool` table the Agent Loop dispatches into: resolves a tool by name and runs
 its `execute` under a timeout, returning the string result or a structured error.
+Three doors feed it, every one through `register` and its `admit_tool` check: the loop's
+own wiring registers the builtin tools (`agent/loop/wiring.py`), the assembly root registers
+plugin tools built by `PluginRegistry.build_tool` (`core/plugin_stack.py`), and `mcp_glue`
+registers MCP tools per connected server.
+_Avoid_: a fourth door -- a tool reaching the table any other way skips admission.
 
 **Deep Research** (`agent/tools/deep_research.py`):
 Opt-in tool delegating an open-ended research question to the MiroThinker API; returns a

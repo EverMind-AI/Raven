@@ -30,6 +30,7 @@ from raven.cli import _onboard_shared, onboard_channels, onboard_commands, onboa
 from raven.cli.commands import app
 from raven.config.loader import set_config_path
 from raven.plugins.memory.everos import roots as _discover_mod
+from raven.plugins.memory.everos import server
 
 runner = CliRunner()
 
@@ -102,17 +103,17 @@ def _no_everos_io(monkeypatch: pytest.MonkeyPatch):
     Both defaults are the inert ones; tests that care install their own answer,
     which wins because it is set later.
     """
-    import raven.plugins.memory.everos._server as srv
-    from raven.plugins.memory.everos import _health
+    import raven.plugins.memory.everos.server as srv
+    from raven.plugins.memory.everos import health
 
     async def _no_spawn(*_a: object, **_kw: object) -> None:
         return None
 
     monkeypatch.setattr(srv, "ensure_everos_server", _no_spawn)
     monkeypatch.setattr(
-        _health,
+        health,
         "probe_capabilities",
-        lambda *_a, **_kw: _health.CapabilityReport(reachable=False, error="probe disabled in tests"),
+        lambda *_a, **_kw: health.CapabilityReport(reachable=False, error="probe disabled in tests"),
     )
     return monkeypatch
 
@@ -1473,7 +1474,7 @@ def test_memory_enable_writes_everos_sections(
     monkeypatch.setattr(onboard_everos, "_probe_everos_chat", lambda *a, **kw: (True, "ok"))
     monkeypatch.setattr(onboard_everos, "_verify_embedding_dim", lambda **kw: True)
 
-    import raven.plugins.memory.everos._server as everos_server
+    import raven.plugins.memory.everos.server as everos_server
 
     async def _fake_ensure_everos_server(*a: object, **kw: object) -> None:
         return None
@@ -1537,7 +1538,7 @@ def test_the_memory_step_reaches_the_capability_report(
     monkeypatch.setattr(onboard_everos, "_probe_everos_chat", lambda *a, **kw: (True, "ok"))
     monkeypatch.setattr(onboard_everos, "_verify_embedding_dim", lambda **kw: True)
 
-    import raven.plugins.memory.everos._server as everos_server
+    import raven.plugins.memory.everos.server as everos_server
 
     async def _fake_ensure_everos_server(*a: object, **kw: object) -> None:
         return None
@@ -1582,7 +1583,7 @@ def test_memory_step_starts_the_configured_address_not_the_default(
         if len(seen) == 1:
             raise RuntimeError("boom")
 
-    import raven.plugins.memory.everos._server as everos_server
+    import raven.plugins.memory.everos.server as everos_server
 
     monkeypatch.setattr(everos_server, "ensure_everos_server", _fake_ensure)
     # The port question is asked only when the intended port is taken, and this
@@ -1627,7 +1628,7 @@ def test_a_failed_start_does_not_decide_to_abandon_memory(
     async def _always_fails(*_a: object, **_kw: object) -> None:
         raise RuntimeError("boom")
 
-    import raven.plugins.memory.everos._server as everos_server
+    import raven.plugins.memory.everos.server as everos_server
 
     monkeypatch.setattr(everos_server, "ensure_everos_server", _always_fails)
     monkeypatch.setattr(onboard_everos, "_config_everos_role", lambda **_: None)
@@ -1658,7 +1659,7 @@ def test_a_failed_start_can_be_retried_until_it_works(
         if len(attempts) < 3:
             raise RuntimeError("boom")
 
-    import raven.plugins.memory.everos._server as everos_server
+    import raven.plugins.memory.everos.server as everos_server
 
     monkeypatch.setattr(everos_server, "ensure_everos_server", _fails_twice)
     monkeypatch.setattr(onboard_everos, "_config_everos_role", lambda **_: None)
@@ -1689,7 +1690,7 @@ def test_a_failed_start_can_switch_port(tmp_env: Path, everos_isolated: Path, mo
         if len(seen) == 1:
             raise RuntimeError("boom")
 
-    import raven.plugins.memory.everos._server as everos_server
+    import raven.plugins.memory.everos.server as everos_server
 
     monkeypatch.setattr(everos_server, "ensure_everos_server", _fails_once)
     monkeypatch.setattr(onboard_everos, "_config_everos_role", lambda **_: None)
@@ -1735,7 +1736,7 @@ def test_change_port_asks_even_when_the_port_tests_free(
         if len(seen) == 1:
             raise RuntimeError("boom")
 
-    import raven.plugins.memory.everos._server as everos_server
+    import raven.plugins.memory.everos.server as everos_server
 
     monkeypatch.setattr(everos_server, "ensure_everos_server", _fails_once)
     monkeypatch.setattr(onboard_everos, "_config_everos_role", lambda **_: None)
@@ -1812,18 +1813,17 @@ class TestTakingOverAFoundRoot:
         confirm an existing setup had the service stopped and restarted on the
         configured port before any menu appeared.
         """
-        from raven.plugins.memory.everos import _server
 
         root = tmp_env.parent / "everos"
         _found(_stubs, _root_state(root, declared_url="http://localhost:1995"))
         touched: list[str] = []
-        _stubs.setattr(_server, "stop_recorded_server", lambda *_a, **_kw: touched.append("stop"))
-        _stubs.setattr(_server, "stop_pid", lambda *_a, **_kw: touched.append("stop"))
+        _stubs.setattr(server, "stop_recorded_server", lambda *_a, **_kw: touched.append("stop"))
+        _stubs.setattr(server, "stop_pid", lambda *_a, **_kw: touched.append("stop"))
 
         async def _ensure(url: str, **_kw: object) -> None:
             touched.append(url)
 
-        _stubs.setattr(_server, "ensure_everos_server", _ensure)
+        _stubs.setattr(server, "ensure_everos_server", _ensure)
         _stubs.setattr(onboard_everos, "_config_everos_role", lambda **_kw: pytest.fail("reconfigured on reuse"))
         self._answers(_stubs, ["managed", "reuse"])
 
@@ -1847,7 +1847,6 @@ class TestTakingOverAFoundRoot:
         into the collision and fail. The port question exists for exactly that
         case, and the reuse lane never asked it.
         """
-        from raven.plugins.memory.everos import _server
 
         root = tmp_env.parent / "everos"
         _found(_stubs, _root_state(root, alive=False, lock_held=False, declared_url="http://localhost:18791"))
@@ -1859,7 +1858,7 @@ class TestTakingOverAFoundRoot:
         async def _ensure(url: str, **_kw: object) -> None:
             started.append(url)
 
-        _stubs.setattr(_server, "ensure_everos_server", _ensure)
+        _stubs.setattr(server, "ensure_everos_server", _ensure)
         self._answers(_stubs, ["managed", "reuse"])
 
         onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
@@ -1872,7 +1871,6 @@ class TestTakingOverAFoundRoot:
     def test_a_failed_start_offers_change_port(self, tmp_env: Path, everos_isolated: Path, _stubs) -> None:
         """The pre-check cannot see the future: a port free at the check can
         be taken before bind, so the failure menu is the second net."""
-        from raven.plugins.memory.everos import _server
 
         root = tmp_env.parent / "everos"
         _found(_stubs, _root_state(root, alive=False, lock_held=False, declared_url="http://localhost:18791"))
@@ -1895,7 +1893,7 @@ class TestTakingOverAFoundRoot:
             if len(started) == 1:
                 raise RuntimeError("taken between check and bind")
 
-        _stubs.setattr(_server, "ensure_everos_server", _ensure)
+        _stubs.setattr(server, "ensure_everos_server", _ensure)
         self._answers(_stubs, ["managed", "reuse", "change"])
 
         onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
@@ -1910,8 +1908,6 @@ class TestTakingOverAFoundRoot:
         memory off, instead of silently ending the step."""
         import questionary
 
-        from raven.plugins.memory.everos import _server
-
         root = tmp_env.parent / "everos"
         _found(_stubs, _root_state(root, alive=False, lock_held=False, declared_url="http://localhost:18791"))
         _stubs.setattr(onboard_everos, "_port_is_free", lambda _p: True)
@@ -1919,7 +1915,7 @@ class TestTakingOverAFoundRoot:
         async def _ensure(*_a: object, **_kw: object) -> None:
             raise RuntimeError("boom")
 
-        _stubs.setattr(_server, "ensure_everos_server", _ensure)
+        _stubs.setattr(server, "ensure_everos_server", _ensure)
         asked: list[str] = []
         it = iter(["managed", "reuse", "skip"])
 
@@ -1939,7 +1935,6 @@ class TestTakingOverAFoundRoot:
     ) -> None:
         """The start can fail for reasons no port fixes; Change port then
         silently rerunning the same address looks broken."""
-        from raven.plugins.memory.everos import _server
 
         root = tmp_env.parent / "everos"
         _found(_stubs, _root_state(root, alive=False, lock_held=False, declared_url="http://localhost:18791"))
@@ -1957,7 +1952,7 @@ class TestTakingOverAFoundRoot:
             if len(started) == 1:
                 raise RuntimeError("boom")
 
-        _stubs.setattr(_server, "ensure_everos_server", _ensure)
+        _stubs.setattr(server, "ensure_everos_server", _ensure)
         self._answers(_stubs, ["managed", "reuse", "change"])
 
         onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
@@ -2008,7 +2003,6 @@ class TestTakingOverAFoundRoot:
         self, tmp_env: Path, everos_isolated: Path, _stubs
     ) -> None:
         """Moving the port is what reconfiguring is for, and only that."""
-        from raven.plugins.memory.everos import _server
 
         root = tmp_env.parent / "everos"
         _found(_stubs, _root_state(root, declared_url="http://localhost:1995"))
@@ -2020,7 +2014,7 @@ class TestTakingOverAFoundRoot:
         async def _ensure(url: str, **_kw: object) -> None:
             started.append(url)
 
-        _stubs.setattr(_server, "ensure_everos_server", _ensure)
+        _stubs.setattr(server, "ensure_everos_server", _ensure)
         self._answers(_stubs, ["managed", "redo"])
 
         onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
@@ -2041,7 +2035,6 @@ class TestTakingOverAFoundRoot:
         and one that just wants its memory back is not asked to accept a move it
         did not request.
         """
-        from raven.plugins.memory.everos import _server
 
         root = tmp_env.parent / "everos"
         _found(_stubs, _root_state(root, alive=False, lock_held=False, declared_url="http://localhost:1995"))
@@ -2050,7 +2043,7 @@ class TestTakingOverAFoundRoot:
         async def _ensure(url: str, **_kw: object) -> None:
             started.append(url)
 
-        _stubs.setattr(_server, "ensure_everos_server", _ensure)
+        _stubs.setattr(server, "ensure_everos_server", _ensure)
         self._answers(_stubs, ["managed", "reuse"])
 
         onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
@@ -2070,8 +2063,6 @@ class TestTakingOverAFoundRoot:
         """
         from types import SimpleNamespace
 
-        from raven.plugins.memory.everos import _server
-
         root = tmp_env.parent / "everos"
         _found(_stubs, _root_state(root, alive=False, lock_held=True, declared_url="http://localhost:1995"))
         _stubs.setattr(
@@ -2084,7 +2075,7 @@ class TestTakingOverAFoundRoot:
         async def _ensure(url: str, **_kw: object) -> None:
             started.append(url)
 
-        _stubs.setattr(_server, "ensure_everos_server", _ensure)
+        _stubs.setattr(server, "ensure_everos_server", _ensure)
         self._answers(_stubs, ["managed", "reuse"])
 
         onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
@@ -2104,8 +2095,6 @@ class TestTakingOverAFoundRoot:
         """
         from types import SimpleNamespace
 
-        from raven.plugins.memory.everos import _server
-
         root = tmp_env.parent / "everos"
         _found(_stubs, _root_state(root, alive=False, lock_held=True, declared_url="http://localhost:1995"))
         _stubs.setattr(
@@ -2118,7 +2107,7 @@ class TestTakingOverAFoundRoot:
         async def _ensure(url: str, **_kw: object) -> None:
             started.append(url)
 
-        _stubs.setattr(_server, "ensure_everos_server", _ensure)
+        _stubs.setattr(server, "ensure_everos_server", _ensure)
         _stubs.setattr(onboard_everos, "_config_everos_role", lambda **_kw: pytest.fail("walked the roles anyway"))
         self._answers(_stubs, ["managed", "reuse"])
 
@@ -2133,7 +2122,6 @@ class TestTakingOverAFoundRoot:
     def test_a_start_that_fails_is_reported_with_its_reason(
         self, tmp_env: Path, everos_isolated: Path, _stubs, capsys: pytest.CaptureFixture
     ) -> None:
-        from raven.plugins.memory.everos import _server
 
         root = tmp_env.parent / "everos"
         _found(_stubs, _root_state(root, alive=False, lock_held=False, declared_url="http://localhost:1995"))
@@ -2141,7 +2129,7 @@ class TestTakingOverAFoundRoot:
         async def _boom(_url: str, **_kw: object) -> None:
             raise RuntimeError("port 1995 is occupied")
 
-        _stubs.setattr(_server, "ensure_everos_server", _boom)
+        _stubs.setattr(server, "ensure_everos_server", _boom)
         _stubs.setattr(onboard_everos, "_config_everos_role", lambda **_kw: pytest.fail("walked the roles anyway"))
         self._answers(_stubs, ["managed", "reuse", "skip"])
 
@@ -4506,13 +4494,13 @@ def test_configuring_azure_stores_the_endpoint_it_was_given(tmp_env: Path, monke
 
 def _stub_capabilities(monkeypatch: pytest.MonkeyPatch, *, configured: tuple[str, ...], **caps: bool) -> None:
     from raven.config import update_everos
-    from raven.plugins.memory.everos import _health
+    from raven.plugins.memory.everos import health
 
     monkeypatch.setattr(update_everos, "everos_role_configured", lambda s: s in configured)
     monkeypatch.setattr(
-        _health,
+        health,
         "probe_capabilities",
-        lambda *_a, **_kw: _health.CapabilityReport(reachable=True, capabilities=caps),
+        lambda *_a, **_kw: health.CapabilityReport(reachable=True, capabilities=caps),
     )
 
 
@@ -5571,7 +5559,7 @@ def test_everos_role_optionality_matches_design():
     the wizard) while embedding/rerank/multimodal degrade gracefully and stay
     skippable. Keeps the wizard metadata aligned with the health contract."""
     from raven.cli.onboard_everos import _EVEROS_ROLES
-    from raven.plugins.memory.everos._health import DEGRADING_SECTIONS, REQUIRED_SECTIONS
+    from raven.plugins.memory.everos.health import DEGRADING_SECTIONS, REQUIRED_SECTIONS
 
     assert REQUIRED_SECTIONS == ("llm",)
     assert set(DEGRADING_SECTIONS) == {"embedding", "rerank", "multimodal"}
@@ -5697,11 +5685,11 @@ class TestPointingRavenAtAnEverosYouRun:
         self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from raven.cli import onboard_everos
-        from raven.plugins.memory.everos._server import ProbeResult
+        from raven.plugins.memory.everos.server import ProbeResult
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
         self._stub_prompts(monkeypatch, host="127.0.0.1", port="8000")
-        monkeypatch.setattr("raven.plugins.memory.everos._server.probe_health", lambda _u, **_kw: ProbeResult.OK)
+        monkeypatch.setattr("raven.plugins.memory.everos.server.probe_health", lambda _u, **_kw: ProbeResult.OK)
 
         assert onboard_everos._use_self_managed_everos() is True
 
@@ -5716,14 +5704,14 @@ class TestPointingRavenAtAnEverosYouRun:
         import questionary
 
         from raven.cli import onboard_everos
-        from raven.plugins.memory.everos._server import ProbeResult
+        from raven.plugins.memory.everos.server import ProbeResult
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
         self._stub_prompts(monkeypatch, host="127.0.0.1", port="8000")
         # A refusal now offers a retype before giving up; this case is the
         # giving-up branch, so answer it that way.
         monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer("skip"))
-        monkeypatch.setattr("raven.plugins.memory.everos._server.probe_health", lambda _u, **_kw: ProbeResult.REFUSED)
+        monkeypatch.setattr("raven.plugins.memory.everos.server.probe_health", lambda _u, **_kw: ProbeResult.REFUSED)
 
         assert onboard_everos._use_self_managed_everos() is False
 
@@ -5783,7 +5771,7 @@ class TestSwitchingToSelfManagedClearsTheOldRoot:
 
     def test_the_previous_root_does_not_survive(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from raven.cli import onboard_everos
-        from raven.plugins.memory.everos._server import ProbeResult
+        from raven.plugins.memory.everos.server import ProbeResult
 
         tmp_env.write_text(
             json.dumps(
@@ -5799,7 +5787,7 @@ class TestSwitchingToSelfManagedClearsTheOldRoot:
         answers = iter(["127.0.0.1", "8000"])
         monkeypatch.setattr(questionary, "text", lambda *a, **kw: _Answer(next(answers)))
         monkeypatch.setattr(onboard_everos.oc, "_require_questionary", lambda: questionary)
-        monkeypatch.setattr("raven.plugins.memory.everos._server.probe_health", lambda _u, **_kw: ProbeResult.OK)
+        monkeypatch.setattr("raven.plugins.memory.everos.server.probe_health", lambda _u, **_kw: ProbeResult.OK)
 
         assert onboard_everos._use_self_managed_everos() is True
 
@@ -6050,7 +6038,7 @@ class TestARefusedAddressCanBeRetyped:
 
     def test_a_second_address_is_accepted(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from raven.cli import onboard_everos
-        from raven.plugins.memory.everos._server import ProbeResult
+        from raven.plugins.memory.everos.server import ProbeResult
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
         self._prompts(monkeypatch, ["127.0.0.1", "8000", "127.0.0.1", "8100"])
@@ -6061,7 +6049,7 @@ class TestARefusedAddressCanBeRetyped:
             seen.append(url)
             return ProbeResult.OK if url.endswith(":8100") else ProbeResult.REFUSED
 
-        monkeypatch.setattr("raven.plugins.memory.everos._server.probe_health", _probe)
+        monkeypatch.setattr("raven.plugins.memory.everos.server.probe_health", _probe)
 
         assert onboard_everos._use_self_managed_everos() is True
         assert seen == ["http://127.0.0.1:8000", "http://127.0.0.1:8100"]
@@ -6070,12 +6058,12 @@ class TestARefusedAddressCanBeRetyped:
 
     def test_skipping_gives_up_without_recording_anything(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from raven.cli import onboard_everos
-        from raven.plugins.memory.everos._server import ProbeResult
+        from raven.plugins.memory.everos.server import ProbeResult
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
         self._prompts(monkeypatch, ["127.0.0.1", "8000"])
         self._choices(monkeypatch, ["skip"])
-        monkeypatch.setattr("raven.plugins.memory.everos._server.probe_health", lambda _u, **_kw: ProbeResult.REFUSED)
+        monkeypatch.setattr("raven.plugins.memory.everos.server.probe_health", lambda _u, **_kw: ProbeResult.REFUSED)
 
         assert onboard_everos._use_self_managed_everos() is False
         slice_ = (json.loads(tmp_env.read_text()).get("plugins") or {}).get("config", {}).get("everos-memory", {})
@@ -6085,12 +6073,12 @@ class TestARefusedAddressCanBeRetyped:
         """A typo in the port is the same mistake as a typo in the host; it
         should not be the one that ends the step without asking."""
         from raven.cli import onboard_everos
-        from raven.plugins.memory.everos._server import ProbeResult
+        from raven.plugins.memory.everos.server import ProbeResult
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
         self._prompts(monkeypatch, ["127.0.0.1", "80o0", "127.0.0.1", "8000"])
         self._choices(monkeypatch, ["retry"])
-        monkeypatch.setattr("raven.plugins.memory.everos._server.probe_health", lambda _u, **_kw: ProbeResult.OK)
+        monkeypatch.setattr("raven.plugins.memory.everos.server.probe_health", lambda _u, **_kw: ProbeResult.OK)
 
         assert onboard_everos._use_self_managed_everos() is True
 
@@ -6148,7 +6136,7 @@ class TestReconfiguringRestartsOurOwnService:
         """The occupancy check is a bind test, so a service we started and are
         about to restart into looks exactly like a stranger squatting."""
         from raven.cli import onboard_everos
-        from raven.plugins.memory.everos._server import LockHolder
+        from raven.plugins.memory.everos.server import LockHolder
 
         tmp_env.write_text(
             json.dumps({"plugins": {"config": {"everos-memory": {"port": 31995, "root": "/r"}}}}),
@@ -6349,7 +6337,7 @@ class TestTheLaneDecidesOwnership:
         async def _ok(*_a: object, **_kw: object) -> None:
             return None
 
-        monkeypatch.setattr("raven.plugins.memory.everos._server.ensure_everos_server", _ok)
+        monkeypatch.setattr("raven.plugins.memory.everos.server.ensure_everos_server", _ok)
 
         onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
