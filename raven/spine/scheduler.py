@@ -524,6 +524,12 @@ class Scheduler:
         lane = self._lanes.get(conversation_id)
         return lane is not None and lane.running_future() is not None
 
+    def has_running(self) -> bool:
+        """True if any lane has a turn in flight, whatever its origin. The
+        gateway's reload guard asks this: a cron or sentinel turn mid-tool is
+        as much in flight as a user's."""
+        return any(lane.running_future() is not None for lane in self._lanes.values())
+
     async def _reap_loop(self) -> None:
         # Self-terminating, like the lane worker: runs while there are lanes to
         # reclaim and exits when none remain; the next submit restarts it.

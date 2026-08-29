@@ -236,7 +236,7 @@ async def test_auto_disable_survives_process_due_writeback(tmp_path: Path) -> No
 
     class _Handle:
         async def result(self):
-            return None
+            return object()  # a completed turn resolves with its outcome; None means it was cut
 
     svc.on_job = make_on_cron_job(submit=lambda req: _Handle(), cron_service=svc)
     await svc._process_due()

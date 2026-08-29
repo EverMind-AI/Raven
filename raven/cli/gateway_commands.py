@@ -455,6 +455,7 @@ def register(app: typer.Typer) -> None:
         async def run():
             health_server = None
             gw_teardown = None
+            gw_scheduler = None
             heartbeat = None
             question_broker = None
             control = None
@@ -475,7 +476,7 @@ def register(app: typer.Typer) -> None:
                     )
 
             async def _bind_generation():
-                nonlocal gw_teardown, question_broker, page_mount, heartbeat
+                nonlocal gw_teardown, gw_scheduler, question_broker, page_mount, heartbeat
 
                 # Generation wiring: everything here binds to the live agent
                 # object and is torn down and re-run at a generation swap.
@@ -498,6 +499,7 @@ def register(app: typer.Typer) -> None:
                     agent,
                     channels.channels,
                     user_pool=config.gateway.user_pool,
+                    cut_by_reload=lambda: swaps.in_flight,
                     system_pool=config.gateway.system_pool,
                     send_max_retries=config.gateway.send_max_retries,
                     shutdown_grace=config.gateway.shutdown_grace,
@@ -908,7 +910,8 @@ def register(app: typer.Typer) -> None:
                     if page_mount is not None:
                         questions += page_mount.question_broker.pending_count()
                     subagents = agent.subagents.get_running_count()
-                    if agent.is_processing or questions or subagents:
+                    in_flight = agent.is_processing or (gw_scheduler is not None and gw_scheduler.has_running())
+                    if in_flight or questions or subagents:
                         return {"ok": False, "reason": "busy", "subagents": subagents, "questions": questions}
                 return await _request_swap()
 

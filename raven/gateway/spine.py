@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from raven.spine.turn import TurnRequest
 
 _TURN_FAILED_REPLY = "Sorry, I encountered an error."
+_TURN_CUT_BY_RELOAD_REPLY = "A runtime reload cut this reply short; please send your message again."
 
 
 def _cid(req: TurnRequest) -> str:
@@ -111,13 +112,15 @@ def _make_gateway_sink(
     hub: DeliveryHub,
     agent_loop: AgentLoop,
     sources: dict[str, Source],
+    cut_by_reload: Callable[[], bool] | None = None,
 ) -> Callable[[TurnEvent], Awaitable[None]]:
     """Adapt the hub into the gateway's EventSink, restoring the two lifecycle
     side effects the bus drainer's ``_dispatch`` had (which the plain hub sink
     drops): on every turn end fire ``on_turn_complete`` (the WakeScheduler's
     parked-wake signal), and on a non-cancelled failure deliver a user-visible
     error reply to the originating channel. A cancelled turn (/stop) fires the
-    wake but sends no reply — mirroring the bus path (CancelledError re-raises
+    wake but sends no reply -- unless ``cut_by_reload`` says a generation swap
+    did the cancelling, in which case the channel is told the reply was cut — mirroring the bus path (CancelledError re-raises
     without the "Sorry" message) and build_rpc_spine's cancelled-gated emit_error.
 
     notify fires on every origin (cron / sentinel / heartbeat / channel), a
@@ -131,8 +134,13 @@ def _make_gateway_sink(
             return
         if isinstance(event, (TurnEnded, TurnFailed)):
             source = sources.pop(event.conversation_id, None)
-            if isinstance(event, TurnFailed) and not event.cancelled and source is not None:
-                await hub.dispatch(Text(content=_TURN_FAILED_REPLY, source=source))
+            if isinstance(event, TurnFailed) and source is not None:
+                if not event.cancelled:
+                    await hub.dispatch(Text(content=_TURN_FAILED_REPLY, source=source))
+                elif cut_by_reload is not None and cut_by_reload():
+                    # /stop is the user's own act and stays silent; a reload is
+                    # not, so the reply it cut is owed at least a sentence.
+                    await hub.dispatch(Text(content=_TURN_CUT_BY_RELOAD_REPLY, source=source))
             agent_loop._notify_turn_complete()
             return
         await hub.dispatch(event)
@@ -148,6 +156,7 @@ def build_gateway(
     system_pool: int = 2,
     send_max_retries: int = 3,
     shutdown_grace: float = 0.0,
+    cut_by_reload: Callable[[], bool] | None = None,
 ) -> tuple[Scheduler, DeliveryHub, dict[str, str], dict[str, Source], Callable[[], Awaitable[None]]]:
     """Wire the gateway's spine pieces: a hub with a ChannelOutletAdapter per
     channel (so a reply reaches its target channel), and a Scheduler whose runner
@@ -176,7 +185,7 @@ def build_gateway(
     scheduler = Scheduler(
         GatewayTurnRunner(agent_loop, readback_texts, sources),
         OriginPools(user=user_pool, system=system_pool),
-        _make_gateway_sink(hub, agent_loop, sources),
+        _make_gateway_sink(hub, agent_loop, sources, cut_by_reload),
     )
 
     async def teardown() -> None:

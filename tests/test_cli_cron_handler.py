@@ -66,7 +66,7 @@ def spine() -> SimpleNamespace:
 
     class _Handle:
         async def result(self):
-            return None
+            return object()  # a completed turn resolves with its outcome; None means it was cut
 
     def _submit(req):
         captured.append(req)
@@ -140,7 +140,7 @@ async def test_spine_path_reads_back_reply_into_system_event():
         async def result(self):
             # The gateway runner stores the reply before result() resolves.
             readback_texts["cron:job_t1"] = "reminder done at 17:05"
-            return None
+            return object()  # a completed turn resolves with its outcome; None means it was cut
 
     def _submit(req):
         captured["req"] = req
@@ -170,7 +170,7 @@ async def test_spine_path_no_reply_falls_back_to_no_response():
 
     class _Handle:
         async def result(self):
-            return None
+            return object()  # a completed turn resolves with its outcome; None means it was cut
 
     handler = make_on_cron_job(
         submit=lambda req: _Handle(),
