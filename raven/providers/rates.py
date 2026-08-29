@@ -45,7 +45,7 @@ DEFAULT_MAX_OUTPUT_TOKENS = 16384
 #: Rate pair: (prompt_cost_per_token, completion_cost_per_token) in USD.
 #: Keep this table small -- it is a fallback for brand-new models that LiteLLM
 #: has not indexed yet. Check LiteLLM first before adding here.
-_FALLBACK_PRICING: dict[str, tuple[float, float]] = {
+_FALLBACK_RATES: dict[str, tuple[float, float]] = {
     # OpenRouter model pages (snapshot 2026-03)
     "z-ai/glm-4.5-air": (0.13e-6, 0.85e-6),  # $0.13/$0.85 per 1M
 }
@@ -482,7 +482,7 @@ def _try_openrouter_rates(model: str, *, table: dict | None = None) -> tuple[flo
     """Look up live OpenRouter per-token rates. Returns rates or None.
 
     ``table`` supplies an already-resolved catalogue, which is what the ladder's
-    first tier passes: pricing runs after every completion, on the event loop, and
+    first tier passes: rate resolution runs after every completion, on the event loop, and
     must not be the thing that blocks a turn on an HTTP round-trip. Omitted, this
     fetches as before.
     """
@@ -562,7 +562,7 @@ def token_rates(model: str, input_tokens: int = 0, output_tokens: int = 0) -> tu
         or _try_litellm_rates(model, input_tokens, output_tokens)
         or _try_openrouter_rates(model)
         or _try_snapshot_rates(model)
-        or _FALLBACK_PRICING.get(model.removeprefix("openrouter/"))
+        or _FALLBACK_RATES.get(model.removeprefix("openrouter/"))
     )
 
 
