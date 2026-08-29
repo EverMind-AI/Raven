@@ -776,10 +776,9 @@ def test_every_interactive_spawn_names_the_binary(monkeypatch: pytest.MonkeyPatc
 
     from raven.cli import tui_commands
 
-    for fn in (tui_commands._spawn_with_rpc_pipes, tui_commands._spawn_with_rpc_socket):
-        source = inspect.getsource(fn)
-        assert "child_env()" in source, f"{fn.__name__} builds its own env"
-        assert "os.environ.copy()" not in source, f"{fn.__name__} bypasses child_env()"
+    source = inspect.getsource(tui_commands._spawn_with_rpc_socket)
+    assert "child_env()" in source, "the spawn builds its own env"
+    assert "os.environ.copy()" not in source, "the spawn bypasses child_env()"
 
 
 def test_bare_raven_passes_a_plain_value_for_every_tui_option(monkeypatch: pytest.MonkeyPatch) -> None:

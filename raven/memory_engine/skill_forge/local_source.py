@@ -67,14 +67,8 @@ class LocalSkillSource:
                 continue
             # ``skill_dir`` lets the post-gate hydrate step in
             # SkillsSegmentBuilder resolve {baseDir} / markdown-link refs
-            # without a second registry lookup. ``None`` for synthetic
-            # ``sqlite://`` rows (mass library imports without on-disk
-            # bundle); the refs helper then leaves placeholders bare.
-            path_obj = getattr(meta, "path", None)
-            path_str = str(path_obj) if path_obj is not None else ""
-            skill_dir: str | None = None
-            if path_obj is not None and not path_str.startswith("sqlite:"):
-                skill_dir = str(path_obj.parent)
+            # without a second registry lookup.
+            skill_dir: str | None = str(meta.path.parent)
             out.append(
                 RouterHit(
                     qualified_id=f"local/{h.name}",
