@@ -33,7 +33,7 @@ INNER_DIRS = ["spine", "contracts", "agent", "memory_engine", "context_engine",
               # proactive_engine's surface seat, ruled on a partition card.
               "config", "utils", "mcp", "playbook", "knowledge", "skill_hub",
               "trajectory"]
-SURFACES = ("raven.cli", "raven.rpc", "raven.web_rpc", "raven.proactive_engine", "raven.acp")
+SURFACES = ("raven.cli", "raven.rpc", "raven.proactive_engine", "raven.acp")
 
 
 def test_kernel_and_organs_know_no_surface():

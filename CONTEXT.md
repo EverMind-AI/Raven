@@ -899,22 +899,37 @@ read through the dispensed view, never by name on the socket.
 **Generation** (`core/runtime.py`, gateway):
 One assembled `RavenRuntime` serving turns. A config change swaps generations at a turn
 boundary: BUILD N+1 comes first (a candidate that fails to assemble leaves N serving),
-SWAP re-runs the gateway's generation wiring (spines, dispatcher bind, sinks, sentinel
-attach), DISPOSE retires N in a pinned order (`RavenRuntime.dispose`). Process-lifetime
-transports -- channels, cron, the sentinel runner, the web socket, health -- survive the
-swap. Trigger: SIGHUP to the gateway.
+SWAP re-runs the gateway's generation wiring (spine, sinks, sentinel attach), DISPOSE
+retires N in a pinned order (`RavenRuntime.dispose`). Process-lifetime transports --
+channels, cron, the sentinel runner, the control plane, health -- survive the swap. One
+swap at a time (`SwapCoordinator`: the slot is held from BUILD until right before the new
+loop runs, and accepted swaps are rate-limited). Honest timing: the serving loop stops
+within ~1s of the request; in-flight turns get `gateway.shutdown_grace` and are then
+cancelled. Triggers: `gateway.reload` on the Control Plane (cross-platform) and SIGHUP
+(POSIX alias).
 _Avoid_: "hot reload" (that is `reload.mcp`, a tool-set reconcile inside one generation);
 "restart" (the `/restart` control command, a whole-process execv).
 
-**Wire Schema** (`rpc-schema/` at repo root):
-The two hand-maintained OpenRPC contracts: `openrpc.json` (the terminal dialect every
-interactive client speaks -- TUI, the served page, ACP) and `openrpc-web.json` (the
-gateway web dialect). Cross-language neutral ground, machine-read by both frontends'
-codegen scripts, the Python match guards, CI and a pre-commit drift hook -- which is why
-it lives at the root and not inside any one consumer (moved up from `ui-tui/` by
-ce526ad5: a shared contract is not named after one of its clients).
+**Wire Schema** (`rpc-schema/openrpc.json` at repo root):
+The hand-maintained OpenRPC contract for the terminal dialect every interactive client
+speaks (TUI, the served page, ACP). Cross-language neutral ground, machine-read by both
+frontends' codegen scripts, the Python match guards, CI and a pre-commit drift hook --
+which is why it lives at the root and not inside any one consumer (moved up from
+`ui-tui/` by ce526ad5: a shared contract is not named after one of its clients). The
+gateway control plane has no OpenRPC document: its only client is another raven process.
 _Avoid_: treating it as a paper -- papers describe Python seams; this is a wire artifact
 consumed as cargo by tooling in two languages.
+
+**Control Plane** (`rpc/control.py` server, `gateway/live_probe.py` client):
+The gateway daemon's window for other raven processes: runtime facts only it can answer
+(`gateway.channels.live`, `.qr`, `gateway.status`) and host commands only it can execute
+(`gateway.channels.start`, `gateway.reload`, `gateway.shutdown`). Loopback WebSocket,
+per-boot token as the first frame, endpoint published in the gateway lock (0600);
+process-lifetime with the dispatcher registered once -- nothing on it depends on the
+generation. The charter is the whole vocabulary, pinned by `tests/test_rpc_control.py`;
+never on it: turn or chat streams, config writes. The server sits on the surface side
+because the daemon package is inner and may not import `raven.rpc`.
+_Avoid_: "web channel" / `web_rpc` (retired: the ui-webui dialect this grew out of).
 
 **Kernel** (`spine/` + `contracts/` + `tracing/`):
 The shippable core: the L0 spine, the L1 papers, and tracing (whose only import-time
@@ -926,7 +941,7 @@ the set and the lazy debt edges; the raven-core wheel is this set as a build art
 Where every package sits, as the machine enforces it. Inner (may not import a surface):
 the seventeen w18 packages plus, seated by the 2026-08-29 structural audit, `config` and
 `utils` (cross-cutting leaves) and `mcp`, `playbook`, `knowledge`, `skill_hub`,
-`trajectory` (L3 shelf members). Surfaces: `cli`, `rpc`, `web_rpc`, `proactive_engine`,
+`trajectory` (L3 shelf members). Surfaces: `cli`, `rpc`, `proactive_engine`,
 and `acp` (an entrance: Raven serving as an agent for another host). Deliberately
 unseated, each awaiting its own ruling: `core` (its sentinel-machinery imports are one
 knot with proactive_engine's surface seat), `evolver` (zero inbound imports; product or
@@ -1584,8 +1599,7 @@ and every Subagent it spawns, and resolved per turn by `WorkdirResolver.resolve(
 checkout you started it from (Workdir policy `LAUNCH_DIR`); intermediate artifacts it
 produces there go under that directory's `.raven/` (the shadow-git repo lives at
 `.raven/shadow.git`). `raven gateway` gives each channel one directory (Workdir policy
-`PER_CHANNEL`), set by `channels.<name>.workspace` — `gateway.web.workspace` for the web
-channel — and defaulting to `<agent home>/../tmp/<channel>`, i.e. `~/.raven/tmp/<channel>`.
+`PER_CHANNEL`), set by `channels.<name>.workspace`, defaulting to `<agent home>/../tmp/<channel>`, i.e. `~/.raven/tmp/<channel>`.
 Overridable per invocation via `--workspace`/`-w` (the working directory itself on
 tui/agent, the root the per-channel defaults hang off on gateway), or per running gateway
 session from the web UI, persisted in `Session.metadata["workdir"]` and taking effect on

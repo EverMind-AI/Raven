@@ -2,7 +2,7 @@
 
 Thin adapters only. The config write path, the preset templates, the probe and
 the persisted test verdicts all already exist and are shared with the web RPC
-(`raven/web_rpc/methods_config.py`); duplicating any of that logic here would
+(formerly the web dialect, since retired); duplicating any of that logic here would
 let the two surfaces disagree about what "installed" means or which fields a
 write is allowed to touch.
 

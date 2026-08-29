@@ -604,10 +604,9 @@ def test_the_gateway_shutdown_cancels_subagents_before_it_closes_the_transports(
     shutdown = src[src.index("except KeyboardInterrupt:") :]
     drain = shutdown.index("begin_drain()")
     cancel = shutdown.index("await agent.subagents.cancel_all()")
-    web = shutdown.index("await web_teardown()")
     pool = shutdown.index("await close_pool()")
 
-    assert drain < cancel < web < pool
+    assert drain < cancel < pool
 
 
 def test_question_body_numbers_choices_and_shows_batch_progress() -> None:
@@ -713,30 +712,8 @@ class TestWhereThePageIsServed:
         assert self.target(port=18792, flag=18999) == 18999
 
 
-@pytest.mark.parametrize("enabled", [True, False])
-def test_the_web_rpc_token_is_minted_whether_or_not_the_channel_is_enabled(enabled: bool) -> None:
-    """The line this pins had its branches the wrong way round: enabling the
-    web channel without configuring a token yielded None, and the server only
-    checks a token when one is set -- an unauthenticated port that can drive
-    the agent. The token is read back by local clients from the lock payload,
-    so minting one costs them nothing.
-    """
-    import secrets
+# The control plane's token gate is exercised behaviourally in
+# tests/test_rpc_control.py (wrong first frame closes the socket, the right
+# one answers); the gateway mints the token per boot and publishes it in the
+# lock, so there is no config-dependent branch left to read here.
 
-    web_cfg = SimpleNamespace(enabled=enabled, host="127.0.0.1", port=8765, auth_token=None)
-
-    token = web_cfg.auth_token or secrets.token_urlsafe(24)
-
-    assert token, "a blank token disables the server's auth check entirely"
-    assert len(token) >= 24
-
-
-def test_the_source_line_no_longer_branches_on_enabled() -> None:
-    """Read the line itself: the fix is that ``enabled`` stopped deciding
-    whether there is a credential at all. Asserted on the source because the
-    surrounding command body cannot be built in a unit test."""
-    src = Path("raven/cli/gateway_commands.py").read_text(encoding="utf-8")
-    line = next(ln for ln in src.splitlines() if ln.strip().startswith("web_token ="))
-
-    assert "if web_cfg.enabled" not in line, line
-    assert "auth_token or secrets.token_urlsafe" in line, line

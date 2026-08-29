@@ -38,8 +38,7 @@ from typing import Any, Callable, Optional
 import typer
 from rich.panel import Panel
 
-from raven.cli import onboard_channels, onboard_everos, onboard_web
-from raven.cli import _onboard_shared
+from raven.cli import _onboard_shared, onboard_channels, onboard_everos, onboard_web
 from raven.cli._onboard_shared import (  # noqa: F401  (re-exports: tests and
     # sibling wizards address these through this module's namespace)
     _ABORT_EVEROS,

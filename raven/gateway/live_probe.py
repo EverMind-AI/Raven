@@ -73,7 +73,7 @@ async def channel_liveness() -> dict[str, dict[str, Any]] | None:
     """``{name: {running, connected, qr_login}}``, or None if nobody answered.
 
     ``connected`` is null for a channel that does not report a pairing; see
-    ``raven.channels.live`` on the gateway for why that is not ``false``.
+    ``gateway.channels.live`` on the gateway for why that is not ``false``.
     """
     global _cache
     if _cache is not None and time.monotonic() - _cache[0] < _CACHE_TTL_S:
@@ -81,7 +81,7 @@ async def channel_liveness() -> dict[str, dict[str, Any]] | None:
     endpoint = _endpoint()
     if endpoint is None:
         return None
-    result = await _ask(endpoint[0], endpoint[1], "raven.channels.live", {})
+    result = await _ask(endpoint[0], endpoint[1], "gateway.channels.live", {})
     channels = (result or {}).get("channels")
     if not isinstance(channels, dict):
         return None
@@ -95,7 +95,7 @@ async def channel_qr(name: str) -> dict[str, Any] | None:
     endpoint = _endpoint()
     if endpoint is None:
         return None
-    return await _ask(endpoint[0], endpoint[1], "raven.channels.qr", {"name": name})
+    return await _ask(endpoint[0], endpoint[1], "gateway.channels.qr", {"name": name})
 
 
 async def channel_start(name: str, *, enabled: bool = True) -> str | None:
@@ -109,9 +109,38 @@ async def channel_start(name: str, *, enabled: bool = True) -> str | None:
     endpoint = _endpoint()
     if endpoint is None:
         return None
-    result = await _ask(endpoint[0], endpoint[1], "raven.channels.start", {"name": name, "enabled": enabled})
+    result = await _ask(endpoint[0], endpoint[1], "gateway.channels.start", {"name": name, "enabled": enabled})
     outcome = (result or {}).get("outcome")
     return str(outcome) if outcome else None
+
+
+async def reload(*, force: bool = False) -> dict[str, Any] | None:
+    """Ask the gateway to rebuild its runtime from config and swap it in.
+
+    Answers the plane's reply verbatim ({ok, generation, swap, grace_s} or
+    {ok: False, reason}), or None when no gateway answered.
+    """
+    endpoint = _endpoint()
+    if endpoint is None:
+        return None
+    return await _ask(endpoint[0], endpoint[1], "gateway.reload", {"force": force})
+
+
+async def status() -> dict[str, Any] | None:
+    """The running gateway's own account of itself, or None when none answers."""
+    endpoint = _endpoint()
+    if endpoint is None:
+        return None
+    return await _ask(endpoint[0], endpoint[1], "gateway.status", {})
+
+
+async def shutdown() -> bool:
+    """Ask the gateway to stop gracefully; False when no gateway answered."""
+    endpoint = _endpoint()
+    if endpoint is None:
+        return False
+    result = await _ask(endpoint[0], endpoint[1], "gateway.shutdown", {})
+    return bool((result or {}).get("ok"))
 
 
 def reset_cache() -> None:
@@ -121,4 +150,4 @@ def reset_cache() -> None:
     _cache = None
 
 
-__all__ = ["channel_liveness", "channel_qr", "channel_start", "reset_cache"]
+__all__ = ["channel_liveness", "channel_qr", "channel_start", "reload", "reset_cache", "shutdown", "status"]

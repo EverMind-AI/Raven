@@ -1,16 +1,11 @@
-"""HTTP download routes for delivered files, served by the gateway.
+"""Deliverable download routes for the page transport.
 
-The request carries an opaque token, never a path, so these routes are not a
-general file-read primitive: they serve exactly what ``deliver_files`` recorded.
-
-An unresolvable token answers **410**, not 404, and that split is load-bearing:
-these routes are registered only when the web channel is on, so a gateway
-running code without them answers every download with the router's own 404. The
-web service proxy forwards the status verbatim, so 404 is the browser's only
-signal for "this deliverable is not being served at all" -- and a client that
-reads it as "gone" tells the user their file expired while the file sits on disk
-untouched. 410 means the store really has no such token; 404 means ask why the
-route is missing.
+The served page (``raven serve`` standalone or the gateway's page mount)
+lets a user fetch a deliverable the agent produced. The routes hand a file
+out by opaque token and answer 410 for a token whose deliverable is gone
+versus 404 for one that never existed, so the client can tell "expired"
+from "never". Mounted by :func:`raven.rpc.transports.ws.build_app` behind
+that transport's origin + session guard; nothing else serves them.
 """
 
 from __future__ import annotations

@@ -50,12 +50,12 @@ class _Mgr:
 
 
 async def _live(mapping):
+    from raven.rpc.control import register_control_methods
     from raven.rpc.dispatcher import Dispatcher
-    from raven.web_rpc.methods_config import register_config_methods
 
     d = Dispatcher()
-    register_config_methods(d, channel_manager=_Mgr(mapping))
-    return await d.dispatch({"jsonrpc": "2.0", "id": 1, "method": "raven.channels.live", "params": {}})
+    register_control_methods(d, channel_manager=_Mgr(mapping))
+    return await d.dispatch({"jsonrpc": "2.0", "id": 1, "method": "gateway.channels.live", "params": {}})
 
 
 async def test_a_channel_that_reports_no_pairing_is_null_not_false() -> None:

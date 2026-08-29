@@ -4,6 +4,20 @@ All notable changes to Raven are documented here.
 
 ## Unreleased
 
+### Changed
+
+- The gateway's web channel is retired and its endpoint becomes the gateway
+  **control plane** (`ws://127.0.0.1:<port>/ws`, loopback, per-boot token
+  published in the gateway lock): six methods only -- `gateway.channels.live`,
+  `.qr`, `.start`, `gateway.status`, `gateway.reload`, `gateway.shutdown`.
+  `raven gateway reload|status|stop` drive it from the CLI; `reload` rebuilds the
+  runtime from config and swaps it in without a restart (the SIGHUP trigger stays
+  as a POSIX alias). The `gateway.web` config table is removed on load with a
+  notice: proactive replies and heartbeat output that `web.enabled: true` used to
+  send to the web channel (which had no clients) now reach your IM channels and
+  the page. The control port no longer serves deliverable downloads; those routes
+  stay on the page transport behind its session guard.
+
 ### Added
 
 - `spawn` now records every sub-agent call on disk, the way `run_subagent_dag`

@@ -78,3 +78,90 @@ def test_dispose_without_backend_skips_the_drain() -> None:
     rec = _Recorder()
     asyncio.run(_runtime(rec, backend=False).dispose())
     assert rec.calls == ["subagents.cancel_all", "close_mcp", "stop"]
+
+
+# ---------------------------------------------------------------------------
+# SwapCoordinator: one swap at a time, released only right before run()
+# ---------------------------------------------------------------------------
+
+
+def _candidate(rec: _Recorder | None = None) -> "SwapCandidate":
+    from raven.core.runtime import SwapCandidate
+
+    return SwapCandidate(config=None, ec_config=None, provider=None, router=None, runtime=_runtime(rec or _Recorder(), backend=False))
+
+
+def test_a_second_request_while_a_swap_is_in_flight_is_refused() -> None:
+    from raven.core.runtime import SwapCoordinator
+
+    clock = [100.0]
+    swaps = SwapCoordinator(min_interval_s=5.0, clock=lambda: clock[0])
+    assert swaps.begin() is None
+    assert swaps.begin() == "swap_in_flight"
+    swaps.stage(_candidate())
+    # Still in flight through take() (the loop stopped, wiring is next)...
+    assert swaps.take() is not None
+    assert swaps.begin() == "swap_in_flight"
+    # ...until release(), which the serving loop calls right before run().
+    swaps.release()
+    assert swaps.generation == 2
+    clock[0] += 10.0
+    assert swaps.begin() is None
+
+
+def test_accepted_swaps_are_rate_limited() -> None:
+    from raven.core.runtime import SwapCoordinator
+
+    clock = [0.0]
+    swaps = SwapCoordinator(min_interval_s=5.0, clock=lambda: clock[0])
+    assert swaps.begin() is None
+    swaps.abort()
+    clock[0] = 2.0
+    assert swaps.begin() == "too_soon"
+    clock[0] = 6.0
+    assert swaps.begin() is None
+
+
+def test_a_failed_build_gives_the_slot_back_without_a_generation_bump() -> None:
+    from raven.core.runtime import SwapCoordinator
+
+    clock = [0.0]
+    swaps = SwapCoordinator(min_interval_s=0.0, clock=lambda: clock[0])
+    assert swaps.begin() is None
+    swaps.abort()
+    swaps.release()
+    assert swaps.generation == 1
+    assert swaps.take() is None
+
+
+def test_a_superseded_candidate_is_discarded_not_disposed() -> None:
+    from raven.core.runtime import SwapCoordinator
+
+    swaps = SwapCoordinator(min_interval_s=0.0, clock=lambda: 0.0)
+    first_rec = _Recorder()
+    first = _candidate(first_rec)
+    discarded: list[str] = []
+    first.runtime.discard = lambda: discarded.append("first")  # type: ignore[method-assign]
+    swaps.stage(first)
+    swaps.stage(_candidate())
+    assert discarded == ["first"]
+    assert first_rec.calls == []  # dispose's stop sequence never ran on it
+
+
+def test_trigger_tasks_are_held_until_done() -> None:
+    from raven.core.runtime import SwapCoordinator
+
+    swaps = SwapCoordinator(min_interval_s=0.0, clock=lambda: 0.0)
+
+    async def _run() -> None:
+        async def _noop() -> None:
+            return None
+
+        task = asyncio.create_task(_noop())
+        swaps.track(task)
+        assert task in swaps._tasks
+        await task
+        await asyncio.sleep(0)
+        assert task not in swaps._tasks
+
+    asyncio.run(_run())

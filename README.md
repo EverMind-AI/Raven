@@ -258,7 +258,6 @@ architecture booklets; this section only says what each package does.
 | `tracing` | Tracing and telemetry |
 | `trajectory` | Turn trajectory store and verdicts |
 | `utils` | Shared helpers, including the atomic write primitive |
-| `web_rpc` | The WebSocket RPC surface |
 
 ## Architecture
 

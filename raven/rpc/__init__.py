@@ -25,7 +25,7 @@ channel at handshake and mint keys on another -- a default session pointing at a
 pool the picker does not show, which is the shape of the bug this constant was
 introduced to fix. It covers the three sites that read it and no more.
 
-The web app (``raven/web_rpc``) is a different channel and passes ``"web"``.
+The gateway control plane (``raven/rpc/control.py``) is not a channel at all.
 """
 
 __all__ = ["LOCAL_CHANNEL"]

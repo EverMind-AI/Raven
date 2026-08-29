@@ -58,7 +58,7 @@ _PACKAGED_UI_DIST = Path(__file__).resolve().parent.parent / "ui" / "dist"
 SERVED_PAGE_SURFACE = "page"
 """What this host calls itself in a trace. See ``raven.tracing.set_surface``.
 
-Not "web": that name belongs to ``raven/web_rpc``, a different front end on its
+Not "web": that name belonged to the retired web channel, a different front end on its
 own channel, and two different things under one label is worse than no label.
 """
 
