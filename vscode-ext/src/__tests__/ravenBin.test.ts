@@ -5,7 +5,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { resolveRavenCommand, type ResolutionContext } from '../ravenBin.js'
+import { resolveRavenCommand, sanitizeExtraArgs, type ResolutionContext } from '../ravenBin.js'
 
 const baseCtx = (overrides: Partial<ResolutionContext> = {}): ResolutionContext => ({
   env: {},
@@ -90,5 +90,24 @@ describe('resolveRavenCommand', () => {
       baseCtx({ extraArgs: ['--dev', '--color', '256'], which: () => '/usr/bin/raven' })
     )
     expect(command?.args).toEqual(['tui', '--dev', '--color', '256'])
+  })
+})
+
+describe('sanitizeExtraArgs', () => {
+  it('returns an empty array for a string value', () => {
+    expect(sanitizeExtraArgs('--dev')).toEqual([])
+  })
+
+  it('returns an empty array for undefined or non-array values', () => {
+    expect(sanitizeExtraArgs(undefined)).toEqual([])
+    expect(sanitizeExtraArgs({ dev: true })).toEqual([])
+  })
+
+  it('keeps only string entries of a mixed array', () => {
+    expect(sanitizeExtraArgs(['--dev', 42, '--color', null])).toEqual(['--dev', '--color'])
+  })
+
+  it('passes a plain string array through', () => {
+    expect(sanitizeExtraArgs(['--dev', '--color', '256'])).toEqual(['--dev', '--color', '256'])
   })
 })

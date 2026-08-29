@@ -32,6 +32,13 @@ function tuiArgs(extraArgs: string[]): string[] {
   return ['tui', ...extraArgs]
 }
 
+export function sanitizeExtraArgs(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+  return value.filter((arg): arg is string => typeof arg === 'string')
+}
+
 function expandHome(filePath: string, homeDir: string): string {
   if (filePath === '~') {
     return homeDir
