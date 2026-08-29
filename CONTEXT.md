@@ -967,8 +967,9 @@ reaches `core.admission` for the door vocabulary and builds a loop by hand for r
 legal, because it is a harness over recorded runs, not an entrance. One package holds two
 seats: in `agent/`, `agent/loop` is the L2 harness shell every entrance runs, and its
 siblings -- `tools`, `subagent`, `acp_client`, `context`, `hook`, `personalizer`,
-`workdir` -- are L3 cargo the loop consumes; the physical split of the package is a card
-awaiting its ruling, recorded here so the shared directory is not read as a shared seat.
+`workdir` -- are L3 cargo the loop consumes; the "cargo does not import the loop shell"
+import-linter contract keeps the two seats apart in the shared directory, which is why
+the package is not split physically (ruled 2026-08-30).
 `agent/acp_client` is named for its side of ACP (Raven driving somebody else's agent);
 `acp/` is the other side, the entrance.
 

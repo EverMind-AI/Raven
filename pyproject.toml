@@ -440,6 +440,20 @@ ignore_imports = [
 ]
 
 [[tool.importlinter.contracts]]
+# raven/agent holds two seats: agent/loop is the L2 harness shell every
+# entrance runs, its siblings are L3 cargo the loop consumes. Cargo that
+# imported the shell would invert the seat (and, in practice, an import cycle
+# papered over with a function-level import). Zero edges today; this keeps it so.
+name = "cargo does not import the loop shell"
+type = "forbidden"
+source_modules = [
+    "raven.agent.tools", "raven.agent.subagent", "raven.agent.acp_client",
+    "raven.agent.context", "raven.agent.hook", "raven.agent.personalizer",
+    "raven.agent.workdir",
+]
+forbidden_modules = ["raven.agent.loop"]
+
+[[tool.importlinter.contracts]]
 name = "channel adapters are independent cargo"
 type = "independence"
 modules = [
