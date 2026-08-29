@@ -932,8 +932,8 @@ async def session_compress(
     stats = await consolidator.maybe_consolidate_by_tokens(session, force=True)
     before_tokens = int(stats.get("before_tokens", 0))
     after_tokens = int(stats.get("after_tokens", before_tokens))
-    archived = int(stats.get("archived", 0))
-    if archived and mgr.exists(session_key):
+    compacted = int(stats.get("compacted", 0))
+    if compacted and mgr.exists(session_key):
         try:
             mgr.save(session)
         except Exception:
@@ -942,24 +942,24 @@ async def session_compress(
     # Consolidation annotates and advances ``last_consolidated``; it never
     # removes anything from the list. So the survivors are the slice past that
     # boundary, and the count comes from the same slice the payload does --
-    # deriving it as ``before - archived`` let the number and the messages
+    # deriving it as ``before - compacted`` let the number and the messages
     # beside it describe two different lists.
     survivors = session.messages[session.last_consolidated :]
-    headline = f"archived {archived} messages" if archived else "nothing to compress"
+    headline = f"compacted {compacted} messages" if compacted else "nothing to compress"
     result: dict[str, Any] = {
         "before_messages": before_messages,
         "after_messages": len(survivors),
         "before_tokens": before_tokens,
         "after_tokens": after_tokens,
-        "removed": archived,
+        "removed": compacted,
         "summary": {
             "headline": headline,
-            "noop": archived == 0,
+            "noop": compacted == 0,
             "token_line": f"{before_tokens} -> {after_tokens} tokens",
         },
     }
-    if archived:
-        # A caller that just archived half the transcript is looking at messages
+    if compacted:
+        # A caller that just compacted half the transcript is looking at messages
         # that no longer exist. Returning the survivors plus refreshed info and
         # usage is what lets it redraw instead of reporting a compaction while
         # still showing what was compacted -- the same three fields
@@ -971,7 +971,7 @@ async def session_compress(
         # where its turns run. The TUI adopts this bundle wholesale, so that
         # reads as `/compress` moving the session to another directory.
         #
-        # Best-effort on purpose: the archive is the operation and it has already
+        # Best-effort on purpose: the compaction is the operation and it has already
         # committed. Failing the whole call because a redraw aid could not be
         # assembled would report failure for work that succeeded, and would leave
         # the caller with neither the new transcript nor the knowledge that its
@@ -985,7 +985,7 @@ async def session_compress(
             if isinstance(usage, dict):
                 result["usage"] = usage
         except Exception:
-            logger.warning("session.compress: archived {} but could not build the redraw payload", session_key)
+            logger.warning("session.compress: compacted {} but could not build the redraw payload", session_key)
     return result
 
 
