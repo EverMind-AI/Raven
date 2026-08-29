@@ -268,9 +268,7 @@ _RPC_HANDSHAKE_EXIT_CODE: int = 3
 # cannot os.dup a socket fd. The Node child connects to the host:port exported
 # in RAVEN_RPC_SOCKET and authenticates with the RAVEN_RPC_TOKEN shared secret
 # (loopback is reachable by any local process, unlike an AF_UNIX file guarded
-# by 0600 perms, so the token restores the trust boundary). The pass_fds /
-# os.pipe variant is retained for `--check` smoke parity and the Python-only
-# handshake-timeout test.
+# by 0600 perms, so the token restores the trust boundary).
 _RPC_SOCKET_ENV: str = "RAVEN_RPC_SOCKET"
 _RPC_TOKEN_ENV: str = "RAVEN_RPC_TOKEN"  # noqa: S105 -- env var name, not a secret
 
