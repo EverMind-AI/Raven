@@ -95,7 +95,18 @@ def _agent_loop_kwargs(relative_path: str) -> set[str]:
             # ``**kwargs`` forwarding would make the set unreadable statically;
             # no entrypoint does that today, and this asserts it stays that way.
             assert all(kw.arg for kw in node.keywords), f"{relative_path}: AgentLoop called with **kwargs"
-            return {kw.arg for kw in node.keywords if kw.arg}
+            # The wiring bundles are transparent to parity: what an entrance
+            # really passes is the flattened field set, so descend into each
+            # bundle constructor and collect its keyword names.
+            flat: set[str] = set()
+            for kw in node.keywords:
+                inner = kw.value
+                if isinstance(inner, ast.Call) and getattr(inner.func, "id", "").endswith(("Wiring", "Policy")):
+                    assert all(k.arg for k in inner.keywords), f"{relative_path}: bundle with **kwargs"
+                    flat |= {k.arg for k in inner.keywords if k.arg}
+                else:
+                    flat.add(kw.arg)
+            return flat
     raise AssertionError(f"no AgentLoop(...) call found in {relative_path}")
 
 

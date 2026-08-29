@@ -163,6 +163,7 @@ def register(app: typer.Typer) -> None:
         from loguru import logger
 
         from raven.agent.loop import AgentLoop
+        from raven.agent.loop.bundles import EngineWiring, HostWiring, SubagentWiring, ToolWiring, TurnPolicy
         from raven.agent.loop.recovery import limits_from_defaults
         from raven.agent.workdir import WorkdirPolicy, WorkdirResolver, validate_override
         from raven.config.raven import load_raven_config
@@ -286,51 +287,58 @@ def register(app: typer.Typer) -> None:
         # fires. Scripted reminder creation is `raven cron add` with an
         # explicit --channel.
         agent_loop = AgentLoop(
-            provider_pool=ProviderPool(lambda: load_runtime_config(None, None)),
-            provider=provider,
-            strategies=strategies,
-            now_fn=parse_fake_now(fake_now),
-            workspace=config.workspace_path,
-            model=config.agents.defaults.model,
-            max_iterations=config.agents.defaults.max_tool_iterations,
-            empty_recovery=limits_from_defaults(config.agents.defaults),
-            context_window_tokens=config.agents.defaults.context_window_tokens,
-            max_concurrent_subagents=config.agents.defaults.max_concurrent_subagents,
-            max_subagent_spawns_per_hour=config.agents.defaults.max_subagent_spawns_per_hour,
-            router=router,
-            agents=config.subagents.agents,
-            playbook_config=config.playbooks,
-            brave_api_key=config.tools.web.search.api_key or None,
-            jina_api_key=config.tools.web.jina_api_key or None,
-            web_proxy=config.tools.web.proxy or None,
-            media_config=config.effective_media_config(),
-            deep_research_config=config.tools.deep_research,
-            exec_config=config.tools.exec,
-            ask_user_config=config.tools.ask_user,
-            restrict_to_workspace=config.tools.restrict_to_workspace,
-            session_manager=session_manager,
-            workdir_resolver=workdir_resolver,
-            mcp_servers=config.tools.mcp_servers,
-            tool_search_config=config.tools.tool_search,
-            sandbox_config=config.tools.sandbox,
-            channels_config=config.channels,
-            skill_forge_config=skill_forge_cfg,
-            context_config=ec_config.context,
-            runtime_config=ec_config.runtime,
-            subagent_dag_config=ec_config.subagent_dag,
-            subagent_questions_config=ec_config.subagent_questions,
-            # ``-m "..."`` is a one-shot — no next turn for recovery
-            # injection, so the ``"interactive"`` policy skips the
-            # checkpoint here.
-            interactive=False,
-            response_modifier=sentinel_response_modifier,
-            on_user_inbound=sentinel_on_user_inbound,
-            backend=backend,
-            memory_config=ec_config.memory,
-            skill_forge_router_config=ec_config.skill_forge.router,
-            plugin_tools=plugin_tools,
-            deliverables=DeliverableStore(get_deliverables_path()),
-        )
+                         provider_pool=ProviderPool(lambda: load_runtime_config(None, None)),
+                         provider=provider,
+                         workspace=config.workspace_path,
+                         model=config.agents.defaults.model,
+                         router=router,
+                         session_manager=session_manager,
+                         mcp_servers=config.tools.mcp_servers,
+                         sandbox_config=config.tools.sandbox,
+                         tools=ToolWiring(
+                             brave_api_key=config.tools.web.search.api_key or None,
+                             jina_api_key=config.tools.web.jina_api_key or None,
+                             web_proxy=config.tools.web.proxy or None,
+                             media_config=config.effective_media_config(),
+                             deep_research_config=config.tools.deep_research,
+                             exec_config=config.tools.exec,
+                             ask_user_config=config.tools.ask_user,
+                             restrict_to_workspace=config.tools.restrict_to_workspace,
+                             tool_search_config=config.tools.tool_search,
+                             plugin_tools=plugin_tools,
+                             deliverables=DeliverableStore(get_deliverables_path()),
+                         ),
+                         subagents=SubagentWiring(
+                             max_concurrent_subagents=config.agents.defaults.max_concurrent_subagents,
+                             max_subagent_spawns_per_hour=config.agents.defaults.max_subagent_spawns_per_hour,
+                             agents=config.subagents.agents,
+                             workdir_resolver=workdir_resolver,
+                             subagent_dag_config=ec_config.subagent_dag,
+                             subagent_questions_config=ec_config.subagent_questions,
+                         ),
+                         engine=EngineWiring(
+                             strategies=strategies,
+                             context_window_tokens=config.agents.defaults.context_window_tokens,
+                             playbook_config=config.playbooks,
+                             skill_forge_config=skill_forge_cfg,
+                             context_config=ec_config.context,
+                             runtime_config=ec_config.runtime,
+                             backend=backend,
+                             memory_config=ec_config.memory,
+                             skill_forge_router_config=ec_config.skill_forge.router,
+                         ),
+                         policy=TurnPolicy(
+                             now_fn=parse_fake_now(fake_now),
+                             max_iterations=config.agents.defaults.max_tool_iterations,
+                             empty_recovery=limits_from_defaults(config.agents.defaults),
+                             interactive=False,
+                             response_modifier=sentinel_response_modifier,
+                         ),
+                         host=HostWiring(
+                             channels_config=config.channels,
+                             on_user_inbound=sentinel_on_user_inbound,
+                         ),
+                     )
         agent_loop.configure_personalization(config.agents.defaults.enable_personalization)
         attach_sentinel_spawn(sentinel_runner, agent_loop)
         attach_sentinel_decision_consumer(sentinel_runner, agent_loop, sentinel_cfg=sentinel_cfg)

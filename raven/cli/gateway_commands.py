@@ -239,6 +239,7 @@ def register(app: typer.Typer) -> None:
     ):
         """Start the Raven gateway."""
         from raven.agent.loop import AgentLoop
+        from raven.agent.loop.bundles import EngineWiring, HostWiring, SubagentWiring, ToolWiring, TurnPolicy
         from raven.agent.loop.recovery import limits_from_defaults
         from raven.agent.workdir import WorkdirPolicy, WorkdirResolver, validate_override
         from raven.config.paths import get_cron_dir
@@ -382,51 +383,59 @@ def register(app: typer.Typer) -> None:
         )
 
         agent = AgentLoop(
-            provider_pool=ProviderPool(lambda: load_runtime_config(None, None)),
-            provider=provider,
-            strategies=strategies,
-            now_fn=parse_fake_now(fake_now),
-            workspace=config.workspace_path,
-            model=config.agents.defaults.model,
-            max_iterations=config.agents.defaults.max_tool_iterations,
-            empty_recovery=limits_from_defaults(config.agents.defaults),
-            context_window_tokens=config.agents.defaults.context_window_tokens,
-            max_concurrent_subagents=config.agents.defaults.max_concurrent_subagents,
-            max_subagent_spawns_per_hour=config.agents.defaults.max_subagent_spawns_per_hour,
-            brave_api_key=config.tools.web.search.api_key or None,
-            jina_api_key=config.tools.web.jina_api_key or None,
-            web_proxy=config.tools.web.proxy or None,
-            media_config=config.effective_media_config(),
-            deep_research_config=config.tools.deep_research,
-            exec_config=config.tools.exec,
-            ask_user_config=config.tools.ask_user,
-            cron_service=cron,
-            restrict_to_workspace=config.tools.restrict_to_workspace,
-            session_manager=session_manager,
-            workdir_resolver=workdir_resolver,
-            mcp_servers=config.tools.mcp_servers,
-            tool_search_config=config.tools.tool_search,
-            sandbox_config=config.tools.sandbox,
-            channels_config=config.channels,
-            deliverables=deliverables,
-            router=router,
-            skill_forge_config=skill_forge_cfg,
-            context_config=ec_config.context,
-            runtime_config=ec_config.runtime,
-            subagent_dag_config=ec_config.subagent_dag,
-            subagent_questions_config=ec_config.subagent_questions,
-            # Gateway sessions are inherently multi-turn (each RPC session
-            # gets a key and can receive a recovery block on its next call).
-            interactive=True,
-            response_modifier=sentinel_response_modifier,
-            on_user_inbound=on_user_inbound,
-            backend=backend,
-            plugin_tools=plugin_tools,
-            memory_config=ec_config.memory,
-            skill_forge_router_config=ec_config.skill_forge.router,
-            agents=config.subagents.agents,
-            playbook_config=config.playbooks,
-        )
+                    provider_pool=ProviderPool(lambda: load_runtime_config(None, None)),
+                    provider=provider,
+                    workspace=config.workspace_path,
+                    model=config.agents.defaults.model,
+                    session_manager=session_manager,
+                    mcp_servers=config.tools.mcp_servers,
+                    sandbox_config=config.tools.sandbox,
+                    router=router,
+                    tools=ToolWiring(
+                        brave_api_key=config.tools.web.search.api_key or None,
+                        jina_api_key=config.tools.web.jina_api_key or None,
+                        web_proxy=config.tools.web.proxy or None,
+                        media_config=config.effective_media_config(),
+                        deep_research_config=config.tools.deep_research,
+                        exec_config=config.tools.exec,
+                        ask_user_config=config.tools.ask_user,
+                        restrict_to_workspace=config.tools.restrict_to_workspace,
+                        tool_search_config=config.tools.tool_search,
+                        deliverables=deliverables,
+                        plugin_tools=plugin_tools,
+                    ),
+                    subagents=SubagentWiring(
+                        max_concurrent_subagents=config.agents.defaults.max_concurrent_subagents,
+                        max_subagent_spawns_per_hour=config.agents.defaults.max_subagent_spawns_per_hour,
+                        workdir_resolver=workdir_resolver,
+                        subagent_dag_config=ec_config.subagent_dag,
+                        subagent_questions_config=ec_config.subagent_questions,
+                        agents=config.subagents.agents,
+                    ),
+                    engine=EngineWiring(
+                        strategies=strategies,
+                        context_window_tokens=config.agents.defaults.context_window_tokens,
+                        skill_forge_config=skill_forge_cfg,
+                        context_config=ec_config.context,
+                        runtime_config=ec_config.runtime,
+                        backend=backend,
+                        memory_config=ec_config.memory,
+                        skill_forge_router_config=ec_config.skill_forge.router,
+                        playbook_config=config.playbooks,
+                    ),
+                    policy=TurnPolicy(
+                        now_fn=parse_fake_now(fake_now),
+                        max_iterations=config.agents.defaults.max_tool_iterations,
+                        empty_recovery=limits_from_defaults(config.agents.defaults),
+                        interactive=True,
+                        response_modifier=sentinel_response_modifier,
+                    ),
+                    host=HostWiring(
+                        cron_service=cron,
+                        channels_config=config.channels,
+                        on_user_inbound=on_user_inbound,
+                    ),
+                )
         agent.configure_personalization(config.agents.defaults.enable_personalization)
 
         # Sentinel's ProactiveSpawn wraps the AgentLoop's SubagentManager; wire it

@@ -13,6 +13,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from raven.config.raven import TokenWiseConfig
+from tests.conftest import wired_kwarg
 
 
 @pytest.fixture
@@ -122,10 +123,10 @@ def test_tui_agent_loop_receives_cron_service(patched_tui_build_deps) -> None:
     _build_agent_loop()
 
     kwargs = patched_tui_build_deps["agent_loop_kwargs"]
-    assert "cron_service" in kwargs, "AgentLoop ctor must receive cron_service kwarg for CronTool auto-register"
-    assert kwargs["cron_service"] is not None
+    assert wired_kwarg(kwargs, "cron_service") is not None, "AgentLoop must receive cron_service for CronTool auto-register"
+    assert wired_kwarg(kwargs, "cron_service") is not None
     cls = patched_tui_build_deps["cron_service_class"]
-    assert isinstance(kwargs["cron_service"], cls)
+    assert isinstance(wired_kwarg(kwargs, "cron_service"), cls)
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +188,7 @@ def test_tui_on_user_inbound_resets_cron_counters(patched_tui_build_deps) -> Non
     _build_agent_loop()
 
     kwargs = patched_tui_build_deps["agent_loop_kwargs"]
-    hook = kwargs.get("on_user_inbound")
+    hook = wired_kwarg(kwargs, "on_user_inbound")
     assert hook is not None, "TUI AgentLoop must wire the silent-fire reset hook"
 
     cron = patched_tui_build_deps["cron_service_class"].instances[0]

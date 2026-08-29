@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, sentinel
 import pytest
 
 from raven.config.raven import TokenWiseConfig
+from tests.conftest import wired_kwarg
 
 
 @pytest.fixture
@@ -112,8 +113,8 @@ def test_tui_agent_loop_receives_non_none_backend(patched_tui_loop_deps) -> None
     _build_agent_loop()
 
     kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
-    assert kwargs.get("backend") is not None, "AgentLoop must receive backend= from _build_agent_loop; got None"
-    assert kwargs["backend"] is patched_tui_loop_deps["fake_backend"]
+    assert wired_kwarg(kwargs, "backend") is not None, "AgentLoop must receive backend= from _build_agent_loop; got None"
+    assert wired_kwarg(kwargs, "backend") is patched_tui_loop_deps["fake_backend"]
 
 
 # ---------------------------------------------------------------------------
@@ -129,8 +130,8 @@ def test_tui_agent_loop_receives_plugin_tools(patched_tui_loop_deps) -> None:
     _build_agent_loop()
 
     kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
-    assert "plugin_tools" in kwargs, "AgentLoop must receive plugin_tools kwarg"
-    assert kwargs["plugin_tools"] is patched_tui_loop_deps["fake_tools"]
+    assert wired_kwarg(kwargs, "plugin_tools") is not None, "AgentLoop must receive plugin_tools"
+    assert wired_kwarg(kwargs, "plugin_tools") is patched_tui_loop_deps["fake_tools"]
 
 
 # ---------------------------------------------------------------------------
@@ -148,8 +149,8 @@ def test_tui_agent_loop_receives_tool_search_config(patched_tui_loop_deps) -> No
     _build_agent_loop()
 
     kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
-    assert "tool_search_config" in kwargs, "AgentLoop must receive tool_search_config kwarg"
-    assert kwargs["tool_search_config"] is patched_tui_loop_deps["config"].tools.tool_search
+    assert wired_kwarg(kwargs, "tool_search_config") is not None, "AgentLoop must receive tool_search_config"
+    assert wired_kwarg(kwargs, "tool_search_config") is patched_tui_loop_deps["config"].tools.tool_search
 
 
 # ---------------------------------------------------------------------------
@@ -202,8 +203,7 @@ def test_tui_agent_loop_forwards_raven_config_slices(patched_tui_loop_deps, kwar
     _build_agent_loop()
 
     kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
-    assert kwarg in kwargs, f"AgentLoop must receive {kwarg} kwarg"
-    assert kwargs[kwarg] is getattr(patched_tui_loop_deps["ec_config"], attr_path)
+    assert wired_kwarg(kwargs, kwarg) is getattr(patched_tui_loop_deps["ec_config"], attr_path)
 
 
 def test_tui_agent_loop_forwards_the_skill_forge_router_slice(patched_tui_loop_deps) -> None:
@@ -214,7 +214,7 @@ def test_tui_agent_loop_forwards_the_skill_forge_router_slice(patched_tui_loop_d
     _build_agent_loop()
 
     kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
-    assert kwargs["skill_forge_router_config"] is patched_tui_loop_deps["ec_config"].skill_forge.router
+    assert wired_kwarg(kwargs, "skill_forge_router_config") is patched_tui_loop_deps["ec_config"].skill_forge.router
 
 
 def test_tui_agent_loop_forwards_the_jina_key(patched_tui_loop_deps) -> None:
@@ -223,7 +223,7 @@ def test_tui_agent_loop_forwards_the_jina_key(patched_tui_loop_deps) -> None:
 
     _build_agent_loop()
 
-    assert "jina_api_key" in patched_tui_loop_deps["agent_loop_kwargs"]
+    assert wired_kwarg(patched_tui_loop_deps["agent_loop_kwargs"], "jina_api_key") is not None
 
 
 def test_tui_agent_loop_receives_a_router_slot(patched_tui_loop_deps) -> None:
@@ -257,8 +257,8 @@ def test_tui_agent_loop_receives_the_agent_config(patched_tui_loop_deps) -> None
     _build_agent_loop()
 
     kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
-    assert "agents" in kwargs, "AgentLoop must receive the agents kwarg"
-    assert kwargs["agents"] is patched_tui_loop_deps["config"].subagents.agents
+    assert wired_kwarg(kwargs, "agents") is not None, "AgentLoop must receive the agents wiring"
+    assert wired_kwarg(kwargs, "agents") is patched_tui_loop_deps["config"].subagents.agents
 
 
 # ---------------------------------------------------------------------------
@@ -695,7 +695,7 @@ def test_tui_agent_loop_receives_deliverables_store(patched_tui_loop_deps) -> No
     _build_agent_loop()
 
     kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
-    assert isinstance(kwargs.get("deliverables"), DeliverableStore)
+    assert isinstance(wired_kwarg(kwargs, "deliverables"), DeliverableStore)
 
 
 # ---------------------------------------------------------------------------
