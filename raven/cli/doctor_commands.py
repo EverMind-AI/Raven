@@ -89,7 +89,7 @@ class MemoryInfo:
     @property
     def unbuilt(self) -> list[str]:
         """Roles the user configured that the server could not build."""
-        from raven.plugins.memory.everos._health import capability_available
+        from raven.plugins.memory.everos.health import capability_available
 
         return [s for s in self.configured if capability_available(self.capabilities, s) is False]
 
@@ -102,7 +102,7 @@ class MemoryInfo:
         semantically, and that is a worse memory rather than no memory. Only this
         list decides the exit code.
         """
-        from raven.plugins.memory.everos._health import REQUIRED_SECTIONS
+        from raven.plugins.memory.everos.health import REQUIRED_SECTIONS
 
         return [s for s in self.unbuilt if s in REQUIRED_SECTIONS]
 
@@ -491,7 +491,7 @@ def _probe_memory(config: "RavenConfig") -> MemoryInfo:
     if backend != "everos":
         return info
     from raven.config.update_everos import everos_owned, everos_role_configured, everos_root
-    from raven.plugins.memory.everos._health import (
+    from raven.plugins.memory.everos.health import (
         DEGRADING_SECTIONS,
         REQUIRED_SECTIONS,
         configured_base_url,
@@ -553,7 +553,7 @@ def _render_memory_capabilities(memory: MemoryInfo) -> None:
     "Server running" and "server can recall" stopped being the same statement in
     everos 1.2.1, so they are printed as separate lines rather than one tick.
     """
-    from raven.plugins.memory.everos._health import capability_available
+    from raven.plugins.memory.everos.health import capability_available
 
     if memory.backend != "everos":
         return
@@ -576,7 +576,7 @@ def _render_memory_capabilities(memory: MemoryInfo) -> None:
         if memory.configured:
             console.print(f"  Configured: {', '.join(memory.configured)}")
         return
-    from raven.plugins.memory.everos._health import DEGRADING_SECTIONS, REQUIRED_SECTIONS
+    from raven.plugins.memory.everos.health import DEGRADING_SECTIONS, REQUIRED_SECTIONS
 
     for section in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS):
         label = f"  {section + ':':<12}"
@@ -696,7 +696,7 @@ def _degradation_note(section: str) -> str:
 
 
 def _server_log_hint() -> str:
-    from raven.plugins.memory.everos._server import server_log_path
+    from raven.plugins.memory.everos.server import server_log_path
 
     return str(server_log_path())
 
