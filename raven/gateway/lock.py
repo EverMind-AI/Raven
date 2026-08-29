@@ -40,16 +40,16 @@ class LockInfo:
     # binds. Carried here rather than in config because it is a runtime fact,
     # not a setting: the port may be ephemeral and the token is minted per boot,
     # so writing either into config.json would leave a stale secret behind on
-    # every exit. The keys keep their web_* spelling on purpose: older lock
-    # readers (a lingering raven serve, doctor) still parse them, and the
-    # payload is the one file two raven versions may read at once.
-    web_host: str = ""
-    web_port: int = 0
-    web_token: str = ""
+    # every exit. Written under control_* and, for one release, under the
+    # older web_* spelling as well: the payload is the one file two raven
+    # versions may read at once, and the reader below accepts either.
+    control_host: str = ""
+    control_port: int = 0
+    control_token: str = ""
 
     @property
-    def web_url(self) -> str:
-        return f"ws://{self.web_host}:{self.web_port}/ws" if self.web_host and self.web_port else ""
+    def control_url(self) -> str:
+        return f"ws://{self.control_host}:{self.control_port}/ws" if self.control_host and self.control_port else ""
 
 
 def _lock_path() -> Path:
@@ -64,16 +64,16 @@ def _read_payload(path: Path) -> LockInfo:
             pid=int(data.get("pid", -1)),
             started_at=float(data.get("started_at", 0.0)),
             config_path=str(data.get("config_path", "")),
-            web_host=str(data.get("web_host", "")),
-            web_port=int(data.get("web_port", 0)),
-            web_token=str(data.get("web_token", "")),
+            control_host=str(data.get("control_host") or data.get("web_host", "")),
+            control_port=int(data.get("control_port") or data.get("web_port", 0)),
+            control_token=str(data.get("control_token") or data.get("web_token", "")),
         )
     except (OSError, ValueError, TypeError):
         return LockInfo(pid=-1, started_at=0.0, config_path="")
 
 
-def publish_web_endpoint(host: str, port: int, token: str) -> None:
-    """Record where this gateway answers RPC, for local clients to find.
+def publish_control_endpoint(host: str, port: int, token: str) -> None:
+    """Record where this gateway's control plane answers, for local clients to find.
 
     Called after the server binds, so the port is the one it actually got. The
     payload carries a credential, and ``O_CREAT``'s mode applies only to a file
@@ -87,6 +87,8 @@ def publish_web_endpoint(host: str, port: int, token: str) -> None:
         data = json.loads(payload.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         data = {}
+    endpoint = {"control_host": host, "control_port": int(port), "control_token": token}
+    data.update(endpoint)
     data.update({"web_host": host, "web_port": int(port), "web_token": token})
     body = json.dumps(data).encode("utf-8")
     fd = os.open(payload, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -157,4 +159,4 @@ def read_status(now: float) -> LockInfo | None:
             return _read_payload(payload)
 
 
-__all__ = ["acquire", "read_status", "publish_web_endpoint", "GatewayAlreadyRunningError", "LockInfo"]
+__all__ = ["acquire", "read_status", "publish_control_endpoint", "GatewayAlreadyRunningError", "LockInfo"]

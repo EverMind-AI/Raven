@@ -255,7 +255,7 @@ def register(app: typer.Typer) -> None:
             terminal_level="DEBUG" if verbose else log_cfg.console_level,
         )
 
-        from raven.gateway.lock import GatewayAlreadyRunningError, acquire, publish_web_endpoint
+        from raven.gateway.lock import GatewayAlreadyRunningError, acquire, publish_control_endpoint
 
         # Held for the whole process; closing/GC of this handle releases the lock.
         try:
@@ -932,7 +932,7 @@ def register(app: typer.Typer) -> None:
                 control = ControlPlaneServer(await pick_port(8765), auth_token=control_token)
                 control.bind(control_dispatcher)
                 bound_host, bound_port = await control.start()
-                publish_web_endpoint(bound_host, bound_port, control_token)
+                publish_control_endpoint(bound_host, bound_port, control_token)
                 console.print(f"[green]✓[/green] Control plane: ws://{bound_host}:{bound_port}/ws")
                 await _bind_generation()
                 await cron.start()
