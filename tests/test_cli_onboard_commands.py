@@ -5021,7 +5021,9 @@ def test_every_credential_prompt_means_the_same_thing_by_ctrl_c(monkeypatch: pyt
         def ask(self) -> None:
             return None
 
-    fake = lambda: SimpleNamespace(text=lambda *a, **kw: _Cancelled(), password=lambda *a, **kw: _Cancelled())
+    def fake():
+        return SimpleNamespace(text=lambda *a, **kw: _Cancelled(), password=lambda *a, **kw: _Cancelled())
+
     # _prompt_api_key lives in the shared kit; the other three prompts live
     # here -- patch the seam in both namespaces so each body sees the fake.
     monkeypatch.setattr(onboard_commands, "_require_questionary", fake)
