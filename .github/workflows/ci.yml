@@ -68,6 +68,8 @@ jobs:
 
       - name: Python lint
         run: make lint-python
+      - name: Import contracts (layer boundaries)
+        run: make lint-imports
 
   unit:
     name: unit (py${{ matrix.python }} / ${{ matrix.os }})

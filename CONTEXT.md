@@ -898,7 +898,24 @@ import no machinery. Two promise tiers, stamped per module via `__tier__`: `cont
 ### Security & Access
 
 **AUTH** (`auth/`):
-Authentication & authorization primitives (e.g. allowlist).
+Authentication & authorization primitives (e.g. allowlist). Classified as a
+cross-cutting mechanism: a leaf consumed by inner layers and cargo, never the
+other way (enforced by the layer contracts in `pyproject.toml`).
+
+**Security** (`security/`):
+Outbound address policy (`network.py`: default-deny fetchability, the guarded
+per-hop fetch) and prompt-injection fences (`trust.py`). A cross-cutting
+mechanism and a member of the channels' shared-services shelf -- cargo may
+depend on it (dingtalk and qq do). Same leaf rule as `auth`.
+
+**Templates** (`templates/`):
+Packaged data assets, zero Python: read as package data (`utils/helpers.py`)
+and shipped by the wheel. An asset directory, not a code package -- it takes
+no layer assignment.
+
+**Browser** (`browser/`):
+Browser automation (`driver.py`) and its outbound policy (`policy.py`).
+Consumed by surfaces only; a surface-side feature library like `importer`.
 
 **SECURITY** (`security/`):
 Network access control (e.g. `network.py`).
