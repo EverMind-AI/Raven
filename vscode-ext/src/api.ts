@@ -19,7 +19,13 @@ export interface VscodeTerminal {
 
 export interface VscodeApi {
   window: {
-    createTerminal(options: { name: string; cwd?: string; shellPath?: string; shellArgs?: string[] }): VscodeTerminal
+    createTerminal(options: {
+      name: string
+      cwd?: string
+      shellPath?: string
+      shellArgs?: string[]
+      location?: 'editor'
+    }): VscodeTerminal
     onDidCloseTerminal(listener: (terminal: VscodeTerminal) => unknown): VscodeDisposable
     showErrorMessage(message: string, ...actions: string[]): Promise<string | undefined>
   }
@@ -46,7 +52,14 @@ export async function loadVscode(): Promise<VscodeApi | null> {
 function adaptVscode(vscode: typeof vscodeNs): VscodeApi {
   return {
     window: {
-      createTerminal: options => vscode.window.createTerminal(options),
+      createTerminal: options =>
+        vscode.window.createTerminal({
+          name: options.name,
+          cwd: options.cwd,
+          shellPath: options.shellPath,
+          shellArgs: options.shellArgs,
+          ...(options.location === 'editor' ? { location: { viewColumn: vscode.ViewColumn.Beside } } : {})
+        }),
       onDidCloseTerminal: listener => vscode.window.onDidCloseTerminal(terminal => listener(terminal)),
       showErrorMessage: async (message, ...actions) => vscode.window.showErrorMessage(message, ...actions)
     },

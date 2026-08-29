@@ -7,9 +7,9 @@ integrated terminal, mirroring the OpenCode extension model.
 
 - Editor title button next to the active file tab plus the command palette
   entry **Raven: Open TUI**
-- Launches `raven tui` in a dedicated integrated terminal named Raven; the
-  terminal process is raven itself, so arguments pass through argv with no
-  host-shell expansion
+- Launches `raven tui` in an editor-area tab named Raven (the terminal sits
+  in the file tab row, like the OpenCode extension); the terminal process is
+  raven itself, so arguments pass through argv with no host-shell expansion
 - Reuses the running terminal; recreates it after it closes
 - Resolves the raven executable automatically: `raven.executablePath` or
   `RAVEN_BIN` (`~` expanded), then `which` / `where`, then a bash/zsh login
