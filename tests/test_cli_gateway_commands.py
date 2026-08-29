@@ -717,3 +717,79 @@ class TestWhereThePageIsServed:
 # one answers); the gateway mints the token per boot and publishes it in the
 # lock, so there is no config-dependent branch left to read here.
 
+
+
+# ---------------------------------------------------------------------------
+# raven gateway reload | status | stop -- the control plane's CLI clients
+# ---------------------------------------------------------------------------
+
+
+def _async_value(value):
+    async def _f(*a, **k):
+        return value
+
+    return _f
+
+
+def test_gateway_status_reports_no_gateway_as_exactly_that(monkeypatch) -> None:
+    from raven.gateway import live_probe
+
+    monkeypatch.setattr(live_probe, "status", _async_value(None))
+    r = runner.invoke(app, ["gateway", "status"])
+    assert r.exit_code == 1
+    assert "No running gateway" in r.stdout
+
+
+def test_gateway_status_renders_the_generation(monkeypatch) -> None:
+    from raven.gateway import live_probe
+
+    monkeypatch.setattr(
+        live_probe,
+        "status",
+        _async_value({"pid": 4242, "started_at": 0.0, "generation": 3, "swap_in_flight": False,
+                      "config_path": "/tmp/c.json", "page": {"mounted": False}}),
+    )
+    r = runner.invoke(app, ["gateway", "status"])
+    assert r.exit_code == 0
+    assert "4242" in r.stdout and "generation 3" in r.stdout
+
+
+def test_gateway_reload_relays_busy_and_force(monkeypatch) -> None:
+    from raven.gateway import live_probe
+
+    seen: list[bool] = []
+
+    async def _reload(*, force: bool = False):
+        seen.append(force)
+        if not force:
+            return {"ok": False, "reason": "busy", "subagents": 2, "questions": 0}
+        return {"ok": True, "generation": 2, "swap": "pending", "grace_s": 5.0}
+
+    monkeypatch.setattr(live_probe, "reload", _reload)
+    refused = runner.invoke(app, ["gateway", "reload"])
+    assert refused.exit_code == 1 and "busy" in refused.stdout and "--force" in refused.stdout
+    forced = runner.invoke(app, ["gateway", "reload", "--force"])
+    assert forced.exit_code == 0 and "generation 2" in forced.stdout
+    assert seen == [False, True]
+
+
+def test_gateway_stop_defers_to_raven_web_when_supervised(monkeypatch) -> None:
+    from raven.cli import serve_commands
+    from raven.gateway import live_probe
+
+    monkeypatch.setattr(serve_commands, "_read_web_state", lambda: 12345)
+    called: list[str] = []
+    monkeypatch.setattr(live_probe, "shutdown", _async_value(True))
+    r = runner.invoke(app, ["gateway", "stop"])
+    assert r.exit_code == 1
+    # Rich wraps at the runner's width; compare whitespace-normalized.
+    assert "raven web --stop" in " ".join(r.stdout.split())
+    assert called == []
+
+
+def test_the_bare_gateway_command_still_starts_the_daemon_path(monkeypatch) -> None:
+    """The group's callback is the daemon; a sub-command must not fall into it
+    and the bare command must not be swallowed by the group."""
+    r = runner.invoke(app, ["gateway", "--help"])
+    assert r.exit_code == 0
+    assert "reload" in r.stdout and "status" in r.stdout and "stop" in r.stdout

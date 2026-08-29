@@ -175,10 +175,21 @@ def page_target(page_config: "GatewayPageConfig", page_port: int | None) -> int 
 
 
 def register(app: typer.Typer) -> None:
-    """Attach the ``gateway`` command to ``app``."""
+    """Attach the ``gateway`` group to ``app``: the daemon as the bare command,
+    the control-plane verbs (reload / status / stop) as sub-commands."""
+    from raven.cli import gateway_control_commands
 
-    @app.command()
+    gateway_app = typer.Typer(
+        invoke_without_command=True,
+        no_args_is_help=False,
+        help="Start the Raven gateway, or drive a running one (reload / status / stop).",
+    )
+    app.add_typer(gateway_app, name="gateway")
+    gateway_control_commands.register(gateway_app)
+
+    @gateway_app.callback()
     def gateway(
+        ctx: typer.Context,
         port: int | None = typer.Option(None, "--port", "-p", help="Gateway port"),
         page_port: int | None = typer.Option(
             None,
@@ -212,6 +223,8 @@ def register(app: typer.Typer) -> None:
         ),
     ):
         """Start the Raven gateway."""
+        if ctx.invoked_subcommand is not None:
+            return
         from raven.agent.loop.bundles import HostWiring, TurnPolicy
         from raven.agent.loop.recovery import limits_from_defaults
         from raven.agent.workdir import WorkdirPolicy, WorkdirResolver, validate_override
