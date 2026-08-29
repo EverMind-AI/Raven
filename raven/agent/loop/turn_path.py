@@ -1226,15 +1226,15 @@ class TurnPathMixin:
         cmd = content.strip().lower()
         if cmd == "/new":
             try:
-                if not await self.memory_consolidator.archive_unconsolidated(session):
+                if not await self.memory_consolidator.consolidate_unconsolidated(session):
                     return (
-                        "Memory archival failed, session not cleared. Please try again.",
+                        "Memory consolidation failed, session not cleared. Please try again.",
                         [],
                     )
             except Exception:
-                logger.exception("/new archival failed for {}", session.key)
+                logger.exception("/new consolidation failed for {}", session.key)
                 return (
-                    "Memory archival failed, session not cleared. Please try again.",
+                    "Memory consolidation failed, session not cleared. Please try again.",
                     [],
                 )
 

@@ -1865,7 +1865,7 @@ async def test_session_compress_reports_what_the_consolidator_archived(
             # the real consolidator cannot produce: `archived` is its report,
             # `last_consolidated` is the fact, and the handler reads the fact.
             session.last_consolidated = 3
-            return {"before_tokens": 900, "after_tokens": 300, "archived": 3}
+            return {"before_tokens": 900, "after_tokens": 300, "compacted": 3}
 
     # A fake is only evidence if it answers to the same contract as the real
     # thing. This one was written against a signature the shipped consolidator
@@ -1886,7 +1886,7 @@ async def test_session_compress_reports_what_the_consolidator_archived(
     assert result["removed"] == 3
     assert result["before_messages"] == 5
     assert result["after_messages"] == 2
-    assert result["summary"]["headline"] == "archived 3 messages"
+    assert result["summary"]["headline"] == "compacted 3 messages"
     assert result["summary"]["noop"] is False
     assert result["summary"]["token_line"] == "900 -> 300 tokens"
 
@@ -1993,7 +1993,7 @@ async def test_session_compress_persists_what_it_archived(tmp_path: Path, monkey
     class _Consolidator:
         async def maybe_consolidate_by_tokens(self, session, *, force=False):
             session.last_consolidated = 3
-            return {"before_tokens": 900, "after_tokens": 300, "archived": 3}
+            return {"before_tokens": 900, "after_tokens": 300, "compacted": 3}
 
     mgr = SessionManager(tmp_path)
     loop = SimpleNamespace(memory_consolidator=_Consolidator(), sessions=mgr)
@@ -2069,7 +2069,7 @@ async def test_session_compress_hands_back_what_the_caller_must_redraw(
         # handing back every message it had just called archived.
         async def maybe_consolidate_by_tokens(self, session, force=False):
             session.last_consolidated = 3
-            return {"before_tokens": 900, "after_tokens": 300, "archived": 3}
+            return {"before_tokens": 900, "after_tokens": 300, "compacted": 3}
 
     loop = SimpleNamespace(
         memory_consolidator=_Consolidator(),
@@ -2110,7 +2110,7 @@ async def test_session_compress_reports_the_same_session_as_resume(
     class _Consolidator:
         async def maybe_consolidate_by_tokens(self, session, force=False):
             session.last_consolidated = 3
-            return {"before_tokens": 900, "after_tokens": 300, "archived": 3}
+            return {"before_tokens": 900, "after_tokens": 300, "compacted": 3}
 
     resolver = WorkdirResolver(
         WorkdirPolicy.PER_CHANNEL,

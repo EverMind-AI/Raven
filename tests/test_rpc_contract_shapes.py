@@ -363,7 +363,7 @@ async def test_session_compress_without_a_consolidator(workspace: Path) -> None:
     assert out.summary.noop is True
 
 
-async def test_session_compress_after_archiving(workspace: Path) -> None:
+async def test_session_compress_after_compacting(workspace: Path) -> None:
     """The branch that carries ``info`` / ``messages`` / ``usage``.
 
     Those three are the whole reason the init bundle is modelled: they are the
@@ -380,7 +380,7 @@ async def test_session_compress_after_archiving(workspace: Path) -> None:
 
     class _Consolidator:
         async def maybe_consolidate_by_tokens(self, session: Any, force: bool = False) -> dict:
-            return {"before_tokens": 100, "after_tokens": 10, "archived": 1}
+            return {"before_tokens": 100, "after_tokens": 10, "compacted": 1}
 
     # The loop has to carry the two enumerations the init bundle reads, or the
     # redraw payload is skipped and this test passes without checking anything.

@@ -1725,7 +1725,7 @@ class MemoryConsolidator:
             self._get_tool_definitions(),
         )
 
-    async def archive_unconsolidated(self, session: Session) -> bool:
+    async def consolidate_unconsolidated(self, session: Session) -> bool:
         """Consolidate the full unconsolidated tail for /new-style session rollover.
 
         Annotates the tail into episodes.md, then runs one round of hot-tag
@@ -1748,11 +1748,13 @@ class MemoryConsolidator:
 
         ``force`` skips the "prompt still fits" early return, which is what a
         user-triggered consolidation wants: consolidate down to the target now
-        rather than waiting to hit the window. Returns before/after token estimates
-        and how many messages moved behind the consolidation boundary — callers
-        that only want the side effect can ignore it.
+        rather than waiting to hit the window. Returns before/after token
+        estimates and ``compacted``, how many messages moved behind the
+        consolidation boundary -- callers that only want the side effect can
+        ignore it. Nothing here archives anything: a session is archived by
+        ``session.archive``, which hides it from the list and moves no message.
         """
-        stats = {"before_tokens": 0, "after_tokens": 0, "archived": 0}
+        stats = {"before_tokens": 0, "after_tokens": 0, "compacted": 0}
         if not session.messages or self.context_window_tokens <= 0:
             return stats
 
@@ -1820,5 +1822,5 @@ class MemoryConsolidator:
                 await self.maybe_refresh_hot_tags()
 
             stats["after_tokens"] = max(estimated, 0)
-            stats["archived"] = max(session.last_consolidated - boundary_before, 0)
+            stats["compacted"] = max(session.last_consolidated - boundary_before, 0)
             return stats
