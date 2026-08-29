@@ -306,7 +306,7 @@ async def test_discoverer_notifies_user_when_superseding_awaiting_confirm(memory
 
     assert len(submitted) == 1
     assert submitted[0].origin is Origin.SENTINEL
-    assert "替换" in submitted[0].text
+    assert "replaced" in submitted[0].text
 
     # The new menu still goes through the dispatcher to the hub.
     menu_msgs = [m for m in posted if m.source.extras.get("_sentinel_action") == "discovery_menu"]

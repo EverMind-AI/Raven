@@ -51,6 +51,7 @@ if TYPE_CHECKING:
 
 from loguru import logger
 
+from raven.i18n import t
 from raven.proactive_engine.sentinel.executor.defer_manager import DeferManager
 from raven.proactive_engine.sentinel.executor.dispatcher import (
     ExecutionResult,
@@ -269,11 +270,11 @@ class SentinelRunner:
         self._running = False
         if self.defer_manager is not None:
             self.defer_manager.stop()
-        for t in (self._tick_task, self._defer_task, self._trigger_task):
-            if t is not None:
-                t.cancel()
+        for task in (self._tick_task, self._defer_task, self._trigger_task):
+            if task is not None:
+                task.cancel()
                 try:
-                    await t
+                    await task
                 except (asyncio.CancelledError, Exception):
                     pass
         self._tick_task = None
@@ -926,7 +927,7 @@ class SentinelRunner:
             # reason keeps the evidence-citing rationale (logs / scoring);
             # nudge_message is the user-facing line the daily plan produced.
             reason=f"daily_plan slot {time_hhmm}: {rationale[:120]}",
-            nudge_message=user_message or rationale or f"提醒：{tag}",
+            nudge_message=user_message or rationale or t("Reminder: {tag}", tag=tag),
             raw_llm_response={"source": source},
         )
 

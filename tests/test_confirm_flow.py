@@ -335,7 +335,7 @@ async def test_first_leg_pick_emits_confirm_prompt_no_execute(
 
     out = await consumer(_msg("/pick 2"))
     assert isinstance(out, MenuReply)
-    assert "要执行" in out.content
+    assert "Run:" in out.content
     assert "任务二" in out.content
     assert "yes" in out.content.lower() or "确认" in out.content
 
@@ -367,13 +367,13 @@ async def test_second_leg_yes_executes_and_records_accepted(
 
     # First leg
     out1 = await consumer(_msg("/pick 2"))
-    assert "要执行" in out1.content
+    assert "Run:" in out1.content
 
     # Second leg — confirm
     out2 = await consumer(_msg("yes"))
     assert isinstance(out2, MenuReply)
     # Output should be the executor's success message (not the confirm prompt)
-    assert "已为您发起" in out2.content or "任务二" in out2.content
+    assert "Started for you" in out2.content or _decision().options[1].title in out2.content
 
     # Decision fully consumed
     raw = pending_store._store.load()["decisions"][0]
@@ -404,7 +404,7 @@ async def test_second_leg_no_cancels_no_execute(pending_store, feedback):
 
     # Second leg — cancel
     out = await consumer(_msg("no"))
-    assert "取消" in out.content
+    assert "cancelled" in out.content
 
     # Decision marked cancelled (consumed=True, picked=None)
     raw = pending_store._store.load()["decisions"][0]
@@ -472,7 +472,7 @@ async def test_skip_does_not_use_confirm_path(pending_store, feedback):
     )
 
     out = await consumer(_msg("跳过"))
-    assert "跳过" in out.content or "好的" in out.content
+    assert "skipping" in out.content or "Okay" in out.content
 
     raw = pending_store._store.load()["decisions"][0]
     assert raw["consumed"] is True

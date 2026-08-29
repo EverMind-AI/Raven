@@ -29,9 +29,14 @@ def current_language() -> str:
 
 def t(text: str, /, **arguments: object) -> str:
     """Translate ``text`` into the current language and fill its ``{placeholders}``."""
-    catalog = _CATALOGS.get(_language)
+    return t_in(_language, text, **arguments)
+
+
+def t_in(language: str, text: str, /, **arguments: object) -> str:
+    """Translate into a named language: for text whose language follows its content, not the UI."""
+    catalog = _CATALOGS.get(language)
     message = catalog.get(text, text) if catalog is not None else text
     return message.format(**arguments) if arguments else message
 
 
-__all__ = ["current_language", "set_language", "t"]
+__all__ = ["current_language", "set_language", "t", "t_in"]

@@ -29,6 +29,7 @@ import typer
 
 from raven.cli._helpers import report_dropped_memory_writes
 from raven.cli._log_file import _strip_tty_stream_handlers, redirect_loguru_to_file
+from raven.i18n import t
 from raven.rpc.cron_events import build_cron_callback_spine, fanout_cron_missed
 from raven.utils import asyncio_runner as bounded_asyncio
 
@@ -782,11 +783,11 @@ def run_subprocess_with_rpc(
             return_when=asyncio.FIRST_COMPLETED,
             timeout=_RPC_HANDSHAKE_TIMEOUT_S,
         )
-        for t in pending:
-            t.cancel()
-        for t in pending:
+        for task in pending:
+            task.cancel()
+        for task in pending:
             try:
-                await t
+                await task
             except (asyncio.CancelledError, Exception):
                 pass
 
@@ -848,10 +849,10 @@ def run_subprocess_with_rpc(
 
 def _print_node_help(out=None) -> None:
     """Print the friendly Node-missing error message."""
-    msg = (
-        "✗ TUI 启动失败：未找到 Node.js ≥ 22。\n"
-        "  安装：https://nodejs.org/  或  brew install node@22  或  nvm install 22\n"
-        '  或：一次性提问  ->  raven agent -m "..."\n'
+    msg = t(
+        "✗ TUI failed to start: Node.js >= 22 not found.\n"
+        "  Install: https://nodejs.org/  or  brew install node@22  or  nvm install 22\n"
+        '  Or ask once:  raven agent -m "..."\n'
     )
     typer.echo(msg, file=out)
 
@@ -967,7 +968,10 @@ def tui(
     if version is None or version < _MIN_NODE_VERSION:
         ver_str = ".".join(map(str, version)) if version else "<unknown>"
         typer.echo(
-            f"✗ Node 版本过低（找到 {ver_str}，需要 >= 22）。\n  请升级：nvm install 22  或  brew upgrade node\n",
+            t(
+                "✗ Node too old (found {version}, need >= 22).\n  Upgrade: nvm install 22  or  brew upgrade node\n",
+                version=ver_str,
+            ),
         )
         raise typer.Exit(code=1)
 
@@ -984,7 +988,7 @@ def tui(
     # (see resolve_dist_entry), so it must NOT hard-require the source tree —
     # a wheel install legitimately has no ui-tui/ source directory.
     if dev and not _UI_TUI_DIR.exists():
-        print(f"✗ TUI 源码缺失（--dev 需要源码树）：{_UI_TUI_DIR}", file=sys.stderr)
+        print(t("✗ TUI sources missing (--dev needs the source tree): {path}", path=_UI_TUI_DIR), file=sys.stderr)
         raise typer.Exit(code=2)
 
     # Color override flows to the child via env (entry.tsx -> colorTier.ts).
@@ -1074,9 +1078,14 @@ def tui(
         dist_entry = resolve_dist_entry()
         if dist_entry is None and not check:
             print(
-                f"✗ TUI 构建产物缺失：{_PACKAGED_DIST_ENTRY}（或源码树 {_UI_TUI_DIR / 'dist' / 'entry.js'}）\n"
-                f"  开发者请运行：cd {_UI_TUI_DIR} && npm install && npm run build\n"
-                f"  用户请重新安装：curl -fsSL https://raven.evermind.ai/install.sh | sh\n",
+                t(
+                    "✗ TUI bundle missing: {entry} (or the source tree {dev_entry})\n"
+                    "  Developers: cd {dir} && npm install && npm run build\n"
+                    "  Users: reinstall with  curl -fsSL https://raven.evermind.ai/install.sh | sh\n",
+                    entry=_PACKAGED_DIST_ENTRY,
+                    dev_entry=_UI_TUI_DIR / "dist" / "entry.js",
+                    dir=_UI_TUI_DIR,
+                ),
                 file=sys.stderr,
             )
             raise typer.Exit(code=2)

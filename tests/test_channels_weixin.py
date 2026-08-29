@@ -133,7 +133,7 @@ def test_render_text_quoted_text_includes_quote():
         "ref_msg": {"title": "T", "message_item": {"type": p.ITEM_TEXT, "text_item": {"text": "orig"}}},
     }
     out = WeixinChannel._render_text_item(item)[0]
-    assert "引用" in out and "reply" in out and "orig" in out
+    assert "[quoted:" in out and "reply" in out and "orig" in out
 
 
 def test_typed_item():
