@@ -9,8 +9,10 @@ derive a cargo bundle by hand.
 
 from __future__ import annotations
 
+import asyncio
+import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 import raven.agent.loop as agent_loop
 from raven.agent.loop.bundles import EngineWiring, HostWiring, SubagentWiring, ToolWiring, TurnPolicy
@@ -50,6 +52,17 @@ class RavenRuntime:
         if self.backend is not None:
             await self.loop.drain_backend_stores()
             await self.backend.stop()
+
+    def discard(self) -> None:
+        """Drop a candidate that never served.
+
+        A built-but-never-started generation holds no started resources --
+        no backend.start(), no MCP connections, no running loop -- so there is
+        nothing to stop; dispose()'s sequence assumes a generation that ran.
+        The method exists so a superseded candidate is dropped on purpose,
+        not by falling out of scope.
+        """
+        return None
 
 
 def build_runtime(
@@ -143,3 +156,82 @@ def build_runtime(
         strategies=strategies,
         deliverables=deliverables,
     )
+
+
+@dataclass
+class SwapCandidate:
+    """Generation N+1, fully built and waiting for N's turn boundary."""
+
+    config: Any
+    ec_config: Any
+    provider: Any
+    router: Any
+    runtime: RavenRuntime
+
+
+class SwapCoordinator:
+    """Serializes generation swaps from every trigger (SIGHUP, gateway.reload).
+
+    One swap at a time: the slot is claimed at BUILD start and released only
+    immediately before the new generation's loop starts running, so a request
+    that completes while the next generation is still being wired is refused
+    rather than stopping a loop that has not started (AgentLoop.run sets
+    _running on entry, so a stop() landing before it would be overwritten and
+    the candidate stranded). Accepted requests are also rate-limited: a swap
+    cancels every in-flight turn and reconnects MCP, so a reload storm must
+    not be a way to keep the daemon permanently rebuilding.
+    """
+
+    def __init__(self, *, min_interval_s: float = 5.0, clock: Callable[[], float] = time.monotonic) -> None:
+        self.generation = 1
+        self._in_flight = False
+        self._swapping = False
+        self._candidate: SwapCandidate | None = None
+        self._last_accept: float | None = None
+        self._tasks: set[asyncio.Task] = set()
+        self._clock = clock
+        self._min_interval_s = min_interval_s
+
+    @property
+    def in_flight(self) -> bool:
+        return self._in_flight
+
+    def begin(self) -> str | None:
+        """Claim the swap slot; None when claimed, else the refusal reason."""
+        if self._in_flight:
+            return "swap_in_flight"
+        now = self._clock()
+        if self._last_accept is not None and now - self._last_accept < self._min_interval_s:
+            return "too_soon"
+        self._in_flight = True
+        self._last_accept = now
+        return None
+
+    def abort(self) -> None:
+        """The build failed: give the slot back, nothing was staged."""
+        self._in_flight = False
+
+    def stage(self, candidate: SwapCandidate) -> None:
+        if self._candidate is not None:
+            self._candidate.runtime.discard()
+        self._candidate = candidate
+
+    def take(self) -> SwapCandidate | None:
+        """The serving loop stopped: hand over the candidate, if one is staged."""
+        candidate, self._candidate = self._candidate, None
+        if candidate is not None:
+            self._swapping = True
+        return candidate
+
+    def release(self) -> None:
+        """Called right before the (new) generation's loop starts; no await
+        may sit between this call and ``agent.run()``."""
+        if self._swapping:
+            self.generation += 1
+            self._swapping = False
+        self._in_flight = False
+
+    def track(self, task: asyncio.Task) -> None:
+        """Hold a reference to a trigger task so it cannot be collected mid-build."""
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)

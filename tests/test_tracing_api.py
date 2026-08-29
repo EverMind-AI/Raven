@@ -625,7 +625,7 @@ def test_the_served_page_is_distinguishable_from_the_terminal(trace_dir):
 
 
 def test_the_page_does_not_call_itself_web(trace_dir):
-    """`web` is `raven/web_rpc`, a different front end on its own channel. Two
+    """`web` was the retired web channel, a different front end on its own channel. Two
     different things under one label is worse than no label."""
     from raven.cli.serve_commands import SERVED_PAGE_SURFACE
 

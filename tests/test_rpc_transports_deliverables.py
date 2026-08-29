@@ -11,7 +11,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from raven.agent.tools._deliverables import DeliverableStore
-from raven.web_rpc.files import add_files_routes, resolve_download
+from raven.rpc.transports.deliverables import add_files_routes, resolve_download
 
 
 @pytest.fixture

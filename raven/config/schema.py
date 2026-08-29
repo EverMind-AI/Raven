@@ -596,30 +596,6 @@ class GatewayLogConfig(Base):
     console_level: str = "INFO"
 
 
-class GatewayWebConfig(ChannelBase):
-    """Web-app channel for the gateway: a local WebSocket JSON-RPC endpoint a
-    client connects to over a WebSocket.
-
-    Configured off by default, but the gateway starts the endpoint either way --
-    see ``raven/cli/gateway_commands.py``: this flag decides whether the
-    configured host/port/token are used, not whether the channel exists, because
-    the endpoint is also how any other process asks a live channel adapter what
-    it is actually doing.
-
-    Off by default. When enabled, the gateway hosts a ``web`` channel — its own
-    streaming spine (build_web) plus a WS server — alongside the IM channels,
-    reusing the TUI RPC wire protocol (token.delta / thinking.delta / tool.* /
-    message.complete). Single-user by design: bound to loopback, not exposed
-    off-box; ``auth_token`` (if set) is a shared secret the client sends as the
-    first line, mirroring the TUI RpcServer's trust gate.
-    """
-
-    enabled: bool = False
-    host: str = "127.0.0.1"
-    port: int = 8765
-    auth_token: str | None = None
-
-
 class GatewayPageConfig(Base):
     """The served page (`raven serve`'s browser front end) hosted inside the
     gateway process, on the gateway's own agent loop.
@@ -660,7 +636,6 @@ class GatewayConfig(Base):
     shutdown_grace: float = 5.0
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
     log: GatewayLogConfig = Field(default_factory=GatewayLogConfig)
-    web: GatewayWebConfig = Field(default_factory=GatewayWebConfig)
     page: GatewayPageConfig = Field(default_factory=GatewayPageConfig)
 
 
@@ -1700,8 +1675,6 @@ class Config(BaseSettings):
             configured = getattr(channel, "workspace", "")
             if isinstance(configured, str) and configured.strip():
                 found[name] = configured.strip()
-        if self.gateway.web.workspace.strip():
-            found["web"] = self.gateway.web.workspace.strip()
         return found
 
     def effective_media_config(self) -> MediaGenConfig:

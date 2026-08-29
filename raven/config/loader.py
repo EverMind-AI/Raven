@@ -490,6 +490,29 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
     atomic_replace(path, json.dumps(data, indent=2, ensure_ascii=False))
 
 
+def _migrate_retired_gateway_web(data: dict[str, Any], *, notify: bool = False) -> bool:
+    """Drop the retired ``gateway.web`` table.
+
+    The web channel it configured is gone: the gateway's control plane needs
+    no configuration (loopback, per-boot token, endpoint published in the
+    lock), and proactive output that ``enabled: true`` used to route to a
+    channel with no clients now reaches the IM channels and the page.
+    Idempotent and unversioned: the key can only be stale.
+    """
+    gateway = data.get("gateway")
+    if not isinstance(gateway, dict) or "web" not in gateway:
+        return False
+    gateway.pop("web")
+    notice = (
+        "Removed `gateway.web` from your config: the web channel is retired. The gateway control "
+        "plane needs no settings (it binds loopback with a per-boot token), and proactive replies that "
+        "`web.enabled` used to send to the web channel now reach your IM channels and the page."
+    )
+    if notify and notice not in _migration_notices:
+        _migration_notices.append(notice)
+    return True
+
+
 def _migrate_config(data: dict, *, pop_extension_keys: bool = True, from_version: int = CURRENT_CONFIG_VERSION) -> dict:
     """Migrate old config formats to current.
 
@@ -512,6 +535,7 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True, from_version
         _migrate_legacy_context_window(data, notify=True)
     if from_version < _AUTO_PROVIDER_MIGRATION:
         _migrate_auto_provider(data, notify=True)
+    _migrate_retired_gateway_web(data, notify=True)
 
     # Move tools.exec.restrictToWorkspace → tools.restrictToWorkspace
     tools = data.get("tools", {})

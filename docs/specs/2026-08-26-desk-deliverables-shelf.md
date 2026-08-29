@@ -35,7 +35,7 @@ places that are not the desk (D3).
 | Delivery record | `transcript/store.ts:92-123` | `recordDelivery` / `deliveriesOf`, a `WeakMap<Lane, Map<turn, DeliveryRow[]>>` |
 | Wire | `raven/agent/tools/deliver.py:168-186` | manifest on `ToolEvent.metadata.raven_delivery` |
 | Replay | `raven/rpc/methods/session.py:289-307` | resume re-sends the manifest and stamps `missing` per file |
-| Download | `raven/web_rpc/files.py` | `/files/download?token=`, `410` when the token is gone |
+| Download | `raven/rpc/transports/deliverables.py` | `/files/download?token=`, `410` when the token is gone |
 | Read-for-render | `raven/rpc/transports/ws.py:208` | `/file?path=`, the agent's own read policy |
 
 Two facts that decide most of the design:

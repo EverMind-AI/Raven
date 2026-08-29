@@ -576,7 +576,7 @@ def register_turn_methods(
     ``default_channel`` is the ``source.channel`` stamped on a turn when the
     client omits one — and it MUST match the channel the outlet was registered
     under (the hub routes deliverables by ``source.channel``), or the reply is
-    dropped. Defaults to ``"tui"``; the web channel (build_web) passes ``"web"``.
+    dropped. Defaults to ``"tui"``.
     """
 
     async def _send(params: dict[str, Any]) -> dict[str, Any]:

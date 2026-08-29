@@ -408,7 +408,7 @@ source_modules = [
     "raven.config", "raven.utils", "raven.mcp", "raven.playbook",
     "raven.knowledge", "raven.skill_hub", "raven.trajectory",
 ]
-forbidden_modules = ["raven.cli", "raven.rpc", "raven.web_rpc", "raven.proactive_engine", "raven.acp"]
+forbidden_modules = ["raven.cli", "raven.rpc", "raven.proactive_engine", "raven.acp"]
 # Debt allowlist: may only SHRINK. Lazy machinery-at-surface-address edges,
 # each queued for relocation in the ledger: CronTool consumed by the loop
 # (turn path registers it, wiring builds it), and the skill install engine
@@ -436,7 +436,7 @@ forbidden_modules = [
     "raven.memory_engine", "raven.ops", "raven.playbook", "raven.plugins",
     "raven.proactive_engine", "raven.providers", "raven.routing", "raven.rpc",
     "raven.sandbox", "raven.security", "raven.session", "raven.skill_hub",
-    "raven.token_wise", "raven.trajectory", "raven.utils", "raven.web_rpc",
+    "raven.token_wise", "raven.trajectory", "raven.utils",
 ]
 ignore_imports = [
     "raven.contracts.llm_provider -> raven.providers.rates",
