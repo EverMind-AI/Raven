@@ -194,3 +194,36 @@ LEGACY_ATTENTION_HEADERS: dict[str, str] = {
     "## 今日 fire 计划": "## Today's fire plan",
 }
 """attention.md H2 headers as older files spell them, mapped to the canonical English ones."""
+
+TOOL_SEARCH_QUERY_EXAMPLE = "生成图片"
+"""A tool-search query in Chinese, shown beside an English one so the model
+recognises either phrasing."""
+TITLE_EXAMPLE = "修复登录跳转"
+"""A conversation title in Chinese, paired with its English form in the
+title tool's parameter description."""
+
+TRIGGER_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "帮我",  # bang wo: "help me"
+        "给我",  # gei wo: "give me"
+        "我要",  # wo yao: "I want"
+        "我想",  # wo xiang: "I'd like"
+        "一个",  # yi ge: "a/one"
+        "一下",  # yi xia: "briefly"
+        "一份",  # yi fen: "a copy of"
+        "这个",  # zhe ge: "this"
+        "那个",  # na ge: "that"
+        "什么",  # shen me: "what"
+        "怎么",  # zen me: "how"
+        "可以",  # ke yi: "can/may"
+        "需要",  # xu yao: "need"
+        "麻烦",  # ma fan: "please/trouble you"
+        "模板",  # mu ban: "template"
+        "流程",  # liu cheng: "process/flow"
+        "方案",  # fang an: "plan/scheme"
+        "自动化",  # zi dong hua: "automation"
+        "工作流",  # gong zuo liu: "workflow"
+    }
+)
+"""Openers and mechanism words a Chinese request carries whatever it asks for,
+so a playbook trigger built from them would fire on every request."""

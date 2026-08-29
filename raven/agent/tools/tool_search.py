@@ -41,6 +41,7 @@ from raven.agent.tools.registry import absent_tool_error
 from raven.agent.tools.tool_index import ToolIndex, rank_tools
 from raven.contracts.token_strategy import TokenStrategy
 from raven.contracts.tool import Tool
+from raven.i18n import zh_lexicon
 
 if TYPE_CHECKING:
     from raven.agent.tools.registry import ToolRegistry
@@ -343,7 +344,7 @@ class ToolSearchTool(Tool):
             "Search the catalog of additional tools that are available but not "
             "currently loaded. Returns matching tools with their description and "
             "parameter schema, ready to invoke with tool_call. Query with task "
-            "keywords, e.g. 'create github issue' or '生成图片'."
+            f"keywords, e.g. 'create github issue' or '{zh_lexicon.TOOL_SEARCH_QUERY_EXAMPLE}'."
         )
 
     @property
