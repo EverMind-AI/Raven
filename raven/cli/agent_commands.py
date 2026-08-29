@@ -286,7 +286,7 @@ def register(app: typer.Typer) -> None:
         # (channel="cli", chat_id="direct", session_key=session_id). Progress
         # renders via the CliOutlet, gated by the same two config flags the bus
         # path honored (send_progress / send_tool_hints).
-        from raven.cli._repl_spine import build_repl
+        from raven.cli._one_shot_spine import build_one_shot_spine
         from raven.spine import ChatType, Origin, Source, TurnRequest
 
         async def run_once():
@@ -301,9 +301,9 @@ def register(app: typer.Typer) -> None:
                     )
             try:
                 # Build inside the running loop: Scheduler pins its home loop in
-                # __init__, so build_repl must not run in the sync prologue.
+                # __init__, so build_one_shot_spine must not run in the sync prologue.
                 ch = agent_loop.channels_config
-                scheduler, hub, teardown = build_repl(
+                scheduler, hub, teardown = build_one_shot_spine(
                     agent_loop,
                     "cli",
                     lambda t: _print_agent_response(t, render_markdown=markdown),

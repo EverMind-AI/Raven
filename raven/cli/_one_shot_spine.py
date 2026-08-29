@@ -2,8 +2,8 @@
 AgentTurnRunner with stream=False, so the reply is one Text), the outlet that
 renders a turn's text to the console, and the sink that feeds the delivery hub.
 
-The one-shot turn runs through spine (submit -> lane -> run_turn -> hub ->
-outlet). spine never imports cli; cli imports spine.
+The turn runs through the spine (submit -> lane -> run_turn -> hub -> outlet);
+the spine never imports cli, cli imports the spine.
 """
 
 import time
@@ -172,7 +172,7 @@ class CliOutlet:
         # Other Notice kinds / ToolEvent / MediaOut are eaten (render-can't path).
 
 
-def build_repl(
+def build_one_shot_spine(
     agent_loop: Any,
     channel: str,
     render: Callable[[str], None],

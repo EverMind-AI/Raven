@@ -35,6 +35,10 @@ All notable changes to Raven are documented here.
   repo-level `evolver/` tool that drives it. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- Audit pass thirteen: `raven/cli/_repl_spine.py` is `_one_shot_spine.py`
+  (`build_repl` is `build_one_shot_spine`) -- it wires `agent -m`, and the
+  REPL it was named for is gone -- and the command modules drop their plan
+  citations and their accounts of what the CLI did before.
 - Audit pass twelve: the channels and the proactive engine describe the shape
   they have -- two scheduler families rather than three, the sentinel's own
   pipeline rather than a plan's phase codes, and the delivery hub named where

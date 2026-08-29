@@ -1,4 +1,4 @@
-"""Cold-start import CLI commands: scan, run, status."""
+"""Cold-start import CLI commands: scan, run, status, cancel."""
 
 from __future__ import annotations
 
@@ -100,9 +100,10 @@ class ImportRunResult:
 def _require_memory_service_ready(backend: object) -> None:
     """Refuse to import when the memory service is not actually there.
 
-    ``backend.start()`` no longer raises: a session that cannot reach EverOS
-    degrades and keeps probing, which is right for a session and wrong here.
-    An import is one deliberate batch, and running it against nothing writes
+    ``backend.start()`` reports through its state rather than raising: a
+    session that cannot reach EverOS degrades and keeps probing, which is right
+    for a session and wrong here, so the state is checked after the start. An
+    import is one deliberate batch, and running it against nothing writes
     nothing while consuming the source list.
 
     Backends that do not report a state -- anything other than the everos one

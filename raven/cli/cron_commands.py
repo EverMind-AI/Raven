@@ -1,7 +1,7 @@
 """``raven cron`` subapp — operator-facing CLI for the CronService
 state at ``~/.raven/cron/jobs.json``.
 
-7 commands (per plan ``sorted-brewing-crayon.md``):
+Commands:
 
 - ``cron list [--all]``         — overview + service banner
 - ``cron get <id>``             — full detail of one job

@@ -498,10 +498,8 @@ def _probe_memory(config: "RavenConfig") -> MemoryInfo:
         probe_capabilities,
     )
 
-    # Which memories, and whose. Neither was reachable from any command before:
-    # the wizard printed the path once while converging and nothing showed it
-    # again, so "where are my memories" had no answer short of reading
-    # config.json by hand. This is the place that question gets asked.
+    # Which memories, and whose: this is where "where are my memories" is
+    # answered, without reading config.json by hand.
     info.owned = everos_owned()
     info.address = configured_base_url(config)
     report = probe_capabilities(configured_base_url(config))

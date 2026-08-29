@@ -5,8 +5,8 @@ This module bundles all ``raven channels ...`` subcommands:
 Lifecycle commands:
 
 - ``channels status``              — show enabled/disabled state for every channel
-- ``channels login``               — link device via QR code (WhatsApp bridge today;
-                                     generalized in a follow-up commit)
+- ``channels login``               — link a device for the channels whose spec
+                                     declares a login capability (QR today)
 
 Config subcommands:
 

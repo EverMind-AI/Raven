@@ -1,10 +1,8 @@
 """Shared onboarding wizard kit: console, language, prompt chrome, primitives.
 
-Extracted from onboard_commands so the four onboard modules import downward
-instead of forming a sibling import cycle (channels/everos/web reached back
-into onboard_commands for these at module level, an SCC held together only
-by the partial-import fallback). Language state lives here; the wizard sets
-it through :func:`raven.i18n.set_language`.
+The onboard modules import this leaf; none imports a sibling wizard module.
+Language state lives here; the wizard sets it through
+:func:`raven.i18n.set_language`.
 """
 
 from __future__ import annotations

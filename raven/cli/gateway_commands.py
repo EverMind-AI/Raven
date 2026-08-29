@@ -79,14 +79,12 @@ def _build_gateway_channels(config) -> set[str]:
     ``enabled_channel_names``, so a channel added to ``ChannelsConfig`` is
     covered without touching this module).
 
-    The gateway owns cron jobs for its IM channels. It does NOT claim
-    ``tui``/``cli`` jobs: those fire in the interactive process that created
-    them (the TUI / ``raven agent`` session), so a TUI-set reminder always
-    delivers to the TUI rather than racing the gateway and being forwarded to an
-    IM channel — fire-at-origin, no trigger-time re-routing. The trade-off is no
-    cross-process fallback while that process is down; restoring "fire at origin,
-    hand off only after the origin exits" is a deferred cron-delivery-ownership
-    design, not this set.
+    The gateway owns cron jobs for its IM channels. It does NOT claim ``tui``
+    jobs: those fire in the interactive process that created them, so a
+    TUI-set reminder delivers to the TUI rather than racing the gateway and
+    being forwarded to an IM channel -- fire at origin, no trigger-time
+    re-routing. The trade-off is no cross-process fallback while that process
+    is down.
 
     ``tui`` is deliberately NOT derived from ``gateway.page.enabled`` here. The
     partition has to follow the mount's outcome, not the config's intent:
@@ -519,9 +517,7 @@ def register(app: typer.Typer) -> None:
 
                 # Proactive target (cron / sentinel / heartbeat / subagent /
                 # deep_research): the gateway spine. Its hub delivers to the IM
-                # channels and, while a page is mounted, to the page. (The
-                # retired web channel used to take this lane when enabled and
-                # broadcast it to zero clients.)
+                # channels and, while a page is mounted, to the page.
                 pro_submit = gw_scheduler.submit
                 pro_hub = gw_hub
                 pro_readback = gw_readback_texts
@@ -688,10 +684,9 @@ def register(app: typer.Typer) -> None:
 
                 # Channel inbound runs through the spine: a permitted
                 # message is submitted as a USER turn. /stop and /restart are
-                # control commands (the bus drainer's job) — intercepted here, not
-                # submitted as turns (else the agent would reply to the text). cid
-                # matches the lane key (conversation or channel:chat_id), the same
-                # session key the bus path's _handle_stop used.
+                # control commands: intercepted here rather than submitted as
+                # turns, or the agent would reply to the text. The cid matches
+                # the lane key (conversation or channel:chat_id).
                 from dataclasses import replace
 
                 from raven.spine import Text
