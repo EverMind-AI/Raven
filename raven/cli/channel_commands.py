@@ -33,6 +33,7 @@ from rich.console import Console
 from rich.table import Table
 
 from raven import __logo__
+from raven.cli._field_spec_table import help_requested, render_field_spec_table
 from raven.cli._tty_guard import die_if_not_tty, is_tty
 
 console = Console()
@@ -41,11 +42,6 @@ console = Console()
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _help_requested(extra_args: list[str]) -> bool:
-    """Detect ``--help`` / ``-h`` inside a free-form ``ctx.args`` list."""
-    return any(t in ("--help", "-h") or t.startswith("--help=") for t in extra_args)
 
 
 def _print_schema_table(name: str) -> None:
@@ -62,26 +58,7 @@ def _print_schema_table(name: str) -> None:
         console.print(f"[red]✗[/red] {exc}")
         raise typer.Exit(1)
 
-    table = Table(title=f"Channel: {name}")
-    table.add_column("Flag", style="cyan", no_wrap=True)
-    table.add_column("Type", overflow="fold")
-    table.add_column("Default", no_wrap=True)
-    table.add_column("Required?", no_wrap=True, justify="center")
-    table.add_column("Secret?", no_wrap=True, justify="center")
-    table.add_column("Description", overflow="fold")
-    for path, spec in specs.items():
-        flag = "--" + path.replace("_", "-")
-        default = spec["default"]
-        default_str = "" if default in (None, "") else str(default)
-        table.add_row(
-            flag,
-            spec["type"],
-            default_str,
-            "✓" if spec.get("required") else "",
-            "✓" if spec["is_secret"] else "",
-            spec.get("description", "") or "",
-        )
-    console.print(table)
+    render_field_spec_table(console, title=f"Channel: {name}", specs=specs, required_column=True)
 
 
 def _warn_empty_credentials(name: str) -> None:
@@ -267,7 +244,7 @@ def _register_config_commands(channels_app: typer.Typer) -> None:
             raven channels enable feishu --app-id X --app-secret Y
             raven channels enable slack --bot-token X --app-token Y --dm.policy open
         """
-        if _help_requested(ctx.args):
+        if help_requested(ctx.args):
             _print_schema_table(name)
             raise typer.Exit(0)
 
@@ -333,7 +310,7 @@ def _register_config_commands(channels_app: typer.Typer) -> None:
             raven channels set telegram --token NEW --proxy http://127.0.0.1:7890
             raven channels set slack --dm.policy open
         """
-        if _help_requested(ctx.args):
+        if help_requested(ctx.args):
             _print_schema_table(name)
             raise typer.Exit(0)
 
