@@ -31,9 +31,19 @@ function cleanProcessEnv(): Record<string, string> {
 
 let cachedShellEnv: Record<string, string> | null = null
 
-function shellEnvironment(): Record<string, string> {
+function shellHint(api: VscodeApi): string | undefined {
+  if (process.platform !== 'win32') {
+    return process.env.SHELL
+  }
+  const config = api.workspace.getConfiguration('terminal.integrated')
+  const defaultProfile = config.get<string>('defaultProfile.windows')
+  const profiles = config.get<Record<string, { path?: string }>>('profiles.windows')
+  return (defaultProfile && profiles?.[defaultProfile]?.path) || undefined
+}
+
+function shellEnvironment(api: VscodeApi): Record<string, string> {
   if (cachedShellEnv === null) {
-    cachedShellEnv = probeLoginShellEnv(runProbe, process.env.SHELL, process.platform) ?? {}
+    cachedShellEnv = probeLoginShellEnv(runProbe, shellHint(api), process.platform) ?? {}
   }
   return { ...cleanProcessEnv(), ...cachedShellEnv }
 }
@@ -74,7 +84,7 @@ export async function activate(context: { subscriptions: VscodeDisposable[] }): 
       )
       return
     }
-    manager.open(command, firstWorkspacePath(api), shellEnvironment())
+    manager.open(command, firstWorkspacePath(api), shellEnvironment(api))
   }
 
   context.subscriptions.push(api.commands.registerCommand('raven.openTui', openTui))

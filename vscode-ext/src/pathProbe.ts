@@ -5,7 +5,9 @@
  * settings, API keys), so a plain which/where probe can miss binaries and a
  * launched process can miss configuration that a direct terminal run would
  * have. This module therefore falls back to probing inside login shells
- * (bash/zsh on posix, powershell.exe/pwsh on Windows). Every side effect is
+ * (bash/zsh on posix; on Windows the VS Code-configured PowerShell edition
+ * is preferred, and powershell.exe/pwsh environments are merged so
+ * profile-defined variables from both editions apply). Every side effect is
  * injected so the probing logic is unit-testable.
  */
 
@@ -70,15 +72,35 @@ export function probeLoginShellEnv(
   platform: NodeJS.Platform
 ): Record<string, string> | null {
   if (platform === 'win32') {
-    return probeWindowsEnv(runner)
+    return probeWindowsEnv(runner, shellHint)
   }
   return probePosixEnv(runner, shellHint)
 }
 
-function probeWindowsEnv(runner: ProbeRunner): Record<string, string> | null {
+function isPowerShellExecutable(shell: string): boolean {
+  return /powershell(\.exe)?$/i.test(shell)
+}
+
+function isPwshExecutable(shell: string): boolean {
+  return /pwsh(\.exe)?$/i.test(shell)
+}
+
+function probeWindowsEnv(runner: ProbeRunner, shellHint: string | undefined): Record<string, string> | null {
   const script =
     '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; Get-ChildItem Env: | ForEach-Object { "$($_.Name)=$($_.Value)" }'
-  for (const shell of ['powershell.exe', 'pwsh']) {
+  const candidates: string[] = []
+  if (shellHint && (isPowerShellExecutable(shellHint) || isPwshExecutable(shellHint))) {
+    candidates.push(shellHint)
+  }
+  if (!candidates.some(isPowerShellExecutable)) {
+    candidates.push('powershell.exe')
+  }
+  if (!candidates.some(isPwshExecutable)) {
+    candidates.push('pwsh')
+  }
+
+  let merged: Record<string, string> | null = null
+  for (const shell of candidates) {
     const result = runner(shell, ['-NonInteractive', '-Command', script], {
       encoding: 'utf8',
       timeout: 15000
@@ -88,10 +110,10 @@ function probeWindowsEnv(runner: ProbeRunner): Record<string, string> | null {
     }
     const env = parseEnvLines(result.stdout)
     if (Object.keys(env).length > 0) {
-      return env
+      merged = { ...env, ...(merged ?? {}) }
     }
   }
-  return null
+  return merged
 }
 
 function probePosixEnv(runner: ProbeRunner, shellHint: string | undefined): Record<string, string> | null {
