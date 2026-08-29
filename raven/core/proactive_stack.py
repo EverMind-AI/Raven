@@ -559,52 +559,6 @@ def attach_sentinel_decision_consumer(
         agent.hooks.append(DecisionConsumerAdapter(consumer))
 
 
-def attach_sentinel_feedback_tool(runner, agent: "AgentLoop") -> None:
-    """Register ``nudge_feedback`` on the AgentLoop tool registry and wire
-    the after_send neutral-flush hook.
-
-    The main LLM classifies the user's intent (accepted / dismissed /
-    snoozed / irrelevant) per turn at zero extra LLM cost. Turns where
-    the LLM doesn't call the tool are recorded as NEUTRAL by the
-    after_send hook — never as ACCEPTED.
-
-    No-op when sentinel/runner is None.
-    """
-    if runner is None:
-        return
-    from raven.contracts.loop_hooks import (
-        AgentHook,
-        AgentHookContext,
-        HookDecision,
-    )
-    from raven.proactive_engine.sentinel.tools import NudgeFeedbackTool
-
-    agent.tools.register(NudgeFeedbackTool(runner))
-
-    class _SentinelFeedbackFinalizeHook(AgentHook):
-        """Drain any nudge still awaiting classification at after_send
-        as NEUTRAL — guarantees no false-positive ACCEPTED when the LLM
-        forgets to call the tool."""
-
-        def __init__(self, runner) -> None:
-            self._runner = runner
-
-        @property
-        def name(self) -> str:
-            return "SentinelFeedbackFinalizeHook"
-
-        async def after_send(self, ctx: AgentHookContext) -> HookDecision:
-            session_key = ctx.session_key or ""
-            if session_key:
-                try:
-                    self._runner.finalize_pending_feedback(session_key)
-                except Exception:  # noqa: BLE001 — must not crash send
-                    pass
-            return HookDecision()
-
-    agent.hooks.append(_SentinelFeedbackFinalizeHook(runner))
-
-
 def build_wake(hb_cfg: Any, *, is_busy: Callable[[], bool]) -> tuple[Any, Any]:
     """The event-wake pair for heartbeat: ``(wake, system_events)``, or
     ``(None, None)`` when event wake is off.
@@ -653,7 +607,6 @@ __all__ = [
     "build_sentinel_stack",
     "attach_sentinel_spawn",
     "attach_sentinel_decision_consumer",
-    "attach_sentinel_feedback_tool",
     "build_heartbeat",
     "build_wake",
 ]
