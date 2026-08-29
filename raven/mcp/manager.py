@@ -1,9 +1,9 @@
 """Per-server MCP connection lifecycle.
 
-Replaces the shared-stack, one-shot connect in ``connect_mcp_servers`` for
-the live agent loop: each server owns a private ``AsyncExitStack`` so it can
-be attached, detached, and reconnected independently while the loop runs
-(plugin install/uninstall, re-auth, config edits — no restart).
+The live path for every MCP server the agent loop talks to: each server owns
+a private ``AsyncExitStack`` so it can be attached, detached, and reconnected
+independently while the loop runs (plugin install/uninstall, re-auth, config
+edits -- no restart).
 
 Ordering constraint worth flagging: ``disconnect`` withdraws the server's
 tools *before* closing its stack, so the agent never sees a tool whose session

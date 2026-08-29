@@ -68,8 +68,8 @@ class SandboxExecutor(ABC):
     def supports_process_spawning(self) -> bool:
         """True if start_process() is implemented for long-running child processes.
 
-        connect_mcp_servers() checks this flag for the stdio MCP branch instead of
-        using isinstance() — keeps caller code decoupled from concrete executor types.
+        connect_mcp_server() checks this flag for the stdio MCP branch instead of
+        using isinstance() -- keeps caller code decoupled from concrete executor types.
         DirectExecutor and the base class default to False.
         """
         return False

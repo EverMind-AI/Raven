@@ -1274,17 +1274,17 @@ class TestAgentLoopExecutorLifecycle:
 
 
 # ---------------------------------------------------------------------------
-# connect_mcp_servers sandbox guard
+# Connecting one MCP server: sandbox guard and transport behaviour
 # ---------------------------------------------------------------------------
 
 
-class TestConnectMcpSandboxGuard:
+class TestConnectOneMcpServer:
     async def test_stdio_sandboxed_no_spawning_raises(self):
         """Sandboxed executor without process-spawning raises SandboxInitError for stdio."""
         from contextlib import AsyncExitStack
 
         from raven.agent.tools.registry import ToolRegistry
-        from raven.mcp.client import connect_mcp_servers
+        from raven.mcp.client import connect_mcp_server
 
         executor = MockExecutor()  # is_sandboxed=True, supports_process_spawning=False
         cfg = MagicMock()
@@ -1292,22 +1292,22 @@ class TestConnectMcpSandboxGuard:
         cfg.command = "mcp-server"
         cfg.args = []
         with pytest.raises(SandboxInitError, match="stdio transport"):
-            await connect_mcp_servers({"svc": cfg}, ToolRegistry(), AsyncExitStack(), executor=executor)
+            await connect_mcp_server("svc", cfg, ToolRegistry(), AsyncExitStack(), executor=executor)
 
-    async def test_stdio_no_executor_does_not_raise(self, monkeypatch):
+    async def test_stdio_no_executor_reaches_the_transport(self, monkeypatch):
         """executor=None falls through to the normal stdio path (no guard triggered)."""
         from contextlib import AsyncExitStack
 
         import mcp.client.stdio
 
         from raven.agent.tools.registry import ToolRegistry
-        from raven.mcp.client import connect_mcp_servers
+        from raven.mcp.client import connect_mcp_server
 
         reached = []
 
         def fake_stdio_client(params):
             reached.append(params.command)
-            raise RuntimeError("stdio_client reached — expected in test")
+            raise RuntimeError("stdio_client reached -- expected in test")
 
         monkeypatch.setattr(mcp.client.stdio, "stdio_client", fake_stdio_client)
 
@@ -1317,79 +1317,12 @@ class TestConnectMcpSandboxGuard:
         cfg.args = []
         cfg.env = None
         cfg.tool_timeout = 30
-        # Guard should NOT raise; the transport error is caught per-server and logged.
-        await connect_mcp_servers({"svc": cfg}, ToolRegistry(), AsyncExitStack(), executor=None)
+        # The guard must not fire. What surfaces instead is the fake transport's
+        # own error, and reaching it is the proof.
+        with pytest.raises(RuntimeError, match="stdio_client reached"):
+            await connect_mcp_server("svc", cfg, ToolRegistry(), AsyncExitStack(), executor=None)
 
         assert reached == ["mcp-server"]
-
-    async def test_streamable_failure_does_not_cancel_following_server(self, monkeypatch):
-        """A transport task failure is isolated to the server being initialized."""
-        from contextlib import AsyncExitStack, asynccontextmanager
-        from types import SimpleNamespace
-
-        import anyio
-        import mcp
-        import mcp.client.streamable_http
-
-        from raven.agent.tools.registry import ToolRegistry
-        from raven.mcp.client import connect_mcp_servers
-
-        attempted = []
-
-        @asynccontextmanager
-        async def fake_streamable_http_client(url, http_client):
-            attempted.append(url)
-            if url == "https://bad.example/mcp":
-                async with anyio.create_task_group() as group:
-
-                    async def fail_transport():
-                        await anyio.sleep(0)
-                        raise RuntimeError("transport failed")
-
-                    group.start_soon(fail_transport)
-                    yield url, object(), None
-            else:
-                yield url, object(), None
-
-        class FakeSession:
-            def __init__(self, read, write):
-                self.read = read
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, exc_type, exc, traceback):
-                return False
-
-            async def initialize(self):
-                if self.read == "https://bad.example/mcp":
-                    await asyncio.Event().wait()
-
-            async def list_tools(self):
-                return SimpleNamespace(tools=[])
-
-        monkeypatch.setattr(mcp, "ClientSession", FakeSession)
-        monkeypatch.setattr(
-            mcp.client.streamable_http,
-            "streamable_http_client",
-            fake_streamable_http_client,
-        )
-
-        def config(url):
-            return SimpleNamespace(type="streamableHttp", url=url, headers=None, tool_timeout=30)
-
-        async with AsyncExitStack() as stack:
-            await connect_mcp_servers(
-                {
-                    "bad": config("https://bad.example/mcp"),
-                    "good": config("https://good.example/mcp"),
-                },
-                ToolRegistry(),
-                stack,
-            )
-
-        assert attempted == ["https://bad.example/mcp", "https://good.example/mcp"]
-        assert asyncio.current_task().cancelling() == 0
 
     async def test_streamable_external_cancellation_propagates(self, monkeypatch):
         """Cancellation of Raven's connection task is not treated as a server failure."""
@@ -1400,7 +1333,7 @@ class TestConnectMcpSandboxGuard:
         import mcp.client.streamable_http
 
         from raven.agent.tools.registry import ToolRegistry
-        from raven.mcp.client import connect_mcp_servers
+        from raven.mcp.client import connect_mcp_server
 
         entered = asyncio.Event()
 
@@ -1435,7 +1368,7 @@ class TestConnectMcpSandboxGuard:
             headers=None,
             tool_timeout=30,
         )
-        task = asyncio.create_task(connect_mcp_servers({"svc": cfg}, ToolRegistry(), AsyncExitStack()))
+        task = asyncio.create_task(connect_mcp_server("svc", cfg, ToolRegistry(), AsyncExitStack()))
         await entered.wait()
         task.cancel()
 
@@ -1452,7 +1385,7 @@ class TestConnectMcpSandboxGuard:
         import mcp.client.sse
 
         from raven.agent.tools.registry import ToolRegistry
-        from raven.mcp.client import connect_mcp_servers
+        from raven.mcp.client import connect_mcp_server
 
         clients = []
 
@@ -1488,7 +1421,7 @@ class TestConnectMcpSandboxGuard:
                 return False
 
             async def initialize(self):
-                pass
+                return SimpleNamespace(capabilities=SimpleNamespace(tools=object()))
 
             async def list_tools(self):
                 return SimpleNamespace(tools=[])
@@ -1504,7 +1437,7 @@ class TestConnectMcpSandboxGuard:
             tool_timeout=30,
         )
         async with AsyncExitStack() as stack:
-            await connect_mcp_servers({"svc": cfg}, ToolRegistry(), stack)
+            await connect_mcp_server("svc", cfg, ToolRegistry(), stack)
 
         assert len(clients) == 1
         assert clients[0]["headers"] == {"X-Config": "config", "X-Shared": "sdk", "X-SDK": "sdk"}
@@ -1518,8 +1451,8 @@ class TestConnectMcpSandboxGuard:
         # safe to do at client level at all.
         assert clients[0]["follow_redirects"] is False
 
-    async def test_unknown_transport_is_skipped(self, monkeypatch):
-        """An unknown transport does not attempt to open an MCP connection."""
+    async def test_unknown_transport_never_opens_a_connection(self, monkeypatch):
+        """An unknown transport is refused before any MCP connection is attempted."""
         from contextlib import AsyncExitStack
         from types import SimpleNamespace
 
@@ -1536,16 +1469,17 @@ class TestConnectMcpSandboxGuard:
         monkeypatch.setattr(mcp_tools, "_mcp_server_connection", fake_connection)
         cfg = SimpleNamespace(type="websocket", command=None, url="wss://example.test/mcp")
 
-        await mcp_tools.connect_mcp_servers({"svc": cfg}, ToolRegistry(), AsyncExitStack())
+        with pytest.raises(mcp_tools.MCPConfigError, match="unknown transport"):
+            await mcp_tools.connect_mcp_server("svc", cfg, ToolRegistry(), AsyncExitStack())
 
         assert attempted is False
 
-    async def test_stdio_sandboxed_with_spawning_does_not_raise(self):
+    async def test_stdio_sandboxed_with_spawning_skips_the_guard(self):
         """Sandboxed executor that supports spawning does not trigger the guard."""
         from contextlib import AsyncExitStack
 
         from raven.agent.tools.registry import ToolRegistry
-        from raven.mcp.client import connect_mcp_servers
+        from raven.mcp.client import connect_mcp_server
 
         class SpawningExecutor(MockExecutor):
             @property
@@ -1553,7 +1487,7 @@ class TestConnectMcpSandboxGuard:
                 return True
 
             async def start_process(self, command, args, env=None):
-                raise RuntimeError("start_process called — expected in test")
+                raise RuntimeError("start_process called -- expected in test")
 
         cfg = MagicMock()
         cfg.type = "stdio"
@@ -1561,55 +1495,10 @@ class TestConnectMcpSandboxGuard:
         cfg.args = []
         cfg.env = None
         cfg.tool_timeout = 30
-        # Guard should NOT raise; error comes from start_process stub instead.
-        try:
-            await connect_mcp_servers({"svc": cfg}, ToolRegistry(), AsyncExitStack(), executor=SpawningExecutor())
-        except SandboxInitError:
-            pytest.fail("SandboxInitError should not be raised when spawning is supported")
-
-    async def test_sandbox_guard_on_second_server_partial_registration(self):
-        """SandboxInitError on server 2 aborts after server 1 was already processed.
-
-        Verifies: the guard raises (not swallowed), even after prior servers connected.
-        """
-        from contextlib import AsyncExitStack
-
-        from raven.agent.tools.registry import ToolRegistry
-        from raven.mcp.client import connect_mcp_servers
-
-        executor = MockExecutor()  # is_sandboxed=True, supports_process_spawning=False
-
-        cfg_http = MagicMock()
-        cfg_http.type = "streamableHttp"
-        cfg_http.url = "http://example.com/mcp"
-        cfg_http.command = None
-        cfg_http.headers = None
-
-        cfg_stdio = MagicMock()
-        cfg_stdio.type = "stdio"
-        cfg_stdio.command = "mcp-server"
-        cfg_stdio.args = []
-
-        # Server 1 is HTTP (no guard) — mock the transport so no real network request is
-        # made. anyio's cancel scopes inside streamable_http_client break when a real HTTP
-        # request fails in a pytest-asyncio test context; mocking avoids that.
-        # Server 2 is stdio (guard fires). SandboxInitError must propagate, not be swallowed.
-        from contextlib import asynccontextmanager
-        from unittest.mock import patch
-
-        @asynccontextmanager
-        async def _failing_http(*args, **kwargs):
-            raise ConnectionError("mock: no network in tests")
-            yield  # make it a generator
-
-        with patch("mcp.client.streamable_http.streamable_http_client", _failing_http):
-            with pytest.raises(SandboxInitError, match="stdio transport"):
-                await connect_mcp_servers(
-                    {"http_svc": cfg_http, "stdio_svc": cfg_stdio},
-                    ToolRegistry(),
-                    AsyncExitStack(),
-                    executor=executor,
-                )
+        # Reaching start_process is the proof: the guard raises SandboxInitError
+        # before any transport is opened, so its message would surface instead.
+        with pytest.raises(RuntimeError, match="start_process called"):
+            await connect_mcp_server("svc", cfg, ToolRegistry(), AsyncExitStack(), executor=SpawningExecutor())
 
 
 # ---------------------------------------------------------------------------
