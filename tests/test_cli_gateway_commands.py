@@ -590,10 +590,13 @@ def test_the_gateway_shutdown_cancels_subagents_before_it_closes_the_transports(
     error, which records as a failure rather than as the stop it is. And the
     gateway never closed the ACP pool at all, so its servers outlived it."""
     src = (Path(__file__).resolve().parents[1] / "raven" / "cli" / "gateway_commands.py").read_text(encoding="utf-8")
-    drain = src.index("begin_drain()")
-    cancel = src.index("await agent.subagents.cancel_all()")
-    web = src.index("await web_teardown()")
-    pool = src.index("await close_pool()")
+    # Scope to the shutdown path: the generation-swap path above it tears the
+    # same spines down in its own order, pinned by test_generation_swap.py.
+    shutdown = src[src.index("except KeyboardInterrupt:") :]
+    drain = shutdown.index("begin_drain()")
+    cancel = shutdown.index("await agent.subagents.cancel_all()")
+    web = shutdown.index("await web_teardown()")
+    pool = shutdown.index("await close_pool()")
 
     assert drain < cancel < web < pool
 

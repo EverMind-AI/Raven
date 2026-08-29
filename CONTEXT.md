@@ -883,6 +883,16 @@ declaration guard (`tests/test_channels_config_declaration.py`) keeps the two co
 _Avoid_: "schema" alone — the central pydantic model and the cargo declaration are
 different artifacts.
 
+**Generation** (`core/runtime.py`, gateway):
+One assembled `RavenRuntime` serving turns. A config change swaps generations at a turn
+boundary: BUILD N+1 comes first (a candidate that fails to assemble leaves N serving),
+SWAP re-runs the gateway's generation wiring (spines, dispatcher bind, sinks, sentinel
+attach), DISPOSE retires N in a pinned order (`RavenRuntime.dispose`). Process-lifetime
+transports -- channels, cron, the sentinel runner, the web socket, health -- survive the
+swap. Trigger: SIGHUP to the gateway.
+_Avoid_: "hot reload" (that is `reload.mcp`, a tool-set reconcile inside one generation);
+"restart" (the `/restart` control command, a whole-process execv).
+
 **Assembly Root** (`core/`):
 The package that composes a running agent out of parts: one `*_stack` builder per assembly
 concern, and `runtime.build_runtime` as the one door every entrance assembles through --
