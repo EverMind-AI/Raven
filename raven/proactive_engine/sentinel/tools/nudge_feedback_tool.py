@@ -23,7 +23,7 @@ from typing import Any
 
 from loguru import logger
 
-from raven.agent.tools.base import Tool
+from raven.contracts.tool import Tool
 from raven.proactive_engine.sentinel.executor.runner import (
     SentinelRunner,
     current_session_key,

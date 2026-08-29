@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Callable
 
-from raven.context_engine.base import AssemblyContext, Segment
 from raven.context_engine.segments import render
+from raven.contracts.context import AssemblyContext, Segment
 from raven.memory_engine.skill_local.registry import filter_by_required_tools
 from raven.tracing import semconv, trace
 

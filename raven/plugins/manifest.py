@@ -65,7 +65,7 @@ class ToolContribution(_ManifestBase):
 
     ``factory`` is a ``module.path:callable`` resolving to a
     ``Callable[[PluginContext], Tool]`` — it returns a single
-    :class:`~raven.agent.tools.base.Tool` the host registers into the
+    :class:`~raven.contracts.tool.Tool` the host registers into the
     agent's tool set at boot. One tool per entry; a plugin exposing
     several tools lists several entries.
     """

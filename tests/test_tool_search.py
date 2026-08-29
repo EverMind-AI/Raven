@@ -5,7 +5,6 @@ from typing import Any
 
 import pytest
 
-from raven.agent.tools.base import Tool
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.tool_index import ToolIndex, _schema_text
 from raven.agent.tools.tool_search import (
@@ -19,6 +18,7 @@ from raven.agent.tools.tool_search import (
     ToolSearchTool,
 )
 from raven.config.schema import ToolSearchConfig
+from raven.contracts.tool import Tool
 
 
 class _FakeTool(Tool):
@@ -405,7 +405,7 @@ async def test_strategy_passthrough_when_meta_tools_absent() -> None:
 
 
 def test_registry_register_first_runs_before_others() -> None:
-    from raven.token_wise.base import TokenStrategy
+    from raven.contracts.token_strategy import TokenStrategy
     from raven.token_wise.registry import StrategyRegistry
 
     class _Noop(TokenStrategy):

@@ -18,9 +18,9 @@ import pytest
 
 from raven.agent.loop.main import _strip_inline_images
 from raven.agent.tools import media
-from raven.agent.tools.base import ToolOutput, ToolResult
 from raven.agent.tools.filesystem import ReadFileTool
 from raven.agent.tools.registry import ToolRegistry
+from raven.contracts.tool import ToolOutput, ToolResult
 from raven.providers import rates as _pricing
 from raven.providers.base import LLMProvider
 
@@ -160,7 +160,7 @@ def test_registry_boundary_stays_a_str_with_blocks_riding_along(tmp_path: Path) 
 
 
 def test_registry_drops_blocks_when_the_tool_reports_an_error() -> None:
-    from raven.agent.tools.base import Tool
+    from raven.contracts.tool import Tool
 
     class _Failing(Tool):
         @property
@@ -1541,7 +1541,7 @@ def test_the_verdict_is_asked_of_the_routed_model_not_the_configured_one(monkeyp
 
 def test_the_assembler_forwards_the_verdict_to_the_renderer(monkeypatch) -> None:
     from raven.context_engine.assembler import ContextAssembler
-    from raven.context_engine.base import AssemblyContext
+    from raven.contracts.context import AssemblyContext
 
     seen = {}
 

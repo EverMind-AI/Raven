@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import pytest
 
-from raven.agent.tools.base import Tool
 from raven.agent.tools.registry import ToolAdmissionError, ToolRegistry, admit_tool
+from raven.contracts.tool import Tool
 
 
 class _EchoTool(Tool):

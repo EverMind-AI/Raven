@@ -27,8 +27,8 @@ from raven.agent.subagent.dag_tool import _NODE_SCHEMA, GUIDE_SKILL_ID, SubAgent
 from raven.agent.subagent.mcp_grant import McpGrant, MissingServer
 from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.agent.subagent.prompt_errors import DagValidationError
-from raven.agent.tools.base import ToolResult
 from raven.config.schema import ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
+from raven.contracts.tool import ToolResult
 
 #: How long a drain waits for a cancelled background run to finish. Generous
 #: against the work (a node's subprocess teardown is milliseconds) and short

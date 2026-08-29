@@ -368,7 +368,7 @@ from raven.plugins.memory.everos.tools import UnderstandMediaTool, make_understa
 class TestUnderstandMediaTool:
     def test_factory_returns_tool_when_extra_available(self, monkeypatch) -> None:
         import raven.plugins.memory.everos.tools as tools_mod
-        from raven.agent.tools.base import Tool
+        from raven.contracts.tool import Tool
 
         # Gate on the parser extra; force it "available" so the assertion
         # holds regardless of whether the heavy extra is installed here.

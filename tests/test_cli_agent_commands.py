@@ -633,8 +633,8 @@ def _invoke_agent_with_usage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *,
 
     from raven.config.loader import save_config
     from raven.config.schema import Config
+    from raven.contracts.token_strategy import UsageSnapshot
     from raven.spine import Text, TurnOutcome, Usage
-    from raven.token_wise.base import UsageSnapshot
     from raven.token_wise.registry import StrategyRegistry
 
     cfg = Config()

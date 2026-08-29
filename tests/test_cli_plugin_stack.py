@@ -14,11 +14,11 @@ from raven.config.raven import (
     PluginsConfig,
     RavenConfig,
 )
+from raven.contracts.memory import MemoryBackend
 from raven.core.plugin_stack import (
     build_plugin_registry,
     maybe_build_memory_backend,
 )
-from raven.memory_engine import MemoryBackend
 from raven.plugins import PluginRegistry
 
 # ---------------------------------------------------------------------------

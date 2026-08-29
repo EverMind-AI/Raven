@@ -10,8 +10,8 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from raven.agent.tools.base import Continuation, Tool, ToolOutput, ToolResult
 from raven.agent.tools.params import cast_params, validate_params
+from raven.contracts.tool import Continuation, Tool, ToolOutput, ToolResult
 from raven.providers.base import RunMeta
 from raven.tracing import semconv, trace
 

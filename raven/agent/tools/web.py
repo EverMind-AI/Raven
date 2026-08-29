@@ -7,7 +7,7 @@ from typing import Any
 import httpx
 from loguru import logger
 
-from raven.agent.tools.base import Tool
+from raven.contracts.tool import Tool
 from raven.security.network import validate_url_target
 
 

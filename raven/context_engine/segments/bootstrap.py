@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from raven.context_engine.base import AssemblyContext, Segment
 from raven.context_engine.segments import render
+from raven.contracts.context import AssemblyContext, Segment
 
 
 class BootstrapSegmentBuilder:

@@ -59,9 +59,9 @@ from raven.agent.subagent.instances import mint_handle
 from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.subagent_memory import EverosIdentity
-from raven.agent.tools.base import Tool, ToolResult
 from raven.config.raven import SubagentDagConfig
 from raven.config.schema import MCPServerConfig
+from raven.contracts.tool import Tool, ToolResult
 
 if TYPE_CHECKING:
     from raven.agent.subagent.registry import AgentRegistry

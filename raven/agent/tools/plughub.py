@@ -31,7 +31,7 @@ from typing import Any
 
 from loguru import logger
 
-from raven.agent.tools.base import Tool
+from raven.contracts.tool import Tool
 
 _ACTIONS = ("find", "connect", "authorize", "list", "remove")
 

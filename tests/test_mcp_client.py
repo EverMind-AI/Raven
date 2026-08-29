@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-from raven.agent.tools.base import ToolResult
+from raven.contracts.tool import ToolResult
 from raven.mcp.client import MCPToolWrapper
 
 

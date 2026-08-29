@@ -38,7 +38,7 @@ from typing import Any, Literal, Protocol
 
 import httpx
 
-from raven.memory_engine import Memory
+from raven.contracts.memory import Memory
 from raven.plugins import PluginContext
 from raven.plugins.memory.everos.server import DEFAULT_EVEROS_BASE_URL
 

@@ -41,7 +41,7 @@ from typing import Any
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.agent.tools.base import Tool
+from raven.contracts.tool import Tool
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.token_wise.cache_optimizer import CacheOptimizer
 from raven.token_wise.registry import StrategyRegistry

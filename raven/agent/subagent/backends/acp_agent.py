@@ -43,7 +43,7 @@ from raven.agent.acp_client.protocol import SESSION_MCP_CAPABILITY, STEER_METHOD
 from raven.agent.subagent import activity
 from raven.agent.subagent.acp_dialects import AcpDialect, ToolCall, content_texts, dialect_for
 from raven.agent.subagent.backends import turn_rows
-from raven.agent.subagent.backends.base import SubagentActionAbortedError, bounded_delta, clamp_output
+from raven.agent.subagent.backends.base import bounded_delta, clamp_output
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.backends.observability import (
     external_agent_span,
@@ -54,6 +54,7 @@ from raven.agent.subagent.backends.observability import (
 )
 from raven.agent.subagent.instances import InstanceRegistry, get_registry
 from raven.agent.subagent.mcp_grant import McpDispatchError, McpGrant, McpSource, acp_target, resolve_grant
+from raven.contracts.subagent_backend import SubagentActionAbortedError
 from raven.mcp.endpoint import McpEndpoints, bridge_command
 
 if TYPE_CHECKING:

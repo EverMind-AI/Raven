@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from raven.memory_engine import Memory
+from raven.contracts.memory import Memory
 from raven.memory_engine.skill_forge import (
     EverosSkillSource,
     ForgeSkillSource,

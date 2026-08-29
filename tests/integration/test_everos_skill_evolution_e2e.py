@@ -28,7 +28,7 @@ from typing import Any
 
 import pytest
 
-from raven.memory_engine import Memory
+from raven.contracts.memory import Memory
 from raven.plugins import PluginContext, ServiceLocator
 from raven.plugins.memory.everos.backend import EverosBackend, _HttpEverosAdapter
 from tests.integration.conftest import as_everos_payload

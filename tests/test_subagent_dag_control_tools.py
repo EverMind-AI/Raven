@@ -19,10 +19,10 @@ import pytest
 from raven.agent.loop import AgentLoop
 from raven.agent.subagent.dag_control_tools import CancelDagTool, DagStatusTool, ResolveDagNodeTool
 from raven.agent.subagent.dag_reader import DagReadError
-from raven.agent.tools.base import Tool
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.tool_search import TOOL_CALL_NAME, ToolCallTool, ToolSearchController
 from raven.config.schema import ToolSearchConfig
+from raven.contracts.tool import Tool
 from raven.providers.base import LLMProvider, LLMResponse
 
 

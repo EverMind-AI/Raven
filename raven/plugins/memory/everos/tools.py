@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from raven.agent.tools.base import Tool
+from raven.contracts.tool import Tool
 from raven.plugins.memory.everos.multimodal import MultimodalUnavailableError, understand_files
 
 logger = logging.getLogger("raven.plugins.memory.everos")

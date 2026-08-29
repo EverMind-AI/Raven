@@ -283,7 +283,7 @@ def annotate_mcp_failure(grant: McpGrant) -> Iterator[None]:
         yield
     except Exception as exc:
         if note := grant.note_text():
-            from raven.agent.subagent.backends.base import SubagentActionAbortedError
+            from raven.contracts.subagent_backend import SubagentActionAbortedError
 
             if isinstance(exc, SubagentActionAbortedError):
                 raise

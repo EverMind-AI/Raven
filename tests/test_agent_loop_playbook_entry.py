@@ -11,7 +11,7 @@ itself.
 from __future__ import annotations
 
 from raven.agent.loop import AgentLoop
-from raven.agent.tools.base import Tool
+from raven.contracts.tool import Tool
 from raven.providers.base import LLMResponse
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest

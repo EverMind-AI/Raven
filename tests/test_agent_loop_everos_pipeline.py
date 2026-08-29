@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from raven.agent.loop import AgentLoop
-from raven.memory_engine.backend import Memory
+from raven.contracts.memory import Memory
 from raven.providers.base import LLMProvider, LLMResponse
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest

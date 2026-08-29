@@ -9,7 +9,7 @@ and the runner that owns that channel delivers the fire directly
 from contextvars import ContextVar
 from typing import Any
 
-from raven.agent.tools.base import Tool
+from raven.contracts.tool import Tool
 from raven.proactive_engine.schedulers.cron.service import CronService
 from raven.proactive_engine.schedulers.cron.types import CronSchedule
 

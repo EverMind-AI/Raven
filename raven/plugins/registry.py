@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 MemoryBackendFactory = Callable[[Any], Any]
 
 # A tool factory consumes a PluginContext and returns a single
-# ``raven.agent.tools.base.Tool``. Typed as Any here so the plugin
+# ``raven.contracts.tool.Tool``. Typed as Any here so the plugin
 # layer stays import-light (no dependency on the agent package).
 ToolFactory = Callable[[Any], Any]
 

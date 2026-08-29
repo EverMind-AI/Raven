@@ -11,7 +11,6 @@ from pathlib import Path
 
 from raven.agent.context import ContextBuilder
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
-from raven.context_engine.base import AssemblyContext
 from raven.context_engine.segments import (
     ActiveSkillsSegmentBuilder,
     BootstrapSegmentBuilder,
@@ -20,7 +19,9 @@ from raven.context_engine.segments import (
     SkillsSegmentBuilder,
     render,
 )
-from raven.memory_engine import Memory, TokenBudget
+from raven.contracts.assembled import TokenBudget
+from raven.contracts.context import AssemblyContext
+from raven.contracts.memory import Memory
 from raven.memory_engine.skill_forge import RouterHit, SkillForgeRouter
 
 

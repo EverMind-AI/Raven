@@ -35,7 +35,6 @@ from typing import TYPE_CHECKING, Callable
 
 from raven.agent.context import ContextBuilder
 from raven.context_engine.assembler import ContextAssembler
-from raven.context_engine.base import ContextEngine
 from raven.context_engine.scent import ScentMenu
 from raven.context_engine.segments import (
     ActiveSkillsSegmentBuilder,
@@ -45,6 +44,7 @@ from raven.context_engine.segments import (
     SkillsSegmentBuilder,
 )
 from raven.context_engine.segments.curator import CuratorSegmentBuilder
+from raven.contracts.context import ContextEngine
 from raven.providers.base import LLMProvider
 
 if TYPE_CHECKING:
@@ -55,7 +55,7 @@ if TYPE_CHECKING:
         SkillForgeConfig,
         SkillForgeRouterConfig,
     )
-    from raven.memory_engine.backend import MemoryBackend
+    from raven.contracts.memory import MemoryBackend
     from raven.memory_engine.skill_forge import (
         LLMGateFilter,
         QueryRewriter,

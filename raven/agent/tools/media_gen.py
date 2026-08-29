@@ -48,7 +48,7 @@ import httpx
 from loguru import logger
 
 from raven.agent import workdir
-from raven.agent.tools.base import Tool
+from raven.contracts.tool import Tool
 from raven.utils.images import image_block
 
 if TYPE_CHECKING:

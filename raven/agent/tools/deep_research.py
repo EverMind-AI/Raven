@@ -23,8 +23,8 @@ from loguru import logger
 
 from raven.agent import workdir
 from raven.agent.tools.ask_user import QuestionResponder
-from raven.agent.tools.base import Tool
 from raven.config.schema import DeepResearchToolConfig
+from raven.contracts.tool import Tool
 
 DEFAULT_BASE_URL = "https://api.miromind.ai/v1"
 DEFAULT_MODEL = "mirothinker-1-7-deepresearch-mini"

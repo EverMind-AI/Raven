@@ -19,7 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from raven.memory_engine import MemoryBackend
+from raven.contracts.memory import MemoryBackend
 from raven.plugins import PluginContext, ServiceLocator
 from raven.plugins.memory.everos.backend import (
     _PROFILE_MAX_CHARS,

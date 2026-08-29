@@ -19,7 +19,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from raven.agent.tools.base import Tool, ToolResult
+from raven.contracts.tool import Tool, ToolResult
 
 # Last-resort wait for one whole call when the responder exposes no
 # ``default_timeout_s`` of its own. The broker machinery ships the same value;

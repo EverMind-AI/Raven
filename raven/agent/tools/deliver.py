@@ -11,8 +11,8 @@ from urllib.parse import quote
 
 from raven.agent import workdir
 from raven.agent.tools._deliverables import DeliverableStore
-from raven.agent.tools.base import Tool
 from raven.agent.tools.filesystem import _resolve_path, _with_current_root
+from raven.contracts.tool import Tool
 
 
 @dataclass(frozen=True)

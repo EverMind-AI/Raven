@@ -19,8 +19,8 @@ from unittest.mock import patch
 import pytest
 
 from raven.agent.loop.main import AgentLoop
-from raven.agent.tools.base import Tool
 from raven.config.schema import MCPServerConfig
+from raven.contracts.tool import Tool
 from raven.mcp.client import Connected
 from raven.mcp.naming import MCPToolRef
 from raven.mcp.prompts import PROMPT_TOOL_NAMES

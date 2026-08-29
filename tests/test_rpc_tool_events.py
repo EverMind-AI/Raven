@@ -19,8 +19,8 @@ from typing import Any
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.agent.tools.base import Tool
 from raven.agent.tools.message import MessageTool
+from raven.contracts.tool import Tool
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 

@@ -7,16 +7,10 @@ One engine — :class:`ContextAssembler` — assembled by
 """
 
 from raven.context_engine.assembler import ContextAssembler
-from raven.context_engine.base import (
-    AssembledPrefix,
-    AssemblyContext,
-    ContextEngine,
-    Segment,
-    SegmentBuilder,
-)
 from raven.context_engine.curator import TurnContext
 from raven.context_engine.factory import build_context_engine
 from raven.context_engine.history_trimmer import HistoryTrimmer
+from raven.contracts.context import AssembledPrefix, AssemblyContext, ContextEngine, Segment, SegmentBuilder
 
 __all__ = [
     "AssembledPrefix",

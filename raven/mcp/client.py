@@ -10,8 +10,8 @@ import httpx
 from loguru import logger
 
 from raven.agent.tools import media
-from raven.agent.tools.base import Tool, ToolResult
 from raven.agent.tools.registry import ToolRegistry
+from raven.contracts.tool import Tool, ToolResult
 from raven.mcp.naming import MCPToolRef, tool_name
 from raven.sandbox import SandboxInitError
 

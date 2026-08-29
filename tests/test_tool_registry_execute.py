@@ -14,9 +14,9 @@ from pathlib import Path
 
 import pytest
 
-from raven.agent.tools.base import Continuation, Tool, ToolOutput, ToolResult
 from raven.agent.tools.filesystem import WriteFileTool
 from raven.agent.tools.registry import ToolRegistry
+from raven.contracts.tool import Continuation, Tool, ToolOutput, ToolResult
 from raven.providers.base import RunMeta, TruncationInfo
 
 

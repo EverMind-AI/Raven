@@ -17,11 +17,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from raven.agent.tools.base import Tool
 from raven.config.raven import ContextConfig
-from raven.context_engine.base import AssembledPrefix
 from raven.context_engine.history_trimmer import HistoryTrimmer
-from raven.memory_engine.base import AssembledContext, TokenBudget
+from raven.contracts.assembled import AssembledContext, TokenBudget
+from raven.contracts.context import AssembledPrefix
+from raven.contracts.tool import Tool
 from raven.memory_engine.consolidate.consolidator import MemoryStore
 from raven.providers.base import LLMProvider
 from raven.providers.binding import ModelBinding, active_window, resolve

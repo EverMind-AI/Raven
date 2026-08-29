@@ -29,15 +29,10 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
-from raven.context_engine.base import (
-    AssembledPrefix,
-    AssemblyContext,
-    ContextEngine,
-    SegmentBuilder,
-)
 from raven.context_engine.scent import ScentMenu
 from raven.context_engine.segments import render
-from raven.memory_engine.base import AssembledContext, TokenBudget
+from raven.contracts.assembled import AssembledContext, TokenBudget
+from raven.contracts.context import AssembledPrefix, AssemblyContext, ContextEngine, SegmentBuilder
 from raven.providers.prompt_cache import STABLE_PREFIX_KEY
 
 if TYPE_CHECKING:
