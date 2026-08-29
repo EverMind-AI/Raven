@@ -108,29 +108,51 @@ describe('probeLoginShellEnv', () => {
 })
 
 describe('probeLoginShellEnv on win32', () => {
-  it('reads the environment from powershell.exe with its profile loaded', () => {
-    const runner = scriptedRunner({
-      status: 0,
-      stdout: 'HTTP_PROXY=http://proxy:6760\nPath=C:\\Windows\\System32\n'
-    })
+  const envScript =
+    '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; Get-ChildItem Env: | ForEach-Object { "$($_.Name)=$($_.Value)" }'
+
+  it('reads the environment from powershell.exe and merges pwsh when present', () => {
+    const runner = scriptedRunner(
+      { status: 0, stdout: 'HTTP_PROXY=http://proxy:6760\nPath=C:\\Windows\\System32\n' },
+      { status: 0, stdout: 'PWSH_ONLY=1\n' }
+    )
     expect(probeLoginShellEnv(runner, undefined, 'win32')).toEqual({
       HTTP_PROXY: 'http://proxy:6760',
-      Path: 'C:\\Windows\\System32'
+      Path: 'C:\\Windows\\System32',
+      PWSH_ONLY: '1'
     })
-    expect(runner).toHaveBeenCalledWith(
-      'powershell.exe',
-      [
-        '-NonInteractive',
-        '-Command',
-        '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; Get-ChildItem Env: | ForEach-Object { "$($_.Name)=$($_.Value)" }'
-      ],
-      { encoding: 'utf8', timeout: 15000 }
+    expect(runner).toHaveBeenCalledTimes(2)
+    expect(runner).toHaveBeenNthCalledWith(1, 'powershell.exe', ['-NonInteractive', '-Command', envScript], {
+      encoding: 'utf8',
+      timeout: 15000
+    })
+  })
+
+  it('prefers the VS Code-configured PowerShell 7 profile and lets it win conflicts', () => {
+    const hint = 'C:\\Program Files\\PowerShell\\7\\pwsh.exe'
+    const runner = scriptedRunner(
+      { status: 0, stdout: 'HTTP_PROXY=http://proxy-from-pwsh:6760\nB=2\n' },
+      { status: 0, stdout: 'HTTP_PROXY=http://proxy-from-ps:6760\nA=1\n' }
     )
+    expect(probeLoginShellEnv(runner, hint, 'win32')).toEqual({
+      HTTP_PROXY: 'http://proxy-from-pwsh:6760',
+      B: '2',
+      A: '1'
+    })
+    expect(runner).toHaveBeenCalledTimes(2)
+    expect(runner).toHaveBeenNthCalledWith(1, hint, ['-NonInteractive', '-Command', envScript], {
+      encoding: 'utf8',
+      timeout: 15000
+    })
+    expect(runner).toHaveBeenNthCalledWith(2, 'powershell.exe', ['-NonInteractive', '-Command', envScript], {
+      encoding: 'utf8',
+      timeout: 15000
+    })
   })
 
   it('falls back to pwsh when powershell.exe fails', () => {
     const runner = scriptedRunner({ status: 1, stdout: null }, { status: 0, stdout: 'A=1\n' })
-    expect(probeLoginShellEnv(runner, '/usr/bin/zsh', 'win32')).toEqual({ A: '1' })
+    expect(probeLoginShellEnv(runner, undefined, 'win32')).toEqual({ A: '1' })
     expect(runner).toHaveBeenCalledTimes(2)
   })
 
