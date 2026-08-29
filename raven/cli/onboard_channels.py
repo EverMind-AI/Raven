@@ -337,7 +337,7 @@ def _scancode_login(channel: str, *, non_interactive: bool = False) -> None:
                     )
                 )
                 return
-            from raven.core.admission import dispense_channel_config
+            from raven.config.admission import dispense_channel_config
 
             # Through the same admission door the gateway uses: the raw
             # section carries only socket fields since the central cargo

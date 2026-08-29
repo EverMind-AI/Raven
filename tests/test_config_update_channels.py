@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from raven.config.admission import PluginConfigError
 from raven.config.update_channels import (
     channel_field_specs,
     disable_channel,
@@ -15,7 +16,6 @@ from raven.config.update_channels import (
     reset_channel,
     set_channel_fields,
 )
-from raven.core.admission import PluginConfigError
 
 
 @pytest.fixture

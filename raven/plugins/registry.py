@@ -318,7 +318,7 @@ class PluginRegistry:
         this registry always had; a declaring manifest gets defaults applied
         and declared keys type-checked before its factory boards.
         """
-        from raven.core.admission import admit_slice
+        from raven.config.admission import admit_slice
 
         mf = self._manifests.get(entry.plugin_id)
         schema = mf.config_schema if mf is not None else {}

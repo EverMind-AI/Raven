@@ -11,7 +11,7 @@ import logging
 
 import pytest
 
-from raven.core.admission import PluginConfigError, admit_slice
+from raven.config.admission import PluginConfigError, admit_slice
 
 
 def test_empty_schema_is_verbatim_passthrough():
@@ -135,7 +135,7 @@ def test_nested_tables_read_by_attribute_and_mapping():
     ``config.groups.get(chat).require_mention``; slack does
     ``config.dm.policy``. Before the nested view, a file-set table crashed
     those attribute reads with AttributeError on dict."""
-    from raven.core.admission import DispensedSlice
+    from raven.config.admission import DispensedSlice
 
     class _Section:
         pass
@@ -157,7 +157,7 @@ def test_nested_tables_read_by_attribute_and_mapping():
 
 
 def test_nested_view_is_frozen_and_typed_values_pass_through():
-    from raven.core.admission import DispensedSlice
+    from raven.config.admission import DispensedSlice
 
     class _Typed:
         require_in_groups = False

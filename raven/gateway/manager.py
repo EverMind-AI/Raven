@@ -120,7 +120,7 @@ class ChannelManager:
                 # the door-dispensed view (declared keys from the admitted
                 # slice, socket fields from the central section, frozen). An
                 # undeclaring channel keeps the verbatim section.
-                from raven.core.admission import dispense_channel_config
+                from raven.config.admission import dispense_channel_config
 
                 section = dispense_channel_config(spec, section, channel=modname)
                 channel = spec.factory(section)

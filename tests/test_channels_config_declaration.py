@@ -14,8 +14,8 @@ from __future__ import annotations
 import pytest
 
 from raven.channels.registry import discover_specs
+from raven.config.admission import _TYPES, dispense_channel_config
 from raven.config.schema import ChannelsConfig, ChannelSocket
-from raven.core.admission import _TYPES, dispense_channel_config
 
 # Host-consumed fields: gating and workspace routing read these, adapters do
 # not. They stay with the host (socket config) and out of every cargo

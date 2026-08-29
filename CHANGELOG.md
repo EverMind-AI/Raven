@@ -34,6 +34,11 @@ All notable changes to Raven are documented here.
   imports the loop shell it is consumed by. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- Config-slice admission (`admit_slice`, `dispense_channel_config`) lives in
+  `raven/config/admission.py`: the door validates config against a cargo
+  declaration, which is config vocabulary, so the channel commands, the
+  gateway manager, the trajectory redactor and the plugin registry reach it
+  without importing the assembly root.
 - **Generations.** The gateway rebuilds its runtime from config and swaps it in
   at the loop's turn boundary instead of restarting: build the candidate first,
   stop the serving generation, dispose it in a pinned order. Channels, cron,
