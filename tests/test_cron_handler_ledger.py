@@ -11,8 +11,8 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from raven.cli._cron_handler import _record_cron_dispatch_to_ledger
 from raven.config.raven import NudgePolicyConfig
+from raven.core.cron_stack import _record_cron_dispatch_to_ledger
 from raven.proactive_engine.schedulers.cron.types import (
     CronJob,
     CronPayload,

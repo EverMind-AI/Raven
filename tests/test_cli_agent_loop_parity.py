@@ -40,7 +40,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 ENTRYPOINTS: dict[str, str] = {
     "agent": "raven/cli/agent_commands.py",
     "gateway": "raven/cli/gateway_commands.py",
-    "tui": "raven/cli/tui_commands.py",
+    "tui": "raven/core/engine_stack.py",
 }
 
 
@@ -61,7 +61,7 @@ LEDGER: dict[str, Difference] = {
         reason=(
             "Sentinel hook. The gateway process owns Sentinel proactivity in "
             "v0.1 and the REPL builds its own stack; the TUI deliberately wires "
-            "neither (see the _build_agent_loop docstring)."
+            "neither (see the build_engine docstring)."
         ),
     ),
     "cron_service": Difference(

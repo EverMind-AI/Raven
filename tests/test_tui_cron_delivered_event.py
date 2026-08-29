@@ -78,11 +78,11 @@ def emitter_spy() -> MagicMock:
 
 
 async def test_fanout_cron_delivered_single_session(emitter_spy: MagicMock) -> None:
-    """``_fanout_cron_delivered`` SHALL emit a ``cron.delivered`` event with the
+    """``fanout_cron_delivered`` SHALL emit a ``cron.delivered`` event with the
     full {job_id, name, text, fired_at} payload to the active session."""
-    from raven.cli.tui_commands import _fanout_cron_delivered
+    from raven.rpc.cron_events import fanout_cron_delivered
 
-    await _fanout_cron_delivered(
+    await fanout_cron_delivered(
         emitter_spy,
         job_id="j1",
         name="hydrate",
@@ -106,10 +106,10 @@ async def test_fanout_cron_delivered_single_session(emitter_spy: MagicMock) -> N
 async def test_fanout_cron_delivered_multi_session(emitter_spy: MagicMock) -> None:
     """Each active session_key SHALL receive the cron.delivered event (fan-out,
     because the cron:<job_id> conversation matches no user subscription)."""
-    from raven.cli.tui_commands import _fanout_cron_delivered
+    from raven.rpc.cron_events import fanout_cron_delivered
 
     emitter_spy._by_session = {"sess_a": [object()], "sess_b": [object()]}
-    await _fanout_cron_delivered(emitter_spy, job_id="j3", name="test", text="multi", fired_at="2026-06-04T12:00:00Z")
+    await fanout_cron_delivered(emitter_spy, job_id="j3", name="test", text="multi", fired_at="2026-06-04T12:00:00Z")
 
     assert emitter_spy.emit.await_count == 2
     keys_called = {c.args[0] for c in emitter_spy.emit.await_args_list}
@@ -118,29 +118,29 @@ async def test_fanout_cron_delivered_multi_session(emitter_spy: MagicMock) -> No
 
 async def test_fanout_cron_delivered_no_active_sessions() -> None:
     """No active session subscribers -> a silent no-op (no emit, no exception)."""
-    from raven.cli.tui_commands import _fanout_cron_delivered
+    from raven.rpc.cron_events import fanout_cron_delivered
 
     emitter = MagicMock()
     emitter._by_session = {}
     emitter.emit = AsyncMock()
-    await _fanout_cron_delivered(emitter, job_id="j", name="n", text="t", fired_at="f")
+    await fanout_cron_delivered(emitter, job_id="j", name="n", text="t", fired_at="f")
     emitter.emit.assert_not_awaited()
 
 
 async def test_cron_callback_spine_fans_out_reply(emitter_spy: MagicMock) -> None:
-    """``_build_cron_callback_spine`` SHALL run the base callback (the spine
+    """``build_cron_callback_spine`` SHALL run the base callback (the spine
     submit + read-back) and fan its reply out as cron.delivered with the job's
     metadata; a job whose turn produced no reply SHALL NOT fan out."""
     from types import SimpleNamespace
 
-    from raven.cli.tui_commands import _build_cron_callback_spine
+    from raven.rpc.cron_events import build_cron_callback_spine
 
     replies = {"j7": "reminder body", "j8": None}
 
     async def base_on_cron(job):
         return replies[job.id]  # the read-back reply
 
-    wrapped = _build_cron_callback_spine(base_on_cron, emitter_spy)
+    wrapped = build_cron_callback_spine(base_on_cron, emitter_spy)
 
     job = SimpleNamespace(id="j7", name="standup", payload=SimpleNamespace(channel=None))
     await wrapped(job)
@@ -167,12 +167,12 @@ async def test_cron_callback_spine_fans_out_only_tui_jobs(emitter_spy: MagicMock
     and SHALL NOT be echoed a second time."""
     from types import SimpleNamespace
 
-    from raven.cli.tui_commands import _build_cron_callback_spine
+    from raven.rpc.cron_events import build_cron_callback_spine
 
     async def base_on_cron(job):
         return "reminder body"
 
-    wrapped = _build_cron_callback_spine(base_on_cron, emitter_spy, default_channel="cli")
+    wrapped = build_cron_callback_spine(base_on_cron, emitter_spy, default_channel="cli")
 
     tui_job = SimpleNamespace(id="j1", name="page", payload=SimpleNamespace(channel="tui"))
     await wrapped(tui_job)
@@ -242,11 +242,11 @@ def _drop(name: str, message: str, at_ms: int):
 
 
 async def test_fanout_cron_missed_active_session(emitter_spy: MagicMock) -> None:
-    """With an attached session, ``_fanout_cron_missed`` SHALL emit one
+    """With an attached session, ``fanout_cron_missed`` SHALL emit one
     cron.missed event carrying every drop, scheduled_at as ISO-8601 UTC."""
-    from raven.cli.tui_commands import _fanout_cron_missed
+    from raven.rpc.cron_events import fanout_cron_missed
 
-    await _fanout_cron_missed(
+    await fanout_cron_missed(
         emitter_spy,
         drops=[
             _drop("hydrate", "记得喝水", 1_749_031_380_000),
@@ -268,13 +268,13 @@ async def test_fanout_cron_missed_no_session_queues_startup_event() -> None:
     """With no subscription yet (server bring-up precedes turn.subscribe), the
     event SHALL be queued on the emitter for the first registration instead of
     being dropped like the cron.delivered no-subscriber no-op."""
-    from raven.cli.tui_commands import _fanout_cron_missed
+    from raven.rpc.cron_events import fanout_cron_missed
 
     emitter = MagicMock()
     emitter._by_session = {}
     emitter.emit = AsyncMock()
 
-    await _fanout_cron_missed(emitter, drops=[_drop("meds", "吃药", 1_749_024_000_000)])
+    await fanout_cron_missed(emitter, drops=[_drop("meds", "吃药", 1_749_024_000_000)])
 
     emitter.emit.assert_not_awaited()
     emitter.queue_startup_event.assert_called_once()
@@ -307,7 +307,7 @@ def test_every_host_that_starts_cron_surfaces_the_startup_drops() -> None:
     Structural on purpose, and worth being clear about the limit: this asserts
     the call is present after ``start()``, not that it runs. It would pass with
     the block under ``if False`` or with the guard inverted. The behaviour of
-    ``_fanout_cron_missed`` itself is covered above; what this catches is a new
+    ``fanout_cron_missed`` itself is covered above; what this catches is a new
     serve path that forgets to call it, which is the regression that already
     happened once.
     """
@@ -341,7 +341,7 @@ def test_every_host_that_starts_cron_surfaces_the_startup_drops() -> None:
             continue
         tail = src[src.index(marker) :]
         assert "last_startup_drops" in tail, f"{rel} starts cron without reading last_startup_drops"
-        assert "_fanout_cron_missed" in tail, f"{rel} reads the drops without fanning them out"
+        assert "fanout_cron_missed" in tail, f"{rel} reads the drops without fanning them out"
 
     stale = sorted(set(EXEMPT) - {rel for rel, _, _ in starters})
     assert not stale, f"EXEMPT names a file that no longer starts cron: {stale}"
@@ -358,12 +358,12 @@ async def test_a_wake_addressed_to_an_instance_is_not_fanned_out(emitter_spy: Ma
     """
     from types import SimpleNamespace
 
-    from raven.cli.tui_commands import _build_cron_callback_spine
+    from raven.rpc.cron_events import build_cron_callback_spine
 
     async def base_on_cron(job):
         return "round 2: submitted 60 kN"
 
-    wrapped = _build_cron_callback_spine(base_on_cron, emitter_spy, default_channel="tui")
+    wrapped = build_cron_callback_spine(base_on_cron, emitter_spy, default_channel="tui")
 
     to_instance = SimpleNamespace(
         id="j1",
@@ -397,7 +397,7 @@ async def test_a_wake_to_an_instance_binds_its_addressee_for_the_wire(emitter_sp
     """
     from types import SimpleNamespace
 
-    from raven.cli.tui_commands import _build_cron_callback_spine
+    from raven.rpc.cron_events import build_cron_callback_spine
 
     seen: dict[str, dict[str, str]] = {}
 
@@ -412,7 +412,7 @@ async def test_a_wake_to_an_instance_binds_its_addressee_for_the_wire(emitter_sp
         }, seen
         return "round 2: submitted 85 kN"
 
-    wrapped = _build_cron_callback_spine(base_on_cron, emitter_spy, default_channel="tui", direct_targets=seen)
+    wrapped = build_cron_callback_spine(base_on_cron, emitter_spy, default_channel="tui", direct_targets=seen)
 
     job = SimpleNamespace(
         id="j1",
@@ -431,7 +431,7 @@ async def test_an_ordinary_reminder_binds_nothing(emitter_spy: MagicMock) -> Non
     """A stale binding would tag the main agent's next stream as a sub-agent's."""
     from types import SimpleNamespace
 
-    from raven.cli.tui_commands import _build_cron_callback_spine
+    from raven.rpc.cron_events import build_cron_callback_spine
 
     seen: dict[str, dict[str, str]] = {}
 
@@ -439,7 +439,7 @@ async def test_an_ordinary_reminder_binds_nothing(emitter_spy: MagicMock) -> Non
         assert seen == {}
         return "记得喝水"
 
-    wrapped = _build_cron_callback_spine(base_on_cron, emitter_spy, default_channel="tui", direct_targets=seen)
+    wrapped = build_cron_callback_spine(base_on_cron, emitter_spy, default_channel="tui", direct_targets=seen)
     job = SimpleNamespace(
         id="j2",
         name="hydrate",
