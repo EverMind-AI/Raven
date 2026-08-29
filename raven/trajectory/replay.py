@@ -867,6 +867,7 @@ async def run_replay(bundle_dir: Path, mode: str = "warn") -> ReplayReport:
         raise ValueError(f"{bundle_dir} holds no recorded turn inputs; nothing to drive the replay with")
 
     from raven.agent.loop import AgentLoop
+    from raven.agent.loop.bundles import ToolWiring
     from raven.session.manager import SessionManager
     from raven.spine.message import ChatType, Source
     from raven.spine.turn import Origin, TurnRequest
@@ -894,12 +895,14 @@ async def run_replay(bundle_dir: Path, mode: str = "warn") -> ReplayReport:
                 sessions.save(session)
 
             loop = AgentLoop(
-                provider=provider,
-                workspace=workspace,
-                model=recording.model,
-                restrict_to_workspace=True,
-                session_manager=sessions,
-            )
+                       provider=provider,
+                       workspace=workspace,
+                       model=recording.model,
+                       session_manager=sessions,
+                       tools=ToolWiring(
+                           restrict_to_workspace=True,
+                       ),
+                   )
             loop.tools = registry
             for turn in recording.turns:
                 if state.halted:

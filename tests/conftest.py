@@ -299,3 +299,19 @@ def _unbind_the_acp_turn() -> Iterator[None]:
     finally:
         asker._TURN.reset(turn_token)
         asker._AUTOFILL.reset(autofill_token)
+
+
+def wired_kwarg(kwargs: dict, name: str):
+    """Resolve a wiring value from captured AgentLoop kwargs, bundle-aware.
+
+    Entrances pass grouped bundles now; a test that asserts one wire reads it
+    through the bundle the field lives in, or straight off the dict for the
+    top-level keywords.
+    """
+    if name in kwargs:
+        return kwargs[name]
+    from raven.agent.loop.bundles import _LEGACY_FIELDS
+
+    owner = _LEGACY_FIELDS.get(name)
+    bundle = kwargs.get(owner) if owner else None
+    return getattr(bundle, name, None) if bundle is not None else None

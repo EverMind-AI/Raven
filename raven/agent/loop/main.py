@@ -114,6 +114,14 @@ from raven.agent.loop._shared import (  # noqa: F401 -- moved verbatim from main
     vision_verdict,
     workdir,
 )
+from raven.agent.loop.bundles import (
+    EngineWiring,
+    HostWiring,
+    SubagentWiring,
+    ToolWiring,
+    TurnPolicy,
+    resolve_wiring,
+)
 from raven.agent.loop.mcp_glue import McpGlueMixin
 from raven.agent.loop.organ_glue import OrganGlueMixin
 from raven.agent.loop.turn_path import TurnPathMixin
@@ -122,35 +130,19 @@ from raven.agent.loop.wiring import WiringMixin
 if TYPE_CHECKING:
     from raven.agent.hook import CompositeHook
     from raven.agent.loop.checkpoint import CheckpointService
-    from raven.agent.tools._deliverables import DeliverableStore
     from raven.agent.tools.ask_user import QuestionResponder
     from raven.agent.tools.base import Tool
-    from raven.agent.workdir import WorkdirResolver
-    from raven.config.raven import (
-        ContextConfig,
-        MemoryConfig,
-        RuntimeConfig,
-        SkillForgeRouterConfig,
-        SubagentDagConfig,
-        SubagentQuestionsConfig,
-    )
     from raven.config.schema import (
-        AskUserToolConfig,
-        ChannelsConfig,
         DeepResearchToolConfig,
-        ExecToolConfig,
-        PlaybookConfig,
     )
     from raven.context_engine import ContextEngine
     from raven.mcp.manager import MCPConnectionManager
     from raven.memory_engine.backend import MemoryBackend
-    from raven.proactive_engine.schedulers.cron.service import CronService
     from raven.providers.pool import ProviderPool
     from raven.routing.router import ModelRouter
     from raven.sandbox.debug_server import SandboxDebugServer
     from raven.spine.runner import Drain, Emit
     from raven.spine.turn import TurnRequest
-    from raven.token_wise.registry import StrategyRegistry
 
 
 class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
@@ -219,62 +211,57 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         provider: LLMProvider,
         workspace: Path,
         model: str | None = None,
-        max_iterations: int = 40,
-        context_window_tokens: int | None = None,
-        brave_api_key: str | None = None,
-        web_proxy: str | None = None,
-        exec_config: ExecToolConfig | None = None,
-        ask_user_config: AskUserToolConfig | None = None,
-        cron_service: CronService | None = None,
-        restrict_to_workspace: bool = False,
+        *,
         session_manager: SessionManager | None = None,
-        mcp_servers: dict | None = None,
-        sandbox_config: SandboxConfig | None = None,
-        channels_config: ChannelsConfig | None = None,
-        deliverables: "DeliverableStore | None" = None,
-        router: "ModelRouter | None" = None,
-        playbook_config: "PlaybookConfig | None" = None,
-        strategies: "StrategyRegistry | None" = None,
-        skill_forge_config: Any = None,
-        response_modifier: Callable[[str, str], str] | None = None,
-        on_user_inbound: Callable[["TurnRequest"], None] | None = None,
-        decision_consumer: "Callable[[TurnRequest], Awaitable[Any]] | None" = None,
-        hooks: "CompositeHook | None" = None,
-        now_fn: Callable | None = None,
-        context_config: "ContextConfig | None" = None,
-        runtime_config: "RuntimeConfig | None" = None,
         provider_pool: "ProviderPool | None" = None,
-        interactive: bool = True,
-        jina_api_key: str | None = None,
-        max_concurrent_subagents: int = 8,
-        max_subagent_spawns_per_hour: int = 30,
-        agents: list | None = None,
-        media_config: Any = None,
-        deep_research_config: Any = None,
-        subagent_dag_config: "SubagentDagConfig | None" = None,
-        subagent_questions_config: "SubagentQuestionsConfig | None" = None,
-        disabled_tools: list[str] | None = None,
-        tool_search_config: Any = None,
-        # AG-1: optional plugin-provided MemoryBackend. When supplied,
-        # the after-turn pipeline gains a third peer step ``backend.store``
-        # (alongside the existing ``maybe_consolidate`` and the implicit
-        # ``append_history`` inside session save). ``None`` preserves
-        # legacy behavior — no plugin-side memory indexing happens.
-        backend: "MemoryBackend | None" = None,
-        # Forwarded to ``build_context_engine`` so the factory can
-        # assemble the unified engine's SkillForgeRouter (Local + Mass +
-        # Everos) and EverOS recall lane. Both default to ``None``; with
-        # no backend the engine degrades (recall → [], router Local-only).
-        memory_config: "MemoryConfig | None" = None,
-        skill_forge_router_config: "SkillForgeRouterConfig | None" = None,
-        # Tools contributed by activated plugins (built by the CLI via
-        # ``build_plugin_tools``). Registered alongside the built-in tools
-        # in ``_register_default_tools``. ``None`` / empty = no plugin
-        # tools, default behavior unchanged.
-        plugin_tools: "list[Tool] | None" = None,
-        empty_recovery: RecoveryLimits | None = None,
-        workdir_resolver: "WorkdirResolver | None" = None,
+        router: "ModelRouter | None" = None,
+        sandbox_config: SandboxConfig | None = None,
+        mcp_servers: dict | None = None,
+        tools: "ToolWiring | None" = None,
+        subagents: "SubagentWiring | None" = None,
+        engine: "EngineWiring | None" = None,
+        policy: "TurnPolicy | None" = None,
+        host: "HostWiring | None" = None,
+        **legacy: Any,
     ):
+        tools, subagents, engine, policy, host = resolve_wiring(tools, subagents, engine, policy, host, legacy)
+        exec_config = tools.exec_config
+        ask_user_config = tools.ask_user_config
+        brave_api_key = tools.brave_api_key
+        jina_api_key = tools.jina_api_key
+        web_proxy = tools.web_proxy
+        restrict_to_workspace = tools.restrict_to_workspace
+        disabled_tools = tools.disabled_tools
+        tool_search_config = tools.tool_search_config
+        media_config = tools.media_config
+        deep_research_config = tools.deep_research_config
+        plugin_tools = tools.plugin_tools
+        deliverables = tools.deliverables
+        agents = subagents.agents
+        max_concurrent_subagents = subagents.max_concurrent_subagents
+        max_subagent_spawns_per_hour = subagents.max_subagent_spawns_per_hour
+        subagent_dag_config = subagents.subagent_dag_config
+        subagent_questions_config = subagents.subagent_questions_config
+        workdir_resolver = subagents.workdir_resolver
+        context_config = engine.context_config
+        runtime_config = engine.runtime_config
+        context_window_tokens = engine.context_window_tokens
+        strategies = engine.strategies
+        skill_forge_config = engine.skill_forge_config
+        skill_forge_router_config = engine.skill_forge_router_config
+        memory_config = engine.memory_config
+        backend = engine.backend
+        playbook_config = engine.playbook_config
+        max_iterations = policy.max_iterations
+        empty_recovery = policy.empty_recovery
+        interactive = policy.interactive
+        response_modifier = policy.response_modifier
+        now_fn = policy.now_fn
+        hooks = host.hooks
+        on_user_inbound = host.on_user_inbound
+        decision_consumer = host.decision_consumer
+        cron_service = host.cron_service
+        channels_config = host.channels_config
         from raven.agent.hook import (
             CompositeHook,
             DecisionConsumerAdapter,

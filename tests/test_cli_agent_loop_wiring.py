@@ -42,6 +42,18 @@ _EXEMPT: dict[tuple[str, str], str] = {
 _REQUIRED = ("strategies",)
 
 
+def _flat_kwargs(call: ast.Call) -> set[str]:
+    """Keyword names a site passes, descending into the wiring bundles."""
+    flat: set[str] = set()
+    for kw in call.keywords:
+        inner = kw.value
+        if isinstance(inner, ast.Call) and getattr(inner.func, "id", "").endswith(("Wiring", "Policy")):
+            flat |= {k.arg for k in inner.keywords if k.arg}
+        elif kw.arg:
+            flat.add(kw.arg)
+    return flat
+
+
 def _sites() -> list[tuple[str, ast.Call]]:
     found: list[tuple[str, ast.Call]] = []
     for path in sorted(RAVEN.rglob("*.py")):
@@ -69,7 +81,7 @@ def test_every_construction_site_wires_every_capability(capability: str):
     missing = [
         rel
         for rel, call in _sites()
-        if capability not in {kw.arg for kw in call.keywords} and (rel, capability) not in _EXEMPT
+        if capability not in _flat_kwargs(call) and (rel, capability) not in _EXEMPT
     ]
     assert not missing, (
         f"these AgentLoop sites do not pass {capability!r}: {missing}\n"
