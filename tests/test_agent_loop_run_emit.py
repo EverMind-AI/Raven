@@ -854,7 +854,7 @@ async def test_run_message_tool_media_is_not_dropped(tmp_path):
 
 
 async def test_run_stream_false_main_reply_is_one_text(tmp_path):
-    # build_repl wires stream=False -> non-streaming chat_with_retry -> the reply
+    # build_one_shot_spine wires stream=False -> non-streaming chat_with_retry -> the reply
     # is one Text (CliOutlet renders it), never a ChatDelta.
     provider = _FakeChatProvider([LLMResponse(content="full reply", finish_reason="stop")])
     loop = AgentLoop(provider=provider, workspace=tmp_path)

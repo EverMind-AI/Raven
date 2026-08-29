@@ -116,7 +116,7 @@ def make_on_cron_job(
     """Build the CronService.on_job callback. Every cron turn runs through the
     spine ``submit`` as a CRON-origin turn.
 
-    ``submit`` (required) is the spine entry (build_gateway / build_repl /
+    ``submit`` (required) is the spine entry (build_gateway / build_one_shot_spine /
     build_rpc_spine scheduler). The turn's source is the job's creation-time
     binding ``(payload.channel, payload.to)`` — the single delivery target.
     The hub routes the reply to that channel's outlet; there is no

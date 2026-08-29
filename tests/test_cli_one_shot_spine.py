@@ -1,11 +1,11 @@
 import asyncio
 
 from raven.agent.spine_runner import AgentTurnRunner
-from raven.cli._repl_spine import (
+from raven.cli._one_shot_spine import (
     CliOutlet,
     TurnUsageSummary,
     _render_summary_line,
-    build_repl,
+    build_one_shot_spine,
     make_hub_sink,
 )
 from raven.spine import (
@@ -88,11 +88,11 @@ async def test_runner_stream_flag_is_forwarded():
     runner = AgentTurnRunner(loop, stream=True)
     events, emit = _collect()
     await runner.run(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="cli:c1"), emit, lambda: [])
-    assert loop.calls[0]["stream"] is True  # build_rpc_spine would pass True; build_repl False
+    assert loop.calls[0]["stream"] is True  # build_rpc_spine would pass True; build_one_shot_spine False
 
 
 async def test_runner_forwards_inline_tool_stream():
-    # build_repl / build_rpc_spine wire inline_tool_stream=True so deep_research streams
+    # build_one_shot_spine / build_rpc_spine wire inline_tool_stream=True so deep_research streams
     # its answer inline; the gateway leaves it False.
     loop = FakeAgentLoop()
     runner = AgentTurnRunner(loop, stream=False, inline_tool_stream=True)
@@ -217,7 +217,7 @@ async def test_sink_routes_deliverables_and_drops_lifecycle():
     assert isinstance(hub.dispatched[0], Text)
 
 
-# --- build_repl: real scheduler + hub + CliOutlet, only the agent loop faked ---
+# --- build_one_shot_spine: real scheduler + hub + CliOutlet, only the agent loop faked ---
 
 
 class _EchoLoop:
@@ -227,8 +227,8 @@ class _EchoLoop:
         return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
 
 
-async def test_build_repl_defaults_to_single_slot_pools():
-    scheduler, _hub, teardown = build_repl(_EchoLoop(), "cli", lambda t: None)
+async def test_build_one_shot_spine_defaults_to_single_slot_pools():
+    scheduler, _hub, teardown = build_one_shot_spine(_EchoLoop(), "cli", lambda t: None)
     try:
         assert scheduler._pools._user._value == 1
         assert scheduler._pools._system._value == 1
@@ -236,8 +236,8 @@ async def test_build_repl_defaults_to_single_slot_pools():
         await teardown()
 
 
-async def test_build_repl_honors_configured_pool_sizes():
-    scheduler, _hub, teardown = build_repl(_EchoLoop(), "cli", lambda t: None, user_pool=5, system_pool=3)
+async def test_build_one_shot_spine_honors_configured_pool_sizes():
+    scheduler, _hub, teardown = build_one_shot_spine(_EchoLoop(), "cli", lambda t: None, user_pool=5, system_pool=3)
     try:
         assert scheduler._pools._user._value == 5
         assert scheduler._pools._system._value == 3
@@ -245,12 +245,12 @@ async def test_build_repl_honors_configured_pool_sizes():
         await teardown()
 
 
-async def test_build_repl_teardown_leaves_no_pending_tasks():
+async def test_build_one_shot_spine_teardown_leaves_no_pending_tasks():
     # The two bugs were both in teardown/interrupt; guard it: after a real turn,
-    # scheduler.shutdown() + hub.aclose() must stop every task build_repl/submit
+    # scheduler.shutdown() + hub.aclose() must stop every task build_one_shot_spine/submit
     # spawned (lane worker, reaper, outlet worker) — no "Task destroyed pending".
     baseline = asyncio.all_tasks()
-    scheduler, hub, teardown = build_repl(_EchoLoop(), "cli", lambda t: None)
+    scheduler, hub, teardown = build_one_shot_spine(_EchoLoop(), "cli", lambda t: None)
     handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="cli:c1"))
     await handle.result()
     await hub.wait_idle("cli")

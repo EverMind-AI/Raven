@@ -374,7 +374,7 @@ def test_chain_reset_error_is_swallowed():
 
 
 async def test_interactive_assembly_cron_renders_once_via_outlet():
-    from raven.cli._repl_spine import build_repl
+    from raven.cli._one_shot_spine import build_one_shot_spine
     from raven.spine import Text, TurnOutcome, Usage
 
     class _CronEchoLoop:
@@ -383,7 +383,7 @@ async def test_interactive_assembly_cron_renders_once_via_outlet():
             return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
 
     rendered: list[str] = []
-    scheduler, hub, teardown = build_repl(_CronEchoLoop(), "tui", rendered.append)
+    scheduler, hub, teardown = build_one_shot_spine(_CronEchoLoop(), "tui", rendered.append)
     handler = make_on_cron_job(submit=scheduler.submit)
 
     try:
