@@ -18,12 +18,12 @@ from typing import Any
 from loguru import logger
 
 from raven.contracts.llm_provider import (  # noqa: F401
+    ChatDelta,
     ErrorClassification,
     GenerationSettings,
     LLMResponse,
     ProviderHTTPError,
     RunMeta,
-    StreamDelta,
     ToolCallRequest,
     TruncationInfo,
 )
@@ -267,7 +267,7 @@ class LLMProvider(_LLMProviderPaper):
         temperature: object = _SENTINEL,
         reasoning_effort: object = _SENTINEL,
         tool_choice: str | dict[str, Any] | None = None,
-    ) -> AsyncIterator[StreamDelta]:
+    ) -> AsyncIterator[ChatDelta]:
         """Non-streaming fallback: emit the full ``chat()`` response as a single
         terminal delta.
 
@@ -318,7 +318,7 @@ class LLMProvider(_LLMProviderPaper):
                     for i, tc in enumerate(response.tool_calls)
                 ]
             }
-        yield StreamDelta(
+        yield ChatDelta(
             content=response.content,
             tool_call_delta=tool_call_delta,
             usage=response.usage or None,
@@ -717,7 +717,7 @@ __all__ = [
     "LLMResponse",
     "ProviderHTTPError",
     "RunMeta",
-    "StreamDelta",
+    "ChatDelta",
     "ToolCallRequest",
     "TruncationInfo",
     "format_llm_error",

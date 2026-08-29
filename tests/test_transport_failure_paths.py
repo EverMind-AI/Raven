@@ -26,7 +26,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
-from raven.providers.base import GenerationSettings, LLMResponse, StreamDelta
+from raven.providers.base import ChatDelta, GenerationSettings, LLMResponse
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.providers.transport_failure import flag_transport_failure
 
@@ -244,10 +244,10 @@ class _BlipThenAnswer:
     async def chat_stream(self, *a: Any, **kw: Any):
         self.attempts += 1
         if self.attempts == 1:
-            yield StreamDelta(content=None, finish_reason="stop", usage={"prompt_tokens": 1, "total_tokens": 2})
+            yield ChatDelta(content=None, finish_reason="stop", usage={"prompt_tokens": 1, "total_tokens": 2})
             return
-        yield StreamDelta(content="the answer")
-        yield StreamDelta(content=None, finish_reason="stop", usage={"prompt_tokens": 2900, "total_tokens": 2903})
+        yield ChatDelta(content="the answer")
+        yield ChatDelta(content=None, finish_reason="stop", usage={"prompt_tokens": 2900, "total_tokens": 2903})
 
     def classify_error(self, exc: Any = None, content: Any = None) -> Any:
         from raven.providers.base import ErrorClassification
@@ -259,13 +259,13 @@ class _EmptyStream:
     """A stream that opens, says nothing, and closes on `stop`.
 
     `chat_stream` is normalised by the provider, so what the assembler sees is
-    `StreamDelta` -- the terminal one carries the finish reason.
+    `ChatDelta` -- the terminal one carries the finish reason.
     """
 
     generation = GenerationSettings()
 
     async def chat_stream(self, *a: Any, **kw: Any):
-        yield StreamDelta(content=None, finish_reason="stop", usage={"prompt_tokens": 1, "total_tokens": 2})
+        yield ChatDelta(content=None, finish_reason="stop", usage={"prompt_tokens": 1, "total_tokens": 2})
 
 
 async def test_the_streaming_path_reconnects_instead_of_ending_the_turn() -> None:
@@ -711,7 +711,7 @@ async def test_a_vision_turn_with_honest_usage_is_not_reconnected() -> None:
         async def chat_stream(self, *a: Any, **kw: Any):
             self.attempts += 1
             # Truthful accounting for a megabyte of png.
-            yield StreamDelta(content=None, finish_reason="stop", usage={"prompt_tokens": 1800, "total_tokens": 1801})
+            yield ChatDelta(content=None, finish_reason="stop", usage={"prompt_tokens": 1800, "total_tokens": 1801})
 
     provider = _SilentAboutThePicture()
     response = await stream_llm_call(provider, messages=_vision_messages(), tools=None, model="stub")

@@ -16,12 +16,12 @@ from loguru import logger
 
 from raven.providers import prompt_cache
 from raven.providers.base import (
+    ChatDelta,
     ErrorClassification,
     GenerationSettings,
     LLMProvider,
     LLMResponse,
     RunMeta,
-    StreamDelta,
     ToolCallRequest,
     format_llm_error,
 )
@@ -575,10 +575,10 @@ class LiteLLMProvider(LLMProvider):
         temperature: object = LLMProvider._SENTINEL,
         reasoning_effort: object = LLMProvider._SENTINEL,
         tool_choice: str | dict[str, Any] | None = None,
-    ) -> AsyncIterator[StreamDelta]:
+    ) -> AsyncIterator[ChatDelta]:
         """Streaming counterpart to chat().
 
-        Yields one StreamDelta per non-empty chunk. Signature matches chat()
+        Yields one ChatDelta per non-empty chunk. Signature matches chat()
         so callers can swap providers transparently. The existing chat() is
         NOT modified — non-TUI paths (channels / cron / sentinel / ...)
         continue to use chat() with no behavioral change.
@@ -718,8 +718,8 @@ class LiteLLMProvider(LLMProvider):
         finally:
             await _close(stream)
 
-    def _normalize_stream_chunk(self, chunk: Any) -> StreamDelta | None:
-        """Normalize a raw provider chunk into a StreamDelta.
+    def _normalize_stream_chunk(self, chunk: Any) -> ChatDelta | None:
+        """Normalize a raw provider chunk into a ChatDelta.
 
         Default: OpenAI shape — `chunk.choices[0].delta.content` (str | None),
         `delta.tool_calls` (list | None), and a final `chunk.usage` snapshot
@@ -797,7 +797,7 @@ class LiteLLMProvider(LLMProvider):
             ):
                 return None
 
-            return StreamDelta(
+            return ChatDelta(
                 content=content,
                 tool_call_delta=tool_call_delta,
                 usage=usage_dict,

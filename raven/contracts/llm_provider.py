@@ -1,6 +1,6 @@
 """The provider paper: response shapes and the interface the harness calls.
 
-A provider hands the loop an :class:`LLMResponse` (or :class:`StreamDelta`
+A provider hands the loop an :class:`LLMResponse` (or :class:`ChatDelta`
 stream) and answers a few capability questions; a failed call is described by
 an :class:`ErrorClassification`. The machinery that produces those -- retry,
 sanitizing, error classification, tracing, the error-string helpers -- lives
@@ -147,7 +147,7 @@ class LLMResponse:
 
 
 @dataclass
-class StreamDelta:
+class ChatDelta:
     """Single normalized delta from a streaming LLM response.
 
     Producers (provider.chat_stream) yield one of these per non-empty chunk.
@@ -213,7 +213,7 @@ class LLMProvider(ABC):
         temperature: object = _SENTINEL,
         reasoning_effort: object = _SENTINEL,
         tool_choice: str | dict[str, Any] | None = None,
-    ) -> AsyncIterator[StreamDelta]:
+    ) -> AsyncIterator[ChatDelta]:
         """Stream ``model``'s reply as deltas; the last one carries the usage and finish reason.
         A provider without a streaming wire may emit the whole reply as one terminal delta."""
         ...
@@ -332,7 +332,7 @@ __all__ = [
     "LLMResponse",
     "ProviderHTTPError",
     "RunMeta",
-    "StreamDelta",
+    "ChatDelta",
     "ToolCallRequest",
     "TruncationInfo",
 ]
