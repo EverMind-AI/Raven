@@ -22,7 +22,6 @@ DEFAULT_DIFF_THRESHOLD = 90.0
 OMITTED_PATHS = {
     "raven/__main__.py",
     "raven/evolver/__main__.py",
-    "raven/utils/win_fcntl_shim.py",
 }
 
 
