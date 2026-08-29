@@ -13,7 +13,7 @@ import { homedir } from 'node:os'
 
 import { loadVscode, type VscodeApi, type VscodeDisposable } from './api.js'
 import { findOnPath, probeLoginShellEnv, resolveWindowsShellHint, type ProbeRunner } from './pathProbe.js'
-import { resolveRavenCommand } from './ravenBin.js'
+import { resolveRavenCommand, sanitizeExtraArgs } from './ravenBin.js'
 import { TuiTerminalManager } from './terminal.js'
 
 const INSTALL_DOCS_URL = 'https://github.com/EverMind-AI/Raven#quick-start'
@@ -71,7 +71,7 @@ export async function activate(context: { subscriptions: VscodeDisposable[] }): 
     const command = resolveRavenCommand({
       env: process.env,
       configExecutablePath: config.get('executablePath') ?? '',
-      extraArgs: config.get('extraArgs') ?? [],
+      extraArgs: sanitizeExtraArgs(config.get('extraArgs')),
       homeDir: homedir(),
       exists: isExistingFile,
       which: name => findOnPath(process.platform, name, runProbe, existsSync)
