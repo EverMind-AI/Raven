@@ -613,7 +613,7 @@ async def test_rebind_keeps_the_paired_account_until_a_scan_is_confirmed(tmp_pat
 async def test_a_confirmed_scan_swaps_the_account_and_drops_the_old_one_s_state(tmp_path):
     ch = _qr_statuses(
         _live_channel(tmp_path),
-        [{"status": "confirmed", "bot_token": "new-token", "baseurl": "https://new.example"}],
+        [{"status": "confirmed", "bot_token": "new-token", "baseurl": "https://new.weixin.qq.com"}],
     )
     await ch.begin_rebind()
     for _ in range(40):
@@ -623,7 +623,7 @@ async def test_a_confirmed_scan_swaps_the_account_and_drops_the_old_one_s_state(
 
     assert ch.rebind_state()["phase"] == "confirmed"
     assert ch._token == "new-token"
-    assert ch._base_url == "https://new.example"
+    assert ch._base_url == "https://new.weixin.qq.com"
     # Everything addressed by the previous account goes with it: a stale cursor
     # replays someone else's history, and a stale context token is rejected.
     assert ch._updates_buf == ""
@@ -763,14 +763,34 @@ async def test_stopping_the_channel_cancels_a_rebind_in_flight(tmp_path):
         ("   ", ""),
         ("http://evil.test", ""),
         ("HTTP://evil.test", ""),
-        ("https://ok.test", "https://ok.test"),
-        ("HTTPS://ok.test", "HTTPS://ok.test"),
-        ("bare.test", "https://bare.test"),
+        ("https://ok.test", ""),
+        ("https://new.weixin.qq.com", "https://new.weixin.qq.com"),
+        ("HTTPS://new.weixin.qq.com", "HTTPS://new.weixin.qq.com"),
+        ("bare.weixin.qq.com", "https://bare.weixin.qq.com"),
+        ("https://weixin.qq.com.evil.test", ""),
     ],
 )
-def test_a_response_cannot_move_polling_to_plaintext(given: str, expected: str) -> None:
-    """The login exchange this poll carries is what a bot token comes out of.
-    An empty answer leaves the caller on the base it already had."""
+def test_a_response_cannot_move_polling_off_the_operator_or_to_plaintext(given: str, expected: str) -> None:
+    """The login exchange this poll carries is what a bot token comes out of: it
+    may move to another host of the configured operator over https and nowhere
+    else. An empty answer leaves the caller on the base it already had."""
     from raven.channels.adapters.weixin.channel import _https_redirect_target
 
-    assert _https_redirect_target(given) == expected
+    assert _https_redirect_target(given, "https://ilinkai.weixin.qq.com") == expected
+
+
+async def test_a_confirmed_scan_does_not_move_polling_to_another_operator(tmp_path):
+    ch = _qr_statuses(
+        _live_channel(tmp_path),
+        [{"status": "confirmed", "bot_token": "new-token", "baseurl": "https://new.example"}],
+    )
+    before = ch._base_url
+    await ch.begin_rebind()
+    for _ in range(40):
+        if ch.rebind_state()["phase"] == "confirmed":
+            break
+        await asyncio.sleep(0.02)
+
+    assert ch.rebind_state()["phase"] == "confirmed"
+    assert ch._token == "new-token"
+    assert ch._base_url == before, "a base outside the configured operator is not adopted"

@@ -19,7 +19,7 @@ from collections import OrderedDict
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import httpx
 from loguru import logger
@@ -44,7 +44,36 @@ _DEDUP_CAP = 1000
 _PAUSE_TICK_S = 30
 
 
-def _https_redirect_target(host: str) -> str:
+def _registrable_domain(host: str) -> str:
+    labels = [part for part in host.lower().strip(".").split(".") if part]
+    return ".".join(labels[-2:])
+
+
+def _operator_base(candidate: str, configured: str) -> str:
+    """``candidate`` as the base to adopt, or ``""`` when it must not be.
+
+    A response may move this channel to another host of the same operator (the
+    registrable domain of ``configured``) over https. Anything else would send
+    the bot token and every later call to a host the configuration never named,
+    so it is refused and the channel stays on the base it has.
+    """
+    target = (candidate or "").strip().rstrip("/")
+    if not target:
+        return ""
+    parts = urlparse(target)
+    host = (parts.hostname or "").lower()
+    if parts.scheme.lower() != "https" or not host:
+        logger.warning("weixin: refusing a base that is not https ({}); staying on the current base", target)
+        return ""
+    if _registrable_domain(host) != _registrable_domain((urlparse(configured).hostname or "").lower()):
+        logger.warning(
+            "weixin: refusing a base outside the configured operator ({}); staying on the current base", target
+        )
+        return ""
+    return target
+
+
+def _https_redirect_target(host: str, configured: str) -> str:
     """The https base a ``scaned_but_redirect`` response may move polling to.
 
     Returns ``""`` for anything unusable, which leaves the caller on the base
@@ -56,9 +85,9 @@ def _https_redirect_target(host: str) -> str:
     Refused rather than silently upgraded -- coercing it to https would hide a
     misconfigured or hostile upstream instead of reporting it.
 
-    The host itself is not pinned to the configured origin. That is a wider
-    question about whether a response may move polling off-host at all, and it
-    is not settled here.
+    The host must belong to the configured operator (:func:`_operator_base`):
+    moving polling to another operator's host would send the bot token and every
+    later call there.
     """
     host = (host or "").strip()
     if not host:
@@ -70,7 +99,7 @@ def _https_redirect_target(host: str) -> str:
     if lowered.startswith("http://"):
         logger.warning("weixin: refusing a plaintext redirect_host ({}); staying on the current base", host)
         return ""
-    return host if lowered.startswith("https://") else f"https://{host}"
+    return _operator_base(host if lowered.startswith("https://") else f"https://{host}", configured)
 
 
 class WeixinChannel(ChannelBase):
@@ -247,8 +276,8 @@ class WeixinChannel(ChannelBase):
                         logger.error("Login confirmed but no bot_token in response")
                         return False
                     self._token = token
-                    if status_data.get("baseurl"):
-                        self._base_url = status_data["baseurl"]
+                    if accepted := _operator_base(status_data.get("baseurl") or "", self.config.base_url):
+                        self._base_url = accepted
                     self._save_state()
                     self.pending_qr = None
                     logger.info(
@@ -259,7 +288,7 @@ class WeixinChannel(ChannelBase):
                     return True
                 if status == "scaned_but_redirect":
                     host = str(status_data.get("redirect_host", "") or "").strip()
-                    if (redirected := _https_redirect_target(host)) and redirected != poll_base:
+                    if (redirected := _https_redirect_target(host, self.config.base_url)) and redirected != poll_base:
                         poll_base = redirected
                 elif status == "expired":
                     refreshes += 1
@@ -386,7 +415,7 @@ class WeixinChannel(ChannelBase):
                     return
                 if status == "scaned_but_redirect":
                     host = str(status_data.get("redirect_host", "") or "").strip()
-                    if (redirected := _https_redirect_target(host)) and redirected != poll_base:
+                    if (redirected := _https_redirect_target(host, self.config.base_url)) and redirected != poll_base:
                         poll_base = redirected
                     self._rebind = {**self._rebind, "phase": "scanned"}
                 elif status == "expired":
@@ -429,8 +458,8 @@ class WeixinChannel(ChannelBase):
         same recovery, not just the ones that spoke inside that window.
         """
         self._token = token
-        if base_url:
-            self._base_url = base_url
+        if accepted := _operator_base(base_url, self.config.base_url):
+            self._base_url = accepted
         self._updates_buf = ""
         self._context_tokens = {}
         self._typing.restore({})

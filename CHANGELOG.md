@@ -34,6 +34,10 @@ All notable changes to Raven are documented here.
   imports the loop shell it is consumed by. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- Security: a base URL or redirect host the WeChat login exchange hands back
+  is adopted only over https and within the configured operator's domain;
+  a Discord `resume_gateway_url` outside the configured gateway's operator
+  is ignored in favour of the configured gateway. Both carry the bot token.
 - Audit pass over eval_engine, knowledge, trajectory and config: the names
   other packages reached under an underscore are public
   (`SessionManager.session_path`, `update_providers.oauth_credentials_present`,
