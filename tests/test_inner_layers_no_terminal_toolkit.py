@@ -18,12 +18,10 @@ REPO = Path(__file__).resolve().parents[1]
 SURFACES = ("cli", "rpc", "acp")
 TOOLKITS = ("rich", "typer", "click")
 
-# Known remaining renderers in inner modules; each is a card, not a licence.
-ALLOWED_TODAY = {
-    "raven/channels/adapters/whatsapp/bridge.py",
-    "raven/plugins/memory/everos/backend.py",
-    "raven/utils/workspace.py",
-}
+# No inner module renders through a toolkit today. A file that must, for a
+# reason argued in its commit, goes here -- and the second test makes the entry
+# expire the day the import is gone.
+ALLOWED_TODAY: set[str] = set()
 
 
 def _toolkit_imports(path: Path) -> list[str]:

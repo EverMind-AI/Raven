@@ -10,6 +10,7 @@ WebSocket broadcast), so the same engine assembly serves both transports.
 from __future__ import annotations
 
 import asyncio
+import sys
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -64,7 +65,7 @@ def build_agent_loop(workspace: str | None = None, home: str | None = None):
     from raven.rpc.errors import InternalError
 
     try:
-        return build_engine(workspace=workspace, home=home).loop
+        return build_engine(workspace=workspace, home=home, notify=lambda m: print(m, file=sys.stderr)).loop
     except MissingCredentialsError as e:
         from loguru import logger as _logger
 

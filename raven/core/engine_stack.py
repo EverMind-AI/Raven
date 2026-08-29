@@ -11,7 +11,7 @@ each surface keeps only its own error translation.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from raven.core.runtime import RavenRuntime
 
@@ -20,7 +20,13 @@ if TYPE_CHECKING:
     from raven.session.manager import SessionManager
 
 
-def build_engine(*, workspace: str | None = None, home: str | None = None, channel: str = "tui") -> RavenRuntime:
+def build_engine(
+    *,
+    workspace: str | None = None,
+    home: str | None = None,
+    channel: str = "tui",
+    notify: Callable[[str], None] | None = None,
+) -> RavenRuntime:
     """Assemble the local-surface runtime; raises what the parts raise.
 
     ``MissingCredentialsError`` for an unfinished install and pydantic's
@@ -65,6 +71,7 @@ def build_engine(*, workspace: str | None = None, home: str | None = None, chann
             interactive=True,
         ),
         host=HostWiring(
+            notify=notify,
             cron_service=cron,
             channels_config=config.channels,
             on_user_inbound=chain_cron_activity_reset(cron),

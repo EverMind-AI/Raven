@@ -94,7 +94,9 @@ def build_runtime(
         # it here is what keeps it out of the entrances' hands.
         provider_pool = ProviderPool(lambda: load_runtime_config(None, None))
     plugin_registry = plugin_stack.build_plugin_registry(ec_config)
-    backend = plugin_stack.maybe_build_memory_backend(config.workspace_path, ec_config, registry=plugin_registry)
+    backend = plugin_stack.maybe_build_memory_backend(
+        config.workspace_path, ec_config, registry=plugin_registry, notify=(host.notify if host is not None else None)
+    )
     plugin_tools = plugin_stack.build_plugin_tools(config.workspace_path, ec_config, registry=plugin_registry)
     strategies = token_wise_stack.install_from_config(
         ec_config.token_wise,

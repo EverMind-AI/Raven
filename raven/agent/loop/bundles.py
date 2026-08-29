@@ -77,6 +77,8 @@ class HostWiring:
     decision_consumer: Any = None
     cron_service: Any = None
     channels_config: Any = None
+    # How the host shows a plugin's actionable notice; None leaves it to the log.
+    notify: Any = None
 
 
 _LEGACY_FIELDS: dict[str, str] = {}

@@ -2,6 +2,8 @@
 workspace once, creating only what is missing.
 """
 
+import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from loguru import logger
@@ -16,8 +18,20 @@ from loguru import logger
 logger.disable(__name__)
 
 
-def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]:
-    """Sync bundled templates to workspace. Only creates missing files."""
+def _stderr_line(message: str) -> None:
+    """Where a report lands when no host supplied a renderer: one plain line on stderr."""
+    print(f"  {message}", file=sys.stderr)
+
+
+def sync_workspace_templates(
+    workspace: Path, silent: bool = False, *, notify: "Callable[[str], None] | None" = None
+) -> list[str]:
+    """Sync bundled templates to workspace. Only creates missing files.
+
+    ``notify`` receives one plain sentence when files were created ("Initialized
+    workspace (3 files)"); the host decides how to show it. Nothing here owns a
+    terminal.
+    """
     from importlib.resources import files as pkg_files
 
     try:
@@ -91,11 +105,8 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
         for name in added:
             logger.debug("workspace sync: created {}", name)
     if added and not silent:
-        from rich.console import Console
-
-        _c = Console(stderr=True)
         label = "Initialized workspace" if existed == 0 else "Updated workspace templates"
-        _c.print(f"  [dim]{label} ({len(added)} file{'s' if len(added) != 1 else ''})[/dim]")
+        (notify or _stderr_line)(f"{label} ({len(added)} file{'s' if len(added) != 1 else ''})")
     return added
 
 

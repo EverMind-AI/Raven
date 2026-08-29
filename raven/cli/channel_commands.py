@@ -532,6 +532,12 @@ def channels_login(
     # section carries only socket fields, and the factory expects the
     # dispensed view with the declaration's defaults materialized.
     channel = spec.factory(dispense_channel_config(spec, channel_cfg, channel=channel_name))
+    if channel_name == "whatsapp":
+        from raven.channels.adapters.whatsapp import bridge
+
+        # The one long-running login: show the bridge build as a spinner here,
+        # where the terminal is, instead of inside the adapter.
+        bridge.progress = lambda label: console.status(f"[cyan]{label}", spinner="dots")
 
     success = asyncio.run(channel.login(force=force))
     if not success:
