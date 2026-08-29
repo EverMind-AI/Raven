@@ -6,9 +6,9 @@ contribution points, and config schema — everything the registry needs
 to know without importing the plugin's code.
 
 The single root table is ``[plugin]``. Contribution arrays are
-``[[plugin.contributes.<kind>]]``. Per design, the only contribution
-kind that lands in PG-1 is ``memory_backends``; the model accepts
-unknown extras silently so future kinds don't break old hosts.
+``[[plugin.contributes.<kind>]]``; the two kinds consumed today are
+``memory_backends`` and ``tools``, and the model ignores kinds it does not
+know so a manifest written for a later host still loads.
 
 Validation rules worth flagging:
 
@@ -105,7 +105,7 @@ class PluginManifest(_ManifestBase):
     id: str = Field(min_length=1)
     version: str = Field(min_length=1)
     display_name: str | None = None
-    raven: str | None = None  # version constraint (parsed later)
+    raven: str | None = None  # the host version the plugin declares; nothing enforces it
     bundled: bool = False
     enabled_by_default: bool = False
     contributes: Contributes = Field(default_factory=Contributes)

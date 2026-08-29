@@ -1,9 +1,8 @@
 """Find the EverOS roots on this machine and say what state each is in.
 
-raven used to assume there was exactly one root at one address and start a server
-whenever that address did not answer. That cost users their memory: a root can
-already be served on another port, by a process this module has to notice rather
-than talk over.
+A root can already be served on another port, by a process this module has to
+notice rather than talk over: assuming one root at one address, and starting a
+server whenever that address does not answer, costs a user their memory.
 
 Ownership is deliberately not one of the questions. Only roots raven creates for
 itself are scanned, and whether raven may write to the one it picks is settled by

@@ -1,6 +1,6 @@
 """Read what a running EverOS server can actually do.
 
-``_server._probe_health`` answers "is the process up". From everos 1.2.1
+``server._probe_health`` answers "is the process up". From everos 1.2.1
 ``/health`` also reports which capabilities the server managed to *build*, and
 those are different questions: 1.2.1 boots with ``[llm]`` alone rather than
 aborting, so a server whose embedding provider is misconfigured still answers

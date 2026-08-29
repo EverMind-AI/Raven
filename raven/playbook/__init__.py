@@ -1,16 +1,19 @@
 """Playbook — reusable task templates: generation, matching, execution.
 
-A playbook is one directory under the playbooks scan root holding a
+Generation, discovery by the model, execution. A playbook is one directory
+under the playbooks scan root holding a
 ``playbook.md`` (two-field frontmatter, human body, one fenced
 ``yaml playbook-spec`` block) — one file, no sidecar. The two modes differ
 only in where the graph comes from: ``dag`` ships it, ``prompt`` ships
 assembly guidance a model turns into a graph at run time — same validation,
-same execution chain. Whether a playbook is matchable on this machine is
-config (``playbooks.disabled``), never file content.
+same execution chain. Whether a playbook is offered on this machine is config
+(``playbooks.disabled``), never file content.
 
 Package layout:
 
 - ``types``      — the pydantic contract (:class:`PlaybookSpec` et al.)
+- ``agent_profiles`` — what each sub-agent on the table can be asked to do
+- ``llm_result`` — the shapes a generation call comes back in
 - ``params``     — parameter values and ``${params.x}`` / ``{{ params.x }}`` refs
 - ``mcp``        — the servers a run may reach, and the MCP pre-flight
 - ``triggers``   — offline vocabulary expansion + guards (L1 material)
