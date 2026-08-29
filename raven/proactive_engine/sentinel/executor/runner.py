@@ -31,7 +31,6 @@ Degradation:
 from __future__ import annotations
 
 import asyncio
-import contextvars
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
@@ -65,16 +64,6 @@ from raven.proactive_engine.sentinel.planner import ProactivePlanner
 from raven.proactive_engine.sentinel.predictor.context_assembler import ContextAssembler
 from raven.proactive_engine.sentinel.trigger_policy.policy import NudgePolicy
 from raven.proactive_engine.sentinel.types import PlannerDecision
-
-# Per-turn session_key published by ``on_user_inbound`` so the
-# ``nudge_feedback`` tool can find the current session without changing
-# the AgentLoop tool-execute signature. asyncio Tasks inherit context, so
-# this propagates correctly from the user-inbound hook through the ReAct
-# loop into tool execution.
-current_session_key: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "sentinel_current_session_key",
-    default=None,
-)
 
 
 def _parse_hhmm(value: str) -> tuple[int, int]:
@@ -227,26 +216,18 @@ class SentinelRunner:
         # arrives on a tracked session within engagement_window_seconds
         # (default 24h — proactive nudges are notification-style, users
         # often reply hours later after seeing the alert), the most recent
-        # nudge moves to ``_awaiting_llm_feedback`` for the main LLM to
-        # classify via the ``nudge_feedback`` tool — or is marked dismissed
-        # immediately if the inbound starts with ``/dismiss`` (deterministic
-        # fast path).
+        # nudge is marked dismissed if the inbound starts with ``/dismiss``
+        # and recorded neutral otherwise: the user engaged, the intent is
+        # not read from prose, and neutral never inflates acceptance.
         self._pending_engagement: dict[str, list[tuple[str, datetime]]] = {}
-        # Nudges popped from ``_pending_engagement`` but awaiting the
-        # main LLM's intent classification. Drained either by the
-        # ``nudge_feedback`` tool (LLM classified) or by
-        # ``finalize_pending_feedback`` (after_send: turn ended without
-        # a classification → record neutral).
-        self._awaiting_llm_feedback: dict[str, list[tuple[str, datetime]]] = {}
 
         # Optional cross-process persistence. The longrun eval and
         # production gateway both split the Sentinel pipeline across
         # multiple subprocesses (``sentinel ticks --live`` dispatches;
         # ``agent --message`` handles the reply). Without a shared store
-        # ``_pending_engagement`` / ``_awaiting_llm_feedback`` are
-        # in-memory dicts that don't survive subprocess boundaries — so
-        # ``on_user_inbound`` always sees an empty queue and the new
-        # LLM-feedback path is inert. The store fixes that by sharing
+        # ``_pending_engagement`` is an in-memory dict that does not survive
+        # subprocess boundaries — so ``on_user_inbound`` would always see an
+        # empty queue and never correlate a reply. The store fixes that by sharing
         # the engagement state through ``state.json`` (same JsonStateStore
         # NudgePolicy / NudgeInjector use).
         self._store = store
@@ -1380,20 +1361,14 @@ class SentinelRunner:
         Called by AgentLoop for every user-originated inbound (not
         Sentinel-origin). Behavior:
         - Session key derived from req.conversation (falls back to channel:chat_id).
-        - Publishes session_key into the ``current_session_key``
-          contextvar so the ``nudge_feedback`` tool can find this
-          session when the main LLM calls it later in the turn.
         - If content starts with '/dismiss' (any case) → mark most recent
           pending nudge as dismissed + tell NudgePolicy to cool this
           session down. Deterministic fast path; no LLM required.
-        - Otherwise, **defer classification to the main LLM** — move the
-          most recent nudge into ``_awaiting_llm_feedback``. The
-          ``nudge_feedback`` tool may consume it during the ReAct loop;
-          if not, ``finalize_pending_feedback`` (after_send) records it
-          as NEUTRAL. Recording every non-/dismiss reply as ACCEPTED
-          would wrongly inflate acceptance_rate on natural-language
-          dismissals like "stop reminding me" and tighten the adaptive quota
-          in the wrong direction.
+        - Otherwise record the most recent nudge as NEUTRAL: the user engaged
+          but the intent is not read from prose. Recording every non-/dismiss
+          reply as ACCEPTED would wrongly inflate acceptance_rate on
+          natural-language dismissals like "stop reminding me" and tighten the
+          adaptive quota in the wrong direction.
         - Stale entries (beyond engagement_window_seconds) are dropped
           on access.
         """
@@ -1416,9 +1391,6 @@ class SentinelRunner:
                 session_key = f"{channel}:{chat_id}" if (channel or chat_id) else ""
             if not session_key:
                 return
-
-            # Publish session_key for the nudge_feedback tool.
-            current_session_key.set(session_key)
 
             # Update idle tracker so BehaviorsExtractor.tick() sees
             # accurate idle_seconds_observed on the next tick.
@@ -1457,15 +1429,14 @@ class SentinelRunner:
                 )
                 return
 
-            # Defer: let the main LLM classify via the nudge_feedback
-            # tool. If the LLM doesn't call the tool, finalize_pending_feedback
-            # records this as NEUTRAL at after_send time.
-            self._awaiting_llm_feedback.setdefault(session_key, []).append((nudge_id, dispatched_at))
             self._persist_engagement()
+            if self.feedback is not None:
+                self.feedback.record_neutral(nudge_id, reason="reply_unclassified")
             logger.debug(
-                "nudge_awaiting_llm_classification id={} session={}",
+                "nudge_neutral id={} session={} via {!r}",
                 nudge_id,
                 session_key,
+                content[:40],
             )
         except Exception as exc:
             logger.warning(
@@ -1473,117 +1444,6 @@ class SentinelRunner:
                 type(exc).__name__,
                 exc,
             )
-
-    # ------------------------------------------------------------------
-    # LLM-mediated feedback — NudgeFeedbackTool calls this from inside
-    # the ReAct loop. ``finalize_pending_feedback`` is the after_send
-    # safety net for turns where the LLM didn't call the tool.
-
-    def consume_feedback_via_tool(
-        self,
-        session_key: str,
-        sentiment: str,
-        reason: str | None = None,
-    ) -> dict[str, Any]:
-        """Record LLM-classified feedback on the most-recently-deferred
-        nudge for ``session_key``.
-
-        sentiment ∈ {"accepted", "dismissed", "snoozed", "irrelevant"}.
-        - accepted   → record_accepted
-        - dismissed  → policy cooldown + record_dismissed
-        - snoozed    → policy cooldown + record_dismissed (reason
-                       prefixed with "snoozed:") — snooze is a soft
-                       dismiss for the current session window
-        - irrelevant → record_neutral (user replied but didn't address
-                       the nudge — e.g. asked an unrelated question)
-
-        Returns ``{"recorded": True, "nudge_id": ..., "signal": ...}``
-        on success, or ``{"recorded": False, "reason": ...}`` if no
-        nudge was awaiting classification.
-        """
-        # Reload from disk first — another subprocess (the sentinel-ticks
-        # dispatcher) may have appended new entries we haven't seen yet.
-        if self._store is not None:
-            self._hydrate_engagement_from_store()
-        queue = self._awaiting_llm_feedback.get(session_key) or []
-        if not queue:
-            return {"recorded": False, "reason": "no_awaiting_nudge"}
-        nudge_id, _ = queue.pop()
-        if not queue:
-            self._awaiting_llm_feedback.pop(session_key, None)
-        else:
-            self._awaiting_llm_feedback[session_key] = queue
-        self._persist_engagement()
-
-        sentiment = (sentiment or "").lower().strip()
-        if sentiment == "accepted":
-            if self.feedback is not None:
-                self.feedback.record_accepted(nudge_id, context=reason)
-            logger.info(
-                "nudge_accepted (llm-classified) id={} session={}",
-                nudge_id,
-                session_key,
-            )
-            return {"recorded": True, "nudge_id": nudge_id, "signal": "accepted"}
-        if sentiment in ("dismissed", "snoozed"):
-            self.policy.record_dismissed(session_key)
-            if self.feedback is not None:
-                tagged = f"snoozed: {reason}" if (sentiment == "snoozed" and reason) else (reason or sentiment)
-                self.feedback.record_dismissed(nudge_id, reason=tagged)
-            logger.info(
-                "nudge_dismissed (llm-classified {}) id={} session={}",
-                sentiment,
-                nudge_id,
-                session_key,
-            )
-            return {"recorded": True, "nudge_id": nudge_id, "signal": sentiment}
-        # Default: irrelevant / unknown sentiment → neutral.
-        if self.feedback is not None:
-            self.feedback.record_neutral(nudge_id, reason=reason or sentiment or None)
-        logger.info(
-            "nudge_neutral (llm-classified irrelevant) id={} session={}",
-            nudge_id,
-            session_key,
-        )
-        return {"recorded": True, "nudge_id": nudge_id, "signal": "neutral"}
-
-    def finalize_pending_feedback(self, session_key: str) -> int:
-        """Flush anything still awaiting classification for ``session_key``
-        as NEUTRAL — the LLM had its chance via ``nudge_feedback`` and
-        didn't take it, so by design we record "user engaged but
-        intent unclear" rather than falling back to "treat as accepted".
-
-        Called from the SentinelFeedbackHook's after_send phase.
-        Returns the number of entries flushed.
-        """
-        # Reload from disk before flushing — entries written by other
-        # subprocesses must also be drained, otherwise neutral wouldn't
-        # land at all in cross-process mode.
-        if self._store is not None:
-            self._hydrate_engagement_from_store()
-        queue = self._awaiting_llm_feedback.pop(session_key, None) or []
-        if not queue:
-            return 0
-        self._persist_engagement()
-        if self.feedback is None:
-            return len(queue)
-        for nudge_id, _ in queue:
-            try:
-                self.feedback.record_neutral(
-                    nudge_id,
-                    reason="no_llm_classification",
-                )
-            except Exception as exc:
-                logger.warning(
-                    "FeedbackTracker.record_neutral failed: {}",
-                    exc,
-                )
-        logger.debug(
-            "nudge_feedback_finalized n={} session={}",
-            len(queue),
-            session_key,
-        )
-        return len(queue)
 
     def _expire_engagement(self, session_key: str) -> list[tuple[str, datetime]]:
         pending = self._pending_engagement.get(session_key)
@@ -1617,7 +1477,6 @@ class SentinelRunner:
             logger.warning("engagement state load failed: {}", exc)
             return
         self._pending_engagement = _decode_engagement(blob.get("pending"))
-        self._awaiting_llm_feedback = _decode_engagement(blob.get("awaiting_llm_feedback"))
 
     def _persist_engagement(self) -> None:
         """Write current engagement state back to the store under an
@@ -1625,10 +1484,7 @@ class SentinelRunner:
         mode for tests / single-process gateway)."""
         if self._store is None:
             return
-        blob = {
-            "pending": _encode_engagement(self._pending_engagement),
-            "awaiting_llm_feedback": _encode_engagement(self._awaiting_llm_feedback),
-        }
+        blob = {"pending": _encode_engagement(self._pending_engagement)}
         state_key = self._STATE_KEY
 
         def _mutate(state: dict[str, Any]) -> dict[str, Any]:
@@ -1678,4 +1534,4 @@ def _decode_engagement(
     return out
 
 
-__all__ = ["SentinelRunner", "TickOutcome", "current_session_key"]
+__all__ = ["SentinelRunner", "TickOutcome"]
