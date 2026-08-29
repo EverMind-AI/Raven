@@ -36,6 +36,9 @@ export interface VscodeApi {
     }
     workspaceFolders?: Array<{ uri: { fsPath: string } }>
   }
+  env: {
+    shell: string | undefined
+  }
   commands: {
     registerCommand(id: string, handler: (...args: unknown[]) => unknown): VscodeDisposable
   }
@@ -68,6 +71,9 @@ function adaptVscode(vscode: typeof vscodeNs): VscodeApi {
     workspace: {
       getConfiguration: section => vscode.workspace.getConfiguration(section),
       workspaceFolders: vscode.workspace.workspaceFolders?.map(folder => ({ uri: { fsPath: folder.uri.fsPath } }))
+    },
+    env: {
+      shell: vscode.env.shell
     },
     commands: {
       registerCommand: (id, handler) => vscode.commands.registerCommand(id, handler)

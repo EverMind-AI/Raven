@@ -12,7 +12,7 @@ import { existsSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 
 import { loadVscode, type VscodeApi, type VscodeDisposable } from './api.js'
-import { findOnPath, probeLoginShellEnv, type ProbeRunner } from './pathProbe.js'
+import { findOnPath, probeLoginShellEnv, resolveWindowsShellHint, type ProbeRunner } from './pathProbe.js'
 import { resolveRavenCommand } from './ravenBin.js'
 import { TuiTerminalManager } from './terminal.js'
 
@@ -36,9 +36,7 @@ function shellHint(api: VscodeApi): string | undefined {
     return process.env.SHELL
   }
   const config = api.workspace.getConfiguration('terminal.integrated')
-  const defaultProfile = config.get<string>('defaultProfile.windows')
-  const profiles = config.get<Record<string, { path?: string }>>('profiles.windows')
-  return (defaultProfile && profiles?.[defaultProfile]?.path) || undefined
+  return resolveWindowsShellHint(api.env.shell, config.get('defaultProfile.windows'), config.get('profiles.windows'))
 }
 
 function shellEnvironment(api: VscodeApi): Record<string, string> {
