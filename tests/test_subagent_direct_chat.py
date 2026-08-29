@@ -951,11 +951,11 @@ class _StreamingProvider:
         return LLMResponse(content="whole", finish_reason="stop")
 
     async def chat_stream(self, **kwargs):
-        from raven.providers.base import StreamDelta
+        from raven.providers.base import ChatDelta
 
         self.stream_kwargs.append(kwargs)
         for piece in self.pieces:
-            yield StreamDelta(content=piece)
+            yield ChatDelta(content=piece)
 
     def get_default_model(self) -> str:
         return "stub"

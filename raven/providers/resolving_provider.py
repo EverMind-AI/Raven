@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
 
-from raven.providers.base import GenerationSettings, LLMProvider, LLMResponse, StreamDelta
+from raven.providers.base import ChatDelta, GenerationSettings, LLMProvider, LLMResponse
 from raven.providers.lazy import LazyProvider
 
 if TYPE_CHECKING:
@@ -87,7 +87,7 @@ class ResolvingProvider(LLMProvider):
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
         **kwargs: Any,
-    ) -> AsyncIterator[StreamDelta]:
+    ) -> AsyncIterator[ChatDelta]:
         async for delta in self._pick(model).chat_stream(messages, tools, model=model, **kwargs):
             yield delta
 

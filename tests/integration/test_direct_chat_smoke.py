@@ -46,12 +46,12 @@ class _EchoProvider:
 
     async def chat_stream(self, *, messages, tools=None, model=None, **_kwargs):
         """The same reply, cut in two, so a streamed turn is visibly not one frame."""
-        from raven.providers.base import StreamDelta
+        from raven.providers.base import ChatDelta
 
         response = await self.chat_with_retry(messages=messages, tools=tools, model=model)
         text = response.content or ""
         for piece in (text[:5], text[5:]):
-            yield StreamDelta(content=piece)
+            yield ChatDelta(content=piece)
 
 
 def _req(text: str, *, target: tuple[str, str] | None = None) -> TurnRequest:

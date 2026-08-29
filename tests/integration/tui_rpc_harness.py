@@ -53,10 +53,10 @@ class ScriptedProvider:
         return await self.chat_with_retry(*args, **kwargs)
 
     async def chat_stream(self, *, messages, tools=None, model=None, **_kwargs):
-        from raven.providers.base import StreamDelta
+        from raven.providers.base import ChatDelta
 
         response = await self.chat_with_retry(messages=messages, tools=tools, model=model)
-        yield StreamDelta(content=response.content or "")
+        yield ChatDelta(content=response.content or "")
 
 
 async def make_loop(

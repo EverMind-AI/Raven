@@ -84,7 +84,7 @@ LEDGER = {
         "SKIPPED_AFTER_BLOCKED_CALL",
         "Segment",
         "SegmentBuilder",
-        "StreamDelta",
+        "ChatDelta",
         "SubagentActionAbortedError",
         "SubagentBackend",
         "SubagentNoAnswerError",

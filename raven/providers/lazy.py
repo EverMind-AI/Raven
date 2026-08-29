@@ -15,7 +15,7 @@ from typing import Any
 
 from loguru import logger
 
-from raven.providers.base import GenerationSettings, LLMProvider, LLMResponse, StreamDelta
+from raven.providers.base import ChatDelta, GenerationSettings, LLMProvider, LLMResponse
 
 
 class LazyProvider(LLMProvider):
@@ -211,7 +211,7 @@ class LazyProvider(LLMProvider):
     async def chat(self, *args: Any, **kwargs: Any) -> LLMResponse:
         return await self._built().chat(*args, **kwargs)
 
-    async def chat_stream(self, *args: Any, **kwargs: Any) -> AsyncIterator[StreamDelta]:
+    async def chat_stream(self, *args: Any, **kwargs: Any) -> AsyncIterator[ChatDelta]:
         async for delta in self._built().chat_stream(*args, **kwargs):
             yield delta
 

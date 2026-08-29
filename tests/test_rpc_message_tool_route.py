@@ -19,7 +19,7 @@ import pytest
 
 from raven.agent.loop import AgentLoop, LoopOutcome
 from raven.agent.tools.message import MessageTool
-from raven.providers.base import StreamDelta
+from raven.providers.base import ChatDelta
 from raven.spine import ChatType, Origin, Source, TurnRequest
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
@@ -56,7 +56,7 @@ class _MessageToolProvider:
     async def chat_stream(self, **kwargs):
         self._i += 1
         if self._i == 1:
-            yield StreamDelta(
+            yield ChatDelta(
                 content=None,
                 tool_call_delta={
                     "tool_calls": [
@@ -190,7 +190,7 @@ async def test_ac4_synthetic_tool_complete_before_message_complete(workspace) ->
 async def test_ac4_no_synthetic_tool_complete_when_message_tool_unused(workspace) -> None:
     class _PlainProvider:
         async def chat_stream(self, **kwargs):
-            yield StreamDelta(content="just text")
+            yield ChatDelta(content="just text")
 
         def get_default_model(self) -> str:
             return "fake/model"
