@@ -26,9 +26,12 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
+from raven import i18n
 from raven.cli import _onboard_shared, onboard_channels, onboard_commands, onboard_everos, onboard_web
 from raven.cli.commands import app
 from raven.config.loader import set_config_path
+from raven.i18n import t
+from raven.i18n import zh as zh_catalog
 from raven.plugins.memory.everos import roots as _discover_mod
 from raven.plugins.memory.everos import server
 
@@ -265,7 +268,7 @@ def test_pick_language_preselects_the_currently_active_language(monkeypatch: pyt
     """
     import questionary
 
-    monkeypatch.setattr(_onboard_shared, "_LANG", "zh")
+    monkeypatch.setattr(i18n, "_language", "zh")
     captured: dict[str, Any] = {}
 
     class _FQ:
@@ -1415,12 +1418,12 @@ def test_giving_up_says_what_is_lost_in_both_languages(
     lang: str,
     needles: tuple[str, ...],
 ) -> None:
-    """`_LANG` defaults to en, so a test written only in English leaves the
-    Chinese half of every `_t` pair unguarded -- it can be watered down to a
+    """The UI language defaults to en, so a test written only in English leaves the
+    Chinese half of every translation unguarded -- it can be watered down to a
     dim one-liner without a single test noticing."""
     import questionary
 
-    monkeypatch.setattr(_onboard_shared, "_LANG", lang)
+    monkeypatch.setattr(i18n, "_language", lang)
     answers = iter(["managed", onboard_commands._BACK, "abort"])
 
     class _FQ:
@@ -2185,7 +2188,7 @@ def test_memory_llm_reuse_pulls_provider_creds(
         def ask(self):
             return self._a
 
-    openai_prov = {"name": "openai", "label": "OpenAI", "label_zh": "OpenAI", "base_url": "https://api.openai.com/v1"}
+    openai_prov = {"name": "openai", "label": "OpenAI", "base_url": "https://api.openai.com/v1"}
     select_answers = iter([("provider", openai_prov)])
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(select_answers)))
     monkeypatch.setattr(questionary, "autocomplete", lambda *a, **kw: _FQ("gpt-4.1-mini"))
@@ -2922,7 +2925,7 @@ def test_prompt_channel_fields_gates_skip_on_required(monkeypatch: pytest.Monkey
     """
     import questionary
 
-    monkeypatch.setattr(_onboard_shared, "_LANG", "en")
+    monkeypatch.setattr(i18n, "_language", "en")
     captured: list[tuple[str, Any]] = []
 
     class _Prompt:
@@ -3597,12 +3600,12 @@ def test_minimax_precedes_deepseek_and_carries_the_open_source_partner_marker() 
 
     minimax = api_key_group["providers"][names.index("minimax")]
     assert minimax["label"] == "MiniMax (open-source partner)"
-    assert minimax["label_zh"] == "MiniMax(开源合作伙伴)"
+    assert zh_catalog.MESSAGES[minimax["label"]] == "MiniMax(开源合作伙伴)"
 
     oauth_group = next(g for g in _CURATED_GROUPS if g["kind"] == "oauth")
     for entry in oauth_group["providers"]:
         assert "partner" not in entry["label"], entry["label"]
-        assert "合作伙伴" not in entry["label_zh"], entry["label_zh"]
+        assert "合作伙伴" not in zh_catalog.MESSAGES.get(entry["label"], ""), entry["label"]
 
 
 def test_no_picker_label_names_the_routing_library() -> None:
@@ -3615,7 +3618,7 @@ def test_no_picker_label_names_the_routing_library() -> None:
 
     for group in _CURATED_GROUPS:
         for entry in group["providers"]:
-            for text in (entry["label"], entry.get("label_zh", "")):
+            for text in (entry["label"], zh_catalog.MESSAGES.get(entry["label"], "")):
                 assert "litellm" not in text.lower(), f"{entry['name']}: {text}"
 
 
@@ -4649,7 +4652,7 @@ def test_the_memory_step_states_the_capability_tiers(
     prompts of equal weight."""
     import questionary
 
-    monkeypatch.setattr(_onboard_shared, "_LANG", lang)
+    monkeypatch.setattr(i18n, "_language", lang)
     answers = iter(["managed", onboard_commands._BACK, "abort"])
 
     class _FQ:
@@ -4668,9 +4671,9 @@ def test_the_memory_step_states_the_capability_tiers(
 def test_skipping_embedding_names_what_it_costs(monkeypatch: pytest.MonkeyPatch, lang: str) -> None:
     """Skipping rerank costs ordering; skipping embedding costs semantic recall
     altogether. The second cannot read like the first."""
-    monkeypatch.setattr(_onboard_shared, "_LANG", lang)
+    monkeypatch.setattr(i18n, "_language", lang)
 
-    note = onboard_commands._t(*onboard_everos._EVEROS_ROLES["embedding"]["skip_note"])
+    note = t(onboard_everos._EVEROS_ROLES["embedding"]["skip_note"])
 
     assert "yellow" in note, "a degradation this large must not be dim"
     assert "cascade backfill" in note
@@ -4688,7 +4691,7 @@ def test_every_optional_role_carries_its_own_skip_note() -> None:
             continue
         note = role.get("skip_note")
         assert note, f"{name} is optional but says nothing when skipped"
-        for text in note:
+        for text in (note, zh_catalog.MESSAGES[note]):
             assert text.startswith("  ["), f"{name}: skip_note must carry its own style and indent: {text!r}"
 
 
@@ -4847,7 +4850,8 @@ def test_removing_a_spec_less_provider_warns_when_it_serves_the_default_model(
 def test_embedding_states_what_skipping_it_costs() -> None:
     """The one role whose absence changes how recall works at all -- searching
     lexically instead of semantically -- has to say so before it is skipped."""
-    en, zh = onboard_everos._EVEROS_ROLES["embedding"]["cost"]
+    en = onboard_everos._EVEROS_ROLES["embedding"]["cost"]
+    zh = zh_catalog.MESSAGES[en]
 
     assert "keywords" in en, en
     assert "关键词" in zh, zh
@@ -4860,7 +4864,8 @@ def test_cost_lines_lead_with_the_consequence() -> None:
         cost = role.get("cost")
         if not cost:
             continue
-        en, zh = cost
+        en = cost
+        zh = zh_catalog.MESSAGES[en]
         assert en.startswith("Without it:"), f"{name}: English cost must lead with the consequence: {en!r}"
         assert zh.startswith("不配置："), f"{name}: Chinese cost must lead with the consequence: {zh!r}"
 
@@ -4873,7 +4878,8 @@ def test_the_roles_we_want_configured_say_so(name: str) -> None:
     tag = onboard_everos._EVEROS_ROLES[name].get("tag")
 
     assert tag, f"{name} should carry its own tag"
-    en, zh = tag
+    en = tag
+    zh = zh_catalog.MESSAGES[en]
     assert "advised" in en, en
     assert "建议" in zh, zh
 
@@ -4884,12 +4890,12 @@ def test_role_blocks_fit_eighty_columns(monkeypatch: pytest.MonkeyPatch, lang: s
     and drops the leading indent, leaving a stray left-flush line mid-sentence."""
     from rich.text import Text
 
-    monkeypatch.setattr(_onboard_shared, "_LANG", lang)
+    monkeypatch.setattr(i18n, "_language", lang)
     for name, role in onboard_everos._EVEROS_ROLES.items():
-        parts = [onboard_commands._t(*role["label"]), onboard_commands._t(*role["purpose"])]
+        parts = [t(role["label"]), t(role["purpose"])]
         for key in ("tag", "cost", "recommendation", "skip_note"):
             if role.get(key):
-                parts.append(onboard_commands._t(*role[key]))
+                parts.append(t(role[key]))
         for part in parts:
             for line in Text.from_markup(part).plain.split("\n"):
                 width = Text(line).cell_len + 2  # the two-space info column
@@ -4912,7 +4918,7 @@ def test_the_cost_line_actually_reaches_the_screen(
     assertion above reads `_EVEROS_ROLES`; this one reads the terminal."""
     import questionary
 
-    monkeypatch.setattr(_onboard_shared, "_LANG", lang)
+    monkeypatch.setattr(i18n, "_language", lang)
 
     class _FQ:
         def ask(self):
@@ -4937,7 +4943,7 @@ def _platform_menu(monkeypatch: pytest.MonkeyPatch, lang: str = "en") -> list:
     The scripted answers are keyed on prompt text, so they have to be written in
     whichever language the step is running in.
     """
-    monkeypatch.setattr(_onboard_shared, "_LANG", lang)
+    monkeypatch.setattr(i18n, "_language", lang)
     offer, platform = (
         ("import conversation history", "Select platform") if lang == "en" else ("导入对话历史", "选择平台")
     )

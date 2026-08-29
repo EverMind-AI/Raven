@@ -4,7 +4,7 @@ Extracted from onboard_commands so the four onboard modules import downward
 instead of forming a sibling import cycle (channels/everos/web reached back
 into onboard_commands for these at module level, an SCC held together only
 by the partial-import fallback). Language state lives here; the wizard sets
-it through :func:`set_lang`.
+it through :func:`raven.i18n.set_language`.
 """
 
 from __future__ import annotations
@@ -16,12 +16,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from raven.cli._theme import POINTER, QMARK
-
-
-def set_lang(lang: str) -> None:
-    """Set the wizard UI language ('en' / 'zh') for every later prompt."""
-    global _LANG
-    _LANG = lang
+from raven.i18n import t
 
 
 class _ThemedConsole(Console):
@@ -65,16 +60,6 @@ _ABORT_EVEROS = object()
 _QMARK = QMARK
 
 _POINTER = POINTER
-
-# UI language, chosen on the wizard's first screen. ``_t`` returns the English
-# or Chinese variant so every later prompt / message stays bilingual.
-_LANG = "en"
-
-
-def _t(en: str, zh: str) -> str:
-    """Return ``zh`` when the user picked Chinese, else ``en``."""
-    return zh if _LANG == "zh" else en
-
 
 _QUESTIONARY_INSTALL_HINT = (
     "[red]Missing dependency:[/red] [accent]questionary[/accent] is required for "
@@ -132,7 +117,7 @@ def _step_header(n: int, title: str) -> None:
     console.print(
         Panel(
             f"[heading]{title}[/heading]",
-            title=f"[bold][accent]{_t('Step', '步骤')} {n}/{_TOTAL_STEPS}[/accent][/bold]",
+            title=f"[bold][accent]{t('Step')} {n}/{_TOTAL_STEPS}[/accent][/bold]",
             title_align="left",
             subtitle=dots,
             subtitle_align="right",
@@ -167,7 +152,7 @@ def _back_placeholder(allow_back: bool, label: Optional[str] = None) -> Any:
     """
     if not allow_back:
         return None
-    return [("fg:#6c6c6c italic", label or _t("empty ↵ to go back", "留空回车返回上一步"))]
+    return [("fg:#6c6c6c italic", label or t("empty ↵ to go back"))]
 
 
 def _field_placeholder(allow_back: bool, required: bool) -> Any:
@@ -180,7 +165,7 @@ def _field_placeholder(allow_back: bool, required: bool) -> Any:
     if allow_back:
         return _back_placeholder(True)
     if not required:
-        return [("fg:#6c6c6c italic", _t("empty ↵ to skip", "留空回车跳过"))]
+        return [("fg:#6c6c6c italic", t("empty ↵ to skip"))]
     return None
 
 
@@ -195,16 +180,11 @@ def _prompt_api_key(provider: str, *, allow_back: bool = False, back_label: Opti
         if allow_back and v == "":
             return True  # a truly-empty submit is the back/cancel signal
         return (
-            True
-            if len(v.strip()) >= 8
-            else _t(
-                "API key looks off (empty or too short) — please re-enter (≥ 8 chars).",
-                "API Key 看起来不对(过短或为空),请重新输入(至少 8 位)。",
-            )
+            True if len(v.strip()) >= 8 else t("API key looks off (empty or too short) — please re-enter (≥ 8 chars).")
         )
 
     key = questionary.password(
-        _t("Paste your API key:", "粘贴你的 API Key:"),
+        t("Paste your API key:"),
         validate=_validate,
         placeholder=_back_placeholder(allow_back, back_label),
         style=RAVEN_STYLE,
@@ -233,7 +213,7 @@ def _failure_choice(options: list[tuple[str, str]], *, non_interactive: bool) ->
     from raven.cli._styles import RAVEN_STYLE
 
     chosen = questionary.select(
-        _t("What would you like to do?", "想做什么?"),
+        t("What would you like to do?"),
         choices=[questionary.Choice(label, value=value) for label, value in options],
         style=RAVEN_STYLE,
         qmark=_QMARK,
