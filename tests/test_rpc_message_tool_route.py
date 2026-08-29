@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from raven.agent.loop import AgentLoop, LoopOutcome
+from raven.agent.loop.bundles import TurnPolicy
 from raven.agent.tools.message import MessageTool
 from raven.contracts.llm_provider import ChatDelta
 from raven.spine import ChatType, Origin, Source, TurnRequest
@@ -79,7 +80,7 @@ def _make_agent(workspace: Path, provider=None) -> AgentLoop:
         provider=provider or _MessageToolProvider(),
         workspace=workspace,
         model="fake/model",
-        max_iterations=3,
+        policy=TurnPolicy(max_iterations=3),
     )
 
     async def _noop(**_kw) -> None:

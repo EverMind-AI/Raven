@@ -23,6 +23,7 @@ import pytest
 
 import raven.agent.loop.organ_glue as agent_main
 from raven.agent.loop import AgentLoop
+from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.providers.base import LLMProvider, LLMResponse
 from raven.providers.binding import ModelBinding
 
@@ -47,8 +48,8 @@ def _loop(workspace: Path, *, window: int, ceiling: int, monkeypatch) -> AgentLo
         provider=_StubProvider(),
         workspace=workspace,
         model="stub",
-        max_iterations=2,
-        restrict_to_workspace=True,
+        policy=TurnPolicy(max_iterations=2),
+        tools=ToolWiring(restrict_to_workspace=True),
     )
     # The window is the binding's, so the fixture sets it where it lives
     # rather than on the loop -- which no longer has one of its own.

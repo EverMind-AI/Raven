@@ -14,6 +14,7 @@ import json
 
 import pytest
 
+from raven.agent.loop.bundles import TurnPolicy
 from raven.agent.tools.plughub import PluginTool
 from raven.market import install as install_mod
 from raven.market import ledger as ledger_mod
@@ -445,7 +446,7 @@ def test_a_real_loop_registers_the_tool(tmp_path) -> None:
         def get_default_model(self) -> str:
             return "stub"
 
-    loop = AgentLoop(provider=_Stub(), workspace=tmp_path, model="stub", max_iterations=1)
+    loop = AgentLoop(provider=_Stub(), workspace=tmp_path, model="stub", policy=TurnPolicy(max_iterations=1))
     tool = loop.tools.get("plugin")
     assert isinstance(tool, PluginTool)
     assert tool._loop is loop

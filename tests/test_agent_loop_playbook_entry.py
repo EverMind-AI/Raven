@@ -11,6 +11,7 @@ itself.
 from __future__ import annotations
 
 from raven.agent.loop import AgentLoop
+from raven.agent.loop.bundles import EngineWiring, TurnPolicy
 from raven.contracts.llm_provider import LLMResponse
 from raven.contracts.tool import Tool
 from raven.spine.message import ChatType, Source
@@ -173,8 +174,8 @@ def test_a_playbook_config_that_is_on_registers_both_entries_even_empty(tmp_path
         provider=_Provider(),
         workspace=tmp_path,
         model="fake/default",
-        max_iterations=2,
-        playbook_config=PlaybookConfig(enabled=True),
+        policy=TurnPolicy(max_iterations=2),
+        engine=EngineWiring(playbook_config=PlaybookConfig(enabled=True)),
     )
 
     assert loop._playbooks is not None, "enabled: true must leave a runtime behind"
@@ -217,8 +218,8 @@ def test_a_user_playbook_in_the_library_registers_the_loader(tmp_path) -> None:
         provider=_Provider(),
         workspace=tmp_path,
         model="fake/default",
-        max_iterations=2,
-        playbook_config=PlaybookConfig(enabled=True),
+        policy=TurnPolicy(max_iterations=2),
+        engine=EngineWiring(playbook_config=PlaybookConfig(enabled=True)),
     )
 
     assert loop.tools.has("load_playbook")
@@ -232,8 +233,8 @@ def test_a_playbook_config_that_is_off_tells_the_model_nothing(tmp_path) -> None
         provider=_Provider(),
         workspace=tmp_path,
         model="fake/default",
-        max_iterations=2,
-        playbook_config=PlaybookConfig(enabled=False),
+        policy=TurnPolicy(max_iterations=2),
+        engine=EngineWiring(playbook_config=PlaybookConfig(enabled=False)),
     )
 
     assert loop._playbooks is None
@@ -258,8 +259,8 @@ def test_both_graph_tools_are_one_surface_to_a_consumer(tmp_path) -> None:
         provider=_Provider(),
         workspace=tmp_path,
         model="fake/default",
-        max_iterations=2,
-        playbook_config=PlaybookConfig(enabled=True),
+        policy=TurnPolicy(max_iterations=2),
+        engine=EngineWiring(playbook_config=PlaybookConfig(enabled=True)),
     )
 
     tools = loop.dag_tools()
@@ -295,8 +296,8 @@ def test_resolve_dag_node_reaches_a_node_the_playbook_engine_owns(tmp_path) -> N
         provider=_Provider(),
         workspace=tmp_path,
         model="fake/default",
-        max_iterations=2,
-        playbook_config=PlaybookConfig(enabled=True),
+        policy=TurnPolicy(max_iterations=2),
+        engine=EngineWiring(playbook_config=PlaybookConfig(enabled=True)),
     )
     registered, private = loop.dag_tools()
 
@@ -329,8 +330,8 @@ def test_liveness_is_the_union_across_graph_tools(tmp_path) -> None:
         provider=_Provider(),
         workspace=tmp_path,
         model="fake/default",
-        max_iterations=2,
-        playbook_config=PlaybookConfig(enabled=True),
+        policy=TurnPolicy(max_iterations=2),
+        engine=EngineWiring(playbook_config=PlaybookConfig(enabled=True)),
     )
     registered, private = loop.dag_tools()
 
@@ -365,8 +366,8 @@ def test_a_runtime_that_cannot_build_leaves_the_feature_off(tmp_path, monkeypatc
         provider=_Provider(),
         workspace=tmp_path,
         model="fake/default",
-        max_iterations=2,
-        playbook_config=PlaybookConfig(enabled=True),
+        policy=TurnPolicy(max_iterations=2),
+        engine=EngineWiring(playbook_config=PlaybookConfig(enabled=True)),
     )
 
     assert loop._playbooks is None

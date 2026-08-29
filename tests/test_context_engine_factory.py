@@ -24,6 +24,7 @@ import pytest
 
 from raven.agent.context import ContextBuilder
 from raven.agent.loop import AgentLoop
+from raven.agent.loop.bundles import EngineWiring, SubagentWiring, ToolWiring, TurnPolicy
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.config.raven import (
     ContextConfig,
@@ -288,14 +289,16 @@ def _make_loop(tmp_path: Path, *, backend=None, agents=None, skill_forge_config=
         provider=_StubProvider(),
         workspace=tmp_path,
         model="stub",
-        max_iterations=2,
-        restrict_to_workspace=True,
-        backend=backend,
-        context_config=ContextConfig(),
-        memory_config=MemoryConfig(),
-        skill_forge_router_config=SkillForgeRouterConfig(),
-        skill_forge_config=skill_forge_config,
-        agents=agents,
+        policy=TurnPolicy(max_iterations=2),
+        tools=ToolWiring(restrict_to_workspace=True),
+        engine=EngineWiring(
+            backend=backend,
+            context_config=ContextConfig(),
+            memory_config=MemoryConfig(),
+            skill_forge_router_config=SkillForgeRouterConfig(),
+            skill_forge_config=skill_forge_config,
+        ),
+        subagents=SubagentWiring(agents=agents),
     )
 
 
@@ -428,12 +431,14 @@ class TestTheWindowFollowsTheTurnsBinding:
             provider=_StubProvider(),
             workspace=tmp_path,
             model="stub",
-            max_iterations=2,
-            restrict_to_workspace=True,
-            context_window_tokens=8192,
-            context_config=ContextConfig(),
-            memory_config=MemoryConfig(),
-            skill_forge_router_config=SkillForgeRouterConfig(),
+            policy=TurnPolicy(max_iterations=2),
+            tools=ToolWiring(restrict_to_workspace=True),
+            engine=EngineWiring(
+                context_window_tokens=8192,
+                context_config=ContextConfig(),
+                memory_config=MemoryConfig(),
+                skill_forge_router_config=SkillForgeRouterConfig(),
+            ),
         )
         curator = _curator_builder(agent.context_engine)
 

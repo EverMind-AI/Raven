@@ -23,6 +23,8 @@ from pathlib import Path
 
 import pytest
 
+from raven.agent.loop.bundles import ToolWiring, TurnPolicy
+
 INNER_DIRS = [
     "agent",
     "spine",
@@ -163,7 +165,13 @@ async def test_add_direction_synthetic_plugin_rides_to_a_real_turn(tmp_path: Pat
         async def chat_stream(self, messages, **kw):
             return _Resp()
 
-    loop = AgentLoop(provider=_Provider(), workspace=tmp_path / "ws", model="f", interactive=False, plugin_tools=[tool])
+    loop = AgentLoop(
+        provider=_Provider(),
+        workspace=tmp_path / "ws",
+        model="f",
+        policy=TurnPolicy(interactive=False),
+        tools=ToolWiring(plugin_tools=[tool]),
+    )
     assert loop.tools.get("synth_echo") is not None
     assert "synth_echo" in [d["function"]["name"] for d in loop.tools.get_definitions()]
     assert await loop.tools.execute("synth_echo", {"text": "hi"}) == "synth: hi"

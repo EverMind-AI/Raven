@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from raven.agent.loop.bundles import SubagentWiring, ToolWiring, TurnPolicy
 from raven.agent.subagent.dag_capabilities import validate_capabilities
 from raven.agent.subagent.dag_graph import parse_dag_spec, validate_and_order
 from raven.agent.subagent.dag_reader import DagReadError, read_node, read_run
@@ -1201,9 +1202,9 @@ def test_agent_loop_passes_its_subagent_dag_config_to_the_registered_tool(tmp_pa
         provider=_StubProvider(),
         workspace=tmp_path,
         model="stub",
-        max_iterations=2,
-        restrict_to_workspace=True,
-        subagent_dag_config=non_default,
+        policy=TurnPolicy(max_iterations=2),
+        tools=ToolWiring(restrict_to_workspace=True),
+        subagents=SubagentWiring(subagent_dag_config=non_default),
     )
 
     tool = loop.tools.get("run_subagent_dag")
@@ -1244,8 +1245,8 @@ async def test_agent_loop_wires_the_adjudicator_into_the_registered_tool(tmp_pat
         provider=_StubProvider(),
         workspace=tmp_path,
         model="stub",
-        max_iterations=2,
-        restrict_to_workspace=True,
+        policy=TurnPolicy(max_iterations=2),
+        tools=ToolWiring(restrict_to_workspace=True),
     )
 
     tool = loop.tools.get("run_subagent_dag")

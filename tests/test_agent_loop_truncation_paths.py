@@ -23,6 +23,7 @@ import pytest
 
 import raven
 from raven.agent.loop import AgentLoop
+from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.providers.base import GenerationSettings, LLMProvider, LLMResponse, RunMeta, ToolCallRequest
 from raven.providers.truncation import flag_truncation
 from raven.spine.message import ChatType, Source
@@ -150,8 +151,8 @@ async def test_cli_path_reports_truncation_not_a_missing_field(workspace) -> Non
         provider=provider,
         workspace=workspace,
         model="stub",
-        max_iterations=4,
-        restrict_to_workspace=True,
+        policy=TurnPolicy(max_iterations=4),
+        tools=ToolWiring(restrict_to_workspace=True),
     )
 
     await agent._process_message(
@@ -374,7 +375,11 @@ async def test_a_cut_is_named_as_one_when_the_upstream_will_not_say_so(workspace
     """
     provider = _LyingFinishReason()
     agent = AgentLoop(
-        provider=provider, workspace=workspace, model="stub", max_iterations=4, restrict_to_workspace=True
+        provider=provider,
+        workspace=workspace,
+        model="stub",
+        policy=TurnPolicy(max_iterations=4),
+        tools=ToolWiring(restrict_to_workspace=True),
     )
 
     await agent._process_message(

@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 
 from raven.agent.loop import AgentLoop
+from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.agent.tools.message import MessageTool
 from raven.contracts.tool import Tool
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
@@ -82,8 +83,8 @@ def _make_agent(workspace: Path, responses: list[LLMResponse], *tools: Tool) -> 
         provider=_ScriptedProvider(responses),
         workspace=workspace,
         model="stub",
-        max_iterations=5,
-        restrict_to_workspace=True,
+        policy=TurnPolicy(max_iterations=5),
+        tools=ToolWiring(restrict_to_workspace=True),
     )
     for t in tools:
         agent.tools.register(t)

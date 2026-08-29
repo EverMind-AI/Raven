@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from raven.agent.loop.bundles import HostWiring
 from raven.proactive_engine.sentinel.executor.action_executor import ActionExecutor
 from raven.proactive_engine.sentinel.executor.decision_consumer import DecisionConsumer, MenuReply
 from raven.proactive_engine.sentinel.executor.decision_router import DecisionRouter
@@ -323,7 +324,7 @@ async def test_decision_consumer_short_circuits_agent_loop(pending_store, tmp_pa
     loop = AgentLoop(
         provider=_FakeProvider(),  # type: ignore[arg-type]
         workspace=workspace,
-        decision_consumer=_consumer_hook,
+        host=HostWiring(decision_consumer=_consumer_hook),
     )
 
     msg = _msg("/pick 1")
@@ -368,7 +369,7 @@ async def test_decision_consumer_falls_through_on_none(pending_store, tmp_path):
     loop = AgentLoop(
         provider=_FakeProvider(),  # type: ignore[arg-type]
         workspace=workspace,
-        decision_consumer=_no_consume_hook,
+        host=HostWiring(decision_consumer=_no_consume_hook),
     )
 
     # Use a real-ish session message — the loop will go through the

@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 import pytest
 
 from raven.agent.loop import AgentLoop
+from raven.agent.loop.bundles import HostWiring, ToolWiring
 from raven.agent.tools.deep_research import DeepResearchOfferTool
 from raven.config.schema import DeepResearchToolConfig
 from raven.contracts.llm_provider import ChatDelta, LLMResponse, ToolCallRequest
@@ -223,11 +224,7 @@ async def test_hook_short_circuit_preserves_media_at_outbound_layer(tmp_path):
             media=["/tmp/x.png"],
         )
 
-    loop = AgentLoop(
-        provider=_FakeChatProvider([]),
-        workspace=tmp_path,
-        decision_consumer=_decision,
-    )
+    loop = AgentLoop(provider=_FakeChatProvider([]), workspace=tmp_path, host=HostWiring(decision_consumer=_decision))
     _stub_edges(loop)
 
     out = await loop._process_message(_req("hi"))
@@ -520,7 +517,11 @@ async def test_mid_session_promotion_streams_on_the_promoting_turn(tmp_path, mon
     # receipt), not just next turn. If promotion moved after the wiring, the
     # promoted tool would miss the callback and this progress event would vanish.
     monkeypatch.delenv("MIROTHINKER_API_KEY", raising=False)
-    loop = AgentLoop(provider=_dr_stream_provider(), workspace=tmp_path, deep_research_config=DeepResearchToolConfig())
+    loop = AgentLoop(
+        provider=_dr_stream_provider(),
+        workspace=tmp_path,
+        tools=ToolWiring(deep_research_config=DeepResearchToolConfig()),
+    )
     _stub_edges(loop)
     assert isinstance(loop.tools.get("deep_research"), DeepResearchOfferTool)  # starts unconfigured
 
@@ -745,11 +746,7 @@ async def test_run_short_circuit_emits_media_before_text(tmp_path):
             media=["/tmp/x.png"],
         )
 
-    loop = AgentLoop(
-        provider=_FakeChatProvider([]),
-        workspace=tmp_path,
-        decision_consumer=_decision,
-    )
+    loop = AgentLoop(provider=_FakeChatProvider([]), workspace=tmp_path, host=HostWiring(decision_consumer=_decision))
     _stub_edges(loop)
     sink = _EmitCollector()
 
@@ -915,7 +912,7 @@ def _hook_loop(tmp_path):
     loop = AgentLoop(
         provider=_FakeStreamProvider([ChatDelta(content="llm")]),
         workspace=tmp_path,
-        decision_consumer=_decision,
+        host=HostWiring(decision_consumer=_decision),
     )
     _stub_edges(loop)
     return loop
@@ -969,7 +966,7 @@ async def test_process_message_origin_none_plain_fires_hook(tmp_path):
     loop = AgentLoop(
         provider=_FakeChatProvider([LLMResponse(content="llm", finish_reason="stop")]),
         workspace=tmp_path,
-        decision_consumer=_decision,
+        host=HostWiring(decision_consumer=_decision),
     )
     _stub_edges(loop)
     out = await _process_via_chat(loop, _req("hi"))

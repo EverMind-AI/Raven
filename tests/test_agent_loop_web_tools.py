@@ -22,6 +22,7 @@ from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.web import WebSearchTool
 from raven.providers.base import LLMProvider, LLMResponse
+from tests._wiring import wire
 
 
 class _StubProvider(LLMProvider):
@@ -58,7 +59,7 @@ def _no_ambient_serper_key(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _loop(workspace: Path, **kw) -> AgentLoop:
-    return AgentLoop(provider=_StubProvider(), workspace=workspace, model="stub", **kw)
+    return AgentLoop(provider=_StubProvider(), workspace=workspace, model="stub", **wire(**kw))
 
 
 def test_web_search_is_withheld_without_a_key(workspace) -> None:

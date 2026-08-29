@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from raven.agent.loop import AgentLoop
+from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.agent.loop.failure_streak import failure_class, is_hard_tool_failure
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.spine.message import ChatType, Source
@@ -109,8 +110,8 @@ async def test_repeated_tool_failure_nudges_bounded(workspace):
         provider=provider,
         workspace=workspace,
         model="stub",
-        max_iterations=6,
-        restrict_to_workspace=True,
+        policy=TurnPolicy(max_iterations=6),
+        tools=ToolWiring(restrict_to_workspace=True),
     )
 
     await agent._process_message(
@@ -184,8 +185,8 @@ async def _nudges_with_find_skill_switched(workspace, off: bool) -> list[str]:
         provider=provider,
         workspace=workspace,
         model="stub",
-        max_iterations=6,
-        restrict_to_workspace=True,
+        policy=TurnPolicy(max_iterations=6),
+        tools=ToolWiring(restrict_to_workspace=True),
     )
     agent.tools.register(_find_skill_stub())
     assert isinstance(cfg, Path)
@@ -259,8 +260,8 @@ async def test_a_truncation_streak_is_nudged_toward_a_smaller_payload(workspace)
         provider=provider,
         workspace=workspace,
         model="stub",
-        max_iterations=6,
-        restrict_to_workspace=True,
+        policy=TurnPolicy(max_iterations=6),
+        tools=ToolWiring(restrict_to_workspace=True),
     )
 
     await agent._process_message(

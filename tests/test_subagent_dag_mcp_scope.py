@@ -23,6 +23,7 @@ from typing import Any
 
 import pytest
 
+from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.agent.subagent.dag_mcp_scope import run_mcp_scope, run_mcp_servers
 from raven.agent.subagent.dag_store import SessionNodes
 from raven.agent.subagent.dag_tool import SubAgentDagTool
@@ -409,9 +410,9 @@ def test_the_source_the_agent_loop_installs_reads_the_run_scope(tmp_path: Path) 
         provider=_StubProvider(),
         workspace=tmp_path,
         model="stub",
-        max_iterations=2,
-        restrict_to_workspace=True,
         mcp_servers=host,
+        policy=TurnPolicy(max_iterations=2),
+        tools=ToolWiring(restrict_to_workspace=True),
     )
     try:
         # The source the loop handed its sub-agent table, reached where the

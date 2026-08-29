@@ -15,6 +15,7 @@ import json
 
 import pytest
 
+from raven.agent.loop.bundles import ToolWiring
 from raven.agent.tools.ask_user import (
     _MAX_JSON_LAYERS,
     AskUserTool,
@@ -536,7 +537,9 @@ async def test_agent_loop_hands_the_configured_budget_to_the_tool(tmp_path):
         async def chat_with_retry(self, **kwargs):  # pragma: no cover - never invoked
             raise NotImplementedError
 
-    loop = AgentLoop(provider=_Provider(), workspace=tmp_path, ask_user_config=AskUserToolConfig(timeout=42))
+    loop = AgentLoop(
+        provider=_Provider(), workspace=tmp_path, tools=ToolWiring(ask_user_config=AskUserToolConfig(timeout=42))
+    )
     tool = loop.tools.get("ask_user")
     assert tool is not None
 

@@ -24,6 +24,7 @@ from typing import Any
 
 import pytest
 
+from raven.agent.loop.bundles import SubagentWiring, ToolWiring, TurnPolicy
 from raven.agent.loop.main import AgentLoop
 from raven.contracts.llm_provider import LLMResponse
 
@@ -90,9 +91,9 @@ async def make_loop(
         provider=ScriptedProvider(),
         workspace=workspace,
         model="stub",
-        max_iterations=2,
-        restrict_to_workspace=True,
-        agents=agents,
+        policy=TurnPolicy(max_iterations=2),
+        tools=ToolWiring(restrict_to_workspace=True),
+        subagents=SubagentWiring(agents=agents),
     )
 
 

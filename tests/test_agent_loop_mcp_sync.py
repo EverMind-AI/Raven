@@ -21,6 +21,7 @@ from raven.config.schema import MCPServerConfig
 from raven.contracts.tool import Tool
 from raven.mcp.naming import MCPToolRef
 from raven.providers.base import LLMProvider
+from tests._wiring import wire
 
 _PATCH = "raven.mcp.manager.connect_mcp_server"
 
@@ -107,9 +108,8 @@ def _loop(workspace: Path, servers: dict | None = None, **kw) -> AgentLoop:
         provider=_StubProvider(),
         workspace=workspace,
         model="stub",
-        max_iterations=1,
         mcp_servers=servers or {},
-        **kw,
+        **wire(max_iterations=1, **kw),
     )
 
 

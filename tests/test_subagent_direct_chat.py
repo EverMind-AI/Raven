@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from raven.agent.loop.bundles import SubagentWiring
 from raven.agent.subagent.direct_chat import DirectChatError, direct_root
 from raven.agent.subagent.instance_state import InstanceState, instance_state_path
 from raven.contracts.llm_provider import LLMResponse
@@ -672,7 +673,9 @@ async def test_a_direct_chat_runs_in_the_session_workdir_not_agent_home(tmp_path
     loop = AgentLoop(
         provider=_agent_loop_for_direct_chat(tmp_path, monkeypatch).provider,
         workspace=home,
-        workdir_resolver=WorkdirResolver(WorkdirPolicy.LAUNCH_DIR, agent_home=home, launch_dir=work),
+        subagents=SubagentWiring(
+            workdir_resolver=WorkdirResolver(WorkdirPolicy.LAUNCH_DIR, agent_home=home, launch_dir=work)
+        ),
     )
 
     async def fake_chat(*, session_key, agent, handle, text, workspace=None, on_delta=None):

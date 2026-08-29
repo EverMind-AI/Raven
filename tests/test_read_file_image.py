@@ -27,6 +27,7 @@ from raven.providers.base import LLMProvider
 # Captured before the autouse _no_openrouter_network fixture swaps it out.
 _REAL_FETCH = _pricing._fetch_openrouter_models
 
+from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.providers.capabilities import (  # noqa: E402
     IMAGE_TOOL_RESULT_TARGETS,
     image_placeholder_text,
@@ -852,8 +853,8 @@ async def test_a_refused_tool_image_is_demoted_and_the_turn_recovers(tmp_path: P
         provider=provider,
         workspace=tmp_path,
         model="stub",
-        max_iterations=8,
-        restrict_to_workspace=True,
+        policy=TurnPolicy(max_iterations=8),
+        tools=ToolWiring(restrict_to_workspace=True),
     )
     # Stand in for a static table that said yes, so the image rides in the tool
     # result and gets refused -- the case the recovery exists for.
@@ -1001,8 +1002,8 @@ async def test_attached_images_land_after_every_tool_result_in_the_batch(tmp_pat
         provider=provider,
         workspace=tmp_path,
         model="stub",
-        max_iterations=6,
-        restrict_to_workspace=True,
+        policy=TurnPolicy(max_iterations=6),
+        tools=ToolWiring(restrict_to_workspace=True),
     )
     # Force the fallback path -- the one this ordering bug lives on.
     agent._image_tool_result_ok = {"stub": False}
@@ -1042,8 +1043,8 @@ async def test_the_attachment_message_is_never_persisted(tmp_path: Path) -> None
         provider=provider,
         workspace=tmp_path,
         model="stub",
-        max_iterations=6,
-        restrict_to_workspace=True,
+        policy=TurnPolicy(max_iterations=6),
+        tools=ToolWiring(restrict_to_workspace=True),
     )
     agent._image_tool_result_ok = {"stub": False}
 
@@ -1108,8 +1109,8 @@ async def test_the_attachment_message_never_reaches_extraction(tmp_path: Path) -
         provider=provider,
         workspace=tmp_path,
         model="stub",
-        max_iterations=6,
-        restrict_to_workspace=True,
+        policy=TurnPolicy(max_iterations=6),
+        tools=ToolWiring(restrict_to_workspace=True),
     )
     agent._image_tool_result_ok = {"stub": False}
 

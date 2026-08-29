@@ -18,6 +18,7 @@ from unittest.mock import patch
 
 import pytest
 
+from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.agent.loop.main import AgentLoop
 from raven.config.schema import MCPServerConfig
 from raven.contracts.tool import Tool
@@ -81,9 +82,9 @@ def _loop(workspace: Path, servers: dict | None = None, disabled: list[str] | No
         provider=_Provider(),
         workspace=workspace,
         model="stub",
-        max_iterations=1,
         mcp_servers=servers or {},
-        disabled_tools=disabled or [],
+        policy=TurnPolicy(max_iterations=1),
+        tools=ToolWiring(disabled_tools=disabled or []),
     )
 
 

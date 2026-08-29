@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from raven.agent.loop import AgentLoop
+from raven.agent.loop.bundles import EngineWiring
 from raven.config import ContextConfig
 from raven.context_engine import ContextAssembler, TurnContext
 from raven.context_engine.segments.curator import CuratorSegmentBuilder
@@ -103,7 +104,7 @@ def test_agentloop_uses_curator_and_keeps_internal_tools_private(tmp_path: Path)
     loop = AgentLoop(
         provider=CuratorScriptProvider(),
         workspace=tmp_path,
-        context_config=ContextConfig(fast_path_threshold=0.0),
+        engine=EngineWiring(context_config=ContextConfig(fast_path_threshold=0.0)),
     )
 
     assert loop.context_engine.name == "context_assembler"
@@ -118,7 +119,7 @@ async def test_curator_slow_path_archives_and_writes_trace(tmp_path: Path):
     loop = AgentLoop(
         provider=provider,
         workspace=tmp_path,
-        context_config=ContextConfig(fast_path_threshold=0.0),
+        engine=EngineWiring(context_config=ContextConfig(fast_path_threshold=0.0)),
     )
 
     assembled = await loop.context_engine.assemble(
@@ -156,7 +157,7 @@ async def test_curator_does_not_dispatch_a_truncated_call(tmp_path: Path):
     loop = AgentLoop(
         provider=provider,
         workspace=tmp_path,
-        context_config=ContextConfig(fast_path_threshold=0.0),
+        engine=EngineWiring(context_config=ContextConfig(fast_path_threshold=0.0)),
     )
 
     assembled = await loop.context_engine.assemble(
@@ -180,7 +181,7 @@ async def test_curator_fallback_when_internal_agent_does_not_finish(tmp_path: Pa
     loop = AgentLoop(
         provider=provider,
         workspace=tmp_path,
-        context_config=ContextConfig(fast_path_threshold=0.0),
+        engine=EngineWiring(context_config=ContextConfig(fast_path_threshold=0.0)),
     )
 
     assembled = await loop.context_engine.assemble(
@@ -202,7 +203,7 @@ async def test_process_message_records_main_and_curator_trajectories(tmp_path: P
     loop = AgentLoop(
         provider=provider,
         workspace=tmp_path,
-        context_config=ContextConfig(fast_path_threshold=0.0),
+        engine=EngineWiring(context_config=ContextConfig(fast_path_threshold=0.0)),
     )
     session = loop.sessions.get_or_create("cli:trace-test")
     session.messages.extend(_session_messages())
@@ -410,7 +411,7 @@ async def test_pinned_guide_body_survives_a_plan_that_omitted_it(tmp_path: Path)
     loop = AgentLoop(
         provider=_PlanOmittingPinsProvider(),
         workspace=tmp_path,
-        context_config=ContextConfig(fast_path_threshold=0.0),
+        engine=EngineWiring(context_config=ContextConfig(fast_path_threshold=0.0)),
     )
 
     assembled = await loop.context_engine.assemble(
@@ -427,7 +428,7 @@ async def test_pinned_guide_body_survives_a_plan_that_omitted_it(tmp_path: Path)
     off = AgentLoop(
         provider=_PlanOmittingPinsProvider(),
         workspace=tmp_path / "off",
-        context_config=ContextConfig(fast_path_threshold=0.0, pinned_skill_ids=[]),
+        engine=EngineWiring(context_config=ContextConfig(fast_path_threshold=0.0, pinned_skill_ids=[])),
     )
     assembled_off = await off.context_engine.assemble(
         "cli:pin-test",
@@ -444,7 +445,7 @@ async def test_pinned_ids_are_recorded_in_the_turn_trace(tmp_path: Path):
     loop = AgentLoop(
         provider=_PlanOmittingPinsProvider(),
         workspace=tmp_path,
-        context_config=ContextConfig(fast_path_threshold=0.0),
+        engine=EngineWiring(context_config=ContextConfig(fast_path_threshold=0.0)),
     )
 
     assembled = await loop.context_engine.assemble(
@@ -513,7 +514,7 @@ async def test_pinned_ids_are_also_protected_from_budget_trimming(tmp_path: Path
     loop = AgentLoop(
         provider=_PlanOmittingPinsProvider(),
         workspace=tmp_path,
-        context_config=ContextConfig(fast_path_threshold=0.0),
+        engine=EngineWiring(context_config=ContextConfig(fast_path_threshold=0.0)),
     )
     await loop.context_engine.assemble(
         "cli:pin-protect",

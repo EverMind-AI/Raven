@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from raven.agent.loop.bundles import SubagentWiring, ToolWiring, TurnPolicy
 from raven.agent.loop.main import AgentLoop
 from raven.contracts.llm_provider import LLMResponse
 from raven.spine import ChatType, Origin, Source, TurnRequest
@@ -96,9 +97,9 @@ def loop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AgentLoop:
         provider=_EchoProvider(),
         workspace=workspace,
         model="stub",
-        max_iterations=2,
-        restrict_to_workspace=True,
-        agents=[coder],
+        policy=TurnPolicy(max_iterations=2),
+        tools=ToolWiring(restrict_to_workspace=True),
+        subagents=SubagentWiring(agents=[coder]),
     )
 
 
