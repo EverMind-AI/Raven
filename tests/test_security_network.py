@@ -85,12 +85,28 @@ def test_allows_v4_mapped_public() -> None:
     [
         "http://[2002:7f00:1::]/x",  # 6to4 embedding 127.0.0.1
         "http://[64:ff9b::7f00:1]/x",  # NAT64 well-known prefix -> 127.0.0.1
+        "http://[2002:a00:1::]/x",  # 6to4 embedding 10.0.0.1
+        "http://[64:ff9b::a9fe:a9fe]/x",  # NAT64 -> 169.254.169.254 (metadata)
     ],
 )
-def test_blocks_ipv6_to_ipv4_transition_prefixes(url: str) -> None:
+def test_blocks_transition_prefixes_with_private_embedded(url: str) -> None:
     ok, err = net.validate_url_target(url)
     assert not ok, f"should block {url}"
     assert "private/internal" in err
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://[2002:5db8:d822::]/x",  # 6to4 embedding public 93.184.216.34
+        "http://[64:ff9b::5db8:d822]/x",  # NAT64 -> public 93.184.216.34
+    ],
+)
+def test_allows_transition_prefixes_with_public_embedded(url: str) -> None:
+    """DNS64 networks synthesize NAT64/6to4 addresses for legitimate public
+    IPv4 services; those must not be blocked wholesale."""
+    ok, err = net.validate_url_target(url)
+    assert ok, f"unexpectedly blocked: {err}"
 
 
 @pytest.mark.parametrize(
