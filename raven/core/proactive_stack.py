@@ -221,6 +221,7 @@ def build_sentinel_stack(
         NudgePolicy,
         ProactivePlanner,
         RoutineLearner,
+        SentinelAssembly,
         SentinelRunner,
     )
     from raven.proactive_engine.sentinel.feedback.persistence import JsonStateStore
@@ -451,13 +452,15 @@ def build_sentinel_stack(
         store=store,  # share engagement state across subprocesses
         **_kwargs,  # propagates now_fn so daily gate sees fake-clock
     )
-    # Stash these for the post-AgentLoop attach step. Stored on the
-    # runner so callers don't have to thread them through manually.
-    runner._phase4_pending_store = pending_store  # type: ignore[attr-defined]
-    runner._phase4_routine_store = routine_store  # type: ignore[attr-defined]
-    runner._phase4_planner_provider = planner_provider or provider  # type: ignore[attr-defined]
-    runner._phase4_planner_model = effective_planner_model  # type: ignore[attr-defined]
-    runner._phase4_now_fn = now_fn  # type: ignore[attr-defined]
+    # Handed over for the post-AgentLoop attach step, on the runner so callers
+    # do not thread five values through by hand.
+    runner.assembly = SentinelAssembly(
+        pending_store=pending_store,
+        routine_store=routine_store,
+        planner_provider=planner_provider or provider,
+        planner_model=effective_planner_model,
+        now_fn=now_fn,
+    )
 
     response_modifier: Callable[[str, str], str] | None = injector
     on_user_inbound = runner.on_user_inbound
@@ -484,13 +487,14 @@ def attach_sentinel_decision_consumer(
     _process_message hook short-circuits user replies into the menu
     pipeline.
 
-    Depends on the runner stash set in build_sentinel_stack. No-op when
+    Depends on ``runner.assembly``, set by build_sentinel_stack. No-op when
     sentinel/runner is None."""
     if runner is None:
         return
-    pending_store = getattr(runner, "_phase4_pending_store", None)
-    if pending_store is None:
+    assembly = getattr(runner, "assembly", None)
+    if assembly is None or assembly.pending_store is None:
         return  # build_sentinel_stack didn't run / pending store not wired
+    pending_store = assembly.pending_store
 
     from loguru import logger as _logger
 
@@ -498,11 +502,11 @@ def attach_sentinel_decision_consumer(
     from raven.proactive_engine.sentinel.executor.decision_consumer import DecisionConsumer
     from raven.proactive_engine.sentinel.executor.decision_router import DecisionRouter
 
-    now_fn = getattr(runner, "_phase4_now_fn", None)
+    now_fn = assembly.now_fn
     _kwargs = {"now_fn": now_fn} if now_fn is not None else {}
 
-    planner_provider = getattr(runner, "_phase4_planner_provider", None)
-    planner_model = getattr(runner, "_phase4_planner_model", None)
+    planner_provider = assembly.planner_provider
+    planner_model = assembly.planner_model
 
     # Health check: require_confirm=True without an LLM provider
     # works for clear yes/no ("yes" / "confirm" / "/cancel") via regex
@@ -527,7 +531,7 @@ def attach_sentinel_decision_consumer(
         **_kwargs,
     )
     executor = ActionExecutor(
-        routine_store=getattr(runner, "_phase4_routine_store", None),
+        routine_store=assembly.routine_store,
         cron_service=agent.cron_service,
         tool_registry=agent.tools,
         subagent_manager=agent.subagents,

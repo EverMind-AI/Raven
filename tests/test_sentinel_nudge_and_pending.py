@@ -20,6 +20,7 @@ from raven.config.raven import NudgePolicyConfig
 from raven.memory_engine.consolidate.consolidator import MemoryStore
 from raven.proactive_engine.sentinel.executor.dispatcher import NudgeDispatcher
 from raven.proactive_engine.sentinel.executor.pending_decision import PendingDecisionStore
+from raven.proactive_engine.sentinel.executor.runner import SentinelAssembly
 from raven.proactive_engine.sentinel.predictor.task_discoverer import TaskDiscoverer
 from raven.proactive_engine.sentinel.trigger_policy.policy import NudgePolicy
 from raven.proactive_engine.sentinel.types import PendingDecision, TaskOption
@@ -413,11 +414,13 @@ def test_attach_decision_consumer_warns_on_no_llm_provider(tmp_path, caplog):
 
     runner = _StubRunner()
     pending_store = PendingDecisionStore(tmp_path / "pending.json")
-    runner._phase4_pending_store = pending_store
-    runner._phase4_routine_store = None
-    runner._phase4_planner_provider = None
-    runner._phase4_planner_model = None
-    runner._phase4_now_fn = None
+    runner.assembly = SentinelAssembly(
+        pending_store=pending_store,
+        routine_store=None,
+        planner_provider=None,
+        planner_model=None,
+        now_fn=None,
+    )
 
     # Build a minimal agent stub
     from raven.agent.hook.composite import CompositeHook
@@ -468,11 +471,13 @@ def test_attach_decision_consumer_no_warn_when_provider_set(tmp_path):
         feedback = MagicMock()
 
     runner = _StubRunner()
-    runner._phase4_pending_store = PendingDecisionStore(tmp_path / "pending.json")
-    runner._phase4_routine_store = None
-    runner._phase4_planner_provider = _StubProvider()
-    runner._phase4_planner_model = "qwen3.5-27B"
-    runner._phase4_now_fn = None
+    runner.assembly = SentinelAssembly(
+        pending_store=PendingDecisionStore(tmp_path / "pending.json"),
+        routine_store=None,
+        planner_provider=_StubProvider(),
+        planner_model="qwen3.5-27B",
+        now_fn=None,
+    )
 
     from raven.agent.hook.composite import CompositeHook
 
@@ -518,11 +523,13 @@ def test_attach_decision_consumer_registers_hook(tmp_path):
         feedback = MagicMock()
 
     runner = _StubRunner()
-    runner._phase4_pending_store = PendingDecisionStore(tmp_path / "pending.json")
-    runner._phase4_routine_store = None
-    runner._phase4_planner_provider = None
-    runner._phase4_planner_model = None
-    runner._phase4_now_fn = None
+    runner.assembly = SentinelAssembly(
+        pending_store=PendingDecisionStore(tmp_path / "pending.json"),
+        routine_store=None,
+        planner_provider=None,
+        planner_model=None,
+        now_fn=None,
+    )
 
     class _StubAgent:
         cron_service = None
@@ -558,11 +565,13 @@ def test_attach_decision_consumer_is_idempotent(tmp_path):
         feedback = MagicMock()
 
     runner = _StubRunner()
-    runner._phase4_pending_store = PendingDecisionStore(tmp_path / "pending.json")
-    runner._phase4_routine_store = None
-    runner._phase4_planner_provider = None
-    runner._phase4_planner_model = None
-    runner._phase4_now_fn = None
+    runner.assembly = SentinelAssembly(
+        pending_store=PendingDecisionStore(tmp_path / "pending.json"),
+        routine_store=None,
+        planner_provider=None,
+        planner_model=None,
+        now_fn=None,
+    )
 
     class _StubAgent:
         cron_service = None
@@ -595,11 +604,13 @@ def test_attach_decision_consumer_no_warn_when_require_confirm_false(
         feedback = MagicMock()
 
     runner = _StubRunner()
-    runner._phase4_pending_store = PendingDecisionStore(tmp_path / "pending.json")
-    runner._phase4_routine_store = None
-    runner._phase4_planner_provider = None
-    runner._phase4_planner_model = None
-    runner._phase4_now_fn = None
+    runner.assembly = SentinelAssembly(
+        pending_store=PendingDecisionStore(tmp_path / "pending.json"),
+        routine_store=None,
+        planner_provider=None,
+        planner_model=None,
+        now_fn=None,
+    )
 
     from raven.agent.hook.composite import CompositeHook
 

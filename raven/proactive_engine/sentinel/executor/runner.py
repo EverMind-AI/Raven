@@ -105,6 +105,19 @@ class TickOutcome:
     notes: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class SentinelAssembly:
+    """What the assembly root built alongside the runner and hands over for
+    the wiring that can only happen once the AgentLoop exists (the decision
+    consumer): the stores it shares and the planner it routes decisions with."""
+
+    pending_store: Any
+    routine_store: Any
+    planner_provider: Any
+    planner_model: str | None
+    now_fn: Callable[[], datetime] | None
+
+
 class SentinelRunner:
     """Orchestrate the proactivity tick.
 
@@ -149,6 +162,8 @@ class SentinelRunner:
         deadline_outage_fallback: bool = True,
         store: "JsonStateStore | None" = None,
     ) -> None:
+        # Set by the assembly root (build_sentinel_stack); read by the attach step.
+        self.assembly: SentinelAssembly | None = None
         self.planner = planner
         self.assembler = assembler
         self.policy = policy
