@@ -131,11 +131,11 @@ def _cached_update() -> tuple[bool, str] | None:
     same conditions (opted out, no cache yet, install that cannot self-upgrade).
     """
     try:
-        from raven.cli.update_notice import _read_cache, update_notice
+        from raven.cli.update_notice import read_cache, update_notice
 
         if update_notice(_raven_version()) is None:
             return None
-        cache = _read_cache() or {}
+        cache = read_cache() or {}
         latest = cache.get("latest_version")
         return (True, latest) if isinstance(latest, str) else None
     except Exception:

@@ -34,7 +34,7 @@ def _is_fenced(body: str, needle: str) -> bool:
 
 
 def _spawn_call(call_id: str, task: str) -> dict:
-    """One `spawn` call as the loop stores it (`ToolCall.to_openai_tool_call`)."""
+    """One `spawn` call as the loop stores it (`ToolCall.openai_tool_call`)."""
     return {
         "id": call_id,
         "type": "function",

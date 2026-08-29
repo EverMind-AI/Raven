@@ -184,7 +184,7 @@ async def test_version_reports_a_pending_upgrade(monkeypatch: pytest.MonkeyPatch
     from raven.cli import update_notice as un
 
     monkeypatch.setattr(un, "update_notice", lambda _cur: (True, "raven upgrade"))
-    monkeypatch.setattr(un, "_read_cache", lambda: {"latest_version": "9.9.9"})
+    monkeypatch.setattr(un, "read_cache", lambda: {"latest_version": "9.9.9"})
 
     result = await system_version({})
 
@@ -454,7 +454,7 @@ async def _check_with(monkeypatch, *, latest: str | None, sink=None) -> tuple[di
 
     monkeypatch.setattr(un, "check_for_update", lambda _cur: latest)
     monkeypatch.setattr(un, "update_notice", lambda _cur: (True, "raven upgrade") if latest else None)
-    monkeypatch.setattr(un, "_read_cache", lambda: {"latest_version": latest} if latest else {})
+    monkeypatch.setattr(un, "read_cache", lambda: {"latest_version": latest} if latest else {})
 
     frames: list = []
     if sink is None:
@@ -492,7 +492,7 @@ async def test_a_transport_with_no_sink_announces_nothing(monkeypatch) -> None:
 
     monkeypatch.setattr(un, "check_for_update", lambda _cur: "9.9.9")
     monkeypatch.setattr(un, "update_notice", lambda _cur: (True, "raven upgrade"))
-    monkeypatch.setattr(un, "_read_cache", lambda: {"latest_version": "9.9.9"})
+    monkeypatch.setattr(un, "read_cache", lambda: {"latest_version": "9.9.9"})
 
     async def _forbidden(*_args, **_kwargs):
         raise AssertionError("announced with no sink wired")
@@ -515,7 +515,7 @@ async def test_a_plain_version_call_never_announces(monkeypatch) -> None:
     from raven.rpc.methods import system as system_mod
 
     monkeypatch.setattr(un, "update_notice", lambda _cur: (True, "raven upgrade"))
-    monkeypatch.setattr(un, "_read_cache", lambda: {"latest_version": "9.9.9"})
+    monkeypatch.setattr(un, "read_cache", lambda: {"latest_version": "9.9.9"})
 
     frames: list = []
 

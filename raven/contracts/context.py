@@ -28,10 +28,6 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from raven.contracts.assembled import AssembledContext, TokenBudget
 
 if TYPE_CHECKING:
-    # Avoid runtime import — ``curator`` imports back from this module
-    # for ``ContextEngine``, so referencing ``TurnContext`` only in type
-    # hints keeps the loop unbroken.
-    from raven.context_engine.curator import TurnContext
     from raven.contracts.llm_provider import LLMProvider
 
 
@@ -216,12 +212,34 @@ class ContextEngine(ABC):
         return None
 
 
+@dataclass
+class TurnContext:
+    """Per-turn inputs needed to build the main agent context."""
+
+    current_message: str
+    media: list[str] | None = None
+    channel: str | None = None
+    chat_id: str | None = None
+    surface: str | None = None
+    selected_skills: list[Any] | None = None
+    # Whether this turn's model can see a picture. Decided by the loop (it owns
+    # the provider and the model id) and carried here because the message is
+    # built down in render, which knows neither. Defaults True so a caller that
+    # does not set it keeps the old inline-everything behavior.
+    can_see_images: bool = True
+    # Name of a registered tool that can read an attachment the model cannot,
+    # or None when none is (it comes from an optional plugin). Naming a tool the
+    # model does not have reads as an instruction it cannot follow.
+    describe_tool: str | None = None
+
+
 __all__ = [
     "AssembledPrefix",
     "AssemblyContext",
     "ContextEngine",
     "Segment",
     "SegmentBuilder",
+    "TurnContext",
 ]
 
 

@@ -36,7 +36,7 @@ from raven.contracts.context import AssembledPrefix, AssemblyContext, ContextEng
 from raven.providers.prompt_cache import STABLE_PREFIX_KEY
 
 if TYPE_CHECKING:
-    from raven.context_engine.curator import TurnContext
+    from raven.contracts.context import TurnContext
     from raven.providers.base import LLMProvider
 
 

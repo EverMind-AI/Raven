@@ -472,7 +472,10 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         "raven/config/update_providers.py",
         "raven/providers/litellm_provider.py",
         "raven/providers/factory.py",
-        "raven/core/provider_stack.py",
+        # The router reads the OpenRouter key in order to call OpenRouter with it;
+        # the read moved here from the assembly root with the vendor knowledge,
+        # and an empty answer disables routing rather than ruling on a provider.
+        "raven/routing/classifier.py",
         "raven/cli/onboard_commands.py",
         # Carries the wizard's EverOS cluster split out of onboard_commands --
         # same reads, same argument, new file name.

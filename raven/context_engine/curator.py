@@ -20,7 +20,7 @@ from typing import Any, Callable
 from raven.config.raven import ContextConfig
 from raven.context_engine.history_trimmer import HistoryTrimmer
 from raven.contracts.assembled import AssembledContext, TokenBudget
-from raven.contracts.context import AssembledPrefix
+from raven.contracts.context import AssembledPrefix, TurnContext
 from raven.contracts.tool import Tool
 from raven.memory_engine.consolidate.consolidator import MemoryStore
 from raven.providers.base import LLMProvider
@@ -28,27 +28,6 @@ from raven.providers.binding import ModelBinding, active_window, resolve
 from raven.utils.atomic_io import atomic_replace
 from raven.utils.paths import ensure_dir, safe_filename
 from raven.utils.tokens import estimate_message_tokens
-
-
-@dataclass
-class TurnContext:
-    """Per-turn inputs needed to build the main agent context."""
-
-    current_message: str
-    media: list[str] | None = None
-    channel: str | None = None
-    chat_id: str | None = None
-    surface: str | None = None
-    selected_skills: list[Any] | None = None
-    # Whether this turn's model can see a picture. Decided by the loop (it owns
-    # the provider and the model id) and carried here because the message is
-    # built down in render, which knows neither. Defaults True so a caller that
-    # does not set it keeps the old inline-everything behavior.
-    can_see_images: bool = True
-    # Name of a registered tool that can read an attachment the model cannot,
-    # or None when none is (it comes from an optional plugin). Naming a tool the
-    # model does not have reads as an instruction it cannot follow.
-    describe_tool: str | None = None
 
 
 @dataclass
@@ -869,7 +848,7 @@ def _tool_call_name_args(tool_call: Any) -> tuple[str, dict[str, Any]]:
     """``(name, arguments)`` from one stored tool_call, or ``("", {})``.
 
     Arguments are serialized as a JSON *string* on the way into the session
-    (OpenAI shape, see ``ToolCall.to_openai_tool_call``) but arrive as a dict
+    (OpenAI shape, see ``providers.tool_calls.openai_tool_call``) but arrive as a dict
     from some providers, so both are accepted. Anything unparseable degrades to
     "no arguments", never an exception -- this runs inside manifest building,
     where a raise would fail the whole turn.

@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.agent.tools.params import cast_params, validate_params
+from raven.contracts.llm_provider import TruncationInfo
 from raven.contracts.tool import RAW_ARGUMENTS_KEY, Continuation, Tool, ToolOutput, ToolResult
 from raven.providers.base import RunMeta
 from raven.tracing import semconv, trace
@@ -99,6 +100,26 @@ def admit_tool(tool: Tool) -> ToolSpec:
         truncation_hint=truncation if isinstance(truncation, str) else None,
         incomplete_hint=incomplete if isinstance(incomplete, str) else None,
         tool=tool,
+    )
+
+
+def _truncation_error(truncation: TruncationInfo) -> str:
+    """What is known, and what is only inferred, kept apart.
+
+    Known: the turn stopped at the output limit, because the upstream said so.
+    Inferred: that this call was the cut one, which follows from generation
+    being sequential but not from anything the upstream said -- a turn can
+    finish a call and then hit the limit in the prose after it. Saying "this
+    call was cut" as a fact sends a model to split up a call that was whole.
+
+    The refusal is not conditional on that inference. A call that may be
+    incomplete is not dispatched either way; being wrong costs one retry. What
+    to do about it is the tool's, via ``Tool.truncation_hint``.
+    """
+    at = f" at the {truncation.at_tokens}-token output limit" if truncation.at_tokens else " at the output limit"
+    return (
+        f"Error: [truncated] This turn stopped{at}, and this call was the last thing "
+        f"being written, so it may have been cut short. It was not run. Send it again."
     )
 
 
@@ -545,7 +566,7 @@ class ToolRegistry:
             # mid-arguments arrives carrying all three -- the flag, the verdict, and
             # the parked text.
             hint = (spec or tool).truncation_hint
-            return truncation.as_error(name) + (f" {hint}" if hint else "") + _received_tail(params)
+            return _truncation_error(truncation) + (f" {hint}" if hint else "") + _received_tail(params)
         if run_meta and run_meta.arguments_repaired and run_meta.last_of_turn:
             # Two facts, two readings, and nothing here to choose between them.
             # The arguments did not parse and nothing arrived after this call,

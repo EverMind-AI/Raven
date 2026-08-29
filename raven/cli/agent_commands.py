@@ -12,7 +12,6 @@ and exits non-zero.
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 
 import typer
 from rich.console import Console
@@ -28,7 +27,6 @@ from raven.cli._helpers import (
 )
 from raven.core.provider_stack import build_model_routing
 from raven.providers.factory import make_provider
-from raven.utils.paths import project_slug
 from raven.utils.workspace import sync_workspace_templates
 
 console = Console()
@@ -160,14 +158,14 @@ def register(app: typer.Typer) -> None:
 
         from raven.agent.loop.bundles import HostWiring, TurnPolicy
         from raven.agent.loop.recovery import limits_from_defaults
-        from raven.agent.workdir import WorkdirPolicy, WorkdirResolver, validate_override
         from raven.config.raven import load_raven_config
+        from raven.core.engine_stack import build_local_sessions
         from raven.core.proactive_stack import (
             attach_sentinel_decision_consumer,
             attach_sentinel_spawn,
             build_sentinel_stack,
         )
-        from raven.session.manager import SessionManager, new_chat_id
+        from raven.session.manager import new_chat_id
 
         # load_runtime_config must run FIRST: it calls set_config_path() so
         # that subsequent load_raven_config() reads from --config, not the
@@ -185,27 +183,10 @@ def register(app: typer.Typer) -> None:
         # routing is disabled, and wraps it for the knn backend so routed model
         # names reach their own endpoints.
         router, provider = build_model_routing(config, provider)
-        # Sessions group by launch directory here, the way Claude Code groups
-        # by project: one terminal session belongs to the checkout it was
-        # started in. The gateway passes no slug -- one daemon serves every
-        # project, so its grouping is the channel instead.
-        launch_dir = Path.cwd()
-        session_manager = SessionManager(
-            config.workspace_path, project_slug=project_slug(launch_dir), project_dir=launch_dir
-        )
-        explicit_workdir = None
-        if workspace:
-            try:
-                explicit_workdir = validate_override(workspace, config.workspace_path)
-            except ValueError as e:
-                raise typer.BadParameter(str(e)) from e
-        workdir_resolver = WorkdirResolver(
-            WorkdirPolicy.LAUNCH_DIR,
-            agent_home=config.workspace_path,
-            launch_dir=Path.cwd(),
-            explicit_workdir=explicit_workdir,
-            sessions=session_manager,
-        )
+        try:
+            session_manager, workdir_resolver = build_local_sessions(config, workspace=workspace)
+        except ValueError as e:
+            raise typer.BadParameter(str(e)) from e
 
         # New-session-by-default: independent one-shots don't bleed into each other.
         if resume is not None:

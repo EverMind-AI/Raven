@@ -33,6 +33,7 @@ from raven.contracts.tool import SKIPPED_AFTER_BLOCKED_CALL, Continuation
 from raven.memory_engine.skill_local.registry import filter_by_required_tools
 from raven.providers.base import LLMProvider
 from raven.providers.streaming import generation_kwargs, stream_llm_call
+from raven.providers.tool_calls import openai_tool_call
 from raven.security.trust import wrap_untrusted
 from raven.utils.messages import build_assistant_message
 
@@ -320,7 +321,7 @@ class RavenLoopBackend:
             # land here -- a streamed reply costs the same as a waited-for one.
             activity.note_usage(response.usage)
             if response.has_tool_calls:
-                tool_call_dicts = [tc.to_openai_tool_call() for tc in response.tool_calls]
+                tool_call_dicts = [openai_tool_call(tc) for tc in response.tool_calls]
                 messages.append(
                     build_assistant_message(
                         response.content or "",

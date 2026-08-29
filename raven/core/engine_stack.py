@@ -11,8 +11,13 @@ each surface keeps only its own error translation.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from raven.core.runtime import RavenRuntime
+
+if TYPE_CHECKING:
+    from raven.agent.workdir import WorkdirResolver
+    from raven.session.manager import SessionManager
 
 
 def build_engine(*, workspace: str | None = None, home: str | None = None, channel: str = "tui") -> RavenRuntime:
@@ -27,7 +32,6 @@ def build_engine(*, workspace: str | None = None, home: str | None = None, chann
     """
     from raven.agent.loop.bundles import HostWiring, TurnPolicy
     from raven.agent.loop.recovery import limits_from_defaults
-    from raven.agent.workdir import WorkdirPolicy, WorkdirResolver, validate_override
     from raven.config.raven import load_raven_config
     from raven.core.config_stack import load_runtime_config
     from raven.core.cron_stack import build_cron_service, chain_cron_activity_reset
@@ -35,8 +39,6 @@ def build_engine(*, workspace: str | None = None, home: str | None = None, chann
     from raven.core.runtime import build_runtime
     from raven.proactive_engine.schedulers.cron.tool import CronTool
     from raven.providers.factory import make_lazy_provider
-    from raven.session.manager import SessionManager
-    from raven.utils.paths import project_slug
 
     config = load_runtime_config(None, home=home)
     ec_config = load_raven_config()
@@ -46,21 +48,7 @@ def build_engine(*, workspace: str | None = None, home: str | None = None, chann
     # knn wrapper only reads the lazy provider's plain fields, so deferring
     # the litellm build survives it.
     router, provider = build_model_routing(config, provider)
-    # Sessions group by launch directory here, the way Claude Code groups
-    # by project: one terminal session belongs to the checkout it was
-    # started in. The gateway passes no slug -- one daemon serves every
-    # project, so its grouping is the channel instead.
-    launch_dir = Path.cwd()
-    session_manager = SessionManager(
-        config.workspace_path, project_slug=project_slug(launch_dir), project_dir=launch_dir
-    )
-    workdir_resolver = WorkdirResolver(
-        WorkdirPolicy.LAUNCH_DIR,
-        agent_home=config.workspace_path,
-        launch_dir=Path.cwd(),
-        explicit_workdir=validate_override(workspace, config.workspace_path) if workspace else None,
-        sessions=session_manager,
-    )
+    session_manager, workdir_resolver = build_local_sessions(config, workspace=workspace)
 
     cron = build_cron_service(allowed_channels={channel})
 
@@ -93,4 +81,32 @@ def build_engine(*, workspace: str | None = None, home: str | None = None, chann
     return runtime
 
 
-__all__ = ["build_engine"]
+def build_local_sessions(config, *, workspace: str | None) -> "tuple[SessionManager, WorkdirResolver]":
+    """The session manager and workdir resolver of a surface launched from a directory.
+
+    Sessions group by launch directory here, the way Claude Code groups by
+    project: one terminal session belongs to the checkout it was started in.
+    The gateway passes no slug -- one daemon serves every project, so its
+    grouping is the channel instead. ``workspace`` is the operator's explicit
+    working-directory override, validated against the agent home
+    (``ValueError`` when it is not allowed).
+    """
+    from raven.agent.workdir import WorkdirPolicy, WorkdirResolver, validate_override
+    from raven.session.manager import SessionManager
+    from raven.utils.paths import project_slug
+
+    launch_dir = Path.cwd()
+    session_manager = SessionManager(
+        config.workspace_path, project_slug=project_slug(launch_dir), project_dir=launch_dir
+    )
+    workdir_resolver = WorkdirResolver(
+        WorkdirPolicy.LAUNCH_DIR,
+        agent_home=config.workspace_path,
+        launch_dir=launch_dir,
+        explicit_workdir=validate_override(workspace, config.workspace_path) if workspace else None,
+        sessions=session_manager,
+    )
+    return session_manager, workdir_resolver
+
+
+__all__ = ["build_engine", "build_local_sessions"]

@@ -8,7 +8,6 @@ in :mod:`raven.providers.base`, which every adapter subclasses. A paper
 describes; it does not do.
 """
 
-import json
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -63,27 +62,6 @@ class TruncationInfo:
 
     at_tokens: int | None = None
 
-    def as_error(self, tool_name: str) -> str:
-        """What is known, and what is only inferred, kept apart.
-
-        Known: the turn stopped at the output limit, because the upstream said
-        so. Inferred: that this call was the cut one, which follows from
-        generation being sequential but not from anything the upstream said --
-        a turn can finish a call and then hit the limit in the prose after it.
-        Saying "this call was cut" as a fact sends a model to split up a call
-        that was whole.
-
-        The refusal is not conditional on that inference. A call that may be
-        incomplete is not dispatched either way; being wrong costs one retry.
-
-        What to do about it is the tool's, via ``Tool.truncation_hint``.
-        """
-        at = f" at the {self.at_tokens}-token output limit" if self.at_tokens else " at the output limit"
-        return (
-            f"Error: [truncated] This turn stopped{at}, and this call was the last thing "
-            f"being written, so it may have been cut short. It was not run. Send it again."
-        )
-
 
 @dataclass(frozen=True)
 class RunMeta:
@@ -91,7 +69,7 @@ class RunMeta:
 
     Kept apart from ``arguments`` because the two travel differently: anything
     inside that dict is serialized into the assistant message by
-    ``to_openai_tool_call``, and the loop does that before the registry sees
+    ``providers.tool_calls.openai_tool_call``, and the loop does that before the registry sees
     the call -- so a flag stored there is already fixed into the conversation
     history by the time anyone strips it, and the model reads back a field it
     never wrote.
@@ -132,22 +110,6 @@ class ToolCallRequest:
     provider_specific_fields: dict[str, Any] | None = None
     function_provider_specific_fields: dict[str, Any] | None = None
     run_meta: RunMeta | None = None
-
-    def to_openai_tool_call(self) -> dict[str, Any]:
-        """Serialize to an OpenAI-style tool_call payload."""
-        tool_call = {
-            "id": self.id,
-            "type": "function",
-            "function": {
-                "name": self.name,
-                "arguments": json.dumps(self.arguments, ensure_ascii=False),
-            },
-        }
-        if self.provider_specific_fields:
-            tool_call["provider_specific_fields"] = self.provider_specific_fields
-        if self.function_provider_specific_fields:
-            tool_call["function"]["provider_specific_fields"] = self.function_provider_specific_fields
-        return tool_call
 
 
 @dataclass

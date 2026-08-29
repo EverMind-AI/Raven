@@ -654,4 +654,6 @@ def test_no_ceiling_is_invented_when_none_was_sent() -> None:
 
     assert sent is None, "nothing was sent, so nothing is claimed"
     assert truncated is True, "signal 1 still speaks for itself"
-    assert "at the output limit" in calls[0].run_meta.truncation.as_error("write_file")
+    from raven.agent.tools.registry import _truncation_error
+
+    assert "at the output limit" in _truncation_error(calls[0].run_meta.truncation)

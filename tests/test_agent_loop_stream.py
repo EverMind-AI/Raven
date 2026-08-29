@@ -715,7 +715,7 @@ async def test_only_the_last_tool_call_is_marked_truncated() -> None:
 async def test_truncation_marker_never_reaches_the_assistant_message() -> None:
     """It is metadata about the call, not an argument the model wrote.
 
-    ``to_openai_tool_call`` serializes ``arguments`` into the assistant message
+    ``openai_tool_call`` serializes ``arguments`` into the assistant message
     that goes back upstream next turn, and the loop does that before the
     registry ever sees the call. A marker living in that dict would therefore
     be echoed to the model as a field it never sent.
@@ -724,7 +724,9 @@ async def test_truncation_marker_never_reaches_the_assistant_message() -> None:
         messages=[{"role": "user", "content": "hi"}], tools=None, model="m"
     )
 
-    payload = json.dumps([tc.to_openai_tool_call() for tc in response.tool_calls])
+    from raven.providers.tool_calls import openai_tool_call
+
+    payload = json.dumps([openai_tool_call(tc) for tc in response.tool_calls])
 
     assert response.tool_calls[1].run_meta is not None
     assert "truncation" not in payload
