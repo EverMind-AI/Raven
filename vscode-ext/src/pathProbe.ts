@@ -79,9 +79,9 @@ function probeWindowsEnv(runner: ProbeRunner): Record<string, string> | null {
   const script =
     '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; Get-ChildItem Env: | ForEach-Object { "$($_.Name)=$($_.Value)" }'
   for (const shell of ['powershell.exe', 'pwsh']) {
-    const result = runner(shell, ['-NoProfile', '-NonInteractive', '-Command', script], {
+    const result = runner(shell, ['-NonInteractive', '-Command', script], {
       encoding: 'utf8',
-      timeout: 10000
+      timeout: 15000
     })
     if (result.status !== 0 || !result.stdout) {
       continue

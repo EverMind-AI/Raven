@@ -108,7 +108,7 @@ describe('probeLoginShellEnv', () => {
 })
 
 describe('probeLoginShellEnv on win32', () => {
-  it('reads the environment from powershell.exe', () => {
+  it('reads the environment from powershell.exe with its profile loaded', () => {
     const runner = scriptedRunner({
       status: 0,
       stdout: 'HTTP_PROXY=http://proxy:6760\nPath=C:\\Windows\\System32\n'
@@ -120,12 +120,11 @@ describe('probeLoginShellEnv on win32', () => {
     expect(runner).toHaveBeenCalledWith(
       'powershell.exe',
       [
-        '-NoProfile',
         '-NonInteractive',
         '-Command',
         '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; Get-ChildItem Env: | ForEach-Object { "$($_.Name)=$($_.Value)" }'
       ],
-      { encoding: 'utf8', timeout: 10000 }
+      { encoding: 'utf8', timeout: 15000 }
     )
   })
 
