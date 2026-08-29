@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
+from raven.config.paths import get_data_dir, get_sandbox_dir
 from raven.sandbox import (
     DirectExecutor,
     ExecResult,
@@ -1763,3 +1764,13 @@ def test_build_executor_warns_when_backend_none(monkeypatch, tmp_path):
     finally:
         logger.remove(sink)
     assert any("no isolation" in m for m in msgs)
+
+
+def test_a_backend_gets_its_own_home_under_the_data_dir() -> None:
+    """boxlite keeps its db, images and layers here rather than in ~/.boxlite,
+    so the directory has to exist by the time the backend is handed the path."""
+    home = get_sandbox_dir("boxlite")
+
+    assert home == get_data_dir() / "sandbox" / "boxlite"
+    assert home.is_dir()
+    assert get_sandbox_dir("other") == home.parent / "other"

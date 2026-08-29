@@ -11,11 +11,17 @@ prefix test against ``api_base``, which is host-substitutable as soon as
 
 from __future__ import annotations
 
+import base64
+import json
+import wave
+from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
-from raven.agent.tools.media_gen import ImageGenerateTool, VideoGenerateTool
+from raven.agent.tools import media_gen
+from raven.agent.tools.media_gen import ImageGenerateTool, SpeechGenerateTool, VideoGenerateTool
 
 
 def _tool(api_base: str) -> VideoGenerateTool:
@@ -75,3 +81,82 @@ def test_an_unconfined_tool_reads_the_paths_it_is_given(tmp_path) -> None:
     outside.write_bytes(b"\x89PNG\r\n")
     tool = ImageGenerateTool(SimpleNamespace(api_base="https://x.test", model=""), workspace=tmp_path / "ws")
     assert tool._image_part(str(outside))["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+# ── the speech path: what the stream carries, and what the file becomes ──
+
+
+def _sse(*events: dict) -> str:
+    return "".join(f"data: {json.dumps(e)}\n\n" for e in events) + "data: [DONE]\n\n"
+
+
+def _audio_delta(*, data: bytes | None = None, transcript: str | None = None) -> dict:
+    audio: dict[str, str] = {}
+    if data is not None:
+        audio["data"] = base64.b64encode(data).decode()
+    if transcript is not None:
+        audio["transcript"] = transcript
+    return {"choices": [{"delta": {"audio": audio}}]}
+
+
+def _speech_tool(monkeypatch: pytest.MonkeyPatch, body: str, status: int = 200) -> SpeechGenerateTool:
+    """A speech tool whose HTTP client answers with ``body`` and nothing else."""
+    transport = httpx.MockTransport(lambda _request: httpx.Response(status, content=body.encode()))
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        media_gen.httpx,
+        "AsyncClient",
+        lambda *_a, **_kw: real_client(transport=transport),
+    )
+    return SpeechGenerateTool(SimpleNamespace(api_base="https://api.test", model="", api_key="k"))
+
+
+async def test_the_pcm_chunks_concatenate_and_the_transcript_joins(monkeypatch) -> None:
+    tool = _speech_tool(
+        monkeypatch,
+        _sse(
+            _audio_delta(data=b"\x01\x02", transcript="hello "),
+            _audio_delta(data=b"\x03\x04"),
+            {"choices": [{"delta": {}}]},
+            _audio_delta(transcript="there"),
+        ),
+    )
+
+    pcm, transcript = await tool._stream_audio_pcm({"model": "m"})
+
+    assert pcm == b"\x01\x02\x03\x04"
+    assert transcript == "hello there"
+
+
+async def test_a_line_that_is_not_an_event_is_skipped_rather_than_fatal(monkeypatch) -> None:
+    tool = _speech_tool(
+        monkeypatch,
+        ": keep-alive\n\n" + "data: {not json\n\n" + _sse(_audio_delta(data=b"\x05\x06")),
+    )
+
+    pcm, transcript = await tool._stream_audio_pcm({"model": "m"})
+
+    assert pcm == b"\x05\x06"
+    assert transcript == ""
+
+
+async def test_an_error_status_raises_with_the_body_loaded(monkeypatch) -> None:
+    tool = _speech_tool(monkeypatch, '{"error": "no such model"}', status=404)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await tool._stream_audio_pcm({"model": "m"})
+
+
+def test_the_wav_declares_the_rate_the_model_emits(tmp_path: Path) -> None:
+    """OpenRouter hands over raw pcm16 with no header; these three numbers are
+    the whole of what makes it playable."""
+    tool = SpeechGenerateTool(SimpleNamespace(api_base="https://api.test", model=""))
+    out = tmp_path / "speech.wav"
+
+    tool._write_wav(out, b"\x00\x01" * 240)
+
+    with wave.open(str(out), "rb") as w:
+        assert w.getframerate() == 24_000
+        assert w.getnchannels() == 1
+        assert w.getsampwidth() == 2
+        assert w.getnframes() == 240

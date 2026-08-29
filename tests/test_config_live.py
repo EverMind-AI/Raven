@@ -20,7 +20,7 @@ import os
 from pathlib import Path
 
 from raven.config import live as live_module
-from raven.config.live import LiveConfig, disabled_tool_names
+from raven.config.live import LiveConfig, disabled_playbook_names, disabled_tool_names
 
 
 def _write(path: Path, payload: dict) -> None:
@@ -166,3 +166,34 @@ class TestBothSpellingsCount:
         path = tmp_path / "config.json"
         _write(path, {"tools": {"disabledTools": "exec"}})
         assert disabled_tool_names(LiveConfig(path)) == frozenset()
+
+
+class TestThePlaybookSwitch:
+    """``playbooks.disabled`` has one spelling and one reader, and is read live
+    for the same reason the tool switch is: the next model call, not the next
+    process."""
+
+    def test_a_disabled_playbook_is_the_next_answer(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.json"
+        _write(path, {"playbooks": {"disabled": ["weekly_report"]}})
+        live = LiveConfig(path)
+        assert disabled_playbook_names(live) == frozenset({"weekly_report"})
+
+        _write(path, {"playbooks": {"disabled": ["standup"]}})
+        # A second write inside the clock's granularity would leave the stamp
+        # unchanged, and the read is allowed to trust the stamp.
+        os.utime(path, (1, 1))
+        assert disabled_playbook_names(live) == frozenset({"standup"})
+
+    def test_nothing_disabled_is_an_empty_set_not_a_missing_key(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.json"
+        _write(path, {})
+        assert disabled_playbook_names(LiveConfig(path)) == frozenset()
+
+    def test_a_value_that_is_not_a_list_of_names_disables_nothing(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.json"
+        _write(path, {"playbooks": {"disabled": "weekly_report"}})
+        assert disabled_playbook_names(LiveConfig(path)) == frozenset()
+
+        _write(path, {"playbooks": {"disabled": ["ok", 7, None]}})
+        assert disabled_playbook_names(LiveConfig(path)) == frozenset({"ok"})

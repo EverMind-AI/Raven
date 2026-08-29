@@ -452,3 +452,21 @@ def test_borrow_copies_the_key_and_the_address(monkeypatch: pytest.MonkeyPatch) 
     borrowed = ue.borrow_provider_credentials("openai")
     assert borrowed["api_key"] == "sk-lend"
     assert borrowed["base_url"] == "https://api.example.test/v1"
+
+
+def test_a_section_reads_back_as_the_table_that_was_written(everos_home: Path) -> None:
+    ue.set_everos_section("llm", {"model": "gpt-5", "api_key": "k"})
+    ue.set_everos_section("llm", {"base_url": "https://api.test"})
+
+    assert ue.everos_section("llm") == {
+        "model": "gpt-5",
+        "api_key": "k",
+        "base_url": "https://api.test",
+    }
+
+
+def test_a_section_nobody_wrote_reads_as_empty(everos_home: Path) -> None:
+    ue.set_everos_section("llm", {"model": "gpt-5"})
+
+    assert ue.everos_section("embedding") == {}
+    assert ue.everos_section("llm") != {}
