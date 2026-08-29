@@ -45,7 +45,7 @@ Two facts that decide most of the design:
   `metadata` intact, and it computes `missing` per file server-side. Nothing has to
   be fetched or invented to list a session's deliverables.
 - **A deliverable is readable by the viewer.** `/file` resolves through the same
-  `_resolve_path` the filesystem tools use, and `deliver_files` resolved the path
+  `resolve_path` the filesystem tools use, and `deliver_files` resolved the path
   through that same function before registering it. So a delivered file renders in
   the pane; the token URL is the download capability, not the read path.
 

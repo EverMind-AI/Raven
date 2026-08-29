@@ -12,7 +12,7 @@ from __future__ import annotations
 import mimetypes
 from pathlib import Path
 
-from raven.agent.tools.filesystem import _resolve_path
+from raven.agent.tools.filesystem import resolve_path
 from raven.agent.workdir import default_channel_root
 from raven.config import load_config
 
@@ -160,8 +160,8 @@ def resolve_readable(raw: str) -> Path:
     # TypeError *inside* the check, so the viewer answered 500 where it meant 403
     # -- refusing either way, but by crashing rather than by deciding.
     allowed = (workspace,) if cfg.tools.restrict_to_workspace else ()
-    resolved = _resolve_path(raw.strip(), workspace, allowed)
-    # After _resolve_path, so a symlink pointing into the state dir is caught by
+    resolved = resolve_path(raw.strip(), workspace, allowed)
+    # After resolve_path, so a symlink pointing into the state dir is caught by
     # where it lands rather than by how it was spelled.
     if in_state_dir(resolved, workspace):
         raise PermissionError(f"{resolved} is inside raven's state directory")

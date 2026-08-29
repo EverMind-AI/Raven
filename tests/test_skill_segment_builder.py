@@ -658,8 +658,8 @@ async def test_the_note_follows_the_real_tool_on_every_channel(tmp_path: Path) -
     through the real _set_tool_context, read back through the real definitions.
     Every surface receives the same delivery instruction."""
     from raven.agent.loop.main import AgentLoop
-    from raven.agent.tools._deliverables import DeliverableStore
     from raven.agent.tools.deliver import DeliverFilesTool
+    from raven.agent.tools.deliverables import DeliverableStore
     from raven.agent.tools.registry import ToolRegistry
     from raven.context_engine.segments import render
     from raven.contracts.tool import Tool

@@ -1,4 +1,4 @@
-"""Internal async helpers shared between the sandbox debug server and CLI."""
+"""Async helpers shared by the sandbox debug server and the sandbox CLI."""
 
 from __future__ import annotations
 

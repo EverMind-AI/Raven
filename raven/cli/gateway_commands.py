@@ -231,10 +231,9 @@ def register(app: typer.Typer) -> None:
         from raven.agent.loop.bundles import HostWiring, TurnPolicy
         from raven.agent.loop.recovery import limits_from_defaults
         from raven.agent.workdir import WorkdirPolicy, WorkdirResolver, validate_override
-        from raven.config.paths import get_cron_dir
         from raven.config.raven import load_raven_config
+        from raven.core.cron_stack import build_cron_service
         from raven.gateway.manager import ChannelManager
-        from raven.proactive_engine.schedulers.cron.service import CronService
         from raven.session.manager import SessionManager
 
         # load_runtime_config must run FIRST: it calls set_config_path() so
@@ -309,9 +308,7 @@ def register(app: typer.Typer) -> None:
         # the TUI can deliver but gateway can't (gateway has no tui outlet).
         # Without this, you'd see "Unknown channel: tui" warnings + lost TUI
         # reminders when both processes are running.
-        cron_store_path = get_cron_dir() / "jobs.json"
-        gateway_channels = _build_gateway_channels(config)
-        cron = CronService(cron_store_path, allowed_channels=gateway_channels)
+        cron = build_cron_service(allowed_channels=_build_gateway_channels(config))
 
         # Create model router (and, for the knn backend, wrap the provider).
         router, provider = build_model_routing(config, provider)

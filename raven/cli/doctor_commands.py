@@ -767,10 +767,10 @@ def _render_human_output(report: DoctorReport) -> None:
         else:
             console.print("  Channels:    [dim]none enabled[/dim]")
         if features.channels_missing_deps:
-            from raven.gateway.manager import _missing_dep_hint
+            from raven.gateway.manager import missing_dep_hint
 
             names = ", ".join(features.channels_missing_deps)
-            console.print(f"               [yellow]⚠ SDK missing: {names}[/yellow]  [dim]{_missing_dep_hint()}[/dim]")
+            console.print(f"               [yellow]⚠ SDK missing: {names}[/yellow]  [dim]{missing_dep_hint()}[/dim]")
         sf_label = "enabled" if features.skill_forge_enabled else "[dim]disabled[/dim]"
         console.print(f"  Skill forge: {sf_label}")
 

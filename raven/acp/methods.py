@@ -527,10 +527,10 @@ class AcpMethods:
         if self._agent_loop is None:
             return []
         from raven.config import load_config
-        from raven.rpc.methods.session import _manager_for
+        from raven.rpc.methods.session import manager_for
 
         try:
-            entries = _manager_for(self._agent_loop, load_config()).list_sessions(channel=self._channel)
+            entries = manager_for(self._agent_loop, load_config()).list_sessions(channel=self._channel)
         except Exception:
             logger.exception("acp: listing stored sessions failed")
             return []
@@ -959,7 +959,7 @@ class AcpMethods:
         cached session and persisted with its first save -- as lazy as the mint
         itself, so a client that opens a session and says nothing writes no file.
 
-        It has to be *the engine's* manager. ``_manager_for(None, config)`` builds
+        It has to be *the engine's* manager. ``manager_for(None, config)`` builds
         a fresh ``SessionManager`` every call and caches nothing, so writing the
         metadata through one would write it into an object discarded on the next
         line -- and the session would silently run in the wrong directory. Without
@@ -968,12 +968,12 @@ class AcpMethods:
         edited the wrong tree" is not a failure anyone would trace back to here.
         """
         from raven.config import load_config
-        from raven.rpc.methods.session import _manager_for
+        from raven.rpc.methods.session import manager_for
 
         if self._agent_loop is None:
             logger.warning("acp: no engine, so {} cannot be pinned to {}", session_key, cwd)
             return
-        _manager_for(self._agent_loop, load_config()).get_or_create(session_key).metadata["workdir"] = cwd
+        manager_for(self._agent_loop, load_config()).get_or_create(session_key).metadata["workdir"] = cwd
 
     def _session_manager(self) -> Any:
         """The engine's own session manager, or a throwaway one when there is no engine.
@@ -984,9 +984,9 @@ class AcpMethods:
         they need and let the no-engine case fall through to its honest no-op.
         """
         from raven.config import load_config
-        from raven.rpc.methods.session import _manager_for
+        from raven.rpc.methods.session import manager_for
 
-        return _manager_for(self._agent_loop, load_config())
+        return manager_for(self._agent_loop, load_config())
 
     def _announce_commands(self, session_id: str) -> None:
         """One ``available_commands_update`` per session, on its own stream.

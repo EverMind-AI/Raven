@@ -26,22 +26,17 @@ support proper provider auto-detection.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from loguru import logger
+
+from raven.config.loader import get_config_path
 
 if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
 
 
-_CONFIG_FILENAME = "config.json"
-_CONFIG_DIR_NAME = ".raven"
 _AUTO_SENTINEL = "auto"
-
-
-def _config_path() -> Path:
-    return Path.home() / _CONFIG_DIR_NAME / _CONFIG_FILENAME
 
 
 def _detect_provider_configured(payload: dict) -> bool:
@@ -125,7 +120,7 @@ async def setup_status(params: dict) -> dict:
     ``{"provider_configured": true}`` so the hermes UI does not park on the
     *Setup required* panel.
     """
-    path = _config_path()
+    path = get_config_path()
     try:
         raw = path.read_text(encoding="utf-8")
     except FileNotFoundError:

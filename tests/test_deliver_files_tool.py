@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from raven.agent.tools._deliverables import DeliverableStore
 from raven.agent.tools.deliver import DeliverFilesTool
+from raven.agent.tools.deliverables import DeliverableStore
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.tool_search import TOOL_CALL_NAME, ToolCallTool, ToolSearchController
 from raven.agent.workdir import bind

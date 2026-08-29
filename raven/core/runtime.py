@@ -84,7 +84,7 @@ def build_runtime(
     untouched; everything cargo-shaped is derived here, identically for every
     entrance.
     """
-    from raven.agent.tools._deliverables import DeliverableStore
+    from raven.agent.tools.deliverables import DeliverableStore
     from raven.config.paths import get_deliverables_path
 
     if provider_pool is None:

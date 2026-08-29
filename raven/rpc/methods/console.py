@@ -248,10 +248,9 @@ def _cron_service(loop):
     svc = getattr(loop, "cron_service", None) if loop is not None else None
     if svc is not None:
         return svc
-    from raven.config.paths import get_cron_dir
-    from raven.proactive_engine.schedulers.cron.service import CronService
+    from raven.core.cron_stack import build_cron_service
 
-    return CronService(get_cron_dir() / "jobs.json", allowed_channels=None)
+    return build_cron_service(allowed_channels=None)
 
 
 def _job_info(j) -> dict:
@@ -377,7 +376,7 @@ async def cron_runs(params: dict, *, agent_loop_factory=None) -> dict:
     from datetime import datetime
 
     from raven.config.loader import load_config
-    from raven.rpc.methods.session import _manager_for, _safe_invoke_factory
+    from raven.rpc.methods.session import _safe_invoke_factory, manager_for
 
     job_id = str(params.get("id", ""))
     svc = _cron_service(_safe_loop(agent_loop_factory))
@@ -387,7 +386,7 @@ async def cron_runs(params: dict, *, agent_loop_factory=None) -> dict:
 
     session_key = f"cron:{job_id}"
     try:
-        mgr = _manager_for(_safe_invoke_factory(agent_loop_factory), load_config())
+        mgr = manager_for(_safe_invoke_factory(agent_loop_factory), load_config())
         raw = mgr.peek(session_key)
         messages = raw.messages if raw is not None else []
     except Exception:

@@ -1140,7 +1140,7 @@ async def test_deliverables_list_answers_for_the_conversation_not_the_transcript
     """The registry is the answer after a reconnect or a compaction: a client
     reads the manifests off turn events while it is connected, and this is what
     is left when it was not."""
-    from raven.agent.tools._deliverables import DeliverableStore
+    from raven.agent.tools.deliverables import DeliverableStore
 
     store = DeliverableStore(tmp_path / "deliverables.json")
     mine = _file(tmp_path, "brief.md")
@@ -1180,7 +1180,7 @@ async def test_deliverables_list_answers_for_the_conversation_not_the_transcript
 async def test_deliverables_list_says_a_file_is_gone_rather_than_dropping_it(tmp_path: Path) -> None:
     """It is still something this conversation handed over. Saying so is more
     use than a row that quietly disappears."""
-    from raven.agent.tools._deliverables import DeliverableStore
+    from raven.agent.tools.deliverables import DeliverableStore
 
     store = DeliverableStore(tmp_path / "deliverables.json")
     target = _file(tmp_path, "gone.md")

@@ -121,7 +121,7 @@ def rig(tmp_path, monkeypatch):
     written: list[dict] = []
     translator = UpdateTranslator(emit=written.append)
     # A stand-in for the engine that carries only what the ACP layer reads from
-    # it: the shared session manager. ``_manager_for`` builds a throwaway one
+    # it: the shared session manager. ``manager_for`` builds a throwaway one
     # when handed None, so a test that passed None would assert nothing about
     # where the working directory ends up.
     engine = SimpleRig(sessions=SessionManager(tmp_path / "ws"))
@@ -864,7 +864,7 @@ class TestSessionList:
         def _explode(loop, config):
             raise OSError("session directory is gone")
 
-        monkeypatch.setattr("raven.rpc.methods.session._manager_for", _explode)
+        monkeypatch.setattr("raven.rpc.methods.session.manager_for", _explode)
         assert load_config() is not None
 
         response = await rig.call("session/list", {})

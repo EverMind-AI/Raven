@@ -101,7 +101,7 @@ def _drivers_dir() -> pathlib.Path | None:
         return None
 
 
-def _may_prompt(model: str) -> bool:
+def may_prompt(model: str) -> bool:
     """Would handing this model to LiteLLM start an interactive login?
 
     Three of its drivers ship a device-flow authenticator, and every entry point
@@ -173,7 +173,7 @@ def _try_litellm_rates(model: str, input_tokens: int, output_tokens: int) -> tup
     probe_out = output_tokens if output_tokens else 1
 
     for candidate in _candidates(model):
-        if _may_prompt(candidate):
+        if may_prompt(candidate):
             # Skipped, not read from the table: the rows these families have are
             # priced at zero, which this function already treats as unknown, so
             # reading them would add a branch that cannot fire. The caller falls
@@ -636,7 +636,7 @@ def _try_litellm_max_output(model: str, *, allow_import: bool = True) -> int | N
         ceiling = _trustworthy_ceiling(_table_entry(candidate))
         if ceiling:
             return ceiling
-        if _may_prompt(candidate):
+        if may_prompt(candidate):
             continue
         try:
             info = litellm.get_model_info(candidate)
@@ -697,7 +697,7 @@ def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int
         window = _numeric(_table_entry(candidate), "max_input_tokens", "max_tokens")
         if window:
             return int(window)
-        if _may_prompt(candidate):
+        if may_prompt(candidate):
             continue
         try:
             info = litellm.get_model_info(candidate)

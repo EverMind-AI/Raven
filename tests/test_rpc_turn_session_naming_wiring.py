@@ -33,7 +33,7 @@ def _use_loop(monkeypatch: pytest.MonkeyPatch, loop: Any) -> None:
     imports them at call time, so ``turn`` never carries them as attributes.
     """
     monkeypatch.setattr(session_module, "_safe_invoke_factory", lambda _factory: loop)
-    monkeypatch.setattr(session_module, "_manager_for", lambda _loop, _config: object())
+    monkeypatch.setattr(session_module, "manager_for", lambda _loop, _config: object())
 
 
 @pytest.fixture

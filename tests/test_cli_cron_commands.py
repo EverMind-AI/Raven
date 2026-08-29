@@ -25,7 +25,7 @@ def fake_cron_dir(tmp_path: Path, monkeypatch) -> Path:
     cron_dir = tmp_path / "cron"
     cron_dir.mkdir(parents=True)
     monkeypatch.setattr(
-        "raven.cli.cron_commands.get_cron_dir",
+        "raven.config.paths.get_cron_dir",
         lambda: cron_dir,
     )
     return cron_dir

@@ -33,7 +33,7 @@ from rich.console import Console
 from rich.table import Table
 
 from raven.cli._log_silence import mute_subsystem_logs_unless_debug
-from raven.config.paths import get_cron_dir
+from raven.core.cron_stack import build_cron_service
 from raven.proactive_engine.schedulers.cron.service import CronService
 from raven.proactive_engine.schedulers.cron.types import CronJob, CronSchedule
 
@@ -64,7 +64,7 @@ def _open_service() -> CronService:
     jobs across all channels — survives a future default change in
     CronService that might tighten to a restrictive default. Gateway
     keeps the actual delivery routing."""
-    return CronService(get_cron_dir() / "jobs.json", allowed_channels=None)
+    return build_cron_service(allowed_channels=None)
 
 
 _INTERACTIVE_CHANNELS = ("tui",)

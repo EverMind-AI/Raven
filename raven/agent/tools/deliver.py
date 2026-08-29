@@ -10,8 +10,8 @@ from typing import Any
 from urllib.parse import quote
 
 from raven.agent import workdir
-from raven.agent.tools._deliverables import DeliverableStore
-from raven.agent.tools.filesystem import _resolve_path, _with_current_root
+from raven.agent.tools.deliverables import DeliverableStore
+from raven.agent.tools.filesystem import _with_current_root, resolve_path
 from raven.contracts.tool import Tool
 
 
@@ -138,7 +138,7 @@ class DeliverFilesTool(Tool):
                 continue
             try:
                 bound = workdir.current()
-                resolved = _resolve_path(raw, bound or self._workspace, _with_current_root(self._allowed_dirs, bound))
+                resolved = resolve_path(raw, bound or self._workspace, _with_current_root(self._allowed_dirs, bound))
             except PermissionError as exc:
                 invalid.append({"path": raw, "reason": str(exc)})
                 continue

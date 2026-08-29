@@ -486,7 +486,7 @@ def channels_status():
     """Show channel status."""
     from raven.channels.registry import discover_channel_names
     from raven.config.loader import load_config
-    from raven.gateway.manager import _missing_dep_hint, missing_dependency_channels
+    from raven.gateway.manager import missing_dep_hint, missing_dependency_channels
 
     config = load_config()
     missing = set(missing_dependency_channels(config))
@@ -511,7 +511,7 @@ def channels_status():
             f"\n[yellow]⚠ Enabled but cannot start: {names}[/yellow] "
             "[dim](dependency not installed; the gateway disables these at startup)[/dim]"
         )
-        console.print(f"  {_missing_dep_hint()}")
+        console.print(f"  {missing_dep_hint()}")
 
 
 @channels_app.command("login")

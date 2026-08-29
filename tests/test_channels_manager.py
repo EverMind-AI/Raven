@@ -10,7 +10,7 @@ import pytest
 
 from raven.channels.contract import Capabilities, ChannelSpec
 from raven.config.schema import ProvidersConfig
-from raven.gateway.manager import ChannelManager, _missing_dep_hint
+from raven.gateway.manager import ChannelManager, missing_dep_hint
 
 
 class _FakeChannel:
@@ -101,7 +101,7 @@ def test_validate_allow_from_rejects_empty(monkeypatch):
         )
 
 
-# ── _missing_dep_hint (install-mode / OS split) ───────────────────────
+# ── missing_dep_hint (install-mode / OS split) ───────────────────────
 
 _EDITABLE_JSON = '{"url": "file:///src", "dir_info": {"editable": true}}'
 _WHEEL_JSON = '{"url": "https://x/raven-0.1.2.whl", "archive_info": {}}'
@@ -119,7 +119,7 @@ def test_hint_editable_syncs_the_umbrella_extra_inexactly(monkeypatch):
     """Editable checkout -> the umbrella extra, and --inexact so syncing one
     channel's SDK in does not uninstall every other channel's."""
     _patch_direct_url(monkeypatch, _EDITABLE_JSON)
-    hint = _missing_dep_hint()
+    hint = missing_dep_hint()
     assert hint == "Run: uv sync --inexact --extra channels"
     assert "--extra channel-" not in hint
 
@@ -139,7 +139,7 @@ def test_hint_non_editable_points_to_installer(monkeypatch, raw):
     """Any non-editable / malformed direct_url.json -> installer hint, never raises."""
     _patch_direct_url(monkeypatch, raw)
     monkeypatch.setattr("raven.gateway.manager.sys.platform", "linux")
-    hint = _missing_dep_hint()
+    hint = missing_dep_hint()
     assert "uv sync" not in hint
     assert "install.sh" in hint
 
@@ -152,7 +152,7 @@ def test_hint_package_not_found_points_to_installer(monkeypatch):
 
     monkeypatch.setattr("raven.gateway.manager.distribution", _raise)
     monkeypatch.setattr("raven.gateway.manager.sys.platform", "darwin")
-    assert "install.sh" in _missing_dep_hint()
+    assert "install.sh" in missing_dep_hint()
 
 
 @pytest.mark.parametrize(
@@ -163,7 +163,7 @@ def test_hint_installer_matches_os(monkeypatch, platform, marker):
     """Wheel install picks the installer for the running OS (irm vs curl)."""
     _patch_direct_url(monkeypatch, _WHEEL_JSON)
     monkeypatch.setattr("raven.gateway.manager.sys.platform", platform)
-    assert marker in _missing_dep_hint()
+    assert marker in missing_dep_hint()
 
 
 @pytest.mark.parametrize(

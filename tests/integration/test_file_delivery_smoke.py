@@ -6,8 +6,8 @@ from __future__ import annotations
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
-from raven.agent.tools._deliverables import DeliverableStore
 from raven.agent.tools.deliver import DeliverFilesTool
+from raven.agent.tools.deliverables import DeliverableStore
 from raven.rpc.transports.deliverables import add_files_routes
 
 

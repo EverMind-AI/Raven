@@ -508,10 +508,10 @@ class OrganGlueMixin:
             # The same split and resolver ``read_skill`` itself uses, so the id
             # grammar -- including "a bare id addresses the Hub" -- and "local
             # spans every on-disk source" stay defined in exactly one place.
-            from raven.agent.tools.skill_hub import _lookup_on_disk, _split_qualified_id
+            from raven.agent.tools.skill_hub import lookup_on_disk, split_qualified_id
 
-            namespace, native = _split_qualified_id(qid)
-            meta = _lookup_on_disk(registry, namespace, native)
+            namespace, native = split_qualified_id(qid)
+            meta = lookup_on_disk(registry, namespace, native)
             source = str(meta.source) if meta is not None and getattr(meta, "source", None) else namespace
         except Exception:  # noqa: BLE001 - a registry hiccup must not lose the report
             logger.debug("skill source lookup failed for %s", qid)

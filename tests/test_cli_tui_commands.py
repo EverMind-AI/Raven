@@ -691,7 +691,7 @@ def test_tui_announces_log_path_only_on_abnormal_exit(
 
 
 def test_tui_agent_loop_receives_deliverables_store(patched_tui_loop_deps) -> None:
-    from raven.agent.tools._deliverables import DeliverableStore
+    from raven.agent.tools.deliverables import DeliverableStore
     from raven.cli.tui_commands import _build_agent_loop
 
     _build_agent_loop()

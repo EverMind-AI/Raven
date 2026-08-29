@@ -29,13 +29,11 @@ def build_engine(*, workspace: str | None = None, home: str | None = None, chann
     from raven.agent.loop.bundles import HostWiring, TurnPolicy
     from raven.agent.loop.recovery import limits_from_defaults
     from raven.agent.workdir import WorkdirPolicy, WorkdirResolver, validate_override
-    from raven.config.paths import get_cron_dir
     from raven.config.raven import load_raven_config
     from raven.core.config_stack import load_runtime_config
-    from raven.core.cron_stack import chain_cron_activity_reset
+    from raven.core.cron_stack import build_cron_service, chain_cron_activity_reset
     from raven.core.provider_stack import build_model_routing
     from raven.core.runtime import build_runtime
-    from raven.proactive_engine.schedulers.cron.service import CronService
     from raven.proactive_engine.schedulers.cron.tool import CronTool
     from raven.providers.factory import make_lazy_provider
     from raven.session.manager import SessionManager
@@ -65,7 +63,7 @@ def build_engine(*, workspace: str | None = None, home: str | None = None, chann
         sessions=session_manager,
     )
 
-    cron = CronService(get_cron_dir() / "jobs.json", allowed_channels={channel})
+    cron = build_cron_service(allowed_channels={channel})
 
     runtime = build_runtime(
         config,

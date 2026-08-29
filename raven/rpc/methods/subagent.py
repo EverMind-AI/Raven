@@ -48,7 +48,7 @@ from raven.agent.subagent.instances import get_registry
 from raven.agent.subagent.tool_vocabulary import normalize_row
 from raven.config.loader import load_config
 from raven.rpc.errors import ConfigValidationError
-from raven.rpc.methods.session import _manager_for, _map_to_wire, _safe_invoke_factory
+from raven.rpc.methods.session import _map_to_wire, _safe_invoke_factory, manager_for
 
 if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
@@ -182,7 +182,7 @@ def _call_dir(root: Path, call_id: str) -> Path | None:
 
 def _session_dir(session_id: str, agent_loop_factory: "AgentLoopFactory | None") -> Path:
     config = load_config()
-    mgr = _manager_for(_safe_invoke_factory(agent_loop_factory), config)
+    mgr = manager_for(_safe_invoke_factory(agent_loop_factory), config)
     return mgr.session_dir(session_id)
 
 

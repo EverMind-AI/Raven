@@ -237,7 +237,7 @@ def _get_or_build_manager(config: "Config") -> SessionManager:
     return SessionManager(config.workspace_path)
 
 
-def _manager_for(agent_loop: "AgentLoop | None", config: "Config") -> SessionManager:
+def manager_for(agent_loop: "AgentLoop | None", config: "Config") -> SessionManager:
     """Prefer the loop's shared manager when available; fall back to a fresh one."""
     if agent_loop is not None:
         mgr = getattr(agent_loop, "sessions", None)
@@ -432,7 +432,7 @@ async def session_create(
             resolved = validate_override(workdir, config.workspace_path)
         except ValueError as e:
             raise ConfigValidationError(str(e), data={"field": "workdir"}) from e
-        _manager_for(agent_loop, config).get_or_create(session_id).metadata["workdir"] = str(resolved)
+        manager_for(agent_loop, config).get_or_create(session_id).metadata["workdir"] = str(resolved)
         info["cwd"] = str(resolved)
     return {
         "session_id": session_id,
@@ -456,7 +456,7 @@ async def session_close(
         return {"ok": True}
     config = load_config()
     agent_loop = _safe_invoke_factory(agent_loop_factory)
-    mgr = _manager_for(agent_loop, config)
+    mgr = manager_for(agent_loop, config)
     try:
         mgr.flush(session_key)
     except Exception:
@@ -496,7 +496,7 @@ async def session_resume(
 
     if session_key:
         try:
-            mgr = _manager_for(agent_loop, config)
+            mgr = manager_for(agent_loop, config)
             raw = mgr.peek(session_key)
             if raw is not None:
                 _fill_resumed_context(info, raw)
@@ -625,7 +625,7 @@ async def session_list(
     """
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
-    mgr = _manager_for(agent_loop, config)
+    mgr = manager_for(agent_loop, config)
     channels = params.get("channels")
     if not isinstance(channels, list) or not channels:
         channels = ["tui"]
@@ -661,7 +661,7 @@ async def session_delete(
             )
         agent_loop = _safe_invoke_factory(agent_loop_factory)
         config = load_config()
-        mgr = _manager_for(agent_loop, config)
+        mgr = manager_for(agent_loop, config)
         removed = mgr.delete(session_key)
         if agent_loop is not None:
             # Not gated on ``removed``: a session that switched model before its
@@ -691,7 +691,7 @@ async def session_most_recent(
     """
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
-    mgr = _manager_for(agent_loop, config)
+    mgr = manager_for(agent_loop, config)
     chat_id = mgr.find_most_recent_chat_id("tui", this_project_only=True, include_archived=False)
     session_id = f"tui:{chat_id}" if chat_id else None
     return {"session_id": session_id}
@@ -722,7 +722,7 @@ async def session_title(
     title = params.get("title")
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
-    mgr = _manager_for(agent_loop, config)
+    mgr = manager_for(agent_loop, config)
 
     if title is not None:
         session = mgr.get_or_create(session_key)
@@ -772,7 +772,7 @@ async def session_pin(
         return {"pinned": pinned, "session_key": "", "pending": False}
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
-    mgr = _manager_for(agent_loop, config)
+    mgr = manager_for(agent_loop, config)
     session = mgr.get_or_create(session_key)
     if pinned:
         session.metadata["pinned"] = True
@@ -800,7 +800,7 @@ async def session_archive(
         return {"archived": archived, "session_key": "", "pending": False}
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
-    mgr = _manager_for(agent_loop, config)
+    mgr = manager_for(agent_loop, config)
     session = mgr.get_or_create(session_key)
     if archived:
         session.metadata["archived"] = True
@@ -837,7 +837,7 @@ async def session_clear(
         )
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
-    mgr = _manager_for(agent_loop, config)
+    mgr = manager_for(agent_loop, config)
     session = mgr.get_or_create(session_key)
     session.clear()
     if mgr.exists(session_key):
@@ -870,7 +870,7 @@ async def session_undo(
     n = params.get("n", 1)
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
-    mgr = _manager_for(agent_loop, config)
+    mgr = manager_for(agent_loop, config)
     session = mgr.get_or_create(session_key)
     removed = session.undo_last_turn(n)
     if removed and mgr.exists(session_key):
@@ -912,7 +912,7 @@ async def session_compress(
 
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
-    mgr = _manager_for(agent_loop, config)
+    mgr = manager_for(agent_loop, config)
     session = mgr.get_or_create(session_key)
     before_messages = len(session.messages)
 
@@ -1010,7 +1010,7 @@ async def session_branch(
     name = params.get("name")
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
-    mgr = _manager_for(agent_loop, config)
+    mgr = manager_for(agent_loop, config)
     child = mgr.fork(session_key, title=(name or None))
     if child is not None and agent_loop is not None:
         # A fork continues its parent's conversation, so it continues on the
@@ -1047,7 +1047,7 @@ async def session_export(
         return {"exported": False, "path": None, "reason": "not_found"}
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
-    mgr = _manager_for(agent_loop, config)
+    mgr = manager_for(agent_loop, config)
     res = mgr.resolve_key(value)
     if res.status == "ambiguous":
         return {
