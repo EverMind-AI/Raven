@@ -105,10 +105,7 @@ def test_the_web_channel_serves_the_methods_a_direct_chat_needs() -> None:
         turn_ids={},
         direct_targets={},
         agent=None,
-        cron=None,
-        config=None,
         channel_manager=None,
-        raven_config=None,
     )
     served = set(dispatcher.methods())
     assert {"turn.send", "subagents.instances", "subagents.instance.history"} <= served
@@ -138,10 +135,7 @@ async def test_the_web_channel_reads_history_through_the_live_loop(tmp_path) -> 
         turn_ids={},
         direct_targets={},
         agent=SimpleNamespace(subagents=_Manager()),
-        cron=None,
-        config=None,
         channel_manager=None,
-        raven_config=None,
     )
     await dispatcher.dispatch(
         {

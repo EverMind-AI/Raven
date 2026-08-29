@@ -28,10 +28,7 @@ def register_web_methods(
     turn_ids: dict[str, str],
     direct_targets: dict[str, dict[str, str]],
     agent: Any,
-    cron: Any,
-    config: Any,
     channel_manager: Any,
-    raven_config: Any,
 ) -> None:
     """Register every method the web channel serves on ``dispatcher``.
 
@@ -66,16 +63,8 @@ def register_web_methods(
     # looks empty rather than one that failed. Measured against a real record on
     # disk before this was passed.
     register_instance_methods(dispatcher, agent_loop_factory=lambda: agent)
-    # Raven config-admin methods (P4): validate + write + hot-apply third-party
-    # sub-agent config to this live agent loop.
-    register_config_methods(
-        dispatcher,
-        agent=agent,
-        cron=cron,
-        config=config,
-        channel_manager=channel_manager,
-        raven_config=raven_config,
-    )
+    # The control plane's live-channel methods (the probe's whole vocabulary).
+    register_config_methods(dispatcher, channel_manager=channel_manager)
 
 
 __all__ = ["register_web_methods"]
