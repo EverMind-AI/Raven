@@ -107,6 +107,12 @@ def admit_slice(
                 f"plugin {plugin_id!r}: config key {key!r} must be {want}, "
                 f"got {type(value).__name__}"
             )
+        choices = spec.get("choices")
+        if choices is not None and value is not None and value not in choices:
+            raise PluginConfigError(
+                f"plugin {plugin_id!r}: config key {key!r} must be one of "
+                f"{choices!r}, got {value!r}"
+            )
         if want == "object" and isinstance(spec.get("fields"), dict):
             # A fixed sub-table declares its own fields and admits
             # recursively: sub-defaults apply, sub-types bite, exactly the

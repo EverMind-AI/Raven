@@ -21,8 +21,8 @@ SPEC = ChannelSpec(
     # host. Defaults and secrecy travel with the cargo; the central model
     # mirrors them until it retires.
     config_schema={
-        "bot_id": {"type": "string", "required": True},
-        "secret": {"type": "string", "required": True, "secret": True},
+        "bot_id": {"type": "string", "default": "", "required": True},
+        "secret": {"type": "string", "default": "", "required": True, "secret": True},
         "welcome_message": {"type": "string", "default": ""},
     },
 )

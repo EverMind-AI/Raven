@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 
 from raven.config.update_channels import (
     channel_field_specs,
@@ -16,6 +15,7 @@ from raven.config.update_channels import (
     reset_channel,
     set_channel_fields,
 )
+from raven.core.admission import PluginConfigError
 
 
 @pytest.fixture
@@ -89,7 +89,7 @@ def test_set_unknown_field_raises_with_helpful_message(cfg_path: Path) -> None:
 
 
 def test_set_invalid_value_raises_validation_error(cfg_path: Path) -> None:
-    with pytest.raises(ValidationError):
+    with pytest.raises(PluginConfigError):
         set_channel_fields("telegram", {"group_policy": "definitely_not_a_valid_literal"}, config_path=cfg_path)
 
 
@@ -181,7 +181,7 @@ def test_atomic_write_no_corruption_on_validation_error(cfg_path: Path) -> None:
     enable_channel("telegram", {"token": "original"}, config_path=cfg_path)
     before = _read(cfg_path)
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(PluginConfigError):
         set_channel_fields("telegram", {"group_policy": "garbage_literal"}, config_path=cfg_path)
 
     assert _read(cfg_path) == before  # nothing got partially written

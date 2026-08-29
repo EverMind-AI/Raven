@@ -21,11 +21,11 @@ SPEC = ChannelSpec(
     # host. Defaults and secrecy travel with the cargo; the central model
     # mirrors them until it retires.
     config_schema={
-        "app_id": {"type": "string", "required": True},
-        "app_secret": {"type": "string", "required": True, "secret": True},
+        "app_id": {"type": "string", "default": "", "required": True},
+        "app_secret": {"type": "string", "default": "", "required": True, "secret": True},
         "encrypt_key": {"type": "string", "default": "", "secret": True},
         "verification_token": {"type": "string", "default": "", "secret": True},
         "react_emoji": {"type": "string", "default": "THUMBSUP"},
-        "group_policy": {"type": "string", "default": "mention"},
+        "group_policy": {"type": "string", "default": "mention", "choices": ["open", "mention"]},
     },
 )

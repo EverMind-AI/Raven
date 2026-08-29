@@ -21,7 +21,7 @@ SPEC = ChannelSpec(
     # host. Defaults and secrecy travel with the cargo; the central model
     # mirrors them until it retires.
     config_schema={
-        "client_id": {"type": "string", "required": True},
-        "client_secret": {"type": "string", "required": True, "secret": True},
+        "client_id": {"type": "string", "default": "", "required": True},
+        "client_secret": {"type": "string", "default": "", "required": True, "secret": True},
     },
 )

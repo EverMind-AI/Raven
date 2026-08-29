@@ -24,6 +24,6 @@ SPEC = ChannelSpec(
     config_schema={
         "bridge_url": {"type": "string", "default": "ws://localhost:3001"},
         "bridge_token": {"type": "string", "default": "", "secret": True},
-        "group_policy": {"type": "string", "default": "open"},
+        "group_policy": {"type": "string", "default": "open", "choices": ["open", "mention"]},
     },
 )

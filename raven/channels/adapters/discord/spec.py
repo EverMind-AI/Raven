@@ -21,9 +21,9 @@ SPEC = ChannelSpec(
     # host. Defaults and secrecy travel with the cargo; the central model
     # mirrors them until it retires.
     config_schema={
-        "token": {"type": "string", "required": True, "secret": True},
+        "token": {"type": "string", "default": "", "required": True, "secret": True},
         "gateway_url": {"type": "string", "default": "wss://gateway.discord.gg/?v=10&encoding=json"},
         "intents": {"type": "integer", "default": 37377},
-        "group_policy": {"type": "string", "default": "mention"},
+        "group_policy": {"type": "string", "default": "mention", "choices": ["mention", "open"]},
     },
 )
