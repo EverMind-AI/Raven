@@ -3588,6 +3588,114 @@ class PlaybooksGetResult(_Strict):
     playbook: PlaybookDetail
 
 
+# ---------------------------------------------------------------------------
+# Terminal dialect: the methods the TUI drives that arrived with handlers only
+# ---------------------------------------------------------------------------
+
+
+class ClipboardPasteParams(_Strict):
+    pass
+
+
+class ClipboardPasteResult(_Strict):
+    attached: bool
+    message: str | None = None
+    width: int | None = None
+    height: int | None = None
+    token_estimate: int | None = None
+
+
+class CommandDispatchParams(_Strict):
+    name: str
+    arg: str | None = None
+
+
+class CommandDispatchResult(_Strict):
+    type: str = Field(..., description="`exec` (a shell-style command ran) or `skill` (the name resolved to a skill).")
+    output: str | None = None
+    name: str | None = None
+    message: str | None = None
+
+
+class DelegationStatusParams(_Strict):
+    pass
+
+
+class DelegationStatusResult(_Strict):
+    max_concurrent_children: int
+    max_spawn_depth: int
+    paused: bool
+
+
+class DelegationPauseParams(_Strict):
+    paused: bool
+
+
+class DelegationPauseResult(_Strict):
+    paused: bool
+
+
+class InputDetectDropParams(_Strict):
+    text: str
+
+
+class InputDetectDropResult(_Strict):
+    matched: bool
+    name: str | None = None
+    text: str | None = Field(default=None, description="The resolved absolute path when matched.")
+    is_image: bool | None = None
+    width: int | None = None
+    height: int | None = None
+    token_estimate: int | None = None
+
+
+class SessionInterruptParams(_Strict):
+    session_id: str
+
+
+class SessionInterruptResult(_Strict):
+    ok: bool
+
+
+class ShellExecParams(_Strict):
+    command: str
+
+
+class ShellExecResult(_Strict):
+    code: int
+    stdout: str
+    stderr: str
+
+
+class SkillsManageParams(_Strict):
+    action: str = Field(..., description="One of list, inspect, search, browse, install.")
+    query: str | None = None
+    page: int | None = None
+
+
+class SkillsManageResult(_Strict):
+    skills: dict[str, list[str]] | None = Field(default=None, description="`list`: names grouped by source.")
+    info: dict[str, JsonValue] | None = Field(
+        default=None, description="`inspect`: one skill's metadata, {} when unknown."
+    )
+    results: list[dict[str, JsonValue]] | None = Field(default=None, description="`search`: matches.")
+    items: list[dict[str, JsonValue]] | None = Field(default=None, description="`browse`: one page of the hub.")
+    page: int | None = None
+    total: int | None = None
+    total_pages: int | None = None
+    installed: bool | None = Field(default=None, description="`install`.")
+    name: str | None = None
+
+
+class SubagentInterruptParams(_Strict):
+    subagent_id: str
+
+
+class SubagentInterruptResult(_Strict):
+    found: bool
+    subagent_id: str
+
+
 METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     # knowledge.* -- bases and their documents, served by the in-process engine
     "knowledge.status": (KnowledgeStatusParams, KnowledgeStatusResult),
@@ -3645,6 +3753,15 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "settings.usage": (SettingsUsageParams, SettingsUsageResult),
     "settings.everos": (SettingsEverosParams, SettingsEverosResult),
     "settings.everosSet": (SettingsEverosSetParams, SettingsEverosSetResult),
+    "clipboard.paste": (ClipboardPasteParams, ClipboardPasteResult),
+    "command.dispatch": (CommandDispatchParams, CommandDispatchResult),
+    "delegation.status": (DelegationStatusParams, DelegationStatusResult),
+    "delegation.pause": (DelegationPauseParams, DelegationPauseResult),
+    "input.detect_drop": (InputDetectDropParams, InputDetectDropResult),
+    "session.interrupt": (SessionInterruptParams, SessionInterruptResult),
+    "shell.exec": (ShellExecParams, ShellExecResult),
+    "skills.manage": (SkillsManageParams, SkillsManageResult),
+    "subagent.interrupt": (SubagentInterruptParams, SubagentInterruptResult),
     "channels.status": (ChannelsStatusParams, ChannelsStatusResult),
     "channels.configure": (ChannelsConfigureParams, ChannelsConfigureResult),
     "channels.qr": (ChannelsQrParams, ChannelsQrResult),

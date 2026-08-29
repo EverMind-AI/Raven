@@ -208,21 +208,10 @@ def test_the_scan_actually_finds_calls() -> None:
 # from the server) or cannot make it at all.
 #
 # The allowlist below is the argument this comment used to forbid. It held 42
-# names, emptied as they were declared, and was deleted. It is back holding nine
-# that arrived on main afterwards, from the MR that gave them handlers -- and
-# holding nine is the point: the number is the debt, visible, and it only goes
-# down.
-INHERITED_UNDECLARED: set[str] = {
-    "clipboard.paste",
-    "command.dispatch",
-    "delegation.pause",
-    "delegation.status",
-    "input.detect_drop",
-    "session.interrupt",
-    "shell.exec",
-    "skills.manage",
-    "subagent.interrupt",
-}
+# names, emptied as they were declared, and was deleted; it came back holding
+# nine that arrived with handlers only, and emptied again as those were declared.
+# It stays, empty: a name added here is the debt, visible, and it only goes down.
+INHERITED_UNDECLARED: set[str] = set()
 
 
 def test_every_registered_method_is_in_the_contract() -> None:
