@@ -6,21 +6,18 @@ boundary is where document structure is meant to land: ``ChunkerBase``
 guarantees no chunk ever spans two sections, so whatever the parser calls a
 section is the structure that survives into retrieval.
 
-The tree's only text parser declines to use that boundary. ``TextParser`` serves
-``text/markdown`` and ``text/html`` alongside plain text and returns the whole
-file as one unstructured section, leaving ``ApproxTokenChunker`` to cut it into
-fixed ~512-token windows wherever the byte budget happens to land. Headings are
-invisible to that cut, so a chunk routinely opens mid-sentence under one
-subsection and closes under the next, a hit carries nothing saying which part of
-the document it came from, and for HTML the raw tags are embedded as text.
+``TextParser`` serves ``text/markdown`` and ``text/html`` alongside plain text
+and returns the whole file as one unstructured section, so ``ApproxTokenChunker``
+cuts fixed ~512-token windows blind to headings: a chunk carries nothing saying
+which part of the document it came from, and HTML arrives with its tags as text.
 
-This module supplies the missing half for the two structured formats:
+This module supplies the structure for the two structured formats:
 
 - ``StructuredTextParser`` splits Markdown on ATX headings and HTML on
   ``<h1>``-``<h6>``, emits one Section per heading, and records the full
-  ancestor path in ``Section.metadata``. Listed after ``TextParser`` in
-  ``create_app(knowledge_parsers=...)`` it takes over those two media types and
-  leaves every other text type with the original parser.
+  ancestor path in ``Section.metadata``. ``KnowledgeManager`` registers it ahead
+  of ``TextParser``, so it takes those two media types and leaves every other
+  text type with the plain parser.
 - ``HeadingAwareChunker`` prefixes that path onto each chunk after the first, so
   a section long enough to be split still carries its heading context into the
   embedding instead of only in its opening slice.
@@ -170,12 +167,8 @@ class _HtmlBlocks(HTMLParser):
         self._title: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list) -> None:
-        # `</head>` is optional in HTML and `html.parser` never closes it for us,
-        # so a document that omits it left the counter stuck above zero for the
-        # rest of the file: every `handle_data` returned early, every body came
-        # out empty, and `parse` fell back to one whole-file Section carrying the
-        # raw markup -- the exact input this module exists to avoid. `head` can
-        # only precede `body`, so `body` starting means any unclosed one ended.
+        # `</head>` is optional in HTML and `html.parser` never closes it; `head`
+        # can only precede `body`, so `body` starting means any unclosed one ended.
         if tag == "body":
             self._dropped = 0
         if tag in _DROPPED_TAGS:
@@ -269,9 +262,8 @@ def _sections_from_blocks(blocks: list[_Block], filename: str, tidy) -> list[Sec
 class StructuredTextParser(ParserBase):
     """Split Markdown and HTML into one Section per heading.
 
-    Register it after ``TextParser`` so it wins those two media types::
-
-        create_app(knowledge_parsers=[TextParser(), StructuredTextParser()])
+    ``KnowledgeManager`` registers it ahead of ``TextParser`` (see ``_manager.py``),
+    so it wins those two media types.
     """
 
     supported_media_types: list[str] = ["text/markdown", "text/html"]

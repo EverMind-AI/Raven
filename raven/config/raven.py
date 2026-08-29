@@ -1,4 +1,4 @@
-"""Raven feature configuration — extends the base Config with 4 feature blocks.
+"""Raven feature configuration — extends the base Config with the blocks in ``EXTENSION_KEYS``.
 
 Usage:
     from raven.config import RavenConfig, load_raven_config
@@ -58,7 +58,7 @@ class _Base(BaseModel):
 
 
 class ContextConfig(_Base):
-    """Context engine selection and tuning."""
+    """Curator tuning."""
 
     # Curator history-lane knobs.
     fast_path_threshold: float = 0.60
@@ -1190,9 +1190,8 @@ class HubSourceConfig(_Base):
 class SkillForgeRouterConfig(_Base):
     """Multi-source skill routing policy.
 
-    Sources themselves are hardcoded (Local + Mass + Everos) per the
-    project-wide design decision; this block tunes the weighted RRF
-    and per-source plumbing.
+    The sources are Local, EverOS and Hub; this block tunes the weighted
+    RRF and the per-source plumbing.
     """
 
     enabled: bool = True
@@ -1288,12 +1287,10 @@ class CheckpointConfig(_Base):
 
 
 class RuntimeConfig(_Base):
-    """Runtime discipline — the 5th feature pillar.
+    """Runtime discipline: the opt-in safety nets.
 
-    Houses the opt-in runtime safety nets. Bug2 ships ``checkpoint``;
-    later phases add ``journal`` / ``verifier`` / ``done_gate`` /
-    ``loop_detection`` (Bug3, us) and ``session`` (Bug1, dev) as sibling
-    sub-configs. All default off so the all-off baseline equals 68a3be7.
+    Holds ``checkpoint``; every net defaults off, so the all-off baseline is
+    the loop as it runs without them.
     """
 
     checkpoint: CheckpointConfig = Field(default_factory=CheckpointConfig)

@@ -406,7 +406,7 @@ def collect_known_secrets(
 
     for path in paths:
         try:
-            _add(_walk_model(load_config(path), "config"))
+            _add(config_secrets(load_config(path)))
         except Exception:
             complete = False
         if path.exists():
@@ -436,10 +436,8 @@ def _variants(value: str) -> set[str]:
 
 def _apply_exact(text: str, secrets: list[KnownSecret], counts: dict[str, int]) -> str:
     # One pass over the text with all variants as an alternation, longest
-    # first (re picks the first alternative at a position, so longest-first
-    # gives longest-match). Sequential str.replace re-scanned its own output:
-    # a short value (a 1-char junk env key, say "k") then shredded the "k"
-    # inside placeholders inserted for earlier, longer secrets.
+    # first (re picks the first alternative at a position), so a placeholder
+    # inserted for one secret is never re-scanned for another.
     variants: dict[str, tuple[str, bool]] = {}
     for secret in secrets:
         for variant in _variants(secret.value):

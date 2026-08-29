@@ -56,7 +56,7 @@ def test_history_follows_a_pre_grouping_transcript_to_its_old_group(tmp_path: Pa
     )
 
     manager = SessionManager(tmp_path, project_slug="-srv-project-a")
-    transcript = manager._get_session_path("cli:abc")
+    transcript = manager.session_path("cli:abc")
     root = session_history_root(manager.session_dir("cli:abc"))
 
     assert transcript.parent.name == "cli"

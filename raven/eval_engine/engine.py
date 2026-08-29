@@ -2,11 +2,11 @@
 
 Holds a config and constructs the three AgentHook instances plus the
 judge + adapter dependencies. Exposes a single :meth:`hooks` accessor
-that returns the three hooks in a stable order, so an Eval-aware
-CLI stack can ``CompositeHook.extend(engine.hooks())`` without
-re-implementing the wiring.
+that returns the three hooks in a stable order, so the assembly root
+(``core/eval_stack.py``, ``core/hooks_stack.py``) can
+``CompositeHook.extend(engine.hooks())`` without re-implementing the wiring.
 
-Designed so a caller without an LLM provider or MemoryEngine can
+Designed so a caller without an LLM provider or MemoryStore can
 construct a degraded EvalEngine — useful for tests that only want
 to exercise the deterministic deny-list path.
 """
@@ -31,9 +31,8 @@ if TYPE_CHECKING:
 class EvalEngine:
     """Aggregates the three Eval Engine hooks behind a single factory.
 
-    Phase B-3: the ``memory`` arg was re-typed from the (deleted)
-    ``MemoryEngine`` facade to :class:`MemoryStore` since the only
-    method the adapter uses is ``append_history``.
+    ``memory`` is a :class:`MemoryStore`; the adapter needs only its
+    ``append_history``.
     """
 
     def __init__(

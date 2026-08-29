@@ -237,7 +237,7 @@ def test_continue_stays_inside_the_project_it_was_launched_from(tmp_path: Path) 
     """`--continue` must not reopen a conversation started in another checkout.
 
     Resolving across groups also corrupts what it resumes: the transcript
-    fallback in `_get_session_path` would then append this project's turns to a
+    fallback in `session_path` would then append this project's turns to a
     file filed under the other one.
     """
     for group, chat_id, updated in (
@@ -292,7 +292,7 @@ def test_continue_still_reaches_a_pre_grouping_session(tmp_path: Path) -> None:
     """Sessions written before grouping sit in the channel directory and carry
     no project attribution, so narrowing must not strand them.
 
-    `_get_session_path` already lets any project adopt one; refusing to find it
+    `session_path` already lets any project adopt one; refusing to find it
     here would mean every pre-upgrade conversation became unreachable from `-c`
     the moment this MR landed.
     """

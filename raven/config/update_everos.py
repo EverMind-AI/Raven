@@ -111,10 +111,6 @@ def borrow_provider_credentials(provider: str) -> dict[str, str]:
     return out
 
 
-# Sections holding a model + credentials, as opposed to the address.
-MODEL_SECTIONS = ("llm", "embedding", "rerank", "multimodal")
-
-
 def default_everos_root() -> Path:
     """Where a fresh install puts raven's own EverOS home.
 

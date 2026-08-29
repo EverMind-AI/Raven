@@ -9,8 +9,8 @@ on AgentLoop's lifecycle phases to answer three orthogonal questions:
                               (deny-list / approval workflow stub)
 - ``AfterIterationHook``    — "did this turn complete successfully?"
                               (LLM judge over the final response;
-                              writes case.md / behaviors.md via the
-                              MemoryEngine adapter)
+                              appends a HISTORY.md line through the
+                              MemoryStore adapter)
 
 All three are **off by default** (``EvalEngineConfig.enabled = False``).
 Mounting them onto AgentLoop happens via the CLI stack — see
@@ -27,10 +27,9 @@ Layout:
       ├── judge/
       │   └── judge.py           LLM judge invocation
       ├── adapter/
-      │   └── adapter.py         MemoryEngine write-back
+      │   └── adapter.py         HISTORY.md write-back
       └── prompts/
-          ├── task_completion.py
-          └── tool_safety.py
+          └── task_completion.py
 """
 
 from raven.eval_engine.config import EvalEngineConfig

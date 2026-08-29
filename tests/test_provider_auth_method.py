@@ -3,7 +3,7 @@
 Decided in one place, ``providers.auth``. Three modules used to decide it
 independently and disagreed:
 
-* ``config.schema._has_credentials`` gates routing -- a section it rejects is
+* ``config.schema.section_has_credentials`` gates routing -- a section it rejects is
   skipped when matching a model id to a provider.
 * ``config.update_providers.list_providers`` gates display -- it is what
   ``raven provider list`` and the pickers show.

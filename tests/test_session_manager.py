@@ -370,11 +370,6 @@ def test_legacy_global_sessions_shim_removed(tmp_path: Path, monkeypatch):
         + "\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        "raven.session.manager.get_legacy_sessions_dir",
-        lambda: legacy,
-        raising=False,
-    )
 
     session = SessionManager(tmp_path / "chanwork").get_or_create("tui:x")
     assert session.messages == []
