@@ -906,6 +906,16 @@ swap. Trigger: SIGHUP to the gateway.
 _Avoid_: "hot reload" (that is `reload.mcp`, a tool-set reconcile inside one generation);
 "restart" (the `/restart` control command, a whole-process execv).
 
+**Wire Schema** (`rpc-schema/` at repo root):
+The two hand-maintained OpenRPC contracts: `openrpc.json` (the terminal dialect every
+interactive client speaks -- TUI, the served page, ACP) and `openrpc-web.json` (the
+gateway web dialect). Cross-language neutral ground, machine-read by both frontends'
+codegen scripts, the Python match guards, CI and a pre-commit drift hook -- which is why
+it lives at the root and not inside any one consumer (moved up from `ui-tui/` by
+ce526ad5: a shared contract is not named after one of its clients).
+_Avoid_: treating it as a paper -- papers describe Python seams; this is a wire artifact
+consumed as cargo by tooling in two languages.
+
 **Kernel** (`spine/` + `contracts/` + `tracing/`):
 The shippable core: the L0 spine, the L1 papers, and tracing (whose only import-time
 edge into the kernel is the paper's instrument decorator). Machine-enforced by the
