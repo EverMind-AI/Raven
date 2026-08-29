@@ -28,10 +28,8 @@ def pytest_unconfigure(config: pytest.Config) -> None:
 
     A fully green run still exited 139 on Linux: the suite finalizes with
     native state live (asyncio subprocess transports collected during GC),
-    and Py_FinalizeEx segfaults on it, masking the recorded status. The CLI
-    routes its exit through the same helper, but on a different trigger --
-    see raven.cli._exit for the lancedb-specific gate it uses, which is not
-    what fires here.
+    and Py_FinalizeEx segfaults on it, masking the recorded status. The
+    helper lives in ``tests/_hard_exit.py``; nothing under ``raven/`` needs it.
 
     Local runs keep normal semantics so nothing masks an exit-time error, and
     the recorded status is preserved either way -- a failing run still exits
@@ -42,7 +40,7 @@ def pytest_unconfigure(config: pytest.Config) -> None:
     if not os.environ.get("CI"):
         return
 
-    from raven.cli._exit import flush_and_hard_exit
+    from tests._hard_exit import flush_and_hard_exit
 
     flush_and_hard_exit(int(getattr(config, "_raven_exitstatus", 0)))
 

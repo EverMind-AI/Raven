@@ -1,4 +1,4 @@
-"""Tests for the hard-exit helper in ``raven.cli._exit``.
+"""Tests for the hard-exit helper in ``tests/_hard_exit.py``.
 
 Its only caller is the pytest session hook in ``tests/conftest.py``, which needs
 it because a fully green run was observed exiting 139 on Linux when the
@@ -16,7 +16,7 @@ import textwrap
 def _hard_exit_child(code: int, *, prints: str = "") -> subprocess.CompletedProcess:
     src = f"""
     import sys
-    from raven.cli._exit import flush_and_hard_exit
+    from tests._hard_exit import flush_and_hard_exit
 
     sys.stdout.write({prints!r})
     flush_and_hard_exit({code})

@@ -1,14 +1,9 @@
-"""Hard-exit past CPython interpreter finalization.
+"""Hard-exit past CPython interpreter finalization, for the pytest session hook.
 
 Finalizing the interpreter while native state is still live can segfault
-(``Py_FinalizeEx``; SIGSEGV, exit 139) and mask the real exit code. The only
-caller today is the pytest session hook (``tests/conftest.py``), where a fully
-green run was observed exiting 139 on Linux.
-
-This used to also gate ``raven.cli.commands.run`` on a live lancedb background
-thread. That gate is gone: nothing under ``raven/`` imports lancedb -- memory
-talks to everos over HTTP and everos runs out-of-process -- so the probe could
-not fire in any configuration.
+(``Py_FinalizeEx``; SIGSEGV, exit 139) and mask the real exit code; a fully
+green run was observed exiting 139 on Linux. The hook in ``conftest.py`` routes
+the recorded status through here on CI.
 """
 
 from __future__ import annotations

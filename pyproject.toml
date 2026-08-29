@@ -345,7 +345,6 @@ source = ["raven"]
 omit = [
     "raven/__main__.py",
     "raven/evolver/__main__.py",
-    "raven/utils/win_fcntl_shim.py",
 ]
 
 [tool.coverage.report]
@@ -354,7 +353,6 @@ show_missing = true
 omit = [
     "raven/__main__.py",
     "raven/evolver/__main__.py",
-    "raven/utils/win_fcntl_shim.py",
 ]
 exclude_also = [
     "if TYPE_CHECKING:",
