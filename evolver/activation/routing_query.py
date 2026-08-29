@@ -1,18 +1,19 @@
-"""dry_query — offline probe of the real skill discovery + selection path.
+"""dry_query -- offline probe of the real skill discovery + selection path.
 
-Round-4 forensics found that a custom skill authored on disk under
-``skill_library/tb2_gap_fill/`` was never injected: the benchmark agent
-constructs ``SkillForgeConfig(enabled=False)`` with empty ``local_dirs``, so
-the directory is never mounted as a discovery layer and ``select()`` returns
-``[]`` before any retrieval runs. ``dry_query`` answers, without an LLM or the
-SR server, "which skill names would routing inject for this task?" by building
-a real :class:`LocalSkillCatalog` + :class:`SkillForgeRouter` whose
-``local_dirs`` point at ``library_root`` and running the actual BM25 retrieval
-+ resolve path.
+It answers, without an LLM or the SR server, "which skill names would routing
+inject for this task?" -- by building a real :class:`LocalSkillCatalog` and
+:class:`SkillForgeRouter` whose ``local_dirs`` point at ``library_root``, and
+running the actual BM25 retrieval and resolve path.
 
-No LLM is involved: the LLM gate and query rewriter are disabled, so selection
-reduces to filesystem discovery + lexical (BM25) scoring — the deterministic
-core of the real path that the benchmark must wire up.
+A skill authored on disk is injected only if its directory is mounted as a
+discovery layer: a ``SkillForgeConfig`` that is disabled, or carries no
+``local_dirs``, makes ``select()`` return an empty list before any retrieval
+runs. That is what this probe exists to show, benchmark harness by benchmark
+harness.
+
+No LLM is involved: the LLM gate and the query rewriter are off, so selection
+reduces to filesystem discovery plus lexical (BM25) scoring -- the
+deterministic core of the real path.
 """
 
 from __future__ import annotations
@@ -43,8 +44,8 @@ def dry_query(task_text: str, *, library_root: Path | None = None) -> list[str]:
     """
     from raven.config.raven import LocalDirConfig, SkillForgeConfig
 
-    # Raven split the old unified SkillService into a discovery catalog
-    # (always-skills + registry/pool) and a retrieval router over sources.
+    # Discovery (always-skills + registry/pool) and retrieval (a router over
+    # sources) are separate objects; this probe drives both, in that order.
     from raven.memory_engine import LocalSkillCatalog, LocalSkillSource, SkillForgeRouter
 
     local_dirs: list[LocalDirConfig] = []
@@ -64,7 +65,6 @@ def dry_query(task_text: str, *, library_root: Path | None = None) -> list[str]:
         catalog = LocalSkillCatalog(
             Path(ws),
             config=config,
-            llm_provider=None,
             start_watcher=False,
         )
         always = catalog.get_always_skills()
