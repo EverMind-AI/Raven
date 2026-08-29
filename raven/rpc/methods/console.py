@@ -1396,6 +1396,9 @@ def register_console_methods(dispatcher, *, agent_loop_factory=None) -> None:
     dispatcher.register("settings.usage", bind(settings_usage))
     dispatcher.register("settings.everos", bind(settings_everos))
     dispatcher.register("settings.everosSet", bind(settings_everos_set))
+    # The camelCase spelling is what the shipped TUI calls; the snake_case name is
+    # the method's, double-registered until the TUI reads it.
+    dispatcher.register("settings.everos_set", bind(settings_everos_set))
     dispatcher.register("channels.status", bind(channels_status))
     dispatcher.register("channels.configure", bind(channels_configure))
     dispatcher.register("channels.qr", channels_qr)

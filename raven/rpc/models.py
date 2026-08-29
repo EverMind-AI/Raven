@@ -3753,6 +3753,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "settings.usage": (SettingsUsageParams, SettingsUsageResult),
     "settings.everos": (SettingsEverosParams, SettingsEverosResult),
     "settings.everosSet": (SettingsEverosSetParams, SettingsEverosSetResult),
+    "settings.everos_set": (SettingsEverosSetParams, SettingsEverosSetResult),
     "clipboard.paste": (ClipboardPasteParams, ClipboardPasteResult),
     "command.dispatch": (CommandDispatchParams, CommandDispatchResult),
     "delegation.status": (DelegationStatusParams, DelegationStatusResult),

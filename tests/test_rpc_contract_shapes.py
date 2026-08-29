@@ -187,6 +187,7 @@ async def test_settings_everos(workspace: Path, tmp_path: Path, monkeypatch: pyt
         await console.settings_everos_set({"section": "llm", "fields": {"model": "gpt-4o"}}),
     )
     _check("settings.everosSet", await console.settings_everos_set({"section": "rerank", "clear": True}))
+    _check("settings.everos_set", await console.settings_everos_set({"section": "llm", "fields": {"model": "gpt-4o"}}))
     # The set has to survive the round trip: a section written and read back is
     # what the page shows, and it is the branch where `api_key_set` is true.
     await console.settings_everos_set({"section": "llm", "fields": {"api_key": "sk-x"}})

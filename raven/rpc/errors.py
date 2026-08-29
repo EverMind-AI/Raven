@@ -111,7 +111,13 @@ class ConfigValidationError(RpcError):
     MESSAGE = "config_validation_error"
 
 
-class NotSupportedInV01Error(RpcError):
+class NotSupportedError(RpcError):
+    """A method the TUI knows but Raven does not back.
+
+    The wire message keeps the ``_in_v01`` spelling: the client matches on it,
+    so it changes together with the TUI, not before.
+    """
+
     CODE = -32012
     MESSAGE = "not_supported_in_v01"
 
@@ -181,7 +187,7 @@ JSONRPC_ERROR_REGISTRY: dict[int, type[RpcError]] = {
         ModelNotAvailableError,
         ConfigFieldReadonlyError,
         ConfigValidationError,
-        NotSupportedInV01Error,
+        NotSupportedError,
         CliCommandFailedError,
         CliCommandTimeoutError,
         NotDispatchCompatibleError,
@@ -204,7 +210,7 @@ __all__ = [
     "ModelNotAvailableError",
     "ConfigFieldReadonlyError",
     "ConfigValidationError",
-    "NotSupportedInV01Error",
+    "NotSupportedError",
     "CliCommandFailedError",
     "CliCommandTimeoutError",
     "NotDispatchCompatibleError",

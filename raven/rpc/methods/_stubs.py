@@ -4,7 +4,7 @@ These method names exist in the fork-imported hermes UI but Raven does not
 back with real functionality. Rather than physically remove the
 slash commands (which would inflate the fork-import diff and worsen future
 upstream merges), we wire each name to a stub that raises
-:class:`NotSupportedInV01Error` (JSON-RPC -32012). The hermes UI already has
+:class:`NotSupportedError` (JSON-RPC -32012). The hermes UI already has
 an error-toast component that consumes this shape gracefully — the user types
 the slash command and sees a transient "Not supported" toast.
 
@@ -41,7 +41,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from raven.rpc.errors import NotSupportedInV01Error
+from raven.rpc.errors import NotSupportedError
 
 if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
@@ -182,13 +182,13 @@ HERMES_ONLY_STUB_METHODS: tuple[str, ...] = tuple(name for name, _msg, _hint in 
 
 
 def _make_stub(error_msg: str, hint: str | None):
-    """Build an async handler that raises NotSupportedInV01Error with payload."""
+    """Build an async handler that raises NotSupportedError with payload."""
 
     async def _handler(params: dict[str, Any]) -> dict:  # pragma: no cover — never returns
         data: dict[str, Any] = {"error": error_msg}
         if hint is not None:
             data["hint"] = hint
-        raise NotSupportedInV01Error(error_msg, data=data)
+        raise NotSupportedError(error_msg, data=data)
 
     return _handler
 
@@ -196,7 +196,7 @@ def _make_stub(error_msg: str, hint: str | None):
 def register_stub_methods(dispatcher: "Dispatcher") -> None:
     """Register all 6-group hermes-only stub methods on a dispatcher.
 
-    Each handler raises :class:`NotSupportedInV01Error` (JSON-RPC -32012);
+    Each handler raises :class:`NotSupportedError` (JSON-RPC -32012);
     the dispatcher serializes it to a ``{code, message, data: {error, hint?}}``
     error frame which hermes's existing error-toast consumes verbatim.
     """
