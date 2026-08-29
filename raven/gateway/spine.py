@@ -1,9 +1,10 @@
 """Spine wiring for the gateway daemon: build_gateway assembles the scheduler,
-the delivery hub with a per-channel outbound outlet, and a teardown — the third
-assembly point, mirroring build_repl / build_rpc_spine. The gateway's host sources
-(cron / sentinel / heartbeat, and channel replies) submit through it.
-
-spine never imports cli; cli imports spine.
+the delivery hub with a per-channel outbound outlet, and a teardown -- the third
+assembly point, mirroring build_repl (cli) and build_rpc_spine (rpc) at their own
+surfaces. It lives with the rest of the gateway plumbing because it wires exactly
+one entrance; the cross-entrance assembly root (raven/core) holds only what every
+entrance shares. The gateway's host sources (cron / sentinel / heartbeat, and
+channel replies) submit through it.
 """
 
 from __future__ import annotations

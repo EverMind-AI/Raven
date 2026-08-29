@@ -940,13 +940,16 @@ the set and the lazy debt edges; the raven-core wheel is this set as a build art
 **Layer Seats** (pyproject.toml `[tool.importlinter]` + `tests/test_l4_entrances.py`):
 Where every package sits, as the machine enforces it. Inner (may not import a surface):
 the seventeen w18 packages plus, seated by the 2026-08-29 structural audit, `config` and
-`utils` (cross-cutting leaves) and `mcp`, `playbook`, `knowledge`, `skill_hub`,
-`trajectory`, `eval_engine` (L3 shelf members); `templates` is packaged data and takes no seat. Surfaces: `cli`, `rpc`, `proactive_engine`,
-and `acp` (an entrance: Raven serving as an agent for another host). Deliberately
-unseated, each awaiting its own ruling: `core` (its sentinel-machinery imports are one
-knot with proactive_engine's surface seat), `evolver` (zero inbound imports; product or
-engine is an open call), `browser` and `importer` (surface-side feature libraries, the
-w18 phrasing).
+`utils` (cross-cutting leaves), `mcp`, `playbook`, `knowledge`, `skill_hub`, `trajectory`,
+`eval_engine` and `proactive_engine` (L3 shelf members -- proactive_engine originates
+turns through its schedulers and sentinel but is an engine the loop and the assembly root
+consume, not a transport), and `core` (the L2 assembly root). `templates` is packaged data
+and takes no seat. Surfaces: `cli`, `rpc`, and `acp` (an entrance: Raven serving as an
+agent for another host). Deliberately unseated, each awaiting its own ruling: `evolver`
+(zero inbound imports; product or engine is an open call), `browser` and `importer`
+(surface-side feature libraries, the w18 phrasing). One ruled edge: `trajectory` (L3)
+reaches `core.admission` for the door vocabulary and builds a loop by hand for replay --
+legal, because it is a harness over recorded runs, not an entrance.
 
 **Assembly Root** (`core/`):
 The package that composes a running agent out of parts: one `*_stack` builder per assembly
