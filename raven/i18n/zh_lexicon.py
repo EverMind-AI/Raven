@@ -227,3 +227,7 @@ TRIGGER_STOPWORDS: frozenset[str] = frozenset(
 )
 """Openers and mechanism words a Chinese request carries whatever it asks for,
 so a playbook trigger built from them would fire on every request."""
+
+TASK_TITLE_EXAMPLE = "草拟回复"
+"""An imperative task title in Chinese, shown beside its English form so the
+model writes a title in the user's language rather than translating one."""
