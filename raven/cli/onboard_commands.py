@@ -60,10 +60,10 @@ from raven.cli._onboard_shared import (  # noqa: F401  (re-exports: tests and
 from raven.core.provider_stack import DEFAULT_PROBE_MESSAGE, send_probe
 from raven.i18n import t
 from raven.providers.registry import (
-    CRED_ENDPOINT,
-    CRED_LOCAL,
-    CRED_OAUTH,
-    credential_kind,
+    SHAPE_ENDPOINT,
+    SHAPE_LOCAL,
+    SHAPE_OAUTH,
+    auth_shape,
 )
 from raven.providers.wire import stored_model_id
 
@@ -617,7 +617,7 @@ def _run_oauth_login(provider: str) -> bool:
     from raven.providers.registry import find_by_name
 
     spec = find_by_name(provider)
-    if credential_kind(provider) != CRED_OAUTH:
+    if auth_shape(provider) != SHAPE_OAUTH:
         console.print(t("  [red]✗ {provider} is not an OAuth provider.[/red]", provider=provider))
         raise typer.Exit(1)
     handler = _LOGIN_HANDLERS.get(spec.name)
@@ -655,7 +655,7 @@ def _verify_provider(provider: str, *, skip_test: bool = False) -> tuple[bool, s
     # A local deployment has no key to verify -- what is being checked is that
     # the address answers, and saying "API key" there describes a field the user
     # was never asked for.
-    if credential_kind(provider) == CRED_LOCAL:
+    if auth_shape(provider) == SHAPE_LOCAL:
         console.print(t("  [dim]⏳ Reaching the server…[/dim]"))
     else:
         console.print(t("  [dim]⏳ Verifying your API key…[/dim]"))
@@ -880,7 +880,7 @@ def _roll_back_provider_fields(provider: str, spec: Any, *, old_key: Optional[st
     layer refuses to write credential fields for them, and doing it anyway turned
     a failed verification into a dead wizard.
     """
-    if credential_kind(provider) == CRED_OAUTH:
+    if auth_shape(provider) == SHAPE_OAUTH:
         return
     _write_provider_fields(provider, {"api_key": old_key or "", "api_base": old_base})
 
@@ -1048,9 +1048,9 @@ def _configure_one_provider(
                 continue
 
         spec = find_by_name(provider)
-        kind = credential_kind(provider)
-        is_oauth = kind == CRED_OAUTH
-        is_custom = kind == CRED_ENDPOINT
+        kind = auth_shape(provider)
+        is_oauth = kind == SHAPE_OAUTH
+        is_custom = kind == SHAPE_ENDPOINT
         # The interactive picker already echoes the chosen provider; only print
         # an explicit confirmation when it came from --provider (no echo then).
         if flag_provider:
@@ -1073,7 +1073,7 @@ def _configure_one_provider(
             provider,
             is_oauth=is_oauth,
             is_custom=is_custom,
-            is_local=kind == CRED_LOCAL,
+            is_local=kind == SHAPE_LOCAL,
             api_key=api_key,
             base_url=base_url,
             model=model,
@@ -1285,7 +1285,7 @@ def _resolve_model_with_test(
                     # A local deployment that cannot be reached is usually a
                     # wrong address, and this is the branch it lands in -- so
                     # retry alone left the one thing worth changing unreachable.
-                    *([(t("Re-enter server URL"), "rebase")] if credential_kind(provider) == CRED_LOCAL else []),
+                    *([(t("Re-enter server URL"), "rebase")] if auth_shape(provider) == SHAPE_LOCAL else []),
                     (t("Continue anyway"), "continue"),
                 ]
                 if status == "network_error"
@@ -1295,9 +1295,9 @@ def _resolve_model_with_test(
                     # left a mistyped address with no way back to the field.
                     (
                         (t("Sign in again"), "reauth")
-                        if credential_kind(provider) == CRED_OAUTH
+                        if auth_shape(provider) == SHAPE_OAUTH
                         else (t("Re-enter server URL"), "rebase")
-                        if credential_kind(provider) == CRED_LOCAL
+                        if auth_shape(provider) == SHAPE_LOCAL
                         else (t("Re-enter key"), "rekey")
                     ),
                     # Also retry, because this branch takes the failures that
@@ -1370,7 +1370,7 @@ def _resolve_model_with_test(
             provider,
             non_interactive=non_interactive,
             warnings=warnings,
-            is_oauth=credential_kind(provider) == CRED_OAUTH,
+            is_oauth=auth_shape(provider) == SHAPE_OAUTH,
         )
         if result == "switch":
             return None
@@ -1430,7 +1430,7 @@ def _configure_existing_provider_model(*, non_interactive: bool) -> bool:
         provider,
         non_interactive=False,
         warnings=[],
-        is_oauth=credential_kind(provider) == CRED_OAUTH,
+        is_oauth=auth_shape(provider) == SHAPE_OAUTH,
     )
     if result == "reauth":
         return _run_oauth_login(provider)
@@ -1480,7 +1480,7 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
             continue
         if action == "update":
             target_spec = find_by_name(target)
-            if credential_kind(target) == CRED_OAUTH:
+            if auth_shape(target) == SHAPE_OAUTH:
                 # Nothing here to update: the credential is a token file, and the
                 # ops layer refuses credential writes for these -- so offering the
                 # key prompt ended the wizard instead of editing anything.
@@ -1492,7 +1492,7 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
                     )
                 )
                 continue
-            if credential_kind(target) == CRED_LOCAL:
+            if auth_shape(target) == SHAPE_LOCAL:
                 # A local deployment holds no key; what there is to update is
                 # where it lives. Offering the key prompt wrote a credential into
                 # a provider that never reads one, and left the address alone.
@@ -1504,7 +1504,7 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
                     stored = ""
                 retyped = _prompt_local_api_base(target_spec, current=stored)
                 _write_provider_fields(target, {"api_base": retyped})
-            elif credential_kind(target) == CRED_ENDPOINT:
+            elif auth_shape(target) == SHAPE_ENDPOINT:
                 # A self-hosted endpoint is a key *and* the address it is sent
                 # to. Updating only the key left the one field that moves when
                 # the user redeploys -- the URL -- unreachable from this menu.
@@ -1552,7 +1552,7 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
             # to clear and refuses the write, so it is told where its credential
             # actually lives instead of ending the run.
             target_spec = find_by_name(target)
-            if credential_kind(target) == CRED_OAUTH:
+            if auth_shape(target) == SHAPE_OAUTH:
                 console.print(
                     t(
                         "  [dim]{a0}'s credential is an OAuth token, not a config field, so there is nothing here to remove.[/dim]",

@@ -908,7 +908,7 @@ def test_add_provider_endpoint_refuses_an_empty_key_for_a_key_based_provider(cfg
 
 
 def test_add_provider_endpoint_allows_an_empty_key_for_a_local_deployment(cfg_path: Path) -> None:
-    """Derived from the registry's credential shape (``credential_kind``), not
+    """Derived from the registry's credential shape (``auth_shape``), not
     a hardcoded vendor list: a local deployment has no key to give."""
     endpoints = add_provider_endpoint(
         "hosted_vllm", label="a", api_base="http://10.0.0.5:8000/v1", config_path=cfg_path

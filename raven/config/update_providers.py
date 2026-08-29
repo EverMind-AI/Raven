@@ -32,10 +32,10 @@ from raven.config.loader import get_config_path, read_raw_or_raise
 from raven.config.schema import ProviderConfig, ProviderEndpoint, ProvidersConfig
 from raven.providers.endpoints import provider_endpoints
 from raven.providers.registry import (
-    CRED_LOCAL,
+    SHAPE_LOCAL,
     ProviderSpec,
+    auth_shape,
     canonical_provider_name,
-    credential_kind,
     endpoints_unsupported_reason,
     find_by_name,
     names_same_provider,
@@ -969,7 +969,7 @@ def add_provider_endpoint(
     ``make_provider`` applies at build time, applied here before the write
     rather than left for that later failure to catch. Also RuntimeError for an
     empty ``api_key`` on a provider whose credential shape needs one --
-    derived from the registry (``credential_kind``), not a hardcoded vendor
+    derived from the registry (``auth_shape``), not a hardcoded vendor
     list, so a local/keyless deployment (``hosted_vllm``, ``ollama_chat``, ...)
     keeps writing a keyless endpoint while every key-based provider gets the
     same rejection the CLI and the TUI picker both need.
@@ -978,7 +978,7 @@ def add_provider_endpoint(
     reason = endpoints_unsupported_reason(name)
     if reason:
         raise RuntimeError(reason)
-    if not api_key and credential_kind(name) != CRED_LOCAL:
+    if not api_key and auth_shape(name) != SHAPE_LOCAL:
         raise RuntimeError(
             f"{name} needs an api_key -- only a local, keyless deployment can add an endpoint without one"
         )

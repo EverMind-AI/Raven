@@ -40,11 +40,11 @@ from raven.config.update_providers import (
 from raven.providers.auth import credential_status
 from raven.providers.common_models import common_models_for, litellm_models_for
 from raven.providers.registry import (
-    CRED_ENDPOINT,
-    CRED_LOCAL,
-    CRED_OAUTH,
+    SHAPE_ENDPOINT,
+    SHAPE_LOCAL,
+    SHAPE_OAUTH,
+    auth_shape,
     canonical_provider_name,
-    credential_kind,
     find_by_model,
     find_by_name,
     split_model_id,
@@ -206,8 +206,8 @@ def _build_provider_entry(
         providers = {p["name"]: p for p in list_providers()}
     info = providers.get(slug, {})
 
-    kind = credential_kind(slug)
-    is_oauth = kind == CRED_OAUTH
+    kind = auth_shape(slug)
+    is_oauth = kind == SHAPE_OAUTH
     configured = bool(info.get("configured"))
     warning = ""
     if is_oauth and not configured:
@@ -232,7 +232,8 @@ def _build_provider_entry(
         # an endpoint-credential spec that ships a usable default (custom's
         # localhost gateway) runs on a bare key, and the picker must not
         # demand what the gate does not.
-        "needs_api_base": kind == CRED_LOCAL or (kind == CRED_ENDPOINT and not (spec and spec.usable_default_api_base)),
+        "needs_api_base": kind == SHAPE_LOCAL
+        or (kind == SHAPE_ENDPOINT and not (spec and spec.usable_default_api_base)),
         "warning": warning,
     }
 
@@ -350,8 +351,8 @@ async def model_save_key(params: dict) -> dict:
             f"{label} uses OAuth; run `raven provider login {parsed.slug.replace('_', '-')}`",
             data={"slug": parsed.slug},
         )
-    kind = credential_kind(parsed.slug)
-    if kind == CRED_LOCAL and parsed.api_key:
+    kind = auth_shape(parsed.slug)
+    if kind == SHAPE_LOCAL and parsed.api_key:
         # Said out loud rather than dropped: a local deployment writes no key, so
         # storing one silently would look like it had been accepted.
         raise ConfigValidationError(
@@ -376,7 +377,7 @@ async def model_save_key(params: dict) -> dict:
     # rather than by omission: leaving the field alone kept whatever was there,
     # so a section that once held a key would still be sending it to the user's
     # own server.
-    fields: dict[str, Any] = {"api_key": "" if kind == CRED_LOCAL else parsed.api_key}
+    fields: dict[str, Any] = {"api_key": "" if kind == SHAPE_LOCAL else parsed.api_key}
     if parsed.api_base:
         fields["api_base"] = parsed.api_base
 
