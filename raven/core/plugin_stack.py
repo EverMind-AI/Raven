@@ -1,4 +1,4 @@
-"""CLI assembly helper for the plugin / memory-backend stack.
+"""Assembly-root builders for the plugin / memory-backend stack.
 
 Two functions that bridge the gap between RavenConfig (user-facing
 settings under ``plugins`` / ``memory``) and the runtime objects
@@ -14,9 +14,7 @@ AgentLoop expects (a ready-to-use :class:`MemoryBackend` instance):
 
 Both functions are intentionally lenient: a missing
 plugin / activation error logs a warning and falls through to ``None``
-rather than crashing the host. The legacy ``self.memory`` pipeline in
-AgentLoop is unaffected — it always works regardless of whether a
-plugin backend is wired.
+rather than crashing the host.
 
 Lifecycle (``backend.start()`` / ``backend.stop()``) is the **caller's**
 responsibility. These helpers only construct; CLI bootstrap code does
@@ -152,9 +150,8 @@ def maybe_build_memory_backend(
         )
         return None
     except Exception as e:
-        # Factory raised during construction — log + degrade rather
-        # than fail the host boot. CLEANUP will tighten this once the
-        # plugin path is the canonical one and a failure is fatal.
+        # Factory raised during construction: log and degrade rather
+        # than fail the host boot.
         logger.warning(
             "memory backend %r factory raised at construction (%s); continuing without backend.",
             name,

@@ -1,6 +1,6 @@
 """Custom RPC exception classes mapped to JSON-RPC 2.0 error codes.
 
-Code table — frozen in `specs/tui-ipc.md` §4 (server-defined range -32000..-32099):
+Code table (server-defined range -32000..-32099):
 
 | code   | message                       | meaning                          |
 |--------|-------------------------------|----------------------------------|

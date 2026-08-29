@@ -1,7 +1,4 @@
-"""TokenWise core abstractions — colocated with implementations.
-
-Migrated from ``raven/core/interfaces.py``. The colocate-with-implementation
-rule means strategies live next to the ABC they implement.
+"""The token-strategy paper: the hooks a TokenWise strategy implements around an LLM call.
 
 Strategies are additive — multiple can be installed. The agent calls each
 hook in registration order. A strategy that is not interested in a given

@@ -15,10 +15,6 @@ Two design points worth highlighting:
   ``@runtime_checkable`` lets tests assert duck-typed conformance
   without inheritance; the cost is accepting any object whose surface
   matches, which is fine because the registration set is closed.
-
-The legacy ``ScoredSkill`` in ``skill/types.py`` stays untouched for
-now — :class:`LocalPool` and :class:`SkillService` continue to use it.
-The cleanup PR collapses the two once SkillService is removed.
 """
 
 from __future__ import annotations

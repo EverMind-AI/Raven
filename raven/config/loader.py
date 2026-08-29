@@ -157,7 +157,7 @@ def drain_migration_notices() -> list[str]:
 
     Drained rather than read so that a process loading the config several times
     (status and doctor do; the TUI RPC server reloads every turn) tells the user
-    once. Callers own a console -- see ``core.helpers``.
+    once. Callers own the console they print them to.
     """
     notices = list(_migration_notices)
     _migration_notices.clear()

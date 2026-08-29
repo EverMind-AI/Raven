@@ -1,12 +1,12 @@
 """Config-slice admission: validate and apply declared defaults at dispensing.
 
-EM-2 completion (ruled 2026-08-27, config-with-cargo end state): a manifest
+Config-with-cargo: a manifest
 may declare ``config_schema`` — a flat mapping of key -> {type, default?,
 required?} — and the registry admits the user's slice against it right
 before the factory sees it. An empty declaration keeps today's verbatim
 pass-through, so every plugin that declares nothing is untouched.
 
-Tolerance rules (migration requirement #1): a missing slice reads as ``{}``;
+Tolerance rules: a missing slice reads as ``{}``;
 admission consults nothing outside the slice itself, so breakage elsewhere
 in the config cannot take the plugin path down; failures name the plugin
 and the key, because "which cargo refused to board and why" is the whole
@@ -193,7 +193,7 @@ class DispensedSlice:
 
     Declared keys answer from the admitted slice (defaults applied, types
     checked); anything else -- the socket fields and any not-yet-declared
-    field -- falls back to the central section, so the pilot changes where a
+    field -- falls back to the central section, so admission changes where a
     value travels, never what it is. Nested tables come back as frozen
     views, so a file-set object key reads exactly like the sub-model it
     replaces.

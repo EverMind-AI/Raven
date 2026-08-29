@@ -7,7 +7,7 @@ independently and disagreed:
   skipped when matching a model id to a provider.
 * ``config.update_providers.list_providers`` gates display -- it is what
   ``raven provider list`` and the pickers show.
-* ``core.helpers.check_provider_credentials`` gates startup -- it decides
+* ``providers.factory.check_provider_credentials`` gates startup -- it decides
   whether ``raven agent`` runs at all.
 
 A provider the second accepted and the first rejected was configured according

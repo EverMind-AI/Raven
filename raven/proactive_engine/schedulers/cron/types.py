@@ -26,7 +26,7 @@ class CronPayload:
     message: str = ""
     channel: str | None = None  # e.g. "whatsapp"
     to: str | None = None  # e.g. phone number
-    # Sentinel-coordination tag (F-G): when set, this cron fire updates
+    # Sentinel-coordination tag: when set, this cron fire updates
     # the shared NudgePolicy ledger (topic_fired_at + record_dispatched)
     # so the L3 Sentinel's later proactive ticks skip the same topic
     # instead of double-nudging. Set by the LLM when creating crons

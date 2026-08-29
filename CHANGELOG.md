@@ -114,7 +114,7 @@ All notable changes to Raven are documented here.
   line into a temporary `pyproject.toml` so the agents reached testers and no one
   else; both mechanisms at once made every wheel build fail on a duplicate archive
   path, and the tree now reaches stable releases and `git+` installs as well.
-- Setup now offers the sub-agents that ship with raven. Step 5 of the wizard
+- Setup now offers the sub-agents that ship with raven. Step 6 of the wizard
   lists each folder under `subagents/` and asks whether to run it on the model it is
   tuned for, on this raven's LLM, or not at all, then writes the roster entries. The
   tuned model leads the menu because it is the one a key of its own buys: inheritance
@@ -208,7 +208,7 @@ All notable changes to Raven are documented here.
   entry that is an object naming neither a file nor a node is refused for the same reason:
   it used to render as its own Python repr.
 
-- `raven onboard --skip-deep-research` is now `--skip-subagents`, because step 5 is the
+- `raven onboard --skip-deep-research` is now `--skip-subagents`, because step 6 is the
   sub-agent step. Typer rejects an unknown option, so a script or CI job passing the old
   name exits 2 with `No such option` rather than skipping anything.
 

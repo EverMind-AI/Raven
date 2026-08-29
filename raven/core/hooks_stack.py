@@ -2,13 +2,12 @@
 
 Composes a :class:`CompositeHook` from optional sub-stacks:
 
-- Legacy Sentinel callbacks (still passed through AgentLoop's
-  on_user_inbound / decision_consumer / response_modifier params —
-  the AgentLoop constructor auto-wraps them via the legacy-callback
-  adapters and registers them into ``self.hooks``; ``build_hooks_stack``
-  does NOT duplicate that wiring).
+- Sentinel callbacks (passed through AgentLoop's on_user_inbound /
+  decision_consumer / response_modifier params — the AgentLoop constructor
+  wraps them in adapters and registers them into ``self.hooks``;
+  ``build_hooks_stack`` does NOT duplicate that wiring).
 - Eval Engine hooks from :func:`build_eval_stack`.
-- Future caller-supplied hooks.
+- Caller-supplied hooks.
 
 The helper is intentionally thin — most callers just hand
 ``EvalEngine.hooks()`` to AgentLoop's ``hooks=...`` constructor
@@ -44,7 +43,7 @@ def build_hooks_stack(
 
     The Sentinel adapter hooks (OnUserInboundAdapter / DecisionConsumerAdapter
     / ResponseModifierAdapter) are NOT added here — AgentLoop's constructor
-    auto-wraps the matching legacy parameters into adapters and inserts
+    wraps the matching parameters into adapters and inserts
     them around any ``hooks=`` argument it receives. See
     ``raven.agent.loop.main.AgentLoop.__init__`` for the canonical
     ordering rationale.

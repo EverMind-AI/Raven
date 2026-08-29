@@ -4,9 +4,8 @@ This package (``raven.context_engine``) hosts the single
 :class:`ContextAssembler` (a concrete subclass of
 :class:`ContextEngine`) plus its building blocks. AgentLoop holds
 exactly one ``self.context_engine: ContextEngine`` reference, built via
-:func:`raven.context_engine.build_context_engine`. The ABC is kept so
-alternative engines can be slotted in for experiments, but there is one
-shipping implementation.
+:func:`raven.context_engine.build_context_engine`. The ABC lets an
+alternative engine be slotted in; one implementation ships.
 
 Naming note:
     Named ``context_engine`` (not ``context``) to mirror the L4

@@ -56,7 +56,7 @@ def _emit_cron_event(
     remains in the cron service's error log (a successful retry resets
     ``last_error``).
 
-    Best-effort like the F-G ledger write: an emit failure must neither
+    Best-effort like the ledger write: an emit failure must neither
     mask the original cron error (failure path re-raises it) nor turn a
     successful run into an error.
     """
@@ -135,7 +135,7 @@ def make_on_cron_job(
     job surfaces in the interactive TUI session (the "cli" channel value
     is retired).
 
-    ``sentinel_runner`` is optional. When present, F-G makes cron fires
+    ``sentinel_runner`` is optional. When present, cron fires
     write to the shared NudgePolicy ledger (topic_fired_at +
     record_dispatched) so the L3 Sentinel suppresses its own proactive
     nudges on the same topic within the dedup window. Without this,
@@ -286,7 +286,7 @@ def make_on_cron_job(
                     exc,
                 )
 
-        # F-G: tell the L3 Sentinel this surface just nudged the user (topic_fired_at
+        # Tell the L3 Sentinel this surface just nudged the user (topic_fired_at
         # + record_dispatched), so its next tick on the same topic skips via
         # topic_quota. Bypasses policy.check(): the user scheduled this cron, so a
         # self-imposed DND / quota must only INFORM, not veto. No-op without sentinel.
@@ -307,7 +307,7 @@ def _record_cron_dispatch_to_ledger(
     sentinel_runner: "SentinelRunner",
     job: "CronJob",
 ) -> None:
-    """F-G internal: write a cron fire into the shared NudgePolicy ledger.
+    """Write a cron fire into the shared NudgePolicy ledger.
 
     The fire IS logged as ``dispatched`` so Sentinel's topic_quota gate
     sees it, but it's IMMEDIATELY marked NEUTRAL so it doesn't pollute
@@ -354,7 +354,7 @@ def _record_cron_dispatch_to_ledger(
             feedback.record_neutral(nudge_id, reason="cron-initiated")
     except Exception as exc:  # noqa: BLE001 — ledger write is best-effort
         logger.warning(
-            "F-G ledger write failed for cron {}: {}: {}",
+            "ledger write failed for cron {}: {}: {}",
             job.id,
             type(exc).__name__,
             exc,

@@ -1,6 +1,6 @@
 """Proactivity preferences reader — bridges Personalizer output to NudgePolicy.
 
-Personalizer.post_learn (``raven/agent/personalizer.py``) writes
+Personalizer.post_learn (``raven/agent/personalizer/``) writes
 proactivity-related facts to the ``## Proactivity Preferences`` section of
 MEMORY.md (facts tagged with ``category=proactivity``). This module reads
 that section and surfaces a structured ``PersonalizedOverrides`` object

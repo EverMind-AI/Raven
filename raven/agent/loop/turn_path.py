@@ -1,5 +1,5 @@
 """The turn execution path: dispatch, the agent loop, streaming, recovery,
-persistence. Bodies moved verbatim from main.py.
+persistence.
 """
 
 from __future__ import annotations
@@ -77,7 +77,7 @@ if TYPE_CHECKING:
 
 class TurnPathMixin:
     """The turn execution path: dispatch, the agent loop, streaming, recovery,
-    persistence. Bodies moved verbatim from main.py."""
+    persistence."""
 
     @staticmethod
     def _checkpoint_active(policy: str, interactive: bool) -> bool:
@@ -506,7 +506,6 @@ class TurnPathMixin:
         self,
         initial_messages: list[dict],
         on_progress: Callable[..., Awaitable[None]] | None = None,
-        extraction_session_id: str | None = None,
         session_key: str | None = None,
         model: str | None = None,
         fallback_models: list[str] | None = None,
@@ -525,22 +524,15 @@ class TurnPathMixin:
         any user messages injected mid-turn (BusyPolicy.INJECT) and merge them
         as user turns before the next LLM call.
 
-        ``extraction_session_id`` is the session key passed to local
-        skill extraction when a turn completes. When ``None``, extraction
-        is skipped (no pipeline wired) -- which is the only case today, so
-        ``extraction_key`` below is always empty. It is not the turn's
-        session key and must not be used as one.
-
         ``session_key`` is the turn's real session key. It labels the
-        checkpoint commit only; usage attribution deliberately still goes
-        through ``extraction_key``, since widening it would start filling
-        per-session cost buckets that have always been empty.
+        checkpoint commit only; usage attribution deliberately carries an
+        empty session key, since widening it would start filling per-session
+        cost buckets that have always been empty.
         """
         messages = initial_messages
         iteration = 0
         final_content = None
         tools_used: list[str] = []
-        extraction_key = extraction_session_id or ""
         effective_model = model or self.model
 
         # Bug2 / decision B — track whether the turn was a normal exit or a
@@ -658,7 +650,7 @@ class TurnPathMixin:
                 )
             # TokenWise after-hook: strategies observe the response for
             # usage tracking, budget enforcement, etc. Errors are swallowed.
-            usage_snapshot = self._build_usage_snapshot(response, call_model, extraction_key)
+            usage_snapshot = self._build_usage_snapshot(response, call_model, "")
             await self.strategies.after_llm_call(
                 {
                     "content": response.content,
@@ -1118,12 +1110,10 @@ class TurnPathMixin:
                 messages = self.context.add_assistant_message(messages, final_content)
 
         # Drop transient empty-recovery scaffolding before persistence /
-        # extraction / return — refactor/Raven's empty-recovery marks
-        # synthetic nudge/prefill messages with ``_recovery_synthetic``; strip
-        # them so they never persist. (Embedded ``_trigger_local_extraction``
-        # was retired on feature/integrate-everos; the after-turn pipeline —
-        # ``context_engine.after_turn`` + ``backend.store`` in
-        # ``_process_message`` — owns extraction now.)
+        # extraction / return: empty recovery marks synthetic nudge/prefill
+        # messages with ``_recovery_synthetic``; strip them so they never
+        # persist. The after-turn pipeline (``context_engine.after_turn`` +
+        # ``backend.store`` in ``_process_message``) owns extraction.
         # Attached-image messages are dropped here for the same reason and at the
         # same point: the returned list feeds persistence, ``after_turn``
         # extraction and ``backend.store`` alike, so filtering once upstream of
@@ -1132,12 +1122,10 @@ class TurnPathMixin:
         if any(any(m.get(k) for k in _transient) for m in messages):
             messages = [m for m in messages if not any(m.get(k) for k in _transient)]
 
-        # Phase B-1 (feature/integrate-everos): embedded extraction (the
-        # ``_trigger_local_extraction`` / ``SkillService.on_execution`` path)
-        # was retired here in favor of the after-turn pipeline owned by the
-        # caller — ``context_engine.after_turn`` + ``backend.store`` +
-        # ``backend.feedback`` run from ``_process_message``. We surface
-        # ``outcome.status`` so that pipeline can gate on completion later.
+        # Extraction belongs to the caller's after-turn pipeline
+        # (``context_engine.after_turn`` + ``backend.store`` + ``backend.feedback``
+        # run from ``_process_message``); ``outcome.status`` is surfaced so that
+        # pipeline can gate on completion.
 
         outcome = LoopOutcome(status=status)
         checkpoint = self._turn_checkpoint()
@@ -1451,7 +1439,6 @@ class TurnPathMixin:
                 + "); the answer was produced without them.",
             )
 
-        extraction_sid = None  # Phase B-1: embedded extraction removed; always None now.
         turn_start_idx = len(initial_messages) - 1
         # The assembled list ends with THIS turn's user message, which is the
         # entry the mark belongs on.
@@ -1486,7 +1473,6 @@ class TurnPathMixin:
             final_content, _, all_msgs, outcome = await self._run_agent_loop(
                 initial_messages,
                 on_progress=on_progress,
-                extraction_session_id=extraction_sid,
                 session_key=key,
                 model=routed_model,
                 fallback_models=fallback_models,

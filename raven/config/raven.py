@@ -260,7 +260,7 @@ class NudgePolicyConfig(_Base):
     #   - day:   stops "anniversary daily countdown" spam
     #   - week:  caps slow-burn topics (book reading reminder, fitness goal)
     # Set any cap to 0 to disable that layer.
-    max_per_topic_per_window: int = 1  # legacy alias for max_per_topic_per_hour
+    max_per_topic_per_window: int = 1
     topic_dedup_window_seconds: int = 3600  # 1h
     max_per_topic_per_day: int = 2
     # Weekly cap raised 4 → 8: deadline reminders (clawtrack 5/12-5/14,
@@ -766,12 +766,11 @@ class TokenWiseConfig(_Base):
 
 
 # ---------------------------------------------------------------------------
-# Feature 4 — SkillForge
+# SkillForge
 # ---------------------------------------------------------------------------
 #
 # SkillForge owns retrieval + execution + feedback emission. Evolution
-# is handled by the embedded ``everos`` pipeline (see
-# ``raven.memory_engine.skill_local.evolver.everos``).
+# is handled by the EverOS memory backend (``raven.plugins.memory.everos``).
 #
 # The config is intentionally kept flat. Component-level knobs
 # (embedding model, BM25 parameters, RRF k, etc.) live in the

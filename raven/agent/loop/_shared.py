@@ -1,7 +1,7 @@
 """Module-level names of the agent loop, shared by main and its mixins.
 
-Moved verbatim from main.py; main re-exports every runtime name so existing
-import paths and monkeypatch targets keep resolving.
+``main`` re-exports every runtime name so existing import paths and
+monkeypatch targets keep resolving.
 """
 # ruff: noqa: F401 -- this module IS the re-export payload: every name here is
 # imported by main (which re-exports it) or by a mixin; unused-here is the point.

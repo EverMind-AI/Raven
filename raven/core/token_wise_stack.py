@@ -1,25 +1,12 @@
 """Build a StrategyRegistry from a ``TokenWiseConfig``.
 
-Called from the ``cli/*_commands.py`` modules when constructing ``AgentLoop``.
-Callers do not need to know which individual strategies exist -- this module is
-the single place that translates config flags into a concrete registry.
+Called from ``core.runtime.build_runtime``. This module is the single place
+that translates config flags into a concrete registry, so callers do not need
+to know which individual strategies exist; a default-on strategy whose
+activation site is never called has no functional symptom, only a bill, which
+is why the assembly lives in one function the parity guard covers.
 
-Before the construction sites below were wired, this function had **no callers
-at all**. The docstring named one ("typically ``cli/commands.py``") that was
-never written, and nothing passed ``strategies=`` to ``AgentLoop``, so every
-surface fell through to the empty pass-through registry. The ``TokenWiseConfig``
-defaults (``enabled``, ``cache_optimization``, ``max_cache_breakpoints=4``) were
-therefore read by no code on any path, and ``CacheOptimizer`` -- complete,
-tested and benchmarked -- never ran. A default-on capability whose activation
-site is never called has no functional symptom; the only symptom available was
-the bill.
-
-Ordering rationale (matches PLAN.md §2):
-    SmartRouter → ToolResultLifecycle → SkillLazyLoader →
-    CacheOptimizer → UsageTracker → BudgetAlerter
-
-Step 1/2 only populate CacheOptimizer and UsageTracker. The rest are
-wired in as they land (step 4, 5, 6).
+Installed in this order: CacheOptimizer, then UsageTracker.
 """
 
 from __future__ import annotations
@@ -142,14 +129,6 @@ def install_from_config(
 
     Called for its effect as much as its return value, and safe to call again:
     the last call wins.
-
-    Every value is read through :func:`_setting`, which falls back rather than
-    raises. This is the seam a config file arrives at, and the fields here tune
-    an optimisation: a value this function cannot make sense of has to cost the
-    default, never the agent's ability to start. The setters it calls are strict
-    for their own reasons -- an unrecognised cache ``ttl`` is accepted and billed
-    upstream instead of refused -- and that strictness belongs one layer down
-    from user input, not at it.
     """
     from raven.providers import prompt_cache
 

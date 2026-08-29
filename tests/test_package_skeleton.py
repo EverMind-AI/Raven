@@ -1,22 +1,16 @@
-"""Package skeleton smoke tests - verify the skeleton imports,
-and the surviving interface ABCs behave correctly.
+"""Package skeleton smoke tests: the package imports and the paper shapes behave.
 
-These tests should pass on a fresh checkout with only Python stdlib and
+These tests pass on a fresh checkout with only Python stdlib and
 pydantic + loguru installed. They do NOT require an LLM provider, a
 configured workspace, or any external service.
 
-Where the shapes live today (the papers package):
+Where the shapes live (the papers package):
 
     TokenStrategy / UsageSnapshot      raven.contracts.token_strategy
     AssembledContext / TokenBudget     raven.contracts.assembled
 
-The three dead ABCs ``ContextEngine`` / ``Monitor`` / ``SkillHandler`` plus
-their helper dataclasses ``NudgeAction`` / ``SkillMeta`` / ``SkillExecutionOutcome``
-were removed (no implementations, alternate routes chosen by the
-design owners). The tests that exercised them are gone with them.
-
-``raven.core`` today is the assembly root, not the retired interfaces home
-these tests once guarded; that old meaning stays dead below.
+``raven.core`` is the assembly root; the tests below pin that it carries no
+interface shapes of its own.
 """
 
 from __future__ import annotations

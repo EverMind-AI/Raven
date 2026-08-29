@@ -6,9 +6,8 @@ Public API:
     - ``CacheOptimizer``         — strategy 2: Anthropic cache_control placement.
     - ``estimate_cost_usd``      — single source of truth for cost estimation.
 
-The ``install_from_config`` assembly helper lives in ``raven.core.token_wise_stack``
-— it's CLI-layer composition, not part of TokenWise's strategy API.
-The token_wise package has no dependency on the CLI layer.
+The ``install_from_config`` assembly helper lives in the assembly root
+(``raven.core.token_wise_stack``), not in TokenWise's strategy API.
 """
 
 from raven.token_wise.cache_optimizer import CacheOptimizer

@@ -1,54 +1,13 @@
-"""Monkey-patch helper for swapping EC CLI modules' module-level ``console``.
+"""Swap the module-level ``console`` of the CLI command modules for one call.
 
-Why monkey-patch rather than refactor:
-- 4 EC CLI modules each define module-level ``console = Console()``; commands
-  resolve ``console.print(...)`` via module name lookup.
-- Refactoring all command signatures to accept ``console`` is ~40 file edits;
-  monkey-patch is 4 ``setattr`` calls.
+Each command module defines ``console = Console()`` and resolves
+``console.print(...)`` by module-global lookup, so ``cli.dispatch`` can point
+them at a buffer-backed console with ``setattr`` instead of threading a console
+through every command signature. ``_CONSOLE_HOSTS`` lists the modules swapped.
 
-grep risk verification:
-
-    $ grep -rn "from .* import console" raven/
-    (no matches)
-
-    $ grep -rn "Console(" raven/ | grep -v _console_injection.py | grep -v rpc
-    raven/cli/sandbox_commands.py:19:console = Console()       ← patched
-    raven/cli/_cron_inspector.py:51:console = Console()        ← patched
-    raven/cli/channel_commands.py:31:console = Console()       ← patched
-    raven/cli/commands.py:60:console = Console()               ← patched
-    raven/utils/workspace.py:Console().print(...)            ← NOT patched
-
-Result: 4 hosts confirmed. ``utils/workspace.py`` is a fresh ``Console()``
-inside ``sync_workspace_templates()``; it's only reachable from ``init`` /
-workspace-template setup paths, none of which are in v0.1 dispatch whitelist
-(no whitelisted command calls ``sync_workspace_templates``). If a future
-whitelist entry depends on it, refactor or expand ``_CONSOLE_HOSTS``.
-
-A later merge brought 8 new CLI modules with module-level
-``console = Console()``; the patch list extends from 4 to 12.
-``_cron_inspector`` was renamed to ``cron_commands``.
-
-    Re-grep after merge:
-    $ grep -rn "^console = Console" raven/cli/
-    raven/cli/_helpers.py            ← patched (NEW)
-    raven/cli/agent_commands.py:40    ← patched (NEW)
-    raven/cli/channel_commands.py:38  ← patched (already)
-    raven/cli/commands.py:58          ← patched (already)
-    raven/cli/cron_commands.py:51     ← patched (renamed from _cron_inspector)
-    raven/cli/gateway_commands.py:29  ← patched (NEW)
-    raven/cli/onboard_commands.py:12  ← patched (NEW)
-    raven/cli/provider_commands.py:36 ← patched (NEW)
-    raven/cli/sandbox_commands.py:19  ← patched (already)
-    raven/cli/sentinel_commands.py:33 ← patched (NEW)
-    raven/cli/skill_commands.py:37    ← patched (NEW)
-    raven/cli/status_commands.py:10   ← patched (NEW)
-
-Total: 12 hosts. All exposed via ``_CONSOLE_HOSTS``.
-
-Concurrency: this context manager is NOT internally locked. The cli.dispatch
-handler holds a module-level ``asyncio.Lock`` to serialize calls (Q7 risk #4).
-Putting the lock here would make ``inject_consoles`` async, which complicates
-the ``with``-block ergonomics inside the handler's ``redirect_stdout`` chain.
+Not internally locked: the ``cli.dispatch`` handler holds a module-level
+``asyncio.Lock`` and serializes calls, which keeps the ``with`` block
+synchronous inside the handler's ``redirect_stdout`` chain.
 """
 
 from __future__ import annotations

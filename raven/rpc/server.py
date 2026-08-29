@@ -5,8 +5,8 @@ Topology: the parent listens on a TCP-loopback socket; the Node child connects,
 sends an auth token line, then exchanges newline-JSON frames over the same
 connection. ``RpcServer`` is given the accepted socket *object* and wires it via
 ``loop.connect_accepted_socket`` (cross-platform: selector + proactor loops).
-A legacy pipe path (``request_fd``/``notify_fd`` + ``connect_read/write_pipe``)
-is retained for the ``--check`` smoke and unit tests.
+A pipe path (``request_fd``/``notify_fd`` + ``connect_read/write_pipe``)
+remains for the ``--check`` smoke and unit tests.
 
 `RpcServer` owns the read pump (one line-delimited JSON frame per iteration),
 dispatches concurrently via `asyncio.create_task` so a long-running streaming
@@ -32,7 +32,6 @@ if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
 
 
-# Per specs/tui-ipc.md §2.5
 MAX_FRAME_BYTES = 1 * 1024 * 1024  # 1 MiB
 
 

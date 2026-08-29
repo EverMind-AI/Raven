@@ -1,7 +1,6 @@
 """The sub-agent backend paper: the surface a nested agent's host calls.
 
-Extracted from the backends package so a third-party backend types against a
-paper, not a machine module.
+A third-party backend types against this paper, not against a machine module.
 """
 
 from __future__ import annotations
@@ -17,12 +16,11 @@ if TYPE_CHECKING:
 class SubagentNoAnswerError(Exception):
     """The run spent its whole round budget and never produced an answer.
 
-    Raised rather than returned so the node fails. It used to fall out of the
-    loop and return "Task completed but no final response was generated" as the
-    run's *output* -- so a step that had fetched thirty-five pages and written
-    nothing was recorded ``completed``, wearing a green tick, and the step
-    downstream merged that sentence as if it were the research. A wrong answer
-    that announces itself is recoverable; one that reads as done is not.
+    Raised rather than returned so the node fails. Returned as the run's
+    *output*, the sentence "Task completed but no final response was generated"
+    would be recorded ``completed``, wear a green tick, and be merged by the step
+    downstream as if it were the research. A wrong answer that announces itself
+    is recoverable; one that reads as done is not.
     """
 
 

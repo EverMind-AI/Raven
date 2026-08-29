@@ -2,8 +2,7 @@
 
 One engine — :class:`ContextAssembler` — assembled by
 :func:`build_context_engine` from a flat list of :class:`SegmentBuilder`
-(seg1–5 + the Curator). The historical ``legacy`` / ``curator`` /
-``default`` split has been collapsed.
+(seg1–5 + the Curator).
 """
 
 from raven.context_engine.assembler import ContextAssembler

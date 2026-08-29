@@ -219,8 +219,9 @@ Run `raven --help` or `raven <command> --help` for the complete CLI surface.
 ## Repo layout
 
 The top-level packages under `raven/`, in one line each. This list is the
-canonical set of commit scopes (see `AGENTS.md`). Layer taxonomy lives in the
-architecture booklets; this section only says what each package does.
+canonical set of commit scopes (see `AGENTS.md`). Layer seats (which package may
+import which) are recorded under **Layer Seats** in `CONTEXT.md`, routed from
+`CONTEXT-MAP.md`; this section only says what each package does.
 
 | Package | What it is |
 |---|---|
@@ -252,7 +253,7 @@ architecture booklets; this section only says what each package does.
 | `sandbox` | Execution sandboxing |
 | `security` | Outbound address policy and prompt-injection fences |
 | `session` | Session export and titles |
-| `skill_hub` | Skill hub client |
+| `skill_hub` | Skill hub: client, install engine, policy and install audit |
 | `spine` | The frozen kernel: submit, lanes, cancel, emit, delivery |
 | `templates` | Packaged data assets (no Python) |
 | `token_wise` | Token efficiency: cache optimizer, usage tracker |
@@ -290,16 +291,19 @@ Key directories:
 ```text
 raven/
 ├── spine/              # Per-turn backbone: submit -> lanes -> emit
+├── contracts/          # Papers: the interfaces every shelf implements
+├── core/               # Assembly root: build_runtime and the *_stack builders
 ├── agent/              # Agent loop, tools, hooks, subagents, context builder
 ├── channels/           # Telegram, Discord, Slack, Matrix, WhatsApp, WeCom, ...
+├── gateway/            # Daemon plumbing: channel manager, outlet, generations, lock
 ├── rpc/                # Python side of the native TUI protocol
 ├── providers/          # LLM provider adapters
 ├── context_engine/     # Context assembly and Curator path
 ├── proactive_engine/   # Sentinel, scheduler, nudges, feedback
 ├── memory_engine/      # EverOS memory, local skills, SkillForge
 ├── playbook/           # Stored orchestrations: library, match funnel, executor
-├── token_wise/         # Usage tracking, cache placement, routing
-├── tracing/            # Span capture and local tracing dashboard
+├── token_wise/         # Usage tracking and cache placement
+├── tracing/            # Span capture (the dashboard lives in cli/tracing_viewer/)
 ├── evolver/            # Benchmark-driven harness self-evolution
 ├── sandbox/            # Isolated command execution
 ├── security/           # Trust boundaries and network checks
