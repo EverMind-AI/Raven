@@ -44,7 +44,7 @@ class FakeStreamingAgent:
 
     tools: dict = {}  # mirrors AgentLoop.tools (the TUI runner reads .get('message'))
 
-    async def run_turn(self, req, emit, drain, *, stream, usage_sink=None) -> TurnOutcome:
+    async def run_turn(self, req, emit, drain, *, stream, inline_tool_stream=False, usage_sink=None) -> TurnOutcome:
         if req.text == "hang":
             await asyncio.Event().wait()  # never set — cancelled by turn.cancel
         await emit(StreamDelta(delta="second-turn-token"))
