@@ -1192,11 +1192,8 @@ class TurnPathMixin:
         media_paths = [m.path for m in req.media]
         msg_session_key = req.conversation or f"{channel}:{chat_id}"
 
-        # AgentHook ``before_user_inbound`` chain.
-        #
-        # Replaces the legacy inline ``on_user_inbound`` + ``decision_consumer``
-        # try/except blocks. The chain runs once and:
-        #   - lets observer hooks (FeedbackTracker, on_user_inbound legacy
+        # AgentHook ``before_user_inbound`` chain. The chain runs once and:
+        #   - lets observer hooks (FeedbackTracker, the on_user_inbound
         #     adapter) record engagement;
         #   - lets short-circuit hooks (DecisionConsumer adapter for
         #     Sentinel /pick replies) halt processing and return their
@@ -1381,8 +1378,8 @@ class TurnPathMixin:
         context_messages = self._context_messages_for_session(session)
         # SkillForge: Selector picks top-K. See note in the system-message
         # branch above — empty return falls back to the full directory.
-        # Phase B-3: routed via ``_select_skills_for_turn`` so the new
-        # ``default`` engine short-circuits selection here.
+        # Routed via ``_select_skills_for_turn`` so the engine can
+        # short-circuit selection here.
         selected_skills = await self._select_skills_for_turn(
             content,
             context_messages,
@@ -1567,9 +1564,9 @@ class TurnPathMixin:
         # ── End Step 4 ──────────────────────────────────────────────────────
 
         if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt.sent_in_turn:
-            # Defensive fingerprint. The silent return None
-            # previously left no trace when the agent replied via message
-            # tool, making stochastic dud-turn bugs invisible to grep. Log
+            # Defensive fingerprint. A silent return None would leave no
+            # trace when the agent replied via the message tool, making
+            # stochastic dud-turn bugs invisible to grep. Log
             # the would-be response so future investigations have a trail
             # parallel to "Response to ..." below.
             if final_content:

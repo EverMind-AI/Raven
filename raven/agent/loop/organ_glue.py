@@ -234,10 +234,9 @@ class OrganGlueMixin:
         """
         from raven.context_engine import TurnContext  # deferred — see module note
 
-        # Phase A / Phase C tidy: reset the metadata stash BEFORE calling
-        # the engine. If ``engine.assemble`` raises partway, the next
-        # caller falls back to the legacy ``_collect_injected_skill_ids``
-        # path rather than accidentally consuming a previous turn's
+        # Reset the metadata stash BEFORE calling the engine. If
+        # ``engine.assemble`` raises partway, the next caller falls back to
+        # the ``_collect_injected_skill_ids`` path rather than accidentally consuming a previous turn's
         # injected ids. Only successful assemble repopulates the stash.
         self._last_injected_skill_ids = None
         self._last_injected_skill_sources = {}

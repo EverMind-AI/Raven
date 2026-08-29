@@ -173,7 +173,7 @@ def make_on_cron_job(
             "has been triggered.\n"
             f"Scheduled instruction: {job.payload.message}\n\n"
             "When you reply, mention when the reminder was originally set "
-            '(e.g. "你在 17:05 提醒的 ...") so the user remembers the '
+            '(e.g. "the reminder you set at 17:05 ...") so the user remembers the '
             "context."
         )
 
