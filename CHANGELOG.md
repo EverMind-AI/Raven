@@ -37,59 +37,31 @@ All notable changes to Raven are documented here.
   test keeps it there). `CONTEXT.md` records every package's seat.
 - `raven/agent/subagent/test_state.py` is `probe_state.py`: a production
   module was sitting on pytest's collection pattern.
-- Audit pass sixteen: the glossary records the memory engine's package face
-  and the asking papers, names `ChannelBase` where a `BaseChannel` was
-  written, and states the Consolidator's place under one context engine.
-- Audit pass fourteen: the MCP and playbook packages keep each rule and drop
-  the account of the arrangement before it -- the parameter pattern that is
-  now the only one, the node spec that is now one type, the router's top-K
-  narrowing, the agent table that replaced a guessed name list.
-- Audit pass thirteen: `raven/cli/_repl_spine.py` is `_one_shot_spine.py`
-  (`build_repl` is `build_one_shot_spine`) -- it wires `agent -m`, and the
-  REPL it was named for is gone -- and the command modules drop their plan
-  citations and their accounts of what the CLI did before.
-- Audit pass twelve: the channels and the proactive engine describe the shape
-  they have -- two scheduler families rather than three, the sentinel's own
-  pipeline rather than a plan's phase codes, and the delivery hub named where
-  the retry actually happens.
-- Audit pass eleven: the four remaining cross-package reaches into private
-  names get public seams (`ImportState.path`, `EverOSBackend.state`,
-  `BehaviorsExtractor.extract_session`, `AgentLoop.notify_turn_complete`,
-  `dag_graph.REQUIRED_NON_BLANK`), and three untested seams get tests: the
-  message splitter three adapters share, the WhatsApp bridge's progress
-  hook, and the control-plane client behind `raven gateway status|reload|stop`.
-- Audit pass ten: the leaf packages (gateway, market, ops, routing, sandbox,
-  session, skill_hub, token_wise, utils) state their rules in the present,
-  and the three generated benchmark reports that sat inside
-  `raven/token_wise/` are written to an ignored `reports/` directory instead.
-- Audit pass seven: the memory engine's prose names the files it writes
-  (`user.md`, `episodes.md` and their siblings, not MEMORY.md / HISTORY.md),
-  the skill forge names its three sources (Local, EverOS, Hub) instead of a
-  retired Mass and a plan's arrival markers, and the local pool points at
-  `LocalSkillCatalog` rather than the `SkillService` it replaced.
-- Audit pass nine: `raven/providers` states its rules -- the credential
-  shape, the cache-ownership rule, the wire-model invariant -- where it used
-  to narrate the incident that produced each, and drops the design-doc and
-  commit references a reader cannot follow.
-- Audit pass eight: the MCP, playbook and plugin packages state their rules
-  instead of the changes that produced them -- the plugin manifest's two
-  contribution kinds (not one), the everos backend's HTTP-to-a-local-server
-  shape (not an embedded substrate), and the module lists that had grown.
-- Audit pass six: the context engine's own prose describes the engine that
-  is there -- one assembler over segment builders (not three lanes and a
-  retired ContextBuilder), the third router source numbered third, the
-  Curator's working state rendered by its own builder.
-- Audit pass five: five channel adapters wrote their description after a
-  statement, so it was an expression and the class had no docstring; the
-  adapters' retry comments name the delivery hub that does the retrying;
-  three empty `TYPE_CHECKING` guards, a commented-out table column and a
-  comment about another module's error contract are gone; the benchmark
-  cache, the sandbox error and the usage tracker say what they do.
-- Audit pass four: eight more symbols with no reader are gone -- the fd-level
-  terminal redirect, the standalone LLM trigger expansion (the generator's own
-  tool call and the shared guard remain), an ISO timestamp helper, two MCP
-  inventory views, the recorded-server stop path, a duplicated JSON parser, a
-  method alias, and a 97 KB routing sample no code reads.
+- **The second read of every module.** Each package was read against a
+  nine-item checklist (module docstring, prose in the present tense, no
+  cross-package reach into a private name, no import of a surface, no symbol
+  without a reader, no public seam without a test, glossary terms, no CJK
+  outside the catalog, test naming) and each finding verified independently:
+  617 findings, 423 confirmed. What landed from it: every cross-package reach
+  into a private name became a public seam (`SessionManager.session_path`,
+  `update_providers.oauth_credentials_present`, `schema.section_has_credentials`,
+  `ImportState.path`, `EverOSBackend.state`, `BehaviorsExtractor.extract_session`,
+  `AgentLoop.notify_turn_complete`, `dag_graph.REQUIRED_NON_BLANK`); symbols with
+  no reader are gone (two `raven.auth` placeholders, two MCP inventory views,
+  three ops helpers, the playbook trigger expansion the generator supersedes, an
+  fd-level terminal redirect, an ISO timestamp helper, a duplicated JSON parser,
+  an unread `memory_dir`, an ignored `llm_provider` parameter, three unfilled
+  `SkillMeta` fields, a method alias, a no-op validator, two dead config paths);
+  three untested seams got tests (the message splitter three channel adapters
+  share, the WhatsApp bridge's progress hook, and the control-plane client behind
+  `raven gateway status|reload|stop`, driven against a real control plane); five
+  channel adapters that wrote their description after a statement -- so the class
+  had no docstring at all -- have one; the memory store's lock is named for what
+  it is (portable, not fcntl, not a no-op on Windows); and three generated
+  benchmark reports, a 97 KB routing sample and two PLAN.md files left the
+  package. Throughout, prose that narrated the change which produced a rule now
+  states the rule: no design-doc sections, ticket ids, commit hashes, phase codes
+  or incident retellings.
 - `raven.i18n` is seated as an inner cross-cutting leaf: it may not import a
   surface, and the kernel may not import it. The glossary records what it is
   and what `zh_lexicon` is not.
@@ -106,21 +78,10 @@ All notable changes to Raven are documented here.
   is adopted only over https and within the configured operator's domain;
   a Discord `resume_gateway_url` outside the configured gateway's operator
   is ignored in favour of the configured gateway. Both carry the bot token.
-- Audit pass over eval_engine, knowledge, trajectory and config: the names
-  other packages reached under an underscore are public
-  (`SessionManager.session_path`, `update_providers.oauth_credentials_present`,
-  `schema.section_has_credentials`), unread symbols are gone
-  (`section_key`, the tool-safety prompt stub,
-  two dead config paths, a no-op validator), and docstrings describe the
-  present shape instead of the change that produced it.
 - The evolver moves out of the `raven` package to the repo-level `evolver/`
   tool (`python -m evolver run --config <yaml>`): it drives raven as a
   library, ships in no wheel, and a fifth import-linter contract keeps the
   runtime from importing it back.
-- Audit pass three: the `raven.auth` placeholders (`capability_token`,
-  `managed_settings`), the MCP OAuth `set_callback_base` hook, three ops
-  connection helpers and an unread tool table are removed with their tests;
-  two PLAN.md files leave the package.
 - Security: a market catalogue entry may name a remote MCP server only at a
   public https address (a local or private one is refused before it is
   written to the config); a redirect hop whose host does not resolve is
