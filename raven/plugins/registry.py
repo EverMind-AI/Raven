@@ -9,9 +9,8 @@ Two responsibilities, split deliberately:
    record it in the factory table. This is where plugin Python code is
    first imported — manifests up to this point have been pure data.
 
-2. **Lookup** (:meth:`get_memory_backend_factory` etc.) — synchronous
-   lookups for the eventual ``build_memory_backend`` entry point
-   landing in PG-3.
+2. **Lookup** (:meth:`get_memory_backend_factory` etc.) — the synchronous
+   lookups the assembly root builds a backend through.
 
 Across-manifest name conflicts (two activated plugins both contributing
 a memory_backend named ``"everos"``) raise :class:`PluginConflictError` —

@@ -35,6 +35,10 @@ All notable changes to Raven are documented here.
   repo-level `evolver/` tool that drives it. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- Audit pass eight: the MCP, playbook and plugin packages state their rules
+  instead of the changes that produced them -- the plugin manifest's two
+  contribution kinds (not one), the everos backend's HTTP-to-a-local-server
+  shape (not an embedded substrate), and the module lists that had grown.
 - Audit pass six: the context engine's own prose describes the engine that
   is there -- one assembler over segment builders (not three lanes and a
   retired ContextBuilder), the third router source numbered third, the

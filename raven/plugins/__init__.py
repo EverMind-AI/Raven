@@ -1,10 +1,9 @@
-"""Plugin foundation.
+"""Plugin foundation: the manifest schema, the plugin context, discovery and
+the registry.
 
-PG-1 introduces the manifest schema + plugin context. Registry and
-discovery follow in PG-2/PG-3. The first (and currently only) public
-contribution point is ``memory_backends``; the schema is forward-
-compatible so future contribution types land without breaking existing
-manifests.
+A plugin contributes memory backends and tools (``[[plugin.contributes.
+memory_backends]]``, ``[[plugin.contributes.tools]]``); the schema ignores
+kinds it does not know, so a manifest written for a later host still loads.
 
 Two principles, both load-bearing:
 

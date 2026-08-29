@@ -4,13 +4,8 @@ One object bundles the live on-disk library, its retrieval index and the executo
 :meth:`load` is the execution entry; :meth:`listing` and :meth:`names` are what
 the tool advertises.
 
-**This used to be a funnel.** It scanned every user message, spent an LLM gate
-call on any message that mentioned a trigger word, and on a hit took over the
-whole turn -- the main agent never ran. That is gone (see
-:mod:`raven.playbook.matcher` for why), and with it three mechanisms that only
-existed to patch it: the per-conversation memory of refusals, the "which of these
-two did you mean" user prompt, and the gate itself. What remains is a library the
-model chooses from.
+Nothing here calls a model: the library is what the model chooses from, and
+:mod:`raven.playbook.matcher` says why the choice is the model's.
 
 Library reads reconcile content fingerprints with the directory, parsing only
 files whose bytes changed.

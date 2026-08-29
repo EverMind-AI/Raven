@@ -31,11 +31,8 @@ from typing import Any
 class ServiceLocator:
     """Narrow grant of host services to a plugin factory.
 
-    Fields land here as the host needs to expose them. PG-1 starts with
-    the bare minimum so the seam exists; later PRs add ``provider`` /
-    ``bus`` / etc. as concrete backends prove they need them. We keep
-    the dataclass frozen on purpose — every field is a capability, and
-    we want adds to be explicit edits to this file, not ambient setattr.
+    Every field is a capability grant, and the dataclass is frozen so adding
+    one is an explicit edit here rather than an ambient setattr somewhere else.
     """
 
     workspace: Path
