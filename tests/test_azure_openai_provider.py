@@ -261,8 +261,13 @@ def test_gpt5_with_tools_defaults_to_no_reasoning() -> None:
     assert "temperature" not in payload
 
 
-def test_gpt5_keeps_the_callers_reasoning_effort() -> None:
+def test_gpt5_tools_force_none_over_configured_effort() -> None:
     payload = _gpt_payload("gpt-5.6-sol", tools=True, reasoning_effort="medium")
+    assert payload["reasoning_effort"] == "none"
+
+
+def test_gpt5_without_tools_keeps_configured_effort() -> None:
+    payload = _gpt_payload("gpt-5.6-sol", tools=False, reasoning_effort="medium")
     assert payload["reasoning_effort"] == "medium"
 
 

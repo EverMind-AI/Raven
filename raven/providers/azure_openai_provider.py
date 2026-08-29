@@ -138,7 +138,8 @@ class AzureOpenAIProvider(LLMProvider):
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = tool_choice or "auto"
-            if reasoning_effort is None and "gpt-5" in deployment_name.lower():
+            if "gpt-5" in deployment_name.lower():
+                # GPT-5.x Chat Completions reject tools under any reasoning effort but "none".
                 payload["reasoning_effort"] = "none"
 
         return payload
