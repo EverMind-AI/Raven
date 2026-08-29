@@ -413,6 +413,33 @@ ignore_imports = [
 ]
 
 [[tool.importlinter.contracts]]
+name = "the kernel stands alone"
+type = "forbidden"
+# The shippable kernel (papers + spine + tracing) must not reach the rest of
+# the tree at import time -- this is what makes a raven-core wheel a build
+# artifact rather than a refactor. Lazy in-method edges are the named debt
+# below: each fires only inside an LLMProvider method a paper-only consumer
+# never calls, and the list may only shrink.
+source_modules = ["raven.contracts", "raven.spine", "raven.tracing"]
+forbidden_modules = [
+    "raven.agent", "raven.channels", "raven.cli", "raven.config",
+    "raven.context_engine", "raven.core", "raven.eval_engine", "raven.gateway",
+    "raven.market", "raven.mcp", "raven.memory_engine", "raven.ops",
+    "raven.playbook", "raven.plugins", "raven.proactive_engine",
+    "raven.providers", "raven.routing", "raven.rpc", "raven.sandbox",
+    "raven.security", "raven.session", "raven.skill_hub", "raven.token_wise",
+    "raven.utils", "raven.web_rpc",
+]
+ignore_imports = [
+    "raven.contracts.llm_provider -> raven.providers.rates",
+    "raven.contracts.llm_provider -> raven.providers.prompt_cache",
+    "raven.contracts.llm_provider -> raven.providers.truncation",
+    "raven.tracing.config -> raven.config.loader",
+    "raven.tracing.semconv -> raven.providers.registry",
+    "raven.tracing.usage -> raven.token_wise.pricing",
+]
+
+[[tool.importlinter.contracts]]
 name = "channel adapters are independent cargo"
 type = "independence"
 modules = [

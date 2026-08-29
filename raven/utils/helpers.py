@@ -9,7 +9,7 @@ import re
 import struct
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal, TypedDict
+from typing import Any
 
 import tiktoken
 from loguru import logger
@@ -37,31 +37,10 @@ def detect_image_mime(data: bytes) -> str | None:
     return None
 
 
-class ImageURL(TypedDict):
-    url: str
-
-
-class ImagePart(TypedDict):
-    """An OpenAI-shaped image content part."""
-
-    type: Literal["image_url"]
-    image_url: ImageURL
-
-
-class TextPart(TypedDict):
-    """A text content part."""
-
-    type: Literal["text"]
-    text: str
-
-
-# What Raven *produces*. Deliberately not used to type what Raven *reads*:
-# inbound content legitimately contains parts this union does not model (an
-# Anthropic part carrying cache_control, an MCP audio block, a provider-specific
-# extension), and the pass-through code that forwards them unchanged would
-# otherwise become a type error for doing the right thing. So read-side helpers
-# keep taking ``Any`` and check shape at runtime.
-ContentPart = TextPart | ImagePart
+# The content-part shapes moved into the papers (contracts/tool.py) -- they
+# type what a tool returns, and the kernel wheel must not reach back here.
+# Transit aliases keep every existing import path alive.
+from raven.contracts.tool import ContentPart, ImagePart, ImageURL, TextPart  # noqa: E402,F401
 
 
 def image_block(data_uri: str) -> ImagePart:
