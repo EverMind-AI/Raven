@@ -111,7 +111,7 @@ def _version_key(value: str) -> tuple[int, ...] | None:
         return None
 
 
-def _read_cache() -> dict | None:
+def read_cache() -> dict | None:
     try:
         parsed = json.loads(_cache_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -144,7 +144,7 @@ def _refresh() -> bool:
     """
     # Imported lazily: the GitHub client pulls in httpx, which we keep off the
     # session-create hot path (this runs in a daemon thread).
-    cache = _read_cache() or {}
+    cache = read_cache() or {}
     previous = cache.get("latest_version")
     keep = previous if isinstance(previous, str) else None
     seen = cache.get("etag")
@@ -190,7 +190,7 @@ def maybe_refresh_async() -> None:
     if _disabled() or not _upgrade_command_works():
         return
 
-    cache = _read_cache()
+    cache = read_cache()
     if cache is not None:
         checked_at = cache.get("checked_at")
         if isinstance(checked_at, (int, float)) and (time.time() - checked_at) < _REFRESH_TTL_SECONDS:
@@ -241,7 +241,7 @@ def check_now(current_version: str) -> Checked:
     reached = _refresh()
     if update_notice(current_version) is None:
         return Checked(None, reached=reached)
-    cache = _read_cache() or {}
+    cache = read_cache() or {}
     latest = cache.get("latest_version")
     return Checked(latest if isinstance(latest, str) else None, reached=reached)
 
@@ -271,7 +271,7 @@ def update_notice(current_version: str) -> tuple[bool, str] | None:
     if _disabled():
         return None
 
-    cache = _read_cache()
+    cache = read_cache()
     if not cache:
         return None
 

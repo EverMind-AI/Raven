@@ -104,19 +104,15 @@ def register(app: typer.Typer) -> None:
         """List installed plugins + the active memory backend."""
         # Import lazily so ``raven --help`` doesn't pay for plugin
         # discovery on every invocation.
-        from raven.core.plugin_stack import plugin_discovery_sources
-        from raven.plugins import (
-            PluginDiscovery,
-            PluginRegistry,
-        )
+        from raven.core.plugin_stack import discover_plugins
+        from raven.plugins import PluginRegistry
 
         ec_config = _load_ec_config(config_path)
 
         # Discover separately from activation so the table can show
         # both shadowed (lower-priority) plugins AND disabled ones,
         # not just the live set. Same four sources the live boot scans.
-        discovery = PluginDiscovery(**plugin_discovery_sources())
-        discovered = discovery.discover()
+        discovered = discover_plugins()
 
         registry = PluginRegistry()
         disabled = frozenset(ec_config.plugins.disabled)

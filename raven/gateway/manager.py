@@ -18,6 +18,7 @@ from loguru import logger
 
 from raven.channels.contract import Channel
 from raven.config.schema import Config
+from raven.providers.transcription import transcription_api_key
 
 
 def missing_dep_hint() -> str:
@@ -108,8 +109,7 @@ class ChannelManager:
         """
         from raven.channels.registry import discover_specs
 
-        groq = self.config.providers.get("groq")
-        groq_key = getattr(groq, "api_key", "") or ""
+        groq_key = transcription_api_key(self.config)
 
         for modname, spec in discover_specs().items():
             section = getattr(self.config.channels, modname, None)
@@ -232,8 +232,7 @@ class ChannelManager:
         except ImportError as e:
             logger.warning("{} channel not started: missing dependency ({}). {}", name, e, missing_dep_hint())
             return "missing_dep"
-        groq = self.config.providers.get("groq")
-        channel.transcription_api_key = getattr(groq, "api_key", "") or ""
+        channel.transcription_api_key = transcription_api_key(self.config)
         self.channels[name] = channel
         if self.on_started is not None:
             try:

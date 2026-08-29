@@ -305,7 +305,7 @@ async def test_the_registry_path_does_not_rewrite_the_callers_arguments():
     """Normalizing must leave the caller's dict alone.
 
     The same `arguments` object the registry is handed also goes to the START
-    tool event and, on the assistant message, through `to_openai_tool_call`. Both
+    tool event and, on the assistant message, through `openai_tool_call`. Both
     happen before `tools.execute` today, so an in-place edit could not reach
     them -- but the object is shared, `cast_params` is the only thing standing
     between the model's text and a rewrite of it, and nothing was watching:

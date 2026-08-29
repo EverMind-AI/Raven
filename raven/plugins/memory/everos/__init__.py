@@ -18,7 +18,9 @@ What the host may reach, declared rather than assumed:
   reports, which ``raven doctor`` and the onboarding wizard read;
 - :mod:`.backend` -- the memory backend the registry builds, plus
   ``convert_messages`` / ``as_ms_epoch`` and ``ServiceState``, public because
-  the sub-agent trace writer and ``raven import`` need the same shapes.
+  the sub-agent trace writer and ``raven import`` need the same shapes;
+- :mod:`.roots` -- where an everos data root may live on this machine and what
+  state each is in, which the onboarding wizard discovers and picks from.
 
 Anything else in the package is the plugin's own.
 """

@@ -63,8 +63,7 @@ def _hub_marker_name() -> str | None:
 async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
     from raven.config.loader import load_config
     from raven.config.raven import load_raven_config
-    from raven.core.plugin_stack import plugin_discovery_sources
-    from raven.plugins.discover import PluginDiscovery
+    from raven.core.plugin_stack import discover_plugins
 
     loop = _safe_loop(agent_loop_factory)
     ec = load_raven_config()
@@ -117,7 +116,7 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
     plugins: list[dict] = []
     try:
         disabled = set(ec.plugins.disabled)
-        for dp in PluginDiscovery(**plugin_discovery_sources()).discover():
+        for dp in discover_plugins():
             mf = dp.manifest
             plugins.append(
                 {

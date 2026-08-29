@@ -39,6 +39,7 @@ from raven.plugins import (
 if TYPE_CHECKING:
     from raven.config.raven import RavenConfig
     from raven.contracts.memory import MemoryBackend
+    from raven.plugins.discover import DiscoveredPlugin
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,14 @@ def plugin_discovery_sources() -> dict:
         "project_dir": Path.cwd() / ".raven" / "plugins",
         "entry_points_group": "raven.plugins",
     }
+
+
+def discover_plugins() -> "list[DiscoveredPlugin]":
+    """Every manifest the four sources hold, before activation: what ``raven
+    plugins`` and ``ext.list`` show, shadowed and disabled ones included."""
+    from raven.plugins.discover import PluginDiscovery
+
+    return PluginDiscovery(**plugin_discovery_sources()).discover()
 
 
 def build_plugin_registry(
@@ -273,5 +282,7 @@ def _plugin_id_for_backend(
 __all__ = [
     "build_plugin_registry",
     "build_plugin_tools",
+    "discover_plugins",
     "maybe_build_memory_backend",
+    "plugin_discovery_sources",
 ]

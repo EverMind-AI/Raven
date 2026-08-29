@@ -66,6 +66,7 @@ from raven.agent.loop._shared import (
     uuid4,
     workdir,
 )
+from raven.providers.tool_calls import openai_tool_call
 
 if TYPE_CHECKING:
     from raven.agent.loop.checkpoint import CheckpointService
@@ -771,7 +772,7 @@ class TurnPathMixin:
                 # Anthropic accepts both, so this only bites on Chat Completions
                 # -- which is the only transport that takes this path at all.
                 pending_images: list[dict[str, Any]] = []
-                tool_call_dicts = [tc.to_openai_tool_call() for tc in response.tool_calls]
+                tool_call_dicts = [openai_tool_call(tc) for tc in response.tool_calls]
                 messages = self.context.add_assistant_message(
                     messages,
                     response.content,

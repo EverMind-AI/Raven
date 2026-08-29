@@ -93,6 +93,7 @@ LEDGER = {
         "ToolOutput",
         "ToolResult",
         "TruncationInfo",
+        "TurnContext",
         "UsageSnapshot",
     },
     "factory_loop": {"AgentHook", "AgentHookContext", "HookDecision"},

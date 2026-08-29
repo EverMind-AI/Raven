@@ -1215,7 +1215,7 @@ def convert_messages(
         # An assistant message may carry tool_calls with empty text —
         # keep it (the tool result downstream references its id). The
         # host's tool_calls are already in everos's ToolCallDTO shape
-        # (``to_openai_tool_call``); tool messages carry tool_call_id.
+        # (``openai_tool_call``); tool messages carry tool_call_id.
         tool_calls = m.get("tool_calls") if role == "assistant" else None
         if not content and not tool_calls:
             continue
