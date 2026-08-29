@@ -1,4 +1,4 @@
-"""Shared Sentinel-stack builder used by both ``gateway`` and ``agent``.
+"""Sentinel-stack builders shared by the gateway, agent and sentinel commands.
 
 Cross-process coordination: when ``config.sentinel.enabled`` is true, a
 single JsonStateStore at ``~/.raven/sentinel/state.json`` is shared

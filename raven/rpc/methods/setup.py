@@ -1,8 +1,5 @@
 """``setup.status`` RPC handler — provider configuration probe.
 
-Contract: ``docs/openspec/changes/tui-ipc-bridge/specs/tui-ipc.md §3.9`` +
-``design.md §3a.1``.
-
 Why this exists
 ---------------
 

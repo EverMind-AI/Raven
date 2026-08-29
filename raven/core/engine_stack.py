@@ -4,9 +4,8 @@ The gateway assembles per generation with its transports around it; the local
 surfaces (the TUI launcher, ``raven serve``, the ACP server) all want the same
 smaller thing -- config, a lazy provider behind model routing, a session
 manager grouped by the launch directory, a workdir resolver, a cron service
-scoped to the local channel, and the loop -- which used to live inside the TUI
-command module and be borrowed from there by the others. It is assembly, so
-it lives here; each surface keeps only its own error translation.
+scoped to the local channel, and the loop. It is assembly, so it lives here;
+each surface keeps only its own error translation.
 """
 
 from __future__ import annotations

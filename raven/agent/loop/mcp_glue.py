@@ -1,6 +1,4 @@
-"""MCP lifecycle glue: connect, sync, prewarm, apply, close. Bodies moved
-verbatim from main.py.
-"""
+"""MCP lifecycle glue: connect, sync, prewarm, apply, close."""
 
 from __future__ import annotations
 

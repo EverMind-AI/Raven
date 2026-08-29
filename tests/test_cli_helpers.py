@@ -1,5 +1,5 @@
-"""Unit tests for the provider factory (``raven.providers.factory``) and the
-assembly helpers that grew out of the old ``raven.core.helpers``.
+"""Unit tests for the provider factory (``raven.providers.factory``) and its
+assembly helpers.
 
 Currently focused on ``send_probe`` — the shared LLM probe used by
 ``onboard`` Step 3 and ``doctor --probe``. Provider and config are

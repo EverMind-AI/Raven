@@ -1,8 +1,5 @@
 # Raven Runtime
 
-> **Status: review baseline (2026-06-28).** Under team review via this PR — owners refine
-> their assigned terms by branching off this PR branch and merging back.
-
 The Python agent runtime: receives messages from chat channels, runs the agent loop
 against LLM providers, and hosts the feature engines (context, memory, proactive, eval)
 plus the TokenWise efficiency layer.
@@ -94,9 +91,9 @@ The behavioural `Protocol` seam between Spine and an agent implementation:
 supplies `AgentTurnRunner` (wraps `AgentLoop`). Gateway and TUI variants also exist.
 _Avoid_: conflating with Agent Loop — Turn Runner is the Protocol; Agent Loop is one implementation.
 
-**Agent Hook** (`agent/hook/`):
+**Agent Hook** (`contracts/loop_hooks.py`; implementations in `agent/hook/`):
 The turn-loop extension point: an `AgentHook` ABC with five async phases
-(`before_user_inbound`, `before_iteration`, `after_iteration`, `after_send`, `on_tool_call`).
+(`before_user_inbound`, `before_iteration`, `before_execute_tools`, `after_iteration`, `after_send`).
 Multiple hooks chain via `CompositeHook`; the EvalEngine wires three concrete implementations.
 _Avoid_: "callback" or "middleware" — neither captures the phase-specific, chain-aware semantics.
 
@@ -302,7 +299,7 @@ the Context Engine assembles the whole window.
 The single backbone every turn flows through: one entry
 (`Scheduler.submit(TurnRequest) → TurnHandle.result()`) and one exit (`emit(Deliverable)`).
 Per-conversation **Lanes** are the unit of both ordering and cancellation. Deliberately
-not a broadcast bus — replaces the dormant `bus/` pub/sub.
+not a broadcast bus.
 _Avoid_: "the bus" — there is no Bus; "queue" for Lane — Lane is a serial+cancel domain.
 
 **Lane**:
@@ -390,6 +387,13 @@ The one-shot command-line entry point (`raven <command>`) for operations and
 configuration. Not a conversation front-end.
 _Avoid_: using "CLI" for the interactive REPL (retiring)
 
+**Routing Profile** (`routing/profiles.py`):
+A named quality-versus-cost weighting the model selector scores candidates with:
+`RoutingProfile(quality_weight, cost_weight)`, three shipped names in `ROUTING_PROFILES`
+(`best` 0.99/0.01, `balanced` 0.50/0.50, `eco` 0.20/0.80); `routing/selector.py` combines
+a model's quality score and its cost score by these weights.
+_Avoid_: confusing with Routing Tag — the tag names a turn's recipient, the profile weighs models.
+
 **Routing Tag**:
 The `channel` field on a `TurnRequest`; names the recipient — a Channel, or the TUI.
 
@@ -408,9 +412,8 @@ history. Never carries file bytes.
 ### Token Efficiency
 
 **TokenWise**:
-The token-efficiency shelf (L3; "cross-cutting" here predates the Layer Seats rulings'
-reserved use of that word for security/auth-style leaves): a set of independently toggled
-TokenStrategies, not a single module.
+The token-efficiency shelf (L3): a set of independently toggled TokenStrategies, not a
+single module.
 
 **TokenStrategy**:
 One independently enable-able efficiency measure, implemented as a `TokenStrategy` ABC
@@ -747,9 +750,9 @@ directory under a playbook root, in three regions — a two-field frontmatter
 `yaml playbook-spec` block holding every machine field. Being under a root is
 what makes it a playbook, so no marker field can disagree with where the file
 sits — one directory, one file, no sidecar and no lifecycle fields. The library
-is two such roots layered: `raven/playbook/builtin/` ships with the package,
-has no write path, and ships empty — the layer is what lets a release carry a
-playbook, not a bundled catalogue — while `<agent_home>/playbooks/` (override:
+is two such roots layered: `raven/playbook/builtin/` is the release layer — read-only,
+resolved at that path and absent until a release adds a playbook there; the layer is
+what lets a release carry a playbook, not a bundled catalogue — while `<agent_home>/playbooks/` (override:
 `playbooks.dir`) is
 where both creation entries — `raven playbook create` and the `create_playbook`
 tool — land their product, usable on arrival (`playbooks.disabled` holds one
@@ -886,8 +889,8 @@ pass-through. Failures name the owner and the key at the door, not deep inside a
 
 **Config-with-cargo** (`channels/contract.py:ChannelSpec.config_schema`, `raven-plugin.toml [plugin.config_schema]`):
 A cargo declares the config keys only it consumes -- types, defaults, secrecy,
-requiredness, choices, nested `fields` -- next to the code that consumes them. Since the
-central per-channel classes retired (M2), the declaration is the only truth: the door
+requiredness, choices, nested `fields` -- next to the code that consumes them. The
+declaration is the only truth: the door
 dispenses from it, the writer (`config/update_channels.py`) validates through the same
 door, and the declaration guard (`tests/test_channels_config_declaration.py`) pins the
 door's own contract.
@@ -946,7 +949,7 @@ the set and the lazy debt edges; the raven-core wheel is this set as a build art
 
 **Layer Seats** (pyproject.toml `[tool.importlinter]` + `tests/test_l4_entrances.py`):
 Where every package sits, as the machine enforces it. Inner (may not import a surface):
-the seventeen w18 packages plus, seated by the 2026-08-29 structural audit, `config` and
+the shelves and engines the contract lists as sources, `config` and
 `utils` (cross-cutting leaves), `mcp`, `playbook`, `knowledge`, `skill_hub`, `trajectory`,
 `eval_engine` and `proactive_engine` (L3 shelf members -- proactive_engine originates
 turns through its schedulers and sentinel but is an engine the loop and the assembly root
@@ -954,7 +957,7 @@ consume, not a transport), and `core` (the L2 assembly root). `templates` is pac
 and takes no seat. Surfaces: `cli`, `rpc`, and `acp` (an entrance: Raven serving as an
 agent for another host). Deliberately unseated, each awaiting its own ruling: `evolver`
 (zero inbound imports; product or engine is an open call), `browser` and `importer`
-(surface-side feature libraries, the w18 phrasing). One ruled edge: `trajectory` (L3)
+(surface-side feature libraries). One ruled edge: `trajectory` (L3)
 reaches `core.admission` for the door vocabulary and builds a loop by hand for replay --
 legal, because it is a harness over recorded runs, not an entrance. One package holds two
 seats: in `agent/`, `agent/loop` is the L2 harness shell every entrance runs, and its
@@ -971,8 +974,7 @@ an entrance brings its transport-side wiring (`TurnPolicy`, `HostWiring`) and ta
 `RavenRuntime`; deriving a cargo bundle by hand in an entrance is the regression
 `test_cli_agent_loop_parity.py` exists to catch. One deliberate bypass: `trajectory/replay.py`
 builds a loop by hand against a recorded run (fake provider, replaced registry) and drives it
-directly; it is a replay harness, not an entrance, and `test_cli_agent_loop_wiring.py` lists it. Distinct from the retired transitional
-`raven.core` context home (`tests/test_package_skeleton.py` keeps the old meaning dead).
+directly; it is a replay harness, not an entrance, and `test_cli_agent_loop_wiring.py` lists it.
 
 **Paper** (`contracts/`):
 A declared shape the layers hold each other to; papers export declared members only and

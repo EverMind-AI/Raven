@@ -156,11 +156,8 @@ _STUB_DEFINITIONS: tuple[tuple[str, str, str | None], ...] = (
         "secret.respond not supported in Raven v0.1",
         "Raven v0.1 has no interactive secret prompt.",
     ),
-    # NOTE: ``commands.catalog`` was previously stubbed (-32012) but is now
-    # promoted to a real handler in
-    # ``raven.rpc.methods.commands.commands_catalog`` that reflects
-    # ``raven.cli.commands.app`` to build a Typer-aware slash catalog. See
-    # ``docs/openspec/changes/harness-command-catalog-dynamic/``.
+    # ``commands.catalog`` is a real handler (``raven.rpc.methods.commands``),
+    # not a stub.
     # image.attach — hermes image-paste attachment. v0.1 Raven is
     # text-only.
     (

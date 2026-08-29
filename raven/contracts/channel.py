@@ -58,7 +58,7 @@ class ChannelSpec:
     # The cargo-consumed slice of this channel's config, declared where the
     # consumer lives (config-with-cargo): key -> {type, default?, required?,
     # secret?, choices?, fields?}, the same vocabulary plugin manifests use.
-    # Since the central per-channel classes retired (M2), this declaration is
+    # This declaration is
     # the only truth: the door dispenses from it and the writer validates
     # through the same door.
     config_schema: dict[str, dict[str, Any]] = field(default_factory=dict)

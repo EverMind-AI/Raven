@@ -1,12 +1,9 @@
-"""``config.get`` / ``config.set`` RPC handlers (specs §3.6).
-
-Contract source: ``docs/openspec/changes/tui-ipc-bridge/specs/tui-ipc.md §3.6``.
+"""``config.get`` / ``config.set`` RPC handlers.
 
 The v0.1 surface exposes only **four hot-changeable** keys; any other write
 target raises :class:`ConfigFieldReadonlyError` (-32010). Values are stored
 in ``~/.raven/config.json`` using dotted-path nesting (``tui.theme`` →
-``{"tui": {"theme": "..."}}``) so that the same file is loadable by the legacy
-``raven.config.raven_loader`` without any schema gymnastics.
+``{"tui": {"theme": "..."}}``) so that the same file is what ``raven.config.loader`` reads.
 
 Validation
 ----------

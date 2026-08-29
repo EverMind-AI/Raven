@@ -119,7 +119,7 @@ class TextParser(ParserBase):
     Reads the entire file as UTF-8 text and returns a single
     :class:`Section`.  No internal boundaries are inferred — the file
     is treated as one unstructured blob, leaving all splitting to a
-    downstream :class:`~agentscope.rag.ChunkerBase`.
+    downstream chunker.
 
     Supports a fixed set of standard text-based IANA media types
     (``text/plain``, ``text/markdown``, ``text/csv``, …).  Use

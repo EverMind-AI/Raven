@@ -4,12 +4,12 @@ Factory-loop tier: Versioned with the factory loop, not frozen for every
 loop — a replacement loop may ship its own hook vocabulary and version this
 paper with it. Only the ``contract`` tier is a cross-loop promise.
 
-This abstraction wires into AgentLoop, replacing the scattered callback
-fields (``response_modifier`` / ``on_user_inbound`` / ``decision_consumer`` /
-``enable_personalization``). eval_engine builds three concrete hook
+AgentLoop adapts its callback parameters (``response_modifier`` /
+``on_user_inbound`` / ``decision_consumer``) into hooks of this shape and runs
+them alongside the registered ones; eval_engine builds three concrete hook
 implementations on top.
 
-Design choices, deliberately kept narrow for the initial cut:
+Design choices:
 
 1. **All phases default to no-op.** Every method on ``AgentHook``
    returns a pass-through ``HookDecision()`` unless overridden. Subclasses

@@ -1,4 +1,4 @@
-"""CLI assembly helper for the Eval Engine.
+"""Assembly-root builder for the Eval Engine.
 
 Builds a configured :class:`EvalEngine` ready to be mounted
 into AgentLoop's hook chain. Default config has ``enabled=False`` so

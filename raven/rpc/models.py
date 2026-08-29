@@ -1,7 +1,7 @@
 """Pydantic v2 models for the client JSON-RPC contract.
 
 These models are the Python-side mirror of ``rpc-schema/openrpc.json``.
-Each public type defined in ``specs/tui-ipc.md`` §3.12 has a corresponding
+Each public type of the contract has a corresponding
 :class:`pydantic.BaseModel`, and each RPC method has a ``<Method>Params`` and
 ``<Method>Result`` model.
 
@@ -30,7 +30,7 @@ class _Strict(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Public types (specs/tui-ipc.md §3.12)
+# Public types
 # ---------------------------------------------------------------------------
 
 

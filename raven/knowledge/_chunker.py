@@ -29,7 +29,7 @@ class ChunkerBase(ABC):
     - **No cross-Section merging**: every output :class:`Chunk` is
       derived from exactly one input :class:`Section`.
     - **DataBlock pass-through**: a Section whose content is a
-      :class:`~agentscope.message.DataBlock` becomes a single Chunk
+      :class:`DataBlock` becomes a single Chunk
       with the same content; multimodal data is never sliced.
     - **Continuous indexing**: ``chunk_index`` runs from ``0`` to
       ``total_chunks - 1`` across the entire output list, even
@@ -66,7 +66,7 @@ class ApproxTokenChunker(ChunkerBase):
     approximated as ``len(text.encode("utf-8")) // 4``, so no
     tokenizer dependency is required.
 
-    Sections carrying a :class:`~agentscope.message.DataBlock`
+    Sections carrying a :class:`DataBlock`
     (images, video, etc.) are passed through unchanged as a single
     chunk.
 

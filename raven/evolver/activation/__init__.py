@@ -1,3 +1,9 @@
+"""Activation: a node's machine-checkable "when do I take effect" (``spec``), the
+per-trial ledger and beacon that record it firing (``ledger``), the pre-flight
+chamber that replays specs over recorded trajectories (``chamber``), routing dry
+queries and the trial audit.
+"""
+
 from raven.evolver.activation.audit import audit_trials
 from raven.evolver.activation.chamber import (
     ChamberReport,

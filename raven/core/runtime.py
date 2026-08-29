@@ -1,10 +1,9 @@
 """build_runtime: the one place a running agent is assembled from config.
 
-Every entrance used to derive the same bundles from the same config keys in
-its own prologue, and the three copies drifted often enough to need a parity
-guard. The mapping lives here once now: an entrance brings its transport-side
-wiring (policy and host) and takes back a runtime; what it may NOT do is
-derive a cargo bundle by hand.
+The mapping from config keys to cargo bundles lives here once: an entrance
+brings its transport-side wiring (policy and host) and takes back a runtime;
+what it may NOT do is derive a cargo bundle by hand. The parity guard
+(``test_cli_agent_loop_parity.py``) catches a copy that drifts.
 """
 
 from __future__ import annotations

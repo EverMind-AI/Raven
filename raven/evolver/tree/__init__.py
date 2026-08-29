@@ -1,8 +1,5 @@
-"""Evolver tree subsystem.
-
-Phase 1 (C1, this module): node schema + JSON round-trip.
-Future C2: Git-backed physical state management.
-Future C3: tree topology + traversal helpers.
+"""The evolver tree: node schema with its JSON round-trip (``node``), the tree
+store and its views (``store``), and git-backed physical state (``git_ops``).
 """
 
 from . import git_ops

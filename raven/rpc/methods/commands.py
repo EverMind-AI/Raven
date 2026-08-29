@@ -1,11 +1,6 @@
 """``commands.catalog`` RPC handler — dynamic Typer-reflected slash catalog.
 
-Contract source: ``docs/openspec/changes/harness-command-catalog-dynamic/`` —
-proposal.md §2.1 ① + design.md §D1-D2 + specs/tui-ipc.md CAP-CAT-1.
-
-Replaces the v0.0.2 ``_stubs.py`` ``-32012`` placeholder.
-
-Algorithm summary (design.md §D1):
+Algorithm summary:
 
 1. Reflect ``raven.cli.commands.app`` (Typer 0.20+):
    - ``app.registered_commands`` → top-level commands (``CommandInfo``; name

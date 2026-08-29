@@ -1,13 +1,13 @@
 """AgentLoop -- the default harness.
 
-Readability split: module-level names live in _shared (re-exported here so
-imports and monkeypatch targets keep working); method groups live in mixins
-(turn_path / wiring / mcp_glue / organ_glue). Bodies are verbatim.
+Module-level names live in ``_shared`` (re-exported here so import paths and
+monkeypatch targets keep resolving); method groups live in mixins
+(``turn_path`` / ``wiring`` / ``mcp_glue`` / ``organ_glue``).
 """
 
 from __future__ import annotations
 
-from raven.agent.loop._shared import (  # noqa: F401 -- moved verbatim from main.py
+from raven.agent.loop._shared import (  # noqa: F401 -- re-exported for import paths and monkeypatch targets
     _ABORTED_ACTION_REPLY,
     _ATTACHED_IMAGE_KEY,
     _DELEGATED_KEY,
@@ -285,7 +285,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         self.on_user_inbound = on_user_inbound
         # Optional async hook fired BEFORE slash-command parsing + normal
         # processing. Used by Sentinel's DecisionConsumer to short-circuit
-        # the agent loop when the user replies to a discovery menu (Phase 4).
+        # the agent loop when the user replies to a discovery menu.
         # Returning a reply means "I handled this; don't process further".
         # Returning None means "fall through to normal flow".
         self.decision_consumer = decision_consumer
@@ -516,7 +516,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             session_dir=self.sessions.session_dir,
         )
         self._direct_handoff = DirectChatHandoff()
-        # Kept for hot-applying web config changes (P4) and for the operations
+        # Kept for hot-applying web config changes and for the operations
         # surfaces that report what config declared, as distinct from what the
         # agent table resolved (the table also holds the package built-in rows).
         self._agent_configs = agents or []

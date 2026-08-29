@@ -1,8 +1,7 @@
 """MemoryBackend Protocol — the single contract every memory plugin implements.
 
-MB-1 introduction: the seam between AgentLoop and the memory subsystem.
-(The older ``MemoryEngine`` ABC it was built alongside is deleted; this
-Protocol is the only memory contract.)
+The seam between AgentLoop and the memory subsystem, and the only memory
+contract.
 
 Three design points to flag for plugin authors:
 
