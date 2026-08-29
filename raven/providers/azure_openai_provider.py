@@ -39,7 +39,7 @@ class AzureOpenAIProvider(LLMProvider):
         self,
         api_key: str = "",
         api_base: str = "",
-        default_model: str = "gpt-5.2-chat",
+        default_model: str = "gpt-5.6-sol",
         deployment: str = "",
         api_version: str = "2024-10-21",
     ):
