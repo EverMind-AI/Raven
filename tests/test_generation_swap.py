@@ -85,7 +85,7 @@ def test_dispose_without_backend_skips_the_drain() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _candidate(rec: _Recorder | None = None) -> "SwapCandidate":
+def _candidate(rec: _Recorder | None = None):
     from raven.core.runtime import SwapCandidate
 
     return SwapCandidate(config=None, ec_config=None, provider=None, router=None, runtime=_runtime(rec or _Recorder(), backend=False))
@@ -96,6 +96,9 @@ def test_a_second_request_while_a_swap_is_in_flight_is_refused() -> None:
 
     clock = [100.0]
     swaps = SwapCoordinator(min_interval_s=5.0, clock=lambda: clock[0])
+    # Born claimed: generation 1 is still being wired until the first release().
+    assert swaps.in_flight and swaps.begin() == "booting"
+    swaps.release()
     assert swaps.begin() is None
     assert swaps.begin() == "swap_in_flight"
     swaps.stage(_candidate())
@@ -114,6 +117,7 @@ def test_accepted_swaps_are_rate_limited() -> None:
 
     clock = [0.0]
     swaps = SwapCoordinator(min_interval_s=5.0, clock=lambda: clock[0])
+    swaps.release()
     assert swaps.begin() is None
     swaps.abort()
     clock[0] = 2.0
@@ -127,6 +131,7 @@ def test_a_failed_build_gives_the_slot_back_without_a_generation_bump() -> None:
 
     clock = [0.0]
     swaps = SwapCoordinator(min_interval_s=0.0, clock=lambda: clock[0])
+    swaps.release()
     assert swaps.begin() is None
     swaps.abort()
     swaps.release()
@@ -138,6 +143,7 @@ def test_a_superseded_candidate_is_discarded_not_disposed() -> None:
     from raven.core.runtime import SwapCoordinator
 
     swaps = SwapCoordinator(min_interval_s=0.0, clock=lambda: 0.0)
+    swaps.release()
     first_rec = _Recorder()
     first = _candidate(first_rec)
     discarded: list[str] = []
@@ -165,3 +171,32 @@ def test_trigger_tasks_are_held_until_done() -> None:
         assert task not in swaps._tasks
 
     asyncio.run(_run())
+
+
+def test_release_bumps_the_generation_exactly_once_per_swap() -> None:
+    from raven.core.runtime import SwapCoordinator
+
+    swaps = SwapCoordinator(min_interval_s=0.0, clock=lambda: 0.0)
+    swaps.release()  # boot
+    assert swaps.generation == 1
+    assert swaps.begin() is None
+    swaps.stage(_candidate())
+    assert swaps.take() is not None
+    swaps.release()
+    swaps.release()  # a stray second release must not count a second swap
+    assert swaps.generation == 2
+    assert swaps.in_flight is False
+
+
+def test_a_staged_candidate_survives_a_release_without_a_take() -> None:
+    """release() without take() is the wiring path ending before the loop
+    stopped for the swap; the candidate is still owed to the next take()."""
+    from raven.core.runtime import SwapCoordinator
+
+    swaps = SwapCoordinator(min_interval_s=0.0, clock=lambda: 0.0)
+    swaps.release()
+    assert swaps.begin() is None
+    swaps.stage(_candidate())
+    swaps.release()
+    assert swaps.generation == 1
+    assert swaps.take() is not None

@@ -11,8 +11,8 @@ All notable changes to Raven are documented here.
   published in the gateway lock): six methods only -- `gateway.channels.live`,
   `.qr`, `.start`, `gateway.status`, `gateway.reload`, `gateway.shutdown`.
   `raven gateway reload|status|stop` drive it from the CLI; `reload` rebuilds the
-  runtime from config and swaps it in without a restart (the SIGHUP trigger stays
-  as a POSIX alias). The `gateway.web` config table is removed on load with a
+  runtime from config and swaps it in without a restart (SIGHUP stays as the
+  POSIX alias of `reload --force`). The `gateway.web` config table is removed on load with a
   notice: proactive replies and heartbeat output that `web.enabled: true` used to
   send to the web channel (which had no clients) now reach your IM channels and
   the page. The control port no longer serves deliverable downloads; those routes
@@ -219,7 +219,7 @@ All notable changes to Raven are documented here.
   process launch directory instead of agent home.
 - `raven gateway` now gives each *channel* its own working directory instead of
   running every conversation in the agent-home root. Set it per channel with
-  `channels.<name>.workspace` (`gateway.web.workspace` for the web channel),
+  `channels.<name>.workspace`,
   configured alongside that channel's credentials; unset means
   `~/.raven/tmp/<channel>`. Existing files already at the agent-home root are
   left in place. A single session can still be pinned elsewhere from the web

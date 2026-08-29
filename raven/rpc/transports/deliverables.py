@@ -93,7 +93,7 @@ def add_files_routes(
     guard: Callable[[web.Request], None] | None = None,
 ) -> None:
     """Register the deliverable download routes. A None store registers nothing,
-    so a gateway without the web channel exposes no download surface at all."""
+    so the gateway's control port exposes no download surface at all."""
     if store is None:
         return
 

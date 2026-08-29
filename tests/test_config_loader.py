@@ -743,3 +743,23 @@ def test_a_provider_that_cannot_be_resolved_is_left_blank(tmp_path: Path) -> Non
 
     assert load_config(p).agents.defaults.provider in ("", "auto")
     assert json.loads(p.read_text(encoding="utf-8"))["agents"]["defaults"]["provider"] == "auto"
+
+
+
+def test_the_retired_gateway_web_table_is_dropped_once_with_a_notice():
+    """The shim is version-gated like its neighbours: a config behind the floor
+    loses the table (in memory and, via _persist_migrations, on disk) and hears
+    about it once; a config already at the floor is left alone."""
+    from raven.config import loader
+
+    loader._migration_notices.clear()
+    data = {"gateway": {"web": {"enabled": True}, "port": 1}}
+    loader._migrate_config(data, from_version=2)
+    assert "web" not in data["gateway"] and data["gateway"]["port"] == 1
+    notices = loader.drain_migration_notices()
+    assert len(notices) == 1 and "gateway.web" in notices[0]
+
+    untouched = {"gateway": {"web": {"enabled": True}}}
+    loader._migrate_config(untouched, from_version=3)
+    assert "web" in untouched["gateway"]
+    assert loader.drain_migration_notices() == []
