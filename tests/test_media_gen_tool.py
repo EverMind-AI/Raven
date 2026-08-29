@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from raven.agent.tools.media_gen import VideoGenerateTool
+from raven.agent.tools.media_gen import ImageGenerateTool, VideoGenerateTool
 
 
 def _tool(api_base: str) -> VideoGenerateTool:
@@ -50,3 +50,28 @@ def test_credentials_are_withheld_from_every_other_origin() -> None:
 
     assert tool._api_headers_for("https://api.mycorp.example/v1/x", headers) == headers
     assert tool._api_headers_for("https://api.mycorp.example.attacker.test/x", headers) is None
+
+
+def test_a_confined_tool_reads_input_images_only_under_the_workspace(tmp_path) -> None:
+    """The file tools honour restrict_to_workspace; an image the model names by
+    path is the same read and gets the same rule."""
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    inside = workspace / "in.png"
+    inside.write_bytes(b"\x89PNG\r\n")
+    outside = tmp_path / "out.png"
+    outside.write_bytes(b"\x89PNG\r\n")
+    tool = ImageGenerateTool(
+        SimpleNamespace(api_base="https://x.test", model=""), workspace=workspace, restrict_to_workspace=True
+    )
+
+    assert tool._image_part(str(inside))["image_url"]["url"].startswith("data:image/png;base64,")
+    with pytest.raises(PermissionError):
+        tool._image_part(str(outside))
+
+
+def test_an_unconfined_tool_reads_the_paths_it_is_given(tmp_path) -> None:
+    outside = tmp_path / "out.png"
+    outside.write_bytes(b"\x89PNG\r\n")
+    tool = ImageGenerateTool(SimpleNamespace(api_base="https://x.test", model=""), workspace=tmp_path / "ws")
+    assert tool._image_part(str(outside))["image_url"]["url"].startswith("data:image/png;base64,")

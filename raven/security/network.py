@@ -158,7 +158,7 @@ def validate_url_target(url: str) -> tuple[bool, str]:
 
 
 def validate_resolved_url(url: str) -> tuple[bool, str]:
-    """Validate a URL after redirect resolution. Only checks the IP path, skips strict DNS errors."""
+    """Validate a URL after redirect resolution: the scheme, then the address the host resolves to."""
     try:
         p = urlparse(url)
     except Exception:
@@ -185,7 +185,7 @@ def validate_resolved_url(url: str) -> tuple[bool, str]:
         try:
             infos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
         except socket.gaierror:
-            return True, ""
+            return False, f"Redirect target {hostname!r} did not resolve"
         for info in infos:
             try:
                 addr = ipaddress.ip_address(info[4][0])

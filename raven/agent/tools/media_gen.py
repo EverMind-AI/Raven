@@ -78,11 +78,13 @@ class _OpenRouterMediaTool(Tool):
         workspace: Path | None = None,
         proxy: str | None = None,
         output_subdir: str = "generated",
+        restrict_to_workspace: bool = False,
     ):
         self._config = config
         self._workspace = Path(workspace) if workspace else Path.cwd()
         self._proxy = proxy
         self._output_subdir = output_subdir
+        self._restrict_to_workspace = restrict_to_workspace
 
     # ── config resolution (at call time, so env/config edits are picked up) ──
 
@@ -224,6 +226,11 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         if ref.startswith(("http://", "https://", "data:")):
             return image_block(ref)
         path = Path(ref).expanduser()
+        if self._restrict_to_workspace:
+            resolved = path.resolve()
+            root = self._workspace.resolve()
+            if resolved != root and root not in resolved.parents:
+                raise PermissionError(f"{ref} is outside the workspace")
         data = path.read_bytes()
         mime = _EXT_MIME.get(path.suffix.lower(), "image/png")
         b64 = base64.b64encode(data).decode("ascii")
