@@ -122,7 +122,7 @@ def tmp_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Redirect config_path + workspace_path under tmp_path; stub template sync.
 
     ``_bootstrap_empty_config`` uses lazy imports, so we patch the *source*
-    modules (``raven.config.paths`` / ``raven.utils.helpers``) rather
+    modules (``raven.config.paths`` / ``raven.utils.workspace``) rather
     than the consumer.
     """
     cfg = tmp_path / "config.json"
@@ -139,7 +139,7 @@ def tmp_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         lambda: workspace,
     )
     monkeypatch.setattr(
-        "raven.utils.helpers.sync_workspace_templates",
+        "raven.utils.workspace.sync_workspace_templates",
         lambda _: None,
     )
     yield cfg

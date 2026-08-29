@@ -36,7 +36,7 @@ from raven.config.schema import ExecToolConfig
 from raven.memory_engine.skill_local.registry import filter_by_required_tools
 from raven.providers.base import LLMProvider
 from raven.security.trust import wrap_untrusted
-from raven.utils.helpers import build_assistant_message
+from raven.utils.messages import build_assistant_message
 
 
 def build_subagent_prompt(

@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from raven.session.manager import SessionManager
-from raven.utils.helpers import project_slug
+from raven.utils.paths import project_slug
 
 
 def _reference_slug(path: str) -> str:

@@ -39,7 +39,7 @@ def build_engine(*, workspace: str | None = None, home: str | None = None, chann
     from raven.proactive_engine.schedulers.cron.tool import CronTool
     from raven.providers.factory import make_lazy_provider
     from raven.session.manager import SessionManager
-    from raven.utils.helpers import project_slug
+    from raven.utils.paths import project_slug
 
     config = load_runtime_config(None, home=home)
     ec_config = load_raven_config()

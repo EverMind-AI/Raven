@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.agent.tools.base import Tool, ToolResult
-from raven.utils.helpers import image_block, text_block
+from raven.utils.images import image_block, text_block
 
 if TYPE_CHECKING:
     from raven.mcp.manager import MCPConnectionManager

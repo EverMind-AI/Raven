@@ -15,7 +15,8 @@ from loguru import logger
 
 from raven.providers.binding import ModelBinding, active_window, resolve
 from raven.tracing import semconv, trace
-from raven.utils.helpers import ensure_dir, estimate_message_tokens, estimate_prompt_tokens_chain
+from raven.utils.paths import ensure_dir
+from raven.utils.tokens import estimate_message_tokens, estimate_prompt_tokens_chain
 
 if TYPE_CHECKING:
     from raven.providers.base import LLMProvider

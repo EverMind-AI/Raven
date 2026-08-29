@@ -28,7 +28,8 @@ from raven.cli._helpers import (
 )
 from raven.core.provider_stack import build_model_routing
 from raven.providers.factory import make_provider
-from raven.utils.helpers import project_slug, sync_workspace_templates
+from raven.utils.paths import project_slug
+from raven.utils.workspace import sync_workspace_templates
 
 console = Console()
 

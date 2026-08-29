@@ -585,7 +585,7 @@ def test_print_llm_error_non_auth_categories_get_apt_hint_not_key_guidance(
 
 
 def test_workspace_sync_prints_single_summary(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
-    from raven.utils.helpers import sync_workspace_templates
+    from raven.utils.workspace import sync_workspace_templates
 
     ws = tmp_path / "workspace"
     added = sync_workspace_templates(ws)
@@ -614,7 +614,7 @@ def test_workspace_sync_debug_detail_lifts_with_raven_logging(tmp_path: Path) ->
     per-file detail. Freezes the behavior the helpers comment relies on."""
     from loguru import logger
 
-    from raven.utils.helpers import sync_workspace_templates
+    from raven.utils.workspace import sync_workspace_templates
 
     records: list[str] = []
     sink_id = logger.add(lambda m: records.append(str(m)), level="DEBUG")

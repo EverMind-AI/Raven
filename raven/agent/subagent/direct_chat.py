@@ -31,7 +31,7 @@ from loguru import logger
 from raven.agent.subagent.activity import persisted_output
 from raven.agent.subagent.history import add_turn_to_instance_log, make_call_id
 from raven.utils.atomic_io import atomic_replace
-from raven.utils.helpers import safe_path_segment
+from raven.utils.paths import safe_path_segment
 
 _DIRECT_DIRNAME = "direct"
 

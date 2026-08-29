@@ -32,7 +32,7 @@ from raven.channels.base import ChannelBase
 from raven.channels.contract import Capabilities
 from raven.channels.transcribe import transcribe_audio
 from raven.config.paths import get_data_dir, get_media_dir
-from raven.utils.helpers import safe_filename
+from raven.utils.paths import safe_filename
 
 TYPING_NOTICE_TIMEOUT_MS = 30_000
 # Keep below the notice timeout so the indicator never expires mid-processing.

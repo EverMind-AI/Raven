@@ -2422,4 +2422,4 @@ from raven.rpc.dispatcher import Dispatcher
 from raven.rpc.errors import SessionTitleTooLongError, TurnInProgressError
 from raven.rpc.methods import session as session_module
 from raven.rpc.models import METHOD_MODELS
-from raven.utils.helpers import estimate_prompt_tokens
+from raven.utils.tokens import estimate_prompt_tokens

@@ -30,7 +30,7 @@ from raven.cli._helpers import (
 from raven.core.provider_stack import build_model_routing
 from raven.providers.factory import make_resolving_provider
 from raven.utils import asyncio_runner as bounded_asyncio
-from raven.utils.helpers import sync_workspace_templates
+from raven.utils.workspace import sync_workspace_templates
 
 if TYPE_CHECKING:
     from raven.config.schema import GatewayPageConfig

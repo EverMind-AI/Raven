@@ -25,7 +25,7 @@ from loguru import logger
 
 from raven.agent import workdir
 from raven.security.trust import wrap_untrusted
-from raven.utils.helpers import detect_image_mime, image_block
+from raven.utils.images import detect_image_mime, image_block
 
 # Ceilings on what one message may carry. ``prepare_image`` caps each image on
 # its own (1568 tokens, 4.5MB of base64); nothing capped the whole message, and a

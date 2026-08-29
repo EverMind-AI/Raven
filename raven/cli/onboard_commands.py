@@ -319,7 +319,7 @@ def _bootstrap_empty_config() -> None:
     """
     from raven.config.loader import get_config_path, load_config, save_config
     from raven.config.paths import get_workspace_path
-    from raven.utils.helpers import sync_workspace_templates
+    from raven.utils.workspace import sync_workspace_templates
 
     path = get_config_path()
     if not path.exists():

@@ -25,7 +25,7 @@ from raven.channels.base import ChannelBase
 from raven.channels.contract import Capabilities
 from raven.channels.transcribe import transcribe_audio
 from raven.config.paths import get_media_dir
-from raven.utils.helpers import split_message
+from raven.utils.messages import split_message
 
 MAX_MESSAGE_LEN = 4000
 _ALBUM_WINDOW_S = 0.6

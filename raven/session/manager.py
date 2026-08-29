@@ -13,7 +13,7 @@ from loguru import logger
 
 from raven.session.title import TITLE_STORAGE_MAX, collapse_to_line
 from raven.utils.atomic_io import atomic_replace, locked_append
-from raven.utils.helpers import ensure_dir, safe_filename, safe_path_segment
+from raven.utils.paths import ensure_dir, safe_filename, safe_path_segment
 
 # Channel for subagent transcripts. Defined here, not in the subagent package,
 # because this module has to know which sessions to keep out of an unfiltered

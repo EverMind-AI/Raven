@@ -49,7 +49,7 @@ from loguru import logger
 
 from raven.agent import workdir
 from raven.agent.tools.base import Tool
-from raven.utils.helpers import image_block
+from raven.utils.images import image_block
 
 if TYPE_CHECKING:
     from raven.config.schema import MediaToolConfig

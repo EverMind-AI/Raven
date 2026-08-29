@@ -16,9 +16,9 @@ grep risk verification:
     raven/cli/_cron_inspector.py:51:console = Console()        ← patched
     raven/cli/channel_commands.py:31:console = Console()       ← patched
     raven/cli/commands.py:60:console = Console()               ← patched
-    raven/utils/helpers.py:205:Console().print(...)            ← NOT patched
+    raven/utils/workspace.py:Console().print(...)            ← NOT patched
 
-Result: 4 hosts confirmed. ``utils/helpers.py:205`` is a fresh ``Console()``
+Result: 4 hosts confirmed. ``utils/workspace.py`` is a fresh ``Console()``
 inside ``sync_workspace_templates()``; it's only reachable from ``init`` /
 workspace-template setup paths, none of which are in v0.1 dispatch whitelist
 (no whitelisted command calls ``sync_workspace_templates``). If a future
