@@ -290,7 +290,30 @@ def _walk_model(model: BaseModel, label: str) -> Iterator[KnownSecret]:
         else:
             yield from _walk_value(value, sub)
     # Extra sections (e.g. providers Raven has no spec for) are plain dicts.
-    yield from _walk_value(model.model_extra or {}, label)
+    extra = model.model_extra or {}
+    if extra and type(model).__name__ == "ChannelsConfig":
+        # Channel sections live in extras since the central classes retired;
+        # their declared spelling is snake_case, so labels (and the name
+        # heuristics' input) use it rather than the file's camelCase.
+        extra = _normalized_channel_extras(extra)
+    yield from _walk_value(extra, label)
+
+
+def _normalized_channel_extras(extra: dict) -> dict:
+    from raven.channels.registry import discover_specs
+    from raven.core.admission import normalize_slice_keys
+
+    specs = discover_specs()
+    out: dict = {}
+    for name, section in extra.items():
+        if hasattr(section, "model_dump"):
+            section = section.model_dump()
+        schema = getattr(specs.get(name), "config_schema", None) or {}
+        if isinstance(section, dict) and schema:
+            out[name] = normalize_slice_keys(schema, section)
+        else:
+            out[name] = section
+    return out
 
 
 def _walk_raw(value: Any, label: str) -> Iterator[KnownSecret]:

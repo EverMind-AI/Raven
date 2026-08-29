@@ -23,7 +23,6 @@ from raven.channels.contract import Capabilities
 from raven.channels.errors import transient_network
 from raven.channels.media import save_media_bytes
 from raven.channels.transcribe import transcribe_audio
-from raven.config.schema import FeishuConfig
 
 _MSG_TYPE_LABEL = {"image": "[image]", "audio": "[audio]", "file": "[file]", "sticker": "[sticker]"}
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".ico", ".tiff", ".tif"}
@@ -49,9 +48,9 @@ class FeishuChannel(ChannelBase):
     name = "feishu"
     display_name = "Feishu"
 
-    config: FeishuConfig
+    config: Any
 
-    def __init__(self, config: FeishuConfig):
+    def __init__(self, config: Any):
         super().__init__(config)
         self._client: Any = None
         self._ws_client: Any = None

@@ -238,6 +238,34 @@ class DispensedSlice:
         raise AttributeError(f"admitted slice is frozen (tried to set {name!r})")
 
 
+def _snake(key: str) -> str:
+    import re
+
+    return re.sub(r"(?<=[a-z0-9])([A-Z])", lambda m: "_" + m.group(1).lower(), key)
+
+
+def normalize_slice_keys(schema: dict[str, Any], table: dict[str, Any]) -> dict[str, Any]:
+    """Snake-case the field keys of a raw file section, guided by the schema.
+
+    Config files hold camelCase (the pydantic-era writers dumped by alias);
+    declarations speak snake_case. Only keys that resolve to a declared field
+    are renamed, and only declared sub-tables are descended into -- map keys
+    (mochat group room ids) pass verbatim.
+    """
+    out: dict[str, Any] = {}
+    for key, value in table.items():
+        resolved = key if key in schema else _snake(key)
+        if resolved not in schema:
+            out[key] = value
+            continue
+        sub = schema[resolved].get("fields")
+        if isinstance(sub, dict) and isinstance(value, dict):
+            out[resolved] = normalize_slice_keys(sub, value)
+        else:
+            out[resolved] = value
+    return out
+
+
 def dispense_channel_config(spec: Any, section: Any, *, channel: str) -> Any:
     """Route a channel section through the admission door before its factory.
 
@@ -251,7 +279,8 @@ def dispense_channel_config(spec: Any, section: Any, *, channel: str) -> Any:
         return section
     from raven.config.loader import channel_cargo_slice
 
-    raw = {k: v for k, v in channel_cargo_slice(channel).items() if k in schema}
+    slice_ = normalize_slice_keys(schema, channel_cargo_slice(channel))
+    raw = {k: v for k, v in slice_.items() if k in schema}
     for key, decl in schema.items():
         if decl.get("required") and key not in raw and hasattr(section, key):
             # Zero-drift transition: an unset required key keeps today's

@@ -20,7 +20,6 @@ from raven.channels.adapters.qq import parsing
 from raven.channels.base import ChannelBase
 from raven.channels.errors import transient_network
 from raven.channels.media import save_media_bytes
-from raven.config.schema import QQConfig
 
 _RECONNECT_DELAY_S = 5
 _DEDUP_CAP = 1000
@@ -67,11 +66,11 @@ def _make_bot_class(channel: "QQChannel") -> "type[botpy.Client]":
 class QQChannel(ChannelBase):
     """QQ channel using the botpy SDK over WebSocket."""
 
-    config: QQConfig
+    config: Any
     name = "qq"
     display_name = "QQ"
 
-    def __init__(self, config: QQConfig):
+    def __init__(self, config: Any):
         super().__init__(config)
         self._client: "botpy.Client | None" = None
         self._http: "httpx.AsyncClient | None" = None

@@ -10,7 +10,7 @@ import pytest
 
 from raven.channels.adapters.whatsapp.bridge import load_or_create_bridge_token
 from raven.channels.adapters.whatsapp.channel import WhatsAppChannel
-from raven.config.schema import WhatsAppConfig
+from tests.conftest import make_channel_config
 
 
 def _make_channel(
@@ -22,7 +22,7 @@ def _make_channel(
         "raven.config.paths.get_runtime_subdir",
         lambda name: tmp_path / name,
     )
-    cfg = WhatsAppConfig(enabled=True, **cfg_overrides)
+    cfg = make_channel_config("whatsapp", enabled=True, **cfg_overrides)
     return WhatsAppChannel(cfg)
 
 

@@ -21,7 +21,6 @@ from raven.channels.adapters.mochat.transport import SocketTransport
 from raven.channels.base import ChannelBase
 from raven.channels.errors import retryable_http, transient_network
 from raven.config.paths import get_runtime_subdir
-from raven.config.schema import MochatConfig
 
 # notify.* events the socket subscribes to; inbox.append is session-routed,
 # the message.* family is panel-routed.
@@ -40,9 +39,9 @@ class MochatChannel(ChannelBase):
     name = "mochat"
     display_name = "Mochat"
 
-    config: MochatConfig
+    config: Any
 
-    def __init__(self, config: MochatConfig):
+    def __init__(self, config: Any):
         super().__init__(config)
         self._api = MochatAPI(config)
         self._transport = SocketTransport(config, self._socket_handlers())

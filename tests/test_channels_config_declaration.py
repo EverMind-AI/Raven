@@ -1,154 +1,123 @@
 """Channel config declarations (config-with-cargo, every adapter).
 
-Every spec declares the cargo-consumed slice of its channel's config in the
-same flat vocabulary plugin manifests use. Storage and validation stay with
-the central pydantic model for now, so this guard is what keeps the two
-coherent: when either side drifts, one of these assertions bites.
+Every spec declares the cargo slice of its channel's config in the same
+vocabulary plugin manifests use, and since the central per-channel classes
+retired (M2), the declaration is the only truth: defaults, secrecy,
+requiredness, choices and nesting all live here. This guard keeps the
+declarations complete and the dispensing honest -- there is no second
+source left to drift against, so what it pins now is the door's own
+contract.
 """
 
 from __future__ import annotations
 
-import typing
-
 import pytest
 
 from raven.channels.registry import discover_specs
-from raven.config.schema import ChannelsConfig
-from raven.core.admission import _TYPES
+from raven.config.schema import ChannelsConfig, ChannelSocket
+from raven.core.admission import _TYPES, dispense_channel_config
 
 # Host-consumed fields: gating and workspace routing read these, adapters do
-# not. They stay central (socket config) and out of every cargo declaration.
+# not. They stay with the host (socket config) and out of every cargo
+# declaration.
 SOCKET_FIELDS = {"enabled", "allow_from", "workspace"}
 
 SPECS = discover_specs()
 
-_SCALARS = {str: "string", bool: "boolean", int: "integer", float: "number"}
+
+@pytest.mark.parametrize("name", sorted(SPECS))
+def test_every_spec_declares_its_cargo(name):
+    """A channel with no declaration has no fields at all now -- the door
+    would dispense nothing but the socket. Every adapter must declare."""
+    assert SPECS[name].config_schema, f"{name} declares no config_schema"
 
 
-def _central_model(name: str) -> type:
-    return ChannelsConfig.model_fields[name].annotation
+@pytest.mark.parametrize("name", sorted(SPECS))
+def test_no_spec_declares_a_socket_field(name):
+    overlap = SOCKET_FIELDS & set(SPECS[name].config_schema)
+    assert not overlap, f"{name} declares socket fields {sorted(overlap)}"
 
 
-def _central_type_name(annotation: object) -> str | None:
-    """The admission-vocabulary name of a central model field's annotation.
-
-    None for shapes the flat vocabulary cannot carry (lists, mappings, nested
-    Containers map to the door's container types: the door type-checks the
-    shape and leaves element/member validation to the value's consumer.
-    """
-    origin = typing.get_origin(annotation)
-    if origin is typing.Union or str(origin) == "<class 'types.UnionType'>":
-        args = [a for a in typing.get_args(annotation) if a is not type(None)]
-        if len(args) == 1:
-            return _central_type_name(args[0])
-        if all(a in _SCALARS for a in args):
-            return "string"
-        return None
-    if origin is typing.Literal:
-        return "string"
-    if origin in (list, tuple, set):
-        return "array"
-    if origin is dict:
-        return "object"
-    if isinstance(annotation, type):
-        try:
-            from pydantic import BaseModel
-
-            if issubclass(annotation, BaseModel):
-                return "object"
-        except ImportError:
-            pass
-    return _SCALARS.get(annotation)
+def _walk(schema, prefix=""):
+    for key, decl in schema.items():
+        path = f"{prefix}{key}"
+        yield path, decl
+        sub = decl.get("fields")
+        if isinstance(sub, dict):
+            yield from _walk(sub, prefix=f"{path}.")
 
 
-def _cargo_fields(model: type) -> dict[str, str]:
-    """The declarable cargo slice of a central model: field -> vocabulary type."""
-    out: dict[str, str] = {}
-    for field_name, field in model.model_fields.items():
-        if field_name in SOCKET_FIELDS:
+@pytest.mark.parametrize("name", sorted(SPECS))
+def test_declarations_speak_the_door_vocabulary(name):
+    """Types name door types; every leaf carries a default (required fields
+    keep one too -- requiredness is a UX marker, and an undefaulted field
+    would dispense as an accidental None)."""
+    for path, decl in _walk(SPECS[name].config_schema):
+        want = decl.get("type")
+        assert want in _TYPES, f"{name}.{path}: unknown type {want!r}"
+        if isinstance(decl.get("fields"), dict):
+            assert want == "object", f"{name}.{path}: fields on non-object"
             continue
-        type_name = _central_type_name(field.annotation)
-        if type_name is not None:
-            out[field_name] = type_name
-    return out
+        assert "default" in decl, f"{name}.{path}: no declared default"
 
 
 @pytest.mark.parametrize("name", sorted(SPECS))
-def test_declares_exactly_the_cargo_fields(name):
-    declared = set(SPECS[name].config_schema)
-    assert declared == set(_cargo_fields(_central_model(name)))
-
-
-@pytest.mark.parametrize("name", sorted(SPECS))
-def test_declared_types_and_required_match_the_central_model(name):
-    model = _central_model(name)
-    expected = _cargo_fields(model)
-    for key, decl in SPECS[name].config_schema.items():
-        assert decl["type"] == expected[key], key
-        assert decl["type"] in _TYPES, key
-        extra = model.model_fields[key].json_schema_extra or {}
-        assert bool(decl.get("required", False)) == bool(extra.get("required", False)), key
-
-
-def test_every_spec_declares_its_cargo():
-    for name, spec in SPECS.items():
-        if _cargo_fields(_central_model(name)):
-            assert spec.config_schema, name
-
-@pytest.mark.parametrize("name", sorted(SPECS))
-def test_dispensed_view_answers_exactly_like_the_central_section(name):
-    """Handover acceptance, all twelve: the door changes where a value
-    travels, never what it is. Every declared key and every socket field
-    answers identically through the dispensed view; the view is frozen."""
-    from raven.config.schema import ChannelsConfig
-    from raven.core.admission import dispense_channel_config
-
+def test_dispensed_view_answers_the_declared_defaults(name):
+    """File-less dispensing materializes every declared field from its
+    default, the socket fields answer from the socket, and the view is
+    frozen."""
     spec = SPECS[name]
-    section = getattr(ChannelsConfig(), name, None)
-    if section is None or not spec.config_schema:
-        pytest.skip("no central section or no declaration")
+    section = ChannelSocket()
     view = dispense_channel_config(spec, section, channel=name)
 
-    for key in spec.config_schema:
-        if hasattr(section, key):
-            assert getattr(view, key) == getattr(section, key), key
-    for socket_field in ("enabled", "allow_from", "workspace"):
-        if hasattr(section, socket_field):
-            assert getattr(view, socket_field) == getattr(section, socket_field)
+    for key, decl in spec.config_schema.items():
+        if isinstance(decl.get("fields"), dict):
+            nested = getattr(view, key)
+            for sk, sd in decl["fields"].items():
+                if "default" in sd:
+                    assert getattr(nested, sk) == sd["default"], f"{key}.{sk}"
+        elif "default" in decl:
+            assert getattr(view, key) == decl["default"], key
+    for socket_field in SOCKET_FIELDS:
+        assert getattr(view, socket_field) == getattr(section, socket_field)
     with pytest.raises(AttributeError):
         view.enabled = True
 
 
-def test_declared_defaults_match_the_central_model():
-    """Transition guard: until the central cargo fields retire, a declared
-    default and the central model default must be the same value -- two
-    sources of one default is how they drift."""
-    from raven.channels.registry import discover_specs
-    from raven.config.schema import ChannelsConfig
-
-    for name, spec in discover_specs().items():
-        section_model = type(getattr(ChannelsConfig(), name, None))
-        if section_model is type(None) or not spec.config_schema:
-            continue
-        defaults = section_model()
-        for key, decl in spec.config_schema.items():
-            if "default" in decl and hasattr(defaults, key):
-                assert decl["default"] == getattr(defaults, key), f"{name}.{key}"
-
-def test_the_file_slice_outranks_the_central_section():
-    """Ownership proof: the delivery path reads the file's sparse slice, so a
-    value the user set answers from the file even when the central section
-    disagrees, and an absent key answers from the declared default."""
+def test_the_file_slice_outranks_the_declared_default(monkeypatch):
+    """A value the operator wrote wins over the declaration's default --
+    the door changes where a value travels, never what it is. camelCase
+    file keys resolve to their snake_case declarations."""
     from raven.config import loader
-    from raven.config.schema import TelegramConfig
-    from raven.core.admission import dispense_channel_config
 
-    spec = discover_specs()["telegram"]
-    section = TelegramConfig(enabled=True, token="stale-central")
-    loader._channel_slices["telegram"] = {"token": "file-truth"}
-    try:
-        view = dispense_channel_config(spec, section, channel="telegram")
-        assert view.token == "file-truth"
-    finally:
-        loader._channel_slices.pop("telegram", None)
+    monkeypatch.setattr(
+        loader,
+        "_channel_slices",
+        {"telegram": {"token": "tok-123", "groupPolicy": "open", "proxy": "socks5://p:1"}},
+    )
+    view = dispense_channel_config(SPECS["telegram"], ChannelSocket(), channel="telegram")
 
+    assert view.token == "tok-123"
+    assert view.group_policy == "open"
+    assert view.proxy == "socks5://p:1"
+    assert view.reply_to_message is False
+
+
+def test_the_central_model_carries_no_cargo_fields():
+    """The retirement stays retired: ChannelsConfig knows the two stream
+    toggles and nothing per-channel; a cargo field class growing back here
+    would put two truths back in play."""
+    assert set(ChannelsConfig.model_fields) == {"send_progress", "send_tool_hints"}
+    assert set(ChannelSocket.model_fields) == {"workspace", "enabled", "allow_from"}
+
+
+def test_dynamic_sections_answer_for_known_adapters():
+    """config.channels.<adapter> answers a socket view whether or not the
+    file has that section; a name no adapter owns still raises."""
+    channels = ChannelsConfig()
+    for name in SPECS:
+        socket = getattr(channels, name)
+        assert socket.enabled is False
+        assert socket.allow_from == ["*"]
+    with pytest.raises(AttributeError):
+        channels.not_a_channel_anyone_ships
