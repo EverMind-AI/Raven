@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.agent.tools.params import cast_params, validate_params
-from raven.contracts.tool import Continuation, Tool, ToolOutput, ToolResult
+from raven.contracts.tool import RAW_ARGUMENTS_KEY, Continuation, Tool, ToolOutput, ToolResult
 from raven.providers.base import RunMeta
 from raven.tracing import semconv, trace
 
@@ -100,12 +100,6 @@ def admit_tool(tool: Tool) -> ToolSpec:
         incomplete_hint=incomplete if isinstance(incomplete, str) else None,
         tool=tool,
     )
-
-
-# Where the agent loop parks a tool call's arguments when they do not parse as
-# JSON. Named here, next to the only code that must recognise it, so the two
-# ends cannot drift into reporting a parse failure as a missing field.
-RAW_ARGUMENTS_KEY = "_raw_arguments"
 
 
 def absent_tool_error(name: str, *, tail: str = "") -> str:

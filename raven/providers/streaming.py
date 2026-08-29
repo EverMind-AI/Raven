@@ -1,10 +1,9 @@
 """Driving one ``provider.chat_stream`` call to a finished ``LLMResponse``.
 
-Extracted from :class:`~raven.agent.loop.main.AgentLoop` so a second caller can
-have it: a sub-agent backend answering a direct chat has to stream its reply,
-and it runs the same shape of call -- tools, reasoning, reconnects -- as the
-main loop does. A copy would have drifted on the first provider quirk fixed in
-one and not the other.
+Shared by the agent loop and by the sub-agent backend that streams a direct
+chat reply: both run the same shape of call -- tools, reasoning, reconnects --
+and a copy would drift on the first provider quirk fixed in one and not the
+other.
 
 Nothing here knows about a turn, a session, or an outlet. The caller supplies
 the provider and the two delta callbacks; what it does with them is its own.
@@ -20,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from raven.agent.tools.registry import RAW_ARGUMENTS_KEY
+from raven.contracts.tool import RAW_ARGUMENTS_KEY
 from raven.providers.base import ErrorClassification, LLMResponse, RunMeta, ToolCallRequest
 from raven.providers.reasoning import split_orphan_think
 from raven.providers.tool_names import normalized_tool_name

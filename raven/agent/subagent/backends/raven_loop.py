@@ -32,6 +32,7 @@ from raven.contracts.subagent_backend import SubagentActionAbortedError, Subagen
 from raven.contracts.tool import SKIPPED_AFTER_BLOCKED_CALL, Continuation
 from raven.memory_engine.skill_local.registry import filter_by_required_tools
 from raven.providers.base import LLMProvider
+from raven.providers.streaming import generation_kwargs, stream_llm_call
 from raven.security.trust import wrap_untrusted
 from raven.utils.messages import build_assistant_message
 
@@ -213,10 +214,6 @@ class RavenLoopBackend:
         on_messages: Callable[[list[dict[str, Any]]], None] | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> str:
-        # Deferred: importing raven.agent.loop runs its package init, which pulls
-        # in AgentLoop, which imports this package at module scope.
-        from raven.agent.loop.streaming import generation_kwargs, stream_llm_call
-
         # The spawn's snapshot wins over the pair this backend was built with;
         # see ``SubagentBackend.run``. The constructor pair remains the fallback
         # for callers that drive a backend directly.

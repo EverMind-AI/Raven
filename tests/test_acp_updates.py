@@ -1398,7 +1398,7 @@ class TestTheFileChangePayload:
 
     @staticmethod
     def _payload(change):
-        from raven.agent.loop.main import _file_change_payload
+        from raven.agent.loop._shared import _file_change_payload
 
         return _file_change_payload(change)
 
@@ -1436,7 +1436,7 @@ class TestTheFileChangePayload:
         """The same reasoning ``_unified`` uses for an oversized diff: half a file
         reads as a smaller change than the one that happened. And a whole file
         both ways is the largest thing a tool event carries."""
-        from raven.agent.loop.main import _FILE_CHANGE_MAX_CHARS
+        from raven.agent.loop._shared import _FILE_CHANGE_MAX_CHARS
         from raven.contracts.tool import FileChange
 
         big = "x" * (_FILE_CHANGE_MAX_CHARS // 2 + 10)
@@ -1447,7 +1447,7 @@ class TestTheFileChangePayload:
     def test_the_before_length_counts_toward_the_cap(self):
         """Both halves ride the same event, so measuring only the new content
         would let a rewrite of a large file through at twice the budget."""
-        from raven.agent.loop.main import _FILE_CHANGE_MAX_CHARS
+        from raven.agent.loop._shared import _FILE_CHANGE_MAX_CHARS
         from raven.contracts.tool import FileChange
 
         after = "y" * (_FILE_CHANGE_MAX_CHARS - 10)

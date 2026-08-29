@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.main import _filter_qualified_ids
+from raven.agent.loop._shared import _filter_qualified_ids
 
 # ---------------------------------------------------------------------------
 # Helpers

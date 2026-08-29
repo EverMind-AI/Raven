@@ -266,9 +266,9 @@ class TurnPathMixin:
     ) -> LLMResponse:
         """Stream LLM response via ``provider.chat_stream`` + accumulate to LLMResponse.
 
-        Per design.md §D3: when a turn caller wires ``on_token_delta``, AgentLoop
-        diverts here instead of to ``chat_with_retry``. The work itself lives in
-        ``raven.agent.loop.streaming`` — a sub-agent backend answering a direct
+        When a turn caller wires ``on_token_delta``, AgentLoop diverts here
+        instead of to ``chat_with_retry``. The work itself lives in
+        ``raven.providers.streaming`` — a sub-agent backend answering a direct
         chat drives the same call and must not drift from it. This method stays
         as the loop's own entry point (its span, its reconnect budget).
 

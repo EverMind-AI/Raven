@@ -18,7 +18,7 @@ from types import SimpleNamespace
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.main import _MAX_ITER_STATIC_FALLBACK, _MAX_ITER_SYNTHESIS_PROMPT
+from raven.agent.loop._shared import _MAX_ITER_STATIC_FALLBACK, _MAX_ITER_SYNTHESIS_PROMPT
 from raven.config.raven import CheckpointConfig, RuntimeConfig
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.spine.message import ChatType, Source
