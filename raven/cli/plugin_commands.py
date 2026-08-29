@@ -28,7 +28,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from raven.core.helpers import load_runtime_config
+from raven.cli._helpers import load_runtime_config
 
 console = Console()
 

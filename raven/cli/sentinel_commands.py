@@ -30,8 +30,9 @@ from rich.table import Table
 
 console = Console()
 
+from raven.cli._helpers import parse_fake_now
 from raven.config.paths import get_sentinel_dir, get_workspace_path
-from raven.core.helpers import make_provider, parse_fake_now
+from raven.providers.factory import make_provider
 
 sentinel_app = typer.Typer(help="Inspect and drive the proactivity subsystem")
 

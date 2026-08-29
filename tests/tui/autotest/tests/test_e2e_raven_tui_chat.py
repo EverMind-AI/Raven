@@ -133,7 +133,7 @@ def test_tui_chat_multi_turn_accumulates_the_session(harness):
     the screen: a prompt is echoed into the transcript as soon as it is typed,
     so screen-scraping for a planted word passes even when history is broken.
     """
-    from raven.core.helpers import load_runtime_config
+    from raven.core.config_stack import load_runtime_config
     from raven.session.manager import SessionManager
 
     sessions = SessionManager(load_runtime_config(None, None).workspace_path)

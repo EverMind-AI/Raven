@@ -1,64 +1,15 @@
-"""Shared CLI helpers used by multiple top-level command modules.
+"""Provider construction from config: the providers shelf's own factory.
 
-Extracted from commands.py so that per-command modules
-(``agent_commands.py``, ``gateway_commands.py``, ``skill_commands.py``,
-``sentinel_commands.py``) can import them directly instead of going
-through lazy wrappers.
-
-Function names drop the leading underscore: the file itself is marked
-internal with the ``_helpers`` prefix, so members do not also need the
-private-name convention.
+Which client class a provider section maps to, how endpoints rotate, how
+credentials are judged before anything is built -- this is knowledge the
+shelf owns, so it lives here and the assembly root composes it. The pool
+and the resolving provider reach it as a sibling import, never up into
+raven.core.
 """
 
 from __future__ import annotations
 
-import asyncio
-import time
-from pathlib import Path
-
-import typer
-from rich.console import Console
-
 from raven.config.schema import Config
-
-console = Console()
-
-
-DEFAULT_PROBE_MESSAGE = "Hi! Say hello in one sentence."
-
-
-def warn_about_pending_cli_reminders(cron_service, config: Config) -> None:
-    """At REPL exit, list cron jobs pinned to channel="cli" that won't fire
-    while the REPL is down. Hint at the config knob that forwards them to
-    a durable channel at trigger time."""
-    from datetime import datetime
-
-    try:
-        jobs = cron_service.list_jobs()
-    except Exception:
-        return
-    now_ms = int(datetime.now().timestamp() * 1000)
-    pending = [
-        j
-        for j in jobs
-        if (j.payload.channel or "") == "cli" and j.state.next_run_at_ms and j.state.next_run_at_ms > now_ms
-    ]
-    if not pending:
-        return
-
-    console.print(f"\n[yellow]⚠  You have {len(pending)} pending CLI reminder(s):[/yellow]")
-    for j in pending:
-        fire = datetime.fromtimestamp(j.state.next_run_at_ms / 1000).strftime("%H:%M")
-        mins = max(0, (j.state.next_run_at_ms - now_ms) // 60_000)
-        console.print(f"   - '{j.name}' at {fire} (in {mins} min)")
-
-    if config.cron.forward_channels == []:
-        console.print(
-            "[dim]   Tip: cron.forward_channels is empty — these reminders will "
-            "be dropped silently when they fire. Run "
-            "`raven cron config set forward_channels '*'` to broadcast to "
-            "all enabled channels.[/dim]"
-        )
 
 
 def check_provider_credentials(config: Config, model: str | None = None) -> None:
@@ -268,122 +219,6 @@ def make_lazy_provider(config: Config):
     return provider
 
 
-def send_probe(
-    *,
-    message: str = DEFAULT_PROBE_MESSAGE,
-    timeout_s: int = 15,
-    max_tokens: int = 200,
-) -> tuple[str, int | None, float]:
-    """Build provider from current config and exchange one chat message.
-
-    Shared by ``onboard`` Step 3 and ``doctor --probe``. Bypasses the full
-    ``AgentLoop`` so the probe only proves the provider answers, not that
-    the agent runtime is healthy.
-
-    Returns ``(response_text, tokens_used, elapsed_s)``. Raises ``RuntimeError``
-    on provider error, ``asyncio.TimeoutError`` on timeout, or whatever
-    ``load_config`` / ``make_provider`` raise on config failure.
-    """
-    from raven.config.loader import load_config
-
-    config = load_config()
-    provider = make_provider(config)
-
-    start = time.monotonic()
-    response = asyncio.run(
-        asyncio.wait_for(
-            provider.chat_with_retry(
-                messages=[{"role": "user", "content": message}],
-                max_tokens=max_tokens,
-                temperature=0.3,
-            ),
-            timeout=timeout_s,
-        )
-    )
-    elapsed = time.monotonic() - start
-
-    if response.finish_reason == "error":
-        raise RuntimeError(response.content or "provider returned an error")
-
-    usage = response.usage or {}
-    tokens = usage.get("total_tokens") or usage.get("completion_tokens")
-    return (response.content or "").strip(), tokens, elapsed
-
-
-def print_probe_troubleshooting(provider: str | None) -> None:
-    """Common-case hints when a probe fails.
-
-    Shared by ``onboard`` Step 3 and ``doctor --probe`` so the diagnostic
-    advice stays in one place.
-    """
-    console.print("\n  [dim]Troubleshooting:[/dim]")
-    if provider:
-        console.print(
-            f"  [dim]·[/dim] [cyan]raven provider test {provider}[/cyan] — re-check credentials without spending tokens"
-        )
-        console.print(
-            f"  [dim]·[/dim] [cyan]raven provider get {provider}[/cyan] — inspect what's actually stored on disk"
-        )
-    console.print(
-        "  [dim]·[/dim] Check the model id in [cyan]~/.raven/config.json[/cyan] "
-        "under [cyan]agents.defaults.model[/cyan] — it should match a model the "
-        "provider serves."
-    )
-
-
-def load_runtime_config(config: str | None = None, home: str | None = None) -> Config:
-    """Load config and optionally override agent home."""
-    from raven.config.loader import load_config, set_config_path
-
-    config_path = None
-    if config:
-        config_path = Path(config).expanduser().resolve()
-        if not config_path.exists():
-            console.print(f"[red]Error: Config file not found: {config_path}[/red]")
-            raise typer.Exit(1)
-        set_config_path(config_path)
-        Console(stderr=True).print(f"[dim]Using config: {config_path}[/dim]")
-
-    loaded = load_config(config_path)
-    if home:
-        loaded.agents.defaults.workspace = home
-    return loaded
-
-
-def parse_fake_now(fake_now: str | None):
-    """Parse an ISO-8601 timestamp into a frozen ``now_fn`` callable.
-
-    Used by the eval harness to drive the Sentinel stack at a deterministic
-    wall-clock time via subprocess invocation. The returned callable always
-    returns the same parsed datetime, so every component that reads "now"
-    through ``now_fn`` sees the same snapshot for the duration of the call.
-
-    Returns ``None`` when the flag is not set, in which case constructors
-    fall through to their default ``datetime.now`` behavior.
-    """
-    if fake_now is None:
-        return None
-    from datetime import datetime as _dt
-
-    try:
-        frozen = _dt.fromisoformat(fake_now)
-    except ValueError as exc:
-        raise typer.BadParameter(
-            f"--fake-now must be an ISO-8601 timestamp (e.g. 2026-05-13T09:00:00); got {fake_now!r}: {exc}"
-        ) from exc
-    return lambda: frozen
-
-
-def print_deprecated_memory_window_notice(config: Config) -> None:
-    """Warn when running with old memoryWindow-only config."""
-    if config.agents.defaults.should_warn_deprecated_memory_window:
-        console.print(
-            "[yellow]Hint:[/yellow] Detected deprecated `memoryWindow` without "
-            "`contextWindowTokens`. `memoryWindow` is ignored; run "
-            "[cyan]raven onboard[/cyan] to refresh your config template."
-        )
-
-
 def make_resolving_provider(config: Config):
     """Provider that resolves each call's vendor from its model name. Used by the
     gateway, where different sessions can be on different vendors at once."""
@@ -393,75 +228,4 @@ def make_resolving_provider(config: Config):
     return ResolvingProvider(config)
 
 
-def build_model_routing(config, provider):
-    """Return ``(router, provider)`` for the configured routing backend.
-
-    - ``knn``: build a :class:`KNNModelRouter` and wrap ``provider`` in a
-      :class:`PerModelProvider` so routed model names reach their endpoints
-      (other models fall back to ``provider`` unchanged).
-    - ``ecoclaw``: build the PinchBench :class:`ModelRouter`.
-    - routing disabled, or ecoclaw with no API key: return ``(None, provider)``.
-    """
-    if not config.routing.enabled:
-        return None, provider
-
-    if config.routing.backend == "knn":
-        from raven.providers.per_model_provider import PerModelProvider
-        from raven.routing.knn_router import KNNModelRouter
-
-        router = KNNModelRouter(config.routing, default_model=config.agents.defaults.model)
-        return router, PerModelProvider(config.routing.models, fallback=provider)
-
-    from raven.routing.router import ModelRouter
-
-    openrouter = config.providers.get("openrouter")
-    api_key = config.routing.api_key or getattr(openrouter, "api_key", "") or ""
-    if not api_key:
-        console.print("[yellow]⚠[/yellow] Routing enabled but no OpenRouter API key found — routing disabled")
-        return None, provider
-
-    from raven.routing.types import RoutingProfileName
-
-    profile: RoutingProfileName = config.routing.profile  # type: ignore[assignment]
-    router = ModelRouter(api_key=api_key, profile=profile, fallback_model=config.agents.defaults.model)
-    return router, provider
-
-
-def print_config_migration_notices() -> None:
-    """Tell the user about any config line a migration just changed for them.
-
-    The migrations run inside the loader, which has no terminal; this is the
-    place that does. Call it after the config is loaded and before the command
-    takes over the screen -- once printed, the notices are gone.
-
-    On stderr, because stdout is a command's answer and this is not part of it:
-    ``raven doctor --json`` and ``raven import --json`` are documented for
-    automation, and a line appended to their output is not a cosmetic problem
-    but an unparseable document. That is also where the rest of this class of
-    message already goes -- ``commands.run``'s own ConfigReadError branch and
-    the loader's malformed-config warning both use stderr -- so a future
-    ``--json`` command inherits the right behaviour without knowing about this.
-    """
-    from rich.console import Console
-
-    from raven.config.loader import drain_migration_notices
-
-    notices = drain_migration_notices()
-    if not notices:
-        return
-    err = Console(stderr=True)
-    for notice in notices:
-        err.print(f"[yellow]Config updated:[/yellow] {notice}")
-
-
-__all__ = [
-    "DEFAULT_PROBE_MESSAGE",
-    "make_provider",
-    "send_probe",
-    "print_probe_troubleshooting",
-    "load_runtime_config",
-    "build_model_routing",
-    "parse_fake_now",
-    "print_deprecated_memory_window_notice",
-    "print_config_migration_notices",
-]
+__all__ = ["check_provider_credentials", "make_lazy_provider", "make_provider", "make_resolving_provider"]

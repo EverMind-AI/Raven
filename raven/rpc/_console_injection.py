@@ -30,7 +30,7 @@ A later merge brought 8 new CLI modules with module-level
 
     Re-grep after merge:
     $ grep -rn "^console = Console" raven/cli/
-    raven/core/helpers.py            ← patched (NEW)
+    raven/cli/_helpers.py            ← patched (NEW)
     raven/cli/agent_commands.py:40    ← patched (NEW)
     raven/cli/channel_commands.py:38  ← patched (already)
     raven/cli/commands.py:58          ← patched (already)
@@ -58,6 +58,7 @@ from collections.abc import Iterator
 
 from rich.console import Console
 
+import raven.cli._helpers as ec_helpers
 import raven.cli.agent_commands as ec_agent
 import raven.cli.channel_commands as ec_channel
 import raven.cli.commands as ec_commands
@@ -69,7 +70,6 @@ import raven.cli.sandbox_commands as ec_sandbox
 import raven.cli.sentinel_commands as ec_sentinel
 import raven.cli.skill_commands as ec_skill
 import raven.cli.status_commands as ec_status
-import raven.core.helpers as ec_helpers
 
 # Order is irrelevant (each module is patched independently); kept stable for
 # readable test introspection.

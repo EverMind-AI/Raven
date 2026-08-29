@@ -42,11 +42,11 @@ def patched_tui_build_deps(monkeypatch: pytest.MonkeyPatch, tmp_path):
     config.tools.sandbox = MagicMock()
     config.channels = MagicMock()
     monkeypatch.setattr(
-        "raven.core.helpers.load_runtime_config",
+        "raven.core.config_stack.load_runtime_config",
         lambda *a, **kw: config,
     )
     monkeypatch.setattr(
-        "raven.core.helpers.make_provider",
+        "raven.providers.factory.make_provider",
         lambda _c: MagicMock(),
     )
 

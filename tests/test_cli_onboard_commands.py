@@ -5257,7 +5257,7 @@ def test_a_stale_default_model_does_not_restart_the_wizard(
 
         monkeypatch.setattr(agent_commands, "_stdout_isatty", lambda: True)
         monkeypatch.setattr(
-            "raven.core.helpers.load_runtime_config",
+            "raven.core.config_stack.load_runtime_config",
             lambda *a, **kw: (_ for _ in ()).throw(typer.Exit(0)),
         )
         result = runner.invoke(app, ["agent"])

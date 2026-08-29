@@ -21,14 +21,14 @@ from loguru import logger
 from rich.console import Console
 
 from raven import __logo__
-from raven.core.helpers import (
-    build_model_routing,
+from raven.cli._helpers import (
     load_runtime_config,
-    make_resolving_provider,
     parse_fake_now,
     print_config_migration_notices,
     print_deprecated_memory_window_notice,
 )
+from raven.core.provider_stack import build_model_routing
+from raven.providers.factory import make_resolving_provider
 from raven.utils import asyncio_runner as bounded_asyncio
 from raven.utils.helpers import sync_workspace_templates
 

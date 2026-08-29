@@ -88,7 +88,7 @@ def build_runtime(
     from raven.config.paths import get_deliverables_path
 
     if provider_pool is None:
-        from raven.core.helpers import load_runtime_config
+        from raven.core.config_stack import load_runtime_config
         from raven.providers.pool import ProviderPool
 
         # Every entrance wants the same pool over the same loader; deriving

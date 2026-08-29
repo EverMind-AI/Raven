@@ -484,11 +484,13 @@ def _build_agent_loop(workspace: str | None = None, home: str | None = None):
         from raven.agent.loop.recovery import limits_from_defaults
         from raven.agent.workdir import WorkdirPolicy, WorkdirResolver, validate_override
         from raven.cli._cron_handler import chain_cron_activity_reset
+        from raven.cli._helpers import load_runtime_config
         from raven.config.paths import get_cron_dir
         from raven.config.raven import load_raven_config
-        from raven.core.helpers import build_model_routing, load_runtime_config, make_lazy_provider
+        from raven.core.provider_stack import build_model_routing
         from raven.proactive_engine.schedulers.cron.service import CronService
         from raven.proactive_engine.schedulers.cron.tool import CronTool
+        from raven.providers.factory import make_lazy_provider
         from raven.session.manager import SessionManager
 
         config = load_runtime_config(None, home=home)
@@ -1194,7 +1196,7 @@ def tui(
     # surfaced on the user's first chat message instead of a launch-time error.
     if workspace is not None:
         from raven.agent.workdir import validate_override
-        from raven.core.helpers import load_runtime_config
+        from raven.cli._helpers import load_runtime_config
 
         try:
             validate_override(workspace, load_runtime_config(None, home=home).workspace_path)

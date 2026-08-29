@@ -30,7 +30,7 @@ def _hermetic_preagentloop(monkeypatch):
     tests exercise only what they claim to."""
     from unittest.mock import MagicMock
 
-    monkeypatch.setattr("raven.core.helpers.make_lazy_provider", lambda *a, **k: MagicMock())
+    monkeypatch.setattr("raven.providers.factory.make_lazy_provider", lambda *a, **k: MagicMock())
 
 
 def _patch_agent_loop_to_raise(monkeypatch: pytest.MonkeyPatch, exc: BaseException) -> None:

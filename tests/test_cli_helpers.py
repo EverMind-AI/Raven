@@ -1,4 +1,5 @@
-"""Unit tests for ``raven.core.helpers``.
+"""Unit tests for the provider factory (``raven.providers.factory``) and the
+assembly helpers that grew out of the old ``raven.core.helpers``.
 
 Currently focused on ``send_probe`` — the shared LLM probe used by
 ``onboard`` Step 3 and ``doctor --probe``. Provider and config are
@@ -14,8 +15,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from raven.core import helpers as _helpers
-from raven.core.helpers import send_probe
+from raven.core.provider_stack import send_probe
+from raven.providers import factory as _helpers
 
 
 @pytest.fixture
@@ -259,7 +260,7 @@ def test_which_client_serves_a_provider_is_read_from_the_registry(
     old way needed its own check beside the resolved provider name.
     """
     from raven.config.schema import Config
-    from raven.core.helpers import make_provider
+    from raven.providers.factory import make_provider
 
     config = Config.model_validate(
         {
@@ -267,7 +268,7 @@ def test_which_client_serves_a_provider_is_read_from_the_registry(
             "agents": {"defaults": {"model": model, "provider": provider}},
         }
     )
-    monkeypatch.setattr("raven.core.helpers.check_provider_credentials", lambda _config, _model=None: None)
+    monkeypatch.setattr("raven.providers.factory.check_provider_credentials", lambda _config, _model=None: None)
 
     assert type(make_provider(config)).__name__ == expected
 
@@ -359,7 +360,7 @@ def test_make_provider_builds_a_rotor_over_several_endpoints(monkeypatch: pytest
             "agents": {"defaults": {"model": "my-model", "provider": "custom"}},
         }
     )
-    monkeypatch.setattr("raven.core.helpers.check_provider_credentials", lambda _config, _model=None: None)
+    monkeypatch.setattr("raven.providers.factory.check_provider_credentials", lambda _config, _model=None: None)
 
     provider = _helpers.make_provider(config)
 
@@ -382,7 +383,7 @@ def test_make_provider_a_single_endpoint_entry_still_returns_a_plain_provider(
             "agents": {"defaults": {"model": "my-model", "provider": "custom"}},
         }
     )
-    monkeypatch.setattr("raven.core.helpers.check_provider_credentials", lambda _config, _model=None: None)
+    monkeypatch.setattr("raven.providers.factory.check_provider_credentials", lambda _config, _model=None: None)
 
     provider = _helpers.make_provider(config)
 
@@ -416,7 +417,7 @@ def test_make_provider_single_endpoint_entry_credentials_are_not_dropped(
             "agents": {"defaults": {"model": "my-model", "provider": "custom"}},
         }
     )
-    monkeypatch.setattr("raven.core.helpers.check_provider_credentials", lambda _config, _model=None: None)
+    monkeypatch.setattr("raven.providers.factory.check_provider_credentials", lambda _config, _model=None: None)
 
     provider = _helpers.make_provider(config)
 
@@ -449,7 +450,7 @@ def test_make_provider_flat_config_is_equivalent_through_the_endpoint_path(
             "agents": {"defaults": {"model": "my-model", "provider": "custom"}},
         }
     )
-    monkeypatch.setattr("raven.core.helpers.check_provider_credentials", lambda _config, _model=None: None)
+    monkeypatch.setattr("raven.providers.factory.check_provider_credentials", lambda _config, _model=None: None)
 
     provider = _helpers.make_provider(config)
 
@@ -491,7 +492,7 @@ def test_make_provider_rejects_endpoints_on_providers_that_cannot_rotate(
             "agents": {"defaults": {"model": model, "provider": provider}},
         }
     )
-    monkeypatch.setattr("raven.core.helpers.check_provider_credentials", lambda _config, _model=None: None)
+    monkeypatch.setattr("raven.providers.factory.check_provider_credentials", lambda _config, _model=None: None)
 
     with pytest.raises(MissingCredentialsError, match="endpoints"):
         _helpers.make_provider(config)
@@ -587,8 +588,8 @@ def test_migration_notices_go_to_stderr_not_stdout(tmp_path, capsys, monkeypatch
     but an unparseable document -- and the migration only fires once, which is
     exactly the run a CI job would be unlucky enough to hit.
     """
+    from raven.cli._helpers import print_config_migration_notices
     from raven.config import loader
-    from raven.core.helpers import print_config_migration_notices
 
     monkeypatch.setattr(loader, "_migration_notices", ["something was rewritten"])
 
@@ -600,8 +601,8 @@ def test_migration_notices_go_to_stderr_not_stdout(tmp_path, capsys, monkeypatch
 
 
 def test_no_notice_prints_nothing_at_all(capsys, monkeypatch) -> None:
+    from raven.cli._helpers import print_config_migration_notices
     from raven.config import loader
-    from raven.core.helpers import print_config_migration_notices
 
     monkeypatch.setattr(loader, "_migration_notices", [])
 

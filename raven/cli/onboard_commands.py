@@ -39,6 +39,7 @@ import typer
 from rich.panel import Panel
 
 from raven.cli import _onboard_shared, onboard_channels, onboard_everos, onboard_web
+from raven.cli._helpers import print_probe_troubleshooting
 from raven.cli._onboard_shared import (  # noqa: F401  (re-exports: tests and
     # sibling wizards address these through this module's namespace)
     _ABORT_EVEROS,
@@ -57,11 +58,7 @@ from raven.cli._onboard_shared import (  # noqa: F401  (re-exports: tests and
     console,
     set_lang,
 )
-from raven.core.helpers import (
-    DEFAULT_PROBE_MESSAGE,
-    print_probe_troubleshooting,
-    send_probe,
-)
+from raven.core.provider_stack import DEFAULT_PROBE_MESSAGE, send_probe
 from raven.providers.registry import (
     CRED_ENDPOINT,
     CRED_LOCAL,

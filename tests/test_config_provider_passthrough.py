@@ -138,7 +138,7 @@ def test_callers_read_declared_fields_and_extras_through_get() -> None:
 def test_make_provider_passes_configured_model_overrides_through() -> None:
     # The wiring from config to provider is one line and easy to leave out,
     # which would make every configured override silently do nothing.
-    from raven.core.helpers import make_provider
+    from raven.providers.factory import make_provider
 
     cfg = _config(openai={"apiKey": "K"})
     cfg.agents.defaults.model = "openai/gpt-4o"
