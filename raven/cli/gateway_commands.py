@@ -591,10 +591,7 @@ def register(app: typer.Typer) -> None:
                     turn_ids=web_turn_ids,
                     direct_targets=web_direct_targets,
                     agent=agent,
-                    cron=cron,
-                    config=config,
                     channel_manager=channels,
-                    raven_config=ec_config,
                 )
                 web_server.bind(web_dispatcher)
 

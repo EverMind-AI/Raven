@@ -35,10 +35,7 @@ def _registered() -> set[str]:
         agent=SimpleNamespace(),
         # A real gateway always passes its live CronService; None would make
         # raven.cron.* silently unregistered and this test blind to them.
-        cron=SimpleNamespace(),
-        config=SimpleNamespace(),
         channel_manager=SimpleNamespace(),
-        raven_config=SimpleNamespace(),
     )
     return set(dispatcher.methods())
 
@@ -70,10 +67,9 @@ def test_every_shared_method_is_declared_in_the_terminal_contract() -> None:
     )
 
 
-def test_cron_methods_register_when_the_service_is_present() -> None:
-    """Pins why the stub cron above is not None: register_web_methods skips
-    raven.cron.* without a live CronService, and a test built that way would
-    report the whole group as an acceptable gap."""
-    registered = _registered()
-    for name in ("raven.cron.list", "raven.cron.add", "raven.cron.remove"):
-        assert name in registered, name
+def test_the_control_plane_registers_exactly_the_probe_vocabulary() -> None:
+    """The C7 shrink is load-bearing: the raven.* dialect is live_probe's three
+    channel methods, and a fourth raven.* registration reappearing here means a
+    new client contract nobody declared."""
+    registered = {n for n in _registered() if n.startswith("raven.")}
+    assert registered == {"raven.channels.qr", "raven.channels.start", "raven.channels.live"}

@@ -54,7 +54,7 @@ async def _live(mapping):
     from raven.web_rpc.methods_config import register_config_methods
 
     d = Dispatcher()
-    register_config_methods(d, agent=None, cron=None, config=None, channel_manager=_Mgr(mapping), raven_config=None)
+    register_config_methods(d, channel_manager=_Mgr(mapping))
     return await d.dispatch({"jsonrpc": "2.0", "id": 1, "method": "raven.channels.live", "params": {}})
 
 

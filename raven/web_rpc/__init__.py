@@ -2,12 +2,12 @@
 
 A local WebSocket JSON-RPC endpoint a client connects to over a WebSocket.
 
-Built for `ui-webui`, which has been retired. It stays because it became the
-gateway process's only cross-process control plane, and something else now
-depends on that: ``raven.gateway.live_probe`` reaches the live channel adapters
-through this endpoint, and those adapters exist nowhere else. Without it every
-other surface goes back to drawing the config file's ``enabled`` flag as if it
-were a connection.
+Built for `ui-webui`, which has been retired; the C7 ruling (2026-08-29)
+shrank it to what actually outlived that front end: the gateway process's
+cross-process control plane. ``raven.gateway.live_probe`` reaches the live
+channel adapters through this endpoint (three ``raven.channels.*`` methods),
+and those adapters exist nowhere else -- without it every other surface goes
+back to drawing the config file's ``enabled`` flag as if it were a connection.
 The web channel streams turns exactly like the TUI (token.delta / thinking.delta
 / tool.* / message.complete), so it reuses the TUI's spine assembly and RPC
 methods with ``channel="web"``; the only web-specific piece is the WebSocket
