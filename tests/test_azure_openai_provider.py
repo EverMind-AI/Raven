@@ -236,3 +236,42 @@ def test_arguments_that_needed_repair_are_reported_as_such() -> None:
     assert cut.tool_calls[0].run_meta.arguments_repaired is True
     # Still repaired: the signal is additional, not a replacement.
     assert cut.tool_calls[0].arguments["content"] == "import ran"
+
+
+def _gpt_payload(
+    deployment: str,
+    *,
+    tools: bool,
+    reasoning_effort: str | None = None,
+) -> dict[str, Any]:
+    provider = AzureOpenAIProvider(api_key="k", api_base="https://x.openai.azure.com")
+    tool_list = [{"type": "function", "function": {"name": "f", "parameters": {}}}] if tools else None
+    return provider._prepare_request_payload(
+        deployment,
+        [{"role": "user", "content": "hi"}],
+        tools=tool_list,
+        reasoning_effort=reasoning_effort,
+    )
+
+
+def test_gpt5_with_tools_defaults_to_no_reasoning() -> None:
+    """GPT-5.x chat completions 400 on tools without reasoning_effort=none."""
+    payload = _gpt_payload("gpt-5.6-sol", tools=True)
+    assert payload["reasoning_effort"] == "none"
+    assert "temperature" not in payload
+
+
+def test_gpt5_keeps_the_callers_reasoning_effort() -> None:
+    payload = _gpt_payload("gpt-5.6-sol", tools=True, reasoning_effort="medium")
+    assert payload["reasoning_effort"] == "medium"
+
+
+def test_gpt5_without_tools_gets_no_injected_effort() -> None:
+    payload = _gpt_payload("gpt-5.6-sol", tools=False)
+    assert "reasoning_effort" not in payload
+
+
+def test_other_deployments_are_untouched() -> None:
+    payload = _gpt_payload("gpt-4o", tools=True)
+    assert "reasoning_effort" not in payload
+    assert payload["temperature"] == 0.7
