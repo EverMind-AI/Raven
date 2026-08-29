@@ -29,10 +29,8 @@ STILL_CARRYING: frozenset[str] = frozenset(
         "raven/core/proactive_stack.py",
         "raven/memory_engine/consolidate/consolidator.py",
         "raven/proactive_engine/schedulers/cron/tool.py",
-        "raven/proactive_engine/sentinel/attention_producers/daily_plan.py",
         "raven/proactive_engine/sentinel/executor/decision_router.py",
         "raven/proactive_engine/sentinel/predictor/prompts.py",
-        "raven/proactive_engine/sentinel/trigger_policy/prompts.py",
         "raven/session/title.py",
     }
 )

@@ -34,6 +34,10 @@ All notable changes to Raven are documented here.
   imports the loop shell it is consumed by. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- The sentinel planner's and the daily planner's system prompts are
+  per-language templates (`raven/templates/prompts/{en,zh}/`) loaded by
+  `raven.i18n.prompt`; their context blocks render through `t()`. An `en`
+  user's sentinel used to be prompted in Chinese.
 - Security: the three URL policies (egress fetch, market trust, browser
   navigation) read one address vocabulary, `raven/security/hosts.py`
   (canonical and browser-legacy spellings, UTS-46 mapping, IPv4 embedded in

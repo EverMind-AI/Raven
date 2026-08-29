@@ -11,9 +11,13 @@ runs before a config exists.
 
 from __future__ import annotations
 
+from functools import lru_cache
+from pathlib import Path
+
 from raven.i18n import zh
 
 _CATALOGS: dict[str, dict[str, str]] = {"zh": zh.MESSAGES}
+_PROMPTS = Path(__file__).resolve().parent.parent / "templates" / "prompts"
 _language = "en"
 
 
@@ -39,4 +43,19 @@ def t_in(language: str, text: str, /, **arguments: object) -> str:
     return message.format(**arguments) if arguments else message
 
 
-__all__ = ["current_language", "set_language", "t", "t_in"]
+def prompt(name: str) -> str:
+    """A model-facing prompt template in the current language (``templates/prompts/<language>/<name>.md``)."""
+    return prompt_in(_language, name)
+
+
+@lru_cache(maxsize=None)
+def prompt_in(language: str, name: str) -> str:
+    """The named template in ``language``, falling back to English when that language has none."""
+    for candidate in (language, "en"):
+        path = _PROMPTS / candidate / f"{name}.md"
+        if path.is_file():
+            return path.read_text(encoding="utf-8")
+    raise FileNotFoundError(f"no prompt template named {name!r}")
+
+
+__all__ = ["current_language", "prompt", "prompt_in", "set_language", "t", "t_in"]
