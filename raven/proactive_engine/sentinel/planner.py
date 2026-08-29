@@ -8,10 +8,9 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from raven.i18n import zh_lexicon
+from raven.i18n import prompt, zh_lexicon
 from raven.proactive_engine.sentinel.trigger_policy.prompts import (
     PLANNER_TOOL,
-    SYSTEM_PROMPT,
     build_context_prompt,
 )
 from raven.proactive_engine.sentinel.types import PlannerContext, PlannerDecision
@@ -132,7 +131,7 @@ class ProactivePlanner:
         tick never crashes the surrounding scheduler.
         """
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": prompt("sentinel_planner")},
             {"role": "user", "content": build_context_prompt(ctx)},
         ]
 
