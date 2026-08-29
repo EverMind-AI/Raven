@@ -6,13 +6,13 @@ shapes); this module re-exports them so existing import paths keep resolving.
 
 from raven.contracts.tool import (  # noqa: F401
     SKIPPED_AFTER_BLOCKED_CALL,
+    ContentPart,  # noqa: F401
     Continuation,
     FileChange,
     Tool,
     ToolOutput,
     ToolResult,
 )
-from raven.utils.helpers import ContentPart  # noqa: F401
 
 __all__ = [
     "ContentPart",

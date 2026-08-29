@@ -14,7 +14,7 @@ from typing import Any, Iterator
 
 from loguru import logger
 
-from raven.utils.helpers import safe_path_segment
+from raven.utils.paths import safe_path_segment
 
 # Subtrees of agent home the agent must not be able to adopt as a working
 # directory: it would then write artifacts over its own memory and skills.

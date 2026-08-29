@@ -19,11 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import unquote, urlparse
 
-from raven.utils.helpers import (
-    _image_pixel_size,
-    detect_image_mime,
-    estimate_image_tokens,
-)
+from raven.utils.images import _image_pixel_size, detect_image_mime, estimate_image_tokens
 
 if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher

@@ -15,7 +15,7 @@ from typing import Any
 import nh3
 from mistune import create_markdown
 
-from raven.utils.helpers import safe_filename
+from raven.utils.paths import safe_filename
 
 HTML_FORMAT = "org.matrix.custom.html"
 DEFAULT_ATTACH_NAME = "attachment"

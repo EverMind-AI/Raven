@@ -45,7 +45,7 @@ from raven.rpc.methods.system import _raven_version
 from raven.session.export import default_export_path, write_transcript
 from raven.session.manager import SessionManager, new_chat_id
 from raven.session.title import TITLE_STORAGE_MAX
-from raven.utils.helpers import estimate_prompt_tokens
+from raven.utils.tokens import estimate_prompt_tokens
 
 if TYPE_CHECKING:
     from raven.agent.loop.main import AgentLoop

@@ -43,7 +43,7 @@ from typing import Any
 
 from loguru import logger
 
-from raven.utils.helpers import safe_path_segment
+from raven.utils.paths import safe_path_segment
 from raven.utils.portable_lock import file_lock
 
 _INSTANCES_DIRNAME = "instances"

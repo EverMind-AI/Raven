@@ -27,11 +27,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.config.paths import ensure_dir, get_workspace_path
-from raven.utils.helpers import (
-    _image_pixel_size,
-    detect_image_mime,
-    estimate_image_tokens,
-)
+from raven.utils.images import _image_pixel_size, detect_image_mime, estimate_image_tokens
 
 if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher

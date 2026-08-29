@@ -39,7 +39,7 @@ from loguru import logger
 
 from raven.agent.subagent.activity import persisted_output
 from raven.utils.atomic_io import atomic_replace
-from raven.utils.helpers import safe_path_segment
+from raven.utils.paths import safe_path_segment
 
 _HISTORY_DIRNAME = "subagents"
 _SPAWN_DIRNAME = "spawn"

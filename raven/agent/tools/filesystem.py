@@ -7,7 +7,7 @@ from typing import Any
 
 from raven.agent import workdir
 from raven.agent.tools.base import FileChange, Tool, ToolResult
-from raven.utils.helpers import detect_image_mime
+from raven.utils.images import detect_image_mime
 
 _DIFF_MAX_LINES = 400
 

@@ -462,7 +462,7 @@ def test_image_block_is_the_only_place_the_shape_is_written() -> None:
     drop the picture. Construction goes through one function instead."""
     import subprocess
 
-    from raven.utils.helpers import image_block
+    from raven.utils.images import image_block
 
     assert image_block("data:image/png;base64,AA") == {
         "type": "image_url",
@@ -475,12 +475,12 @@ def test_image_block_is_the_only_place_the_shape_is_written() -> None:
         capture_output=True,
         text=True,
     ).stdout.splitlines()
-    offenders = [h for h in hits if "raven/utils/helpers.py" not in h]
+    offenders = [h for h in hits if "raven/utils/images.py" not in h]
     assert offenders == [], f"hand-written image block outside helpers.py: {offenders}"
 
 
 def test_is_inline_image_separates_payloads_from_references() -> None:
-    from raven.utils.helpers import is_image_part, is_inline_image
+    from raven.utils.images import is_image_part, is_inline_image
 
     inline = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA"}}
     remote = {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}
@@ -548,7 +548,8 @@ def test_mcp_audio_content_is_labelled_never_stringified() -> None:
 def test_content_part_types_describe_what_raven_produces() -> None:
     """The TypedDicts are documentation-grade: CI runs no type checker, so they
     are asserted at runtime here to keep them from drifting from reality."""
-    from raven.utils.helpers import ImagePart, TextPart, image_block, text_block
+    from raven.contracts.tool import ImagePart, TextPart
+    from raven.utils.images import image_block, text_block
 
     img = image_block("data:image/png;base64,AA")
     txt = text_block("hello")
@@ -563,7 +564,7 @@ def test_read_side_helpers_stay_permissive_about_unknown_parts() -> None:
     """Inbound content carries parts the union does not model (Anthropic
     cache_control, MCP audio, provider extensions). Pass-through must not break."""
     from raven.agent.loop.main import _strip_inline_images
-    from raven.utils.helpers import estimate_content_part_tokens, is_inline_image
+    from raven.utils.images import estimate_content_part_tokens, is_inline_image
 
     exotic = {"type": "text", "text": "cached", "cache_control": {"type": "ephemeral"}}
     unknown = {"type": "some_future_part", "payload": {"a": 1}}

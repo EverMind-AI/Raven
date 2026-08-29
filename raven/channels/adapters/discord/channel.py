@@ -21,7 +21,7 @@ from loguru import logger
 from raven.channels.base import ChannelBase
 from raven.channels.contract import Capabilities
 from raven.channels.media import save_media_bytes
-from raven.utils.helpers import split_message
+from raven.utils.messages import split_message
 
 _API_BASE = "https://discord.com/api/v10"
 _MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024

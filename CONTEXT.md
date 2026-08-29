@@ -988,7 +988,7 @@ mechanism and a member of the channels' shared-services shelf -- cargo may
 depend on it (dingtalk and qq do). Same leaf rule as `auth`.
 
 **Templates** (`templates/`):
-Packaged data assets, zero Python: read as package data (`utils/helpers.py`)
+Packaged data assets, zero Python: read as package data (`utils/workspace.py`)
 and shipped by the wheel. An asset directory, not a code package -- it takes
 no layer assignment.
 
@@ -1623,7 +1623,7 @@ _Avoid_: "session workspace" — the gateway's unit is the channel, not the conv
 _Avoid_: confusing with Agent home — when `restrict_to_workspace` fences tools, it admits
 both roots, but they stay two different directories with different lifetimes.
 
-**Project slug** (`project_slug()`, `raven/utils/helpers.py`):
+**Project slug** (`project_slug()`, `raven/utils/paths.py`):
 A launch directory flattened into one filesystem-safe segment, following the convention
 Claude Code uses for `~/.claude/projects/`: every run of non-alphanumeric characters becomes
 a single `-` (per character, not per run), and past 200 characters the slug is truncated with

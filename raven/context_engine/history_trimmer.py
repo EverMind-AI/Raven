@@ -28,7 +28,7 @@ from typing import Any, Callable
 
 from raven.providers.base import LLMProvider
 from raven.providers.binding import ModelBinding, active_window, resolve
-from raven.utils.helpers import estimate_prompt_tokens_chain
+from raven.utils.tokens import estimate_prompt_tokens_chain
 
 # Provider-safe message keys. Anything else on a session message
 # (timestamps, internal ids, manifest annotations) is dropped before

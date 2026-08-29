@@ -34,7 +34,7 @@ from raven.channels.media import save_media_bytes
 from raven.channels.transcribe import transcribe_audio
 from raven.config.paths import get_runtime_subdir
 from raven.utils.atomic_io import atomic_replace
-from raven.utils.helpers import split_message
+from raven.utils.messages import split_message
 
 _DEDUP_CAP = 1000
 

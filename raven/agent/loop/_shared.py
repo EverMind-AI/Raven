@@ -75,7 +75,8 @@ from raven.sandbox import SandboxConfig, SandboxExecutor, SandboxInitError, buil
 from raven.session.manager import Session, SessionManager
 from raven.spine.turn import Origin, session_of
 from raven.tracing import semconv, trace
-from raven.utils.helpers import estimate_prompt_tokens, is_image_part, is_inline_image
+from raven.utils.images import is_image_part, is_inline_image
+from raven.utils.tokens import estimate_prompt_tokens
 
 # Teardown's budget for letting outstanding writes finish. See
 # ``drain_backend_stores``: the pipeline cuts retries short first, so this only

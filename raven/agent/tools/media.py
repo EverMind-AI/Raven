@@ -24,7 +24,8 @@ import io
 from pathlib import Path
 from typing import Any
 
-from raven.utils.helpers import ContentPart, estimate_image_tokens, image_block, is_image_part, text_block
+from raven.contracts.tool import ContentPart
+from raven.utils.images import estimate_image_tokens, image_block, is_image_part, text_block
 
 # Formats every target accepts inline. A raster format Pillow can decode (BMP,
 # TIFF, ICO) is converted to JPEG rather than rejected. Formats Pillow cannot
