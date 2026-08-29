@@ -152,7 +152,7 @@ class ContextAssembler(ContextEngine):
             if isinstance(seg, Exception):
                 degraded.append(builder.name)
                 logger.opt(exception=seg).error("segment builder {} failed; assembling without it", builder.name)
-        meta: dict[str, Any] = {"degraded_segments": degraded} if degraded else {}
+        meta: dict[str, Any] = {}
         prefix_parts: list[tuple[int, str, bool]] = []
         for builder, seg in zip(self._phase_a, a_segs):
             if seg is None or isinstance(seg, Exception):
@@ -182,13 +182,21 @@ class ContextAssembler(ContextEngine):
                 tool_defs=self.get_tool_definitions(),
             ),
         )
-        b_segs = await asyncio.gather(*[b.build(ctx_b) for b in self._phase_b])
+        # The same rule as Phase A: a failing Curator loses its segment (the
+        # turn runs on the prefix and the raw history), never the turn.
+        b_segs = await asyncio.gather(*[b.build(ctx_b) for b in self._phase_b], return_exceptions=True)
+        for builder, seg in zip(self._phase_b, b_segs):
+            if isinstance(seg, Exception):
+                degraded.append(builder.name)
+                logger.opt(exception=seg).error("segment builder {} failed; assembling without it", builder.name)
+        if degraded:
+            meta["degraded_segments"] = degraded
 
         system = system_prefix
         history: list[dict[str, Any]] = []
         seg6_parts: list[tuple[int, str]] = []
         for builder, seg in zip(self._phase_b, b_segs):
-            if seg is None:
+            if seg is None or isinstance(seg, Exception):
                 continue
             meta |= seg.meta
             if seg.text:
