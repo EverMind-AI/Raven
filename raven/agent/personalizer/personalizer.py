@@ -379,14 +379,14 @@ class Personalizer:
             return fallback
 
     def _append_to_memory_section(self, section: str, facts: list[str]) -> None:
-        """Append new facts under the given section header in MEMORY.md.
+        """Append new facts under the given section header in user.md.
 
         - If the section already exists: inserts lines right after the header.
         - If the section is missing: appends a new section at the end of the file.
 
-        Read-modify-write is fcntl-locked via ``MemoryStore.locked()`` so
-        concurrent writers (MemoryConsolidator, SentinelMemoryWriter) on
-        another process don't clobber the update.
+        Read-modify-write holds ``MemoryStore.locked()`` so concurrent writers
+        (MemoryConsolidator, SentinelMemoryWriter) in another process cannot
+        clobber the update.
         """
         header = f"## {section}"
         fact_lines = "\n".join(f"- {f}" for f in facts)
