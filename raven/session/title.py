@@ -127,7 +127,8 @@ def title_tool_schema(budget: int = TITLE_BUDGET) -> list[dict[str, Any]]:
                                 f"The conversation's title, at most {budget} characters "
                                 f"(about {budget // 2} Chinese characters). Name what the user "
                                 "wants done, in the user's own language: 'Fix the login redirect' / "
-                                "'修复登录跳转'. No quotes, no trailing punctuation, no 'Title:' prefix."
+                                f"'{zh_lexicon.TITLE_EXAMPLE}'. No quotes, no trailing punctuation, "
+                                "no 'Title:' prefix."
                             ),
                         },
                     },

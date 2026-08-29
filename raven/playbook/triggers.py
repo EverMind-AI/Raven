@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from raven.i18n import zh_lexicon
 from raven.playbook.types import Triggers
 
 if TYPE_CHECKING:
@@ -34,23 +35,9 @@ _DEFAULT_MAX_HIT_RATE = 0.02
 # Bare function words that survive the length rule but carry no task signal.
 # Domain-generic words ("article", "report") are NOT listed here on purpose --
 # the negative-sample filter judges those from data, not from anyone's
-# intuition. Chinese entries are written as unicode escapes to keep the
-# source ASCII; each carries its pinyin and meaning.
+# intuition. The Chinese half of the list is language data, so it lives in
+# raven.i18n.zh_lexicon with the rest.
 _STOPWORDS = {
-    "\u5e2e\u6211",  # bang wo: "help me"
-    "\u7ed9\u6211",  # gei wo: "give me"
-    "\u6211\u8981",  # wo yao: "I want"
-    "\u6211\u60f3",  # wo xiang: "I'd like"
-    "\u4e00\u4e2a",  # yi ge: "a/one"
-    "\u4e00\u4e0b",  # yi xia: "briefly"
-    "\u4e00\u4efd",  # yi fen: "a copy of"
-    "\u8fd9\u4e2a",  # zhe ge: "this"
-    "\u90a3\u4e2a",  # na ge: "that"
-    "\u4ec0\u4e48",  # shen me: "what"
-    "\u600e\u4e48",  # zen me: "how"
-    "\u53ef\u4ee5",  # ke yi: "can/may"
-    "\u9700\u8981",  # xu yao: "need"
-    "\u9ebb\u70e6",  # ma fan: "please/trouble you"
     "the",
     "and",
     "for",
@@ -65,12 +52,7 @@ _STOPWORDS = {
     "template",
     "framework",
     "process",
-    "\u6a21\u677f",  # mu ban: "template"
-    "\u6d41\u7a0b",  # liu cheng: "process/flow"
-    "\u65b9\u6848",  # fang an: "plan/scheme"
-    "\u81ea\u52a8\u5316",  # zi dong hua: "automation"
-    "\u5de5\u4f5c\u6d41",  # gong zuo liu: "workflow"
-}
+} | zh_lexicon.TRIGGER_STOPWORDS
 
 
 def normalize(text: str) -> str:
