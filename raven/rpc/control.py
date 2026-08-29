@@ -93,7 +93,6 @@ class RebindState(_Strict):
     detail: str = Field(..., description="Why it failed, when it did: expired | no_token | error.")
 
 
-
 class ChannelLive(_Strict):
     running: bool
     connected: bool | None = Field(
@@ -102,10 +101,8 @@ class ChannelLive(_Strict):
     qr_login: bool
 
 
-
 class ChannelsQrParams(_Strict):
     name: str | None = None
-
 
 
 class ChannelsQrResult(_Strict):
@@ -116,11 +113,9 @@ class ChannelsQrResult(_Strict):
     rebind: RebindState | None = Field(None, description="Null for a channel that does not offer rebinding.")
 
 
-
 class ChannelsStartParams(_Strict):
     name: str | None = None
     enabled: bool | None = Field(None, description="False stops the adapter; anything else starts it.")
-
 
 
 class ChannelsStartResult(_Strict):
@@ -132,15 +127,12 @@ class ChannelsStartResult(_Strict):
     )
 
 
-
 class ChannelsLiveParams(_Strict):
     pass
 
 
-
 class ChannelsLiveResult(_Strict):
     channels: dict[str, ChannelLive]
-
 
 
 class ReloadParams(_Strict):

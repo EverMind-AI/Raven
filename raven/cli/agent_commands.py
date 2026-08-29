@@ -264,15 +264,15 @@ def register(app: typer.Typer) -> None:
             router=router,
             workdir_resolver=workdir_resolver,
             policy=TurnPolicy(
-                             now_fn=parse_fake_now(fake_now),
-                             max_iterations=config.agents.defaults.max_tool_iterations,
-                             empty_recovery=limits_from_defaults(config.agents.defaults),
-                             interactive=False,
-                             response_modifier=sentinel_response_modifier,
+                now_fn=parse_fake_now(fake_now),
+                max_iterations=config.agents.defaults.max_tool_iterations,
+                empty_recovery=limits_from_defaults(config.agents.defaults),
+                interactive=False,
+                response_modifier=sentinel_response_modifier,
             ),
             host=HostWiring(
                 channels_config=config.channels,
-                             on_user_inbound=sentinel_on_user_inbound,
+                on_user_inbound=sentinel_on_user_inbound,
             ),
         )
         agent_loop = runtime.loop

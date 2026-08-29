@@ -121,6 +121,4 @@ def build_cron_callback_spine(
     return wrapped
 
 
-
-
 __all__ = ["build_cron_callback_spine", "fanout_cron_delivered", "fanout_cron_missed"]

@@ -73,17 +73,13 @@ def _sites() -> list[tuple[str, ast.Call]]:
 def test_the_enumeration_still_finds_the_construction_sites():
     """The negative assertions below all pass over an empty list."""
     names = {rel for rel, _ in _sites()}
-    assert "core/runtime.py" in names, (
-        f"the assembly door stopped building an AgentLoop by name: {sorted(names)}"
-    )
+    assert "core/runtime.py" in names, f"the assembly door stopped building an AgentLoop by name: {sorted(names)}"
 
 
 @pytest.mark.parametrize("capability", _REQUIRED)
 def test_every_construction_site_wires_every_capability(capability: str):
     missing = [
-        rel
-        for rel, call in _sites()
-        if capability not in _flat_kwargs(call) and (rel, capability) not in _EXEMPT
+        rel for rel, call in _sites() if capability not in _flat_kwargs(call) and (rel, capability) not in _EXEMPT
     ]
     assert not missing, (
         f"these AgentLoop sites do not pass {capability!r}: {missing}\n"

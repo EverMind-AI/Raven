@@ -304,8 +304,6 @@ def set_sandbox_backend(
     return prev
 
 
-
-
 def set_plugin_config_fields(
     plugin_id: str,
     fields: dict[str, Any],

@@ -78,9 +78,18 @@ async def test_the_token_gate_closes_a_wrong_first_frame_and_answers_the_right_o
     import aiohttp
 
     d = Dispatcher()
-    register_control_methods(d, channel_manager=None, status=lambda: {
-        "pid": 1, "started_at": 0.0, "generation": 3, "swap_in_flight": False, "config_path": "", "page": {},
-    })
+    register_control_methods(
+        d,
+        channel_manager=None,
+        status=lambda: {
+            "pid": 1,
+            "started_at": 0.0,
+            "generation": 3,
+            "swap_in_flight": False,
+            "config_path": "",
+            "page": {},
+        },
+    )
     server = ControlPlaneServer(0, auth_token="s3cret")
     server.bind(d)
     host, bound = await server.start()
@@ -283,7 +292,6 @@ async def test_channels_qr_reads_a_real_weixin_adapter() -> None:
     from unittest.mock import AsyncMock
 
     from raven.channels.adapters.weixin.channel import WeixinChannel
-
 
     ch = WeixinChannel(make_channel_config("weixin"))
     ch._running = True

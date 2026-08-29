@@ -23,9 +23,23 @@ from pathlib import Path
 
 import pytest
 
-INNER_DIRS = ["agent", "spine", "contracts", "memory_engine", "context_engine",
-              "providers", "session", "sandbox", "routing", "token_wise",
-              "plugins", "channels", "gateway", "market", "ops"]
+INNER_DIRS = [
+    "agent",
+    "spine",
+    "contracts",
+    "memory_engine",
+    "context_engine",
+    "providers",
+    "session",
+    "sandbox",
+    "routing",
+    "token_wise",
+    "plugins",
+    "channels",
+    "gateway",
+    "market",
+    "ops",
+]
 
 # Roster members with their package prefixes; inner layers may know them
 # lazily (function-level) but never at module level.
@@ -35,9 +49,23 @@ ROSTER = {
     "importer": "raven.importer",
     "evolver": "raven.evolver",
     "eval_engine": "raven.eval_engine",
-    **{f"adapter-{n}": f"raven.channels.adapters.{n}" for n in (
-        "dingtalk", "discord", "email", "feishu", "matrix", "mochat",
-        "qq", "slack", "telegram", "wecom", "weixin", "whatsapp")},
+    **{
+        f"adapter-{n}": f"raven.channels.adapters.{n}"
+        for n in (
+            "dingtalk",
+            "discord",
+            "email",
+            "feishu",
+            "matrix",
+            "mochat",
+            "qq",
+            "slack",
+            "telegram",
+            "wecom",
+            "weixin",
+            "whatsapp",
+        )
+    },
 }
 
 REPO = Path(__file__).resolve().parent.parent
@@ -77,7 +105,8 @@ def test_delete_direction_zero_module_level_inner_knowledge(member: str):
 async def test_add_direction_synthetic_plugin_rides_to_a_real_turn(tmp_path: Path):
     plug = tmp_path / "plugins" / "synth-cap"
     plug.mkdir(parents=True)
-    (plug / "raven-plugin.toml").write_text(textwrap.dedent("""
+    (plug / "raven-plugin.toml").write_text(
+        textwrap.dedent("""
         [plugin]
         id = "synth-cap"
         version = "0.0.1"
@@ -87,11 +116,13 @@ async def test_add_direction_synthetic_plugin_rides_to_a_real_turn(tmp_path: Pat
         [[plugin.contributes.tools]]
         name = "synth_echo"
         factory = "synth_cap_pkg.tools:make_tool"
-    """))
+    """)
+    )
     pkg = plug / "synth_cap_pkg"
     pkg.mkdir()
     (pkg / "__init__.py").write_text("")
-    (pkg / "tools.py").write_text(textwrap.dedent("""
+    (pkg / "tools.py").write_text(
+        textwrap.dedent("""
         from raven.agent.tools.base import Tool
 
         class SynthEchoTool(Tool):
@@ -102,9 +133,11 @@ async def test_add_direction_synthetic_plugin_rides_to_a_real_turn(tmp_path: Pat
                 return f"synth: {kw.get('text', '')}"
         def make_tool(ctx):
             return SynthEchoTool()
-    """))
+    """)
+    )
 
     from raven.plugins.bootstrap import assemble_plugin_registry
+
     reg = assemble_plugin_registry(user_dir=tmp_path / "plugins", entry_points_group=None)
     assert "synth_echo" in reg.tool_names()
     tool = reg.build_tool("synth_echo", config={}, services=None)
@@ -130,8 +163,7 @@ async def test_add_direction_synthetic_plugin_rides_to_a_real_turn(tmp_path: Pat
         async def chat_stream(self, messages, **kw):
             return _Resp()
 
-    loop = AgentLoop(provider=_Provider(), workspace=tmp_path / "ws", model="f",
-                     interactive=False, plugin_tools=[tool])
+    loop = AgentLoop(provider=_Provider(), workspace=tmp_path / "ws", model="f", interactive=False, plugin_tools=[tool])
     assert loop.tools.get("synth_echo") is not None
     assert "synth_echo" in [d["function"]["name"] for d in loop.tools.get_definitions()]
     assert await loop.tools.execute("synth_echo", {"text": "hi"}) == "synth: hi"
@@ -155,7 +187,8 @@ def test_no_new_cargo_inside_mechanism_packages():
                 continue
             py_lines = sum(
                 len(f.read_text(errors="replace").splitlines())
-                for f in subdir.rglob("*.py") if "__pycache__" not in f.parts
+                for f in subdir.rglob("*.py")
+                if "__pycache__" not in f.parts
             )
             if py_lines >= 300 and not any(rel.startswith(a) or a.startswith(rel) for a in _CARGO_DEBT_ALLOWLIST):
                 offenders.append(f"{rel} ({py_lines} lines)")

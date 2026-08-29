@@ -39,7 +39,6 @@ class RpcStack:
     deliverables: Any = None
 
 
-
 _TUI_INIT_CRASH_TYPES: tuple[type[BaseException], ...] = (
     TypeError,
     AttributeError,
@@ -100,6 +99,7 @@ def build_agent_loop(workspace: str | None = None, home: str | None = None):
                 "log_path": "~/.raven/logs/tui.log",
             },
         ) from e
+
 
 async def build_rpc_stack(
     send_frame: SendFrame,

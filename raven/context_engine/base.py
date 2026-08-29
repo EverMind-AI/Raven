@@ -13,4 +13,12 @@ from raven.contracts.context import (  # noqa: F401
 )
 from raven.memory_engine.base import AssembledContext, TokenBudget  # noqa: F401
 
-__all__ = ["AssembledContext", "TokenBudget", "AssembledPrefix", "AssemblyContext", "ContextEngine", "Segment", "SegmentBuilder"]
+__all__ = [
+    "AssembledContext",
+    "TokenBudget",
+    "AssembledPrefix",
+    "AssemblyContext",
+    "ContextEngine",
+    "Segment",
+    "SegmentBuilder",
+]

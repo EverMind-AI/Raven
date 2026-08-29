@@ -57,8 +57,7 @@ def admit_slice(
     for key, spec in schema.items():
         if not isinstance(spec, dict):
             raise PluginConfigError(
-                f"plugin {plugin_id!r}: config_schema[{key!r}] must be a table, "
-                f"got {type(spec).__name__}"
+                f"plugin {plugin_id!r}: config_schema[{key!r}] must be a table, got {type(spec).__name__}"
             )
         if key not in admitted:
             if "default" in spec:
@@ -68,30 +67,22 @@ def admit_slice(
             elif isinstance(spec.get("fields"), dict):
                 # A declared sub-table materializes from its own defaults, so
                 # an absent [channels.slack.dm] still answers dm.policy.
-                admitted[key] = admit_slice(
-                    spec["fields"], {}, plugin_id=f"{plugin_id}.{key}", logger=log
-                )
+                admitted[key] = admit_slice(spec["fields"], {}, plugin_id=f"{plugin_id}.{key}", logger=log)
             elif spec.get("required"):
-                raise PluginConfigError(
-                    f"plugin {plugin_id!r}: config key {key!r} is required and missing"
-                )
+                raise PluginConfigError(f"plugin {plugin_id!r}: config key {key!r} is required and missing")
             continue
         want = spec.get("type")
         if want is None:
             continue
         expected = _TYPES.get(want)
         if expected is None:
-            raise PluginConfigError(
-                f"plugin {plugin_id!r}: config_schema[{key!r}] names unknown type {want!r}"
-            )
+            raise PluginConfigError(f"plugin {plugin_id!r}: config_schema[{key!r}] names unknown type {want!r}")
         value = admitted[key]
         # bool subclasses int in Python; a bare isinstance check would admit
         # ``true`` where an integer is declared, which is never what the
         # operator meant.
         if isinstance(value, bool) and want in ("integer", "number"):
-            raise PluginConfigError(
-                f"plugin {plugin_id!r}: config key {key!r} must be {want}, got boolean"
-            )
+            raise PluginConfigError(f"plugin {plugin_id!r}: config key {key!r} must be {want}, got boolean")
         if value is None and not spec.get("required"):
             # None on an optional key is "unset", not a type violation: the
             # central models spell optionality as `str | None`, and the door
@@ -99,23 +90,19 @@ def admit_slice(
             continue
         if not isinstance(value, expected):
             raise PluginConfigError(
-                f"plugin {plugin_id!r}: config key {key!r} must be {want}, "
-                f"got {type(value).__name__}"
+                f"plugin {plugin_id!r}: config key {key!r} must be {want}, got {type(value).__name__}"
             )
         choices = spec.get("choices")
         if choices is not None and value is not None and value not in choices:
             raise PluginConfigError(
-                f"plugin {plugin_id!r}: config key {key!r} must be one of "
-                f"{choices!r}, got {value!r}"
+                f"plugin {plugin_id!r}: config key {key!r} must be one of {choices!r}, got {value!r}"
             )
         if want == "object" and isinstance(spec.get("fields"), dict):
             # A fixed sub-table declares its own fields and admits
             # recursively: sub-defaults apply, sub-types bite, exactly the
             # door rules. Field-less objects stay opaque (member validation
             # is the consumer's).
-            admitted[key] = admit_slice(
-                spec["fields"], value, plugin_id=f"{plugin_id}.{key}", logger=log
-            )
+            admitted[key] = admit_slice(spec["fields"], value, plugin_id=f"{plugin_id}.{key}", logger=log)
     for key in admitted:
         if key not in schema:
             log.warning(

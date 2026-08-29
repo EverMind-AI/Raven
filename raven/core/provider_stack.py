@@ -92,4 +92,5 @@ def send_probe(
     tokens = usage.get("total_tokens") or usage.get("completion_tokens")
     return (response.content or "").strip(), tokens, elapsed
 
+
 __all__ = ["DEFAULT_PROBE_MESSAGE", "build_model_routing", "send_probe"]

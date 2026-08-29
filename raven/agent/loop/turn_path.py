@@ -77,7 +77,7 @@ if TYPE_CHECKING:
 
 class TurnPathMixin:
     """The turn execution path: dispatch, the agent loop, streaming, recovery,
-persistence. Bodies moved verbatim from main.py."""
+    persistence. Bodies moved verbatim from main.py."""
 
     @staticmethod
     def _checkpoint_active(policy: str, interactive: bool) -> bool:

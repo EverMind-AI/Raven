@@ -91,6 +91,7 @@ class SelectionResult:
     category: TaskCategory
     profile: RoutingProfileName
 
+
 @runtime_checkable
 class RoutesModels(Protocol):
     """The single method the harness calls on a model router.

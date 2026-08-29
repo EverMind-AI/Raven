@@ -117,9 +117,7 @@ class ChannelsConfig(Base):
         for name in list(self.__pydantic_extra__ or {}):
             for key in (name, _to_camel_key(name)):
                 value = data.get(key)
-                if isinstance(value, dict) and all(
-                    k in pristine and pristine[k] == v for k, v in value.items()
-                ):
+                if isinstance(value, dict) and all(k in pristine and pristine[k] == v for k, v in value.items()):
                     del data[key]
         return data
 

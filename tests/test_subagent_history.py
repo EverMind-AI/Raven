@@ -127,7 +127,6 @@ def test_spawn_record_finish_is_idempotent(tmp_path: Path) -> None:
     assert len(log.read_text(encoding="utf-8").splitlines()) == lines_after_first
 
 
-
 def test_spawn_record_keeps_failures(tmp_path: Path) -> None:
     """The failure case is the one worth keeping: without it, a sub-agent that
     died leaves nothing to debug from."""

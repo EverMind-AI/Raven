@@ -112,7 +112,9 @@ def test_ledger_bites_a_sneaked_symbol(tmp_path):
     p = work / "channel.py"
     src = p.read_text()
     assert '"ChannelSpec",' in src
-    p.write_text(src.replace('"ChannelSpec",', '"ChannelSpec",\n    "SneakedIn",', 1) + "\nclass SneakedIn:\n    pass\n")
+    p.write_text(
+        src.replace('"ChannelSpec",', '"ChannelSpec",\n    "SneakedIn",', 1) + "\nclass SneakedIn:\n    pass\n"
+    )
     violations = check_ledger(work, LEDGER)
     assert any("SneakedIn" in v for v in violations), violations
 

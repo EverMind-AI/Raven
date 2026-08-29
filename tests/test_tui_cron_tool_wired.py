@@ -123,7 +123,9 @@ def test_tui_agent_loop_receives_cron_service(patched_tui_build_deps) -> None:
     _build_agent_loop()
 
     kwargs = patched_tui_build_deps["agent_loop_kwargs"]
-    assert wired_kwarg(kwargs, "cron_service") is not None, "AgentLoop must receive cron_service for CronTool auto-register"
+    assert wired_kwarg(kwargs, "cron_service") is not None, (
+        "AgentLoop must receive cron_service for CronTool auto-register"
+    )
     assert wired_kwarg(kwargs, "cron_service") is not None
     cls = patched_tui_build_deps["cron_service_class"]
     assert isinstance(wired_kwarg(kwargs, "cron_service"), cls)

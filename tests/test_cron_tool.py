@@ -79,6 +79,7 @@ async def test_add_cron_expr_with_bad_tz_still_errors() -> None:
     assert "unknown timezone" in result
     cron.add_job.assert_not_called()
 
+
 async def test_cron_tool_context_isolation() -> None:
     """Two concurrent turns share one CronTool instance (the gateway's user
     pool is 4). The route must be turn-local: with plain attributes, turn B's

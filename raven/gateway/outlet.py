@@ -46,7 +46,9 @@ class ChannelOutletAdapter:
                 await self._channel.send(out.source.chat_id, "", media=[m.path for m in out.media])
             else:
                 names = ", ".join(m.path.rsplit("/", 1)[-1] for m in out.media)
-                note = f"Files ready: {names}. This channel cannot attach files; open the same session in Raven UI or TUI."
+                note = (
+                    f"Files ready: {names}. This channel cannot attach files; open the same session in Raven UI or TUI."
+                )
                 await self._channel.send(out.source.chat_id, note)
         elif isinstance(out, ToolEvent) and out.phase is ToolPhase.COMPLETE:
             delivery = (out.metadata or {}).get("raven_delivery")

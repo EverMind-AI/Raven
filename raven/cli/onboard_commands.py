@@ -160,13 +160,6 @@ _CURATED_PROVIDERS: list[dict[str, Any]] = [
 ]
 
 
-
-
-
-
-
-
-
 def _config_language() -> str:
     """Read the saved UI language from the on-disk config ('en' / 'zh').
 
@@ -224,8 +217,6 @@ def _pick_language() -> None:
 # ---------------------------------------------------------------------------
 
 
-
-
 def _check_tty_or_die(non_interactive: bool) -> None:
     """Bail when stdout isn't a TTY and the user didn't opt into headless mode."""
     if non_interactive:
@@ -237,8 +228,6 @@ def _check_tty_or_die(non_interactive: bool) -> None:
             "[accent]raven onboard --non-interactive --provider <name> --api-key <key>[/accent]"
         )
         raise typer.Exit(2)
-
-
 
 
 def _configured_providers() -> list[str]:
@@ -389,10 +378,6 @@ def _validate_provider_name(name: str) -> str:
     return spec.name
 
 
-
-
-
-
 def _collect_fields(prompts: list[Callable[[], Any]]) -> Optional[list[Any]]:
     """Run text-prompt callables in order with empty-submit = back.
 
@@ -530,8 +515,6 @@ def _prompt_litellm_vendor() -> Optional[str]:
     # through the same gate the --provider flag goes through, which is what turns
     # a typo into a message instead of a traceback.
     return normalize_provider_name(typed)
-
-
 
 
 def _prompt_local_api_base(spec: Any, *, current: str = "", allow_back: bool = False) -> Any:
@@ -1021,8 +1004,6 @@ def _persist_default_model(model: Optional[str], provider: str) -> None:
 # ---------------------------------------------------------------------------
 # Step 1 — connectivity-failure submenu + test probe
 # ---------------------------------------------------------------------------
-
-
 
 
 def _run_test_probe(

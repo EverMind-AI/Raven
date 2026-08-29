@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 class McpGlueMixin:
     """MCP lifecycle glue: connect, sync, prewarm, apply, close. Bodies moved
-verbatim from main.py."""
+    verbatim from main.py."""
 
     async def _mcp_executor(self):
         """The sandbox executor an MCP connect should run under, started."""
