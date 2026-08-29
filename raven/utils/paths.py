@@ -3,7 +3,6 @@
 import os
 import re
 import struct
-from datetime import datetime
 from pathlib import Path
 
 
@@ -11,11 +10,6 @@ def ensure_dir(path: Path) -> Path:
     """Ensure directory exists, return it."""
     path.mkdir(parents=True, exist_ok=True)
     return path
-
-
-def timestamp() -> str:
-    """Current ISO timestamp."""
-    return datetime.now().isoformat()
 
 
 _UNSAFE_CHARS = re.compile(r'[<>:"/\\|?*]')
@@ -106,4 +100,4 @@ def project_slug(directory: str | Path) -> str:
     return f"{slug[:_SLUG_MAX_LEN]}-{_slug_hash(path)}"
 
 
-__all__ = ["ensure_dir", "project_slug", "safe_filename", "safe_path_segment", "timestamp"]
+__all__ = ["ensure_dir", "project_slug", "safe_filename", "safe_path_segment"]

@@ -246,32 +246,6 @@ class MCPConnectionManager:
                 out.append(name)
         return sorted(out)
 
-    def tools_of(self, server: str) -> dict[str, str]:
-        """Registered name -> the tool's own name, for one server.
-
-        Both halves come from the registry's origin index, which is the only
-        record of them. A caller that wants to show a bare tool name takes it
-        from here rather than stripping a prefix off the registered name: the
-        name is sanitised, capped and possibly hash-suffixed, so the prefix it
-        appears to carry is not reliably the server's.
-        """
-        return {n: ref.tool for n in self._registry.names_from(server) if (ref := self._registry.origin_of(n))}
-
-    def tools_by_server(self) -> dict[str, dict[str, str]]:
-        """:meth:`tools_of` for every server at once, in one pass.
-
-        A caller listing N servers reads this instead of calling ``tools_of``
-        N times: that method scans the whole origin index per server, so the
-        per-server form costs N passes where this costs one. Servers with no
-        registered tools are absent rather than empty, which is what
-        ``dict.get(name, {})`` at the call site wants.
-        """
-        out: dict[str, dict[str, str]] = {}
-        for name in self._registry.names():
-            if (ref := self._registry.origin_of(name)) is not None:
-                out.setdefault(ref.server, {})[name] = ref.tool
-        return out
-
     def tool_map(self) -> dict[str, str]:
         """Registered tool name -> owning server name."""
         return {n: ref.server for n in self._registry.names() if (ref := self._registry.origin_of(n))}

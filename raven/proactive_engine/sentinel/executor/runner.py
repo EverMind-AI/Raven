@@ -475,8 +475,6 @@ class SentinelRunner:
                 )
         self._last_memory_write_date = self._now_fn()
 
-    _maybe_write_observations = _refresh_memory_state
-
     _SENTINEL_INFINITE_IDLE_SECONDS = 10**9  # ~ 31 years; any idle gate clears
 
     def _observed_idle_seconds(self) -> int:
@@ -643,7 +641,7 @@ class SentinelRunner:
 
     async def _maybe_run_task_discovery(self) -> None:
         """Daily TaskDiscoverer pass. Same per-process guard pattern as
-        ``_maybe_write_observations``: only one attempt per local day.
+        ``_refresh_memory_state``: only one attempt per local day.
         Cross-process safety lives in PendingDecisionStore (newer write
         supersedes older live decision on the same address) so two
         processes producing menus at 08:00 only result in one menu the

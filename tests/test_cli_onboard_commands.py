@@ -1820,7 +1820,6 @@ class TestTakingOverAFoundRoot:
         root = tmp_env.parent / "everos"
         _found(_stubs, _root_state(root, declared_url="http://localhost:1995"))
         touched: list[str] = []
-        _stubs.setattr(server, "stop_recorded_server", lambda *_a, **_kw: touched.append("stop"))
         _stubs.setattr(server, "stop_pid", lambda *_a, **_kw: touched.append("stop"))
 
         async def _ensure(url: str, **_kw: object) -> None:
