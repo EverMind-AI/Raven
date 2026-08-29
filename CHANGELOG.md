@@ -35,6 +35,10 @@ All notable changes to Raven are documented here.
   repo-level `evolver/` tool that drives it. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- Audit pass twelve: the channels and the proactive engine describe the shape
+  they have -- two scheduler families rather than three, the sentinel's own
+  pipeline rather than a plan's phase codes, and the delivery hub named where
+  the retry actually happens.
 - Audit pass eleven: the four remaining cross-package reaches into private
   names get public seams (`ImportState.path`, `EverOSBackend.state`,
   `BehaviorsExtractor.extract_session`, `AgentLoop.notify_turn_complete`,

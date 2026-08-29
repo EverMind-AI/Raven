@@ -1,9 +1,9 @@
-"""Sentinel — Raven's proactivity subsystem.
+"""Sentinel — the LLM-planned path of the Proactive Engine.
 
-Provides the L3 ProactivePlanner plus the three nudge executors (plain
-nudge, inject, defer) gated by NudgePolicy, along with RoutineLearner,
-NudgeFeedbackTracker, ContextAssembler, ProactiveSpawn, and SentinelRunner
-— the orchestrator that binds all components into a periodic tick loop.
+The ProactivePlanner decides; the three nudge executors (plain nudge, inject,
+defer) carry it out under NudgePolicy; RoutineLearner, NudgeFeedbackTracker,
+ContextAssembler and ProactiveSpawn feed and follow it; SentinelRunner binds
+them into a periodic tick loop.
 """
 
 from raven.proactive_engine.sentinel.executor.defer_manager import DeferManager

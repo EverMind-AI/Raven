@@ -113,8 +113,8 @@ class PlannerContext:
     nudge_policy_state: NudgePolicyState = field(default_factory=NudgePolicyState)
     last_decision: "PlannerDecision | None" = None
     user_profile: str = ""
-    # Recent fire history (v10+): lets Planner see what topics it has
-    # already pushed and whether the user dismissed them. Format:
+    # Recent fire history: lets the Planner see what topics it has already
+    # pushed and whether the user dismissed them. Format:
     #   {"recent_fires": [{ts, topic_tag, message_preview}, ...],
     #    "topic_counts_24h": {tag: n, ...},
     #    "topic_counts_7d":  {tag: n, ...},
