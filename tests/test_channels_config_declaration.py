@@ -135,3 +135,20 @@ def test_declared_defaults_match_the_central_model():
             if "default" in decl and hasattr(defaults, key):
                 assert decl["default"] == getattr(defaults, key), f"{name}.{key}"
 
+def test_the_file_slice_outranks_the_central_section():
+    """Ownership proof: the delivery path reads the file's sparse slice, so a
+    value the user set answers from the file even when the central section
+    disagrees, and an absent key answers from the declared default."""
+    from raven.config import loader
+    from raven.config.schema import TelegramConfig
+    from raven.core.admission import dispense_channel_config
+
+    spec = discover_specs()["telegram"]
+    section = TelegramConfig(enabled=True, token="stale-central")
+    loader._channel_slices["telegram"] = {"token": "file-truth"}
+    try:
+        view = dispense_channel_config(spec, section, channel="telegram")
+        assert view.token == "file-truth"
+    finally:
+        loader._channel_slices.pop("telegram", None)
+
