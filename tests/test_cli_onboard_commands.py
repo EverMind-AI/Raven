@@ -141,7 +141,7 @@ def tmp_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     )
     monkeypatch.setattr(
         "raven.utils.workspace.sync_workspace_templates",
-        lambda _: None,
+        lambda _, **kw: None,
     )
     yield cfg
     set_config_path(None)  # type: ignore[arg-type]

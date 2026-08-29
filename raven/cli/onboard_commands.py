@@ -328,7 +328,7 @@ def _bootstrap_empty_config() -> None:
         save_config(load_config())
     workspace = get_workspace_path()
     workspace.mkdir(parents=True, exist_ok=True)
-    sync_workspace_templates(workspace)
+    sync_workspace_templates(workspace, notify=lambda m: console.print(f"  [dim]{m}[/dim]"))
 
 
 # ---------------------------------------------------------------------------

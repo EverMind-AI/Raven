@@ -24,6 +24,7 @@ the await around them.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -113,6 +114,7 @@ def maybe_build_memory_backend(
     config: "RavenConfig",
     *,
     registry: PluginRegistry | None = None,
+    notify: "Callable[[str], None] | None" = None,
 ) -> "MemoryBackend | None":
     """Construct the configured memory backend, if any.
 
@@ -143,6 +145,7 @@ def maybe_build_memory_backend(
         workspace=workspace,
         user_id=config.memory.user_id,
         agent_id=config.memory.agent_id,
+        notify=notify,
     )
     try:
         backend = registry.build_memory_backend(

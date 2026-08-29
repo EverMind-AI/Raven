@@ -177,7 +177,7 @@ def register(app: typer.Typer) -> None:
         sentinel_cfg = ec_config.sentinel
         print_deprecated_memory_window_notice(config)
         print_config_migration_notices()
-        sync_workspace_templates(config.workspace_path)
+        sync_workspace_templates(config.workspace_path, notify=lambda m: console.print(f"  [dim]{m}[/dim]"))
 
         provider = make_provider(config)
         # Model routing (config.routing). Returns the provider unchanged when
@@ -254,6 +254,7 @@ def register(app: typer.Typer) -> None:
                 response_modifier=sentinel_response_modifier,
             ),
             host=HostWiring(
+                notify=lambda m: console.print(m, style="yellow", markup=False),
                 channels_config=config.channels,
                 on_user_inbound=sentinel_on_user_inbound,
             ),

@@ -84,7 +84,7 @@ def patched_tui_loop_deps(monkeypatch: pytest.MonkeyPatch, tmp_path):
     )
     monkeypatch.setattr(
         "raven.core.plugin_stack.maybe_build_memory_backend",
-        lambda ws, cfg, *, registry=None: fake_backend,
+        lambda ws, cfg, *, registry=None, notify=None: fake_backend,
     )
     monkeypatch.setattr(
         "raven.core.plugin_stack.build_plugin_tools",
@@ -317,7 +317,7 @@ def test_tui_build_plugin_registry_called_once(monkeypatch: pytest.MonkeyPatch, 
         call_count["build"] += 1
         return sentinel.shared_registry
 
-    def _spy_backend(ws, cfg, *, registry=None):
+    def _spy_backend(ws, cfg, *, registry=None, notify=None):
         passed_registries.append(("backend", registry))
         return None
 

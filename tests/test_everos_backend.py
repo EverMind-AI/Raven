@@ -21,6 +21,19 @@ import pytest
 
 from raven.contracts.memory import MemoryBackend
 from raven.plugins import PluginContext, ServiceLocator
+
+# What the backend told the host through ServiceLocator.notify; the host (not
+# the plugin) decides how to show it, so the tests read the channel, not stderr.
+NOTICES: list[str] = []
+
+
+@pytest.fixture(autouse=True)
+def _fresh_notices():
+    NOTICES.clear()
+    yield
+    NOTICES.clear()
+
+
 from raven.plugins.memory.everos.backend import (
     _PROFILE_MAX_CHARS,
     EverosBackend,
@@ -109,7 +122,7 @@ def _ctx(
 ) -> PluginContext:
     return PluginContext(
         config=config,
-        services=ServiceLocator(workspace=tmp_path, user_id=user_id, agent_id=agent_id),
+        services=ServiceLocator(workspace=tmp_path, user_id=user_id, agent_id=agent_id, notify=NOTICES.append),
     )
 
 
@@ -249,7 +262,7 @@ class TestColdStartSpeaksUp:
             b = EverosBackend(_ctx(tmp_path))
             await b.start()
 
-        assert "Starting memory service" in capsys.readouterr().err
+        assert "Starting memory service" in " ".join(NOTICES)
 
     async def test_an_already_running_server_stays_silent(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
         """``on_wait`` must not fire when there is nothing to wait for: this path
@@ -262,7 +275,7 @@ class TestColdStartSpeaksUp:
             b = EverosBackend(_ctx(tmp_path))
             await b.start()
 
-        assert "Starting memory service" not in capsys.readouterr().err
+        assert "Starting memory service" not in " ".join(NOTICES)
 
     async def test_unconfigured_llm_degrades_with_an_actionable_line(
         self, tmp_path: Path, capsys: pytest.CaptureFixture
@@ -278,7 +291,7 @@ class TestColdStartSpeaksUp:
             b = EverosBackend(_ctx(tmp_path))
             await b.start()
 
-        err = " ".join(capsys.readouterr().err.split())
+        err = " ".join(" ".join(NOTICES).split())
         assert "its LLM is not configured" in err
         assert "raven onboard" in err
 
@@ -294,7 +307,7 @@ class TestColdStartSpeaksUp:
             await b.start()
 
         assert b._state is not ServiceState.READY
-        err = " ".join(capsys.readouterr().err.split())
+        err = " ".join(" ".join(NOTICES).split())
         assert "exited with code 1" in err
         assert "without long-term memory" in err
 
@@ -332,7 +345,7 @@ class TestAUserManagedRootIsReadOnly:
 
         assert started == [], "started a server on a root raven does not own"
         assert b._state is ServiceState.FOREIGN
-        err = " ".join(capsys.readouterr().err.split())
+        err = " ".join(" ".join(NOTICES).split())
         assert "you manage is not running" in err
         assert "does not start or stop it" in err
 
@@ -356,7 +369,7 @@ class TestAUserManagedRootIsReadOnly:
 
         assert started == []
         assert b._state is ServiceState.READY
-        assert capsys.readouterr().err == ""
+        assert NOTICES == []
 
     def test_the_factory_drops_no_templates_into_it(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         self._not_owned(monkeypatch)
@@ -434,7 +447,7 @@ class TestStartWarnsWhenRecallCannotWork:
 
         # Collapsed: rich wraps at the terminal width, so a raw substring match
         # would depend on how wide the machine running the tests happens to be.
-        err = " ".join(capsys.readouterr().err.split())
+        err = " ".join(" ".join(NOTICES).split())
         assert "falls back to keyword matching" in err
         assert "cascade backfill" in err
 
@@ -450,7 +463,7 @@ class TestStartWarnsWhenRecallCannotWork:
         with patch("raven.plugins.memory.everos.server.ensure_everos_server", new=AsyncMock()):
             await b.start()
 
-        assert capsys.readouterr().err == ""
+        assert NOTICES == []
 
     async def test_writes_are_not_disabled_by_the_warning(
         self, tmp_path: Path, _no_capability_probe, capsys: pytest.CaptureFixture
@@ -475,7 +488,7 @@ class TestStartWarnsWhenRecallCannotWork:
         with patch("raven.plugins.memory.everos.server.ensure_everos_server", new=AsyncMock()):
             await b.start()
 
-        assert capsys.readouterr().err == ""
+        assert NOTICES == []
 
     async def test_a_server_that_cannot_report_says_nothing(
         self, tmp_path: Path, _no_capability_probe, capsys: pytest.CaptureFixture
@@ -488,7 +501,7 @@ class TestStartWarnsWhenRecallCannotWork:
         with patch("raven.plugins.memory.everos.server.ensure_everos_server", new=AsyncMock()):
             await b.start()
 
-        assert capsys.readouterr().err == ""
+        assert NOTICES == []
 
 
 # ---------------------------------------------------------------------------
@@ -1097,7 +1110,7 @@ class TestIdentityFromServices:
     ) -> None:
         ctx = PluginContext(
             config={"user_id": "other"},
-            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
+            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default", notify=NOTICES.append),
         )
         make_backend(ctx)
         assert any("user_id" in r.message for r in caplog.records if r.levelname == "WARNING")
@@ -1109,7 +1122,7 @@ class TestIdentityFromServices:
     ) -> None:
         ctx = PluginContext(
             config={"user_id": "default"},
-            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
+            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default", notify=NOTICES.append),
         )
         make_backend(ctx)
         assert not [r for r in caplog.records if r.levelname == "WARNING"]
@@ -1122,7 +1135,7 @@ class TestIdentityFromServices:
 
         ctx = PluginContext(
             config={},
-            services=ServiceLocator(workspace=tmp_path, user_id=bad, agent_id="default"),
+            services=ServiceLocator(workspace=tmp_path, user_id=bad, agent_id="default", notify=NOTICES.append),
         )
         backend = make_backend(ctx)
         await backend.start()
@@ -1131,7 +1144,7 @@ class TestIdentityFromServices:
         # for it in config.json, and it must reach the terminal: the callers all
         # swallow a raise into logger.exception, and a one-shot CLI run writes no
         # log file for it to land in.
-        err = " ".join(capsys.readouterr().err.split())
+        err = " ".join(" ".join(NOTICES).split())
         assert "memory.userId" in err
         # The accepted-character class must survive rich's markup parser: it
         # looks exactly like a tag, and a swallowed one leaves the user matching
@@ -1147,15 +1160,15 @@ class TestIdentityFromServices:
         own honest count -- so this only pins that ``stop()`` stays silent."""
         ctx = PluginContext(
             config={},
-            services=ServiceLocator(workspace=tmp_path, user_id="a/b", agent_id="default"),
+            services=ServiceLocator(workspace=tmp_path, user_id="a/b", agent_id="default", notify=NOTICES.append),
         )
         backend = make_backend(ctx)
         await backend.start()
-        capsys.readouterr()
+        NOTICES.clear()
 
         assert await backend.store("s1", [{"role": "user", "content": "hi"}]) is False
         await backend.stop()
-        assert "unavailable" not in capsys.readouterr().err
+        assert "unavailable" not in " ".join(NOTICES)
 
 
 class TestServiceStateMachine:
@@ -1889,6 +1902,7 @@ class TestTheDegradationWarningOnASelfManagedServer:
         ctx.config = {"base_url": "http://localhost:18791"}
         ctx.services.agent_id = "default"
         ctx.services.user_id = "default"
+        ctx.services.notify = NOTICES.append
         ctx.logger = MagicMock()
         return ctx
 
@@ -1917,7 +1931,7 @@ class TestTheDegradationWarningOnASelfManagedServer:
     ) -> None:
         await self._start_unowned(monkeypatch, caps={"llm": True, "embed": False})
 
-        err = " ".join(capsys.readouterr().err.split())
+        err = " ".join(" ".join(NOTICES).split())
         assert "embedding is unavailable" in err
         # Their server, their log. Pointing at raven's is a dead end.
         assert "everos-server.log" not in err
@@ -1927,7 +1941,7 @@ class TestTheDegradationWarningOnASelfManagedServer:
     ) -> None:
         await self._start_unowned(monkeypatch, caps={"llm": True, "embed": True})
 
-        assert "embedding is unavailable" not in capsys.readouterr().err
+        assert "embedding is unavailable" not in " ".join(NOTICES)
 
     async def test_a_server_too_old_to_report_is_not_condemned(
         self, monkeypatch, capsys: pytest.CaptureFixture
@@ -1935,7 +1949,7 @@ class TestTheDegradationWarningOnASelfManagedServer:
         """An empty capability map is silence, not a negative."""
         await self._start_unowned(monkeypatch, caps={})
 
-        assert "embedding is unavailable" not in capsys.readouterr().err
+        assert "embedding is unavailable" not in " ".join(NOTICES)
 
 
 class TestConvertMessagesTimestamps:

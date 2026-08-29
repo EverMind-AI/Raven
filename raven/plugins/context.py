@@ -21,6 +21,7 @@ view of available services, only read from it.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,12 @@ class ServiceLocator:
 
     agent_id: str
     """Agent-track owner identity. Same single-source rule as ``user_id``."""
+
+    notify: Callable[[str], None] | None = None
+    """How a plugin tells the user something they can act on ("long-term memory
+    is off: ..."). The host supplies the renderer (a console, a notice channel);
+    a plugin never owns a terminal. ``None`` means the host offers no channel and
+    the plugin falls back to its log."""
 
 
 @dataclass(frozen=True)

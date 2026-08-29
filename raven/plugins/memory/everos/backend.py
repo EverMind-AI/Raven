@@ -31,6 +31,7 @@ import logging
 import math
 import re
 import time
+from collections.abc import Callable
 from datetime import datetime
 from enum import Enum
 from types import SimpleNamespace
@@ -368,6 +369,10 @@ class _HttpEverosAdapter:
 # ---------------------------------------------------------------------------
 
 
+def _log_notice(text: str) -> None:
+    logging.getLogger(__name__).warning(text)
+
+
 class EverosBackend:
     """raven.plugins.memory.everos's :class:`MemoryBackend` implementation."""
 
@@ -380,6 +385,9 @@ class EverosBackend:
         self._config = ctx.config
         self._services = ctx.services
         self._logger = ctx.logger
+        # The host's channel for a sentence the user can act on; without one the
+        # log is all there is (rpc / tui hosts read their log file).
+        self.notify: Callable[[str], None] = getattr(ctx.services, "notify", None) or _log_notice
         self._agent_id: str = self._services.agent_id
         self._user_id: str = self._services.user_id
         self._warn_stale_identity_keys()
@@ -599,17 +607,12 @@ class EverosBackend:
             # a config error under the dropped-write counter and told the user
             # the service was unavailable, which sent them to a server that was
             # never broken.
-            from rich.console import Console
-            from rich.markup import escape
 
             self._state = ServiceState.BAD_IDENTITY
-            # Escaped: the message quotes the accepted-character class, and rich
-            # reads "[a-zA-Z0-9_.@+-]" as a markup tag and eats it -- leaving the
-            # user the pattern "^+$" to match their id against.
-            Console(stderr=True).print(
-                f"[yellow]Long-term memory is off: {escape(str(e))}[/yellow]\n"
-                "[dim]Fix memory.userId / memory.agentId in your config.json, "
-                "then start a new session.[/dim]"
+            self.notify(
+                f"Long-term memory is off: {e}\n"
+                "Fix memory.userId / memory.agentId in your config.json, "
+                "then start a new session."
             )
             return
         self._logger.info(
@@ -620,17 +623,13 @@ class EverosBackend:
             import sys
 
             if sys.platform == "win32":
-                from rich.console import Console
-
-                Console(stderr=True).print(
-                    "[yellow]EverOS memory is not available on native Windows.[/yellow]\n"
-                    "[dim]Run Raven inside WSL for full memory support, "
-                    "or run `raven onboard` to reconfigure.[/dim]"
+                self.notify(
+                    "EverOS memory is not available on native Windows.\n"
+                    "Run Raven inside WSL for full memory support, "
+                    "or run `raven onboard` to reconfigure."
                 )
                 self._adapter = _NoOpAdapter()
                 return
-
-            from rich.console import Console
 
             from raven.config.update_everos import everos_owned
             from raven.plugins.memory.everos.server import (
@@ -639,7 +638,6 @@ class EverosBackend:
                 ensure_everos_server,
             )
 
-            stderr = Console(stderr=True)
             base_url = self._config.get("base_url") or DEFAULT_EVEROS_BASE_URL
 
             if not everos_owned():
@@ -660,9 +658,9 @@ class EverosBackend:
                 # the user may start it themselves mid-session, and the probe
                 # that notices needs an adapter left to use.
                 self._state = ServiceState.FOREIGN
-                stderr.print(
-                    f"[yellow]Long-term memory is off: the EverOS you manage is not running at {base_url}.[/yellow]\n"
-                    "[dim]Start it yourself and Raven will use it; Raven does not start or stop it.[/dim]"
+                self.notify(
+                    f"Long-term memory is off: the EverOS you manage is not running at {base_url}.\n"
+                    "Start it yourself and Raven will use it; Raven does not start or stop it."
                 )
                 return
 
@@ -677,7 +675,7 @@ class EverosBackend:
                 # child from one still booting.
                 self._proc = await ensure_everos_server(
                     base_url,
-                    on_wait=lambda: stderr.print("[dim]Starting memory service...[/dim]"),
+                    on_wait=lambda: self.notify("Starting memory service..."),
                     on_proc=self._remember_child,
                 )
                 self._state = ServiceState.READY
@@ -687,20 +685,14 @@ class EverosBackend:
                 # user can act on this, so say it here rather than only in the
                 # log the caller writes.
                 self._state = ServiceState.UNCONFIGURED
-                stderr.print(
-                    "[yellow]Long-term memory is off: its LLM is not configured.[/yellow]\n"
-                    "[dim]Run `raven onboard` to set it up.[/dim]"
-                )
+                self.notify("Long-term memory is off: its LLM is not configured.\nRun `raven onboard` to set it up.")
                 return
             except EverosBinaryMissingError as e:
                 # An install problem, not a startup problem: no probe and no
                 # retry can resolve it, so it must not be filed with the states
                 # that keep trying.
                 self._state = ServiceState.NO_BINARY
-                stderr.print(
-                    f"[yellow]Long-term memory is off: {e}[/yellow]\n"
-                    "[dim]Install the everos CLI, then start a new session.[/dim]"
-                )
+                self.notify(f"Long-term memory is off: {e}\nInstall the everos CLI, then start a new session.")
                 return
             except Exception as e:
                 # Not raised on: the session continues without memory, and the
@@ -713,17 +705,16 @@ class EverosBackend:
                     e,
                     self._state.value,
                 )
-                stderr.print(
-                    f"[yellow]Memory service unavailable: {e}[/yellow]\n"
-                    "[dim]This session starts without long-term memory; Raven retries in the background.[/dim]"
+                self.notify(
+                    f"Memory service unavailable: {e}\n"
+                    "This session starts without long-term memory; Raven retries in the background."
                 )
                 return
             # Off-thread: the probe and the config read below are both blocking
             # IO, and start() runs on the loop every session begins on.
             await asyncio.to_thread(self._warn_if_recall_cannot_work, base_url)
 
-    @staticmethod
-    def _warn_unowned_recall(base_url: str, report: Any) -> None:
+    def _warn_unowned_recall(self, base_url: str, report: Any) -> None:
         """Say what a server the user runs cannot do, on its own authority.
 
         No log path in the message: the log raven knows about is the one it
@@ -733,17 +724,14 @@ class EverosBackend:
         """
         if not report.reports_capabilities or report.available("embedding") is not False:
             return
-        from rich.console import Console
-
-        Console(stderr=True).print(
-            "[yellow]The EverOS you run is up but embedding is unavailable: recall falls back "
-            "to keyword matching.[/yellow]\n"
-            "[dim]Memories are still stored. Fix the embedding provider in that server's own\n"
-            "config and restart it -- Raven follows along.[/dim]"
+        self.notify(
+            "The EverOS you run is up but embedding is unavailable: recall falls back "
+            "to keyword matching.\n"
+            "Memories are still stored. Fix the embedding provider in that server's own\n"
+            "config and restart it -- Raven follows along."
         )
 
-    @staticmethod
-    def _warn_if_recall_cannot_work(base_url: str) -> None:
+    def _warn_if_recall_cannot_work(self, base_url: str) -> None:
         """Say out loud when the server is up but recall is not what it should be.
 
         A running server no longer implies a fully working one: everos 1.2.1 boots
@@ -767,21 +755,19 @@ class EverosBackend:
             # one -- the fabricated root doctor was fixed to stop trusting. It
             # usually does not exist, so the gate read False and this warning,
             # the only move raven has left on this path, never fired at all.
-            EverosBackend._warn_unowned_recall(base_url, report)
+            self._warn_unowned_recall(base_url, report)
             return
         from raven.config.update_everos import everos_role_configured
 
         if not (everos_role_configured("embedding") and report.available("embedding") is False):
             return
-        from rich.console import Console
-
         from raven.plugins.memory.everos.server import server_log_path
 
-        Console(stderr=True).print(
-            "[yellow]EverOS is running but embedding is unavailable: recall falls back to "
-            "keyword matching.[/yellow]\n"
-            f"[dim]Memories are still stored. Check {server_log_path()}, fix the provider, "
-            "then run `everos cascade backfill` to give existing rows their vectors.[/dim]"
+        self.notify(
+            "EverOS is running but embedding is unavailable: recall falls back to "
+            "keyword matching.\n"
+            f"Memories are still stored. Check {server_log_path()}, fix the provider, "
+            "then run `everos cascade backfill` to give existing rows their vectors."
         )
 
     async def stop(self) -> None:

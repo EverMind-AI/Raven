@@ -280,7 +280,7 @@ def register(app: typer.Typer) -> None:
         banner = _risk_banner(config)
         if banner is not None:
             console.print(banner, style="bold red", markup=False)
-        sync_workspace_templates(config.workspace_path)
+        sync_workspace_templates(config.workspace_path, notify=lambda m: console.print(f"  [dim]{m}[/dim]"))
         provider = make_resolving_provider(config)
         session_manager = SessionManager(config.workspace_path)
         session_root = None
@@ -363,6 +363,7 @@ def register(app: typer.Typer) -> None:
                 response_modifier=sentinel_response_modifier,
             ),
             host=HostWiring(
+                notify=lambda m: console.print(m, style="yellow", markup=False),
                 cron_service=cron,
                 channels_config=config.channels,
                 on_user_inbound=on_user_inbound,
@@ -793,6 +794,7 @@ def register(app: typer.Typer) -> None:
                             response_modifier=sentinel_response_modifier,
                         ),
                         host=HostWiring(
+                            notify=lambda m: console.print(m, style="yellow", markup=False),
                             cron_service=cron,
                             channels_config=new_config.channels,
                             on_user_inbound=on_user_inbound,
