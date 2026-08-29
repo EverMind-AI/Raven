@@ -23,8 +23,8 @@ SPEC = ChannelSpec(
     config_schema={
         "mode": {"type": "string", "default": "socket"},
         "webhook_path": {"type": "string", "default": "/slack/events"},
-        "bot_token": {"type": "string", "required": True, "secret": True},
-        "app_token": {"type": "string", "required": True, "secret": True},
+        "bot_token": {"type": "string", "default": "", "required": True, "secret": True},
+        "app_token": {"type": "string", "default": "", "required": True, "secret": True},
         "user_token_read_only": {"type": "boolean", "default": True},
         "reply_in_thread": {"type": "boolean", "default": True},
         "react_emoji": {"type": "string", "default": "eyes"},

@@ -21,9 +21,9 @@ SPEC = ChannelSpec(
     # host. Defaults and secrecy travel with the cargo; the central model
     # mirrors them until it retires.
     config_schema={
-        "token": {"type": "string", "required": True, "secret": True},
+        "token": {"type": "string", "default": "", "required": True, "secret": True},
         "proxy": {"type": "string", "default": None},
         "reply_to_message": {"type": "boolean", "default": False},
-        "group_policy": {"type": "string", "default": "mention"},
+        "group_policy": {"type": "string", "default": "mention", "choices": ["open", "mention"]},
     },
 )

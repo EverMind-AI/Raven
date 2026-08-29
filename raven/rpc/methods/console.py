@@ -504,10 +504,10 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
         return {"applied": True, "previous": prev}
 
     if key.startswith("channels.") and key.endswith(".enabled"):
-        from raven.config.update_channels import _channel_names, disable_channel, enable_channel
+        from raven.config.update_channels import channel_names, disable_channel, enable_channel
 
         name = key.split(".")[1]
-        if name not in _channel_names():
+        if name not in channel_names():
             raise ConfigValidationError(f"unknown channel: {name}")
         if not isinstance(value, bool):
             raise ConfigValidationError("enabled must be a boolean")
@@ -833,11 +833,11 @@ async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
 
 async def channels_status(params: dict, *, agent_loop_factory=None) -> dict:
     from raven.config.loader import load_config
-    from raven.config.update_channels import _channel_names, channel_field_specs
+    from raven.config.update_channels import channel_field_specs, channel_names
 
     config = load_config()
     items = []
-    for name in _channel_names():
+    for name in channel_names():
         model = getattr(config.channels, name, None)
         enabled = bool(getattr(model, "enabled", False))
         missing: list[str] = []
@@ -927,15 +927,15 @@ async def channels_configure(params: dict, *, agent_loop_factory=None) -> dict:
     box it showed, and a blank one means "left as is", not "erase".
     """
     from raven.config.update_channels import (
-        _channel_names,
         channel_field_specs,
+        channel_names,
         disable_channel,
         enable_channel,
         set_channel_fields,
     )
 
     name = str(params.get("name") or "")
-    if name not in _channel_names():
+    if name not in channel_names():
         raise ConfigValidationError(f"unknown channel: {name}")
     raw = params.get("fields")
     if raw is None:

@@ -274,6 +274,7 @@ def _register_config_commands(channels_app: typer.Typer) -> None:
         from pydantic import ValidationError
 
         from raven.config.update_channels import enable_channel
+        from raven.core.admission import PluginConfigError
 
         fields = _parse_channel_flags(ctx.args, name)
         missing = [k for k in _missing_required_fields(name) if fields.get(k) in ("", None, [])]
@@ -292,7 +293,7 @@ def _register_config_commands(channels_app: typer.Typer) -> None:
         except KeyError as exc:
             console.print(f"[red]✗[/red] {exc}")
             raise typer.Exit(1)
-        except ValidationError as exc:
+        except (PluginConfigError, ValidationError) as exc:
             console.print(f"[red]✗ Validation failed:[/red]\n{exc}")
             raise typer.Exit(1)
 
@@ -339,6 +340,7 @@ def _register_config_commands(channels_app: typer.Typer) -> None:
         from pydantic import ValidationError
 
         from raven.config.update_channels import set_channel_fields
+        from raven.core.admission import PluginConfigError
 
         fields = _parse_channel_flags(ctx.args, name)
         if not fields:
@@ -350,7 +352,7 @@ def _register_config_commands(channels_app: typer.Typer) -> None:
         except KeyError as exc:
             console.print(f"[red]✗[/red] {exc}")
             raise typer.Exit(1)
-        except ValidationError as exc:
+        except (PluginConfigError, ValidationError) as exc:
             console.print(f"[red]✗ Validation failed:[/red]\n{exc}")
             raise typer.Exit(1)
         console.print(f"[green]✓[/green] {name} updated: {', '.join(prev)}")

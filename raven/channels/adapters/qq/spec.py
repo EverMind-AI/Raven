@@ -21,7 +21,7 @@ SPEC = ChannelSpec(
     # host. Defaults and secrecy travel with the cargo; the central model
     # mirrors them until it retires.
     config_schema={
-        "app_id": {"type": "string", "required": True},
-        "secret": {"type": "string", "required": True, "secret": True},
+        "app_id": {"type": "string", "default": "", "required": True},
+        "secret": {"type": "string", "default": "", "required": True, "secret": True},
     },
 )

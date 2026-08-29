@@ -34,7 +34,7 @@ SPEC = ChannelSpec(
         "watch_limit": {"type": "integer", "default": 100},
         "retry_delay_ms": {"type": "integer", "default": 500},
         "max_retry_attempts": {"type": "integer", "default": 0},
-        "claw_token": {"type": "string", "required": True, "secret": True},
+        "claw_token": {"type": "string", "default": "", "required": True, "secret": True},
         "agent_user_id": {"type": "string", "default": ""},
         "sessions": {"type": "array", "default": []},
         "panels": {"type": "array", "default": []},
