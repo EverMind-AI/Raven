@@ -61,7 +61,6 @@ def ensure_bridge_dir() -> Path:
     # at <package>/bridge in a built wheel (parents[3]) but at the repo root's
     # ./bridge when running from an editable / source checkout (parents[4]).
     candidates = [
-        here.parents[2] / "bridge",  # raven/channels/bridge (legacy)
         here.parents[3] / "bridge",  # raven/bridge (packaged wheel)
         here.parents[4] / "bridge",  # <repo-root>/bridge (editable / source)
     ]

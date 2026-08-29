@@ -341,4 +341,15 @@ class Tool(ABC):
 
 
 __tier__ = "contract"
-__all__ = ["Continuation", "FileChange", "SKIPPED_AFTER_BLOCKED_CALL", "Tool", "ToolOutput", "ToolResult"]
+__all__ = [
+    "ContentPart",
+    "Continuation",
+    "FileChange",
+    "ImagePart",
+    "ImageURL",
+    "SKIPPED_AFTER_BLOCKED_CALL",
+    "TextPart",
+    "Tool",
+    "ToolOutput",
+    "ToolResult",
+]

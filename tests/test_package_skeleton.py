@@ -95,7 +95,11 @@ def test_minimal_token_strategy_subclass():
 # ---------------------------------------------------------------------------
 
 
-def test_token_budget_threshold():
+def test_token_budget_is_a_frozen_shape():
+    import dataclasses
+
+    import pytest
+
     b = TokenBudget(
         context_length=100_000,
         reserved_output=8_000,
@@ -103,8 +107,9 @@ def test_token_budget_threshold():
         reserved_system=2_000,
         available_history=86_000,
     )
-    assert b.total_reserved == 14_000
-    assert b.threshold == int(86_000 * 0.75)
+    assert b.available_history == 86_000
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        b.available_history = 1  # type: ignore[misc]
 
 
 def test_assembled_context_defaults():

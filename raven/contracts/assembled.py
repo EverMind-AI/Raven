@@ -52,15 +52,6 @@ class TokenBudget:
     reserved_system: int  # System prompt overhead
     available_history: int  # What's left for session history + archive injection
 
-    @property
-    def total_reserved(self) -> int:
-        return self.reserved_output + self.reserved_tools + self.reserved_system
-
-    @property
-    def threshold(self) -> int:
-        """Compaction trigger (75% of available_history by default)."""
-        return int(self.available_history * 0.75)
-
 
 __tier__ = "contract"
 __all__ = ["AssembledContext", "TokenBudget"]
