@@ -150,7 +150,27 @@ def test_console_injection_patches_all_modules():
 
     The patch list was extended 4 → 12 after a merge introduced 8 new CLI modules.
     """
-    assert len(_CONSOLE_HOSTS) == 12, "patch list locks 12 console hosts"
+    # The host set is every raven.cli module that defines a module-level rich
+    # console, read off the source so a discovery that silently skipped one
+    # would show up here.
+    import ast
+    from pathlib import Path
+
+    cli_dir = Path(__file__).resolve().parents[1] / "raven" / "cli"
+    assigned = set()
+    for path in cli_dir.glob("*.py"):
+        tree = ast.parse(path.read_text(errors="replace"))
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and any(
+                isinstance(x, ast.Name) and x.id == "console" for x in node.targets
+            ):
+                assigned.add(f"raven.cli.{path.stem}")
+    found = {m.__name__ for m in _CONSOLE_HOSTS}
+    # Every module that assigns a console is a host; modules that bind one by
+    # import (the onboarding screens share _onboard_shared's) are hosts too, so
+    # the discovered set may be larger, never smaller.
+    assert assigned <= found, f"console hosts missing modules that assign a console: {sorted(assigned - found)}"
+    assert len(found) >= 20
     originals = {mod: mod.console for mod in _CONSOLE_HOSTS}
 
     from rich.console import Console as RichConsole
