@@ -428,6 +428,28 @@ class TestFailureSemantics:
         assert ac.metadata["degraded_segments"] == ["boom"]
         assert ac.messages is not None  # the turn assembled; only the segment is gone
 
+    async def test_phase_b_builder_failure_degrades_its_segment_only(
+        self,
+        builder: ContextBuilder,
+    ) -> None:
+        """The prefix-dependent phase is isolated the same way: a Curator that
+        raises loses its segment and is named, and the turn still assembles on
+        the prefix and the raw history."""
+
+        class _Boom:
+            name = "curator-boom"
+            order = 60
+            needs_prefix = True
+
+            async def build(self, ctx):
+                raise RuntimeError("curator down")
+
+        eng = _engine(builder, router=SkillForgeRouter([]), backend=_StubBackend())
+        eng._phase_b = [*eng._phase_b, _Boom()]
+        ac = await eng.assemble("s", [], _budget(), turn=_turn())
+        assert ac.metadata["degraded_segments"] == ["curator-boom"]
+        assert ac.messages is not None
+
     async def test_single_skill_source_failure_isolated(
         self,
         builder: ContextBuilder,

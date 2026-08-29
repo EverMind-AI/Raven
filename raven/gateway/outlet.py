@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from raven.spine.delivery import Capabilities
-from raven.spine.events import Deliverable, MediaOut, Text, ToolEvent, ToolPhase
+from raven.spine.events import Deliverable, MediaOut, Notice, NoticeKind, Text, ToolEvent, ToolPhase
 
 if TYPE_CHECKING:
     from raven.channels.contract import Channel
@@ -21,7 +21,10 @@ class ChannelOutletAdapter:
     ``channel.send(...)``, eats the streaming / in-turn events
     (StreamDelta / Reasoning / ToolEvent / Notice) — a channel is non-streaming
     and shows only the final reply (edit-in-place streaming is not yet supported).
-    A real send failure raises, which the hub retries; eating is not failure.
+    The one notice a channel does render is ``ORGAN_DEGRADED``: an answer
+    produced without an organ says so, as its own short line, or the user reads
+    a confident reply that never saw their memory. A real send failure raises,
+    which the hub retries; eating is not failure.
 
     The deliverable carries its target as ``source`` (the hub routes here by
     source.channel, so it is always set); the reply goes back to that channel /
@@ -50,6 +53,8 @@ class ChannelOutletAdapter:
                     f"Files ready: {names}. This channel cannot attach files; open the same session in Raven UI or TUI."
                 )
                 await self._channel.send(out.source.chat_id, note)
+        elif isinstance(out, Notice) and out.kind is NoticeKind.ORGAN_DEGRADED and out.detail:
+            await self._channel.send(out.source.chat_id, out.detail)
         elif isinstance(out, ToolEvent) and out.phase is ToolPhase.COMPLETE:
             delivery = (out.metadata or {}).get("raven_delivery")
             if not isinstance(delivery, dict):

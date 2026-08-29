@@ -130,3 +130,24 @@ async def test_deliver_files_falls_back_to_a_compact_list_without_attachments():
             None,
         )
     ]
+
+
+async def test_organ_degraded_notice_reaches_the_channel_as_its_own_line():
+    ch = _FakeChannel()
+    adapter = ChannelOutletAdapter(ch)
+    await adapter.deliver(
+        Notice(
+            kind=NoticeKind.ORGAN_DEGRADED,
+            source=_src("telegram", "c9"),
+            detail="Some capabilities were unavailable this turn (memory).",
+        )
+    )
+    assert ch.sent == [("c9", "Some capabilities were unavailable this turn (memory).", None)]
+
+
+async def test_other_notices_stay_eaten_on_a_channel():
+    ch = _FakeChannel()
+    adapter = ChannelOutletAdapter(ch)
+    await adapter.deliver(Notice(kind=NoticeKind.PROGRESS, source=_src(), detail="thinking"))
+    await adapter.deliver(Notice(kind=NoticeKind.ORGAN_DEGRADED, source=_src()))
+    assert ch.sent == []
