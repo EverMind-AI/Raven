@@ -373,6 +373,7 @@ output = "coverage.json"
 [dependency-groups]
 dev = [
     "hatchling>=1.32.0",
+    "import-linter>=2.14",
     "json-repair>=0.59.5",
     "jsonschema>=4.23.0",
     "packaging>=26.1",
@@ -385,4 +386,40 @@ dev = [
     "pytest-cov>=7.1.0",
     "pytest-xdist>=3.8.0",
     "ruff==0.15.12",
+]
+
+[tool.importlinter]
+root_package = "raven"
+exclude_type_checking_imports = true
+
+[[tool.importlinter.contracts]]
+name = "inner layers know no surface"
+type = "forbidden"
+source_modules = [
+    "raven.spine", "raven.contracts", "raven.agent", "raven.memory_engine",
+    "raven.context_engine", "raven.providers", "raven.session", "raven.sandbox",
+    "raven.routing", "raven.token_wise", "raven.plugins", "raven.channels",
+    "raven.gateway", "raven.market", "raven.ops", "raven.security", "raven.auth",
+]
+forbidden_modules = ["raven.cli", "raven.rpc", "raven.web_rpc", "raven.proactive_engine"]
+# Debt allowlist: may only SHRINK. Lazy machinery-at-surface-address edges,
+# each queued for relocation in the ledger: CronTool consumed by the loop
+# (turn path registers it, wiring builds it), and the skill install engine
+# consumed by market through its rpc method wrapper.
+ignore_imports = [
+    "raven.agent.loop.turn_path -> raven.proactive_engine.schedulers.cron.tool",
+    "raven.agent.loop.wiring -> raven.proactive_engine.schedulers.cron.tool",
+    "raven.market.install -> raven.rpc.methods.skillhub",
+]
+
+[[tool.importlinter.contracts]]
+name = "channel adapters are independent cargo"
+type = "independence"
+modules = [
+    "raven.channels.adapters.dingtalk", "raven.channels.adapters.discord",
+    "raven.channels.adapters.email", "raven.channels.adapters.feishu",
+    "raven.channels.adapters.matrix", "raven.channels.adapters.mochat",
+    "raven.channels.adapters.qq", "raven.channels.adapters.slack",
+    "raven.channels.adapters.telegram", "raven.channels.adapters.wecom",
+    "raven.channels.adapters.weixin", "raven.channels.adapters.whatsapp",
 ]

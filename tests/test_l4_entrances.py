@@ -22,7 +22,10 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 INNER_DIRS = ["spine", "contracts", "agent", "memory_engine", "context_engine",
               "providers", "session", "sandbox", "routing", "token_wise",
-              "plugins", "channels", "gateway", "market", "ops"]
+              "plugins", "channels", "gateway", "market", "ops",
+              # Cross-cutting leaves, enrolled by the partition cards: consumed
+              # by inner layers and cargo alike, so they may not know a surface.
+              "security", "auth"]
 SURFACES = ("raven.cli", "raven.rpc", "raven.web_rpc", "raven.proactive_engine")
 
 

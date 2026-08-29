@@ -49,6 +49,9 @@ lint-python:
 	uv run --frozen --python $(PYTHON_VERSION) --extra dev ruff check $(PYTHON_LINT_TARGETS)
 	uv run --frozen --python $(PYTHON_VERSION) --extra dev ruff format --check $(PYTHON_LINT_TARGETS)
 
+lint-imports:
+	uv run --frozen --python $(PYTHON_VERSION) lint-imports
+
 lint-ui:
 	npm run gen:check --prefix ui-web
 	npm run type-check --prefix ui-web
