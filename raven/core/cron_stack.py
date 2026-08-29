@@ -1,4 +1,8 @@
-"""Shared ``on_cron_job`` factory used by ``gateway``, ``agent`` and ``tui``.
+"""Cron assembly for the runtime: the ``on_cron_job`` factory every entrance wires.
+
+Used by the gateway, the REPL, the TUI and the rpc stack alike; it composes the
+cron service with the spine (a reminder fires as a CRON-origin turn) and the
+sentinel ledger, which is assembly, not transport.
 
 A scheduled reminder fires as a CRON-origin spine turn bound to the
 ``cron:<job_id>`` session. Delivery is direct: the turn's source is the

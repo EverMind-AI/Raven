@@ -8,6 +8,7 @@ when running simultaneously, agree on quotas + pending injects + defers.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Callable
 
 from raven.config.paths import get_sentinel_dir
@@ -610,3 +611,48 @@ __all__ = [
     "attach_sentinel_decision_consumer",
     "attach_sentinel_feedback_tool",
 ]
+
+
+
+def build_wake(hb_cfg: Any, *, is_busy: Callable[[], bool]) -> tuple[Any, Any]:
+    """The event-wake pair for heartbeat: ``(wake, system_events)``, or
+    ``(None, None)`` when event wake is off.
+
+    In-process producers (cron completions, missed-reminder observers) can end
+    the heartbeat sleep early instead of waiting for the next interval; the busy
+    check covers spine-dispatched turns only -- exactly the lane a wake must
+    never compete with.
+    """
+    if not hb_cfg.event_wake:
+        return None, None
+    from raven.proactive_engine.system_events import SystemEventQueue
+    from raven.proactive_engine.wake import WakeScheduler
+
+    return WakeScheduler(is_busy=is_busy, min_interval_s=hb_cfg.event_wake_min_interval_s), SystemEventQueue()
+
+
+def build_heartbeat(
+    config: Any,
+    provider: Any,
+    *,
+    model: str,
+    on_execute: Callable[[str], Awaitable[str]],
+    wake: Any,
+    system_events: Any,
+) -> Any:
+    """The heartbeat service over the host's submit closure. Deliver-only: the
+    hub already delivered the reply, so ``on_notify`` stays None."""
+    from raven.proactive_engine.schedulers.heartbeat.service import HeartbeatService
+
+    hb_cfg = config.gateway.heartbeat
+    return HeartbeatService(
+        workspace=config.workspace_path,
+        provider=provider,
+        model=model,
+        on_execute=on_execute,
+        on_notify=None,
+        interval_s=hb_cfg.interval_s,
+        enabled=hb_cfg.enabled,
+        wake=wake,
+        system_events=system_events,
+    )

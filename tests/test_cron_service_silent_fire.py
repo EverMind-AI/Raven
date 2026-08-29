@@ -225,7 +225,7 @@ async def test_auto_disable_survives_process_due_writeback(tmp_path: Path) -> No
     job. The handler flips job.enabled on disable, so the writeback must
     persist the disable rather than clobber it with a recomputed next run.
     """
-    from raven.cli._cron_handler import make_on_cron_job
+    from raven.core.cron_stack import make_on_cron_job
 
     store_path = tmp_path / "jobs.json"
     svc = CronService(store_path, allowed_channels={"tui"})

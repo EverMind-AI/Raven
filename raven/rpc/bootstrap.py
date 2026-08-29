@@ -39,6 +39,68 @@ class RpcStack:
     deliverables: Any = None
 
 
+
+_TUI_INIT_CRASH_TYPES: tuple[type[BaseException], ...] = (
+    TypeError,
+    AttributeError,
+    ImportError,
+    FileNotFoundError,
+    OSError,
+)
+
+
+def build_agent_loop(workspace: str | None = None, home: str | None = None):
+    """The rpc stack's loop factory: :func:`raven.core.engine_stack.build_engine`
+    with every construction failure translated to the ``-32603`` the transport
+    can carry.
+
+    ``InternalError`` for an unfinished install names which provider needs what
+    (where the generic path once reported ``exception_message: "1"`` -- a
+    ``typer.Exit`` stringified -- and buried the real sentence in a log).
+    """
+    from pydantic import ValidationError
+
+    from raven.core.engine_stack import build_engine
+    from raven.providers.auth import MissingCredentialsError
+    from raven.rpc.errors import InternalError
+
+    try:
+        return build_engine(workspace=workspace, home=home).loop
+    except MissingCredentialsError as e:
+        from loguru import logger as _logger
+
+        _logger.warning("rpc: provider not usable: {}", e.summary)
+        raise InternalError(
+            e.summary,
+            data={"reason": "missing_credentials", "provider": e.provider, "remedy": e.remedy},
+        ) from e
+    except (*_TUI_INIT_CRASH_TYPES, ValidationError) as e:
+        from loguru import logger as _logger
+
+        _logger.exception("rpc: engine init crash ({}); surfacing as -32603 internal_error", type(e).__name__)
+        raise InternalError(
+            detail=str(e),
+            data={
+                "reason": "tui_init_crash",
+                "exception_type": type(e).__name__,
+                "exception_message": str(e),
+                "log_path": "~/.raven/logs/tui.log",
+            },
+        ) from e
+    except Exception as e:
+        from loguru import logger as _logger
+
+        _logger.exception("rpc: engine init uncaught exception; surfacing as -32603 internal_error")
+        raise InternalError(
+            detail=str(e),
+            data={
+                "reason": "uncaught",
+                "exception_type": type(e).__name__,
+                "exception_message": str(e),
+                "log_path": "~/.raven/logs/tui.log",
+            },
+        ) from e
+
 async def build_rpc_stack(
     send_frame: SendFrame,
     *,
@@ -83,14 +145,10 @@ async def build_rpc_stack(
     state all stay where they are. ``None`` keeps this stack's own broker, so
     existing callers are unchanged.
     """
-    from raven.cli.tui_commands import (
-        _build_agent_loop,
-        _build_cron_callback_spine,
-        _fanout_cron_missed,
-    )
     from raven.rpc.approval_broker import ApprovalBroker
     from raven.rpc.confirm_broker import ConfirmBroker
     from raven.rpc.connection import conversation_scoped
+    from raven.rpc.cron_events import build_cron_callback_spine, fanout_cron_missed
     from raven.rpc.dispatcher import Dispatcher
     from raven.rpc.errors import RpcError
     from raven.rpc.methods import (
@@ -128,7 +186,7 @@ async def build_rpc_stack(
     build_error: RpcError | None = None
     if owns_loop:
         try:
-            agent_loop = _build_agent_loop()
+            agent_loop = build_agent_loop()
         except RpcError as e:
             build_error = e
 
@@ -181,7 +239,7 @@ async def build_rpc_stack(
     direct_targets: dict[str, dict[str, str]] = {}
     turn_teardown = None
     if agent_loop is not None:
-        from raven.cli._cron_handler import make_on_cron_job
+        from raven.core.cron_stack import make_on_cron_job
 
         cron_readback: dict[str, str] = {}
         turn_scheduler, _turn_hub, turn_ids, turn_teardown = build_rpc_spine(
@@ -206,7 +264,7 @@ async def build_rpc_stack(
                 default_channel=LOCAL_CHANNEL,
                 cron_service=agent_loop.cron_service,
             )
-            agent_loop.cron_service.on_job = _build_cron_callback_spine(
+            agent_loop.cron_service.on_job = build_cron_callback_spine(
                 base_on_cron, emitter, direct_targets=direct_targets
             )
             await agent_loop.cron_service.start()
@@ -215,7 +273,7 @@ async def build_rpc_stack(
             # than through tui_commands, so without this the drops are collected
             # and never told to anyone.
             if agent_loop.cron_service.last_startup_drops:
-                await _fanout_cron_missed(emitter, drops=agent_loop.cron_service.last_startup_drops)
+                await fanout_cron_missed(emitter, drops=agent_loop.cron_service.last_startup_drops)
 
     # The sink is what makes an explicit version check visible to tabs other than
     # the one that asked: two windows on one gateway, one settings button, and

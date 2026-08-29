@@ -1,4 +1,4 @@
-"""Trigger-path tests for ``make_on_cron_job`` (raven/cli/_cron_handler.py).
+"""Trigger-path tests for ``make_on_cron_job`` (raven/core/cron_stack.py).
 
 Distinct scope from ``test_cron_handler_ledger.py``, which covers the
 sentinel ledger write side-effect.
@@ -18,7 +18,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from raven.cli._cron_handler import make_on_cron_job
+from raven.core.cron_stack import make_on_cron_job
 from raven.proactive_engine.schedulers.cron.types import (
     CronJob,
     CronJobState,
@@ -310,7 +310,7 @@ def _user_req(*, origin=None, channel: str = "telegram", chat_id: str = "chat9")
 
 
 def test_chain_resets_on_user_origin():
-    from raven.cli._cron_handler import chain_cron_activity_reset
+    from raven.core.cron_stack import chain_cron_activity_reset
 
     cron_service = MagicMock()
     hook = chain_cron_activity_reset(cron_service)
@@ -324,7 +324,7 @@ def test_chain_ignores_non_user_origins():
     """CRON / HEARTBEAT turns run the user-inbound hook chain too (only
     SENTINEL / SUBAGENT are skipped at the AgentLoop gate) — a cron fire
     resetting its own counter would defeat the guard."""
-    from raven.cli._cron_handler import chain_cron_activity_reset
+    from raven.core.cron_stack import chain_cron_activity_reset
     from raven.spine import Origin
 
     cron_service = MagicMock()
@@ -337,7 +337,7 @@ def test_chain_ignores_non_user_origins():
 
 
 def test_chain_calls_inner_first_and_returns_its_result():
-    from raven.cli._cron_handler import chain_cron_activity_reset
+    from raven.core.cron_stack import chain_cron_activity_reset
 
     calls: list[str] = []
     cron_service = MagicMock()
@@ -355,7 +355,7 @@ def test_chain_calls_inner_first_and_returns_its_result():
 
 
 def test_chain_reset_error_is_swallowed():
-    from raven.cli._cron_handler import chain_cron_activity_reset
+    from raven.core.cron_stack import chain_cron_activity_reset
 
     cron_service = MagicMock()
     cron_service.notify_user_active.side_effect = OSError("store locked")

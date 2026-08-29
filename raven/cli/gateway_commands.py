@@ -236,7 +236,6 @@ def register(app: typer.Typer) -> None:
         from raven.config.raven import load_raven_config
         from raven.gateway.manager import ChannelManager
         from raven.proactive_engine.schedulers.cron.service import CronService
-        from raven.proactive_engine.schedulers.heartbeat.service import HeartbeatService
         from raven.session.manager import SessionManager
 
         # load_runtime_config must run FIRST: it calls set_config_path() so
@@ -339,7 +338,7 @@ def register(app: typer.Typer) -> None:
         # Anti-runaway reset: genuine user activity on a (channel, chat_id)
         # zeroes the silent-fire counters of the jobs bound to it. Chained
         # after the Sentinel engagement hook, not replacing it.
-        from raven.cli._cron_handler import chain_cron_activity_reset
+        from raven.core.cron_stack import chain_cron_activity_reset
 
         on_user_inbound = chain_cron_activity_reset(cron, inner=sentinel_on_user_inbound)
 
@@ -390,24 +389,16 @@ def register(app: typer.Typer) -> None:
         if sentinel_runner is not None:
             sentinel_runner.set_channel_manager(channels)
 
-        from raven.cli._cron_handler import make_on_cron_job
+        from raven.core.cron_stack import make_on_cron_job
 
         # Event wake: in-process producers (cron completions) can end the
         # heartbeat sleep early instead of waiting for the next interval.
         # Busy check covers spine-dispatched turns only (user messages) —
         # exactly the lane a wake must never compete with.
         hb_cfg = config.gateway.heartbeat
-        wake = None
-        system_events = None
-        if hb_cfg.event_wake:
-            from raven.proactive_engine.system_events import SystemEventQueue
-            from raven.proactive_engine.wake import WakeScheduler
+        from raven.core.proactive_stack import build_heartbeat, build_wake
 
-            system_events = SystemEventQueue()
-            wake = WakeScheduler(
-                is_busy=lambda: agent.is_processing,
-                min_interval_s=hb_cfg.event_wake_min_interval_s,
-            )
+        wake, system_events = build_wake(hb_cfg, is_busy=lambda: agent.is_processing)
 
         def _pick_heartbeat_target() -> tuple[str, str]:
             """Pick a routable channel/chat target for heartbeat-triggered messages."""
@@ -553,7 +544,7 @@ def register(app: typer.Typer) -> None:
                 # false). Wired before cron.start() — the start-time check is
                 # the first observation pass.
                 if system_events is not None and wake is not None and config.cron.notify_missed:
-                    from raven.cli._cron_handler import make_on_missed_foreign
+                    from raven.core.cron_stack import make_on_missed_foreign
 
                     cron.on_missed_foreign = make_on_missed_foreign(system_events, wake)
 
@@ -579,14 +570,11 @@ def register(app: typer.Typer) -> None:
                     await pro_submit(req).result()
                     return ""
 
-                heartbeat = HeartbeatService(
-                    workspace=config.workspace_path,
-                    provider=provider,
+                heartbeat = build_heartbeat(
+                    config,
+                    provider,
                     model=agent.model,
                     on_execute=on_heartbeat_execute,
-                    on_notify=None,
-                    interval_s=hb_cfg.interval_s,
-                    enabled=hb_cfg.enabled,
                     wake=wake,
                     system_events=system_events,
                 )
@@ -688,9 +676,9 @@ def register(app: typer.Typer) -> None:
                     # path serve and the TUI use. Only tui jobs: an IM job's
                     # reply is already delivered on its own channel, and the
                     # page has no claim on it.
-                    from raven.cli.tui_commands import _build_cron_callback_spine
+                    from raven.rpc.cron_events import build_cron_callback_spine
 
-                    cron.on_job = _build_cron_callback_spine(
+                    cron.on_job = build_cron_callback_spine(
                         cron.on_job,
                         page_mount.emitter,
                         default_channel=pro_channel,

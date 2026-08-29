@@ -451,7 +451,7 @@ def rpc_server_deps(monkeypatch: pytest.MonkeyPatch):
     )
     monkeypatch.setattr("raven.rpc.spine.build_rpc_spine", fake_build_rpc_spine)
 
-    monkeypatch.setattr("raven.cli._cron_handler.make_on_cron_job", MagicMock())
+    monkeypatch.setattr("raven.core.cron_stack.make_on_cron_job", MagicMock())
     monkeypatch.setattr("raven.rpc.methods.turn.clear_active", MagicMock())
 
     # The snapshot backfill walks a real registry; the MagicMock loop has none.

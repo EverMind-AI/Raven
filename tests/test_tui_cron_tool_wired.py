@@ -169,7 +169,7 @@ def test_tui_cron_on_job_wired_in_run_not_build(patched_tui_build_deps) -> None:
 
 # The message-tool-swap wrapper and the bus outbound handler are gone
 # cron now runs as a spine CRON turn and the reply is fanned out as
-# cron.delivered by ``_build_cron_callback_spine`` (covered in
+# cron.delivered by ``build_cron_callback_spine`` (covered in
 # test_tui_cron_delivered_event.py), so no bus publish / callback swap remains.
 
 
