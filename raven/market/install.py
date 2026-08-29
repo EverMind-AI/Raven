@@ -153,13 +153,16 @@ async def _install_skill_piece(contrib: dict) -> tuple[dict, Any]:
     hub_id = str(contrib.get("skillhub_id") or "")
     if not hub_id:
         raise PlugInstallError("catalog skill contribution carries no skillhub_id")
-    from raven.rpc.methods.skillhub import skillhub_install
+    from raven.skill_hub.hub import SkillHubError, install
 
     # if_absent: undoing this piece deletes the skill directory, so the
     # transaction must only ever delete a directory it created. Without it, an
     # entry naming a skill the user already installed turns a failed install into
     # deletion of their copy.
-    result = await skillhub_install({"id": hub_id}, if_absent=True)
+    try:
+        result = await install(hub_id, if_absent=True)
+    except SkillHubError as e:
+        raise PlugInstallError(f"skill '{hub_id}' could not be installed: {e}") from e
     name = str(result.get("name") or "")
     return {"kind": "skill", "name": name, "skillhub_id": hub_id}, None
 
@@ -168,10 +171,10 @@ async def _undo_skill_piece(piece: dict) -> None:
     name = str(piece.get("name") or "")
     if not name:
         return
-    from raven.rpc.methods.skillhub import skillhub_remove
+    from raven.skill_hub.hub import remove
 
     try:
-        await skillhub_remove({"name": name})
+        await remove(name)
     except Exception as e:  # noqa: BLE001 — best-effort rollback; report, don't mask the original error
         logger.warning("plughub: skill rollback for '{}' failed: {}", name, e)
 

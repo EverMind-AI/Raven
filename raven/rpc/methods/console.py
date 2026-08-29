@@ -48,7 +48,7 @@ def _hub_marker_name() -> str | None:
     skill correctly reports ``hub=false``.
     """
     try:
-        from raven.rpc.methods.skillhub import MARKER
+        from raven.skill_hub.hub import MARKER
     except ImportError:
         logger.debug("ext.list: skill market not installed; reporting every skill as hub=false")
         return None
