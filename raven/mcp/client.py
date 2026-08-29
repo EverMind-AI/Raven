@@ -310,36 +310,3 @@ async def connect_mcp_server(
         registered.append(wrapper.name)
         logger.debug("MCP: registered tool '{}' from server '{}'", wrapper.name, name)
     return Connected(names=registered, session=session, capabilities=handshake.capabilities)
-
-
-async def connect_mcp_servers(
-    mcp_servers: dict,
-    registry: ToolRegistry,
-    stack: AsyncExitStack,
-    executor: "SandboxExecutor | None" = None,
-) -> None:
-    """Connect to configured MCP servers and register their tools.
-
-    One-shot connect-all over a shared stack, and no longer the live path: the
-    agent loop connects through
-    :class:`~raven.mcp.manager.MCPConnectionManager`, which owns one
-    stack per server so servers can be attached and detached while raven runs.
-
-    This helper stays for callers that want one shot over one stack -- scripts
-    and tests. Note it does **not** honour ``enabled``, so it is not a drop-in
-    for the manager.
-    """
-    for name, cfg in mcp_servers.items():
-        try:
-            result = await connect_mcp_server(name, cfg, registry, stack, executor=executor)
-            logger.info("MCP server '{}': connected, {} tools registered", name, len(result.names))
-        except SandboxInitError:
-            # Propagates so the caller surfaces it as a startup error rather
-            # than running with a silently broken MCP server.
-            raise
-        except MCPConfigError as e:
-            logger.warning("MCP server '{}': {}, skipping", name, e)
-        except (Exception, BaseExceptionGroup) as e:
-            # BaseExceptionGroup is raised by anyio task groups (e.g. streamableHttp cancel
-            # scope failures) and is not a subclass of Exception in Python 3.11+.
-            logger.error("MCP server '{}': failed to connect: {}", name, e)
