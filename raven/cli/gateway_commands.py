@@ -340,8 +340,8 @@ def register(app: typer.Typer) -> None:
 
         # Gateway-side memory-backend wiring. Mirrors the REPL
         # bootstrap (cli/agent_commands.py). Returns ``None`` when no
-        # plugin contributes the configured backend — AgentLoop falls
-        # back to its legacy ``self.memory`` path. Lifecycle (start /
+        # plugin contributes the configured backend — AgentLoop then runs
+        # without a memory backend. Lifecycle (start /
         # stop) lands inside the run-loop coroutine below.
         # One registry shared by both contribution points, so plugins are
         # discovered and activated once rather than per consumer.

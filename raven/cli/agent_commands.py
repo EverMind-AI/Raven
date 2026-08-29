@@ -229,8 +229,8 @@ def register(app: typer.Typer) -> None:
 
         # Build the plugin-provided memory backend (the bundled
         # everos backend by default). Returns ``None`` when no plugin
-        # contributes the configured backend name — AgentLoop falls
-        # back to its legacy ``self.memory`` path. Lifecycle (start /
+        # contributes the configured backend name — AgentLoop then runs
+        # without a memory backend. Lifecycle (start /
         # stop) is handled in ``run_once`` so the awaits land in the
         # right event loop context.
         # Build the plugin registry once and reuse it for both the memory
@@ -280,7 +280,7 @@ def register(app: typer.Typer) -> None:
             return console.status("[dim]Raven is thinking...[/dim]", spinner="dots")
 
         # Single message mode — one USER turn through spine (submit -> lane ->
-        # run_turn -> hub -> CliOutlet), with the legacy cli/direct defaults
+        # run_turn -> hub -> CliOutlet), with the cli/direct defaults
         # (channel="cli", chat_id="direct", session_key=session_id). Progress
         # renders via the CliOutlet, gated by the same two config flags the bus
         # path honored (send_progress / send_tool_hints).
