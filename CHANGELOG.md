@@ -35,6 +35,12 @@ All notable changes to Raven are documented here.
   repo-level `evolver/` tool that drives it. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- Audit pass five: five channel adapters wrote their description after a
+  statement, so it was an expression and the class had no docstring; the
+  adapters' retry comments name the delivery hub that does the retrying;
+  three empty `TYPE_CHECKING` guards, a commented-out table column and a
+  comment about another module's error contract are gone; the benchmark
+  cache, the sandbox error and the usage tracker say what they do.
 - Audit pass four: eight more symbols with no reader are gone -- the fd-level
   terminal redirect, the standalone LLM trigger expansion (the generator's own
   tool call and the shared guard remain), an ISO timestamp helper, two MCP

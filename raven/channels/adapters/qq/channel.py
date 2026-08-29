@@ -245,5 +245,5 @@ class QQChannel(ChannelBase):
                 )
         except Exception as e:
             if isinstance(e, ServerError) or transient_network(e):
-                raise  # 5xx / network drop: let manager._send_with_retry back off
+                raise  # 5xx / network drop: let the delivery hub back off
             logger.error("Error sending QQ message: {}", e)

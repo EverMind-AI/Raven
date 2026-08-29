@@ -168,8 +168,9 @@ def _markdown_to_html(text: str) -> str:
 
 
 class TelegramChannel(ChannelBase):
-    capabilities = Capabilities(file_attachments=True)
     """Telegram bot over long polling — no webhook / public IP needed."""
+
+    capabilities = Capabilities(file_attachments=True)
 
     config: Any
     name = "telegram"

@@ -522,5 +522,5 @@ class MochatChannel(ChannelBase):
                 await self._api.send_session(target.id, content)
         except Exception as e:
             if retryable_http(e) or transient_network(e):
-                raise  # let manager._send_with_retry back off and retry
+                raise  # let the delivery hub back off and retry
             logger.error("Failed to send Mochat message: {}", e)

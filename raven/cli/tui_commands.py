@@ -331,14 +331,6 @@ def _spawn_with_rpc_pipes(
     return proc, req_r, notif_w
 
 
-# Narrow exception classes that represent recoverable init-time crashes —
-# kwargs drift after AgentLoop ctor refactor, attribute path drift after
-# config schema rename, ImportError on optional extras, missing config file,
-# Pydantic ValidationError. All are surfaced as -32603 ``internal_error``
-# with ``data.reason="tui_init_crash"`` so the UI can distinguish them from a
-# legitimate -32008 ``model_not_available`` (no provider configured).
-
-
 def _build_agent_loop(workspace: str | None = None, home: str | None = None):
     """The TUI's loop factory: the rpc stack's :func:`build_agent_loop`, kept
     under this name so the launcher and its tests address it here."""

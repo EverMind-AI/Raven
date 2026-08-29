@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from raven.plugins.context import PluginContext, ServiceLocator
 from raven.plugins.discover import DiscoveredPlugin, Source
 from raven.plugins.manifest import PluginManifest
 from raven.tracing import semconv, trace
@@ -272,7 +273,6 @@ class PluginRegistry:
         host. Any exception from the factory propagates so the host
         sees the real cause rather than a wrapped one.
         """
-        from raven.plugins.context import PluginContext  # local: cycle-safe
 
         factory = self.get_memory_backend_factory(name)
         config = self._admit(self._memory_backends[name], config)
@@ -300,7 +300,6 @@ class PluginRegistry:
         cause. The host registers the returned tool into the agent's
         :class:`ToolRegistry`.
         """
-        from raven.plugins.context import PluginContext  # local: cycle-safe
 
         factory = self.get_tool_factory(name)
         config = self._admit(self._tools[name], config)
@@ -324,12 +323,6 @@ class PluginRegistry:
         schema = mf.config_schema if mf is not None else {}
         return admit_slice(schema, config, plugin_id=entry.plugin_id)
 
-
-# Forward import for the type hint above. Kept at module-bottom so the
-# import cost is paid only when someone reads the class — and to avoid
-# the circular hit at module-load time (registry is imported from
-# __init__ before context is).
-from raven.plugins.context import ServiceLocator  # noqa: E402
 
 __all__ = [
     "MemoryBackendFactory",

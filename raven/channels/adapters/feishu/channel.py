@@ -42,8 +42,9 @@ _DEDUP_CAP = 1000
 
 
 class FeishuChannel(ChannelBase):
-    capabilities = Capabilities(file_attachments=True)
     """Feishu bot over a WebSocket long connection — no public IP / webhook."""
+
+    capabilities = Capabilities(file_attachments=True)
 
     name = "feishu"
     display_name = "Feishu"

@@ -7,12 +7,9 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from raven.sandbox.interfaces import ExecResult, SandboxExecutor, SandboxInitError
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
