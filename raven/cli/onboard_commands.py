@@ -2399,10 +2399,12 @@ def run_wizard(
 def _step6_subagents(*, skip: bool, non_interactive: bool, warnings: list[str]) -> object:
     """Step 6 — the sub-agents in this checkout, optional, forward-only.
 
-    Registration is a wizard step rather than an installer step because it needs
-    a configured host raven, and ``subagents/install.sh`` runs before one exists.
-    Skipped on --skip-subagents or non-interactive; leaving it undone just means
-    an empty third-party roster, and re-running ``onboard`` fills it in.
+    This is a wizard step rather than an installer step because it needs a
+    configured host raven, and ``subagents/install.sh`` runs before one exists.
+    Skipped on --skip-subagents or non-interactive; roster membership comes from
+    discovery either way, so leaving it undone just means the vendored agents
+    stay listed-and-disabled until their venvs are built, and re-running
+    ``onboard`` builds them.
     """
     _step_header(6, t("Sub-agents"))
     if skip or non_interactive:

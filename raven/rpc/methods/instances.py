@@ -4,9 +4,9 @@ A different noun from ``methods/subagents.py``, which configures *which*
 sub-agents exist. This group is about the instances a session has actually
 talked to -- the things the direct-chat surface addresses.
 
-Every read here goes through something already shared with the web RPC (the
-instance registry, ``reconcile_instance_rows``, the record directories the
-runtime writes) rather than deriving a second answer, so the two surfaces cannot
+Every read here goes through ``raven.agent.subagent.instances`` (the registry
+and ``reconcile_instance_rows``) and the record directories the runtime writes,
+rather than deriving a second answer here, so the TUI and the served page cannot
 come to disagree about what an instance is or which ones are still alive.
 
 The one write here is ``subagents.instance.create``: the user's own way to

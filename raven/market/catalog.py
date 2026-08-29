@@ -1,4 +1,4 @@
-"""Catalog source for the plugin market.
+"""Catalog source for PlugHub, the plugin marketplace.
 
 v1 ships a curated catalog inside the wheel (``catalog.json``); a hosted
 hub can override it later via ``RAVEN_PLUGHUB_URL`` without touching the
@@ -70,7 +70,7 @@ async def _load() -> dict:
             if isinstance(data, dict) and isinstance(data.get("entries"), list):
                 return data
             logger.warning("plughub: hub returned an unexpected catalog shape; using bundled catalog")
-    except Exception as e:  # noqa: BLE001 — market must degrade, never break the page
+    except Exception as e:  # noqa: BLE001 — PlugHub must degrade, never break the page
         logger.warning("plughub: hub unreachable ({}); using bundled catalog", e)
     return _bundled()
 

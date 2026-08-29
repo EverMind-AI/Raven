@@ -1,4 +1,4 @@
-"""Atomic install / uninstall / toggle for market plugins.
+"""Atomic install / uninstall / toggle for PlugHub plugins.
 
 An install interprets a catalog entry's ``contributes`` list, lands each
 piece, then writes the ledger. Any piece failing rolls back the pieces
@@ -233,7 +233,7 @@ async def install_plugin(entry: dict, form: dict | None = None) -> dict:
 
 
 async def uninstall_plugin(name: str) -> dict:
-    """Remove a plugin: ledger replay for market installs, config+credential
+    """Remove a plugin: ledger replay for PlugHub installs, config+credential
     removal for manual servers. Does not touch live connections."""
     from raven.market.ledger import delete_ledger, read_ledger
 

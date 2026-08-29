@@ -1325,7 +1325,7 @@ async def _record_node_memory(
     """Write this node's Memory record, swallowing any failure.
 
     Written through the store rather than to a local path: a DAG run's files go
-    to the session's workspace backend, which may not be this filesystem.
+    to the DAG core's file backend, which may not be this filesystem.
     """
     if identity.source == "trace":
         # The host owns both the write and the read here, so it mints the join

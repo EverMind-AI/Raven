@@ -47,7 +47,7 @@ def split_session_key(session_key: str) -> tuple[str, str]:
     if ":" in session_key:
         channel, chat_id = session_key.split(":", 1)
         return channel, chat_id
-    # Planner may emit a bare session key or alias ('cli:direct', 'telegram:home').
+    # Planner may emit a bare session key or alias ('tui:direct', 'telegram:home').
     # Default to a synthetic channel when parsing fails.
     return "sentinel", session_key or "direct"
 

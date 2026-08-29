@@ -380,7 +380,8 @@ class PlaybookRuntime:
         The single entry, for the model's tool and for ``raven playbook run``
         alike. What "act on it" means is the playbook's own business rather than
         the caller's -- a ``dag`` playbook dispatches (after any gaps are filled
-        and its confirm gate passes), a ``prompt`` one comes back as composition
+        and the graph-level confirm passes: ``PlaybookSpec.confirm``, dispatched
+        as ``SubAgentDagSpec.confirm``), a ``prompt`` one comes back as composition
         guidance for the caller to build a graph from. The caller does not choose,
         and is not told to: ``mode`` is how the author wrote the file, not a
         decision anyone downstream should be making.

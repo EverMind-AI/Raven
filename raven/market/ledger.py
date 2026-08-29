@@ -1,10 +1,10 @@
-"""Install ledger — one JSON file per market-installed plugin.
+"""Install ledger — one JSON file per PlugHub-installed plugin.
 
 The ledger is what makes a multi-piece install reversible: it records the
 exact pieces the transaction landed (config key, credentials path, skill
 directory), so uninstall replays it in reverse and never guesses. It is
-also the provenance oracle: config entry with a ledger -> "market",
-without -> "manual".
+also the provenance oracle: a PlugHub install writes a ledger, so a config
+entry with a ledger -> "market", without -> "manual".
 
 Layout (``~/.raven/plugins/<catalog_id>.json``):
 
@@ -71,7 +71,7 @@ def read_ledger(catalog_id: str) -> dict | None:
     """The ledger for ``catalog_id``, or None when there is not one.
 
     An id that cannot name a file provably has no ledger, so it answers None
-    rather than raising: a ledger read is a question ("did the market install
+    rather than raising: a ledger read is a question ("did PlugHub install
     this?"), and the answer for a hand-written server name -- which is never
     used as a filename -- is no, not an error about a term the user never used.
     """

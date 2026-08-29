@@ -131,6 +131,9 @@ async def preflight_mcp_source(
     A connect failure degrades rather than aborting: the server is left in its
     failed state, the grant reports it, and the graph runs without it. Aborting
     would make one unreachable server cost the whole run.
+
+    ``workspace`` is Agent home -- the directory the sandbox executor confines a
+    bridged upstream to.
     """
     from raven.agent.subagent.mcp_grant import LiveMcpSource
     from raven.agent.tools.registry import ToolRegistry

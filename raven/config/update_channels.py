@@ -74,8 +74,8 @@ def _camel(key: str) -> str:
     return head + "".join(part.title() for part in rest)
 
 
-def _camelize_keys(schema: dict[str, Any], table: dict[str, Any]) -> dict[str, Any]:
-    """The write-side inverse of :func:`_normalize_keys`.
+def _camelize_keys(declaration: dict[str, Any], table: dict[str, Any]) -> dict[str, Any]:
+    """The write-side inverse of :func:`~raven.config.admission.normalize_slice_keys`.
 
     Sections are serialized with camelCase field keys so this writer stays
     byte-compatible with ``save_config`` (which still dumps by alias);
@@ -83,10 +83,10 @@ def _camelize_keys(schema: dict[str, Any], table: dict[str, Any]) -> dict[str, A
     """
     out: dict[str, Any] = {}
     for key, value in table.items():
-        if key not in schema:
+        if key not in declaration:
             out[key] = value
             continue
-        sub = schema[key].get("fields")
+        sub = declaration[key].get("fields")
         if isinstance(sub, dict) and isinstance(value, dict):
             out[_camel(key)] = _camelize_keys(sub, value)
         else:
@@ -94,10 +94,10 @@ def _camelize_keys(schema: dict[str, Any], table: dict[str, Any]) -> dict[str, A
     return out
 
 
-def _materialize(schema: dict[str, Any], section: dict[str, Any]) -> dict[str, Any]:
+def _materialize(declaration: dict[str, Any], section: dict[str, Any]) -> dict[str, Any]:
     """The effective values: file section over declared defaults, recursively."""
     out: dict[str, Any] = {}
-    for key, decl in schema.items():
+    for key, decl in declaration.items():
         sub = decl.get("fields")
         if isinstance(sub, dict):
             value = section.get(key)
@@ -109,15 +109,15 @@ def _materialize(schema: dict[str, Any], section: dict[str, Any]) -> dict[str, A
         else:
             out[key] = None
     for key, value in section.items():
-        if key not in schema:
+        if key not in declaration:
             out[key] = copy.deepcopy(value)
     return out
 
 
-def _flatten_schema(schema: dict[str, Any], prefix: str = "") -> dict[str, dict[str, Any]]:
+def _flatten_schema(declaration: dict[str, Any], prefix: str = "") -> dict[str, dict[str, Any]]:
     """Flat ``dotted-path -> spec`` map for CLI parsers and redaction."""
     out: dict[str, dict[str, Any]] = {}
-    for key, decl in schema.items():
+    for key, decl in declaration.items():
         path = f"{prefix}{key}"
         sub = decl.get("fields")
         if isinstance(sub, dict):
@@ -139,9 +139,9 @@ def _flatten_schema(schema: dict[str, Any], prefix: str = "") -> dict[str, dict[
     return out
 
 
-def _flatten_values(schema: dict[str, Any], values: dict[str, Any], prefix: str = "") -> dict[str, Any]:
+def _flatten_values(declaration: dict[str, Any], values: dict[str, Any], prefix: str = "") -> dict[str, Any]:
     out: dict[str, Any] = {}
-    for key, decl in schema.items():
+    for key, decl in declaration.items():
         path = f"{prefix}{key}"
         sub = decl.get("fields")
         value = values.get(key)
@@ -152,10 +152,10 @@ def _flatten_values(schema: dict[str, Any], values: dict[str, Any], prefix: str 
     return out
 
 
-def _walk_schema_path(schema: dict[str, Any], dotted_key: str) -> dict[str, Any]:
+def _walk_schema_path(declaration: dict[str, Any], dotted_key: str) -> dict[str, Any]:
     """Walk ``a.b.c`` through declared sub-tables to the leaf declaration."""
     segs = dotted_key.split(".")
-    cursor = schema
+    cursor = declaration
     for seg in segs[:-1]:
         decl = cursor.get(seg)
         sub = decl.get("fields") if isinstance(decl, dict) else None
@@ -317,14 +317,14 @@ def get_channel_config(
     """
     from raven.config.admission import normalize_slice_keys
 
-    schema = _channel_schema(name)
+    declaration = _channel_schema(name)
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)
     raw_section = (data.get("channels") or {}).get(name) or {}
-    values = _materialize(schema, normalize_slice_keys(schema, raw_section))
+    values = _materialize(declaration, normalize_slice_keys(declaration, raw_section))
 
-    specs = _flatten_schema(schema)
-    flat = _flatten_values(schema, values)
+    specs = _flatten_schema(declaration)
+    flat = _flatten_values(declaration, values)
     out: dict[str, Any] = {}
     for path_key, spec in specs.items():
         val = flat.get(path_key)
@@ -348,14 +348,14 @@ def reset_channel(
     The section's key is preserved so that downstream discovery still sees
     the channel; only field values revert.
     """
-    schema = _channel_schema(name)
+    declaration = _channel_schema(name)
     path = config_path or get_config_path()
 
     def _apply(_text: str | None) -> tuple[str, None]:
         data = read_raw_or_raise(path)
         data.setdefault("channels", {})
-        defaults = _materialize(schema, {})
-        data["channels"][name] = _camelize_keys(schema, defaults)
+        defaults = _materialize(declaration, {})
+        data["channels"][name] = _camelize_keys(declaration, defaults)
         return json.dumps(data, indent=2, ensure_ascii=False), None
 
     atomic_update(path, _apply)
@@ -373,8 +373,8 @@ def _patch_channel(
     config_path: Path | None,
 ) -> dict[str, Any]:
     """Validate-then-write core. Used by enable / disable / set."""
-    schema = _channel_schema(name)
-    specs = _flatten_schema(schema)
+    declaration = _channel_schema(name)
+    specs = _flatten_schema(declaration)
 
     unknown = [k for k in fields if k not in specs]
     if unknown:
@@ -387,20 +387,20 @@ def _patch_channel(
 
         data = read_raw_or_raise(path)
         raw_section = (data.get("channels") or {}).get(name) or {}
-        working = _materialize(schema, normalize_slice_keys(schema, raw_section))
+        working = _materialize(declaration, normalize_slice_keys(declaration, raw_section))
 
         prev: dict[str, Any] = {}
         for path_key, raw_val in fields.items():
-            decl = _walk_schema_path(schema, path_key)
+            decl = _walk_schema_path(declaration, path_key)
             coerced = _coerce_value(raw_val, decl)
             prev[path_key] = _set_nested(path_key, coerced, working)
 
         # The same door the gateway dispenses through: the writer and the
         # reader cannot disagree about what boards.
-        validated = admit_slice(schema, working, plugin_id=f"channel:{name}")
+        validated = admit_slice(declaration, working, plugin_id=f"channel:{name}")
 
         data.setdefault("channels", {})
-        data["channels"][name] = _camelize_keys(schema, validated)
+        data["channels"][name] = _camelize_keys(declaration, validated)
         return json.dumps(data, indent=2, ensure_ascii=False), prev
 
     return atomic_update(path, _apply)

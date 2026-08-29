@@ -220,8 +220,8 @@ def _snake(key: str) -> str:
     return re.sub(r"(?<=[a-z0-9])([A-Z])", lambda m: "_" + m.group(1).lower(), key)
 
 
-def normalize_slice_keys(schema: dict[str, Any], table: dict[str, Any]) -> dict[str, Any]:
-    """Snake-case the field keys of a raw file section, guided by the schema.
+def normalize_slice_keys(declaration: dict[str, Any], table: dict[str, Any]) -> dict[str, Any]:
+    """Snake-case the field keys of a raw file section, guided by the declaration.
 
     Config files hold camelCase (the pydantic-era writers dumped by alias);
     declarations speak snake_case. Only keys that resolve to a declared field
@@ -230,11 +230,11 @@ def normalize_slice_keys(schema: dict[str, Any], table: dict[str, Any]) -> dict[
     """
     out: dict[str, Any] = {}
     for key, value in table.items():
-        resolved = key if key in schema else _snake(key)
-        if resolved not in schema:
+        resolved = key if key in declaration else _snake(key)
+        if resolved not in declaration:
             out[key] = value
             continue
-        sub = schema[resolved].get("fields")
+        sub = declaration[resolved].get("fields")
         if isinstance(sub, dict) and isinstance(value, dict):
             out[resolved] = normalize_slice_keys(sub, value)
         else:
@@ -250,12 +250,12 @@ def dispense_channel_config(spec: Any, section: Any, *, channel: str) -> Any:
     file's values; everything else materializes from the declaration's own
     defaults, which are the only defaults there are.
     """
-    schema = getattr(spec, "config_schema", None) or {}
-    if not schema:
+    declaration = getattr(spec, "config_schema", None) or {}
+    if not declaration:
         return section
     from raven.config.loader import channel_cargo_slice
 
-    slice_ = normalize_slice_keys(schema, channel_cargo_slice(channel))
-    raw = {k: v for k, v in slice_.items() if k in schema}
-    cargo = admit_slice(schema, raw, plugin_id=f"channel:{channel}")
+    slice_ = normalize_slice_keys(declaration, channel_cargo_slice(channel))
+    raw = {k: v for k, v in slice_.items() if k in declaration}
+    cargo = admit_slice(declaration, raw, plugin_id=f"channel:{channel}")
     return DispensedSlice(section, cargo)

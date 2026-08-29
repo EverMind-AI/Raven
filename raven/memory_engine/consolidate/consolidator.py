@@ -1635,7 +1635,7 @@ class MemoryConsolidator:
     def context_window_tokens(self) -> int:
         """The running turn's window; the one built with, outside a turn.
 
-        The consolidator archives down to half this number, so a session on a
+        The consolidator consolidates down to half this number, so a session on a
         1M model must not be measured against the window of whichever session
         built the loop.
         """
@@ -1726,7 +1726,7 @@ class MemoryConsolidator:
         )
 
     async def archive_unconsolidated(self, session: Session) -> bool:
-        """Archive the full unconsolidated tail for /new-style session rollover.
+        """Consolidate the full unconsolidated tail for /new-style session rollover.
 
         Annotates the tail into episodes.md, then runs one round of hot-tag
         section refresh so the profile reflects the just-closed session.
@@ -1743,11 +1743,12 @@ class MemoryConsolidator:
 
     @trace.instrument("memory.consolidate", extract=semconv.memory_consolidate)
     async def maybe_consolidate_by_tokens(self, session: Session, *, force: bool = False) -> dict[str, int]:
-        """Loop: archive old messages until prompt fits within half the context window.
+        """Loop: move old messages behind the consolidation boundary until the
+        prompt fits within half the context window.
 
         ``force`` skips the "prompt still fits" early return, which is what a
-        user-triggered compaction wants: archive down to the target now rather
-        than waiting to hit the window. Returns before/after token estimates
+        user-triggered consolidation wants: consolidate down to the target now
+        rather than waiting to hit the window. Returns before/after token estimates
         and how many messages moved behind the consolidation boundary — callers
         that only want the side effect can ignore it.
         """

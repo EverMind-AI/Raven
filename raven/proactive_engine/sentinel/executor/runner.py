@@ -613,7 +613,7 @@ class SentinelRunner:
         where they were last active, so a multi-channel user isn't pinged on
         every channel at once. Sessions on channels outside an attached
         ChannelManager's ``enabled_channels`` are skipped (e.g. a stale feishu
-        session must not capture a REPL nudge whose only real surface is cli).
+        session must not capture a TUI nudge whose only real surface is tui).
         """
         sm = self._delivery_session_manager
         if sm is None:

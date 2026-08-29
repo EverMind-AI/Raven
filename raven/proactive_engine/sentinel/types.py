@@ -1,4 +1,4 @@
-"""Core data types for the Sentinel proactivity subsystem."""
+"""Core data types for the Sentinel pipeline."""
 
 from __future__ import annotations
 
@@ -74,7 +74,7 @@ class Routine:
 class ActiveSession:
     """A minimal view of an active channel session."""
 
-    key: str  # e.g. "cli:direct", "telegram:home"
+    key: str  # e.g. "tui:direct", "telegram:home"
     last_active_at: datetime
     last_user_message: str | None = None
     last_assistant_message: str | None = None

@@ -284,8 +284,8 @@ def register(app: typer.Typer) -> None:
         # Single message mode — one USER turn through spine (submit -> lane ->
         # run_turn -> hub -> CliOutlet), with the cli/direct defaults
         # (channel="cli", chat_id="direct", session_key=session_id). Progress
-        # renders via the CliOutlet, gated by the same two config flags the bus
-        # path honored (send_progress / send_tool_hints).
+        # renders via the CliOutlet, gated by the same two config flags the
+        # gateway honors (send_progress / send_tool_hints).
         from raven.cli._one_shot_spine import build_one_shot_spine
         from raven.spine import ChatType, Origin, Source, TurnRequest
 
@@ -311,8 +311,8 @@ def register(app: typer.Typer) -> None:
                     send_progress=bool(ch.send_progress) if ch else False,
                     send_tool_hints=bool(ch.send_tool_hints) if ch else False,
                 )
-                # A one-shot spawn rarely finishes before the hard-exit below (same
-                # as the bus path), but wire submit for parity with the TUI.
+                # A one-shot spawn rarely finishes before the hard-exit below,
+                # but wire submit for parity with the TUI.
                 agent_loop.subagents.set_submit(scheduler.submit)
                 with _thinking_ctx():
                     handle = scheduler.submit(

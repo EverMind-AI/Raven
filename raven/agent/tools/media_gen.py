@@ -25,9 +25,10 @@ Video uses a separate async endpoint (NOT chat-completions):
   ``kwaivgi/kling-v3.0-std`` (Kling v3 Standard). Requires postpaid billing /
   credits enabled on the OpenRouter account.
 
-Generated files are written under ``<workspace>/<output_subdir>`` and the path
-is returned so the agent can forward it with the ``message`` tool's ``media``
-field. A denied request (HTTP 403) hints at setting ``tools.media.proxy``.
+Generated files are written under ``<working directory>/<output_subdir>`` --
+``workdir.current()`` when a turn is bound, the constructor's root otherwise --
+and the path is returned so the agent can forward it with the ``message``
+tool's ``media`` field. A denied request (HTTP 403) hints at setting ``tools.media.proxy``.
 
 See demos/skill_retrieval/skills/image-gen/SKILL.md for the image recipe.
 """

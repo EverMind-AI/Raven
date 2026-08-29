@@ -1,5 +1,5 @@
-"""Workspace template sync: the bundled ``templates/`` package data copied into a
-workspace once, creating only what is missing.
+"""Workspace template sync: the bundled ``templates/`` package data copied into
+Agent home once, creating only what is missing.
 """
 
 import sys
@@ -26,7 +26,7 @@ def _stderr_line(message: str) -> None:
 def sync_workspace_templates(
     workspace: Path, silent: bool = False, *, notify: "Callable[[str], None] | None" = None
 ) -> list[str]:
-    """Sync bundled templates to workspace. Only creates missing files.
+    """Sync bundled templates to Agent home. Only creates missing files.
 
     ``notify`` receives one plain sentence when files were created ("Initialized
     workspace (3 files)"); the host decides how to show it. Nothing here owns a

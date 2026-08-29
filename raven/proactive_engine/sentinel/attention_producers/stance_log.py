@@ -74,10 +74,10 @@ def _bootstrap_from_attention(
     """One-time migration: pull stance bullets out of attention.md's
     legacy storage when the sidecar JSON doesn't exist yet.
 
-    Workspaces created before the sidecar split kept stance entries
-    inline in attention.md. Without this, upgrading those workspaces
+    Agent homes created before the sidecar split kept stance entries
+    inline in attention.md. Without this, upgrading those agent homes
     silently empties the section until 30d of fresh entries accumulate.
-    Runs once per workspace; the next compute_body persists the result
+    Runs once per agent home; the next compute_body persists the result
     to the sidecar and this legacy path is never re-read.
 
     Holds the attention.md read lock during the snapshot so a

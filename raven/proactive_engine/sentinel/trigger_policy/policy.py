@@ -6,7 +6,7 @@ dedup, and dismissal cooldown in one place.
 
 Design:
 - Optionally file-backed via JsonStateStore (when running multiple Raven
-  processes, e.g. REPL + gateway together). Without a store, state is
+  processes, e.g. TUI + gateway together). Without a store, state is
   process-local and resets on restart.
 - Deterministic via injectable ``now_fn`` — tests freeze time.
 - Thread-safety: the policy is designed for a single asyncio event loop. No
@@ -122,11 +122,11 @@ class NudgePolicy:
 
     Usage:
         policy = NudgePolicy(config, now_fn=datetime.now)
-        verdict = policy.check("nudge", session_key="cli:direct",
+        verdict = policy.check("nudge", session_key="tui:direct",
                                content="hello", priority="low")
         if verdict.verdict == "allow":
             await dispatch(...)
-            policy.record_fired("nudge", session_key="cli:direct",
+            policy.record_fired("nudge", session_key="tui:direct",
                                 content="hello")
     """
 
