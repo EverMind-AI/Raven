@@ -991,10 +991,3 @@ def _trace_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
             clean["content"] = _snippet(clean["content"], 1600)
         traced.append(clean)
     return traced
-
-
-def _json_or_text(value: str) -> Any:
-    try:
-        return json.loads(value)
-    except json.JSONDecodeError:
-        return value

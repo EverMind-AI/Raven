@@ -246,19 +246,6 @@ def _is_everos_server(pid: int) -> bool:
     return _SERVER_CMDLINE in out.stdout
 
 
-def find_recorded_server(root: Path | str) -> dict[str, Any] | None:
-    """The server raven started for ``root``, if it is still that server."""
-    record = _read_pidfile()
-    if not record:
-        return None
-    if str(record.get("root")) != str(Path(root).expanduser()):
-        return None
-    pid = record.get("pid")
-    if not isinstance(pid, int) or not _is_everos_server(pid):
-        return None
-    return record
-
-
 class StopOutcome(str, Enum):
     """Why a stop attempt ended the way it did.
 
@@ -273,21 +260,6 @@ class StopOutcome(str, Enum):
     NOT_OURS = "not_ours"
     SIGNAL_FAILED = "signal_failed"
     STILL_DRAINING = "still_draining"
-
-
-def stop_recorded_server(root: Path | str, *, timeout: float = 35.0) -> StopOutcome:
-    """Ask the server raven started for ``root`` to shut down, and wait for it.
-
-    SIGTERM rather than SIGKILL: uvicorn's graceful shutdown runs the OME
-    engine's ``stop()``, which drains in-flight strategy runs (up to 30s) before
-    releasing the jobstore lock. Killing outright would leave that work to crash
-    recovery for no reason -- which is also why ``STILL_DRAINING`` is a distinct
-    answer rather than a failure: the server is doing exactly what it should.
-    """
-    record = find_recorded_server(root)
-    if record is None:
-        return StopOutcome.NOT_OURS
-    return stop_pid(int(record["pid"]), timeout=timeout)
 
 
 def stop_pid(pid: int, *, timeout: float = 35.0) -> StopOutcome:
@@ -567,10 +539,10 @@ def _lock_holder_pid(lock: Path, root: Path) -> int | None:
 def lock_holder(root: Path | str) -> LockHolder | None:
     """The process serving ``root``'s data, identified from the OS.
 
-    Answers the question ``find_recorded_server`` cannot: not "did raven start
-    this", but "who has the data". Losing the pidfile, moving the config
-    directory, or upgrading from a raven that kept no pidfile all leave the
-    lock intact, and the lock is what actually blocks a second instance.
+    Identified from the lock rather than from a pidfile raven wrote: losing the
+    pidfile, moving the config directory, or upgrading from a raven that kept
+    none all leave the lock intact, and the lock is what actually blocks a
+    second instance.
     """
     resolved = Path(root).expanduser()
     lock = resolved / ".index" / "sqlite" / "ome.db.lock"

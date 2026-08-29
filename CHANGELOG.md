@@ -35,6 +35,11 @@ All notable changes to Raven are documented here.
   repo-level `evolver/` tool that drives it. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- Audit pass four: eight more symbols with no reader are gone -- the fd-level
+  terminal redirect, the standalone LLM trigger expansion (the generator's own
+  tool call and the shared guard remain), an ISO timestamp helper, two MCP
+  inventory views, the recorded-server stop path, a duplicated JSON parser, a
+  method alias, and a 97 KB routing sample no code reads.
 - `raven.i18n` is seated as an inner cross-cutting leaf: it may not import a
   surface, and the kernel may not import it. The glossary records what it is
   and what `zh_lexicon` is not.

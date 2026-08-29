@@ -40,7 +40,7 @@ from raven.playbook.matcher import TriggerIndex
 from raven.playbook.router import RouterSizes, select_playbooks
 from raven.playbook.runtime import MAX_GAP_ROUNDS, PlaybookRuntime
 from raven.playbook.store import BUILTIN_ROOT, PlaybookExistsError, PlaybookOrigin, PlaybookStore
-from raven.playbook.triggers import expand_triggers, find_collisions, normalize
+from raven.playbook.triggers import find_collisions, normalize
 from raven.playbook.types import (
     NodeSpec,
     ParamSpec,
@@ -71,7 +71,6 @@ __all__ = [
     "StaticInventory",
     "TriggerIndex",
     "Triggers",
-    "expand_triggers",
     "agent_profiles_from_registry",
     "find_collisions",
     "live_inventory",
