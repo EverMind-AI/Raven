@@ -2,8 +2,8 @@
 
 Public API:
     - ``StrategyRegistry``       — chains TokenStrategy hooks around LLM calls.
-    - ``UsageTracker``           — strategy 1: records tokens + cost per call.
-    - ``CacheOptimizer``         — strategy 2: Anthropic cache_control placement.
+    - ``UsageTracker``           — records tokens + cost per call.
+    - ``CacheOptimizer``         — Anthropic cache_control placement.
     - ``estimate_cost_usd``      — single source of truth for cost estimation.
 
 The ``install_from_config`` assembly helper lives in the assembly root

@@ -19,9 +19,8 @@ from raven.utils.paths import ensure_dir, safe_filename, safe_path_segment
 # because this module has to know which sessions to keep out of an unfiltered
 # list and must not import upward to learn it.
 #
-# Nothing in this tree writes the channel yet -- the subagent transcript writer
-# lands separately. The filter is here anyway because it costs two lines and
-# gets the ordering right: a session store that starts collecting `sub:` files
+# The filter exists before any writer does, and that ordering is the point:
+# a session store that starts collecting `sub:` files
 # before anything knows to exclude them puts machine-generated transcripts in
 # front of every human-facing picker.
 SUBAGENT_CHANNEL = "sub"

@@ -362,7 +362,7 @@ class SandboxDebugServer:
                 pass
 
         async def _watch_disconnect():
-            # P1.3: client disconnect detector. The exec protocol does not expect
+            # Client disconnect detector. The exec protocol does not expect
             # any client→server traffic after the initial command, so a successful
             # readline() (stray data) is ignored, and an empty result means the
             # client closed its half of the socket — at which point we must stop

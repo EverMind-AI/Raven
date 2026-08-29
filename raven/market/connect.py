@@ -5,10 +5,10 @@ everything that has to happen *around* it -- the catalog lookup, the id rules,
 the bounded connect kick, the rollback rule ("authentication failed => the
 plugin was not installed"), the re-authorization retry and the removal.
 
-It moved out of ``raven/rpc/methods/plughub.py`` when it grew a second caller.
-The panel drives it over RPC; the agent's own ``plugin`` tool drives it
-in-process from a turn. A rule with two implementations is two rules, and this
-one decides whether a user's config keeps a server they never authorized.
+Two callers share it: the panel drives it over RPC, the agent's own ``plugin``
+tool drives it in-process from a turn. A rule with two implementations is two
+rules, and this one decides whether a user's config keeps a server they never
+authorized.
 
 Refusals leave as :class:`PlugConnectError` carrying the structured ``data``
 the RPC layer echoes into ``error.data``; that layer translates them to its own

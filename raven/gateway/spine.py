@@ -114,14 +114,13 @@ def _make_gateway_sink(
     sources: dict[str, Source],
     cut_by_reload: Callable[[], bool] | None = None,
 ) -> Callable[[TurnEvent], Awaitable[None]]:
-    """Adapt the hub into the gateway's EventSink, restoring the two lifecycle
-    side effects the bus drainer's ``_dispatch`` had (which the plain hub sink
-    drops): on every turn end fire ``on_turn_complete`` (the WakeScheduler's
-    parked-wake signal), and on a non-cancelled failure deliver a user-visible
-    error reply to the originating channel. A cancelled turn (/stop) fires the
-    wake but sends no reply -- unless ``cut_by_reload`` says a generation swap
-    did the cancelling, in which case the channel is told the reply was cut — mirroring the bus path (CancelledError re-raises
-    without the "Sorry" message) and build_rpc_spine's cancelled-gated emit_error.
+    """Adapt the delivery hub into the gateway's EventSink, with the two
+    lifecycle side effects the plain hub sink does not carry: on TurnEnded or
+    TurnFailed fire ``on_turn_complete`` (the WakeScheduler's parked-wake
+    signal), and on a non-cancelled failure deliver a user-visible error reply
+    to the originating channel. A cancelled turn (/stop) fires the wake and
+    sends no reply -- unless ``cut_by_reload`` says a generation swap did the
+    cancelling, in which case the channel is told the reply was cut.
 
     notify fires on every origin (cron / sentinel / heartbeat / channel), a
     superset of the bus drainer's user-turn-only _dispatch — benign and slightly

@@ -4,9 +4,9 @@ Serializes cross-process (and cross-thread) writers to a shared file by
 taking an exclusive lock on a sibling ``.lock`` anchor via ``portalocker``
 (POSIX ``fcntl.flock`` + Windows ``LockFileEx`` under the hood).
 
-Replaces the previous ``fcntl``-only lock paths that silently degraded to
-*unlocked* on Windows (``import fcntl`` → ``ImportError`` / ``sys.platform ==
-"win32"`` no-op branches), which lost concurrent writes on Windows.
+Used instead of ``fcntl`` directly, which is POSIX-only: an ``import fcntl``
+guarded for Windows degrades to *unlocked* there, and a concurrent write is
+then lost rather than serialized.
 """
 
 from __future__ import annotations

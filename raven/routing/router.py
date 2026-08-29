@@ -3,7 +3,7 @@
 Usage:
     router = ModelRouter(api_key="sk-or-...", profile="balanced")
     await router.initialize()
-    model_id = await router.select_model(user_message)
+    primary, fallbacks = await router.select_model_chain(user_message)
 """
 
 from __future__ import annotations

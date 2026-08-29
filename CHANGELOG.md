@@ -35,6 +35,10 @@ All notable changes to Raven are documented here.
   repo-level `evolver/` tool that drives it. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- Audit pass ten: the leaf packages (gateway, market, ops, routing, sandbox,
+  session, skill_hub, token_wise, utils) state their rules in the present,
+  and the three generated benchmark reports that sat inside
+  `raven/token_wise/` are written to an ignored `reports/` directory instead.
 - Audit pass seven: the memory engine's prose names the files it writes
   (`user.md`, `episodes.md` and their siblings, not MEMORY.md / HISTORY.md),
   the skill forge names its three sources (Local, EverOS, Hub) instead of a

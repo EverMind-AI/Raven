@@ -10,7 +10,7 @@ This module wraps the Hermes logic as a ``TokenStrategy`` so it can be
 installed in Raven's ``StrategyRegistry`` side-by-side with our own
 ``CacheOptimizer`` for A/B comparison.
 
-Key behavioral differences vs Raven's CacheOptimizer:
+How it differs from :class:`~raven.token_wise.cache_optimizer.CacheOptimizer`:
     - Does NOT mark the tools schema (all 4 breakpoints go to messages)
     - Does NOT place a mid-history breakpoint
     - Uses a **rolling tail window** that shifts every iteration / turn
