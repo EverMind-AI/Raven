@@ -56,7 +56,7 @@ def check_ledger(pkg_dir: Path, ledger: dict[str, set[str]]) -> list[str]:
 
 LEDGER = {
     "contract": {
-        # The seven shapes, moved in whole by the S2 full move:
+        # Contract tier: the shapes every shelf implements against.
         "AssembledContext",
         "TokenBudget",
         "AssembledPrefix",
@@ -76,6 +76,7 @@ LEDGER = {
         "Memory",
         "MemoryBackend",
         "ProviderHTTPError",
+        "RAW_ARGUMENTS_KEY",
         "RunMeta",
         "SKIPPED_AFTER_BLOCKED_CALL",
         "Segment",

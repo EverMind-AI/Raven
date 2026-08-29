@@ -173,7 +173,7 @@ async def test_tool_start_carries_blocking_false_for_a_plain_tool(workspace) -> 
 
 
 async def test_tool_complete_truncated_flag(workspace) -> None:
-    from raven.agent.loop.main import _TOOL_PREVIEW_MAX_CHARS
+    from raven.agent.loop._shared import _TOOL_PREVIEW_MAX_CHARS
 
     over = "X" * (_TOOL_PREVIEW_MAX_CHARS + 100)
     tool = _FakeTool("grep", result=over)

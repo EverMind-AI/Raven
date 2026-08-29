@@ -277,7 +277,7 @@ async def test_the_streaming_path_reconnects_instead_of_ending_the_turn() -> Non
     verdict requires that nothing was emitted, which is exactly the condition
     the reconnect below it already tests, so it reconnects instead.
     """
-    from raven.agent.loop.streaming import stream_llm_call
+    from raven.providers.streaming import stream_llm_call
 
     stream = _BlipThenAnswer()
     response = await stream_llm_call(
@@ -295,7 +295,7 @@ async def test_the_streaming_path_reconnects_instead_of_ending_the_turn() -> Non
 async def test_a_stream_that_stays_empty_ends_as_empty_not_as_an_error() -> None:
     """Once the reconnects are spent, the response is what it is. An error
     here would pre-empt the loop's own empty-response recovery."""
-    from raven.agent.loop.streaming import stream_llm_call
+    from raven.providers.streaming import stream_llm_call
 
     response = await stream_llm_call(
         _EmptyStream(),
@@ -484,7 +484,7 @@ async def test_one_blip_is_healed_on_either_path() -> None:
     one path, the stream's own reconnect on the other -- because those are the
     recoveries each path actually has.
     """
-    from raven.agent.loop.streaming import stream_llm_call
+    from raven.providers.streaming import stream_llm_call
 
     streamed = _BlipThenAnswer()
     from_stream = await stream_llm_call(
@@ -700,7 +700,7 @@ async def test_a_vision_turn_with_honest_usage_is_not_reconnected() -> None:
     where the upstream did nothing wrong. Reconnecting sent the picture twice
     and logged a transport failure for it.
     """
-    from raven.agent.loop.streaming import stream_llm_call
+    from raven.providers.streaming import stream_llm_call
 
     class _SilentAboutThePicture:
         generation = GenerationSettings()

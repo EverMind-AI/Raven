@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.agent.loop.main import _strip_inline_images
+from raven.agent.loop._shared import _strip_inline_images
 from raven.agent.tools import media
 from raven.agent.tools.filesystem import ReadFileTool
 from raven.agent.tools.registry import ToolRegistry
@@ -563,7 +563,7 @@ def test_content_part_types_describe_what_raven_produces() -> None:
 def test_read_side_helpers_stay_permissive_about_unknown_parts() -> None:
     """Inbound content carries parts the union does not model (Anthropic
     cache_control, MCP audio, provider extensions). Pass-through must not break."""
-    from raven.agent.loop.main import _strip_inline_images
+    from raven.agent.loop._shared import _strip_inline_images
     from raven.utils.images import estimate_content_part_tokens, is_inline_image
 
     exotic = {"type": "text", "text": "cached", "cache_control": {"type": "ephemeral"}}

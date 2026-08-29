@@ -30,9 +30,9 @@ from unittest.mock import patch
 
 import pytest
 
-from raven.agent.loop.streaming import _finalize_tool_calls
 from raven.providers.azure_openai_provider import AzureOpenAIProvider
 from raven.providers.litellm_provider import LiteLLMProvider
+from raven.providers.streaming import _finalize_tool_calls
 from raven.providers.tool_names import normalized_tool_name, sanitary_form
 
 

@@ -12,7 +12,7 @@ import json
 
 import pytest
 
-from raven.agent.loop.main import _ORIGIN_KEY
+from raven.agent.loop._shared import _ORIGIN_KEY
 from raven.rpc.methods.session import _map_to_wire
 from raven.spine.turn import Origin
 
@@ -127,13 +127,13 @@ def test_the_origins_named_in_the_description_are_the_real_ones() -> None:
 def test_every_origin_but_the_user_is_marked(origin) -> None:
     """Marking only sub-agents would leave cron, sentinel and heartbeat drawing
     their runtime prose as typed words -- the same bug, three more ways in."""
-    from raven.agent.loop.main import _runtime_origin
+    from raven.agent.loop._shared import _runtime_origin
 
     assert _runtime_origin(origin) == str(origin)
 
 
 def test_a_person_typing_is_not_marked() -> None:
-    from raven.agent.loop.main import _runtime_origin
+    from raven.agent.loop._shared import _runtime_origin
 
     assert _runtime_origin(Origin.USER) is None
     assert _runtime_origin(None) is None

@@ -340,6 +340,11 @@ class Tool(ABC):
         }
 
 
+# Where a tool call's arguments are parked when they do not parse as JSON, so the
+# side that reports the parse failure and the side that reads it cannot drift
+# into calling it a missing field.
+RAW_ARGUMENTS_KEY = "_raw_arguments"
+
 __tier__ = "contract"
 __all__ = [
     "ContentPart",
@@ -347,6 +352,7 @@ __all__ = [
     "FileChange",
     "ImagePart",
     "ImageURL",
+    "RAW_ARGUMENTS_KEY",
     "SKIPPED_AFTER_BLOCKED_CALL",
     "TextPart",
     "Tool",

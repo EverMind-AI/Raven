@@ -1,10 +1,9 @@
 """Module-level names of the agent loop, shared by main and its mixins.
 
-``main`` re-exports every runtime name so existing import paths and
-monkeypatch targets keep resolving.
+``main`` and the mixins import what they use from here.
 """
-# ruff: noqa: F401 -- this module IS the re-export payload: every name here is
-# imported by main (which re-exports it) or by a mixin; unused-here is the point.
+# ruff: noqa: F401 -- every name here is imported by main or by a mixin;
+# unused-here is the point.
 
 from __future__ import annotations
 
@@ -37,7 +36,6 @@ from raven.agent.loop.recovery import (
     is_only_think_debris,
     strip_think_blocks,
 )
-from raven.agent.loop.streaming import stream_llm_call
 from raven.agent.subagent import SubagentManager
 from raven.agent.subagent.direct_chat import DirectChatHandoff
 from raven.agent.subagent.spawn_tool import SpawnTool
@@ -71,6 +69,7 @@ from raven.providers.base import (
 from raven.providers.binding import ModelBinding, active_binding, use_binding
 from raven.providers.capabilities import image_placeholder_text, supports_image_tool_result, vision_verdict
 from raven.providers.rates import resolve_context_window
+from raven.providers.streaming import stream_llm_call
 from raven.sandbox import SandboxConfig, SandboxExecutor, SandboxInitError, build_executor
 from raven.session.manager import Session, SessionManager
 from raven.spine.turn import Origin, session_of
