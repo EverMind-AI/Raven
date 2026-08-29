@@ -44,13 +44,8 @@ _SLUG_RE = re.compile(r"[^a-z0-9]+")
 NodeSpec = DagNodeSpec
 """One step of the graph -- the DAG's own node model, not a second definition.
 
-A playbook's ``nodes[]`` used to be declared here, and the two drifted: neither
-was a superset (this one had ``skills`` / ``mcps`` / ``confirm``, the DAG's had
-``inputs``), the step's target field was spelled ``agent`` here and ``subagent``
-there,
-and a field a playbook could write but no graph could carry was silently dropped
-at dispatch. The subset discipline the two are supposed to have -- a playbook's
-fields are a subset of a graph's -- is now structural rather than a rule someone
+``NodeSpec`` is ``DagNodeSpec``, so a playbook's node fields are a subset of a
+graph's by construction rather than a rule someone
 has to remember.
 
 The camelCase wire spelling is unchanged: ``DagNodeSpec`` carries the camel alias

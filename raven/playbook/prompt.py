@@ -353,13 +353,11 @@ COMPOSE_TOOL_NAME = "emit_graph"
 def compose_tool() -> list[dict[str, Any]]:
     """Forced-call schema for prompt-mode graph composition: a bare node list.
 
-    The node schema is found through the model's own reference rather than by
-    name. ``NodeSpec`` is an alias of ``DagNodeSpec`` since the two definitions
-    merged, so pydantic titles the definition ``DagNodeSpec`` and a lookup by the
-    alias returned ``{}`` -- ``items`` went out empty, leaving the prose in
-    ``build_compose_prompt`` as the only field guidance the call had. That was
-    survivable while the two agreed; a model following prose that names a field
-    the model forbids gets one repair round holding nothing but "not permitted".
+    The node schema is found by following the model's own ``$ref`` rather than
+    by name: ``NodeSpec`` is an alias of ``DagNodeSpec``, so pydantic titles the
+    definition ``DagNodeSpec`` and a lookup by the alias answers ``{}`` -- which
+    would send ``items`` out empty and leave the prose in
+    ``build_compose_prompt`` as the call's only field guidance.
     """
     schema = PlaybookSpec.model_json_schema(by_alias=True)
     node_schema = _node_schema_of(schema)

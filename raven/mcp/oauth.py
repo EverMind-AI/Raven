@@ -19,7 +19,7 @@ same pattern). The ``state`` value is read from the authorization URL the SDK
 hands to ``redirect_handler`` — the SDK generates it, we only correlate.
 
 A server's config may also carry the discovery results themselves
-(``MCPOAuthConfig``, filled in by a market install from the catalog entry). When
+(``MCPOAuthConfig``, filled in by a PlugHub install from the catalog entry). When
 it does, :func:`provider_for` seeds them instead of fetching them, so the
 browser opens without the RFC 9728/8414 round trips in front of it -- and with a
 pre-registered ``client_id``, without the registration round trip either. An

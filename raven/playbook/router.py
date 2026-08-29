@@ -1,9 +1,9 @@
 """Which playbooks this turn shows the model, when the library outgrows the prompt.
 
-The library used to be listed whole in ``load_playbook``'s description, which is
-right for the handful of playbooks an install starts with and wrong by the time
-there are a hundred: each one costs a description plus a parameter table, and all
-of it is spent on every turn whether or not anything is relevant.
+Above ``top_k`` the full description is rendered for the top-K only, while the
+name enum stays the whole library: listing every playbook whole costs a
+description plus a parameter table each, spent on every turn whether or not
+anything is relevant.
 
 The narrowing is the same shape as the skill side's
 (:class:`~raven.memory_engine.skill_forge.SkillForgeRouter`): over-fetch, then cut
