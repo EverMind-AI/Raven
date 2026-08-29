@@ -241,7 +241,6 @@ ignore = ["E501"]
 
 # Tracing probe factories take the target class as an argument, named after
 # the class (e.g. `def _install_llm(LLMProvider: type)`) for readability.
-"raven/tracing/instrument.py" = ["N803"]
 
 # The login shell has to be resolved through PATH rather than pinned to an
 # absolute path: a fixed /bin/bash would defeat capturing a login shell that
@@ -421,9 +420,10 @@ name = "the kernel stands alone"
 type = "forbidden"
 # The shippable kernel (papers + spine + tracing) must not reach the rest of
 # the tree at import time -- this is what makes a raven-core wheel a build
-# artifact rather than a refactor. Lazy in-method edges are the named debt
-# below: each fires only inside an LLMProvider method a paper-only consumer
-# never calls, and the list may only shrink.
+# artifact rather than a refactor. The three edges below are tracing's lazy
+# reads of the host (config loader, provider registry, pricing table), each
+# inside a function a kernel-only consumer never calls; the list may only
+# shrink.
 source_modules = ["raven.contracts", "raven.spine", "raven.tracing"]
 forbidden_modules = [
     "raven.acp", "raven.agent", "raven.auth", "raven.browser",

@@ -31,40 +31,6 @@ def load_runtime_config(config: str | None = None, home: str | None = None) -> C
     return loaded
 
 
-def warn_about_pending_cli_reminders(cron_service, config: Config) -> None:
-    """At REPL exit, list cron jobs pinned to channel="cli" that won't fire
-    while the REPL is down. Hint at the config knob that forwards them to
-    a durable channel at trigger time."""
-    from datetime import datetime
-
-    try:
-        jobs = cron_service.list_jobs()
-    except Exception:
-        return
-    now_ms = int(datetime.now().timestamp() * 1000)
-    pending = [
-        j
-        for j in jobs
-        if (j.payload.channel or "") == "cli" and j.state.next_run_at_ms and j.state.next_run_at_ms > now_ms
-    ]
-    if not pending:
-        return
-
-    console.print(f"\n[yellow]⚠  You have {len(pending)} pending CLI reminder(s):[/yellow]")
-    for j in pending:
-        fire = datetime.fromtimestamp(j.state.next_run_at_ms / 1000).strftime("%H:%M")
-        mins = max(0, (j.state.next_run_at_ms - now_ms) // 60_000)
-        console.print(f"   - '{j.name}' at {fire} (in {mins} min)")
-
-    if config.cron.forward_channels == []:
-        console.print(
-            "[dim]   Tip: cron.forward_channels is empty — these reminders will "
-            "be dropped silently when they fire. Run "
-            "`raven cron config set forward_channels '*'` to broadcast to "
-            "all enabled channels.[/dim]"
-        )
-
-
 def print_probe_troubleshooting(provider: str | None) -> None:
     """Common-case hints when a probe fails.
 
@@ -154,5 +120,4 @@ __all__ = [
     "print_config_migration_notices",
     "print_deprecated_memory_window_notice",
     "print_probe_troubleshooting",
-    "warn_about_pending_cli_reminders",
 ]

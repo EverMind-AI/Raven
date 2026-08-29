@@ -12,9 +12,10 @@ All notable changes to Raven are documented here.
   (`raven/core`, where config becomes a running agent through one door,
   `build_runtime`), the shelves (channels, plugins, providers, memory, ...),
   and the entrances (`cli`, `rpc`, `acp`). Three import-linter contracts run
-  in CI with no allowlisted exceptions: inner layers never import an entrance,
-  the twelve channel adapters are mutually independent, and the kernel imports
-  nothing else. The papers hold shapes only (machinery such as provider retry
+  in CI: inner layers never import an entrance (with no allowlisted
+  exceptions), the twelve channel adapters are mutually independent, and the
+  kernel imports nothing else at module level (three lazy tracing reads of the
+  host are named and may only shrink). The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
 - **Generations.** The gateway rebuilds its runtime from config and swaps it in
