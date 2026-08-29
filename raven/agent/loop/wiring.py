@@ -36,9 +36,9 @@ from raven.agent.loop._shared import (
 )
 
 if TYPE_CHECKING:
-    from raven.agent.tools.ask_user import QuestionResponder
     from raven.agent.tools.deliverables import DeliverableStore
     from raven.config.schema import PlaybookConfig, SkillForgeRouterConfig
+    from raven.contracts.asking import QuestionResponder
     from raven.providers.pool import ProviderPool
     from raven.skill_hub import SkillHubClient
 

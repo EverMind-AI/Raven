@@ -16,23 +16,12 @@ from __future__ import annotations
 import asyncio
 import weakref
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any
+
+from raven.contracts.asking import Asker
 
 if TYPE_CHECKING:
     from raven.agent.tools.ask_user import AskUserTool
-
-
-class Asker(Protocol):
-    async def ask(
-        self,
-        prompt: str,
-        choices: list[str] | None,
-        conversation_id: str,
-        *,
-        index: int = 0,
-        total: int = 1,
-        batch: list[dict[str, str]] | None = None,
-    ) -> str | None: ...
 
 
 class AskViaTool:

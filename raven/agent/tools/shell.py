@@ -8,26 +8,13 @@ from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from raven.agent import workdir
 from raven.agent.tools.shell_policy import CommandDecision, ShellCommandPolicy, executable_text
+from raven.contracts.asking import ApprovalResponder
 from raven.contracts.tool import Continuation, Tool, ToolOutput, ToolResult
 from raven.sandbox import DirectExecutor, SandboxExecutor
-
-
-class ApprovalResponder(Protocol):
-    """Turn-scoped capability that can approve one exact shell command."""
-
-    async def await_approval(
-        self,
-        *,
-        conversation_id: str,
-        turn_id: str,
-        tool_call_id: str,
-        command: str,
-        description: str,
-    ) -> bool: ...
 
 
 @dataclass(frozen=True)

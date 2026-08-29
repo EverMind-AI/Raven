@@ -34,6 +34,9 @@ All notable changes to Raven are documented here.
   imports the loop shell it is consumed by. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- The three asking capabilities (`QuestionResponder`, `ApprovalResponder`,
+  `Asker`) are papers in `raven/contracts/asking.py`; the tools and the ACP
+  client type against them from there.
 - Config version floor 4 retires three legacy leaves in the file instead of
   in the schema: `skillForge.skillsDir` becomes the first `skillForge.localDirs`
   entry, `skillForge.massLibraryDb` and `context.engine` are removed, each
