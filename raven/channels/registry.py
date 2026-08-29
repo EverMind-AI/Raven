@@ -29,7 +29,7 @@ def discover_specs() -> dict[str, ChannelSpec]:
         try:
             mod = importlib.import_module(f"{_ADAPTERS_PKG}.{name}.spec")
         except ModuleNotFoundError:
-            continue  # not yet migrated
+            continue
         if (spec := getattr(mod, "SPEC", None)) is not None:
             specs[name] = spec
     return specs
@@ -38,10 +38,8 @@ def discover_specs() -> dict[str, ChannelSpec]:
 def discover_channel_names() -> list[str]:
     """Return adapter names by scanning the adapters package (zero imports).
 
-    Enumerates both flat modules (``slack.py``) and sub-packages
-    (``feishu/``). The scan is one level deep, so helper modules nested
-    inside an adapter sub-package are not listed and never get mistaken
-    for a channel.
+    One sub-package per adapter, one level deep, so helper modules nested
+    inside an adapter are not listed and never get mistaken for a channel.
     """
     import raven.channels.adapters as pkg
 
