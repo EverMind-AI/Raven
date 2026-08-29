@@ -25,6 +25,7 @@ export interface VscodeApi {
       shellPath?: string
       shellArgs?: string[]
       location?: 'editor'
+      env?: Record<string, string>
     }): VscodeTerminal
     onDidCloseTerminal(listener: (terminal: VscodeTerminal) => unknown): VscodeDisposable
     showErrorMessage(message: string, ...actions: string[]): Promise<string | undefined>
@@ -58,6 +59,7 @@ function adaptVscode(vscode: typeof vscodeNs): VscodeApi {
           cwd: options.cwd,
           shellPath: options.shellPath,
           shellArgs: options.shellArgs,
+          env: options.env,
           ...(options.location === 'editor' ? { location: { viewColumn: vscode.ViewColumn.Beside } } : {})
         }),
       onDidCloseTerminal: listener => vscode.window.onDidCloseTerminal(terminal => listener(terminal)),

@@ -6,7 +6,9 @@
  * sits in the file tab row like the OpenCode extension. The terminal process
  * is raven itself (shellPath/shellArgs), so arguments reach it through argv
  * without any host-shell expansion, and a normal TUI exit closes the tab,
- * which resets the manager for the next launch.
+ * which resets the manager for the next launch. The login shell environment
+ * (proxy settings, API keys) is passed through so raven behaves the same as
+ * in a directly opened terminal.
  */
 
 import type { VscodeApi, VscodeDisposable, VscodeTerminal } from './api.js'
@@ -22,7 +24,7 @@ export class TuiTerminalManager {
     return this.terminal !== null
   }
 
-  open(command: RavenCommand, workspacePath: string | undefined): void {
+  open(command: RavenCommand, workspacePath: string | undefined, env?: Record<string, string>): void {
     if (this.terminal) {
       this.terminal.show()
       return
@@ -32,7 +34,8 @@ export class TuiTerminalManager {
       cwd: workspacePath,
       shellPath: command.command,
       shellArgs: command.args,
-      location: 'editor'
+      location: 'editor',
+      env
     })
     this.closeSubscription = this.api.window.onDidCloseTerminal(closed => {
       if (closed !== this.terminal) {
