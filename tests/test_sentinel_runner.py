@@ -483,27 +483,18 @@ def _FakeInbound(
 
 
 @pytest.mark.asyncio
-async def test_on_user_inbound_defers_non_dismiss_to_llm(tmp_path):
-    """Non-/dismiss replies move the nudge to ``_awaiting_llm_feedback``
-    for the main LLM to classify via the nudge_feedback tool — they are
-    NOT immediately recorded as accepted (the legacy behavior was a
-    reverse-signal bug: "不要提醒了" / "stop reminding me" got logged
-    as ACCEPTED and tightened the adaptive quota in the wrong
-    direction)."""
+async def test_on_user_inbound_records_an_unclassified_reply_as_neutral(tmp_path):
+    """Non-/dismiss replies are recorded NEUTRAL: the user engaged, the intent
+    is not read from prose, and neutral never inflates acceptance (the old
+    behavior logged "stop reminding me" as ACCEPTED and tightened the
+    adaptive quota in the wrong direction)."""
     runner, ctx = _build_runner(_decision("nudge"), tmp_path=tmp_path)
     await runner.tick_once()  # dispatch one nudge
     runner.on_user_inbound(_FakeInbound(channel="cli", chat_id="direct", content="thanks!"))
     counts = ctx["feedback"].counts()
-    # Crucially: no accepted/dismissed/neutral on the inbound hook
-    # itself — the LLM hasn't run yet.
-    assert counts["dispatched"] == 1
+    assert counts["neutral"] == 1
     assert counts["accepted"] == 0
-    assert counts["dismissed"] == 0
-    assert counts["neutral"] == 0
-    # Original pending is drained; nudge moved into awaiting queue.
     assert runner._pending_engagement.get("cli:direct", []) == []
-    awaiting = runner._awaiting_llm_feedback.get("cli:direct", [])
-    assert len(awaiting) == 1
 
 
 @pytest.mark.asyncio
@@ -524,96 +515,6 @@ async def test_on_user_inbound_skips_action_origin_turn(tmp_path):
     assert counts["dismissed"] == 0
     assert counts["neutral"] == 0
     assert len(runner._pending_engagement.get("cli:direct", [])) == 1
-    assert runner._awaiting_llm_feedback.get("cli:direct", []) == []
-
-
-@pytest.mark.asyncio
-async def test_consume_feedback_via_tool_records_accepted(tmp_path):
-    runner, ctx = _build_runner(_decision("nudge"), tmp_path=tmp_path)
-    await runner.tick_once()
-    runner.on_user_inbound(_FakeInbound(content="great, thanks"))
-    outcome = runner.consume_feedback_via_tool(
-        "cli:direct",
-        sentiment="accepted",
-        reason="thanked us",
-    )
-    assert outcome["recorded"] is True
-    assert outcome["signal"] == "accepted"
-    counts = ctx["feedback"].counts()
-    assert counts["accepted"] == 1
-    assert counts["dismissed"] == 0
-    assert runner._awaiting_llm_feedback.get("cli:direct", []) == []
-
-
-@pytest.mark.asyncio
-async def test_consume_feedback_via_tool_records_dismissed(tmp_path):
-    """Natural-language dismissal classified by the main LLM: behaves
-    identically to the deterministic /dismiss fast path (records
-    dismissed + applies session cooldown via NudgePolicy)."""
-    clock = _Clock(datetime(2026, 4, 21, 14, 0, 0))
-    runner, ctx = _build_runner(_decision("nudge"), tmp_path=tmp_path, clock=clock)
-    await runner.tick_once()
-    runner.on_user_inbound(_FakeInbound(content="不要提醒了"))
-    outcome = runner.consume_feedback_via_tool(
-        "cli:direct",
-        sentiment="dismissed",
-        reason="不要提醒了",
-    )
-    assert outcome["signal"] == "dismissed"
-    counts = ctx["feedback"].counts()
-    assert counts["dismissed"] == 1
-    assert counts["accepted"] == 0
-    # Cooldown applied — match the /dismiss fast-path test's assertion.
-    clock.advance(65)
-    verdict = ctx["policy"].check("nudge", "cli:direct", "other msg", "low")
-    assert verdict.verdict == "deny"
-    assert "dismissed" in verdict.reason
-
-
-@pytest.mark.asyncio
-async def test_consume_feedback_via_tool_records_neutral_on_irrelevant(tmp_path):
-    runner, ctx = _build_runner(_decision("nudge"), tmp_path=tmp_path)
-    await runner.tick_once()
-    runner.on_user_inbound(_FakeInbound(content="oh by the way, what's the weather"))
-    outcome = runner.consume_feedback_via_tool(
-        "cli:direct",
-        sentiment="irrelevant",
-        reason="user switched topic",
-    )
-    assert outcome["signal"] == "neutral"
-    counts = ctx["feedback"].counts()
-    assert counts["neutral"] == 1
-    assert counts["accepted"] == 0
-    assert counts["dismissed"] == 0
-
-
-@pytest.mark.asyncio
-async def test_consume_feedback_via_tool_no_awaiting_is_noop(tmp_path):
-    runner, ctx = _build_runner(_decision("skip"), tmp_path=tmp_path)
-    outcome = runner.consume_feedback_via_tool(
-        "cli:direct",
-        sentiment="accepted",
-    )
-    assert outcome["recorded"] is False
-    assert outcome["reason"] == "no_awaiting_nudge"
-    assert ctx["feedback"].counts()["accepted"] == 0
-
-
-@pytest.mark.asyncio
-async def test_finalize_pending_feedback_records_neutral(tmp_path):
-    """When the turn ends without the LLM calling nudge_feedback, the
-    after_send hook flushes anything still awaiting as NEUTRAL — by
-    design this never falls back to ACCEPTED."""
-    runner, ctx = _build_runner(_decision("nudge"), tmp_path=tmp_path)
-    await runner.tick_once()
-    runner.on_user_inbound(_FakeInbound(content="hmm"))
-    # LLM didn't call the tool — simulate after_send.
-    n = runner.finalize_pending_feedback("cli:direct")
-    assert n == 1
-    counts = ctx["feedback"].counts()
-    assert counts["neutral"] == 1
-    assert counts["accepted"] == 0
-    assert runner._awaiting_llm_feedback.get("cli:direct", []) == []
 
 
 @pytest.mark.asyncio
@@ -662,7 +563,6 @@ async def test_on_user_inbound_different_session_untouched(tmp_path):
     # Original pending is still there — different session, untouched.
     assert len(runner._pending_engagement.get("cli:direct", [])) == 1
     # And nothing got deferred to awaiting on the unrelated session.
-    assert runner._awaiting_llm_feedback.get("telegram:home", []) == []
 
 
 @pytest.mark.asyncio
@@ -685,10 +585,9 @@ async def test_on_user_inbound_handles_missing_session_key(tmp_path):
 #
 # These cover the longrun / gateway split where ``sentinel ticks --live``
 # dispatches in one subprocess and ``agent --message`` handles user replies
-# in another. Without the store the in-memory ``_pending_engagement`` /
-# ``_awaiting_llm_feedback`` dicts vanish at subprocess exit, leaving
-# every reply unable to correlate back to its dispatch — meaning the new
-# nudge_feedback tool path can never be exercised.
+# in another. Without the store the in-memory ``_pending_engagement`` dict
+# vanishes at subprocess exit, leaving every reply unable to correlate back
+# to its dispatch.
 
 from raven.proactive_engine.sentinel.feedback.persistence import JsonStateStore
 
@@ -795,10 +694,10 @@ async def test_cross_instance_dismiss(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_cross_instance_consume_feedback_via_tool(tmp_path):
-    """Dispatch in A; non-/dismiss inbound on B → defers to awaiting
-    queue persisted via store. Instance C calls consume_feedback_via_tool
-    and finds the awaiting entry."""
+async def test_cross_instance_reply_records_neutral_and_clears_the_shared_queue(tmp_path):
+    """Dispatch in A; a non-/dismiss inbound on B records NEUTRAL on B and
+    clears the pending entry in the shared store, so a third instance sees
+    nothing left to correlate."""
     state_path = tmp_path / "state.json"
     runner_a, _ = _build_runner_with_store(
         _decision("nudge"),
@@ -806,28 +705,17 @@ async def test_cross_instance_consume_feedback_via_tool(tmp_path):
         store=JsonStateStore(state_path),
     )
     await runner_a.tick_once()
-
-    runner_b, _ = _build_runner_with_store(
+    runner_b, ctx_b = _build_runner_with_store(
         _decision("skip"),
         tmp_path=tmp_path,
         store=JsonStateStore(state_path),
     )
     runner_b.on_user_inbound(_FakeInbound(content="thanks!"))
-    # Deferred — neither accepted nor dismissed yet.
+    assert ctx_b["feedback"].counts()["neutral"] == 1
     assert runner_b._pending_engagement.get("cli:direct", []) == []
-    assert "cli:direct" in runner_b._awaiting_llm_feedback
-
-    # New instance C: simulates the in-ReAct nudge_feedback tool call.
-    runner_c, ctx_c = _build_runner_with_store(
+    runner_c, _ = _build_runner_with_store(
         _decision("skip"),
         tmp_path=tmp_path,
         store=JsonStateStore(state_path),
     )
-    outcome = runner_c.consume_feedback_via_tool(
-        "cli:direct",
-        sentiment="accepted",
-        reason="thanked",
-    )
-    assert outcome["recorded"] is True
-    assert outcome["signal"] == "accepted"
-    assert ctx_c["feedback"].counts()["accepted"] == 1
+    assert runner_c._pending_engagement.get("cli:direct", []) == []
