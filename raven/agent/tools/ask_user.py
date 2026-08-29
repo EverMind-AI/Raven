@@ -17,40 +17,15 @@ import asyncio
 import json
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any
 
+from raven.contracts.asking import QuestionResponder
 from raven.contracts.tool import Tool, ToolResult
 
 # Last-resort wait for one whole call when the responder exposes no
 # ``default_timeout_s`` of its own. The broker machinery ships the same value;
 # duplicated rather than imported so this module names no concrete machine.
 DEFAULT_TIMEOUT_S = 600.0
-
-
-class QuestionResponder(Protocol):
-    """Turn-scoped capability that can put questions to the user and await
-    answers.
-
-    The paper the tools type against -- the concrete broker lives with the
-    transport that constructs it and is injected at assembly (mirror of
-    ``ApprovalResponder`` in ``shell.py``). Structural: no machine imports
-    this, nothing here imports a machine.
-    """
-
-    async def await_question(
-        self,
-        conversation_id: str,
-        *,
-        prompt: str,
-        choices: list[str] | None = None,
-        default: str = "",
-        timeout_s: float | None = None,
-        header: str = "",
-        recommended: str = "",
-        index: int = 0,
-        total: int = 1,
-        batch: list[dict[str, Any]] | None = None,
-    ) -> str: ...
 
 
 # How many times an argument may be JSON-decoded before it is treated as text.

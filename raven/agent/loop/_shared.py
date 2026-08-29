@@ -162,7 +162,6 @@ def _first_line(text: str) -> str:
 if TYPE_CHECKING:
     from raven.agent.hook import CompositeHook
     from raven.agent.loop.checkpoint import CheckpointService
-    from raven.agent.tools.ask_user import QuestionResponder
     from raven.agent.tools.deliverables import DeliverableStore
     from raven.agent.workdir import WorkdirResolver
     from raven.config.raven import (
@@ -181,6 +180,7 @@ if TYPE_CHECKING:
         PlaybookConfig,
     )
     from raven.context_engine import ContextEngine
+    from raven.contracts.asking import QuestionResponder
     from raven.contracts.memory import MemoryBackend
     from raven.contracts.token_strategy import UsageSnapshot
     from raven.contracts.tool import Tool

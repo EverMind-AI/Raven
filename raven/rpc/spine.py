@@ -24,7 +24,8 @@ from typing import Any
 from raven.agent.spine_runner import AgentTurnRunner
 from raven.agent.tools.ask_user import AskUserTool
 from raven.agent.tools.message import MessageTool
-from raven.agent.tools.shell import ApprovalResponder, ExecTool
+from raven.agent.tools.shell import ExecTool
+from raven.contracts.asking import ApprovalResponder
 from raven.rpc.subscriptions import SubscriptionEmitter
 from raven.spine import (
     Deliverable,

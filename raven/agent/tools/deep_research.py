@@ -22,8 +22,8 @@ import httpx
 from loguru import logger
 
 from raven.agent import workdir
-from raven.agent.tools.ask_user import QuestionResponder
 from raven.config.schema import DeepResearchToolConfig
+from raven.contracts.asking import QuestionResponder
 from raven.contracts.tool import Tool
 
 DEFAULT_BASE_URL = "https://api.miromind.ai/v1"

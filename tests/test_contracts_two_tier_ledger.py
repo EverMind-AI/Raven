@@ -57,6 +57,8 @@ def check_ledger(pkg_dir: Path, ledger: dict[str, set[str]]) -> list[str]:
 LEDGER = {
     "contract": {
         # Contract tier: the shapes every shelf implements against.
+        "ApprovalResponder",
+        "Asker",
         "AssembledContext",
         "TokenBudget",
         "AssembledPrefix",
@@ -76,6 +78,7 @@ LEDGER = {
         "Memory",
         "MemoryBackend",
         "ProviderHTTPError",
+        "QuestionResponder",
         "RAW_ARGUMENTS_KEY",
         "RunMeta",
         "SKIPPED_AFTER_BLOCKED_CALL",

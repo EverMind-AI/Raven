@@ -52,11 +52,11 @@ from raven.agent.loop.wiring import WiringMixin
 if TYPE_CHECKING:
     from raven.agent.hook import CompositeHook
     from raven.agent.loop.checkpoint import CheckpointService
-    from raven.agent.tools.ask_user import QuestionResponder
     from raven.config.schema import (
         DeepResearchToolConfig,
     )
     from raven.context_engine import ContextEngine
+    from raven.contracts.asking import QuestionResponder
     from raven.contracts.memory import MemoryBackend
     from raven.contracts.tool import Tool
     from raven.mcp.manager import MCPConnectionManager
