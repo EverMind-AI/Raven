@@ -21,7 +21,7 @@ from raven.providers import model_catalog_cache, rates
 from raven.providers.base import send_max_tokens
 from raven.providers.litellm_setup import import_litellm
 from raven.providers.rates import (
-    _FALLBACK_PRICING,
+    _FALLBACK_RATES,
     resolve_context_window,
     token_rates,
 )
@@ -317,8 +317,8 @@ def test_the_hijacked_model_reports_neither_a_price_nor_a_window(monkeypatch):
 
 
 def test_the_manual_table_answers_a_model_too_new_for_the_others():
-    model = next(iter(_FALLBACK_PRICING))
-    p_rate, c_rate = _FALLBACK_PRICING[model]
+    model = next(iter(_FALLBACK_RATES))
+    p_rate, c_rate = _FALLBACK_RATES[model]
 
     assert _rate_cost(model, 1000, 500) == pytest.approx(1000 * p_rate + 500 * c_rate, rel=0.01)
 
