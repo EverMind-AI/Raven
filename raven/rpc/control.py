@@ -33,12 +33,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import secrets
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from aiohttp import WSMsgType, web
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from raven.rpc.errors import RpcError
 
 if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
@@ -60,9 +63,13 @@ CHARTER: frozenset[str] = frozenset(
 
 
 class _Strict(BaseModel):
-    """Base class for control-plane models -- forbids extra fields."""
+    """Base class for control-plane models: no extra fields, no lax coercion.
 
-    model_config = ConfigDict(extra="forbid")
+    Strict on purpose -- the models are the contract, so a string "false"
+    for a boolean is a -32602, not a forced reload.
+    """
+
+    model_config = ConfigDict(extra="forbid", strict=True)
 
 
 class RebindState(_Strict):
@@ -175,6 +182,21 @@ class ShutdownResult(_Strict):
     ok: bool
 
 
+class InvalidControlParamsError(RpcError):
+    """Params that do not fit the method's declared model (JSON-RPC -32602)."""
+
+    CODE = -32602
+    MESSAGE = "invalid_params"
+
+
+def _params(model: type[BaseModel], params: dict) -> BaseModel:
+    try:
+        return model.model_validate(params or {})
+    except ValidationError as exc:
+        first = exc.errors()[0] if exc.errors() else {}
+        raise InvalidControlParamsError(str(first.get("msg", "invalid params")), data={"errors": exc.errors()}) from exc
+
+
 CONTROL_METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "gateway.channels.qr": (ChannelsQrParams, ChannelsQrResult),
     "gateway.channels.start": (ChannelsStartParams, ChannelsStartResult),
@@ -235,7 +257,7 @@ def register_control_methods(
         ``qr_text`` carries the raw payload for the client to render when the
         gateway has no ``qrcode`` to rasterise with.
         """
-        name = params.get("name", "")
+        name = _params(ChannelsQrParams, params).name or ""
         ch = channel_manager.get_channel(name) if channel_manager is not None else None
         qr = getattr(ch, "pending_qr", None) if ch is not None else None
         running = ch is not None and bool(getattr(ch, "is_running", False))
@@ -261,8 +283,9 @@ def register_control_methods(
         launch: no adapter, no QR to scan, no messages. ``outcome`` is a word
         from ChannelManager, every value of which is a state the caller draws.
         """
-        name = str(params.get("name") or "")
-        want_on = params.get("enabled")
+        args = _params(ChannelsStartParams, params)
+        name = args.name or ""
+        want_on = args.enabled
         if channel_manager is None:
             return {"outcome": "no_manager"}
         if want_on is False:
@@ -306,9 +329,10 @@ def register_control_methods(
         questions are cancelled, and a mounted page reconnects. ``busy`` is
         the refusal for a gateway with work in flight; ``force`` overrides it.
         """
+        args = _params(ReloadParams, params)
         if request_swap is None:
             return {"ok": False, "reason": "unavailable"}
-        return await request_swap(bool(params.get("force", False)))
+        return await request_swap(args.force)
 
     async def _status(params: dict) -> dict:
         if status is None:
@@ -362,19 +386,29 @@ class ControlPlaneServer:
         return self._bound
 
     async def _handle_ws(self, request: web.Request) -> web.WebSocketResponse:
+        # No browser is a legitimate client of this plane: an Origin header
+        # means a page is trying to reach it, and the answer is no before the
+        # upgrade, whatever token it might go on to send.
+        if request.headers.get("Origin"):
+            raise web.HTTPForbidden(reason="control plane accepts no browser origin")
         ws = web.WebSocketResponse(max_msg_size=MAX_FRAME_BYTES)
         await ws.prepare(request)
         if not await self._check_auth(ws):
             await ws.close()
             return ws
         self._clients.add(ws)
+        pending: set[asyncio.Task] = set()
         try:
             async for msg in ws:
                 if msg.type == WSMsgType.TEXT:
-                    asyncio.create_task(self._handle_frame(ws, msg.data))
+                    task = asyncio.create_task(self._handle_frame(ws, msg.data))
+                    pending.add(task)
+                    task.add_done_callback(pending.discard)
                 elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE, WSMsgType.CLOSING):
                     break
         finally:
+            for task in pending:
+                task.cancel()
             self._clients.discard(ws)
         return ws
 
@@ -385,7 +419,7 @@ class ControlPlaneServer:
         except Exception:
             logger.error("control plane: token not received; closing connection")
             return False
-        if first.type != WSMsgType.TEXT or first.data.strip() != self._auth_token:
+        if first.type != WSMsgType.TEXT or not secrets.compare_digest(first.data.strip(), self._auth_token):
             logger.error("control plane: token mismatch; closing connection")
             return False
         return True
@@ -427,8 +461,17 @@ class ControlPlaneServer:
         await self._runner.setup()
         site = web.TCPSite(self._runner, self._host, self._port)
         await site.start()
-        self._bound = (self._host, self._port)
-        logger.info("control plane: listening on ws://{}:{}/ws", self._host, self._port)
+        # Read the port back from the listening socket so port 0 works and
+        # the published endpoint is the one actually bound.
+        port = self._port
+        for sock in getattr(getattr(site, "_server", None), "sockets", None) or ():
+            try:
+                port = int(sock.getsockname()[1])
+                break
+            except Exception:
+                continue
+        self._bound = (self._host, port)
+        logger.info("control plane: listening on ws://{}:{}/ws", self._host, port)
         return self._bound
 
     async def serve(self) -> None:

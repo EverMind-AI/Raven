@@ -17,7 +17,7 @@ from raven.utils.atomic_io import atomic_replace, atomic_update
 # than on every load -- the watermark is what lets a user re-set by hand
 # whatever a migration cleared. Kept out of the schema on purpose: see
 # ``_stamp_path``.
-CURRENT_CONFIG_VERSION = 2
+CURRENT_CONFIG_VERSION = 3
 
 # The generation that introduced each run-once migration. Each is gated on its
 # own floor rather than on "is this config current", because those are not the
@@ -29,6 +29,7 @@ CURRENT_CONFIG_VERSION = 2
 # notice invited them to. Adding a migration means adding a floor here.
 _CONTEXT_WINDOW_MIGRATION = 1
 _AUTO_PROVIDER_MIGRATION = 2
+_RETIRED_GATEWAY_WEB_MIGRATION = 3
 
 # The context window every pre-0.1.11 bootstrap wrote to disk verbatim: back
 # then ``AgentDefaults.context_window_tokens`` defaulted to this number and
@@ -354,6 +355,8 @@ def _persist_migrations(path: Path, from_version: int = 0) -> None:
                 changed = _migrate_legacy_context_window(raw) or changed
             if from_version < _AUTO_PROVIDER_MIGRATION:
                 changed = _migrate_auto_provider(raw) or changed
+            if from_version < _RETIRED_GATEWAY_WEB_MIGRATION:
+                changed = _migrate_retired_gateway_web(raw) or changed
         if not changed:
             return None, True
         return json.dumps(raw, indent=2, ensure_ascii=False), True
@@ -497,7 +500,8 @@ def _migrate_retired_gateway_web(data: dict[str, Any], *, notify: bool = False) 
     no configuration (loopback, per-boot token, endpoint published in the
     lock), and proactive output that ``enabled: true`` used to route to a
     channel with no clients now reaches the IM channels and the page.
-    Idempotent and unversioned: the key can only be stale.
+    Run once per config through the version floor, and persisted like its
+    two predecessors, so the file loses the key and the notice fires once.
     """
     gateway = data.get("gateway")
     if not isinstance(gateway, dict) or "web" not in gateway:
@@ -535,7 +539,8 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True, from_version
         _migrate_legacy_context_window(data, notify=True)
     if from_version < _AUTO_PROVIDER_MIGRATION:
         _migrate_auto_provider(data, notify=True)
-    _migrate_retired_gateway_web(data, notify=True)
+    if from_version < _RETIRED_GATEWAY_WEB_MIGRATION:
+        _migrate_retired_gateway_web(data, notify=True)
 
     # Move tools.exec.restrictToWorkspace → tools.restrictToWorkspace
     tools = data.get("tools", {})

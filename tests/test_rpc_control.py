@@ -38,9 +38,16 @@ def test_the_server_module_reaches_nothing_inner_at_import_time() -> None:
     client. A module-level import of raven.gateway here would invert that."""
     src = Path(__file__).resolve().parents[1] / "raven" / "rpc" / "control.py"
     tree = ast.parse(src.read_text(encoding="utf-8"))
-    for node in tree.body:
-        if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("raven."):
-            assert not node.module.startswith("raven.gateway"), node.module
+
+    def _is_gateway(name: str) -> bool:
+        return name == "raven.gateway" or name.startswith("raven.gateway.")
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            assert not _is_gateway(node.module), node.module
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                assert not _is_gateway(alias.name), alias.name
 
 
 async def test_host_commands_answer_unavailable_without_their_closures() -> None:
@@ -68,18 +75,16 @@ async def test_reload_relays_the_coordinator_reply_and_the_force_flag() -> None:
 
 
 async def test_the_token_gate_closes_a_wrong_first_frame_and_answers_the_right_one() -> None:
-    aiohttp = pytest.importorskip("aiohttp")
-    from raven.rpc.transports.ws import pick_port
+    import aiohttp
 
-    port = await pick_port(18901)
     d = Dispatcher()
     register_control_methods(d, channel_manager=None, status=lambda: {
         "pid": 1, "started_at": 0.0, "generation": 3, "swap_in_flight": False, "config_path": "", "page": {},
     })
-    server = ControlPlaneServer(port, auth_token="s3cret")
+    server = ControlPlaneServer(0, auth_token="s3cret")
     server.bind(d)
     host, bound = await server.start()
-    assert (host, bound) == ("127.0.0.1", port)
+    assert host == "127.0.0.1" and bound > 0
     url = f"ws://{host}:{bound}/ws"
     try:
         async with aiohttp.ClientSession() as session:
@@ -363,3 +368,35 @@ async def test_the_qr_poll_carries_the_rebind_phase() -> None:
     r = (await _dispatch(d, "gateway.channels.qr", {"name": "weixin"}))["result"]
     assert r["rebind"]["phase"] == "waiting"
     assert r["rebind"]["code_age_s"] == 4.0
+
+
+def test_the_control_app_serves_only_the_socket() -> None:
+    """No deliverable download routes ride the control port; those stay on the
+    page transport behind its session guard."""
+    src = (Path(__file__).resolve().parents[1] / "raven" / "rpc" / "control.py").read_text(encoding="utf-8")
+    start_src = src[src.index("async def start(self)") : src.index("async def serve(self)")]
+    assert start_src.count("add_get(") == 1 and '"/ws"' in start_src
+    assert "add_files_routes" not in src
+
+
+def test_the_gateway_publishes_the_endpoint_only_after_the_site_bound() -> None:
+    src = (Path(__file__).resolve().parents[1] / "raven" / "cli" / "gateway_commands.py").read_text(encoding="utf-8")
+    assert src.index("await control.start()") < src.index("publish_web_endpoint(bound_host, bound_port, control_token)")
+
+
+async def test_params_are_validated_against_the_declared_models() -> None:
+    """The models are the contract, not documentation: a string 'false' for
+    force is -32602, not a forced reload."""
+    seen: list[bool] = []
+
+    async def _swap(force: bool) -> dict:
+        seen.append(force)
+        return {"ok": True}
+
+    d = Dispatcher()
+    register_control_methods(d, channel_manager=None, request_swap=_swap)
+    bad = await _dispatch(d, "gateway.reload", {"force": "false"})
+    assert bad["error"]["code"] == -32602
+    extra = await _dispatch(d, "gateway.channels.start", {"name": "x", "bogus": 1})
+    assert extra["error"]["code"] == -32602
+    assert seen == []

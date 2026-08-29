@@ -779,7 +779,12 @@ def test_gateway_stop_defers_to_raven_web_when_supervised(monkeypatch) -> None:
 
     monkeypatch.setattr(serve_commands, "_read_web_state", lambda: 12345)
     called: list[str] = []
-    monkeypatch.setattr(live_probe, "shutdown", _async_value(True))
+
+    async def _shutdown():
+        called.append("shutdown")
+        return True
+
+    monkeypatch.setattr(live_probe, "shutdown", _shutdown)
     r = runner.invoke(app, ["gateway", "stop"])
     assert r.exit_code == 1
     # Rich wraps at the runner's width; compare whitespace-normalized.
@@ -787,9 +792,37 @@ def test_gateway_stop_defers_to_raven_web_when_supervised(monkeypatch) -> None:
     assert called == []
 
 
-def test_the_bare_gateway_command_still_starts_the_daemon_path(monkeypatch) -> None:
+def test_the_gateway_group_lists_its_verbs(monkeypatch) -> None:
     """The group's callback is the daemon; a sub-command must not fall into it
     and the bare command must not be swallowed by the group."""
     r = runner.invoke(app, ["gateway", "--help"])
     assert r.exit_code == 0
     assert "reload" in r.stdout and "status" in r.stdout and "stop" in r.stdout
+
+
+def test_gateway_stop_asks_the_control_plane_when_unsupervised(monkeypatch) -> None:
+    from raven.cli import serve_commands
+    from raven.gateway import live_probe
+
+    monkeypatch.setattr(serve_commands, "_read_web_state", lambda: None)
+    monkeypatch.setattr(live_probe, "shutdown", _async_value(True))
+    r = runner.invoke(app, ["gateway", "stop"])
+    assert r.exit_code == 0 and "stopping" in r.stdout
+
+
+def test_gateway_reload_renders_build_failed_and_no_gateway(monkeypatch) -> None:
+    from raven.gateway import live_probe
+
+    async def _failed(**_k):
+        return {"ok": False, "reason": "build_failed", "error": "ValueError: boom"}
+
+    monkeypatch.setattr(live_probe, "reload", _failed)
+    r = runner.invoke(app, ["gateway", "reload"])
+    assert r.exit_code == 1 and "build_failed" in r.stdout and "boom" in r.stdout
+
+    async def _nobody(**_k):
+        return None
+
+    monkeypatch.setattr(live_probe, "reload", _nobody)
+    r = runner.invoke(app, ["gateway", "reload"])
+    assert r.exit_code == 1 and "No running gateway" in r.stdout

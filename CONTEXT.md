@@ -906,7 +906,7 @@ swap at a time (`SwapCoordinator`: the slot is held from BUILD until right befor
 loop runs, and accepted swaps are rate-limited). Honest timing: the serving loop stops
 within ~1s of the request; in-flight turns get `gateway.shutdown_grace` and are then
 cancelled. Triggers: `gateway.reload` on the Control Plane (cross-platform) and SIGHUP
-(POSIX alias).
+(POSIX alias of `reload --force`; a signal has no reply channel).
 _Avoid_: "hot reload" (that is `reload.mcp`, a tool-set reconcile inside one generation);
 "restart" (the `/restart` control command, a whole-process execv).
 

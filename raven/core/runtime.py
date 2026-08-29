@@ -184,7 +184,11 @@ class SwapCoordinator:
 
     def __init__(self, *, min_interval_s: float = 5.0, clock: Callable[[], float] = time.monotonic) -> None:
         self.generation = 1
-        self._in_flight = False
+        # Claimed from birth: generation 1 is being wired until the serving
+        # loop's first release(), and a swap accepted in that window would
+        # stop a loop that has not started -- the same hole, at boot.
+        self._in_flight = True
+        self._booting = True
         self._swapping = False
         self._candidate: SwapCandidate | None = None
         self._last_accept: float | None = None
@@ -199,7 +203,7 @@ class SwapCoordinator:
     def begin(self) -> str | None:
         """Claim the swap slot; None when claimed, else the refusal reason."""
         if self._in_flight:
-            return "swap_in_flight"
+            return "booting" if self._booting else "swap_in_flight"
         now = self._clock()
         if self._last_accept is not None and now - self._last_accept < self._min_interval_s:
             return "too_soon"
@@ -229,6 +233,7 @@ class SwapCoordinator:
         if self._swapping:
             self.generation += 1
             self._swapping = False
+        self._booting = False
         self._in_flight = False
 
     def track(self, task: asyncio.Task) -> None:

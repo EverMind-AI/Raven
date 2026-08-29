@@ -37,6 +37,10 @@ if TYPE_CHECKING:
 
 console = Console()
 
+# Minimum spacing between accepted generation swaps (each one cancels every
+# in-flight turn and reconnects MCP); see SwapCoordinator.
+_SWAP_MIN_INTERVAL_S = 5.0
+
 
 
 def _risk_banner(config) -> str | None:
@@ -742,13 +746,15 @@ def register(app: typer.Typer) -> None:
 
             from raven.core.runtime import SwapCandidate, SwapCoordinator
 
-            swaps = SwapCoordinator(min_interval_s=config.gateway.shutdown_grace)
+            # Spacing between accepted swaps is its own number, not the
+            # teardown grace: a grace of 0 must not switch the storm guard off.
+            swaps = SwapCoordinator(min_interval_s=_SWAP_MIN_INTERVAL_S)
 
             async def _unbind_generation():
                 # The generation slice of the shutdown path, in the same
                 # order; the process-lifetime transports (channels, cron,
-                # sentinel, web socket, health) stay up through a swap.
-                nonlocal page_mount
+                # sentinel, control plane, health) stay up through a swap.
+                nonlocal gw_teardown, page_mount
                 if heartbeat is not None:
                     heartbeat.stop()
                 if question_broker is not None:
@@ -763,6 +769,7 @@ def register(app: typer.Typer) -> None:
                     page_mount = None
                 if gw_teardown is not None:
                     await gw_teardown()
+                    gw_teardown = None
                 await runtime.dispose()
 
             async def _request_swap() -> dict:
@@ -820,7 +827,14 @@ def register(app: typer.Typer) -> None:
                 }
 
             def _on_sighup() -> None:
-                swaps.track(asyncio.create_task(_request_swap()))
+                # A signal has no reply channel, so it is the forced form of
+                # gateway.reload; a refusal is logged since nobody else hears it.
+                async def _signalled() -> None:
+                    reply = await _reload(force=True)
+                    if not reply.get("ok"):
+                        _logger.warning("SIGHUP reload refused: {}", reply.get("reason"))
+
+                swaps.track(asyncio.create_task(_signalled()))
 
             async def _serve_generations():
                 # One iteration per generation: agent.run() returning with a
@@ -865,7 +879,7 @@ def register(app: typer.Typer) -> None:
                         )
                         raise
                     await heartbeat.start()
-                    _logger.info("generation swap complete; generation {} is serving", swaps.generation + 1)
+                    _logger.info("generation {} wired; starting", swaps.generation + 1)
 
             # The control plane: process-lifetime, registered once. Nothing on
             # it depends on the generation, so nothing here rebinds at a swap;
@@ -897,15 +911,18 @@ def register(app: typer.Typer) -> None:
                 nonlocal shutdown_requested
                 shutdown_requested = True
                 if main_task is not None:
-                    main_task.cancel()
+                    # One tick later, so the {ok: true} reply leaves before
+                    # the teardown closes the control socket.
+                    asyncio.get_running_loop().call_soon(main_task.cancel)
 
             async def _reload(force: bool) -> dict:
                 # A swap cancels every in-flight turn, sub-agent and pending
                 # question; refuse while there is work unless told to force.
                 if not force:
-                    pending = getattr(question_broker, "_pending", None) if question_broker is not None else None
-                    questions = len(pending) if hasattr(pending, "__len__") else 0
-                    subagents = len(getattr(agent.subagents, "_running_tasks", None) or {})
+                    questions = question_broker.pending_count() if question_broker is not None else 0
+                    if page_mount is not None:
+                        questions += page_mount.question_broker.pending_count()
+                    subagents = agent.subagents.get_running_count()
                     if agent.is_processing or questions or subagents:
                         return {"ok": False, "reason": "busy", "subagents": subagents, "questions": questions}
                 return await _request_swap()
@@ -923,10 +940,10 @@ def register(app: typer.Typer) -> None:
             # from the historical default. Local clients read both from the
             # lock payload, the same way `doctor` finds the gateway.
             control_token = secrets.token_urlsafe(24)
-            control = ControlPlaneServer(await pick_port(8765), auth_token=control_token)
-            control.bind(control_dispatcher)
 
             try:
+                control = ControlPlaneServer(await pick_port(8765), auth_token=control_token)
+                control.bind(control_dispatcher)
                 bound_host, bound_port = await control.start()
                 publish_web_endpoint(bound_host, bound_port, control_token)
                 console.print(f"[green]✓[/green] Control plane: ws://{bound_host}:{bound_port}/ws")
