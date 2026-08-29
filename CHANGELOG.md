@@ -6,6 +6,21 @@ All notable changes to Raven are documented here.
 
 ### Changed
 
+- `setup.status` now reads the config file `RAVEN_HOME` points at, like every
+  other reader; it used to answer for `~/.raven/config.json` regardless.
+- `raven channels *` and the gateway no longer warn that `channels.sendProgress`
+  / `channels.sendToolHints` "is not a table": section-wide settings are not
+  channels whose cargo failed to parse.
+- The bundled EverOS plugin declares the keys the onboarding wizard records
+  (`root`, `owned`, `agent_id`, `user_id`), so a boot no longer warns about
+  each of them; an invalid type now fails loudly at activation instead.
+- A context builder that runs after the prefix is assembled (the Curator)
+  now degrades like the others: its segment is dropped and named, the turn
+  runs on. Chat channels render that one notice as its own short line, so an
+  answer produced without long-term memory says so.
+- `raven sentinel tick` builds the same Sentinel stack the gateway runs
+  (shared state store, pending decisions, routines), so a CLI tick reads and
+  writes the quotas a live gateway would instead of a private copy.
 - **Architecture, v0.2.0.** The runtime is now layered by binding time and the
   boundaries are machine-enforced: a frozen kernel (`raven/spine`), the papers
   (`raven/contracts`, every interface a shelf implements), the assembly root
@@ -29,7 +44,9 @@ All notable changes to Raven are documented here.
   gateway dispenses through. Existing config files load unchanged.
 - The gateway's web channel is retired and its endpoint becomes the gateway
   **control plane** (`ws://127.0.0.1:<port>/ws`, loopback, per-boot token
-  published in the gateway lock): six methods only -- `gateway.channels.live`,
+  published in the gateway lock; for this one release the lock also carries the
+  older `web_*` spelling of that address, so a reader from the previous release
+  still finds it): six methods only -- `gateway.channels.live`,
   `.qr`, `.start`, `gateway.status`, `gateway.reload`, `gateway.shutdown`.
   `raven gateway reload|status|stop` drive it from the CLI; `reload` rebuilds the
   runtime from config and swaps it in without a restart (SIGHUP stays as the
