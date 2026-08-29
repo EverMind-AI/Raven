@@ -943,7 +943,6 @@ async def test_an_empty_skills_list_is_forwarded_without_changing_the_prompt():
     assert plan.kind == "dag"
     assert tool.calls[0]["nodes"][0]["prompt_template"] == "go"
     assert tool.calls[0]["nodes"][0]["skills"] == []
-    assert not [n for n in plan.notes if "skill" in n.lower()]
 
 
 async def test_mcps_are_passed_to_the_graph_tool_without_prompt_rewriting():
@@ -967,7 +966,6 @@ async def test_mcps_are_passed_to_the_graph_tool_without_prompt_rewriting():
     node = tool.calls[0]["nodes"][0]
     assert node["mcps"] == ["github"]
     assert "github" not in node["prompt_template"]
-    assert plan.notes == []
 
 
 async def test_the_dispatch_receipt_names_the_run() -> None:

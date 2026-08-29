@@ -96,17 +96,18 @@ def test_find_collisions_reports_shared_entries():
 # ---------------------------------------------------------------- L1 index
 
 
-def test_index_matches_normalized_substrings():
+def test_index_counts_normalized_substrings():
     idx = TriggerIndex(
         {
             "seo": Triggers(keywords=["SEO", SEARCH_RANKING]),
             "feedback": Triggers(keywords=[USER_FEEDBACK]),
         }
     )
-    assert idx.match(FULL_WIDTH_SEO_ASK) == ["seo"]  # full-width folded by NFKC
-    assert idx.match(MIXED_ASK) == ["seo", "feedback"]
-    assert idx.match(LUNCH) == []
-    assert idx.match("") == []
+    # Iteration order is first hit, and full width folds by NFKC.
+    assert list(idx.hit_counts(FULL_WIDTH_SEO_ASK)) == ["seo"]
+    assert list(idx.hit_counts(MIXED_ASK)) == ["seo", "feedback"]
+    assert idx.hit_counts(LUNCH) == {}
+    assert idx.hit_counts("") == {}
 
 
 def test_normalize_folds_case_width_and_whitespace():

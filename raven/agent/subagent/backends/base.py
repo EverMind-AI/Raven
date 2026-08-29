@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
-from typing import TYPE_CHECKING
 
 from loguru import logger
 
@@ -14,9 +13,6 @@ from raven.contracts.subagent_backend import (  # noqa: F401
     SubagentBackend,
     SubagentNoAnswerError,
 )
-
-if TYPE_CHECKING:
-    pass
 
 IN_SUBAGENT_RUN: ContextVar[bool] = ContextVar("raven_in_subagent_run", default=False)
 """True while an in-process backend is executing a sub-agent task.

@@ -10,7 +10,7 @@ logs, keyed by ``attempt.id``.
 
 Append-only on purpose: verdicts from different sources coexist (a user's
 "fail" and a judge's "fail" are two records), and re-judging appends rather
-than rewrites. :func:`latest_verdict` gives the last word per attempt.
+than rewrites, so the last record for an attempt is its current word.
 """
 
 from __future__ import annotations
@@ -113,9 +113,3 @@ def read_verdicts(state_dir: Path | None = None, *, attempt_id: str | None = Non
         if attempt_id is None or v.attempt_id == attempt_id:
             out.append(v)
     return out
-
-
-def latest_verdict(attempt_id: str, state_dir: Path | None = None) -> Verdict | None:
-    """The most recently appended verdict for ``attempt_id``, or None."""
-    matches = read_verdicts(state_dir, attempt_id=attempt_id)
-    return matches[-1] if matches else None
