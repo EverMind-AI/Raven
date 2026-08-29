@@ -34,6 +34,13 @@ All notable changes to Raven are documented here.
   imports the loop shell it is consumed by. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- Audit pass over eval_engine, knowledge, trajectory and config: the names
+  other packages reached under an underscore are public
+  (`SessionManager.session_path`, `update_providers.oauth_credentials_present`,
+  `schema.section_has_credentials`), unread symbols are gone
+  (`section_key`, the tool-safety prompt stub,
+  two dead config paths, a no-op validator), and docstrings describe the
+  present shape instead of the change that produced it.
 - The evolver moves out of the `raven` package to the repo-level `evolver/`
   tool (`python -m evolver run --config <yaml>`): it drives raven as a
   library, ships in no wheel, and a fifth import-linter contract keeps the

@@ -1,12 +1,9 @@
 """LanceDB vector store: embedded, file-backed, no server.
 
-Chosen over the Qdrant backend the vendored tree ships because a knowledge base
-must not add a process to the deployment. LanceDB is already resolved into the
-environment (``everos[multimodal]`` depends on it, and EverOS keeps its own
-memory in it), it stores a collection as files under one directory, and it
-opens from the gateway process the same way a config file does. The dependency
-is pinned directly rather than leaned on transitively -- the same call the repo
-already made for numpy.
+LanceDB is embedded and file-backed, so a knowledge base adds no process to
+the deployment: a collection is a directory under the state root, opened from
+the gateway process the same way a config file is. The dependency is pinned
+directly rather than leaned on transitively.
 
 Two details are load-bearing:
 

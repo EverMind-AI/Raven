@@ -96,7 +96,7 @@ def test_bundle_roundtrip(state, workspace):
     assert [s["name"] for s in spans] == ["session.turn", "tool.call"]
     verdicts = _read_lines(bundle_dir / "verdicts.jsonl")
     assert verdicts[0]["status"] == "fail" and verdicts[0]["why"] == "wrong answer"
-    source_session = manager._get_session_path("cli:chat1")
+    source_session = manager.session_path("cli:chat1")
     assert (bundle_dir / "session.jsonl").read_text(encoding="utf-8") == source_session.read_text(encoding="utf-8")
 
 

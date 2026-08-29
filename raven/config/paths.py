@@ -73,11 +73,6 @@ def get_workspace_path(workspace: str | None = None) -> Path:
     return ensure_dir(path)
 
 
-def get_cli_history_path() -> Path:
-    """Return the shared CLI history file path."""
-    return Path.home() / ".raven" / "history" / "cli_history"
-
-
 def get_bridge_install_dir() -> Path:
     """Return the shared WhatsApp bridge installation directory."""
     return Path.home() / ".raven" / "bridge"
@@ -127,8 +122,3 @@ def get_env_file() -> Path:
     creating the parent and tightening the mode; see ``restrict_to_owner``.
     """
     return Path.home() / ".raven" / "env"
-
-
-def get_legacy_sessions_dir() -> Path:
-    """Return the legacy global session directory used for migration fallback."""
-    return Path.home() / ".raven" / "sessions"

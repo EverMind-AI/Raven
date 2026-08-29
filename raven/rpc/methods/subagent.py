@@ -26,7 +26,7 @@ missing for as long as they were.
 
 The session manager comes from the running loop when there is one, exactly as
 ``session.resume`` takes it. That is load-bearing rather than tidy: the group a
-session's directory falls under is resolved through ``_get_session_path``, which
+session's directory falls under is resolved through ``session_path``, which
 adopts a transcript written before project grouping existed, so a manager built
 fresh here could resolve the same key to a different directory and answer with an
 empty panel for a run that is on disk.

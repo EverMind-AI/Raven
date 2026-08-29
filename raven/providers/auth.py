@@ -172,9 +172,9 @@ def _present(section: Any, name: str) -> bool:
 
 
 def _token_present(provider: str) -> bool:
-    from raven.config.update_providers import _oauth_credentials_present
+    from raven.config.update_providers import oauth_credentials_present
 
-    return _oauth_credentials_present(provider)
+    return oauth_credentials_present(provider)
 
 
 def credential_files(provider: str) -> list[Path]:
@@ -193,9 +193,9 @@ def credential_files(provider: str) -> list[Path]:
     from raven.config.paths import get_oauth_dir
 
     if provider == "github_copilot":
-        from raven.config.update_providers import _COPILOT_TOKEN_FILES, _copilot_token_dir
+        from raven.config.update_providers import COPILOT_TOKEN_FILES, copilot_token_dir
 
-        return [_copilot_token_dir() / name for name in _COPILOT_TOKEN_FILES]
+        return [copilot_token_dir() / name for name in COPILOT_TOKEN_FILES]
 
     if provider == "openai_codex":
         from raven.providers.chatgpt_token import auth_file
@@ -230,7 +230,7 @@ _ADDRESS = Requirement(("api_base",), "an address", "an address -- run `raven pr
 #: one anyway (`custom`'s localhost gateway). `is_local` keeps the plain
 #: `_ADDRESS`: a local deployment's spec default (Ollama's standard port)
 #: must not make it look configured before the user has pointed it anywhere,
-#: which is the bug `_has_credentials`'s docstring already names.
+#: which is the bug `section_has_credentials`'s docstring already names.
 _ADDRESS_OR_SPEC_DEFAULT = Requirement(
     ("api_base",),
     "an address",

@@ -347,13 +347,6 @@ class GeminiProviderConfig(ProviderConfig):
             return self.api_key_list[0]
         return self.api_key
 
-    @property
-    def all_keys(self) -> list[str]:
-        """Return all configured API keys."""
-        if self.api_key_list:
-            return list(self.api_key_list)
-        return [self.api_key] if self.api_key else []
-
 
 def _prefer_set_values(base: dict[str, Any], winner: dict[str, Any]) -> dict[str, Any]:
     """Merge two sections for one provider, letting a set value beat an unset one.
@@ -368,7 +361,7 @@ def _prefer_set_values(base: dict[str, Any], winner: dict[str, Any]) -> dict[str
     return merged
 
 
-def _has_credentials(config: "ProviderConfig", spec: Any, name: str = "") -> bool:
+def section_has_credentials(config: "ProviderConfig", spec: Any, name: str = "") -> bool:
     """Is this section actually usable, or just a placeholder?
 
     Every declared provider exists as an empty section whether or not the user
@@ -1173,18 +1166,6 @@ class ThirdPartyOpenAISubagentConfig(Base):
         return cleaned
 
     @model_validator(mode="after")
-    def _allow_replayed_state(self) -> "ThirdPartyOpenAISubagentConfig":
-        """``stateful`` is honoured for this kind now.
-
-        It used to be rejected on the grounds that an HTTP agent has no
-        resumable session. It has one now, but Raven owns it: the message list
-        is replayed from ``raven/agent/subagent/instance_state.py`` rather than
-        resumed by the provider, so no ``resumeCommand`` is involved and there
-        is nothing for the cli-kind cross-check to verify here.
-        """
-        return self
-
-    @model_validator(mode="after")
     def _drop_declared_local_file_access(self) -> "ThirdPartyOpenAISubagentConfig":
         """Coerce rather than reject: this field is one an older form wrote.
 
@@ -1198,9 +1179,7 @@ class ThirdPartyOpenAISubagentConfig(Base):
 
         A hard reject is still right where the caller can act on it -- see
         ``reject_unsupported_openai_fields``, which the write path calls on an
-        incoming payload. The neighbouring ``_allow_replayed_state`` no longer
-        rejects ``stateful`` because Raven now replays the message list itself
-        for this kind.
+        incoming payload.
         """
         if self.reads_local_files:
             logger.warning(
@@ -1481,14 +1460,6 @@ AgentConfig = Annotated[
     Field(discriminator="kind"),
 ]
 
-# The pre-``agents`` spelling of the union, kept as an alias because "third
-# party" is still the right name for the three external transports where a
-# caller genuinely means those (the probe, the acp snapshot store).
-ThirdPartySubagentConfig = Annotated[
-    ThirdPartyCliSubagentConfig | ThirdPartyOpenAISubagentConfig | ThirdPartyAcpSubagentConfig,
-    Field(discriminator="kind"),
-]
-
 
 class PlaybookRouterConfig(Base):
     """How far the per-turn playbook listing is narrowed.
@@ -1740,7 +1711,7 @@ class Config(BaseSettings):
             if not spec.claims(model_id):
                 continue
             p = self.providers.get(spec.name)
-            if p and _has_credentials(p, spec):
+            if p and section_has_credentials(p, spec):
                 return p, spec.name
 
         # Explicit prefix naming a provider Raven has no spec for: LiteLLM knows
@@ -1753,7 +1724,7 @@ class Config(BaseSettings):
         # routed here, while display and startup both called it unconfigured.
         if prefix and find_by_name(prefix) is None:
             passthrough = self.providers.get(prefix)
-            if passthrough and _has_credentials(passthrough, None, prefix):
+            if passthrough and section_has_credentials(passthrough, None, prefix):
                 return passthrough, canonical_provider_name(prefix)
 
         # Fallback: configured local providers can route models without
@@ -1762,7 +1733,7 @@ class Config(BaseSettings):
             if not spec.is_local:
                 continue
             p = self.providers.get(spec.name)
-            if p and _has_credentials(p, spec):
+            if p and section_has_credentials(p, spec):
                 return p, spec.name
 
         # Fallback: gateways first, then others (follows registry order).
@@ -1783,7 +1754,7 @@ class Config(BaseSettings):
             if spec.is_oauth:
                 continue
             p = self.providers.get(spec.name)
-            if p and _has_credentials(p, spec):
+            if p and section_has_credentials(p, spec):
                 return p, spec.name
         return None, None
 

@@ -183,7 +183,7 @@ class ProviderPool:
         Every declared provider exists as an empty section, so presence proves
         nothing -- reuse the same check the credential preflight uses.
         """
-        from raven.config.schema import _has_credentials as section_is_usable
+        from raven.config.schema import section_has_credentials as section_is_usable
         from raven.providers.registry import find_by_name
 
         if provider_name == "auto":

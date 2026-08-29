@@ -2,9 +2,8 @@
 into a vector store, and what a search hands back.
 
 The shapes are adopted from AgentScope's ``rag`` package (Apache-2.0; see
-NOTICES.md), which this repository vendored while the web service existed. They
-are kept unchanged now that it does not: a knowledge base written before the
-retirement is still read by this code, and the shapes are what make that true.
+NOTICES.md) and kept as adopted: a knowledge base written by the earlier
+deployment is still read by this code because the shapes did not move.
 Defined here rather than imported because importing AgentScope would put
 FastAPI, a message bus and a provider catalogue behind ``raven.knowledge``, and
 the package's whole point is that indexing and retrieval run inside the gateway

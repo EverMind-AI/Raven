@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from raven.knowledge._sections import MAX_SECTION_CHARS, SECTION_ORDINAL, section_key
+from raven.knowledge._sections import MAX_SECTION_CHARS, SECTION_ORDINAL
 from raven.knowledge._structure import HeadingAwareChunker, StructuredTextParser
 from raven.knowledge._types import Section, TextBlock
 
@@ -245,7 +245,9 @@ def test_two_same_named_siblings_are_told_apart():
     examples = [s for s in sections if s.metadata.get("heading") == "Example"]
     assert len(examples) == 2
     assert examples[0].metadata["heading_path"] == examples[1].metadata["heading_path"]
-    assert section_key(examples[0]) != section_key(examples[1]), "the two sections share an identity"
+    assert examples[0].metadata[SECTION_ORDINAL] != examples[1].metadata[SECTION_ORDINAL], (
+        "the two sections share an identity"
+    )
 
 
 def test_a_document_with_no_headings_records_no_ordinal():
@@ -255,7 +257,6 @@ def test_a_document_with_no_headings_records_no_ordinal():
 
     assert len(sections) == 1
     assert sections[0].metadata == {}
-    assert section_key(sections[0]) == ()
 
 
 def test_every_chunk_of_a_section_carries_its_ordinal():

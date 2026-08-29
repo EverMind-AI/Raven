@@ -472,7 +472,7 @@ def _redact_nested_model(instance: BaseModel) -> BaseModel:
 
 #: Copilot's credentials are two files LiteLLM owns, not one: the device-flow
 #: access token and the short-lived API key it is exchanged for.
-_COPILOT_TOKEN_FILES = ("access-token", "api-key.json")
+COPILOT_TOKEN_FILES = ("access-token", "api-key.json")
 
 
 def _oauth_token_path(provider_name: str) -> Path:
@@ -489,7 +489,7 @@ def _oauth_token_path(provider_name: str) -> Path:
     return credential_files(provider_name)[0]
 
 
-def _copilot_token_dir() -> Path:
+def copilot_token_dir() -> Path:
     """The directory LiteLLM's Copilot authenticator reads and writes.
 
     ``import_litellm`` points ``GITHUB_COPILOT_TOKEN_DIR`` at Raven's own
@@ -502,7 +502,7 @@ def _copilot_token_dir() -> Path:
     return Path(token_dir).expanduser() if token_dir else get_oauth_dir() / "github_copilot"
 
 
-def _oauth_credentials_present(provider_name: str) -> bool:
+def oauth_credentials_present(provider_name: str) -> bool:
     """Are this provider's credentials on disk and readable as credentials?
 
     A file at the right path is not evidence: a truncated write passes
@@ -1380,7 +1380,7 @@ def _probe_copilot_seat(*, timeout_s: float, transport: httpx.BaseTransport | No
     backend an editor is asking, so one header would report a working seat as a
     bad credential. Both come from the driver rather than from a guess here.
     """
-    if not _oauth_credentials_present("github_copilot"):
+    if not oauth_credentials_present("github_copilot"):
         return {
             "ok": False,
             "status": "oauth_token_missing",
@@ -1554,4 +1554,7 @@ __all__ = [
     "remove_provider_endpoint",
     "list_provider_endpoints",
     "test_provider",
+    "oauth_credentials_present",
+    "copilot_token_dir",
+    "COPILOT_TOKEN_FILES",
 ]

@@ -1,10 +1,10 @@
 """File parsers: raw upload bytes to a list of sections.
 
 A parser handles one format family and preserves boundaries; it never chunks.
-Adopted from AgentScope's own implementation (Apache-2.0; see NOTICES.md), narrowed to the text family -- the only parsers
-the deployment being replaced ever registered. PDF, Word, Excel and PowerPoint
-each need a third-party library, so they arrive with the optional extra that
-carries those, not with the package.
+Adopted from AgentScope's own implementation (Apache-2.0; see NOTICES.md). Only
+the text family ships in the package; PDF, Word, Excel and PowerPoint parsers
+each need a third-party library and arrive with the optional extra that carries
+those.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ class ParserBase(ABC):
     instance may be invoked concurrently from multiple agent runs.
 
     Subclasses must declare :attr:`supported_media_types` so that the
-    KnowledgeBaseManager can route uploaded files to the right parser
+    KnowledgeManager can route uploaded files to the right parser
     based on standard IANA media types (RFC 6838).
     """
 

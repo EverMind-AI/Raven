@@ -262,7 +262,7 @@ class SessionManager:
         channel = key.partition(":")[0]
         return self.sessions_dir / (self.project_slug or safe_path_segment(channel) or "_")
 
-    def _get_session_path(self, key: str) -> Path:
+    def session_path(self, key: str) -> Path:
         """The file path for a session: ``sessions/<group>/<chat_id>.jsonl``.
 
         A session opened before this process's grouping applied -- a transcript
@@ -286,7 +286,7 @@ class SessionManager:
         the same as the transcript minus the suffix, so the pair sits together
         and neither the ``*.jsonl`` globs nor this directory sees the other.
 
-        The group comes from :meth:`_get_session_path` so a pre-grouping
+        The group comes from :meth:`session_path` so a pre-grouping
         transcript's metadata lands beside the transcript rather than under the
         slug this process would otherwise pick.
 
@@ -298,7 +298,7 @@ class SessionManager:
         raises ``ValueError``.
         """
         chat_id = safe_path_segment(key.partition(":")[2]) or "_"
-        return self._get_session_path(key).parent / chat_id
+        return self.session_path(key).parent / chat_id
 
     @staticmethod
     def key_from_path(path: Path) -> str:
@@ -381,7 +381,7 @@ class SessionManager:
 
         Narrowed still means two directories, not one: this project's group, and
         the channel-named group holding sessions written before grouping
-        existed. Those carry no project attribution, and ``_get_session_path``
+        existed. Those carry no project attribution, and ``session_path``
         already lets any project adopt one, so excluding them here would strand
         every pre-upgrade conversation with no way to reach it from ``-c``.
 
@@ -526,7 +526,7 @@ class SessionManager:
 
     def _load(self, key: str) -> Session | None:
         """Load a session from disk."""
-        path = self._get_session_path(key)
+        path = self.session_path(key)
         if not path.exists():
             return None
 
@@ -587,7 +587,7 @@ class SessionManager:
         their first user message names the fork point's ancestor, not the
         fork — so they stay untitled unless titled explicitly.
         """
-        path = self._get_session_path(session.key)
+        path = self.session_path(session.key)
 
         if not session.metadata.get("title") and not session.metadata.get("parent_session_id"):
             auto_title = _first_user_auto_title(session.messages)
@@ -642,7 +642,7 @@ class SessionManager:
         Returns True only if a file was actually removed; False if no file
         existed or the removal failed. Deleting an unknown key is a safe no-op.
         """
-        path = self._get_session_path(key)
+        path = self.session_path(key)
         self.invalidate(key)
         if path.exists():
             try:
@@ -655,7 +655,7 @@ class SessionManager:
 
     def exists(self, key: str) -> bool:
         """Return True if the session has a file on disk (lazy sessions don't)."""
-        return self._get_session_path(key).exists()
+        return self.session_path(key).exists()
 
     def peek(self, key: str) -> "Session | None":
         """Return the cached session if present; else load from disk without caching.

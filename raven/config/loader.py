@@ -664,9 +664,6 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True, from_version
                     "Migrated: agents.defaults.everosSkillLight → skillForge.everos",
                 )
 
-    # skills_dir → local_dirs migration now handled by
-    # SkillForgeConfig._migrate_skills_dir model_validator (R5).
-
     # Same for the session-title gate, which changed both name and unit:
     # ``min_input_chars`` counted code points, ``min_input_width`` counts
     # display columns. The old key is not carried over -- 8 of one is not 8 of
