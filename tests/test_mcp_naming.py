@@ -33,7 +33,7 @@ class TestSanitisation:
     def test_non_ascii_becomes_underscores(self):
         # One underscore per replaced character: the two server characters and
         # the two tool characters, plus the two separators.
-        assert tool_name("热点", "查询") == "mcp" + "_" + "__" + "_" + "__"
+        assert tool_name("по", "за") == "mcp" + "_" + "__" + "_" + "__"
 
     def test_the_legacy_form_is_not_sanitised(self):
         # The shipped name was built from the raw pair. A blacklist entry
