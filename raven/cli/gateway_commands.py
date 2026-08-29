@@ -65,11 +65,10 @@ def _risk_banner(config) -> str | None:
         return None
 
     open_channels = []
-    for name in type(config.channels).model_fields:
-        section = getattr(config.channels, name, None)
-        if section is None or not getattr(section, "enabled", False):
+    for name, section in config.channels.channel_entries().items():
+        if not section.enabled:
             continue
-        if "*" in (getattr(section, "allow_from", None) or []):
+        if "*" in (section.allow_from or []):
             open_channels.append(name)
     if not open_channels:
         return None

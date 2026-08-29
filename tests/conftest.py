@@ -315,3 +315,40 @@ def wired_kwarg(kwargs: dict, name: str):
     owner = _LEGACY_FIELDS.get(name)
     bundle = kwargs.get(owner) if owner else None
     return getattr(bundle, name, None) if bundle is not None else None
+
+
+def make_channel_config(channel: str, **overrides):
+    """A dispensed channel config for adapter tests: declared defaults, with
+    ``overrides`` split between socket fields and cargo (cargo overrides run
+    through the admission door, so an invalid test value bites here too)."""
+    from raven.channels.registry import discover_specs
+    from raven.config.schema import ChannelSocket
+    from raven.core.admission import DispensedSlice, admit_slice
+
+    schema = discover_specs()[channel].config_schema or {}
+    socket_keys = {"enabled", "allow_from", "workspace"}
+    socket = ChannelSocket(**{k: v for k, v in overrides.items() if k in socket_keys})
+    cargo = admit_slice(
+        schema,
+        {k: v for k, v in overrides.items() if k not in socket_keys},
+        plugin_id=f"test:{channel}",
+    )
+    for key, decl in schema.items():
+        if key not in cargo and isinstance(decl.get("fields"), dict):
+            cargo[key] = admit_slice(decl["fields"], {}, plugin_id=f"test:{channel}.{key}")
+    return DispensedSlice(socket, cargo)
+
+
+def with_channel_fields(view, **overrides):
+    """A copy of a dispensed channel config with fields overridden -- the
+    test-side mutation path now that the production view is frozen."""
+    from raven.core.admission import DispensedSlice
+
+    cargo = dict(object.__getattribute__(view, "_cargo"))
+    section = object.__getattribute__(view, "_section")
+    socket_keys = {"enabled", "allow_from", "workspace"}
+    socket_over = {k: v for k, v in overrides.items() if k in socket_keys}
+    if socket_over:
+        section = section.model_copy(update=socket_over)
+    cargo.update({k: v for k, v in overrides.items() if k not in socket_keys})
+    return DispensedSlice(section, cargo)

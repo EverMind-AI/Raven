@@ -16,7 +16,7 @@ from raven.channels.adapters.email import parsing
 
 
 class EmailMailbox:
-    """Thin wrapper over imaplib/smtplib driven by an EmailConfig."""
+    """Thin wrapper over imaplib/smtplib driven by an Any."""
 
     def __init__(self, config):
         self.config = config

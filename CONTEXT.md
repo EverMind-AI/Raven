@@ -877,11 +877,23 @@ declaration once at entry, and dispenses a frozen result (an admitted config sli
 pass-through. Failures name the owner and the key at the door, not deep inside a turn.
 
 **Config-with-cargo** (`channels/contract.py:ChannelSpec.config_schema`, `raven-plugin.toml [plugin.config_schema]`):
-A cargo declares the config keys only it consumes, next to the code that consumes them;
-storage and validation stay with the central model until the storage handover, and the
-declaration guard (`tests/test_channels_config_declaration.py`) keeps the two coherent.
-_Avoid_: "schema" alone — the central pydantic model and the cargo declaration are
+A cargo declares the config keys only it consumes -- types, defaults, secrecy,
+requiredness, choices, nested `fields` -- next to the code that consumes them. Since the
+central per-channel classes retired (M2), the declaration is the only truth: the door
+dispenses from it, the writer (`config/update_channels.py`) validates through the same
+door, and the declaration guard (`tests/test_channels_config_declaration.py`) pins the
+door's own contract.
+_Avoid_: "schema" alone — the config file's JSON and the cargo declaration are
 different artifacts.
+
+**Channel Socket** (`config/schema.py:ChannelSocket`):
+The host-side view of one channel section: `enabled`, `allow_from`, `workspace` --
+what the host plugs every channel into, uniform across adapters. `ChannelsConfig` is
+dynamic: any discovered adapter answers a socket view whether or not the file has its
+section (sticky access, so mutation persists), and sections indistinguishable from the
+default socket are dropped at serialization to keep the file sparse.
+_Avoid_: "channel config class" (the twelve central classes are retired); cargo fields
+read through the dispensed view, never by name on the socket.
 
 **Generation** (`core/runtime.py`, gateway):
 One assembled `RavenRuntime` serving turns. A config change swaps generations at a turn

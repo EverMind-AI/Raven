@@ -21,6 +21,7 @@ from raven.config import (
 from raven.rpc.dispatcher import Dispatcher
 from raven.web_rpc import methods_config
 from raven.web_rpc.methods_config import register_config_methods
+from tests.conftest import make_channel_config
 
 
 @pytest.fixture(autouse=True)
@@ -1305,6 +1306,8 @@ async def test_instances_reconciliation_calls_live_handles_once_per_session(
     assert manager.calls == 1
 
 
+
+
 def _model_cfg():
     """Config with two vendors keyed, so routable/unroutable both have coverage."""
     from raven.config.schema import Config
@@ -1891,10 +1894,9 @@ async def test_channels_qr_reads_a_real_whatsapp_adapter(tmp_path: Path, monkeyp
     import json as _json
 
     from raven.channels.adapters.whatsapp.channel import WhatsAppChannel
-    from raven.config.schema import WhatsAppConfig
 
     monkeypatch.setattr("raven.config.paths.get_runtime_subdir", lambda name: tmp_path / name)
-    ch = WhatsAppChannel(WhatsAppConfig(enabled=True))
+    ch = WhatsAppChannel(make_channel_config("whatsapp", enabled=True))
     ch._running = True
 
     class _Mgr:
@@ -1924,9 +1926,9 @@ async def test_channels_qr_reads_a_real_weixin_adapter() -> None:
     from unittest.mock import AsyncMock
 
     from raven.channels.adapters.weixin.channel import WeixinChannel
-    from raven.config.schema import WeixinConfig
 
-    ch = WeixinChannel(WeixinConfig())
+
+    ch = WeixinChannel(make_channel_config("weixin"))
     ch._running = True
     ch._save_state = lambda: None
     ch._print_qr = lambda url: None

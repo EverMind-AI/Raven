@@ -24,6 +24,7 @@ from typing import Any
 from loguru import logger
 
 from raven.config.loader import get_config_path, read_raw_or_raise
+from raven.core.admission import normalize_slice_keys
 from raven.utils.atomic_io import atomic_update
 
 # The socket: what the host plugs every channel into, whatever the
@@ -72,28 +73,6 @@ def _snake(key: str) -> str:
 def _camel(key: str) -> str:
     head, *rest = key.split("_")
     return head + "".join(part.title() for part in rest)
-
-
-def _normalize_keys(schema: dict[str, Any], table: dict[str, Any]) -> dict[str, Any]:
-    """Snake-case the field keys of a raw file section, guided by the schema.
-
-    Config files hold camelCase (the pydantic-era writers dumped by alias);
-    the schema speaks snake_case. Only keys that resolve to a declared field
-    are renamed, and only declared sub-tables are descended into -- map keys
-    (mochat group room ids) pass verbatim.
-    """
-    out: dict[str, Any] = {}
-    for key, value in table.items():
-        resolved = key if key in schema else _snake(key)
-        if resolved not in schema:
-            out[key] = value
-            continue
-        sub = schema[resolved].get("fields")
-        if isinstance(sub, dict) and isinstance(value, dict):
-            out[resolved] = _normalize_keys(sub, value)
-        else:
-            out[resolved] = value
-    return out
 
 
 def _camelize_keys(schema: dict[str, Any], table: dict[str, Any]) -> dict[str, Any]:
@@ -341,7 +320,7 @@ def get_channel_config(
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)
     raw_section = (data.get("channels") or {}).get(name) or {}
-    values = _materialize(schema, _normalize_keys(schema, raw_section))
+    values = _materialize(schema, normalize_slice_keys(schema, raw_section))
 
     specs = _flatten_schema(schema)
     flat = _flatten_values(schema, values)
@@ -407,7 +386,7 @@ def _patch_channel(
 
         data = read_raw_or_raise(path)
         raw_section = (data.get("channels") or {}).get(name) or {}
-        working = _materialize(schema, _normalize_keys(schema, raw_section))
+        working = _materialize(schema, normalize_slice_keys(schema, raw_section))
 
         prev: dict[str, Any] = {}
         for path_key, raw_val in fields.items():

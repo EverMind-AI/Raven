@@ -337,7 +337,12 @@ def _scancode_login(channel: str, *, non_interactive: bool = False) -> None:
                     )
                 )
                 return
-            adapter = spec.factory(channel_cfg)
+            from raven.core.admission import dispense_channel_config
+
+            # Through the same admission door the gateway uses: the raw
+            # section carries only socket fields since the central cargo
+            # classes retired, and the factory expects the dispensed view.
+            adapter = spec.factory(dispense_channel_config(spec, channel_cfg, channel=channel))
             if channel == "whatsapp":
                 oc.console.print(
                     oc._t(

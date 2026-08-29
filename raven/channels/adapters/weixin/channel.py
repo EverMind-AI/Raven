@@ -33,7 +33,6 @@ from raven.channels.errors import retryable_http
 from raven.channels.media import save_media_bytes
 from raven.channels.transcribe import transcribe_audio
 from raven.config.paths import get_runtime_subdir
-from raven.config.schema import WeixinConfig
 from raven.utils.atomic_io import atomic_replace
 from raven.utils.helpers import split_message
 
@@ -76,13 +75,17 @@ def _https_redirect_target(host: str) -> str:
 class WeixinChannel(ChannelBase):
     """Personal WeChat channel using the iLink HTTP long-poll API."""
 
-    config: WeixinConfig
+    config: Any
     name = "weixin"
     display_name = "WeChat"
     capabilities = Capabilities(interactive_login=True, file_attachments=True)  # QR pairing via iLink
 
-    def __init__(self, config: WeixinConfig):
+    def __init__(self, config: Any):
         super().__init__(config)
+        # The service can hand back a relocated endpoint (login redirect,
+        # status baseurl); that is runtime state, not config -- the dispensed
+        # config is frozen, and this attribute is what moves.
+        self._base_url: str = config.base_url
         self._client: httpx.AsyncClient | None = None
         self._token: str = ""
         self._updates_buf: str = ""
@@ -145,7 +148,7 @@ class WeixinChannel(ChannelBase):
             else {}
         )
         if data.get("base_url"):
-            self.config.base_url = data["base_url"]
+            self._base_url = data["base_url"]
         return bool(self._token)
 
     def _save_state(self) -> None:
@@ -158,7 +161,7 @@ class WeixinChannel(ChannelBase):
                         "get_updates_buf": self._updates_buf,
                         "context_tokens": self._context_tokens,
                         "typing_tickets": self._typing.snapshot(),
-                        "base_url": self.config.base_url,
+                        "base_url": self._base_url,
                     },
                     ensure_ascii=False,
                 ),
@@ -177,7 +180,7 @@ class WeixinChannel(ChannelBase):
         self, endpoint: str, params: dict | None = None, *, base_url: str | None = None, auth: bool = True
     ) -> dict:
         assert self._client is not None
-        url = f"{(base_url or self.config.base_url).rstrip('/')}/{endpoint}"
+        url = f"{(base_url or self._base_url).rstrip('/')}/{endpoint}"
         resp = await self._client.get(url, params=params, headers=self._headers(auth=auth))
         resp.raise_for_status()
         return resp.json()
@@ -187,7 +190,7 @@ class WeixinChannel(ChannelBase):
         payload = dict(body or {})
         payload.setdefault("base_info", p.BASE_INFO)
         resp = await self._client.post(
-            f"{self.config.base_url}/{endpoint}", json=payload, headers=self._headers(auth=auth)
+            f"{self._base_url}/{endpoint}", json=payload, headers=self._headers(auth=auth)
         )
         resp.raise_for_status()
         return resp.json()
@@ -218,7 +221,7 @@ class WeixinChannel(ChannelBase):
             qrcode_id, scan_url = await self._fetch_qr()
             self.pending_qr = scan_url
             self._print_qr(scan_url)
-            poll_base = self.config.base_url
+            poll_base = self._base_url
             refreshes = 0
 
             while self._running:
@@ -246,7 +249,7 @@ class WeixinChannel(ChannelBase):
                         return False
                     self._token = token
                     if status_data.get("baseurl"):
-                        self.config.base_url = status_data["baseurl"]
+                        self._base_url = status_data["baseurl"]
                     self._save_state()
                     self.pending_qr = None
                     logger.info(
@@ -266,7 +269,7 @@ class WeixinChannel(ChannelBase):
                         return False
                     qrcode_id, scan_url = await self._fetch_qr()
                     self.pending_qr = scan_url
-                    poll_base = self.config.base_url
+                    poll_base = self._base_url
                     self._print_qr(scan_url)
                     continue
                 await asyncio.sleep(1)
@@ -346,7 +349,7 @@ class WeixinChannel(ChannelBase):
 
     async def _rebind_loop(self) -> None:
         """Fetch a code, watch it, and swap the account only once confirmed."""
-        poll_base = self.config.base_url
+        poll_base = self._base_url
         try:
             qrcode_id, scan_url = await self._fetch_qr()
             self.pending_qr = scan_url
@@ -394,7 +397,7 @@ class WeixinChannel(ChannelBase):
                         return
                     qrcode_id, scan_url = await self._fetch_qr()
                     self.pending_qr = scan_url
-                    poll_base = self.config.base_url
+                    poll_base = self._base_url
                     self._rebind = {**self._rebind, "phase": "waiting", "refreshes": refreshes, "code_at": time.time()}
                     continue
                 await asyncio.sleep(1)
@@ -428,7 +431,7 @@ class WeixinChannel(ChannelBase):
         """
         self._token = token
         if base_url:
-            self.config.base_url = base_url
+            self._base_url = base_url
         self._updates_buf = ""
         self._context_tokens = {}
         self._typing.restore({})

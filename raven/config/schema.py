@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from loguru import logger
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings
 
@@ -33,236 +33,101 @@ class ChannelBase(Base):
     )
 
 
-class WhatsAppConfig(ChannelBase):
-    """WhatsApp channel configuration."""
+def _to_camel_key(key: str) -> str:
+    head, *rest = key.split("_")
+    return head + "".join(part.title() for part in rest)
+
+
+class ChannelSocket(ChannelBase):
+    """The host-side view of one channel section: the three socket fields.
+
+    Cargo fields live with the adapter specs (``config_schema``) and travel
+    through the admission door; they ride along here as extras so a loaded
+    section round-trips, but nothing host-side may read them by name.
+    """
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="allow")
 
     enabled: bool = False
-    bridge_url: str = "ws://localhost:3001"
-    bridge_token: str = ""  # Shared token for bridge auth (auto-generated when empty)
-    allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed phone numbers; ['*'] = anyone
-    group_policy: Literal["open", "mention"] = "open"  # "open" responds to all, "mention" only when @mentioned
-
-
-class TelegramConfig(ChannelBase):
-    """Telegram channel configuration."""
-
-    enabled: bool = False
-    token: str = Field(default="", json_schema_extra={"required": True})  # Bot token from @BotFather
-    allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed user IDs or usernames; ['*'] = anyone
-    proxy: str | None = None  # HTTP/SOCKS5 proxy URL, e.g. "http://127.0.0.1:7890" or "socks5://127.0.0.1:1080"
-    reply_to_message: bool = False  # Reserved: outbound quote-reply is not wired yet; no effect today
-    group_policy: Literal["open", "mention"] = (
-        "mention"  # "mention" responds when @mentioned or replied to, "open" responds to all
-    )
-
-
-class FeishuConfig(ChannelBase):
-    """Feishu/Lark channel configuration using WebSocket long connection."""
-
-    enabled: bool = False
-    app_id: str = Field(default="", json_schema_extra={"required": True})  # App ID from Feishu Open Platform
-    app_secret: str = Field(default="", json_schema_extra={"required": True})  # App Secret from Feishu Open Platform
-    encrypt_key: str = ""  # Encrypt Key for event subscription
-    verification_token: str = ""  # Verification Token for event subscription
-    allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed user open_ids; ['*'] = anyone
-    react_emoji: str = "THUMBSUP"  # Emoji type for message reactions (e.g. THUMBSUP, OK, DONE, SMILE)
-    group_policy: Literal["open", "mention"] = "mention"  # "mention" responds when @mentioned, "open" responds to all
-
-
-class DingTalkConfig(ChannelBase):
-    """DingTalk channel configuration using Stream mode."""
-
-    enabled: bool = False
-    client_id: str = Field(default="", json_schema_extra={"required": True})  # AppKey
-    client_secret: str = Field(default="", json_schema_extra={"required": True})  # AppSecret
-    allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed staff_ids; ['*'] = anyone
-
-
-class DiscordConfig(ChannelBase):
-    """Discord channel configuration."""
-
-    enabled: bool = False
-    token: str = Field(default="", json_schema_extra={"required": True})  # Bot token from Discord Developer Portal
-    allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed user IDs; ['*'] = anyone
-    gateway_url: str = "wss://gateway.discord.gg/?v=10&encoding=json"
-    intents: int = 37377  # GUILDS + GUILD_MESSAGES + DIRECT_MESSAGES + MESSAGE_CONTENT
-    group_policy: Literal["mention", "open"] = "mention"
-
-
-class MatrixConfig(ChannelBase):
-    """Matrix (Element) channel configuration."""
-
-    enabled: bool = False
-    homeserver: str = "https://matrix.org"
-    access_token: str = Field(default="", json_schema_extra={"required": True})
-    user_id: str = Field(default="", json_schema_extra={"required": True})  # @bot:matrix.org
-    device_id: str = ""
-    e2ee_enabled: bool = True  # Enable Matrix E2EE support (encryption + encrypted room handling).
-    sync_stop_grace_seconds: int = (
-        2  # Max seconds to wait for sync_forever to stop gracefully before cancellation fallback.
-    )
-    max_media_bytes: int = (
-        20 * 1024 * 1024
-    )  # Max attachment size accepted for Matrix media handling (inbound + outbound).
-    allow_from: list[str] = Field(default_factory=lambda: ["*"])  # ['*'] = anyone
-    group_policy: Literal["open", "mention", "allowlist"] = "open"
-    group_allow_from: list[str] = Field(default_factory=list)
-    allow_room_mentions: bool = False
-
-
-class EmailConfig(ChannelBase):
-    """Email channel configuration (IMAP inbound + SMTP outbound)."""
-
-    enabled: bool = False
-    consent_granted: bool = False  # Explicit owner permission to access mailbox data
-
-    # IMAP (receive)
-    imap_host: str = Field(default="", json_schema_extra={"required": True})
-    imap_port: int = 993
-    imap_username: str = Field(default="", json_schema_extra={"required": True})
-    imap_password: str = Field(default="", json_schema_extra={"required": True})
-    imap_mailbox: str = "INBOX"
-    imap_use_ssl: bool = True
-
-    # SMTP (send)
-    smtp_host: str = Field(default="", json_schema_extra={"required": True})
-    smtp_port: int = 587
-    smtp_username: str = Field(default="", json_schema_extra={"required": True})
-    smtp_password: str = Field(default="", json_schema_extra={"required": True})
-    smtp_use_tls: bool = True
-    smtp_use_ssl: bool = False
-    from_address: str = ""
-
-    # Behavior
-    auto_reply_enabled: bool = True  # If false, inbound email is read but no automatic reply is sent
-    poll_interval_seconds: int = 30
-    mark_seen: bool = True
-    max_body_chars: int = 12000
-    subject_prefix: str = "Re: "
-    allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed sender email addresses; ['*'] = anyone
-
-
-class MochatMentionConfig(Base):
-    """Mochat mention behavior configuration."""
-
-    require_in_groups: bool = False
-
-
-class MochatGroupRule(Base):
-    """Mochat per-group mention requirement."""
-
-    require_mention: bool = False
-
-
-class MochatConfig(ChannelBase):
-    """Mochat channel configuration."""
-
-    enabled: bool = False
-    base_url: str = "https://mochat.io"
-    socket_url: str = ""
-    socket_path: str = "/socket.io"
-    socket_disable_msgpack: bool = False
-    socket_reconnect_delay_ms: int = 1000
-    socket_max_reconnect_delay_ms: int = 10000
-    socket_connect_timeout_ms: int = 10000
-    refresh_interval_ms: int = 30000
-    watch_timeout_ms: int = 25000
-    watch_limit: int = 100
-    retry_delay_ms: int = 500
-    max_retry_attempts: int = 0  # 0 means unlimited retries
-    claw_token: str = Field(default="", json_schema_extra={"required": True})
-    agent_user_id: str = ""
-    sessions: list[str] = Field(default_factory=list)
-    panels: list[str] = Field(default_factory=list)
-    allow_from: list[str] = Field(default_factory=lambda: ["*"])  # ['*'] = anyone
-    mention: MochatMentionConfig = Field(default_factory=MochatMentionConfig)
-    groups: dict[str, MochatGroupRule] = Field(default_factory=dict)
-    reply_delay_mode: str = "non-mention"  # off | non-mention
-    reply_delay_ms: int = 120000
-
-
-class SlackDMConfig(Base):
-    """Slack DM policy configuration."""
-
-    enabled: bool = True
-    policy: str = "open"  # "open" or "allowlist"
-    allow_from: list[str] = Field(default_factory=list)  # Allowed Slack user IDs
-
-
-class SlackConfig(ChannelBase):
-    """Slack channel configuration."""
-
-    enabled: bool = False
-    mode: str = "socket"  # "socket" supported
-    webhook_path: str = "/slack/events"
-    bot_token: str = Field(default="", json_schema_extra={"required": True})  # xoxb-...
-    app_token: str = Field(default="", json_schema_extra={"required": True})  # xapp-...
-    user_token_read_only: bool = True
-    reply_in_thread: bool = True
-    react_emoji: str = "eyes"
-    allow_from: list[str] = Field(
-        default_factory=lambda: ["*"]
-    )  # Allowed Slack user IDs (sender-level); ['*'] = anyone
-    group_policy: str = "mention"  # "mention", "open", "allowlist"
-    group_allow_from: list[str] = Field(default_factory=list)  # Allowed channel IDs if allowlist
-    dm: SlackDMConfig = Field(default_factory=SlackDMConfig)
-
-
-class QQConfig(ChannelBase):
-    """QQ channel configuration using botpy SDK."""
-
-    enabled: bool = False
-    app_id: str = Field(default="", json_schema_extra={"required": True})  # bot AppID from q.qq.com
-    secret: str = Field(default="", json_schema_extra={"required": True})  # bot AppSecret from q.qq.com
-    allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed user openids; ['*'] = public access
-
-
-class WecomConfig(ChannelBase):
-    """WeCom (Enterprise WeChat) AI Bot channel configuration."""
-
-    enabled: bool = False
-    bot_id: str = Field(default="", json_schema_extra={"required": True})  # Bot ID from WeCom AI Bot platform
-    secret: str = Field(default="", json_schema_extra={"required": True})  # Bot Secret from WeCom AI Bot platform
-    allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed user IDs; ['*'] = anyone
-    welcome_message: str = ""  # Welcome message for enter_chat event
-
-
-class WeixinConfig(ChannelBase):
-    """Personal WeChat channel configuration."""
-
-    enabled: bool = False
-    allow_from: list[str] = Field(default_factory=lambda: ["*"])  # ['*'] = anyone
-    base_url: str = "https://ilinkai.weixin.qq.com"
-    cdn_base_url: str = "https://novac2c.cdn.weixin.qq.com/c2c"
-    route_tag: str | int | None = None
-    token: str = ""
-    state_dir: str = ""
-    poll_timeout: int = 35
+    allow_from: list[str] = Field(default_factory=lambda: ["*"])
 
 
 class ChannelsConfig(Base):
-    """Configuration for chat channels."""
+    """Configuration for chat channels.
+
+    Channel sections are dynamic: any adapter the spec registry discovers may
+    have a section here, and no channel needs one to exist. Attribute access
+    answers with a :class:`ChannelSocket` view (extras carried) for known
+    adapters, so ``config.channels.telegram.enabled`` reads the same whether
+    or not the file has a telegram table.
+    """
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="allow")
 
     send_progress: bool = True  # stream agent's text progress to the channel
     send_tool_hints: bool = False  # stream tool-call hints (e.g. read_file("…"))
-    whatsapp: WhatsAppConfig = Field(default_factory=WhatsAppConfig)
-    telegram: TelegramConfig = Field(default_factory=TelegramConfig)
-    discord: DiscordConfig = Field(default_factory=DiscordConfig)
-    feishu: FeishuConfig = Field(default_factory=FeishuConfig)
-    mochat: MochatConfig = Field(default_factory=MochatConfig)
-    dingtalk: DingTalkConfig = Field(default_factory=DingTalkConfig)
-    email: EmailConfig = Field(default_factory=EmailConfig)
-    slack: SlackConfig = Field(default_factory=SlackConfig)
-    qq: QQConfig = Field(default_factory=QQConfig)
-    matrix: MatrixConfig = Field(default_factory=MatrixConfig)
-    wecom: WecomConfig = Field(default_factory=WecomConfig)
-    weixin: WeixinConfig = Field(default_factory=WeixinConfig)
+
+    def _adapter_names(self) -> set[str]:
+        from raven.channels.registry import discover_channel_names
+
+        return set(discover_channel_names())
+
+    def channel_entries(self) -> dict[str, "ChannelSocket"]:
+        """Socket views for every channel section present in the config."""
+        out: dict[str, ChannelSocket] = {}
+        for name, value in (self.model_extra or {}).items():
+            if isinstance(value, ChannelSocket):
+                out[name] = value
+            elif isinstance(value, dict):
+                out[name] = ChannelSocket.model_validate(value)
+        return out
+
+    def __getattr__(self, name: str) -> Any:
+        extra = self.__pydantic_extra__
+        if extra is not None and name in extra:
+            value = extra[name]
+            if isinstance(value, ChannelSocket):
+                return value
+            if isinstance(value, dict):
+                # Sticky coercion: the socket materializes into the extras on
+                # first access, so mutations persist and every reader sees one
+                # object -- the mutable semantics the named fields used to have.
+                socket = ChannelSocket.model_validate(value)
+                extra[name] = socket
+                return socket
+            return value
+        if not name.startswith("_") and name in self._adapter_names():
+            socket = ChannelSocket()
+            if extra is not None:
+                extra[name] = socket
+            return socket
+        raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
+
+    @model_serializer(mode="wrap")
+    def _drop_pristine_sections(self, handler: Any) -> Any:
+        """Keep the file sparse: a section indistinguishable from the default
+        socket (which sticky access materializes as a side effect) writes
+        nothing -- absent and default-valued read identically everywhere."""
+        data = handler(self)
+        if not isinstance(data, dict):
+            return data
+        pristine: dict[str, Any] = {}
+        pristine.update(ChannelSocket().model_dump())
+        pristine.update(ChannelSocket().model_dump(by_alias=True))
+        for name in list(self.__pydantic_extra__ or {}):
+            for key in (name, _to_camel_key(name)):
+                value = data.get(key)
+                if isinstance(value, dict) and all(
+                    k in pristine and pristine[k] == v for k, v in value.items()
+                ):
+                    del data[key]
+        return data
 
     def enabled_channel_names(self) -> set[str]:
-        """Names of every enabled IM channel. Field-driven, so a channel
-        added to this model is covered without touching consumers (the
-        gateway cron partition, cron add's target validation)."""
-        return {name for name in type(self).model_fields if getattr(getattr(self, name, None), "enabled", False)}
+        """Names of every enabled IM channel. Entry-driven, so a channel
+        section added to the config is covered without touching consumers
+        (the gateway cron partition, cron add's target validation)."""
+        return {name for name, socket in self.channel_entries().items() if socket.enabled}
 
 
 class AgentDefaults(Base):

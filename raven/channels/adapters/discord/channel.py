@@ -21,7 +21,6 @@ from loguru import logger
 from raven.channels.base import ChannelBase
 from raven.channels.contract import Capabilities
 from raven.channels.media import save_media_bytes
-from raven.config.schema import DiscordConfig
 from raven.utils.helpers import split_message
 
 _API_BASE = "https://discord.com/api/v10"
@@ -48,11 +47,11 @@ class DiscordChannel(ChannelBase):
     capabilities = Capabilities(file_attachments=True)
     """Discord channel over the Gateway WebSocket."""
 
-    config: DiscordConfig
+    config: Any
     name = "discord"
     display_name = "Discord"
 
-    def __init__(self, config: DiscordConfig):
+    def __init__(self, config: Any):
         super().__init__(config)
         self._ws: Any = None
         self._http: httpx.AsyncClient | None = None

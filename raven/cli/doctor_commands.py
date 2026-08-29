@@ -450,10 +450,7 @@ def _gather_static_checks() -> DoctorReport:
         context_window_tokens=defaults.context_window_tokens,
     )
 
-    enabled: list[str] = []
-    for name, value in config.channels.__dict__.items():
-        if getattr(value, "enabled", False):
-            enabled.append(name)
+    enabled = sorted(config.channels.enabled_channel_names())
 
     try:
         skill_forge_on = bool(config.skill_forge.enabled)
