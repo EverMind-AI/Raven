@@ -158,11 +158,11 @@ def test_render_menu_markdown_format():
         ],
     )
     text = render_menu_markdown(decision)
-    assert text.startswith("📋 [今日建议]")
-    assert "1. (新任务) 草拟回复 X" in text
+    assert text.startswith("📋 [Today's suggestions]")
+    assert text.splitlines()[2].startswith("1. (new task) ")
     assert "   — X 在昨天发了未回复" in text
-    assert "2. (持续模式 ✓) 周二 PR review" in text
-    assert "回复数字选择" in text
+    assert "2. (ongoing ✓) " in text
+    assert "Reply with a number to choose" in text
 
 
 def test_render_menu_markdown_omits_why_when_empty():
@@ -176,7 +176,7 @@ def test_render_menu_markdown_omits_why_when_empty():
         ],
     )
     text = render_menu_markdown(decision)
-    assert "1. (新任务) bare option" in text
+    assert "1. (new task) bare option" in text
     # No "—" line for empty why
     assert "   —" not in text.split("回复数字")[0]
 
@@ -243,7 +243,7 @@ async def test_supersede_notice_submits_sentinel_origin_when_wired(memory_store,
     assert req.origin is Origin.SENTINEL
     assert req.source.sender_id == "sentinel"
     assert req.source.channel == "feishu" and req.source.chat_id == "ou_xxx"
-    assert "替换" in req.text
+    assert "replaced" in req.text
     assert req.sentinel is None  # not a menu-pick → no action_origin
 
 
@@ -425,7 +425,7 @@ async def test_discoverer_overdue_survives_truncation(memory_store, pending_stor
     assert decision is not None
     assert len(decision.options) == 3
     # Floated to the front with the overdue marker; survived truncation.
-    assert decision.options[0].title == "⚠️ 逾期 5/1 交月报"
+    assert decision.options[0].title.startswith("⚠️ overdue 5/1 ")
 
 
 @pytest.mark.asyncio

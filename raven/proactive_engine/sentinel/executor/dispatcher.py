@@ -22,6 +22,7 @@ from typing import Any, Awaitable, Callable
 
 from loguru import logger
 
+from raven.i18n import t
 from raven.proactive_engine.sentinel.types import PendingDecision, PlannerDecision, TaskOption
 from raven.spine import ChatType, Source, Text
 
@@ -212,21 +213,21 @@ def render_menu_markdown(decision: PendingDecision) -> str:
 
         Reply with a number to choose, or reply "skip".
     """
-    lines = ["📋 [今日建议]", ""]
+    lines = [t("📋 [Today's suggestions]"), ""]
     for idx, opt in enumerate(decision.options, start=1):
         marker = _option_type_marker(opt)
         lines.append(f"{idx}. {marker} {opt.title}")
         if opt.why:
             lines.append(f"   — {opt.why}")
     lines.append("")
-    lines.append('回复数字选择，或回复 "跳过"。')
+    lines.append(t('Reply with a number to choose, or reply "skip".'))
     return "\n".join(lines)
 
 
 def _option_type_marker(opt: TaskOption) -> str:
     if opt.type == "routine_confirm":
-        return "(持续模式 ✓)"
-    return "(新任务)"
+        return t("(ongoing ✓)")
+    return t("(new task)")
 
 
 __all__ = [

@@ -34,6 +34,10 @@ All notable changes to Raven are documented here.
   imports the loop shell it is consumed by. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- The sentinel's replies and menus, the TUI launcher's errors, the WeChat
+  quote marker and the importers' preambles render in the user's language
+  through `raven.i18n` (English by default, Chinese when `language` is
+  `zh`); every `raven` command sets the language from the saved config.
 - The attention.md daily fire plan section is headed `## Today's fire plan`;
   files written with the Chinese heading keep parsing through the legacy
   alias table, which now lives with the other Chinese language data in

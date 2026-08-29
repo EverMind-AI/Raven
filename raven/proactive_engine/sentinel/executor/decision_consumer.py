@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Callable
 
 from loguru import logger
 
+from raven.i18n import t
 from raven.proactive_engine.sentinel.executor.pending_decision import PendingDecisionStore
 from raven.proactive_engine.sentinel.types import (
     ActionExecutionResult,
@@ -195,7 +196,7 @@ class DecisionConsumer:
             return MenuReply(
                 channel=msg.source.channel,
                 chat_id=msg.source.chat_id,
-                content="这个 decision 已经处理过了。",
+                content=t("This decision has already been handled."),
             )
         if self.feedback is not None:
             try:
@@ -208,7 +209,7 @@ class DecisionConsumer:
         return MenuReply(
             channel=msg.source.channel,
             chat_id=msg.source.chat_id,
-            content="好的，已跳过今天的建议。",
+            content=t("Okay, skipping today's suggestion."),
         )
 
     async def _handle_pick(
@@ -296,7 +297,7 @@ class DecisionConsumer:
         return MenuReply(
             channel=inbound.source.channel,
             chat_id=inbound.source.chat_id,
-            content=(f"要执行：{option.title}？\n  · 回复 yes / 确认 → 执行\n  · 回复 no / 取消 → 跳过"),
+            content=t("Run: {title}?\n  · reply yes / confirm → run\n  · reply no / cancel → skip", title=option.title),
         )
 
     async def _handle_confirmed_execute(
@@ -365,7 +366,7 @@ class DecisionConsumer:
             return MenuReply(
                 channel=msg.source.channel,
                 chat_id=msg.source.chat_id,
-                content="这个 decision 已经处理过了，无需取消。",
+                content=t("This decision has already been handled; nothing to cancel."),
             )
         if self.feedback is not None:
             try:
@@ -378,14 +379,14 @@ class DecisionConsumer:
         return MenuReply(
             channel=msg.source.channel,
             chat_id=msg.source.chat_id,
-            content="好的，已取消。",
+            content=t("Okay, cancelled."),
         )
 
 
 def _render_user_facing(result: ActionExecutionResult, option: TaskOption) -> str:
     """Compose a short user-facing message from the execution result."""
     if result.status == "ok":
-        primary = result.output_text or f"已为您处理：{option.title}"
+        primary = result.output_text or t("Handled for you: {title}", title=option.title)
         if result.side_effects:
             # Keep side-effect log compact; user mostly cares about the
             # primary line. Show side effects only if explicit (one
@@ -394,9 +395,9 @@ def _render_user_facing(result: ActionExecutionResult, option: TaskOption) -> st
             return f"{primary}\n{secondary}" if len(secondary) < 240 else primary
         return primary
     if result.status == "deferred":
-        return result.output_text or "已延后执行。"
+        return result.output_text or t("Deferred.")
     # error / unknown
-    return f"无法执行：{option.title}\n原因：{result.error or '未知错误'}"
+    return t("Could not run: {title}\nReason: {reason}", title=option.title, reason=result.error or t("unknown error"))
 
 
 __all__ = ["DecisionConsumer"]

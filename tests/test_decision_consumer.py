@@ -189,7 +189,7 @@ async def test_skip_path_marks_dismissed(pending_store, feedback):
 
     out = await consumer(_msg("跳过"))
     assert isinstance(out, MenuReply)
-    assert "跳过" in out.content or "好的" in out.content
+    assert "skipping" in out.content or "Okay" in out.content
 
     # Decision still consumed=True but with picked_option_id=None
     raw = pending_store._store.load()["decisions"][0]
@@ -291,7 +291,7 @@ async def test_error_status_renders_user_facing_apology(pending_store):
     consumer = _make_consumer(pending_store=pending_store)
     out = await consumer(_msg("/pick 1"))
     assert isinstance(out, MenuReply)
-    assert "无法执行" in out.content
+    assert "Could not run" in out.content
     assert "oops" in out.content
 
 

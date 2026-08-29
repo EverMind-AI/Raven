@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
+from raven.i18n import t
 from raven.proactive_engine.sentinel.predictor.prompts import (
     build_discovery_prompt,
     discovery_tool_schema,
@@ -295,7 +296,9 @@ class TaskDiscoverer:
         by today's fresh menu. Prevents the silent-data-loss footgun
         where a user replied '/pick 2' and is mid-confirm when a new
         discovery run drops the original menu."""
-        notice = "ℹ️ 您之前未确认的任务建议已被今天的新菜单替换。如需继续之前的选择，请在新菜单中重新挑选。"
+        notice = t(
+            "ℹ️ Your earlier unconfirmed task suggestions were replaced by today's new menu. To continue an earlier choice, pick it again from the new menu."
+        )
         try:
             assert self._submit is not None
             from raven.spine import ChatType, Origin, Source, TurnRequest
@@ -550,7 +553,7 @@ class TaskDiscoverer:
         """Flag past-deadline options and float them to the front.
 
         Overdue items are the highest-signal nudges (a due date slipped),
-        so we surface them — prefixed with a ``⚠️ 逾期 M/D`` marker and
+        so we surface them — prefixed with an overdue marker (``⚠️ overdue M/D``) and
         ordered ahead of on-time options — rather than dropping them.
         ``deadline`` is the LLM-emitted ISO date already validated in
         ``_raw_to_option``; empty means no due date.
@@ -564,7 +567,7 @@ class TaskDiscoverer:
             except ValueError:
                 dl = None
             if dl is not None and dl < today:
-                opt.title = f"⚠️ 逾期 {dl.month}/{dl.day} {opt.title}"
+                opt.title = t("⚠️ overdue {month}/{day} {title}", month=dl.month, day=dl.day, title=opt.title)
                 overdue.append(opt)
             else:
                 current.append(opt)

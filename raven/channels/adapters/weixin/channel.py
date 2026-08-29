@@ -33,6 +33,7 @@ from raven.channels.errors import retryable_http
 from raven.channels.media import save_media_bytes
 from raven.channels.transcribe import transcribe_audio
 from raven.config.paths import get_runtime_subdir
+from raven.i18n import t
 from raven.utils.atomic_io import atomic_replace
 from raven.utils.messages import split_message
 
@@ -642,7 +643,7 @@ class WeixinChannel(ChannelBase):
             quoted.append(ref["title"])
         if ref_item and (rt := (ref_item.get("text_item") or {}).get("text", "")):
             quoted.append(rt)
-        return [f"[引用: {' | '.join(quoted)}]\n{text}" if quoted else text]
+        return [t("[quoted: {items}]\n{text}", items=" | ".join(quoted), text=text) if quoted else text]
 
     @staticmethod
     def _first_quoted_media(items: list[dict]) -> tuple[int, dict] | None:

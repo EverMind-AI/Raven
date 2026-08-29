@@ -25,22 +25,13 @@ CJK = re.compile(r"[\u3400-\u9fff\uff00-\uffef\u3000-\u303f]")
 STILL_CARRYING: frozenset[str] = frozenset(
     {
         "raven/agent/tools/tool_search.py",
-        "raven/channels/adapters/weixin/channel.py",
         "raven/cli/onboard_commands.py",
-        "raven/cli/tui_commands.py",
         "raven/core/proactive_stack.py",
-        "raven/importer/scanners/claude_code.py",
-        "raven/importer/scanners/hermes.py",
         "raven/memory_engine/consolidate/consolidator.py",
         "raven/proactive_engine/schedulers/cron/tool.py",
         "raven/proactive_engine/sentinel/attention_producers/daily_plan.py",
-        "raven/proactive_engine/sentinel/executor/action_executor.py",
-        "raven/proactive_engine/sentinel/executor/decision_consumer.py",
         "raven/proactive_engine/sentinel/executor/decision_router.py",
-        "raven/proactive_engine/sentinel/executor/dispatcher.py",
-        "raven/proactive_engine/sentinel/executor/runner.py",
         "raven/proactive_engine/sentinel/predictor/prompts.py",
-        "raven/proactive_engine/sentinel/predictor/task_discoverer.py",
         "raven/proactive_engine/sentinel/trigger_policy/prompts.py",
         "raven/session/title.py",
     }
