@@ -179,8 +179,8 @@ class RpcTurnRunner(AgentTurnRunner):
         # Function-level on purpose: the acp client family is future shelf
         # cargo and must not be named at this module's import time
         # (binding-time debt).
-        from raven.agent.acp.asker import AskViaTool, start_ask_turn
-        from raven.agent.acp.resolver import Autofill
+        from raven.agent.acp_client.asker import AskViaTool, start_ask_turn
+        from raven.agent.acp_client.resolver import Autofill
 
         ask_tool = tools.get("ask_user") if tools is not None else None
         interactive = req.origin is Origin.USER and isinstance(ask_tool, AskUserTool)

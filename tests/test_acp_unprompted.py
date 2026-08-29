@@ -14,7 +14,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from raven.agent.acp.unprompted import UnpromptedRecorder
+from raven.agent.acp_client.unprompted import UnpromptedRecorder
 
 
 class _Registry:
@@ -145,7 +145,7 @@ async def test_silence_ends_a_turn_that_reports_no_usage(tmp_path, monkeypatch):
     """``message.complete`` produces a wire frame only when there is usage to
     report, so a turn without one ends in no frame at all -- waited on alone,
     one live wake round was buffered forever. Silence is the fallback ending."""
-    import raven.agent.acp.unprompted as mod
+    import raven.agent.acp_client.unprompted as mod
 
     monkeypatch.setattr(mod, "_IDLE_S", 0.05)
     rec, emitted = _recorder(tmp_path)
@@ -162,8 +162,8 @@ async def test_a_resumed_session_does_not_replay_its_history_as_an_unprompted_tu
     transcript as `session/update` frames. No run holds the session yet at that
     point, so without a guard those fall through to the resident recorder and
     every resumed turn logs its own history as work the agent did unasked."""
-    from raven.agent.acp.capabilities import CapabilitySnapshot
-    from raven.agent.acp.pool import _SessionRouter
+    from raven.agent.acp_client.capabilities import CapabilitySnapshot
+    from raven.agent.acp_client.pool import _SessionRouter
     from raven.agent.subagent.backends.acp_agent import AcpAgentBackend
 
     router = _SessionRouter("Oncall")

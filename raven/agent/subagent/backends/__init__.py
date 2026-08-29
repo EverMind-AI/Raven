@@ -67,7 +67,7 @@ class AgentMeta(NamedTuple):
     modes: tuple[Any, ...] = ()
     """The operating profiles this agent offers, or ``()`` when it offers none.
 
-    ``raven.agent.acp.capabilities.AcpMode`` records, measured at registration
+    ``raven.agent.acp_client.capabilities.AcpMode`` records, measured at registration
     from the agent's own session response -- only the acp transport has them.
     Unlike the three capabilities above these are not a yes/no about the
     transport but a menu the dispatching model picks from, so they reach the
@@ -207,7 +207,7 @@ def acp_snapshot_for(cfg: Any) -> Any:
     the alternative is a capability quietly disappearing with nothing anywhere
     connecting it to the edit that caused it.
     """
-    from raven.agent.acp.capabilities import SnapshotStore
+    from raven.agent.acp_client.capabilities import SnapshotStore
 
     name = getattr(cfg, "name", "") or ""
     try:
@@ -317,7 +317,7 @@ def build_third_party_backend(cfg: Any, *, registry: Any = None, timeout: int | 
             allow_mcp_secrets=cfg.allow_mcp_secrets,
         )
     if kind == "acp":
-        from raven.agent.acp.capabilities import CapabilitySnapshot
+        from raven.agent.acp_client.capabilities import CapabilitySnapshot
 
         snapshot = acp_snapshot_for(cfg)
         return AcpAgentBackend(

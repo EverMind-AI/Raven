@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from raven.agent.acp import autofill, resolver
-from raven.agent.acp.resolver import Autofill
+from raven.agent.acp_client import autofill, resolver
+from raven.agent.acp_client.resolver import Autofill
 from raven.config.raven import MemoryConfig, SubagentQuestionsConfig
 from raven.providers.openai_codex_provider import _convert_messages
 from raven.spine.events import ToolPhase
@@ -604,14 +604,14 @@ async def test_resolve_sends_the_turns_model_rather_than_the_providers_default()
 
 
 def test_current_autofill_is_none_before_a_turn_binds_one():
-    from raven.agent.acp.asker import current_autofill, start_ask_turn
+    from raven.agent.acp_client.asker import current_autofill, start_ask_turn
 
     start_ask_turn(None, conversation_id="tui:c1")
     assert current_autofill() is None
 
 
 def test_start_ask_turn_binds_the_autofill():
-    from raven.agent.acp.asker import current_autofill, start_ask_turn
+    from raven.agent.acp_client.asker import current_autofill, start_ask_turn
 
     marker = object()
     start_ask_turn(None, marker, conversation_id="tui:c1")
@@ -621,7 +621,7 @@ def test_start_ask_turn_binds_the_autofill():
 def test_start_ask_turn_still_takes_one_positional_asker():
     # Every existing caller passes the asker positionally and unpacks two values
     # from current_ask; neither may change.
-    from raven.agent.acp.asker import current_ask, current_autofill, start_ask_turn
+    from raven.agent.acp_client.asker import current_ask, current_autofill, start_ask_turn
 
     start_ask_turn("asker-obj", conversation_id="tui:c1")
     assert current_ask() == ("asker-obj", "tui:c1")

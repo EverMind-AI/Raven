@@ -37,7 +37,7 @@ unpinned command would silently change which adapter build a user runs; the cost
 is that these need bumping deliberately.
 
 Every preset runs unattended, so none of them may stop to ask permission: raven
-answers whatever an ACP agent asks (``raven/agent/acp/permissions.py``), and the
+answers whatever an ACP agent asks (``raven/agent/acp_client/permissions.py``), and the
 two adapters that also take a launch-time "never ask" setting are configured with
 it below so the question is not asked in the first place. The rest have no such
 setting -- checked, not assumed.
@@ -130,7 +130,7 @@ THIRD_PARTY_SUBAGENT_PRESETS: dict[str, dict[str, Any]] = {
         # Its default mode ("agent") is approval `on-request` with
         # `networkAccess: false`, which is the cli preset's sandbox minus the
         # network the cli preset explicitly turned on. Raven approves whatever
-        # an ACP agent asks for anyway (raven/agent/acp/permissions.py), so
+        # an ACP agent asks for anyway (raven/agent/acp_client/permissions.py), so
         # asking buys nothing but a round trip per tool call -- and the mode is
         # also what restores network access, which no per-call approval does.
         # Measured in codex-acp 1.1.14: AgentMode.AgentFullAccess is approval

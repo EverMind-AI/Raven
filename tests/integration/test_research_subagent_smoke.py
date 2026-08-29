@@ -87,7 +87,7 @@ async def test_the_startup_backfill_measures_statefulness_by_itself(tmp_path: Pa
     """
     from types import SimpleNamespace
 
-    from raven.agent.acp import capabilities
+    from raven.agent.acp_client import capabilities
     from raven.agent.subagent import probe
     from raven.agent.subagent.backends import agent_meta
     from raven.config.schema import ThirdPartyAcpSubagentConfig

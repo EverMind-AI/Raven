@@ -48,7 +48,7 @@ def _cfg(home: Path):
 
 
 async def test_ravens_own_probe_reports_the_agent_ready(tmp_path):
-    from raven.agent.acp.capabilities import verify_agent
+    from raven.agent.acp_client.capabilities import verify_agent
 
     snapshot = await verify_agent(_cfg(tmp_path / "home"))
 
@@ -65,7 +65,7 @@ async def test_the_probe_reads_back_exactly_what_the_agent_declared(tmp_path):
     from ``promptCapabilities``, so a flag the agent set and the client cannot
     find would show up here as a missing modality rather than as a passing test.
     """
-    from raven.agent.acp.capabilities import verify_agent
+    from raven.agent.acp_client.capabilities import verify_agent
 
     snapshot = await verify_agent(_cfg(tmp_path / "home"))
 
@@ -84,7 +84,7 @@ async def test_the_probe_opens_a_real_session_not_just_a_handshake(tmp_path):
     """``session/new`` is the second round trip, and it is what separates "the
     executable exists" from "this agent is usable" -- the gap a ``which`` probe
     can never close. The detail line names the session capability it found."""
-    from raven.agent.acp.capabilities import verify_agent
+    from raven.agent.acp_client.capabilities import verify_agent
 
     snapshot = await verify_agent(_cfg(tmp_path / "home"))
 

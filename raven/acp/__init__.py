@@ -9,7 +9,7 @@ The layers, outermost first:
 
 * :mod:`raven.acp.stdio` -- descriptors and framing. Knows nothing about ACP.
 * :mod:`raven.acp.protocol` -- the wire helpers the agent direction needs, on top
-  of the framing already proven in :mod:`raven.agent.acp.protocol`.
+  of the framing already proven in :mod:`raven.agent.acp_client.protocol`.
 * :mod:`raven.acp.capabilities` -- what this agent declares, and what the client
   declared back.
 * :mod:`raven.acp.updates` -- the outbound translator, which is also where a
@@ -30,8 +30,8 @@ The layers, outermost first:
   teardown.
 
 The opposite direction -- raven spawning somebody else's ACP agent -- already
-exists under :mod:`raven.agent.acp` and is not this. The two share only the wire
-layer in :mod:`raven.agent.acp.protocol`, which is imported rather than copied.
+exists under :mod:`raven.agent.acp_client` and is not this. The two share only the wire
+layer in :mod:`raven.agent.acp_client.protocol`, which is imported rather than copied.
 """
 
 from raven.acp.stdio import MAX_FRAME_BYTES, claim_stdout, read_frames, write_frame

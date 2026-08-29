@@ -653,7 +653,7 @@ async def test_a_row_recorded_during_a_tool_call_reaches_the_next_llm_call(tmp_p
     # The seam: a sub-agent's question is answered while its spawn tool is still
     # running, which is why the row can only be written at the next iteration's
     # top -- splicing it in mid-batch would orphan the running tool_call.
-    from raven.agent.acp.asker import start_ask_turn
+    from raven.agent.acp_client.asker import start_ask_turn
 
     auto = _RecordingAutofill()
 

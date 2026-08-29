@@ -17,7 +17,7 @@ conversation's sub-agent history:
     sub-agent instance's session.
 
 The wire frames behind those turns are deliberately *not* copied here. They are
-already written, in full and in order, by :mod:`raven.agent.acp.journal`, and a
+already written, in full and in order, by :mod:`raven.agent.acp_client.journal`, and a
 per-instance copy was measured to hold no record the journal did not: 47 records
 against 47, for 78x the transcript's bytes. What such a copy would have added is
 reach -- the journal lives in the audit store, outside any workspace a sub-agent

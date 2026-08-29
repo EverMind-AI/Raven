@@ -24,7 +24,7 @@ from unittest.mock import patch
 import pytest
 from loguru import logger
 
-from raven.agent.acp.capabilities import (
+from raven.agent.acp_client.capabilities import (
     AcpMode,
     CapabilitySnapshot,
     SnapshotStore,
@@ -32,8 +32,8 @@ from raven.agent.acp.capabilities import (
     snapshot_fingerprint,
     verify_agent,
 )
-from raven.agent.acp.pool import close_pool, get_pool
-from raven.agent.acp.protocol import AcpRemoteError
+from raven.agent.acp_client.pool import close_pool, get_pool
+from raven.agent.acp_client.protocol import AcpRemoteError
 from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_backend, third_party_agent_meta
 from raven.agent.subagent.backends.acp_agent import AcpAgentBackend, AcpEmptyTurnError
 from raven.agent.subagent.instances import InstanceRegistry
@@ -179,8 +179,8 @@ def test_the_per_session_mcp_promise_is_read_from_meta_and_survives_storage() ->
     ``to_row`` / ``from_row`` would read as absent on every dispatch after the
     one that measured it.
     """
-    from raven.agent.acp.capabilities import handshake_of
-    from raven.agent.acp.protocol import SESSION_MCP_CAPABILITY
+    from raven.agent.acp_client.capabilities import handshake_of
+    from raven.agent.acp_client.protocol import SESSION_MCP_CAPABILITY
 
     def caps(meta: dict | None) -> dict:
         agent: dict = {"mcpCapabilities": {"http": True}}
@@ -280,7 +280,7 @@ async def test_an_edited_launch_config_does_not_cost_an_agent_its_resume(tmp_pat
     it does not recover on its own: only a test records a new snapshot.
     """
     path = tmp_path / "caps.json"
-    monkeypatch.setattr("raven.agent.acp.capabilities.default_snapshot_path", lambda: path)
+    monkeypatch.setattr("raven.agent.acp_client.capabilities.default_snapshot_path", lambda: path)
     cfg = stub_config("a")
     SnapshotStore(path=path).record(await verify_agent(cfg))
     assert third_party_agent_meta(cfg).stateful is True
@@ -298,7 +298,7 @@ async def test_a_stale_snapshot_is_never_reported_as_a_verdict(tmp_path: Path, m
     no measurement backs, so the row asks for a test instead.
     """
     path = tmp_path / "caps.json"
-    monkeypatch.setattr("raven.agent.acp.capabilities.default_snapshot_path", lambda: path)
+    monkeypatch.setattr("raven.agent.acp_client.capabilities.default_snapshot_path", lambda: path)
     cfg = stub_config("a")
     SnapshotStore(path=path).record(await verify_agent(cfg))
 
@@ -470,7 +470,7 @@ def test_the_relearned_menu_reaches_the_schema_the_model_picks_from(
     store learning the new wording proves nothing on its own.
     """
     path = tmp_path / "caps.json"
-    monkeypatch.setattr("raven.agent.acp.capabilities.default_snapshot_path", lambda: path)
+    monkeypatch.setattr("raven.agent.acp_client.capabilities.default_snapshot_path", lambda: path)
     cfg = stub_config("a")
     stored = _with_modes(cfg, AcpMode(id="fast", name="Fast", description="what it used to say"))
     SnapshotStore(path=path).record(stored)
@@ -531,7 +531,7 @@ def test_acp_meta_reads_the_stored_snapshot_when_none_is_passed(tmp_path: Path, 
     with no snapshot; keeping the lookup inside is what lets them stay untouched.
     """
     path = tmp_path / "caps.json"
-    monkeypatch.setattr("raven.agent.acp.capabilities.default_snapshot_path", lambda: path)
+    monkeypatch.setattr("raven.agent.acp_client.capabilities.default_snapshot_path", lambda: path)
     cfg = stub_config("a")
     assert third_party_agent_meta(cfg).stateful is False
     SnapshotStore(path=path).record(_snapshot("a", cfg, can_resume=True))
@@ -586,7 +586,7 @@ async def test_probe_does_not_show_a_green_light_before_verification(tmp_path: P
     speaks the protocol, holds a credential, or can reach the gateway it bridges
     to. So an unverified entry is ``attention``, never ``ready``.
     """
-    monkeypatch.setattr("raven.agent.acp.capabilities.default_snapshot_path", lambda: tmp_path / "caps.json")
+    monkeypatch.setattr("raven.agent.acp_client.capabilities.default_snapshot_path", lambda: tmp_path / "caps.json")
     cfg = stub_config("a")
     result = await probe_one(cfg, source="config")
     assert result.kind == "acp"
@@ -615,7 +615,7 @@ async def test_an_explicit_test_retries_past_a_stale_recorded_failure(tmp_path: 
     """
     from raven.agent.subagent.probe import run_test
 
-    monkeypatch.setattr("raven.agent.acp.capabilities.default_snapshot_path", lambda: tmp_path / "caps.json")
+    monkeypatch.setattr("raven.agent.acp_client.capabilities.default_snapshot_path", lambda: tmp_path / "caps.json")
     cfg = stub_config("a")
     stale = await verify_agent(stub_config("a", mode="silent", ready_timeout_ms=1000))
     assert stale.status == "missing"
@@ -648,7 +648,7 @@ async def test_a_dispatch_relearns_the_menu_the_agent_now_serves(
     every route into a session, and a dispatch is the first place that is seen.
     """
     path = tmp_path / "caps.json"
-    monkeypatch.setattr("raven.agent.acp.capabilities.default_snapshot_path", lambda: path)
+    monkeypatch.setattr("raven.agent.acp_client.capabilities.default_snapshot_path", lambda: path)
     cfg = stub_config("a")
     SnapshotStore(path=path).record(
         CapabilitySnapshot(
@@ -811,7 +811,7 @@ async def test_an_empty_turn_names_a_request_raven_could_not_answer(tmp_path: Pa
     without this the error reads as an unexplained empty turn.
 
     Permission requests used to be refused this way too and are now answered
-    (``raven/agent/acp/permissions.py``); this covers what raven still refuses.
+    (``raven/agent/acp_client/permissions.py``); this covers what raven still refuses.
     """
     backend = build_third_party_backend(stub_config("a", mode="asks"))
     for task_id in ("t1", "t2"):
@@ -1017,7 +1017,7 @@ async def test_an_interrupted_first_turn_still_binds_its_session(tmp_path: Path)
 async def test_an_unsettled_cancel_still_drops_the_binding(tmp_path: Path) -> None:
     """The other half: a cancel the agent ignored leaves the turn running on it,
     so the session must NOT be reused -- prompting it again would collide."""
-    from raven.agent.acp import client as client_mod
+    from raven.agent.acp_client import client as client_mod
 
     cfg = stub_config("a", mode="cancel_deaf")
     registry = InstanceRegistry(path=tmp_path / "instances.json")
@@ -1236,7 +1236,7 @@ def test_the_launch_key_covers_every_launch_parameter() -> None:
     """
     import inspect
 
-    from raven.agent.acp.pool import LAUNCH_PARAMS, AcpConnectionPool, launch_key
+    from raven.agent.acp_client.pool import LAUNCH_PARAMS, AcpConnectionPool, launch_key
 
     # `name` is the dict key itself; `on_request` is a callable, and swapping the
     # handler does not make the running process the wrong one. `ready_timeout_s`
@@ -1364,7 +1364,7 @@ def _journal_records(path: Path) -> list[dict]:
 
 
 def _journal_for(agent: str) -> Path:
-    from raven.agent.acp.journal import journal_root
+    from raven.agent.acp_client.journal import journal_root
 
     files = sorted(journal_root().rglob(f"{agent}-*.jsonl"))
     assert files, f"no journal was opened for {agent!r}"
@@ -1633,8 +1633,8 @@ async def test_a_caller_with_no_budget_still_gets_a_bounded_handshake() -> None:
     lock, so every dispatch to it blocks with nothing to end the wait. That is a
     worse failure than the fixed 120s this revision replaced.
     """
-    from raven.agent.acp import pool as pool_mod
-    from raven.agent.acp.client import AcpClient
+    from raven.agent.acp_client import pool as pool_mod
+    from raven.agent.acp_client.client import AcpClient
 
     seen: list[float | None] = []
     real = AcpClient.request
@@ -1669,7 +1669,7 @@ async def test_a_cancelled_connect_does_not_leak_the_process(monkeypatch) -> Non
     cancelled there is in nobody's bookkeeping: it never reached `_connections`,
     so `close_all` at shutdown cannot find it and the process outlives raven.
     """
-    from raven.agent.acp.client import AcpClient
+    from raven.agent.acp_client.client import AcpClient
 
     launched: list[AcpClient] = []
     real_launch = AcpClient.launch.__func__
@@ -1698,7 +1698,7 @@ async def test_a_connection_that_stopped_speaking_is_dead_and_gets_replaced() ->
     the pool re-issued the same dead connection and every later task failed in
     milliseconds. A closed read loop is a dead connection, whatever ps says.
     """
-    from raven.agent.acp.protocol import AcpConnectionError
+    from raven.agent.acp_client.protocol import AcpConnectionError
 
     cfg = stub_config("mute", mode="mute")
     first = await get_pool().acquire(name="mute", command=cfg.command, env=dict(cfg.env))
@@ -1722,9 +1722,9 @@ async def test_the_eof_error_carries_the_exit_code_and_the_last_stderr() -> None
     that had both an exit code and a written reason: EOF races the reap and the
     stderr drain. The read loop now waits for them before composing the error.
     """
-    from raven.agent.acp import protocol as acp_protocol
-    from raven.agent.acp.client import AcpClient
-    from raven.agent.acp.protocol import AcpConnectionError
+    from raven.agent.acp_client import protocol as acp_protocol
+    from raven.agent.acp_client.client import AcpClient
+    from raven.agent.acp_client.protocol import AcpConnectionError
 
     cfg = stub_config("abort", mode="abort")
     client = await AcpClient.launch(name="abort", command=cfg.command, env=dict(cfg.env))
@@ -1744,8 +1744,8 @@ async def test_an_unanswered_request_does_not_stall_the_read_loop() -> None:
     session on a pooled connection, which read as "two sub-agents at once
     hangs" with nothing pointing at the question.
     """
-    from raven.agent.acp import protocol
-    from raven.agent.acp.client import AcpClient
+    from raven.agent.acp_client import protocol
+    from raven.agent.acp_client.client import AcpClient
 
     seen: list[str] = []
     blocked = asyncio.Event()
@@ -1788,9 +1788,9 @@ async def test_read_loop_death_cancels_in_flight_answers() -> None:
     connection that could never deliver the answer. ``close`` cancels them; a
     loop that dies on its own has to as well.
     """
-    from raven.agent.acp import protocol
-    from raven.agent.acp.client import AcpClient
-    from raven.agent.acp.protocol import AcpConnectionError
+    from raven.agent.acp_client import protocol
+    from raven.agent.acp_client.client import AcpClient
+    from raven.agent.acp_client.protocol import AcpConnectionError
 
     asked = asyncio.Event()
     cancelled = asyncio.Event()
@@ -1833,8 +1833,8 @@ async def test_a_pending_question_does_not_stall_another_session() -> None:
     proves a second session completes a whole prompt round trip on the same
     connection while that question is still pending.
     """
-    from raven.agent.acp import protocol
-    from raven.agent.acp.client import AcpClient
+    from raven.agent.acp_client import protocol
+    from raven.agent.acp_client.client import AcpClient
 
     asked = asyncio.Event()
     seen: list[str] = []
@@ -1968,8 +1968,8 @@ async def test_a_retracted_request_cancels_the_handler_still_answering_it() -> N
     run stopped listening, so an unhandled one leaves the sheet up for the whole
     of the question broker's own budget, answering into a turn that has ended.
     """
-    from raven.agent.acp import protocol
-    from raven.agent.acp.client import AcpClient
+    from raven.agent.acp_client import protocol
+    from raven.agent.acp_client.client import AcpClient
 
     started = asyncio.Event()
     retracted = asyncio.Event()
@@ -2017,8 +2017,8 @@ async def test_an_id_no_dict_can_hold_does_not_kill_the_connection() -> None:
     The stub ends the turn only once raven has answered the request whose id it
     could not index, so a connection that died reports as a failed prompt.
     """
-    from raven.agent.acp import protocol
-    from raven.agent.acp.client import AcpClient
+    from raven.agent.acp_client import protocol
+    from raven.agent.acp_client.client import AcpClient
 
     answered: list[str] = []
 
@@ -2061,8 +2061,8 @@ async def test_an_unserialisable_handler_result_does_not_vanish_unretrieved() ->
     task's body, one frame up -- so the outcome is a normal assertion instead of
     whatever happens to be running when the collector fires.
     """
-    from raven.agent.acp import protocol
-    from raven.agent.acp.client import AcpClient
+    from raven.agent.acp_client import protocol
+    from raven.agent.acp_client.client import AcpClient
 
     class _NotJsonSerialisable:
         def __repr__(self) -> str:
@@ -2205,7 +2205,7 @@ def test_the_most_permissive_offered_option_is_the_one_chosen() -> None:
     ``allow_always``, another adapter may mint anything -- while the four kinds
     are the protocol's. An id raven invented comes back from codex as a decline.
     """
-    from raven.agent.acp.permissions import permission_outcome
+    from raven.agent.acp_client.permissions import permission_outcome
 
     offered = {
         "options": [
@@ -2218,7 +2218,7 @@ def test_the_most_permissive_offered_option_is_the_one_chosen() -> None:
 
 
 def test_a_reject_is_never_chosen_over_an_allow() -> None:
-    from raven.agent.acp.permissions import permission_outcome
+    from raven.agent.acp_client.permissions import permission_outcome
 
     offered = {"options": [{"optionId": "r", "kind": "reject_always"}, {"optionId": "o", "kind": "allow_once"}]}
     assert permission_outcome(offered) == {"outcome": "selected", "optionId": "o"}
@@ -2230,7 +2230,7 @@ def test_only_rejects_offered_still_selects_one() -> None:
     Measured on codex-acp: an ``outcome: cancelled`` is ``{decision: "cancel"}``
     for the whole turn, while a selected reject is one tool call declined.
     """
-    from raven.agent.acp.permissions import permission_outcome
+    from raven.agent.acp_client.permissions import permission_outcome
 
     assert permission_outcome({"options": [{"optionId": "r", "kind": "reject_once"}]}) == {
         "outcome": "selected",
@@ -2239,14 +2239,14 @@ def test_only_rejects_offered_still_selects_one() -> None:
 
 
 def test_an_option_with_no_kind_is_still_answerable() -> None:
-    from raven.agent.acp.permissions import permission_outcome
+    from raven.agent.acp_client.permissions import permission_outcome
 
     assert permission_outcome({"options": [{"optionId": "x"}]}) == {"outcome": "selected", "optionId": "x"}
 
 
 def test_no_options_at_all_is_the_only_cancel() -> None:
     """An ``optionId`` raven made up is indistinguishable from a real choice."""
-    from raven.agent.acp.permissions import permission_outcome
+    from raven.agent.acp_client.permissions import permission_outcome
 
     assert permission_outcome({"options": []}) == {"outcome": "cancelled"}
     assert permission_outcome({}) == {"outcome": "cancelled"}
@@ -2254,8 +2254,8 @@ def test_no_options_at_all_is_the_only_cancel() -> None:
 
 async def test_the_approver_leaves_unsupported_methods_refused() -> None:
     """It answers permissions only; ``fs/*`` is advertised as unsupported."""
-    from raven.agent.acp.client import UNHANDLED
-    from raven.agent.acp.permissions import auto_approver
+    from raven.agent.acp_client.client import UNHANDLED
+    from raven.agent.acp_client.permissions import auto_approver
 
     handle = auto_approver("a")
     assert await handle("fs/read_text_file", {"path": "/etc/hostname"}) is UNHANDLED
@@ -2263,7 +2263,7 @@ async def test_the_approver_leaves_unsupported_methods_refused() -> None:
 
 async def test_an_observer_that_raises_still_yields_the_approval() -> None:
     """An unanswered permission request cancels the whole turn."""
-    from raven.agent.acp.permissions import auto_approver
+    from raven.agent.acp_client.permissions import auto_approver
     from tests import acp_frames
 
     async def boom(method: str, params: dict[str, object]) -> None:
@@ -2279,7 +2279,7 @@ async def test_an_observer_that_raises_still_yields_the_approval() -> None:
 
 
 async def test_a_cancelled_turn_is_cancelled_on_the_agent_too() -> None:
-    from raven.agent.acp.pool import get_pool
+    from raven.agent.acp_client.pool import get_pool
 
     connection = await get_pool().acquire(
         name="stub",
@@ -2308,8 +2308,8 @@ async def test_a_cancelled_turn_is_cancelled_on_the_agent_too() -> None:
 
 
 async def test_an_agent_that_ignores_the_cancel_marks_the_session_unsettled() -> None:
-    from raven.agent.acp import client as client_mod
-    from raven.agent.acp.pool import get_pool
+    from raven.agent.acp_client import client as client_mod
+    from raven.agent.acp_client.pool import get_pool
 
     monkeyed = client_mod._CANCEL_SETTLE_S
     client_mod._CANCEL_SETTLE_S = 0.3
@@ -2343,8 +2343,8 @@ async def test_an_agent_that_ignores_the_cancel_marks_the_session_unsettled() ->
 
 
 async def test_draining_notifies_without_waiting_for_the_turn_to_settle() -> None:
-    from raven.agent.acp import client as client_mod
-    from raven.agent.acp.pool import get_pool
+    from raven.agent.acp_client import client as client_mod
+    from raven.agent.acp_client.pool import get_pool
 
     connection = await get_pool().acquire(
         name="stub",
@@ -2377,8 +2377,8 @@ async def test_draining_notifies_without_waiting_for_the_turn_to_settle() -> Non
 
 
 async def test_closing_the_pool_leaves_drain_mode() -> None:
-    from raven.agent.acp import client as client_mod
-    from raven.agent.acp.pool import close_pool
+    from raven.agent.acp_client import client as client_mod
+    from raven.agent.acp_client.pool import close_pool
 
     client_mod.begin_drain()
     await close_pool()
@@ -2388,7 +2388,7 @@ async def test_closing_the_pool_leaves_drain_mode() -> None:
 async def test_a_turn_that_would_not_stop_drops_its_session_binding(tmp_path: Path) -> None:
     """The settle budget expired, so the turn is still running on the agent while
     the session lock is released -- prompting that session again would collide."""
-    from raven.agent.acp import client as client_mod
+    from raven.agent.acp_client import client as client_mod
 
     cfg = stub_config("stub", mode="cancel_deaf")
     registry = InstanceRegistry(path=tmp_path / "inst.json")
@@ -2706,7 +2706,7 @@ async def test_a_cancelled_turn_still_records_where_its_frames_are(tmp_path: Pat
     an ``opencode`` dispatch that ran past its budget left a record with no
     frames at all before this.
     """
-    from raven.agent.acp import client as client_mod
+    from raven.agent.acp_client import client as client_mod
     from raven.agent.subagent import activity
 
     backend = build_third_party_backend(stub_config("a", mode="cancel_deaf"))
@@ -3113,8 +3113,8 @@ async def test_a_backfilled_subject_overwrites_a_colliding_raw_input_key() -> No
 
 async def test_an_elicitation_reaches_the_elicitor_of_its_own_session() -> None:
     """A pooled connection carries several runs; sessionId is what separates them."""
-    from raven.agent.acp.permissions import request_dispatcher
-    from raven.agent.acp.pool import _SessionElicitors
+    from raven.agent.acp_client.permissions import request_dispatcher
+    from raven.agent.acp_client.pool import _SessionElicitors
 
     class Spy:
         def __init__(self, tag):
@@ -3136,8 +3136,8 @@ async def test_an_elicitation_reaches_the_elicitor_of_its_own_session() -> None:
 
 
 async def test_an_elicitation_for_an_unknown_session_declines() -> None:
-    from raven.agent.acp.permissions import request_dispatcher
-    from raven.agent.acp.pool import _SessionElicitors
+    from raven.agent.acp_client.permissions import request_dispatcher
+    from raven.agent.acp_client.pool import _SessionElicitors
 
     handle = request_dispatcher("stub", elicitors=_SessionElicitors("stub"))
     got = await handle("elicitation/create", {"sessionId": "gone", "mode": "form", "message": "m"})
@@ -3146,8 +3146,8 @@ async def test_an_elicitation_for_an_unknown_session_declines() -> None:
 
 async def test_a_request_scoped_elicitation_declines_rather_than_erroring() -> None:
     """`-32601` on a declared capability is a lie the agent cannot act on."""
-    from raven.agent.acp.permissions import request_dispatcher
-    from raven.agent.acp.pool import _SessionElicitors
+    from raven.agent.acp_client.permissions import request_dispatcher
+    from raven.agent.acp_client.pool import _SessionElicitors
 
     handle = request_dispatcher("stub", elicitors=_SessionElicitors("stub"))
     got = await handle("elicitation/create", {"requestId": "r1", "mode": "form", "message": "m"})
@@ -3155,8 +3155,8 @@ async def test_a_request_scoped_elicitation_declines_rather_than_erroring() -> N
 
 
 async def test_an_elicitor_that_raises_still_answers() -> None:
-    from raven.agent.acp.permissions import request_dispatcher
-    from raven.agent.acp.pool import _SessionElicitors
+    from raven.agent.acp_client.permissions import request_dispatcher
+    from raven.agent.acp_client.pool import _SessionElicitors
 
     class Boom:
         async def elicit(self, params):
@@ -3171,8 +3171,8 @@ async def test_an_elicitor_that_raises_still_answers() -> None:
 
 
 async def test_the_dispatcher_still_approves_permissions_and_refuses_the_rest() -> None:
-    from raven.agent.acp.client import UNHANDLED
-    from raven.agent.acp.permissions import request_dispatcher
+    from raven.agent.acp_client.client import UNHANDLED
+    from raven.agent.acp_client.permissions import request_dispatcher
 
     handle = request_dispatcher("stub")
     approved = await handle("session/request_permission", {"options": [{"optionId": "a", "kind": "allow_always"}]})
@@ -3182,7 +3182,7 @@ async def test_the_dispatcher_still_approves_permissions_and_refuses_the_rest() 
 
 async def test_an_elicitation_declines_when_the_dispatcher_has_no_registry() -> None:
     """No registry at all must still decline rather than raise or claim UNHANDLED."""
-    from raven.agent.acp.permissions import request_dispatcher
+    from raven.agent.acp_client.permissions import request_dispatcher
 
     handle = request_dispatcher("stub")
     got = await handle("elicitation/create", {"sessionId": "s", "mode": "form", "message": "m"})
@@ -3191,7 +3191,7 @@ async def test_an_elicitation_declines_when_the_dispatcher_has_no_registry() -> 
 
 def test_elicitor_detach_is_identity_checked() -> None:
     """An unconditional pop lets a finishing run unserve a later one, and ``==`` must not substitute for ``is``."""
-    from raven.agent.acp.pool import _SessionElicitors
+    from raven.agent.acp_client.pool import _SessionElicitors
 
     class AlwaysEqual:
         """Equal to everything, so identity and equality diverge for these two."""
@@ -3212,7 +3212,7 @@ def test_elicitor_detach_is_identity_checked() -> None:
 
 async def test_a_dispatched_acp_run_answers_its_agents_question(tmp_path: Path) -> None:
     """End to end: the agent asks mid-turn, the user answers, the agent uses it."""
-    from raven.agent.acp.asker import start_ask_turn
+    from raven.agent.acp_client.asker import start_ask_turn
 
     seen: list[str] = []
 
@@ -3241,7 +3241,7 @@ async def test_a_dispatched_acp_run_answers_a_question_sent_as_an_update(tmp_pat
     choices the agent offered, and the agent gets the answer inside the turn it
     was still holding open.
     """
-    from raven.agent.acp.asker import start_ask_turn
+    from raven.agent.acp_client.asker import start_ask_turn
 
     seen: list[tuple[str, list | None]] = []
 
@@ -3268,7 +3268,7 @@ async def test_a_question_sent_as_an_update_does_not_stall_the_read_loop(tmp_pat
     connection so would every other session's. The turn completing with its
     content is what says the answer was taken off that loop.
     """
-    from raven.agent.acp.asker import start_ask_turn
+    from raven.agent.acp_client.asker import start_ask_turn
 
     class Parks:
         async def ask(self, prompt, choices, conversation_id):
@@ -3292,7 +3292,7 @@ async def test_a_background_turn_answers_the_question_rather_than_ignoring_it(tm
     fail-safe. The empty answer is what its own tool renders as "the user did
     not answer; proceed with best judgment".
     """
-    from raven.agent.acp.asker import start_ask_turn
+    from raven.agent.acp_client.asker import start_ask_turn
 
     start_ask_turn(None, conversation_id="tui:c1")
     cfg = stub_config("a", mode="asks_user_and_waits")
@@ -3306,7 +3306,7 @@ async def test_a_background_turn_answers_the_question_rather_than_ignoring_it(tm
 
 def test_responder_detach_is_identity_checked() -> None:
     """Same trap as the elicitor registry: a finishing run must not tear down a later one's."""
-    from raven.agent.acp.pool import _SessionResponders
+    from raven.agent.acp_client.pool import _SessionResponders
 
     class AlwaysEqual:
         def __eq__(self, other):
@@ -3329,8 +3329,8 @@ async def test_a_question_outliving_its_run_is_taken_down_with_it(tmp_path: Path
     alone it holds the conversation's form lock for `LOCK_WAIT_SECONDS` and
     keeps a sheet up that answers into a run that is gone.
     """
-    from raven.agent.acp.asker import start_ask_turn
-    from raven.agent.acp.elicitor import Elicitor
+    from raven.agent.acp_client.asker import start_ask_turn
+    from raven.agent.acp_client.elicitor import Elicitor
 
     asked: list[str] = []
 
@@ -3382,7 +3382,7 @@ async def test_a_second_run_on_a_pooled_connection_asks_its_own_turns_user(tmp_p
     turn's asker, whatever a later turn bound. No pool close between the two
     runs here on purpose: closing it is what hides this.
     """
-    from raven.agent.acp.asker import start_ask_turn
+    from raven.agent.acp_client.asker import start_ask_turn
 
     class Tool:
         def __init__(self) -> None:
@@ -3551,8 +3551,8 @@ async def test_a_pinned_cwd_launches_there_but_the_session_follows_the_caller(
     relative paths did not resolve, and what it wrote landed in the vendored
     checkout rather than the caller's tree.
     """
-    from raven.agent.acp.client import AcpClient
-    from raven.agent.acp.pool import AcpConnectionPool
+    from raven.agent.acp_client.client import AcpClient
+    from raven.agent.acp_client.pool import AcpConnectionPool
 
     pinned = tmp_path / "vendored-folder"
     pinned.mkdir()
@@ -3588,8 +3588,8 @@ async def test_an_unpinned_entry_uses_the_caller_for_both(tmp_path: Path, monkey
     """The boundary on the split above: with no pinned ``cwd`` both values are the
     caller's workspace, which is what every preset and hand-written acp row has
     always done -- so the split changes nothing for them."""
-    from raven.agent.acp.client import AcpClient
-    from raven.agent.acp.pool import AcpConnectionPool
+    from raven.agent.acp_client.client import AcpClient
+    from raven.agent.acp_client.pool import AcpConnectionPool
 
     caller = tmp_path / "callers-project"
     caller.mkdir()
@@ -3628,7 +3628,7 @@ async def test_close_all_abandons_a_connection_whose_close_hangs() -> None:
     runs -- which used to be however long the sub-agent's in-flight provider
     call still had to go.
     """
-    from raven.agent.acp import pool as pool_mod
+    from raven.agent.acp_client import pool as pool_mod
 
     pool = pool_mod.AcpConnectionPool()
     released = asyncio.Event()
