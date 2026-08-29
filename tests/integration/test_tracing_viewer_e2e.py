@@ -2,7 +2,7 @@
 
 Spawns the real Node viewer against a synthetic state dir and drives it over
 HTTP, because the behaviour under test lives entirely in
-``raven/tracing/viewer/*.js`` and none of it is reachable from Python.
+``raven/cli/tracing_viewer/*.js`` and none of it is reachable from Python.
 
 Two properties are pinned here, both of which a plausible refactor can break
 silently:

@@ -174,11 +174,12 @@ include = [
     # Playbook role-pool defaults and the builtin playbook library.
     "raven/playbook/*.yaml",
     "raven/playbook/builtin/**/*.md",
-    # Tracing dashboard viewer (dependency-free Node server + static client).
-    "raven/tracing/viewer/**/*.js",
-    "raven/tracing/viewer/**/*.css",
-    "raven/tracing/viewer/**/*.html",
-    "raven/tracing/viewer/**/*.json",
+    # Tracing dashboard viewer (dependency-free Node server + static client),
+    # a CLI-launched surface, so it lives beside the CLI and not in the kernel.
+    "raven/cli/tracing_viewer/**/*.js",
+    "raven/cli/tracing_viewer/**/*.css",
+    "raven/cli/tracing_viewer/**/*.html",
+    "raven/cli/tracing_viewer/**/*.json",
 ]
 
 [tool.hatch.build.targets.sdist]
