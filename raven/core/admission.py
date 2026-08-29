@@ -97,11 +97,6 @@ def admit_slice(
             # central models spell optionality as `str | None`, and the door
             # must not turn an explicit unset into a rejection or a default.
             continue
-        if want == "object" and hasattr(value, "model_dump"):
-            # Transition form: while the central typed models still exist, an
-            # object-declared key may arrive as a nested model. It dumps to a
-            # mapping, which is the shape the declaration promises.
-            continue
         if not isinstance(value, expected):
             raise PluginConfigError(
                 f"plugin {plugin_id!r}: config key {key!r} must be {want}, "
@@ -188,10 +183,6 @@ class _NestedView:
         table = object.__getattribute__(self, "_table")
         if isinstance(other, _NestedView):
             return table == object.__getattribute__(other, "_table")
-        if hasattr(other, "model_dump"):
-            # Transition form: a view materialized from declared defaults
-            # compares by value against the central sub-model it replaces.
-            return table == other.model_dump()
         return table == other
 
     def __repr__(self) -> str:
@@ -201,8 +192,7 @@ class _NestedView:
 def _view(value: Any) -> Any:
     """Wrap plain mappings (and mappings inside lists) for attribute access.
 
-    Typed values -- central model instances during the transition, or
-    anything else with its own attributes -- pass through untouched.
+    Values that carry their own attributes pass through untouched.
     """
     if isinstance(value, dict):
         return _NestedView(value)
@@ -271,8 +261,8 @@ def dispense_channel_config(spec: Any, section: Any, *, channel: str) -> Any:
 
     A channel with no declaration keeps the verbatim section -- same rule as
     plugin slices. The slice fed to the door is the declared subset of the
-    section's values, so central defaults and declared defaults meet the
-    consistency guard, not each other's shadow.
+    file's values; everything else materializes from the declaration's own
+    defaults, which are the only defaults there are.
     """
     schema = getattr(spec, "config_schema", None) or {}
     if not schema:
@@ -281,16 +271,5 @@ def dispense_channel_config(spec: Any, section: Any, *, channel: str) -> Any:
 
     slice_ = normalize_slice_keys(schema, channel_cargo_slice(channel))
     raw = {k: v for k, v in slice_.items() if k in schema}
-    for key, decl in schema.items():
-        if decl.get("required") and key not in raw and hasattr(section, key):
-            # Zero-drift transition: an unset required key keeps today's
-            # semantics (the adapter fails at connect, not the door at start)
-            # by falling back to the central section until that model retires.
-            raw[key] = getattr(section, key)
     cargo = admit_slice(schema, raw, plugin_id=f"channel:{channel}")
-    for key, decl in schema.items():
-        if key not in cargo and "default" not in decl and hasattr(section, key):
-            # No file value and no declared default: the central model still
-            # owns this key's default until the write-side schema retires.
-            cargo[key] = getattr(section, key)
     return DispensedSlice(section, cargo)

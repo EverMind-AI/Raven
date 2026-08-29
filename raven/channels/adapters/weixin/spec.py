@@ -18,9 +18,9 @@ SPEC = ChannelSpec(
     factory=_make,
     capabilities=Capabilities(interactive_login=True, file_attachments=True),
     # Cargo declaration (config-with-cargo): the fields only this adapter
-    # consumes. Socket fields (enabled / allow_from / workspace) stay with the
-    # host. Defaults and secrecy travel with the cargo; the central model
-    # mirrors them until it retires.
+    # consumes, with their defaults, secrecy and nesting -- the declaration
+    # is the only truth. Socket fields (enabled / allow_from / workspace)
+    # stay with the host.
     # route_tag is str | int in the central model; declared as string, the
     # widest scalar the flat vocabulary offers for a mixed union.
     config_schema={

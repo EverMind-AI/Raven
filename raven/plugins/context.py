@@ -3,10 +3,10 @@
 A factory (the ``module.path:callable`` named in a manifest) receives
 exactly one :class:`PluginContext`. From it, the factory pulls:
 
-- ``config``  — the plugin's own config slice from RavenConfig, passed
-  through verbatim. The manifest's ``config_schema`` is parsed but NOT
-  validated and its defaults are NOT applied (see EM-2); a plugin must
-  supply its own defaults in code.
+- ``config``  — the plugin's own config slice from RavenConfig, after
+  admission: declared keys are type-checked and their declared defaults
+  applied, unknown keys pass through with a warning. An empty
+  ``config_schema`` keeps verbatim pass-through.
 - ``services`` — a :class:`ServiceLocator` exposing only the host
   services a backend is allowed to touch. The locator is intentionally
   narrow so plugins don't grow ambient dependencies on arbitrary host
