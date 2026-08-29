@@ -412,12 +412,9 @@ source_modules = [
     "raven.proactive_engine", "raven.core",
 ]
 forbidden_modules = ["raven.cli", "raven.rpc", "raven.acp"]
-# Debt allowlist: may only SHRINK. One lazy machinery-at-surface-address edge
-# remains, queued for relocation: the skill install engine consumed by market
-# through its rpc method wrapper.
-ignore_imports = [
-    "raven.market.install -> raven.rpc.methods.skillhub",
-]
+# Debt allowlist: none. The last allowlisted edge (market reaching the skill
+# install engine through its rpc wrapper) closed when the engine moved to
+# skill_hub; an ignore_imports entry here would be new debt, not a carry-over.
 
 [[tool.importlinter.contracts]]
 name = "the kernel stands alone"

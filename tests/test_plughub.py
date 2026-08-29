@@ -662,11 +662,11 @@ async def test_a_plugin_skill_piece_refuses_to_replace_an_existing_skill(_isolat
     """
     seen: dict = {}
 
-    async def _fake_install(params, *, agent_loop_factory=None, if_absent=False):
+    async def _fake_install(skill_id, *, agent_loop_factory=None, if_absent=False):
         seen["if_absent"] = if_absent
         return {"name": "notes"}
 
-    monkeypatch.setattr("raven.rpc.methods.skillhub.skillhub_install", _fake_install)
+    monkeypatch.setattr("raven.skill_hub.hub.install", _fake_install)
 
     entry = {
         "id": "with-skill",

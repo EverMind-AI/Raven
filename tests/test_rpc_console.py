@@ -65,7 +65,7 @@ def test_the_hub_marker_is_none_when_the_market_is_absent(monkeypatch: pytest.Mo
     real_import = builtins.__import__
 
     def _no_skillhub(name, *args, **kwargs):
-        if name == "raven.rpc.methods.skillhub":
+        if name == "raven.skill_hub.hub":
             raise ImportError("market not installed")
         return real_import(name, *args, **kwargs)
 
