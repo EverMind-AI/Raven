@@ -446,7 +446,7 @@ injection, vision routing. Bodies moved verbatim from main.py."""
 
     def set_skills_sink(self, sink) -> None:
         """Late-bind the sink that reports SkillForge-injected skills to the web
-        UI (host wires it to the web channel's emitter). ``sink`` is an async
+        UI (the host wires it to the page's emitter). ``sink`` is an async
         callable ``(conversation, name, payload)`` matching the DAG sink."""
         self._skills_sink = sink
 

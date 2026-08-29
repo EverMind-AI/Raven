@@ -30,7 +30,7 @@ A later merge brought 8 new CLI modules with module-level
 
     Re-grep after merge:
     $ grep -rn "^console = Console" raven/cli/
-    raven/cli/_helpers.py:22         ← patched (NEW)
+    raven/core/helpers.py            ← patched (NEW)
     raven/cli/agent_commands.py:40    ← patched (NEW)
     raven/cli/channel_commands.py:38  ← patched (already)
     raven/cli/commands.py:58          ← patched (already)

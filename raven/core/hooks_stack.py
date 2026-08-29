@@ -1,4 +1,4 @@
-"""CLI assembly helper for AgentLoop's hook chain.
+"""Assembly-root helper for AgentLoop's hook chain (unwired today).
 
 Composes a :class:`CompositeHook` from optional sub-stacks:
 

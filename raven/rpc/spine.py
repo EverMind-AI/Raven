@@ -53,7 +53,7 @@ from raven.spine.turn import session_of
 _TURN_FAILED_CODE = -32099
 
 # ``run_subagent_dag`` progress event -> wire event. A name missing from this map
-# is dropped rather than forwarded: the same sink shape serves the web channel,
+# is dropped rather than forwarded: the same sink shape serves the page,
 # which is free to grow events this protocol has no variant for.
 _DAG_WIRE_EVENT = {
     "dag_run_started": "dag.run_started",

@@ -6,6 +6,24 @@ All notable changes to Raven are documented here.
 
 ### Changed
 
+- **Architecture, v0.2.0.** The runtime is now layered by binding time and the
+  boundaries are machine-enforced: a frozen kernel (`raven/spine`), the papers
+  (`raven/contracts`, every interface a shelf implements), the assembly root
+  (`raven/core`, where config becomes a running agent through one door,
+  `build_runtime`), the shelves (channels, plugins, providers, memory, ...),
+  and the entrances (`cli`, `rpc`, `proactive_engine`, `acp`). Three
+  import-linter contracts run in CI: inner layers never import an entrance,
+  the twelve channel adapters are mutually independent, and the kernel imports
+  nothing else. `CONTEXT.md` records every package's seat.
+- **Generations.** The gateway rebuilds its runtime from config and swaps it in
+  at the loop's turn boundary instead of restarting: build the candidate first,
+  stop the serving generation, dispose it in a pinned order. Channels, cron,
+  the sentinel and the control plane survive the swap.
+- **Channel config lives with the adapter.** Each adapter's `spec.py` declares
+  its fields, defaults, secrecy and nesting; the twelve central per-channel
+  config classes are gone, `channels.<name>` sections are dynamic, and
+  `raven channels set/show` validate through the same admission door the
+  gateway dispenses through. Existing config files load unchanged.
 - The gateway's web channel is retired and its endpoint becomes the gateway
   **control plane** (`ws://127.0.0.1:<port>/ws`, loopback, per-boot token
   published in the gateway lock): six methods only -- `gateway.channels.live`,

@@ -522,7 +522,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         self._agent_configs = agents or []
         self._dag_progress_sink = None
         # Late-bound sink that pushes per-turn SkillForge-injected skill ids to
-        # the web UI's skill panel (host wires it to the web channel's emitter,
+        # the page's skill panel (the host wires it to the page's emitter,
         # parallel to _dag_progress_sink). None in non-web contexts (CLI/IM).
         self._skills_sink = None
 

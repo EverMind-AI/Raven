@@ -23,16 +23,16 @@ REPO = Path(__file__).resolve().parent.parent
 INNER_DIRS = ["spine", "contracts", "agent", "memory_engine", "context_engine",
               "providers", "session", "sandbox", "routing", "token_wise",
               "plugins", "channels", "gateway", "market", "ops",
-              # Cross-cutting leaves, enrolled by the partition cards: consumed
+              # Cross-cutting leaves, seated by CONTEXT.md's Layer Seats: consumed
               # by inner layers and cargo alike, so they may not know a surface.
               "security", "auth",
               # Seated by the 2026-08-29 structural audit: config and utils
               # are cross-cutting leaves (same rule as auth); the other five
               # are L3 shelf members. raven.core is deliberately absent -- its
               # sentinel-machinery imports are one knot with
-              # proactive_engine's surface seat, ruled on a partition card.
+              # proactive_engine's surface seat (see CONTEXT.md, Layer Seats).
               "config", "utils", "mcp", "playbook", "knowledge", "skill_hub",
-              "trajectory"]
+              "trajectory", "eval_engine"]
 SURFACES = ("raven.cli", "raven.rpc", "raven.proactive_engine", "raven.acp")
 
 

@@ -1664,11 +1664,9 @@ class Config(BaseSettings):
         """Every channel that names its own working directory.
 
         Keyed by the channel name as it appears in a session key
-        (``web:<chat_id>``, ``qq:<open_id>``), which is the field name under
-        ``channels`` -- plus ``web``, whose config lives under ``gateway``
-        because the web channel is hosted by the gateway rather than dialled
-        out to. Channels that left ``workspace`` empty are omitted, so the
-        resolver falls back to ``<root>/<channel>`` for them.
+        (``qq:<open_id>``), which is the field name under ``channels``.
+        Channels that left ``workspace`` empty are omitted, so the resolver
+        falls back to ``<root>/<channel>`` for them.
         """
         found: dict[str, str] = {}
         for name, channel in self.channels:

@@ -29,3 +29,12 @@ A full glossary↔code gap scan (2026-06-28) is under team review. Key open item
 
 Each owner reviews their assigned terms and merges refinements via the PR. ~30 terms were
 confirmed still accurate and need no change.
+
+## Architecture terms (routing)
+
+The five-layer vocabulary lives in `CONTEXT.md`; look these up there:
+**Kernel** (spine + contracts + tracing), **Paper** and the two tiers, **Assembly Root**
+(`core/`, `build_runtime`), **Admission** and **Config-with-cargo**, **Channel Socket**,
+**Generation** (the swap model), **Control Plane** (`rpc/control.py` / `gateway/live_probe.py`),
+**Wire Schema** (`rpc-schema/openrpc.json`), **Layer Seats** (where every package sits and which
+are deliberately unseated).

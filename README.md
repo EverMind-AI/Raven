@@ -194,6 +194,7 @@ raven gateway
 | `raven sentinel status` | Inspect proactive memory and scheduled nudges |
 | `raven cron list` | Inspect scheduled jobs |
 | `raven gateway` | Run messaging gateways |
+| `raven gateway reload` / `status` / `stop` | Drive a running gateway through its control plane (rebuild from config without a restart, inspect the generation, stop gracefully) |
 | `raven upgrade` | Upgrade a managed installation |
 
 Run `raven --help` or `raven <command> --help` for the complete CLI surface.
@@ -265,7 +266,7 @@ architecture booklets; this section only says what each package does.
 CLI / TUI / Messaging Gateways
               |
               v
-          TUI-RPC / Spine
+          RPC / Spine
               |
               v
            Agent Loop
@@ -282,7 +283,7 @@ CLI / TUI / Messaging Gateways
       +--- Proactivity + Evolver
 ```
 
-The Python runtime and React/Ink TUI communicate only through typed TUI-RPC. The Spine carries runtime events, while the Agent Loop coordinates providers, tools, context, memory, skills, subagents, and proactive work.
+The Python runtime and React/Ink TUI communicate only through the typed RPC contract. The Spine carries runtime events, while the Agent Loop coordinates providers, tools, context, memory, skills, subagents, and proactive work.
 
 Key directories:
 
