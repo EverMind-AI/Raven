@@ -405,7 +405,7 @@ async def test_all_junk_triggers_feed_the_repair_loop():
 
     assert result.spec.triggers.keywords == ["user feedback", "feedback weekly"]
     repair_msg = gen._provider.calls[1][-1]["content"]
-    assert "every trigger candidate was dropped" in repair_msg
+    assert "every keyword candidate was dropped" in repair_msg
 
 
 async def test_revise_keeps_the_name_and_reports_fresh_notes():

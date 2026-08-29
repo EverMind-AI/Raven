@@ -53,7 +53,7 @@ def test_normalization_is_applied_before_dedup():
 def test_guards_raise_when_nothing_survives():
     # Reported rather than silently widened: keeping a dropped entry so the
     # playbook still has a vocabulary would reinstate the unfit entry.
-    with pytest.raises(TriggerGuardError, match="every trigger candidate was dropped"):
+    with pytest.raises(TriggerGuardError, match="every keyword candidate was dropped"):
         guard_triggers([CJK_DE, CJK_HELP_ME, CJK_BRIEFLY])
 
 

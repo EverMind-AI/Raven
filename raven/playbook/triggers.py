@@ -45,7 +45,8 @@ _STOPWORDS = {
     "make",
     "help",
     # Mechanism words: they describe how the system works, not any one task,
-    # so they appear in requests for every playbook and trigger all of them.
+    # so they appear in requests for every playbook and would make all of
+    # them visible at once.
     "playbook",
     "workflow",
     "pipeline",
@@ -136,7 +137,7 @@ def guard_triggers(
         )
     if not keywords:
         raise TriggerGuardError(
-            f"every trigger candidate was dropped by the guards (from {raw!r}); "
+            f"every keyword candidate was dropped by the guards (from {raw!r}); "
             "propose words that are specific to this task and at least "
             f"{_MIN_KEYWORD_CHARS} characters long"
         )
