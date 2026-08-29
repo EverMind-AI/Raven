@@ -51,9 +51,9 @@ class _ReplyAgent:
 
     def __init__(self, events=()) -> None:
         self._events = list(events)
-        self.notify_count = 0  # _notify_turn_complete spy (the gateway sink fires it)
+        self.notify_count = 0  # notify_turn_complete spy (the gateway sink fires it)
 
-    def _notify_turn_complete(self) -> None:
+    def notify_turn_complete(self) -> None:
         self.notify_count += 1
 
     async def run_turn(self, req, emit, drain, *, stream, usage_sink=None, text_sink=None) -> TurnOutcome:

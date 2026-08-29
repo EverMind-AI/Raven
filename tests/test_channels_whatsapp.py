@@ -413,3 +413,39 @@ def test_whatsapp_spec_declares_interactive_login_and_is_cheap():
     )
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
+
+
+def test_the_bridge_reports_a_long_step_through_the_installed_progress(tmp_path, monkeypatch) -> None:
+    """The adapter owns no terminal: it announces npm install and tsc through
+    ``bridge.progress``, which the CLI login replaces with a spinner."""
+    import subprocess
+    from contextlib import contextmanager
+
+    from raven.channels.adapters.whatsapp import bridge
+
+    labels: list[str] = []
+
+    @contextmanager
+    def _record(label: str):
+        labels.append(label)
+        yield
+
+    install_dir = tmp_path / "bridge"
+    (install_dir / "src").mkdir(parents=True)
+    monkeypatch.setattr(bridge, "progress", _record)
+    monkeypatch.setattr("raven.config.paths.get_bridge_install_dir", lambda: install_dir)
+    monkeypatch.setattr(bridge.shutil, "which", lambda _name: "/usr/bin/npm")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: None)
+
+    bridge.ensure_bridge_dir()
+
+    assert labels and any("npm install" in label for label in labels)
+    assert any("tsc" in label for label in labels)
+
+
+def test_the_default_progress_is_a_log_line_not_a_terminal(caplog) -> None:
+    from raven.channels.adapters.whatsapp import bridge
+
+    assert bridge.progress is bridge._log_progress
+    with bridge.progress("step"):
+        pass

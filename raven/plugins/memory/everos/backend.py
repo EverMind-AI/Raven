@@ -596,6 +596,16 @@ class EverosBackend:
 
     # ── Lifecycle ───────────────────────────────────────────────────
 
+    @property
+    def state(self) -> "ServiceState":
+        """Whether this backend is usable, and what would change that.
+
+        Public because a host decides what to do about a backend that is not
+        ready -- the importer refuses to write into one -- and that decision
+        cannot be read off the Protocol.
+        """
+        return self._state
+
     async def start(self) -> None:
         try:
             self._validate_identity()

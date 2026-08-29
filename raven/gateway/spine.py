@@ -140,7 +140,7 @@ def _make_gateway_sink(
                     # /stop is the user's own act and stays silent; a reload is
                     # not, so the reply it cut is owed at least a sentence.
                     await hub.dispatch(Text(content=_TURN_CUT_BY_RELOAD_REPLY, source=source))
-            agent_loop._notify_turn_complete()
+            agent_loop.notify_turn_complete()
             return
         await hub.dispatch(event)
 

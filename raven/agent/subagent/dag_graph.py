@@ -32,7 +32,7 @@ _AGENT_PATTERN = r"^(?:\S(?:.*\S)?)?$"
 # Fields a node cannot run without. A playbook may leave one blank on purpose --
 # ``load_playbook`` reports it as a gap for the model to fill -- so "blank" has to
 # survive parsing and be caught here instead.
-_REQUIRED_NON_BLANK = ("subagent", "prompt_template", "node_summary")
+REQUIRED_NON_BLANK = ("subagent", "prompt_template", "node_summary")
 
 
 class DagNodeSpec(BaseModel):
@@ -239,7 +239,7 @@ def validate_and_order(
     # blank as a gap for the model to fill, and this is the point past which a
     # blank can no longer be filled by anyone.
     for node in nodes:
-        blank = [f for f in _REQUIRED_NON_BLANK if not str(getattr(node, f, "") or "").strip()]
+        blank = [f for f in REQUIRED_NON_BLANK if not str(getattr(node, f, "") or "").strip()]
         if blank:
             raise DagValidationError(
                 f"node '{node.id}' is missing {sorted(blank)} -- a node cannot run without them. "

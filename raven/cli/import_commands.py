@@ -108,7 +108,7 @@ def _require_memory_service_ready(backend: object) -> None:
     Backends that do not report a state -- anything other than the everos one
     -- are left alone rather than locked out.
     """
-    state = getattr(backend, "_state", None)
+    state = getattr(backend, "state", None)
     if state is None:
         return
     from raven.plugins.memory.everos.backend import ServiceState
@@ -534,7 +534,7 @@ def status_cmd(
 def stop_cmd() -> None:
     """Cancel a running background import."""
     state = _default_state()
-    if not state._path.exists():
+    if not state.path.exists():
         console.print("No import in progress.")
         return
     cancel = state.cancel_path

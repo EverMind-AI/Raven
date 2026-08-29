@@ -994,7 +994,7 @@ class TestImportRefusesToRunWithoutMemory:
         from raven.plugins.memory.everos.backend import ServiceState
 
         class _NotReady:
-            _state = ServiceState.FAILED
+            state = ServiceState.FAILED
 
         with pytest.raises(typer.Exit):
             _require_memory_service_ready(_NotReady())
@@ -1008,7 +1008,7 @@ class TestImportRefusesToRunWithoutMemory:
         from raven.plugins.memory.everos.backend import ServiceState
 
         class _BadIdentity:
-            _state = ServiceState.BAD_IDENTITY
+            state = ServiceState.BAD_IDENTITY
 
         with pytest.raises(typer.Exit):
             _require_memory_service_ready(_BadIdentity())
@@ -1022,7 +1022,7 @@ class TestImportRefusesToRunWithoutMemory:
         from raven.plugins.memory.everos.backend import ServiceState
 
         class _Ready:
-            _state = ServiceState.READY
+            state = ServiceState.READY
 
         _require_memory_service_ready(_Ready())
 
