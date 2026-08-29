@@ -236,7 +236,6 @@ import which) are recorded under **Layer Seats** in `CONTEXT.md`, routed from
 | `context_engine` | Context assembly for a turn |
 | `core` | Assembly root: the *_stack builders and the admission door |
 | `eval_engine` | Evaluation harness |
-| `evolver` | Self-improvement loop |
 | `gateway` | Daemon plumbing: channel manager, outlet, live probe, run lock |
 | `importer` | External data import |
 | `knowledge` | Knowledge base service |
@@ -304,7 +303,6 @@ raven/
 ├── playbook/           # Stored orchestrations: library, match funnel, executor
 ├── token_wise/         # Usage tracking and cache placement
 ├── tracing/            # Span capture (the dashboard lives in cli/tracing_viewer/)
-├── evolver/            # Benchmark-driven harness self-evolution
 ├── sandbox/            # Isolated command execution
 ├── security/           # Trust boundaries and network checks
 ├── cli/                # `raven` command line entry point
@@ -313,6 +311,7 @@ raven/
 ui-tui/                 # React/Ink native terminal UI
 bridge/                 # WhatsApp TypeScript bridge
 benchmarks/             # Benchmark adapters, including AppWorld evolver wiring
+evolver/                # Benchmark-driven harness self-evolution: a tool over the library, not in the wheel
 ```
 
 <br>

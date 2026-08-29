@@ -34,6 +34,10 @@ All notable changes to Raven are documented here.
   imports the loop shell it is consumed by. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- The evolver moves out of the `raven` package to the repo-level `evolver/`
+  tool (`python -m evolver run --config <yaml>`): it drives raven as a
+  library, ships in no wheel, and a fifth import-linter contract keeps the
+  runtime from importing it back.
 - Audit pass three: the `raven.auth` placeholders (`capability_token`,
   `managed_settings`), the MCP OAuth `set_callback_base` hook, three ops
   connection helpers and an unread tool table are removed with their tests;

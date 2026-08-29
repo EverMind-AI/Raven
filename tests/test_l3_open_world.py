@@ -49,7 +49,6 @@ ROSTER = {
     "playbook": "raven.playbook",
     "everos": "raven.plugins.memory.everos",
     "importer": "raven.importer",
-    "evolver": "raven.evolver",
     "eval_engine": "raven.eval_engine",
     **{
         f"adapter-{n}": f"raven.channels.adapters.{n}"

@@ -2,7 +2,7 @@
 
 PYTHON ?= python3
 PYTHON_VERSION ?= 3.12
-PYTHON_LINT_TARGETS ?= raven tests scripts
+PYTHON_LINT_TARGETS ?= raven evolver tests scripts
 COMMIT_RANGE ?= origin/main..HEAD
 COVERAGE_BASE_REF ?= origin/main
 # Required coverage percentage for executable lines changed by a PR.
@@ -16,7 +16,7 @@ help:
 	@echo "  install        Install Python deps, Node deps, and git hooks"
 	@echo "  install-deps   Install Python deps only (CI uses this)"
 	@echo "  lint           Run Python, TUI, and bridge lint gates"
-	@echo "  lint-python    Ruff check + format gate over raven/, tests/, scripts/"
+	@echo "  lint-python    Ruff check + format gate over raven/, evolver/, tests/, scripts/"
 	@echo "  lint-tui       TypeScript lint + RPC drift check"
 	@echo "  lint-bridge    Bridge package build check"
 	@echo "  test           Run focused Python checks and TUI tests"
