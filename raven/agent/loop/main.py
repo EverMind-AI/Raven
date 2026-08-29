@@ -732,6 +732,10 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         """True while a turn is being dispatched under the global lock."""
         return self._processing_lock.locked()
 
+    def notify_turn_complete(self) -> None:
+        """Fire the turn-complete callbacks: the seam a host sink signals through."""
+        self._notify_turn_complete()
+
     def _notify_turn_complete(self) -> None:
         for callback in self.on_turn_complete:
             try:

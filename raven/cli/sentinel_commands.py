@@ -1068,7 +1068,7 @@ def sentinel_behaviors_rebuild(
                     f"[red]No session file at {path}[/red]",
                 )
                 return 0
-            return await extractor._extract_one_session(path, offsets)  # noqa: SLF001
+            return await extractor.extract_session(path, offsets)
 
         added = asyncio.run(_run_one())
     else:

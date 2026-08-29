@@ -23,7 +23,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
-from raven.agent.subagent.dag_graph import _REQUIRED_NON_BLANK
+from raven.agent.subagent.dag_graph import REQUIRED_NON_BLANK
 from raven.playbook.params import param_refs
 from raven.playbook.types import NodeSpec, PlaybookSpec
 
@@ -179,7 +179,7 @@ def validate_graph_nodes(
 
     fillable = _fillable_fields() if allow_blank_fillable else frozenset()
     for node in nodes:
-        blank = [f for f in _REQUIRED_NON_BLANK if not str(getattr(node, f, "") or "").strip()]
+        blank = [f for f in REQUIRED_NON_BLANK if not str(getattr(node, f, "") or "").strip()]
         reportable = [f for f in blank if f not in fillable]
         if reportable:
             errors.append(f"node {node.id!r}: missing {sorted(reportable)} -- a node cannot run without them")

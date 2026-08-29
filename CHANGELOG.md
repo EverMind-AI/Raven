@@ -35,6 +35,12 @@ All notable changes to Raven are documented here.
   repo-level `evolver/` tool that drives it. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- Audit pass eleven: the four remaining cross-package reaches into private
+  names get public seams (`ImportState.path`, `EverOSBackend.state`,
+  `BehaviorsExtractor.extract_session`, `AgentLoop.notify_turn_complete`,
+  `dag_graph.REQUIRED_NON_BLANK`), and three untested seams get tests: the
+  message splitter three adapters share, the WhatsApp bridge's progress
+  hook, and the control-plane client behind `raven gateway status|reload|stop`.
 - Audit pass ten: the leaf packages (gateway, market, ops, routing, sandbox,
   session, skill_hub, token_wise, utils) state their rules in the present,
   and the three generated benchmark reports that sat inside
