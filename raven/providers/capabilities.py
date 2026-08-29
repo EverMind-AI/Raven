@@ -320,10 +320,8 @@ _WIRE_OVERRIDES: tuple[tuple[str, str, dict[str, Any]], ...] = (
 def wire_overrides(provider: str | None, model: str | None) -> dict[str, Any]:
     """Extras to send in the request body for this provider and model.
 
-    Lived as an ``if provider_name == ... and ... in model`` inside the factory,
-    because a fact about one model family behind one gateway had nowhere else to
-    go. Declared here it sits with the other per-model facts, and a second one
-    does not mean a second branch in provider construction.
+    Declared in ``_WIRE_OVERRIDES`` beside the other per-model facts, so a
+    second one does not mean a second branch in provider construction.
     """
     from raven.providers.registry import normalize_provider_name
 

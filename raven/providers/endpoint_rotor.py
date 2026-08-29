@@ -315,9 +315,9 @@ class EndpointRotorProvider(LLMProvider):
                     continue
 
                 if first.finish_reason == "error":
-                    # The fallback path 34099d8 added surfaces a failed open as
-                    # a terminal error delta rather than an exception; judged
-                    # the same way as one.
+                    # LLMProvider.chat_stream's non-streaming fallback surfaces
+                    # a failed open as a terminal error delta rather than an
+                    # exception; judged the same way as one.
                     classification = first.error_classification or self.classify_error(content=first.content)
                     if _rotates(classification):
                         self._mark_failure(i)

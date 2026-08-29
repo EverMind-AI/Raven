@@ -69,22 +69,21 @@ async def stream_llm_call(
 ) -> LLMResponse:
     """Stream an LLM response via ``provider.chat_stream`` + accumulate to LLMResponse.
 
-    Per design.md §D3: when a turn caller wires ``on_token_delta``, its loop
-    diverts here instead of to ``chat_with_retry``. Each non-empty content chunk
-    fires the callback; tool_call fragments are merged positionally; the final
-    response object is shape-compatible with what ``chat()`` would have returned.
+    When a turn caller wires ``on_token_delta``, its loop diverts here instead
+    of to ``chat_with_retry``. Each non-empty content chunk fires the callback;
+    tool_call fragments are merged positionally; the final response object is
+    shape-compatible with what ``chat()`` would have returned.
 
-    v0.1 first-cut tool-call merge: assumes one tool call per position,
-    fragments arrive in order, ``id`` / ``function.name`` appear in the first
-    fragment, ``function.arguments`` is the concatenation of per-fragment
-    arguments strings. Multi-tool / out-of-order merging is a v0.2 ask.
+    The tool-call merge is by ``index``: ``id`` and ``function.name`` are taken
+    from the first fragment carrying them, and ``function.arguments`` is the
+    concatenation of the per-fragment argument strings.
 
     A failure that already streamed deltas is not retried -- the caller has
     rendered them, so a second attempt would duplicate its output. Before the
     first delta there is nothing to duplicate, so a retryable error reconnects up
     to ``max_reconnects`` times. Once the budget is spent the exception
-    propagates: per N-TURNFAILED a mid-turn provider error is the turn's failure,
-    not a text reply about one.
+    propagates: a mid-turn provider error is the turn's failure (the lane emits
+    TurnFailed), not a text reply about one.
 
     ``stream_kwargs`` reaches ``chat_stream`` unchanged. It exists because that
     signature carries *literal* generation defaults rather than the provider's
@@ -235,10 +234,7 @@ async def stream_llm_call(
     )
 
     # No terminal reason arrived means none may be fabricated: a reply that died
-    # mid-stream has to stay distinguishable from one that finished. Upstream
-    # changed this in v0.1.13; the change could not reach here because this file
-    # is the extraction of the loop's inline stream call and upstream has no
-    # counterpart to merge against.
+    # mid-stream has to stay distinguishable from one that finished.
     finish_reason = upstream_finish_reason or "unknown"
 
     # A call that emitted nothing but thought still thought for a measurable
@@ -275,10 +271,10 @@ def generation_kwargs(provider: Any) -> dict[str, Any]:
     """The provider's own generation defaults, as ``chat_stream`` keywords.
 
     ``chat_stream`` declares ``max_tokens=4096, temperature=0.7`` as literals
-    while ``chat_with_retry`` reads ``provider.generation``. A caller that
-    streams on one path and calls ``chat_with_retry`` on another would otherwise
-    answer the same instance under two different budgets -- visible as a reply
-    truncated at 4096 tokens on the streaming path alone.
+    while ``chat_with_retry`` reads ``provider.generation``, so a caller that
+    streams on one path and calls ``chat_with_retry`` on another would answer the
+    same instance under two different budgets -- a reply truncated at 4096 tokens
+    on the streaming path alone.
 
     Duck-typed: a provider stub without ``generation`` contributes nothing and
     the signature defaults stand.

@@ -1,13 +1,11 @@
 """How a provider is connected to: what material it needs, and whether it is there.
 
-Authentication used to be described by one boolean (``ProviderSpec.is_oauth``)
-and one string (``env_key``). Underneath sit shapes those two cannot express:
-Azure needs a key *and* an address; Gemini takes a key *or* a list of them;
-Bedrock needs neither because the environment already holds AWS credentials;
-four providers hold a token in a file, written by three unrelated flows.
-
-Because the shape was not stated, "is this provider usable" was answered
-independently wherever it was needed, and the answers diverged. Routing skipped
+A provider's requirement is an AND of OR-groups: Azure needs a key *and* an
+address; Gemini takes a key *or* a list of them; Bedrock needs neither because
+the environment already holds AWS credentials; four providers hold a token in a
+file, written by three unrelated flows. Callers ask :func:`credential_status`
+rather than reading a section themselves, because an unstated shape is answered
+independently wherever it is needed, and the answers diverge. Routing skipped
 a Gemini section configured with ``api_key_list``; ``provider list`` showed the
 same section as ready; startup refused to run on it. Azure with a key and no
 address was accepted by routing and display and rejected at startup.
@@ -103,12 +101,9 @@ class AuthMethod:
 class MissingCredentialsError(Exception):
     """A provider cannot be used because its credentials are absent.
 
-    Raised where the gate is decided, not where it is reported. The check runs
-    behind three entry points -- the CLI, the gateway, and the TUI -- and used to
-    end in ``console.print`` plus ``typer.Exit``, which is one of them speaking.
-    Through the other two the message went to a log nobody was reading and the
-    user got ``internal_error`` with ``exception_message: "1"``: the exit code,
-    stringified.
+    Raised where the gate is decided, not where it is reported: the check runs
+    behind three entry points (the CLI, the gateway and the TUI) and each renders
+    the refusal its own way.
     """
 
     def __init__(self, summary: str, *, provider: str = "", remedy: str = ""):

@@ -35,6 +35,10 @@ All notable changes to Raven are documented here.
   repo-level `evolver/` tool that drives it. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- Audit pass nine: `raven/providers` states its rules -- the credential
+  shape, the cache-ownership rule, the wire-model invariant -- where it used
+  to narrate the incident that produced each, and drops the design-doc and
+  commit references a reader cannot follow.
 - Audit pass eight: the MCP, playbook and plugin packages state their rules
   instead of the changes that produced them -- the plugin manifest's two
   contribution kinds (not one), the everos backend's HTTP-to-a-local-server

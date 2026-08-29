@@ -252,9 +252,9 @@ def _convert_tool_output(content: Any) -> Any:
     image at all.
 
     The important part is what this does NOT do: ``json.dumps`` a block list.
-    That used to serialize an image's whole base64 payload into the output as
-    prose -- the model saw megabytes of gibberish instead of a picture, and
-    nothing errored.
+    That would serialize an image's whole base64 payload into the output as
+    prose -- nothing would error, and the model would see megabytes of gibberish
+    instead of a picture.
     """
     if isinstance(content, str):
         return content

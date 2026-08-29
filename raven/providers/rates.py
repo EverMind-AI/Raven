@@ -1,11 +1,8 @@
 """What a model costs per token and how much context it takes.
 
 Both are facts about a provider's catalogue, so they are decided here and not by
-whoever is about to report a number. They used to live in ``token_wise.pricing``
-next to the cost formula, which put a provider decision outside
-``raven.providers`` -- and a decision outside its module grows a second copy: the
-benchmark runner carried its own rate table, and the window resolution grew an
-OpenRouter fallback that answered for vendors OpenRouter does not serve.
+whoever is about to report a number: a provider decision made outside
+``raven.providers`` grows a second copy, and the copies answer differently.
 
 Two questions, deliberately answered from different places:
 
@@ -316,7 +313,7 @@ def _fetch_openrouter_models(*, allow_fetch: bool = True) -> dict[str, dict]:
 def warm_catalog_in_background() -> None:
     """Start filling the catalog off the request path, without blocking a turn.
 
-    The pricing path cannot be relied on to do it. It asks LiteLLM's static
+    The rates ladder cannot be relied on to do it. It asks LiteLLM's static
     table first and only reaches this catalog when that table *misses*, so for
     every model LiteLLM does carry -- which is every model Raven ships a default
     for -- the catalog is never fetched and a reader like

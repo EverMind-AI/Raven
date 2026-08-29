@@ -30,8 +30,7 @@ class ProviderPool:
 
     def __init__(self, config: "Config | Callable[[], Config]") -> None:
         # A supplier, not a snapshot: a credential fixed after start (an OAuth
-        # re-login, an edited config file) has to be visible without a
-        # restart, which the old per-switch config reload gave for free.
+        # re-login, an edited config file) has to be visible without a restart.
         # Cached bindings are dropped when the config that produced them is no
         # longer the current one.
         self._supplier = config if callable(config) else (lambda: config)
