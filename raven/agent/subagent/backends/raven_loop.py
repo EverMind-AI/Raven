@@ -28,10 +28,10 @@ from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.shell import ExecTool
 from raven.agent.tools.web import WebFetchTool, WebSearchTool
 from raven.config.schema import ExecToolConfig
+from raven.contracts.llm_provider import LLMProvider
 from raven.contracts.subagent_backend import SubagentActionAbortedError, SubagentNoAnswerError
 from raven.contracts.tool import SKIPPED_AFTER_BLOCKED_CALL, Continuation
 from raven.memory_engine.skill_local.registry import filter_by_required_tools
-from raven.providers.base import LLMProvider
 from raven.providers.streaming import generation_kwargs, stream_llm_call
 from raven.providers.tool_calls import openai_tool_call
 from raven.security.trust import wrap_untrusted

@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from raven.agent.loop.main import AgentLoop
-from raven.providers.base import LLMResponse
+from raven.contracts.llm_provider import LLMResponse
 from raven.spine import ChatType, Origin, Source, TurnRequest
 
 _CONVERSATION = "tui:smoke"
@@ -46,7 +46,7 @@ class _EchoProvider:
 
     async def chat_stream(self, *, messages, tools=None, model=None, **_kwargs):
         """The same reply, cut in two, so a streamed turn is visibly not one frame."""
-        from raven.providers.base import ChatDelta
+        from raven.contracts.llm_provider import ChatDelta
 
         response = await self.chat_with_retry(messages=messages, tools=tools, model=model)
         text = response.content or ""

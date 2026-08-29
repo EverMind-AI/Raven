@@ -18,8 +18,8 @@ from loguru import logger
 from raven.tracing import semconv, trace
 
 if TYPE_CHECKING:
+    from raven.contracts.llm_provider import LLMProvider
     from raven.memory_engine.consolidate.consolidator import MemoryStore
-    from raven.providers.base import LLMProvider
 
 
 # ── Prompts ───────────────────────────────────────────────────────────────────

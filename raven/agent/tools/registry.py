@@ -11,9 +11,8 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.agent.tools.params import cast_params, validate_params
-from raven.contracts.llm_provider import TruncationInfo
+from raven.contracts.llm_provider import RunMeta, TruncationInfo
 from raven.contracts.tool import RAW_ARGUMENTS_KEY, Continuation, Tool, ToolOutput, ToolResult
-from raven.providers.base import RunMeta
 from raven.tracing import semconv, trace
 
 if TYPE_CHECKING:

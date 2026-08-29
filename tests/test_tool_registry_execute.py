@@ -16,8 +16,8 @@ import pytest
 
 from raven.agent.tools.filesystem import WriteFileTool
 from raven.agent.tools.registry import ToolRegistry
+from raven.contracts.llm_provider import RunMeta, TruncationInfo
 from raven.contracts.tool import Continuation, Tool, ToolOutput, ToolResult
-from raven.providers.base import RunMeta, TruncationInfo
 
 
 class _Split(Tool):

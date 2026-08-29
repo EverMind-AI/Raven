@@ -56,7 +56,7 @@ from raven.agent.subagent.mcp_grant import (
 )
 
 if TYPE_CHECKING:
-    from raven.providers.base import LLMProvider
+    from raven.contracts.llm_provider import LLMProvider
 
 
 _READ_CHUNK = 65536

@@ -39,8 +39,8 @@ from raven.proactive_engine.sentinel.attention_producers._base import (
 )
 
 if TYPE_CHECKING:
+    from raven.contracts.llm_provider import LLMProvider
     from raven.memory_engine.consolidate.consolidator import MemoryStore
-    from raven.providers.base import LLMProvider
 
 
 # Date patterns commonly written in MEMORY.md and persona text:

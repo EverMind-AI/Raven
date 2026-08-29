@@ -7,6 +7,7 @@ which playbooks get *described* to the model when the library is too big to list
 whole, which is what the router tests at the bottom cover.
 """
 
+from raven.contracts.llm_provider import ErrorClassification, LLMResponse
 from raven.playbook import (
     RouterSizes,
     TriggerIndex,
@@ -17,7 +18,6 @@ from raven.playbook import (
     select_playbooks,
 )
 from raven.playbook.types import PlaybookSpec
-from raven.providers.base import ErrorClassification, LLMResponse
 
 
 class _ToolCall:

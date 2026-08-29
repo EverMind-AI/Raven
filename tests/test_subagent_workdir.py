@@ -19,7 +19,7 @@ from raven.agent.subagent.history import dag_root, spawn_root
 from raven.agent.subagent.manager import SubagentManager
 from raven.agent.workdir import bind
 from raven.config.schema import ThirdPartyCliSubagentConfig
-from raven.providers.base import LLMResponse
+from raven.contracts.llm_provider import LLMResponse
 from raven.session.manager import SessionManager
 
 

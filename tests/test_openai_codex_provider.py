@@ -12,7 +12,7 @@ import json
 
 import pytest
 
-from raven.providers.base import ProviderHTTPError
+from raven.contracts.llm_provider import ProviderHTTPError
 from raven.providers.openai_codex_provider import (
     DEFAULT_CODEX_URL,
     OpenAICodexProvider,

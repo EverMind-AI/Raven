@@ -21,9 +21,9 @@ from raven.config.raven import ContextConfig
 from raven.context_engine.history_trimmer import HistoryTrimmer
 from raven.contracts.assembled import AssembledContext, TokenBudget
 from raven.contracts.context import AssembledPrefix, TurnContext
+from raven.contracts.llm_provider import LLMProvider
 from raven.contracts.tool import Tool
 from raven.memory_engine.consolidate.consolidator import MemoryStore
-from raven.providers.base import LLMProvider
 from raven.providers.binding import ModelBinding, active_window, resolve
 from raven.utils.atomic_io import atomic_replace
 from raven.utils.paths import ensure_dir, safe_filename

@@ -26,8 +26,8 @@ from raven.config.raven import ContextConfig, SkillForgeConfig
 from raven.context_engine.assembler import ContextAssembler
 from raven.context_engine.segments.curator import CuratorSegmentBuilder
 from raven.context_engine.segments.skills import SkillsSegmentBuilder
+from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
 from raven.memory_engine.skill_forge.gate import LLMGateFilter
-from raven.providers.base import LLMResponse, ToolCallRequest
 from raven.providers.binding import ModelBinding
 
 NEW_MODEL = "anthropic/claude-opus-4-8"

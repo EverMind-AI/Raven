@@ -24,8 +24,8 @@ from raven.eval_engine.judge.judge import EvalJudge
 
 if TYPE_CHECKING:
     from raven.agent.hook import AgentHook
+    from raven.contracts.llm_provider import LLMProvider
     from raven.memory_engine.consolidate.consolidator import MemoryStore
-    from raven.providers.base import LLMProvider
 
 
 class EvalEngine:

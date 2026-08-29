@@ -25,7 +25,7 @@ from typing import Any
 import pytest
 
 from raven.agent.loop.main import AgentLoop
-from raven.providers.base import LLMResponse
+from raven.contracts.llm_provider import LLMResponse
 
 _TOKEN = "harness"
 CLIENT_VERSION = "0.1.0"
@@ -53,7 +53,7 @@ class ScriptedProvider:
         return await self.chat_with_retry(*args, **kwargs)
 
     async def chat_stream(self, *, messages, tools=None, model=None, **_kwargs):
-        from raven.providers.base import ChatDelta
+        from raven.contracts.llm_provider import ChatDelta
 
         response = await self.chat_with_retry(messages=messages, tools=tools, model=model)
         yield ChatDelta(content=response.content or "")

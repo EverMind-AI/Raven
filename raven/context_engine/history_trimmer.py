@@ -26,7 +26,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from raven.providers.base import LLMProvider
+from raven.contracts.llm_provider import LLMProvider
 from raven.providers.binding import ModelBinding, active_window, resolve
 from raven.utils.tokens import estimate_prompt_tokens_chain
 

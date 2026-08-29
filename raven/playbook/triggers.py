@@ -27,7 +27,7 @@ from raven.playbook.llm_result import ProviderResponseError, RequiredToolError, 
 from raven.playbook.types import Triggers
 
 if TYPE_CHECKING:
-    from raven.providers.base import LLMProvider
+    from raven.contracts.llm_provider import LLMProvider
 
 _EXPAND_TOOL_NAME = "emit_triggers"
 

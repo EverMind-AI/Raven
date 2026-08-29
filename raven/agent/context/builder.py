@@ -12,7 +12,7 @@ from raven.security.trust import wrap_untrusted, wrap_untrusted_blocks
 from raven.utils.messages import build_assistant_message
 
 if TYPE_CHECKING:
-    from raven.providers.base import LLMProvider
+    from raven.contracts.llm_provider import LLMProvider
 
 
 class ContextBuilder:

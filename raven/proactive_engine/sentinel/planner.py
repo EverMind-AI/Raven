@@ -111,7 +111,7 @@ def _derive_auto_tag(message: str | None, action: str) -> str:
 
 
 if TYPE_CHECKING:
-    from raven.providers.base import LLMProvider
+    from raven.contracts.llm_provider import LLMProvider
 
 
 _VALID_ACTIONS = frozenset(
