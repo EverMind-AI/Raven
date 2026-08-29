@@ -37,9 +37,9 @@ from raven.tracing import semconv, trace
 logger = logging.getLogger(__name__)
 
 
-# A memory-backend factory is a callable that consumes a PluginContext
-# and returns a MemoryBackend implementation. MemoryBackend lands in
-# MB-1; until then the return is typed as Any so PG can compile alone.
+# A memory-backend factory is a callable that consumes a PluginContext and
+# returns a MemoryBackend implementation; typed as Any so this module does
+# not import the paper at load time.
 MemoryBackendFactory = Callable[[Any], Any]
 
 # A tool factory consumes a PluginContext and returns a single
