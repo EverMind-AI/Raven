@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 
 from raven.agent.loop import AgentLoop
+from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.providers.base import ChatDelta, LLMProvider, LLMResponse, ToolCallRequest
 from raven.rpc.methods.session import _map_to_wire
 from raven.rpc.models import TranscriptMessage
@@ -108,8 +109,8 @@ async def _run_a_thinking_turn_with_a_slow_tool(workspace: Path) -> list[dict[st
         provider=provider,
         workspace=workspace,
         model="stub",
-        max_iterations=3,
-        restrict_to_workspace=True,
+        policy=TurnPolicy(max_iterations=3),
+        tools=ToolWiring(restrict_to_workspace=True),
     )
     real_execute = agent.tools.execute
 

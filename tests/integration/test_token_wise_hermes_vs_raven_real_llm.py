@@ -38,6 +38,7 @@ from typing import Any
 import pytest
 
 from raven.agent.loop import AgentLoop
+from raven.agent.loop.bundles import EngineWiring, HostWiring, TurnPolicy
 from raven.contracts.tool import Tool
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.token_wise.cache_optimizer import CacheOptimizer
@@ -319,11 +320,10 @@ async def _run_variant(
         provider=provider,
         workspace=workspace,
         model=MODEL,
-        max_iterations=max_iterations,
-        context_window_tokens=200_000,
         mcp_servers={},
-        channels_config=None,
-        strategies=StrategyRegistry(strategies),
+        policy=TurnPolicy(max_iterations=max_iterations),
+        engine=EngineWiring(context_window_tokens=200_000, strategies=StrategyRegistry(strategies)),
+        host=HostWiring(channels_config=None),
     )
 
     # Configure tools

@@ -801,9 +801,9 @@ def _make_agent_loop(tmp_path: Path, third_party: list | None = None):
         provider=_StubLoopProvider(),
         workspace=tmp_path,
         model="stub",
-        max_iterations=2,
-        restrict_to_workspace=True,
-        agents=third_party,
+        policy=TurnPolicy(max_iterations=2),
+        tools=ToolWiring(restrict_to_workspace=True),
+        subagents=SubagentWiring(agents=third_party),
     )
 
 
@@ -1554,6 +1554,7 @@ def test_local_file_access_defaults_by_kind_and_round_trips_camel() -> None:
 
 # --- instance registry ---------------------------------------------------
 
+from raven.agent.loop.bundles import SubagentWiring, ToolWiring, TurnPolicy
 from raven.agent.subagent.instances import InstanceRegistry
 
 

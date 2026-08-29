@@ -144,9 +144,8 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         engine: "EngineWiring | None" = None,
         policy: "TurnPolicy | None" = None,
         host: "HostWiring | None" = None,
-        **legacy: Any,
     ):
-        tools, subagents, engine, policy, host = resolve_wiring(tools, subagents, engine, policy, host, legacy)
+        tools, subagents, engine, policy, host = resolve_wiring(tools, subagents, engine, policy, host)
         exec_config = tools.exec_config
         ask_user_config = tools.ask_user_config
         brave_api_key = tools.brave_api_key

@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from raven.agent.loop import AgentLoop
+from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
 from raven.config.schema import ToolSearchConfig
 from raven.contracts.token_strategy import TokenStrategy
 from raven.providers.base import LLMProvider, LLMResponse
@@ -57,14 +58,12 @@ def _make_loop(workspace: Path, cfg, strategies=None) -> AgentLoop:
         provider=_StubProvider(),
         workspace=workspace,
         model="stub",
-        max_iterations=2,
-        restrict_to_workspace=True,
-        tool_search_config=cfg,
-        strategies=strategies,
         # web_search is the cataloged domain tool these tests fold away, and the
         # loop only registers it when a search key resolves. Supplying one keeps
         # the subject of the test present for the right reason.
-        brave_api_key="test-serper-key",
+        policy=TurnPolicy(max_iterations=2),
+        tools=ToolWiring(restrict_to_workspace=True, tool_search_config=cfg, brave_api_key="test-serper-key"),
+        engine=EngineWiring(strategies=strategies),
     )
 
 

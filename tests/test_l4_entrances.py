@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+from raven.agent.loop.bundles import TurnPolicy
+
 REPO = Path(__file__).resolve().parent.parent
 INNER_DIRS = [
     "spine",
@@ -119,7 +121,9 @@ async def test_a_new_entrance_needs_only_inward_imports():
     from raven.spine.scheduler import OriginPools, Scheduler
     from raven.spine.turn import Origin, TurnRequest
 
-    loop = AgentLoop(provider=_Provider(), workspace=Path(tempfile.mkdtemp()), model="f", interactive=False)
+    loop = AgentLoop(
+        provider=_Provider(), workspace=Path(tempfile.mkdtemp()), model="f", policy=TurnPolicy(interactive=False)
+    )
     received: list = []
 
     async def sink(ev):

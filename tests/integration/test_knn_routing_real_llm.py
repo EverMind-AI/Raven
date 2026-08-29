@@ -22,6 +22,8 @@ from pathlib import Path
 
 import pytest
 
+from raven.agent.loop.bundles import TurnPolicy
+
 EMBED_URL = os.environ.get("RAVEN_EMBED_URL", "http://localhost:9100/embed")
 CHEAP = os.environ.get("RAVEN_ROUTE_CHEAP_MODEL", "qwen/qwen-2.5-7b-instruct")
 STRONG = os.environ.get("RAVEN_ROUTE_STRONG_MODEL", "meta-llama/llama-3.3-70b-instruct")
@@ -122,8 +124,7 @@ async def test_knn_routing_end_to_end(tmp_path):
         workspace=tmp_path,
         router=router,
         model=CHEAP,
-        max_iterations=6,
-        interactive=False,
+        policy=TurnPolicy(max_iterations=6, interactive=False),
     )
 
     async def _noop(**_kw):

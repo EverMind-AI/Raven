@@ -19,6 +19,7 @@ import pytest
 
 from raven.agent.loop import AgentLoop
 from raven.agent.loop._shared import _MAX_ITER_STATIC_FALLBACK, _MAX_ITER_SYNTHESIS_PROMPT
+from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
 from raven.config.raven import CheckpointConfig, RuntimeConfig
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.spine.message import ChatType, Source
@@ -81,12 +82,12 @@ def _make_agent(workspace: Path, provider: LLMProvider) -> AgentLoop:
         provider=provider,
         workspace=workspace,
         model="stub",
-        max_iterations=2,
-        restrict_to_workspace=True,
         # Exhaustion always synthesizes now, checkpoint or not; checkpoint only
         # adds the recovery snapshot on top. Disable it here so the test stays
         # focused on the synthesize branch without a shadow-git dependency.
-        runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="never")),
+        policy=TurnPolicy(max_iterations=2),
+        tools=ToolWiring(restrict_to_workspace=True),
+        engine=EngineWiring(runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="never"))),
     )
 
 

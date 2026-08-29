@@ -34,6 +34,7 @@ from raven.agent.hook import (
 )
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
+from tests._wiring import wire
 
 
 @dataclass
@@ -286,9 +287,7 @@ def _make_agent(workspace, **kwargs):
         provider=_StubProvider(),
         workspace=workspace,
         model="stub",
-        max_iterations=2,
-        restrict_to_workspace=True,
-        **kwargs,
+        **wire(max_iterations=2, restrict_to_workspace=True, **kwargs),
     )
 
 

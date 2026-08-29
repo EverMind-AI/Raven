@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.trajectory.replay import (
     RecordedLLMCall,
@@ -823,8 +824,8 @@ async def test_end_to_end_record_save_replay_with_real_tracer(tmp_path, monkeypa
             provider=_ScriptedProvider(),
             workspace=tmp_path / "ws",
             model="stub",
-            max_iterations=5,
-            restrict_to_workspace=True,
+            policy=TurnPolicy(max_iterations=5),
+            tools=ToolWiring(restrict_to_workspace=True),
         )
         loop.tools.register(_MarkerTool(marker))
         # Source identity and session key agree, as they do in every real
@@ -880,8 +881,8 @@ async def test_end_to_end_replay_after_harness_change_diverges(tmp_path, monkeyp
             provider=_ScriptedProvider(),
             workspace=tmp_path / "ws",
             model="stub",
-            max_iterations=5,
-            restrict_to_workspace=True,
+            policy=TurnPolicy(max_iterations=5),
+            tools=ToolWiring(restrict_to_workspace=True),
         )
         loop.tools.register(_MarkerTool(tmp_path / "marker"))
         await loop._process_message(
@@ -934,8 +935,8 @@ async def test_end_to_end_streamed_recording_replays_through_the_stream_path(tmp
             provider=_ScriptedProvider(),
             workspace=tmp_path / "ws",
             model="stub",
-            max_iterations=5,
-            restrict_to_workspace=True,
+            policy=TurnPolicy(max_iterations=5),
+            tools=ToolWiring(restrict_to_workspace=True),
         )
         loop.tools.register(_MarkerTool(marker))
         streamed_tokens: list[str] = []
@@ -1021,8 +1022,8 @@ async def test_end_to_end_replay_restores_pre_attempt_history(tmp_path, monkeypa
             ),
             workspace=tmp_path / "ws",
             model="stub",
-            max_iterations=5,
-            restrict_to_workspace=True,
+            policy=TurnPolicy(max_iterations=5),
+            tools=ToolWiring(restrict_to_workspace=True),
         )
         loop.tools.register(_MarkerTool(marker))
 
@@ -1085,8 +1086,8 @@ async def test_end_to_end_replay_restores_history_when_first_input_repeats(tmp_p
             ),
             workspace=tmp_path / "ws",
             model="stub",
-            max_iterations=5,
-            restrict_to_workspace=True,
+            policy=TurnPolicy(max_iterations=5),
+            tools=ToolWiring(restrict_to_workspace=True),
         )
         loop.tools.register(_MarkerTool(marker))
 

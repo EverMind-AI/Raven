@@ -19,6 +19,7 @@ import json
 from pathlib import Path
 
 from raven.agent.loop.main import AgentLoop
+from tests._wiring import wire
 
 
 class _StubProvider:
@@ -36,7 +37,7 @@ def _write_switches(path: Path, names: list[str]) -> None:
 
 
 def _loop(tmp_path: Path, **kwargs) -> AgentLoop:
-    return AgentLoop(provider=_StubProvider(), workspace=tmp_path / "ws", **kwargs)
+    return AgentLoop(provider=_StubProvider(), workspace=tmp_path / "ws", **wire(**kwargs))
 
 
 def _offered(loop: AgentLoop) -> set[str]:

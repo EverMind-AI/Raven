@@ -20,6 +20,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from raven.agent.loop.bundles import EngineWiring
 from raven.agent.loop.main import AgentLoop
 from raven.agent.subagent.manager import SubagentManager
 from raven.config.raven import ContextConfig, SkillForgeConfig
@@ -96,10 +97,9 @@ def _loop(tmp_path) -> AgentLoop:
         provider=_Provider(),
         workspace=tmp_path,
         model="fake/model",
-        context_config=ContextConfig(),
         # This test walks the push pipeline's holders (rewriter/gate); the
         # pull default builds neither.
-        skill_forge_config=SkillForgeConfig(discovery="push"),
+        engine=EngineWiring(context_config=ContextConfig(), skill_forge_config=SkillForgeConfig(discovery="push")),
     )
 
 
@@ -217,9 +217,9 @@ def test_a_pair_free_switch_keeps_a_window_the_user_pinned(tmp_path) -> None:
         provider=_Provider(),
         workspace=tmp_path,
         model="fake/model",
-        context_window_tokens=32768,
-        context_config=ContextConfig(),
-        skill_forge_config=SkillForgeConfig(),
+        engine=EngineWiring(
+            context_window_tokens=32768, context_config=ContextConfig(), skill_forge_config=SkillForgeConfig()
+        ),
     )
 
     loop.set_provider(_Provider("new"), NEW_MODEL)
@@ -267,8 +267,7 @@ def test_an_empty_curator_model_follows_the_agent_model_both_times(tmp_path) -> 
         provider=_Provider(),
         workspace=tmp_path,
         model="fake/model",
-        context_config=ContextConfig(curator_model=""),
-        skill_forge_config=SkillForgeConfig(),
+        engine=EngineWiring(context_config=ContextConfig(curator_model=""), skill_forge_config=SkillForgeConfig()),
     )
     curator = next(b for b in loop.context_engine._builders if isinstance(b, CuratorSegmentBuilder))
     assert curator.curator_model == "fake/model"

@@ -15,6 +15,7 @@ from typing import Any
 
 from raven.agent.loop import AgentLoop
 from raven.agent.loop._shared import _filter_qualified_ids
+from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -62,9 +63,9 @@ def _make_loop(workspace: Path, *, backend=None) -> AgentLoop:
         provider=_StubProvider(),
         workspace=workspace,
         model="stub",
-        max_iterations=2,
-        restrict_to_workspace=True,
-        backend=backend,
+        policy=TurnPolicy(max_iterations=2),
+        tools=ToolWiring(restrict_to_workspace=True),
+        engine=EngineWiring(backend=backend),
     )
 
 

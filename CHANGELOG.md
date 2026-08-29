@@ -34,6 +34,9 @@ All notable changes to Raven are documented here.
   imports the loop shell it is consumed by. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- `AgentLoop` takes its five wiring bundles and nothing else: the flat
+  keyword shim that folded legacy names into them (used by tests only) is
+  gone, and the tests construct the bundles they mean.
 - `raven.memory_engine` is a package face: the store, the consolidator, the
   skill catalog and router, the attention and behaviors parsers resolve as
   names on the package (lazily), and nothing outside the engine imports its

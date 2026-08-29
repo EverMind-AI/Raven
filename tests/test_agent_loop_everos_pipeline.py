@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from raven.agent.loop import AgentLoop
+from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
 from raven.contracts.memory import Memory
 from raven.providers.base import LLMProvider, LLMResponse
 from raven.spine.message import ChatType, Source
@@ -116,12 +117,11 @@ def _make_agent(workspace: Path, *, backend=None) -> AgentLoop:
         provider=_StubProvider(),
         workspace=workspace,
         model="stub",
-        max_iterations=2,
-        restrict_to_workspace=True,
-        backend=backend,
         # These tests assert the push pipeline's end-to-end effects (the
         # everos skill body landing in the prompt); pull renders a menu only.
-        skill_forge_config=SkillForgeConfig(discovery="push"),
+        policy=TurnPolicy(max_iterations=2),
+        tools=ToolWiring(restrict_to_workspace=True),
+        engine=EngineWiring(backend=backend, skill_forge_config=SkillForgeConfig(discovery="push")),
     )
 
 

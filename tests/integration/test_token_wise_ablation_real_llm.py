@@ -36,6 +36,7 @@ from pathlib import Path
 import pytest
 
 from raven.agent.loop import AgentLoop
+from raven.agent.loop.bundles import EngineWiring, HostWiring, TurnPolicy
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.token_wise.cache_optimizer import CacheOptimizer
 from raven.token_wise.registry import StrategyRegistry
@@ -255,11 +256,12 @@ async def _run_variant(
         provider=provider,
         workspace=workspace,
         model=MODEL,
-        max_iterations=4,  # we expect zero tool turns
-        context_window_tokens=200_000,  # disable consolidator triggering
+        # we expect zero tool turns
+        # disable consolidator triggering
         mcp_servers={},
-        channels_config=None,
-        strategies=registry,
+        policy=TurnPolicy(max_iterations=4),
+        engine=EngineWiring(context_window_tokens=200_000, strategies=registry),
+        host=HostWiring(channels_config=None),
     )
     # Strip default tools so the assistant has nothing to invoke and the
     # tools schema doesn't add noise/cost variance to the experiment.

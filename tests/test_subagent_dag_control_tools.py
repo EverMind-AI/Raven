@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 
 from raven.agent.loop import AgentLoop
+from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.agent.subagent.dag_control_tools import CancelDagTool, DagStatusTool, ResolveDagNodeTool
 from raven.agent.subagent.dag_reader import DagReadError
 from raven.agent.tools.registry import ToolRegistry
@@ -435,9 +436,8 @@ async def test_the_loop_registers_all_three_tools_outside_the_schema(workspace: 
         provider=_StubProvider(),
         workspace=workspace,
         model="stub",
-        max_iterations=2,
-        restrict_to_workspace=True,
-        tool_search_config=ToolSearchConfig(enabled=True),
+        policy=TurnPolicy(max_iterations=2),
+        tools=ToolWiring(restrict_to_workspace=True, tool_search_config=ToolSearchConfig(enabled=True)),
     )
 
     assert loop.tools.has("cancel_dag")
@@ -470,9 +470,9 @@ async def test_a_default_loop_can_still_reach_the_hidden_tools(workspace: Path) 
         provider=_StubProvider(),
         workspace=workspace,
         model="stub",
-        max_iterations=2,
-        restrict_to_workspace=True,
         # no tool_search_config: the default deploy
+        policy=TurnPolicy(max_iterations=2),
+        tools=ToolWiring(restrict_to_workspace=True),
     )
 
     assert loop.tools.has("tool_call")

@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from raven.agent.loop import AgentLoop
+from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
@@ -103,8 +104,8 @@ async def test_overflow_shrinks_and_recovers(workspace):
         provider=provider,
         workspace=workspace,
         model="stub",
-        max_iterations=12,
-        restrict_to_workspace=True,
+        policy=TurnPolicy(max_iterations=12),
+        tools=ToolWiring(restrict_to_workspace=True),
     )
 
     out = await agent._process_message(

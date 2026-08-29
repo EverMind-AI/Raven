@@ -26,6 +26,7 @@ from raven.agent.tools.capabilities import (
 )
 from raven.config.loader import load_config
 from raven.providers.base import LLMProvider, LLMResponse
+from tests._wiring import wire
 
 
 class _StubProvider(LLMProvider):
@@ -96,8 +97,7 @@ def _loop(workspace: Path, config, **kw) -> AgentLoop:
         provider=_StubProvider(),
         workspace=workspace,
         model="stub",
-        media_config=config.effective_media_config(),
-        **kw,
+        **wire(media_config=config.effective_media_config(), **kw),
     )
 
 

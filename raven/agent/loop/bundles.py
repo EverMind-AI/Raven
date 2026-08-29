@@ -1,9 +1,7 @@
 """Construction bundles for AgentLoop: forty-five keywords become five groups.
 
-Each bundle is one wiring concern, mirroring the mixin split. The legacy
-keyword names keep working through the constructor's ``**legacy`` shim, which
-maps them into these bundles field by field -- same values, same defaults, so
-existing callers construct the same loop.
+Each bundle is one wiring concern, mirroring the mixin split; ``AgentLoop``
+takes the five bundles and nothing else, so a wiring field has one address.
 """
 
 from __future__ import annotations
@@ -81,7 +79,8 @@ class HostWiring:
     notify: Any = None
 
 
-_LEGACY_FIELDS: dict[str, str] = {}
+# Which bundle each wiring field lives in; tests read captured kwargs through it.
+FIELD_OWNER: dict[str, str] = {}
 for _bundle_name, _cls in (
     ("tools", ToolWiring),
     ("subagents", SubagentWiring),
@@ -90,7 +89,7 @@ for _bundle_name, _cls in (
     ("host", HostWiring),
 ):
     for _f in _cls.__dataclass_fields__:
-        _LEGACY_FIELDS[_f] = _bundle_name
+        FIELD_OWNER[_f] = _bundle_name
 
 
 def resolve_wiring(
@@ -99,23 +98,12 @@ def resolve_wiring(
     engine: EngineWiring | None,
     policy: TurnPolicy | None,
     host: HostWiring | None,
-    legacy: dict[str, Any],
 ) -> tuple[ToolWiring, SubagentWiring, EngineWiring, TurnPolicy, HostWiring]:
-    """Fold legacy keyword names into their bundles; refuse a name nobody owns.
-
-    A typo must stay a loud TypeError, exactly as a keyword typo was before
-    the bundles existed.
-    """
-    bundles = {
-        "tools": tools or ToolWiring(),
-        "subagents": subagents or SubagentWiring(),
-        "engine": engine or EngineWiring(),
-        "policy": policy or TurnPolicy(),
-        "host": host or HostWiring(),
-    }
-    for name, value in legacy.items():
-        owner = _LEGACY_FIELDS.get(name)
-        if owner is None:
-            raise TypeError(f"AgentLoop got an unexpected keyword argument {name!r}")
-        setattr(bundles[owner], name, value)
-    return (bundles["tools"], bundles["subagents"], bundles["engine"], bundles["policy"], bundles["host"])
+    """Every bundle a caller left out is the default one."""
+    return (
+        tools or ToolWiring(),
+        subagents or SubagentWiring(),
+        engine or EngineWiring(),
+        policy or TurnPolicy(),
+        host or HostWiring(),
+    )

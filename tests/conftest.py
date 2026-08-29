@@ -308,9 +308,9 @@ def wired_kwarg(kwargs: dict, name: str):
     """
     if name in kwargs:
         return kwargs[name]
-    from raven.agent.loop.bundles import _LEGACY_FIELDS
+    from raven.agent.loop.bundles import FIELD_OWNER
 
-    owner = _LEGACY_FIELDS.get(name)
+    owner = FIELD_OWNER.get(name)
     bundle = kwargs.get(owner) if owner else None
     return getattr(bundle, name, None) if bundle is not None else None
 
