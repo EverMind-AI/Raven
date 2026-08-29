@@ -144,6 +144,19 @@ def dispense_channel_config(spec: Any, section: Any, *, channel: str) -> Any:
     schema = getattr(spec, "config_schema", None) or {}
     if not schema:
         return section
-    raw = {k: getattr(section, k) for k in schema if hasattr(section, k)}
+    from raven.config.loader import channel_cargo_slice
+
+    raw = {k: v for k, v in channel_cargo_slice(channel).items() if k in schema}
+    for key, decl in schema.items():
+        if decl.get("required") and key not in raw and hasattr(section, key):
+            # Zero-drift transition: an unset required key keeps today's
+            # semantics (the adapter fails at connect, not the door at start)
+            # by falling back to the central section until that model retires.
+            raw[key] = getattr(section, key)
     cargo = admit_slice(schema, raw, plugin_id=f"channel:{channel}")
+    for key, decl in schema.items():
+        if key not in cargo and "default" not in decl and hasattr(section, key):
+            # No file value and no declared default: the central model still
+            # owns this key's default until the write-side schema retires.
+            cargo[key] = getattr(section, key)
     return DispensedSlice(section, cargo)

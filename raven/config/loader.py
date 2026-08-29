@@ -368,6 +368,33 @@ def _persist_migrations(path: Path, from_version: int = 0) -> None:
         _write_migration_version(path)
 
 
+# The raw channel sections, exactly as the file spells them (sparse: only what
+# the user set). The delivery path reads cargo from here through the admission
+# door, so declared defaults -- not the central model's -- own an absent key.
+# Keyed per load; a malformed section yields an empty slice and a warning
+# rather than taking the load down (the socket half still validates).
+_channel_slices: dict[str, dict] = {}
+
+
+def channel_cargo_slice(name: str) -> dict:
+    """The sparse, file-true cargo slice for one channel (empty when unset)."""
+    return dict(_channel_slices.get(name, {}))
+
+
+def _stash_channel_slices(data: dict) -> None:
+    _channel_slices.clear()
+    channels = data.get("channels")
+    if not isinstance(channels, dict):
+        return
+    for name, section in channels.items():
+        if isinstance(section, dict):
+            _channel_slices[name] = dict(section)
+        else:
+            logging.getLogger(__name__).warning(
+                "channels.%s is not a table; its cargo reads as unset", name
+            )
+
+
 def load_config(config_path: Path | None = None) -> Config:
     """
     Load configuration from file or create default.
@@ -391,6 +418,7 @@ def load_config(config_path: Path | None = None) -> Config:
             from_version = _migration_version(path)
             unstamped = from_version < CURRENT_CONFIG_VERSION
             data = _migrate_config(data, from_version=from_version)
+            _stash_channel_slices(data)
         except json.JSONDecodeError as e:
             # Boot on defaults for a malformed file (a transient mid-write race
             # shouldn't brick callers) but warn LOUDLY -- a persistent syntax
