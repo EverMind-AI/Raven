@@ -289,12 +289,12 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # ToolRegistry by ``_register_default_tools``.
         self.plugin_tools: "list[Tool]" = list(plugin_tools or [])
 
-        # Phase A: per-turn stash for ``injected_skill_ids`` surfaced by
+        # Per-turn stash for ``injected_skill_ids`` surfaced by
         # :class:`DefaultContextEngine.assemble`'s ``AssembledContext.metadata``.
         # Populated inside ``_assemble_context_messages`` so the after-turn
         # feedback dispatcher can read it without re-running selection.
-        # ``None`` means "use the legacy ``_collect_injected_skill_ids``
-        # path" — see that method for the branch.
+        # ``None`` means "use the ``_collect_injected_skill_ids`` path" — see
+        # that method for the branch.
         self._last_injected_skill_ids: list[str] | None = None
         # ``qualified_id -> registry source`` for the ids above. The id's own
         # prefix is the addressing namespace (``local`` for anything on disk),
@@ -364,7 +364,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             skill_forge_router_config,
         )
         # Install-policy knobs for the use_skill tool (registered later in
-        # ``_register_builtin_tools``, which no longer sees these configs).
+        # ``_register_builtin_tools``, which does not see these configs).
         self._skill_min_safety = float(
             getattr(getattr(skill_forge_router_config, "hub", None), "min_safety", 0.7),
         )
@@ -534,9 +534,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # one, and ``set_default_binding`` is what keeps that fallback current.
         # Add the call there when adding another holder.
 
-        # Phase B-3: the L4 facade (``DefaultMemoryEngine`` /
-        # ``MemoryEngine`` ABC) has been retired. AgentLoop now holds
-        # the underlying subsystems directly:
+        # AgentLoop holds the memory subsystems directly:
         #
         # - ``self.memory_consolidator`` (above) — markdown compaction
         #   policy. Owns the ``MemoryStore`` it built; reach it via
@@ -545,7 +543,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         #   always-skills + ``# Skills`` render path. The SkillForgeRouter stack
         #   (assembled in ``context_engine.factory``) owns retrieval.
 
-        # AgentHook lifecycle chain. The 3 legacy callback
+        # AgentHook lifecycle chain. The three callback
         # parameters (``on_user_inbound`` / ``decision_consumer`` /
         # ``response_modifier``) get auto-wrapped into adapter hooks
         # and merged with any caller-supplied ``hooks`` composite.
@@ -553,7 +551,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # Ordering rationale:
         #   1. OnUserInboundAdapter first — pure observer, never
         #      short-circuits. Keeps FeedbackTracker engagement counting
-        #      every legitimate inbound (matching legacy behavior).
+        #      every legitimate inbound.
         #   2. DecisionConsumerAdapter next — may short-circuit when the
         #      user replies to a Sentinel TaskDiscovery menu. Observers
         #      have already fired.
