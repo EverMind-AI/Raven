@@ -897,7 +897,7 @@ def sentinel_attention(
     Read-only. Useful for verifying which producers have written and
     eyeballing the diagnostic Sentinel Observations block.
     """
-    from raven.memory_engine.consolidate.attention import parse_attention
+    from raven.memory_engine import parse_attention
 
     ws = Path(workspace) if workspace else get_workspace_path()
     path = ws / "user_memory" / "attention.md"
@@ -949,7 +949,7 @@ def sentinel_behaviors(
     Without filters, prints the full markdown file. With ``--folded``,
     renders one line per event in the same compact format Planner sees.
     """
-    from raven.memory_engine.consolidate.behaviors import (
+    from raven.memory_engine import (
         parse_behaviors,
         render_folded_block,
     )
@@ -1026,10 +1026,10 @@ def sentinel_behaviors_rebuild(
     import asyncio
 
     from raven.config.raven import load_raven_config
-    from raven.memory_engine.consolidate.behaviors_extractor import (
+    from raven.memory_engine import (
         BehaviorsExtractor,
+        MemoryStore,
     )
-    from raven.memory_engine.consolidate.consolidator import MemoryStore
     from raven.session.manager import SessionManager
 
     ws = Path(workspace) if workspace else get_workspace_path()
@@ -1054,7 +1054,7 @@ def sentinel_behaviors_rebuild(
         # Narrow to a single session by patching SessionManager's
         # sessions_dir lookup — cheaper than threading a filter through
         # run_all. We just iterate the matching file directly.
-        from raven.memory_engine.consolidate.behaviors_extractor import (
+        from raven.memory_engine import (
             BehaviorsOffsets,
         )
 

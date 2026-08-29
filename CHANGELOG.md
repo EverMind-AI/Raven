@@ -34,6 +34,10 @@ All notable changes to Raven are documented here.
   imports the loop shell it is consumed by. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- `raven.memory_engine` is a package face: the store, the consolidator, the
+  skill catalog and router, the attention and behaviors parsers resolve as
+  names on the package (lazily), and nothing outside the engine imports its
+  submodules; a test keeps it so.
 - Modules that only type against the provider shapes (`LLMProvider`,
   `LLMResponse`, `ToolCallRequest`, ...) import them from the paper,
   `raven.contracts.llm_provider`; `raven.providers.base` is imported by the

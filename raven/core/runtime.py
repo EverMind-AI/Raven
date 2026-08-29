@@ -107,7 +107,7 @@ def build_runtime(
 
     host = host or HostWiring()
     if ec_config.eval_engine.enabled:
-        from raven.memory_engine.consolidate.consolidator import MemoryStore
+        from raven.memory_engine import MemoryStore
 
         eval_engine = eval_stack.build_eval_stack(
             provider=provider,

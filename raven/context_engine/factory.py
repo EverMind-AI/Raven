@@ -56,7 +56,7 @@ if TYPE_CHECKING:
         SkillForgeRouterConfig,
     )
     from raven.contracts.memory import MemoryBackend
-    from raven.memory_engine.skill_forge import (
+    from raven.memory_engine import (
         LLMGateFilter,
         QueryRewriter,
         SkillForgeRouter,
@@ -207,7 +207,7 @@ def _build_router(
     skill_hub_client: "SkillHubClient | None" = None,
 ) -> "SkillForgeRouter":
     """Assemble the 1-to-3 source SkillForgeRouter for segment 5."""
-    from raven.memory_engine.skill_forge import (
+    from raven.memory_engine import (
         EverosSkillSource,
         HubSkillSource,
         LocalSkillSource,
@@ -284,7 +284,7 @@ def _build_rewriter_and_gate(
     if skill_forge_config is None or provider is None:
         return None, None
 
-    from raven.memory_engine.skill_forge import LLMGateFilter, QueryRewriter
+    from raven.memory_engine import LLMGateFilter, QueryRewriter
 
     rewriter: "QueryRewriter | None" = None
     if bool(getattr(skill_forge_config, "rewrite_enabled", False)):

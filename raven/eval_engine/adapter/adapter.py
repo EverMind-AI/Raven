@@ -19,7 +19,7 @@ from datetime import datetime
 from typing import Callable
 
 from raven.eval_engine.judge.judge import JudgeVerdict
-from raven.memory_engine.consolidate.consolidator import MemoryStore
+from raven.memory_engine import MemoryStore
 
 logger = logging.getLogger(__name__)
 

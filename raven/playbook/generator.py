@@ -48,7 +48,7 @@ from raven.playbook.validate import check_assets, unusable_mcp_servers, validate
 
 if TYPE_CHECKING:
     from raven.contracts.llm_provider import LLMProvider
-    from raven.memory_engine.skill_forge import SkillForgeRouter
+    from raven.memory_engine import SkillForgeRouter
     from raven.playbook.agent_profiles import PlaybookAgentProfile
 
 _MAX_REPAIR_ROUNDS = 3

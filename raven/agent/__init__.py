@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from raven.agent.context import ContextBuilder
     from raven.agent.loop import AgentLoop
-    from raven.memory_engine.consolidate.consolidator import MemoryStore
+    from raven.memory_engine import MemoryStore
 
 __all__ = ["AgentLoop", "ContextBuilder", "MemoryStore"]
 

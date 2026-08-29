@@ -37,12 +37,12 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
-from raven.memory_engine.consolidate.consolidator import parse_episode_line
+from raven.memory_engine import parse_episode_line
 
 if TYPE_CHECKING:
     from raven.config.raven import DailyAnalysisConfig
     from raven.contracts.llm_provider import LLMProvider
-    from raven.memory_engine.consolidate.consolidator import MemoryStore
+    from raven.memory_engine import MemoryStore
     from raven.proactive_engine.sentinel.predictor.routine_store import (
         RoutineStore,
     )

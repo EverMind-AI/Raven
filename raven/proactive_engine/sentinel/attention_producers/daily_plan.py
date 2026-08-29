@@ -40,7 +40,7 @@ from raven.proactive_engine.sentinel.attention_producers._base import (
 
 if TYPE_CHECKING:
     from raven.contracts.llm_provider import LLMProvider
-    from raven.memory_engine.consolidate.consolidator import MemoryStore
+    from raven.memory_engine import MemoryStore
 
 
 # Date patterns commonly written in MEMORY.md and persona text:
@@ -470,7 +470,7 @@ class DailyPlanProducer(AttentionProducer):
             attention_file = self._memory_store.attention_file
             if not attention_file.exists():
                 return ""
-            from raven.memory_engine.consolidate.attention import parse_attention
+            from raven.memory_engine import parse_attention
 
             sections = parse_attention(attention_file.read_text(encoding="utf-8"))
             wanted = [

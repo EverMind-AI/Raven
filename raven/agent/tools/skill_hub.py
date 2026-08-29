@@ -43,7 +43,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
     from pathlib import Path
 
-    from raven.memory_engine.skill_local.registry import SkillRegistry
+    from raven.memory_engine import SkillRegistry
     from raven.skill_hub import SkillHubClient
 
 logger = logging.getLogger(__name__)

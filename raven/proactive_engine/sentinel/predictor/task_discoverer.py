@@ -40,7 +40,7 @@ from raven.proactive_engine.sentinel.types import (
 
 if TYPE_CHECKING:
     from raven.contracts.llm_provider import LLMProvider
-    from raven.memory_engine.consolidate.consolidator import MemoryStore
+    from raven.memory_engine import MemoryStore
     from raven.proactive_engine.sentinel.executor.dispatcher import NudgeDispatcher
     from raven.proactive_engine.sentinel.executor.pending_decision import PendingDecisionStore
     from raven.proactive_engine.sentinel.feedback.tracker import NudgeFeedbackTracker

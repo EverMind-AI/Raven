@@ -142,7 +142,7 @@ def build_attention_path(
 
     behaviors_extractor = None
     if sentinel_cfg.behaviors_extract.enabled:
-        from raven.memory_engine.consolidate.behaviors_extractor import (
+        from raven.memory_engine import (
             BehaviorsExtractor,
         )
 
@@ -211,7 +211,7 @@ def build_sentinel_stack(
 
     # Local imports — Sentinel modules pull in heavy transitive deps
     # (memory store, routine learner); skip the cost when disabled.
-    from raven.memory_engine.consolidate.consolidator import MemoryStore
+    from raven.memory_engine import MemoryStore
     from raven.proactive_engine.sentinel import (
         ContextAssembler,
         DeferManager,
