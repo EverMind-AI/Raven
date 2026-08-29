@@ -96,17 +96,6 @@ _PENDING: dict[str, _Pending] = {}
 """OAuth ``state`` -> the pending round-trip it will resolve."""
 
 
-def set_callback_base(base_url: str) -> None:
-    """Declare the running HTTP origin that serves ``/oauth/callback``.
-
-    No longer called by ``raven serve``: see :data:`CALLBACK_PORT` for why the
-    redirect must not follow a port that moves. Kept for a host that genuinely
-    owns a fixed origin and wants the callback on it.
-    """
-    global _callback_base
-    _callback_base = base_url.rstrip("/")
-
-
 def redirect_uri() -> str | None:
     return f"{_callback_base}{_CALLBACK_PATH}" if _callback_base else None
 
@@ -1106,5 +1095,4 @@ __all__ = [
     "provider_for",
     "redirect_uri",
     "resolve_callback",
-    "set_callback_base",
 ]

@@ -234,8 +234,7 @@ def _no_openrouter_network(tmp_path):
     finally:
         rates._fetch_openrouter_models = original_fetch
         model_catalog_cache._CACHE_PATH = original_path
-        rates._OPENROUTER_CACHE.clear()
-        rates._OPENROUTER_CACHE_TIME = 0.0
+        rates.reset_openrouter_cache()
 
 
 @pytest.fixture(autouse=True)

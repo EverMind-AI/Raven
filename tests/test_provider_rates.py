@@ -39,9 +39,9 @@ _REAL_FETCH = rates._fetch_openrouter_models
 
 @pytest.fixture(autouse=True)
 def _reset_catalog_state():
-    rates._OPENROUTER_CACHE.clear()
+    rates.reset_openrouter_cache()
     yield
-    rates._OPENROUTER_CACHE.clear()
+    rates.reset_openrouter_cache()
 
 
 @pytest.fixture
@@ -758,7 +758,7 @@ def disk_cache(tmp_path, monkeypatch):
     """Point the OpenRouter disk cache at a temp file; never touch real ~/.raven."""
     path = tmp_path / "model-catalog.json"
     monkeypatch.setattr(model_catalog_cache, "_CACHE_PATH", path, raising=False)
-    rates._OPENROUTER_CACHE.clear()
+    rates.reset_openrouter_cache()
     monkeypatch.setattr(rates, "_OPENROUTER_CACHE_TIME", 0.0)
     return path
 

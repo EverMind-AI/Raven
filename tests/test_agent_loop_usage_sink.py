@@ -66,9 +66,9 @@ def workspace():
 
 @pytest.fixture(autouse=True)
 def _reset_openrouter_cache():
-    rates._OPENROUTER_CACHE.clear()
+    rates.reset_openrouter_cache()
     yield
-    rates._OPENROUTER_CACHE.clear()
+    rates.reset_openrouter_cache()
 
 
 def _make_agent(workspace: Path, provider: LLMProvider, model: str, window: int | None) -> AgentLoop:
