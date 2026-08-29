@@ -20,7 +20,7 @@ from raven.rpc.models import (
     SkillhubSearchParams,
 )
 from raven.skill_hub import hub
-from raven.skill_hub.hub import SkillHubFailed, SkillHubRejected
+from raven.skill_hub.hub import SkillHubRequestError, SkillHubUnavailableError
 
 if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
@@ -40,9 +40,9 @@ def _parse(model_cls: type, params: dict) -> Any:
 def _translated():
     try:
         yield
-    except SkillHubRejected as e:
+    except SkillHubRequestError as e:
         raise ConfigValidationError(str(e), data=e.data or None) from e
-    except SkillHubFailed as e:
+    except SkillHubUnavailableError as e:
         raise InternalError(str(e), data=e.data or None) from e
 
 

@@ -9,7 +9,7 @@ when running simultaneously, agree on quotas + pending injects + defers.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any
 
 from raven.config.paths import get_sentinel_dir
 
@@ -605,14 +605,6 @@ def attach_sentinel_feedback_tool(runner, agent: "AgentLoop") -> None:
     agent.hooks.append(_SentinelFeedbackFinalizeHook(runner))
 
 
-__all__ = [
-    "build_sentinel_stack",
-    "attach_sentinel_spawn",
-    "attach_sentinel_decision_consumer",
-    "attach_sentinel_feedback_tool",
-]
-
-
 def build_wake(hb_cfg: Any, *, is_busy: Callable[[], bool]) -> tuple[Any, Any]:
     """The event-wake pair for heartbeat: ``(wake, system_events)``, or
     ``(None, None)`` when event wake is off.
@@ -655,3 +647,13 @@ def build_heartbeat(
         wake=wake,
         system_events=system_events,
     )
+
+
+__all__ = [
+    "build_sentinel_stack",
+    "attach_sentinel_spawn",
+    "attach_sentinel_decision_consumer",
+    "attach_sentinel_feedback_tool",
+    "build_heartbeat",
+    "build_wake",
+]

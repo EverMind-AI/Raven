@@ -497,7 +497,7 @@ async def test_a_skill_id_with_slashes_stays_one_path_segment(workspace, monkeyp
 
 def test_base_url_refuses_a_plaintext_remote_hub(monkeypatch):
     monkeypatch.setenv("RAVEN_SKILLHUB_URL", "http://hub.example.com")
-    with pytest.raises(hub.SkillHubRejected):
+    with pytest.raises(hub.SkillHubRequestError):
         hub._base_url()
 
 

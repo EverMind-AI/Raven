@@ -4,8 +4,8 @@ The four operations behind the ``skillhub.*`` RPC methods and behind a plugin
 install that carries a skill (``raven.market.install``), together with the
 archive safety rules -- member allow-list, size caps, staging directory and
 lock -- that make a hub download safe to unpack. Failures are
-:class:`SkillHubRejected` (a request the caller can correct, or a hub answer
-that names the problem) and :class:`SkillHubFailed` (raven's own fault or an
+:class:`SkillHubRequestError` (a request the caller can correct, or a hub answer
+that names the problem) and :class:`SkillHubUnavailableError` (raven's own fault or an
 unreachable hub); the RPC surface translates them into its own vocabulary.
 """
 
@@ -39,12 +39,12 @@ class SkillHubError(Exception):
         self.data = data or {}
 
 
-class SkillHubRejected(SkillHubError):
-    """The request or the hub's answer is at fault, and the caller can act on it."""
+class SkillHubRequestError(SkillHubError):
+    """The request or the hub's answer is at fault, and the caller can act on it (-32602 on the wire)."""
 
 
-class SkillHubFailed(SkillHubError):
-    """Raven's own failure, or a hub that could not be reached."""
+class SkillHubUnavailableError(SkillHubError):
+    """Raven's own failure, or a hub that could not be reached (-32603 on the wire)."""
 
 
 DEFAULT_BASE_URL = "https://skillhub.evermind.ai"
@@ -88,7 +88,7 @@ def _base_url() -> str:
     try:
         return hub_endpoint(os.environ.get("RAVEN_SKILLHUB_URL"), DEFAULT_BASE_URL, what="RAVEN_SKILLHUB_URL")
     except HubTrustError as exc:
-        raise SkillHubRejected(str(exc)) from exc
+        raise SkillHubRequestError(str(exc)) from exc
 
 
 def _skills_dir() -> Path:
@@ -151,7 +151,7 @@ async def _hub_json(path: str, params: dict | None = None) -> Any:
             async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False) as client:
                 async with client.stream("GET", url, params=params) as resp:
                     if 300 <= resp.status_code < 400:
-                        raise SkillHubRejected(
+                        raise SkillHubRequestError(
                             "the skill hub redirected a metadata request; point RAVEN_SKILLHUB_URL at the hub itself",
                             data={"url": url},
                         )
@@ -159,17 +159,17 @@ async def _hub_json(path: str, params: dict | None = None) -> Any:
                     async for chunk in resp.aiter_bytes():
                         buf += chunk
                         if len(buf) > _MAX_JSON_BYTES:
-                            raise SkillHubFailed(
+                            raise SkillHubUnavailableError(
                                 f"the skill hub sent more than {_MAX_JSON_BYTES} bytes of metadata",
                                 data={"url": url},
                             )
                     return _unwrap_body(resp.status_code, bytes(buf))
     except TimeoutError as exc:
-        raise SkillHubFailed(
+        raise SkillHubUnavailableError(
             f"the skill hub did not answer within {_DOWNLOAD_DEADLINE:.0f}s", data={"url": url}
         ) from exc
     except httpx.HTTPError as exc:
-        raise SkillHubFailed(f"skill hub unreachable: {exc}", data={"url": url}) from exc
+        raise SkillHubUnavailableError(f"skill hub unreachable: {exc}", data={"url": url}) from exc
 
 
 def _unwrap_body(status_code: int, raw: bytes) -> Any:
@@ -177,17 +177,17 @@ def _unwrap_body(status_code: int, raw: bytes) -> Any:
     try:
         body = json.loads(raw)
     except ValueError as exc:
-        raise SkillHubFailed("skill hub returned a non-JSON body", data={"status": status_code}) from exc
+        raise SkillHubUnavailableError("skill hub returned a non-JSON body", data={"status": status_code}) from exc
     if not isinstance(body, dict):
-        raise SkillHubFailed("skill hub returned an unexpected body")
+        raise SkillHubUnavailableError("skill hub returned an unexpected body")
     status = body.get("status")
     if status not in (0, None):
-        raise SkillHubRejected(
+        raise SkillHubRequestError(
             str(body.get("error") or "skill hub rejected the request"),
             data={"hub_status": status, "request_id": body.get("requestId")},
         )
     if status_code >= 400:
-        raise SkillHubFailed(f"skill hub HTTP {status_code}", data={"body": str(body)[:400]})
+        raise SkillHubUnavailableError(f"skill hub HTTP {status_code}", data={"body": str(body)[:400]})
     return body.get("result")
 
 
@@ -220,21 +220,21 @@ def _safe_members(zf: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
     """
     infos = [i for i in zf.infolist() if not i.is_dir()]
     if not infos:
-        raise SkillHubRejected("the downloaded skill archive is empty")
+        raise SkillHubRequestError("the downloaded skill archive is empty")
     if len(infos) > _MAX_MEMBERS:
-        raise SkillHubRejected(f"the skill archive has too many files ({len(infos)})")
+        raise SkillHubRequestError(f"the skill archive has too many files ({len(infos)})")
     total = sum(max(0, i.file_size) for i in infos)
     if total > _MAX_UNPACKED_BYTES:
-        raise SkillHubRejected(f"the skill archive unpacks to {total} bytes, which is too large")
+        raise SkillHubRequestError(f"the skill archive unpacks to {total} bytes, which is too large")
     for info in infos:
         name = info.filename.replace("\\", "/")
         if name.startswith("/") or ".." in Path(name).parts:
-            raise SkillHubRejected(f"the skill archive contains an unsafe path: {info.filename}")
+            raise SkillHubRequestError(f"the skill archive contains an unsafe path: {info.filename}")
         # zipfile raises a bare RuntimeError for an encrypted member, which would
         # reach the caller as internal_error. A skill nobody can read is a bad
         # answer from the hub, and it is refused as one.
         if info.flag_bits & 0x1:
-            raise SkillHubRejected(f"the skill archive is encrypted: {info.filename}")
+            raise SkillHubRequestError(f"the skill archive is encrypted: {info.filename}")
     return infos
 
 
@@ -273,7 +273,7 @@ def _extract(data: bytes, target: Path) -> tuple[list[str], list[str]]:
                 continue
             dest = (target / rel).resolve()
             if not dest.is_relative_to(target.resolve()):
-                raise SkillHubRejected(f"the skill archive contains an unsafe path: {name}")
+                raise SkillHubRequestError(f"the skill archive contains an unsafe path: {name}")
             if not _allowed_member(rel, info):
                 skipped.append(rel)
                 continue
@@ -282,7 +282,7 @@ def _extract(data: bytes, target: Path) -> tuple[list[str], list[str]]:
                 shutil.copyfileobj(src, out)
             written.append(rel)
     if not any(r.split("/")[-1] == "SKILL.md" for r in written):
-        raise SkillHubRejected("the downloaded archive has no SKILL.md, so it is not a skill")
+        raise SkillHubRequestError("the downloaded archive has no SKILL.md, so it is not a skill")
     return sorted(written), sorted(skipped)
 
 
@@ -322,24 +322,26 @@ async def _fetch_capped(url: str, *, check, params: dict | None = None, what: st
                                 async for chunk in resp.aiter_bytes():
                                     buf += chunk
                                     if len(buf) > _MAX_ZIP_BYTES:
-                                        raise SkillHubRejected(
+                                        raise SkillHubRequestError(
                                             f"{what} exceeded {_MAX_ZIP_BYTES} bytes and was stopped",
                                             data={"url": target},
                                         )
                             return resp.status_code, ctype, bytes(buf)
                     target = redirect_target(target, location, check=check, what=what)
                     params = None
-        raise SkillHubRejected(f"{what} redirected more than {MAX_REDIRECTS} times")
+        raise SkillHubRequestError(f"{what} redirected more than {MAX_REDIRECTS} times")
     except HubTrustError as exc:
-        raise SkillHubRejected(str(exc)) from exc
+        raise SkillHubRequestError(str(exc)) from exc
     except TimeoutError as exc:
-        raise SkillHubFailed(f"{what} did not finish within {_DOWNLOAD_DEADLINE:.0f}s", data={"url": url}) from exc
+        raise SkillHubUnavailableError(
+            f"{what} did not finish within {_DOWNLOAD_DEADLINE:.0f}s", data={"url": url}
+        ) from exc
     except httpx.InvalidURL as exc:
         # Not an HTTPError, so it would otherwise escape as internal_error: the
         # hub handed back something that is not a usable URL at all.
-        raise SkillHubRejected(f"{what} is not a usable URL: {exc}", data={"url": target}) from exc
+        raise SkillHubRequestError(f"{what} is not a usable URL: {exc}", data={"url": target}) from exc
     except httpx.HTTPError as exc:
-        raise SkillHubFailed(f"skill download failed: {exc}", data={"url": target}) from exc
+        raise SkillHubUnavailableError(f"skill download failed: {exc}", data={"url": target}) from exc
 
 
 def _marker_owner(marker: Path) -> str:
@@ -379,7 +381,7 @@ def _install_lock(root: Path, name: str):
             # has finished would be a lie the caller cannot act on.
             age = _LOCK_STALE_S + 1
         if age < _LOCK_STALE_S and not _take_lock(lock):
-            raise SkillHubRejected(
+            raise SkillHubRequestError(
                 f"an install of {name} is already running; try again in a moment",
                 data={"name": name},
             )
@@ -397,13 +399,13 @@ def _install_lock(root: Path, name: str):
             try:
                 os.rename(lock, claimed)
             except OSError:
-                raise SkillHubRejected(
+                raise SkillHubRequestError(
                     f"an install of {name} is already running; try again in a moment",
                     data={"name": name},
                 ) from None
             shutil.rmtree(claimed, ignore_errors=True)
             if not _take_lock(lock):
-                raise SkillHubRejected(
+                raise SkillHubRequestError(
                     f"an install of {name} is already running; try again in a moment",
                     data={"name": name},
                 )
@@ -461,7 +463,7 @@ async def search(
 async def detail(skill_id: str) -> dict:
     raw = await _hub_json(f"/openapi/v1/skills/{quote(skill_id, safe='')}") or {}
     if not isinstance(raw, dict):
-        raise SkillHubFailed("skill hub returned an unexpected detail body")
+        raise SkillHubUnavailableError("skill hub returned an unexpected detail body")
     installed = await asyncio.to_thread(_installed_index)
     out = _item(raw, installed)
     files = raw.get("files")
@@ -495,7 +497,7 @@ async def install(skill_id: str, *, agent_loop_factory=None, if_absent: bool = F
     hub_id = quote(skill_id, safe="")
     detail = await _hub_json(f"/openapi/v1/skills/{hub_id}") or {}
     if not isinstance(detail, dict) or not detail.get("name"):
-        raise SkillHubRejected("skill not found on the hub", data={"id": skill_id})
+        raise SkillHubRequestError("skill not found on the hub", data={"id": skill_id})
 
     from raven.market.trust import HubTrustError, require_public_https
 
@@ -506,21 +508,21 @@ async def install(skill_id: str, *, agent_loop_factory=None, if_absent: bool = F
         url, params={"source": "raven"}, check=require_public_https, what="the skill download"
     )
     if status >= 400:
-        raise SkillHubFailed(f"skill download failed with HTTP {status}")
+        raise SkillHubUnavailableError(f"skill download failed with HTTP {status}")
     if "json" in ctype:
         # Contract per the hub's OpenAPI: a presigned URL instead of the bytes.
         # The hub picks that URL, so it is checked before raven follows it.
         meta = _unwrap_body(status, data) or {}
         zip_url = meta.get("zip_url") if isinstance(meta, dict) else None
         if not zip_url:
-            raise SkillHubFailed("skill download returned neither a zip nor a zip_url")
+            raise SkillHubUnavailableError("skill download returned neither a zip nor a zip_url")
         try:
             require_public_https(str(zip_url), what="the hub's zip_url")
         except HubTrustError as exc:
-            raise SkillHubRejected(str(exc)) from exc
+            raise SkillHubRequestError(str(exc)) from exc
         status, _, data = await _fetch_capped(str(zip_url), check=require_public_https, what="the skill download")
         if status >= 400:
-            raise SkillHubFailed(f"skill download failed with HTTP {status}")
+            raise SkillHubUnavailableError(f"skill download failed with HTTP {status}")
 
     entry_id = str(detail.get("id") or skill_id)
     name = _safe_name(str(detail.get("name")))
@@ -552,12 +554,12 @@ async def install(skill_id: str, *, agent_loop_factory=None, if_absent: bool = F
             replaced = target.exists()
             if replaced:
                 if not (target / MARKER).is_file():
-                    raise SkillHubRejected(
+                    raise SkillHubRequestError(
                         f"a local skill named {name} already exists; rename it first",
                         data={"path": str(target)},
                     )
                 if if_absent:
-                    raise SkillHubRejected(
+                    raise SkillHubRequestError(
                         f"a skill named {name} is already installed; remove it before installing this plugin",
                         data={"path": str(target)},
                     )
@@ -566,7 +568,7 @@ async def install(skill_id: str, *, agent_loop_factory=None, if_absent: bool = F
                 # different entry would be a silent replacement.
                 owner = _marker_owner(target / MARKER)
                 if owner and owner != entry_id:
-                    raise SkillHubRejected(
+                    raise SkillHubRequestError(
                         f"the skill directory {name} already holds hub entry {owner}; remove it first",
                         data={"path": str(target), "owner": owner},
                     )
@@ -607,9 +609,9 @@ async def install(skill_id: str, *, agent_loop_factory=None, if_absent: bool = F
     except zipfile.BadZipFile as exc:
         # A hub serving an error page, or a truncated body, is a bad answer -- not
         # a raven fault to report with a traceback.
-        raise SkillHubRejected(f"the download is not a usable zip archive ({exc})", data={"id": skill_id}) from exc
+        raise SkillHubRequestError(f"the download is not a usable zip archive ({exc})", data={"id": skill_id}) from exc
     except OSError as exc:
-        raise SkillHubFailed(f"the skill could not be written: {exc}", data={"path": str(target)}) from exc
+        raise SkillHubUnavailableError(f"the skill could not be written: {exc}", data={"path": str(target)}) from exc
     await asyncio.to_thread(_refresh_pool, agent_loop_factory)
     return {
         "name": name,
@@ -627,9 +629,9 @@ async def remove(skill_name: str, *, agent_loop_factory=None) -> dict:
     root = _skills_dir().resolve()
     target = (root / name).resolve()
     if target.parent != root or not target.is_dir():
-        raise SkillHubRejected("no such installed skill", data={"name": skill_name})
+        raise SkillHubRequestError("no such installed skill", data={"name": skill_name})
     if not (target / MARKER).is_file():
-        raise SkillHubRejected(
+        raise SkillHubRequestError(
             "that skill was not installed from the hub, so it is not removed here",
             data={"name": name},
         )
@@ -638,4 +640,13 @@ async def remove(skill_name: str, *, agent_loop_factory=None) -> dict:
     return {"removed": True, "name": name}
 
 
-__all__ = ["MARKER", "SkillHubError", "SkillHubFailed", "SkillHubRejected", "detail", "install", "remove", "search"]
+__all__ = [
+    "MARKER",
+    "SkillHubError",
+    "SkillHubUnavailableError",
+    "SkillHubRequestError",
+    "detail",
+    "install",
+    "remove",
+    "search",
+]
