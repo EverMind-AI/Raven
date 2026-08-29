@@ -15,7 +15,7 @@ import pytest
 
 from raven.providers.common_models import common_models_for
 from raven.providers.registry import PROVIDERS
-from raven.rpc.errors import ConfigValidationError, NotSupportedInV01Error
+from raven.rpc.errors import ConfigValidationError, NotSupportedError
 from raven.rpc.methods import model as model_module
 from raven.rpc.methods.model import (
     model_add_endpoint,
@@ -191,7 +191,7 @@ async def test_save_key_custom_accepts_api_base(fake_home: Path) -> None:
 
 
 async def test_save_key_oauth_rejected(fake_home: Path) -> None:
-    with pytest.raises(NotSupportedInV01Error):
+    with pytest.raises(NotSupportedError):
         await model_save_key({"slug": "openai_codex", "api_key": "x"})
 
 

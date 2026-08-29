@@ -4044,6 +4044,62 @@
     },
     {
       "name": "settings.everosSet",
+      "summary": "Merge fields into one EverOS section, or clear it. Deprecated spelling of settings.everos_set, kept for the shipped TUI.",
+      "params": [
+        {
+          "name": "section",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "fields",
+          "required": false,
+          "schema": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "description": "Merged into the section; ignored when clearing."
+          }
+        },
+        {
+          "name": "clear",
+          "required": false,
+          "schema": {
+            "type": "boolean",
+            "description": "Drop the section; refused for llm and embedding."
+          }
+        },
+        {
+          "name": "borrow_from",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "Take api_key and base_url from this connected provider, copied not referenced. Wins over the same keys in `fields`, which cannot carry a real key: the page only ever sees a redacted one."
+          }
+        }
+      ],
+      "result": {
+        "name": "SettingsEverosSetResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "applied": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "applied"
+          ],
+          "type": "object"
+        }
+      },
+      "deprecated": true
+    },
+    {
+      "name": "settings.everos_set",
       "summary": "Merge fields into one EverOS section, or clear it.",
       "params": [
         {

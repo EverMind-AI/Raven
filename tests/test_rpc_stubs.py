@@ -2,7 +2,7 @@
 
 All 6 stub groups (10 actual method names) return JSON-RPC error -32012
 ``not_supported_in_v01`` with a structured error message. The dispatcher
-serializes ``NotSupportedInV01Error`` to a ``{code, message, data}`` frame.
+serializes ``NotSupportedError`` to a ``{code, message, data}`` frame.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from raven.rpc.dispatcher import Dispatcher
-from raven.rpc.errors import NotSupportedInV01Error
+from raven.rpc.errors import NotSupportedError
 from raven.rpc.methods._stubs import (
     HERMES_ONLY_STUB_METHODS,
     register_stub_methods,
@@ -96,7 +96,7 @@ async def test_stub_handler_callable_raises_directly(method: str, _msg: str, _hi
     d = Dispatcher()
     register_stub_methods(d)
     handler = d._handlers[method]  # type: ignore[attr-defined]
-    with pytest.raises(NotSupportedInV01Error):
+    with pytest.raises(NotSupportedError):
         await handler({})
 
 

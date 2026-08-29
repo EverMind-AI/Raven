@@ -52,7 +52,7 @@ from raven.providers.registry import (
 from raven.providers.wire import stored_model_id
 from raven.rpc.errors import (
     ConfigValidationError,
-    NotSupportedInV01Error,
+    NotSupportedError,
 )
 from raven.rpc.models import (
     ModelAddEndpointParams,
@@ -346,7 +346,7 @@ async def model_save_key(params: dict) -> dict:
     spec = find_by_name(parsed.slug)
     label = spec.label if spec else parsed.slug
     if spec and spec.is_oauth:
-        raise NotSupportedInV01Error(
+        raise NotSupportedError(
             f"{label} uses OAuth; run `raven provider login {parsed.slug.replace('_', '-')}`",
             data={"slug": parsed.slug},
         )
@@ -383,7 +383,7 @@ async def model_save_key(params: dict) -> dict:
     try:
         await asyncio.to_thread(set_provider_fields, parsed.slug, fields)
     except RuntimeError as exc:
-        raise NotSupportedInV01Error(str(exc), data={"slug": parsed.slug}) from exc
+        raise NotSupportedError(str(exc), data={"slug": parsed.slug}) from exc
     except KeyError as exc:
         raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
 

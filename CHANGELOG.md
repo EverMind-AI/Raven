@@ -34,6 +34,11 @@ All notable changes to Raven are documented here.
   imports the loop shell it is consumed by. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- `settings.everos_set` is the RPC method's name; `settings.everosSet` stays
+  registered and declared (marked deprecated in the OpenRPC document) until
+  the TUI reads the new one. The `-32012` error class is `NotSupportedError`;
+  its wire message keeps the `not_supported_in_v01` spelling for the same
+  reason.
 - `RpcServer` takes the connected socket and nothing else: the POSIX pipe
   path (`request_fd` / `notify_fd`, kept for a demo runner that no longer
   exists) is gone with the workaround comments it needed, and the tests
