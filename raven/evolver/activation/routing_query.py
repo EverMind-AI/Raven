@@ -45,9 +45,7 @@ def dry_query(task_text: str, *, library_root: Path | None = None) -> list[str]:
 
     # Raven split the old unified SkillService into a discovery catalog
     # (always-skills + registry/pool) and a retrieval router over sources.
-    from raven.memory_engine.skill_forge.catalog import LocalSkillCatalog
-    from raven.memory_engine.skill_forge.local_source import LocalSkillSource
-    from raven.memory_engine.skill_forge.router import SkillForgeRouter
+    from raven.memory_engine import LocalSkillCatalog, LocalSkillSource, SkillForgeRouter
 
     local_dirs: list[LocalDirConfig] = []
     if library_root is not None:

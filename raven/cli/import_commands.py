@@ -271,7 +271,7 @@ async def _land_hermes_user_md(
     """
     from raven.importer.hermes_user_md import import_user_md_sections
     from raven.importer.scanners.hermes import split_memory_entries
-    from raven.memory_engine.consolidate.consolidator import MemoryStore
+    from raven.memory_engine import MemoryStore
 
     for _scanner, result in items:
         if result.platform is not Platform.HERMES or result.source_key != "user-md":

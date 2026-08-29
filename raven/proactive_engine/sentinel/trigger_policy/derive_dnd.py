@@ -26,7 +26,7 @@ from __future__ import annotations
 import re
 
 from raven.config.raven import DndWindow
-from raven.memory_engine.consolidate.attention import parse_attention
+from raven.memory_engine import parse_attention
 
 # ``- dnd: 22:30-06:00 [weekdays=...] [reason=...]``
 _DND_RE = re.compile(

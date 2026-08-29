@@ -21,7 +21,7 @@ from raven.eval_engine import EvalEngine, EvalEngineConfig
 
 if TYPE_CHECKING:
     from raven.contracts.llm_provider import LLMProvider
-    from raven.memory_engine.consolidate.consolidator import MemoryStore
+    from raven.memory_engine import MemoryStore
 
 logger = logging.getLogger(__name__)
 

@@ -18,7 +18,7 @@ from raven.tracing import semconv, trace
 
 if TYPE_CHECKING:
     from raven.contracts.memory import MemoryBackend
-    from raven.memory_engine.consolidate.consolidator import MemoryStore
+    from raven.memory_engine import MemoryStore
 
 # The turn's own bound on recall. The backend plugin carries a stricter one so
 # its circuit breaker fires first; this is the floor under any third-party

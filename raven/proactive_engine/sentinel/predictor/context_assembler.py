@@ -24,7 +24,7 @@ from typing import Any, Callable
 from loguru import logger
 
 from raven.config.raven import DEFAULT_PLANNER_ATTENTION_SECTIONS
-from raven.memory_engine.consolidate.consolidator import MemoryStore
+from raven.memory_engine import MemoryStore
 from raven.proactive_engine.sentinel.predictor.routine_learner import RoutineLearner
 from raven.proactive_engine.sentinel.trigger_policy.policy import NudgePolicy
 from raven.proactive_engine.sentinel.trigger_policy.prefs import (
@@ -222,7 +222,7 @@ class ContextAssembler:
             text = path.read_text(encoding="utf-8")
         except OSError:
             return ""
-        from raven.memory_engine.consolidate.attention import parse_attention
+        from raven.memory_engine import parse_attention
 
         sections = parse_attention(text)
         parts: list[str] = []
@@ -249,7 +249,7 @@ class ContextAssembler:
             return ""
         from datetime import timedelta as _td
 
-        from raven.memory_engine.consolidate.behaviors import (
+        from raven.memory_engine import (
             parse_behaviors,
             render_folded_block,
             slice_after_day,

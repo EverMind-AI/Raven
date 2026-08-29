@@ -31,7 +31,7 @@ from raven.config.schema import ExecToolConfig
 from raven.contracts.llm_provider import LLMProvider
 from raven.contracts.subagent_backend import SubagentActionAbortedError, SubagentNoAnswerError
 from raven.contracts.tool import SKIPPED_AFTER_BLOCKED_CALL, Continuation
-from raven.memory_engine.skill_local.registry import filter_by_required_tools
+from raven.memory_engine import filter_by_required_tools
 from raven.providers.streaming import generation_kwargs, stream_llm_call
 from raven.providers.tool_calls import openai_tool_call
 from raven.security.trust import wrap_untrusted
@@ -72,7 +72,7 @@ def build_subagent_prompt(
     tools this sub-agent lacks is still withheld.
     """
     from raven.agent.context import ContextBuilder
-    from raven.memory_engine.skill_forge import LocalSkillCatalog
+    from raven.memory_engine import LocalSkillCatalog
 
     # Transient ContextBuilder just for the runtime-context builder; the
     # subagent has no ContextBuilder of its own (and must not start a watcher).

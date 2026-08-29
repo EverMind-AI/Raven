@@ -60,8 +60,7 @@ from raven.agent.tools.web import WebFetchTool, WebSearchTool
 from raven.contracts.assembled import TokenBudget
 from raven.contracts.llm_provider import LLMProvider, LLMResponse
 from raven.contracts.tool import SKIPPED_AFTER_BLOCKED_CALL, Continuation, ToolOutput
-from raven.memory_engine.consolidate.consolidator import MemoryConsolidator, MemoryStore
-from raven.memory_engine.store_pipeline import StorePipeline
+from raven.memory_engine import MemoryConsolidator, MemoryStore, StorePipeline
 from raven.providers.base import send_max_tokens
 from raven.providers.binding import ModelBinding, active_binding, use_binding
 from raven.providers.capabilities import image_placeholder_text, supports_image_tool_result, vision_verdict

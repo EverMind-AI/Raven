@@ -37,7 +37,7 @@ from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     from raven.gateway.manager import ChannelManager
-    from raven.memory_engine.consolidate.behaviors_extractor import (
+    from raven.memory_engine import (
         BehaviorsExtractor,
     )
     from raven.proactive_engine.sentinel.attention_updater import AttentionUpdater

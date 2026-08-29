@@ -29,7 +29,7 @@ from raven.security.trust import wrap_untrusted
 from raven.skill_hub.policy import SkillPolicy, is_blocked, refuses_low_safety
 
 if TYPE_CHECKING:
-    from raven.memory_engine.skill_forge import SkillForgeRouter
+    from raven.memory_engine import SkillForgeRouter
 
 _MIN_CHARS = 8
 _MIN_CORE_CHARS = 4

@@ -72,7 +72,7 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
     catalog = getattr(getattr(loop, "context", None), "skills", None)
     if catalog is None:
         try:
-            from raven.memory_engine.skill_forge.catalog import LocalSkillCatalog
+            from raven.memory_engine import LocalSkillCatalog
 
             config = load_config()
             catalog = LocalSkillCatalog(

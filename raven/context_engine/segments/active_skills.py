@@ -6,12 +6,11 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from raven.context_engine.segments import render
 from raven.contracts.context import AssemblyContext, Segment
-from raven.memory_engine.skill_local.registry import filter_by_required_tools
+from raven.memory_engine import filter_by_required_tools
 from raven.tracing import semconv, trace
 
 if TYPE_CHECKING:
-    from raven.memory_engine.skill_forge import LocalSkillCatalog
-    from raven.memory_engine.skill_local.types import SkillMeta
+    from raven.memory_engine import LocalSkillCatalog, SkillMeta
 
 
 class ActiveSkillsSegmentBuilder:

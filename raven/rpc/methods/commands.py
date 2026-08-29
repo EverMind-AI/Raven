@@ -160,7 +160,7 @@ def _compute_skill_count() -> tuple[int, str | None]:
     """
     try:
         from raven.config.loader import load_config
-        from raven.memory_engine.skill_local.registry import SkillRegistry
+        from raven.memory_engine import SkillRegistry
 
         config = load_config()
         workspace = config.workspace_path
