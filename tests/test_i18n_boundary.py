@@ -25,7 +25,6 @@ CJK = re.compile(r"[\u3400-\u9fff\uff00-\uffef\u3000-\u303f]")
 STILL_CARRYING: frozenset[str] = frozenset(
     {
         "raven/cli/onboard_commands.py",
-        "raven/core/proactive_stack.py",
         "raven/proactive_engine/schedulers/cron/tool.py",
         "raven/proactive_engine/sentinel/executor/decision_router.py",
     }

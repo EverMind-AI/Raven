@@ -515,9 +515,9 @@ def attach_sentinel_decision_consumer(
     if sentinel_cfg.task_discovery_require_confirm and (planner_provider is None or planner_model is None):
         _logger.warning(
             "Sentinel: task_discovery_require_confirm=True but no LLM "
-            "provider/model configured for DecisionRouter — only "
-            "deterministic yes/no regex (`yes`/`确认`/`no`/`取消`/etc.) "
-            "will work; ambiguous user replies will fall through to "
+            "provider/model configured for DecisionRouter -- only the "
+            "deterministic yes/no regex, over the confirm and cancel words "
+            "of either language, will work; ambiguous replies fall through to "
             "normal conversation and the decision will stay awaiting "
             "until the TTL expires. Configure sentinel.evaluator_base_url"
             " or set task_discovery_require_confirm=False to silence "
