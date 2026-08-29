@@ -56,11 +56,11 @@ class ChannelSpec:
     factory: Callable[[Any], Channel]  # (config) -> Channel
     capabilities: Capabilities = field(default_factory=Capabilities)
     # The cargo-consumed slice of this channel's config, declared where the
-    # consumer lives (config-with-cargo): flat key -> {type, default?,
-    # required?}, the same vocabulary plugin manifests use. Empty = undeclared,
-    # today's behaviour. Storage and validation stay with the central model for
-    # now; a guard keeps this declaration and that model coherent until the
-    # handover.
+    # consumer lives (config-with-cargo): key -> {type, default?, required?,
+    # secret?, choices?, fields?}, the same vocabulary plugin manifests use.
+    # Since the central per-channel classes retired (M2), this declaration is
+    # the only truth: the door dispenses from it and the writer validates
+    # through the same door.
     config_schema: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 

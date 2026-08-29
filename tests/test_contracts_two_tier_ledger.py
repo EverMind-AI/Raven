@@ -56,7 +56,6 @@ def check_ledger(pkg_dir: Path, ledger: dict[str, set[str]]) -> list[str]:
 
 LEDGER = {
     "contract": {
-        "TurnRequest", "TurnHandle", "Origin",
         # The seven shapes, moved in whole by the S2 full move:
         "AssembledContext",
         "TokenBudget",
@@ -110,11 +109,10 @@ def test_ledger_bites_a_sneaked_symbol(tmp_path):
 
     work = tmp_path / "contracts"
     shutil.copytree(CONTRACTS_DIR, work, ignore=shutil.ignore_patterns("__pycache__"))
-    p = work / "turn.py"
-    p.write_text(p.read_text().replace(
-        '__all__ = ["TurnRequest", "TurnHandle", "Origin"]',
-        '__all__ = ["TurnRequest", "TurnHandle", "Origin", "SneakedIn"]',
-    ) + "\nclass SneakedIn:\n    pass\n")
+    p = work / "channel.py"
+    src = p.read_text()
+    assert '"ChannelSpec",' in src
+    p.write_text(src.replace('"ChannelSpec",', '"ChannelSpec",\n    "SneakedIn",', 1) + "\nclass SneakedIn:\n    pass\n")
     violations = check_ledger(work, LEDGER)
     assert any("SneakedIn" in v for v in violations), violations
 

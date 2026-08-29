@@ -941,9 +941,6 @@ no layer assignment.
 Browser automation (`driver.py`) and its outbound policy (`policy.py`).
 Consumed by surfaces only; a surface-side feature library like `importer`.
 
-**SECURITY** (`security/`):
-Network access control (e.g. `network.py`).
-
 ### Execution & Evaluation
 
 **SandBox** (`sandbox/`):

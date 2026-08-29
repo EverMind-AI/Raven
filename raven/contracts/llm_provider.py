@@ -733,16 +733,6 @@ class LLMProvider(ABC):
 
         return ErrorClassification("unknown")
 
-    @classmethod
-    def _is_transient_error(cls, content: str | None) -> bool:
-        """Back-compat shim — retryable verdict from the string classifier."""
-        return cls.classify_error(content=content).retryable
-
-    @classmethod
-    def _should_fallback(cls, content: str | None) -> bool:
-        """Back-compat shim — fallback verdict from the string classifier."""
-        return cls.classify_error(content=content).should_fallback
-
     @staticmethod
     def _jittered(delay: float) -> float:
         """Apply +/-10% jitter to a backoff delay to avoid synchronized retries."""

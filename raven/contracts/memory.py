@@ -1,9 +1,8 @@
 """MemoryBackend Protocol — the single contract every memory plugin implements.
 
-MB-1 introduction. This is the **new** seam between AgentLoop and the
-memory subsystem, deliberately distinct from the older
-:class:`MemoryEngine` ABC in :mod:`raven.memory_engine.base` so the
-two can coexist while the codebase transitions.
+MB-1 introduction: the seam between AgentLoop and the memory subsystem.
+(The older ``MemoryEngine`` ABC it was built alongside is deleted; this
+Protocol is the only memory contract.)
 
 Three design points to flag for plugin authors:
 

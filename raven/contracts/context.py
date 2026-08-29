@@ -16,10 +16,8 @@ Naming note:
 
 Layering note:
     The data carriers ``AssembledContext`` and ``TokenBudget`` live in
-    :mod:`raven.memory_engine.base` (they were placed there before
-    this ABC landed). The two engines (``MemoryEngine``,
-    ``ContextEngine``) are peer L4 abstractions; the dataclasses are
-    shared value objects, not part of either's contract surface.
+    :mod:`raven.contracts.assembled`; they are shared value objects,
+    not part of this contract's surface.
 """
 
 from __future__ import annotations
