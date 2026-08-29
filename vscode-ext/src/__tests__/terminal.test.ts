@@ -42,15 +42,7 @@ function createFakeApi() {
         const disposable: VscodeDisposable = { dispose: vi.fn() }
         return disposable
       }),
-      showErrorMessage: vi.fn(async () => undefined),
-      createStatusBarItem: vi.fn(() => ({
-        text: '',
-        tooltip: undefined,
-        command: undefined,
-        show: vi.fn(),
-        hide: vi.fn(),
-        dispose: vi.fn()
-      }))
+      showErrorMessage: vi.fn(async () => undefined)
     },
     workspace: {
       getConfiguration: vi.fn(() => ({ get: vi.fn() })),
@@ -58,8 +50,7 @@ function createFakeApi() {
     },
     commands: {
       registerCommand: vi.fn(() => ({ dispose: vi.fn() }))
-    },
-    StatusBarAlignment: { Left: 1 }
+    }
   }
 
   return { api, terminals, closeListeners }

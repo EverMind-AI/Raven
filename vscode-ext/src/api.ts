@@ -17,21 +17,11 @@ export interface VscodeTerminal {
   dispose(): void
 }
 
-export interface VscodeStatusBarItem {
-  text: string
-  tooltip: string | undefined
-  command: string | undefined
-  show(): void
-  hide(): void
-  dispose(): void
-}
-
 export interface VscodeApi {
   window: {
     createTerminal(options: { name: string; cwd?: string; shellPath?: string; shellArgs?: string[] }): VscodeTerminal
     onDidCloseTerminal(listener: (terminal: VscodeTerminal) => unknown): VscodeDisposable
     showErrorMessage(message: string, ...actions: string[]): Promise<string | undefined>
-    createStatusBarItem(alignment: number, priority?: number): VscodeStatusBarItem
   }
   workspace: {
     getConfiguration(section: string): {
@@ -42,7 +32,6 @@ export interface VscodeApi {
   commands: {
     registerCommand(id: string, handler: (...args: unknown[]) => unknown): VscodeDisposable
   }
-  StatusBarAlignment: { Left: number }
 }
 
 export async function loadVscode(): Promise<VscodeApi | null> {
@@ -59,33 +48,7 @@ function adaptVscode(vscode: typeof vscodeNs): VscodeApi {
     window: {
       createTerminal: options => vscode.window.createTerminal(options),
       onDidCloseTerminal: listener => vscode.window.onDidCloseTerminal(terminal => listener(terminal)),
-      showErrorMessage: async (message, ...actions) => vscode.window.showErrorMessage(message, ...actions),
-      createStatusBarItem: (alignment, priority) => {
-        const item = vscode.window.createStatusBarItem(alignment, priority)
-        return {
-          get text(): string {
-            return item.text
-          },
-          set text(value: string) {
-            item.text = value
-          },
-          get tooltip(): string | undefined {
-            return typeof item.tooltip === 'string' ? item.tooltip : undefined
-          },
-          set tooltip(value: string | undefined) {
-            item.tooltip = value
-          },
-          get command(): string | undefined {
-            return typeof item.command === 'string' ? item.command : undefined
-          },
-          set command(value: string | undefined) {
-            item.command = value
-          },
-          show: () => item.show(),
-          hide: () => item.hide(),
-          dispose: () => item.dispose()
-        }
-      }
+      showErrorMessage: async (message, ...actions) => vscode.window.showErrorMessage(message, ...actions)
     },
     workspace: {
       getConfiguration: section => vscode.workspace.getConfiguration(section),
@@ -93,7 +56,6 @@ function adaptVscode(vscode: typeof vscodeNs): VscodeApi {
     },
     commands: {
       registerCommand: (id, handler) => vscode.commands.registerCommand(id, handler)
-    },
-    StatusBarAlignment: vscode.StatusBarAlignment
+    }
   }
 }

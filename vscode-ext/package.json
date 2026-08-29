@@ -25,7 +25,6 @@
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
-    "onStartupFinished",
     "onCommand:raven.openTui"
   ],
   "contributes": {
@@ -36,6 +35,14 @@
         "icon": "$(terminal)"
       }
     ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "raven.openTui",
+          "group": "navigation"
+        }
+      ]
+    },
     "configuration": {
       "title": "Raven",
       "properties": {

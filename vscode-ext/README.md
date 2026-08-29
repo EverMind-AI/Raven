@@ -5,7 +5,8 @@ integrated terminal, mirroring the OpenCode extension model.
 
 ## Features
 
-- Command palette entry and status bar shortcut: **Raven: Open TUI**
+- Editor title button next to the active file tab plus the command palette
+  entry **Raven: Open TUI**
 - Launches `raven tui` in a dedicated integrated terminal named Raven; the
   terminal process is raven itself, so arguments pass through argv with no
   host-shell expansion

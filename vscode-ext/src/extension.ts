@@ -1,10 +1,10 @@
 /**
  * VS Code extension entry point.
  *
- * Registers the raven.openTui command plus a status bar shortcut. The command
- * resolves how to launch raven (setting, RAVEN_BIN, PATH, uv) and opens the
- * TUI inside a dedicated integrated terminal that is reused across
- * invocations.
+ * Registers the raven.openTui command, exposed as an editor title button
+ * (menus.editor/title) next to the active file tab. The command resolves how
+ * to launch raven (setting, RAVEN_BIN, PATH, uv) and opens the TUI inside a
+ * dedicated integrated terminal that is reused across invocations.
  */
 
 import { spawnSync } from 'node:child_process'
@@ -63,11 +63,4 @@ export async function activate(context: { subscriptions: VscodeDisposable[] }): 
   }
 
   context.subscriptions.push(api.commands.registerCommand('raven.openTui', openTui))
-
-  const statusBar = api.window.createStatusBarItem(api.StatusBarAlignment.Left, 1)
-  statusBar.text = '$(terminal) Raven'
-  statusBar.tooltip = 'Open Raven TUI'
-  statusBar.command = 'raven.openTui'
-  statusBar.show()
-  context.subscriptions.push(statusBar)
 }
