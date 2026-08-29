@@ -13,8 +13,8 @@ _ADAPTERS_PKG = "raven.channels.adapters"
 
 
 def discover_specs() -> dict[str, ChannelSpec]:
-    """Return ``{name: ChannelSpec}`` for migrated adapters, keyed by package
-    name.
+    """Return ``{name: ChannelSpec}`` for the adapters under ``raven.channels.adapters``,
+    keyed by package name.
 
     Imports only each ``<name>/spec.py`` (cheap — the heavy SDK import is
     deferred into the spec's ``factory``). An adapter without a ``spec.py`` is
