@@ -13,39 +13,31 @@ synchronous inside the handler's ``redirect_stdout`` chain.
 from __future__ import annotations
 
 import contextlib
+import importlib
+import pkgutil
 from collections.abc import Iterator
+from types import ModuleType
 
 from rich.console import Console
 
-import raven.cli._helpers as ec_helpers
-import raven.cli.agent_commands as ec_agent
-import raven.cli.channel_commands as ec_channel
-import raven.cli.commands as ec_commands
-import raven.cli.cron_commands as ec_cron
-import raven.cli.gateway_commands as ec_gateway
-import raven.cli.onboard_commands as ec_onboard
-import raven.cli.provider_commands as ec_provider
-import raven.cli.sandbox_commands as ec_sandbox
-import raven.cli.sentinel_commands as ec_sentinel
-import raven.cli.skill_commands as ec_skill
-import raven.cli.status_commands as ec_status
+import raven.cli
 
-# Order is irrelevant (each module is patched independently); kept stable for
-# readable test introspection.
-_CONSOLE_HOSTS: tuple = (
-    ec_commands,
-    ec_sandbox,
-    ec_channel,
-    ec_cron,
-    ec_agent,
-    ec_gateway,
-    ec_onboard,
-    ec_provider,
-    ec_sentinel,
-    ec_skill,
-    ec_status,
-    ec_helpers,
-)
+
+def _console_hosts() -> tuple[ModuleType, ...]:
+    """Every module under ``raven.cli`` whose module-level ``console`` is a rich
+    Console. Discovered rather than listed: the list drifted to 12 of 22 while it
+    was maintained by hand, and a command module outside it printed past the TUI."""
+    hosts: list[ModuleType] = []
+    for info in pkgutil.iter_modules(raven.cli.__path__):
+        if info.name.startswith("__"):
+            continue
+        mod = importlib.import_module(f"raven.cli.{info.name}")
+        if isinstance(getattr(mod, "console", None), Console):
+            hosts.append(mod)
+    return tuple(sorted(hosts, key=lambda m: m.__name__))
+
+
+_CONSOLE_HOSTS: tuple[ModuleType, ...] = _console_hosts()
 
 
 @contextlib.contextmanager
