@@ -4,9 +4,11 @@ The shapes a memory backend implements (``Memory``, ``MemoryBackend``) and the
 assembled-context carriers (``AssembledContext``, ``TokenBudget``) are papers
 in :mod:`raven.contracts`; this package holds the machinery around them:
 
-- ``consolidate/``      -- ``MemoryStore`` (MEMORY.md / HISTORY.md under a
-  portable lock), ``MemoryConsolidator`` (token-driven compaction), the
-  attention and behaviors parsers and the behaviors extractor.
+- ``consolidate/``      -- ``MemoryStore`` (the ``user.md`` profile and the
+  ``episodes.md`` episode log, with ``attention.md`` and ``behaviors.md``
+  beside them, all under a portable file lock), ``MemoryConsolidator``
+  (token-driven consolidation), the attention and behaviors parsers and the
+  behaviors extractor.
 - ``skills/``, ``skill_local/``, ``skill_forge/`` -- the local skill pool, its
   watcher and catalog, and the forge that routes and evolves skills.
 - ``store_pipeline.py`` -- the write path from a finished turn into the store.

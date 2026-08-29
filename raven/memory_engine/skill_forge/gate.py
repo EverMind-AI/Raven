@@ -1,9 +1,5 @@
 """LLM gate — relevance filter over RRF-fused router candidates.
 
-Ported from the pre-integrate-everos
-``SkillService._llm_gate_filter`` and adapted to operate on
-:class:`RouterHit` instead of the legacy ``SkillMeta``.
-
 The gate runs after :class:`SkillForgeRouter` fan-out + RRF: it sees
 the candidate name + description + a short body excerpt and asks an LLM
 to plan, filter against the agent's available tools and against the

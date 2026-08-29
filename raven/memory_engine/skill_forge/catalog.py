@@ -1,15 +1,13 @@
 """LocalSkillCatalog — the single owner of the local skill pool.
 
-Absorbs what used to be ``SkillService``: it builds the
-:class:`SkillRegistry` + :class:`LocalPool`, runs the SKILL.md file
-watcher, and renders skills for the prompt (always-skills, injection,
-XML summary).
+It builds the :class:`SkillRegistry` and :class:`LocalPool`, runs the SKILL.md
+file watcher, and renders skills for the prompt (always-skills, injection, XML
+summary).
 
-Retrieval is **not** here — that lives in :class:`LocalSkillSource`
-(which reuses this catalog's ``pool`` + ``registry``) and is fused
-with the remote sources by :class:`SkillForgeRouter`. The old
-``SkillService.select`` / LLM-gate / query-rewriter retrieval path
-was retired when the router replaced it.
+Retrieval is **not** here: it lives in :class:`LocalSkillSource`, which reuses
+this catalog's ``pool`` and ``registry``, and is fused with the remote sources
+by :class:`SkillForgeRouter`, with the LLM gate and query rewriter downstream
+of the fusion.
 """
 
 from __future__ import annotations

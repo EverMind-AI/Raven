@@ -1,4 +1,12 @@
-"""Memory system for persistent agent memory."""
+"""The store and the consolidator behind long-term memory.
+
+``MemoryStore`` owns the files: ``user.md`` (profile), ``episodes.md`` (episode
+log) and their ``attention.md`` / ``behaviors.md`` siblings, each read and
+written under a portable file lock so a second raven cannot interleave.
+``MemoryConsolidator`` is the token-pressure path: conversation evicted from
+the window is annotated into episodes, and the episodes are folded back into
+the profile section by section.
+"""
 
 from __future__ import annotations
 

@@ -1,18 +1,15 @@
 """SkillRegistry — data layer for skills.
 
 Pure IO + frontmatter parsing + dependency checking. No rendering, no
-retrieval logic. Ported from the pre-refactor ``agent/skills.py``, with
-three-layer pool semantics (workspace > external > builtin) and the same
-three-namespace metadata lookup (``raven > nanobot > openclaw``).
+retrieval logic; callers reach it through :class:`LocalSkillCatalog`. Three
+pool layers, and the three-namespace metadata lookup
+(``raven > nanobot > openclaw``).
 
 Layers (highest priority first):
 
-  workspace : ``<workspace>/skills/``     — user's session/project pool
-  external  : ``<skills_dir>/``           — user's curated library
-                                            (e.g. mirror of skill_library
-                                             output, mounted via
-                                             ``config.skill_forge.skills_dir``)
-  builtin   : packaged ``raven/skills/`` — ships with the install
+  workspace : ``<workspace>/skills/``      — user's session/project pool
+  external  : each ``skillForge.localDirs`` entry — user's curated libraries
+  builtin   : packaged ``raven/memory_engine/skills/`` — ships with the install
 
 Disk layout supported per layer (auto-detected per top-level dir):
 

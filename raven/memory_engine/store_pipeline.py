@@ -4,8 +4,8 @@ The turn hands a slice over and returns; everything after that -- ordering,
 retries, bounds, and what shutdown does with whatever is left -- lives here.
 Indexing latency belongs to this module, not to the user's input box.
 
-Deliberately not called a queue in prose or in public names: ``Lane`` owns that
-word in this codebase (see CONTEXT.md), and the two are different things.
+The per-session deques here are not Lanes (CONTEXT.md reserves that word for
+the spine's scheduling domains): nothing in this module schedules a turn.
 """
 
 from __future__ import annotations
