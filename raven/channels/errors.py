@@ -1,6 +1,6 @@
 """Outbound send-error classification shared by channel adapters.
 
-``manager._send_with_retry`` backs off only on raised exceptions, so adapters
+``DeliveryHub._deliver_with_retry`` backs off only on raised exceptions, so adapters
 re-raise TRANSIENT failures (network drop, timeout, 5xx) and keep swallowing
 permanent ones (4xx, bad payloads, auth) — retrying those would only repeat
 the failure or duplicate side effects.

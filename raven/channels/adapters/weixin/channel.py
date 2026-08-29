@@ -824,7 +824,7 @@ class WeixinChannel(ChannelBase):
             await self._send_media_file(chat_id, path, ctx_token)
         except (httpx.TimeoutException, httpx.TransportError):
             logger.opt(exception=True).warning("Network error sending media {}", path)
-            raise  # let ChannelManager retry
+            raise  # let the delivery hub retry
         except httpx.HTTPStatusError as e:
             if e.response is not None and e.response.status_code >= 500:
                 logger.exception("Server error sending media {}", path)

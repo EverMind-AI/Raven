@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import typer
 from rich.console import Console
@@ -36,10 +36,6 @@ from raven.cli._log_silence import mute_subsystem_logs_unless_debug
 from raven.core.cron_stack import build_cron_service
 from raven.proactive_engine.schedulers.cron.service import CronService
 from raven.proactive_engine.schedulers.cron.types import CronJob, CronSchedule
-
-if TYPE_CHECKING:
-    pass
-
 
 cron_app = typer.Typer(
     help="Inspect and manage scheduled cron jobs (~/.raven/cron/jobs.json)",

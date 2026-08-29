@@ -9,15 +9,11 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import httpx
 from loguru import logger
 
 from raven.routing.types import ClassificationResult, TaskCategory
-
-if TYPE_CHECKING:
-    pass
 
 # ── 23 categories → task IDs ───────────────────────────────────────────────────
 

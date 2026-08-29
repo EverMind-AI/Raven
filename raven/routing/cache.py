@@ -106,7 +106,7 @@ def _deserialize(raw: dict) -> tuple[BenchmarkData, float] | None:
 
 
 class BenchmarkCache:
-    """Thread-safe benchmark data cache with background refresh."""
+    """Benchmark data cache with background refresh, for one event loop."""
 
     def __init__(self, cache_path: Path = _DEFAULT_CACHE_PATH):
         self._cache_path = cache_path

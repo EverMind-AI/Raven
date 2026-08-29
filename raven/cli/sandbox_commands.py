@@ -141,7 +141,6 @@ def _run_list() -> None:
         table = Table(title="Sandbox VMs")
         table.add_column("", style="bold", no_wrap=True)  # owned marker
         table.add_column("ID", style="cyan", no_wrap=True)
-        # table.add_column("Name")  # VMs are not named today; restore when naming is supported
         table.add_column("State")
         table.add_column("Image")
         table.add_column("CPUs", justify="right")

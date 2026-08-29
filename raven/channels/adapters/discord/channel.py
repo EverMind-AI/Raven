@@ -69,8 +69,9 @@ def _accepted_resume_url(candidate: object, configured: str) -> str | None:
 
 
 class DiscordChannel(ChannelBase):
-    capabilities = Capabilities(file_attachments=True)
     """Discord channel over the Gateway WebSocket."""
+
+    capabilities = Capabilities(file_attachments=True)
 
     config: Any
     name = "discord"

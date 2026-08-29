@@ -14,9 +14,9 @@ from typing import Any
 class SandboxInitError(RuntimeError):
     """Raised when the sandbox backend cannot be started or probed.
 
-    Defined in interfaces.py (not in boxlite_executor.py) so it can be imported
-    without requiring boxlite to be installed. mcp.py and loop.py import this
-    type for error handling; they must not fail just because boxlite is absent.
+    Defined here rather than in ``boxlite_executor`` so it can be imported
+    without boxlite installed: the agent loop and the MCP client import this
+    type for error handling and must not fail because a backend is absent.
     """
 
 

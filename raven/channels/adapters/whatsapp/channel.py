@@ -129,7 +129,7 @@ class WhatsAppChannel(ChannelBase):
             await self._ws.send(json.dumps({"type": "send", "to": chat_id, "text": text}, ensure_ascii=False))
         except Exception as e:
             if transient_network(e):
-                raise  # ws drop: let manager._send_with_retry back off and retry
+                raise  # ws drop: let the delivery hub back off and retry
             logger.error("Error sending WhatsApp message: {}", e)
 
     # ── inbound ───────────────────────────────────────────────────────

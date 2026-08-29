@@ -33,8 +33,9 @@ def _transient_slack(err: Exception) -> bool:
 
 
 class SlackChannel(ChannelBase):
-    capabilities = Capabilities(file_attachments=True)
     """Slack channel using Socket Mode."""
+
+    capabilities = Capabilities(file_attachments=True)
 
     config: Any
     name = "slack"
@@ -109,7 +110,7 @@ class SlackChannel(ChannelBase):
                     logger.error("Failed to upload file {}: {}", media_path, e)
         except Exception as e:
             if _transient_slack(e):
-                raise  # let manager._send_with_retry back off and retry
+                raise  # let the delivery hub back off and retry
             logger.error("Error sending Slack message: {}", e)
 
     # ── inbound ───────────────────────────────────────────────────────

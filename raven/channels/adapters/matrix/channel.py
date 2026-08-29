@@ -70,8 +70,9 @@ def _bridge_nio_logging() -> None:
 
 
 class MatrixChannel(ChannelBase):
-    capabilities = Capabilities(file_attachments=True)
     """Matrix (Element) channel driven by matrix-nio long-poll sync."""
+
+    capabilities = Capabilities(file_attachments=True)
 
     config: Any
     name = "matrix"
