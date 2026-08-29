@@ -12,7 +12,7 @@ import { existsSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 
 import { loadVscode, type VscodeApi, type VscodeDisposable } from './api.js'
-import { findOnPath, type ProbeRunner } from './pathProbe.js'
+import { findOnPath, probeLoginShellEnv, type ProbeRunner } from './pathProbe.js'
 import { resolveRavenCommand } from './ravenBin.js'
 import { TuiTerminalManager } from './terminal.js'
 
@@ -21,6 +21,21 @@ const INSTALL_DOCS_URL = 'https://github.com/EverMind-AI/Raven#quick-start'
 const runProbe: ProbeRunner = (command, args, { encoding, timeout }) => {
   const result = spawnSync(command, args, { encoding, timeout })
   return { status: result.status, stdout: result.stdout ?? null }
+}
+
+function cleanProcessEnv(): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)
+  )
+}
+
+let cachedShellEnv: Record<string, string> | null = null
+
+function shellEnvironment(): Record<string, string> {
+  if (cachedShellEnv === null) {
+    cachedShellEnv = probeLoginShellEnv(runProbe, process.env.SHELL, process.platform) ?? {}
+  }
+  return { ...cleanProcessEnv(), ...cachedShellEnv }
 }
 
 function isExistingFile(filePath: string): boolean {
@@ -59,7 +74,7 @@ export async function activate(context: { subscriptions: VscodeDisposable[] }): 
       )
       return
     }
-    manager.open(command, firstWorkspacePath(api))
+    manager.open(command, firstWorkspacePath(api), shellEnvironment())
   }
 
   context.subscriptions.push(api.commands.registerCommand('raven.openTui', openTui))

@@ -15,6 +15,9 @@ integrated terminal, mirroring the OpenCode extension model.
   `RAVEN_BIN` (`~` expanded), then `which` / `where`, then a bash/zsh login
   shell probe (for GUI-launched VS Code that lacks the shell rc PATH), then
   `uv run raven`
+- Launches with the login shell environment merged in (bash/zsh on POSIX,
+  PowerShell on Windows), so proxy settings and API keys from your shell rc
+  apply to raven inside VS Code
 
 ## Requirements
 

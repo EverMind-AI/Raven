@@ -1,11 +1,12 @@
 /**
- * Unit tests for findOnPath: which/where probing, the bash/zsh login-shell
- * fallback, non-file output filtering, and win32 behavior.
+ * Unit tests for findOnPath and probeLoginShellEnv: which/where probing, the
+ * bash/zsh login-shell fallback, env parsing, non-file output filtering, and
+ * win32 behavior.
  */
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { findOnPath, type ProbeResult } from '../pathProbe.js'
+import { findOnPath, probeLoginShellEnv, type ProbeResult } from '../pathProbe.js'
 
 function scriptedRunner(...results: ProbeResult[]) {
   let index = 0
@@ -72,5 +73,70 @@ describe('findOnPath', () => {
     const runner = scriptedRunner({ status: 1, stdout: null })
     expect(findOnPath('win32', 'raven', runner, () => true)).toBeNull()
     expect(runner).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('probeLoginShellEnv', () => {
+  it('parses KEY=VALUE lines and ignores shell noise', () => {
+    const runner = scriptedRunner({
+      status: 0,
+      stdout: 'no job control in this shell\nHTTP_PROXY=http://proxy:6760\nPATH=/usr/bin:/bin\n'
+    })
+    expect(probeLoginShellEnv(runner, '/bin/zsh', 'linux')).toEqual({
+      HTTP_PROXY: 'http://proxy:6760',
+      PATH: '/usr/bin:/bin'
+    })
+    expect(runner).toHaveBeenCalledWith('/bin/zsh', ['-lic', 'env'], { encoding: 'utf8', timeout: 5000 })
+  })
+
+  it('prefers the hinted shell and falls back to bash then zsh', () => {
+    const runner = scriptedRunner({ status: 1, stdout: null }, { status: 0, stdout: 'A=1\n' })
+    expect(probeLoginShellEnv(runner, '/usr/bin/zsh', 'darwin')).toEqual({ A: '1' })
+    expect(runner).toHaveBeenCalledTimes(2)
+  })
+
+  it('ignores an unsupported shell hint', () => {
+    const runner = scriptedRunner({ status: 0, stdout: 'A=1\n' })
+    expect(probeLoginShellEnv(runner, '/usr/bin/fish', 'linux')).toEqual({ A: '1' })
+    expect(runner).toHaveBeenCalledWith('bash', ['-lic', 'env'], { encoding: 'utf8', timeout: 5000 })
+  })
+
+  it('returns null when every shell probe fails', () => {
+    const runner = scriptedRunner({ status: 1, stdout: null }, { status: 1, stdout: null }, { status: 1, stdout: null })
+    expect(probeLoginShellEnv(runner, '/bin/bash', 'linux')).toBeNull()
+  })
+})
+
+describe('probeLoginShellEnv on win32', () => {
+  it('reads the environment from powershell.exe', () => {
+    const runner = scriptedRunner({
+      status: 0,
+      stdout: 'HTTP_PROXY=http://proxy:6760\nPath=C:\\Windows\\System32\n'
+    })
+    expect(probeLoginShellEnv(runner, undefined, 'win32')).toEqual({
+      HTTP_PROXY: 'http://proxy:6760',
+      Path: 'C:\\Windows\\System32'
+    })
+    expect(runner).toHaveBeenCalledWith(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; Get-ChildItem Env: | ForEach-Object { "$($_.Name)=$($_.Value)" }'
+      ],
+      { encoding: 'utf8', timeout: 10000 }
+    )
+  })
+
+  it('falls back to pwsh when powershell.exe fails', () => {
+    const runner = scriptedRunner({ status: 1, stdout: null }, { status: 0, stdout: 'A=1\n' })
+    expect(probeLoginShellEnv(runner, '/usr/bin/zsh', 'win32')).toEqual({ A: '1' })
+    expect(runner).toHaveBeenCalledTimes(2)
+  })
+
+  it('returns null when both windows shells fail', () => {
+    const runner = scriptedRunner({ status: 1, stdout: null }, { status: 1, stdout: null })
+    expect(probeLoginShellEnv(runner, undefined, 'win32')).toBeNull()
   })
 })

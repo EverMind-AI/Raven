@@ -70,7 +70,8 @@ describe('TuiTerminalManager', () => {
       cwd: '/workspace/raven',
       shellPath: '/usr/local/bin/raven',
       shellArgs: ['tui', '--dev'],
-      location: 'editor'
+      location: 'editor',
+      env: undefined
     })
     expect(terminals).toHaveLength(1)
     expect(terminals[0].shown).toBe(1)
@@ -89,7 +90,24 @@ describe('TuiTerminalManager', () => {
       cwd: undefined,
       shellPath: '/usr/bin/uv',
       shellArgs: ['run', 'raven', 'tui'],
-      location: 'editor'
+      location: 'editor',
+      env: undefined
+    })
+  })
+
+  it('passes the login shell environment to the terminal', () => {
+    const { api } = createFakeApi()
+    const manager = new TuiTerminalManager(api)
+
+    manager.open(command, undefined, { HTTP_PROXY: 'http://proxy.example:6760' })
+
+    expect(api.window.createTerminal).toHaveBeenCalledWith({
+      name: 'Raven',
+      cwd: undefined,
+      shellPath: '/usr/local/bin/raven',
+      shellArgs: ['tui', '--dev'],
+      location: 'editor',
+      env: { HTTP_PROXY: 'http://proxy.example:6760' }
     })
   })
 
