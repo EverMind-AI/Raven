@@ -446,21 +446,6 @@ def clear_everos_section(section: str) -> None:
     _write_atomic(get_everos_config_path(), data)
 
 
-def everos_declared_address() -> str | None:
-    """The address ``<root>/everos.toml`` declares, or ``None`` when unset.
-
-    This is the authority on where a server for that root listens: EverOS reads
-    ``[api]`` at startup, and raven no longer overrides it on the command line.
-    Everything else -- raven's ``base_url``, a doctor probe -- is a copy of it.
-    """
-    api = everos_section("api")
-    host = api.get("host")
-    port = api.get("port")
-    if not host or not port:
-        return None
-    return f"http://{host}:{port}"
-
-
 def set_everos_api(*, host: str, port: int) -> None:
     """Record the address a server for this root must listen on.
 

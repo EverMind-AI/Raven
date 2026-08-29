@@ -202,11 +202,11 @@ class LocalSkillCatalog:
         self._file_watcher = None
 
     # ------------------------------------------------------------------
-    # Legacy ``SkillsLoader`` API (signature-compatible drop-in)
+    # Dict-shaped listing API
     # ------------------------------------------------------------------
 
     def list_skills(self, filter_unavailable: bool = True) -> list[dict[str, str]]:
-        """All skills as legacy-shape dicts ``{name, path, source}``."""
+        """All skills as ``{name, path, source}`` dicts."""
         metas = self._registry.list_all()
         if filter_unavailable:
             metas = [m for m in metas if self._registry.check_available(m.name, source=m.source)]

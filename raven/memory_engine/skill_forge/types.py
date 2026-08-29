@@ -2,7 +2,7 @@
 
 Two design points worth highlighting:
 
-- :class:`RouterHit` is **self-contained**. Unlike the legacy
+- :class:`RouterHit` is **self-contained**. Unlike
   ``ScoredSkill`` in :mod:`raven.memory_engine.skill_local.types` (which
   only carried name + score and forced consumers to re-fetch the body
   from SkillRegistry), :class:`RouterHit` ships the rendered ``content``

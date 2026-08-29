@@ -44,8 +44,7 @@ log = logging.getLogger(__name__)
 
 from raven.memory_engine.skill_local.types import SkillMeta
 
-# Default builtin skills directory — mirrors the path used by the legacy
-# ``SkillsLoader`` so that replacing it is a drop-in change.
+# Default builtin skills directory.
 #
 # Resolves to ``raven/memory_engine/skills/`` — the built-in markdown
 # library lives under the memory_engine package alongside the skill code
@@ -94,8 +93,8 @@ class SkillRegistry:
         # entries with colliding names across sources are kept distinct here.
         self._by_full_key: dict[tuple[str, str], SkillMeta] | None = None
         # Secondary index: name → first-priority meta (workspace > external >
-        # builtin > other sources alphabetical). For legacy callers that
-        # don't carry a source.
+        # builtin > other sources alphabetical), for callers that do not
+        # carry a source.
         self._by_name: dict[str, SkillMeta] | None = None
         # Sources that need a partial rescan on the next ``list_all``.
         # Empty set + ``_metas_cache`` not None ⇒ cache is fresh.
@@ -458,7 +457,7 @@ class SkillRegistry:
         # ``stable_key`` is the directory name. For everos it is
         # the sqlite ``skills.id`` string (the pipeline materializes
         # ``<workspace>/skills/everos/<sqlite_id>/SKILL.md``); for
-        # everything else it equals the display name (legacy convention).
+        # everything else it equals the display name.
         stable_key = skill_dir.name
         # Display name prefers frontmatter ``name`` so everos skills
         # whose directory is a numeric id still surface a human-readable
@@ -487,7 +486,7 @@ class SkillRegistry:
 
 
 def _parse_frontmatter(content: str) -> dict | None:
-    """Minimal YAML-lite parser — matches legacy SkillsLoader behavior.
+    """Minimal YAML-lite parser for SKILL.md frontmatter.
 
     Expected format::
 
