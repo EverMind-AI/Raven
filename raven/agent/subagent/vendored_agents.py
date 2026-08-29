@@ -7,7 +7,7 @@ tree into table rows so a raven that *has* the tree offers them without anyone
 registering them by hand.
 
 Discovery, deliberately, rather than a hard-coded list: adding a folder is then
-adding a folder, which is the same reason :func:`raven.cli.subagent_setup.discover`
+adding a folder, which is the same reason the onboarding wizard's discovery
 scans instead of naming them. And discovery only -- nothing here writes config.
 A row is materialized from the manifest on every start, so a folder whose
 manifest changes (a new command template after an upgrade) is picked up without a
@@ -29,8 +29,8 @@ hide the folder from the operations view too, where "present but not set up" is
 exactly what a user needs to see. So it is listed and disabled.
 
 This module owns the three facts about where the tree is and what state a folder
-is in; :mod:`raven.cli.subagent_setup` imports them for the onboarding flow
-rather than keeping its own answers. Two readers that disagree about whether a
+is in; the onboarding wizard imports them rather than keeping its own
+answers. Two readers that disagree about whether a
 folder is ready would offer to install one this refuses to advertise.
 """
 
