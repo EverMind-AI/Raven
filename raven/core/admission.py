@@ -108,13 +108,91 @@ def admit_slice(
     return admitted
 
 
+class _NestedView:
+    """Frozen attribute-and-mapping view over one nested cargo table.
+
+    A file-set object key arrives at the door as a plain mapping, but the
+    adapters read nested cargo the way they read everything else -- by
+    attribute (``config.mention.require_in_groups``) -- and some also by
+    mapping (``config.groups.get(chat_id)``). This view serves both without
+    caring which pydantic sub-model used to back the shape.
+    """
+
+    __slots__ = ("_table",)
+
+    def __init__(self, table: dict[str, Any]) -> None:
+        object.__setattr__(self, "_table", table)
+
+    def __getattr__(self, name: str) -> Any:
+        table = object.__getattribute__(self, "_table")
+        try:
+            return _view(table[name])
+        except KeyError:
+            raise AttributeError(name) from None
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError(f"admitted slice is frozen (tried to set {name!r})")
+
+    def __getitem__(self, key: str) -> Any:
+        return _view(object.__getattribute__(self, "_table")[key])
+
+    def get(self, key: str, default: Any = None) -> Any:
+        table = object.__getattribute__(self, "_table")
+        return _view(table[key]) if key in table else default
+
+    def __contains__(self, key: object) -> bool:
+        return key in object.__getattribute__(self, "_table")
+
+    def __iter__(self):
+        return iter(object.__getattribute__(self, "_table"))
+
+    def __len__(self) -> int:
+        return len(object.__getattribute__(self, "_table"))
+
+    def __bool__(self) -> bool:
+        return bool(object.__getattribute__(self, "_table"))
+
+    def keys(self):
+        return object.__getattribute__(self, "_table").keys()
+
+    def values(self):
+        return [_view(v) for v in object.__getattribute__(self, "_table").values()]
+
+    def items(self):
+        return [(k, _view(v)) for k, v in object.__getattribute__(self, "_table").items()]
+
+    def __eq__(self, other: object) -> bool:
+        table = object.__getattribute__(self, "_table")
+        if isinstance(other, _NestedView):
+            return table == object.__getattribute__(other, "_table")
+        return table == other
+
+    def __repr__(self) -> str:
+        return f"_NestedView({object.__getattribute__(self, '_table')!r})"
+
+
+def _view(value: Any) -> Any:
+    """Wrap plain mappings (and mappings inside lists) for attribute access.
+
+    Typed values -- central model instances during the transition, or
+    anything else with its own attributes -- pass through untouched.
+    """
+    if isinstance(value, dict):
+        return _NestedView(value)
+    if isinstance(value, list):
+        return [_view(v) for v in value]
+    return value
+
+
 class DispensedSlice:
     """The frozen view a factory receives once its cargo passed the door.
 
     Declared keys answer from the admitted slice (defaults applied, types
     checked); anything else -- the socket fields and any not-yet-declared
     field -- falls back to the central section, so the pilot changes where a
-    value travels, never what it is.
+    value travels, never what it is. Nested tables come back as frozen
+    views, so a file-set object key reads exactly like the sub-model it
+    replaces.
     """
 
     __slots__ = ("_cargo", "_section")
@@ -126,7 +204,7 @@ class DispensedSlice:
     def __getattr__(self, name: str) -> Any:
         cargo = object.__getattribute__(self, "_cargo")
         if name in cargo:
-            return cargo[name]
+            return _view(cargo[name])
         return getattr(object.__getattribute__(self, "_section"), name)
 
     def __setattr__(self, name: str, value: Any) -> None:

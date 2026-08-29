@@ -129,3 +129,52 @@ def test_container_types_are_shape_checked_at_the_door():
         admit_slice(schema, {"rooms": "a,b"}, plugin_id="p")
     with pytest.raises(PluginConfigError):
         admit_slice(schema, {"routing": ["not", "a", "mapping"]}, plugin_id="p")
+
+
+def test_nested_tables_read_by_attribute_and_mapping():
+    """A file-set object key must read exactly like the sub-model it replaces:
+    mochat does ``config.mention.require_in_groups`` and
+    ``config.groups.get(chat).require_mention``; slack does
+    ``config.dm.policy``. Before the nested view, a file-set table crashed
+    those attribute reads with AttributeError on dict."""
+    from raven.core.admission import DispensedSlice
+
+    class _Section:
+        pass
+
+    slice_ = DispensedSlice(
+        _Section(),
+        {
+            "mention": {"require_in_groups": True},
+            "groups": {"room-1": {"require_mention": False}},
+            "panels": [{"id": "p1"}],
+        },
+    )
+
+    assert slice_.mention.require_in_groups is True
+    assert slice_.groups.get("room-1").require_mention is False
+    assert slice_.groups.get("room-2") is None
+    assert "room-1" in slice_.groups
+    assert slice_.panels[0].id == "p1"
+
+
+def test_nested_view_is_frozen_and_typed_values_pass_through():
+    from raven.core.admission import DispensedSlice
+
+    class _Typed:
+        require_in_groups = False
+
+    class _Section:
+        pass
+
+    slice_ = DispensedSlice(_Section(), {"mention": _Typed(), "groups": {}})
+
+    assert slice_.mention is not None
+    assert isinstance(slice_.mention, _Typed)
+    assert not slice_.groups
+    try:
+        slice_.groups.x = 1
+    except AttributeError:
+        pass
+    else:
+        raise AssertionError("nested view accepted a write")
