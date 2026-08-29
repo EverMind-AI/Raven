@@ -13,7 +13,7 @@ def _channel(group_policy="open", allow_from=("*",)):
     cfg = SimpleNamespace(
         group_policy=group_policy,
         token="t",
-        gateway_url="wss://x",
+        gateway_url="wss://gateway.discord.gg/?v=10&encoding=json",
         intents=0,
         allow_from=list(allow_from),
     )
@@ -301,14 +301,18 @@ def test_ready_stores_resume_state_and_identifies():
                 "op": 0,
                 "t": "READY",
                 "s": 1,
-                "d": {"user": {"id": "42"}, "session_id": "sess9", "resume_gateway_url": "wss://resume"},
+                "d": {
+                    "user": {"id": "42"},
+                    "session_id": "sess9",
+                    "resume_gateway_url": "wss://gateway-us-east1-b.discord.gg",
+                },
             },
         ]
     )
     ch._ws = ws
     asyncio.run(ch._gateway_loop())
     assert ws.sent[0]["op"] == 2  # fresh start -> IDENTIFY
-    assert ch._session_id == "sess9" and ch._resume_url == "wss://resume"
+    assert ch._session_id == "sess9" and ch._resume_url == "wss://gateway-us-east1-b.discord.gg"
     assert ch._seq == 1
 
 
@@ -417,3 +421,22 @@ def test_discord_spec_import_is_cheap():
     )
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
+
+
+def test_ready_ignores_a_resume_gateway_outside_the_operator():
+    ch = _gateway_ch()
+    ws = _FakeWS(
+        [
+            {"op": 10, "d": {"heartbeat_interval": 1000}},
+            {
+                "op": 0,
+                "t": "READY",
+                "s": 1,
+                "d": {"user": {"id": "42"}, "session_id": "sess9", "resume_gateway_url": "wss://gateway.evil.example"},
+            },
+        ]
+    )
+    ch._ws = ws
+    asyncio.run(ch._gateway_loop())
+    assert ch._session_id == "sess9"
+    assert ch._resume_url is None, "the first frame on a resumed socket carries the bot token"
