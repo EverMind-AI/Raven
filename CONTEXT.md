@@ -955,7 +955,7 @@ the set and the lazy debt edges; the raven-core wheel is this set as a build art
 Where every package sits, as the machine enforces it. Inner (may not import a surface):
 the shelves and engines the contract lists as sources (`tracing` among them -- a kernel
 member, seated inner here as well so every package appears in one roster), `config` and
-`utils` (cross-cutting leaves), `mcp`, `playbook`, `knowledge`, `skill_hub`, `trajectory`,
+`utils` and `i18n` (cross-cutting leaves), `mcp`, `playbook`, `knowledge`, `skill_hub`, `trajectory`,
 `eval_engine` and `proactive_engine` (L3 shelf members -- proactive_engine originates
 turns through its schedulers and sentinel but is an engine the loop and the assembly root
 consume, not a transport), and `core` (the L2 assembly root). `templates` is packaged data
@@ -1007,8 +1007,23 @@ depend on it (dingtalk and qq do). Same leaf rule as `auth`.
 
 **Templates** (`templates/`):
 Packaged data assets, zero Python: read as package data (`utils/workspace.py`)
-and shipped by the wheel. An asset directory, not a code package -- it takes
-no layer assignment.
+and shipped by the wheel, the per-language prompt templates under
+`templates/prompts/<language>/` among them. An asset directory, not a code
+package -- it takes no layer assignment.
+
+**I18n** (`i18n/`):
+User-facing text in the user's language. `t(text, **arguments)` translates by
+the English source text (gettext style, so a message id is the message), `t_in`
+does the same in a language the content rather than the UI decides, and
+`prompt(name)` loads a model-facing template from `templates/prompts/`. The
+Chinese catalog is `zh.py`; `zh_lexicon.py` holds Chinese language *data* an
+engine consults (cue words, punctuation classes, the legacy attention headers),
+which is not translation. The language is process state a host sets: the
+onboarding wizard from its first screen, every other entrance from
+`config.language`. A cross-cutting leaf, seated inner: `tests/test_i18n_boundary.py`
+keeps Chinese literals out of every other module.
+_Avoid_: calling `zh_lexicon` a catalog -- one is what raven says, the other is
+what raven recognises.
 
 **Browser** (`browser/`):
 Browser automation (`driver.py`) and its outbound policy (`policy.py`).

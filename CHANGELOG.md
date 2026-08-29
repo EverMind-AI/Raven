@@ -26,14 +26,18 @@ All notable changes to Raven are documented here.
   (`raven/contracts`, every interface a shelf implements), the assembly root
   (`raven/core`, where config becomes a running agent through one door,
   `build_runtime`), the shelves (channels, plugins, providers, memory, ...),
-  and the entrances (`cli`, `rpc`, `acp`). Four import-linter contracts run
+  and the entrances (`cli`, `rpc`, `acp`). Five import-linter contracts run
   in CI: inner layers never import an entrance (with no allowlisted
   exceptions), the twelve channel adapters are mutually independent, the
   kernel imports nothing else at module level (three lazy tracing reads of the
-  host are named and may only shrink), and the cargo under `raven/agent` never
-  imports the loop shell it is consumed by. The papers hold shapes only (machinery such as provider retry
+  host are named and may only shrink), the cargo under `raven/agent` never
+  imports the loop shell it is consumed by, and the runtime never imports the
+  repo-level `evolver/` tool that drives it. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- `raven.i18n` is seated as an inner cross-cutting leaf: it may not import a
+  surface, and the kernel may not import it. The glossary records what it is
+  and what `zh_lexicon` is not.
 - The sentinel planner's and the daily planner's system prompts are
   per-language templates (`raven/templates/prompts/{en,zh}/`) loaded by
   `raven.i18n.prompt`; their context blocks render through `t()`. An `en`
