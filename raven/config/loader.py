@@ -70,6 +70,11 @@ EXTENSION_KEYS = (
     "subagent_dag",
     "subagentQuestions",
     "subagent_questions",
+    # Eval Engine judge hooks (raven.eval_engine), off by default. Same
+    # consequence as sessionTitle above if omitted: the documented way to turn
+    # the engine on would fail base Config validation.
+    "evalEngine",
+    "eval_engine",
 )
 
 # Global variable to store current config path (for multi-instance support)

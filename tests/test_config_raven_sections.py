@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from raven.config.loader import EXTENSION_KEYS
 from raven.config.raven import (
+    EvalEngineConfig,
     HubSourceConfig,
     MemoryConfig,
     PluginsConfig,
@@ -86,6 +87,8 @@ class TestDefaults:
         assert isinstance(c.plugins, PluginsConfig)
         assert isinstance(c.memory, MemoryConfig)
         assert isinstance(c.skill_forge.router, SkillForgeRouterConfig)
+        assert isinstance(c.eval_engine, EvalEngineConfig)
+        assert c.eval_engine.enabled is False
 
 
 # ---------------------------------------------------------------------------

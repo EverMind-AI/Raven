@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Callable
 
 import raven.agent.loop as agent_loop
 from raven.agent.loop.bundles import EngineWiring, HostWiring, SubagentWiring, ToolWiring, TurnPolicy
-from raven.core import plugin_stack, token_wise_stack
+from raven.core import eval_stack, hooks_stack, plugin_stack, token_wise_stack
 
 if TYPE_CHECKING:
     from raven.agent.loop.main import AgentLoop
@@ -105,6 +105,16 @@ def build_runtime(
     if deliverables is None:
         deliverables = DeliverableStore(get_deliverables_path())
 
+    host = host or HostWiring()
+    if ec_config.eval_engine.enabled:
+        from raven.memory_engine.consolidate.consolidator import MemoryStore
+
+        eval_engine = eval_stack.build_eval_stack(
+            provider=provider,
+            memory=MemoryStore(config.workspace_path),
+            config=ec_config.eval_engine,
+        )
+        host = replace(host, hooks=hooks_stack.build_hooks_stack(eval_engine=eval_engine, extra_hooks=host.hooks))
     loop = agent_loop.AgentLoop(
         provider=provider,
         workspace=config.workspace_path,
@@ -147,7 +157,7 @@ def build_runtime(
             backend=backend,
         ),
         policy=policy or TurnPolicy(),
-        host=host or HostWiring(),
+        host=host,
     )
     loop.configure_personalization(config.agents.defaults.enable_personalization)
     return RavenRuntime(
