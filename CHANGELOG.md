@@ -34,6 +34,11 @@ All notable changes to Raven are documented here.
   imports the loop shell it is consumed by. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- Security: a market catalogue entry may name a remote MCP server only at a
+  public https address (a local or private one is refused before it is
+  written to the config); a redirect hop whose host does not resolve is
+  refused instead of waved through; an input image the model names by local
+  path honours `tools.restrictToWorkspace` like every file read.
 - The sentinel's replies and menus, the TUI launcher's errors, the WeChat
   quote marker and the importers' preambles render in the user's language
   through `raven.i18n` (English by default, Chinese when `language` is

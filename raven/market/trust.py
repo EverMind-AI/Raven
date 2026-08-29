@@ -405,6 +405,11 @@ def validate_mcp_connection(cfg: dict) -> dict:
 
     ``cfg`` is the camelCase stanza built from a catalogue entry plus the user's
     form input, i.e. exactly what is about to be written to ``config.json``.
+
+    A remote server's ``url`` must be public https: the catalogue is remote
+    content, and a server it points at is connected to with the user's keys. A
+    user's own local server is configured directly, not installed from the
+    market.
     """
     _check_env(cfg.get("env"))
     _check_headers(cfg.get("headers"))
@@ -423,7 +428,7 @@ def validate_mcp_connection(cfg: dict) -> dict:
         url = str(cfg.get("url") or "")
         if not url:
             raise HubTrustError(f"catalog entry of type {kind!r} carries no url")
-        require_https(url, what=f"catalog entry url for a {kind} server")
+        require_public_https(url, what=f"catalog entry url for a {kind} server")
     return cfg
 
 

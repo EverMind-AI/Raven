@@ -801,3 +801,23 @@ def test_a_catalog_entry_may_not_carry_an_oauth_client_secret(key: str) -> None:
 
     with pytest.raises(HubTrustError, match="public client"):
         validate_mcp_connection(_oauth_stanza(**{key: "sh-1"}))
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["http://localhost:8000/mcp", "https://127.0.0.1:8000/mcp", "https://10.0.0.5/mcp", "http://mcp.example.com/mcp"],
+)
+def test_a_catalog_entry_may_not_point_a_remote_server_inside_the_network(url: str) -> None:
+    """The market installs remote content that is then connected to with the
+    user's keys; a local or private address is where those keys must not go."""
+    from raven.market.trust import HubTrustError, validate_mcp_connection
+
+    with pytest.raises(HubTrustError):
+        validate_mcp_connection({"type": "streamableHttp", "url": url})
+
+
+def test_a_catalog_entry_may_name_a_public_https_server() -> None:
+    from raven.market.trust import validate_mcp_connection
+
+    cfg = {"type": "streamableHttp", "url": "https://mcp.example.com/mcp"}
+    assert validate_mcp_connection(cfg) is cfg

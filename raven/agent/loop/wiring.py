@@ -377,6 +377,7 @@ class WiringMixin:
                         workspace=self.workspace,
                         proxy=media.proxy,
                         output_subdir=media.output_subdir,
+                        restrict_to_workspace=self.restrict_to_workspace,
                     )
                 )
         # Deep research (MiroThinker) is a paid, minute-scale HTTP engine, so it is
