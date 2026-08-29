@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
-from raven.i18n import zh_lexicon
+from raven.i18n import t, zh_lexicon
 from raven.proactive_engine.sentinel.types import PendingDecision, RouteResult
 
 if TYPE_CHECKING:
@@ -128,6 +128,19 @@ _CLASSIFIER_TOOL: dict[str, Any] = {
         },
     },
 }
+
+
+def _confirm_ask(title: str) -> str:
+    """The question the user was actually asked, in the language they saw.
+
+    The classifier below judges a reply against it, so a hand-written paraphrase
+    here is a second copy of a message the catalog owns -- and the two had
+    already drifted apart.
+    """
+    return t(
+        "Run: {title}?\n  \u00b7 reply yes / confirm \u2192 run\n  \u00b7 reply no / cancel \u2192 skip",
+        title=title,
+    )
 
 
 class DecisionRouter:
@@ -325,7 +338,7 @@ class DecisionRouter:
             {
                 "role": "user",
                 "content": (
-                    f"User was asked: '要执行：{opt_title}? 回复 yes / no'\n\n"
+                    f"User was asked: {_confirm_ask(opt_title)!r}\n\n"
                     f"User replied: {content!r}\n\n"
                     "Did they confirm or cancel?"
                 ),
