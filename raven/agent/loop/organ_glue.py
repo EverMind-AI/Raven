@@ -339,22 +339,18 @@ class OrganGlueMixin:
         """
         self._store_pipeline.enqueue(session_key, messages_slice)
 
-    async def drain_backend_stores(self, timeout: float = _STORE_DRAIN_BUDGET_S) -> None:
-        """Let queued writes finish before the process goes away, then say what
-        was lost. The counting is the pipeline's; telling the user is the
-        host's, and this is the last moment it is still actionable."""
+    async def drain_backend_stores(self, timeout: float = _STORE_DRAIN_BUDGET_S) -> int:
+        """Let queued writes finish before the process goes away and return how
+        many turns were lost. The counting is the pipeline's; telling the user
+        is the host's (see ``cli._helpers.report_dropped_memory_writes``), and
+        the return value is what it tells them with."""
         dropped = await self._store_pipeline.drain(timeout)
         if dropped:
             logger.warning(
                 "{} turn(s) were not indexed: the memory service never caught up",
                 dropped,
             )
-            from rich.console import Console
-
-            Console(stderr=True).print(
-                f"[yellow]{dropped} turn(s) were not written to long-term memory "
-                "because the memory service was unavailable.[/yellow]"
-            )
+        return dropped
 
     def _note_memory_ok(self) -> None:
         """A successful store clears a standing fault, and says so once."""

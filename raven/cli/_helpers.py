@@ -16,6 +16,20 @@ from raven.core import config_stack
 console = Console()
 
 
+def report_dropped_memory_writes(dropped: int, out: Console | None = None) -> None:
+    """Tell the user how many turns never reached long-term memory at shutdown.
+
+    The loop counts (``AgentLoop.drain_backend_stores``); the host renders, on
+    its own console or stderr, because this is the last moment the loss is
+    still actionable and the loop does not own a terminal.
+    """
+    if dropped:
+        (out or Console(stderr=True)).print(
+            f"[yellow]{dropped} turn(s) were not written to long-term memory "
+            "because the memory service was unavailable.[/yellow]"
+        )
+
+
 def load_runtime_config(config: str | None = None, home: str | None = None) -> Config:
     """The CLI face of :func:`raven.core.config_stack.load_runtime_config`: a
     missing file is a red line and exit 1, a pinned file is announced."""

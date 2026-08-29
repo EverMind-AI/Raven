@@ -26,6 +26,7 @@ from raven.cli._helpers import (
     parse_fake_now,
     print_config_migration_notices,
     print_deprecated_memory_window_notice,
+    report_dropped_memory_writes,
 )
 from raven.core.provider_stack import build_model_routing
 from raven.providers.factory import make_resolving_provider
@@ -1015,7 +1016,8 @@ def register(app: typer.Typer) -> None:
                 # spawned during AgentLoop teardown can complete.
                 if backend is not None:
                     try:
-                        await agent.drain_backend_stores()
+                        dropped = await agent.drain_backend_stores()
+                        report_dropped_memory_writes(dropped, console)
                         await backend.stop()
                     except Exception:
                         _logger.exception(
