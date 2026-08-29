@@ -39,9 +39,9 @@ def _endpoint() -> tuple[str, str] | None:
         info = read_status(time.time())
     except Exception:
         return None
-    if info is None or not info.web_url:
+    if info is None or not info.control_url:
         return None
-    return info.web_url, info.web_token
+    return info.control_url, info.control_token
 
 
 async def _ask(url: str, token: str, method: str, params: dict[str, Any]) -> dict[str, Any] | None:

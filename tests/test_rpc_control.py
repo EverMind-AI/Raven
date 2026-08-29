@@ -389,7 +389,7 @@ def test_the_control_app_serves_only_the_socket() -> None:
 
 def test_the_gateway_publishes_the_endpoint_only_after_the_site_bound() -> None:
     src = (Path(__file__).resolve().parents[1] / "raven" / "cli" / "gateway_commands.py").read_text(encoding="utf-8")
-    assert src.index("await control.start()") < src.index("publish_web_endpoint(bound_host, bound_port, control_token)")
+    assert src.index("await control.start()") < src.index("publish_control_endpoint(bound_host, bound_port, control_token)")
 
 
 async def test_params_are_validated_against_the_declared_models() -> None:

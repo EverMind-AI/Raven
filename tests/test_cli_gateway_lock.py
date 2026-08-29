@@ -141,7 +141,7 @@ def test_the_published_endpoint_file_is_never_briefly_world_readable(tmp_path, m
 
     old_umask = os.umask(0o022)
     try:
-        lock.publish_web_endpoint("127.0.0.1", 8765, "s3cret-token")
+        lock.publish_control_endpoint("127.0.0.1", 8765, "s3cret-token")
     finally:
         os.umask(old_umask)
 
@@ -149,7 +149,8 @@ def test_the_published_endpoint_file_is_never_briefly_world_readable(tmp_path, m
     modes_at_write = [mode for i, mode in records if i == ino]
     assert modes_at_write and all(mode == 0o600 for mode in modes_at_write)
     assert (target.stat().st_mode & 0o777) == 0o600
-    assert json.loads(target.read_text(encoding="utf-8"))["web_token"] == "s3cret-token"
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    assert payload["control_token"] == payload["web_token"] == "s3cret-token"
 
 
 def test_an_existing_wide_open_payload_is_narrowed_before_the_token_lands(tmp_path, monkeypatch) -> None:
@@ -167,7 +168,7 @@ def test_an_existing_wide_open_payload_is_narrowed_before_the_token_lands(tmp_pa
 
     old_umask = os.umask(0o022)
     try:
-        lock.publish_web_endpoint("127.0.0.1", 8765, "s3cret-token")
+        lock.publish_control_endpoint("127.0.0.1", 8765, "s3cret-token")
     finally:
         os.umask(old_umask)
 
@@ -187,7 +188,7 @@ def test_first_start_never_exposes_the_token(tmp_instance: Path, monkeypatch) ->
     old_umask = os.umask(0o022)
     held = acquire(now=1.0)
     try:
-        _gateway_lock.publish_web_endpoint("127.0.0.1", 8765, "s3cret-token")
+        _gateway_lock.publish_control_endpoint("127.0.0.1", 8765, "s3cret-token")
     finally:
         os.umask(old_umask)
         held.close()
@@ -198,4 +199,27 @@ def test_first_start_never_exposes_the_token(tmp_instance: Path, monkeypatch) ->
     assert len(modes_at_write) >= 2  # acquire's payload write + the token write
     assert all(mode == 0o600 for mode in modes_at_write)
     assert (lock_file.stat().st_mode & 0o777) == 0o600
-    assert json.loads(lock_file.read_text(encoding="utf-8"))["web_token"] == "s3cret-token"
+    payload = json.loads(lock_file.read_text(encoding="utf-8"))
+    assert payload["control_token"] == payload["web_token"] == "s3cret-token"
+
+
+def test_an_older_lock_payload_with_web_keys_still_yields_the_control_endpoint(tmp_path):
+    """The previous release wrote the endpoint under web_*; a daemon still running
+    across an upgrade has that file, and the new reader must find it."""
+    path = tmp_path / "gateway.lock"
+    path.write_text(
+        json.dumps(
+            {
+                "pid": 1,
+                "started_at": 0.0,
+                "config_path": "",
+                "web_host": "127.0.0.1",
+                "web_port": 4321,
+                "web_token": "old",
+            }
+        ),
+        encoding="utf-8",
+    )
+    info = _gateway_lock._read_payload(path)
+    assert (info.control_host, info.control_port, info.control_token) == ("127.0.0.1", 4321, "old")
+    assert info.control_url == "ws://127.0.0.1:4321/ws"
