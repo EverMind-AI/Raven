@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from raven.agent.subagent.test_state import LastTest, TestStateStore, fingerprint
+from raven.agent.subagent.probe_state import LastTest, TestStateStore, fingerprint
 from raven.config.schema import ThirdPartyCliSubagentConfig, ThirdPartyOpenAISubagentConfig
 
 

@@ -39,8 +39,8 @@ from raven.agent.subagent.backends.acp_agent import AcpAgentBackend, AcpEmptyTur
 from raven.agent.subagent.instances import InstanceRegistry
 from raven.agent.subagent.manager import SubagentManager
 from raven.agent.subagent.probe import probe_one
+from raven.agent.subagent.probe_state import fingerprint
 from raven.agent.subagent.spawn_tool import SpawnTool
-from raven.agent.subagent.test_state import fingerprint
 from raven.config.schema import SubagentsConfig, ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
 from raven.config.update_subagents import reject_unsupported_acp_fields
 
@@ -553,7 +553,7 @@ def test_acp_backend_statefulness_follows_the_snapshot() -> None:
 def test_two_acp_agents_do_not_share_one_test_verdict() -> None:
     """The regression that would hand agent A's verdict to agent B.
 
-    ``test_state.fingerprint`` dispatched on ``kind == "openai"`` and fell through
+    ``probe_state.fingerprint`` dispatched on ``kind == "openai"`` and fell through
     to the cli field list for everything else. An acp entry has none of those
     fields, so every acp agent digested identically.
     """
@@ -567,7 +567,7 @@ def test_cli_verdict_digests_are_unchanged() -> None:
     """Adding a kind must not silently discard every remembered cli verdict."""
     import hashlib
 
-    from raven.agent.subagent.test_state import _CLI_FIELDS
+    from raven.agent.subagent.probe_state import _CLI_FIELDS
 
     cfg = ThirdPartyCliSubagentConfig(name="x", command="claude -p {prompt}")
     payload = {name: getattr(cfg, name, None) for name in _CLI_FIELDS}

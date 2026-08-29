@@ -346,7 +346,7 @@ async def test_probe_result_wire_shape_is_camel_case(tmp_path: Path) -> None:
 async def test_probe_all_attaches_a_verdict_to_the_matching_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from raven.agent.subagent.test_state import LastTest
+    from raven.agent.subagent.probe_state import LastTest
 
     monkeypatch.setattr(probe_mod, "_login_path", lambda: str(tmp_path))
     a = _cli("a {prompt}", name="a")
@@ -358,7 +358,7 @@ async def test_probe_all_attaches_a_verdict_to_the_matching_result(
 
 
 async def test_probe_wire_shape_carries_last_test(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from raven.agent.subagent.test_state import LastTest
+    from raven.agent.subagent.probe_state import LastTest
 
     monkeypatch.setattr(probe_mod, "_login_path", lambda: str(tmp_path))
     cfg = _cli("nope {prompt}", name="a")

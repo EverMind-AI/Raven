@@ -13,7 +13,7 @@ list -- worse than a dispatch that fails with a clear error. This is the same
 rule ``backends.enabled_third_party`` documents for ``enabled``.
 
 Invalidation is by digest of the fields that decide how the agent is launched,
-the mechanism :mod:`raven.agent.subagent.test_state` already uses for test
+the mechanism :mod:`raven.agent.subagent.probe_state` already uses for test
 verdicts: a stored snapshot whose digest no longer matches its config is treated
 as absent rather than shown as current, which also covers a hand-edited
 ``config.json`` that no UI hook would see.
@@ -223,7 +223,7 @@ def snapshot_fingerprint(cfg: Any) -> str:
     """A digest of the fields that decide how this acp agent is launched.
 
     ``name``, ``description``, ``preset`` and ``enabled`` are deliberately absent
-    for the reason ``test_state.fingerprint`` gives: renaming an agent or
+    for the reason ``probe_state.fingerprint`` gives: renaming an agent or
     switching it off and on does not change what it can do, so neither may
     discard a measurement that still holds.
     """
