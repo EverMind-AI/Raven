@@ -404,7 +404,7 @@ source_modules = [
     "raven.gateway", "raven.market", "raven.ops", "raven.security", "raven.auth",
     # Seated by the 2026-08-29 structural audit: cross-cutting leaves and the
     # L3 shelf members that had no recorded layer.
-    "raven.config", "raven.utils", "raven.mcp", "raven.playbook",
+    "raven.config", "raven.utils", "raven.i18n", "raven.mcp", "raven.playbook",
     "raven.knowledge", "raven.skill_hub", "raven.trajectory", "raven.eval_engine",
     # proactive_engine is an engine (schedulers + sentinel), consumed by the
     # loop, the assembly root and the entrances, and imports no surface itself;
@@ -431,7 +431,7 @@ forbidden_modules = [
     "raven.acp", "raven.agent", "raven.auth", "raven.browser",
     "raven.channels", "raven.cli", "raven.config", "raven.context_engine",
     "raven.core", "raven.eval_engine", "raven.gateway",
-    "raven.importer", "raven.knowledge", "raven.market", "raven.mcp",
+    "raven.i18n", "raven.importer", "raven.knowledge", "raven.market", "raven.mcp",
     "raven.memory_engine", "raven.ops", "raven.playbook", "raven.plugins",
     "raven.proactive_engine", "raven.providers", "raven.routing", "raven.rpc",
     "raven.sandbox", "raven.security", "raven.session", "raven.skill_hub",

@@ -237,6 +237,7 @@ import which) are recorded under **Layer Seats** in `CONTEXT.md`, routed from
 | `core` | Assembly root: the *_stack builders and the admission door |
 | `eval_engine` | Evaluation harness |
 | `gateway` | Daemon plumbing: channel manager, outlet, live probe, run lock |
+| `i18n` | User-facing text in the user's language |
 | `importer` | External data import |
 | `knowledge` | Knowledge base service |
 | `market` | Plugin market: catalog, trust, install, ledger |
