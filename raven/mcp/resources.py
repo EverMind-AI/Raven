@@ -340,7 +340,7 @@ def _data_uri(raw: bytes, mime: str) -> str:
 
 
 def _write_blob(server: str, uri: str, raw: bytes, mime: str, *, workspace: Any) -> str | None:
-    """Land a binary resource under the workspace and return its path.
+    """Land a binary resource under Agent home (``<agent home>/mcp_resources/``).
 
     Returns None when there is nowhere to write -- a caller built without a
     workspace still gets the description and any renderable block, which beats

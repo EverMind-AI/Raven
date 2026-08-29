@@ -35,6 +35,10 @@ All notable changes to Raven are documented here.
   repo-level `evolver/` tool that drives it. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- Audit pass fourteen: the MCP and playbook packages keep each rule and drop
+  the account of the arrangement before it -- the parameter pattern that is
+  now the only one, the node spec that is now one type, the router's top-K
+  narrowing, the agent table that replaced a guessed name list.
 - Audit pass thirteen: `raven/cli/_repl_spine.py` is `_one_shot_spine.py`
   (`build_repl` is `build_one_shot_spine`) -- it wires `agent -m`, and the
   REPL it was named for is gone -- and the command modules drop their plan

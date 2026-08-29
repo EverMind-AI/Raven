@@ -66,9 +66,7 @@ _HANDSHAKE_TIMEOUT = 90.0
 # How long a server may stay exempt from that bound because it is parked at the
 # browser-authorization step. Derived, not chosen: it has to outlast the OAuth
 # flow's own timeout so a real flow always resolves first and only a leaked one
-# hits this. Written as a literal it silently inverted when the flow timeout was
-# raised, and the watchdog started cancelling authorizations the page had just
-# promised the reader another eight minutes for.
+# hits this. A literal here would invert the moment that timeout is raised.
 _REAP_ROUNDS = 5
 """How many times ``reap_attempts`` re-reads the task sets before giving up.
 

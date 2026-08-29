@@ -13,9 +13,8 @@ is no model in the room, so ``_compose`` spends one call to turn the guidance in
 a graph. Deleting that path would have quietly removed the CLI's ability to run a
 prompt-mode playbook at all.
 
-This module builds no backends and resolves no agent names. Each node names an
-agent on the shared table and the graph tool looks it up, which is what removed
-the synthetic ``pb-<node>`` names every step used to run under.
+This module builds no backends and resolves no agent names: each node names an
+agent on the shared table and the graph tool resolves it.
 
 Stateless by design: a plan either runs, or comes back as questions the
 caller relays to the user, and the caller decides what to do with the answer --

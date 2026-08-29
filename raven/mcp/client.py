@@ -47,9 +47,8 @@ class MCPToolWrapper(Tool):
         """This tool's origin record, for the registry to file at registration.
 
         Deliberately not a lookup table anyone queries: the wrapper holds the
-        pair because it needs it to place the call, and the one queryable copy
-        lives in the registry. A public accessor that others could read back is
-        how the second source grew last time.
+        pair because it needs it to place the call; the registry holds the one
+        queryable copy, and a public accessor here would be a second.
         """
         return MCPToolRef(name=self._name, server=self._server_name, tool=self._original_name)
 

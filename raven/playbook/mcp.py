@@ -1,7 +1,5 @@
 """The MCP servers one playbook run may reach, and the pre-flight that opens them.
 
-Two holes are closed here, and they are the same hole seen from both ends.
-
 A playbook's ``mcps: [local-pg]`` is a bare local short name resolved against the
 receiving machine's ``tools.mcpServers``, so a distributed playbook delivered
 nothing unless that machine happened to have a server of that name. The spec's

@@ -107,10 +107,8 @@ def validate_structure(
 
     ``known_agents`` comes from the agent table, and ``None`` means the caller has
     none -- the names are then *not checked at all* rather than checked against a
-    guess. The four hardcoded names this used to default to were a fiction the
-    table has since replaced: with them, a playbook naming a perfectly well
-    configured ``claude_code`` was reported invalid, and one naming a deleted agent
-    was reported fine.
+    guess, because a guessed list reports a well-configured agent invalid and a
+    deleted one fine.
 
     Every caller in the tree does have a table (the package's built-in rows are
     seeds, so it is never empty), so ``None`` is for a caller written later that
