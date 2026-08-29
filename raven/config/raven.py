@@ -253,12 +253,8 @@ class NudgePolicyConfig(_Base):
     max_per_topic_per_window: int = 1
     topic_dedup_window_seconds: int = 3600  # 1h
     max_per_topic_per_day: int = 2
-    # Weekly cap raised 4 → 8: deadline reminders (clawtrack 5/12-5/14,
-    # birthday 5/20-5/24) need ~1 fire every 1-2 days across the
-    # "deadline approaches" stretch; old cap=4 burned through the budget
-    # in the first 3-4 days then denied all in-window fires that the
-    # type_a scorer was looking for. 8 still bans daily-for-a-week spam
-    # but allows the natural pre-deadline cadence.
+    # 8 allows the natural pre-deadline cadence (a fire every 1-2 days as a
+    # deadline approaches) while still banning daily-for-a-week spam.
     max_per_topic_per_week: int = 8
 
     # NudgeInjector settings
@@ -523,9 +519,8 @@ class BehaviorsExtractConfig(_Base):
 
     enabled: bool = False
     """Master switch — even with ``sentinel.enabled`` on, the extractor
-    only runs when this is True. Two failure modes drive default-off:
-    each idle tick costs one LLM call; behaviors.md is observable-only
-    in MVP (P6 wires reads but Phase-2 behavior is still in flux)."""
+    only runs when this is True. Default off because each idle tick costs
+    one LLM call."""
 
     idle_seconds: int = 900
     """Min consecutive idle time (no inbound across any session) before
@@ -774,10 +769,8 @@ class EverOSConfig(_Base):
     """
 
     enabled: bool = False
-    # Note: the per-turn tool-call gate (formerly min_tool_calls / min_messages
-    # here) is now sourced from skill_forge.detect_min_tool_calls so the same
-    # threshold drives any future auto-detect surface in addition to this
-    # pipeline.
+    # The per-turn tool-call gate is skill_forge.detect_min_tool_calls, so one
+    # threshold drives every auto-detect surface, this pipeline included.
     # Number of similar existing skills shown to the skill_extractor
     # LLM as candidates for ``update``. 5 is enough — overlap between
     # turn-derived candidates above this rank is rare, and the prompt
@@ -804,7 +797,7 @@ class EverOSConfig(_Base):
 
 
 class LocalDirConfig(_Base):
-    """One local skill directory entry (R1)."""
+    """One local skill directory entry."""
 
     path: str
     """Absolute or ``~``-relative path. Expanded at startup."""
@@ -823,9 +816,9 @@ class LocalDirConfig(_Base):
 class SkillForgeConfig(_Base):
     """SkillForge configuration.
 
-    ``enabled=True`` (default, R8) activates the SkillForge retrieval/
+    ``enabled=True`` (the default) activates the SkillForge retrieval/
     injection pipeline. Set ``enabled=False`` to fall back to the
-    pre-refactor behavior of handing the full skill directory to the LLM
+    behaviour of handing the full skill directory to the LLM
     (component stubs that return empty lists also cause ``ContextBuilder``
     to fall back to the full directory automatically).
 
@@ -885,11 +878,11 @@ class SkillForgeConfig(_Base):
     in this module."""
 
     local_dirs: list[LocalDirConfig] = Field(default_factory=list)
-    """Local skill directories to mount (R1). List order = priority:
+    """Local skill directories to mount. List order = priority:
     later entries override earlier on name collision."""
 
     scan_max_depth: int = 5
-    """Maximum directory depth when scanning for SKILL.md files (R2).
+    """Maximum directory depth when scanning for SKILL.md files.
     Paths deeper than this below a layer root are silently skipped.
     Prevents unbounded filesystem walks on huge mirrors."""
 
@@ -936,7 +929,7 @@ class SkillForgeConfig(_Base):
     top_k: int = 5
     """Number of skills returned by ``select()``."""
 
-    # --- Dual-pool fusion weights (R6) ---
+    # --- Dual-pool fusion weights ---
     local_pool_top_k: int = 10
     """Candidate count from the local BM25 pool per query."""
 
@@ -956,11 +949,9 @@ class SkillForgeConfig(_Base):
     """Enable a second retrieval path with LLM-rewritten queries."""
 
     rewrite_max_tokens: int = 8192
-    """Output token budget for the rewriter LLM call. Defaults to 8192 to
-    leave headroom for Qwen3-style reasoning traces (~3-4k tokens) on top
-    of the actual rewrite output. The previous 1024 budget caused frequent
-    finish_reason=length truncations with empty visible content, which
-    surfaced as 'Failed to parse rewrite response as JSON' fallbacks."""
+    """Output token budget for the rewriter LLM call: 8192 leaves headroom for
+    reasoning traces (~3-4k tokens) on top of the rewrite output; a smaller
+    budget truncates the reply before its JSON is complete."""
 
     # --- Skill injection mode (full_body vs summary) ---
     injection_mode: str = "full_body"
@@ -975,8 +966,8 @@ class SkillForgeConfig(_Base):
     - ``"summary"``: build_skills_summary renders an XML directory of
       (name, description, available) tuples. Agent must call ``read_file``
       on a skill's SKILL.md to access its body — progressive disclosure,
-      cheaper in tokens but Round-D eval showed agents often skip the
-      read step entirely (top1_kw rate ~0.62 vs ~0.80 with full_body)."""
+      cheaper in tokens, but agents often skip the read step entirely, so
+      retrieval quality drops against ``full_body``."""
 
     inject_max: int = 2
     """Max skills inlined when ``injection_mode='full_body'``. Each skill body
@@ -987,7 +978,7 @@ class SkillForgeConfig(_Base):
     out always:true skills. R8 default: False (always skills inject)."""
 
     always_max: int = 5
-    """Max always skills injected per turn (R3). Exceeding this truncates
+    """Max always skills injected per turn. Exceeding this truncates
     by local_dirs list order + alphabetical, with a WARN listing dropped
     skill names."""
 
@@ -1037,18 +1028,8 @@ class SkillForgeConfig(_Base):
 
     # --- Producer refresh trigger (optional, zero-config via .refresh_endpoint sentinel) ---
     refresh_url: str | None = None
-    """Producer-side refresh service base URL (e.g.
-    ``http://producer-host:8765``). When set, ``raven skill refresh
-    <source>`` POSTs ``<url>/refresh?source=...`` to trigger an immediate
-    git pull + ingest on the producer. The actual refresh runs producer-side;
-    the consumer just sends the trigger and lets the ``.stale`` flag
-    mechanism propagate the update.
-
-    Zero-config: when unset, the ``skill refresh`` CLI auto-discovers
-    the endpoint from a ``.refresh_endpoint`` file beside the skill library (a
-    single-line text file written by the producer admin during
-    ``export_to_mass_library --refresh-endpoint=URL``). 99% of users
-    don't need to set this field."""
+    """Reserved for a producer-side refresh service. Nothing reads it today; it
+    stays accepted so a config that set it keeps loading."""
 
     # --- Evolver model ---
     evolve_model: str | None = None
@@ -1117,7 +1098,7 @@ class SkillForgeConfig(_Base):
 
 
 # ---------------------------------------------------------------------------
-# CFG-1 — Plugin / Memory backend / SkillForgeRouter
+# Plugin / Memory backend / SkillForgeRouter
 # ---------------------------------------------------------------------------
 
 
@@ -1275,7 +1256,7 @@ class CheckpointConfig(_Base):
 
     When active, the agent loop commits the workspace to an out-of-band
     shadow git repo at the end of each turn (covering both normal and
-    max-iteration exits). This is the safety net behind Bug2: a truncated
+    max-iteration exits). This is the safety net: a truncated
     multi-file edit leaves a recoverable snapshot, and the next turn gets a
     recovery prompt listing what the interrupted turn changed.
 
@@ -1289,7 +1270,7 @@ class CheckpointConfig(_Base):
                           have no "next turn" to inject recovery into, so
                           paying the snapshot cost there is wasted.
     - ``"never"``      — disabled entirely; loop is byte-identical to the
-                          pre-Bug2 baseline (no commits, no interrupt
+                          loop without checkpoints (no commits, no interrupt
                           reclassification, no recovery injection).
 
     Default ``"interactive"`` matches mature competitors (Claude Code,
@@ -1506,12 +1487,12 @@ class RavenConfig(_Base):
     subagent_questions: SubagentQuestionsConfig = Field(default_factory=SubagentQuestionsConfig)
     eval_engine: EvalEngineConfig = Field(default_factory=EvalEngineConfig)
 
-    # CFG-1: plugin system + memory backend.
+    # Plugin system + memory backend.
     plugins: PluginsConfig = Field(default_factory=PluginsConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
 
     # The full base config (agents, channels, providers, tools, routing).
-    # Kept as a nested field so we can round-trip YAML with the base loader.
+    # Kept as a nested field so we can round-trip the JSON with the base loader.
     base: BaseConfig = Field(default_factory=BaseConfig)
 
 

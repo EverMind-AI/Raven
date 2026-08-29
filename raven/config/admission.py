@@ -25,9 +25,8 @@ _TYPES: dict[str, type | tuple[type, ...]] = {
     "number": (int, float),
     "boolean": bool,
     # Container shapes are type-checked at the door but not descended into:
-    # element and member validation stays with whoever consumes the value
-    # (today the central pydantic model; after the storage handover, the
-    # cargo's own factory).
+    # element and member validation stays with the cargo that consumes the
+    # value. Files hold camelCase keys; ``normalize_slice_keys`` resolves them.
     "array": list,
     "object": dict,
 }
@@ -38,7 +37,7 @@ class PluginConfigError(Exception):
 
 
 def admit_slice(
-    schema: dict[str, Any],
+    declaration: dict[str, Any],
     slice_: dict[str, Any] | None,
     *,
     plugin_id: str,
@@ -51,10 +50,10 @@ def admit_slice(
     contract half that bites.
     """
     admitted = dict(slice_ or {})
-    if not schema:
+    if not declaration:
         return admitted
     log = logger or logging.getLogger(f"raven.plugins.{plugin_id}")
-    for key, spec in schema.items():
+    for key, spec in declaration.items():
         if not isinstance(spec, dict):
             raise PluginConfigError(
                 f"plugin {plugin_id!r}: config_schema[{key!r}] must be a table, got {type(spec).__name__}"
@@ -104,7 +103,7 @@ def admit_slice(
             # is the consumer's).
             admitted[key] = admit_slice(spec["fields"], value, plugin_id=f"{plugin_id}.{key}", logger=log)
     for key in admitted:
-        if key not in schema:
+        if key not in declaration:
             log.warning(
                 "plugin %s: config key %r is not in its config_schema; passing through",
                 plugin_id,

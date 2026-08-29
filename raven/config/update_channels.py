@@ -3,7 +3,7 @@
 This module is the ONLY write path for channel configuration. All entry
 points (CLI commands, future wizard, future WebUI, future REPL slash)
 must call functions defined here. Direct load_config / save_config on
-the channels section is forbidden -- see plan rule.
+the channels section is forbidden: this module is the only write path.
 
 Field truth lives with the cargo: every question this module answers --
 which channels exist, which fields they carry, types, defaults, secrecy,
@@ -27,7 +27,7 @@ from raven.config.loader import get_config_path, read_raw_or_raise
 from raven.utils.atomic_io import atomic_update
 
 # The socket: what the host plugs every channel into, whatever the
-# transport. Uniform across all twelve adapters (probed 2026-08-29).
+# transport. Uniform across the adapters; declared here and pinned by tests.
 _SOCKET_SCHEMA: dict[str, dict[str, Any]] = {
     "enabled": {"type": "boolean", "default": False},
     "allow_from": {"type": "array", "default": ["*"]},

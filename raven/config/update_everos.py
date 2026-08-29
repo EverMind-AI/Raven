@@ -261,10 +261,8 @@ class EverosRootNotOwnedError(RuntimeError):
 def _require_owned(action: str) -> None:
     """Refuse a write unless raven owns the active root.
 
-    The read-only promise used to live only at the call sites that happened to
-    remember it -- the same shape as the drift this whole change is about, where
-    one rule was enforced in several places and one of them was wrong. Enforcing
-    it at the write primitives means a new caller cannot quietly opt out.
+    Enforced at the write primitives so a new caller cannot opt out; the toml is
+    the address of record.
     """
     if everos_owned():
         return

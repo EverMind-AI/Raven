@@ -250,7 +250,7 @@ def set_default_model(
     created ``Config()`` baked in, which is typically a different vendor).
 
     ``provider`` writes ``agents.defaults.provider`` in the same patch. That field
-    overrides what a model id says, so leaving it behind lets a stale pin route
+    overrides what a model id says, so leaving it behind lets a stale configured provider route
     the new model to the old vendor -- with the old vendor's key -- while the
     write that was just reported as successful changes nothing. Callers that do
     not know which provider serves the model pass None and leave it alone.
