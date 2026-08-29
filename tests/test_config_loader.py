@@ -438,6 +438,34 @@ def test_a_later_generation_does_not_reopen_a_migration_already_run(tmp_path: Pa
     assert [n for n in drain_migration_notices() if "contextWindowTokens" in n] == []
 
 
+def test_the_legacy_leaves_migration_rewrites_the_file_once(tmp_path: Path) -> None:
+    """A config stamped 3 carries the three leaves the models stopped accepting;
+    the floor moves them (or drops them) in the file, tells the user once, and
+    stamps 4 so the next load does not look again."""
+    p = tmp_path / "config.json"
+    _write(
+        p,
+        {
+            "skillForge": {"skillsDir": "/srv/skills", "massLibraryDb": "/tmp/old.db"},
+            "context": {"engine": "legacy"},
+        },
+    )
+    _stamp_path(p).write_text(json.dumps({"version": 3}), encoding="utf-8")
+
+    drain_migration_notices()
+    load_config(p)
+
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert on_disk["skillForge"] == {"localDirs": [{"path": "/srv/skills"}]}
+    assert on_disk["context"] == {}
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+    notices = drain_migration_notices()
+    assert len([n for n in notices if "skillForge." in n or "context.engine" in n]) == 3
+
+    load_config(p)
+    assert drain_migration_notices() == []
+
+
 def test_the_provider_migration_survives_a_legacy_top_level_block(tmp_path: Path) -> None:
     """The probe validates a strict ``Config``, and this migration runs before
     the shims that relocate legacy blocks. A config still carrying a top-level

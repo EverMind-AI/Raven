@@ -4,7 +4,7 @@ Usage:
     from raven.config import RavenConfig, load_raven_config
 
     cfg = load_raven_config()
-    if cfg.context.engine == "curator":
+    if cfg.skill_forge.enabled:
         ...
 
 Design:
@@ -19,8 +19,6 @@ Design:
 from __future__ import annotations
 
 import json
-import logging
-import warnings
 from pathlib import Path
 from typing import Any, Literal
 
@@ -30,6 +28,7 @@ from pydantic.alias_generators import to_camel
 from raven.config.loader import (
     EXTENSION_KEYS,
     _migrate_config,
+    _migration_version,
     get_config_path,
 )
 from raven.config.loader import load_config as load_base_config
@@ -59,16 +58,6 @@ class _Base(BaseModel):
 
 class ContextConfig(_Base):
     """Context engine selection and tuning."""
-
-    engine: str = "unified"
-    """Deprecated — there is now a single :class:`ContextAssembler`.
-
-    The historical ``"legacy"`` / ``"curator"`` / ``"default"`` split was
-    collapsed: every turn runs the Curator history lane + the EverOS
-    recall / SkillForgeRouter lanes in one engine. The field is retained (as a
-    free string) so existing YAML setting ``engine: legacy`` etc. still
-    loads — the value is ignored by ``build_context_engine``.
-    """
 
     # Curator history-lane knobs.
     fast_path_threshold: float = 0.60
@@ -901,8 +890,7 @@ class SkillForgeConfig(_Base):
 
     local_dirs: list[LocalDirConfig] = Field(default_factory=list)
     """Local skill directories to mount (R1). List order = priority:
-    later entries override earlier on name collision. Legacy
-    ``skills_dir`` auto-migrated via model_validator (R5)."""
+    later entries override earlier on name collision."""
 
     scan_max_depth: int = 5
     """Maximum directory depth when scanning for SKILL.md files (R2).
@@ -912,7 +900,7 @@ class SkillForgeConfig(_Base):
     # --- Retrieval / reranker knobs ---
     embedding_model: str = "default"
     """Dense embedding model identifier. MUST match the embedding model
-    that produced ``mass_library_db``'s stored vectors, otherwise dense
+    that produced the skill library's stored vectors, otherwise dense
     retrieval returns garbage because the query vector lives in a different
     space. Configure this to match the embedding service and corpus used by
     your deployment."""
@@ -977,29 +965,6 @@ class SkillForgeConfig(_Base):
     of the actual rewrite output. The previous 1024 budget caused frequent
     finish_reason=length truncations with empty visible content, which
     surfaced as 'Failed to parse rewrite response as JSON' fallbacks."""
-
-    mass_library_db: str | None = None
-    """Path to a pre-built SQLite skill library (the "mass pool").
-    Set to ``None`` to disable the mass pool entirely — only the file-based
-    local pool (workspace + builtin + everos) will be used. Set this to a
-    deployment-specific database path when shipping a pre-built skill library.
-
-    When set, ``SkillService`` attaches the file in **read-only** mode at
-    startup and uses its (metadata + embedding) rows for dense retrieval
-    of curated mass skills.
-
-    Lifecycle:
-      - Operator builds the DB offline via
-        ``raven skill import-files <skills_dir> --db <path>`` followed
-        by ``raven skill rebuild-index --db <path>`` (encodes
-        embeddings into the same file).
-      - Deploys the resulting ``.db`` file alongside the runtime.
-      - At runtime, Raven never modifies it — replace the file to
-        update the library.
-
-    Body, frontmatter and embeddings live inline in the DB; SKILL.md
-    files for mass-library skills are not required on disk.
-    """
 
     # --- Skill injection mode (full_body vs summary) ---
     injection_mode: str = "full_body"
@@ -1084,7 +1049,7 @@ class SkillForgeConfig(_Base):
     mechanism propagate the update.
 
     Zero-config: when unset, the ``skill refresh`` CLI auto-discovers
-    the endpoint from ``<mass_library_db>/../.refresh_endpoint`` (a
+    the endpoint from a ``.refresh_endpoint`` file beside the skill library (a
     single-line text file written by the producer admin during
     ``export_to_mass_library --refresh-endpoint=URL``). 99% of users
     don't need to set this field."""
@@ -1144,21 +1109,9 @@ class SkillForgeConfig(_Base):
 
     @model_validator(mode="before")
     @classmethod
-    def _migrate_skills_dir(cls, data: dict) -> dict:
-        """R5: auto-convert legacy ``skills_dir`` → ``local_dirs``."""
+    def _check_local_weight(cls, data: dict) -> dict:
         if not isinstance(data, dict):
             return data
-        for old_key in ("skills_dir", "skillsDir"):
-            old_val = data.pop(old_key, None)
-            if old_val and "local_dirs" not in data and "localDirs" not in data:
-                data["local_dirs"] = [{"path": old_val}]
-                warnings.warn(
-                    f"skill_forge.{old_key} is deprecated, use local_dirs "
-                    f"instead. Auto-converted to local_dirs=[{{path: {old_val!r}}}]. "
-                    f"This field will be removed in a future release.",
-                    DeprecationWarning,
-                    stacklevel=2,
-                )
         lw = data.get("local_weight") or data.get("localWeight")
         if lw is not None:
             lw = float(lw)
@@ -1588,66 +1541,13 @@ def load_raven_config(config_path: Path | None = None) -> RavenConfig:
                 data = json.load(f) or {}
         except (json.JSONDecodeError, OSError):
             data = {}
-        # Apply the same migrations the base loader uses so legacy fields
-        # (e.g. ``agents.defaults.everos``) end up in their new
-        # home (``skillForge.everos``) before we extract blocks.
-        data = _migrate_config(data, pop_extension_keys=False)
-        # CFG-1 deprecation surface: warn once when the user still has
-        # the legacy ``skill_forge.mass_library_db`` field set without
-        # the new ``skill_router.mass.endpoint``. The two coexist for
-        # one release; CLEANUP removes the legacy field.
-        _warn_mass_library_db_deprecated(data)
+        # The same migrations the base loader runs, gated by the same version
+        # floor, so legacy leaves reach their new home before the blocks are
+        # extracted (the base loader persisted the rewrite; this is the
+        # in-memory twin for the extension blocks).
+        data = _migrate_config(data, pop_extension_keys=False, from_version=_migration_version(actual_path))
         for key in EXTENSION_KEYS:
             if key in data and data[key] is not None:
                 overrides[key] = data[key]
 
     return RavenConfig(base=base, **overrides)
-
-
-def _warn_mass_library_db_deprecated(data: dict) -> None:
-    """Single-shot deprecation warning for ``skill_forge.mass_library_db``.
-
-    Fires when the user has the old field set AND has not switched to
-    the new ``skill_router.mass.endpoint``. We don't auto-migrate
-    because the old field is a local SQLite path and the new field is
-    an HTTP endpoint — semantically different, so the user must pick
-    one consciously.
-    """
-    legacy = None
-    for skill_forge_key in ("skill_forge", "skillForge"):
-        block = data.get(skill_forge_key)
-        if isinstance(block, dict):
-            legacy = block.get("mass_library_db") or block.get("massLibraryDb")
-            if legacy:
-                break
-    if not legacy:
-        return
-    new = None
-    # The remote skill library is now the Hub source at
-    # skillForge.router.hub (Mass was retired; Hub replaces it).
-    for sf_key in ("skill_forge", "skillForge"):
-        block = data.get(sf_key)
-        if isinstance(block, dict):
-            router = block.get("router")
-            if isinstance(router, dict):
-                new = (router.get("hub") or {}).get("endpoint")
-                if new:
-                    break
-    if new:
-        # User already set the new field — they're mid-migration. No
-        # warning, just a one-line info log.
-        logging.getLogger(__name__).info(
-            "config: both skill_forge.mass_library_db (legacy) and "
-            "skillForge.router.hub.endpoint are set; the legacy field is "
-            "ignored by the Skill Hub source and will be removed.",
-        )
-        return
-    warnings.warn(
-        "skill_forge.mass_library_db is deprecated and the local-matmul "
-        "mass-library path has been removed. Switch to "
-        "skillForge.router.hub.endpoint = '<URL>' to point at the remote "
-        "Skill Hub. The legacy field is read but ignored by the new "
-        "SkillForgeRouter / Skill Hub path.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
