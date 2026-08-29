@@ -1,7 +1,8 @@
 """``raven tracing`` — open the tracing dashboard.
 
 The dashboard is a dependency-free Node viewer bundled under
-``raven/tracing/viewer/``. Instrumentation itself runs in-process (installed at
+``raven/cli/tracing_viewer/`` -- a surface the CLI launches, kept out of the
+``tracing`` kernel package. Instrumentation itself runs in-process (installed at
 CLI startup, see :mod:`raven.tracing`); this command only launches the viewer
 that reads the captured spans from ``~/.raven/traces``.
 
@@ -44,7 +45,7 @@ console = Console()
 
 
 def _viewer_dir() -> Path:
-    return Path(__file__).resolve().parent.parent / "tracing" / "viewer"
+    return Path(__file__).resolve().parent / "tracing_viewer"
 
 
 # Asset the viewer must still be able to read off disk for the page to work.

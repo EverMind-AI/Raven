@@ -262,7 +262,7 @@ def test_pid_is_viewer_posix_keeps_ps_command_check(monkeypatch):
 
     def run(argv, **kwargs):
         calls.append(list(argv))
-        return _FakeCompleted("node /opt/raven/tracing/viewer/server.js\n")
+        return _FakeCompleted("node /opt/raven/cli/tracing_viewer/server.js\n")
 
     monkeypatch.setattr(tc.subprocess, "run", run)
     assert tc._pid_is_viewer(4242) is True
