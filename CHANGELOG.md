@@ -34,6 +34,10 @@ All notable changes to Raven are documented here.
   imports the loop shell it is consumed by. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- Audit pass three: the `raven.auth` placeholders (`capability_token`,
+  `managed_settings`), the MCP OAuth `set_callback_base` hook, three ops
+  connection helpers and an unread tool table are removed with their tests;
+  two PLAN.md files leave the package.
 - Security: a market catalogue entry may name a remote MCP server only at a
   public https address (a local or private one is refused before it is
   written to the config); a redirect hop whose host does not resolve is

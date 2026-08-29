@@ -764,8 +764,8 @@ def effective_context_window(model: str, configured: int | None, *, allow_fetch:
 def reset_openrouter_cache() -> None:
     """Clear the in-process OpenRouter catalog cache.
 
-    Only useful for tests -- pair it with the ``model_catalog_cache._CACHE_PATH``
-    seam to exercise the disk tiers without touching the real ~/.raven/cache/.
+    The tests' reset: pair it with the ``model_catalog_cache._CACHE_PATH`` seam
+    to exercise the disk tiers without touching the real ~/.raven/cache/.
     """
     global _OPENROUTER_CACHE, _OPENROUTER_CACHE_TIME, _WARM_AT
     _OPENROUTER_CACHE = {}
