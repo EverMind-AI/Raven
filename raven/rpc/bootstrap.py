@@ -338,7 +338,7 @@ async def build_rpc_stack(
         # write, and closing the adapter under it fails that write for a reason
         # that has nothing to do with the service.
         try:
-            from raven.agent.acp.client import begin_drain
+            from raven.agent.acp_client.client import begin_drain
 
             begin_drain()
             if agent_loop is not None:
@@ -375,7 +375,7 @@ async def build_rpc_stack(
         # ACP agents are launched with start_new_session, so they do not get the
         # terminal's signals and outlive this process unless the pool is closed.
         try:
-            from raven.agent.acp.pool import close_pool
+            from raven.agent.acp_client.pool import close_pool
 
             await close_pool()
         except Exception:

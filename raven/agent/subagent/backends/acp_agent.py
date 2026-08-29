@@ -2,7 +2,7 @@
 
 The counterpart of :mod:`raven.agent.subagent.backends.cli_agent`. Where that one
 spawns a process per task and parses whatever the CLI prints, this one keeps a
-connection (owned by :mod:`raven.agent.acp.pool`) and delivers the task as a
+connection (owned by :mod:`raven.agent.acp_client.pool`) and delivers the task as a
 request on it.
 
 Two consequences worth stating, because they are what the transport buys:
@@ -15,7 +15,7 @@ Two consequences worth stating, because they are what the transport buys:
 - Those notifications are the run as a reader wants it, not everything that
   crossed the wire. The whole exchange -- the agent's own requests and what raven
   answered, raven's outbound frames, notifications no session was listening for,
-  stderr -- is written by :mod:`raven.agent.acp.journal` for the life of the
+  stderr -- is written by :mod:`raven.agent.acp_client.journal` for the life of the
   connection, and each call records the byte range it occupied there.
 - Resuming is the agent's own ``session/load``, not a second command template, so
   whether an agent *can* resume is read from its handshake instead of inferred
@@ -34,12 +34,12 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from raven.agent.acp.ask_user import AskUserResponder, clarify_responder
-from raven.agent.acp.capabilities import CapabilitySnapshot, relearn_session_modes, steer_offered
-from raven.agent.acp.elicitor import Elicitor
-from raven.agent.acp.permissions import PERMISSION_METHOD
-from raven.agent.acp.pool import get_pool
-from raven.agent.acp.protocol import SESSION_MCP_CAPABILITY, STEER_METHOD, AcpError, AcpRemoteError
+from raven.agent.acp_client.ask_user import AskUserResponder, clarify_responder
+from raven.agent.acp_client.capabilities import CapabilitySnapshot, relearn_session_modes, steer_offered
+from raven.agent.acp_client.elicitor import Elicitor
+from raven.agent.acp_client.permissions import PERMISSION_METHOD
+from raven.agent.acp_client.pool import get_pool
+from raven.agent.acp_client.protocol import SESSION_MCP_CAPABILITY, STEER_METHOD, AcpError, AcpRemoteError
 from raven.agent.subagent import activity
 from raven.agent.subagent.acp_dialects import AcpDialect, ToolCall, content_texts, dialect_for
 from raven.agent.subagent.backends import turn_rows
@@ -588,7 +588,7 @@ class AcpAgentBackend:
         if getattr(connection, "_raven_unprompted", False):
             return
         try:
-            from raven.agent.acp.unprompted import UnpromptedRecorder
+            from raven.agent.acp_client.unprompted import UnpromptedRecorder
 
             recorder = UnpromptedRecorder(
                 self.name,

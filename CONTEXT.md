@@ -949,7 +949,13 @@ agent for another host). Deliberately unseated, each awaiting its own ruling: `e
 (zero inbound imports; product or engine is an open call), `browser` and `importer`
 (surface-side feature libraries, the w18 phrasing). One ruled edge: `trajectory` (L3)
 reaches `core.admission` for the door vocabulary and builds a loop by hand for replay --
-legal, because it is a harness over recorded runs, not an entrance.
+legal, because it is a harness over recorded runs, not an entrance. One package holds two
+seats: in `agent/`, `agent/loop` is the L2 harness shell every entrance runs, and its
+siblings -- `tools`, `subagent`, `acp_client`, `context`, `hook`, `personalizer`,
+`workdir` -- are L3 cargo the loop consumes; the physical split of the package is a card
+awaiting its ruling, recorded here so the shared directory is not read as a shared seat.
+`agent/acp_client` is named for its side of ACP (Raven driving somebody else's agent);
+`acp/` is the other side, the entrance.
 
 **Assembly Root** (`core/`):
 The package that composes a running agent out of parts: one `*_stack` builder per assembly
@@ -963,9 +969,10 @@ directly; it is a replay harness, not an entrance, and `test_cli_agent_loop_wiri
 
 **Paper** (`contracts/`):
 A declared shape the layers hold each other to; papers export declared members only and
-import no machinery. Two promise tiers, stamped per module via `__tier__`: `contract`
-(frozen for every loop) and `factory_loop` (versioned with the factory loop). Enforced by
-`tests/test_contracts_two_tier_ledger.py`.
+import no machinery -- the stdlib, pydantic, the other papers and the spine, nothing else
+(`TYPE_CHECKING` blocks exempt). Two promise tiers, stamped per module via `__tier__`:
+`contract` (frozen for every loop) and `factory_loop` (versioned with the factory loop).
+Both rules are enforced by `tests/test_contracts_two_tier_ledger.py`.
 
 ### Security & Access
 
@@ -1278,7 +1285,7 @@ _Avoid_: conflating it with the roster's `live-progress` tag, which says a trans
 its *intermediate work* (acp only) and is advertised to the model. Reply streaming is
 invisible to the model and is about the answer itself.
 
-**Capability Snapshot** (`raven/agent/acp/capabilities.py`):
+**Capability Snapshot** (`raven/agent/acp_client/capabilities.py`):
 What one ACP agent reported at its last handshake - protocol version, whether it can
 resume / fork / load a session, whether it takes a Steer (`canSteer`, from
 `agentCapabilities._meta`), its models and auth methods - recorded by a Test and read
@@ -1295,7 +1302,7 @@ claim no measurement backs. The `/subagents` row for a stale entry asks for a te
 _Avoid_: reading it as a liveness check - it is one measurement, taken at Test time, not a
 statement about the agent right now.
 
-**Unattended Approval** (`raven/agent/acp/permissions.py`):
+**Unattended Approval** (`raven/agent/acp_client/permissions.py`):
 How raven answers an ACP Subagent's `session/request_permission`: it approves, choosing
 from the options the agent offered by their protocol `kind` (`allow_always`, then
 `allow_once`) and never by `optionId`, which is the agent's own vocabulary. There is no
@@ -1309,7 +1316,7 @@ Distinct from what raven still refuses: `fs/read_text_file` and its siblings are
 unsupported in `CLIENT_CAPABILITIES`, and a handler returning `UNHANDLED` is how they stay
 that way.
 
-**Steer** (`raven/agent/acp/protocol.py`, `raven/agent/subagent/activity.py`,
+**Steer** (`raven/agent/acp_client/protocol.py`, `raven/agent/subagent/activity.py`,
 `raven/agent/subagent/manager.py`):
 A person's words merged into a Subagent's turn while it is still running, read by the agent
 before its next model call, as opposed to a prompt that opens a turn. ACP 1.20.0 has no such
@@ -1329,7 +1336,7 @@ _Avoid_: "inject" for the whole feature - `injected` is one status of a steer, a
 `BusyPolicy.INJECT` is a different thing (a turn queued behind the running one);
 "interrupt" - a steer does not stop the turn.
 
-**Unprompted Turn** (`raven/agent/acp/unprompted.py`):
+**Unprompted Turn** (`raven/agent/acp_client/unprompted.py`):
 A turn an ACP Subagent ran with nobody having asked - an on-call agent waking on its own
 schedule is the case it exists for. Every other sink on the session router is attached for
 one run and detached at its end, so these frames used to be dropped as a late usage report;
@@ -1344,7 +1351,7 @@ is the fallback ending.
 _Avoid_: "background turn" - nothing about it is backgrounded; it runs and streams like any
 other turn, and only its *origin* differs.
 
-**Elicitation Pass-Through** (`raven/agent/acp/elicitor.py`):
+**Elicitation Pass-Through** (`raven/agent/acp_client/elicitor.py`):
 How an ACP Subagent's `elicitation/create` reaches the user. Form mode only, and advertised
 as only that: `url` elicitation is for out-of-band credential and payment collection, so
 advertising it would let a sub-agent send the reader to an address of its own choosing. The
@@ -1368,7 +1375,7 @@ by default and declines when a dispatch has no reachable user. **Question Autofi
 one thing that answers on this path without asking, and only from what the turn already
 established.
 
-**Ask-User Round Trip** (`raven/agent/acp/ask_user.py`):
+**Ask-User Round Trip** (`raven/agent/acp_client/ask_user.py`):
 How an ACP Subagent's question reaches the user when it does not use `elicitation/create`.
 Raven-X routes its deep-research clarify through an extension of its own: the question
 leaves as a `session/update` whose `sessionUpdate` is `ask_user_request`, and the answer
@@ -1392,7 +1399,7 @@ _Avoid_: reading a dropped frame as a no-op. The agent blocks its tool call on t
 ten minutes before falling back to the question's default, so not answering is the stall this
 exists to prevent, not an abstention.
 
-**Question Autofill** (`raven/agent/acp/autofill.py`, `raven/agent/acp/resolver.py`):
+**Question Autofill** (`raven/agent/acp_client/autofill.py`, `raven/agent/acp_client/resolver.py`):
 The step in which raven answers a Subagent's question from the turn's own context instead
 of putting it to the user. It sits in front of both question routes -- **Elicitation
 Pass-Through** and **Ask-User Round Trip** -- and decides per form rather than per
@@ -1416,7 +1423,7 @@ fail-safe paths return (timeout, cancellation, an undeliverable question, connec
 and autofill never sets one, so a question it deferred and nobody answered is the same
 empty skip it always was.
 
-**Frame Journal** (`raven/agent/acp/journal.py`):
+**Frame Journal** (`raven/agent/acp_client/journal.py`):
 Every frame of one ACP connection, both directions, in wire order, on disk. Distinct from
 the run transcript, which holds the `session/update` notifications routed to one session -
 the reading of a delegated run, and not everything that crossed the wire. Four classes of

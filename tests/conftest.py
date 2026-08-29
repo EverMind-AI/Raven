@@ -244,12 +244,12 @@ def _no_openrouter_network(tmp_path):
 def _no_real_acp_journal(tmp_path, monkeypatch):
     """Keep ACP wire journals out of the real home.
 
-    Every pooled connection opens one (``raven/agent/acp/journal.py``), so any
+    Every pooled connection opens one (``raven/agent/acp_client/journal.py``), so any
     test that launches a stub server would otherwise write the whole exchange --
     the prompt, every tool result, every stderr line -- under the developer's
     ``~/.raven/traces``, and leave it there after the run.
     """
-    from raven.agent.acp import journal
+    from raven.agent.acp_client import journal
 
     monkeypatch.setattr(journal, "journal_root", lambda: tmp_path / "acp-frames")
     yield
@@ -290,7 +290,7 @@ def _unbind_the_acp_turn() -> Iterator[None]:
     token also carries "this var was never set", which no assignment can
     express.
     """
-    from raven.agent.acp import asker
+    from raven.agent.acp_client import asker
 
     turn_token = asker._TURN.set(asker._TURN.get())
     autofill_token = asker._AUTOFILL.set(asker._AUTOFILL.get())

@@ -557,9 +557,9 @@ class TestAutomaticSnapshotVerification:
             return Snap()
 
         monkeypatch.setattr(probe_mod, "acp_snapshot_for", fake_snapshot_for)
-        monkeypatch.setattr("raven.agent.acp.capabilities.verify_agent", fake_verify)
+        monkeypatch.setattr("raven.agent.acp_client.capabilities.verify_agent", fake_verify)
         monkeypatch.setattr(
-            "raven.agent.acp.capabilities.SnapshotStore",
+            "raven.agent.acp_client.capabilities.SnapshotStore",
             lambda: type("S", (), {"record": staticmethod(lambda s: recorded.append(getattr(s, "status")))})(),
         )
         monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
@@ -591,9 +591,9 @@ class TestAutomaticSnapshotVerification:
             )()
 
         monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: None)
-        monkeypatch.setattr("raven.agent.acp.capabilities.verify_agent", fake_verify)
+        monkeypatch.setattr("raven.agent.acp_client.capabilities.verify_agent", fake_verify)
         monkeypatch.setattr(
-            "raven.agent.acp.capabilities.SnapshotStore",
+            "raven.agent.acp_client.capabilities.SnapshotStore",
             lambda: type("S", (), {"record": staticmethod(lambda s: None)})(),
         )
         monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
@@ -620,9 +620,9 @@ class TestAutomaticSnapshotVerification:
             called.append("verified")
             return type("S", (), {"status": "ready"})()
 
-        monkeypatch.setattr("raven.agent.acp.capabilities.verify_agent", fake_verify)
+        monkeypatch.setattr("raven.agent.acp_client.capabilities.verify_agent", fake_verify)
         monkeypatch.setattr(
-            "raven.agent.acp.capabilities.SnapshotStore",
+            "raven.agent.acp_client.capabilities.SnapshotStore",
             lambda: type("S", (), {"record": staticmethod(lambda s: None)})(),
         )
         monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
@@ -646,9 +646,9 @@ class TestAutomaticSnapshotVerification:
             called.append(cfg.name)
             return type("S", (), {"status": "ready"})()
 
-        monkeypatch.setattr("raven.agent.acp.capabilities.verify_agent", fake_verify)
+        monkeypatch.setattr("raven.agent.acp_client.capabilities.verify_agent", fake_verify)
         monkeypatch.setattr(
-            "raven.agent.acp.capabilities.SnapshotStore",
+            "raven.agent.acp_client.capabilities.SnapshotStore",
             lambda: type("S", (), {"record": staticmethod(lambda s: None)})(),
         )
         monkeypatch.setattr(probe_mod, "_SCHEDULED", False)

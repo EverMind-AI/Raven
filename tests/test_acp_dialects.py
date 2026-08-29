@@ -579,7 +579,7 @@ def test_a_file_change_with_no_path_anywhere_keeps_the_truthful_key() -> None:
 
 
 def test_claude_code_merges_a_question_with_its_custom_box() -> None:
-    from raven.agent.acp.elicitation import fields
+    from raven.agent.acp_client.elicitation import fields
     from raven.agent.subagent.acp_dialects.claude_code import ClaudeCodeDialect
 
     schema = {
@@ -606,7 +606,7 @@ def test_claude_code_merges_a_question_with_its_custom_box() -> None:
 
 
 def test_claude_code_leaves_an_unpaired_custom_field_alone() -> None:
-    from raven.agent.acp.elicitation import fields
+    from raven.agent.acp_client.elicitation import fields
     from raven.agent.subagent.acp_dialects.claude_code import ClaudeCodeDialect
 
     schema = {"type": "object", "properties": {"notes_custom": {"type": "string"}}}
@@ -616,7 +616,7 @@ def test_claude_code_leaves_an_unpaired_custom_field_alone() -> None:
 
 
 def test_the_default_dialect_pairs_nothing() -> None:
-    from raven.agent.acp.elicitation import fields
+    from raven.agent.acp_client.elicitation import fields
     from raven.agent.subagent.acp_dialects.base import AcpDialect
 
     schema = {
@@ -634,7 +634,7 @@ def test_claude_code_merges_a_custom_box_written_before_its_question() -> None:
     so the user is asked the same thing twice and the free-text box arrives as
     a standalone prompt -- the exact shape the merge exists to prevent.
     """
-    from raven.agent.acp.elicitation import fields
+    from raven.agent.acp_client.elicitation import fields
 
     schema = {
         "type": "object",
@@ -658,7 +658,7 @@ def test_claude_code_pairs_by_the_adapters_marker_not_by_the_spelling() -> None:
     `_meta._askUserQuestionCustomAnswer.questionId` names the property the
     free-text half belongs to; a sibling named anything at all still folds.
     """
-    from raven.agent.acp.elicitation import fields
+    from raven.agent.acp_client.elicitation import fields
 
     schema = {
         "type": "object",
@@ -684,7 +684,7 @@ def test_claude_code_leaves_an_unmarked_lookalike_as_a_question_of_its_own() -> 
     it is never put to the user, and its answer only ever surfaces if the enum
     half happens to be answered off-enum.
     """
-    from raven.agent.acp.elicitation import fields
+    from raven.agent.acp_client.elicitation import fields
 
     schema = {
         "type": "object",
@@ -714,7 +714,7 @@ def test_claude_code_does_not_fold_a_custom_box_the_schema_requires() -> None:
     An on-enum answer would then be accepted as content missing a key the
     `requestedSchema` lists as required. Two questions is the lesser cost.
     """
-    from raven.agent.acp.elicitation import fields
+    from raven.agent.acp_client.elicitation import fields
 
     schema = {
         "type": "object",

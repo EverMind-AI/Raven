@@ -21,8 +21,8 @@ from uuid import uuid4
 from loguru import logger
 
 from raven.agent import workdir
-from raven.agent.acp import resolver as autofill_resolver
-from raven.agent.acp.asker import current_autofill
+from raven.agent.acp_client import resolver as autofill_resolver
+from raven.agent.acp_client.asker import current_autofill
 from raven.agent.context import ContextBuilder
 from raven.agent.loop.failure_streak import (
     failure_class,

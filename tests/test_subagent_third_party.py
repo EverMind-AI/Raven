@@ -3878,7 +3878,7 @@ def test_the_spawning_ravens_home_reaches_its_cli_subagent(monkeypatch: pytest.M
 
 def _acp_with_modes(tmp_path: Path, monkeypatch, modes) -> SpawnTool:
     """A roster carrying one acp agent whose probe measured ``modes``."""
-    from raven.agent.acp.capabilities import CapabilitySnapshot
+    from raven.agent.acp_client.capabilities import CapabilitySnapshot
     from raven.agent.subagent import backends as backends_mod
     from raven.config.schema import ThirdPartyAcpSubagentConfig
 
@@ -3899,7 +3899,7 @@ def _acp_with_modes(tmp_path: Path, monkeypatch, modes) -> SpawnTool:
 def test_the_mode_enum_is_what_the_probe_measured(tmp_path: Path, monkeypatch) -> None:
     """Measured, never declared on the row: the menu the model picks from has to
     be the one the agent serves, or it names a mode the agent then refuses."""
-    from raven.agent.acp.capabilities import AcpMode
+    from raven.agent.acp_client.capabilities import AcpMode
 
     tool = _acp_with_modes(
         tmp_path, monkeypatch, [AcpMode("fast", "Fast", "converges early"), AcpMode("deep", "Deep", "searches longer")]
@@ -3924,7 +3924,7 @@ def test_no_agent_with_modes_means_no_mode_parameter(tmp_path: Path) -> None:
 async def test_a_mode_aimed_at_an_agent_without_it_is_refused_with_the_real_list(tmp_path: Path, monkeypatch) -> None:
     """The schema's enum is the union over every agent (one property cannot
     depend on another's value), so the per-agent check is the tool's own."""
-    from raven.agent.acp.capabilities import AcpMode
+    from raven.agent.acp_client.capabilities import AcpMode
 
     tool = _acp_with_modes(tmp_path, monkeypatch, [AcpMode("fast", "Fast", "")])
 
@@ -3947,7 +3947,7 @@ async def test_a_mode_aimed_at_an_agent_with_none_says_so(tmp_path: Path) -> Non
 
 
 def _moded_manager(tmp_path: Path, monkeypatch) -> SubagentManager:
-    from raven.agent.acp.capabilities import AcpMode, CapabilitySnapshot
+    from raven.agent.acp_client.capabilities import AcpMode, CapabilitySnapshot
     from raven.agent.subagent import backends as backends_mod
     from raven.config.schema import ThirdPartyAcpSubagentConfig
 

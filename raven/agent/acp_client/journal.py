@@ -6,7 +6,7 @@ wants, and it is not the same thing as what crossed the wire. Four classes of
 traffic never reached it, each invisible in a different way:
 
 - **The agent's own requests.** ``session/request_permission`` is answered
-  automatically and unattended (see :mod:`raven.agent.acp.permissions`), so
+  automatically and unattended (see :mod:`raven.agent.acp_client.permissions`), so
   nothing anywhere could say what raven approved on a sub-agent's behalf.
 - **Raven's outbound frames.** Which session was resumed, whether a cancel was
   sent, what the prompt actually was.

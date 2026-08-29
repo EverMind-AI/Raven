@@ -74,7 +74,7 @@ class _StubAutofill:
         self._decisions = decisions
 
     async def resolve(self, questions, *, agent, instance):
-        from raven.agent.acp import autofill
+        from raven.agent.acp_client import autofill
 
         out = []
         for question in questions:
@@ -94,8 +94,8 @@ async def _ask_with(asker, autofill_obj, question: str = "Which branch?") -> str
     Bound before the `AskUserResponder` is constructed because that is where both the
     asker and the autofill are read; bound after, the responder would have neither.
     """
-    from raven.agent.acp.ask_user import AskUserResponder
-    from raven.agent.acp.asker import start_ask_turn
+    from raven.agent.acp_client.ask_user import AskUserResponder
+    from raven.agent.acp_client.asker import start_ask_turn
 
     sent: list[dict] = []
 
@@ -132,15 +132,15 @@ async def test_the_client_declares_the_extension() -> None:
     `_meta.raven.askUser`, and falls back to ending the turn on its questions
     otherwise. The key is what turns every other test here into live behaviour.
     """
-    from raven.agent.acp.protocol import CLIENT_CAPABILITIES, initialize_params
+    from raven.agent.acp_client.protocol import CLIENT_CAPABILITIES, initialize_params
 
     assert CLIENT_CAPABILITIES["_meta"]["raven"]["askUser"] is True
     assert initialize_params()["clientCapabilities"]["_meta"]["raven"]["askUser"] is True
 
 
 async def test_a_question_reaches_the_user_and_the_answer_goes_back() -> None:
-    from raven.agent.acp.ask_user import AskUserResponder
-    from raven.agent.acp.asker import start_ask_turn
+    from raven.agent.acp_client.ask_user import AskUserResponder
+    from raven.agent.acp_client.asker import start_ask_turn
 
     tool, sent = _Answers("EU"), _Recorder()
     start_ask_turn(tool, conversation_id="tui:c1")
@@ -153,8 +153,8 @@ async def test_a_question_reaches_the_user_and_the_answer_goes_back() -> None:
 
 async def test_a_question_with_no_choices_is_put_as_free_text() -> None:
     """`None`, not `[]`: the contract's own way of saying "type an answer"."""
-    from raven.agent.acp.ask_user import AskUserResponder
-    from raven.agent.acp.asker import start_ask_turn
+    from raven.agent.acp_client.ask_user import AskUserResponder
+    from raven.agent.acp_client.asker import start_ask_turn
 
     tool, sent = _Answers("2024"), _Recorder()
     start_ask_turn(tool, conversation_id="tui:c1")
@@ -172,8 +172,8 @@ async def test_a_turn_with_no_reachable_user_answers_empty_at_once() -> None:
     was ever going to see; an empty answer is what its tool already renders as
     "the user did not answer; proceed with best judgment".
     """
-    from raven.agent.acp.ask_user import AskUserResponder
-    from raven.agent.acp.asker import start_ask_turn
+    from raven.agent.acp_client.ask_user import AskUserResponder
+    from raven.agent.acp_client.asker import start_ask_turn
 
     sent = _Recorder()
     start_ask_turn(None, conversation_id="tui:c1")
@@ -184,8 +184,8 @@ async def test_a_turn_with_no_reachable_user_answers_empty_at_once() -> None:
 
 
 async def test_a_run_that_ended_answers_empty_without_asking() -> None:
-    from raven.agent.acp.ask_user import AskUserResponder
-    from raven.agent.acp.asker import start_ask_turn
+    from raven.agent.acp_client.ask_user import AskUserResponder
+    from raven.agent.acp_client.asker import start_ask_turn
 
     tool, sent = _Answers("EU"), _Recorder()
     start_ask_turn(tool, conversation_id="tui:c1")
@@ -200,8 +200,8 @@ async def test_a_run_that_ended_answers_empty_without_asking() -> None:
 
 async def test_a_question_already_put_is_cancelled_and_still_answered() -> None:
     """The window `cancel` exists for: a sheet up, and the run behind it gone."""
-    from raven.agent.acp.ask_user import AskUserResponder
-    from raven.agent.acp.asker import start_ask_turn
+    from raven.agent.acp_client.ask_user import AskUserResponder
+    from raven.agent.acp_client.asker import start_ask_turn
 
     sent = _Recorder()
 
@@ -220,8 +220,8 @@ async def test_a_question_already_put_is_cancelled_and_still_answered() -> None:
 
 
 async def test_an_asker_that_raises_still_answers() -> None:
-    from raven.agent.acp.ask_user import AskUserResponder
-    from raven.agent.acp.asker import start_ask_turn
+    from raven.agent.acp_client.ask_user import AskUserResponder
+    from raven.agent.acp_client.asker import start_ask_turn
 
     sent = _Recorder()
 
@@ -238,8 +238,8 @@ async def test_an_asker_that_raises_still_answers() -> None:
 
 async def test_a_structurally_unavailable_round_trip_reads_as_no_answer() -> None:
     """`ask_direct` returns `None` for "no broker, no conversation"."""
-    from raven.agent.acp.ask_user import AskUserResponder
-    from raven.agent.acp.asker import start_ask_turn
+    from raven.agent.acp_client.ask_user import AskUserResponder
+    from raven.agent.acp_client.asker import start_ask_turn
 
     tool, sent = _Answers(None), _Recorder()
     start_ask_turn(tool, conversation_id="tui:c1")
@@ -251,8 +251,8 @@ async def test_a_structurally_unavailable_round_trip_reads_as_no_answer() -> Non
 
 async def test_a_frame_with_no_handle_is_dropped_rather_than_guessed() -> None:
     """Nothing to answer into: `requestId` and `sessionId` both absent."""
-    from raven.agent.acp.ask_user import AskUserResponder
-    from raven.agent.acp.asker import start_ask_turn
+    from raven.agent.acp_client.ask_user import AskUserResponder
+    from raven.agent.acp_client.asker import start_ask_turn
 
     tool, sent = _Answers("EU"), _Recorder()
     start_ask_turn(tool, conversation_id="tui:c1")
@@ -265,8 +265,8 @@ async def test_a_frame_with_no_handle_is_dropped_rather_than_guessed() -> None:
 
 async def test_a_session_scoped_answer_carries_no_request_id() -> None:
     """The agent's own handler accepts either key, so only what is known is sent."""
-    from raven.agent.acp.ask_user import AskUserResponder
-    from raven.agent.acp.asker import start_ask_turn
+    from raven.agent.acp_client.ask_user import AskUserResponder
+    from raven.agent.acp_client.asker import start_ask_turn
 
     tool, sent = _Answers("EU"), _Recorder()
     start_ask_turn(tool, conversation_id="tui:c1")
@@ -284,8 +284,8 @@ async def test_two_questions_on_one_conversation_do_not_overlap() -> None:
     An overlapping one is fail-safed to its default there, which reads as a skip
     nobody ever saw -- so the lock is what keeps the second question a question.
     """
-    from raven.agent.acp.ask_user import AskUserResponder
-    from raven.agent.acp.asker import start_ask_turn
+    from raven.agent.acp_client.ask_user import AskUserResponder
+    from raven.agent.acp_client.asker import start_ask_turn
 
     order: list[str] = []
     sent = _Recorder()
@@ -315,9 +315,9 @@ async def test_a_question_kept_waiting_for_its_conversation_answers_empty(monkey
     An answer that lands after the agent has already fail-safed is worse than a
     fast empty one, which at least gets that turn moving again.
     """
-    from raven.agent.acp import ask_user as ask_user_module
-    from raven.agent.acp.ask_user import AskUserResponder
-    from raven.agent.acp.asker import start_ask_turn
+    from raven.agent.acp_client import ask_user as ask_user_module
+    from raven.agent.acp_client.ask_user import AskUserResponder
+    from raven.agent.acp_client.asker import start_ask_turn
 
     sent = _Recorder()
 
@@ -345,9 +345,9 @@ async def test_a_question_kept_waiting_for_its_conversation_answers_empty(monkey
 
 async def test_an_elicitation_form_and_a_question_share_the_lock() -> None:
     """Both routes end at one broker, so they must not overlap each other either."""
-    from raven.agent.acp.ask_user import AskUserResponder
-    from raven.agent.acp.asker import start_ask_turn
-    from raven.agent.acp.elicitor import Elicitor
+    from raven.agent.acp_client.ask_user import AskUserResponder
+    from raven.agent.acp_client.asker import start_ask_turn
+    from raven.agent.acp_client.elicitor import Elicitor
 
     order: list[str] = []
     sent = _Recorder()
@@ -384,8 +384,8 @@ async def test_the_dispatcher_routes_the_frame_as_well_as_answering_it() -> None
     Intercepting would leave a turn whose record does not say a question was
     asked, which is the one thing a reader of that record most needs to see.
     """
-    from raven.agent.acp.ask_user import AskUserResponder, notification_dispatcher
-    from raven.agent.acp.asker import start_ask_turn
+    from raven.agent.acp_client.ask_user import AskUserResponder, notification_dispatcher
+    from raven.agent.acp_client.asker import start_ask_turn
 
     routed: list[tuple[str, dict]] = []
     sent = _Recorder()
@@ -417,8 +417,8 @@ async def test_the_dispatcher_does_not_wait_on_the_user() -> None:
     the defect the request path was already fixed for, arriving by the door that
     was not.
     """
-    from raven.agent.acp.ask_user import AskUserResponder, notification_dispatcher
-    from raven.agent.acp.asker import start_ask_turn
+    from raven.agent.acp_client.ask_user import AskUserResponder, notification_dispatcher
+    from raven.agent.acp_client.asker import start_ask_turn
 
     class Parks:
         async def ask(self, prompt, choices, conversation_id):
@@ -444,7 +444,7 @@ async def test_the_dispatcher_does_not_wait_on_the_user() -> None:
 
 
 async def test_an_ordinary_update_is_not_taken_for_a_question() -> None:
-    from raven.agent.acp.ask_user import is_ask_user_update, notification_dispatcher
+    from raven.agent.acp_client.ask_user import is_ask_user_update, notification_dispatcher
 
     taken: list[dict] = []
 
@@ -472,8 +472,8 @@ async def test_a_question_for_a_finished_session_is_routed_and_not_answered() ->
     Not an error either: a question can arrive for a session whose turn has just
     settled, and the agent has its own timeout for exactly that.
     """
-    from raven.agent.acp.ask_user import AskUserResponder
-    from raven.agent.acp.pool import _SessionResponders
+    from raven.agent.acp_client.ask_user import AskUserResponder
+    from raven.agent.acp_client.pool import _SessionResponders
 
     responders = _SessionResponders("a")
     assert responders.dispatch(_frame()) is False
@@ -488,7 +488,7 @@ async def test_a_question_for_a_finished_session_is_routed_and_not_answered() ->
 
 
 async def test_a_responder_that_raises_does_not_kill_the_read_loop() -> None:
-    from raven.agent.acp.ask_user import notification_dispatcher
+    from raven.agent.acp_client.ask_user import notification_dispatcher
 
     routed: list[str] = []
 
@@ -526,7 +526,7 @@ async def test_a_partial_question_reaches_the_asker_with_its_note() -> None:
 
 
 async def test_an_answered_question_never_takes_the_conversation_lock() -> None:
-    from raven.agent.acp.asker import question_lock
+    from raven.agent.acp_client.asker import question_lock
 
     lock = question_lock("tui:c1")
     await lock.acquire()
@@ -553,9 +553,9 @@ async def test_an_answered_question_does_not_answer_for_a_run_that_ended() -> No
     """
     import contextlib
 
-    from raven.agent.acp import autofill
-    from raven.agent.acp.ask_user import AskUserResponder
-    from raven.agent.acp.asker import start_ask_turn
+    from raven.agent.acp_client import autofill
+    from raven.agent.acp_client.ask_user import AskUserResponder
+    from raven.agent.acp_client.asker import start_ask_turn
 
     held: dict = {}
 
@@ -585,8 +585,8 @@ async def test_the_autofill_is_read_at_construction_not_when_the_question_lands(
     drift: a responder reading at question time would see the newest turn's
     autofill -- here, none -- and put a question raven could have answered.
     """
-    from raven.agent.acp.ask_user import AskUserResponder
-    from raven.agent.acp.asker import start_ask_turn
+    from raven.agent.acp_client.ask_user import AskUserResponder
+    from raven.agent.acp_client.asker import start_ask_turn
 
     asker, sent = _RecordingAsker("asked the user"), _Recorder()
     start_ask_turn(asker, _StubAutofill({"": ("answer", "feat/x")}), conversation_id="tui:c1")

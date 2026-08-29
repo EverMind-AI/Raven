@@ -2,8 +2,8 @@ import asyncio
 
 import pytest
 
-from raven.agent.acp.asker import AskViaTool, current_ask, current_autofill
-from raven.agent.acp.resolver import Autofill
+from raven.agent.acp_client.asker import AskViaTool, current_ask, current_autofill
+from raven.agent.acp_client.resolver import Autofill
 from raven.agent.tools.ask_user import AskUserTool
 from raven.config.raven import SubagentQuestionsConfig
 from raven.gateway.spine import build_gateway

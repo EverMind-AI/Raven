@@ -2,7 +2,7 @@
 
 Deliberately free of transport, broker and event loop, because everything here is
 a decision about a JSON Schema and is worth testing without an agent process. The
-glue that turns a `Field` into a question a human sees is `raven.agent.acp.elicitor`.
+glue that turns a `Field` into a question a human sees is `raven.agent.acp_client.elicitor`.
 """
 
 from __future__ import annotations

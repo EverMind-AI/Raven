@@ -33,10 +33,10 @@ from typing import Any, Literal
 
 from loguru import logger
 
-from raven.agent.acp import protocol
-from raven.agent.acp.client import AcpClient
-from raven.agent.acp.permissions import auto_approver
-from raven.agent.acp.protocol import SESSION_MCP_CAPABILITY, STEER_CAPABILITY, AcpError, AcpRemoteError
+from raven.agent.acp_client import protocol
+from raven.agent.acp_client.client import AcpClient
+from raven.agent.acp_client.permissions import auto_approver
+from raven.agent.acp_client.protocol import SESSION_MCP_CAPABILITY, STEER_CAPABILITY, AcpError, AcpRemoteError
 from raven.utils.atomic_io import atomic_update
 
 _FILENAME = "subagent_acp_capabilities.json"

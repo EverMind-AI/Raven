@@ -601,7 +601,7 @@ async def _run_rpc_server_until_done(
         # filled. Stopping them costs a signal and a bounded wait, where the
         # drain costs its whole budget.
         try:
-            from raven.agent.acp.client import begin_drain
+            from raven.agent.acp_client.client import begin_drain
 
             begin_drain()
             if agent_loop is not None:
@@ -613,7 +613,7 @@ async def _run_rpc_server_until_done(
         # ACP agents are launched with start_new_session, so they do not get the
         # terminal's signals and outlive this process unless the pool is closed.
         try:
-            from raven.agent.acp.pool import close_pool
+            from raven.agent.acp_client.pool import close_pool
 
             await close_pool()
         except Exception:

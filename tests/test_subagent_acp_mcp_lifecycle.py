@@ -13,9 +13,9 @@ from typing import Any
 
 import pytest
 
-from raven.agent.acp.capabilities import CapabilitySnapshot
-from raven.agent.acp.pool import close_pool
-from raven.agent.acp.protocol import SESSION_MCP_CAPABILITY, AcpRemoteError
+from raven.agent.acp_client.capabilities import CapabilitySnapshot
+from raven.agent.acp_client.pool import close_pool
+from raven.agent.acp_client.protocol import SESSION_MCP_CAPABILITY, AcpRemoteError
 from raven.agent.subagent.backends import build_third_party_backend
 from raven.agent.subagent.backends.acp_agent import AcpAgentBackend
 from raven.agent.subagent.mcp_grant import McpServerView

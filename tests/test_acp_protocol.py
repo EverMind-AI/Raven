@@ -248,6 +248,6 @@ class TestTheTwoSidesAgree:
         the same one, and nothing else in either package would notice if they
         drifted apart."""
         from raven.acp.protocol import CANCEL_REQUEST_METHOD as SENT
-        from raven.agent.acp.protocol import CANCEL_REQUEST_METHOD as HEARD
+        from raven.agent.acp_client.protocol import CANCEL_REQUEST_METHOD as HEARD
 
         assert SENT == HEARD == "$/cancel_request"

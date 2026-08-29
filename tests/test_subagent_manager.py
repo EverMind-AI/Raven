@@ -1152,7 +1152,7 @@ async def test_the_hand_over_reaches_the_recorder_a_real_acp_backend_builds(tmp_
     declines to write when it holds no resolver and emits nothing when it holds
     no sink. Both hand-overs are checked, because neither had ever run -- the
     dispatch died on the first, two lines above the second."""
-    from raven.agent.acp.pool import _SessionRouter
+    from raven.agent.acp_client.pool import _SessionRouter
     from raven.agent.subagent.backends.acp_agent import AcpAgentBackend
     from raven.agent.subagent.instances import InstanceRegistry
 

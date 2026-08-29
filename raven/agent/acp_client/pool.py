@@ -23,13 +23,13 @@ from typing import Any
 
 from loguru import logger
 
-from raven.agent.acp import protocol
-from raven.agent.acp.ask_user import notification_dispatcher
-from raven.agent.acp.capabilities import handshake_of
-from raven.agent.acp.client import AcpClient, end_drain
-from raven.agent.acp.journal import open_journal
-from raven.agent.acp.permissions import request_dispatcher
-from raven.agent.acp.protocol import AcpError
+from raven.agent.acp_client import protocol
+from raven.agent.acp_client.ask_user import notification_dispatcher
+from raven.agent.acp_client.capabilities import handshake_of
+from raven.agent.acp_client.client import AcpClient, end_drain
+from raven.agent.acp_client.journal import open_journal
+from raven.agent.acp_client.permissions import request_dispatcher
+from raven.agent.acp_client.protocol import AcpError
 
 # Budget for the one `initialize` a new connection owes, when the caller does
 # not say. Generous because an adapter fetched by `npx` may be downloading
