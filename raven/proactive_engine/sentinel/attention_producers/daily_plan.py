@@ -1,4 +1,4 @@
-"""``## 今日 fire 计划`` — LLM-driven daily fire schedule.
+"""The daily fire plan section of attention.md, an LLM-driven daily fire schedule.
 
 Runs once per day (first tick after 06:00 local time) to enumerate the
 fires the Planner intends to deliver today: routines, in-window
@@ -15,7 +15,7 @@ to spread fires + avoid DND windows).
 
 Output DSL (one entry per line, parseable by ``parse_daily_plan``):
 
-    ## 今日 fire 计划
+    ## Today's fire plan
     <!-- generated 2026-05-04T06:00:00 | model=qwen3.5-27b -->
     - 07:30 routine_morning_med | priority=high | "morning meds"
     - 11:30 routine_noon_med | priority=high | "pre-lunch meds"
@@ -33,6 +33,8 @@ from typing import TYPE_CHECKING, Callable
 
 from loguru import logger
 
+from raven.i18n import zh_lexicon
+from raven.memory_engine import DAILY_FIRE_PLAN_HEADER
 from raven.proactive_engine.sentinel.attention_producers._base import (
     WEEKDAY,
     AttentionProducer,
@@ -45,11 +47,11 @@ if TYPE_CHECKING:
 
 # Date patterns commonly written in MEMORY.md and persona text:
 #   "5/15" / "5-15"   — M/D (current year assumed)
-#   "5月15日" / "5月15号" — Chinese long form
+#   month/day with the Chinese counters (zh_lexicon.DATE_PATTERN)
 #   "2026-05-15"      — ISO full date
 # We do NOT use a single mega-regex: keeping these split keeps misfires
 # (e.g. matching version "v1.5.10") tractable to debug.
-_DATE_RE_ZH = re.compile(r"(?P<m>\d{1,2})月(?P<d>\d{1,2})[日号]")
+_DATE_RE_ZH = re.compile(zh_lexicon.DATE_PATTERN)
 _DATE_RE_MD = re.compile(r"(?<![\d.])\b(?P<m>\d{1,2})[/-](?P<d>\d{1,2})\b(?![\d.])")
 _DATE_RE_ISO = re.compile(r"\b\d{4}-(?P<m>\d{2})-(?P<d>\d{2})\b")
 
@@ -331,7 +333,7 @@ class DailyPlanProducer(AttentionProducer):
     schedule. Cached for the rest of the day; next call after 06:00
     local time triggers a fresh plan."""
 
-    SECTION_HEADER = "## 今日 fire 计划"
+    SECTION_HEADER = DAILY_FIRE_PLAN_HEADER
 
     _PLAN_CADENCE = timedelta(hours=20)
     _PLAN_TEMPERATURE = 0.3

@@ -36,6 +36,7 @@ from typing import Callable, Iterable
 
 from loguru import logger
 
+from raven.i18n import zh_lexicon
 from raven.proactive_engine.sentinel.types import Routine
 from raven.utils.text import CJK_RE
 
@@ -47,6 +48,7 @@ DEFAULT_DECAY_HALF_LIFE_DAYS = 14
 # Intentionally small stopword set — perfect coverage is not the v1 goal;
 # we want domain words to survive.
 _STOPWORDS = {
+    *zh_lexicon.FUNCTIONAL_WORDS,
     # English
     "the",
     "a",
@@ -95,30 +97,6 @@ _STOPWORDS = {
     "if",
     "then",
     # Chinese (common functional words)
-    "的",
-    "了",
-    "在",
-    "是",
-    "我",
-    "有",
-    "和",
-    "就",
-    "不",
-    "人",
-    "都",
-    "一",
-    "也",
-    "要",
-    "去",
-    "会",
-    "着",
-    "到",
-    "上",
-    "下",
-    "说",
-    "用户",
-    "他",
-    "她",
 }
 
 # Patterns we recognize at the start of a HISTORY.md line.

@@ -34,6 +34,10 @@ All notable changes to Raven are documented here.
   imports the loop shell it is consumed by. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- The attention.md daily fire plan section is headed `## Today's fire plan`;
+  files written with the Chinese heading keep parsing through the legacy
+  alias table, which now lives with the other Chinese language data in
+  `raven/i18n/zh_lexicon.py` (cue words, punctuation classes, date counters).
 - `raven.i18n` translates user-facing text by its English source (`t("Back")`),
   with the Chinese catalog in `raven/i18n/zh.py`; the onboarding wizard and
   the CLI screens that carried `(en, zh)` pairs speak through it, and a test

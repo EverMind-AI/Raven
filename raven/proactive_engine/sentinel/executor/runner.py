@@ -768,7 +768,7 @@ class SentinelRunner:
         # that made ``discover-now`` wait up to ``interval_s`` before
         # firing, contradicting its own name.
         await self._maybe_run_task_discovery()
-        # New: scheduled-fire fast-path. If attention.md ``## 今日 fire 计划``
+        # Scheduled-fire fast-path. If the attention.md daily fire plan
         # has an entry due within ±20 min of now AND that topic hasn't fired
         # today, dispatch directly without the planner LLM. Keeps Daily
         # Planning's slot-time + topic_tag commitments instead of letting
@@ -863,7 +863,7 @@ class SentinelRunner:
         )
 
     def _due_plan_slots(self, now: datetime) -> list[tuple[dict, str]]:
-        """Return ``(entry, tag)`` for each ``## 今日 fire 计划`` slot due within
+        """Return ``(entry, tag)`` for each daily fire plan slot due within
         ``_SCHEDULED_FIRE_SLACK_S`` (±20 min) of ``now`` with a non-empty
         topic_tag. Shared by the fast path, the planner-down deadline fallback,
         and the skipped-deadline warning so they never drift on parse / window
@@ -935,7 +935,7 @@ class SentinelRunner:
         now: datetime,
         due_slots: "list[tuple[dict, str]] | None" = None,
     ) -> PlannerDecision | None:
-        """Return a synthetic PlannerDecision if a ``## 今日 fire 计划``
+        """Return a synthetic PlannerDecision if a daily fire plan
         entry is due within ``_SCHEDULED_FIRE_SLACK_S`` (±20 min) of
         ``now`` and that topic hasn't already fired today.
 

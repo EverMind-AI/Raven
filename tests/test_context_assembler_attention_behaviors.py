@@ -284,7 +284,7 @@ class TestDefaults:
             "## Predicted next 3 days",
             "## Currently focused on",
             "## Recent proactive decisions (14d)",
-            "## 今日 fire 计划",
+            "## Today's fire plan",
         ]:
             assert h2 in ctx.attention_md, f"missing default section: {h2}"
         assert "deadline_report" in ctx.attention_md  # slot body reaches Planner

@@ -5,13 +5,14 @@ from __future__ import annotations
 import re
 from datetime import datetime
 
+from raven.i18n import zh_lexicon
 from raven.proactive_engine.sentinel.types import PlannerContext
 from raven.security.trust import wrap_untrusted
 
 _DATE_RE = re.compile(
     r"(?P<iso>\d{4}-\d{1,2}-\d{1,2})"
     r"|"
-    r"(?P<m>\d{1,2})(?:[/\-]|月)(?P<d>\d{1,2})日?"
+    r"(?P<m>\d{1,2})(?:[/\-]|" + zh_lexicon.MONTH + r")(?P<d>\d{1,2})" + zh_lexicon.DAY + "?"
 )
 
 

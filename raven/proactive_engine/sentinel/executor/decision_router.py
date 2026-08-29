@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
+from raven.i18n import zh_lexicon
 from raven.proactive_engine.sentinel.types import PendingDecision, RouteResult
 
 if TYPE_CHECKING:
@@ -46,11 +47,11 @@ _PICK_RE = re.compile(r"^/pick\s+(\d+)\s*$", re.IGNORECASE)
 # Anchored to whole-message so "yes please" matches but "yes I'd like to..."
 # falls through to LLM (or treated as ambiguous).
 _CONFIRM_YES_RE = re.compile(
-    r"^\s*(yes|y|是|确认|好|ok|嗯|对|/confirm)\s*[!.！。]?\s*$",
+    r"^\s*(yes|y|ok|/confirm|" + "|".join(zh_lexicon.YES_WORDS) + r")\s*[!." + zh_lexicon.SENTENCE_ENDS + r"]?\s*$",
     re.IGNORECASE,
 )
 _CONFIRM_NO_RE = re.compile(
-    r"^\s*(no|n|否|取消|不|算了|cancel|/cancel)\s*[!.！。]?\s*$",
+    r"^\s*(no|n|cancel|/cancel|" + "|".join(zh_lexicon.NO_WORDS) + r")\s*[!." + zh_lexicon.SENTENCE_ENDS + r"]?\s*$",
     re.IGNORECASE,
 )
 

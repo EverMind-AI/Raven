@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, Callable
 from loguru import logger
 
 from raven.agent import workdir
+from raven.i18n import zh_lexicon
 from raven.security.trust import wrap_untrusted
 from raven.utils.images import detect_image_mime, image_block
 
@@ -76,8 +77,7 @@ def _language_directive() -> str:
         return ""
     if lang == "zh":
         return (
-            "\nAlways respond in Simplified Chinese (简体中文), "
-            "unless the user explicitly writes in another language.\n"
+            f"\nAlways respond in {zh_lexicon.LANGUAGE_NAME}, unless the user explicitly writes in another language.\n"
         )
     return ""
 
