@@ -30,7 +30,7 @@ from __future__ import annotations
 import re
 import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 from loguru import logger
@@ -95,9 +95,6 @@ class ExecutionPlan:
     dispatched*. ``questions``: it cannot proceed, and ``reply`` says why."""
 
     reply: str = ""
-
-    notes: list[str] = field(default_factory=list)
-    """Degradations worth surfacing (unsupported mcps, unfillable requests)."""
 
 
 def _gap_reply(spec: PlaybookSpec, missing: list[tuple[str, str]], blanks: list[tuple[str, str]]) -> str:

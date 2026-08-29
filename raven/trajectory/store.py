@@ -10,6 +10,8 @@ evidence) needs a stronger promise: **pinned ids are never purged**. The pin
 registry (``pins.json`` in the trace state dir) records that promise; any
 future purge tooling MUST drop only spans whose ``attempt.id`` and ``traceId``
 are both unpinned, and must keep every artifact such a span references.
+:func:`is_pinned` is that predicate: the promise `raven trajectory pin` writes
+is redeemed by calling it, not by re-deriving the rule.
 
 Reading
 -------

@@ -37,8 +37,8 @@ class TriggerIndex:
         The count, not just the fact: a message matching three of a playbook's
         words is a better fit than one matching a single generic word, and that
         difference is the whole ranking signal
-        (:mod:`raven.playbook.router`). ``match`` used to be the only reader and it
-        threw the count away, because a funnel only needed "nominated or not".
+        (:mod:`raven.playbook.router`). Iterating the result gives the ids in
+        first-hit order, for a caller that only needs "which ones".
         """
         text = normalize(message)
         if not text:
@@ -48,17 +48,6 @@ class TriggerIndex:
             if entry in text:
                 counts[pid] = counts.get(pid, 0) + 1
         return counts
-
-    def match(self, message: str) -> list[str]:
-        """Playbook ids this message mentions, first-hit order, deduped."""
-        text = normalize(message)
-        if not text:
-            return []
-        hits: list[str] = []
-        for entry, pid in self._entries:
-            if pid not in hits and entry in text:
-                hits.append(pid)
-        return hits
 
 
 __all__ = ["TriggerIndex"]

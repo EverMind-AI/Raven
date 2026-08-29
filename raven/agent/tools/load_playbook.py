@@ -160,5 +160,4 @@ class LoadPlaybookTool(Tool):
         # guidance to compose from, or what is still missing. The distinction is
         # carried by the words rather than a separate field, because the caller's
         # next move is a reply or a call either way.
-        notes = "".join(f"\n[note] {n}" for n in plan.notes)
-        return f"{plan.reply}{notes}"
+        return plan.reply
