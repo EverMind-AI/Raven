@@ -1,10 +1,9 @@
 """Shared low-level helpers for segment builders.
 
-Mostly the pure(ish) render functions formerly living as
-``ContextBuilder`` methods. Keeping them here lets each
-:class:`SegmentBuilder` (and the ``UserBuilder`` inside
-:class:`ContextAssembler`) share one implementation without a
-``ContextBuilder`` instance. The non-render entries are the tool-table
+Pure(ish) render functions each :class:`SegmentBuilder` shares, together
+with :meth:`ContextAssembler._build_user` and the two lazy delegations in
+``agent/context/builder.py``: one implementation, no instance to hold. The
+non-render entries are the tool-table
 readers, shared by the three builders that gate content on which tools the
 agent actually holds: :func:`collect_tool_names` for the two that gate
 *content*, and :func:`live_dispatch_tools` for the one that gates a
@@ -85,9 +84,8 @@ def _language_directive() -> str:
 DISPATCH_TOOLS = ("spawn", "run_subagent_dag")
 """The tools a delegation instruction can actually be carried out with.
 
-Ordered as the prompt names them. ``run_subagent_dag`` only registers when
-third-party sub-agents are configured, and either name can be withheld for a
-single turn through ``tools.disabled_tools``, so neither is guaranteed present.
+Ordered as the prompt names them. Either name can be withheld for a single
+turn through ``tools.disabled_tools``, so neither is guaranteed present.
 """
 
 
@@ -214,10 +212,8 @@ def _delegation_block(
     """
     lines = [f"- `{name}` {owns}" for name, owns in specialists if owns]
     if not lines or not dispatch:
-        # The blank line between the platform policy and the guidelines, which the
-        # template no longer carries: the section owns its own separators so that
-        # an install with nothing to say here reproduces the previous prompt
-        # exactly rather than one blank line short of it.
+        # This section owns the separator between the platform policy and the
+        # guidelines; the template carries none.
         return "\n\n", ""
     if "spawn" in dispatch:
         hand_off = (
@@ -347,18 +343,13 @@ def render_recalled_memory(memories: "list[Memory] | None") -> str:
 
 
 # One host-owned line appended to the ``# Skills`` block when this turn's tool
-# surface includes ``deliver_files``. Deliberately NOT a second resident copy of
-# the tool's own rule -- ``identity.py`` already deleted one duplicate resident
-# surface for drifting, and the rule does live in ``deliver.py``'s description.
-# This is placed against the instruction that overrides it: a hub skill is
-# written for another product, where saving a file and printing its path IS the
-# delivery (``openclaw_skills_claw-presentation-creator`` ends on
-# ``print(f"\u2713 Presentation created: {output_file}")``), and an injected body
-# of that shape beats one sentence in a tool description -- the observed turn
-# built a .pptx over 23 minutes and handed the web user a path under
-# ``/root/.raven/tmp/web/``, never calling the tool at all. So it names the
-# competing convention for the model to resolve rather than restating the rule
-# into the void, and it appears only on a turn that injected a skill body.
+# surface includes ``deliver_files``. It is not a second copy of the tool's own
+# rule (that lives in ``deliver.py``'s description): it names the convention
+# competing with it. A hub skill body is written for another product, where
+# saving a file and printing its path IS the delivery, and an injected body of
+# that shape outweighs one sentence in a tool description. So the note appears
+# only on a turn that injected a skill body, and it addresses the competing
+# convention rather than restating the rule.
 SKILL_DELIVERY_NOTE = (
     "Note: a skill body above may come from another product, where saving a file and "
     "printing its path is how it reaches the user. That is not true on this channel -- "
@@ -371,14 +362,14 @@ def render_router_skills(hits: list[Any]) -> str:
     """Render SkillForgeRouter hits into the ``# Skills`` body (segment 5).
 
     The ``# Skills`` heading is added by the builder; this returns only
-    the body. Header format matches the legacy
-    ``LocalSkillCatalog.load_skills_for_context`` rendering used by the
-    sibling ``# Active Skills`` block so the agent sees one uniform skill
-    layout — including the ``Relative refs ... use the absolute form for
-    read_file / exec`` hint sentence that tells the agent how to consume
-    bundled files. Inline ``[qualified_id]`` after the name is the only
-    new piece: it lets the after-turn feedback dispatcher correlate shown
-    vs used skills. Empty hits → ``""``.
+    the body. The header format matches
+    ``LocalSkillCatalog.load_skills_for_context``, which renders the sibling
+    ``# Active Skills`` block, so the agent sees one uniform skill layout --
+    including the ``Relative refs ... use the absolute form for read_file /
+    exec`` hint sentence that tells the agent how to consume bundled files.
+    The inline ``[qualified_id]`` after the name is this block's own: it lets
+    the after-turn feedback dispatcher correlate shown vs used skills. Empty
+    hits → ``""``.
     """
     if not hits:
         return ""

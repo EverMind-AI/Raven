@@ -35,6 +35,10 @@ All notable changes to Raven are documented here.
   repo-level `evolver/` tool that drives it. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- Audit pass six: the context engine's own prose describes the engine that
+  is there -- one assembler over segment builders (not three lanes and a
+  retired ContextBuilder), the third router source numbered third, the
+  Curator's working state rendered by its own builder.
 - Audit pass five: five channel adapters wrote their description after a
   statement, so it was an expression and the class had no docstring; the
   adapters' retry comments name the delivery hub that does the retrying;

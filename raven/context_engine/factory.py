@@ -1,26 +1,24 @@
 """Context engine factory — one engine.
 
-There is a single :class:`ContextAssembler`. Per the context-builder
-design it runs three lanes per turn (the prior ``legacy`` / ``curator`` /
-``default`` split is gone):
+:func:`build_context_engine` returns one :class:`ContextAssembler` over an
+ordered list of :class:`SegmentBuilder`s, each owning one section of the
+system prompt:
 
-- **Curator lane** — manifest build + fast / slow / fallback history
-  selection + ``# Curator Working State``. Owns ``*history``.
-- **EverOS lane** — ``backend.recall(user_id=...)`` (segment 3,
-  ``# Memory``) and a :class:`SkillForgeRouter` over 1–3 sources (segment 5,
-  ``# Skills``).
-- **Host** — identity / bootstrap / always-skills, rendered by
-  :class:`ContextBuilder`.
+- **Identity / Bootstrap / ActiveSkills** — the host's own sections.
+- **Memory** — ``backend.recall(user_id=...)`` (segment 3, ``# Memory``).
+- **Skills** — a :class:`SkillForgeRouter` over 1-3 sources (segment 5,
+  ``# Skills``), built only under pull discovery.
+- **Curator** — manifest build, history selection and
+  ``# Curator Working State``. Owns ``*history``.
 
-The SkillForgeRouter is assembled from up to three hardcoded sources:
+The SkillForgeRouter is assembled from up to three sources:
 
 - :class:`LocalSkillSource` — always; wraps the builder's existing
   ``LocalPool`` + ``SkillRegistry`` (no second disk scan).
 - :class:`EverosSkillSource` — only when a ``backend`` is wired. Bridges
   ``backend.recall(agent_id=...)`` into the router.
 - :class:`HubSkillSource` — only when ``skillForge.router.hub.endpoint``
-  is set. The remote Skill Hub marketplace (replaces the retired Mass
-  source).
+  is set: the remote Skill Hub marketplace.
 
 With no ``backend`` the engine still constructs: the recall lane yields
 ``[]`` and the router runs Local-only, so the agent boots even when no
@@ -90,11 +88,9 @@ def build_context_engine(
     into a pinned model *and its own credential*. Without it a pin has no
     credential of its own and the subsystem follows the conversation's model.
 
-    ``config.engine`` is no longer a dispatch key — there is a single
-    engine. The field is retained in :class:`ContextConfig` for config
-    back-compat but is ignored here. ``builder`` is used only as the
-    holder of the shared ``MemoryStore`` / ``LocalSkillCatalog`` until it
-    is retired.
+    ``builder`` is read only for the shared ``MemoryStore`` and
+    ``LocalSkillCatalog`` it holds; nothing here dispatches on a configured
+    engine name, because there is one engine.
     """
     from raven.config.raven import (
         MemoryConfig as _MemoryConfig,
@@ -237,7 +233,7 @@ def _build_router(
             everos_source.weight = float(weights["everos"])
         sources.append(everos_source)
 
-    # ── Source 4: Hub (conditional on remote endpoint) ──────────────
+    # ── Source 3: Hub (conditional on remote endpoint) ──────────────
     hub_cfg = skill_forge_router_config.hub
     if hub_cfg.endpoint:
         from raven.skill_hub import SkillHubClient
