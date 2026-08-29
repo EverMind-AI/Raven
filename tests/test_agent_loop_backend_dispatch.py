@@ -609,11 +609,11 @@ class TestTheGiveUpMessageIsHonest:
         agent = _make_loop(tmp_path, backend=_Never())
         agent._dispatch_backend_store("s", [{"role": "user", "content": "x"}])
 
-        await agent.drain_backend_stores(timeout=5.0)
+        dropped = await agent.drain_backend_stores(timeout=5.0)
 
         assert agent._store_pipeline.dropped == 1
-        err = capsys.readouterr().err
-        assert "1 turn(s) were not written to long-term memory" in err
+        assert dropped == 1  # the host renders the notice from this count; the loop prints nothing
+        assert "were not written" not in capsys.readouterr().err
 
     async def test_a_turn_that_succeeds_on_retry_is_not_counted(
         self, tmp_path: Path, monkeypatch, capsys: pytest.CaptureFixture

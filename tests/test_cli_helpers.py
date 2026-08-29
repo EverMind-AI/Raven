@@ -610,3 +610,18 @@ def test_no_notice_prints_nothing_at_all(capsys, monkeypatch) -> None:
 
     captured = capsys.readouterr()
     assert (captured.out, captured.err) == ("", "")
+
+
+def test_report_dropped_memory_writes_renders_on_the_given_console_only_when_something_was_lost() -> None:
+    import io
+
+    from rich.console import Console
+
+    from raven.cli._helpers import report_dropped_memory_writes
+
+    buf = io.StringIO()
+    out = Console(file=buf, force_terminal=False, width=200)
+    report_dropped_memory_writes(0, out)
+    assert buf.getvalue() == ""
+    report_dropped_memory_writes(2, out)
+    assert "2 turn(s) were not written to long-term memory" in buf.getvalue()

@@ -24,6 +24,7 @@ from raven.cli._helpers import (
     parse_fake_now,
     print_config_migration_notices,
     print_deprecated_memory_window_notice,
+    report_dropped_memory_writes,
 )
 from raven.core.provider_stack import build_model_routing
 from raven.providers.factory import make_provider
@@ -335,7 +336,8 @@ def register(app: typer.Typer) -> None:
                     try:
                         # Drain queued writes first: stopping the backend
                         # closes the HTTP client they still need.
-                        await agent_loop.drain_backend_stores()
+                        dropped = await agent_loop.drain_backend_stores()
+                        report_dropped_memory_writes(dropped, console)
                         await backend.stop()
                     except Exception:
                         logger.exception(
