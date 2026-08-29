@@ -24,7 +24,6 @@ from typing import Any
 from loguru import logger
 
 from raven.config.loader import get_config_path, read_raw_or_raise
-from raven.core.admission import normalize_slice_keys
 from raven.utils.atomic_io import atomic_update
 
 # The socket: what the host plugs every channel into, whatever the
@@ -316,6 +315,8 @@ def get_channel_config(
     - non-empty value renders as ``'****set****'``
     - empty / None renders as ``'(empty)'``
     """
+    from raven.core.admission import normalize_slice_keys
+
     schema = _channel_schema(name)
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)
@@ -382,7 +383,7 @@ def _patch_channel(
     path = config_path or get_config_path()
 
     def _apply(_text: str | None) -> tuple[str, dict[str, Any]]:
-        from raven.core.admission import admit_slice
+        from raven.core.admission import admit_slice, normalize_slice_keys
 
         data = read_raw_or_raise(path)
         raw_section = (data.get("channels") or {}).get(name) or {}
