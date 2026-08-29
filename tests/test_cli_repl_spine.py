@@ -264,7 +264,7 @@ class _FakeUsageTracker:
     """snapshot()-only stand-in; each set() swaps in a new lifetime total."""
 
     def __init__(self) -> None:
-        from raven.token_wise.base import UsageSnapshot
+        from raven.contracts.token_strategy import UsageSnapshot
 
         self._snap = UsageSnapshot(model="stub")
 
@@ -272,7 +272,7 @@ class _FakeUsageTracker:
         return self._snap
 
     def set(self, **totals) -> None:
-        from raven.token_wise.base import UsageSnapshot
+        from raven.contracts.token_strategy import UsageSnapshot
 
         self._snap = UsageSnapshot(model="stub", **totals)
 

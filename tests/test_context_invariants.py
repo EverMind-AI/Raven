@@ -20,7 +20,6 @@ import pytest
 from raven.agent.context import ContextBuilder
 from raven.config.raven import ContextConfig
 from raven.context_engine import ContextAssembler, TurnContext
-from raven.context_engine.base import AssemblyContext, Segment
 from raven.context_engine.segments import (
     ActiveSkillsSegmentBuilder,
     BootstrapSegmentBuilder,
@@ -29,7 +28,9 @@ from raven.context_engine.segments import (
     SkillsSegmentBuilder,
 )
 from raven.context_engine.segments.curator import CuratorSegmentBuilder
-from raven.memory_engine import Memory, TokenBudget
+from raven.contracts.assembled import TokenBudget
+from raven.contracts.context import AssemblyContext, Segment
+from raven.contracts.memory import Memory
 from raven.memory_engine.skill_forge import RouterHit, SkillForgeRouter
 
 

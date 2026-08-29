@@ -17,8 +17,8 @@ from unittest.mock import patch
 import pytest
 
 from raven.agent.loop.main import AgentLoop
-from raven.agent.tools.base import Tool
 from raven.config.schema import MCPServerConfig
+from raven.contracts.tool import Tool
 from raven.mcp.naming import MCPToolRef
 from raven.providers.base import LLMProvider
 
@@ -471,8 +471,8 @@ async def test_tool_notices_ride_the_runtime_context_block(workspace) -> None:
 
 async def test_the_assembler_asks_the_loop_for_notices_each_turn(workspace) -> None:
     from raven.context_engine.assembler import ContextAssembler
-    from raven.context_engine.base import AssemblyContext
-    from raven.memory_engine.base import TokenBudget
+    from raven.contracts.assembled import TokenBudget
+    from raven.contracts.context import AssemblyContext
 
     notes = ["MCP plugin 'x' is installed but awaiting authorization."]
     asm = ContextAssembler([], get_tool_definitions=lambda: [], get_tool_notices=lambda: notes)

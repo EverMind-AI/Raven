@@ -27,7 +27,8 @@ from raven.context_engine.segments import (
     SkillsSegmentBuilder,
 )
 from raven.context_engine.segments.curator import CuratorSegmentBuilder
-from raven.memory_engine import Memory, TokenBudget
+from raven.contracts.assembled import TokenBudget
+from raven.contracts.memory import Memory
 from raven.memory_engine.skill_forge import RouterHit, SkillForgeRouter
 
 # ---------------------------------------------------------------------------

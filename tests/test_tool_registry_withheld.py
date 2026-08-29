@@ -17,8 +17,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from raven.agent.tools.base import Tool
 from raven.agent.tools.registry import ToolRegistry
+from raven.contracts.tool import Tool
 
 
 class _Stub(Tool):

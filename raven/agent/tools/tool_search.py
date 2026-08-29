@@ -37,10 +37,10 @@ import json
 from itertools import zip_longest
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from raven.agent.tools.base import Tool
 from raven.agent.tools.registry import absent_tool_error
 from raven.agent.tools.tool_index import ToolIndex, rank_tools
-from raven.token_wise.base import TokenStrategy
+from raven.contracts.token_strategy import TokenStrategy
+from raven.contracts.tool import Tool
 
 if TYPE_CHECKING:
     from raven.agent.tools.registry import ToolRegistry

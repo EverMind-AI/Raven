@@ -22,7 +22,7 @@ from raven.agent.subagent.dag_adjudication import ABANDON, CONTINUE, DECISIONS
 from raven.agent.subagent.dag_live import cancel_run, live_run_ids, resolve_node
 from raven.agent.subagent.dag_reader import DagReadError
 from raven.agent.subagent.dag_resume import read_run_reconciled
-from raven.agent.tools.base import Tool
+from raven.contracts.tool import Tool
 
 _PROMPT_LINE_LIMIT = 10
 

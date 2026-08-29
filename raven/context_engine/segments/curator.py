@@ -25,7 +25,6 @@ from loguru import logger
 
 from raven.agent.tools.registry import ToolRegistry
 from raven.config.raven import ContextConfig
-from raven.context_engine.base import AssemblyContext, Segment
 from raven.context_engine.curator import (
     CuratorArchiveMessagesTool,
     CuratorArchiveStore,
@@ -42,6 +41,7 @@ from raven.context_engine.curator import (
     _curator_input_payload,
     _trace_messages,
 )
+from raven.contracts.context import AssemblyContext, Segment
 from raven.memory_engine.consolidate.consolidator import MemoryStore
 from raven.providers.base import LLMProvider
 from raven.providers.binding import ModelBinding, active_window, resolve

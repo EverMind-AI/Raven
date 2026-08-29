@@ -14,16 +14,12 @@ from typing import Any, NamedTuple
 from loguru import logger
 
 from raven.agent.subagent.backends.acp_agent import AcpAgentBackend
-from raven.agent.subagent.backends.base import (
-    ABORTED_ACTION_RESULT,
-    IN_SUBAGENT_RUN,
-    SubagentActionAbortedError,
-    SubagentBackend,
-)
+from raven.agent.subagent.backends.base import ABORTED_ACTION_RESULT, IN_SUBAGENT_RUN
 from raven.agent.subagent.backends.cli_agent import CliAgentBackend
 from raven.agent.subagent.backends.openai_api import OpenAIApiBackend
 from raven.agent.subagent.backends.raven_loop import RavenLoopBackend, build_subagent_prompt
 from raven.agent.subagent.presets import session_mcp_for
+from raven.contracts.subagent_backend import SubagentActionAbortedError, SubagentBackend
 
 
 class AgentMeta(NamedTuple):

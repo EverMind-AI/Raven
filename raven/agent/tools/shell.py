@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from raven.agent import workdir
-from raven.agent.tools.base import Continuation, Tool, ToolOutput, ToolResult
 from raven.agent.tools.shell_policy import CommandDecision, ShellCommandPolicy, executable_text
+from raven.contracts.tool import Continuation, Tool, ToolOutput, ToolResult
 from raven.sandbox import DirectExecutor, SandboxExecutor
 
 

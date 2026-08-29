@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 
 import raven
-from raven.memory_engine import Memory, MemoryBackend
+from raven.contracts.memory import Memory, MemoryBackend
 from raven.plugins import (
     PluginDiscovery,
     ServiceLocator,

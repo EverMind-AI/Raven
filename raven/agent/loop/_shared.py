@@ -42,7 +42,6 @@ from raven.agent.subagent import SubagentManager
 from raven.agent.subagent.direct_chat import DirectChatHandoff
 from raven.agent.subagent.spawn_tool import SpawnTool
 from raven.agent.tools.ask_user import AskUserTool
-from raven.agent.tools.base import SKIPPED_AFTER_BLOCKED_CALL, Continuation, ToolOutput
 from raven.agent.tools.deep_research import (
     DeepResearchManager,
     DeepResearchOfferTool,
@@ -60,7 +59,8 @@ from raven.agent.tools.message import MessageTool
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.shell import ExecTool
 from raven.agent.tools.web import WebFetchTool, WebSearchTool
-from raven.memory_engine.base import TokenBudget
+from raven.contracts.assembled import TokenBudget
+from raven.contracts.tool import SKIPPED_AFTER_BLOCKED_CALL, Continuation, ToolOutput
 from raven.memory_engine.consolidate.consolidator import MemoryConsolidator, MemoryStore
 from raven.memory_engine.store_pipeline import StorePipeline
 from raven.providers.base import (
@@ -165,7 +165,6 @@ if TYPE_CHECKING:
     from raven.agent.loop.checkpoint import CheckpointService
     from raven.agent.tools._deliverables import DeliverableStore
     from raven.agent.tools.ask_user import QuestionResponder
-    from raven.agent.tools.base import Tool
     from raven.agent.workdir import WorkdirResolver
     from raven.config.raven import (
         ContextConfig,
@@ -183,9 +182,11 @@ if TYPE_CHECKING:
         PlaybookConfig,
     )
     from raven.context_engine import ContextEngine
+    from raven.contracts.memory import MemoryBackend
+    from raven.contracts.token_strategy import UsageSnapshot
+    from raven.contracts.tool import Tool
     from raven.mcp.manager import MCPConnectionManager
     from raven.mcp.report import ApplyReport
-    from raven.memory_engine.backend import MemoryBackend
     from raven.proactive_engine.schedulers.cron.service import CronService
     from raven.providers.pool import ProviderPool
     from raven.routing.router import ModelRouter
@@ -194,7 +195,6 @@ if TYPE_CHECKING:
     from raven.spine.events import NoticeKind
     from raven.spine.runner import Drain, Emit
     from raven.spine.turn import TurnRequest
-    from raven.token_wise.base import UsageSnapshot
     from raven.token_wise.registry import StrategyRegistry
 
 

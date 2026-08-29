@@ -16,8 +16,8 @@ import asyncio
 
 import pytest
 
-from raven.agent.tools.base import Tool
 from raven.agent.tools.registry import ToolRegistry
+from raven.contracts.tool import Tool
 
 
 class _SleepTool(Tool):

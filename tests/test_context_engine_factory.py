@@ -34,7 +34,6 @@ from raven.config.raven import (
 )
 from raven.config.schema import SubagentsConfig
 from raven.context_engine import ContextAssembler
-from raven.context_engine.base import AssemblyContext
 from raven.context_engine.factory import build_context_engine
 from raven.context_engine.segments import (
     IdentitySegmentBuilder,
@@ -42,7 +41,8 @@ from raven.context_engine.segments import (
     SkillsSegmentBuilder,
 )
 from raven.context_engine.segments.curator import CuratorSegmentBuilder
-from raven.memory_engine import TokenBudget
+from raven.contracts.assembled import TokenBudget
+from raven.contracts.context import AssemblyContext
 from raven.memory_engine.skill_forge import (
     EverosSkillSource,
     HubSkillSource,

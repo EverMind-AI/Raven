@@ -69,10 +69,10 @@ from raven.agent.loop._shared import (
 
 if TYPE_CHECKING:
     from raven.agent.loop.checkpoint import CheckpointService
+    from raven.contracts.token_strategy import UsageSnapshot
     from raven.spine.events import NoticeKind
     from raven.spine.runner import Drain, Emit
     from raven.spine.turn import TurnRequest
-    from raven.token_wise.base import UsageSnapshot
 
 
 class TurnPathMixin:
@@ -227,7 +227,7 @@ class TurnPathMixin:
         We detect by inequality and subtract when needed so downstream code
         (pricing, telemetry) sees a single consistent semantics.
         """
-        from raven.token_wise.base import UsageSnapshot
+        from raven.contracts.token_strategy import UsageSnapshot
         from raven.token_wise.pricing import estimate_cost_usd
 
         usage = response.usage or {}

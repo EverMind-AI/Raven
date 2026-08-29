@@ -450,10 +450,9 @@ class WiringMixin:
 
         self.tools.register(PluginTool(loop=self))
         if self.cron_service:
-            # Lazy import: CronTool lives under raven.proactive_engine.schedulers.cron.tool
-            # which (a) imports raven.agent.tools.base, triggering raven.agent.__init__,
-            # which (b) imports this very loop module. Importing at function scope breaks the
-            # cycle since loop.py is fully loaded by the time _register_default_tools runs.
+            # Function-scope import on purpose: the cron tool is cargo the loop must
+            # not name at module level (tests/test_l3_open_world.py counts module-level
+            # imports), so the edge stays lazy and the loop is fully loaded when it fires.
             from raven.proactive_engine.schedulers.cron.tool import CronTool
 
             self.tools.register(CronTool(self.cron_service))

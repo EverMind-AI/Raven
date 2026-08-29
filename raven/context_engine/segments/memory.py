@@ -12,12 +12,12 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from raven.context_engine.base import AssemblyContext, Segment
 from raven.context_engine.segments import render
+from raven.contracts.context import AssemblyContext, Segment
 from raven.tracing import semconv, trace
 
 if TYPE_CHECKING:
-    from raven.memory_engine.backend import MemoryBackend
+    from raven.contracts.memory import MemoryBackend
     from raven.memory_engine.consolidate.consolidator import MemoryStore
 
 # The turn's own bound on recall. The backend plugin carries a stricter one so

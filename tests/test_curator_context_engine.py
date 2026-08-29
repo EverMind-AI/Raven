@@ -9,7 +9,7 @@ from raven.agent.loop import AgentLoop
 from raven.config import ContextConfig
 from raven.context_engine import ContextAssembler, TurnContext
 from raven.context_engine.segments.curator import CuratorSegmentBuilder
-from raven.memory_engine.base import TokenBudget
+from raven.contracts.assembled import TokenBudget
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest

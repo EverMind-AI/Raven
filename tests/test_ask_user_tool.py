@@ -21,8 +21,8 @@ from raven.agent.tools.ask_user import (
     _normalize_options,
     _normalize_questions,
 )
-from raven.agent.tools.base import ToolResult
 from raven.agent.tools.registry import ToolRegistry
+from raven.contracts.tool import ToolResult
 
 
 class _StubBroker:

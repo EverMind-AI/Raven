@@ -31,8 +31,8 @@ from collections import Counter
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
-from raven.context_engine.base import AssemblyContext, Segment
 from raven.context_engine.segments import render
+from raven.contracts.context import AssemblyContext, Segment
 from raven.memory_engine.skill_forge.refs import resolve_refs
 from raven.skill_hub.audit import record_install, write_install_meta
 from raven.skill_hub.policy import SkillPolicy, is_blocked

@@ -1,25 +1,14 @@
-"""Memory engine data carriers.
+"""The assembled-context paper: what a context engine hands the loop for one call.
 
-Phase B-3: the :class:`MemoryEngine` ABC + :class:`DefaultMemoryEngine`
-facade have been deleted. The L4 indirection turned out to leak too
-much surface (subsystem accessors that third-party plugins couldn't
-satisfy); the host now talks to :class:`MemoryStore` /
-:class:`MemoryConsolidator` / :class:`SkillService` directly and uses
-the narrower :class:`MemoryBackend` Protocol
-(:mod:`raven.memory_engine.backend`) as the plugin contract.
+Two carriers, produced by :meth:`ContextEngine.assemble` and read by the loop
+and the token strategies alike:
 
-What remains in this file is the two data-carrier dataclasses that
-:class:`ContextEngine.assemble` returns and consumes:
-
-- :class:`AssembledContext` — the message list + metadata handed to
-  AgentLoop for the LLM call.
-- :class:`TokenBudget` — per-turn budget breakdown so the engine can
-  decide what fits in the prompt.
-
-These live here (rather than next to :class:`ContextEngine` itself)
-for historical reasons — the rename ``raven.context_engine.types``
-is a future tidy. Importers cited the old path heavily so we kept
-the location stable through the Phase B cleanup.
+- :class:`AssembledContext` -- the message list for the LLM call, an optional
+  system-prompt addition, which session message indices survived assembly,
+  and free-form metadata for debugging and telemetry.
+- :class:`TokenBudget` -- the per-turn budget an engine sizes the prompt with:
+  the context window, what is reserved out of it for the reply, the tool
+  schemas and the system prompt, and what that leaves for history.
 """
 
 from __future__ import annotations

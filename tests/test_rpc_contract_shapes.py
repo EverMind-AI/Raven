@@ -159,8 +159,8 @@ async def test_settings_usage_reads_what_the_default_tracker_writes(
     same default, which is what writing through one and reading through the
     other checks.
     """
+    from raven.contracts.token_strategy import UsageSnapshot
     from raven.rpc.methods.console import settings_usage
-    from raven.token_wise.base import UsageSnapshot
     from raven.token_wise.usage_tracker import UsageTracker
 
     monkeypatch.setenv("HOME", str(tmp_path / "home"))

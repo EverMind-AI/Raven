@@ -46,7 +46,7 @@ _SNIFF_BYTES = 64
 _READ_FILE_HINT = " — use the read_file tool to see it"
 
 if TYPE_CHECKING:
-    from raven.memory_engine.backend import Memory
+    from raven.contracts.memory import Memory
 
 # L4 pillar layout — agent identity/behavior live under agent_memory;
 # user.md is omitted here because the MemorySegmentBuilder already injects

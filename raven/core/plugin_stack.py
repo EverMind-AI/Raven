@@ -40,7 +40,7 @@ from raven.plugins import (
 
 if TYPE_CHECKING:
     from raven.config.raven import RavenConfig
-    from raven.memory_engine import MemoryBackend
+    from raven.contracts.memory import MemoryBackend
 
 logger = logging.getLogger(__name__)
 

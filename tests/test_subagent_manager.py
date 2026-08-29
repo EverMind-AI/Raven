@@ -31,7 +31,6 @@ from raven.agent.subagent.backends.base import clamp_output
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent.manager import SubagentManager
 from raven.agent.subagent.registry import AgentRegistry
-from raven.agent.tools.base import Continuation
 from raven.agent.tools.shell import ExecTool
 from raven.config.schema import (
     AgentDefaults,
@@ -40,6 +39,7 @@ from raven.config.schema import (
     ThirdPartyCliSubagentConfig,
     ThirdPartyOpenAISubagentConfig,
 )
+from raven.contracts.tool import Continuation
 from raven.providers.base import LLMResponse, ToolCallRequest
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.sandbox import ExecResult, SandboxExecutor
@@ -724,7 +724,7 @@ async def test_dag_tool_refuses_to_run_inside_a_subagent(tmp_path):
     tool on a sub-agent, the call fails loudly instead of fanning out."""
     from raven.agent.subagent.backends.base import IN_SUBAGENT_RUN
     from raven.agent.subagent.dag_tool import SubAgentDagTool
-    from raven.agent.tools.base import ToolResult
+    from raven.contracts.tool import ToolResult
 
     tool = SubAgentDagTool(workspace=tmp_path)
 
@@ -1658,8 +1658,8 @@ async def test_a_run_out_of_rounds_answers_from_what_it_gathered(tmp_path) -> No
 async def test_a_run_with_nothing_to_say_fails_instead_of_reading_as_done(tmp_path) -> None:
     """Raised, not returned. A node that produced nothing must not wear a tick
     while the step downstream merges its placeholder as data."""
-    from raven.agent.subagent.backends.base import SubagentNoAnswerError
     from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.contracts.subagent_backend import SubagentNoAnswerError
 
     backend = RavenLoopBackend(
         provider=_AlwaysToolsProvider(answer_when_toolless=None), model="stub", agent_home=tmp_path

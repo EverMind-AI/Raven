@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 from loguru import logger
 
-from raven.token_wise.base import TokenStrategy
+from raven.contracts.token_strategy import TokenStrategy
 from raven.token_wise.cache_optimizer import CacheOptimizer
 from raven.token_wise.registry import StrategyRegistry
 from raven.token_wise.usage_tracker import UsageTracker

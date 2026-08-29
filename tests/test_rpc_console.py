@@ -13,8 +13,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from raven.agent.tools.base import Tool
 from raven.config import update_tools
+from raven.contracts.tool import Tool
 from raven.rpc.methods import console as console_module
 from raven.rpc.methods.console import _SETTINGS_SIMPLE_KEYS, _hub_marker_name
 

@@ -5,21 +5,18 @@ These tests should pass on a fresh checkout with only Python stdlib and
 pydantic + loguru installed. They do NOT require an LLM provider, a
 configured workspace, or any external service.
 
-Relocation map (kept as a header note so future readers can trace where
-the symbols came from):
+Where the shapes live today (the papers package):
 
-    raven.core.interfaces.TokenStrategy / UsageSnapshot
-        →  raven.token_wise.base
-    raven.core.interfaces.AssembledContext / TokenBudget
-        →  raven.memory_engine.base
+    TokenStrategy / UsageSnapshot      raven.contracts.token_strategy
+    AssembledContext / TokenBudget     raven.contracts.assembled
 
 The three dead ABCs ``ContextEngine`` / ``Monitor`` / ``SkillHandler`` plus
 their helper dataclasses ``NudgeAction`` / ``SkillMeta`` / ``SkillExecutionOutcome``
 were removed (no implementations, alternate routes chosen by the
 design owners). The tests that exercised them are gone with them.
 
-``raven.core`` is fully removed now that AssembledContext + TokenBudget
-have moved to their permanent home under ``memory_engine``.
+``raven.core`` today is the assembly root, not the retired interfaces home
+these tests once guarded; that old meaning stays dead below.
 """
 
 from __future__ import annotations
@@ -27,8 +24,8 @@ from __future__ import annotations
 import pytest
 
 from raven import __version__
-from raven.memory_engine.base import AssembledContext, TokenBudget
-from raven.token_wise.base import TokenStrategy, UsageSnapshot
+from raven.contracts.assembled import AssembledContext, TokenBudget
+from raven.contracts.token_strategy import TokenStrategy, UsageSnapshot
 
 # ---------------------------------------------------------------------------
 # Package metadata
@@ -40,11 +37,9 @@ def test_package_imports():
     assert __version__  # non-empty
 
 
-def test_memory_engine_base_exports_assembled_dataclasses():
-    # AssembledContext + TokenBudget have their permanent home
-    # under memory_engine; raven.core is fully removed.
-    from raven.memory_engine.base import AssembledContext as ReAssembled
-    from raven.memory_engine.base import TokenBudget as ReBudget
+def test_assembled_shapes_live_in_the_papers():
+    from raven.contracts.assembled import AssembledContext as ReAssembled
+    from raven.contracts.assembled import TokenBudget as ReBudget
 
     assert ReAssembled is AssembledContext
     assert ReBudget is TokenBudget

@@ -24,8 +24,8 @@ from typing import Any
 
 from loguru import logger
 
+from raven.contracts.token_strategy import TokenStrategy
 from raven.providers.prompt_cache import cache_control
-from raven.token_wise.base import TokenStrategy
 
 
 def _supports_cache_control(model: str) -> bool:

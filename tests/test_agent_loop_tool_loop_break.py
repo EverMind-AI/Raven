@@ -143,7 +143,7 @@ class _NudgeTextProvider(_AlwaysFailsSameToolProvider):
 
 
 def _find_skill_stub():
-    from raven.agent.tools.base import Tool
+    from raven.contracts.tool import Tool
 
     class _FindSkill(Tool):
         @property

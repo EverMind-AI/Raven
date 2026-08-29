@@ -6,7 +6,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from raven.memory_engine import Memory, MemoryBackend
+from raven.contracts.memory import Memory, MemoryBackend
 
 # ---------------------------------------------------------------------------
 # Memory dataclass

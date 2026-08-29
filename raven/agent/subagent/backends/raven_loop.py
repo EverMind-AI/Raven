@@ -15,11 +15,7 @@ from typing import Any
 from loguru import logger
 
 from raven.agent.subagent import activity
-from raven.agent.subagent.backends.base import (
-    IN_SUBAGENT_RUN,
-    SubagentActionAbortedError,
-    SubagentNoAnswerError,
-)
+from raven.agent.subagent.backends.base import IN_SUBAGENT_RUN
 from raven.agent.subagent.mcp_grant import (
     McpGrant,
     McpSource,
@@ -27,12 +23,13 @@ from raven.agent.subagent.mcp_grant import (
     raven_loop_target,
     resolve_grant,
 )
-from raven.agent.tools.base import SKIPPED_AFTER_BLOCKED_CALL, Continuation
 from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.shell import ExecTool
 from raven.agent.tools.web import WebFetchTool, WebSearchTool
 from raven.config.schema import ExecToolConfig
+from raven.contracts.subagent_backend import SubagentActionAbortedError, SubagentNoAnswerError
+from raven.contracts.tool import SKIPPED_AFTER_BLOCKED_CALL, Continuation
 from raven.memory_engine.skill_local.registry import filter_by_required_tools
 from raven.providers.base import LLMProvider
 from raven.security.trust import wrap_untrusted

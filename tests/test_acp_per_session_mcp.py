@@ -22,8 +22,8 @@ import pytest
 
 from raven.acp.methods import AcpMethods
 from raven.acp.updates import UpdateTranslator
-from raven.agent.tools.base import Tool
 from raven.agent.tools.registry import ToolRegistry
+from raven.contracts.tool import Tool
 from raven.mcp.naming import MCPToolRef
 from raven.rpc.dispatcher import Dispatcher
 from raven.session.manager import SessionManager

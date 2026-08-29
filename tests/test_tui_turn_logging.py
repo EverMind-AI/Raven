@@ -16,7 +16,7 @@ import pytest
 from loguru import logger
 
 from raven.agent.loop import AgentLoop
-from raven.agent.tools.base import Tool
+from raven.contracts.tool import Tool
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 

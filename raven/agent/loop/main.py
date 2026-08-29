@@ -131,13 +131,13 @@ if TYPE_CHECKING:
     from raven.agent.hook import CompositeHook
     from raven.agent.loop.checkpoint import CheckpointService
     from raven.agent.tools.ask_user import QuestionResponder
-    from raven.agent.tools.base import Tool
     from raven.config.schema import (
         DeepResearchToolConfig,
     )
     from raven.context_engine import ContextEngine
+    from raven.contracts.memory import MemoryBackend
+    from raven.contracts.tool import Tool
     from raven.mcp.manager import MCPConnectionManager
-    from raven.memory_engine.backend import MemoryBackend
     from raven.providers.pool import ProviderPool
     from raven.routing.router import ModelRouter
     from raven.sandbox.debug_server import SandboxDebugServer

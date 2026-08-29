@@ -123,7 +123,7 @@ async def test_add_direction_synthetic_plugin_rides_to_a_real_turn(tmp_path: Pat
     (pkg / "__init__.py").write_text("")
     (pkg / "tools.py").write_text(
         textwrap.dedent("""
-        from raven.agent.tools.base import Tool
+        from raven.contracts.tool import Tool
 
         class SynthEchoTool(Tool):
             name = "synth_echo"

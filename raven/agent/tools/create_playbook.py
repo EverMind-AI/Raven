@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Callable
 
-from raven.agent.tools.base import Tool
+from raven.contracts.tool import Tool
 
 if TYPE_CHECKING:
     from raven.playbook import PlaybookGenerator, PlaybookStore

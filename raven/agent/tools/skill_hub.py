@@ -33,7 +33,7 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from raven.agent.tools.base import Tool
+from raven.contracts.tool import Tool
 from raven.skill_hub.audit import record_install, write_install_meta
 from raven.skill_hub.policy import SkillPolicy, is_blocked, refuses_low_safety
 

@@ -15,8 +15,8 @@ import pytest
 
 from raven.agent.loop import AgentLoop
 from raven.config.schema import ToolSearchConfig
+from raven.contracts.token_strategy import TokenStrategy
 from raven.providers.base import LLMProvider, LLMResponse
-from raven.token_wise.base import TokenStrategy
 from raven.token_wise.registry import StrategyRegistry
 
 

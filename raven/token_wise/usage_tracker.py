@@ -22,7 +22,7 @@ from typing import Any
 
 from loguru import logger
 
-from raven.token_wise.base import TokenStrategy, UsageSnapshot
+from raven.contracts.token_strategy import TokenStrategy, UsageSnapshot
 
 
 def _default_telemetry_dir() -> Path:

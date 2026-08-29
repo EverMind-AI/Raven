@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from raven.agent.tools.base import Tool
+from raven.contracts.tool import Tool
 
 if TYPE_CHECKING:
     from raven.playbook.runtime import PlaybookRuntime

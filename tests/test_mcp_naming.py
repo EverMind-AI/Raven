@@ -256,8 +256,8 @@ class TestRegistryResolvesConfiguredNames:
         assert ToolRegistry().resolve_configured("mcp_ghost_tool") == []
 
     def test_leaves_non_mcp_names_to_exact_matching(self):
-        from raven.agent.tools.base import Tool
         from raven.agent.tools.registry import ToolRegistry
+        from raven.contracts.tool import Tool
 
         class _Builtin(Tool):
             name = "read_file"

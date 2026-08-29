@@ -58,7 +58,7 @@ IMMUTABLE_PATTERNS: tuple[str, ...] = (
     # ── L3 — Capability contract ───────────────────────────────────────────
     "raven/agent/loop/main.py",
     "raven/agent/context/",
-    "raven/agent/tools/base.py",
+    "raven/contracts/tool.py",
     "raven/agent/tools/registry.py",
     "raven/agent/personalizer/",
     "raven/agent/subagent/",
