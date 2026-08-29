@@ -1,7 +1,7 @@
 /**
- * Unit tests for TuiTerminalManager: terminal creation with argv-passing
- * shellPath/shellArgs, reuse while alive, recreation after close, and
- * disposal.
+ * Unit tests for TuiTerminalManager: editor-area terminal creation with
+ * argv-passing shellPath/shellArgs, reuse while alive, recreation after
+ * close, and disposal.
  */
 
 import { describe, expect, it, vi } from 'vitest'
@@ -69,7 +69,8 @@ describe('TuiTerminalManager', () => {
       name: 'Raven',
       cwd: '/workspace/raven',
       shellPath: '/usr/local/bin/raven',
-      shellArgs: ['tui', '--dev']
+      shellArgs: ['tui', '--dev'],
+      location: 'editor'
     })
     expect(terminals).toHaveLength(1)
     expect(terminals[0].shown).toBe(1)
@@ -87,7 +88,8 @@ describe('TuiTerminalManager', () => {
       name: 'Raven',
       cwd: undefined,
       shellPath: '/usr/bin/uv',
-      shellArgs: ['run', 'raven', 'tui']
+      shellArgs: ['run', 'raven', 'tui'],
+      location: 'editor'
     })
   })
 

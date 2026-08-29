@@ -2,9 +2,11 @@
  * Single-Raven-terminal lifecycle: reuse the terminal while it is alive and
  * recreate it once it closes.
  *
- * The terminal process is raven itself (shellPath/shellArgs), so arguments
- * reach it through argv without any host-shell expansion, and a normal TUI
- * exit closes the terminal, which resets the manager for the next launch.
+ * The terminal opens as an editor-area tab (location: editor) so the TUI
+ * sits in the file tab row like the OpenCode extension. The terminal process
+ * is raven itself (shellPath/shellArgs), so arguments reach it through argv
+ * without any host-shell expansion, and a normal TUI exit closes the tab,
+ * which resets the manager for the next launch.
  */
 
 import type { VscodeApi, VscodeDisposable, VscodeTerminal } from './api.js'
@@ -29,7 +31,8 @@ export class TuiTerminalManager {
       name: 'Raven',
       cwd: workspacePath,
       shellPath: command.command,
-      shellArgs: command.args
+      shellArgs: command.args,
+      location: 'editor'
     })
     this.closeSubscription = this.api.window.onDidCloseTerminal(closed => {
       if (closed !== this.terminal) {
