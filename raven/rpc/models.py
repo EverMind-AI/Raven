@@ -997,7 +997,7 @@ TurnEvent = Annotated[
 
 
 class SessionListItem(_Strict):
-    """One row in the session picker (gatewayTypes.ts:130 SessionListItem)."""
+    """One row in the session picker (gatewayTypes.ts SessionListItem)."""
 
     id: str = Field(..., description="Full session_key: <channel>:<chat_id>.")
     message_count: int
@@ -1078,7 +1078,7 @@ class SessionMostRecentParams(_Strict):
 
 
 class SessionMostRecentResult(_Strict):
-    """Response shape per gatewayTypes.ts:147 SessionMostRecentResponse."""
+    """Response shape per gatewayTypes.ts SessionMostRecentResponse."""
 
     session_id: str | None = Field(
         default=None,
@@ -1090,14 +1090,14 @@ class SessionMostRecentResult(_Strict):
 
 
 class SessionTitleParams(_Strict):
-    """Params per slash/commands/core.ts:201,218 — session_id + optional title."""
+    """Params per slash/commands/core.ts,218 — session_id + optional title."""
 
     session_id: str = Field(..., description="Full session_key.")
     title: str | None = None
 
 
 class SessionTitleResult(_Strict):
-    """Response per gatewayTypes.ts:154 SessionTitleResponse.
+    """Response per gatewayTypes.ts SessionTitleResponse.
 
     pending=True means the title is held in memory for a lazy (never-saved)
     session and lands with the session's first save.
@@ -1634,9 +1634,9 @@ class CommandsCatalogParams(_Strict):
 class CommandsCatalogResponse(_Strict):
     """Slash-command catalog reflected from raven.cli.commands.app.
 
-    Shape consumed by ui-tui createSlashHandler.ts:53-79 (alias / prefix-1 /
-    multi-match) and createGatewayEventHandler.ts:198 (gating on non-empty
-    pairs). v0.1 emits alias=canonical 1:1; TS-side prefix-1-match handles
+    Shape consumed by ui-tui createSlashHandler.ts (alias / prefix-1 /
+    multi-match) and createGatewayEventHandler.ts (gating on non-empty
+    pairs). The server emits alias=canonical 1:1; TS-side prefix-1-match handles
     partials.
     """
 

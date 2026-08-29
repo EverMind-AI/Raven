@@ -264,7 +264,7 @@ _SPAWN_TASK_ID_RE = re.compile(r"\bstarted \(id: ([0-9a-f]{8})\)")
 def _map_to_wire(messages: list[dict[str, Any]], session_key: str) -> list[dict[str, Any]]:
     """Map stored session messages to the GatewayTranscriptMessage wire shape.
 
-    The TS side (``gatewayTypes.ts:23``) expects ``{role, text?, context?, name?}``.
+    The TS side (``gatewayTypes.ts``) expects ``{role, text?, context?, name?}``.
     Stored messages carry ``content`` (not ``text``) so we rename the field.
     All well-formed stored messages are included (N stored → N wire) — no
     consolidation filter; non-dict or roleless entries are skipped with a
@@ -683,7 +683,7 @@ async def session_most_recent(
     """``session.most_recent`` — return the most-recently-updated tui session key.
 
     Returns the SessionMostRecentResponse shape: {session_id?: string | null, ...}.
-    The TS caller (createGatewayEventHandler.ts:242) reads r?.session_id; null
+    The TS caller (createGatewayEventHandler.ts) reads r?.session_id; null
     is the tolerated no-sessions value.
 
     Scoped to this checkout: the TUI offers this session to reopen, and one
@@ -713,7 +713,7 @@ async def session_title(
     Get path: returns the current title from the cached or disk-loaded
     session.
 
-    Wire shape per SessionTitleResponse (gatewayTypes.ts:154):
+    Wire shape per SessionTitleResponse (gatewayTypes.ts):
       {title?: string, session_key: string, pending: bool}
     """
     session_key = params.get("session_id", "")

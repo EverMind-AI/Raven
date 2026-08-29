@@ -46,7 +46,7 @@ from raven.rpc.errors import RpcError
 if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
 
-# Match rpc.server.MAX_FRAME_BYTES (specs 2.5).
+# Match rpc.server.MAX_FRAME_BYTES.
 MAX_FRAME_BYTES = 1 * 1024 * 1024
 _AUTH_TIMEOUT_S = 10.0
 
