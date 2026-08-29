@@ -401,7 +401,8 @@ history. Never carries file bytes.
 ### Token Efficiency
 
 **TokenWise**:
-The cross-cutting token-efficiency layer: a set of independently toggled
+The token-efficiency shelf (L3; "cross-cutting" here predates the partition cards'
+reserved use of that word for security/auth-style leaves): a set of independently toggled
 TokenStrategies, not a single module.
 
 **TokenStrategy**:
@@ -905,6 +906,23 @@ swap. Trigger: SIGHUP to the gateway.
 _Avoid_: "hot reload" (that is `reload.mcp`, a tool-set reconcile inside one generation);
 "restart" (the `/restart` control command, a whole-process execv).
 
+**Kernel** (`spine/` + `contracts/` + `tracing/`):
+The shippable core: the L0 spine, the L1 papers, and tracing (whose only import-time
+edge into the kernel is the paper's instrument decorator). Machine-enforced by the
+"the kernel stands alone" import-linter contract in pyproject.toml, whose comment names
+the set and the lazy debt edges; the raven-core wheel is this set as a build artifact.
+
+**Layer Seats** (pyproject.toml `[tool.importlinter]` + `tests/test_l4_entrances.py`):
+Where every package sits, as the machine enforces it. Inner (may not import a surface):
+the seventeen w18 packages plus, seated by the 2026-08-29 structural audit, `config` and
+`utils` (cross-cutting leaves) and `mcp`, `playbook`, `knowledge`, `skill_hub`,
+`trajectory` (L3 shelf members). Surfaces: `cli`, `rpc`, `web_rpc`, `proactive_engine`,
+and `acp` (an entrance: Raven serving as an agent for another host). Deliberately
+unseated, each awaiting its own ruling: `core` (its sentinel-machinery imports are one
+knot with proactive_engine's surface seat), `evolver` (zero inbound imports; product or
+engine is an open call), `browser` and `importer` (surface-side feature libraries, the
+w18 phrasing).
+
 **Assembly Root** (`core/`):
 The package that composes a running agent out of parts: one `*_stack` builder per assembly
 concern, and `runtime.build_runtime` as the one door every entrance assembles through --
@@ -948,8 +966,10 @@ Isolated command execution (microVM / boxlite); owns the debug server and VM lif
 
 **EvalEngine** (`eval_engine/`):
 The L3 evaluation engine: task judging and cognitive coordination, implemented as three
-`AgentHook` instances (`BeforeIterationHook`, `AfterIterationHook`, `ToolAuditHook`)
-wired into `AgentLoop` via `CompositeHook`.
+`AgentHook` instances (`BeforeIterationHook`, `AfterIterationHook`, `ToolAuditHook`).
+Buildable (`core/eval_stack.py`) but unwired today: no production path constructs an
+EvalEngine or passes its hooks to the loop -- activation is a pending ruling, and this
+entry says so rather than describing wiring that does not exist.
 
 **EvalJudge** (`eval_engine/judge/`):
 The single-call LLM judge behind the EvalEngine's task-completion check: it compares the
