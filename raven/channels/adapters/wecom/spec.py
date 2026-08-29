@@ -18,10 +18,11 @@ SPEC = ChannelSpec(
     capabilities=Capabilities(),
     # Cargo declaration (config-with-cargo): the fields only this adapter
     # consumes. Socket fields (enabled / allow_from / workspace) stay with the
-    # host. Defaults stay in the central model until the storage handover.
+    # host. Defaults and secrecy travel with the cargo; the central model
+    # mirrors them until it retires.
     config_schema={
         "bot_id": {"type": "string", "required": True},
-        "secret": {"type": "string", "required": True},
-        "welcome_message": {"type": "string"},
+        "secret": {"type": "string", "required": True, "secret": True},
+        "welcome_message": {"type": "string", "default": ""},
     },
 )

@@ -18,17 +18,25 @@ SPEC = ChannelSpec(
     capabilities=Capabilities(file_attachments=True),
     # Cargo declaration (config-with-cargo): the fields only this adapter
     # consumes. Socket fields (enabled / allow_from / workspace) stay with the
-    # host. Defaults stay in the central model until the storage handover.
+    # host. Defaults and secrecy travel with the cargo; the central model
+    # mirrors them until it retires.
     config_schema={
-        "mode": {"type": "string"},
-        "webhook_path": {"type": "string"},
-        "bot_token": {"type": "string", "required": True},
-        "app_token": {"type": "string", "required": True},
-        "user_token_read_only": {"type": "boolean"},
-        "reply_in_thread": {"type": "boolean"},
-        "react_emoji": {"type": "string"},
-        "group_policy": {"type": "string"},
-        "group_allow_from": {"type": "array"},
-        "dm": {"type": "object"},
+        "mode": {"type": "string", "default": "socket"},
+        "webhook_path": {"type": "string", "default": "/slack/events"},
+        "bot_token": {"type": "string", "required": True, "secret": True},
+        "app_token": {"type": "string", "required": True, "secret": True},
+        "user_token_read_only": {"type": "boolean", "default": True},
+        "reply_in_thread": {"type": "boolean", "default": True},
+        "react_emoji": {"type": "string", "default": "eyes"},
+        "group_policy": {"type": "string", "default": "mention"},
+        "group_allow_from": {"type": "array", "default": []},
+        "dm": {
+            "type": "object",
+            "fields": {
+                "enabled": {"type": "boolean", "default": True},
+                "policy": {"type": "string", "default": "open"},
+                "allow_from": {"type": "array", "default": []},
+            },
+        },
     },
 )
