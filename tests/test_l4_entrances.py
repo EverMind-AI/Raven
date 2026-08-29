@@ -27,13 +27,13 @@ INNER_DIRS = ["spine", "contracts", "agent", "memory_engine", "context_engine",
               # by inner layers and cargo alike, so they may not know a surface.
               "security", "auth",
               # Seated by the 2026-08-29 structural audit: config and utils
-              # are cross-cutting leaves (same rule as auth); the other five
-              # are L3 shelf members. raven.core is deliberately absent -- its
-              # sentinel-machinery imports are one knot with
-              # proactive_engine's surface seat (see CONTEXT.md, Layer Seats).
+              # are cross-cutting leaves (same rule as auth); the rest are L3
+              # shelf members. proactive_engine is an engine consumed by the
+              # loop and the assembly root, not a transport, and core is the
+              # assembly root itself (see CONTEXT.md, Layer Seats).
               "config", "utils", "mcp", "playbook", "knowledge", "skill_hub",
-              "trajectory", "eval_engine"]
-SURFACES = ("raven.cli", "raven.rpc", "raven.proactive_engine", "raven.acp")
+              "trajectory", "eval_engine", "proactive_engine", "core"]
+SURFACES = ("raven.cli", "raven.rpc", "raven.acp")
 
 
 def test_kernel_and_organs_know_no_surface():

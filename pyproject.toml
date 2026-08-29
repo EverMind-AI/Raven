@@ -401,21 +401,20 @@ source_modules = [
     "raven.routing", "raven.token_wise", "raven.plugins", "raven.channels",
     "raven.gateway", "raven.market", "raven.ops", "raven.security", "raven.auth",
     # Seated by the 2026-08-29 structural audit: cross-cutting leaves and the
-    # L3 shelf members that had no recorded layer. raven.core stays unlisted
-    # only because its 18 imports of proactive_engine's sentinel machinery are
-    # one knot with that package's surface seat -- ruled together (see the
-    # Layer Seats entry in CONTEXT.md), not half-cut here.
+    # L3 shelf members that had no recorded layer.
     "raven.config", "raven.utils", "raven.mcp", "raven.playbook",
     "raven.knowledge", "raven.skill_hub", "raven.trajectory", "raven.eval_engine",
+    # proactive_engine is an engine (schedulers + sentinel), consumed by the
+    # loop, the assembly root and the entrances, and imports no surface itself;
+    # its earlier surface seat was a misreading of "originates turns" as
+    # "is a transport". Seating it here also seats core, the assembly root.
+    "raven.proactive_engine", "raven.core",
 ]
-forbidden_modules = ["raven.cli", "raven.rpc", "raven.proactive_engine", "raven.acp"]
-# Debt allowlist: may only SHRINK. Lazy machinery-at-surface-address edges,
-# each queued for relocation in the ledger: CronTool consumed by the loop
-# (turn path registers it, wiring builds it), and the skill install engine
-# consumed by market through its rpc method wrapper.
+forbidden_modules = ["raven.cli", "raven.rpc", "raven.acp"]
+# Debt allowlist: may only SHRINK. One lazy machinery-at-surface-address edge
+# remains, queued for relocation: the skill install engine consumed by market
+# through its rpc method wrapper.
 ignore_imports = [
-    "raven.agent.loop.turn_path -> raven.proactive_engine.schedulers.cron.tool",
-    "raven.agent.loop.wiring -> raven.proactive_engine.schedulers.cron.tool",
     "raven.market.install -> raven.rpc.methods.skillhub",
 ]
 

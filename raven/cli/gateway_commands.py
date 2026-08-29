@@ -503,7 +503,7 @@ def register(app: typer.Typer) -> None:
                 # Built here, inside the running loop, not in the sync command
                 # prologue: Scheduler pins its home loop at construction (submit
                 # must come from that loop), and the prologue has no loop yet.
-                from raven.core.gateway_spine import build_gateway
+                from raven.gateway.spine import build_gateway
 
                 gw_scheduler, gw_hub, gw_readback_texts, gw_sources, gw_teardown = build_gateway(
                     agent,
