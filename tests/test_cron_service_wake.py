@@ -189,3 +189,30 @@ async def test_manual_run_uses_the_shared_writeback(tmp_path: Path) -> None:
     assert j["state"]["lastStatus"] == "ok"
     assert j["state"]["lastRunAtMs"] >= before
     assert j["state"]["nextRunAtMs"] > _now_ms()
+
+
+async def test_a_failed_one_shot_stays_on_the_table_disabled(tmp_path: Path) -> None:
+    """A one-shot whose turn failed (a reload cut it, the provider was down) is
+    not deleted: it stays, disabled, carrying the error, so the record that the
+    reminder never reached anyone survives the run."""
+    store_path = tmp_path / "jobs.json"
+
+    async def on_job(job) -> None:
+        raise RuntimeError("turn was cancelled or failed before it completed")
+
+    svc = CronService(store_path, on_job=on_job)
+    job = svc.add_job(
+        name="oneshot",
+        schedule=CronSchedule(kind="at", at_ms=_now_ms() + 60_000),
+        message="fire once",
+        channel="tui",
+        to="direct",
+        delete_after_run=True,
+    )
+    await svc._execute_job(job)
+
+    kept = [j for j in svc._store.jobs if j.id == job.id]
+    assert len(kept) == 1
+    assert kept[0].enabled is False
+    assert kept[0].state.last_status == "error"
+    assert "cancelled" in (kept[0].state.last_error or "")

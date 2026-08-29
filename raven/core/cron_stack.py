@@ -239,7 +239,11 @@ def make_on_cron_job(
                 conversation=conversation,
             )
         try:
-            await submit(req).result()
+            outcome = await submit(req).result()
+            if outcome is None:
+                # Cancelled or failed before it completed -- a runtime reload cuts
+                # in-flight turns -- so the job records a failure, not a delivery.
+                raise RuntimeError("turn was cancelled or failed before it completed")
         except Exception as exc:
             if system_events is not None and wake is not None:
                 _emit_cron_event(system_events, wake, job, f"{type(exc).__name__}: {exc}", failed=True)

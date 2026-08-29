@@ -533,9 +533,11 @@ class CronService:
         job.state.last_run_at_ms = start_ms
         job.updated_at_ms = self._now_ms()
 
-        # Handle one-shot jobs
+        # Handle one-shot jobs. A one-shot that failed stays on the table,
+        # disabled, with its error: deleting it would erase the only record
+        # that the reminder never reached anyone.
         if job.schedule.kind == "at":
-            if job.delete_after_run:
+            if job.delete_after_run and job.state.last_status == "ok":
                 self._store.jobs = [j for j in self._store.jobs if j.id != job.id]
             else:
                 job.enabled = False

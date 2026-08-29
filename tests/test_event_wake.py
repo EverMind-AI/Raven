@@ -360,7 +360,7 @@ def _spine_submit(outcomes: list):
                 if isinstance(outcome, Exception):
                     raise outcome
                 readback[req.conversation] = outcome
-                return None
+                return object()  # a completed turn resolves with its outcome; None means it was cut
 
         return _Handle()
 

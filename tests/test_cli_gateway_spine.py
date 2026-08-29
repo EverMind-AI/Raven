@@ -266,6 +266,37 @@ async def test_gateway_sink_sends_error_reply_on_failure():
     assert agent.notify_count >= 1
 
 
+async def test_gateway_sink_tells_the_channel_when_a_reload_cut_the_turn():
+    # The same cancel, but during a generation swap: the user did not ask for
+    # it, so the channel gets one sentence instead of silence.
+    started = asyncio.Event()
+
+    class _BlockingAgent(_ReplyAgent):
+        async def run_turn(self, req, emit, drain, *, stream, usage_sink=None, text_sink=None):
+            started.set()
+            await asyncio.Event().wait()
+
+    agent = _BlockingAgent()
+    ch = _FakeChannel("telegram")
+    scheduler, hub, readback_texts, _sources, teardown = build_gateway(
+        agent, {"telegram": ch}, cut_by_reload=lambda: True
+    )
+    try:
+        handle = scheduler.submit(_req(channel="telegram", conversation="telegram:u1"))
+        await started.wait()
+        assert scheduler.has_running()
+        scheduler.cancel_conversation("telegram:u1")
+        try:
+            await handle.result()
+        except (asyncio.CancelledError, Exception):
+            pass
+        await hub.wait_idle("telegram")
+    finally:
+        await teardown()
+    assert len(ch.sent) == 1 and "reload" in ch.sent[0][1]
+    assert not scheduler.has_running()
+
+
 async def test_gateway_sink_no_error_reply_on_cancel():
     # /stop cancels a running turn -> TurnFailed(cancelled=True) -> notify but NO
     # "Sorry" (the bus path re-raises CancelledError without the error message).
