@@ -1,3 +1,11 @@
+"""The `raven upgrade` command surface.
+
+Upgrades the installed Raven in place without rebuilding the whole
+environment: resolve the target version, swap the package, and refuse to
+serve out of a half-written installation (see the guard in the serve
+path). Everything here is transport: rendering, prompts and exit codes.
+"""
+
 from __future__ import annotations
 
 import base64

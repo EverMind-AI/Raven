@@ -549,7 +549,12 @@ def channels_login(
         return
     die_if_not_tty(f"raven channels login {channel_name} (from an interactive terminal)")
     console.print(f"{__logo__} {spec.display_name} Login\n")
-    channel = spec.factory(channel_cfg)
+    from raven.core.admission import dispense_channel_config
+
+    # Through the same admission door as the gateway and onboarding: the raw
+    # section carries only socket fields, and the factory expects the
+    # dispensed view with the declaration's defaults materialized.
+    channel = spec.factory(dispense_channel_config(spec, channel_cfg, channel=channel_name))
 
     success = asyncio.run(channel.login(force=force))
     if not success:

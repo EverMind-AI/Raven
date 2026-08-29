@@ -81,14 +81,6 @@ LEDGER: dict[str, Difference] = {
             "expose; the TUI has no such flag, so there is nothing to pass."
         ),
     ),
-    "deliverables": Difference(
-        absent_from=frozenset({"agent", "tui"}),
-        reason=(
-            "The gateway builds the store itself because the web surface needs "
-            "the same handle; agent and tui take the door's default, which is "
-            "the identical expression."
-        ),
-    ),
 }
 
 
@@ -210,7 +202,10 @@ def test_the_shared_core_is_not_eroding(kwargs_by_entrypoint: dict[str, set[str]
     """
     shared = set.intersection(*kwargs_by_entrypoint.values())
 
-    assert len(shared) >= 10, f"only {len(shared)} kwargs are passed by all three entrypoints: {sorted(shared)}"
+    # 9 = the identity five (provider, session_manager, router,
+    # workdir_resolver, channels_config/on_user_inbound via host) plus the
+    # three policy fields; provider_pool and deliverables fold into the door.
+    assert len(shared) >= 9, f"only {len(shared)} kwargs are passed by all three entrypoints: {sorted(shared)}"
 
 
 class _StubProvider:

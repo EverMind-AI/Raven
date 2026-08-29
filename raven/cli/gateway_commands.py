@@ -38,21 +38,6 @@ if TYPE_CHECKING:
 console = Console()
 
 
-_GATEWAY_IM_CHANNELS: tuple[str, ...] = (
-    "whatsapp",
-    "telegram",
-    "discord",
-    "feishu",
-    "mochat",
-    "dingtalk",
-    "email",
-    "slack",
-    "qq",
-    "matrix",
-    "wecom",
-    "weixin",
-)
-
 
 def _risk_banner(config) -> str | None:
     """Startup banner for the dangerous default combo: no sandbox + a channel
@@ -110,15 +95,6 @@ def _build_gateway_channels(config) -> set[str]:
     in :func:`register`, which runs before ``cron.start()``.
     """
     return config.channels.enabled_channel_names()
-
-
-def _build_deliverable_store(config):
-    """Build the shared store backing ``deliver_files`` on every outlet."""
-
-    from raven.agent.tools._deliverables import DeliverableStore
-    from raven.config.paths import get_deliverables_path
-
-    return DeliverableStore(get_deliverables_path())
 
 
 def _format_question_body(params: dict) -> str:
@@ -357,18 +333,14 @@ def register(app: typer.Typer) -> None:
         # One registry shared by both contribution points, so plugins are
         # discovered and activated once rather than per consumer.
         from raven.core.runtime import build_runtime
-        from raven.providers.pool import ProviderPool
 
-        deliverables = _build_deliverable_store(config)
         runtime = build_runtime(
             config,
             ec_config,
             provider=provider,
             session_manager=session_manager,
-            provider_pool=ProviderPool(lambda: load_runtime_config(None, None)),
             router=router,
             workdir_resolver=workdir_resolver,
-            deliverables=deliverables,
             policy=TurnPolicy(
                 max_iterations=config.agents.defaults.max_tool_iterations,
                 empty_recovery=limits_from_defaults(config.agents.defaults),
@@ -384,6 +356,9 @@ def register(app: typer.Typer) -> None:
         )
         agent = runtime.loop
         backend = runtime.backend
+        # The web surface serves this same store; generations that follow
+        # receive it back through _prepare_swap, so the handle is stable.
+        deliverables = runtime.deliverables
 
         # Sentinel attach and the wake hook are generation wiring: they bind to
         # the live agent object, so they happen in _bind_generation below.
@@ -909,8 +884,7 @@ def register(app: typer.Typer) -> None:
                         new_ec,
                         provider=new_provider,
                         session_manager=session_manager,
-                        provider_pool=ProviderPool(lambda: load_runtime_config(None, None)),
-                        router=new_router,
+                                    router=new_router,
                         workdir_resolver=workdir_resolver,
                         deliverables=deliverables,
                         policy=TurnPolicy(

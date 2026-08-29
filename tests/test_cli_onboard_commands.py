@@ -26,7 +26,7 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
-from raven.cli import onboard_channels, onboard_commands, onboard_everos, onboard_web
+from raven.cli import _onboard_shared, onboard_channels, onboard_commands, onboard_everos, onboard_web
 from raven.cli.commands import app
 from raven.config.loader import set_config_path
 from raven.plugins.memory.everos import roots as _discover_mod
@@ -264,7 +264,7 @@ def test_pick_language_preselects_the_currently_active_language(monkeypatch: pyt
     """
     import questionary
 
-    monkeypatch.setattr(onboard_commands, "_LANG", "zh")
+    monkeypatch.setattr(_onboard_shared, "_LANG", "zh")
     captured: dict[str, Any] = {}
 
     class _FQ:
@@ -1419,7 +1419,7 @@ def test_giving_up_says_what_is_lost_in_both_languages(
     dim one-liner without a single test noticing."""
     import questionary
 
-    monkeypatch.setattr(onboard_commands, "_LANG", lang)
+    monkeypatch.setattr(_onboard_shared, "_LANG", lang)
     answers = iter(["managed", onboard_commands._BACK, "abort"])
 
     class _FQ:
@@ -2388,7 +2388,7 @@ def test_scancode_login_retry_then_success(tmp_env: Path, monkeypatch: pytest.Mo
     # Failure submenu: choose retry first; second login succeeds so menu isn't
     # reached again.
     monkeypatch.setattr(
-        onboard_commands,
+        _onboard_shared,
         "_failure_choice",
         lambda options, *, non_interactive: "retry",
     )
@@ -2405,7 +2405,7 @@ def test_scancode_login_skip_reverts_enable(tmp_env: Path, monkeypatch: pytest.M
         _async_return(False),
     )
     monkeypatch.setattr(
-        onboard_commands,
+        _onboard_shared,
         "_failure_choice",
         lambda options, *, non_interactive: "skip",
     )
@@ -2438,7 +2438,7 @@ def test_scancode_login_node_missing_skip(tmp_env: Path, monkeypatch: pytest.Mon
         captured["labels"] = [label for label, _ in options]
         return "skip"
 
-    monkeypatch.setattr(onboard_commands, "_failure_choice", _fc)
+    monkeypatch.setattr(_onboard_shared, "_failure_choice", _fc)
     monkeypatch.setattr(
         "raven.channels.adapters.whatsapp.channel.WhatsAppChannel.login",
         _must_not_call("WhatsAppChannel.login"),
@@ -2457,7 +2457,7 @@ def test_scancode_login_node_missing_retry_then_present(tmp_env: Path, monkeypat
     missing = iter([True, False])  # first check missing, then present
     monkeypatch.setattr(onboard_channels, "_node_runtime_missing", lambda c: next(missing))
     monkeypatch.setattr(
-        onboard_commands,
+        _onboard_shared,
         "_failure_choice",
         lambda options, *, non_interactive: "retry",
     )
@@ -2934,7 +2934,7 @@ def test_prompt_channel_fields_gates_skip_on_required(monkeypatch: pytest.Monkey
     """
     import questionary
 
-    monkeypatch.setattr(onboard_commands, "_LANG", "en")
+    monkeypatch.setattr(_onboard_shared, "_LANG", "en")
     captured: list[tuple[str, Any]] = []
 
     class _Prompt:
@@ -4661,7 +4661,7 @@ def test_the_memory_step_states_the_capability_tiers(
     prompts of equal weight."""
     import questionary
 
-    monkeypatch.setattr(onboard_commands, "_LANG", lang)
+    monkeypatch.setattr(_onboard_shared, "_LANG", lang)
     answers = iter(["managed", onboard_commands._BACK, "abort"])
 
     class _FQ:
@@ -4680,7 +4680,7 @@ def test_the_memory_step_states_the_capability_tiers(
 def test_skipping_embedding_names_what_it_costs(monkeypatch: pytest.MonkeyPatch, lang: str) -> None:
     """Skipping rerank costs ordering; skipping embedding costs semantic recall
     altogether. The second cannot read like the first."""
-    monkeypatch.setattr(onboard_commands, "_LANG", lang)
+    monkeypatch.setattr(_onboard_shared, "_LANG", lang)
 
     note = onboard_commands._t(*onboard_everos._EVEROS_ROLES["embedding"]["skip_note"])
 
@@ -4896,7 +4896,7 @@ def test_role_blocks_fit_eighty_columns(monkeypatch: pytest.MonkeyPatch, lang: s
     and drops the leading indent, leaving a stray left-flush line mid-sentence."""
     from rich.text import Text
 
-    monkeypatch.setattr(onboard_commands, "_LANG", lang)
+    monkeypatch.setattr(_onboard_shared, "_LANG", lang)
     for name, role in onboard_everos._EVEROS_ROLES.items():
         parts = [onboard_commands._t(*role["label"]), onboard_commands._t(*role["purpose"])]
         for key in ("tag", "cost", "recommendation", "skip_note"):
@@ -4924,7 +4924,7 @@ def test_the_cost_line_actually_reaches_the_screen(
     assertion above reads `_EVEROS_ROLES`; this one reads the terminal."""
     import questionary
 
-    monkeypatch.setattr(onboard_commands, "_LANG", lang)
+    monkeypatch.setattr(_onboard_shared, "_LANG", lang)
 
     class _FQ:
         def ask(self):
@@ -4949,7 +4949,7 @@ def _platform_menu(monkeypatch: pytest.MonkeyPatch, lang: str = "en") -> list:
     The scripted answers are keyed on prompt text, so they have to be written in
     whichever language the step is running in.
     """
-    monkeypatch.setattr(onboard_commands, "_LANG", lang)
+    monkeypatch.setattr(_onboard_shared, "_LANG", lang)
     offer, platform = (
         ("import conversation history", "Select platform") if lang == "en" else ("导入对话历史", "选择平台")
     )
@@ -5033,11 +5033,11 @@ def test_every_credential_prompt_means_the_same_thing_by_ctrl_c(monkeypatch: pyt
         def ask(self) -> None:
             return None
 
-    monkeypatch.setattr(
-        onboard_commands,
-        "_require_questionary",
-        lambda: SimpleNamespace(text=lambda *a, **kw: _Cancelled(), password=lambda *a, **kw: _Cancelled()),
-    )
+    fake = lambda: SimpleNamespace(text=lambda *a, **kw: _Cancelled(), password=lambda *a, **kw: _Cancelled())
+    # _prompt_api_key lives in the shared kit; the other three prompts live
+    # here -- patch the seam in both namespaces so each body sees the fake.
+    monkeypatch.setattr(onboard_commands, "_require_questionary", fake)
+    monkeypatch.setattr(_onboard_shared, "_require_questionary", fake)
 
     for call in (
         lambda: onboard_commands._prompt_api_key("deepseek"),

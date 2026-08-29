@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 import typer
 
-from raven.cli import onboard_commands as oc
+from raven.cli import _onboard_shared as oc
 
 
 def _enabled_channels() -> list[str]:
