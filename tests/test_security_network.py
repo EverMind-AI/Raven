@@ -55,6 +55,44 @@ def test_blocks_unique_local_v6() -> None:
     assert "private/internal" in err
 
 
+def test_blocks_v4_mapped_loopback() -> None:
+    ok, err = net.validate_url_target("http://[::ffff:127.0.0.1]/x")
+    assert not ok
+    assert "private/internal" in err
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://[::ffff:10.0.0.1]/x",
+        "http://[::ffff:7f00:1]/x",  # hex form of ::ffff:127.0.0.1
+        "http://[::ffff:169.254.169.254]/latest/meta-data/",
+    ],
+)
+def test_blocks_v4_mapped_private(url: str) -> None:
+    ok, err = net.validate_url_target(url)
+    assert not ok, f"should block {url}"
+    assert "private/internal" in err
+
+
+def test_allows_v4_mapped_public() -> None:
+    ok, err = net.validate_url_target("http://[::ffff:93.184.216.34]/x")
+    assert ok, f"unexpectedly blocked: {err}"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://[2002:7f00:1::]/x",  # 6to4 embedding 127.0.0.1
+        "http://[64:ff9b::7f00:1]/x",  # NAT64 well-known prefix -> 127.0.0.1
+    ],
+)
+def test_blocks_ipv6_to_ipv4_transition_prefixes(url: str) -> None:
+    ok, err = net.validate_url_target(url)
+    assert not ok, f"should block {url}"
+    assert "private/internal" in err
+
+
 @pytest.mark.parametrize(
     "url",
     [
@@ -111,6 +149,12 @@ def test_allows_public_ipv6(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_resolved_blocks_private_ip_literal() -> None:
     ok, err = net.validate_resolved_url("http://10.0.0.1/x")
+    assert not ok
+    assert "private" in err
+
+
+def test_resolved_blocks_v4_mapped_private() -> None:
+    ok, err = net.validate_resolved_url("http://[::ffff:10.0.0.1]/x")
     assert not ok
     assert "private" in err
 

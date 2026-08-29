@@ -21,10 +21,19 @@ _BLOCKED_NETWORKS = [
     ipaddress.ip_network("::1/128"),
     ipaddress.ip_network("fc00::/7"),
     ipaddress.ip_network("fe80::/10"),
+    # 6to4 (RFC 3056) and NAT64 (RFC 6052) route to an embedded IPv4
+    # destination, so an IPv4-only blocklist would miss them.
+    ipaddress.ip_network("2002::/16"),
+    ipaddress.ip_network("64:ff9b::/96"),
 ]
 
 
 def _is_private(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    # The kernel routes IPv4-mapped IPv6 (::ffff:a.b.c.d) to the embedded
+    # IPv4 address, so judge the embedded address against the blocklist.
+    mapped = getattr(addr, "ipv4_mapped", None)
+    if mapped is not None:
+        addr = mapped
     return any(addr in net for net in _BLOCKED_NETWORKS)
 
 
