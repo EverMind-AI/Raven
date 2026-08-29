@@ -427,7 +427,6 @@ class TestFailureSemantics:
         assert ac.metadata["degraded_segments"] == ["boom"]
         assert ac.messages is not None  # the turn assembled; only the segment is gone
 
-
     async def test_single_skill_source_failure_isolated(
         self,
         builder: ContextBuilder,

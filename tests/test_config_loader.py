@@ -745,7 +745,6 @@ def test_a_provider_that_cannot_be_resolved_is_left_blank(tmp_path: Path) -> Non
     assert json.loads(p.read_text(encoding="utf-8"))["agents"]["defaults"]["provider"] == "auto"
 
 
-
 def test_the_retired_gateway_web_table_is_dropped_once_with_a_notice():
     """The shim is version-gated like its neighbours: a config behind the floor
     loses the table (in memory and, via _persist_migrations, on disk) and hears

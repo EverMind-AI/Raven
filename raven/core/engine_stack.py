@@ -54,7 +54,9 @@ def build_engine(*, workspace: str | None = None, home: str | None = None, chann
     # started in. The gateway passes no slug -- one daemon serves every
     # project, so its grouping is the channel instead.
     launch_dir = Path.cwd()
-    session_manager = SessionManager(config.workspace_path, project_slug=project_slug(launch_dir), project_dir=launch_dir)
+    session_manager = SessionManager(
+        config.workspace_path, project_slug=project_slug(launch_dir), project_dir=launch_dir
+    )
     workdir_resolver = WorkdirResolver(
         WorkdirPolicy.LAUNCH_DIR,
         agent_home=config.workspace_path,

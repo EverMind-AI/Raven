@@ -45,7 +45,7 @@ if TYPE_CHECKING:
 
 class WiringMixin:
     """Construction-time wiring: providers, bindings, tool registration, playbooks,
-workdir and sinks. Bodies moved verbatim from main.py."""
+    workdir and sinks. Bodies moved verbatim from main.py."""
 
     def _report_reserved_disabled_tools(self) -> None:
         """Tell the operator about an off switch the loop cannot honour.

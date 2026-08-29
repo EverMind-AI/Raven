@@ -20,19 +20,42 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-INNER_DIRS = ["spine", "contracts", "agent", "memory_engine", "context_engine",
-              "providers", "session", "sandbox", "routing", "token_wise",
-              "plugins", "channels", "gateway", "market", "ops",
-              # Cross-cutting leaves, seated by CONTEXT.md's Layer Seats: consumed
-              # by inner layers and cargo alike, so they may not know a surface.
-              "security", "auth",
-              # Seated by the 2026-08-29 structural audit: config and utils
-              # are cross-cutting leaves (same rule as auth); the rest are L3
-              # shelf members. proactive_engine is an engine consumed by the
-              # loop and the assembly root, not a transport, and core is the
-              # assembly root itself (see CONTEXT.md, Layer Seats).
-              "config", "utils", "mcp", "playbook", "knowledge", "skill_hub",
-              "trajectory", "eval_engine", "proactive_engine", "core"]
+INNER_DIRS = [
+    "spine",
+    "contracts",
+    "agent",
+    "memory_engine",
+    "context_engine",
+    "providers",
+    "session",
+    "sandbox",
+    "routing",
+    "token_wise",
+    "plugins",
+    "channels",
+    "gateway",
+    "market",
+    "ops",
+    # Cross-cutting leaves, seated by CONTEXT.md's Layer Seats: consumed
+    # by inner layers and cargo alike, so they may not know a surface.
+    "security",
+    "auth",
+    # Seated by the 2026-08-29 structural audit: config and utils
+    # are cross-cutting leaves (same rule as auth); the rest are L3
+    # shelf members. proactive_engine is an engine consumed by the
+    # loop and the assembly root, not a transport, and core is the
+    # assembly root itself (see CONTEXT.md, Layer Seats).
+    "config",
+    "utils",
+    "mcp",
+    "playbook",
+    "knowledge",
+    "skill_hub",
+    "trajectory",
+    "eval_engine",
+    "proactive_engine",
+    "core",
+]
 SURFACES = ("raven.cli", "raven.rpc", "raven.acp")
 
 
@@ -58,10 +81,7 @@ def test_kernel_and_organs_know_no_surface():
     # Debt allowlist: EMPTY, and may only shrink — it emptied when ask_user /
     # deep_research were re-typed against the QuestionResponder paper (tool
     # side), so no inner module names the concrete broker machine at rpc.
-    assert offenders == [], (
-        "an inner layer imports a surface (callers must stay unknown to the "
-        f"called): {offenders}"
-    )
+    assert offenders == [], f"an inner layer imports a surface (callers must stay unknown to the called): {offenders}"
 
 
 class _Resp:
@@ -98,15 +118,13 @@ async def test_a_new_entrance_needs_only_inward_imports():
     from raven.spine.scheduler import OriginPools, Scheduler
     from raven.spine.turn import Origin, TurnRequest
 
-    loop = AgentLoop(provider=_Provider(), workspace=Path(tempfile.mkdtemp()),
-                     model="f", interactive=False)
+    loop = AgentLoop(provider=_Provider(), workspace=Path(tempfile.mkdtemp()), model="f", interactive=False)
     received: list = []
 
     async def sink(ev):
         received.append(type(ev).__name__)
 
-    sched = Scheduler(runner=AgentTurnRunner(loop, stream=False),
-                      pools=OriginPools(user=2, system=2), sink=sink)
+    sched = Scheduler(runner=AgentTurnRunner(loop, stream=False), pools=OriginPools(user=2, system=2), sink=sink)
     req = TurnRequest(
         origin=Origin.USER,
         source=Source(channel="fifth", chat_id="c1", sender_id="u", chat_type=ChatType.DM),

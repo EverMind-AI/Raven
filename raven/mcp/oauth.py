@@ -432,6 +432,7 @@ class FileTokenStorage:
         corrects the entry must be believed, and only the facts that actually
         failed stay distrusted.
         """
+
         def _mark(data: dict) -> dict | None:
             if data.get("oauth_seed_stale") == fingerprint:
                 return None

@@ -393,9 +393,7 @@ def _stash_channel_slices(data: dict) -> None:
         if isinstance(section, dict):
             _channel_slices[name] = dict(section)
         else:
-            logging.getLogger(__name__).warning(
-                "channels.%s is not a table; its cargo reads as unset", name
-            )
+            logging.getLogger(__name__).warning("channels.%s is not a table; its cargo reads as unset", name)
 
 
 def load_config(config_path: Path | None = None) -> Config:

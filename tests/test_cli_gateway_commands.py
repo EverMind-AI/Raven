@@ -718,7 +718,6 @@ class TestWhereThePageIsServed:
 # lock, so there is no config-dependent branch left to read here.
 
 
-
 # ---------------------------------------------------------------------------
 # raven gateway reload | status | stop -- the control plane's CLI clients
 # ---------------------------------------------------------------------------
@@ -746,8 +745,16 @@ def test_gateway_status_renders_the_generation(monkeypatch) -> None:
     monkeypatch.setattr(
         live_probe,
         "status",
-        _async_value({"pid": 4242, "started_at": 0.0, "generation": 3, "swap_in_flight": False,
-                      "config_path": "/tmp/c.json", "page": {"mounted": False}}),
+        _async_value(
+            {
+                "pid": 4242,
+                "started_at": 0.0,
+                "generation": 3,
+                "swap_in_flight": False,
+                "config_path": "/tmp/c.json",
+                "page": {"mounted": False},
+            }
+        ),
     )
     r = runner.invoke(app, ["gateway", "status"])
     assert r.exit_code == 0

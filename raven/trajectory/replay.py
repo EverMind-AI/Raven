@@ -895,14 +895,14 @@ async def run_replay(bundle_dir: Path, mode: str = "warn") -> ReplayReport:
                 sessions.save(session)
 
             loop = AgentLoop(
-                       provider=provider,
-                       workspace=workspace,
-                       model=recording.model,
-                       session_manager=sessions,
-                       tools=ToolWiring(
-                           restrict_to_workspace=True,
-                       ),
-                   )
+                provider=provider,
+                workspace=workspace,
+                model=recording.model,
+                session_manager=sessions,
+                tools=ToolWiring(
+                    restrict_to_workspace=True,
+                ),
+            )
             loop.tools = registry
             for turn in recording.turns:
                 if state.halted:

@@ -44,6 +44,7 @@ class _ThemedConsole(Console):
             self._themed = True
         super().print(*args, **kwargs)
 
+
 console = _ThemedConsole()
 
 _TOTAL_STEPS = 7
@@ -69,9 +70,11 @@ _POINTER = POINTER
 # or Chinese variant so every later prompt / message stays bilingual.
 _LANG = "en"
 
+
 def _t(en: str, zh: str) -> str:
     """Return ``zh`` when the user picked Chinese, else ``en``."""
     return zh if _LANG == "zh" else en
+
 
 _QUESTIONARY_INSTALL_HINT = (
     "[red]Missing dependency:[/red] [accent]questionary[/accent] is required for "
@@ -81,6 +84,7 @@ _QUESTIONARY_INSTALL_HINT = (
 )
 
 _PROMPT_THEMED = False
+
 
 def _theme_questionary(questionary: Any) -> None:
     """Give every ``select`` a consistent pointer and drop questionary's own
@@ -109,6 +113,7 @@ def _theme_questionary(questionary: Any) -> None:
     questionary.select = _themed_select
     _PROMPT_THEMED = True
 
+
 def _require_questionary() -> Any:
     """Lazy-import :mod:`questionary` so missing-package errors stay scoped here."""
     try:
@@ -118,6 +123,7 @@ def _require_questionary() -> Any:
         raise typer.Exit(1)
     _theme_questionary(questionary)
     return questionary
+
 
 def _step_header(n: int, title: str) -> None:
     # Progress dots: filled for done/current steps, hollow for upcoming ones.
@@ -136,6 +142,7 @@ def _step_header(n: int, title: str) -> None:
     )
     console.print()  # breathing room between the header and the step's prompts
 
+
 def _load_raw_config() -> dict[str, Any]:
     """Return the parsed on-disk config, or ``{}`` if absent/empty.
 
@@ -147,6 +154,7 @@ def _load_raw_config() -> dict[str, Any]:
     from raven.config.loader import get_config_path, read_raw_or_raise
 
     return read_raw_or_raise(get_config_path()) or {}
+
 
 def _back_placeholder(allow_back: bool, label: Optional[str] = None) -> Any:
     """A faint in-field placeholder telling the user what an empty submit does.
@@ -161,6 +169,7 @@ def _back_placeholder(allow_back: bool, label: Optional[str] = None) -> Any:
         return None
     return [("fg:#6c6c6c italic", label or _t("empty ↵ to go back", "留空回车返回上一步"))]
 
+
 def _field_placeholder(allow_back: bool, required: bool) -> Any:
     """In-field hint for a channel credential prompt.
 
@@ -173,6 +182,7 @@ def _field_placeholder(allow_back: bool, required: bool) -> Any:
     if not required:
         return [("fg:#6c6c6c italic", _t("empty ↵ to skip", "留空回车跳过"))]
     return None
+
 
 def _prompt_api_key(provider: str, *, allow_back: bool = False, back_label: Optional[str] = None) -> Any:
     """Ask for an API key (hidden input). Returns ``_BACK`` on empty submit
@@ -208,6 +218,7 @@ def _prompt_api_key(provider: str, *, allow_back: bool = False, back_label: Opti
     if not key:
         raise typer.Exit(1)
     return key
+
 
 def _failure_choice(options: list[tuple[str, str]], *, non_interactive: bool) -> str:
     """Render a numbered failure submenu, return the chosen value.

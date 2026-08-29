@@ -88,7 +88,9 @@ def test_dispose_without_backend_skips_the_drain() -> None:
 def _candidate(rec: _Recorder | None = None):
     from raven.core.runtime import SwapCandidate
 
-    return SwapCandidate(config=None, ec_config=None, provider=None, router=None, runtime=_runtime(rec or _Recorder(), backend=False))
+    return SwapCandidate(
+        config=None, ec_config=None, provider=None, router=None, runtime=_runtime(rec or _Recorder(), backend=False)
+    )
 
 
 def test_a_second_request_while_a_swap_is_in_flight_is_refused() -> None:

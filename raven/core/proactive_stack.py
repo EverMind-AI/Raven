@@ -613,7 +613,6 @@ __all__ = [
 ]
 
 
-
 def build_wake(hb_cfg: Any, *, is_busy: Callable[[], bool]) -> tuple[Any, Any]:
     """The event-wake pair for heartbeat: ``(wake, system_events)``, or
     ``(None, None)`` when event wake is off.

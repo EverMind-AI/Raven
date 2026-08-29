@@ -21,9 +21,7 @@ def test_empty_schema_is_verbatim_passthrough():
 
 def test_missing_slice_reads_as_empty_then_defaults_apply():
     schema = {"base_url": {"type": "string", "default": "http://127.0.0.1:8000"}}
-    assert admit_slice(schema, None, plugin_id="p") == {
-        "base_url": "http://127.0.0.1:8000"
-    }
+    assert admit_slice(schema, None, plugin_id="p") == {"base_url": "http://127.0.0.1:8000"}
 
 
 def test_present_value_beats_default():
@@ -75,9 +73,7 @@ def _registry_with(tmp_path, schema_toml: str):
         "[[plugin.contributes.memory_backends]]\n"
         'name = "demo"\nfactory = "demo_mod:make"\n' + schema_toml
     )
-    plug.joinpath("demo_mod.py").write_text(
-        "def make(ctx):\n    return dict(ctx.config)\n"
-    )
+    plug.joinpath("demo_mod.py").write_text("def make(ctx):\n    return dict(ctx.config)\n")
     return assemble_plugin_registry(user_dir=tmp_path / "plugins", entry_points_group=None)
 
 
@@ -88,17 +84,13 @@ def _locator(tmp_path):
 
 
 def test_registry_applies_defaults_before_factory_boards(tmp_path):
-    reg = _registry_with(
-        tmp_path, '[plugin.config_schema]\nmode = { type = "string", default = "fast" }\n'
-    )
+    reg = _registry_with(tmp_path, '[plugin.config_schema]\nmode = { type = "string", default = "fast" }\n')
     got = reg.build_memory_backend("demo", config={}, services=_locator(tmp_path))
     assert got == {"mode": "fast"}
 
 
 def test_registry_bites_bad_type_at_the_door(tmp_path):
-    reg = _registry_with(
-        tmp_path, '[plugin.config_schema]\nmode = { type = "string" }\n'
-    )
+    reg = _registry_with(tmp_path, '[plugin.config_schema]\nmode = { type = "string" }\n')
     with pytest.raises(PluginConfigError, match="'demo'"):
         reg.build_memory_backend("demo", config={"mode": 3}, services=_locator(tmp_path))
 
@@ -111,9 +103,7 @@ def test_everos_declaration_is_zero_behavior_for_valid_config(tmp_path):
     mf = reg.manifest_for("everos-memory")
     assert mf is not None and "base_url" in mf.config_schema
     schema = mf.config_schema
-    assert admit_slice(schema, {"base_url": "http://x:9"}, plugin_id="everos-memory") == {
-        "base_url": "http://x:9"
-    }
+    assert admit_slice(schema, {"base_url": "http://x:9"}, plugin_id="everos-memory") == {"base_url": "http://x:9"}
     assert admit_slice(schema, {}, plugin_id="everos-memory") == {}
     with pytest.raises(PluginConfigError):
         admit_slice(schema, {"base_url": 9}, plugin_id="everos-memory")

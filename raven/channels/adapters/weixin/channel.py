@@ -189,9 +189,7 @@ class WeixinChannel(ChannelBase):
         assert self._client is not None
         payload = dict(body or {})
         payload.setdefault("base_info", p.BASE_INFO)
-        resp = await self._client.post(
-            f"{self._base_url}/{endpoint}", json=payload, headers=self._headers(auth=auth)
-        )
+        resp = await self._client.post(f"{self._base_url}/{endpoint}", json=payload, headers=self._headers(auth=auth))
         resp.raise_for_status()
         return resp.json()
 

@@ -29,8 +29,6 @@ def tmp_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     set_config_path(None)  # type: ignore[arg-type]
 
 
-
-
 def _read(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -537,7 +535,6 @@ def test_channels_login_helptext_lists_args_and_options(tmp_config: Path) -> Non
 def whatsapp_channel(tmp_config: Path):
     """A WhatsAppChannel instance with a dummy config."""
     from raven.channels.adapters.whatsapp.channel import WhatsAppChannel
-
 
     return WhatsAppChannel(make_channel_config("whatsapp"))
 

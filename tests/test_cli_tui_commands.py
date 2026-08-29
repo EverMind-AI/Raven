@@ -113,7 +113,9 @@ def test_tui_agent_loop_receives_non_none_backend(patched_tui_loop_deps) -> None
     _build_agent_loop()
 
     kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
-    assert wired_kwarg(kwargs, "backend") is not None, "AgentLoop must receive backend= from _build_agent_loop; got None"
+    assert wired_kwarg(kwargs, "backend") is not None, (
+        "AgentLoop must receive backend= from _build_agent_loop; got None"
+    )
     assert wired_kwarg(kwargs, "backend") is patched_tui_loop_deps["fake_backend"]
 
 

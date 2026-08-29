@@ -156,9 +156,7 @@ class ContextAssembler(ContextEngine):
         for builder, seg in zip(self._phase_a, a_segs):
             if isinstance(seg, Exception):
                 degraded.append(builder.name)
-                logger.opt(exception=seg).error(
-                    "segment builder {} failed; assembling without it", builder.name
-                )
+                logger.opt(exception=seg).error("segment builder {} failed; assembling without it", builder.name)
         meta: dict[str, Any] = {"degraded_segments": degraded} if degraded else {}
         prefix_parts: list[tuple[int, str, bool]] = []
         for builder, seg in zip(self._phase_a, a_segs):

@@ -170,7 +170,8 @@ class InstanceRegistry:
                     self._flush()
                 except OSError as e:  # noqa: BLE001 - persistence is best-effort
                     logger.warning(
-                        "subagent instance registry write failed (mapping live in-process, will not survive restart): {}", e
+                        "subagent instance registry write failed (mapping live in-process, will not survive restart): {}",
+                        e,
                     )
 
     async def upsert_spawn(
@@ -352,7 +353,8 @@ class InstanceRegistry:
                         self._flush()
                     except OSError as e:  # noqa: BLE001 - persistence is best-effort
                         logger.warning(
-                            "subagent instance registry write failed (records dropped in-process, remain on disk): {}", e
+                            "subagent instance registry write failed (records dropped in-process, remain on disk): {}",
+                            e,
                         )
                 return len(doomed)
 

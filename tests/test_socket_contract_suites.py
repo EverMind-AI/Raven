@@ -16,8 +16,15 @@ import inspect
 import pytest
 
 PROVIDER_METHODS = ("chat", "chat_with_retry", "chat_stream")
-RESPONSE_MEMBERS = ("content", "tool_calls", "reasoning_content", "thinking_blocks",
-                    "usage", "finish_reason", "error_classification")
+RESPONSE_MEMBERS = (
+    "content",
+    "tool_calls",
+    "reasoning_content",
+    "thinking_blocks",
+    "usage",
+    "finish_reason",
+    "error_classification",
+)
 
 
 def check_provider(provider) -> list[str]:
@@ -50,8 +57,9 @@ def check_executor(executor) -> list[str]:
     """Entry ticket for the sandbox socket (the conformance-test half of the
     hardened admission)."""
     problems = []
-    if not isinstance(getattr(type(executor), "is_sandboxed", None), property) \
-            and not hasattr(executor, "is_sandboxed"):
+    if not isinstance(getattr(type(executor), "is_sandboxed", None), property) and not hasattr(
+        executor, "is_sandboxed"
+    ):
         problems.append("missing is_sandboxed")
     if not hasattr(executor, "supports_process_spawning"):
         problems.append("missing supports_process_spawning")
@@ -170,6 +178,7 @@ def test_executor_without_type_level_aenter_is_rejected():
         def __getattr__(self, name):  # instance-level fake, must NOT count
             async def _f(*a):
                 return self
+
             return _f
 
     assert any("__aenter__" in p for p in check_executor(Bad()))

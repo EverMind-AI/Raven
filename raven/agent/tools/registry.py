@@ -100,6 +100,7 @@ def admit_tool(tool: Tool) -> ToolSpec:
         tool=tool,
     )
 
+
 # Where the agent loop parks a tool call's arguments when they do not parse as
 # JSON. Named here, next to the only code that must recognise it, so the two
 # ends cannot drift into reporting a parse failure as a missing field.

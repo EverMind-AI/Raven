@@ -33,8 +33,6 @@ class TextPart(TypedDict):
 ContentPart = TextPart | ImagePart
 
 
-
-
 @dataclass(frozen=True)
 class FileChange:
     """One file's whole content before and after a write.

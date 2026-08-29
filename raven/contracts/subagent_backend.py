@@ -14,7 +14,6 @@ if TYPE_CHECKING:
     from raven.contracts.llm_provider import LLMProvider
 
 
-
 class SubagentNoAnswerError(Exception):
     """The run spent its whole round budget and never produced an answer.
 
@@ -84,6 +83,7 @@ class SubagentBackend(Protocol):
         mode: str | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> str: ...
+
 
 __tier__ = "contract"
 __all__ = ["SubagentActionAbortedError", "SubagentBackend", "SubagentNoAnswerError"]

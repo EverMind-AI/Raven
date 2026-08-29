@@ -23,7 +23,7 @@ from raven.agent.loop._shared import (
 
 class OrganGlueMixin:
     """Optional-organ glue: context assembly, memory store pipeline, skill
-injection, vision routing. Bodies moved verbatim from main.py."""
+    injection, vision routing. Bodies moved verbatim from main.py."""
 
     def _supports_image_tool_result(self, model: str | None = None) -> bool:
         """Cached per model: resolving the LiteLLM target parses the model string,

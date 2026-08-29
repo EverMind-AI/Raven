@@ -42,7 +42,6 @@ console = Console()
 _SWAP_MIN_INTERVAL_S = 5.0
 
 
-
 def _risk_banner(config) -> str | None:
     """Startup banner for the dangerous default combo: no sandbox + a channel
     open to anyone. Returns the banner text, or None when either leg is safe.
@@ -476,6 +475,7 @@ def register(app: typer.Typer) -> None:
                     _logger.exception(
                         "memory backend start failed; continuing with legacy memory path",
                     )
+
             async def _bind_generation():
                 nonlocal gw_teardown, question_broker, page_mount, heartbeat
 
@@ -515,7 +515,6 @@ def register(app: typer.Typer) -> None:
                 # And retired when it stops, so a channel disabled and enabled
                 # again is not left replying through the adapter it dropped.
                 channels.on_stopped = gw_hub.retire
-
 
                 # Proactive target (cron / sentinel / heartbeat / subagent /
                 # deep_research): the gateway spine. Its hub delivers to the IM
