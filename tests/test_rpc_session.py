@@ -960,12 +960,12 @@ async def test_session_most_recent_via_dispatcher(tmp_path: Path, monkeypatch: p
 
 
 # ---------------------------------------------------------------------------
-# _manager_for: shared-loop preference vs fresh-manager fall-through
+# manager_for: shared-loop preference vs fresh-manager fall-through
 # ---------------------------------------------------------------------------
 
 
 def test_manager_for_reuses_shared_loop_manager(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """When agent_loop.sessions IS a SessionManager, _manager_for returns that
+    """When agent_loop.sessions IS a SessionManager, manager_for returns that
     exact instance — the shared loop manager is reused, not rebuilt."""
     from types import SimpleNamespace
 
@@ -979,7 +979,7 @@ def test_manager_for_reuses_shared_loop_manager(tmp_path: Path, monkeypatch: pyt
 
     monkeypatch.setattr(session_module, "_get_or_build_manager", _boom)
 
-    assert session_module._manager_for(loop, cfg) is shared
+    assert session_module.manager_for(loop, cfg) is shared
 
 
 def test_manager_for_falls_through_when_no_loop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -989,7 +989,7 @@ def test_manager_for_falls_through_when_no_loop(tmp_path: Path, monkeypatch: pyt
     sentinel = SessionManager(tmp_path)
     monkeypatch.setattr(session_module, "_get_or_build_manager", lambda _cfg: sentinel)
 
-    assert session_module._manager_for(None, cfg) is sentinel
+    assert session_module.manager_for(None, cfg) is sentinel
 
 
 def test_manager_for_falls_through_when_loop_sessions_not_a_manager(
@@ -1004,7 +1004,7 @@ def test_manager_for_falls_through_when_loop_sessions_not_a_manager(
     monkeypatch.setattr(session_module, "_get_or_build_manager", lambda _cfg: sentinel)
     loop = SimpleNamespace(sessions=None)
 
-    assert session_module._manager_for(loop, cfg) is sentinel
+    assert session_module.manager_for(loop, cfg) is sentinel
 
 
 def test_is_turn_active_reflects_active_turns(monkeypatch):

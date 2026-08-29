@@ -331,7 +331,7 @@ _EPISODE_LINE_RE = re.compile(r"^\s*\[(\d{4}-\d{2}-\d{2}[T ]\d{1,2}:\d{2})\]\s+(
 _TAG_RE = re.compile(r"#([a-z][a-z0-9-]*)")
 
 
-def _parse_episode_line(line: str) -> tuple[str, str, list[str]] | None:
+def parse_episode_line(line: str) -> tuple[str, str, list[str]] | None:
     """Split an episodes.md line into (timestamp, summary, tags).
 
     Returns None for lines that don't match the
@@ -424,7 +424,7 @@ def _is_process_only_episode(line: str) -> bool:
     Unparseable / untagged lines fall through (return False) so we don't
     accidentally suppress unrelated freeform notes.
     """
-    parsed = _parse_episode_line(line)
+    parsed = parse_episode_line(line)
     if not parsed:
         return False
     _, _, tags = parsed
@@ -1305,7 +1305,7 @@ episode_summary:
             return {}
         counts: dict[str, int] = {}
         for line in self.history_file.read_text(encoding="utf-8").splitlines():
-            parsed = _parse_episode_line(line)
+            parsed = parse_episode_line(line)
             if not parsed:
                 continue
             _, _, tags = parsed
@@ -1334,7 +1334,7 @@ episode_summary:
         cutoff = self._now_fn() - timedelta(days=days)
         counts: dict[str, int] = {}
         for line in self.history_file.read_text(encoding="utf-8").splitlines():
-            parsed = _parse_episode_line(line)
+            parsed = parse_episode_line(line)
             if not parsed:
                 continue
             ts, _, tags = parsed
@@ -1380,7 +1380,7 @@ episode_summary:
             stripped = line.strip()
             if not stripped:
                 continue
-            parsed = _parse_episode_line(stripped)
+            parsed = parse_episode_line(stripped)
             if not parsed:
                 continue
             _, _, tags = parsed

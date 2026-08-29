@@ -57,10 +57,11 @@ def _cfg() -> tuple[str, str, str]:
     not the base channels ``Config`` — hence ``load_raven_config``.
     """
     from raven.config.raven import load_raven_config
+    from raven.plugins.memory.everos.server import DEFAULT_EVEROS_BASE_URL
 
     cfg = load_raven_config()
     plug = (cfg.plugins.config or {}).get("everos-memory", {})
-    base_url = str(plug.get("base_url") or "http://localhost:18791").rstrip("/")
+    base_url = str(plug.get("base_url") or DEFAULT_EVEROS_BASE_URL).rstrip("/")
     user_id = cfg.memory.user_id or "default"
     agent_id = cfg.memory.agent_id or "default"
     return base_url, user_id, agent_id

@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.config.paths import ensure_dir, get_workspace_path
-from raven.utils.images import _image_pixel_size, detect_image_mime, estimate_image_tokens
+from raven.utils.images import detect_image_mime, estimate_image_tokens, image_pixel_size
 
 if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
@@ -229,7 +229,7 @@ async def clipboard_paste(
 
     result: dict[str, Any] = {"attached": False}
     bits = [str(path)]
-    if size := _image_pixel_size(data):
+    if size := image_pixel_size(data):
         result["width"], result["height"] = size
         result["token_estimate"] = estimate_image_tokens(*size)
         bits.append(f"{size[0]}x{size[1]}")

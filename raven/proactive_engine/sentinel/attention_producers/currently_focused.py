@@ -18,7 +18,7 @@ import json
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
-from raven.memory_engine.consolidate.consolidator import _parse_episode_line
+from raven.memory_engine.consolidate.consolidator import parse_episode_line
 from raven.proactive_engine.sentinel.attention_producers._base import (
     AttentionProducer,
 )
@@ -168,7 +168,7 @@ class CurrentlyFocusedProducer(AttentionProducer):
         except OSError:
             return {}, {}
         for line in text.splitlines():
-            parsed = _parse_episode_line(line)
+            parsed = parse_episode_line(line)
             if not parsed:
                 continue
             ts, _, tags = parsed

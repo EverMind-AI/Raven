@@ -20,7 +20,7 @@ from urllib.parse import quote
 from aiohttp import web
 from loguru import logger
 
-from raven.agent.tools._deliverables import DeliverableRecord, DeliverableStore
+from raven.agent.tools.deliverables import DeliverableRecord, DeliverableStore
 from raven.config.paths import get_cache_dir
 
 _CHUNK = 64 * 1024

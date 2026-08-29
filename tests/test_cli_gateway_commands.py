@@ -530,7 +530,7 @@ def test_gateway_provider_resolves_vendors_per_call():
 
 def test_the_door_defaults_a_deliverables_store(tmp_path, monkeypatch) -> None:
     import raven.core.runtime as runtime_mod
-    from raven.agent.tools._deliverables import DeliverableStore
+    from raven.agent.tools.deliverables import DeliverableStore
 
     captured = {}
 

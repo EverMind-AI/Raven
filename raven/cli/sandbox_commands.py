@@ -14,7 +14,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from raven.sandbox._async_utils import cancel_and_collect as _cancel_and_collect
+from raven.sandbox.async_utils import cancel_and_collect as _cancel_and_collect
 
 console = Console()
 logger = logging.getLogger(__name__)

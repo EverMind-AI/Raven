@@ -75,7 +75,7 @@ _IMAGE_TOKEN_CAP = 1568
 _IMAGE_HEADER_BYTES = 4096
 
 
-def _image_pixel_size(data: bytes) -> tuple[int, int] | None:
+def image_pixel_size(data: bytes) -> tuple[int, int] | None:
     """Pixel dimensions from an image header, or None if not derivable.
 
     Header-only parsing on purpose: the caller has a whole image in memory
@@ -151,7 +151,7 @@ def estimate_content_part_tokens(part: Any) -> int | None:
         head = base64.b64decode(payload[:_IMAGE_HEADER_BYTES], validate=False)
     except (binascii.Error, ValueError):
         return _IMAGE_TOKEN_CAP
-    size = _image_pixel_size(head)
+    size = image_pixel_size(head)
     return estimate_image_tokens(*size) if size else _IMAGE_TOKEN_CAP
 
 

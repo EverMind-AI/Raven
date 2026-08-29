@@ -163,8 +163,8 @@ def _first_line(text: str) -> str:
 if TYPE_CHECKING:
     from raven.agent.hook import CompositeHook
     from raven.agent.loop.checkpoint import CheckpointService
-    from raven.agent.tools._deliverables import DeliverableStore
     from raven.agent.tools.ask_user import QuestionResponder
+    from raven.agent.tools.deliverables import DeliverableStore
     from raven.agent.workdir import WorkdirResolver
     from raven.config.raven import (
         ContextConfig,

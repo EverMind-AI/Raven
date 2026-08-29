@@ -448,4 +448,14 @@ def chain_cron_activity_reset(
     return on_user_inbound
 
 
-__all__ = ["make_on_cron_job", "make_on_missed_foreign", "chain_cron_activity_reset"]
+def build_cron_service(*, allowed_channels: "set[str] | None") -> "CronService":
+    """Open the shared cron store for one process. ``allowed_channels`` is the
+    set this process can deliver to (``None`` for management commands that
+    only inspect the store), so two runners never claim each other's jobs."""
+    from raven.config.paths import get_cron_dir
+    from raven.proactive_engine.schedulers.cron.service import CronService
+
+    return CronService(get_cron_dir() / "jobs.json", allowed_channels=allowed_channels)
+
+
+__all__ = ["build_cron_service", "make_on_cron_job", "make_on_missed_foreign", "chain_cron_activity_reset"]

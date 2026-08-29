@@ -9,7 +9,7 @@ import logging
 import os
 from pathlib import Path
 
-from raven.sandbox._async_utils import cancel_and_collect as _cancel_and_collect
+from raven.sandbox.async_utils import cancel_and_collect as _cancel_and_collect
 
 logger = logging.getLogger(__name__)
 

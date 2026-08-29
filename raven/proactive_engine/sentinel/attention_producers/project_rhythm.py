@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
-from raven.memory_engine.consolidate.consolidator import _parse_episode_line
+from raven.memory_engine.consolidate.consolidator import parse_episode_line
 from raven.proactive_engine.sentinel.attention_producers._base import (
     AttentionProducer,
 )
@@ -43,7 +43,7 @@ class ProjectRhythmProducer(AttentionProducer):
         cutoff = now - timedelta(days=self._since_days)
         buckets: dict[str, list[tuple[datetime, int, int]]] = {}
         for line in history_file.read_text(encoding="utf-8").splitlines():
-            parsed = _parse_episode_line(line)
+            parsed = parse_episode_line(line)
             if not parsed:
                 continue
             ts, _, tags = parsed

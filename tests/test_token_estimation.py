@@ -260,7 +260,7 @@ def test_image_pixel_size_survives_every_real_jpeg_variant() -> None:
         "fill_bytes": plain[:2] + b"\xff\xff\xff" + plain[2:],
     }
     for label, data in variants.items():
-        assert images._image_pixel_size(data) == (640, 480), label
+        assert images.image_pixel_size(data) == (640, 480), label
 
 
 def test_image_pixel_size_returns_none_on_malformed_jpeg_without_raising() -> None:
@@ -280,22 +280,22 @@ def test_image_pixel_size_returns_none_on_malformed_jpeg_without_raising() -> No
         "zero_length_segment": plain[:2] + b"\xff\xe0\x00\x00" + plain[4:],
         "not_an_image": b"hello world",
     }.items():
-        assert images._image_pixel_size(data) is None, label
+        assert images.image_pixel_size(data) is None, label
 
 
 def test_image_pixel_size_parses_png_gif_and_jpeg() -> None:
-    assert images._image_pixel_size(_png(640, 480)) == (640, 480)
+    assert images.image_pixel_size(_png(640, 480)) == (640, 480)
 
     gif = b"GIF89a" + (320).to_bytes(2, "little") + (240).to_bytes(2, "little")
-    assert images._image_pixel_size(gif) == (320, 240)
+    assert images.image_pixel_size(gif) == (320, 240)
 
     # SOF0 frame header: precision, height, width, components.
     sof = (
         b"\xff\xc0" + (11).to_bytes(2, "big") + b"\x08" + (200).to_bytes(2, "big") + (300).to_bytes(2, "big") + b"\x01"
     )
-    assert images._image_pixel_size(b"\xff\xd8\xff" + b"\xe0\x00\x02" + sof) == (300, 200)
+    assert images.image_pixel_size(b"\xff\xd8\xff" + b"\xe0\x00\x02" + sof) == (300, 200)
 
-    assert images._image_pixel_size(b"not an image") is None
+    assert images.image_pixel_size(b"not an image") is None
 
 
 def test_estimate_content_part_tokens_ignores_text_parts() -> None:

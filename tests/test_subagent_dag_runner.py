@@ -1892,12 +1892,12 @@ class TestGuideSkillPointer:
     def test_guide_id_resolves_against_the_shipped_registry(self, tmp_path: Path) -> None:
         """Pins the two halves together: the id the tool prints must be the id
         ``read_skill`` can actually resolve, or the instruction is a dead end."""
-        from raven.agent.tools.skill_hub import _lookup_on_disk, _split_qualified_id
+        from raven.agent.tools.skill_hub import lookup_on_disk, split_qualified_id
         from raven.memory_engine.skill_forge import LocalSkillCatalog
 
         registry = LocalSkillCatalog(tmp_path, start_watcher=False).registry
-        source, native = _split_qualified_id(GUIDE_SKILL_ID)
-        assert _lookup_on_disk(registry, source, native) is not None
+        source, native = split_qualified_id(GUIDE_SKILL_ID)
+        assert lookup_on_disk(registry, source, native) is not None
 
 
 async def test_run_subagent_dag_tool_unknown_subagent(tmp_path: Path) -> None:

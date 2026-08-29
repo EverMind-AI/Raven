@@ -20,7 +20,7 @@ from raven.channels.contract import Channel
 from raven.config.schema import Config
 
 
-def _missing_dep_hint() -> str:
+def missing_dep_hint() -> str:
     """How to install missing channel SDKs, tailored to the install mode.
 
     An editable (dev) checkout uses ``uv sync``; a wheel/tool install has no
@@ -132,7 +132,7 @@ class ChannelManager:
                     "{} channel disabled: missing dependency ({}). {}",
                     modname,
                     e,
-                    _missing_dep_hint(),
+                    missing_dep_hint(),
                 )
 
         self._validate_allow_from()
@@ -230,7 +230,7 @@ class ChannelManager:
         try:
             channel = spec.factory(section)
         except ImportError as e:
-            logger.warning("{} channel not started: missing dependency ({}). {}", name, e, _missing_dep_hint())
+            logger.warning("{} channel not started: missing dependency ({}). {}", name, e, missing_dep_hint())
             return "missing_dep"
         groq = self.config.providers.get("groq")
         channel.transcription_api_key = getattr(groq, "api_key", "") or ""

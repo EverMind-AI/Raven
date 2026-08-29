@@ -1284,12 +1284,12 @@ def _litellm_api_base(spec: Any) -> str:
         # flow, never a models ping, so there is nothing here for it either way.
         return ""
 
-    from raven.providers.rates import _may_prompt
+    from raven.providers.rates import may_prompt
     from raven.providers.wire import stored_model_id, wire_model
 
     # Asked of the stored form, not the wire form, for the same reason.
     stored = stored_model_id(spec.name, "probe-model")
-    if _may_prompt(stored):
+    if may_prompt(stored):
         # Resolving one of these resolves its credentials on the way, and with no
         # token file that prints a device code and blocks. One answer to "can this
         # be handed to LiteLLM" for every caller -- see providers.rates.
