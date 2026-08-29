@@ -215,7 +215,7 @@ def _wire_host(url: str, parts: Any) -> str:
     """The host the HTTP client will really use, not the one urlsplit reports.
 
     They differ, and the difference was a bypass: IDNA maps the ideographic full
-    stop U+3002 (and its fullwidth siblings) onto ``.``, so ``127。0。0。1``
+    stop U+3002 (and its fullwidth siblings) onto ``.``, so ``127.0.0.1`` spelled with them
     reaches urlsplit as one non-numeric label -- an ordinary hostname as far as
     every check here is concerned -- while httpx connects to 127.0.0.1. Judging
     the string the connect will use closes that whole class rather than one

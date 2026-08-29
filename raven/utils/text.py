@@ -9,7 +9,7 @@ from typing import Any
 
 import yaml
 
-CJK_RE = re.compile(r"[一-鿿]")
+CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _FM_CLOSE_RE = re.compile(r"^---\s*$", re.MULTILINE)
 
 
@@ -24,7 +24,7 @@ def display_width(text: str) -> int:
     A length in code points is not comparable across scripts, and code that
     compares one against a single threshold silently means two different things
     to a Chinese and an English writer: "hello" is five code points and one
-    word, while the five code points of "你能做什么" are a whole question. Columns
+    word, while five CJK code points ("what can you do" in Chinese) are a whole question. Columns
     are the unit that reads the same in both, since a CJK ideograph occupies the
     room of about two latin letters on screen and carries about that much more.
     """

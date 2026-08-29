@@ -18,7 +18,7 @@ _ID_PATTERN = r"^[A-Za-z0-9_-]+$"
 # registry, grouped for the capability check, and echoed into status
 # JSON. It reaches no path and no shell, so it accepts any name the config layer
 # accepts. Holding it to the id charset meant a DAG could not name an agent that
-# `spawn` dispatches to happily -- "General Audit" and 研究员 are legal agent
+# `spawn` dispatches to happily -- "General Audit" and a Chinese display name are legal agent
 # names, and the node was rejected for the name alone. Edge whitespace is still
 # refused because it is invisible: " coder" would fail the table lookup against
 # a name that looks identical to the configured one.

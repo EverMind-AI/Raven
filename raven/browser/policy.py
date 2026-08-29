@@ -46,7 +46,7 @@ def _mapped_host(host: str) -> str:
     """The host as a browser reads it, before anything looks at its shape.
 
     The WHATWG host parser runs *after* UTS-46 mapping, and this check used to
-    run on the raw string: ``169．254．169．254`` (fullwidth stops) and a label
+    run on the raw string: ``169.254.169.254`` spelled with fullwidth stops (U+FF0E) and a label
     ending in superscript digits are 169.254.169.254 to Chromium and unparseable
     here, so they went through. Real UTS-46 rather than NFKC, because the point
     of this module is to reach the same verdict as the browser rather than a

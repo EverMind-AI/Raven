@@ -388,7 +388,7 @@ _FORESIGHT_DEDUP_STOPWORDS: frozenset[str] = frozenset(
         "habit",
     }
 )
-_FORESIGHT_TOKEN_RE = re.compile(r"[a-zA-Z]{4,}|[一-鿿]{2,}")
+_FORESIGHT_TOKEN_RE = re.compile(r"[a-zA-Z]{4,}|[\u4e00-\u9fff]{2,}")
 # Jaccard threshold for "same claim, reworded". 0.6 chosen empirically:
 # catches recurring-habit clusters like "Saturday run x4" or "daily
 # medication reminders x6" while leaving obviously-distinct predictions
