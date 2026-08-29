@@ -43,7 +43,7 @@ _UNSPECIFIC_KIND = "other"
 _RAVEN_TOOL_NAME = "raven.toolName"
 
 # A leading identifier in a title, alone or ahead of ``": <subject>"`` -- the
-# shape :func:`raven.acp.tool_kinds.title_for` builds. Anchored and bounded so
+# shape the ACP entrance's title_for builds. Anchored and bounded so
 # prose cannot match: a title of "Ran the tests" has a space where this wants a
 # colon or the end of the string.
 _TITLE_NAME = re.compile(r"\A([A-Za-z_][A-Za-z0-9_.]*)(?::\s|\Z)")

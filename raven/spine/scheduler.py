@@ -222,7 +222,7 @@ class Lane:
         Silent by design, unlike cancel_turn's queued branch above: its only two
         callers are Scheduler.shutdown's phase 2, where the process is already
         going down and every slot dies with it, and Lane.cancel via the gateway's
-        /stop path (raven.cli.gateway_commands -> cancel_conversation), whose
+        /stop path (the gateway's cancel_conversation), whose
         scheduler's lanes turn.send never binds -- so there is no client-facing
         slot here for the silence to strand.
         """

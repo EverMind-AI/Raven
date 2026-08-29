@@ -42,7 +42,7 @@ _REFUSAL_MEMORY = 64
 _STDERR_LINE_CAP = 500
 
 # Line budget for both child pipes. asyncio's default is 64 KiB, which is 128x
-# smaller than the frame size `raven.acp.stdio.MAX_FRAME_BYTES` lets an agent
+# smaller than the 8 MiB frame the ACP stdio protocol lets an agent
 # send: a single frame past 64 KiB made `readline` raise and took the read loop
 # down with it, and on stderr the same raise stopped the drain and deadlocked the
 # child. Matched to that cap so the transport can carry what the protocol allows.
