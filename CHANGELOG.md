@@ -34,6 +34,9 @@ All notable changes to Raven are documented here.
   imports the loop shell it is consumed by. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- The Eval Engine has a config table (`evalEngine`, off by default) and
+  `build_runtime` mounts its three hooks when it is on; before, the engine
+  and its stack builder existed but nothing assembled them.
 - Config-slice admission (`admit_slice`, `dispense_channel_config`) lives in
   `raven/config/admission.py`: the door validates config against a cargo
   declaration, which is config vocabulary, so the channel commands, the

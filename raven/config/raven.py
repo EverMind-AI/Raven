@@ -1492,6 +1492,53 @@ class SubagentQuestionsConfig(_Base):
     failure here."""
 
 
+# ---------------------------------------------------------------------------
+# Eval Engine -- judge hooks on the loop, off by default
+# ---------------------------------------------------------------------------
+
+
+class EvalEngineConfig(_Base):
+    """Eval Engine tunables.
+
+    Default is fully off: the assembly root mounts no hook. Operators flip
+    ``enabled = True`` and the relevant per-phase toggles to activate the
+    engine; ``build_runtime`` then extends the loop's hook chain with its
+    three hooks.
+    """
+
+    enabled: bool = False
+    """Master switch. Off means no Eval Engine hook is mounted."""
+
+    judge_model: str = "claude-haiku-4-5"
+    """Cheap small-batch model used for the LLM judge call. ``haiku`` is
+    the default since the judge is on a per-turn hot path."""
+
+    judge_timeout_seconds: float = 8.0
+    """Hard ceiling on a single judge call. Time-out -> judge returns
+    ``JudgeVerdict.unknown`` and the hook falls through pass-through."""
+
+    on_task_completion: bool = True
+    """When ``enabled``, run the after-iteration judge to write case.md /
+    behaviors.md outcomes. Set to False to silence the writer without
+    disabling the rest of the engine."""
+
+    on_tool_audit: bool = False
+    """Tool audit is an expensive per-tool-call check. Default off so the
+    engine ships safe but not loud."""
+
+    on_iteration_gate: bool = False
+    """Token-budget / pruning gate that runs before every iteration.
+    Default off so the engine has zero overhead in the common case."""
+
+    max_iteration_tokens: int = 40_000
+    """If ``on_iteration_gate`` is on, refuse to start another iteration
+    once the cumulative messages exceed this token budget."""
+
+    tool_denylist: list[str] = Field(default_factory=list)
+    """If ``on_tool_audit`` is on, tool names listed here are blocked
+    deterministically before any LLM safety check runs."""
+
+
 class RavenConfig(_Base):
     """Raven root config. Composes the base Config with feature extensions."""
 
@@ -1508,6 +1555,7 @@ class RavenConfig(_Base):
     session_title: SessionTitleConfig = Field(default_factory=SessionTitleConfig)
     subagent_dag: SubagentDagConfig = Field(default_factory=SubagentDagConfig)
     subagent_questions: SubagentQuestionsConfig = Field(default_factory=SubagentQuestionsConfig)
+    eval_engine: EvalEngineConfig = Field(default_factory=EvalEngineConfig)
 
     # CFG-1: plugin system + memory backend.
     plugins: PluginsConfig = Field(default_factory=PluginsConfig)
