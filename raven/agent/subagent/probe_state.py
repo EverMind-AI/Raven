@@ -1,4 +1,4 @@
-"""Remembered outcomes of explicit subagent availability tests.
+"""Remembered outcomes of explicit subagent availability probes.
 
 Worth keeping, because for a cli agent the free probe can only answer
 "installed" while the failures that matter -- a missing provider credential, a

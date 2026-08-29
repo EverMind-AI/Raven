@@ -27,7 +27,7 @@ from loguru import logger
 from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_backend
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.instances import InstanceRegistry
-from raven.agent.subagent.test_state import LastTest
+from raven.agent.subagent.probe_state import LastTest
 
 ProbeStatus = Literal["ready", "attention", "missing", "unknown"]
 Source = Literal["config", "preset"]

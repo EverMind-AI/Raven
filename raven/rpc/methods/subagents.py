@@ -31,7 +31,7 @@ from raven.agent.subagent.presets import (
     third_party_subagent_presets,
 )
 from raven.agent.subagent.probe import ProbeResult, probe_all, run_test
-from raven.agent.subagent.test_state import TestStateStore
+from raven.agent.subagent.probe_state import TestStateStore
 from raven.config.loader import get_config_path
 from raven.config.schema import SubagentsConfig
 from raven.config.update_subagents import (

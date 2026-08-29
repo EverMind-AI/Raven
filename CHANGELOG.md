@@ -35,6 +35,8 @@ All notable changes to Raven are documented here.
   repo-level `evolver/` tool that drives it. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- `raven/agent/subagent/test_state.py` is `probe_state.py`: a production
+  module was sitting on pytest's collection pattern.
 - Audit pass sixteen: the glossary records the memory engine's package face
   and the asking papers, names `ChannelBase` where a `BaseChannel` was
   written, and states the Consolidator's place under one context engine.
