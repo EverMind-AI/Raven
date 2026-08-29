@@ -29,7 +29,7 @@ from typing import Optional
 
 from benchmarks.appworld import batch as batch_mod
 from benchmarks.appworld.evolve.adapter import AppWorldConfig
-from raven.evolver.orchestrator.scoring import PrecheckFn
+from evolver.orchestrator.scoring import PrecheckFn
 
 
 def _port_bound(port: int, timeout: float = 0.3) -> bool:

@@ -105,7 +105,7 @@ inputs. Provider cases that require live credentials remain skipped.
 
 All production Python under `raven/` is measured except:
 
-- `raven/__main__.py` and `raven/evolver/__main__.py`, which only forward their
+- `raven/__main__.py` and `evolver/__main__.py`, which only forward their
   module entry points.
 
 Type-checking-only blocks and `if __name__ == "__main__"` launcher blocks are

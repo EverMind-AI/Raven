@@ -279,17 +279,17 @@ ignore = ["E501"]
 # K is SOP domain vocabulary for trials-per-task (N803/N806); *_PASS /
 # *_TOKEN constants are outcome labels and a beacon marker, not credentials
 # (S105); asserts tracked with the convert-vs-keep batch above (S101).
-"raven/evolver/tree/git_ops.py" = ["S607"]
-"raven/evolver/launch/config.py" = ["S607"]
-"raven/evolver/launch/contract.py" = ["S607"]
-"raven/evolver/launch/runner.py" = ["S607"]
-"raven/evolver/orchestrator/nodes/semantic.py" = ["S101"]
-"raven/evolver/scheduler/cold_start_bandit.py" = ["N803", "N806"]
-"raven/evolver/scheduler/tree_aware_bandit.py" = ["N803"]
-"raven/evolver/scheduler/tree_loader.py" = ["S101"]
-"raven/evolver/analysis/stability_bucket.py" = ["S105"]
-"raven/evolver/applier/beacon_guard.py" = ["S105"]
-"raven/evolver/judge/prompts.py" = ["S105"]
+"evolver/tree/git_ops.py" = ["S607"]
+"evolver/launch/config.py" = ["S607"]
+"evolver/launch/contract.py" = ["S607"]
+"evolver/launch/runner.py" = ["S607"]
+"evolver/orchestrator/nodes/semantic.py" = ["S101"]
+"evolver/scheduler/cold_start_bandit.py" = ["N803", "N806"]
+"evolver/scheduler/tree_aware_bandit.py" = ["N803"]
+"evolver/scheduler/tree_loader.py" = ["S101"]
+"evolver/analysis/stability_bucket.py" = ["S105"]
+"evolver/applier/beacon_guard.py" = ["S105"]
+"evolver/judge/prompts.py" = ["S105"]
 "benchmarks/appworld/evolve/adapter.py" = ["N803", "S105"]
 "benchmarks/appworld/evolve/editor.py" = ["N806"]
 "benchmarks/appworld/evolve/sandbox.py" = ["S607"]
@@ -307,6 +307,9 @@ ignore = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The evolver is a repo-level tool package, not installed with raven; the
+# tests import it from the checkout.
+pythonpath = ["."]
 norecursedirs = ["tests/integration", "*.egg", ".*", "build", "dist"]
 addopts = [
     "-ra",
@@ -344,7 +347,7 @@ branch = true
 source = ["raven"]
 omit = [
     "raven/__main__.py",
-    "raven/evolver/__main__.py",
+    "evolver/__main__.py",
 ]
 
 [tool.coverage.report]
@@ -352,7 +355,7 @@ precision = 2
 show_missing = true
 omit = [
     "raven/__main__.py",
-    "raven/evolver/__main__.py",
+    "evolver/__main__.py",
 ]
 exclude_also = [
     "if TYPE_CHECKING:",
@@ -389,6 +392,7 @@ dev = [
 [tool.importlinter]
 root_package = "raven"
 exclude_type_checking_imports = true
+include_external_packages = true
 
 [[tool.importlinter.contracts]]
 name = "inner layers know no surface"
@@ -426,7 +430,7 @@ source_modules = ["raven.contracts", "raven.spine", "raven.tracing"]
 forbidden_modules = [
     "raven.acp", "raven.agent", "raven.auth", "raven.browser",
     "raven.channels", "raven.cli", "raven.config", "raven.context_engine",
-    "raven.core", "raven.eval_engine", "raven.evolver", "raven.gateway",
+    "raven.core", "raven.eval_engine", "raven.gateway",
     "raven.importer", "raven.knowledge", "raven.market", "raven.mcp",
     "raven.memory_engine", "raven.ops", "raven.playbook", "raven.plugins",
     "raven.proactive_engine", "raven.providers", "raven.routing", "raven.rpc",
@@ -464,3 +468,9 @@ modules = [
     "raven.channels.adapters.telegram", "raven.channels.adapters.wecom",
     "raven.channels.adapters.weixin", "raven.channels.adapters.whatsapp",
 ]
+
+[[tool.importlinter.contracts]]
+name = "the runtime does not import the evolver"
+type = "forbidden"
+source_modules = ["raven"]
+forbidden_modules = ["evolver"]

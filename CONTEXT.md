@@ -960,9 +960,10 @@ member, seated inner here as well so every package appears in one roster), `conf
 turns through its schedulers and sentinel but is an engine the loop and the assembly root
 consume, not a transport), and `core` (the L2 assembly root). `templates` is packaged data
 and takes no seat. Surfaces: `cli`, `rpc`, and `acp` (an entrance: Raven serving as an
-agent for another host). Deliberately unseated, each awaiting its own ruling: `evolver`
-(zero inbound imports; product or engine is an open call), `browser` and `importer`
-(surface-side feature libraries). One ruled edge: `trajectory` (L3)
+agent for another host). Deliberately unseated, each awaiting its own ruling: `browser` and
+`importer` (surface-side feature libraries). `evolver` is not a seat at all: it left the
+package for the repo-level `evolver/` tool (outside the wheel) that drives raven as a library,
+and a fifth import-linter contract keeps the runtime from importing it back. One ruled edge: `trajectory` (L3)
 reaches `config.admission` for the door vocabulary and builds a loop by hand for replay --
 legal, because it is a harness over recorded runs, not an entrance. One package holds two
 seats: in `agent/`, `agent/loop` is the L2 harness shell every entrance runs, and its

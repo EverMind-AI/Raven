@@ -21,7 +21,7 @@ PRODUCTION_PATHSPEC = ":(glob)raven/**/*.py"
 DEFAULT_DIFF_THRESHOLD = 90.0
 OMITTED_PATHS = {
     "raven/__main__.py",
-    "raven/evolver/__main__.py",
+    "evolver/__main__.py",
 }
 
 
