@@ -133,7 +133,7 @@ class TestOnUserInboundAdapter:
 
     def test_name(self):
         adapter = OnUserInboundAdapter(lambda m: None)
-        assert adapter.name == "Legacy(on_user_inbound)"
+        assert adapter.name == "callback(on_user_inbound)"
 
 
 # ===========================================================================
@@ -179,7 +179,7 @@ class TestDecisionConsumerAdapter:
 
     def test_name(self):
         adapter = DecisionConsumerAdapter(AsyncMock())
-        assert adapter.name == "Legacy(decision_consumer)"
+        assert adapter.name == "callback(decision_consumer)"
 
 
 # ===========================================================================
@@ -252,7 +252,7 @@ class TestResponseModifierAdapter:
 
     def test_name(self):
         adapter = ResponseModifierAdapter(lambda k, c: c)
-        assert adapter.name == "Legacy(response_modifier)"
+        assert adapter.name == "callback(response_modifier)"
 
 
 # ===========================================================================
