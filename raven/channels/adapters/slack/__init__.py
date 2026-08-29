@@ -1,4 +1,4 @@
-"""Slack channel adapter (migrated to the capability contract).
+"""Slack channel adapter.
 
 Intentionally does NOT re-export ``SlackChannel`` — that would import slack_sdk
 at package import and defeat cheap spec discovery (``registry.discover_specs``

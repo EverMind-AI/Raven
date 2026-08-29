@@ -1,4 +1,4 @@
-"""WhatsApp channel adapter (migrated to the capability contract).
+"""WhatsApp channel adapter.
 
 Intentionally does NOT re-export ``WhatsAppChannel`` — that would import the
 channel implementation (Node bridge client) at package import and defeat cheap

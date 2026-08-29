@@ -142,24 +142,6 @@ def build_attachment_content(
     return content
 
 
-def build_thread_relates_to(metadata: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Construct an m.thread m.relates_to block from carried thread metadata."""
-    if not metadata:
-        return None
-    root_id = metadata.get("thread_root_event_id")
-    if not isinstance(root_id, str) or not root_id:
-        return None
-    reply_to = metadata.get("thread_reply_to_event_id") or metadata.get("event_id")
-    if not isinstance(reply_to, str) or not reply_to:
-        return None
-    return {
-        "rel_type": "m.thread",
-        "event_id": root_id,
-        "m.in_reply_to": {"event_id": reply_to},
-        "is_falling_back": True,
-    }
-
-
 # ── event field extraction ────────────────────────────────────────────
 
 
