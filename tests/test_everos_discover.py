@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from raven.plugins.memory.everos import roots
+from raven.plugins.memory.everos.server import DEFAULT_EVEROS_BASE_URL
 
 
 def _write_root(root: Path, *, api: tuple[str, int] | None = ("127.0.0.1", 18791), key: str = "k") -> None:
@@ -216,4 +217,4 @@ def test_a_new_root_does_not_declare_the_everos_default_port() -> None:
     """8000 is among the most commonly occupied ports on a developer machine; it
     only ever appeared in raven's roots because raven overrode it on the command
     line and never wrote the file."""
-    assert "8000" not in roots.default_new_root_url()
+    assert "8000" not in DEFAULT_EVEROS_BASE_URL

@@ -36,7 +36,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from raven.plugins.memory.everos.server import (
-    DEFAULT_EVEROS_BASE_URL,
     _probe_health,
     ome_lock_held,
 )
@@ -162,15 +161,4 @@ def pick(states: list[RootState]) -> RootState | None:
     return None
 
 
-def default_new_root_url() -> str:
-    """The address a freshly created root should declare.
-
-    Not the ``[api]`` default EverOS ships (8000): that port is one of the most
-    commonly occupied on a developer machine, and it only ever appeared in
-    raven's roots because raven overrode it on the command line and never wrote
-    the file.
-    """
-    return DEFAULT_EVEROS_BASE_URL
-
-
-__all__ = ["RootState", "default_new_root_url", "discover", "pick"]
+__all__ = ["RootState", "discover", "pick"]

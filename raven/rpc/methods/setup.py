@@ -33,9 +33,6 @@ if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
 
 
-_AUTO_SENTINEL = "auto"
-
-
 def _detect_provider_configured(payload: dict) -> bool:
     """Return True iff the loaded config payload indicates a usable provider.
 

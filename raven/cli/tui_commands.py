@@ -250,14 +250,6 @@ def run_subprocess(
 # tui-ipc-bridge: RPC handshake + asyncio server loop
 # ---------------------------------------------------------------------------
 #
-# Topology:
-#   parent ─── os.pipe() ──▶ Node (child fd 3) — child writes JSON-RPC requests
-#   parent ◀── os.pipe() ─── Node (child fd 4) — parent writes responses + notif
-#
-# `pass_fds=(req_r, notif_w)` keeps the FDs open across fork+exec. Inside the
-# child, Node maps them to fixed numbers (3 / 4) via the RAVEN_RPC_FD_*
-# environment variables.
-
 # Handshake budget: spec 5.1 — Node must send `system.hello` within 5 s of
 # spawn or the parent aborts with exit 3.
 _RPC_HANDSHAKE_TIMEOUT_S: float = 5.0
@@ -287,48 +279,6 @@ def _drop_watcher_spam(record: dict) -> bool:
     """Sink filter dropping watchfiles poll-timeout chatter (TUI-only, so the
     shared gateway sink is unaffected)."""
     return "rust notify timeout" not in record["message"]
-
-
-def _spawn_with_rpc_pipes(
-    argv: list[str],
-    cwd: Path,
-) -> tuple[subprocess.Popen[bytes], int, int]:
-    """Spawn `argv` with two private pipes wired for JSON-RPC.
-
-    Returns (popen, parent_request_read_fd, parent_notify_write_fd).
-    The two parent-side FDs are owned by the caller and must be closed.
-    """
-    # Pipe 1: Node → Python (requests). Node writes; Python reads.
-    req_r, req_w = os.pipe()
-    # Pipe 2: Python → Node (responses + notifications).
-    notif_r, notif_w = os.pipe()
-
-    # We must NOT inherit cloexec on the FDs we pass; Popen(pass_fds=...) will
-    # clear cloexec on those automatically. We DO want cloexec on our parent-
-    # side ends so a future fork doesn't leak them.
-    for fd in (req_r, notif_w):
-        os.set_inheritable(fd, False)
-
-    env = child_env()
-    # Inside the child these will appear as fd 3 / 4 (Popen remaps in order).
-    env["RAVEN_RPC_FD_REQUEST"] = "3"
-    env["RAVEN_RPC_FD_NOTIFY"] = "4"
-
-    proc = subprocess.Popen(
-        argv,
-        cwd=str(cwd),
-        stdin=None,
-        stdout=None,
-        stderr=None,
-        env=env,
-        pass_fds=(req_w, notif_r),
-    )
-
-    # Child has dup'd the inheritable ends; close them in the parent.
-    os.close(req_w)
-    os.close(notif_r)
-
-    return proc, req_r, notif_w
 
 
 def _build_agent_loop(workspace: str | None = None, home: str | None = None):
