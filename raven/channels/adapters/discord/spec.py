@@ -18,11 +18,12 @@ SPEC = ChannelSpec(
     capabilities=Capabilities(file_attachments=True),
     # Cargo declaration (config-with-cargo): the fields only this adapter
     # consumes. Socket fields (enabled / allow_from / workspace) stay with the
-    # host. Defaults stay in the central model until the storage handover.
+    # host. Defaults and secrecy travel with the cargo; the central model
+    # mirrors them until it retires.
     config_schema={
-        "token": {"type": "string", "required": True},
-        "gateway_url": {"type": "string"},
-        "intents": {"type": "integer"},
-        "group_policy": {"type": "string"},
+        "token": {"type": "string", "required": True, "secret": True},
+        "gateway_url": {"type": "string", "default": "wss://gateway.discord.gg/?v=10&encoding=json"},
+        "intents": {"type": "integer", "default": 37377},
+        "group_policy": {"type": "string", "default": "mention"},
     },
 )

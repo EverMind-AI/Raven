@@ -18,11 +18,12 @@ SPEC = ChannelSpec(
     capabilities=Capabilities(file_attachments=True),
     # Pilot declaration (config-with-cargo): the fields only this adapter
     # consumes. Socket fields (enabled / allow_from / workspace) stay with the
-    # host. Defaults stay in the central model until the storage handover.
+    # host. Defaults and secrecy travel with the cargo; the central model
+    # mirrors them until it retires.
     config_schema={
-        "token": {"type": "string", "required": True},
-        "proxy": {"type": "string"},
-        "reply_to_message": {"type": "boolean"},
-        "group_policy": {"type": "string"},
+        "token": {"type": "string", "required": True, "secret": True},
+        "proxy": {"type": "string", "default": None},
+        "reply_to_message": {"type": "boolean", "default": False},
+        "group_policy": {"type": "string", "default": "mention"},
     },
 )

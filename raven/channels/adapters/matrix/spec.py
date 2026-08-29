@@ -18,17 +18,18 @@ SPEC = ChannelSpec(
     capabilities=Capabilities(file_attachments=True),
     # Cargo declaration (config-with-cargo): the fields only this adapter
     # consumes. Socket fields (enabled / allow_from / workspace) stay with the
-    # host. Defaults stay in the central model until the storage handover.
+    # host. Defaults and secrecy travel with the cargo; the central model
+    # mirrors them until it retires.
     config_schema={
-        "homeserver": {"type": "string"},
-        "access_token": {"type": "string", "required": True},
+        "homeserver": {"type": "string", "default": "https://matrix.org"},
+        "access_token": {"type": "string", "required": True, "secret": True},
         "user_id": {"type": "string", "required": True},
-        "device_id": {"type": "string"},
-        "e2ee_enabled": {"type": "boolean"},
-        "sync_stop_grace_seconds": {"type": "integer"},
-        "max_media_bytes": {"type": "integer"},
-        "group_policy": {"type": "string"},
-        "allow_room_mentions": {"type": "boolean"},
-        "group_allow_from": {"type": "array"},
+        "device_id": {"type": "string", "default": ""},
+        "e2ee_enabled": {"type": "boolean", "default": True},
+        "sync_stop_grace_seconds": {"type": "integer", "default": 2},
+        "max_media_bytes": {"type": "integer", "default": 20971520},
+        "group_policy": {"type": "string", "default": "open"},
+        "group_allow_from": {"type": "array", "default": []},
+        "allow_room_mentions": {"type": "boolean", "default": False},
     },
 )

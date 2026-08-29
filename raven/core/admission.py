@@ -15,6 +15,7 @@ point of failing loudly at the door instead of deep inside a turn.
 
 from __future__ import annotations
 
+import copy
 import logging
 from typing import Any
 
@@ -61,7 +62,15 @@ def admit_slice(
             )
         if key not in admitted:
             if "default" in spec:
-                admitted[key] = spec["default"]
+                # Copied, not shared: a mutable default (list, table) handed
+                # to two dispensings must not alias one object across cargo.
+                admitted[key] = copy.deepcopy(spec["default"])
+            elif isinstance(spec.get("fields"), dict):
+                # A declared sub-table materializes from its own defaults, so
+                # an absent [channels.slack.dm] still answers dm.policy.
+                admitted[key] = admit_slice(
+                    spec["fields"], {}, plugin_id=f"{plugin_id}.{key}", logger=log
+                )
             elif spec.get("required"):
                 raise PluginConfigError(
                     f"plugin {plugin_id!r}: config key {key!r} is required and missing"
@@ -97,6 +106,14 @@ def admit_slice(
             raise PluginConfigError(
                 f"plugin {plugin_id!r}: config key {key!r} must be {want}, "
                 f"got {type(value).__name__}"
+            )
+        if want == "object" and isinstance(spec.get("fields"), dict):
+            # A fixed sub-table declares its own fields and admits
+            # recursively: sub-defaults apply, sub-types bite, exactly the
+            # door rules. Field-less objects stay opaque (member validation
+            # is the consumer's).
+            admitted[key] = admit_slice(
+                spec["fields"], value, plugin_id=f"{plugin_id}.{key}", logger=log
             )
     for key in admitted:
         if key not in schema:
@@ -165,6 +182,10 @@ class _NestedView:
         table = object.__getattribute__(self, "_table")
         if isinstance(other, _NestedView):
             return table == object.__getattribute__(other, "_table")
+        if hasattr(other, "model_dump"):
+            # Transition form: a view materialized from declared defaults
+            # compares by value against the central sub-model it replaces.
+            return table == other.model_dump()
         return table == other
 
     def __repr__(self) -> str:

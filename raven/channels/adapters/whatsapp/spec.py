@@ -19,10 +19,11 @@ SPEC = ChannelSpec(
     capabilities=Capabilities(interactive_login=True),
     # Cargo declaration (config-with-cargo): the fields only this adapter
     # consumes. Socket fields (enabled / allow_from / workspace) stay with the
-    # host. Defaults stay in the central model until the storage handover.
+    # host. Defaults and secrecy travel with the cargo; the central model
+    # mirrors them until it retires.
     config_schema={
-        "bridge_url": {"type": "string"},
-        "bridge_token": {"type": "string"},
-        "group_policy": {"type": "string"},
+        "bridge_url": {"type": "string", "default": "ws://localhost:3001"},
+        "bridge_token": {"type": "string", "default": "", "secret": True},
+        "group_policy": {"type": "string", "default": "open"},
     },
 )
