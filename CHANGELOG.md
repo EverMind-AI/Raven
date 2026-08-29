@@ -35,6 +35,11 @@ All notable changes to Raven are documented here.
   repo-level `evolver/` tool that drives it. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- Audit pass seven: the memory engine's prose names the files it writes
+  (`user.md`, `episodes.md` and their siblings, not MEMORY.md / HISTORY.md),
+  the skill forge names its three sources (Local, EverOS, Hub) instead of a
+  retired Mass and a plan's arrival markers, and the local pool points at
+  `LocalSkillCatalog` rather than the `SkillService` it replaced.
 - Audit pass nine: `raven/providers` states its rules -- the credential
   shape, the cache-ownership rule, the wire-model invariant -- where it used
   to narrate the incident that produced each, and drops the design-doc and

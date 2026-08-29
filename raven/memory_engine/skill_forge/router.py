@@ -15,11 +15,10 @@ Two policies the router enforces (not its sources):
   The other sources still feed RRF so the router never produces a
   whole-pipeline failure because of one transient.
 
-The router's source list is **fixed at construction**. Per the design
-decision, sources are internal and hardcoded (Local + Mass + Everos
-arrive in SR-3 / SR-4); third-party skill retrieval extension goes
-through :class:`MemoryBackend` rather than through new ForgeSkillSource
-implementations.
+The router's source list is **fixed at construction**: the sources are
+internal and hardcoded (Local, EverOS and Hub); third-party skill retrieval
+extension goes through :class:`MemoryBackend` rather than through new
+ForgeSkillSource implementations.
 """
 
 from __future__ import annotations
