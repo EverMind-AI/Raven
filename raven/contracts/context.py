@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     # for ``ContextEngine``, so referencing ``TurnContext`` only in type
     # hints keeps the loop unbroken.
     from raven.context_engine.curator import TurnContext
-    from raven.providers.base import LLMProvider
+    from raven.contracts.llm_provider import LLMProvider
 
 
 # ---------------------------------------------------------------------------

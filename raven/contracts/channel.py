@@ -19,7 +19,7 @@ from typing import Any, Protocol, runtime_checkable
 
 # Capabilities and SupportsStreaming live in spine.delivery (their consumer is
 # the delivery hub); re-exported here so channels keep importing from one place.
-from raven.spine.delivery import Capabilities, SupportsStreaming
+from raven.spine.delivery import Capabilities
 
 
 @runtime_checkable
@@ -64,32 +64,5 @@ class ChannelSpec:
     config_schema: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
-# Each capability flag must agree with its matching opt-in protocol. Adding a
-# capability = add one row; the check below covers both directions for it.
-_CAP_PROTOCOLS: tuple[tuple[str, type], ...] = (
-    ("interactive_login", SupportsLogin),
-    ("streaming", SupportsStreaming),
-)
-
-
-def capability_violations(channel: object, caps: Capabilities | None = None) -> list[str]:
-    """Return mismatches between declared capabilities and implemented protocols.
-
-    A channel declaring a capability must implement the matching ``Supports*``
-    protocol, and vice-versa. Empty list = consistent. Used by the per-channel
-    capability-proof tests.
-    """
-    caps = caps if caps is not None else getattr(channel, "capabilities", Capabilities())
-    out: list[str] = []
-    for flag, proto in _CAP_PROTOCOLS:
-        declared = getattr(caps, flag)
-        implemented = isinstance(channel, proto)
-        if declared and not implemented:
-            out.append(f"declares {flag} but does not implement {proto.__name__}")
-        if implemented and not declared:
-            out.append(f"implements {proto.__name__} but does not declare {flag}")
-    return out
-
-
 __tier__ = "contract"
-__all__ = ["Channel", "ChannelSpec", "SupportsLogin", "capability_violations"]
+__all__ = ["Channel", "ChannelSpec", "SupportsLogin"]

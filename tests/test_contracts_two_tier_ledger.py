@@ -89,10 +89,6 @@ LEDGER = {
         "ToolResult",
         "TruncationInfo",
         "UsageSnapshot",
-        "capability_violations",
-        "format_llm_error",
-        "parse_llm_error",
-        "send_max_tokens",
     },
     "factory_loop": {"AgentHook", "AgentHookContext", "HookDecision"},
 }
@@ -128,3 +124,66 @@ def test_ledger_bites_missing_factory_marker(tmp_path):
     p.write_text(p.read_text().replace("Versioned with the factory loop", "versioned, loosely"))
     violations = check_ledger(work, LEDGER)
     assert any("marker" in v for v in violations), violations
+
+
+# ---------------------------------------------------------------------------
+# A paper describes, it does not do: no machinery imports
+# ---------------------------------------------------------------------------
+
+# What a paper may import besides the stdlib: pydantic (shapes are models),
+# typing_extensions, the other papers, and the spine (L0 shapes such as
+# Capabilities). Anything else -- providers, tracing, loguru, a shelf -- is
+# machinery, and a paper that needs it has a body that belongs elsewhere.
+PAPER_IMPORT_ROOTS = ("raven.contracts", "raven.spine", "pydantic", "typing_extensions")
+
+
+def check_imports(pkg_dir: Path) -> list[str]:
+    """Return every import of machinery in the papers; ``if TYPE_CHECKING:``
+    blocks are annotation-only and exempt."""
+    import ast
+    import sys
+
+    violations: list[str] = []
+    for py in sorted(pkg_dir.glob("*.py")):
+        tree = ast.parse(py.read_text())
+        guarded: set[int] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.If) and isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING":
+                guarded.update(id(sub) for sub in ast.walk(node))
+        for node in ast.walk(tree):
+            if id(node) in guarded:
+                continue
+            if isinstance(node, ast.Import):
+                mods = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                mods = [node.module or ""]
+            else:
+                continue
+            for mod in mods:
+                if mod.split(".")[0] in sys.stdlib_module_names:
+                    continue
+                if any(mod == root or mod.startswith(root + ".") for root in PAPER_IMPORT_ROOTS):
+                    continue
+                violations.append(f"{py.name}:{node.lineno} imports {mod}")
+    return violations
+
+
+def test_papers_import_no_machinery():
+    assert check_imports(CONTRACTS_DIR) == []
+
+
+def test_import_guard_bites_machinery_and_spares_type_checking(tmp_path):
+    pkg = tmp_path / "contracts"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    (pkg / "leaky.py").write_text(
+        "from typing import TYPE_CHECKING\n"
+        "from raven.providers.base import LLMProvider\n"
+        "def f():\n"
+        "    from loguru import logger\n"
+        "if TYPE_CHECKING:\n"
+        "    from raven.context_engine.curator import TurnContext\n"
+        "__tier__ = 'contract'\n__all__ = []\n"
+    )
+    got = check_imports(pkg)
+    assert got == ["leaky.py:2 imports raven.providers.base", "leaky.py:4 imports loguru"], got
