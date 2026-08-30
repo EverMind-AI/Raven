@@ -78,7 +78,7 @@ def test_fetch_attachment_downloaded(monkeypatch, tmp_path):
     resp.content = b"data"
     resp.raise_for_status = MagicMock()
     ch._http = MagicMock()
-    ch._http.get = AsyncMock(return_value=resp)
+    monkeypatch.setattr("raven.security.network.guarded_fetch", AsyncMock(return_value=resp))
     import raven.channels.adapters.discord.channel as disc
 
     saved = tmp_path / "saved.bin"
@@ -89,13 +89,43 @@ def test_fetch_attachment_downloaded(monkeypatch, tmp_path):
     assert "attachment" in res.text
 
 
-def test_fetch_attachment_download_error():
+def test_fetch_attachment_download_error(monkeypatch):
     ch = _channel()
     ch._http = MagicMock()
-    ch._http.get = AsyncMock(side_effect=RuntimeError("boom"))
+    monkeypatch.setattr("raven.security.network.guarded_fetch", AsyncMock(side_effect=RuntimeError("boom")))
     res = asyncio.run(ch._fetch_attachment({"url": "u", "filename": "f.bin", "size": 10}))
     assert res.path is None
     assert "download failed" in res.text
+
+
+def test_fetch_attachment_refused_hop_is_blocked_not_saved(monkeypatch):
+    """guarded_fetch answers None when a hop was refused (already logged); the
+    attachment must read as blocked, and nothing may be written to disk."""
+    ch = _channel()
+    ch._http = MagicMock()
+    monkeypatch.setattr("raven.security.network.guarded_fetch", AsyncMock(return_value=None))
+    import raven.channels.adapters.discord.channel as disc
+
+    saved = []
+    monkeypatch.setattr(disc, "save_media_bytes", lambda *a: saved.append(a))
+
+    res = asyncio.run(ch._fetch_attachment({"url": "u", "filename": "f.bin", "size": 10}))
+
+    assert res.path is None
+    assert "blocked" in res.text
+    assert saved == []
+
+
+def test_fetch_attachment_reads_through_the_egress_guard():
+    """The URL is the payload's choice, so the read goes through the same guard
+    qq and dingtalk use -- a bare client.get here is the regression to catch."""
+    import inspect
+
+    import raven.channels.adapters.discord.channel as disc
+
+    source = inspect.getsource(disc.DiscordChannel._fetch_attachment)
+    assert "guarded_fetch" in source
+    assert "._http.get(" not in source
 
 
 # ── _on_message gating + dispatch (no network) ────────────────────────

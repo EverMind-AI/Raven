@@ -292,8 +292,15 @@ class DiscordChannel(ChannelBase):
             return self._Attachment(f"[attachment: {filename}]")
         if size and size > _MAX_ATTACHMENT_BYTES:
             return self._Attachment(f"[attachment: {filename} - too large]")
+        # The URL arrives inside the vendor's MESSAGE_CREATE payload, so it is
+        # a name the message chose, not one we did -- the same reason qq and
+        # dingtalk route their media reads through the egress guard.
+        from raven.security.network import guarded_fetch
+
         try:
-            resp = await self._http.get(url)
+            resp = await guarded_fetch(self._http, url, what="Discord attachment")
+            if resp is None:
+                return self._Attachment(f"[attachment: {filename} - blocked]")
             resp.raise_for_status()
             path = save_media_bytes("discord", resp.content, filename)
             return self._Attachment(f"[attachment: {path}]", str(path))
