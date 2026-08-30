@@ -985,8 +985,8 @@ def register(app: typer.Typer) -> None:
                     await page_mount.teardown()
                 if control is not None:
                     await control.stop()
-                from raven.agent.acp_client.client import begin_drain
-                from raven.agent.acp_client.pool import close_pool
+                from raven.acp_client.client import begin_drain
+                from raven.acp_client.pool import close_pool
 
                 # Before anything tears a transport down: an ACP connection
                 # closed first fails every pending turn with a connection error,

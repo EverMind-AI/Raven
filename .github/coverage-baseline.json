@@ -184,7 +184,7 @@
       "line_percent": 72.727273,
       "statements": 11
     },
-    "raven/agent/acp_client/__init__.py": {
+    "raven/acp_client/__init__.py": {
       "branch_percent": 100.0,
       "branches": 0,
       "covered_branches": 0,
@@ -192,7 +192,7 @@
       "line_percent": 100.0,
       "statements": 4
     },
-    "raven/agent/acp_client/ask_user.py": {
+    "raven/acp_client/ask_user.py": {
       "branch_percent": 87.5,
       "branches": 24,
       "covered_branches": 21,
@@ -200,7 +200,7 @@
       "line_percent": 98.198198,
       "statements": 111
     },
-    "raven/agent/acp_client/asker.py": {
+    "raven/acp_client/asker.py": {
       "branch_percent": 100.0,
       "branches": 2,
       "covered_branches": 2,
@@ -208,7 +208,7 @@
       "line_percent": 96.875,
       "statements": 32
     },
-    "raven/agent/acp_client/autofill.py": {
+    "raven/acp_client/autofill.py": {
       "branch_percent": 91.37931,
       "branches": 58,
       "covered_branches": 53,
@@ -216,7 +216,7 @@
       "line_percent": 96.923077,
       "statements": 130
     },
-    "raven/agent/acp_client/capabilities.py": {
+    "raven/acp_client/capabilities.py": {
       "branch_percent": 85.714286,
       "branches": 28,
       "covered_branches": 24,
@@ -224,7 +224,7 @@
       "line_percent": 90.118577,
       "statements": 253
     },
-    "raven/agent/acp_client/client.py": {
+    "raven/acp_client/client.py": {
       "branch_percent": 85.416667,
       "branches": 96,
       "covered_branches": 82,
@@ -232,7 +232,7 @@
       "line_percent": 90.087464,
       "statements": 343
     },
-    "raven/agent/acp_client/elicitation.py": {
+    "raven/acp_client/elicitation.py": {
       "branch_percent": 84.782609,
       "branches": 46,
       "covered_branches": 39,
@@ -240,7 +240,7 @@
       "line_percent": 93.38843,
       "statements": 121
     },
-    "raven/agent/acp_client/elicitor.py": {
+    "raven/acp_client/elicitor.py": {
       "branch_percent": 94.0,
       "branches": 50,
       "covered_branches": 47,
@@ -248,7 +248,7 @@
       "line_percent": 95.901639,
       "statements": 122
     },
-    "raven/agent/acp_client/journal.py": {
+    "raven/acp_client/journal.py": {
       "branch_percent": 92.5,
       "branches": 40,
       "covered_branches": 37,
@@ -256,7 +256,7 @@
       "line_percent": 92.592593,
       "statements": 135
     },
-    "raven/agent/acp_client/permissions.py": {
+    "raven/acp_client/permissions.py": {
       "branch_percent": 94.444444,
       "branches": 18,
       "covered_branches": 17,
@@ -264,7 +264,7 @@
       "line_percent": 100.0,
       "statements": 53
     },
-    "raven/agent/acp_client/pool.py": {
+    "raven/acp_client/pool.py": {
       "branch_percent": 94.444444,
       "branches": 36,
       "covered_branches": 34,
@@ -272,7 +272,7 @@
       "line_percent": 97.340426,
       "statements": 188
     },
-    "raven/agent/acp_client/protocol.py": {
+    "raven/acp_client/protocol.py": {
       "branch_percent": 66.666667,
       "branches": 6,
       "covered_branches": 4,
@@ -280,7 +280,7 @@
       "line_percent": 100.0,
       "statements": 51
     },
-    "raven/agent/acp_client/resolver.py": {
+    "raven/acp_client/resolver.py": {
       "branch_percent": 91.666667,
       "branches": 24,
       "covered_branches": 22,
@@ -288,7 +288,7 @@
       "line_percent": 99.047619,
       "statements": 105
     },
-    "raven/agent/acp_client/unprompted.py": {
+    "raven/acp_client/unprompted.py": {
       "branch_percent": 75.0,
       "branches": 48,
       "covered_branches": 36,
@@ -456,7 +456,7 @@
       "line_percent": 100.0,
       "statements": 3
     },
-    "raven/agent/subagent/acp_dialects/__init__.py": {
+    "raven/acp_client/acp_dialects/__init__.py": {
       "branch_percent": 100.0,
       "branches": 4,
       "covered_branches": 4,
@@ -464,7 +464,7 @@
       "line_percent": 100.0,
       "statements": 19
     },
-    "raven/agent/subagent/acp_dialects/base.py": {
+    "raven/acp_client/acp_dialects/base.py": {
       "branch_percent": 83.333333,
       "branches": 48,
       "covered_branches": 40,
@@ -472,7 +472,7 @@
       "line_percent": 95.620438,
       "statements": 137
     },
-    "raven/agent/subagent/acp_dialects/claude_code.py": {
+    "raven/acp_client/acp_dialects/claude_code.py": {
       "branch_percent": 75.0,
       "branches": 12,
       "covered_branches": 9,
@@ -480,7 +480,7 @@
       "line_percent": 93.333333,
       "statements": 45
     },
-    "raven/agent/subagent/acp_dialects/codex.py": {
+    "raven/acp_client/acp_dialects/codex.py": {
       "branch_percent": 85.106383,
       "branches": 94,
       "covered_branches": 80,
@@ -504,7 +504,7 @@
       "line_percent": 96.470588,
       "statements": 85
     },
-    "raven/agent/subagent/backends/acp_agent.py": {
+    "raven/acp_client/acp_agent.py": {
       "branch_percent": 87.341772,
       "branches": 158,
       "covered_branches": 138,

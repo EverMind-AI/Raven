@@ -1,7 +1,7 @@
 import asyncio
 from dataclasses import replace
 
-from raven.agent.acp_client.asker import current_ask
+from raven.acp_client.asker import current_ask
 from raven.agent.tools.ask_user import AskUserTool
 from raven.agent.tools.message import MessageTool
 from raven.agent.tools.shell import ExecTool

@@ -35,8 +35,8 @@ from typing import Any
 
 from loguru import logger
 
-from raven.agent.acp_client import autofill
-from raven.agent.acp_client.asker import attribute, current_ask, current_autofill, question_lock
+from raven.acp_client import autofill
+from raven.acp_client.asker import attribute, current_ask, current_autofill, question_lock
 
 UPDATE_METHOD = "session/update"
 

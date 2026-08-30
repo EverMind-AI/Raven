@@ -81,7 +81,7 @@ async def make_loop(
     workspace.mkdir()
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
     if measure:
-        from raven.agent.acp_client.capabilities import SnapshotStore, verify_agent
+        from raven.acp_client.capabilities import SnapshotStore, verify_agent
 
         store = SnapshotStore()
         for cfg in agents or []:
@@ -144,7 +144,7 @@ class TuiRpcHarness:
             await asyncio.wait_for(self._server, timeout=10.0)
         except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
             self._server.cancel()
-        from raven.agent.acp_client.pool import close_pool
+        from raven.acp_client.pool import close_pool
 
         await close_pool()
 

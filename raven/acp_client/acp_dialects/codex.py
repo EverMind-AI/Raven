@@ -17,7 +17,7 @@ import re
 import shlex
 from typing import Any
 
-from raven.agent.subagent.acp_dialects.base import AcpDialect, DialectResult, ToolCall, _dict
+from raven.acp_client.acp_dialects.base import AcpDialect, DialectResult, ToolCall, _dict
 
 # Codex's own item types (`codex-rs/protocol/src/items.rs`), which the adapter
 # flattens into five ACP `kind` values on the way out. Recovering them is what

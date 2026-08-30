@@ -3,7 +3,7 @@
 A deep-research endpoint reports its steps in a response field rather than in a
 notification, so this reads the field: the step's own tool name, its payload,
 and its result with the transport's wrapping removed. Sibling to
-:mod:`raven.agent.subagent.acp_dialects`, for a transport that has no
+:mod:`raven.acp_client.acp_dialects`, for a transport that has no
 notifications to read.
 
 Two response shapes, one accumulator. Buffered, every step arrives whole;

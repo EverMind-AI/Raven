@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.agent.acp_client.client import AcpClient
+from raven.acp_client.client import AcpClient
 from raven.agent.subagent.backends import env as backend_env
 
 

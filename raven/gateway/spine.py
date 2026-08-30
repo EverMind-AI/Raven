@@ -82,8 +82,8 @@ class GatewayTurnRunner(AgentTurnRunner):
         # Function-level on purpose: the acp client family is future shelf
         # cargo and must not be named at this module's import time
         # (binding-time debt).
-        from raven.agent.acp_client.asker import AskViaTool, start_ask_turn
-        from raven.agent.acp_client.resolver import Autofill
+        from raven.acp_client.asker import AskViaTool, start_ask_turn
+        from raven.acp_client.resolver import Autofill
 
         tools = getattr(self._loop, "tools", None)
         ask_tool = tools.get("ask_user") if tools is not None else None

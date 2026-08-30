@@ -17,8 +17,8 @@ Handing a renderer the adapter's *title* instead is the one thing that is not on
 the table -- it put a 100-character pipeline where a verb belongs.
 
 Adapters that answer differently from the spec subclass this; see
-:mod:`raven.agent.subagent.acp_dialects.claude_code` and
-:mod:`raven.agent.subagent.acp_dialects.codex`. Anything not measured is left to
+:mod:`raven.acp_client.acp_dialects.claude_code` and
+:mod:`raven.acp_client.acp_dialects.codex`. Anything not measured is left to
 this class rather than guessed at per adapter.
 """
 
@@ -28,8 +28,6 @@ import json
 import re
 from dataclasses import dataclass
 from typing import Any
-
-from raven.agent.subagent.tool_vocabulary import SUBJECT_KEYS
 
 _FALLBACK_TOOL = "tool_call"
 
@@ -213,6 +211,8 @@ class AcpDialect:
         measured, codex-acp's ``read`` sends no ``rawInput`` at all and the path
         exists nowhere else on the frame.
         """
+        from raven.agent.subagent.tool_vocabulary import SUBJECT_KEYS
+
         raw = _dict(update.get("rawInput"))
         for key in SUBJECT_KEYS:
             value = raw.get(key)

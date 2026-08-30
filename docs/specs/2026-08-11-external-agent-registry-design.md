@@ -344,7 +344,7 @@ if dupes:
 | 文件 | 改动 |
 |---|---|
 | `raven/agent/acp/{__init__,protocol,client,capabilities,pool}.py` | 新增：framing、连接、握手快照、进程级连接池 |
-| `raven/agent/subagent/backends/acp_agent.py` | 新增：`AcpAgentBackend`，含 span/artifact 落盘 |
+| `raven/acp_client/acp_agent.py` | 新增：`AcpAgentBackend`，含 span/artifact 落盘 |
 | `raven/config/schema.py` | 新增 `ThirdPartyAcpSubagentConfig` + union 成员；`_resolve_preset_provenance` 按 kind 门控 |
 | `raven/config/update_subagents.py` | 新增 `reject_unsupported_acp_fields` |
 | `raven/web_rpc/methods_config.py` | `_set` 调用上面这个 rejector |
