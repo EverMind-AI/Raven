@@ -44,6 +44,31 @@ def wrap_untrusted(text: str, *, source: str) -> str:
     )
 
 
+def unwrap_untrusted(text: object) -> str:
+    """Inverse of :func:`wrap_untrusted`; unfenced input comes back unchanged.
+
+    Kept here rather than in a consumer so the fence grammar has one
+    definition: a consumer re-spelling the markers would have to guess the
+    nonce and would silently fall back to "not fenced". Conservative by
+    construction -- it unwraps only when the opening line and the final line
+    carry the SAME nonce, so a body that merely contains a forged marker is
+    left alone, which is the whole point of the nonce.
+    """
+    body = text if isinstance(text, str) else str(text)
+    if not body.startswith("[BEGIN UNTRUSTED "):
+        return body
+    head, sep, rest = body.partition("\n")
+    if not sep or "#" not in head:
+        return body
+    nonce = head.rsplit("#", 1)[-1].split()[0]
+    if not nonce:
+        return body
+    inner, sep, tail = rest.rpartition("\n")
+    if not sep or not tail.startswith("[END UNTRUSTED ") or not tail.rstrip().endswith(f"#{nonce}]"):
+        return body
+    return inner
+
+
 def wrap_untrusted_blocks(blocks: list[dict[str, Any]], *, source: str) -> list[dict[str, Any]]:
     """Fence the text parts of a multimodal content block list.
 
