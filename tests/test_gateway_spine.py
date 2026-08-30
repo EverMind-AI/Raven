@@ -15,7 +15,7 @@ from raven.agent.acp_client.asker import AskViaTool, current_ask, current_autofi
 from raven.agent.acp_client.resolver import Autofill
 from raven.agent.tools.ask_user import AskUserTool
 from raven.config.raven import SubagentQuestionsConfig
-from raven.gateway.spine import build_gateway
+from raven.gateway.spine import _DELIVERY_GRACE, build_gateway
 from raven.spine import (
     ChatType,
     MediaOut,
@@ -397,3 +397,43 @@ async def test_build_gateway_teardown_leaves_no_pending_tasks():
     assert any(not t.done() for t in spawned)  # live spine tasks exist before teardown
     await teardown()
     assert all(t.done() for t in spawned)  # teardown stopped every one
+
+
+# --- teardown delivers what the sink handed it before closing the outlets ---
+
+
+async def test_teardown_delivers_what_is_still_queued_before_closing_the_hub():
+    """The barrier the reload notice depends on, tested at the seam.
+
+    ``_make_gateway_sink`` enqueues the cut-turn sentence while
+    ``scheduler.shutdown`` resolves that turn, and the outlet worker has not
+    run yet when ``teardown`` moves on. Closing the hub there cancels the
+    worker, and the sentence is lost. The test above proves the sink enqueues
+    it; this proves teardown lets it out.
+    """
+    ch = _FakeChannel("telegram")
+    _scheduler, hub, _readback, _sources, teardown = build_gateway(_ReplyAgent(), {"telegram": ch})
+    await hub.dispatch(Text(content="owed to a cut turn", source=_src()))
+
+    await teardown()
+
+    assert [content for _to, content, _media in ch.sent if "owed" in content], ch.sent
+
+
+async def test_a_channel_that_never_takes_the_send_does_not_hold_the_swap_open():
+    """Bounded, so one dead transport cannot stall a generation swap."""
+    entered = asyncio.Event()
+
+    class _StuckChannel(_FakeChannel):
+        async def send(self, chat_id: str, content: str, media: list[str] | None = None) -> None:
+            entered.set()
+            await asyncio.Event().wait()
+
+    ch = _StuckChannel("telegram")
+    _scheduler, hub, _readback, _sources, teardown = build_gateway(_ReplyAgent(), {"telegram": ch}, shutdown_grace=0.05)
+    await hub.dispatch(Text(content="never lands", source=_src()))
+    await asyncio.wait_for(entered.wait(), timeout=5)
+
+    await asyncio.wait_for(teardown(), timeout=_DELIVERY_GRACE + 5)
+
+    assert ch.sent == []

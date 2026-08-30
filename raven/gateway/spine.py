@@ -9,8 +9,11 @@ channel replies) submit through it.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING
+
+from loguru import logger
 
 from raven.agent.spine_runner import AgentTurnRunner
 from raven.agent.tools.ask_user import AskUserTool
@@ -147,6 +150,12 @@ def _make_gateway_sink(
     return sink
 
 
+#: Seconds ``teardown`` gives the outlets to deliver what is already queued.
+#: Separate from the turn grace on purpose: a caller may allow a running turn
+#: zero seconds and still owe the sentence that cutting it produced.
+_DELIVERY_GRACE = 2.0
+
+
 def build_gateway(
     agent_loop: AgentLoop,
     channels: Mapping[str, Channel],
@@ -189,6 +198,19 @@ def build_gateway(
 
     async def teardown() -> None:
         await scheduler.shutdown(grace=shutdown_grace)
+        # shutdown resolves the turns it cut, and the sink enqueues the sentence
+        # each cut turn is owed while that happens. ``aclose`` cancels the outlet
+        # workers mid-flight, so without a barrier here the sentence is queued
+        # and then dropped -- a reload would be silent for exactly the user whose
+        # reply it interrupted. Bounded: a channel whose transport is already
+        # gone costs the sentence, not the swap.
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*(hub.wait_idle(name) for name in channels)),
+                timeout=max(shutdown_grace, _DELIVERY_GRACE),
+            )
+        except TimeoutError:
+            logger.warning("gateway: delivery still queued when the grace expired; closing anyway")
         await hub.aclose()
 
     return scheduler, hub, readback_texts, sources, teardown
