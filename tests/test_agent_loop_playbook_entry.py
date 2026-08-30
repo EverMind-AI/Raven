@@ -11,7 +11,7 @@ itself.
 from __future__ import annotations
 
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.bundles import EngineWiring, TurnPolicy
+from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
 from raven.contracts.llm_provider import LLMResponse
 from raven.contracts.tool import Tool
 from raven.spine.message import ChatType, Source
@@ -167,7 +167,14 @@ def test_a_playbook_config_that_is_on_registers_both_entries_even_empty(tmp_path
     tool that loads it did not exist until the next process. Its description
     says there is nothing installed when there is nothing installed, which costs
     a sentence and keeps the pair reachable together.
+
+    The pair is bundled plugin cargo now (``raven/plugins/bundled/playbook``):
+    production discovery hands it in as plugin tools, so this test hands the
+    loop the same two tools unbound and asserts the binding leaves both
+    serving.
     """
+    from raven.agent.tools.create_playbook import CreatePlaybookTool
+    from raven.agent.tools.load_playbook import LoadPlaybookTool
     from raven.config.schema import PlaybookConfig
 
     loop = AgentLoop(
@@ -176,6 +183,7 @@ def test_a_playbook_config_that_is_on_registers_both_entries_even_empty(tmp_path
         model="fake/default",
         policy=TurnPolicy(max_iterations=2),
         engine=EngineWiring(playbook_config=PlaybookConfig(enabled=True)),
+        tools=ToolWiring(plugin_tools=[LoadPlaybookTool(), CreatePlaybookTool()]),
     )
 
     assert loop._playbooks is not None, "enabled: true must leave a runtime behind"
@@ -199,6 +207,7 @@ def test_a_user_playbook_in_the_library_registers_the_loader(tmp_path) -> None:
     A hand-written directory under the user layer is a playbook -- no generator
     involved -- and one file is enough to open the entry point.
     """
+    from raven.agent.tools.load_playbook import LoadPlaybookTool
     from raven.config.schema import PlaybookConfig
 
     target = tmp_path / "playbooks" / "weekly-feedback"
@@ -220,13 +229,20 @@ def test_a_user_playbook_in_the_library_registers_the_loader(tmp_path) -> None:
         model="fake/default",
         policy=TurnPolicy(max_iterations=2),
         engine=EngineWiring(playbook_config=PlaybookConfig(enabled=True)),
+        tools=ToolWiring(plugin_tools=[LoadPlaybookTool()]),
     )
 
     assert loop.tools.has("load_playbook")
 
 
 def test_a_playbook_config_that_is_off_tells_the_model_nothing(tmp_path) -> None:
-    """Off, neither entry exists -- the library is invisible rather than refused."""
+    """Off, neither entry exists -- the library is invisible rather than refused.
+
+    The pair still arrives (discovery does not read the feature flag), declines
+    its binding, and leaves the table.
+    """
+    from raven.agent.tools.create_playbook import CreatePlaybookTool
+    from raven.agent.tools.load_playbook import LoadPlaybookTool
     from raven.config.schema import PlaybookConfig
 
     loop = AgentLoop(
@@ -235,6 +251,7 @@ def test_a_playbook_config_that_is_off_tells_the_model_nothing(tmp_path) -> None
         model="fake/default",
         policy=TurnPolicy(max_iterations=2),
         engine=EngineWiring(playbook_config=PlaybookConfig(enabled=False)),
+        tools=ToolWiring(plugin_tools=[LoadPlaybookTool(), CreatePlaybookTool()]),
     )
 
     assert loop._playbooks is None
@@ -361,6 +378,9 @@ def test_a_runtime_that_cannot_build_leaves_the_feature_off(tmp_path, monkeypatc
     def _boom(self, cfg):
         raise RuntimeError("library is a rock")
 
+    from raven.agent.tools.create_playbook import CreatePlaybookTool
+    from raven.agent.tools.load_playbook import LoadPlaybookTool
+
     monkeypatch.setattr(AgentLoop, "_build_playbook_runtime", _boom)
     loop = AgentLoop(
         provider=_Provider(),
@@ -368,6 +388,7 @@ def test_a_runtime_that_cannot_build_leaves_the_feature_off(tmp_path, monkeypatc
         model="fake/default",
         policy=TurnPolicy(max_iterations=2),
         engine=EngineWiring(playbook_config=PlaybookConfig(enabled=True)),
+        tools=ToolWiring(plugin_tools=[LoadPlaybookTool(), CreatePlaybookTool()]),
     )
 
     assert loop._playbooks is None

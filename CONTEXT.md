@@ -921,8 +921,14 @@ product code steers the turn loop from a plugin directory (`<home>/plugins`, `./
 beside a product, a root named in `plugins.dirs`, or an entry point) instead of a fork. A factory
 may decline by returning `None` (a clean opt-out, logged, never fatal), and a contributed tool
 that needs what only the assembled loop owns declares `bind_runtime(handles)` and receives the
-frozen `RuntimeHandles` grants right after plugin tools register -- the register-first,
-bind-later idiom `ask_user` has always used for its broker, as a first-class contribution shape.
+frozen `RuntimeHandles` grants once the loop finishes assembling -- the register-first,
+bind-later idiom `ask_user` has always used for its broker, as a first-class contribution shape;
+a binder may raise `BindDeclinedError` to be taken off the table quietly, the late-bound twin of a
+factory returning `None`. The wheel carries its own shelf of such plugins,
+`raven/plugins/bundled/` (origin `bundled`, shadowed by nothing): the playbook entry tools
+(`load_playbook` / `create_playbook`) live there and bind the loop-assembled
+`RuntimeHandles.playbook_runtime` funnel, so the loop keeps one dispatch gate, one quota and
+one announce path while the tools ride the plugin contract.
 
 **Plugin Registry** (`plugins/registry.py`):
 The `PluginRegistry` discovers manifests, activates those not in `plugins.disabled` (respecting

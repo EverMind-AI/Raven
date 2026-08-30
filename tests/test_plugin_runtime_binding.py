@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.bundles import HostWiring, ToolWiring, TurnPolicy
+from raven.agent.loop.bundles import EngineWiring, HostWiring, ToolWiring, TurnPolicy
 from raven.contracts.llm_provider import LLMResponse
 from raven.plugins.context import RuntimeHandles
 from raven.providers.base import LLMProvider
@@ -74,7 +74,7 @@ class _Explosive:
         return "ok"
 
 
-def _loop(tmp_path, plugin_tools) -> AgentLoop:
+def _loop(tmp_path, plugin_tools, playbook_config=None) -> AgentLoop:
     loop = AgentLoop(
         provider=_Provider(),
         workspace=tmp_path,
@@ -82,6 +82,7 @@ def _loop(tmp_path, plugin_tools) -> AgentLoop:
         policy=TurnPolicy(max_iterations=2),
         host=HostWiring(),
         tools=ToolWiring(restrict_to_workspace=True, plugin_tools=plugin_tools),
+        engine=EngineWiring(playbook_config=playbook_config),
     )
 
     async def _noop(**_kw) -> None:
@@ -112,3 +113,37 @@ def test_a_tool_that_raises_while_binding_is_unregistered(tmp_path):
 
     assert loop.tools.get("explosive_probe") is None, "half-bound tools must not serve"
     assert loop.tools.get("plain_probe") is not None, "one bad plugin does not take the others down"
+
+
+def test_the_playbook_funnel_reaches_the_bundled_tools_by_binding(tmp_path):
+    """The whole grant path for the shelf's first real resident: the loop
+    assembles the funnel, and the two bundled tools serve exactly that object
+    -- same runtime, same generator, same store, same adopt."""
+    from raven.agent.tools.create_playbook import CreatePlaybookTool
+    from raven.agent.tools.load_playbook import LoadPlaybookTool
+    from raven.config.schema import PlaybookConfig
+
+    load, create = LoadPlaybookTool(), CreatePlaybookTool()
+    loop = _loop(tmp_path, [load, create], playbook_config=PlaybookConfig(enabled=True))
+
+    assert loop._playbooks is not None, "the loop was configured to build the funnel"
+    assert loop.tools.get("load_playbook") is load
+    assert loop.tools.get("create_playbook") is create
+    assert load._runtime is loop._playbooks
+    assert create._generator is loop._playbooks.generator
+    assert create._store is loop._playbooks.store
+    assert create._adopt == loop._playbooks.adopt
+
+
+def test_a_loop_without_playbooks_takes_the_bundled_tools_off_the_table(tmp_path):
+    """No funnel, no service: the tools decline and are unregistered quietly,
+    so `playbooks.enabled: false` turns the feature exactly as far off as it
+    was when the loop registered the tools itself."""
+    from raven.agent.tools.create_playbook import CreatePlaybookTool
+    from raven.agent.tools.load_playbook import LoadPlaybookTool
+
+    loop = _loop(tmp_path, [LoadPlaybookTool(), CreatePlaybookTool(), _Plain()])
+
+    assert loop.tools.get("load_playbook") is None, "an unbound loader must not serve"
+    assert loop.tools.get("create_playbook") is None
+    assert loop.tools.get("plain_probe") is not None, "a decline does not take the others down"

@@ -92,27 +92,26 @@ def everos_plugin_missing_note() -> str:
 
 
 def plugin_discovery_sources() -> dict:
-    """Resolve the three fixed discovery-source locations the host scans.
+    """Resolve the four fixed discovery-source locations the host scans.
 
     Shared by :func:`build_plugin_registry` (live boot) and the
     ``raven plugins`` CLI command so both see the same set:
 
+    - bundled — ``raven/plugins/bundled/`` inside the installed package: the
+      wheel's own plugin shelf (the playbook entry tools live there), scanned
+      first and shadowed by nothing.
     - user    — ``<raven home>/plugins/`` (``RAVEN_HOME`` or ``~/.raven``).
     - project — ``./.raven/plugins/``.
     - entry_points — the ``raven.plugins`` group.
 
-    ``bundled_dir`` stays a parameter of :class:`PluginDiscovery` and is not
-    one of these: the wheel ships no plugin of its own since the EverOS
-    backend became its own distribution, so naming a directory inside the
-    package would name a directory nothing puts anything in.
-
     The roots a config names itself (``plugins.dirs``) are the fourth source;
     :func:`named_plugin_roots` resolves them, so this set stays the fixed one.
     """
+    import raven.plugins
     from raven.home import raven_home
 
     return {
-        "bundled_dir": None,
+        "bundled_dir": Path(raven.plugins.__file__).parent / "bundled",
         "user_dir": raven_home() / "plugins",
         "project_dir": Path.cwd() / ".raven" / "plugins",
         "entry_points_group": "raven.plugins",

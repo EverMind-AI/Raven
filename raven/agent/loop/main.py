@@ -558,6 +558,10 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # that dependency, and the two orderings are not compatible -- see
         # ``_build_playbook_runtime``.
         self._build_playbooks()
+        # Only now does every late-bound grant exist (the playbook funnel is
+        # the youngest organ), so this is where plugin tools that declared
+        # ``bind_runtime`` receive their handles.
+        self._bind_plugin_runtime()
         self._report_reserved_disabled_tools()
 
     async def _start_executor(self) -> None:

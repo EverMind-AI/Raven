@@ -488,27 +488,11 @@ class WiringMixin:
         # Registered last so a plugin can override a built-in by name if
         # it deliberately contributes the same name; ``_withheld_tool_names``
         # still runs afterward and can strip any of them. A tool that declares
-        # ``bind_runtime`` gets the loop's late-bound handles here -- the
-        # factory ran before this loop existed, so this is the first moment
-        # they can be granted -- and one that raises while binding is
-        # unregistered loudly rather than left half-bound.
-        from raven.plugins.context import RuntimeHandles
-
-        _handles = RuntimeHandles(
-            session_dir=self.sessions.session_dir,
-            subagent_registry=self.subagents.registry,
-            subagents_paused=lambda: self.subagents.paused,
-        )
+        # ``bind_runtime`` is granted the loop's late-bound handles in
+        # ``_bind_plugin_runtime``, not here: the handles carry organs (the
+        # playbook funnel) assembled after even this registry is populated.
         for tool in self.plugin_tools:
             self.tools.register(tool)
-            bind = getattr(tool, "bind_runtime", None)
-            if not callable(bind):
-                continue
-            try:
-                bind(_handles)
-            except Exception:
-                logger.exception("plugin tool {} raised in bind_runtime; unregistering it", tool.name)
-                self.tools.unregister(tool.name)
 
         # Skill retrieval tools (body -> scripts). Both are source-agnostic and
         # both serve local/everos straight from the registry, so both register
@@ -595,8 +579,45 @@ class WiringMixin:
                 first=True,
             )
 
+    def _bind_plugin_runtime(self) -> None:
+        """Grant the late-bound handles to every plugin tool that declared.
+
+        Runs once from the constructor, after the loop has finished assembling
+        itself: the factories ran before this loop existed, and the handles
+        carry organs (the playbook funnel) built after even the tool registry
+        is populated, so this is the first moment every grant exists. A tool
+        that raises :class:`BindDeclinedError` is unregistered quietly -- the grant
+        it needs is off in this loop, which is configuration, not a bug. Any
+        other exception unregisters loudly rather than leaving a tool
+        half-bound. A tool that was withheld or shadowed after registering is
+        skipped: binding what the table no longer serves grants power to a
+        dead reference.
+        """
+        from raven.plugins.context import BindDeclinedError, RuntimeHandles
+
+        handles = RuntimeHandles(
+            session_dir=self.sessions.session_dir,
+            subagent_registry=self.subagents.registry,
+            subagents_paused=lambda: self.subagents.paused,
+            playbook_runtime=self._playbooks,
+        )
+        for tool in self.plugin_tools:
+            bind = getattr(tool, "bind_runtime", None)
+            if not callable(bind):
+                continue
+            if self.tools.get(tool.name) is not tool:
+                continue
+            try:
+                bind(handles)
+            except BindDeclinedError as decline:
+                logger.info("plugin tool {} declined its runtime binding ({}); unregistering it", tool.name, decline)
+                self.tools.unregister(tool.name)
+            except Exception:
+                logger.exception("plugin tool {} raised in bind_runtime; unregistering it", tool.name)
+                self.tools.unregister(tool.name)
+
     def _build_playbooks(self) -> None:
-        """Build the playbook runtime and register its two entry tools.
+        """Build the playbook runtime for the bundled entry tools to bind.
 
         Runs after ``_register_default_tools`` because the runtime's generator
         needs a real inventory of what this install offers, and that is
@@ -605,13 +626,17 @@ class WiringMixin:
         the two orderings look compatible: the runtime had to exist before
         registration, yet could not be built until after it.
 
+        The two entry tools are plugin cargo now (``raven/plugins/bundled/playbook``):
+        they register with the other plugin tools and receive this runtime in
+        ``_bind_plugin_runtime``, so the loop assembles the funnel and the
+        plugin serves it.
+
         It read ``self._mcp_servers`` several assignments before that field
         existed, so ``enabled: true`` raised ``AttributeError``, the guard below
         swallowed it, and the whole feature was off on every install that asked
         for it -- with one warning line as the only trace. No test caught it
-        because none of them construct an ``AgentLoop`` with a playbook config;
-        they assemble the runtime directly, which is the one path production
-        never takes.
+        because none of them constructed an ``AgentLoop`` with a playbook
+        config; the loop-level playbook tests now do.
 
         A failure to build still leaves the feature off rather than breaking the
         loop: a library that cannot load is not a reason for the agent to refuse
@@ -625,28 +650,6 @@ class WiringMixin:
         except Exception:
             logger.opt(exception=True).warning("Playbook runtime failed to build; feature disabled")
             return
-        # The only entry into the library, and registered even when the library
-        # is empty. Withholding it until something was in there made the first
-        # creation of a session unreachable: `create_playbook` writes one, and
-        # the tool that loads it did not exist until the next process. Its
-        # description says so itself when there is nothing installed, which
-        # costs a sentence.
-        from raven.agent.tools.load_playbook import LoadPlaybookTool
-
-        self.tools.register(LoadPlaybookTool(self._playbooks))
-        # Creation registers whenever the feature is on -- an empty library is
-        # exactly when capturing the first workflow matters.
-        from raven.agent.tools.create_playbook import CreatePlaybookTool
-
-        self.tools.register(
-            CreatePlaybookTool(
-                self._playbook_generator,
-                self._playbook_store,
-                # A new playbook is loadable in the same conversation without
-                # waiting for the next directory reconciliation.
-                adopt=self._playbooks.adopt,
-            )
-        )
 
     def _build_playbook_runtime(self, cfg: "PlaybookConfig"):
         """Assemble the playbook funnel from pieces this loop already owns.
@@ -704,10 +707,9 @@ class WiringMixin:
         # Both Playbook model calls use the live, capability-aware agent view.
         executor.set_agent_profiles(lambda: agent_profiles_from_registry(self.subagents.registry))
         store = PlaybookStore(user_layer)
-        # Kept for the create_playbook tool: creation shares the library and
-        # generator with the funnel, so both entries write the same place.
-        self._playbook_store = store
-        self._playbook_generator = PlaybookGenerator(
+        # Rides on the runtime below: creation shares the library and generator
+        # with the funnel, so both entry tools write the same place.
+        generator = PlaybookGenerator(
             self.provider,
             None,
             lambda: agent_profiles_from_registry(self.subagents.registry),
@@ -721,6 +723,7 @@ class WiringMixin:
         return PlaybookRuntime(
             store=store,
             executor=executor,
+            generator=generator,
             # The file as it stands, and deliberately not ``cfg.disabled``
             # beside it: that is a snapshot of the same key, and a runtime
             # holding both can only ever add to the deny list -- ``disable``
