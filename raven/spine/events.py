@@ -23,7 +23,6 @@ class NoticeKind(StrEnum):
     PROGRESS = "progress"
     TOOL_HINT = "tool_hint"
     INJECTED = "injected"
-    DELIVERY_FAILED = "delivery_failed"
     # An optional organ failed this turn and the turn proceeded without it;
     # outlets should render the detail so the user knows the answer was
     # produced degraded (e.g. without long-term memory).
