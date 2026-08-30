@@ -57,7 +57,7 @@ def _print_agent_response(response: str, render_markdown: bool) -> None:
 # the error line alone.
 _NON_AUTH_HINTS = {
     "rate_limit": "Hint: the provider is rate limiting; retry in a moment.",
-    "network": "Hint: network problem; check connectivity and retry.",
+    "network": "Hint: network problem; check connectivity and the provider apiBase, then retry.",
     "context_overflow": "Hint: the input exceeds the model's context window; shorten it.",
     "server": "Hint: provider-side error; retry later or switch models.",
     "model_unavailable": "Hint: model not served; pick another with raven provider use <name>/<model>.",
