@@ -58,4 +58,8 @@
   expect:
     mode: dag
     node_count: 3                  # faithful transcription: no invented steps
-    agents_used: [data-raven, content-raven]
+    # The four descriptive builtin rows (data-raven and friends) were retired:
+    # they were labels, not agents -- every one dispatched the same provider,
+    # model and tools. The roster the generator casts against holds the one
+    # generic agent; per-step differentiation lives in each node's prompt.
+    agents_used: [Raven]
