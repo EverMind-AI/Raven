@@ -94,10 +94,14 @@ _DENIED_ARGS = frozenset(
 
 # A package name, optionally scoped, optionally pinned. No scheme, no path, no
 # second slash: that is what keeps `github:attacker/pwn`,
-# `https://evil/pwn.tgz`, `file:../x` and `git+ssh://...` out.
+# `https://evil/pwn.tgz`, `file:../x` and `git+ssh://...` out. ASCII, because
+# `\w` alone also admits a Cyrillic look-alike of a Latin letter -- a name the
+# confirm dialog shows as the real package while the registry, which only knows
+# the ASCII spelling, resolves something else or nothing.
 _PACKAGE_SPEC_RE = re.compile(
     r"^(@[A-Za-z0-9][\w.-]*/)?[A-Za-z0-9][\w.-]*"  # [@scope/]name
-    r"([@=<>!~][\w.\-+*=]*)?$"  # optional @version / ==version
+    r"([@=<>!~][\w.\-+*=]*)?$",  # optional @version / ==version
+    re.ASCII,
 )
 
 _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
