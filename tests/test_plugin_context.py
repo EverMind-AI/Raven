@@ -66,3 +66,11 @@ class TestPluginContext:
         )
         with pytest.raises(FrozenInstanceError):
             ctx.config = {"changed": True}  # type: ignore[misc]
+
+
+class TestProviderGrant:
+    def test_provider_is_an_optional_grant(self, tmp_path: Path) -> None:
+        bare = ServiceLocator(workspace=tmp_path, user_id="u", agent_id="a")
+        assert bare.provider is None
+        lent = object()
+        assert ServiceLocator(workspace=tmp_path, user_id="u", agent_id="a", provider=lent).provider is lent

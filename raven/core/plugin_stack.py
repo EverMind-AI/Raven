@@ -39,6 +39,7 @@ from raven.plugins import (
 
 if TYPE_CHECKING:
     from raven.config.raven import RavenConfig
+    from raven.contracts.llm_provider import LLMProvider
     from raven.contracts.memory import MemoryBackend
     from raven.plugins.discover import DiscoveredPlugin
 
@@ -193,6 +194,7 @@ def build_plugin_tools(
     config: "RavenConfig",
     *,
     registry: PluginRegistry | None = None,
+    provider: "LLMProvider | None" = None,
 ) -> list:
     """Construct every plugin-contributed tool admitted by ``config``.
 
@@ -217,6 +219,7 @@ def build_plugin_tools(
         workspace=workspace,
         user_id=config.memory.user_id,
         agent_id=config.memory.agent_id,
+        provider=provider,
     )
     slices = config.plugins.config
     tools = []
@@ -254,6 +257,7 @@ def build_plugin_hooks(
     config: "RavenConfig",
     *,
     registry: PluginRegistry | None = None,
+    provider: "LLMProvider | None" = None,
 ) -> list:
     """Construct every plugin-contributed hook admitted by ``config``.
 
@@ -278,6 +282,7 @@ def build_plugin_hooks(
         workspace=workspace,
         user_id=config.memory.user_id,
         agent_id=config.memory.agent_id,
+        provider=provider,
     )
     slices = config.plugins.config
     hooks = []
