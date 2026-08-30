@@ -180,14 +180,14 @@ async def test_add_direction_synthetic_plugin_rides_to_a_real_turn(tmp_path: Pat
 # inside a mechanism package rides the wrong wheel at split time. everos is
 # the one known debt (move scheduled for the S stage); this allowlist is that
 # debt's ledger -- shrink it, never grow it.
-_MECHANISM_PACKAGES = ["plugins", "skill_hub"]
+_MECHANISM_PACKAGES = ["plugins", "market"]
 _CARGO_DEBT_ALLOWLIST = {"plugins/memory/everos"}
 
 
 def test_the_mechanism_roster_names_packages_that_exist():
     """Both packages on the roster were renamed once (plugin -> plugins,
-    plughub -> skill_hub) and the roster was not, so the walk below iterated
-    nothing and the ban passed vacuously for the whole rename's lifetime."""
+    plughub -> market, in 536418b1) and the roster was not, so the walk below
+    iterated nothing and the ban passed vacuously for the rename's lifetime."""
     for pkg in _MECHANISM_PACKAGES:
         assert (REPO / "raven" / pkg).is_dir(), f"mechanism package {pkg!r} is not there"
     for debt in _CARGO_DEBT_ALLOWLIST:
