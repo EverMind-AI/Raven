@@ -450,6 +450,27 @@ def test_the_shapes_the_real_catalogue_uses_still_install(args: list) -> None:
 
 
 @pytest.mark.parametrize(
+    ("ascii_spec", "look_alike"),
+    [
+        # Cyrillic a / o in the name, the scope and the version, in turn
+        ("package", "p\u0430ckage"),
+        ("@scope/name", "@sc\u043epe/name"),
+        ("name@1.0.0-beta", "name@1.0.0-bet\u0430"),
+    ],
+)
+def test_a_package_name_may_not_hide_a_look_alike_letter(ascii_spec: str, look_alike: str) -> None:
+    """``\\w`` is Unicode by default, so a Cyrillic letter dropped into a package
+    name passed the spec check exactly as its Latin twin does -- while the
+    registry, which only knows the ASCII spelling, resolves the two to different
+    packages if it resolves the look-alike at all."""
+    from raven.market.trust import HubTrustError, validate_mcp_connection
+
+    validate_mcp_connection({"type": "stdio", "command": "npx", "args": ["-y", ascii_spec]})
+    with pytest.raises(HubTrustError):
+        validate_mcp_connection({"type": "stdio", "command": "npx", "args": ["-y", look_alike]})
+
+
+@pytest.mark.parametrize(
     "name",
     [
         # redirect where the named package comes from: `--registry` by another name
