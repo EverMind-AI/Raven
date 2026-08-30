@@ -1315,12 +1315,12 @@ Add to the `Raven-Code` entry in `~/.raven/config.json` via the supported API
 
 ```python
 uv run python -c "
-from raven.config.update_subagents import get_third_party_subagents, set_third_party_subagents
-entries = get_third_party_subagents()
+from raven.config.update_subagents import get_agents, set_agents
+entries = get_agents()
 for e in entries:
     if e['name'] == 'Raven-Code':
         e['everos'] = {'userId': 'raven-code', 'agentId': 'raven-code'}
-set_third_party_subagents(entries)
+set_agents(entries)
 print('ok')
 "
 ```

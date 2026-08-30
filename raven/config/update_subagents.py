@@ -270,9 +270,13 @@ def remove_agent(name: str, *, config_path: Path | None = None) -> bool:
     return True
 
 
-# Pre-``agents`` spellings, kept as names only.
+# Pre-``agents`` spellings. Kept as names because the vendored product trees
+# import them: ``subagents/*/install.py`` takes add_ and get_, ``install.sh``
+# takes remove_agent, and the uninstall recipe in ``subagents/README.md`` takes
+# remove_third_party_subagent. ``tests/test_external_consumer_surface.py`` reads
+# that surface out of those files, so what is promised is checked rather than
+# remembered -- and a spelling nothing there reaches is not a promise.
 get_third_party_subagents = get_agents
-set_third_party_subagents = set_agents
 add_third_party_subagent = add_agent
 remove_third_party_subagent = remove_agent
 
@@ -288,5 +292,4 @@ __all__ = [
     "remove_agent",
     "remove_third_party_subagent",
     "set_agents",
-    "set_third_party_subagents",
 ]
