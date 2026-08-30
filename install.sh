@@ -254,9 +254,16 @@ install_raven() {
     # Install all channel adapters by default. If the umbrella extra fails to
     # resolve/build on this platform, fall back to base raven so one broken
     # channel SDK cannot block the whole install.
-    if ! uv tool install --force -c "$constraints" -e "$script_dir[channels]"; then
-      warn "Channel dependencies failed to install; installed base raven only. Some channels stay unavailable (see: raven channels list)."
-      uv tool install --force -c "$constraints" -e "$script_dir"
+    # The default config names the everos memory backend, which ships as its
+    # own distribution beside the wheel -- carry it, and degrade loudly (the
+    # host boots memoryless and `raven doctor` says why) if it cannot build.
+    plugin_dir="$script_dir/plugins-dist/everos-memory"
+    if ! uv tool install --force -c "$constraints" --with-editable "$plugin_dir" -e "$script_dir[channels]"; then
+      warn "Channel dependencies failed to install; retrying with base raven. Some channels stay unavailable (see: raven channels list)."
+      if ! uv tool install --force -c "$constraints" --with-editable "$plugin_dir" -e "$script_dir"; then
+        warn "EverOS memory plugin failed to install; long-term memory stays off (raven doctor explains)."
+        uv tool install --force -c "$constraints" -e "$script_dir"
+      fi
     fi
   else
     # Remote mode: install the latest published release wheel, which bundles
@@ -267,8 +274,12 @@ install_raven() {
     wheel_url="${RAVEN_WHEEL_URL:-}"
     if [ -z "$wheel_url" ]; then
       info "Resolving the latest raven release from GitHub..."
-      wheel_url="$(curl -fsSL "https://api.github.com/repos/EverMind-AI/Raven/releases/latest" 2>/dev/null \
-        | grep -oE 'https://[^"]*/raven-[^"]*\.whl' | head -n1)"
+      release_json="$(curl -fsSL "https://api.github.com/repos/EverMind-AI/Raven/releases/latest" 2>/dev/null)"
+      wheel_url="$(printf '%s' "$release_json" | grep -oE 'https://[^"]*/raven-[^"]*\.whl' | head -n1)"
+      # The everos memory plugin ships as a sibling wheel from the same
+      # release; older releases carry none, and its absence only means the
+      # default memory backend degrades loudly at boot.
+      everos_url="$(printf '%s' "$release_json" | grep -oE 'https://[^"]*/everos_memory-[^"]*\.whl' | head -n1)"
     fi
     if [ -z "$wheel_url" ]; then
       # The GitHub API caps unauthenticated callers at 60 requests/hour per IP, so a
@@ -324,9 +335,17 @@ install_raven() {
     fi
     info "  installing $wheel_url"
     # shellcheck disable=SC2086  # $c_args is an intentional word-split option pair.
-    if ! uv tool install --force $c_args "raven[channels] @ $wheel_url"; then
+    p_args=""
+    if [ -n "${everos_url:-}" ]; then
+      p_args="--with everos-memory @ $everos_url"
+      info "  with memory plugin $everos_url"
+    else
+      warn "This release carries no EverOS memory plugin wheel; long-term memory stays off (raven doctor explains)."
+    fi
+    # shellcheck disable=SC2086  # $c_args / $p_args are intentional word-split option pairs.
+    if ! uv tool install --force $c_args $p_args "raven[channels] @ $wheel_url"; then
       warn "Channel dependencies failed to install; installed base raven only. Some channels stay unavailable (see: raven channels list)."
-      uv tool install --force $c_args "$wheel_url"
+      uv tool install --force $c_args $p_args "$wheel_url" || uv tool install --force $c_args "$wheel_url"
     fi
   fi
   # Ensure ~/.local/bin (uv tool bin dir) is on PATH for future shells.

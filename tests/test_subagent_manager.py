@@ -43,6 +43,7 @@ from raven.contracts.tool import Continuation
 from raven.providers.base import LLMResponse, ToolCallRequest
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.sandbox import ExecResult, SandboxExecutor
+from tests._everos_presence import everos_plugin_absent
 
 
 class _StubProvider:
@@ -1825,6 +1826,39 @@ async def _unavailable_everos(*args: Any, **kwargs: Any) -> list:
     listening on.
     """
     raise RuntimeError("no live everos in tests")
+
+
+class TestHostEverosAddressWithoutThePlugin:
+    """No plugin means no host-run everos, so there is no host address either.
+
+    The constant that used to be returned here is the plugin's own, and reading
+    it was an unguarded import in the middle of a background writer -- one that
+    turned every spawn of an everos-declaring agent into a traceback.
+    """
+
+    def test_the_host_address_is_empty_rather_than_a_traceback(self) -> None:
+        with everos_plugin_absent():
+            assert manager_mod._host_everos_base_url() == ""
+
+    def test_an_agent_that_named_its_own_address_keeps_it(self, tmp_path: Path, monkeypatch) -> None:
+        """Only the default comes from the plugin; a declared address does not."""
+        manager = _third_party_manager(
+            tmp_path,
+            monkeypatch,
+            agents=[
+                ThirdPartyCliSubagentConfig(
+                    name="Raven-Code",
+                    command="raven --prompt {prompt}",
+                    everos={"agentId": "raven-code", "baseUrl": "http://box:9000"},
+                )
+            ],
+        )
+
+        with everos_plugin_absent():
+            identity = manager.everos_identity("Raven-Code")
+
+        assert identity is not None
+        assert identity.base_url == "http://box:9000"
 
 
 class TestTraceSourceWiring:

@@ -8,8 +8,12 @@ which discovery finds through the ``raven.plugins`` entry-point group.
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
+import pytest
+
+import raven
 from raven.config.raven import (
     MemoryConfig,
     PluginsConfig,
@@ -20,10 +24,13 @@ from raven.core.plugin_stack import (
     build_plugin_hooks,
     build_plugin_registry,
     build_plugin_tools,
+    everos_plugin_installed,
+    everos_plugin_missing_note,
     maybe_build_memory_backend,
     named_plugin_roots,
 )
 from raven.plugins import PluginRegistry
+from tests._everos_presence import everos_plugin_absent, everos_plugin_broken
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -286,3 +293,52 @@ class TestProviderGrant:
         seen: list = []
         build_plugin_hooks(tmp_path, _config(), registry=_GrantWatch(seen))
         assert seen == [("hook", None)]
+
+
+# ---------------------------------------------------------------------------
+# everos plugin presence
+# ---------------------------------------------------------------------------
+
+
+class TestEverosPresence:
+    def test_the_dev_environment_carries_the_plugin(self) -> None:
+        assert everos_plugin_installed() is True
+
+    def test_an_uninstalled_distribution_reads_as_absent(self) -> None:
+        with everos_plugin_absent():
+            assert everos_plugin_installed() is False
+
+    def test_a_plugin_that_is_broken_inside_still_reads_as_installed(self) -> None:
+        """The two failures a host must not confuse: gone, and here but broken.
+
+        A package whose own imports fail is present -- the guard says so, and the
+        import the caller then makes raises the plugin's own error instead of
+        being reported as an absence nobody can act on.
+        """
+        with everos_plugin_broken():
+            assert everos_plugin_installed() is True
+            with pytest.raises(ImportError):
+                from raven_everos.health import capability_available  # noqa: F401
+
+    def test_no_host_module_imports_the_plugin_at_module_level(self) -> None:
+        """Every one of these imports has to stay inside a function.
+
+        A module-level one fails at ``import raven.cli``, before any guard can
+        run, and no amount of degrading downstream can recover from that.
+        """
+        root = Path(raven.__file__).parent
+        offenders = [
+            f"{path.relative_to(root)}:{node.lineno}"
+            for path in sorted(root.rglob("*.py"))
+            for node in ast.parse(path.read_text(encoding="utf-8")).body
+            if isinstance(node, (ast.Import, ast.ImportFrom))
+            for name in ([node.module or ""] if isinstance(node, ast.ImportFrom) else [a.name for a in node.names])
+            if name.startswith("raven_everos")
+        ]
+
+        assert offenders == []
+
+    def test_the_note_names_the_distribution_and_the_default(self) -> None:
+        note = everos_plugin_missing_note()
+        assert "everos-memory" in note
+        assert "memory.backend" in note

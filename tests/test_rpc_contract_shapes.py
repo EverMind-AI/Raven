@@ -46,6 +46,7 @@ from pydantic import BaseModel
 import raven.home as raven_home_module
 from raven.config.loader import set_config_path
 from raven.rpc.models import METHOD_MODELS
+from tests._everos_presence import everos_plugin_absent
 
 _NOT_SUPPORTED_IN_V01 = -32012
 
@@ -274,6 +275,16 @@ async def test_memory_stats_with_everos_down(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr("raven.rpc.methods.memory._cfg", lambda: ("http://x", "u", "a"))
     out = _check("memory.stats", await memory_stats({}))
     assert out.ok is False
+
+
+async def test_memory_stats_without_the_plugin() -> None:
+    """A third code path into the same shape: the backend is not installed."""
+    from raven.rpc.methods.memory import memory_stats
+
+    with everos_plugin_absent():
+        out = _check("memory.stats", await memory_stats({}))
+    assert out.ok is False
+    assert out.base_url == ""
 
 
 @pytest.mark.parametrize(

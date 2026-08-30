@@ -22,6 +22,7 @@ from rich.console import Console
 
 from raven import __logo__
 from raven.cli._helpers import print_probe_troubleshooting
+from raven.core.plugin_stack import everos_plugin_installed, everos_plugin_missing_note
 from raven.core.provider_stack import send_probe
 
 if TYPE_CHECKING:
@@ -74,6 +75,10 @@ class MemoryInfo:
     whose embedding provider failed to build still answers 200 and degrades to
     keyword-only search, so the two can disagree, and that disagreement is the
     fault worth reporting.
+
+    ``plugin_missing`` is the case where neither can be filled in at all: the
+    backend the config names ships as its own distribution, and this install
+    does not have it.
     """
 
     backend: Optional[str] = None
@@ -85,10 +90,15 @@ class MemoryInfo:
     configured: list[str] = field(default_factory=list)
     capabilities: dict[str, bool] = field(default_factory=dict)
     retrieval: Optional[str] = None
+    plugin_missing: bool = False
 
     @property
     def unbuilt(self) -> list[str]:
         """Roles the user configured that the server could not build."""
+        # Nothing configured has nothing to be unbuilt, and this is the shape a
+        # plugin-less install reports -- so the answer must not need the plugin.
+        if not self.configured:
+            return []
         from raven_everos.health import capability_available
 
         return [s for s in self.configured if capability_available(self.capabilities, s) is False]
@@ -102,9 +112,12 @@ class MemoryInfo:
         semantically, and that is a worse memory rather than no memory. Only this
         list decides the exit code.
         """
+        unbuilt = self.unbuilt
+        if not unbuilt:
+            return []
         from raven_everos.health import REQUIRED_SECTIONS
 
-        return [s for s in self.unbuilt if s in REQUIRED_SECTIONS]
+        return [s for s in unbuilt if s in REQUIRED_SECTIONS]
 
 
 @dataclass
@@ -225,8 +238,9 @@ class DoctorReport:
         if self.probe is not None and not self.probe.ok:
             return 2
         # A role the user configured that the server could not build is a real
-        # fault, not a warning: recall silently returns nothing.
-        if self.memory is not None and self.memory.broken:
+        # fault, not a warning: recall silently returns nothing. A backend whose
+        # plugin is not installed is the same fault one step earlier.
+        if self.memory is not None and (self.memory.plugin_missing or self.memory.broken):
             return 2
         return 0
 
@@ -490,6 +504,9 @@ def _probe_memory(config: "RavenConfig") -> MemoryInfo:
     info = MemoryInfo(backend=backend)
     if backend != "everos":
         return info
+    if not everos_plugin_installed():
+        info.plugin_missing = True
+        return info
     from raven.config.update_everos import everos_owned, everos_role_configured, everos_root
     from raven_everos.health import (
         DEGRADING_SECTIONS,
@@ -551,10 +568,13 @@ def _render_memory_capabilities(memory: MemoryInfo) -> None:
     "Server running" and "server can recall" stopped being the same statement in
     everos 1.2.1, so they are printed as separate lines rather than one tick.
     """
-    from raven_everos.health import capability_available
-
     if memory.backend != "everos":
         return
+    if memory.plugin_missing:
+        console.print(f"  Plugin:     [red]✗ {everos_plugin_missing_note()}[/red]")
+        return
+    from raven_everos.health import capability_available
+
     if memory.root:
         console.print(f"  Memories:   {memory.root}")
     if not memory.owned:

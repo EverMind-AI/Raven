@@ -19,6 +19,7 @@ from raven.cli import doctor_commands
 from raven.cli.commands import app
 from raven.config.loader import save_config, set_config_path
 from raven.config.schema import Config
+from tests._everos_presence import everos_plugin_absent, everos_plugin_broken
 
 runner = CliRunner()
 
@@ -1201,3 +1202,36 @@ def test_the_json_row_reports_the_two_states_independently(
 
     assert row["configured"] is configured
     assert row["disabled"] is disabled
+
+
+class TestDoctorWithoutTheMemoryPlugin:
+    """The backend ships as its own distribution, and this install lacks it.
+
+    ``memory.backend`` still defaults to ``everos``, so the report has to say
+    what is missing instead of dying on the import: doctor is the command a
+    person runs precisely when something is wrong.
+    """
+
+    def test_the_report_names_the_distribution_and_fails(self, healthy_config: Path) -> None:
+        with everos_plugin_absent():
+            r = runner.invoke(app, ["doctor"])
+
+        assert r.exit_code == 2, r.stdout
+        assert "everos-memory" in r.stdout
+        assert "memory.backend" in r.stdout
+
+    def test_the_json_report_carries_it_as_a_field(self, healthy_config: Path) -> None:
+        with everos_plugin_absent():
+            r = runner.invoke(app, ["doctor", "--json"])
+
+        payload = json.loads(r.stdout)
+        assert payload["memory"]["plugin_missing"] is True
+        assert payload["memory"]["configured"] == []
+
+    def test_an_installed_but_broken_plugin_is_not_called_absent(self) -> None:
+        """A plugin whose own import fails is a bug to fix, not a degrade to
+        report -- swallowing it would hide the fault behind an install hint."""
+        from raven.cli import doctor_commands as dc
+
+        with everos_plugin_broken(), pytest.raises(ImportError):
+            dc._probe_memory(SimpleNamespace(memory=SimpleNamespace(backend="everos")))

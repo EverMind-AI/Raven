@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 import typer
 
 from raven.cli import _onboard_shared as oc
+from raven.core.plugin_stack import everos_plugin_installed, everos_plugin_missing_note
 from raven.i18n import t
 
 
@@ -1706,6 +1707,20 @@ def _step4_memory(
             )
         )
         _set_memory_backend(None)
+        return None
+
+    if not everos_plugin_installed():
+        # Nothing is written. Every lane below configures, starts or probes a
+        # service this install does not carry, and turning the backend off here
+        # would answer for the user a question only installing the plugin
+        # settles.
+        oc.console.print(
+            t(
+                "  [yellow]⚠ Long-term memory cannot be configured in this installation.[/yellow]\n  [dim]{note}[/dim]",
+                note=everos_plugin_missing_note(),
+            ),
+            highlight=False,
+        )
         return None
 
     if skip or non_interactive:
