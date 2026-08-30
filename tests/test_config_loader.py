@@ -278,6 +278,25 @@ def test_an_empty_value_is_not_a_home(tmp_path, monkeypatch) -> None:
     assert get_config_path() == Path.home() / ".raven" / "config.json"
 
 
+def test_home_implements_the_layout_paper(tmp_path, monkeypatch) -> None:
+    """raven.home answers with the paper's vocabulary, not its own copies."""
+    from pathlib import Path
+
+    from raven import home
+    from raven.contracts.path_policy import (
+        CONFIG_FILENAME,
+        DEFAULT_HOME_DIRNAME,
+        HOME_ENV_VAR,
+    )
+
+    monkeypatch.setattr(home, "_current_config_path", None)
+    monkeypatch.setenv(HOME_ENV_VAR, str(tmp_path))
+    assert home.raven_home() == tmp_path
+    assert home.get_config_path() == tmp_path / CONFIG_FILENAME
+    monkeypatch.setenv(HOME_ENV_VAR, "   ")
+    assert home.raven_home() == Path.home() / DEFAULT_HOME_DIRNAME
+
+
 def test_the_workspace_follows_raven_home_too(tmp_path, monkeypatch) -> None:
     """The half that matters most.
 

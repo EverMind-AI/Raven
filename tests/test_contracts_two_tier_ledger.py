@@ -67,6 +67,10 @@ LEDGER = {
         "AssemblyContext",
         "Channel",
         "ChannelSpec",
+        "CONFIG_FILENAME",
+        "DEFAULT_HOME_DIRNAME",
+        "HOME_ENV_VAR",
+        "WORKSPACE_DEFAULT_SENTINEL",
         "ContextEngine",
         "ContentPart",
         "Continuation",
@@ -206,7 +210,7 @@ def test_import_guard_bites_machinery_and_spares_type_checking(tmp_path):
 # The contract tier is versioned: its shape moves only with a version bump
 # ---------------------------------------------------------------------------
 
-PINNED_CONTRACT_SURFACE = ("1", "6567a9ecbea138e4c09fd9e334916a889b306f6ebc455e3191e23f8a359a1f0d")
+PINNED_CONTRACT_SURFACE = ("2", "16391fc32528e1fc405359dcd92ada0fa8d99de435f40cd9e120fc4a7bd57745")
 
 
 def contract_surface_digest(pkg_dir: Path) -> str:
