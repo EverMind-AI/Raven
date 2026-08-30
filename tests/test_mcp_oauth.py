@@ -811,3 +811,22 @@ async def test_a_partial_endpoint_block_is_not_a_document(_fixed_callback):
         "srv", _server_cfg(issuer="https://as.example", token_endpoint="https://as.example/token")
     )
     assert not _is_seeded(provider)
+
+
+def test_delete_credentials_takes_the_lock_sidecar_with_it(tmp_path, monkeypatch):
+    """A deleted credential leaves no trace -- not even the lock file that
+    once guarded its writes."""
+    from raven.mcp import oauth
+
+    monkeypatch.setattr(oauth, "_credentials_dir", lambda: tmp_path)
+    path = oauth.credentials_path("example")
+    lock = path.parent / ".lock" / (path.name + ".lock")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{}")
+    lock.write_text("")
+
+    oauth.delete_credentials("example")
+
+    assert not path.exists()
+    assert not lock.exists()
+    oauth.delete_credentials("example")

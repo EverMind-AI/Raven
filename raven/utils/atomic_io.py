@@ -108,6 +108,17 @@ def _replace_unlocked(path: Path, data: str, create_mode: int | None = None) -> 
     os.replace(tmp_path, path)
 
 
+def remove_with_lock(path: Path) -> None:
+    """Remove ``path`` and its lock sidecar; both absent is fine.
+
+    The sidecar's location is this module's own fact -- a caller deleting a
+    locked file must not re-derive it by hand, or the two drift and deleted
+    files leave lock litter behind.
+    """
+    path.unlink(missing_ok=True)
+    (path.parent / ".lock" / (path.name + ".lock")).unlink(missing_ok=True)
+
+
 def atomic_replace(path: Path, data: str, *, mode: int | None = None) -> None:
     """Replace ``path``'s content with ``data`` via temp file + os.replace.
 
