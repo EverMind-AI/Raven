@@ -90,6 +90,8 @@ LEDGER = {
         "SubagentActionAbortedError",
         "SubagentBackend",
         "SubagentNoAnswerError",
+        "SupportsApprovalTurn",
+        "SupportsDirectAsk",
         "SupportsLogin",
         "TextPart",
         "TokenStrategy",

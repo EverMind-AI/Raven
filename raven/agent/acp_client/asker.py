@@ -16,16 +16,13 @@ from __future__ import annotations
 import asyncio
 import weakref
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from raven.contracts.asking import Asker
-
-if TYPE_CHECKING:
-    from raven.agent.tools.ask_user import AskUserTool
+from raven.contracts.asking import Asker, SupportsDirectAsk
 
 
 class AskViaTool:
-    """Adapts `AskUserTool.ask_direct` to the `Asker` protocol.
+    """Adapts a tool's `ask_direct` (`SupportsDirectAsk`) to the `Asker` protocol.
 
     Bound per turn but resolved per question, which is what lets a transport
     bind its broker after the tool was registered. Lives here rather than in one
@@ -33,7 +30,7 @@ class AskViaTool:
     build the same asker from the same tool.
     """
 
-    def __init__(self, tool: "AskUserTool") -> None:
+    def __init__(self, tool: SupportsDirectAsk) -> None:
         self._tool = tool
 
     async def ask(

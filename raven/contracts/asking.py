@@ -5,11 +5,16 @@ command, or hand a prompt to whoever is driving the session, types against one
 of these shapes. The concrete brokers live with the transport that constructs
 them (the RPC surface, the gateway's channels, the ACP host) and are injected
 at assembly; nothing here imports a machine.
+
+The host side of the same seam is here too: what a tool exposes for an entrance
+to lend it a capability for one turn (``SupportsApprovalTurn``,
+``SupportsDirectAsk``). An entrance probes for that shape, never for the class
+-- a shelf may seat another Tool implementation, and the entrance must not care.
 """
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 
 class ApprovalResponder(Protocol):
@@ -65,5 +70,49 @@ class QuestionResponder(Protocol):
     ) -> str: ...
 
 
-__all__ = ["ApprovalResponder", "Asker", "QuestionResponder"]
+@runtime_checkable
+class SupportsApprovalTurn(Protocol):
+    """A tool that takes a per-turn approval binding.
+
+    The seam an entrance lends its ``ApprovalResponder`` through: bound at the
+    start of every turn, ``None`` revoking it for an origin with nobody to ask.
+    Runtime-checkable because the entrance probes whatever sits at ``exec`` for
+    this shape and binds only what has it.
+    """
+
+    def start_approval_turn(
+        self,
+        responder: ApprovalResponder | None,
+        *,
+        conversation_id: str,
+        turn_id: str,
+    ) -> None: ...
+
+
+@runtime_checkable
+class SupportsDirectAsk(Protocol):
+    """A tool that can put one host-side question to the user outside a model
+    tool call.
+
+    What the turn's ``Asker`` is adapted from: the entrance probes whatever sits
+    at ``ask_user`` for this shape, and a tool without it leaves the turn with no
+    asker, so a sub-agent's question declines rather than reaching a method the
+    tool does not have. ``None`` from ``ask_direct`` means the round-trip is
+    structurally unavailable; ``""`` is the user's non-answer.
+    """
+
+    async def ask_direct(
+        self,
+        prompt: str,
+        choices: list[str] | None,
+        conversation_id: str,
+        timeout_s: float | None = None,
+        *,
+        index: int = 0,
+        total: int = 1,
+        batch: list[dict[str, str]] | None = None,
+    ) -> str | None: ...
+
+
+__all__ = ["ApprovalResponder", "Asker", "QuestionResponder", "SupportsApprovalTurn", "SupportsDirectAsk"]
 __tier__ = "contract"

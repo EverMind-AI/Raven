@@ -22,10 +22,8 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from raven.agent.spine_runner import AgentTurnRunner
-from raven.agent.tools.ask_user import AskUserTool
 from raven.agent.tools.message import MessageTool
-from raven.agent.tools.shell import ExecTool
-from raven.contracts.asking import ApprovalResponder
+from raven.contracts.asking import ApprovalResponder, SupportsApprovalTurn, SupportsDirectAsk
 from raven.rpc.subscriptions import SubscriptionEmitter
 from raven.spine import (
     Deliverable,
@@ -164,7 +162,7 @@ class RpcTurnRunner(AgentTurnRunner):
         cid = _conversation_id(req)
         tools = getattr(self._loop, "tools", None)
         exec_tool = tools.get("exec") if tools is not None else None
-        if isinstance(exec_tool, ExecTool):
+        if isinstance(exec_tool, SupportsApprovalTurn):
             # Approval capability is rebound for every turn. Only USER origin
             # receives the TUI responder; CRON and other background origins can
             # share this process but must still fail closed as non-interactive.
@@ -184,7 +182,7 @@ class RpcTurnRunner(AgentTurnRunner):
         from raven.agent.acp_client.resolver import Autofill
 
         ask_tool = tools.get("ask_user") if tools is not None else None
-        interactive = req.origin is Origin.USER and isinstance(ask_tool, AskUserTool)
+        interactive = req.origin is Origin.USER and isinstance(ask_tool, SupportsDirectAsk)
         start_ask_turn(
             AskViaTool(ask_tool) if interactive else None,
             Autofill(
