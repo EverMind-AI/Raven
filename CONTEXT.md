@@ -918,7 +918,11 @@ each naming a `factory` (`module:callable`). The host passes the user's
 `plugins.config["<id>"]` dict verbatim to the factory as `PluginContext.config`. A `hooks`
 contribution returns an `AgentHook` the assembly root appends to the loop's chain: it is how
 product code steers the turn loop from a plugin directory (`<home>/plugins`, `./.raven/plugins`
-beside a product, a root named in `plugins.dirs`, or an entry point) instead of a fork.
+beside a product, a root named in `plugins.dirs`, or an entry point) instead of a fork. A factory
+may decline by returning `None` (a clean opt-out, logged, never fatal), and a contributed tool
+that needs what only the assembled loop owns declares `bind_runtime(handles)` and receives the
+frozen `RuntimeHandles` grants right after plugin tools register -- the register-first,
+bind-later idiom `ask_user` has always used for its broker, as a first-class contribution shape.
 
 **Plugin Registry** (`plugins/registry.py`):
 The `PluginRegistry` discovers manifests, activates those not in `plugins.disabled` (respecting

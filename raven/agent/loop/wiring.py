@@ -487,9 +487,28 @@ class WiringMixin:
         # Plugin-contributed tools (e.g. EverOS's ``understand_media``).
         # Registered last so a plugin can override a built-in by name if
         # it deliberately contributes the same name; ``_withheld_tool_names``
-        # still runs afterward and can strip any of them.
+        # still runs afterward and can strip any of them. A tool that declares
+        # ``bind_runtime`` gets the loop's late-bound handles here -- the
+        # factory ran before this loop existed, so this is the first moment
+        # they can be granted -- and one that raises while binding is
+        # unregistered loudly rather than left half-bound.
+        from raven.plugins.context import RuntimeHandles
+
+        _handles = RuntimeHandles(
+            session_dir=self.sessions.session_dir,
+            subagent_registry=self.subagents.registry,
+            subagents_paused=lambda: self.subagents.paused,
+        )
         for tool in self.plugin_tools:
             self.tools.register(tool)
+            bind = getattr(tool, "bind_runtime", None)
+            if not callable(bind):
+                continue
+            try:
+                bind(_handles)
+            except Exception:
+                logger.exception("plugin tool {} raised in bind_runtime; unregistering it", tool.name)
+                self.tools.unregister(tool.name)
 
         # Skill retrieval tools (body -> scripts). Both are source-agnostic and
         # both serve local/everos straight from the registry, so both register
