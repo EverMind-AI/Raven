@@ -900,9 +900,12 @@ Moving the endpoint or rotating the key does not make a base stale.
 **Plugin** (`plugins/`):
 A component declared by a `raven-plugin.toml` manifest (`[plugin]`: `id`, `version`, optional
 `bundled` / `enabled_by_default`). It contributes capabilities via
-`[[plugin.contributes.<kind>]]` arrays — currently `memory_backends` and `tools` — each naming
-a `factory` (`module:callable`). The host passes the user's `plugins.config["<id>"]` dict
-verbatim to the factory as `PluginContext.config`.
+`[[plugin.contributes.<kind>]]` arrays — currently `memory_backends`, `tools` and `hooks` —
+each naming a `factory` (`module:callable`). The host passes the user's
+`plugins.config["<id>"]` dict verbatim to the factory as `PluginContext.config`. A `hooks`
+contribution returns an `AgentHook` the assembly root appends to the loop's chain: it is how
+product code steers the turn loop from a plugin directory (`<home>/plugins`, `./.raven/plugins`
+beside a product, or an entry point) instead of a fork.
 
 **Plugin Registry** (`plugins/registry.py`):
 The `PluginRegistry` discovers manifests, activates those not in `plugins.disabled` (respecting

@@ -52,15 +52,16 @@ def plugin_discovery_sources() -> dict:
     ``raven plugins`` CLI command so both see the same set:
 
     - bundled — ``raven/plugins/memory/`` inside the package.
-    - user    — ``~/.raven/plugins/``.
+    - user    — ``<raven home>/plugins/`` (``RAVEN_HOME`` or ``~/.raven``).
     - project — ``./.raven/plugins/``.
     - entry_points — the ``raven.plugins`` group.
     """
     import raven
+    from raven.home import raven_home
 
     return {
         "bundled_dir": Path(raven.__path__[0]) / "plugins" / "memory",
-        "user_dir": Path.home() / ".raven" / "plugins",
+        "user_dir": raven_home() / "plugins",
         "project_dir": Path.cwd() / ".raven" / "plugins",
         "entry_points_group": "raven.plugins",
     }
@@ -234,6 +235,53 @@ def build_plugin_tools(
     return tools
 
 
+def build_plugin_hooks(
+    workspace: Path,
+    config: "RavenConfig",
+    *,
+    registry: PluginRegistry | None = None,
+) -> list:
+    """Construct every plugin-contributed hook admitted by ``config``.
+
+    Mirrors :func:`build_plugin_tools` for the ``hooks`` contribution point:
+    walks the activated registry's hook names, resolves each owning plugin's
+    config slice, and builds the hook via :meth:`PluginRegistry.build_hook`.
+    Lenient the same way -- a failing factory is logged and skipped, a
+    factory returning ``None`` has declined -- because a product's steering
+    hook must never be the thing that keeps the agent from booting. The
+    assembly root appends the returned hooks to the loop's chain.
+
+    Returns an empty list when no plugin contributes a hook.
+    """
+    # The assembly root hands in the registry it already built; a host that
+    # has none (a stubbed or degraded boot) contributes no hooks rather than
+    # rebuilding discovery or failing the boot over an extension point.
+    hook_names = getattr(registry, "hook_names", None)
+    names = hook_names() if callable(hook_names) else []
+    if not names:
+        return []
+    services = ServiceLocator(
+        workspace=workspace,
+        user_id=config.memory.user_id,
+        agent_id=config.memory.agent_id,
+    )
+    slices = config.plugins.config
+    hooks = []
+    for name in names:
+        plugin_id = registry.hook_plugin_id(name)
+        plugin_slice = (plugin_id and slices.get(plugin_id)) or slices.get(name) or {}
+        try:
+            hook = registry.build_hook(name, config=plugin_slice, services=services)
+        except Exception as e:
+            logger.warning("plugin hook %r factory raised at construction (%s); skipping it.", name, e)
+            continue
+        if hook is None:
+            logger.debug("plugin hook %r factory opted out (returned None); skipping it.", name)
+            continue
+        hooks.append(hook)
+    return hooks
+
+
 def _resolve_plugin_config_slice(
     registry: PluginRegistry,
     config: "RavenConfig",
@@ -283,6 +331,7 @@ def _plugin_id_for_backend(
 
 
 __all__ = [
+    "build_plugin_hooks",
     "build_plugin_registry",
     "build_plugin_tools",
     "discover_plugins",

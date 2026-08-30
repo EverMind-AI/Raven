@@ -25,11 +25,13 @@ from raven.plugins.context import PluginContext, ServiceLocator
 from raven.plugins.discover import DiscoveredPlugin, ManifestOrigin, PluginDiscovery
 from raven.plugins.manifest import (
     Contributes,
+    HookContribution,
     MemoryBackendContribution,
     PluginManifest,
     ToolContribution,
 )
 from raven.plugins.registry import (
+    HookFactory,
     MemoryBackendFactory,
     PluginConflictError,
     PluginError,
@@ -42,6 +44,8 @@ from raven.plugins.registry import (
 __all__ = [
     "Contributes",
     "DiscoveredPlugin",
+    "HookContribution",
+    "HookFactory",
     "assemble_plugin_registry",
     "MemoryBackendContribution",
     "MemoryBackendFactory",
