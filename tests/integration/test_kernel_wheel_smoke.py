@@ -44,8 +44,11 @@ def test_the_kernel_wheel_builds_and_imports_alone(tmp_path):
         "loaded = sorted(m for m in sys.modules if m == 'raven' or m.startswith('raven.'))\n"
         "print(json.dumps({'loaded': loaded, 'version': raven.__version__}))\n"
     )
+    # Isolated mode: `python -c` puts the cwd on sys.path, and this test runs
+    # with the checkout as cwd -- without -I the probe imports the source tree
+    # and proves nothing about the wheel.
     check = subprocess.run(
-        [str(python), "-c", probe],
+        [str(python), "-I", "-c", probe],
         capture_output=True,
         text=True,
         timeout=120,
