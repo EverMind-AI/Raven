@@ -42,6 +42,7 @@ class PlaybookRuntime:
         *,
         store: PlaybookStore,
         executor: PlaybookExecutor,
+        generator: Any = None,
         disabled: Iterable[str] = (),
         disabled_source: "Callable[[], frozenset[str]] | None" = None,
         known_agents: "Callable[[], Iterable[str]] | None" = None,
@@ -62,6 +63,10 @@ class PlaybookRuntime:
         #: run of the same playbook starts with a fresh budget.
         self._gap_rounds: dict[tuple[str, str], int] = {}
         self._store = store
+        #: Carried, never called: creation's composer rides with the library so
+        #: the bundled ``create_playbook`` tool binds one object. ``None`` on a
+        #: host that assembles a runtime without creation (the CLI's run path).
+        self._generator = generator
         self._specs: dict[str, PlaybookSpec] = {}
         #: Parsed, and refused by the structural check. Kept rather than dropped
         #: because the reason is usually not in the file: an agent switched off,
@@ -289,6 +294,16 @@ class PlaybookRuntime:
         self._reindex()
         logger.info("Playbook {!r} adopted into the live library", name)
         return True
+
+    @property
+    def store(self) -> PlaybookStore:
+        """The library both entry tools write and read -- one place on disk."""
+        return self._store
+
+    @property
+    def generator(self) -> Any:
+        """Creation's composer, for the bundled ``create_playbook`` to bind."""
+        return self._generator
 
     @property
     def dag_tool(self) -> Any:

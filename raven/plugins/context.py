@@ -99,6 +99,24 @@ class RuntimeHandles:
     """Whether the operator paused sub-agent work; an orchestrating tool
     consults this before starting more."""
 
+    playbook_runtime: Any = None
+    """The loop's assembled playbook funnel (library, executor, creation's
+    composer), for the bundled playbook tools to bind. The loop assembles it
+    so dispatch discipline stays single -- one gate, one quota, one announce
+    path -- and the plugin only serves it. ``None`` when the feature is off
+    in this loop or the funnel failed to build, which a binder treats as a
+    decline."""
+
+
+class BindDeclinedError(Exception):
+    """Raised inside ``bind_runtime`` to decline serving.
+
+    The late-bound twin of a factory returning ``None``: the grant this tool
+    needs is not in the handles (the feature is off in this loop, the organ
+    absent), so the tool asks to be taken off the table. The loop unregisters
+    it quietly -- a decline is a configuration fact, not a plugin bug, so no
+    traceback."""
+
 
 @dataclass(frozen=True)
 class PluginContext:

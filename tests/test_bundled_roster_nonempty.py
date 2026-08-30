@@ -22,3 +22,19 @@ def test_bundled_discovery_finds_factory_cargo():
         f"entry point; roster: {sorted(backends)}"
     )
     assert "understand_media" in set(reg.tool_names())
+
+
+def test_the_wheels_own_shelf_carries_the_playbook_tools():
+    """The bundled source is live again: the playbook entry tools are plugin
+    cargo (raven/plugins/bundled/playbook), so this shelf going empty or
+    undiscovered means every install silently loses the feature -- the same
+    closed loop the everos assertion above guards for the entry-point source.
+    """
+    from raven.core.plugin_stack import plugin_discovery_sources
+    from raven.plugins.bootstrap import assemble_plugin_registry
+
+    sources = plugin_discovery_sources()
+    assert sources["bundled_dir"] is not None and sources["bundled_dir"].is_dir()
+    reg = assemble_plugin_registry(**sources)
+    assert {"load_playbook", "create_playbook"} <= set(reg.tool_names())
+    assert reg.tool_plugin_id("load_playbook") == "playbook"

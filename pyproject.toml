@@ -172,6 +172,8 @@ include = [
     "raven/templates/**/*.md",
     "raven/skills/**/*.md",
     "raven/skills/**/*.sh",
+    # The wheel's own plugin shelf: manifests ride beside their factories.
+    "raven/plugins/bundled/**/raven-plugin.toml",
     # Bundled model-label snapshot, so a fresh install labels models offline.
     "raven/providers/data/*.json",
     "raven/providers/data/*.toml",
