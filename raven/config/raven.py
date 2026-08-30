@@ -684,20 +684,6 @@ class BudgetPolicyConfig(_Base):
     track_global_daily: bool = True
 
 
-class SmartRoutingConfig(_Base):
-    """SmartRouter configuration."""
-
-    enabled: bool = False
-    tiers: dict[str, list[str]] = Field(default_factory=dict)
-    """Which models each tier may route to. Empty out of the box: the table
-    this replaced named six models across three vendors, for users who may
-    hold no key for any of them, and routing has no meaning without models to
-    choose between -- so enabling this means listing your own."""
-
-    default_tier: Literal["light", "medium", "heavy"] = "heavy"
-    """Fallback tier when routing is uncertain — conservative default."""
-
-
 class ToolResultLifecycleConfig(_Base):
     """Tool result lifecycle management (the three-phase pruner)."""
 
@@ -741,7 +727,6 @@ class TokenWiseConfig(_Base):
     """Only inject skill summaries relevant to the current message."""
 
     tool_result_lifecycle: ToolResultLifecycleConfig = Field(default_factory=ToolResultLifecycleConfig)
-    smart_routing: SmartRoutingConfig = Field(default_factory=SmartRoutingConfig)
     budget: BudgetPolicyConfig = Field(default_factory=BudgetPolicyConfig)
 
 

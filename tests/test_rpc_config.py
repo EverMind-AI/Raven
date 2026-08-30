@@ -1,7 +1,6 @@
 """Tests for ``config.get`` / ``config.set`` RPC handlers (specs §3.6).
 
 v0.1 hot-changeable whitelist (per specs §3.6):
-    - ``agent.thinking_budget``
     - ``agent.temperature``
     - ``tui.theme``
     - ``tui.show_token_usage``

@@ -17,7 +17,7 @@ from raven.utils.atomic_io import atomic_replace, atomic_update
 # than on every load -- the watermark is what lets a user re-set by hand
 # whatever a migration cleared. Kept out of the schema on purpose: see
 # ``_stamp_path``.
-CURRENT_CONFIG_VERSION = 4
+CURRENT_CONFIG_VERSION = 5
 
 # The generation that introduced each run-once migration. Each is gated on its
 # own floor rather than on "is this config current", because those are not the
@@ -31,6 +31,7 @@ _CONTEXT_WINDOW_MIGRATION = 1
 _AUTO_PROVIDER_MIGRATION = 2
 _RETIRED_GATEWAY_WEB_MIGRATION = 3
 _LEGACY_LEAVES_MIGRATION = 4
+_PHANTOM_KNOBS_MIGRATION = 5
 
 # The context window every pre-0.1.11 bootstrap wrote to disk verbatim: back
 # then ``AgentDefaults.context_window_tokens`` defaulted to this number and
@@ -345,6 +346,8 @@ def _persist_migrations(path: Path, from_version: int = 0) -> None:
                 changed = _migrate_retired_gateway_web(raw) or changed
             if from_version < _LEGACY_LEAVES_MIGRATION:
                 changed = _migrate_legacy_leaves(raw) or changed
+            if from_version < _PHANTOM_KNOBS_MIGRATION:
+                changed = _migrate_phantom_knobs(raw) or changed
         if not changed:
             return None, True
         return json.dumps(raw, indent=2, ensure_ascii=False), True
@@ -518,6 +521,36 @@ def _migrate_retired_gateway_web(data: dict[str, Any], *, notify: bool = False) 
     return True
 
 
+def _migrate_phantom_knobs(data: dict[str, Any], *, notify: bool = False) -> bool:
+    """Retire the two knobs that were written and never read.
+
+    ``agents.defaults.thinkingBudget`` had a settings key on the wire and no
+    reader anywhere -- the loop never saw it (the schema carries no such field,
+    so the loaded config dropped it silently). ``tokenWise.smartRouting`` was a
+    config class whose only reference was a test asserting its default. Both
+    leave the file through the floor, told once, so the strict models need no
+    shim for them.
+    """
+    changed = False
+    defaults = (data.get("agents") or {}).get("defaults") or {}
+    for spelling in ("thinkingBudget", "thinking_budget"):
+        if spelling in defaults:
+            defaults.pop(spelling)
+            changed = True
+            notice = f"Migrated: dropped agents.defaults.{spelling} (written by the settings page, read by nothing)"
+            if notify and notice not in _migration_notices:
+                _migration_notices.append(notice)
+    tw = data.get("tokenWise") or data.get("token_wise") or {}
+    for spelling in ("smartRouting", "smart_routing"):
+        if spelling in tw:
+            tw.pop(spelling)
+            changed = True
+            notice = f"Migrated: dropped tokenWise.{spelling} (a router this build never consulted)"
+            if notify and notice not in _migration_notices:
+                _migration_notices.append(notice)
+    return changed
+
+
 def _migrate_legacy_leaves(data: dict[str, Any], *, notify: bool = False) -> bool:
     """Retire the three leaves the schema kept accepting after their meaning left.
 
@@ -594,6 +627,8 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True, from_version
         _migrate_retired_gateway_web(data, notify=True)
     if from_version < _LEGACY_LEAVES_MIGRATION:
         _migrate_legacy_leaves(data, notify=True)
+    if from_version < _PHANTOM_KNOBS_MIGRATION:
+        _migrate_phantom_knobs(data, notify=True)
 
     # Move tools.exec.restrictToWorkspace → tools.restrictToWorkspace
     tools = data.get("tools", {})

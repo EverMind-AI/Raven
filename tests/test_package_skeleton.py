@@ -158,7 +158,6 @@ def test_config_safe_defaults():
     assert cfg.skill_forge.enabled is True  # R8: retrieval/injection pipeline on by default
     assert cfg.skill_forge.auto_detect is False
     assert cfg.skill_forge.auto_evolve is False
-    assert cfg.token_wise.smart_routing.enabled is False
     # Baseline memory/skill feature layer defaults ON: a
     # fresh install runs the everos memory backend, the SkillForgeRouter, and
     # empty-response recovery. Pinned so a future silent flip gets caught.

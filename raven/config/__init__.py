@@ -29,7 +29,6 @@ from raven.config.raven import (
     RavenConfig,
     SentinelConfig,
     SkillForgeConfig,
-    SmartRoutingConfig,
     TokenWiseConfig,
     ToolResultLifecycleConfig,
     load_raven_config,
@@ -57,6 +56,5 @@ __all__ = [
     "SkillForgeConfig",
     "NudgePolicyConfig",
     "BudgetPolicyConfig",
-    "SmartRoutingConfig",
     "ToolResultLifecycleConfig",
 ]

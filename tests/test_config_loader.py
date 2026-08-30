@@ -466,6 +466,33 @@ def test_the_legacy_leaves_migration_rewrites_the_file_once(tmp_path: Path) -> N
     assert drain_migration_notices() == []
 
 
+def test_the_phantom_knobs_migration_strips_both_spellings(tmp_path: Path) -> None:
+    """A config stamped 4 may carry the two knobs nothing ever read; the floor
+    drops them in the file, tells the user once, and stamps 5."""
+    p = tmp_path / "config.json"
+    _write(
+        p,
+        {
+            "agents": {"defaults": {"thinkingBudget": 2048}},
+            "tokenWise": {"smartRouting": {"enabled": True}},
+        },
+    )
+    _stamp_path(p).write_text(json.dumps({"version": 4}), encoding="utf-8")
+
+    drain_migration_notices()
+    load_config(p)
+
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert "thinkingBudget" not in on_disk["agents"]["defaults"]
+    assert on_disk["tokenWise"] == {}
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+    notices = drain_migration_notices()
+    assert len([n for n in notices if "thinkingBudget" in n or "smartRouting" in n]) == 2
+
+    load_config(p)
+    assert drain_migration_notices() == []
+
+
 def test_the_provider_migration_survives_a_legacy_top_level_block(tmp_path: Path) -> None:
     """The probe validates a strict ``Config``, and this migration runs before
     the shims that relocate legacy blocks. A config still carrying a top-level
