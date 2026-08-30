@@ -9,6 +9,11 @@ accepts both camelCase and snake_case (``alias_generator=to_camel`` +
 also carries plugin-only keys (``search.apiKey``, ``fetch.apiKey``, ``proxy``,
 ``stateRoot``) that the flow models do not own.
 
+Four of the fork's fields are deliberately absent: ``toolsAllowlist``,
+``minimalContext``, ``truncationWrapup`` and ``reactiveClamp`` were consumed by
+the fork's LOOP, and no seam here reaches them. See ``_RETIRED_KEYS`` for who
+owns each surface now and why they are not merely accepted and ignored.
+
 ``with_overlay`` is the per-mode entry point: a session mode's ``drFlow`` diff
 (camelCase, arbitrary depth) is deep-merged over the base dict and the result
 re-validated, so a mode changes exactly the knobs it names and nothing else.
@@ -18,6 +23,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar, Literal
 
+from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
 
@@ -30,21 +36,6 @@ class _Base(BaseModel):
         populate_by_name=True,
         extra="ignore",
     )
-
-
-class ReactiveClampConfig(_Base):
-    """Retry an overflow-rejected call with a smaller reserve. Default off."""
-
-    enabled: bool = False
-    shrink_factor: float = 0.5
-
-
-class TruncationWrapupConfig(_Base):
-    """The completion-truncation wrap-up, gated and budgeted. Default off."""
-
-    enabled: bool = False
-    max_tokens: int = 4096
-    reasoning_effort: str | None = "low"
 
 
 class SearchSaturationConfig(_Base):
@@ -251,6 +242,31 @@ SUPERSEDED_VERSIONS: tuple[str, ...] = (
 )
 
 
+# Knobs the fork's LOOP consumed, which no seam here reaches. They are kept OFF
+# the model rather than accepted and ignored: a field that validates reads as
+# live, and ``toolsAllowlist`` reads as the tool fence -- it was the fence in the
+# fork (``_apply_dr_tools_allowlist`` unregistered everything else) and the fence
+# here is ``tools.disabledTools``, one config level up and owned by the trunk.
+# Named with their owner so a ported fork slice is told where the knob went
+# instead of being silently disarmed.
+_RETIRED_KEYS: dict[str, tuple[str, str]] = {
+    "toolsAllowlist": ("tools_allowlist", "tools.disabledTools, applied by the trunk's registry"),
+    "minimalContext": ("minimal_context", "context.dropSegments, applied by the trunk's context engine"),
+    "truncationWrapup": ("truncation_wrapup", "nothing - the loop's generation path has no hook seam"),
+    "reactiveClamp": ("reactive_clamp", "nothing - the loop's generation path has no hook seam"),
+}
+
+
+def _warn_retired(raw: dict[str, Any]) -> None:
+    for camel, (snake, owner) in _RETIRED_KEYS.items():
+        if camel in raw or snake in raw:
+            logger.warning(
+                "research-flow: drFlow.{} is no longer read by this flow; that surface is {}",
+                camel,
+                owner,
+            )
+
+
 def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
     """Overlay wins; dicts merge recursively; every other value replaces.
 
@@ -277,16 +293,12 @@ class FlowConfig(_Base):
     version: str = "dr@3.5"
     max_iterations: int | None = None
     context_window_tokens: int | None = None
-    tools_allowlist: tuple[str, ...] = ("web_search", "web_fetch")
     think_closing_tag_required: bool = True
-    minimal_context: bool = True
     prompt_section_override: str | None = None
     identity_override: str | None = None
     measured_guidance: bool = True
     fetch_max_chars: int = 14_000
     search: SearchConfig = Field(default_factory=SearchConfig)
-    truncation_wrapup: TruncationWrapupConfig = Field(default_factory=TruncationWrapupConfig)
-    reactive_clamp: ReactiveClampConfig = Field(default_factory=ReactiveClampConfig)
     digest: DigestConfig = Field(default_factory=DigestConfig)
     verify: VerifyConfig = Field(default_factory=VerifyConfig)
     budget_note: BudgetNoteConfig = Field(default_factory=BudgetNoteConfig)
@@ -330,7 +342,9 @@ class FlowConfig(_Base):
     @classmethod
     def from_slice(cls, d: dict[str, Any] | None) -> "FlowConfig":
         """Validate the plugin's config slice as the product wrote it."""
-        return cls.model_validate(d or {})
+        raw = d or {}
+        _warn_retired(raw)
+        return cls.model_validate(raw)
 
     def with_overlay(self, overlay: dict[str, Any] | None) -> "FlowConfig":
         """This config with a mode's ``drFlow`` diff deep-merged over it.
@@ -340,6 +354,7 @@ class FlowConfig(_Base):
         """
         if not overlay:
             return self
+        _warn_retired(overlay)
         base = self.model_dump(by_alias=True)
         return type(self).model_validate(_deep_merge(base, overlay))
 
@@ -355,11 +370,9 @@ __all__ = [
     "FinalShapeConfig",
     "FlowConfig",
     "ForceFinalizeConfig",
-    "ReactiveClampConfig",
     "SearchConfig",
     "SearchSaturationConfig",
     "SpinBreakerConfig",
     "SufficiencyConfig",
-    "TruncationWrapupConfig",
     "VerifyConfig",
 ]

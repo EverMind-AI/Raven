@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import itertools
 import os
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -70,6 +71,7 @@ from research_flow.support.fetch_gate_core import FetchGate
 from research_flow.support.ledger import close_product_ledger, ledger_path, open_product_ledger
 from research_flow.support.process_appendix import build_appendix, read_ledger
 from research_flow.support.search_saturation import SearchSaturation
+from research_flow.support.turn_observers import turn_observers
 from research_flow.tools.web import set_current_session
 
 if TYPE_CHECKING:
@@ -80,13 +82,39 @@ if TYPE_CHECKING:
 # its turn (same scheme as the fork's loop).
 _TURN_SEQ = itertools.count()
 
-# The raw inbound text of the turn, stashed by TurnFrame.before_user_inbound
-# before it prepends the memo / brief and appends the reminder. The
-# conversation gate must classify what the USER wrote: ``ctx.turn_question`` is
-# read after the rewrite, so by then it carries our own blocks.
-_INBOUND_KEY = "research_flow_inbound"
+# ``ctx.metadata`` is NOT one dict per turn. The loop builds a fresh
+# AgentHookContext for the inbound rewrite (``turn_path.py:1355``), another for
+# the whole iteration run (``turn_path.py:583``, the only one carrying ``mode``
+# and ``mode_overlay``), and a third for the outbound (``turn_path.py:1673``) --
+# each with its own empty ``metadata``. So anything that has to cross those
+# three groups travels in a ContextVar: a turn is one asyncio task, and every
+# phase of it is awaited inside the same one. Same reasoning, and the same bug
+# class, as ``_RESEARCH_TURN`` in gates/conversation.py.
+#
+# Each is read ONCE and cleared, for the reason ``take_pending_clarify`` states:
+# ``before_user_inbound`` is skipped for some turn origins, and a value that
+# survived into the next turn would classify the previous turn's question or
+# stamp its counters on this turn's record.
 
-_TURN_MODE_KEY = "dr_turn_mode"
+# What the USER wrote, before the memo / brief / reminder were folded in.
+# ``ctx.turn_question`` is read after the rewrite (``turn_path.py:587``), so by
+# then it carries our own blocks and the classifier would be reading them.
+_INBOUND: ContextVar[str | None] = ContextVar("dr_turn_inbound", default=None)
+
+# The turn-mode decision, handed from the iteration phase that makes it to the
+# turn-end stamp that records it.
+_TURN_MODE: ContextVar[TurnMode | None] = ContextVar("dr_turn_mode", default=None)
+
+# The iteration context's own ``metadata`` dict, by reference. That dict IS the
+# per-turn scratchpad every gate writes its counters into; the reference is what
+# lets the turn-end stamp read them from a context that is not it.
+_TURN_METADATA: ContextVar[dict[str, Any] | None] = ContextVar("dr_turn_metadata", default=None)
+
+
+def _take(var: ContextVar[Any]) -> Any:
+    value = var.get()
+    var.set(None)
+    return value
 
 
 @dataclass
@@ -152,10 +180,17 @@ class TurnFrame(AgentHook):
     SETS the research flag every wrapped observer's predicate reads.
     """
 
-    def __init__(self, cfg: FlowConfig, store: SessionStore, gate: ConversationGate | None) -> None:
+    def __init__(
+        self,
+        cfg: FlowConfig,
+        store: SessionStore,
+        gate: ConversationGate | None,
+        mode: str = "",
+    ) -> None:
         self._cfg = cfg
         self._store = store
         self._gate = gate
+        self._mode = mode
         # Resolved once, the way the fork's assembly resolved them: a feature
         # switch read alone downstream cannot then act on a surface that is off.
         self._conversation = cfg.conversation.enabled
@@ -182,8 +217,10 @@ class TurnFrame(AgentHook):
         set_clarify_verdict(None)
         set_first_turn(False)
         set_prior_sources(())
+        _TURN_MODE.set(None)
+        _TURN_METADATA.set(None)
         text = ctx.inbound_content or ""
-        ctx.metadata[_INBOUND_KEY] = text
+        _INBOUND.set(text)
         record = self._store.load(ctx.session_key)
         if self._conversation:
             self._consume_pending_clarify(ctx.session_key, record, text)
@@ -253,7 +290,15 @@ class TurnFrame(AgentHook):
         ``ctx.messages``; everything before ``ctx.turn_base`` is prior history.
         The flag it sets defaults to True, so with the feature off nothing
         downstream can tell this method exists.
+
+        The iteration context's ``metadata`` is captured here and not in
+        ``after_send``, because that phase is handed a different context: this
+        dict is where every gate below writes its counters, and the reference is
+        what makes them readable at turn end. Captured before the early return,
+        so the counters survive with the conversation surface off too.
         """
+        if ctx.iteration == 1:
+            _TURN_METADATA.set(ctx.metadata)
         if ctx.iteration != 1 or not self._conversation:
             return HookDecision()
         prior = [m for m in (ctx.messages or [])[: ctx.turn_base] if m.get("role") in ("user", "assistant")]
@@ -272,10 +317,10 @@ class TurnFrame(AgentHook):
         elif self._gate is None:
             mode = TurnMode(True, "config_always")
         else:
-            text = str(ctx.metadata.get(_INBOUND_KEY) or "") or ctx.turn_question
+            text = str(_take(_INBOUND) or "") or ctx.turn_question
             mode = await self._gate.decide(text, prior)
         set_research_turn(mode.research)
-        ctx.metadata[_TURN_MODE_KEY] = mode
+        _TURN_MODE.set(mode)
         if not mode.research:
             logger.info("conversation-gate: answering from context ({}) - {}", mode.source, mode.why)
         return HookDecision()
@@ -284,7 +329,10 @@ class TurnFrame(AgentHook):
 
     async def after_send(self, ctx: AgentHookContext) -> HookDecision:
         record = self._store.load(ctx.session_key)
-        observers: dict[str, Any] = {}
+        # The gates' own counters first, the turn-level ones over them - the
+        # order the fork stamped them in, and the one that lets a turn-level key
+        # win a name collision.
+        observers: dict[str, Any] = turn_observers(_take(_TURN_METADATA))
         final_content = ctx.outbound_content or ""
         changed = False
 
@@ -304,7 +352,7 @@ class TurnFrame(AgentHook):
                     **ReportShape(shaped.visible).counters(),
                 }
 
-        mode = ctx.metadata.get(_TURN_MODE_KEY)
+        mode = _take(_TURN_MODE)
         if isinstance(mode, TurnMode):
             observers["conversation_gate"] = mode.counters()
 
@@ -339,6 +387,16 @@ class TurnFrame(AgentHook):
                     # history next turn.
                     final_content = final_content.rstrip() + "\n" + appendix
                     changed = True
+                    # And the rendered trail parked where a HOST can reach it.
+                    # The line above is the whole of the appendix's distribution
+                    # neutrality, and it is also why a caller reading the session
+                    # record - the only machine-readable channel this product has
+                    # - could otherwise not see the trail at all: the turn's
+                    # ledger is deleted moments later. Kept OUT of
+                    # ``process_appendix``, which is counters a reader parses as
+                    # a measurement payload; a multi-kilobyte string does not
+                    # belong beside them.
+                    observers["research_trail"] = appendix
 
         # ``take_*`` clears as it reads. Without that a later turn that asked
         # nothing would re-persist the previous turn's pending and answer it twice.
@@ -350,7 +408,10 @@ class TurnFrame(AgentHook):
                 record.chain_round = int(pending.get("chain_round") or 1)
             except (TypeError, ValueError):
                 record.chain_round = 1
-        record.mode = str(ctx.metadata.get("mode") or "")
+        # The chain's own mode, not the context's: ``after_send`` is handed a
+        # fresh context that carries no mode at all, so reading it there wrote
+        # "" on every turn of every mode.
+        record.mode = self._mode
         record.observers = observers
         self._store.save(ctx.session_key, record)
         if changed:
@@ -367,6 +428,7 @@ def build_chain(
     tools: ToolHandles,
     store: SessionStore,
     evidence_round: EvidenceRound | None = None,
+    mode: str = "",
 ) -> list[AgentHook]:
     """The fork's ``build_dr_flow`` observer assembly, as one hook chain.
 
@@ -378,7 +440,8 @@ def build_chain(
     the shared instance in. The saturation rule has no chain-side holder - the
     hook builds it with :func:`saturation_for` straight into the session gear.
     An LLM-backed gate whose provider is absent is skipped with a warning,
-    never built to crash.
+    never built to crash. ``mode`` names the session profile this chain was
+    resolved for; the chain records it, it does not read it.
     """
     effective_iterations = cfg.max_iterations or max_iterations
     effective_window = cfg.context_window_tokens or context_window_tokens
@@ -581,7 +644,7 @@ def build_chain(
 
     # First, never wrapped: it sets the research flag every GatedHook predicate
     # reads, and its ``after_send`` must see the outbound before the chain ends.
-    return [TurnFrame(cfg, store, gate), *observers]
+    return [TurnFrame(cfg, store, gate, mode), *observers]
 
 
 @dataclass
@@ -603,6 +666,13 @@ class ResearchFlowHook(AgentHook):
     when it builds that session's chain, and drops them - together with the
     tools' per-session slots - when the session switches mode, so the next
     turn's tool state is rebuilt against the new chain's instances.
+
+    Only an ITERATION context names the session's mode (``turn_path.py:589``);
+    the inbound and outbound phases are handed contexts whose ``metadata`` is
+    empty. A chain is therefore built from an iteration context alone, and the
+    other two phases reuse the one the session's last iteration resolved -
+    otherwise every turn built a second, base-config chain for the rewrite,
+    threw the real one away, and ran the turn's exit under the wrong knobs.
     """
 
     cfg: FlowConfig
@@ -616,12 +686,23 @@ class ResearchFlowHook(AgentHook):
     def __post_init__(self) -> None:
         self._chains: dict[tuple[str, str], _ChainSlot] = {}
         self._session_mode: dict[str, str] = {}
+        self._current: dict[str, _ChainSlot] = {}
+        self._unmoded: _ChainSlot | None = None
 
     @property
     def name(self) -> str:
         return "ResearchFlowHook"
 
     def _resolve(self, ctx: AgentHookContext) -> _ChainSlot:
+        """This turn's chain.
+
+        ``"mode" in metadata`` is the test, not a truthy mode: a deployment
+        that declares no modes reports ``""`` as its mode on the iteration
+        contexts, and that is a real answer, while the absent key means the
+        phase simply is not told.
+        """
+        if "mode" not in (ctx.metadata or {}):
+            return self._reuse(ctx)
         key = ctx.session_key
         mode = str(ctx.metadata.get("mode") or "")
         prev = self._session_mode.get(key)
@@ -664,6 +745,7 @@ class ResearchFlowHook(AgentHook):
                 tools=self.tools,
                 store=self.store,
                 evidence_round=er,
+                mode=mode,
             )
             slot = _ChainSlot(
                 mode=mode,
@@ -674,7 +756,46 @@ class ResearchFlowHook(AgentHook):
                 ),
             )
             self._chains[(key, mode)] = slot
+        self._current[key] = slot
         return slot
+
+    def _reuse(self, ctx: AgentHookContext) -> _ChainSlot:
+        """The chain for a phase whose context does not name the mode.
+
+        The session's last iteration resolved one, and within a turn that IS
+        this turn's chain - so ``after_send`` runs the mode's gates and closes
+        the ledger the mode's chain opened, and the next turn's inbound rewrite
+        runs the mode the session is on.
+
+        Before any turn of this process has reached an iteration there is
+        nothing to reuse, and the base config stands in for that one rewrite.
+        Kept out of ``_chains`` so it can never be served to an iteration phase
+        as if it were a mode's chain, and it does not claim the session's mode:
+        a slot built from an overlay nobody handed us is not that mode's chain.
+        """
+        slot = self._current.get(ctx.session_key)
+        if slot is not None:
+            return slot
+        if self._unmoded is None:
+            cfg = self.cfg
+            self._unmoded = _ChainSlot(
+                mode="",
+                cfg=cfg,
+                composite=CompositeHook(
+                    build_chain(
+                        cfg,
+                        self.provider,
+                        max_iterations=self.max_iterations,
+                        context_window_tokens=self.context_window_tokens,
+                        tools=self.tools,
+                        store=self.store,
+                    )
+                ),
+                opens_ledger=(
+                    cfg.final_shape.process_appendix or (cfg.conversation.enabled and cfg.conversation.research_memo)
+                ),
+            )
+        return self._unmoded
 
     def _start_turn(self, slot: _ChainSlot) -> None:
         """What the fork's loop did at the top of every turn, tool side."""

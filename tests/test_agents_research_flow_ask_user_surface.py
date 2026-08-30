@@ -239,8 +239,17 @@ def test_the_handoff_default_keeps_the_registry_check() -> None:
     parent = AskUserTool()
     for payload in ({"questions": ["which year?"]}, {"questions": [{"question": "q"}]}, "not a dict"):
         assert DRAskUserTool().validate_params(payload) == parent.validate_params(payload)
-    assert DRAskUserTool(delivery="tool").validate_params({"questions": ["which year?"]}) == []
-    assert DRAskUserTool(delivery="tool").validate_params("not a dict")
+        assert DRAskUserTool(delivery="tool").validate_params(payload) == parent.validate_params(payload)
+    # The floor the override used to hold moved to the cast the registry runs
+    # before it validates. A bare-string question is normalized by the PARENT on
+    # both deliveries; what separates them is an entry that names no question at
+    # all -- the round trip widens it so the granted call still spends the round
+    # trip inside execute, the handoff leaves it for the parent's own path.
+    questionless = {"questions": [{"options": ["a", "b"]}]}
+    assert DRAskUserTool(delivery="tool").cast_params(dict(questionless)) == {
+        "questions": [{"question": "", "options": ["a", "b"]}]
+    }
+    assert DRAskUserTool().cast_params(dict(questionless)) == questionless
 
 
 # ---------------------------------------------------------------------------

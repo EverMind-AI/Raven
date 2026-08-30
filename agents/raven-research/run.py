@@ -109,6 +109,24 @@ SECRET_SLOTS = {
 # optional fallback loop.
 REQUIRED_SECRETS = ("RESEARCH_API_KEY",)
 
+# Not a secret, but resolved the same way: the proxy both web tools dial
+# through. With none here and none in the host config they connect direct.
+PROXY_ENV = "RESEARCH_WEB_PROXY"
+PROXY_SLOT = ("tools", "web", "proxy")
+
+# The research-flow plugin REPLACES web_search and web_fetch, and a plugin
+# factory is handed its own config slice and nothing else -- it never sees
+# tools.web. So every value resolved above has to reach that slice too, under
+# the names the plugin reads (raven-plugin.toml documents them). Without this
+# the key an operator put in .env configures only the built-ins the plugin
+# shadows: the launch succeeds, the tool is advertised, and every search comes
+# back "API key not configured".
+PLUGIN_WEB_MIRROR = {
+    ("tools", "web", "search", "apiKey"): ("search", "apiKey"),
+    ("tools", "web", "jinaApiKey"): ("fetch", "apiKey"),
+    PROXY_SLOT: ("proxy",),
+}
+
 # The env var the search tool itself falls back to at call time; pinned
 # against raven/agent/tools/web.py by tests/test_agents_research_launcher.py.
 SEARCH_ENV_VAR = "SERPER_API_KEY"
@@ -249,18 +267,44 @@ def seed_contract(workspace: Path, flow_slice: dict) -> None:
     target.write_text(_flow_prompts(flow_slice)[1], encoding="utf-8")
 
 
-def mode_catalogue() -> dict:
+def iteration_cap(base_flow: dict, base_cap, overlay: dict):
+    """One mode's iteration budget, resolved the way the fork's loop resolved it.
+
+    The fork let ``drFlow.maxIterations`` overwrite the loop's own cap
+    (``AgentLoop.__init__``: ``self.max_iterations = self._dr_flow.max_iterations``),
+    so one number both bounded the ReAct loop and told the model how much budget
+    was left. Here they are two settings with two readers -- the loop enforces
+    the mode's ``maxToolIterations``, the flow's budget note and spin breaker
+    divide by ``drFlow.maxIterations`` -- and nothing joins them, so the model
+    was told ``iteration 3/20`` on a turn the loop would let run to 40.
+    Resolving it here ships one number per mode that both sides read.
+
+    An explicit ``null`` arrives as a present key holding ``None``: a mode
+    declining the flow's override, which is how ``ultra`` asks to run to its own
+    ``maxToolIterations`` rather than the baseline's 20.
+    """
+    dr = overlay.get("drFlow") or {}
+    flow_cap = dr["maxIterations"] if "maxIterations" in dr else base_flow.get("maxIterations")
+    cap = ((overlay.get("agents") or {}).get("defaults") or {}).get("maxToolIterations") or base_cap
+    return flow_cap or cap
+
+
+def mode_catalogue(config: dict) -> dict:
     """The ``acp.modes`` block: one entry per mode, each carrying its own diff.
 
     Diffs, not merged blocks: the overlay reaches the plugin's hooks through
     the session policy as ``ctx.metadata["mode_overlay"]``, and the plugin
     merges it over the baseline flow config per session. The baseline mode
-    carries an empty overlay. An empty dict when this folder ships no
-    ``modes/`` directory, which leaves the rendered config without ``acp.modes``
-    and ``session/set_mode`` method-not-found -- the pre-modes behaviour.
+    carries an empty diff but not an empty cap -- see :func:`iteration_cap`: the
+    plugin learns the loop's budget from the overlay alone, so every mode
+    declares its own. An empty dict when this folder ships no ``modes/``
+    directory, which leaves the rendered config without ``acp.modes`` and
+    ``session/set_mode`` method-not-found -- the pre-modes behaviour.
     """
     if not MODES_DIR.is_dir():
         return {}
+    base_flow = ((config.get("plugins") or {}).get("config") or {}).get(FLOW_PLUGIN_ID) or {}
+    base_cap = ((config.get("agents") or {}).get("defaults") or {}).get("maxToolIterations")
     catalogue: dict = {}
     for mode, (name, description) in MODE_LABELS.items():
         overlay: dict = {}
@@ -275,7 +319,7 @@ def mode_catalogue() -> dict:
                     f"{overlay_file}: unsupported top-level key(s) {', '.join(unknown)}; "
                     f"an overlay carries only {', '.join(sorted(OVERLAY_KEYS))}"
                 )
-        cap = (overlay.get("agents") or {}).get("defaults", {}).get("maxToolIterations")
+        cap = iteration_cap(base_flow, base_cap, overlay)
         entry_overlay: dict = {"drFlow": overlay.get("drFlow", {})}
         if cap:
             entry_overlay["maxToolIterations"] = cap
@@ -316,6 +360,9 @@ def render_config(source: Path) -> Path:
         if value:
             put(config, path, value)
 
+    if proxy := (env_value(PROXY_ENV) or dig(host, PROXY_SLOT)):
+        put(config, PROXY_SLOT, proxy)
+
     llm_key = REQUIRED_SECRETS[0]
     if env_value(llm_key):
         defaults = config.get("agents", {}).get("defaults", {})
@@ -341,7 +388,18 @@ def render_config(source: Path) -> Path:
     plugins["dirs"] = [str(PLUGINS_DIR)]
     flow_slice = plugins.setdefault("config", {}).setdefault(FLOW_PLUGIN_ID, {})
     flow_slice.setdefault("stateRoot", str(root / "research_flow"))
-    catalogue = mode_catalogue()
+    for trunk_path, slice_path in PLUGIN_WEB_MIRROR.items():
+        if value := dig(config, trunk_path):
+            put(flow_slice, slice_path, value)
+    # Same mirror, same reason as the web keys: the fork's assembly was CALLED
+    # with the window the loop had resolved, so both observers that divide by it
+    # quoted the model the turn actually ran on. A plugin factory sees its own
+    # slice and nothing else, and an absent window makes the budget note drop its
+    # ``context ~N%`` clause and the spin breaker lose its context arm entirely --
+    # both silently.
+    if window := defaults.get("contextWindowTokens"):
+        flow_slice.setdefault("contextWindowTokens", window)
+    catalogue = mode_catalogue(config)
     if catalogue:
         acp = config.setdefault("acp", {})
         acp["modes"] = catalogue

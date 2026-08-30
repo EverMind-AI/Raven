@@ -159,9 +159,12 @@ def _contributed_ask_user(tmp_path, slice_: dict):
 
     from raven.plugins.context import PluginContext, ServiceLocator
 
+    # A provider is lent because the plugin contributes as one piece: without
+    # one it declines the hook, and with the hook it declines the tools too,
+    # since they are per-session only through it.
     ctx = PluginContext(
         config=dict(slice_),
-        services=ServiceLocator(workspace=tmp_path, user_id="u", agent_id="a"),
+        services=ServiceLocator(workspace=tmp_path, user_id="u", agent_id="a", provider=object()),
     )
     try:
         return flow_plugin.make_ask_user(ctx)

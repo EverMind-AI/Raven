@@ -54,6 +54,28 @@ _FALLBACK_NOT_DELIVERED = (
 )
 
 
+def _schema_shaped(entry: Any) -> dict[str, Any]:
+    """One ``questions`` entry reduced to what the declared schema accepts.
+
+    Missing text becomes the empty string rather than a dropped entry: an entry
+    that asks nothing still has to reach ``execute`` to be dropped there by
+    ``clean_questions``, which is where the fork dropped it, and the call spends
+    the round trip the gate granted exactly as it did there. ``header`` and
+    ``recommended`` are carried only in the types the schema declares; both are
+    ignored by ``clean_questions`` anyway, so a malformed one costs nothing.
+    """
+    if not isinstance(entry, dict):
+        entry = {"question": entry}
+    shaped: dict[str, Any] = {"question": str(entry.get("question") or "")}
+    if (header := entry.get("header")) is not None:
+        shaped["header"] = str(header)
+    if isinstance(options := entry.get("options"), list):
+        shaped["options"] = [str(option) for option in options]
+    if isinstance(pick := entry.get("recommended"), int) and not isinstance(pick, bool):
+        shaped["recommended"] = pick
+    return shaped
+
+
 class DRAskUserTool(AskUserTool):
     """Ask the user before researching. One call, at the start of a turn.
 
@@ -130,22 +152,28 @@ class DRAskUserTool(AskUserTool):
         self._round_trip_granted.set(False)
         return granted
 
-    def validate_params(self, params: Any) -> list[str]:
-        # Under the round trip the registry's strict schema check runs BETWEEN
-        # the gate's grant and this tool's own cleaning, and the gate accepts
-        # deliberately wider shapes (``clean_questions`` keeps a bare-string
-        # question). A call the gate granted must not bounce at the registry:
-        # the state already says ``asked``, the grant is already spent-able,
-        # and the model would read a parameter error instead of this tool's
-        # contract. ``execute`` cleans every shape defensively, so accepting
-        # here is safe. The handoff default keeps the parent's check: its
-        # granted call short-circuits before the registry, so nothing changes
-        # on the measured arms.
-        if self._delivery != "tool":
-            return super().validate_params(params)
-        if not isinstance(params, dict):
-            return [f"parameters must be an object, got {type(params).__name__}"]
-        return []
+    def cast_params(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Widen a granted call into the declared shape before it is validated.
+
+        Under the round trip the registry's strict schema check runs BETWEEN
+        the gate's grant and this tool's own cleaning, and the gate accepts
+        deliberately wider shapes (``clean_questions`` keeps a bare-string
+        question and drops an entry that names none). A call the gate granted
+        must not bounce at the registry: the state already says ``asked``, the
+        grant is already spent-able, and the model would read a parameter error
+        instead of this tool's contract. The registry casts through this hook
+        before it validates, so this is where the widening belongs -- the
+        schema the model reads stays exactly what the fork showed it, and
+        ``execute`` still cleans every shape it is handed. The handoff default
+        is untouched: its granted call short-circuits before the registry, so
+        nothing changes on the measured arms.
+        """
+        params = super().cast_params(params)
+        if self._delivery != "tool" or not isinstance(params.get("questions"), list):
+            return params
+        params = dict(params)
+        params["questions"] = [_schema_shaped(entry) for entry in params["questions"]]
+        return params
 
     @property
     def name(self) -> str:

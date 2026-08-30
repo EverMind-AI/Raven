@@ -453,3 +453,191 @@ def test_the_accept_set_survives_a_metadata_round_trip():
     assert len(memo.sources) == 1 and len(memo.opened) == 2
     restored = ResearchMemo.from_metadata(memo.to_metadata())
     assert restored.opened == memo.opened
+
+
+# --------------------------------------------------------------------------- #
+# One turn, three hook contexts                                               #
+# --------------------------------------------------------------------------- #
+#
+# ``ctx.metadata`` is not one dict per turn. The loop builds a fresh
+# AgentHookContext for the inbound rewrite, another for the whole iteration run
+# (the only one carrying ``mode`` / ``mode_overlay``), and a third for the
+# outbound. Everything below drives all three, in order, exactly as the loop
+# does - because every defect this section covers is invisible to a test that
+# reuses one context.
+
+
+def _turn_hook(tmp_path, slice_, provider=None):
+    from research_flow.config import FlowConfig
+    from research_flow.flow import ResearchFlowHook, ToolHandles
+    from research_flow.state import SessionStore
+
+    cfg = FlowConfig.from_slice(slice_)
+    return ResearchFlowHook(
+        cfg=cfg,
+        provider=provider,
+        tools=ToolHandles(),
+        store=SessionStore(tmp_path),
+        max_iterations=cfg.max_iterations or 40,
+        context_window_tokens=cfg.context_window_tokens or 0,
+    )
+
+
+_BASE_SLICE = {
+    "enabled": True,
+    "conversation": {"enabled": True, "gate": "agentic", "researchMemo": True},
+    "finalShape": {"record": True},
+}
+
+
+def _run_turn(hook, text, *, prior=(), mode="", overlay=None, iteration_writes=None):
+    """One turn through the three contexts the loop actually builds.
+
+    One ``asyncio.run`` for the whole turn, not one per phase: the plugin hands
+    state between the phase groups in ContextVars, and ``asyncio.run`` copies
+    the context into a fresh task, so a per-phase driver would lose exactly what
+    is under test here. The loop awaits all three inside one coroutine.
+    """
+
+    async def turn():
+        inbound = AgentHookContext(session_key="s", inbound_content=text)
+        content = (await hook.before_user_inbound(inbound)).modified_content or text
+
+        iter_ctx = AgentHookContext(
+            session_key="s",
+            iteration=1,
+            messages=[*prior, {"role": "user", "content": content}],
+            turn_base=len(prior),
+            turn_question=content,
+            metadata={"mode": mode, "mode_overlay": overlay if overlay is not None else {"drFlow": {}}},
+        )
+        await hook.before_iteration(iter_ctx)
+        if iteration_writes:
+            iter_ctx.metadata.update(iteration_writes)
+
+        await hook.after_send(AgentHookContext(session_key="s", outbound_content="the answer"))
+        return content
+
+    return asyncio.run(turn()), hook.store.load("s")
+
+
+def test_the_gate_classifies_what_the_user_wrote_not_what_we_prepended(tmp_path):
+    """The classifier's input is the question, after our own blocks come off.
+
+    ``before_user_inbound`` folds the memo in and ``ctx.turn_question`` is read
+    after that rewrite, so the phase that decides the turn mode is handed
+    ``[memo] + question`` unless the raw text is carried across. The failure is
+    silent and one-directional: a memo listing pages about the earlier topic
+    makes a fresh factual question look like a follow-up the model can answer
+    from context, which is the one direction that answers from stale evidence.
+    """
+    provider = _Provider(_Reply('{"research": false, "why": "reformat only"}'))
+    hook = _turn_hook(tmp_path, _BASE_SLICE, provider)
+    memo = ResearchMemo().merge_ledger(
+        [{"op": "fetch", "url": "https://a.example/paper", "chars": 900, "ok": True}],
+        max_sources=9,
+        max_queries=9,
+    )
+    hook.store.save("s", hook.store.load("s").__class__(research_memo=memo.to_metadata()))
+
+    content, _ = _run_turn(hook, "and in 2025?", prior=_HISTORY)
+
+    assert MEMO_OPEN in content, "the memo is still injected; only the classifier's copy is clean"
+    asked = provider.calls[0]["messages"][1]["content"]
+    assert "and in 2025?" in asked
+    assert MEMO_OPEN not in asked and "https://a.example/paper" not in asked
+
+
+def test_the_turn_stamp_carries_the_gate_verdict_and_every_gate_namespace(tmp_path):
+    """What the turn measured has to outlive the phase that measured it.
+
+    The twin stamped one ``observers`` dict on the turn's last assistant
+    message: the gate counters the iteration phases wrote, plus the turn-level
+    ones. Here the iteration phases write into a context ``after_send`` is not
+    handed, so both halves were lost - ``conversation_gate`` was never written
+    at all, and every gate counter ended with the turn that produced it, which
+    makes "the gate never fired" and "the gate was never installed" the same
+    reading.
+    """
+    provider = _Provider(_Reply('{"research": false, "why": "reformat only"}'))
+    hook = _turn_hook(tmp_path, _BASE_SLICE, provider)
+
+    _, record = _run_turn(
+        hook,
+        "reformat that as a table",
+        prior=_HISTORY,
+        iteration_writes={
+            "fetch_floor": {"searches": 3, "fetches": 1, "notes": 2},
+            "spin_breaker": {"hits": [{"iteration": 4, "marker": "restart"}], "triggers": 1, "_prev": {"a"}},
+        },
+    )
+
+    assert record.observers["conversation_gate"]["dr_turn_research"] is False
+    assert record.observers["conversation_gate"]["dr_turn_source"] == "gate"
+    assert record.observers["fetch_floor"] == {"searches": 3, "fetches": 1, "notes": 2}
+    # Counted and logged, not passed through: the hit list is unbounded and the
+    # entity set beside it is not JSON at all.
+    assert record.observers["spin_breaker"]["hits"] == 1
+    assert record.observers["spin_breaker"]["hit_log"] == [{"iteration": 4, "marker": "restart"}]
+    assert "_prev" not in record.observers["spin_breaker"]
+    # The loop's own keys are the session's profile, which the record already
+    # carries by name; they are not a gate's measurement.
+    assert "mode" not in record.observers and "mode_overlay" not in record.observers
+    assert record.observers["final_shape"], "the turn-level counters still land"
+
+
+def test_a_stamp_cannot_be_inherited_by_the_next_turn(tmp_path):
+    """Read-once, for the reason the pending clarify is.
+
+    ``before_user_inbound`` is skipped for some turn origins, so a value left
+    behind would stamp the previous turn's verdict on this turn's record - and a
+    verdict is exactly the field a reader would trust.
+    """
+    provider = _Provider(_Reply('{"research": false, "why": "reformat only"}'))
+    hook = _turn_hook(tmp_path, _BASE_SLICE, provider)
+
+    async def two_turns():
+        # One context for both, or the second turn would inherit nothing by
+        # accident and the assertion would pass without the read-once.
+        ctx = AgentHookContext(
+            session_key="s",
+            iteration=1,
+            messages=[*_HISTORY, {"role": "user", "content": "reformat that"}],
+            turn_base=len(_HISTORY),
+            turn_question="reformat that",
+            metadata={"mode": "", "mode_overlay": {"drFlow": {}}},
+        )
+        await hook.before_user_inbound(AgentHookContext(session_key="s", inbound_content="reformat that"))
+        await hook.before_iteration(ctx)
+        await hook.after_send(AgentHookContext(session_key="s", outbound_content="a"))
+        first = hook.store.load("s").observers
+        # The second turn's inbound phase never ran: the origin was one the loop
+        # skips it for.
+        await hook.after_send(AgentHookContext(session_key="s", outbound_content="b"))
+        return first, hook.store.load("s").observers
+
+    first, second = asyncio.run(two_turns())
+    assert first["conversation_gate"]["dr_turn_source"] == "gate"
+    assert "conversation_gate" not in second and "fetch_floor" not in second
+
+
+def test_the_mode_the_turn_ran_in_governs_its_exit_and_is_recorded(tmp_path):
+    """One chain per turn, resolved from the one context that names the mode.
+
+    Only an iteration context carries ``mode``, so resolving on the other two
+    built a second, base-config chain for the rewrite, discarded the real one on
+    the way out, and ran the turn's exit under knobs no mode had asked for - and
+    the discard took the session's tool gear with it every single turn.
+    """
+    hook = _turn_hook(tmp_path, {**_BASE_SLICE, "conversation": {"enabled": False}})
+
+    _, record = _run_turn(
+        hook,
+        "survey the field",
+        mode="deep",
+        overlay={"drFlow": {"finalShape": {"record": False}}, "maxToolIterations": 30},
+    )
+
+    assert record.mode == "deep", "the profile the turn ran under, not the empty one after_send is handed"
+    assert "final_shape" not in record.observers, "the mode turned recording off and the exit obeyed it"
+    assert list(hook.session_gear) == ["s"], "the turn must not discard its own session's tool gear"
