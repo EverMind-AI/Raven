@@ -226,9 +226,17 @@ def build_sentinel_stack(
         SentinelRunner,
     )
     from raven.proactive_engine.sentinel.feedback.persistence import JsonStateStore
+    from raven.proactive_engine.sentinel.state_files import (
+        DISCOVER_TRIGGERS_FILENAME,
+        FEEDBACK_FILENAME,
+        LEGACY_FEEDBACK_FILENAME,
+        PENDING_DECISIONS_FILENAME,
+        ROUTINES_FILENAME,
+        STATE_FILENAME,
+    )
 
     # One JSON file, one lock, shared by the three state-carrying components.
-    store = JsonStateStore(state_path or (get_sentinel_dir() / "state.json"))
+    store = JsonStateStore(state_path or (get_sentinel_dir() / STATE_FILENAME))
 
     # Fake-clock injection for longrun eval — each "now"-reading component
     # routes through this callable. Defaults to real wall.
@@ -304,10 +312,10 @@ def build_sentinel_stack(
         model=effective_planner_model,
     )
     feedback_dir = state_path.parent if state_path else get_sentinel_dir()
-    feedback_path = feedback_dir / "feedback.jsonl"
+    feedback_path = feedback_dir / FEEDBACK_FILENAME
     if state_path is None:
         _migrate_legacy_feedback_log(
-            config.workspace_path / "sentinel_feedback.jsonl",
+            config.workspace_path / LEGACY_FEEDBACK_FILENAME,
             feedback_path,
         )
     feedback = NudgeFeedbackTracker(feedback_path)
@@ -321,9 +329,9 @@ def build_sentinel_stack(
     from raven.proactive_engine.sentinel.executor.pending_decision import PendingDecisionStore
     from raven.proactive_engine.sentinel.predictor.routine_store import RoutineStore
 
-    pending_store_path = (state_path.parent if state_path else get_sentinel_dir()) / "pending_decisions.json"
+    pending_store_path = (state_path.parent if state_path else get_sentinel_dir()) / PENDING_DECISIONS_FILENAME
     pending_store = PendingDecisionStore(pending_store_path)
-    routine_store_path = (state_path.parent if state_path else get_sentinel_dir()) / "routines.json"
+    routine_store_path = (state_path.parent if state_path else get_sentinel_dir()) / ROUTINES_FILENAME
     routine_store = RoutineStore(routine_store_path)
 
     routine_aggregator = None
@@ -426,7 +434,7 @@ def build_sentinel_stack(
         )
 
         discover_trigger_store = DiscoverTriggerStore(
-            (state_path.parent if state_path else get_sentinel_dir()) / "discover_triggers.json"
+            (state_path.parent if state_path else get_sentinel_dir()) / DISCOVER_TRIGGERS_FILENAME
         )
     else:
         discover_trigger_store = None
