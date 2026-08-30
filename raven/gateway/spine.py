@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from raven.agent.spine_runner import AgentTurnRunner
-from raven.agent.tools.ask_user import AskUserTool
+from raven.contracts.asking import SupportsDirectAsk
 from raven.gateway.outlet import ChannelOutletAdapter
 from raven.spine import OriginPools, Scheduler
 from raven.spine.delivery import DeliveryHub
@@ -87,7 +87,7 @@ class GatewayTurnRunner(AgentTurnRunner):
 
         tools = getattr(self._loop, "tools", None)
         ask_tool = tools.get("ask_user") if tools is not None else None
-        interactive = req.origin is Origin.USER and isinstance(ask_tool, AskUserTool)
+        interactive = req.origin is Origin.USER and isinstance(ask_tool, SupportsDirectAsk)
         start_ask_turn(
             AskViaTool(ask_tool) if interactive else None,
             Autofill(
