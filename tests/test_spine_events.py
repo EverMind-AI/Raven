@@ -45,7 +45,6 @@ def test_notice_kind_is_closed_enum_with_progress_and_tool_hint():
         "progress",
         "tool_hint",
         "injected",
-        "delivery_failed",
         "action_blocked",
         "organ_degraded",
     }
@@ -176,8 +175,8 @@ def test_deliverable_is_the_runner_event_union_under_its_delivery_role_name():
 
 def test_notice_wraps_a_typed_kind_and_carries_source_and_detail():
     src = Source(channel="t", chat_id="c", sender_id="u", chat_type=ChatType.DM)
-    n = Notice(kind=NoticeKind.DELIVERY_FAILED, source=src, detail="telegram send failed")
-    assert n.kind is NoticeKind.DELIVERY_FAILED  # kind stays the closed-set enum
+    n = Notice(kind=NoticeKind.ORGAN_DEGRADED, source=src, detail="telegram send failed")
+    assert n.kind is NoticeKind.ORGAN_DEGRADED  # kind stays the closed-set enum
     assert n.source is src and n.detail == "telegram send failed"  # parallel fields, not in the enum
 
 
