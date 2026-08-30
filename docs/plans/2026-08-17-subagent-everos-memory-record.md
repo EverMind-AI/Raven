@@ -978,7 +978,7 @@ Add the static resolver and the accessor:
         return self._everos_identities.get(agent or "")
 ```
 
-In `set_third_party_subagents`, alongside the existing `backends` / `meta` build
+In `add_third_party_subagent`, alongside the existing `backends` / `meta` build
 (the identity map is rebuilt with them so a hot config change applies to it too):
 
 ```python
