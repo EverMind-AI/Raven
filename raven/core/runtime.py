@@ -76,6 +76,8 @@ def build_runtime(
     deliverables: Any = None,
     policy: TurnPolicy | None = None,
     host: HostWiring | None = None,
+    context_engine: Any = None,
+    executor: Any = None,
 ) -> RavenRuntime:
     """Assemble a runtime generation from the two config trees.
 
@@ -123,6 +125,7 @@ def build_runtime(
         provider_pool=provider_pool,
         router=router,
         sandbox_config=config.tools.sandbox,
+        executor=executor,
         mcp_servers=config.tools.mcp_servers,
         tools=ToolWiring(
             brave_api_key=config.tools.web.search.api_key or None,
@@ -155,6 +158,7 @@ def build_runtime(
             runtime_config=ec_config.runtime,
             memory_config=ec_config.memory,
             backend=backend,
+            context_engine=context_engine,
         ),
         policy=policy or TurnPolicy(),
         host=host,

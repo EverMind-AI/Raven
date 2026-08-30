@@ -63,6 +63,13 @@ All notable changes to Raven are documented here.
   package. Throughout, prose that narrated the change which produced a rule now
   states the rule: no design-doc sections, ticket ids, commit hashes, phase codes
   or incident retellings.
+- The last two organs get instance sockets on the door: `build_runtime` takes
+  `context_engine=` (riding `EngineWiring`, where that organ's config already
+  rides) and `executor=` (beside `sandbox_config`, its config twin), and the
+  shell binds a handed instance instead of building its own. With provider,
+  session, routing, pool, memory and token_wise, all seven decision points are
+  now substitutable through the one door, and `tests/test_core_runtime_swap.py`
+  pins each one.
 - **The audit's second pass.** The confirmations above were written before
   those passes landed, so the remainder was re-read against the tip and verified
   again: 32 were already fixed, 3 were not defects, 67 stood. What that pass

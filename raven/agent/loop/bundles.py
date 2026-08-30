@@ -53,6 +53,9 @@ class EngineWiring:
     memory_config: Any = None
     backend: Any = None
     playbook_config: Any = None
+    # The instance socket beside the config socket: a built ContextEngine the
+    # shell binds as-is instead of building its own.
+    context_engine: Any = None
 
 
 @dataclass

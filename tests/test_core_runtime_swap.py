@@ -16,7 +16,6 @@ by the shell, so the gap is a visible fact rather than a silent one.
 
 from __future__ import annotations
 
-import inspect
 from pathlib import Path
 
 import pytest
@@ -280,26 +279,62 @@ def test_the_token_wise_socket_takes_the_strategy_the_config_names(tmp_path: Pat
     assert [type(s) for s in rt.loop.strategies.strategies] == [CacheOptimizer]
 
 
-def test_the_two_organs_without_a_socket_are_built_by_the_shell() -> None:
-    """The door has no ``context_engine=`` and no ``executor=``.
+@pytest.mark.asyncio
+async def test_the_context_engine_socket_binds_the_instance_the_door_was_handed(tmp_path: Path, monkeypatch) -> None:
+    """The seventh organ pair closes: a built context engine rides the bundle
+    through the door, and the turn's prompt is whatever it assembled -- the
+    shell builds nothing of its own."""
+    from raven.contracts.assembled import AssembledContext
+    from raven.core import runtime
 
-    Both organs are built inside ``AgentLoop.__init__`` from loop-private state
-    (``build_context_engine`` captures the tool registry, the sub-agent table
-    and the MCP notices; ``build_executor`` takes the mount root and the owned
-    VM ids), and no bundle field carries a pre-built instance of either.
-    Opening a socket needs a carrier between door and shell -- a bundle field
-    or a top-level kwarg -- which the maintainer has not chosen (findings card:
-    context-executor-sockets-card.md). Until then this test keeps the gap a
-    visible fact: the day either name appears on the door, the assertion below
-    is the one to retire, and a swap case takes its place.
-    """
-    from raven.agent.loop.main import AgentLoop
-    from raven.core.runtime import build_runtime
+    class _StubEngine:
+        owns_compaction = False
 
-    door = inspect.signature(build_runtime).parameters
-    shell = inspect.signature(AgentLoop.__init__).parameters
+        def __init__(self) -> None:
+            self.assembled_for: list[str] = []
 
-    assert {"provider", "session_manager", "provider_pool", "router"} <= set(door)
-    for name in ("context_engine", "executor"):
-        assert name not in door, name
-        assert name not in shell, name
+        def set_provider(self, *a, **k) -> None:
+            return None
+
+        async def assemble(self, session_key, session_messages, budget, *, turn):
+            self.assembled_for.append(session_key)
+            return AssembledContext(messages=[{"role": "user", "content": "marker-from-the-stub-engine"}])
+
+        async def after_turn(self, *a, **k) -> None:
+            return None
+
+    _quiet_plugins(tmp_path, monkeypatch)
+    config, ec_config = _configs(tmp_path)
+    stub = _StubEngine()
+    provider = _Provider()
+
+    rt = runtime.build_runtime(config, ec_config, provider=provider, context_engine=stub)
+
+    assert rt.loop.context_engine is stub
+
+    await rt.loop._process_message(_turn("does not matter: the stub decides"), session_key="test:c1")
+
+    assert stub.assembled_for, "the turn never asked the substitute engine"
+    assert "marker-from-the-stub-engine" in str(provider.chats[0])
+
+
+@pytest.mark.asyncio
+async def test_the_executor_socket_binds_the_instance_the_door_was_handed(tmp_path: Path, monkeypatch) -> None:
+    """A built executor rides the door beside ``sandbox_config``, its config
+    twin, and is the one the exec tool holds -- mount-root and home-volume
+    derivation stay the builder's business."""
+    from raven.core import runtime
+
+    class _StubExecutor:
+        is_sandboxed = False
+        supports_process_spawning = True
+
+    _quiet_plugins(tmp_path, monkeypatch)
+    config, ec_config = _configs(tmp_path)
+    stub = _StubExecutor()
+
+    rt = runtime.build_runtime(config, ec_config, provider=_Provider(), executor=stub)
+
+    assert rt.loop._executor is stub
+    exec_tool = rt.loop.tools.get("exec")
+    assert exec_tool is not None and exec_tool._executor is stub
