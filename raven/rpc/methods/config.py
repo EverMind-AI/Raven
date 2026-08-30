@@ -1,4 +1,4 @@
-"""``config.get`` / ``config.set`` RPC handlers.
+"""``config.get`` / ``config.set`` / ``config.unset`` RPC handlers.
 
 The v0.1 surface exposes only **four hot-changeable** keys; any other write
 target raises :class:`ConfigFieldReadonlyError` (-32010). Values are stored
@@ -241,6 +241,31 @@ def _set_nested(payload: dict[str, Any], dotted_key: str, value: Any) -> None:
     cur[parts[-1]] = value
 
 
+def _unset_nested(payload: dict[str, Any], dotted_key: str) -> Any | None:
+    """Remove the leaf at the dotted path and prune emptied parents.
+
+    Returns the removed value, or ``None`` when nothing was stored. Pruning
+    matters: an override-free file should look override-free, not carry a
+    trail of empty tables that reads as configuration.
+    """
+    parts = dotted_key.split(".")
+    trail: list[dict[str, Any]] = []
+    cur: Any = payload
+    for part in parts[:-1]:
+        if not isinstance(cur, dict) or part not in cur:
+            return None
+        trail.append(cur)
+        cur = cur[part]
+    if not isinstance(cur, dict) or parts[-1] not in cur:
+        return None
+    previous = cur.pop(parts[-1])
+    for parent, part in zip(reversed(trail), reversed(parts[:-1])):
+        if parent[part]:
+            break
+        del parent[part]
+    return previous
+
+
 # ---------------------------------------------------------------------------
 # Handlers
 # ---------------------------------------------------------------------------
@@ -324,6 +349,48 @@ async def config_set(
     _save_config(payload)
 
     return {"applied": True, "previous": previous}
+
+
+async def config_unset(params: dict) -> dict:
+    """Remove a stored override so the default answers again.
+
+    Same whitelist as ``config.set``; ``"model"`` is refused because it is a
+    switch with scopes, not a stored override -- switching back is another
+    ``config.set``. Returns ``{removed, previous, default}``: ``removed`` is
+    False when nothing was stored, which is not an error -- the state the
+    caller asked for is the state they have.
+
+    Raises:
+        ConfigValidationError (-32011): params shape invalid, or key "model".
+        ConfigFieldReadonlyError (-32010): key not in the writable whitelist.
+    """
+    if not isinstance(params, dict):
+        raise ConfigValidationError(
+            "config.unset params must be an object",
+            data={"got": type(params).__name__},
+        )
+    key = params.get("key")
+    if not isinstance(key, str) or not key:
+        raise ConfigValidationError(
+            "config.unset params.key is required and must be a non-empty string",
+            data={"field": "key", "got": repr(key)},
+        )
+    if key == "model":
+        raise ConfigValidationError(
+            "'model' is a switch, not a stored override; switch back with config.set",
+            data={"field": "key"},
+        )
+    if key not in _VALIDATORS:
+        raise ConfigFieldReadonlyError(
+            f"key '{key}' is not in the v0.1 hot-changeable whitelist",
+            data={"field": key, "writable": list(CONFIG_WRITABLE_KEYS)},
+        )
+
+    payload = _load_config()
+    previous = _unset_nested(payload, _STORAGE_PATHS[key])
+    if previous is not None:
+        _save_config(payload)
+    return {"removed": previous is not None, "previous": previous, "default": _DEFAULTS[key]}
 
 
 def _set_model(
@@ -518,18 +585,20 @@ def register_config_methods(
     *,
     agent_loop_factory: "AgentLoopFactory | None" = None,
 ) -> None:
-    """Register ``config.get`` / ``config.set`` on a dispatcher instance."""
+    """Register ``config.get`` / ``config.set`` / ``config.unset`` on a dispatcher instance."""
 
     async def _set(params: dict) -> dict:
         return await config_set(params, agent_loop_factory=agent_loop_factory)
 
     dispatcher.register("config.get", config_get)
     dispatcher.register("config.set", _set)
+    dispatcher.register("config.unset", config_unset)
 
 
 __all__ = [
     "config_get",
     "config_set",
+    "config_unset",
     "register_config_methods",
     "CONFIG_WRITABLE_KEYS",
 ]

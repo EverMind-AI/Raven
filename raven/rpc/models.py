@@ -1480,6 +1480,18 @@ class ConfigSetParams(_Strict):
     scope: Literal["session", "default"] | None = None
 
 
+class ConfigUnsetParams(_Strict):
+    key: str
+
+
+class ConfigUnsetResult(_Strict):
+    # ``removed`` is False when nothing was stored -- not an error: the state
+    # the caller asked for is the state they have.
+    removed: bool
+    previous: JsonValue = Field(...)
+    default: JsonValue = Field(...)
+
+
 class ConfigSetResult(_Strict):
     applied: bool
     # ``previous`` is a *required* field whose value may legitimately be
@@ -3810,6 +3822,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     # config.*
     "config.get": (ConfigGetParams, ConfigGetResult),
     "config.set": (ConfigSetParams, ConfigSetResult),
+    "config.unset": (ConfigUnsetParams, ConfigUnsetResult),
     # subagent.* -- handed-off calls (singular; not the plural below)
     "subagent.list": (SubagentListParams, SubagentListResult),
     "subagent.context": (SubagentContextParams, SubagentContextResult),
@@ -3895,6 +3908,8 @@ __all__ = [
     "CliResult",
     "StubResult",
     "CommandsCatalogResponse",
+    "ConfigUnsetParams",
+    "ConfigUnsetResult",
     "TurnEvent",
     "SessionMostRecentParams",
     "SessionMostRecentResult",

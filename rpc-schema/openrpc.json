@@ -1505,6 +1505,56 @@
       ]
     },
     {
+      "name": "config.unset",
+      "summary": "Remove a stored override so the default answers again.",
+      "params": [
+        {
+          "name": "key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "ConfigUnsetResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "removed",
+            "previous",
+            "default"
+          ],
+          "properties": {
+            "removed": {
+              "type": "boolean"
+            },
+            "previous": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "default": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
       "name": "subagent.list",
       "summary": "List the background calls one conversation handed off, newest first.",
       "params": [

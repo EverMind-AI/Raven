@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 157 methods, 89 component schemas.
+// 158 methods, 89 component schemas.
 
 /* eslint-disable */
 /**
@@ -1810,6 +1810,14 @@ export interface ConfigSetResult {
   session_id?: string;
   applies_to_session?: boolean;
 }
+export interface ConfigUnsetParams {
+  key: string;
+}
+export interface ConfigUnsetResult {
+  removed: boolean;
+  previous: JsonValue | null;
+  default: JsonValue | null;
+}
 export interface SubagentListParams {
   /**
    * Absent or unknown is an empty list, not an error.
@@ -3539,6 +3547,7 @@ export interface RpcMethods {
   'model.remove_endpoint': { params: ModelRemoveEndpointParams; result: ModelRemoveEndpointResult };
   'config.get': { params: ConfigGetParams; result: ConfigGetResult };
   'config.set': { params: ConfigSetParams; result: ConfigSetResult };
+  'config.unset': { params: ConfigUnsetParams; result: ConfigUnsetResult };
   'subagent.list': { params: SubagentListParams; result: SubagentListResult };
   'subagent.context': { params: SubagentContextParams; result: SubagentContextResult };
   'subagents.list': { params: SubagentsListParams; result: SubagentsListResult };
@@ -3696,6 +3705,7 @@ export const RPC_METHODS = [
   "complete.slash",
   "config.get",
   "config.set",
+  "config.unset",
   "confirm.respond",
   "cron.delete",
   "cron.list",
