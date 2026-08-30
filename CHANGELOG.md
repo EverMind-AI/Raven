@@ -91,6 +91,15 @@ All notable changes to Raven are documented here.
   named four symbols while those trees reach for eight. It reads the surface out
   of `subagents/*/install.py`, `install.sh` and the README now, so a rename that
   would break a downstream install fails here instead of there.
+- The span vocabulary moves out of the kernel to `raven/observability/`.
+  Deciding what a raven span *means* -- that an LLM span carries its routing
+  backend, that a usage block prices out at a number -- needs the provider
+  registry and the token ledger, so the kernel was reaching into two shelves for
+  it. The machinery it keeps: context, suppression, the `instrument` decorator,
+  the store. `the kernel stands alone` now carries one `ignore_imports` instead
+  of three, and the one left says why in the contract: tracing has to find
+  raven's home to read its own `[tracing]` block. Instrumented call sites pass
+  their extractor as an argument, so nothing moved but eighteen imports.
 - `raven.i18n` is seated as an inner cross-cutting leaf: it may not import a
   surface, and the kernel may not import it. The glossary records what it is
   and what `zh_lexicon` is not.
