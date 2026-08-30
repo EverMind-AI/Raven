@@ -27,6 +27,12 @@ where the reviewer reads why the number is what it is.
 Clause 2 overlaps `the kernel stands alone` (import-linter) and
 tests/test_kernel_closure.py, which ask about the whole kernel set; this file
 asks the narrower question the booklet asked, of spine alone.
+
+One addendum (2026-08-31) extends clause 1's discipline to raven/contracts:
+the papers are additions-safe by design, but additions inside a budget --
+1,922 lines when the ceiling landed -- so a new paper passes the same
+explicit review a kernel line does, in the same file the reviewer already
+reads for why the numbers are what they are.
 """
 
 from __future__ import annotations
@@ -37,12 +43,14 @@ import sys
 from pathlib import Path
 
 LINE_CEILING = 2_000
+CONTRACTS_LINE_CEILING = 2_500
 THIRD_PARTY_ALLOWED = frozenset({"loguru"})
 DEBT_MARKER = re.compile(r"\b(TODO|FIXME|HACK)\b")
 
 REPO = Path(__file__).resolve().parent.parent
 KERNEL_PACKAGE = "raven.spine"
 SPINE = REPO / "raven" / "spine"
+CONTRACTS = REPO / "raven" / "contracts"
 
 
 def _spine_files() -> list[Path]:
@@ -108,3 +116,14 @@ def test_the_kernel_carries_no_debt_markers() -> None:
     ]
 
     assert marked == [], f"the frozen kernel carries deferred work: {marked}"
+
+
+def test_the_papers_stay_under_their_line_ceiling() -> None:
+    files = sorted(p for p in CONTRACTS.rglob("*.py") if "__pycache__" not in p.parts)
+    assert files, "raven/contracts has no Python files; a budget measured on nothing is met by nothing"
+    lines = sum(len(p.read_text(encoding="utf-8").splitlines()) for p in files)
+
+    assert 0 < lines <= CONTRACTS_LINE_CEILING, (
+        f"raven/contracts is {lines} lines against a ceiling of {CONTRACTS_LINE_CEILING}; "
+        "a new paper is a reviewed change to this ceiling, not a bump in passing"
+    )

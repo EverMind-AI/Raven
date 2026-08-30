@@ -325,5 +325,13 @@ class AgentHook(ABC):
         return HookDecision()
 
 
+#: The hook surface's own version, bumped whenever the vocabulary grows or a
+#: phase changes meaning (2: the turn-scoped ``metadata`` dict,
+#: ``session_history``, and the ``before_user_inbound`` rewrite grant). The
+#: fingerprint test (tests/test_agent_hook_contract.py) pins the field and
+#: phase rosters to this number, so growth is a bump a reviewer -- and a
+#: product hook author -- sees, rather than a drift nobody counted.
+FACTORY_LOOP_SURFACE_VERSION = 2
+
 __tier__ = "factory_loop"
-__all__ = ["AgentHook", "AgentHookContext", "HookDecision"]
+__all__ = ["AgentHook", "AgentHookContext", "FACTORY_LOOP_SURFACE_VERSION", "HookDecision"]

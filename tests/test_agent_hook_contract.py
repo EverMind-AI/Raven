@@ -618,3 +618,72 @@ class TestNoteAndInboundGrants:
         decision = await CompositeHook([Memo(), Reminder()]).before_user_inbound(ctx)
         assert decision.modified_content == "[memo]\n\nwhat changed?\n\n[reminder]"
         assert ctx.outbound_content is None
+
+
+def test_the_factory_loop_surface_is_versioned() -> None:
+    """The tier's word is "versioned with the factory loop" -- but the hook
+    vocabulary grew five context fields and a phase with no number moving, so
+    versioned was prose rather than a mechanism. The roster below pins the
+    surface to the declared version: growing one without the other is red,
+    and the bump is what a reviewer (and a product hook author) sees.
+    """
+    import dataclasses
+
+    import raven.contracts.loop_hooks as lh
+
+    surface = {
+        "context": sorted(f.name for f in dataclasses.fields(lh.AgentHookContext)),
+        "decision": sorted(f.name for f in dataclasses.fields(lh.HookDecision)),
+        "phases": sorted(
+            name for name, member in vars(lh.AgentHook).items() if callable(member) and not name.startswith("_")
+        ),
+    }
+    pinned = {
+        # 1 was the pre-metadata surface (no shared turn dict, no session
+        # history, no inbound rewrite); it shipped unnumbered and is not
+        # reconstructed here.
+        2: {
+            "context": [
+                "inbound_content",
+                "iteration",
+                "messages",
+                "metadata",
+                "outbound_content",
+                "response",
+                "session_history",
+                "session_key",
+                "tools",
+                "turn_base",
+                "turn_question",
+                "turn_request",
+            ],
+            "decision": [
+                "append_note",
+                "modified_content",
+                "modified_tools",
+                "notes",
+                "pass_through",
+                "rollback",
+                "rollback_inject",
+                "rollback_overrides",
+                "short_circuit_result",
+            ],
+            "phases": [
+                "after_iteration",
+                "after_send",
+                "before_execute_tools",
+                "before_iteration",
+                "before_user_inbound",
+                "terminal_answerless",
+            ],
+        },
+    }
+
+    assert lh.FACTORY_LOOP_SURFACE_VERSION in pinned, (
+        "a new surface version needs its roster pinned here in the same change"
+    )
+    assert surface == pinned[lh.FACTORY_LOOP_SURFACE_VERSION], (
+        "the hook surface changed: bump FACTORY_LOOP_SURFACE_VERSION in "
+        "raven/contracts/loop_hooks.py and pin the new roster here -- growing "
+        "one without the other is the drift this test exists to stop"
+    )
