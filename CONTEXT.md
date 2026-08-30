@@ -988,6 +988,16 @@ reads them where it always did.
 _Avoid_: resolving `RAVEN_HOME` again anywhere else -- that is how two directories become
 the answer to one question.
 
+**PathPolicy** (`contracts/path_policy.py`):
+The disk-layout paper: the home rule's vocabulary (`HOME_ENV_VAR`,
+`DEFAULT_HOME_DIRNAME`, `CONFIG_FILENAME`) and the workspace default sentinel,
+declared once so neither the tree nor the vendored launchers (which re-derive
+them by hand) drift. Constants only, deliberately: path-escape checking is the
+tools' security boundary, and a callable protocol joins when a consumer types
+against it.
+_Avoid_: hardcoding `~/.raven`, `config.json` or the workspace sentinel string
+outside this paper and its implementers.
+
 **Historical Plans** (`docs/plans/`):
 An archive, not a promise: a plan describes the tree as it stood on its own
 date, and holding one to today's layout would make it lie about that date. A
