@@ -9,6 +9,10 @@ resolution-markers = [
 ]
 
 [manifest]
+members = [
+    "everos-memory",
+    "raven",
+]
 constraints = [
     { name = "aiohttp", specifier = ">=3.13.4" },
     { name = "everalgo-boundary", specifier = "<0.3" },
@@ -927,6 +931,25 @@ wheels = [
 [package.optional-dependencies]
 multimodal = [
     { name = "everalgo-parser", extra = ["svg"] },
+]
+
+[[package]]
+name = "everos-memory"
+version = "1.2.0"
+source = { editable = "plugins-dist/everos-memory" }
+dependencies = [
+    { name = "everos", extra = ["multimodal"] },
+    { name = "httpx" },
+    { name = "loguru" },
+    { name = "raven" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "everos", extras = ["multimodal"], specifier = "==1.2.3" },
+    { name = "httpx", specifier = ">=0.28.0,<1.0.0" },
+    { name = "loguru", specifier = ">=0.7.3,<1.0.0" },
+    { name = "raven", editable = "." },
 ]
 
 [[package]]
@@ -3265,6 +3288,7 @@ channels = [
     { name = "wecom-aibot-sdk-python" },
 ]
 dev = [
+    { name = "everos-memory" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
@@ -3305,6 +3329,7 @@ requires-dist = [
     { name = "croniter", specifier = ">=6.0.0,<7.0.0" },
     { name = "dingtalk-stream", marker = "extra == 'channel-dingtalk'", specifier = ">=0.24.0,<1.0.0" },
     { name = "everos", extras = ["multimodal"], specifier = "==1.2.3" },
+    { name = "everos-memory", marker = "extra == 'dev'", editable = "plugins-dist/everos-memory" },
     { name = "httpx", specifier = ">=0.28.0,<1.0.0" },
     { name = "huggingface-hub", marker = "extra == 'eval'", specifier = ">=1.11.0" },
     { name = "idna", specifier = ">=3.4,<4.0.0" },

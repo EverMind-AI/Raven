@@ -1,7 +1,7 @@
 """Tests for ``raven plugins`` and ``raven plugin auth``.
 
 ``plugins`` is read-only: it renders the activated plugins -- here the
-registered entry-points one, raven.plugins.memory.everos -- and resolves
+registered entry-points one, raven_everos -- and resolves
 ``config.memory.backend`` against the live registry without invoking any
 plugin runtime (no ``MemoryBackend.start`` is awaited). These tests pin the
 table's contents and the three branches of the backend-selection block:
@@ -165,7 +165,7 @@ def _wide_console(monkeypatch: pytest.MonkeyPatch) -> None:
     rather than a narrow terminal.
 
     Reproduce by importing the CLI at 80 columns before the test runs: the
-    failure is `assert 'raven.plugins.memory.everos.backend:make_backend' in`
+    failure is `assert 'raven_everos.backend:make_backend' in`
     a string that ends `...___/`.
     """
     from rich.console import Console
@@ -204,7 +204,7 @@ class TestActiveBackend:
         assert result.exit_code == 0, result.stdout
         assert "everos-memory" in result.stdout
         assert "1.2.0" in result.stdout
-        assert "bundled" in result.stdout
+        assert "entry_points" in result.stdout
 
     def test_shows_active_backend_with_track_ids(
         self,
@@ -306,4 +306,4 @@ class TestVerboseFlag:
         result = _invoke(args, tmp_path)
         assert result.exit_code == 0
         # The factory reference is the canonical ``module:callable`` form.
-        assert "raven.plugins.memory.everos.backend:make_backend" in result.stdout
+        assert "raven_everos.backend:make_backend" in result.stdout

@@ -149,9 +149,9 @@ def _render_plugin_table(
 
     if not discovered:
         console.print(
-            "[yellow]No plugins discovered.[/yellow] The everos backend "
-            "ships bundled — run [bold]uv sync[/bold] — or drop a manifest "
-            "under [bold]~/.raven/plugins/[/bold].",
+            "[yellow]No plugins discovered.[/yellow] The everos backend is "
+            "its own distribution — install [bold]everos-memory[/bold] — "
+            "or drop a manifest under [bold]~/.raven/plugins/[/bold].",
         )
         return
 

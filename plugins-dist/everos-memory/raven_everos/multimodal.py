@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-logger = logging.getLogger("raven.plugins.memory.everos")
+logger = logging.getLogger("raven_everos")
 
 # Extension → modality hint. Only used for the human-readable provenance
 # tag; ``everalgo.parser`` itself dispatches by extension/MIME.

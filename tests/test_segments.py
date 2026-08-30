@@ -287,7 +287,7 @@ class TestRecallHasATurnBudget:
         plugin's own timeout handling, which is what demotes the service and
         makes every later turn cost nothing."""
         from raven.context_engine.segments import memory as memory_segment
-        from raven.plugins.memory.everos import backend as everos_backend
+        from raven_everos import backend as everos_backend
 
         assert everos_backend._RECALL_TIMEOUT_S < memory_segment._RECALL_BUDGET_S
 

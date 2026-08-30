@@ -10,7 +10,7 @@ import httpx
 import pytest
 
 from raven.plugins import PluginContext, ServiceLocator
-from raven.plugins.memory.everos.backend import (
+from raven_everos.backend import (
     EverosBackend,
     _HttpEverosAdapter,
     _jsonify,

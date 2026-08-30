@@ -1,5 +1,61 @@
 {
   "files": {
+    "plugins-dist/everos-memory/raven_everos/__init__.py": {
+      "branch_percent": 100.0,
+      "branches": 0,
+      "covered_branches": 0,
+      "covered_lines": 1,
+      "line_percent": 100.0,
+      "statements": 1
+    },
+    "plugins-dist/everos-memory/raven_everos/backend.py": {
+      "branch_percent": 91.860465,
+      "branches": 172,
+      "covered_branches": 158,
+      "covered_lines": 447,
+      "line_percent": 94.503171,
+      "statements": 473
+    },
+    "plugins-dist/everos-memory/raven_everos/health.py": {
+      "branch_percent": 83.333333,
+      "branches": 6,
+      "covered_branches": 5,
+      "covered_lines": 34,
+      "line_percent": 79.069767,
+      "statements": 43
+    },
+    "plugins-dist/everos-memory/raven_everos/multimodal.py": {
+      "branch_percent": 85.714286,
+      "branches": 14,
+      "covered_branches": 12,
+      "covered_lines": 65,
+      "line_percent": 90.277778,
+      "statements": 72
+    },
+    "plugins-dist/everos-memory/raven_everos/roots.py": {
+      "branch_percent": 100.0,
+      "branches": 10,
+      "covered_branches": 10,
+      "covered_lines": 56,
+      "line_percent": 100.0,
+      "statements": 56
+    },
+    "plugins-dist/everos-memory/raven_everos/server.py": {
+      "branch_percent": 73.75,
+      "branches": 80,
+      "covered_branches": 59,
+      "covered_lines": 251,
+      "line_percent": 76.060606,
+      "statements": 330
+    },
+    "plugins-dist/everos-memory/raven_everos/tools.py": {
+      "branch_percent": 83.333333,
+      "branches": 12,
+      "covered_branches": 10,
+      "covered_lines": 47,
+      "line_percent": 92.156863,
+      "statements": 51
+    },
     "raven/__init__.py": {
       "branch_percent": 100.0,
       "branches": 0,
@@ -3063,62 +3119,6 @@
       "covered_lines": 62,
       "line_percent": 100.0,
       "statements": 62
-    },
-    "raven/plugins/memory/everos/__init__.py": {
-      "branch_percent": 100.0,
-      "branches": 0,
-      "covered_branches": 0,
-      "covered_lines": 1,
-      "line_percent": 100.0,
-      "statements": 1
-    },
-    "raven/plugins/memory/everos/backend.py": {
-      "branch_percent": 91.860465,
-      "branches": 172,
-      "covered_branches": 158,
-      "covered_lines": 447,
-      "line_percent": 94.503171,
-      "statements": 473
-    },
-    "raven/plugins/memory/everos/health.py": {
-      "branch_percent": 83.333333,
-      "branches": 6,
-      "covered_branches": 5,
-      "covered_lines": 34,
-      "line_percent": 79.069767,
-      "statements": 43
-    },
-    "raven/plugins/memory/everos/multimodal.py": {
-      "branch_percent": 85.714286,
-      "branches": 14,
-      "covered_branches": 12,
-      "covered_lines": 65,
-      "line_percent": 90.277778,
-      "statements": 72
-    },
-    "raven/plugins/memory/everos/roots.py": {
-      "branch_percent": 100.0,
-      "branches": 10,
-      "covered_branches": 10,
-      "covered_lines": 56,
-      "line_percent": 100.0,
-      "statements": 56
-    },
-    "raven/plugins/memory/everos/server.py": {
-      "branch_percent": 73.75,
-      "branches": 80,
-      "covered_branches": 59,
-      "covered_lines": 251,
-      "line_percent": 76.060606,
-      "statements": 330
-    },
-    "raven/plugins/memory/everos/tools.py": {
-      "branch_percent": 83.333333,
-      "branches": 12,
-      "covered_branches": 10,
-      "covered_lines": 47,
-      "line_percent": 92.156863,
-      "statements": 51
     },
     "raven/plugins/registry.py": {
       "branch_percent": 90.909091,

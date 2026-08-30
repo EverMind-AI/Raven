@@ -500,11 +500,10 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         "raven/contracts/llm_provider.py",
         "raven/providers/minimax_oauth_provider.py",
         "raven/providers/per_model_provider.py",
-        # Other subsystems' credentials entirely: the skill hub, the EverOS
-        # memory backend, an embedding script.
+        # Other subsystems' credentials entirely: the skill hub, an embedding
+        # script.
         "raven/config/update.py",
         "raven/context_engine/factory.py",
-        "raven/plugins/memory/everos/backend.py",
         "raven/routing/generate_embeddings.py",
         # A third-party sub-agent's own credential, not a provider section: the
         # key goes on that agent's own Authorization header against its own

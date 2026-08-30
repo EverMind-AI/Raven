@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from raven.plugins.memory.everos import roots
-from raven.plugins.memory.everos.server import DEFAULT_EVEROS_BASE_URL
+from raven_everos import roots
+from raven_everos.server import DEFAULT_EVEROS_BASE_URL
 
 
 def _write_root(root: Path, *, api: tuple[str, int] | None = ("127.0.0.1", 18791), key: str = "k") -> None:
