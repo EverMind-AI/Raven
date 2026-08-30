@@ -29,9 +29,9 @@ eight are the fork's own numbers, unchanged on this build.
   "not modified" is asserted against ``research_flow.gates.conversation`` and
   the fork's sha still holds;
 * the open clarify round lives in the plugin's ``SessionStore``, keyed by
-  session key, not on ``session.metadata``. A fork inheriting one is therefore
-  a question about the key the child is minted with, and is asserted as
-  behaviour rather than by reading ``SessionManager.fork``'s source.
+  session key, not on ``session.metadata``; the fork-inheritance property is
+  asserted in the session file (this file carried a twin of it until the two
+  merged, 2026-08-31).
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ sys.path.insert(0, str(PLUGIN_DIR))
 
 from research_flow.config import FlowConfig  # noqa: E402
 from research_flow.flow import ToolHandles, build_chain  # noqa: E402
-from research_flow.gates.ask_user import AskUserGate, PendingClarify  # noqa: E402
+from research_flow.gates.ask_user import AskUserGate  # noqa: E402
 from research_flow.gates.conversation import GatedHook  # noqa: E402
 from research_flow.prompts import render_identity_and_contract, render_parts  # noqa: E402
 from research_flow.state import SessionStore  # noqa: E402
@@ -75,10 +75,6 @@ def _flat(text: str) -> str:
     into a diff in three unrelated tests. The one place the wrap itself is the
     subject asserts on it directly."""
     return " ".join((text or "").split())
-
-
-def _q(text="which entity?", options=()):
-    return {"question": text, "options": list(options)}
 
 
 def _on_state_config() -> FlowConfig:
@@ -335,35 +331,3 @@ def test_the_conversation_module_is_not_modified() -> None:
         "dr_turn_source",
         "dr_turn_why",
     }
-
-
-def test_a_fork_does_not_inherit_a_pending_clarify(tmp_path) -> None:
-    """A child session cannot answer its parent's open question.
-
-    [port] The fork read ``SessionManager.fork``'s source, because the pending
-    lived on ``session.metadata`` and the risk was a future ``deepcopy`` of it.
-    Here the pending lives in the plugin's own store, keyed by session key, so
-    the fact that carries the property is that ``fork`` mints a fresh key - and
-    that is asserted as behaviour: write a pending against the parent's key and
-    read the child's back."""
-    from raven.session.manager import SessionManager
-
-    sessions = SessionManager(tmp_path / "home")
-    parent = sessions.get_or_create("cli:parent")
-    parent.add_message("user", "which entity?")
-    sessions.save(parent)
-
-    store = SessionStore(tmp_path / "state")
-    record = store.load(parent.key)
-    record.pending_clarify = PendingClarify(original_question="which entity?", questions=[_q()]).to_metadata()
-    record.chain_round = 1
-    store.save(parent.key, record)
-
-    child = sessions.fork(parent.key)
-    assert child is not None
-    assert child.key != parent.key
-    assert child.metadata["parent_session_id"] == parent.key
-    assert store.load(child.key).pending_clarify is None
-    assert store.load(child.key).chain_round == 0
-    # The parent's round is untouched: forking is not a way to spend it.
-    assert store.load(parent.key).chain_round == 1

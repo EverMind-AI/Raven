@@ -255,6 +255,13 @@ def test_the_proxy_falls_back_to_the_host_config(grounded, tmp_path, monkeypatch
 
 
 def test_the_search_env_var_is_the_tools_own(launcher):
+    """The degraded path's pin, not the product's: research-flow REPLACES
+    web_search, so in a healthy launch this module never serves. It is what
+    answers when the plugin fails to board (an unreadable plugins.dirs entry,
+    an import error in research_flow) -- the launch proceeds on built-ins, and
+    the bare export require_search accepted must still reach the tool that
+    actually runs. The healthy-path pin is the sibling test below.
+    """
     import inspect
 
     import raven.agent.tools.web as web
