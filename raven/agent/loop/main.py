@@ -109,6 +109,16 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
 
     _LOOP_BREAK_MAX = 2
 
+    # Hook rollbacks per turn: a gate that keeps bouncing a draft must not be
+    # able to spin the loop forever. Past the cap the decision degrades to
+    # pass-through and the refusal is counted, so the books never read a
+    # bounce that did not happen.
+    _MAX_HOOK_ROLLBACKS = 8
+    # Generation parameters a rollback may override on the re-sample call.
+    # Anything else is dropped: these feed the provider call directly, and an
+    # unknown key from a hook must not TypeError the whole turn.
+    _ROLLBACK_OVERRIDE_KEYS = frozenset({"temperature", "max_tokens", "reasoning_effort"})
+
     # The tool that can read an attachment for a model that cannot see it.
     # Contributed by the EverOS plugin, so absent on a default install.
     _DESCRIBE_TOOL = "understand_media"

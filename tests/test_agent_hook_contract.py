@@ -52,6 +52,7 @@ PHASES = [
     "before_iteration",
     "before_execute_tools",
     "after_iteration",
+    "terminal_answerless",
     "after_send",
 ]
 
@@ -97,6 +98,10 @@ class TestHookDecision:
         assert d.pass_through is True
         assert d.short_circuit_result is None
         assert d.modified_content is None
+        assert d.rollback is False
+        assert d.rollback_overrides is None
+        assert d.rollback_inject is None
+        assert d.modified_tools is None
         assert d.notes == []
 
     def test_short_circuit_carries_arbitrary_value(self):
@@ -136,6 +141,8 @@ class TestAgentHookContext:
         assert c.response is None
         assert c.outbound_content is None
         assert c.metadata == {}
+        assert c.turn_question == ""
+        assert c.turn_base == 0
 
     def test_fields_can_be_set(self):
         c = AgentHookContext(
@@ -541,3 +548,44 @@ class TestCompositeHookEndToEndScenario:
         d3 = await composite.after_send(ctx)
         assert d3.modified_content == "hi user [nudge]"
         assert log == ["nudge_injector.after_send"]
+
+
+class TestCompositeHaltingAndGrants:
+    async def test_rollback_halts_the_chain_like_a_short_circuit(self, ctx):
+        seen: list[str] = []
+
+        class Bouncer(AgentHook):
+            async def after_iteration(self, ctx):
+                seen.append("bouncer")
+                return HookDecision(rollback=True, rollback_inject=[{"role": "user", "content": "again"}])
+
+        class Later(AgentHook):
+            async def after_iteration(self, ctx):
+                seen.append("later")
+                return HookDecision()
+
+        decision = await CompositeHook([Bouncer(), Later()]).after_iteration(ctx)
+        assert decision.rollback is True
+        assert decision.rollback_inject == [{"role": "user", "content": "again"}]
+        assert seen == ["bouncer"]
+
+    async def test_modified_tools_chain_through_before_iteration(self, ctx):
+        class DropB(AgentHook):
+            async def before_iteration(self, ctx):
+                return HookDecision(modified_tools=[t for t in (ctx.tools or []) if t["name"] != "b"])
+
+        class DropC(AgentHook):
+            async def before_iteration(self, ctx):
+                return HookDecision(modified_tools=[t for t in (ctx.tools or []) if t["name"] != "c"])
+
+        ctx.tools = [{"name": "a"}, {"name": "b"}, {"name": "c"}]
+        decision = await CompositeHook([DropB(), DropC()]).before_iteration(ctx)
+        assert decision.modified_tools == [{"name": "a"}]
+
+    async def test_terminal_answerless_dispatches(self, ctx):
+        class Salvage(AgentHook):
+            async def terminal_answerless(self, ctx):
+                return HookDecision(short_circuit_result="best-supported answer")
+
+        decision = await CompositeHook([Salvage()]).terminal_answerless(ctx)
+        assert decision.short_circuit_result == "best-supported answer"

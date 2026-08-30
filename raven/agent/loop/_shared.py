@@ -281,6 +281,40 @@ _SKIP_AFTER_SEND_ORIGINS = frozenset({Origin.SENTINEL, Origin.SUBAGENT})
 # that one marks empty-response recovery scaffolding, and collapsing the two
 # would make either meaning impossible to reason about separately.
 _ATTACHED_IMAGE_KEY = "_attached_image"
+#: A message a hook injected on rollback: the harness re-prompting itself (a
+#: reviewer rejection, a commit nudge). It persists into history because the
+#: model was shown it, but no real user said it; the underscore key is dropped
+#: on the way to the provider, so what it changes is only how readers of the
+#: transcript classify the line.
+_HOOK_INJECTED_KEY = "_hook_injected"
+
+
+def turn_question(messages: list[dict[str, Any]] | None) -> str:
+    """This turn's question: the text of the last user message at loop entry.
+
+    Read once, at entry -- later the history has grown and the last user
+    message may be an injection rather than what the user asked.
+    """
+    for m in reversed(messages or []):
+        if not isinstance(m, dict) or m.get("role") != "user":
+            continue
+        content = m.get("content")
+        text = ""
+        if isinstance(content, str):
+            text = content
+        elif isinstance(content, list):
+            text = " ".join(
+                str(part.get("text", "")) for part in content if isinstance(part, dict) and part.get("type") == "text"
+            )
+        text = text.strip()
+        # The context builder prepends a runtime-context block (time, channel)
+        # to the inbound message; the question is what follows the blank line.
+        if text.startswith(ContextBuilder._RUNTIME_CONTEXT_TAG):
+            text = text.partition("\n\n")[2].strip()
+        if text:
+            return text
+    return ""
+
 
 # Marks the stored user entry of a turn that is a delegated result coming back,
 # not something a person sent. Renamed to ``delegated`` at the save gate for the

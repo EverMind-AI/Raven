@@ -10,6 +10,7 @@ from raven.agent.loop._shared import (
     _ABORTED_ACTION_REPLY,
     _ATTACHED_IMAGE_KEY,
     _DELEGATED_KEY,
+    _HOOK_INJECTED_KEY,
     _MAX_ITER_STATIC_FALLBACK,
     _MAX_ITER_SYNTHESIS_PROMPT,
     _NOTICE_KEY,
@@ -63,6 +64,7 @@ from raven.agent.loop._shared import (
     strip_think_blocks,
     time,
     trace,
+    turn_question,
     uuid4,
     workdir,
 )
@@ -264,6 +266,7 @@ class TurnPathMixin:
         model: str | None,
         on_token_delta: Callable[[str], Awaitable[None]] | None = None,
         on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
+        **generation: Any,
     ) -> LLMResponse:
         """Stream LLM response via ``provider.chat_stream`` + accumulate to LLMResponse.
 
@@ -285,6 +288,7 @@ class TurnPathMixin:
             on_token_delta=on_token_delta,
             on_reasoning_delta=on_reasoning_delta,
             max_reconnects=self._MAX_STREAM_RECONNECTS,
+            **generation,
         )
 
     @classmethod
@@ -568,6 +572,59 @@ class TurnPathMixin:
         watch_state = _watch_work.TurnWatch()
         watch_request = _watch_work.asked_for(initial_messages)
 
+        # The iteration hook chain's context for this whole turn; None when no
+        # hook is registered, so a default install pays nothing here.
+        from raven.agent.hook import AgentHookContext
+
+        hook_ctx = (
+            AgentHookContext(
+                session_key=session_key or "",
+                turn_question=turn_question(initial_messages),
+                turn_base=max(0, len(initial_messages) - 1),
+            )
+            if len(self.hooks) > 0
+            else None
+        )
+        hook_rollbacks = 0
+        iter_msg_base = 0
+        pending_gen_overrides: dict[str, Any] | None = None
+
+        def _hook_rollback(decision) -> bool:
+            """Honor a hook's rollback: pop everything this iteration appended
+            and re-sample without consuming an iteration. Message helpers
+            mutate-and-return the same list, so truncating at the iteration
+            watermark removes exactly this iteration's products."""
+            nonlocal iteration, hook_rollbacks, pending_gen_overrides
+            if not decision.rollback:
+                return False
+            if hook_rollbacks >= self._MAX_HOOK_ROLLBACKS:
+                if hook_ctx is not None:
+                    hook_ctx.metadata["rollbacks_refused"] = hook_ctx.metadata.get("rollbacks_refused", 0) + 1
+                logger.warning("Hook rollback cap ({}) reached; proceeding without rollback", self._MAX_HOOK_ROLLBACKS)
+                return False
+            requested = decision.rollback_overrides or {}
+            overrides = {k: v for k, v in requested.items() if k in self._ROLLBACK_OVERRIDE_KEYS}
+            if len(overrides) != len(requested):
+                logger.warning(
+                    "Hook rollback overrides dropped (not in allowlist): {}", sorted(set(requested) - set(overrides))
+                )
+            hook_rollbacks += 1
+            del messages[iter_msg_base:]
+            for m in decision.rollback_inject or ():
+                entry = dict(m)
+                entry.setdefault("timestamp", self._now_fn().isoformat())
+                entry[_HOOK_INJECTED_KEY] = True
+                messages.append(entry)
+            iteration -= 1
+            pending_gen_overrides = overrides or None
+            logger.info(
+                "Hook rollback {}/{}: popped iteration messages, re-sampling (overrides={})",
+                hook_rollbacks,
+                self._MAX_HOOK_ROLLBACKS,
+                sorted(overrides) or None,
+            )
+            return True
+
         while iteration < self.max_iterations:
             iteration += 1
             logger.info(
@@ -614,6 +671,24 @@ class TurnPathMixin:
                 auto.set_snapshot(messages)
 
             tool_defs = self.tools.get_definitions()
+            iter_msg_base = len(messages)
+
+            if hook_ctx is not None:
+                hook_ctx.iteration = iteration
+                hook_ctx.messages = messages
+                hook_ctx.tools = tool_defs
+                hook_ctx.response = None
+                decision = await self.hooks.before_iteration(hook_ctx)
+                if decision.short_circuit_result is not None:
+                    final_content = str(decision.short_circuit_result)
+                    messages = self.context.add_assistant_message(messages, final_content)
+                    break
+                # Taken from the decision, not from ``hook_ctx.tools``: the two
+                # happen to be the same object today, and relying on that would
+                # make the rule stop firing silently the day get_definitions
+                # returns a cached list. The registry itself is never touched.
+                if decision.modified_tools is not None:
+                    tool_defs = decision.modified_tools
 
             # Nothing to switch off here any more. When CacheOptimizer runs it
             # stamps the request it marked, and the provider reads that stamp on
@@ -629,6 +704,8 @@ class TurnPathMixin:
 
             # TokenWise before-hook: strategies may rewrite messages, tools,
             # or model (e.g. CacheOptimizer marks cache_control blocks).
+            gen_overrides = dict(pending_gen_overrides or {})
+            pending_gen_overrides = None
             call_messages, call_tools, call_model = await self.strategies.before_llm_call(
                 messages,
                 tool_defs,
@@ -641,6 +718,7 @@ class TurnPathMixin:
                     model=call_model,
                     on_token_delta=on_token_delta,
                     on_reasoning_delta=on_reasoning_delta,
+                    **gen_overrides,
                 )
             else:
                 response = await self.provider.chat_with_retry(
@@ -648,6 +726,7 @@ class TurnPathMixin:
                     tools=call_tools,
                     model=call_model,
                     fallback_models=fallback_models,
+                    **gen_overrides,
                 )
             # TokenWise after-hook: strategies observe the response for
             # usage tracking, budget enforcement, etc. Errors are swallowed.
@@ -743,6 +822,19 @@ class TurnPathMixin:
                     continue
 
             if response.has_tool_calls:
+                if hook_ctx is not None:
+                    hook_ctx.messages = messages
+                    hook_ctx.response = response
+                    decision = await self.hooks.before_execute_tools(hook_ctx)
+                    if _hook_rollback(decision):
+                        continue
+                    if decision.short_circuit_result is not None:
+                        # The tool-call response is dropped entirely: persisting
+                        # an assistant message whose tool_calls never executed
+                        # leaves dangling calls that strict providers reject.
+                        final_content = str(decision.short_circuit_result)
+                        messages = self.context.add_assistant_message(messages, final_content)
+                        break
                 # Blocking a call is handled where the call is: the
                 # branch below refuses it and cancels the siblings the
                 # model wrote beside it. The only answer that has to
@@ -997,6 +1089,19 @@ class TurnPathMixin:
                 # deliberately drops it rather than leaving it dangling.
                 if pending_images:
                     messages.append({"role": "user", "content": pending_images, _ATTACHED_IMAGE_KEY: True})
+                # Dispatched before prev_had_tool_calls is set: a rollback means
+                # this iteration never happened, so the empty-response classifier
+                # must see the pre-iteration state on the re-sample.
+                if hook_ctx is not None:
+                    hook_ctx.messages = messages
+                    hook_ctx.response = response
+                    decision = await self.hooks.after_iteration(hook_ctx)
+                    if _hook_rollback(decision):
+                        continue
+                    if decision.short_circuit_result is not None:
+                        final_content = str(decision.short_circuit_result)
+                        messages = self.context.add_assistant_message(messages, final_content)
+                        break
                 prev_had_tool_calls = True
             else:
                 clean = self._strip_think(response.content)
@@ -1062,6 +1167,20 @@ class TurnPathMixin:
                     prev_had_tool_calls = False
                     continue
 
+                # Before the text is persisted, so a short-circuit replaces it
+                # without leaving the replaced draft in history and a rollback
+                # discards-and-re-samples it.
+                if hook_ctx is not None:
+                    hook_ctx.messages = messages
+                    hook_ctx.response = response
+                    decision = await self.hooks.after_iteration(hook_ctx)
+                    if _hook_rollback(decision):
+                        continue
+                    if decision.short_circuit_result is not None:
+                        final_content = str(decision.short_circuit_result)
+                        messages = self.context.add_assistant_message(messages, final_content)
+                        break
+
                 messages = self.context.add_assistant_message(
                     messages,
                     clean,
@@ -1119,6 +1238,20 @@ class TurnPathMixin:
         # same point: the returned list feeds persistence, ``after_turn``
         # extraction and ``backend.store`` alike, so filtering once upstream of
         # all three is the only place that covers them.
+        # The terminal seam: a turn that ended with nothing a reader can see --
+        # a provider error, or an exhausted budget whose wrap-up came back
+        # empty -- gets one last chance to commit an answer.
+        answerless = status == "error" or not (final_content or "").strip()
+        if hook_ctx is not None and answerless:
+            hook_ctx.messages = messages
+            hook_ctx.response = None
+            hook_ctx.metadata["turn_end"] = {"status": status, "iterations": iteration}
+            decision = await self.hooks.terminal_answerless(hook_ctx)
+            if decision.short_circuit_result is not None:
+                final_content = str(decision.short_circuit_result)
+                messages = self.context.add_assistant_message(messages, final_content)
+                hook_ctx.metadata["turn_end"]["salvaged"] = True
+
         _transient = ("_recovery_synthetic", _ATTACHED_IMAGE_KEY)
         if any(any(m.get(k) for k in _transient) for m in messages):
             messages = [m for m in messages if not any(m.get(k) for k in _transient)]

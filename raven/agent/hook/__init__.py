@@ -1,9 +1,11 @@
 """AgentHook abstraction for AgentLoop lifecycle.
 
-AgentLoop's scattered callback fields (``response_modifier`` /
-``on_user_inbound`` / ``decision_consumer`` / ``enable_personalization``)
-are ported onto this contract. eval_engine adds the three iteration-phase
-hooks (before_iteration / before_execute_tools / after_iteration).
+The loop fires six phases through one ``CompositeHook`` chain: one on the
+way in (before_user_inbound), three per ReAct iteration (before_iteration /
+before_execute_tools / after_iteration), one when a turn ends with nothing
+to show (terminal_answerless), one on the way out (after_send). eval_engine
+adds three concrete iteration-phase hooks; a product steers the loop with
+its own on the same six.
 
 Public surface:
 
