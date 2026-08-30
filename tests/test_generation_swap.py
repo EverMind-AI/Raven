@@ -221,3 +221,73 @@ def test_a_staged_candidate_survives_a_release_without_a_take() -> None:
     swaps.release()
     assert swaps.generation == 1
     assert swaps.take() is not None
+
+
+def test_every_generation_organ_has_a_dispose_call() -> None:
+    """No dispose handle, no START -- the coverage half, machine-checked.
+
+    The roster below is the list of generation-scoped organs: things a
+    generation starts or holds that must be retired at swap. Growing the
+    generation means growing BOTH this roster and ``RavenRuntime.dispose`` --
+    the assertion fails on whichever half was forgotten. Process-lifetime
+    organs (channels, cron, the control plane, health) are deliberately not
+    here: they survive a swap by design and the gateway owns their shutdown.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    from raven.core.runtime import RavenRuntime
+
+    organs = {
+        "sub-agents": "self.loop.subagents.cancel_all",
+        "mcp connections": "self.loop.close_mcp",
+        "the loop itself": "self.loop.stop",
+        "in-flight store writes": "self.loop.drain_backend_stores",
+        "the memory backend": "self.backend.stop",
+    }
+
+    def dotted(node: ast.expr) -> str:
+        parts: list[str] = []
+        while isinstance(node, ast.Attribute):
+            parts.append(node.attr)
+            node = node.value
+        if isinstance(node, ast.Name):
+            parts.append(node.id)
+        return ".".join(reversed(parts))
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(RavenRuntime.dispose)))
+    called = {
+        dotted(node.func)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+
+    missing = {organ: call for organ, call in organs.items() if call not in called}
+    assert not missing, (
+        f"dispose() no longer retires {sorted(missing)}: a generation organ without a "
+        "dispose call leaks across every swap. Retire it in RavenRuntime.dispose, or, "
+        "if the organ genuinely left the generation, remove it from this roster in the "
+        "same change."
+    )
+
+    extra = {c for c in called if c.startswith("self.")} - set(organs.values())
+    assert not extra, (
+        f"dispose() retires {sorted(extra)} that this roster does not name: add the new "
+        "organ here so the next writer inherits the checklist, not just the code."
+    )
+
+
+def test_discard_stays_a_no_op() -> None:
+    """A never-started candidate holds no started resources, so ``discard``
+    must not acquire any: the moment it calls anything, some organ is being
+    started before FREEZE, which is the ordering the phase names forbid."""
+    import ast
+    import inspect
+    import textwrap
+
+    from raven.core.runtime import RavenRuntime
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(RavenRuntime.discard)))
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)]
+    assert not calls, "discard() gained a call; a built-but-never-served generation has nothing to stop"
