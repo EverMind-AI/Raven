@@ -382,9 +382,11 @@ def sentinel_nudges(
     from collections import Counter
     from datetime import timedelta
 
-    feedback_path = get_sentinel_dir() / "feedback.jsonl"
+    from raven.proactive_engine.sentinel.state_files import FEEDBACK_FILENAME, LEGACY_FEEDBACK_FILENAME
+
+    feedback_path = get_sentinel_dir() / FEEDBACK_FILENAME
     if not feedback_path.exists():
-        legacy_path = get_workspace_path() / "sentinel_feedback.jsonl"
+        legacy_path = get_workspace_path() / LEGACY_FEEDBACK_FILENAME
         if legacy_path.exists():
             feedback_path = legacy_path
 
@@ -462,7 +464,9 @@ def sentinel_nudges(
 
     # --- NudgePolicy persisted state ----------------------------------
     if show_state:
-        state_path = get_sentinel_dir() / "state.json"
+        from raven.proactive_engine.sentinel.state_files import STATE_FILENAME
+
+        state_path = get_sentinel_dir() / STATE_FILENAME
         if not state_path.exists():
             console.print(f"\n[dim]No NudgePolicy state at {state_path}[/dim]")
             return
@@ -532,8 +536,9 @@ def sentinel_decisions(
     from datetime import datetime as _dt
 
     from raven.proactive_engine.sentinel.executor.pending_decision import PendingDecisionStore
+    from raven.proactive_engine.sentinel.state_files import PENDING_DECISIONS_FILENAME
 
-    store = PendingDecisionStore(get_sentinel_dir() / "pending_decisions.json")
+    store = PendingDecisionStore(get_sentinel_dir() / PENDING_DECISIONS_FILENAME)
     now_ms = int(_dt.now().timestamp() * 1000)
 
     if all_:
@@ -712,8 +717,9 @@ def sentinel_discover_now(
     from raven.proactive_engine.sentinel.discover_triggers import (
         DiscoverTriggerStore,
     )
+    from raven.proactive_engine.sentinel.state_files import DISCOVER_TRIGGERS_FILENAME
 
-    store = DiscoverTriggerStore(get_sentinel_dir() / "discover_triggers.json")
+    store = DiscoverTriggerStore(get_sentinel_dir() / DISCOVER_TRIGGERS_FILENAME)
     trigger = store.add(channel=channel, to=to)
     if channel == "*":
         target_desc = "channel='*' (broadcast to all enabled at fire time)"
@@ -827,7 +833,9 @@ def sentinel_routines(
         console.print(f"[red]Unknown --status {status!r} (use candidate / active / retired)[/red]")
         raise typer.Exit(code=2)
 
-    store = RoutineStore(get_sentinel_dir() / "routines.json")
+    from raven.proactive_engine.sentinel.state_files import ROUTINES_FILENAME
+
+    store = RoutineStore(get_sentinel_dir() / ROUTINES_FILENAME)
     routines = store.all_routines()
     if status:
         routines = [r for r in routines if r.status == status]
