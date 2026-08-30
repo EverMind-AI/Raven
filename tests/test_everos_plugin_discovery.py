@@ -28,9 +28,9 @@ import pytest
 import raven
 from raven.contracts.memory import Memory, MemoryBackend
 from raven.plugins import (
+    ManifestOrigin,
     PluginDiscovery,
     ServiceLocator,
-    Source,
     assemble_plugin_registry,
 )
 
@@ -81,7 +81,7 @@ class TestBundledDiscovery:
         d = PluginDiscovery(bundled_dir=_BUNDLED)
         out = d.discover()
         record = next(p for p in out if p.manifest.id == "everos-memory")
-        assert record.source == Source.BUNDLED
+        assert record.source == ManifestOrigin.BUNDLED
         # Bundled discovery has an on-disk manifest path.
         assert record.location is not None
         assert record.location.name == "raven-plugin.toml"
@@ -108,7 +108,7 @@ class TestBundledDiscovery:
         out = d.discover()
         record = next(p for p in out if p.manifest.id == "everos-memory")
         # Bundled (version 1.2.0) wins; user-dir version (9.9.9) is shadowed.
-        assert record.source == Source.BUNDLED
+        assert record.source == ManifestOrigin.BUNDLED
         assert record.manifest.version == "1.2.0"
 
 

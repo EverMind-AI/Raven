@@ -467,17 +467,17 @@ class EverosBackend:
         wait, or stop and report. The child's exit code separates them; there is
         no timing heuristic that does.
         """
-        from raven.plugins.memory.everos.server import ProbeResult
+        from raven.plugins.memory.everos.server import ProbeVerdict
 
         if self._state in _TERMINAL_STATES:
             return
-        if result is ProbeResult.OK:
+        if result is ProbeVerdict.OK:
             self._state = ServiceState.READY
             return
-        if result is ProbeResult.TIMEOUT:
+        if result is ProbeVerdict.TIMEOUT:
             self._state = ServiceState.UNRESPONSIVE
             return
-        if result is ProbeResult.REFUSED:
+        if result is ProbeVerdict.REFUSED:
             self._state = self._state_from_child()
             return
         self._state = ServiceState.UNRESPONSIVE
@@ -552,14 +552,14 @@ class EverosBackend:
         """
         import httpx
 
-        from raven.plugins.memory.everos.server import ProbeResult
+        from raven.plugins.memory.everos.server import ProbeVerdict
 
         if isinstance(exc, (httpx.TimeoutException, asyncio.TimeoutError)):
-            self._apply_probe(ProbeResult.TIMEOUT)
+            self._apply_probe(ProbeVerdict.TIMEOUT)
         elif isinstance(exc, httpx.ConnectError):
-            self._apply_probe(ProbeResult.REFUSED)
+            self._apply_probe(ProbeVerdict.REFUSED)
         else:
-            self._apply_probe(ProbeResult.ERROR)
+            self._apply_probe(ProbeVerdict.ERROR)
 
     def _warn_stale_identity_keys(self) -> None:
         """Surface a config left over from before identity moved to the host.
@@ -654,9 +654,9 @@ class EverosBackend:
                 # A root the user manages: connect if a server is up, never start
                 # one. Starting it would take the OME jobstore lock exclusively,
                 # which is theirs to grant, not raven's to assume.
-                from raven.plugins.memory.everos.server import ProbeResult, probe_health
+                from raven.plugins.memory.everos.server import ProbeVerdict, probe_health
 
-                if await asyncio.to_thread(probe_health, base_url) is ProbeResult.OK:
+                if await asyncio.to_thread(probe_health, base_url) is ProbeVerdict.OK:
                     self._state = ServiceState.READY
                     # Say what it can actually do, exactly as the owned path
                     # does. The argument for the warning is stronger here, not

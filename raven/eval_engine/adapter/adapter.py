@@ -1,7 +1,7 @@
 """Write Eval Engine verdicts into HISTORY.md.
 
 Writes one HISTORY.md line per judged turn through
-:meth:`MemoryStore.append_history`, where the Sentinel's ContextAssembler
+:meth:`MemoryStore.append_history`, where the Sentinel's PlannerContextAssembler
 reads it back; no new file type is involved.
 
 The adapter is intentionally a thin shim — it doesn't perform any I/O
@@ -45,7 +45,7 @@ class EvalAdapter:
 
         ``unknown`` verdicts are intentionally NOT recorded — they're
         signal noise. ``completed`` and ``failed`` go through so the
-        Sentinel ContextAssembler's history tail sees recent outcomes.
+        Sentinel PlannerContextAssembler's history tail sees recent outcomes.
         """
         if verdict is JudgeVerdict.unknown:
             return

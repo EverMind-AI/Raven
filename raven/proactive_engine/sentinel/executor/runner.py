@@ -2,7 +2,7 @@
 periodically-ticking service.
 
 Each tick:
-1. ContextAssembler.assemble()       → PlannerContext
+1. PlannerContextAssembler.assemble()       → PlannerContext
 2. ProactivePlanner.decide(ctx)      → PlannerDecision
 3. _route(decision)                  → appropriate executor path:
    - skip         : record tick, no dispatch
@@ -11,7 +11,7 @@ Each tick:
    - nudge_defer  : NudgePolicy.check → DeferManager.register
    - spawn_agent  : ProactiveSpawn.dispatch (its own policy check inside)
 4. Record fired / dispatched to NudgePolicy + FeedbackTracker.
-5. Update ContextAssembler with last decision for next tick's prompt.
+5. Update PlannerContextAssembler with last decision for next tick's prompt.
 
 Two drive modes:
 - ``await runner.tick_once()``         — single synchronous tick; useful
@@ -62,7 +62,7 @@ from raven.proactive_engine.sentinel.executor.injector import NudgeInjector
 from raven.proactive_engine.sentinel.executor.spawn import ProactiveSpawn
 from raven.proactive_engine.sentinel.feedback.tracker import NudgeFeedbackTracker, new_nudge_id
 from raven.proactive_engine.sentinel.planner import ProactivePlanner
-from raven.proactive_engine.sentinel.predictor.context_assembler import ContextAssembler
+from raven.proactive_engine.sentinel.predictor.context_assembler import PlannerContextAssembler
 from raven.proactive_engine.sentinel.trigger_policy.policy import NudgePolicy
 from raven.proactive_engine.sentinel.types import PlannerDecision
 
@@ -130,7 +130,7 @@ class SentinelRunner:
         self,
         *,
         planner: ProactivePlanner,
-        assembler: ContextAssembler,
+        assembler: PlannerContextAssembler,
         policy: NudgePolicy,
         dispatcher: NudgeDispatcher | None = None,
         injector: NudgeInjector | None = None,
@@ -314,13 +314,13 @@ class SentinelRunner:
     async def tick_once(self) -> TickOutcome:
         """One end-to-end tick. Safe to call synchronously by benchmarks.
 
-        Assembles context via ContextAssembler then delegates to
+        Assembles context via PlannerContextAssembler then delegates to
         ``tick_with_context``. Never raises — failures become skip outcomes.
         """
         try:
             ctx = self.assembler.assemble()
         except Exception as exc:
-            logger.exception("ContextAssembler failed: {}", exc)
+            logger.exception("PlannerContextAssembler failed: {}", exc)
             return TickOutcome(
                 decision=PlannerDecision(action="skip", reason=f"assembler_error: {type(exc).__name__}"),
                 result=None,
@@ -741,7 +741,7 @@ class SentinelRunner:
 
         Benchmark adapters use this to test the full Sentinel pipeline
         (Planner + NudgePolicy + executors) without depending on the
-        ContextAssembler's session/memory sources.
+        PlannerContextAssembler's session/memory sources.
         """
         # Daily: trim feedback log to retention window. Must run BEFORE
         # _maybe_retune_policy so the adaptive tuner sees the freshly

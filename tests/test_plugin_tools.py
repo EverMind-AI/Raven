@@ -15,13 +15,13 @@ from pydantic import ValidationError
 from raven.plugins import (
     Contributes,
     DiscoveredPlugin,
+    ManifestOrigin,
     PluginConflictError,
     PluginContext,
     PluginManifest,
     PluginNotFoundError,
     PluginRegistry,
     ServiceLocator,
-    Source,
     ToolContribution,
 )
 
@@ -64,7 +64,7 @@ def _discovered_with_tools(
             tools=[ToolContribution(name=n, factory=f) for n, f in tools],
         ),
     )
-    return DiscoveredPlugin(manifest=mf, source=Source.USER, location=None)
+    return DiscoveredPlugin(manifest=mf, source=ManifestOrigin.USER, location=None)
 
 
 # ---------------------------------------------------------------------------

@@ -7,8 +7,8 @@ from pathlib import Path
 
 from raven.plugins import (
     DiscoveredPlugin,
+    ManifestOrigin,
     PluginDiscovery,
-    Source,
 )
 
 
@@ -47,7 +47,7 @@ class TestSingleSource:
         out = d.discover()
         assert len(out) == 1
         assert out[0].manifest.id == "foo"
-        assert out[0].source == Source.BUNDLED
+        assert out[0].source == ManifestOrigin.BUNDLED
         assert out[0].location is not None
         assert out[0].location.name == "raven-plugin.toml"
 
@@ -97,7 +97,7 @@ class TestConflictResolution:
         out = d.discover()
         assert len(out) == 1
         # Bundled wins per the "builtin shadow rule".
-        assert out[0].source == Source.BUNDLED
+        assert out[0].source == ManifestOrigin.BUNDLED
 
     def test_user_shadows_project(self, tmp_path: Path) -> None:
         user = tmp_path / "user"
@@ -107,7 +107,7 @@ class TestConflictResolution:
         d = PluginDiscovery(user_dir=user, project_dir=project)
         out = d.discover()
         assert len(out) == 1
-        assert out[0].source == Source.USER
+        assert out[0].source == ManifestOrigin.USER
 
     def test_priority_order_full_chain(self, tmp_path: Path) -> None:
         bundled = tmp_path / "bundled"
@@ -130,10 +130,10 @@ class TestConflictResolution:
         out = d.discover()
         by_id = {p.manifest.id: p.source for p in out}
         assert by_id == {
-            "b-only": Source.BUNDLED,
-            "u-only": Source.USER,
-            "p-only": Source.PROJECT,
-            "x": Source.BUNDLED,
+            "b-only": ManifestOrigin.BUNDLED,
+            "u-only": ManifestOrigin.USER,
+            "p-only": ManifestOrigin.PROJECT,
+            "x": ManifestOrigin.BUNDLED,
         }
 
 
@@ -175,4 +175,4 @@ class TestDiscoveredPluginRecord:
         out = PluginDiscovery(bundled_dir=tmp_path).discover()
         rec: DiscoveredPlugin = out[0]
         with pytest.raises(FrozenInstanceError):
-            rec.source = Source.USER  # type: ignore[misc]
+            rec.source = ManifestOrigin.USER  # type: ignore[misc]

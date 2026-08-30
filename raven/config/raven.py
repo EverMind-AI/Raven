@@ -223,7 +223,7 @@ class NudgePolicyConfig(_Base):
     # Content dedup — hash the nudge_message; reject duplicates within this window
     dedup_window_seconds: int = 86400  # 24h
 
-    # Memory-loading filter (smart loading): controls how ContextAssembler
+    # Memory-loading filter (smart loading): controls how PlannerContextAssembler
     # builds the memory_md slice of the Planner prompt. Defaults are pure
     # passthrough; users opt in via config when MEMORY.md grows large
     # enough that token cost / signal-to-noise becomes a concern.
@@ -267,7 +267,7 @@ class NudgePolicyConfig(_Base):
 
 
 # Single source of truth for the Planner's attention.md section allowlist.
-# Both ``SentinelConfig.attention_planner_sections`` and ``ContextAssembler``'s
+# Both ``SentinelConfig.attention_planner_sections`` and ``PlannerContextAssembler``'s
 # no-config fallback reference this, so a deploy that sets the config and one
 # that relies on the fallback can't silently drift to different section sets.
 DEFAULT_PLANNER_ATTENTION_SECTIONS: tuple[str, ...] = (
@@ -1132,7 +1132,7 @@ class MemoryConfig(_Base):
 
     user_id: str = "default"
     """Bare user identity passed as ``backend.recall(user_id=...)`` for
-    the user-track recall channel inside ``ContextAssembler.assemble``."""
+    the user-track recall channel inside ``PlannerContextAssembler.assemble``."""
 
     agent_id: str = "default"
     """Bare agent identity passed as ``backend.recall(agent_id=...)`` by

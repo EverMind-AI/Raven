@@ -123,7 +123,7 @@ class InstallInfo:
 
 
 @dataclass
-class ProbeResult:
+class LlmProbeResult:
     ok: bool
     text: Optional[str] = None
     tokens: Optional[int] = None
@@ -206,7 +206,7 @@ class DoctorReport:
     gateway: Optional[GatewayInfo] = None
     memory: Optional[MemoryInfo] = None
     tools: Optional[ToolsInfo] = None
-    probe: Optional[ProbeResult] = None
+    probe: Optional[LlmProbeResult] = None
     config_health: Optional[ConfigHealth] = None
 
     def exit_code(self) -> int:
@@ -536,13 +536,13 @@ def _probe_memory(config: "RavenConfig") -> MemoryInfo:
     return info
 
 
-def _run_llm_probe(timeout_s: int) -> ProbeResult:
-    """Wrap :func:`send_probe` so failures become a structured ProbeResult."""
+def _run_llm_probe(timeout_s: int) -> LlmProbeResult:
+    """Wrap :func:`send_probe` so failures become a structured LlmProbeResult."""
     try:
         text, tokens, elapsed = send_probe(timeout_s=timeout_s)
-        return ProbeResult(ok=True, text=text, tokens=tokens, elapsed_s=elapsed)
+        return LlmProbeResult(ok=True, text=text, tokens=tokens, elapsed_s=elapsed)
     except Exception as exc:
-        return ProbeResult(ok=False, error=str(exc) or exc.__class__.__name__)
+        return LlmProbeResult(ok=False, error=str(exc) or exc.__class__.__name__)
 
 
 def _render_memory_capabilities(memory: MemoryInfo) -> None:

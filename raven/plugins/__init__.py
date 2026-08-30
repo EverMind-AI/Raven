@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from raven.plugins.bootstrap import assemble_plugin_registry
 from raven.plugins.context import PluginContext, ServiceLocator
-from raven.plugins.discover import DiscoveredPlugin, PluginDiscovery, Source
+from raven.plugins.discover import DiscoveredPlugin, ManifestOrigin, PluginDiscovery
 from raven.plugins.manifest import (
     Contributes,
     MemoryBackendContribution,
@@ -54,7 +54,7 @@ __all__ = [
     "PluginNotFoundError",
     "PluginRegistry",
     "ServiceLocator",
-    "Source",
+    "ManifestOrigin",
     "ToolContribution",
     "ToolFactory",
 ]

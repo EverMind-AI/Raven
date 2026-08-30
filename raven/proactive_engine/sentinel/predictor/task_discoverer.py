@@ -45,7 +45,7 @@ if TYPE_CHECKING:
     from raven.proactive_engine.sentinel.executor.dispatcher import NudgeDispatcher
     from raven.proactive_engine.sentinel.executor.pending_decision import PendingDecisionStore
     from raven.proactive_engine.sentinel.feedback.tracker import NudgeFeedbackTracker
-    from raven.proactive_engine.sentinel.predictor.context_assembler import ContextAssembler
+    from raven.proactive_engine.sentinel.predictor.context_assembler import PlannerContextAssembler
     from raven.proactive_engine.sentinel.predictor.routine_aggregator import RoutineAggregator
     from raven.proactive_engine.sentinel.predictor.routine_learner import RoutineLearner
     from raven.proactive_engine.sentinel.predictor.routine_store import RoutineStore
@@ -69,7 +69,7 @@ class TaskDiscoverer:
         dispatcher: "NudgeDispatcher",
         provider: "LLMProvider",
         model: str,
-        context_assembler: "ContextAssembler | None" = None,
+        context_assembler: "PlannerContextAssembler | None" = None,
         routine_store: "RoutineStore | None" = None,
         routine_learner: "RoutineLearner | None" = None,
         routine_aggregator: "RoutineAggregator | None" = None,
@@ -475,7 +475,7 @@ class TaskDiscoverer:
         try:
             fh = self.context_assembler._fire_history(self._now_fn())
         except Exception as exc:
-            logger.warning("ContextAssembler._fire_history failed: {}", exc)
+            logger.warning("PlannerContextAssembler._fire_history failed: {}", exc)
             return ""
         recent = fh.get("recent_fires", [])
         if not recent:

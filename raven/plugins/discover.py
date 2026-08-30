@@ -4,7 +4,7 @@ A discovery pass scans every source the host knows about (bundled
 sub-tree, user-level dir, project-level dir, pip entry points),
 deduplicates by plugin id, and returns a stable list of
 :class:`DiscoveredPlugin` records. Discovery only reads manifests — no
-plugin Python code is imported here. The :class:`Source` enum doubles
+plugin Python code is imported here. The :class:`ManifestOrigin` enum doubles
 as the conflict-resolution priority ordering (higher wins).
 
 Priority order (`bundled > user > project > entry_points`) follows the
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 _MANIFEST_FILENAME = "raven-plugin.toml"
 
 
-class Source(IntEnum):
+class ManifestOrigin(IntEnum):
     """Where a manifest came from. Numeric value is conflict priority —
     higher wins. Lower values lose silently and are logged."""
 
@@ -46,7 +46,7 @@ class DiscoveredPlugin:
     """A manifest read from a specific source, awaiting activation."""
 
     manifest: PluginManifest
-    source: Source
+    source: ManifestOrigin
     location: Path | None
     """Path to the manifest file. ``None`` for entry-points-discovered
     plugins where the manifest lives inside a wheel's package data."""
@@ -84,13 +84,13 @@ class PluginDiscovery:
         all_found: list[DiscoveredPlugin] = []
         if self._bundled_dir is not None:
             all_found.extend(
-                self._scan_dir(self._bundled_dir, Source.BUNDLED),
+                self._scan_dir(self._bundled_dir, ManifestOrigin.BUNDLED),
             )
         if self._user_dir is not None:
-            all_found.extend(self._scan_dir(self._user_dir, Source.USER))
+            all_found.extend(self._scan_dir(self._user_dir, ManifestOrigin.USER))
         if self._project_dir is not None:
             all_found.extend(
-                self._scan_dir(self._project_dir, Source.PROJECT),
+                self._scan_dir(self._project_dir, ManifestOrigin.PROJECT),
             )
         if self._entry_points_group is not None:
             all_found.extend(self._scan_entry_points(self._entry_points_group))
@@ -102,7 +102,7 @@ class PluginDiscovery:
     def _scan_dir(
         self,
         root: Path,
-        source: Source,
+        source: ManifestOrigin,
     ) -> list[DiscoveredPlugin]:
         """Look for ``<root>/<plugin_id>/raven-plugin.toml``.
 
@@ -181,7 +181,7 @@ class PluginDiscovery:
                     out.append(
                         DiscoveredPlugin(
                             manifest=mf,
-                            source=Source.ENTRY_POINTS,
+                            source=ManifestOrigin.ENTRY_POINTS,
                             location=None,
                         ),
                     )
@@ -227,4 +227,4 @@ class PluginDiscovery:
         return sorted(by_id.values(), key=lambda p: p.manifest.id)
 
 
-__all__ = ["DiscoveredPlugin", "PluginDiscovery", "Source"]
+__all__ = ["DiscoveredPlugin", "PluginDiscovery", "ManifestOrigin"]

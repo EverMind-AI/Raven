@@ -612,38 +612,38 @@ class TestProbeClassification:
     """
 
     def test_ok_on_200(self) -> None:
-        from raven.plugins.memory.everos.server import ProbeResult, probe_health
+        from raven.plugins.memory.everos.server import ProbeVerdict, probe_health
 
         resp = MagicMock(status_code=200)
         with patch("httpx.get", return_value=resp):
-            assert probe_health("http://localhost:18791") is ProbeResult.OK
+            assert probe_health("http://localhost:18791") is ProbeVerdict.OK
 
     def test_refused_is_distinct_from_timeout(self) -> None:
         import httpx
 
-        from raven.plugins.memory.everos.server import ProbeResult, probe_health
+        from raven.plugins.memory.everos.server import ProbeVerdict, probe_health
 
         with patch("httpx.get", side_effect=httpx.ConnectError("refused")):
-            assert probe_health("http://localhost:18791") is ProbeResult.REFUSED
+            assert probe_health("http://localhost:18791") is ProbeVerdict.REFUSED
 
         with patch("httpx.get", side_effect=httpx.ConnectTimeout("slow")):
-            assert probe_health("http://localhost:18791") is ProbeResult.TIMEOUT
+            assert probe_health("http://localhost:18791") is ProbeVerdict.TIMEOUT
 
         with patch("httpx.get", side_effect=httpx.ReadTimeout("hung")):
-            assert probe_health("http://localhost:18791") is ProbeResult.TIMEOUT
+            assert probe_health("http://localhost:18791") is ProbeVerdict.TIMEOUT
 
     def test_non_200_is_error_not_refused(self) -> None:
-        from raven.plugins.memory.everos.server import ProbeResult, probe_health
+        from raven.plugins.memory.everos.server import ProbeVerdict, probe_health
 
         resp = MagicMock(status_code=503)
         with patch("httpx.get", return_value=resp):
-            assert probe_health("http://localhost:18791") is ProbeResult.ERROR
+            assert probe_health("http://localhost:18791") is ProbeVerdict.ERROR
 
     def test_unexpected_exception_is_error(self) -> None:
-        from raven.plugins.memory.everos.server import ProbeResult, probe_health
+        from raven.plugins.memory.everos.server import ProbeVerdict, probe_health
 
         with patch("httpx.get", side_effect=ValueError("garbage")):
-            assert probe_health("http://localhost:18791") is ProbeResult.ERROR
+            assert probe_health("http://localhost:18791") is ProbeVerdict.ERROR
 
     def test_bool_wrapper_stays_truthful(self) -> None:
         """``_probe_health`` keeps its bool contract for the callers that only

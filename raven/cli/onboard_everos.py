@@ -1369,7 +1369,7 @@ def _use_self_managed_everos() -> bool:
     a convention into something the code cannot break.
     """
     from raven.config.update import set_plugin_config_fields
-    from raven.plugins.memory.everos.server import ProbeResult, probe_health
+    from raven.plugins.memory.everos.server import ProbeVerdict, probe_health
 
     while True:
         host = _prompt_text(t("Host (e.g. 127.0.0.1):"), default="localhost")
@@ -1383,7 +1383,7 @@ def _use_self_managed_everos() -> bool:
         base_url = f"http://{host}:{port}"
         oc.console.print(t("  [dim]Checking {base_url}...[/dim]", base_url=base_url))
         result = probe_health(base_url)
-        if result is ProbeResult.OK:
+        if result is ProbeVerdict.OK:
             break
         oc.console.print(
             t("  [red]x No EverOS answered at {base_url} ({a1}).[/red]", base_url=base_url, a1=result.value),

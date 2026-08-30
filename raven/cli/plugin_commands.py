@@ -197,14 +197,14 @@ def _render_plugin_table(
 
 
 def _source_label(source) -> str:
-    """Friendly label for a :class:`Source` enum value."""
-    from raven.plugins import Source
+    """Friendly label for a :class:`ManifestOrigin` enum value."""
+    from raven.plugins import ManifestOrigin
 
     return {
-        Source.ENTRY_POINTS: "entry_points",
-        Source.PROJECT: "project",
-        Source.USER: "user",
-        Source.BUNDLED: "bundled",
+        ManifestOrigin.ENTRY_POINTS: "entry_points",
+        ManifestOrigin.PROJECT: "project",
+        ManifestOrigin.USER: "user",
+        ManifestOrigin.BUNDLED: "bundled",
     }.get(source, str(source))
 
 
