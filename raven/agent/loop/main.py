@@ -26,6 +26,7 @@ from raven.agent.loop._shared import (
     SandboxExecutor,
     SandboxInitError,
     SessionManager,
+    SessionPolicy,
     StorePipeline,
     SubagentManager,
     ToolRegistry,
@@ -213,6 +214,9 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         self._configured_window = context_window_tokens or None
         self._default_binding = ModelBinding(provider, model or provider.get_default_model(), self._configured_window)
         self._session_bindings: dict[str, ModelBinding] = {}
+        # Per-session operating policy (iteration cap, mode overlay); set by a
+        # transport that speaks modes, read once at each turn's start.
+        self._session_policies: dict[str, SessionPolicy] = {}
         # Keys whose session record has been consulted for a stored model, hit
         # or miss. See ``_restore_once``.
         self._restore_attempted: set[str] = set()

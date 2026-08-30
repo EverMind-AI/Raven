@@ -194,3 +194,24 @@ async def test_no_hooks_means_no_phase_work(tmp_path):
 
     assert "plain" in str(out)
     assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_session_policy_caps_iterations_and_reaches_the_hooks(tmp_path):
+    seen: list[dict] = []
+
+    class Observe(AgentHook):
+        async def before_iteration(self, ctx):
+            seen.append(dict(ctx.metadata))
+            return HookDecision()
+
+    provider = _ScriptedProvider([_tool_call("list_dir", {"path": "."})] * 5 + [_text("done")])
+    loop = _loop(tmp_path, provider, [Observe()], max_iterations=6)
+    loop.set_session_policy("cli:c", max_iterations=2, mode="deep", mode_overlay={"k": 10})
+
+    out = await loop._process_message(_req())
+
+    assert out is not None
+    assert len(provider.calls) <= 3, "the session cap of 2 held (plus the exhaustion wrap-up call)"
+    assert seen[0]["mode"] == "deep" and seen[0]["mode_overlay"] == {"k": 10}
+    assert loop.session_policy("cli:other").mode == "", "another session runs on the defaults"
