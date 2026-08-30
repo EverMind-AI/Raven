@@ -43,6 +43,7 @@ from raven.agent.loop._shared import (
     _runtime_origin,
     _stamp_reasoning_ms,
     _strip_inline_images,
+    append_hook_note,
     asyncio,
     autofill_resolver,
     classify_empty_response,
@@ -594,6 +595,13 @@ class TurnPathMixin:
         iter_msg_base = 0
         pending_gen_overrides: dict[str, Any] | None = None
 
+        def _land_hook_note(decision) -> None:
+            """Honor a hook's ``append_note``: the note joins the last message
+            the model is about to read. A body shape the loop does not know
+            drops the note with a warning rather than guessing it into place."""
+            if decision.append_note and not append_hook_note(messages, decision.append_note):
+                logger.warning("Hook note dropped: no transcript message to land it on")
+
         def _hook_rollback(decision) -> bool:
             """Honor a hook's rollback: pop everything this iteration appended
             and re-sample without consuming an iteration. Message helpers
@@ -688,6 +696,7 @@ class TurnPathMixin:
                     final_content = str(decision.short_circuit_result)
                     messages = self.context.add_assistant_message(messages, final_content)
                     break
+                _land_hook_note(decision)
                 # Taken from the decision, not from ``hook_ctx.tools``: the two
                 # happen to be the same object today, and relying on that would
                 # make the rule stop firing silently the day get_definitions
@@ -833,6 +842,7 @@ class TurnPathMixin:
                     decision = await self.hooks.before_execute_tools(hook_ctx)
                     if _hook_rollback(decision):
                         continue
+                    _land_hook_note(decision)
                     if decision.short_circuit_result is not None:
                         # The tool-call response is dropped entirely: persisting
                         # an assistant message whose tool_calls never executed
@@ -1103,6 +1113,7 @@ class TurnPathMixin:
                     decision = await self.hooks.after_iteration(hook_ctx)
                     if _hook_rollback(decision):
                         continue
+                    _land_hook_note(decision)
                     if decision.short_circuit_result is not None:
                         final_content = str(decision.short_circuit_result)
                         messages = self.context.add_assistant_message(messages, final_content)
@@ -1181,6 +1192,7 @@ class TurnPathMixin:
                     decision = await self.hooks.after_iteration(hook_ctx)
                     if _hook_rollback(decision):
                         continue
+                    _land_hook_note(decision)
                     if decision.short_circuit_result is not None:
                         final_content = str(decision.short_circuit_result)
                         messages = self.context.add_assistant_message(messages, final_content)
@@ -1343,10 +1355,13 @@ class TurnPathMixin:
             _hook_ctx = AgentHookContext(
                 session_key=msg_session_key,
                 turn_request=req,
+                inbound_content=content,
             )
             _decision = await self.hooks.before_user_inbound(_hook_ctx)
             if _decision.short_circuit_result is not None:
                 return _decision.short_circuit_result
+            if _decision.modified_content is not None:
+                content = _decision.modified_content
 
         preview = content[:80] + "..." if len(content) > 80 else content
         logger.info("Processing message from {}:{}: {}", channel, sender_id, preview)

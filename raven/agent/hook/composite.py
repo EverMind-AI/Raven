@@ -36,8 +36,9 @@ from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
 logger = logging.getLogger(__name__)
 
 
-_CHAIN_MODIFIED_PHASES = frozenset({"after_send"})
+_CHAIN_MODIFIED_PHASES = frozenset({"after_send", "before_user_inbound"})
 _CHAIN_TOOLS_PHASES = frozenset({"before_iteration"})
+_CHAIN_NOTE_PHASES = frozenset({"before_iteration", "before_execute_tools", "after_iteration"})
 
 
 class CompositeHook(AgentHook):
@@ -103,8 +104,10 @@ class CompositeHook(AgentHook):
         """
         chain_content = phase in _CHAIN_MODIFIED_PHASES
         chain_tools = phase in _CHAIN_TOOLS_PHASES
+        chain_notes = phase in _CHAIN_NOTE_PHASES
         last_modified: str | None = None
         last_tools: list[dict] | None = None
+        notes: list[str] = []
 
         for hook in self._hooks:
             method = getattr(hook, phase)
@@ -123,13 +126,22 @@ class CompositeHook(AgentHook):
 
             if chain_content and decision.modified_content is not None:
                 # Propagate to next hook in this phase
-                ctx.outbound_content = decision.modified_content
+                if phase == "before_user_inbound":
+                    ctx.inbound_content = decision.modified_content
+                else:
+                    ctx.outbound_content = decision.modified_content
                 last_modified = decision.modified_content
             if chain_tools and decision.modified_tools is not None:
                 ctx.tools = decision.modified_tools
                 last_tools = decision.modified_tools
+            if chain_notes and decision.append_note:
+                notes.append(decision.append_note)
 
-        return HookDecision(modified_content=last_modified, modified_tools=last_tools)
+        return HookDecision(
+            modified_content=last_modified,
+            modified_tools=last_tools,
+            append_note="\n\n".join(notes) or None,
+        )
 
 
 __all__ = ["CompositeHook"]

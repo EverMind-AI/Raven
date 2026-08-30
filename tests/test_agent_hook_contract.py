@@ -589,3 +589,32 @@ class TestCompositeHaltingAndGrants:
 
         decision = await CompositeHook([Salvage()]).terminal_answerless(ctx)
         assert decision.short_circuit_result == "best-supported answer"
+
+
+class TestNoteAndInboundGrants:
+    async def test_notes_chain_in_order_through_the_iteration_phases(self, ctx):
+        class Budget(AgentHook):
+            async def after_iteration(self, ctx):
+                return HookDecision(append_note="[budget: half spent]")
+
+        class Gate(AgentHook):
+            async def after_iteration(self, ctx):
+                return HookDecision(append_note="[gate: open a page before searching again]")
+
+        decision = await CompositeHook([Budget(), Gate()]).after_iteration(ctx)
+        assert decision.append_note == "[budget: half spent]\n\n[gate: open a page before searching again]"
+        assert (await CompositeHook([Budget()]).after_send(ctx)).append_note is None, "not an iteration phase"
+
+    async def test_inbound_text_chains_through_inbound_content(self, ctx):
+        class Memo(AgentHook):
+            async def before_user_inbound(self, ctx):
+                return HookDecision(modified_content=f"[memo]\n\n{ctx.inbound_content}")
+
+        class Reminder(AgentHook):
+            async def before_user_inbound(self, ctx):
+                return HookDecision(modified_content=f"{ctx.inbound_content}\n\n[reminder]")
+
+        ctx.inbound_content = "what changed?"
+        decision = await CompositeHook([Memo(), Reminder()]).before_user_inbound(ctx)
+        assert decision.modified_content == "[memo]\n\nwhat changed?\n\n[reminder]"
+        assert ctx.outbound_content is None
