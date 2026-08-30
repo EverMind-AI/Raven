@@ -2,7 +2,7 @@
 
 PYTHON ?= python3
 PYTHON_VERSION ?= 3.12
-PYTHON_LINT_TARGETS ?= raven evolver tests scripts
+PYTHON_LINT_TARGETS ?= raven evolver agents tests scripts
 COMMIT_RANGE ?= origin/main..HEAD
 COVERAGE_BASE_REF ?= origin/main
 # Required coverage percentage for executable lines changed by a PR.

@@ -475,3 +475,12 @@ name = "the runtime does not import the evolver"
 type = "forbidden"
 source_modules = ["raven"]
 forbidden_modules = ["evolver"]
+
+[[tool.importlinter.contracts]]
+# The agents/ pilots consume installed raven; the runtime reaching back into
+# a product definition would invert that dependency -- same rule, and the
+# same shape, as the evolver contract above.
+name = "the runtime does not import the agents pilots"
+type = "forbidden"
+source_modules = ["raven"]
+forbidden_modules = ["agents"]
