@@ -62,6 +62,35 @@ All notable changes to Raven are documented here.
   package. Throughout, prose that narrated the change which produced a rule now
   states the rule: no design-doc sections, ticket ids, commit hashes, phase codes
   or incident retellings.
+- **The audit's second pass.** The confirmations above were written before
+  those passes landed, so the remainder was re-read against the tip and verified
+  again: 32 were already fixed, 3 were not defects, 67 stood. What that pass
+  found and fixed, beyond more of the same: `dry_query` in the repo-level
+  `evolver/` tree raised `TypeError` on every call, because a parameter removal
+  a few commits earlier had grepped `raven/` and `tests/` and the evolver is
+  neither -- it now has tests, so a signature change in `raven/` that breaks it
+  fails the suite. `MemoryStore` had two copies of the same compare-and-set
+  write; there is one, and the live caller is on it. `connect_mcp_servers` had
+  no caller and eight tests pinning its error policy while the connection
+  manager's own policy went unpinned; the function is gone and the tests drive
+  the live path (one of them had been passing against a handshake that never
+  completed). Four cross-package seams that only one caller crossed got tests,
+  and so did the personalizer, which nothing had constructed.
+- Two vocabularies the glossary had already ruled out are gone from the code.
+  `credential_kind` and the `CRED_*` constants are `auth_shape` and `SHAPE_*`
+  (CONTEXT.md gains the **Auth Shape** entry that separates what the wizard asks
+  for from what makes a connection valid), and the rates ladder no longer calls
+  itself pricing, which names the arithmetic on top of it.
+- **User-visible:** compaction stops calling itself archiving, because
+  `session.archive` is a different feature -- it hides a session and moves no
+  message. `session.compress` now answers `compacted N messages` where it said
+  `archived N messages`, and a `/new` that cannot fold the tail says "Memory
+  consolidation failed". The wire fields are unchanged: `session.compress` still
+  answers `removed`, and `session.archive` still takes `archived`.
+- The tripwire that guards the surface the vendored product installers import
+  named four symbols while those trees reach for eight. It reads the surface out
+  of `subagents/*/install.py`, `install.sh` and the README now, so a rename that
+  would break a downstream install fails here instead of there.
 - `raven.i18n` is seated as an inner cross-cutting leaf: it may not import a
   surface, and the kernel may not import it. The glossary records what it is
   and what `zh_lexicon` is not.
