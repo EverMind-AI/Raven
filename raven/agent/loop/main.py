@@ -177,28 +177,14 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         max_iterations = policy.max_iterations
         empty_recovery = policy.empty_recovery
         interactive = policy.interactive
-        response_modifier = policy.response_modifier
         now_fn = policy.now_fn
         hooks = host.hooks
-        on_user_inbound = host.on_user_inbound
-        decision_consumer = host.decision_consumer
         cron_service = host.cron_service
         channels_config = host.channels_config
-        from raven.agent.hook import (
-            CompositeHook,
-            DecisionConsumerAdapter,
-            OnUserInboundAdapter,
-            ResponseModifierAdapter,
-        )
+        from raven.agent.hook import CompositeHook
         from raven.config.schema import AskUserToolConfig, ExecToolConfig
         from raven.token_wise.registry import StrategyRegistry
 
-        # Optional async hook fired BEFORE slash-command parsing + normal
-        # processing. Used by Sentinel's DecisionConsumer to short-circuit
-        # the agent loop when the user replies to a discovery menu.
-        # Returning a reply means "I handled this; don't process further".
-        # Returning None means "fall through to normal flow".
-        self.decision_consumer = decision_consumer
         self.channels_config = channels_config
         self._deliverables = deliverables
         self._workdir_resolver = workdir_resolver
@@ -541,31 +527,14 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         #   always-skills + ``# Skills`` render path. The SkillForgeRouter stack
         #   (assembled in ``context_engine.factory``) owns retrieval.
 
-        # AgentHook lifecycle chain. The three callback
-        # parameters (``on_user_inbound`` / ``decision_consumer`` /
-        # ``response_modifier``) get auto-wrapped into adapter hooks
-        # and merged with any caller-supplied ``hooks`` composite.
-        #
-        # Ordering rationale:
-        #   1. OnUserInboundAdapter first — pure observer, never
-        #      short-circuits. Keeps FeedbackTracker engagement counting
-        #      every legitimate inbound.
-        #   2. DecisionConsumerAdapter next — may short-circuit when the
-        #      user replies to a Sentinel TaskDiscovery menu. Observers
-        #      have already fired.
-        #   3. Caller-supplied ``hooks`` after — typically empty today;
-        #      eval_engine will populate it.
-        #   4. ResponseModifierAdapter last — only meaningful in
-        #      ``after_send`` phase, where it's the sole writer.
+        # AgentHook lifecycle chain: the host hands finished hooks (adapter-
+        # wrapped callbacks included -- raven/agent/hook/adapters is where a
+        # plain callable becomes one). List order is chain order: an observer
+        # that must see every inbound belongs before anything that can
+        # short-circuit, and an outbound modifier goes last.
         self.hooks: "CompositeHook" = CompositeHook()
-        if on_user_inbound is not None:
-            self.hooks.append(OnUserInboundAdapter(on_user_inbound))
-        if decision_consumer is not None:
-            self.hooks.append(DecisionConsumerAdapter(decision_consumer))
         if hooks is not None:
             self.hooks.extend(hooks)
-        if response_modifier is not None:
-            self.hooks.append(ResponseModifierAdapter(response_modifier))
 
         self._register_default_tools()
         # After the registry is populated, and after ``_mcp_servers`` is set: the

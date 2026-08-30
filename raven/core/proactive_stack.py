@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from raven.config.raven import SentinelConfig
     from raven.config.schema import Config
     from raven.contracts.llm_provider import LLMProvider
+    from raven.proactive_engine.sentinel.executor.decision_consumer import DecisionConsumer
     from raven.session.manager import SessionManager
 
 
@@ -476,16 +477,29 @@ def attach_sentinel_spawn(runner, agent: "AgentLoop") -> None:
     runner.spawn = ProactiveSpawn(agent.subagents, runner.policy)
 
 
+def sentinel_hooks(on_user_inbound, response_modifier) -> list:
+    """Adapter hooks for the sentinel stack's two callbacks, chain-ordered:
+    the inbound observer first, the outbound nudge injector last."""
+    from raven.agent.hook.adapters import OnUserInboundAdapter, ResponseModifierAdapter
+
+    hooks: list = []
+    if on_user_inbound is not None:
+        hooks.append(OnUserInboundAdapter(on_user_inbound))
+    if response_modifier is not None:
+        hooks.append(ResponseModifierAdapter(response_modifier))
+    return hooks
+
+
 def attach_sentinel_decision_consumer(
     runner,
     agent: "AgentLoop",
     *,
     sentinel_cfg: "SentinelConfig",
-) -> None:
+) -> "DecisionConsumer | None":
     """Wire DecisionRouter + ActionExecutor + DecisionConsumer once
-    AgentLoop exists. Sets ``agent.decision_consumer`` so AgentLoop's
-    _process_message hook short-circuits user replies into the menu
-    pipeline.
+    AgentLoop exists. Appends the consumer's adapter hook so user replies
+    short-circuit into the menu pipeline, and returns the consumer (None
+    when sentinel is off) for the caller that wires its executor's submit.
 
     Depends on ``runner.assembly``, set by build_sentinel_stack. No-op when
     sentinel/runner is None."""
@@ -545,14 +559,11 @@ def attach_sentinel_decision_consumer(
         require_confirm=sentinel_cfg.task_discovery_require_confirm,
         **_kwargs,
     )
-    agent.decision_consumer = consumer
-    # AgentLoop's __init__ wired the hook chain from its constructor
-    # kwargs, but ``decision_consumer`` hadn't been built yet (it needs
-    # agent.tools / agent.subagents for ActionExecutor), so the
-    # construction-time ``if decision_consumer is not None`` check
-    # short-circuited. Without this post-hoc append, user replies to
-    # discovery menus would skip the PendingDecisionStore bookkeeping
-    # and decisions would stay ``pending`` until TTL expiry.
+    # The consumer joins the hook chain post-hoc because it cannot exist at
+    # loop construction (it needs agent.tools / agent.subagents for
+    # ActionExecutor). Without this append, user replies to discovery menus
+    # would skip the PendingDecisionStore bookkeeping and decisions would
+    # stay ``pending`` until TTL expiry.
     # Idempotent: a re-attach (fixture reuse, hot-reload, double-wire
     # by a future caller) must not append twice — a duplicate adapter
     # would run the menu pipeline twice per user inbound and fire
@@ -561,6 +572,7 @@ def attach_sentinel_decision_consumer(
 
     if not any(isinstance(h, DecisionConsumerAdapter) for h in agent.hooks):
         agent.hooks.append(DecisionConsumerAdapter(consumer))
+    return consumer
 
 
 def build_wake(hb_cfg: Any, *, is_busy: Callable[[], bool]) -> tuple[Any, Any]:
