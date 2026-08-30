@@ -416,8 +416,8 @@ async def test_the_llm_call_span_records_a_truncated_non_streaming_turn() -> Non
     and is already written. That is why the decision lives inside the method
     rather than at its call site.
     """
+    from raven.observability import semconv
     from raven.providers.base import GenerationSettings, LLMProvider, LLMResponse, ToolCallRequest
-    from raven.tracing import semconv
 
     class _CutOff(LLMProvider):
         def __init__(self) -> None:

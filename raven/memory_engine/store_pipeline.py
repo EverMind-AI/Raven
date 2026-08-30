@@ -17,7 +17,8 @@ from typing import Any, NamedTuple
 
 from loguru import logger
 
-from raven.tracing import semconv, trace
+from raven.observability import semconv
+from raven.tracing import trace
 
 # How many turns' worth of unindexed writes one session may hold before the
 # oldest is dropped. Bounded because a slow memory service must not be able to

@@ -13,7 +13,8 @@ from loguru import logger
 from raven.agent.tools.params import cast_params, validate_params
 from raven.contracts.llm_provider import RunMeta, TruncationInfo
 from raven.contracts.tool import RAW_ARGUMENTS_KEY, Continuation, Tool, ToolOutput, ToolResult
-from raven.tracing import semconv, trace
+from raven.observability import semconv
+from raven.tracing import trace
 
 if TYPE_CHECKING:
     from raven.mcp.naming import MCPToolRef

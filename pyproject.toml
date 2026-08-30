@@ -410,7 +410,7 @@ source_modules = [
     # loop, the assembly root and the entrances, and imports no surface itself;
     # its earlier surface seat was a misreading of "originates turns" as
     # "is a transport". Seating it here also seats core, the assembly root.
-    "raven.proactive_engine", "raven.core",
+    "raven.proactive_engine", "raven.core", "raven.observability",
 ]
 forbidden_modules = ["raven.cli", "raven.rpc", "raven.acp"]
 # Debt allowlist: none. The last allowlisted edge (market reaching the skill
@@ -434,13 +434,13 @@ forbidden_modules = [
     "raven.i18n", "raven.importer", "raven.knowledge", "raven.market", "raven.mcp",
     "raven.memory_engine", "raven.ops", "raven.playbook", "raven.plugins",
     "raven.proactive_engine", "raven.providers", "raven.routing", "raven.rpc",
-    "raven.sandbox", "raven.security", "raven.session", "raven.skill_hub",
-    "raven.token_wise", "raven.trajectory", "raven.utils",
+    "raven.observability", "raven.sandbox", "raven.security", "raven.session",
+    "raven.skill_hub", "raven.token_wise", "raven.trajectory", "raven.utils",
 ]
 ignore_imports = [
+    # The one reach left: tracing has to find raven's home to read its own
+    # ``[tracing]`` block, and the home resolver lives in the config shelf.
     "raven.tracing.config -> raven.config.loader",
-    "raven.tracing.semconv -> raven.providers.registry",
-    "raven.tracing.usage -> raven.token_wise.pricing",
 ]
 
 [[tool.importlinter.contracts]]

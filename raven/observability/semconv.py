@@ -12,9 +12,9 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
-from . import config
-from . import usage as usage_mod
-from .store import preview_text
+from raven.observability import usage as usage_mod
+from raven.tracing import config
+from raven.tracing.store import preview_text
 
 _SKILL_TOOLS = {"use_skill", "read_skill"}
 

@@ -14,7 +14,8 @@ from loguru import logger
 
 from raven.context_engine.segments import render
 from raven.contracts.context import AssemblyContext, Segment
-from raven.tracing import semconv, trace
+from raven.observability import semconv
+from raven.tracing import trace
 
 if TYPE_CHECKING:
     from raven.contracts.memory import MemoryBackend

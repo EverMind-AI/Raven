@@ -243,6 +243,7 @@ import which) are recorded under **Layer Seats** in `CONTEXT.md`, routed from
 | `market` | Plugin market: catalog, trust, install, ledger |
 | `mcp` | MCP client machinery |
 | `memory_engine` | Long-term memory engine |
+| `observability` | What a raven span means: the attribute vocabulary and the usage it reports |
 | `ops` | Machine registry and on-call operations |
 | `playbook` | Playbook runtime |
 | `plugins` | Plugin discovery, manifests, registry, and bundled plugins |
@@ -257,7 +258,7 @@ import which) are recorded under **Layer Seats** in `CONTEXT.md`, routed from
 | `spine` | The frozen kernel: submit, lanes, cancel, emit, delivery |
 | `templates` | Packaged data assets (no Python) |
 | `token_wise` | Token efficiency: cache optimizer, usage tracker |
-| `tracing` | Tracing and telemetry |
+| `tracing` | Span capture: context, the instrument decorator, the store |
 | `trajectory` | Turn trajectory store and verdicts |
 | `utils` | Shared helpers, including the atomic write primitive |
 
@@ -304,6 +305,7 @@ raven/
 ├── playbook/           # Stored orchestrations: library, match funnel, executor
 ├── token_wise/         # Usage tracking and cache placement
 ├── tracing/            # Span capture (the dashboard lives in cli/tracing_viewer/)
+├── observability/      # The span vocabulary a standalone kernel may not hold
 ├── sandbox/            # Isolated command execution
 ├── security/           # Trust boundaries and network checks
 ├── cli/                # `raven` command line entry point

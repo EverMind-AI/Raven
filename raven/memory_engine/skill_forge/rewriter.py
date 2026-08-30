@@ -20,8 +20,9 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from raven.observability import semconv
 from raven.providers.binding import active_binding
-from raven.tracing import semconv, trace
+from raven.tracing import trace
 
 if TYPE_CHECKING:
     from raven.contracts.llm_provider import LLMProvider
