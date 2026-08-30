@@ -44,9 +44,10 @@ from raven.context_engine.curator import (
 from raven.contracts.context import AssemblyContext, Segment
 from raven.contracts.llm_provider import LLMProvider
 from raven.memory_engine import MemoryStore
+from raven.observability import semconv
 from raven.providers.binding import ModelBinding, active_window, resolve
 from raven.providers.tool_calls import openai_tool_call
-from raven.tracing import semconv, trace
+from raven.tracing import trace
 
 
 class CuratorSegmentBuilder:

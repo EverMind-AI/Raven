@@ -22,8 +22,9 @@ import time
 from typing import TYPE_CHECKING
 
 from raven.memory_engine.skill_forge.types import RouterHit
+from raven.observability import semconv
 from raven.providers.binding import ModelBinding, active_binding
-from raven.tracing import semconv, trace
+from raven.tracing import trace
 
 if TYPE_CHECKING:
     from raven.contracts.llm_provider import LLMProvider

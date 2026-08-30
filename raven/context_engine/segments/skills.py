@@ -34,9 +34,10 @@ from typing import TYPE_CHECKING, Any
 from raven.context_engine.segments import render
 from raven.contracts.context import AssemblyContext, Segment
 from raven.memory_engine import resolve_refs
+from raven.observability import semconv
 from raven.skill_hub.audit import record_install, write_install_meta
 from raven.skill_hub.policy import SkillPolicy, is_blocked
-from raven.tracing import semconv, trace
+from raven.tracing import trace
 
 if TYPE_CHECKING:
     from collections.abc import Iterable

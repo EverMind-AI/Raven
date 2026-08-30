@@ -29,10 +29,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from raven.observability import semconv
 from raven.plugins.context import PluginContext, ServiceLocator
 from raven.plugins.discover import DiscoveredPlugin, Source
 from raven.plugins.manifest import PluginManifest
-from raven.tracing import semconv, trace
+from raven.tracing import trace
 
 logger = logging.getLogger(__name__)
 

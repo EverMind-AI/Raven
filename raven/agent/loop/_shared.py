@@ -61,6 +61,7 @@ from raven.contracts.assembled import TokenBudget
 from raven.contracts.llm_provider import LLMProvider, LLMResponse
 from raven.contracts.tool import SKIPPED_AFTER_BLOCKED_CALL, Continuation, ToolOutput
 from raven.memory_engine import MemoryConsolidator, MemoryStore, StorePipeline
+from raven.observability import semconv
 from raven.providers.base import send_max_tokens
 from raven.providers.binding import ModelBinding, active_binding, use_binding
 from raven.providers.capabilities import image_placeholder_text, supports_image_tool_result, vision_verdict
@@ -69,7 +70,7 @@ from raven.providers.streaming import stream_llm_call
 from raven.sandbox import SandboxConfig, SandboxExecutor, SandboxInitError, build_executor
 from raven.session.manager import Session, SessionManager
 from raven.spine.turn import Origin, session_of
-from raven.tracing import semconv, trace
+from raven.tracing import trace
 from raven.utils.images import is_image_part, is_inline_image
 from raven.utils.tokens import estimate_prompt_tokens
 

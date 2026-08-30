@@ -971,7 +971,18 @@ _Avoid_: "web channel" / `web_rpc` (retired: the ui-webui dialect this grew out 
 The shippable core: the L0 spine, the L1 papers, and tracing (whose only import-time
 edge into the kernel is the paper's instrument decorator). Machine-enforced by the
 "the kernel stands alone" import-linter contract in pyproject.toml, whose comment names
-the set and the lazy debt edges; the raven-core wheel is this set as a build artifact.
+the set and the one lazy edge left; the raven-core wheel is this set as a build artifact.
+
+**Span Vocabulary** (`observability/`):
+What a raven span means -- the attribute extractors, and the usage block they report --
+as against the machinery that opens and closes one, which is kernel. The split is what
+lets the kernel stand alone: deciding that an LLM span carries its routing backend means
+splitting a model id (`providers/registry.py`), and putting a number on a usage block
+means pricing tokens (`token_wise/pricing.py`), so a kernel that held the vocabulary
+would reach into two shelves for it. An instrumented site passes its extractor as an
+argument (`@trace.instrument("llm.call", extract=semconv.llm_call)`), so the extractor
+travels with the caller and the kernel never names one.
+_Avoid_: "telemetry" for either half -- it names neither the machinery nor the meaning.
 
 **Layer Seats** (pyproject.toml `[tool.importlinter]` + `tests/test_l4_entrances.py`):
 Where every package sits, as the machine enforces it. Inner (may not import a surface):

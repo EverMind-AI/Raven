@@ -28,7 +28,8 @@ from raven.contracts.llm_provider import (  # noqa: F401
     TruncationInfo,
 )
 from raven.contracts.llm_provider import LLMProvider as _LLMProviderPaper
-from raven.tracing import semconv, trace
+from raven.observability import semconv
+from raven.tracing import trace
 
 # Wordings providers use to reject list-type content in a tool message. Each is
 # a real 400 body, not a guess: the first group was measured against

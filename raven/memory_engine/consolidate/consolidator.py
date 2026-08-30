@@ -21,8 +21,9 @@ from typing import TYPE_CHECKING, Any, Callable, Iterator
 
 from loguru import logger
 
+from raven.observability import semconv
 from raven.providers.binding import ModelBinding, active_window, resolve
-from raven.tracing import semconv, trace
+from raven.tracing import trace
 from raven.utils.paths import ensure_dir
 from raven.utils.tokens import estimate_message_tokens, estimate_prompt_tokens_chain
 
