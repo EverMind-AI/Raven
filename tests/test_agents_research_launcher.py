@@ -17,6 +17,23 @@ from pathlib import Path
 
 import pytest
 
+#: The vendored twin's visible tool face -- its config disables everything
+#: else its fork registers. The B side must show exactly this face: trunk
+#: grew tools the fork never had (the deep_research offer stub above all,
+#: which would have a research agent offering to outsource research), and
+#: every one of them must be disabled by the product config, not by luck.
+VENDORED_TOOL_FACE = {
+    "read_file",
+    "write_file",
+    "edit_file",
+    "list_dir",
+    "grep",
+    "find",
+    "web_search",
+    "web_fetch",
+    "ask_user",
+}
+
 REPO = Path(__file__).resolve().parent.parent
 RUN_PY = REPO / "agents" / "raven-research" / "run.py"
 
@@ -122,3 +139,63 @@ def test_the_exec_targets_installed_raven(grounded, monkeypatch):
     assert binary == sys.executable
     assert argv[:4] == [sys.executable, "-m", "raven", "acp"]
     assert argv[4] == "--config"
+
+
+def _quiet_plugins(tmp_path, monkeypatch):
+    from raven.core import plugin_stack
+
+    monkeypatch.setattr(
+        plugin_stack,
+        "plugin_discovery_sources",
+        lambda: {
+            "bundled_dir": tmp_path / "none",
+            "user_dir": tmp_path / "none",
+            "project_dir": tmp_path / "none",
+            "entry_points_group": None,
+        },
+    )
+
+
+def test_the_pilots_tool_face_equals_the_vendored_twins(grounded, tmp_path, monkeypatch):
+    """Build the loop from the rendered config; the model-visible tool set is
+    the fork's nine and nothing more."""
+    from raven.config.loader import load_config
+    from raven.config.raven import RavenConfig
+    from raven.contracts.llm_provider import LLMResponse
+    from raven.core import runtime
+    from raven.providers.base import LLMProvider
+
+    class _StubProvider(LLMProvider):
+        def __init__(self) -> None:
+            super().__init__(api_key="test")
+
+        async def chat(
+            self,
+            messages,
+            tools=None,
+            model=None,
+            max_tokens=4096,
+            temperature=0.7,
+            reasoning_effort=None,
+            tool_choice=None,
+        ):
+            return LLMResponse(content="ok", finish_reason="stop")
+
+        def get_default_model(self) -> str:
+            return "fake/default"
+
+    _quiet_plugins(tmp_path, monkeypatch)
+    rendered = grounded.render_config(RUN_PY.parent / "config.json")
+    # The acp entrance's first act is set_config_path(rendered) -- the live
+    # config (which serves disabledTools) reads that path, so the test does
+    # what the transport does.
+    import raven.home as home
+
+    monkeypatch.setattr(home, "_current_config_path", rendered)
+    config = load_config(rendered)
+    rt = runtime.build_runtime(config, RavenConfig(), provider=_StubProvider())
+    try:
+        visible = {d["function"]["name"] for d in rt.loop.tools.get_definitions()}
+    finally:
+        rt.discard()
+    assert visible == VENDORED_TOOL_FACE
