@@ -22,15 +22,16 @@ All notable changes to Raven are documented here.
   (shared state store, pending decisions, routines), so a CLI tick reads and
   writes the quotas a live gateway would instead of a private copy.
 - **Architecture, v0.2.0.** The runtime is now layered by binding time and the
-  boundaries are machine-enforced: a frozen kernel (`raven/spine`), the papers
+  boundaries are machine-enforced: a kernel closed to drive-by edits
+  (`raven/spine`), the papers
   (`raven/contracts`, every interface a shelf implements), the assembly root
   (`raven/core`, where config becomes a running agent through one door,
   `build_runtime`), the shelves (channels, plugins, providers, memory, ...),
   and the entrances (`cli`, `rpc`, `acp`). Five import-linter contracts run
   in CI: inner layers never import an entrance (with no allowlisted
   exceptions), the twelve channel adapters are mutually independent, the
-  kernel imports nothing else at module level (three lazy tracing reads of the
-  host are named and may only shrink), the cargo under `raven/agent` never
+  kernel imports nothing else at module level (one lazy read of the host is
+  named, and the list may only shrink), the cargo under `raven/agent` never
   imports the loop shell it is consumed by, and the runtime never imports the
   repo-level `evolver/` tool that drives it. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
