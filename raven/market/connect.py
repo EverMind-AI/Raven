@@ -265,7 +265,7 @@ async def install_and_connect(entry_id: Any, form: Any, loop: Any) -> dict:
     """
     from raven.market import catalog_detail, install_plugin, uninstall_plugin
     from raven.market.install import PlugInstallError
-    from raven.market.trust import HubTrustError
+    from raven.market.vetting import HubTrustError
     from raven.mcp.oauth import auth_wait_servers
 
     entry_id = validated_catalog_id(entry_id)

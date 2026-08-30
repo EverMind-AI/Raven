@@ -42,7 +42,7 @@ def _bundled() -> dict:
 
 
 async def _load() -> dict:
-    from raven.market.trust import hub_endpoint
+    from raven.market.vetting import hub_endpoint
 
     raw = os.environ.get(_HUB_ENV, "").strip()
     if not raw:

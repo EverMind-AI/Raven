@@ -87,7 +87,7 @@ def _build_mcp_config(contrib: dict, form: dict) -> dict:
     """Catalog connection template + form secrets -> a camelCase config
     stanza, validated through MCPServerConfig before it ever hits disk."""
     from raven.config.schema import MCPServerConfig
-    from raven.market.trust import HubTrustError, validate_mcp_connection
+    from raven.market.vetting import HubTrustError, validate_mcp_connection
 
     cfg: dict[str, Any] = dict(contrib.get("connection") or {})
     cfg["auth"] = ((contrib.get("auth") or {}).get("mode")) or "none"
