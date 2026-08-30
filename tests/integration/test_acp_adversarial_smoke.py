@@ -127,16 +127,34 @@ class TestSessionRefusals:
 
             assert response["error"]["code"] == -32602
 
-    async def test_per_session_mcp_servers_are_refused_not_ignored(self, home, project):
+    async def test_a_malformed_mcp_server_entry_is_refused_not_ignored(self, home, project):
+        """Per-session stdio MCP servers are a feature now (the host-held
+        bridge), so a well-formed entry is accepted -- what must never happen
+        is a bad entry being silently dropped: the client would believe its
+        server is attached while its tools are not there."""
         async with stub_client(env=home) as client:
             await client.handshake()
             response = await client.request(
                 "session/new",
-                {"cwd": str(project), "mcpServers": [{"name": "s", "command": "true", "args": []}]},
+                {"cwd": str(project), "mcpServers": [{"name": "s", "args": []}]},
             )
 
             assert response["error"]["code"] == -32602
-            assert response["error"]["data"]["field"] == "mcpServers"
+            assert response["error"]["data"]["field"] == "mcpServers.command"
+            assert response["error"]["data"]["name"] == "s"
+
+    async def test_a_non_stdio_mcp_server_entry_is_refused_by_type(self, home, project):
+        """Honouring a url entry would put the definition and its credentials
+        in a sub-agent's process; the refusal names the field and the entry."""
+        async with stub_client(env=home) as client:
+            await client.handshake()
+            response = await client.request(
+                "session/new",
+                {"cwd": str(project), "mcpServers": [{"name": "s", "url": "https://x.test/mcp"}]},
+            )
+
+            assert response["error"]["code"] == -32602
+            assert response["error"]["data"]["field"] == "mcpServers.type"
 
     async def test_the_connection_survives_every_refusal(self, home, project):
         async with stub_client(env=home) as client:
@@ -348,7 +366,11 @@ class TestSessionLoad:
                 for f in client.frames
                 if f.get("method") == "session/update" and f["params"]["sessionId"] == "acp:planted"
             ]
-            assert [u["sessionUpdate"] for u in updates] == [
+            # The commands advert is session-scoped (one per session, on its
+            # own stream), not part of the replayed history; the replay
+            # assertion reads the history alone.
+            replayed = [u["sessionUpdate"] for u in updates if u["sessionUpdate"] != "available_commands_update"]
+            assert replayed == [
                 "user_message_chunk",
                 "agent_thought_chunk",
                 "agent_message_chunk",
@@ -356,6 +378,7 @@ class TestSessionLoad:
                 "tool_call_update",
                 "agent_message_chunk",
             ]
+            assert [u["sessionUpdate"] for u in updates].count("available_commands_update") == 1
             assert updates[3]["title"] == "read_file: a.py"
             assert updates[3]["status"] == "pending", "a finished call must not replay as a spinner"
             for frame in client.frames:
