@@ -44,6 +44,18 @@ COMMON_MODELS: dict[str, list[str]] = {
         "openrouter/moonshotai/kimi-k2.6",
         "openrouter/qwen/qwen3.7-max",
     ],
+    "orcarouter": [
+        "orcarouter/auto",
+        "orcarouter/openai/gpt-5.5",
+        "orcarouter/google/gemini-3.5-flash",
+        "orcarouter/anthropic/claude-opus-4.8",
+        "orcarouter/anthropic/claude-sonnet-5",
+        "orcarouter/anthropic/claude-haiku-4.5",
+        "orcarouter/grok/grok-4.3",
+        "orcarouter/deepseek/deepseek-v4-pro",
+        "orcarouter/minimax/minimax-m2.7",
+        "orcarouter/qwen/qwen3.7-max",
+    ],
     "openai": [
         "openai/gpt-5.5",
         "openai/gpt-5.5-pro",

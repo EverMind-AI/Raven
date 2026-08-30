@@ -167,7 +167,7 @@ The schema follows a small, versioned semantic contract. See the [Tracing Standa
 
 ## Providers and Gateways
 
-Raven supports API-key, OAuth, local, and OpenAI-compatible providers. The onboarding catalog includes OpenRouter, OpenAI, Anthropic, Gemini, MiniMax, DeepSeek, Z.ai, DashScope, Moonshot, VolcEngine, SiliconFlow, Groq, AiHubMix, Azure OpenAI, GitHub Copilot OAuth, OpenAI Codex OAuth, Ollama, and hosted vLLM.
+Raven supports API-key, OAuth, local, and OpenAI-compatible providers. The onboarding catalog includes OpenRouter, OrcaRouter, OpenAI, Anthropic, Gemini, MiniMax, DeepSeek, Z.ai, DashScope, Moonshot, VolcEngine, SiliconFlow, Groq, AiHubMix, Azure OpenAI, GitHub Copilot OAuth, OpenAI Codex OAuth, Ollama, and hosted vLLM.
 
 Twelve gateway adapters connect Raven to Telegram, Slack, Discord, WhatsApp, Matrix, Feishu, WeCom, Mochat, QQ, DingTalk, Email, and WeChat.
 

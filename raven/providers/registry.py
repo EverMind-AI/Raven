@@ -51,6 +51,13 @@ class ProviderSpec:
     # A vendor LiteLLM merely spells differently is NOT this: adopt LiteLLM's
     # spelling as `name` and keep ours in `name_aliases` (see hosted_vllm).
     via_driver: str = ""
+    # When set on a gateway, the upstream expects the model id to keep its full
+    # namespace ("orcarouter/anthropic/claude-x" reaches the gateway as
+    # "anthropic/claude-x"), so the wire form replaces only the gateway's own
+    # prefix with the driver's. A bare rest ("orcarouter/auto") is a router name
+    # that belongs to the gateway, so it keeps the gateway prefix -- the upstream
+    # does not accept it naked.
+    via_driver_preserves_namespace: bool = False
     # Prefix LiteLLM's metadata table files this provider's models under, when it
     # differs from the routing prefix ("minimax-global/MiniMax-M3" is priced at
     # "minimax/MiniMax-M3"). None: the two coincide.
@@ -247,6 +254,29 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         model_overrides=(),
         supports_prompt_caching=True,
         default_model="openrouter/anthropic/claude-sonnet-4-5",
+    ),
+    # OrcaRouter: global gateway, OpenAI-compatible interface, keys start with
+    # "sk-orca-". LiteLLM carries no "orcarouter" provider, so it is reached
+    # through the OpenAI driver; the gateway expects the full model namespace
+    # (the wire form is "openai/<namespace>/<model>", and "orcarouter/auto"
+    # keeps its prefix as a router name).
+    ProviderSpec(
+        name="orcarouter",
+        keywords=("orcarouter",),
+        env_key="ORCAROUTER_API_KEY",
+        display_name="OrcaRouter",
+        via_driver="openai",
+        via_driver_preserves_namespace=True,
+        skip_prefixes=(),
+        env_extras=(),
+        is_gateway=True,
+        is_local=False,
+        detect_by_key_prefix="sk-orca-",
+        detect_by_base_keyword="orcarouter",
+        default_api_base="https://api.orcarouter.ai/v1",
+        strip_model_prefix=False,
+        model_overrides=(),
+        default_model="orcarouter/openai/gpt-5.5",
     ),
     # AiHubMix: global gateway, OpenAI-compatible interface.
     # strip_model_prefix=True: it doesn't understand "anthropic/claude-3",
