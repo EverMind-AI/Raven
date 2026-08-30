@@ -572,6 +572,10 @@ class TurnPathMixin:
         watch_state = _watch_work.TurnWatch()
         watch_request = _watch_work.asked_for(initial_messages)
 
+        # Read once, here: a mode switched mid-turn lands on the next turn.
+        policy = self.session_policy(session_key or "")
+        iteration_cap = policy.max_iterations or self.max_iterations
+
         # The iteration hook chain's context for this whole turn; None when no
         # hook is registered, so a default install pays nothing here.
         from raven.agent.hook import AgentHookContext
@@ -581,6 +585,7 @@ class TurnPathMixin:
                 session_key=session_key or "",
                 turn_question=turn_question(initial_messages),
                 turn_base=max(0, len(initial_messages) - 1),
+                metadata={"mode": policy.mode, "mode_overlay": dict(policy.mode_overlay)},
             )
             if len(self.hooks) > 0
             else None
@@ -625,12 +630,12 @@ class TurnPathMixin:
             )
             return True
 
-        while iteration < self.max_iterations:
+        while iteration < iteration_cap:
             iteration += 1
             logger.info(
                 "Iteration {}/{} model={}",
                 iteration,
-                self.max_iterations,
+                iteration_cap,
                 effective_model,
             )
 
@@ -1200,8 +1205,8 @@ class TurnPathMixin:
         if leftover is not None and (lost := leftover.pending_rows()):
             logger.info("question autofill: {} row(s) ended the turn unwritten", len(lost))
 
-        if final_content is None and iteration >= self.max_iterations:
-            logger.warning("Max iterations ({}) reached; synthesizing final answer", self.max_iterations)
+        if final_content is None and iteration >= iteration_cap:
+            logger.warning("Max iterations ({}) reached; synthesizing final answer", iteration_cap)
             # Exhaustion is two orthogonal facts, not an either/or:
             #   1. The turn did NOT complete — tag it ``interrupted`` so the
             #      shadow-git checkpoint commit is labelled and the next turn's

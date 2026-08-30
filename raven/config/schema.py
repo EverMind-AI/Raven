@@ -592,6 +592,34 @@ class GatewayPageConfig(Base):
     port: int = 18792
 
 
+class AcpModeConfig(Base):
+    """One operating profile a client may switch a session to over ACP.
+
+    The stable schema's session modes: a named profile a session runs in,
+    switched with ``session/set_mode``. Two things move with a mode -- the
+    tool-iteration ceiling the loop enforces, and an ``overlay`` the loop does
+    not interpret at all: it reaches the hook chain as
+    ``ctx.metadata["mode_overlay"]``, so a product's own hooks read their own
+    knobs from it. Everything else about the agent is the connection's,
+    identically, in every mode.
+    """
+
+    name: str
+    description: str = ""
+    max_tool_iterations: int | None = None
+    """``None`` inherits ``agents.defaults.maxToolIterations``."""
+    overlay: dict[str, Any] = Field(default_factory=dict)
+
+
+class AcpConfig(Base):
+    """The ACP surface's session modes: none declared means the surface is
+    absent from the wire, exactly as before."""
+
+    modes: dict[str, AcpModeConfig] = Field(default_factory=dict)
+    default_mode: str | None = None
+    """Which mode a new session starts in; the first declared one when unset."""
+
+
 class TuiConfig(Base):
     """Terminal UI launcher behavior.
 
@@ -1597,6 +1625,7 @@ class Config(BaseSettings):
     subagents: SubagentsConfig = Field(default_factory=SubagentsConfig)
     playbooks: PlaybookConfig = Field(default_factory=PlaybookConfig)
     tui: TuiConfig = Field(default_factory=TuiConfig)
+    acp: AcpConfig = Field(default_factory=AcpConfig)
     # UI language chosen during onboarding. Drives the wizard/CLI copy and the
     # agent's reply language (injected into the system prompt). "en" | "zh".
     language: Literal["en", "zh"] = "en"

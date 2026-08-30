@@ -101,6 +101,15 @@ withhold tools for the iteration. Multiple hooks chain via `CompositeHook`; the 
 wires three concrete implementations, and a product steers the loop with its own.
 _Avoid_: "callback" or "middleware" — neither captures the phase-specific, chain-aware semantics.
 
+**Session Mode** (`acp/modes.py`; declared under `acp.modes` in config):
+A named per-session operating profile a client switches over ACP `session/set_mode`; every
+session response carries the `SessionModeState`. Two things move with a mode: the iteration
+cap the loop enforces, and an `overlay` the loop hands the hook chain as
+`ctx.metadata["mode_overlay"]` without interpreting -- a product's own hooks read their own
+knobs from it. Session state, not transcript state; a switch lands on the session's next turn.
+_Avoid_: re-spelling a mode as a `session/set_config_option` entry -- modes are first-class in
+the stable schema.
+
 **Subagent** (`agent/subagent/`):
 A background agent task spawned by `SubagentManager`. Runs with its own tool set; its result
 re-enters the session as a `SUBAGENT`-origin `TurnRequest` via Spine submit. Bounded by

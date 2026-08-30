@@ -1546,3 +1546,66 @@ class TestErrorPassthrough:
 
             validate_outbound(response)
             assert json.dumps(response), "an error frame must be serialisable; data carries arbitrary values"
+
+
+class TestSessionModes:
+    """session/set_mode and the modes object on session responses."""
+
+    def _declare(self, rig, monkeypatch):
+        from raven.acp.modes import AcpModeProfile, SessionModes
+
+        modes = SessionModes(
+            {
+                "fast": AcpModeProfile(id="fast", name="Fast", description="bounded", max_iterations=None),
+                "deep": AcpModeProfile(
+                    id="deep", name="Deep", description="longer", max_iterations=60, overlay={"k": 10}
+                ),
+            },
+            default="fast",
+        )
+        rig.methods._modes = modes
+        applied: list[tuple] = []
+        rig.engine.set_session_policy = lambda key, **kw: applied.append((key, kw))
+        return modes, applied
+
+    async def test_without_declared_modes_set_mode_stays_not_implemented(self, rig):
+        from raven.acp.modes import SessionModes
+
+        rig.methods._modes = SessionModes({}, default=None)
+        await rig.handshake()
+        sid = await rig.new_session()
+        response = await rig.call("session/set_mode", {"sessionId": sid, "modeId": "deep"})
+        assert response["error"]["code"] == protocol.METHOD_NOT_FOUND
+
+    async def test_session_new_carries_the_mode_state(self, rig, monkeypatch):
+        self._declare(rig, monkeypatch)
+        await rig.handshake()
+        response = await rig.call("session/new", {"cwd": str(rig.tmp_path / "project"), "mcpServers": []})
+        state = response["result"]["modes"]
+        validate_def("SessionModeState", state)
+        assert state["currentModeId"] == "fast"
+        assert [m["id"] for m in state["availableModes"]] == ["fast", "deep"]
+
+    async def test_set_mode_switches_and_applies_the_policy(self, rig, monkeypatch):
+        modes, applied = self._declare(rig, monkeypatch)
+        await rig.handshake()
+        sid = await rig.new_session()
+        response = await rig.call("session/set_mode", {"sessionId": sid, "modeId": "deep"})
+        assert response["result"] == {}
+        assert modes.current(sid) == "deep"
+        assert applied[-1][0] == sid
+        assert applied[-1][1] == {"max_iterations": 60, "mode": "deep", "mode_overlay": {"k": 10}}
+
+    async def test_unknown_mode_is_invalid_params_naming_the_catalogue(self, rig, monkeypatch):
+        self._declare(rig, monkeypatch)
+        await rig.handshake()
+        sid = await rig.new_session()
+        response = await rig.call("session/set_mode", {"sessionId": sid, "modeId": "ultra"})
+        assert response["error"]["code"] == protocol.INVALID_PARAMS
+        assert response["error"]["data"]["availableModes"] == ["fast", "deep"]
+
+    async def test_unknown_session_is_resource_not_found(self, rig, monkeypatch):
+        self._declare(rig, monkeypatch)
+        await rig.handshake()
+        response = await rig.call("session/set_mode", {"sessionId": "ghost", "modeId": "deep"})
+        assert response["error"]["code"] == protocol.RESOURCE_NOT_FOUND

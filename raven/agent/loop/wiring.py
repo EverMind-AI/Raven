@@ -157,6 +157,32 @@ class WiringMixin:
         """What a session with no switch of its own runs on."""
         return self._default_binding
 
+    def set_session_policy(
+        self,
+        session_key: str,
+        *,
+        max_iterations: int | None = None,
+        mode: str = "",
+        mode_overlay: dict | None = None,
+    ) -> None:
+        """Record the operating policy this session's next turn runs under.
+
+        Nothing running is touched: a turn reads its policy once at its start,
+        so a switch lands on the session's next turn -- the same contract the
+        model picker states.
+        """
+        from raven.agent.loop._shared import SessionPolicy
+
+        self._session_policies[session_key] = SessionPolicy(
+            max_iterations=max_iterations, mode=mode, mode_overlay=dict(mode_overlay or {})
+        )
+
+    def session_policy(self, session_key: str):
+        """The session's policy, or the loop-wide defaults as one."""
+        from raven.agent.loop._shared import SessionPolicy
+
+        return self._session_policies.get(session_key, SessionPolicy())
+
     def binding_for_session(self, session_key: str) -> ModelBinding:
         """The binding this session runs on: its own switch, else the default.
 

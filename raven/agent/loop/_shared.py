@@ -289,6 +289,22 @@ _ATTACHED_IMAGE_KEY = "_attached_image"
 _HOOK_INJECTED_KEY = "_hook_injected"
 
 
+@dataclass(frozen=True)
+class SessionPolicy:
+    """What one session's turns run under beyond the loop-wide defaults.
+
+    ``max_iterations`` caps the ReAct loop for this session (``None`` inherits
+    the loop's); ``mode`` and ``mode_overlay`` are the session's operating
+    profile as the transport named it -- the loop does not interpret the
+    overlay, it hands it to the hook chain as ``ctx.metadata`` so a product's
+    own hooks read their own knobs.
+    """
+
+    max_iterations: int | None = None
+    mode: str = ""
+    mode_overlay: dict[str, Any] = field(default_factory=dict)
+
+
 def turn_question(messages: list[dict[str, Any]] | None) -> str:
     """This turn's question: the text of the last user message at loop entry.
 
