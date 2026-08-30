@@ -4,6 +4,7 @@
 node_modules/
 bridge/node_modules
 ui-tui/node_modules
+ui-web/node_modules
 bridge/dist/
 # Generated architecture/diagram SVGs at repo root (not source)
 /*.svg
