@@ -10,7 +10,6 @@ Validation
 
 Per-key validators reject:
 
-* ``agent.thinking_budget``: must be a non-negative integer.
 * ``agent.temperature``: must be a number (int/float) in the closed range
   ``[0.0, 2.0]``.
 * ``tui.theme``: must be a non-empty string matching ``[A-Za-z0-9_-]+``.
@@ -50,7 +49,6 @@ _CONFIG_FILENAME = "config.json"
 
 # Default values returned by config.get when the on-disk config omits the key.
 _DEFAULTS: dict[str, Any] = {
-    "agent.thinking_budget": 0,
     "agent.temperature": 1.0,
     "tui.theme": "default",
     "tui.show_token_usage": True,
@@ -64,22 +62,6 @@ _DEFAULTS: dict[str, Any] = {
 
 
 _THEME_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
-
-
-def _validate_thinking_budget(value: Any) -> int:
-    # Booleans are a subclass of int — reject them explicitly so True doesn't
-    # silently coerce to 1.
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ConfigValidationError(
-            "agent.thinking_budget must be a non-negative integer",
-            data={"field": "agent.thinking_budget", "got": repr(value)},
-        )
-    if value < 0:
-        raise ConfigValidationError(
-            "agent.thinking_budget must be non-negative",
-            data={"field": "agent.thinking_budget", "value": value},
-        )
-    return value
 
 
 def _validate_temperature(value: Any) -> float:
@@ -134,7 +116,6 @@ def _validate_language(value: Any) -> str:
 
 
 _VALIDATORS: dict[str, Callable[[Any], Any]] = {
-    "agent.thinking_budget": _validate_thinking_budget,
     "agent.temperature": _validate_temperature,
     "tui.theme": _validate_theme,
     "tui.show_token_usage": _validate_show_token_usage,
@@ -156,7 +137,6 @@ CONFIG_WRITABLE_KEYS: tuple[str, ...] = tuple(_VALIDATORS.keys())
 # being touched. The wire key is the client's contract and is frozen; only the
 # right-hand side is this module's business.
 _STORAGE_PATHS: dict[str, str] = {
-    "agent.thinking_budget": "agents.defaults.thinking_budget",
     "agent.temperature": "agents.defaults.temperature",
     "tui.theme": "tui.theme",
     "tui.show_token_usage": "tui.show_token_usage",
