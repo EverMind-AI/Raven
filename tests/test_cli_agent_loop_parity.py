@@ -56,14 +56,6 @@ class Difference(NamedTuple):
 # tests below make either shape visible -- an undeclared difference fails, and so
 # does an entry that no longer matches the code.
 LEDGER: dict[str, Difference] = {
-    "response_modifier": Difference(
-        absent_from=frozenset({"tui"}),
-        reason=(
-            "Sentinel hook. The gateway process owns Sentinel proactivity in "
-            "v0.1 and the REPL builds its own stack; the TUI deliberately wires "
-            "neither (see the build_engine docstring)."
-        ),
-    ),
     "cron_service": Difference(
         absent_from=frozenset({"agent"}),
         reason=(

@@ -190,8 +190,11 @@ def test_tui_on_user_inbound_resets_cron_counters(patched_tui_build_deps) -> Non
     _build_agent_loop()
 
     kwargs = patched_tui_build_deps["agent_loop_kwargs"]
-    hook = wired_kwarg(kwargs, "on_user_inbound")
-    assert hook is not None, "TUI AgentLoop must wire the silent-fire reset hook"
+    from raven.agent.hook.adapters import OnUserInboundAdapter
+
+    wired = [h for h in (wired_kwarg(kwargs, "hooks") or []) if isinstance(h, OnUserInboundAdapter)]
+    assert wired, "TUI AgentLoop must wire the silent-fire reset hook"
+    hook = wired[0]._callback
 
     cron = patched_tui_build_deps["cron_service_class"].instances[0]
     hook(

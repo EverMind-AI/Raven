@@ -404,7 +404,7 @@ def test_gateway_wires_anti_runaway_count_and_reset() -> None:
     src = inspect.getsource(gateway_commands.register)
     assert "cron_service=cron," in src
     assert "chain_cron_activity_reset(cron, inner=sentinel_on_user_inbound)" in src
-    assert "on_user_inbound=on_user_inbound," in src
+    assert "hooks=sentinel_hooks(on_user_inbound, sentinel_response_modifier)," in src
 
 
 def test_gateway_wires_missed_reminder_observer_behind_config() -> None:

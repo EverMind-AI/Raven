@@ -320,6 +320,7 @@ def register(app: typer.Typer) -> None:
             attach_sentinel_decision_consumer,
             attach_sentinel_spawn,
             build_sentinel_stack,
+            sentinel_hooks,
         )
 
         sentinel_runner, sentinel_response_modifier, sentinel_on_user_inbound = build_sentinel_stack(
@@ -358,13 +359,12 @@ def register(app: typer.Typer) -> None:
                 empty_recovery=limits_from_defaults(config.agents.defaults),
                 interactive=False,
                 now_fn=parse_fake_now(fake_now),
-                response_modifier=sentinel_response_modifier,
             ),
             host=HostWiring(
                 notify=lambda m: console.print(m, style="yellow", markup=False),
                 cron_service=cron,
                 channels_config=config.channels,
-                on_user_inbound=on_user_inbound,
+                hooks=sentinel_hooks(on_user_inbound, sentinel_response_modifier),
             ),
         )
         agent = runtime.loop
@@ -483,7 +483,7 @@ def register(app: typer.Typer) -> None:
                 # SubagentManager; the decision consumer needs agent.tools +
                 # agent.subagents, so both attach post-construction.
                 attach_sentinel_spawn(sentinel_runner, agent)
-                attach_sentinel_decision_consumer(sentinel_runner, agent, sentinel_cfg=sentinel_cfg)
+                decision_consumer = attach_sentinel_decision_consumer(sentinel_runner, agent, sentinel_cfg=sentinel_cfg)
                 if wake is not None:
                     agent.on_turn_complete.append(wake.on_turn_complete)
 
@@ -582,11 +582,8 @@ def register(app: typer.Typer) -> None:
                     sentinel_runner.dispatcher.set_post(pro_hub.post)
                 if sentinel_runner is not None and sentinel_runner.task_discoverer is not None:
                     sentinel_runner.task_discoverer.set_submit(pro_submit)
-                if (
-                    agent.decision_consumer is not None
-                    and getattr(agent.decision_consumer, "executor", None) is not None
-                ):
-                    agent.decision_consumer.executor.set_submit(pro_submit)
+                if decision_consumer is not None and getattr(decision_consumer, "executor", None) is not None:
+                    decision_consumer.executor.set_submit(pro_submit)
                 # Subagent result re-injection submits a SUBAGENT-origin turn.
                 agent.subagents.set_submit(pro_submit)
                 # Deep research (channel/async) delivers its finished answer back
@@ -786,13 +783,12 @@ def register(app: typer.Typer) -> None:
                             empty_recovery=limits_from_defaults(new_config.agents.defaults),
                             interactive=False,
                             now_fn=parse_fake_now(fake_now),
-                            response_modifier=sentinel_response_modifier,
                         ),
                         host=HostWiring(
                             notify=lambda m: console.print(m, style="yellow", markup=False),
                             cron_service=cron,
                             channels_config=new_config.channels,
-                            on_user_inbound=on_user_inbound,
+                            hooks=sentinel_hooks(on_user_inbound, sentinel_response_modifier),
                         ),
                     )
                 except Exception as exc:

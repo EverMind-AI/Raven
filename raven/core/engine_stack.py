@@ -33,9 +33,10 @@ def build_engine(
     ``ValidationError`` for a malformed config come through untranslated: the
     calling surface decides whether that is a red line, an RPC error or a log.
 
-    No ``response_modifier``: Sentinel proactivity belongs to the gateway
+    No sentinel hooks: Sentinel proactivity belongs to the gateway
     process, and the local surfaces deliberately wire none.
     """
+    from raven.agent.hook.adapters import OnUserInboundAdapter
     from raven.agent.loop.bundles import HostWiring, TurnPolicy
     from raven.agent.loop.recovery import limits_from_defaults
     from raven.config.raven import load_raven_config
@@ -74,7 +75,7 @@ def build_engine(
             notify=notify,
             cron_service=cron,
             channels_config=config.channels,
-            on_user_inbound=chain_cron_activity_reset(cron),
+            hooks=[OnUserInboundAdapter(chain_cron_activity_reset(cron))],
         ),
     )
 

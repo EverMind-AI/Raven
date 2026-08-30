@@ -165,6 +165,7 @@ def register(app: typer.Typer) -> None:
             attach_sentinel_decision_consumer,
             attach_sentinel_spawn,
             build_sentinel_stack,
+            sentinel_hooks,
         )
         from raven.session.manager import new_chat_id
 
@@ -251,12 +252,11 @@ def register(app: typer.Typer) -> None:
                 max_iterations=config.agents.defaults.max_tool_iterations,
                 empty_recovery=limits_from_defaults(config.agents.defaults),
                 interactive=False,
-                response_modifier=sentinel_response_modifier,
             ),
             host=HostWiring(
                 notify=lambda m: console.print(m, style="yellow", markup=False),
                 channels_config=config.channels,
-                on_user_inbound=sentinel_on_user_inbound,
+                hooks=sentinel_hooks(sentinel_on_user_inbound, sentinel_response_modifier),
             ),
         )
         agent_loop = runtime.loop

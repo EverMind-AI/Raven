@@ -65,7 +65,6 @@ class TurnPolicy:
     max_iterations: int = 40
     empty_recovery: Any = None
     interactive: bool = True
-    response_modifier: Any = None
     now_fn: Any = None
 
 
@@ -74,8 +73,6 @@ class HostWiring:
     """Handles the hosting surface injects: hooks, sinks, host services."""
 
     hooks: Any = None
-    on_user_inbound: Any = None
-    decision_consumer: Any = None
     cron_service: Any = None
     channels_config: Any = None
     # How the host shows a plugin's actionable notice; None leaves it to the log.

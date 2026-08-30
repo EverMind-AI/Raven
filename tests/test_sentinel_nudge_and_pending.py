@@ -429,7 +429,6 @@ def test_attach_decision_consumer_warns_on_no_llm_provider(tmp_path, caplog):
         cron_service = None
         tools = MagicMock()
         subagents = MagicMock()
-        decision_consumer = None
         hooks = CompositeHook()
 
     agent = _StubAgent()
@@ -447,7 +446,7 @@ def test_attach_decision_consumer_warns_on_no_llm_provider(tmp_path, caplog):
     captured = io.StringIO()
     sink_id = _logger.add(captured, level="WARNING")
     try:
-        attach_sentinel_decision_consumer(runner, agent, sentinel_cfg=sentinel_cfg)
+        consumer = attach_sentinel_decision_consumer(runner, agent, sentinel_cfg=sentinel_cfg)
     finally:
         _logger.remove(sink_id)
 
@@ -455,7 +454,7 @@ def test_attach_decision_consumer_warns_on_no_llm_provider(tmp_path, caplog):
     assert "task_discovery_require_confirm=True but no LLM" in log_text
     # Consumer was still attached (degraded mode is functional for
     # clear yes/no via regex)
-    assert agent.decision_consumer is not None
+    assert consumer is not None
 
 
 def test_attach_decision_consumer_no_warn_when_provider_set(tmp_path):
@@ -485,7 +484,6 @@ def test_attach_decision_consumer_no_warn_when_provider_set(tmp_path):
         cron_service = None
         tools = MagicMock()
         subagents = MagicMock()
-        decision_consumer = None
         hooks = CompositeHook()
 
     agent = _StubAgent()
@@ -535,7 +533,6 @@ def test_attach_decision_consumer_registers_hook(tmp_path):
         cron_service = None
         tools = MagicMock()
         subagents = MagicMock()
-        decision_consumer = None
         hooks = CompositeHook()
 
     agent = _StubAgent()
@@ -577,7 +574,6 @@ def test_attach_decision_consumer_is_idempotent(tmp_path):
         cron_service = None
         tools = MagicMock()
         subagents = MagicMock()
-        decision_consumer = None
         hooks = CompositeHook()
 
     agent = _StubAgent()
@@ -618,7 +614,6 @@ def test_attach_decision_consumer_no_warn_when_require_confirm_false(
         cron_service = None
         tools = MagicMock()
         subagents = MagicMock()
-        decision_consumer = None
         hooks = CompositeHook()
 
     agent = _StubAgent()
