@@ -469,6 +469,15 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         # and `has_credential` both ask the tools, which is where each family's
         # rule already lives, so this file cannot become a second opinion.
         "raven/agent/tools/capabilities.py",
+        # The launcher library deciding whether a host config, read as raw
+        # JSON, carries any provider key worth inheriting wholesale
+        # (inherit_llm). No verdict on a specific Raven provider is made: the
+        # block is copied as-is precisely because two providers spelled the
+        # same can be two different endpoints, and the empty answer refuses
+        # the product launch rather than ruling any provider unconfigured.
+        # Asking auth would mean parsing the host's file into a RavenConfig a
+        # launcher deliberately treats as opaque, possibly newer, JSON.
+        "raven/config/product_render.py",
         "raven/config/update_providers.py",
         "raven/providers/litellm_provider.py",
         "raven/providers/factory.py",

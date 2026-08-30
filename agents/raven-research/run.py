@@ -4,10 +4,12 @@
 The vendored Raven-Research (subagents/raven-research) carries a whole fork
 checkout; this product carries none. It renders its config and execs the
 installed raven's own ``raven acp``, so every turn runs through the same
-assembly door (build_runtime) as the host's TUI and gateway. What remains
-here is exactly what cannot move into either side's config: merging ``.env``
-secrets into a rendered copy, inheriting the host's LLM when this folder has
-no key of its own, and seeding the product identity into the workspace once.
+assembly door (build_runtime) as the host's TUI and gateway. The machinery
+of rendering lives in the launcher library
+(``raven.config.product_render``); what remains here is this product's own
+half -- its tables (which secrets go where, what its modes are called, which
+overlay keys exist) and its judgement (how a mode's budget resolves, the
+flow prompts, refusing to launch without a search key).
 
 The rendered copy lands under the state root and the location is
 load-bearing: raven derives its data dir from the config file's own parent,
@@ -22,8 +24,9 @@ architecture doing the job the fork used to:
 * identity is a workspace asset -- raven reads
   ``agent_memory/profile/soul.md``, so ``soul.md`` beside this file is
   copied there on first launch -- not a config override;
-* modes are absent: installed raven declares ``session/set_mode`` as not yet
-  built, and this product does not pretend otherwise.
+* modes are overlays: ``modes/*.json`` diffs become ``acp.modes`` entries a
+  client's picker shows, applied per session over the baseline flow config
+  instead of being compiled into the loop the way the fork did.
 
 After rendering, this process execs ``python -m raven acp`` on its own
 interpreter (the row's ``{PYTHON}`` resolves at install time to one that
@@ -39,8 +42,7 @@ import os
 import sys
 from pathlib import Path
 
-from raven.contracts.path_policy import CONFIG_FILENAME
-from raven.home import raven_home
+from raven.config import product_render as render
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_CONFIG = HERE / "config.json"
@@ -72,27 +74,6 @@ MODE_LABELS = {
 OVERLAY_KEYS = frozenset({"drFlow", "agents"})
 
 PRODUCT = "raven-research-ng"
-
-
-def env_value(name: str) -> str | None:
-    """Read a setting from the process environment, falling back to ``.env``.
-
-    The environment wins so a caller can override one value without editing
-    the file that holds the others.
-    """
-    if value := os.environ.get(name):
-        return value.strip()
-    env_file = HERE / ".env"
-    if env_file.is_file():
-        for line in env_file.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            key, _, value = line.partition("=")
-            if key.strip() == name and value.strip():
-                return value.strip()
-    return None
-
 
 # Where each secret belongs in the config raven loads. The paths are trunk
 # raven's own config surface (tools.web.search.apiKey / tools.web.jinaApiKey),
@@ -132,69 +113,19 @@ PLUGIN_WEB_MIRROR = {
 SEARCH_ENV_VAR = "SERPER_API_KEY"
 
 
+def env_value(name: str) -> str | None:
+    """This product's settings lookup: the process environment, then ``.env``."""
+    return render.env_value(name, env_file=HERE / ".env")
+
+
 def state_root() -> Path:
     """Everything this product persists lands here, never in this folder."""
-    override = env_value("RESEARCH_NG_STATE_ROOT")
-    if override:
-        return Path(override).expanduser()
-    return raven_home() / "workspace" / "subagent_sessions" / PRODUCT
+    return render.product_state_root(PRODUCT, override=env_value("RESEARCH_NG_STATE_ROOT"))
 
 
 def log(message: str) -> None:
     """Record a diagnostic without contaminating the protocol stream."""
     print(message, file=sys.stderr, flush=True)
-
-
-def host_config() -> dict:
-    """The host raven's config, or an empty dict when there is none to read.
-
-    Read as JSON through the path paper's answer -- the host propagates its
-    ``RAVEN_HOME`` into this process (builtin_agents does), so ``raven_home()``
-    here is the host's home.
-    """
-    try:
-        return json.loads((raven_home() / CONFIG_FILENAME).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-
-
-def dig(data: dict, path: tuple) -> str:
-    for part in path:
-        if not isinstance(data, dict):
-            return ""
-        data = data.get(part)
-    return data if isinstance(data, str) else ""
-
-
-def put(data: dict, path: tuple, value: str) -> None:
-    node = data
-    for part in path[:-1]:
-        node = node.setdefault(part, {})
-    node[path[-1]] = value
-
-
-def inherit_llm(config: dict, host: dict) -> str:
-    """Take the host raven's whole LLM configuration; return what was taken.
-
-    Only reached when this product has no key of its own. The provider block
-    is copied wholesale rather than matched by name -- two providers spelled
-    the same can be two different endpoints. What is inherited is which
-    brains are reachable, which one is chosen, and how a model name routes;
-    deliberately not the rest of ``agents.defaults``, which are this
-    product's own operating limits.
-    """
-    providers = host.get("providers") or {}
-    if not any(isinstance(p, dict) and p.get("apiKey") for p in providers.values()):
-        return ""
-    for key in ("providers", "routing"):
-        if key in host:
-            config[key] = host[key]
-    defaults = config.setdefault("agents", {}).setdefault("defaults", {})
-    host_defaults = (host.get("agents") or {}).get("defaults") or {}
-    for key in ("provider", "model"):
-        if key in host_defaults:
-            defaults[key] = host_defaults[key]
-    return f"provider={defaults.get('provider')} model={defaults.get('model')}"
 
 
 def require_search(config: dict) -> None:
@@ -205,7 +136,7 @@ def require_search(config: dict) -> None:
     the one failure mode nobody inspects. The bare env var counts because the
     tool resolves its key at call time from the config value or that var.
     """
-    key = dig(config, ("tools", "web", "search", "apiKey"))
+    key = render.dig(config, ("tools", "web", "search", "apiKey"))
     if key or os.environ.get(SEARCH_ENV_VAR):
         return
     raise SystemExit(
@@ -219,15 +150,14 @@ def seed_identity(workspace: Path, flow_slice: dict) -> None:
 
     Rendered, not copied: the flow inserts its measured guidance into the
     identity text the way the vendored twin did at prompt-build time, so the
-    workspace copy is the model-visible text. Once: the workspace copy is the
-    live one afterwards, and a product update must not silently overwrite
-    what an operator tuned in place.
+    workspace copy is the model-visible text. Once (``seed_once``'s
+    contract): the workspace copy is the live one afterwards, and a product
+    update must not silently overwrite what an operator tuned in place.
     """
-    target = workspace / "agent_memory" / "profile" / "soul.md"
-    if target.exists():
-        return
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(rendered_identity(flow_slice), encoding="utf-8")
+    render.seed_once(
+        workspace / "agent_memory" / "profile" / "soul.md",
+        lambda: rendered_identity(flow_slice),
+    )
 
 
 def _flow_prompts(flow_slice: dict):
@@ -260,11 +190,10 @@ def seed_contract(workspace: Path, flow_slice: dict) -> None:
     contract from ``agent.md`` -- the two halves of the segment the fork built
     in code. Same once-only rule as the identity.
     """
-    target = workspace / "agent_memory" / "profile" / "agent.md"
-    if target.exists():
-        return
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(_flow_prompts(flow_slice)[1], encoding="utf-8")
+    render.seed_once(
+        workspace / "agent_memory" / "profile" / "agent.md",
+        lambda: _flow_prompts(flow_slice)[1],
+    )
 
 
 def iteration_cap(base_flow: dict, base_cap, overlay: dict):
@@ -289,86 +218,28 @@ def iteration_cap(base_flow: dict, base_cap, overlay: dict):
     return flow_cap or cap
 
 
-def mode_catalogue(config: dict) -> dict:
-    """The ``acp.modes`` block: one entry per mode, each carrying its own diff.
-
-    Diffs, not merged blocks: the overlay reaches the plugin's hooks through
-    the session policy as ``ctx.metadata["mode_overlay"]``, and the plugin
-    merges it over the baseline flow config per session. The baseline mode
-    carries an empty diff but not an empty cap -- see :func:`iteration_cap`: the
-    plugin learns the loop's budget from the overlay alone, so every mode
-    declares its own. An empty dict when this folder ships no ``modes/``
-    directory, which leaves the rendered config without ``acp.modes`` and
-    ``session/set_mode`` method-not-found -- the pre-modes behaviour.
-    """
-    if not MODES_DIR.is_dir():
-        return {}
-    base_flow = ((config.get("plugins") or {}).get("config") or {}).get(FLOW_PLUGIN_ID) or {}
-    base_cap = ((config.get("agents") or {}).get("defaults") or {}).get("maxToolIterations")
-    catalogue: dict = {}
-    for mode, (name, description) in MODE_LABELS.items():
-        overlay: dict = {}
-        if mode != BASELINE_MODE:
-            overlay_file = MODES_DIR / f"{mode}.json"
-            if not overlay_file.is_file():
-                continue
-            overlay = json.loads(overlay_file.read_text(encoding="utf-8"))
-            unknown = sorted(set(overlay) - OVERLAY_KEYS)
-            if unknown:
-                raise SystemExit(
-                    f"{overlay_file}: unsupported top-level key(s) {', '.join(unknown)}; "
-                    f"an overlay carries only {', '.join(sorted(OVERLAY_KEYS))}"
-                )
-        cap = iteration_cap(base_flow, base_cap, overlay)
-        entry_overlay: dict = {"drFlow": overlay.get("drFlow", {})}
-        if cap:
-            entry_overlay["maxToolIterations"] = cap
-        catalogue[mode] = {
-            "name": name,
-            "description": description,
-            "maxToolIterations": cap,
-            "overlay": entry_overlay,
-        }
-    return catalogue
-
-
-def sweep_stale_renders(root: Path) -> None:
-    """Remove rendered configs whose server is gone, by pid liveness."""
-    for stale in root.glob(".config.rendered.*.json"):
-        try:
-            pid = int(stale.name.split(".")[3])
-            os.kill(pid, 0)
-        except (IndexError, ValueError, ProcessLookupError):
-            stale.unlink(missing_ok=True)
-        except PermissionError:
-            continue
-
-
 def render_config(source: Path) -> Path:
     """Write a copy of ``source`` with the secrets merged in, under the state root.
 
-    The location is the mechanism: raven derives its data dir from the config
-    file's own parent, so wherever this file goes, sessions and cache go too.
+    The composition is this product's; every machine it calls is the launcher
+    library's. Order matters twice: the LLM check runs after the slot merge
+    (its absence is what switches to inheritance), and the mode catalogue is
+    assembled after the flow slice is final (a mode's budget resolves against
+    the baseline flow config).
     """
     config = json.loads(source.read_text(encoding="utf-8"))
-    host = host_config()
+    host = render.host_config()
 
-    for name, path in SECRET_SLOTS.items():
-        value = env_value(name)
-        if not value and name not in REQUIRED_SECRETS:
-            value = dig(host, path)
-        if value:
-            put(config, path, value)
-
-    if proxy := (env_value(PROXY_ENV) or dig(host, PROXY_SLOT)):
-        put(config, PROXY_SLOT, proxy)
+    render.apply_secret_slots(config, host, slots=SECRET_SLOTS, required=REQUIRED_SECRETS, lookup=env_value)
+    if proxy := (env_value(PROXY_ENV) or render.dig(host, PROXY_SLOT)):
+        render.put(config, PROXY_SLOT, proxy)
 
     llm_key = REQUIRED_SECRETS[0]
     if env_value(llm_key):
         defaults = config.get("agents", {}).get("defaults", {})
         log(f"[run] llm: own key (provider={defaults.get('provider')} model={defaults.get('model')})")
     else:
-        taken = inherit_llm(config, host)
+        taken = render.inherit_llm(config, host)
         if not taken:
             raise SystemExit(
                 f"error: {llm_key} is not set and the host config has no provider key to "
@@ -389,8 +260,8 @@ def render_config(source: Path) -> Path:
     flow_slice = plugins.setdefault("config", {}).setdefault(FLOW_PLUGIN_ID, {})
     flow_slice.setdefault("stateRoot", str(root / "research_flow"))
     for trunk_path, slice_path in PLUGIN_WEB_MIRROR.items():
-        if value := dig(config, trunk_path):
-            put(flow_slice, slice_path, value)
+        if value := render.dig(config, trunk_path):
+            render.put(flow_slice, slice_path, value)
     # Same mirror, same reason as the web keys: the fork's assembly was CALLED
     # with the window the loop had resolved, so both observers that divide by it
     # quoted the model the turn actually ran on. A plugin factory sees its own
@@ -399,7 +270,21 @@ def render_config(source: Path) -> Path:
     # both silently.
     if window := defaults.get("contextWindowTokens"):
         flow_slice.setdefault("contextWindowTokens", window)
-    catalogue = mode_catalogue(config)
+
+    base_flow = ((config.get("plugins") or {}).get("config") or {}).get(FLOW_PLUGIN_ID) or {}
+    base_cap = defaults.get("maxToolIterations")
+    catalogue = render.mode_catalogue(
+        MODES_DIR,
+        MODE_LABELS,
+        baseline=BASELINE_MODE,
+        overlay_keys=OVERLAY_KEYS,
+        # The product's half of the catalogue: how a budget resolves, and which
+        # overlay slice the plugin should see.
+        resolve=lambda overlay: (
+            iteration_cap(base_flow, base_cap, overlay),
+            {"drFlow": overlay.get("drFlow", {})},
+        ),
+    )
     if catalogue:
         acp = config.setdefault("acp", {})
         acp["modes"] = catalogue
@@ -409,14 +294,8 @@ def render_config(source: Path) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     seed_identity(Path(defaults["workspace"]), flow_slice)
     seed_contract(Path(defaults["workspace"]), flow_slice)
-    sweep_stale_renders(root)
-
-    rendered = root / f".config.rendered.{os.getpid()}.json"
-    fd = os.open(rendered, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    os.fchmod(fd, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as stream:
-        json.dump(config, stream, indent=2, ensure_ascii=False)
-    return rendered
+    render.sweep_stale_renders(root)
+    return render.write_rendered(config, root)
 
 
 def main() -> int:
