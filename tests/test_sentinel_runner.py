@@ -21,7 +21,7 @@ from raven.proactive_engine.sentinel.executor.injector import NudgeInjector
 from raven.proactive_engine.sentinel.executor.runner import SentinelRunner
 from raven.proactive_engine.sentinel.executor.spawn import ProactiveSpawn
 from raven.proactive_engine.sentinel.feedback.tracker import NudgeFeedbackTracker
-from raven.proactive_engine.sentinel.predictor.context_assembler import ContextAssembler
+from raven.proactive_engine.sentinel.predictor.context_assembler import PlannerContextAssembler
 from raven.proactive_engine.sentinel.trigger_policy.policy import NudgePolicy
 from raven.proactive_engine.sentinel.types import PlannerDecision
 
@@ -97,7 +97,7 @@ def _build_runner(
 ):
     now_fn = clock if clock is not None else _now
     policy = NudgePolicy(_cfg(), now_fn=now_fn)
-    assembler = ContextAssembler(nudge_policy=policy, now_fn=now_fn)
+    assembler = PlannerContextAssembler(nudge_policy=policy, now_fn=now_fn)
     posted: list = []
     if include_dispatcher:
         dispatcher = NudgeDispatcher(now_fn=now_fn)
@@ -603,7 +603,7 @@ def _build_runner_with_store(
     persists across constructions."""
     now_fn = clock if clock is not None else _now
     policy = NudgePolicy(_cfg(), store=store, now_fn=now_fn)
-    assembler = ContextAssembler(nudge_policy=policy, now_fn=now_fn)
+    assembler = PlannerContextAssembler(nudge_policy=policy, now_fn=now_fn)
     dispatcher = NudgeDispatcher(now_fn=now_fn)
     dispatcher.set_post(AsyncMock())
     injector = NudgeInjector(store=store, now_fn=now_fn)

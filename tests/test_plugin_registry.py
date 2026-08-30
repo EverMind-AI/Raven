@@ -11,6 +11,7 @@ import pytest
 from raven.plugins import (
     Contributes,
     DiscoveredPlugin,
+    ManifestOrigin,
     MemoryBackendContribution,
     PluginConflictError,
     PluginContext,
@@ -19,7 +20,6 @@ from raven.plugins import (
     PluginNotFoundError,
     PluginRegistry,
     ServiceLocator,
-    Source,
 )
 
 # ---------------------------------------------------------------------------
@@ -65,7 +65,7 @@ def _make_discovered(
     )
     return DiscoveredPlugin(
         manifest=mf,
-        source=Source.BUNDLED if bundled else Source.USER,
+        source=ManifestOrigin.BUNDLED if bundled else ManifestOrigin.USER,
         location=None,
     )
 

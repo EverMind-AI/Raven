@@ -31,7 +31,7 @@ from typing import Any
 
 from raven.observability import semconv
 from raven.plugins.context import PluginContext, ServiceLocator
-from raven.plugins.discover import DiscoveredPlugin, Source
+from raven.plugins.discover import DiscoveredPlugin, ManifestOrigin
 from raven.plugins.manifest import PluginManifest
 from raven.tracing import trace
 
@@ -118,7 +118,7 @@ class PluginRegistry:
         self,
         mf: PluginManifest,
         *,
-        source: Source,
+        source: ManifestOrigin,
         location: Path | None,
     ) -> None:
         if mf.id in self._manifests:
@@ -166,7 +166,7 @@ class PluginRegistry:
             logger.debug("registered tool %s from %s", tool.name, mf.id)
 
     @staticmethod
-    def _ensure_importable(source: Source, location: Path | None) -> None:
+    def _ensure_importable(source: ManifestOrigin, location: Path | None) -> None:
         """Put a file-based plugin's directory on ``sys.path`` so its
         factory module imports.
 
@@ -182,7 +182,7 @@ class PluginRegistry:
         of the process: every module under that directory becomes
         importable, not just the referenced factory.
         """
-        if source not in (Source.USER, Source.PROJECT) or location is None:
+        if source not in (ManifestOrigin.USER, ManifestOrigin.PROJECT) or location is None:
             return
         plugin_dir = str(location.parent)
         if plugin_dir not in sys.path:

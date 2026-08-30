@@ -2,7 +2,7 @@
 
 The ProactivePlanner decides; the three nudge executors (plain nudge, inject,
 defer) carry it out under NudgePolicy; RoutineLearner, NudgeFeedbackTracker,
-ContextAssembler and ProactiveSpawn feed and follow it; SentinelRunner binds
+PlannerContextAssembler and ProactiveSpawn feed and follow it; SentinelRunner binds
 them into a periodic tick loop.
 """
 
@@ -17,7 +17,7 @@ from raven.proactive_engine.sentinel.feedback.tracker import (
     new_nudge_id,
 )
 from raven.proactive_engine.sentinel.planner import ProactivePlanner
-from raven.proactive_engine.sentinel.predictor.context_assembler import ContextAssembler
+from raven.proactive_engine.sentinel.predictor.context_assembler import PlannerContextAssembler
 from raven.proactive_engine.sentinel.predictor.routine_learner import RoutineLearner
 from raven.proactive_engine.sentinel.trigger_policy.policy import CheckResult, NudgePolicy
 from raven.proactive_engine.sentinel.trigger_policy.prefs import (
@@ -35,7 +35,7 @@ from raven.proactive_engine.sentinel.types import (
 __all__ = [
     "ActiveSession",
     "CheckResult",
-    "ContextAssembler",
+    "PlannerContextAssembler",
     "DeferManager",
     "ExecutionResult",
     "FeedbackSignal",

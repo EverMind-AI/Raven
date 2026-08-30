@@ -213,12 +213,12 @@ def build_sentinel_stack(
     # (memory store, routine learner); skip the cost when disabled.
     from raven.memory_engine import MemoryStore
     from raven.proactive_engine.sentinel import (
-        ContextAssembler,
         DeferManager,
         NudgeDispatcher,
         NudgeFeedbackTracker,
         NudgeInjector,
         NudgePolicy,
+        PlannerContextAssembler,
         ProactivePlanner,
         RoutineLearner,
         SentinelAssembly,
@@ -261,7 +261,7 @@ def build_sentinel_stack(
     learner = RoutineLearner(
         min_history_entries=sentinel_cfg.routine_min_history_entries,
     )
-    assembler = ContextAssembler(
+    assembler = PlannerContextAssembler(
         memory_store=memory_store,
         session_manager=session_manager,
         routine_learner=learner,

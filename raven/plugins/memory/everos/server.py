@@ -43,7 +43,7 @@ def _extract_port(base_url: str) -> str:
 _PROBE_TIMEOUT_S = 1.0
 
 
-class ProbeResult(Enum):
+class ProbeVerdict(Enum):
     """Why a health probe ended the way it did.
 
     A bare bool collapsed two answers a caller must tell apart. ``REFUSED``
@@ -59,29 +59,29 @@ class ProbeResult(Enum):
     ERROR = "error"
 
 
-def probe_health(base_url: str, *, timeout: float = _PROBE_TIMEOUT_S) -> ProbeResult:
+def probe_health(base_url: str, *, timeout: float = _PROBE_TIMEOUT_S) -> ProbeVerdict:
     """Ask ``{base_url}/health`` whether a server is answering there."""
     import httpx
 
     try:
         r = httpx.get(f"{base_url}/health", timeout=timeout)
     except httpx.ConnectError:
-        return ProbeResult.REFUSED
+        return ProbeVerdict.REFUSED
     except httpx.TimeoutException:
-        return ProbeResult.TIMEOUT
+        return ProbeVerdict.TIMEOUT
     except Exception:
-        return ProbeResult.ERROR
-    return ProbeResult.OK if r.status_code == 200 else ProbeResult.ERROR
+        return ProbeVerdict.ERROR
+    return ProbeVerdict.OK if r.status_code == 200 else ProbeVerdict.ERROR
 
 
 def _probe_health(base_url: str) -> bool:
     """Liveness alone, for callers that have nothing to do with the reason.
 
-    A wrapper rather than a changed return type: every ``ProbeResult`` member is
+    A wrapper rather than a changed return type: every ``ProbeVerdict`` member is
     truthy, so handing the enum to an existing ``if _probe_health(...)`` would
     turn a refused connection into a pass.
     """
-    return probe_health(base_url) is ProbeResult.OK
+    return probe_health(base_url) is ProbeVerdict.OK
 
 
 def _speaks_our_api(base_url: str) -> bool:
@@ -789,7 +789,7 @@ async def ensure_everos_server(
 
 __all__ = [
     "DEFAULT_EVEROS_BASE_URL",
-    "ProbeResult",
+    "ProbeVerdict",
     "probe_health",
     "EverosBinaryMissingError",
     "EverosNotConfiguredError",

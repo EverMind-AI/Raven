@@ -44,7 +44,7 @@ from raven.plugins.memory.everos.backend import (
     convert_messages,
     make_backend,
 )
-from raven.plugins.memory.everos.server import ProbeResult
+from raven.plugins.memory.everos.server import ProbeVerdict
 
 # ---------------------------------------------------------------------------
 # Fake adapter — records calls + returns canned data
@@ -337,7 +337,7 @@ class TestAUserManagedRootIsReadOnly:
         monkeypatch.setattr("raven.plugins.memory.everos.server.ensure_everos_server", _ensure)
         monkeypatch.setattr(
             "raven.plugins.memory.everos.server.probe_health",
-            lambda _u, **_kw: ProbeResult.REFUSED,
+            lambda _u, **_kw: ProbeVerdict.REFUSED,
         )
 
         b = EverosBackend(_ctx(tmp_path))
@@ -361,7 +361,7 @@ class TestAUserManagedRootIsReadOnly:
         monkeypatch.setattr("raven.plugins.memory.everos.server.ensure_everos_server", _ensure)
         monkeypatch.setattr(
             "raven.plugins.memory.everos.server.probe_health",
-            lambda _u, **_kw: ProbeResult.OK,
+            lambda _u, **_kw: ProbeVerdict.OK,
         )
 
         b = EverosBackend(_ctx(tmp_path))
@@ -1214,10 +1214,10 @@ class TestServiceStateMachine:
 
     def test_probe_ok_reaches_ready(self) -> None:
         from raven.plugins.memory.everos.backend import ServiceState
-        from raven.plugins.memory.everos.server import ProbeResult
+        from raven.plugins.memory.everos.server import ProbeVerdict
 
         b = self._backend()
-        b._apply_probe(ProbeResult.OK)
+        b._apply_probe(ProbeVerdict.OK)
         assert b._state is ServiceState.READY
 
     def test_timeout_is_unresponsive_not_failed(self) -> None:
@@ -1225,29 +1225,29 @@ class TestServiceStateMachine:
         every time. Filing it as FAILED would be wrong in the other direction:
         FAILED means the child is gone."""
         from raven.plugins.memory.everos.backend import ServiceState
-        from raven.plugins.memory.everos.server import ProbeResult
+        from raven.plugins.memory.everos.server import ProbeVerdict
 
         b = self._backend()
         b._state = ServiceState.READY
-        b._apply_probe(ProbeResult.TIMEOUT)
+        b._apply_probe(ProbeVerdict.TIMEOUT)
         assert b._state is ServiceState.UNRESPONSIVE
 
     def test_refused_with_a_live_child_is_starting(self) -> None:
         from raven.plugins.memory.everos.backend import ServiceState
-        from raven.plugins.memory.everos.server import ProbeResult
+        from raven.plugins.memory.everos.server import ProbeVerdict
 
         b = self._backend()
         b._proc = MagicMock(**{"poll.return_value": None})
-        b._apply_probe(ProbeResult.REFUSED)
+        b._apply_probe(ProbeVerdict.REFUSED)
         assert b._state is ServiceState.STARTING
 
     def test_refused_with_a_dead_child_is_failed(self) -> None:
         from raven.plugins.memory.everos.backend import ServiceState
-        from raven.plugins.memory.everos.server import ProbeResult
+        from raven.plugins.memory.everos.server import ProbeVerdict
 
         b = self._backend()
         b._proc = MagicMock(**{"poll.return_value": 1, "returncode": 1})
-        b._apply_probe(ProbeResult.REFUSED)
+        b._apply_probe(ProbeVerdict.REFUSED)
         assert b._state is ServiceState.FAILED
 
     def test_refused_with_no_child_of_ours_is_starting(self) -> None:
@@ -1255,18 +1255,18 @@ class TestServiceStateMachine:
         exit code to read. Calling that FAILED would stop a start that is
         someone else's and going fine."""
         from raven.plugins.memory.everos.backend import ServiceState
-        from raven.plugins.memory.everos.server import ProbeResult
+        from raven.plugins.memory.everos.server import ProbeVerdict
 
         b = self._backend()
         b._proc = None
-        b._apply_probe(ProbeResult.REFUSED)
+        b._apply_probe(ProbeVerdict.REFUSED)
         assert b._state is ServiceState.STARTING
 
     def test_any_state_recovers_to_ready_on_a_later_probe(self) -> None:
         """FAILED is not terminal. The user can start the server by hand in
         another terminal, and the next probe has to see it."""
         from raven.plugins.memory.everos.backend import ServiceState
-        from raven.plugins.memory.everos.server import ProbeResult
+        from raven.plugins.memory.everos.server import ProbeVerdict
 
         for start in (
             ServiceState.FAILED,
@@ -1276,7 +1276,7 @@ class TestServiceStateMachine:
         ):
             b = self._backend()
             b._state = start
-            b._apply_probe(ProbeResult.OK)
+            b._apply_probe(ProbeVerdict.OK)
             assert b._state is ServiceState.READY, start
 
     def test_terminal_states_ignore_probes(self) -> None:
@@ -1284,12 +1284,12 @@ class TestServiceStateMachine:
         config, not the process. Probing cannot fix any of them, so a stray OK
         must not paper over them."""
         from raven.plugins.memory.everos.backend import ServiceState
-        from raven.plugins.memory.everos.server import ProbeResult
+        from raven.plugins.memory.everos.server import ProbeVerdict
 
         for terminal in (ServiceState.UNCONFIGURED, ServiceState.NO_BINARY, ServiceState.BAD_IDENTITY):
             b = self._backend()
             b._state = terminal
-            b._apply_probe(ProbeResult.OK)
+            b._apply_probe(ProbeVerdict.OK)
             assert b._state is terminal
 
     def test_may_spawn_only_from_states_that_can_be_fixed_by_spawning(self) -> None:
@@ -1832,7 +1832,7 @@ class TestASessionPicksUpAServiceThatArrivesLate:
     async def test_a_later_turn_recalls_once_the_server_answers(self, monkeypatch) -> None:
         from raven.plugins.memory.everos import backend as mod
         from raven.plugins.memory.everos.backend import ServiceState
-        from raven.plugins.memory.everos.server import ProbeResult
+        from raven.plugins.memory.everos.server import ProbeVerdict
 
         adapter = MagicMock()
         adapter.search = AsyncMock(return_value=None)
@@ -1841,10 +1841,10 @@ class TestASessionPicksUpAServiceThatArrivesLate:
         # throttle, which has its own coverage.
         monkeypatch.setattr(mod, "_PROBE_MIN_INTERVAL_S", 0.0)
 
-        answers = iter([ProbeResult.REFUSED, ProbeResult.OK])
+        answers = iter([ProbeVerdict.REFUSED, ProbeVerdict.OK])
         monkeypatch.setattr(
             "raven.plugins.memory.everos.server.probe_health",
-            lambda _u, **_kw: next(answers, ProbeResult.OK),
+            lambda _u, **_kw: next(answers, ProbeVerdict.OK),
         )
 
         # Turn one: nothing there. Returns empty without touching the adapter,
@@ -1867,14 +1867,14 @@ class TestASessionPicksUpAServiceThatArrivesLate:
         is somebody else's, and adopting it would hide a missing memory LLM."""
         from raven.plugins.memory.everos import backend as mod
         from raven.plugins.memory.everos.backend import ServiceState
-        from raven.plugins.memory.everos.server import ProbeResult
+        from raven.plugins.memory.everos.server import ProbeVerdict
 
         adapter = MagicMock()
         adapter.search = AsyncMock(return_value=None)
         b = self._backend(adapter)
         b._state = ServiceState.UNCONFIGURED
         monkeypatch.setattr(mod, "_PROBE_MIN_INTERVAL_S", 0.0)
-        monkeypatch.setattr("raven.plugins.memory.everos.server.probe_health", lambda _u, **_kw: ProbeResult.OK)
+        monkeypatch.setattr("raven.plugins.memory.everos.server.probe_health", lambda _u, **_kw: ProbeVerdict.OK)
 
         assert await b.recall("q", user_id="u", top_k=5) == []
         assert b._probe_task is None, "probed a state no probe can resolve"
@@ -1909,14 +1909,14 @@ class TestTheDegradationWarningOnASelfManagedServer:
     async def _start_unowned(self, monkeypatch, *, caps: dict):
         from raven.plugins.memory.everos import health
         from raven.plugins.memory.everos.backend import EverosBackend
-        from raven.plugins.memory.everos.server import ProbeResult
+        from raven.plugins.memory.everos.server import ProbeVerdict
 
         monkeypatch.setattr("raven.config.update_everos.everos_owned", lambda: False)
         monkeypatch.setattr(
             "raven.config.update_everos.everos_role_configured",
             lambda _s: pytest.fail("read the local toml for a root raven does not own"),
         )
-        monkeypatch.setattr("raven.plugins.memory.everos.server.probe_health", lambda _u, **_kw: ProbeResult.OK)
+        monkeypatch.setattr("raven.plugins.memory.everos.server.probe_health", lambda _u, **_kw: ProbeVerdict.OK)
         monkeypatch.setattr(
             health,
             "probe_capabilities",

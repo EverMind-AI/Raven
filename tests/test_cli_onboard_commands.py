@@ -5692,11 +5692,11 @@ class TestPointingRavenAtAnEverosYouRun:
         self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from raven.cli import onboard_everos
-        from raven.plugins.memory.everos.server import ProbeResult
+        from raven.plugins.memory.everos.server import ProbeVerdict
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
         self._stub_prompts(monkeypatch, host="127.0.0.1", port="8000")
-        monkeypatch.setattr("raven.plugins.memory.everos.server.probe_health", lambda _u, **_kw: ProbeResult.OK)
+        monkeypatch.setattr("raven.plugins.memory.everos.server.probe_health", lambda _u, **_kw: ProbeVerdict.OK)
 
         assert onboard_everos._use_self_managed_everos() is True
 
@@ -5711,14 +5711,14 @@ class TestPointingRavenAtAnEverosYouRun:
         import questionary
 
         from raven.cli import onboard_everos
-        from raven.plugins.memory.everos.server import ProbeResult
+        from raven.plugins.memory.everos.server import ProbeVerdict
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
         self._stub_prompts(monkeypatch, host="127.0.0.1", port="8000")
         # A refusal now offers a retype before giving up; this case is the
         # giving-up branch, so answer it that way.
         monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer("skip"))
-        monkeypatch.setattr("raven.plugins.memory.everos.server.probe_health", lambda _u, **_kw: ProbeResult.REFUSED)
+        monkeypatch.setattr("raven.plugins.memory.everos.server.probe_health", lambda _u, **_kw: ProbeVerdict.REFUSED)
 
         assert onboard_everos._use_self_managed_everos() is False
 
@@ -5778,7 +5778,7 @@ class TestSwitchingToSelfManagedClearsTheOldRoot:
 
     def test_the_previous_root_does_not_survive(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from raven.cli import onboard_everos
-        from raven.plugins.memory.everos.server import ProbeResult
+        from raven.plugins.memory.everos.server import ProbeVerdict
 
         tmp_env.write_text(
             json.dumps(
@@ -5794,7 +5794,7 @@ class TestSwitchingToSelfManagedClearsTheOldRoot:
         answers = iter(["127.0.0.1", "8000"])
         monkeypatch.setattr(questionary, "text", lambda *a, **kw: _Answer(next(answers)))
         monkeypatch.setattr(onboard_everos.oc, "_require_questionary", lambda: questionary)
-        monkeypatch.setattr("raven.plugins.memory.everos.server.probe_health", lambda _u, **_kw: ProbeResult.OK)
+        monkeypatch.setattr("raven.plugins.memory.everos.server.probe_health", lambda _u, **_kw: ProbeVerdict.OK)
 
         assert onboard_everos._use_self_managed_everos() is True
 
@@ -6045,7 +6045,7 @@ class TestARefusedAddressCanBeRetyped:
 
     def test_a_second_address_is_accepted(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from raven.cli import onboard_everos
-        from raven.plugins.memory.everos.server import ProbeResult
+        from raven.plugins.memory.everos.server import ProbeVerdict
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
         self._prompts(monkeypatch, ["127.0.0.1", "8000", "127.0.0.1", "8100"])
@@ -6054,7 +6054,7 @@ class TestARefusedAddressCanBeRetyped:
 
         def _probe(url, **_kw):
             seen.append(url)
-            return ProbeResult.OK if url.endswith(":8100") else ProbeResult.REFUSED
+            return ProbeVerdict.OK if url.endswith(":8100") else ProbeVerdict.REFUSED
 
         monkeypatch.setattr("raven.plugins.memory.everos.server.probe_health", _probe)
 
@@ -6065,12 +6065,12 @@ class TestARefusedAddressCanBeRetyped:
 
     def test_skipping_gives_up_without_recording_anything(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from raven.cli import onboard_everos
-        from raven.plugins.memory.everos.server import ProbeResult
+        from raven.plugins.memory.everos.server import ProbeVerdict
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
         self._prompts(monkeypatch, ["127.0.0.1", "8000"])
         self._choices(monkeypatch, ["skip"])
-        monkeypatch.setattr("raven.plugins.memory.everos.server.probe_health", lambda _u, **_kw: ProbeResult.REFUSED)
+        monkeypatch.setattr("raven.plugins.memory.everos.server.probe_health", lambda _u, **_kw: ProbeVerdict.REFUSED)
 
         assert onboard_everos._use_self_managed_everos() is False
         slice_ = (json.loads(tmp_env.read_text()).get("plugins") or {}).get("config", {}).get("everos-memory", {})
@@ -6080,12 +6080,12 @@ class TestARefusedAddressCanBeRetyped:
         """A typo in the port is the same mistake as a typo in the host; it
         should not be the one that ends the step without asking."""
         from raven.cli import onboard_everos
-        from raven.plugins.memory.everos.server import ProbeResult
+        from raven.plugins.memory.everos.server import ProbeVerdict
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
         self._prompts(monkeypatch, ["127.0.0.1", "80o0", "127.0.0.1", "8000"])
         self._choices(monkeypatch, ["retry"])
-        monkeypatch.setattr("raven.plugins.memory.everos.server.probe_health", lambda _u, **_kw: ProbeResult.OK)
+        monkeypatch.setattr("raven.plugins.memory.everos.server.probe_health", lambda _u, **_kw: ProbeVerdict.OK)
 
         assert onboard_everos._use_self_managed_everos() is True
 
