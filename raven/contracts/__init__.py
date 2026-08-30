@@ -3,7 +3,8 @@
 Two promise tiers, tracked per module via ``__tier__`` and enforced by the
 two-tier ledger guard (tests/test_contracts_two_tier_ledger.py):
 
-- ``contract``     — frozen for every loop (turn contract + the seven shapes).
+- ``contract``     — frozen for every loop; every paper stamped so. The turn
+  contract is spine's (``raven/spine/turn.py``), not a paper here.
 - ``factory_loop`` — versioned with the factory loop; carries the marker
   "Versioned with the factory loop" in its docstring.
 

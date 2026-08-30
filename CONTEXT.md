@@ -1029,8 +1029,9 @@ builds a loop by hand against a recorded run (fake provider, replaced registry) 
 directly; it is a replay harness, not an entrance, and `test_cli_agent_loop_wiring.py` lists it.
 
 **Paper** (`contracts/`):
-A declared shape the layers hold each other to -- the turn contract, the seven shapes
-a shelf implements, the asking capabilities a tool types against (`contracts/asking.py`).
+A declared shape the layers hold each other to -- the shapes a shelf implements against,
+the asking capabilities a tool types against (`contracts/asking.py`). The turn contract is
+not a paper: it is spine's (`spine/turn.py`).
 Papers export declared members only and
 import no machinery -- the stdlib, pydantic, the other papers and the spine, nothing else
 (`TYPE_CHECKING` blocks exempt). Two promise tiers, stamped per module via `__tier__`:

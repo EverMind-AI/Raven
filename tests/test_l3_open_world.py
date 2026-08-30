@@ -19,29 +19,42 @@ from __future__ import annotations
 
 import ast
 import textwrap
+import tomllib
 from pathlib import Path
 
 import pytest
 
 from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 
-INNER_DIRS = [
-    "agent",
-    "spine",
-    "contracts",
-    "memory_engine",
-    "context_engine",
-    "providers",
-    "session",
-    "sandbox",
-    "routing",
-    "token_wise",
-    "plugins",
-    "channels",
-    "gateway",
-    "market",
-    "ops",
-]
+REPO = Path(__file__).resolve().parent.parent
+
+
+def _seated_inner() -> list[str]:
+    """The seats the contract calls inner, read from the contract.
+
+    ``pyproject.toml``'s "inner layers know no surface" is the roster. The hand
+    copy this file kept had fifteen names when the contract seated thirty-one,
+    so half the inner tree was never walked and the delete-direction clause
+    held only where someone had remembered to look. The L4 guard reads the
+    same contract with the same call.
+    """
+    data = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))
+    contracts = data["tool"]["importlinter"]["contracts"]
+    inner = next(c for c in contracts if c["name"] == "inner layers know no surface")
+    return sorted(m.removeprefix("raven.") for m in inner["source_modules"])
+
+
+def _python_files(name: str) -> list[Path]:
+    """Every .py of one seat, whether the seat is a package or a single module."""
+    pkg = REPO / "raven" / name
+    if pkg.is_dir():
+        return [p for p in pkg.rglob("*.py") if "__pycache__" not in p.parts]
+    module = REPO / "raven" / f"{name}.py"
+    assert module.is_file(), f"seat {name!r} is neither a package nor a module"
+    return [module]
+
+
+INNER_DIRS = _seated_inner()
 
 # Roster members with their package prefixes; inner layers may know them
 # lazily (function-level) but never at module level.
@@ -69,27 +82,34 @@ ROSTER = {
     },
 }
 
-REPO = Path(__file__).resolve().parent.parent
+# Delete-direction debt: the assembly root's eval stack names the eval engine
+# at module level. Whether that stack gets wired for real or dissolved is a
+# product ruling still open, so the edge is ledgered here rather than hidden
+# by leaving core off the roster -- shrink it, never grow it.
+_DELETE_DIRECTION_DEBT = {"raven.eval_engine": {"core/eval_stack.py"}}
+
+
+def _names_target(node: ast.stmt, target: str) -> bool:
+    if isinstance(node, ast.ImportFrom):
+        return bool(node.module) and node.module.startswith(target)
+    if isinstance(node, ast.Import):
+        return any(a.name.startswith(target) for a in node.names)
+    return False
 
 
 def _module_level_imports(target: str) -> list[str]:
     hits = []
+    rel = target.removeprefix("raven.").replace(".", "/")
+    debt = _DELETE_DIRECTION_DEBT.get(target, ())
     for d in INNER_DIRS:
-        for p in (REPO / "raven" / d).rglob("*.py"):
-            if "__pycache__" in p.parts:
-                continue
-            rel = target.removeprefix("raven.").replace(".", "/")
-            if rel in str(p):
+        for p in _python_files(d):
+            if rel in str(p) or p.relative_to(REPO / "raven").as_posix() in debt:
                 continue
             try:
                 tree = ast.parse(p.read_text(errors="replace"))
             except SyntaxError:
                 continue
-            for node in tree.body:
-                if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith(target):
-                    hits.append(f"{p}:{node.lineno}")
-                elif isinstance(node, ast.Import) and any(a.name.startswith(target) for a in node.names):
-                    hits.append(f"{p}:{node.lineno}")
+            hits.extend(f"{p}:{node.lineno}" for node in tree.body if _names_target(node, target))
     return hits
 
 
@@ -100,6 +120,17 @@ def test_delete_direction_zero_module_level_inner_knowledge(member: str):
         f"inner layers gained module-level knowledge of L3 member {member!r}: {hits}. "
         "Optional capabilities are imported lazily or discovered, never at module level."
     )
+
+
+def test_the_delete_direction_debt_is_still_debt():
+    """An allowlisted edge that is no longer there is an exemption nobody
+    needs; the entry comes off the ledger the moment the import goes lazy."""
+    for target, files in _DELETE_DIRECTION_DEBT.items():
+        for rel in files:
+            tree = ast.parse((REPO / "raven" / rel).read_text(errors="replace"))
+            assert any(_names_target(node, target) for node in tree.body), (
+                f"{rel} no longer imports {target} at module level; drop it from the ledger"
+            )
 
 
 @pytest.mark.asyncio

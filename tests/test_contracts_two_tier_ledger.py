@@ -1,7 +1,9 @@
 """Two-tier admission ledger — the S2 guard, prototyped with its own bite-tests.
 
-contracts/ will carry two promise tiers (ruled 2026-08-26):
-  - contract tier:      frozen for every loop (turn contract + the seven shapes)
+contracts/ carries two promise tiers (ruled 2026-08-26):
+  - contract tier:      frozen for every loop (every paper stamped "contract";
+                        the turn contract is spine's, raven/spine/turn.py, and
+                        the re-export paper that once stood in for it is gone)
   - factory_loop tier:  versioned with the factory loop (loop_hooks trio); each
                         such module must carry the versioning marker in its
                         docstring so nobody mistakes it for a cross-loop promise.
