@@ -967,11 +967,23 @@ never on it: turn or chat streams, config writes. The server sits on the surface
 because the daemon package is inner and may not import `raven.rpc`.
 _Avoid_: "web channel" / `web_rpc` (retired: the ui-webui dialect this grew out of).
 
-**Kernel** (`spine/` + `contracts/` + `tracing/`):
-The shippable core: the L0 spine, the L1 papers, and tracing (whose only import-time
-edge into the kernel is the paper's instrument decorator). Machine-enforced by the
-"the kernel stands alone" import-linter contract in pyproject.toml, whose comment names
-the set and the one lazy edge left; the raven-core wheel is this set as a build artifact.
+**Kernel** (`spine/` + `contracts/` + `tracing/` + `home.py`):
+The shippable core: the L0 spine, the L1 papers, tracing (whose only import-time edge
+into the kernel is the paper's instrument decorator), and the address resolver they all
+need. Machine-enforced by the "the kernel stands alone" import-linter contract in
+pyproject.toml, which carries no exceptions; the raven-core wheel is this set as a build
+artifact.
+
+**Home** (`home.py`):
+Where raven keeps everything: `RAVEN_HOME` or `~/.raven`, and the config file inside it,
+with an override a second instance can set. Kernel rather than config, because the kernel
+has to find its own settings -- a core that could not locate `config.json` without the
+config shelf would not be the closure the wheel claims -- and because the answer steers
+the installer, the node runtime lookup, the trace directory, the cron store and the serve
+state file alike. `config/loader.py` re-exports all three names, so every existing caller
+reads them where it always did.
+_Avoid_: resolving `RAVEN_HOME` again anywhere else -- that is how two directories become
+the answer to one question.
 
 **Span Vocabulary** (`observability/`):
 What a raven span means -- the attribute extractors, and the usage block they report --

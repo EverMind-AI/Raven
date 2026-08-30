@@ -503,7 +503,7 @@ class TestOwnershipReachesTheIdentityPrompt:
         """
         self._switches = tmp_path / "config.json"
         self._disable()
-        monkeypatch.setattr("raven.config.loader._current_config_path", self._switches)
+        monkeypatch.setattr("raven.home._current_config_path", self._switches)
 
     def _disable(self, *names: str) -> None:
         self._switches.write_text(json.dumps({"tools": {"disabledTools": list(names)}}), encoding="utf-8")

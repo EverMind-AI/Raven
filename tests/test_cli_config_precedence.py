@@ -62,9 +62,7 @@ def isolated_config_state(tmp_path: Path, monkeypatch):
     fake_home.mkdir()
     monkeypatch.setattr(Path, "home", lambda: fake_home)
 
-    import raven.config.loader as loader
-
-    monkeypatch.setattr(loader, "_current_config_path", None)
+    monkeypatch.setattr("raven.home._current_config_path", None)
 
     return fake_home
 

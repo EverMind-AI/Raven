@@ -21,6 +21,7 @@ from typing import Any
 
 import pytest
 
+import raven.home as raven_home_module
 from raven.rpc.errors import ConfigValidationError
 from raven.rpc.methods.subagent import subagent_context, subagent_list
 
@@ -32,14 +33,14 @@ def workspace(tmp_path: Path):
     """A workspace of our own, reached the way the handlers reach it."""
     import raven.config.loader as loader
 
-    previous = loader._current_config_path
+    previous = raven_home_module._current_config_path
     ws = tmp_path / "ws"
     ws.mkdir()
     cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({"agents": {"defaults": {"workspace": str(ws)}}}))
     loader.set_config_path(cfg)
     yield ws
-    loader._current_config_path = previous
+    raven_home_module._current_config_path = previous
 
 
 class _Provider:

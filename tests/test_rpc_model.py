@@ -34,7 +34,7 @@ def fake_home(monkeypatch, tmp_path) -> Path:
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     # Clear any process-wide config-path override a prior test left set, so
     # get_config_path() falls back to the patched Path.home (monkeypatch restores it).
-    monkeypatch.setattr("raven.config.loader._current_config_path", None)
+    monkeypatch.setattr("raven.home._current_config_path", None)
     # OAuth credentials live under ``~/.raven`` too, so the patched home covers
     # them -- but each family prefers an environment override when one is set, and
     # the suite-wide fixture sets all of them.

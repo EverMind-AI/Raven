@@ -2,7 +2,6 @@
 
 import json
 import logging
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -10,6 +9,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from raven.config.schema import Config
+from raven.home import get_config_path, raven_home, set_config_path
 from raven.utils.atomic_io import atomic_replace, atomic_update
 
 # Generation counter for the run-once config migrations below. Bump it, and add
@@ -78,11 +78,17 @@ EXTENSION_KEYS = (
     "eval_engine",
 )
 
-# Global variable to store current config path (for multi-instance support)
-_current_config_path: Path | None = None
-
 # Paths already warned about as malformed in this process; repeated
 # load_config calls (status/doctor load more than once) warn only once.
+__all__ = [
+    "ConfigReadError",
+    "get_config_path",
+    "load_config",
+    "raven_home",
+    "read_raw_or_raise",
+    "set_config_path",
+]
+
 _warned_paths: set[str] = set()
 
 # User-facing lines produced by a migration that actually changed something,
@@ -92,30 +98,6 @@ _warned_paths: set[str] = set()
 # announced where the user is looking. Drained, not read, so N loads per
 # process yield one telling.
 _migration_notices: list[str] = []
-
-
-def set_config_path(path: Path) -> None:
-    """Set the current config path (used to derive data directory)."""
-    global _current_config_path
-    _current_config_path = path
-
-
-def raven_home() -> Path:
-    """The directory raven keeps everything in.
-
-    ``RAVEN_HOME`` decides where config.json, the cron store and every runtime
-    subdirectory live, the same way it steers the installer, the node runtime
-    lookup, the tracing directory and the serve state file.
-    """
-    home = os.environ.get("RAVEN_HOME", "").strip()
-    return Path(home).expanduser() if home else Path.home() / ".raven"
-
-
-def get_config_path() -> Path:
-    """Get the configuration file path."""
-    if _current_config_path:
-        return _current_config_path
-    return raven_home() / "config.json"
 
 
 class ConfigReadError(Exception):

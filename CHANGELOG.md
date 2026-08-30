@@ -97,10 +97,15 @@ All notable changes to Raven are documented here.
   backend, that a usage block prices out at a number -- needs the provider
   registry and the token ledger, so the kernel was reaching into two shelves for
   it. The machinery it keeps: context, suppression, the `instrument` decorator,
-  the store. `the kernel stands alone` now carries one `ignore_imports` instead
-  of three, and the one left says why in the contract: tracing has to find
-  raven's home to read its own `[tracing]` block. Instrumented call sites pass
-  their extractor as an argument, so nothing moved but eighteen imports.
+  the store. Instrumented call sites pass their extractor as an argument, so
+  nothing moved but eighteen imports.
+- `RAVEN_HOME` and the config path resolve in `raven/home.py`, a kernel module
+  that imports nothing: the kernel has to find its own settings, and a core that
+  needed the config shelf to locate `config.json` would not be the closure the
+  raven-core wheel claims. `config/loader.py` re-exports the three names, so
+  every caller reads them where it always did. With that, **all five
+  import-linter contracts carry no exceptions at all** -- the last three
+  `ignore_imports` entries in the tree are gone.
 - `raven.i18n` is seated as an inner cross-cutting leaf: it may not import a
   surface, and the kernel may not import it. The glossary records what it is
   and what `zh_lexicon` is not.

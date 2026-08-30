@@ -18,6 +18,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import raven.home as raven_home_module
 from raven.rpc.errors import (
     ConfigFieldReadonlyError,
     ConfigValidationError,
@@ -419,9 +420,8 @@ def _pin(home: Path, provider: str, providers: dict | None = None) -> None:
         ),
         encoding="utf-8",
     )
-    import raven.config.loader as loader
 
-    loader._current_config_path = None
+    raven_home_module._current_config_path = None
 
 
 async def test_a_bare_id_the_pinned_provider_does_not_serve_is_refused(fake_home: Path) -> None:

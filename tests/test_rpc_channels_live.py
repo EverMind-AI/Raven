@@ -12,15 +12,15 @@ def isolated_config(tmp_path: Path):
     """A config path of our own, so this reads no developer's real channels."""
     import json
 
-    import raven.config.loader as loader
+    import raven.home as raven_home_module
     from raven.config.loader import set_config_path
 
-    previous = loader._current_config_path
+    previous = raven_home_module._current_config_path
     cfg_path = tmp_path / "config.json"
     cfg_path.write_text(json.dumps({"agents": {"defaults": {"workspace": str(tmp_path / "ws")}}}))
     set_config_path(cfg_path)
     yield
-    loader._current_config_path = previous
+    raven_home_module._current_config_path = previous
 
 
 from raven.rpc.methods import console as console_module

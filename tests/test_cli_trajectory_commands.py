@@ -150,7 +150,7 @@ def report_config(tmp_path, monkeypatch):
     """Point config loading at a throwaway file so no test reads the user's real config."""
     cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({"providers": {"anthropic": {"apiKey": _FAKE_CFG_KEY}}}), encoding="utf-8")
-    monkeypatch.setattr("raven.config.loader._current_config_path", cfg)
+    monkeypatch.setattr("raven.home._current_config_path", cfg)
     return cfg
 
 

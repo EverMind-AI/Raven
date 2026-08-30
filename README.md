@@ -243,6 +243,7 @@ import which) are recorded under **Layer Seats** in `CONTEXT.md`, routed from
 | `market` | Plugin market: catalog, trust, install, ledger |
 | `mcp` | MCP client machinery |
 | `memory_engine` | Long-term memory engine |
+| `home` | Where raven keeps everything: the one address resolver |
 | `observability` | What a raven span means: the attribute vocabulary and the usage it reports |
 | `ops` | Machine registry and on-call operations |
 | `playbook` | Playbook runtime |
@@ -306,6 +307,7 @@ raven/
 ├── token_wise/         # Usage tracking and cache placement
 ├── tracing/            # Span capture (the dashboard lives in cli/tracing_viewer/)
 ├── observability/      # The span vocabulary a standalone kernel may not hold
+├── home.py             # RAVEN_HOME and the config path, resolved once
 ├── sandbox/            # Isolated command execution
 ├── security/           # Trust boundaries and network checks
 ├── cli/                # `raven` command line entry point

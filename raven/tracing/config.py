@@ -43,7 +43,7 @@ def _config_section() -> dict:
     try:
         import json
 
-        from raven.config.loader import get_config_path
+        from raven.home import get_config_path
 
         path = get_config_path()
         if not path.exists():

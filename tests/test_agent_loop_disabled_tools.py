@@ -52,7 +52,7 @@ class TestTheFileIsTheAuthority:
     def test_a_switch_flipped_after_startup_is_honoured(self, tmp_path: Path, monkeypatch) -> None:
         cfg = tmp_path / "config.json"
         _write_switches(cfg, [])
-        monkeypatch.setattr("raven.config.loader._current_config_path", cfg)
+        monkeypatch.setattr("raven.home._current_config_path", cfg)
         loop = _loop(tmp_path)
         assert "grep" in _offered(loop)
 
@@ -68,7 +68,7 @@ class TestTheFileIsTheAuthority:
         and then only until the next time it was switched off."""
         cfg = tmp_path / "config.json"
         _write_switches(cfg, ["grep"])
-        monkeypatch.setattr("raven.config.loader._current_config_path", cfg)
+        monkeypatch.setattr("raven.home._current_config_path", cfg)
         loop = _loop(tmp_path)
         assert "grep" not in _offered(loop)
 
@@ -82,7 +82,7 @@ class TestTheFileIsTheAuthority:
         name rather than by the symptom two layers away."""
         cfg = tmp_path / "config.json"
         _write_switches(cfg, ["grep"])
-        monkeypatch.setattr("raven.config.loader._current_config_path", cfg)
+        monkeypatch.setattr("raven.home._current_config_path", cfg)
 
         loop = _loop(tmp_path)
 
@@ -94,7 +94,7 @@ class TestTheHarnessListStillHolds:
     config file behind them, so the constructor path cannot simply be deleted."""
 
     def test_a_constructor_name_is_withheld_with_no_config_at_all(self, tmp_path: Path, monkeypatch) -> None:
-        monkeypatch.setattr("raven.config.loader._current_config_path", tmp_path / "absent.json")
+        monkeypatch.setattr("raven.home._current_config_path", tmp_path / "absent.json")
 
         loop = _loop(tmp_path, disabled_tools=["grep"])
 
@@ -105,7 +105,7 @@ class TestTheHarnessListStillHolds:
         answer, and it must not hand the harness back a tool it excluded."""
         cfg = tmp_path / "config.json"
         _write_switches(cfg, [])
-        monkeypatch.setattr("raven.config.loader._current_config_path", cfg)
+        monkeypatch.setattr("raven.home._current_config_path", cfg)
 
         loop = _loop(tmp_path, disabled_tools=["grep"])
 
@@ -114,7 +114,7 @@ class TestTheHarnessListStillHolds:
     def test_the_two_sources_add_up(self, tmp_path: Path, monkeypatch) -> None:
         cfg = tmp_path / "config.json"
         _write_switches(cfg, ["read_file"])
-        monkeypatch.setattr("raven.config.loader._current_config_path", cfg)
+        monkeypatch.setattr("raven.home._current_config_path", cfg)
 
         loop = _loop(tmp_path, disabled_tools=["grep"])
         offered = _offered(loop)
