@@ -44,12 +44,13 @@ class SessionRecord:
     ``research_memo`` and ``pending_clarify`` hold the same dict shapes the fork
     persisted on ``session.metadata`` (``ResearchMemo.to_metadata`` /
     ``PendingClarify.to_metadata``); ``chain_round`` mirrors the open clarify
-    chain's count (0 when no round is open); ``mode`` is the session's last-seen
-    mode name, kept so a phase that fires before the loop reports one (the
-    inbound rewrite) resolves the same chain as the rest of the turn.
-    ``observers`` is the latest turn's read-only counters (final shape,
-    conversation gate, process appendix) - the fork attached these to the last
-    assistant message, which a plugin cannot reach.
+    chain's count (0 when no round is open); ``mode`` is the session profile the
+    last turn actually ran under, which is what says which knobs produced the
+    counters beside it. ``observers`` is the latest turn's read-only counters -
+    every gate namespace the turn wrote, plus the final shape, the conversation
+    gate, the process appendix and its rendered trail. The fork attached these
+    to the last assistant message; a plugin cannot reach one, so only the latest
+    turn's survive here.
     """
 
     research_memo: dict[str, Any] | None = None

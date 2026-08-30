@@ -87,24 +87,72 @@ class _Shared:
         set_ledger_dir(self.store.ledger_dir)
         self.session_gear: dict[str, SessionGear] = {}
         self._web_search: WebSearchTool | None = None
+        self._search_built = False
         self._web_fetch: WebFetchTool | None = None
         self._ask_user: DRAskUserTool | None = None
         self._hook: ResearchFlowHook | None = None
+        self._installable: bool | None = None
 
     @property
     def provider(self) -> "LLMProvider | None":
         return self._ctx.services.provider
 
-    def web_search(self) -> WebSearchTool:
-        if self._web_search is None:
+    def installable(self) -> bool:
+        """Whether this plugin may contribute anything at all.
+
+        One answer for the hook and the three tools, because they are one
+        contribution: the tools are per-session only through the hook, which
+        selects the session (``set_current_session``) and resets its slot
+        (``start_turn``) at the top of every turn. Contributed without it, every
+        session collapses into the ContextVar's default slot and nothing ever
+        resets it -- the replay cache, the dedup sets and the retry budget go
+        process-wide and permanent -- and the clarify tool can never be granted
+        a round trip. Declining together leaves the kernel's own web tools
+        serving, which is what a build without this plugin gets.
+        """
+        if self._installable is None:
+            cfg = self.cfg
+            self._installable = True
+            if self.provider is None:
+                llm_gates = [
+                    name
+                    for name, on in (
+                        ("sufficiency", cfg.sufficiency.enabled),
+                        ("verify", cfg.verify.enabled),
+                        ("forceFinalize", cfg.force_finalize.enabled),
+                        ("conversation.gate=agentic", cfg.conversation.enabled and cfg.conversation.gate == "agentic"),
+                    )
+                    if on
+                ]
+                if llm_gates:
+                    logger.warning(
+                        "research-flow: no provider was lent to the plugin and these LLM gates "
+                        "are enabled: {}; the flow and its tools are not installed",
+                        ", ".join(llm_gates),
+                    )
+                    self._installable = False
+        return self._installable
+
+    def web_search(self) -> WebSearchTool | None:
+        """The search tool, or ``None`` when it has no key to search with.
+
+        The fork refused to register a keyless ``web_search`` rather than
+        advertise a tool whose every call is an error string, and the contract
+        this flow renders tells the model its tools are exactly these. Ask the
+        built tool rather than the config slice: it resolves the key at call
+        time from the slice or from ``SERPER_API_KEY``, and gating on the slice
+        alone would withdraw the tool from a deploy that only exports the var.
+        """
+        if not self._search_built:
+            self._search_built = True
             cfg = self.cfg
             gear = self.session_gear
 
             # The chain owns the session's EvidenceRound / SearchSaturation and
             # registers them in the gear map; these factories hand the tool the
             # SAME instances, so the gate that opens a round and the tool that
-            # spends it agree. The base-config fallback covers a tool used with
-            # no hook installed (single-session, no modes).
+            # spends it agree. The base-config fallback covers a tool driven
+            # outside a session the chain has geared up (a direct caller, a test).
             def evidence_round_factory():
                 slot = gear.get(current_session())
                 if slot is not None:
@@ -117,7 +165,7 @@ class _Shared:
                     return slot.saturation
                 return saturation_for(cfg)
 
-            self._web_search = WebSearchTool(
+            tool = WebSearchTool(
                 api_key=self.search_api_key,
                 max_results=cfg.search.rendered_width,
                 proxy=self.proxy,
@@ -131,6 +179,13 @@ class _Shared:
                 evidence_round_factory=evidence_round_factory,
                 saturation_factory=saturation_factory,
             )
+            if tool.api_key:
+                self._web_search = tool
+            else:
+                logger.warning(
+                    "research-flow: web_search is not registered -- no Serper key in "
+                    "plugins.config['research-flow'].search.apiKey and no SERPER_API_KEY"
+                )
         return self._web_search
 
     def web_fetch(self) -> WebFetchTool:
@@ -184,24 +239,6 @@ class _Shared:
     def hook(self) -> ResearchFlowHook | None:
         if self._hook is None:
             cfg = self.cfg
-            if self.provider is None:
-                llm_gates = [
-                    name
-                    for name, on in (
-                        ("sufficiency", cfg.sufficiency.enabled),
-                        ("verify", cfg.verify.enabled),
-                        ("forceFinalize", cfg.force_finalize.enabled),
-                        ("conversation.gate=agentic", cfg.conversation.enabled and cfg.conversation.gate == "agentic"),
-                    )
-                    if on
-                ]
-                if llm_gates:
-                    logger.warning(
-                        "research-flow: no provider was lent to the plugin and these LLM gates "
-                        "are enabled: {}; the hook is not installed",
-                        ", ".join(llm_gates),
-                    )
-                    return None
             self._hook = ResearchFlowHook(
                 cfg=cfg,
                 provider=self.provider,
@@ -232,36 +269,36 @@ def _shared_for(ctx: "PluginContext") -> _Shared:
     return shared
 
 
+def _contributing(ctx: "PluginContext") -> _Shared | None:
+    """The activation's shared state, or ``None`` when it contributes nothing."""
+    shared = _shared_for(ctx)
+    if not shared.cfg.enabled or not shared.installable():
+        return None
+    return shared
+
+
 def make_hook(ctx: "PluginContext") -> ResearchFlowHook | None:
     """Factory for the ``research_flow`` hook contribution."""
-    shared = _shared_for(ctx)
-    if not shared.cfg.enabled:
-        return None
-    return shared.hook()
+    shared = _contributing(ctx)
+    return shared.hook() if shared else None
 
 
 def make_web_search(ctx: "PluginContext") -> WebSearchTool | None:
-    """Factory for the ``web_search`` replacement tool."""
-    shared = _shared_for(ctx)
-    if not shared.cfg.enabled:
-        return None
-    return shared.web_search()
+    """Factory for the ``web_search`` replacement tool; declines when it has no key."""
+    shared = _contributing(ctx)
+    return shared.web_search() if shared else None
 
 
 def make_web_fetch(ctx: "PluginContext") -> WebFetchTool | None:
     """Factory for the ``web_fetch`` replacement tool."""
-    shared = _shared_for(ctx)
-    if not shared.cfg.enabled:
-        return None
-    return shared.web_fetch()
+    shared = _contributing(ctx)
+    return shared.web_fetch() if shared else None
 
 
 def make_ask_user(ctx: "PluginContext") -> DRAskUserTool | None:
     """Factory for the ``ask_user`` clarify tool; declines when the round is off."""
-    shared = _shared_for(ctx)
-    if not shared.cfg.enabled:
-        return None
-    return shared.ask_user()
+    shared = _contributing(ctx)
+    return shared.ask_user() if shared else None
 
 
 __all__ = [

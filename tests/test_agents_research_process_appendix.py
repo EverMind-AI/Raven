@@ -564,3 +564,59 @@ def test_an_ambiguous_prefix_stays_an_accusation():
     ]
     t = build_trail(rows, "\u89c1 https://ex.example/reports/2026-industry \u62a5\u544a")
     assert t.cited_not_opened == ["https://ex.example/reports/2026-industry"]
+
+
+# --------------------------------------------------------------------------- #
+# Where the rendered trail is parked                                          #
+# --------------------------------------------------------------------------- #
+
+
+def test_the_rendered_trail_is_kept_where_a_host_can_read_it(tmp_path, monkeypatch):
+    """The appendix rides on the reply; the trail has to survive somewhere else.
+
+    Riding on the outbound string alone is the whole of the appendix's
+    distribution neutrality - the persisted transcript never carries it, so no
+    model reads it this turn or as history next turn. That also means the only
+    machine-readable copy is the one parked beside the counters, and the turn's
+    ledger file is deleted moments later. Measured once on a live turn: 17 pages
+    read, 8 cited, and the record of the other 9 built and then dropped.
+
+    Kept OUT of ``process_appendix``: those are counters a reader parses as a
+    measurement payload, and a multi-kilobyte string does not belong beside them.
+    """
+    import asyncio
+
+    from research_flow.config import FlowConfig
+    from research_flow.flow import ResearchFlowHook, ToolHandles
+    from research_flow.state import SessionStore
+    from research_flow.support import ledger as ledger_mod
+
+    from raven.contracts.loop_hooks import AgentHookContext
+
+    store = SessionStore(tmp_path)
+    monkeypatch.setattr(ledger_mod, "_ledger_dir", store.ledger_dir)
+    cfg = FlowConfig.from_slice({"enabled": True, "finalShape": {"processAppendix": True}})
+    hook = ResearchFlowHook(cfg=cfg, provider=None, tools=ToolHandles(), store=store)
+
+    async def turn():
+        ctx = AgentHookContext(
+            session_key="s",
+            iteration=1,
+            messages=[{"role": "user", "content": "q"}],
+            metadata={"mode": "", "mode_overlay": {"drFlow": {}}},
+        )
+        await hook.before_iteration(ctx)
+        path = ledger_mod.ledger_path()
+        Path(path).write_text("\n".join(json.dumps(r) for r in LEDGER) + "\n", encoding="utf-8")
+        return await hook.after_send(
+            AgentHookContext(session_key="s", outbound_content="the answer cites https://a.example/one")
+        )
+
+    decision = asyncio.run(turn())
+    observers = store.load("s").observers
+
+    assert "Research trail" in (decision.modified_content or ""), "the appendix still rides on the reply"
+    assert "Research trail" in observers["research_trail"]
+    assert observers["research_trail"] in (decision.modified_content or "")
+    assert observers["process_appendix"]["emitted"] is True
+    assert "research_trail" not in observers["process_appendix"]

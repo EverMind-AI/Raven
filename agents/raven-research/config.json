@@ -74,16 +74,6 @@
             "onSaturate": "widen"
           }
         },
-        "toolsAllowlist": [
-          "web_search",
-          "web_fetch",
-          "read_file",
-          "write_file",
-          "edit_file",
-          "find",
-          "grep",
-          "list_dir"
-        ],
         "finalShape": {
           "record": true,
           "requireMarker": false,

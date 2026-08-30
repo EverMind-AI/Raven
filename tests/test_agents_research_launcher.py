@@ -77,10 +77,68 @@ def test_the_render_boards_the_flow_plugin_and_the_modes(grounded, tmp_path):
     assert data["context"]["dropSegments"] == ["identity", "memory", "active_skills", "skills"]
     modes = data["acp"]["modes"]
     assert list(modes) == ["fast", "deep", "ultra"] and data["acp"]["defaultMode"] == "fast"
-    assert modes["fast"]["overlay"] == {"drFlow": {}} and modes["fast"]["maxToolIterations"] is None
-    assert modes["deep"]["maxToolIterations"] == 60 and modes["deep"]["overlay"]["maxToolIterations"] == 60
+    assert modes["fast"]["overlay"]["drFlow"] == {}
     assert modes["deep"]["overlay"]["drFlow"]["maxIterations"] == 30
     assert modes["ultra"]["overlay"]["drFlow"]["sufficiency"] == {"enabled": False}
+
+
+def test_every_mode_ships_one_iteration_budget_the_loop_and_the_flow_share(grounded):
+    """The number the loop enforces and the number the model is told are one.
+
+    The vendored twin's loop overwrote its own cap with ``drFlow.maxIterations``
+    (``self.max_iterations = self._dr_flow.max_iterations``), so a single number
+    bounded the ReAct loop AND was the denominator the budget note and the spin
+    breaker divided by. Here the loop reads ``acp.modes[*].maxToolIterations``
+    and the flow reads its own knob, and nothing joined them: fast told the
+    model ``iteration N/20`` on a turn the loop would let run to 40, and the
+    breaker's ``minBudgetRatio: 0.5`` tripped at iteration 10 of 40 instead of
+    20 of 20. The launcher resolves the twin's rule once and ships the result
+    twice - to the loop as the mode's cap, and inside the overlay, which is the
+    only channel a plugin hook has for it.
+    """
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    modes = data["acp"]["modes"]
+    assert {name: entry["maxToolIterations"] for name, entry in modes.items()} == {
+        "fast": 20,
+        "deep": 30,
+        "ultra": 150,
+    }
+    for name, entry in modes.items():
+        assert entry["overlay"]["maxToolIterations"] == entry["maxToolIterations"], name
+    # ``ultra`` is the mode that declines the override (``maxIterations: null``),
+    # so its budget is its own ``maxToolIterations`` rather than the baseline 20.
+    assert modes["ultra"]["overlay"]["drFlow"]["maxIterations"] is None
+
+
+def test_the_resolved_context_window_reaches_the_plugin_slice(grounded):
+    """Both observers that divide by the window are handed it by the assembly.
+
+    The twin CALLED its assembly with the loop's resolved window, so the note
+    quoted the model the turn actually ran on. A plugin factory sees its own
+    slice and nothing else, and with no window there the budget note drops its
+    ``context ~N%`` clause and the spin breaker loses its context arm - two
+    features that read as present and measure nothing.
+    """
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    window = data["agents"]["defaults"]["contextWindowTokens"]
+    assert window == 65536
+    assert data["plugins"]["config"]["research-flow"]["contextWindowTokens"] == window
+
+
+def test_the_shipped_config_claims_no_tool_fence_it_does_not_own(grounded):
+    """``toolsAllowlist`` was the twin's fence and is not one here.
+
+    In the fork it unregistered every tool it did not name. On the trunk the
+    fence is ``tools.disabledTools``, one config level up, and the flow reads
+    nothing - so a list shipped under the flow's own key described a fence that
+    was not there. The face that fence produces is pinned separately; this pins
+    that the config no longer claims to be what produces it.
+    """
+    source = json.loads((RUN_PY.parent / "config.json").read_text())
+    assert "toolsAllowlist" not in source["plugins"]["config"]["research-flow"]
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    assert "toolsAllowlist" not in data["plugins"]["config"]["research-flow"]
+    assert data["tools"]["disabledTools"], "the fence that IS enforced stays declared"
 
 
 def test_the_modes_are_the_vendored_twins_overlays(tmp_path):
@@ -164,10 +222,53 @@ def test_missing_search_key_refuses(grounded, monkeypatch):
         grounded.render_config(RUN_PY.parent / "config.json")
 
 
+def test_the_web_keys_and_the_proxy_reach_the_plugin_slice(grounded, monkeypatch):
+    """The plugin REPLACES both web tools and is handed only its own slice.
+
+    A key that lands on ``tools.web`` alone therefore configures the built-ins
+    the plugin shadows and nothing the model can call: the launch succeeds, the
+    tool is advertised, and every search answers "API key not configured".
+    """
+    monkeypatch.setenv("RESEARCH_JINA_API_KEY", "jina-key")
+    monkeypatch.setenv("RESEARCH_WEB_PROXY", "http://127.0.0.1:7890")
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    flow = data["plugins"]["config"]["research-flow"]
+    assert flow["search"]["apiKey"] == "serper-key"
+    assert flow["fetch"]["apiKey"] == "jina-key"
+    assert flow["proxy"] == "http://127.0.0.1:7890"
+    assert flow["search"]["saturation"]["k"] == 5, "the mirror joins the flow's own search block"
+    # And stays on the trunk surface: that is what the kernel's own tools read,
+    # and what require_search consults before letting the server start.
+    assert data["tools"]["web"]["search"]["apiKey"] == "serper-key"
+    assert data["tools"]["web"]["jinaApiKey"] == "jina-key"
+    assert data["tools"]["web"]["proxy"] == "http://127.0.0.1:7890"
+
+
+def test_the_proxy_falls_back_to_the_host_config(grounded, tmp_path, monkeypatch):
+    monkeypatch.delenv("RESEARCH_WEB_PROXY", raising=False)
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(json.dumps({"tools": {"web": {"proxy": "socks5://127.0.0.1:1080"}}}))
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    assert data["tools"]["web"]["proxy"] == "socks5://127.0.0.1:1080"
+    assert data["plugins"]["config"]["research-flow"]["proxy"] == "socks5://127.0.0.1:1080"
+
+
 def test_the_search_env_var_is_the_tools_own(launcher):
     import inspect
 
     import raven.agent.tools.web as web
+
+    assert launcher.SEARCH_ENV_VAR in inspect.getsource(web)
+
+
+def test_the_search_env_var_is_the_plugin_tools_own(launcher):
+    """The launcher accepts a bare export in place of the rendered key, so the
+    tool that replaces the built-in has to read the same variable."""
+    import inspect
+
+    sys.path.insert(0, str(launcher.FLOW_PLUGIN_DIR))
+    from research_flow.tools import web
 
     assert launcher.SEARCH_ENV_VAR in inspect.getsource(web)
 
@@ -244,7 +345,12 @@ def test_the_pilots_tool_face_equals_the_vendored_twins(grounded, tmp_path, monk
         from research_flow.tools.ask_user import DRAskUserTool
         from research_flow.tools.web import WebFetchTool, WebSearchTool
 
-        assert isinstance(rt.loop.tools.get("web_search"), WebSearchTool), "the plugin's search replaced the built-in"
+        search = rt.loop.tools.get("web_search")
+        assert isinstance(search, WebSearchTool), "the plugin's search replaced the built-in"
+        # The whole launch path in one assertion: .env -> rendered config ->
+        # plugin slice -> the tool the model actually calls. Without it the
+        # tool is registered and every call it makes is an error string.
+        assert search.api_key == "serper-key", "the rendered Serper key reaches the tool the model calls"
         assert isinstance(rt.loop.tools.get("web_fetch"), WebFetchTool)
         assert isinstance(rt.loop.tools.get("ask_user"), DRAskUserTool)
         assert any(h.name == "ResearchFlowHook" for h in rt.loop.hooks._hooks), "the flow hook boarded the chain"
@@ -252,3 +358,52 @@ def test_the_pilots_tool_face_equals_the_vendored_twins(grounded, tmp_path, monk
     finally:
         rt.discard()
     assert visible == VENDORED_TOOL_FACE
+
+
+def test_the_budget_the_launcher_ships_is_the_one_both_observers_divide_by(grounded, tmp_path):
+    """The whole path in one assertion: rendered config -> slice -> observers.
+
+    Two observers divide by these numbers - the budget note writes the quotient
+    into the model's own history, the spin breaker gates on it - and both take
+    them from the chain assembly, which is handed the slice and the mode's
+    overlay and nothing else. Asserted per mode rather than once, because the
+    mode is where the two settings used to disagree.
+    """
+    sys.path.insert(0, str(RUN_PY.parent / "plugins" / "research-flow"))
+    from research_flow.config import FlowConfig
+    from research_flow.flow import ResearchFlowHook, ToolHandles
+    from research_flow.gates.budget_note import BudgetNoteObserver
+    from research_flow.gates.spin_breaker import SpinEntryBreaker
+    from research_flow.state import SessionStore
+
+    from raven.contracts.loop_hooks import AgentHookContext
+
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    slice_ = data["plugins"]["config"]["research-flow"]
+    cfg = FlowConfig.from_slice(slice_)
+    hook = ResearchFlowHook(
+        cfg=cfg,
+        provider=None,
+        tools=ToolHandles(),
+        store=SessionStore(tmp_path / "flow"),
+        max_iterations=cfg.max_iterations or 40,
+        context_window_tokens=cfg.context_window_tokens or 0,
+    )
+
+    for name, expected in (("fast", 20), ("deep", 30), ("ultra", 150)):
+        entry = data["acp"]["modes"][name]
+        slot = hook._resolve(
+            AgentHookContext(
+                session_key=f"s-{name}",
+                iteration=1,
+                metadata={"mode": name, "mode_overlay": entry["overlay"]},
+            )
+        )
+        # Unwrapped: the product runs the conversation surface, so every
+        # observer in the chain arrives inside a GatedHook.
+        built = [getattr(h, "inner", h) for h in slot.composite._hooks]
+        note = next(h for h in built if isinstance(h, BudgetNoteObserver))
+        breaker = next(h for h in built if isinstance(h, SpinEntryBreaker))
+        assert (note._max_iterations, breaker._max_iterations) == (expected, expected), name
+        assert entry["maxToolIterations"] == expected, f"{name}: and the loop enforces the same number"
+        assert (note._context_window_tokens, breaker._context_window_tokens) == (65536, 65536), name

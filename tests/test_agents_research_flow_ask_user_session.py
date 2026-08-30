@@ -49,7 +49,7 @@ PLUGIN_DIR = REPO / "agents" / "raven-research" / "plugins" / "research-flow"
 sys.path.insert(0, str(PLUGIN_DIR))
 
 from research_flow.config import AskUserConfig, FlowConfig  # noqa: E402
-from research_flow.flow import _TURN_MODE_KEY, TurnFrame  # noqa: E402
+from research_flow.flow import _TURN_MODE, TurnFrame  # noqa: E402
 from research_flow.gates import ask_user as ask_user_module  # noqa: E402
 from research_flow.gates.ask_user import (  # noqa: E402
     BRIEF_CLOSE,
@@ -528,7 +528,7 @@ def test_the_clarify_answer_turn_is_research_without_consulting_the_gate(tmp_pat
         await frame.before_user_inbound(_inbound("the EU market, 2024"))
         ctx = _iteration(prior=prior, question="the EU market, 2024")
         await frame.before_iteration(ctx)
-        return ctx.metadata[_TURN_MODE_KEY]
+        return _TURN_MODE.get()
 
     mode = _scenario(run)
     assert mode.research is True
@@ -567,7 +567,7 @@ def test_an_unrelated_follow_up_still_goes_to_the_gate(tmp_path) -> None:
         await frame.before_user_inbound(_inbound(_ZH_NEW_REQUEST))
         ctx = _iteration(prior=prior, question=_ZH_NEW_REQUEST)
         await frame.before_iteration(ctx)
-        return ctx.metadata[_TURN_MODE_KEY]
+        return _TURN_MODE.get()
 
     mode = _scenario(run)
     assert seen, "an unrelated follow-up must still be classified"

@@ -758,7 +758,7 @@ class WebSearchTool(Tool):
         if not self.api_key:
             return (
                 "Error: Serper API key not configured. Set it in "
-                "~/.raven/config.json under tools.web.search.apiKey "
+                '~/.raven/config.json under plugins.config["research-flow"].search.apiKey '
                 "(or export SERPER_API_KEY), then restart the gateway.",
                 [],
                 dict(_NO_SHAPING),
@@ -914,6 +914,32 @@ def _encoding_lost(text: str) -> bool:
     legitimate page carries; a run of them means the decode itself failed.
     """
     return text.count("\ufffd") > max(8, len(text) // 200)
+
+
+_UNRESOLVED_REFUSAL = "Cannot resolve hostname:"
+"""The trunk validator's one refusal that says nothing about the target. Pinned
+by the tool tests, which fail if the wording moves and takes the tolerance below
+with it."""
+
+
+def _judge_fetch_target(url: str) -> tuple[bool, str]:
+    """The trunk validator's verdict, minus the refusal on a resolver failure.
+
+    The reader service opens the connection to ``url`` from its own network;
+    this process never does, so a local resolution failure carries no
+    information about whether the target is internal, and the address check it
+    feeds is vacuous either way. Resolvers fail under load (``EAI_AGAIN``) as
+    readily as for a name that does not exist and the caller cannot tell the
+    two apart from a ``gaierror``, so refusing here reports load to the model as
+    "this URL is bad". The private-address block still applies whenever the
+    name resolves; only the refusal-on-failure is dropped, which is what the
+    fork got from ``validate_url_target(url, strict_dns=False)``. The trunk
+    validator carries no such knob, so the tolerance lives on this side of it.
+    """
+    is_valid, error_msg = validate_url_target(url)
+    if not is_valid and error_msg.startswith(_UNRESOLVED_REFUSAL):
+        return True, ""
+    return is_valid, error_msg
 
 
 class _FetchTurnState:
@@ -1105,7 +1131,7 @@ class WebFetchTool(Tool):
         max_chars = min(maxChars, self.max_chars) if maxChars else self.max_chars
         # Off the event loop: ``socket.getaddrinfo`` is synchronous and can hang for
         # seconds on a slow resolver, and one process serves every session's turn.
-        is_valid, error_msg = await asyncio.to_thread(validate_url_target, url)
+        is_valid, error_msg = await asyncio.to_thread(_judge_fetch_target, url)
         if not is_valid:
             return json.dumps({"error": f"URL validation failed: {error_msg}", "url": url}, ensure_ascii=False)
 
