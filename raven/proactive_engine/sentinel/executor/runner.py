@@ -1528,4 +1528,4 @@ def _decode_engagement(
     return out
 
 
-__all__ = ["SentinelRunner", "TickOutcome"]
+__all__ = ["SentinelAssembly", "SentinelRunner", "TickOutcome"]
