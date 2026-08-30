@@ -127,34 +127,26 @@ class TestSessionRefusals:
 
             assert response["error"]["code"] == -32602
 
-    async def test_a_malformed_mcp_server_entry_is_refused_not_ignored(self, home, project):
-        """Per-session stdio MCP servers are a feature now (the host-held
-        bridge), so a well-formed entry is accepted -- what must never happen
-        is a bad entry being silently dropped: the client would believe its
-        server is attached while its tools are not there."""
+    async def test_no_mcp_server_shape_may_fail_the_dispatch(self, home, project):
+        """Per-session MCP servers are an optional capability on top of the
+        task: a well-formed stdio entry is adopted, and one this build cannot
+        honour is dropped and logged -- it costs the session those tools, never
+        the session. Refusing would turn one bad attachment into a sub-agent
+        that cannot answer at all."""
         async with stub_client(env=home) as client:
             await client.handshake()
-            response = await client.request(
-                "session/new",
-                {"cwd": str(project), "mcpServers": [{"name": "s", "args": []}]},
-            )
+            for entry in (
+                {"name": "s", "command": "true", "args": []},
+                {"name": "s", "args": []},
+                {"name": "s", "url": "https://x.test/mcp"},
+            ):
+                response = await client.request(
+                    "session/new",
+                    {"cwd": str(project), "mcpServers": [entry]},
+                )
 
-            assert response["error"]["code"] == -32602
-            assert response["error"]["data"]["field"] == "mcpServers.command"
-            assert response["error"]["data"]["name"] == "s"
-
-    async def test_a_non_stdio_mcp_server_entry_is_refused_by_type(self, home, project):
-        """Honouring a url entry would put the definition and its credentials
-        in a sub-agent's process; the refusal names the field and the entry."""
-        async with stub_client(env=home) as client:
-            await client.handshake()
-            response = await client.request(
-                "session/new",
-                {"cwd": str(project), "mcpServers": [{"name": "s", "url": "https://x.test/mcp"}]},
-            )
-
-            assert response["error"]["code"] == -32602
-            assert response["error"]["data"]["field"] == "mcpServers.type"
+                assert "error" not in response, (entry, response)
+                assert response["result"]["sessionId"], entry
 
     async def test_the_connection_survives_every_refusal(self, home, project):
         async with stub_client(env=home) as client:
