@@ -1,0 +1,21 @@
+{
+  "name": "Raven-Research-NG",
+  "kind": "acp",
+  "description": "A research agent that answers a question by searching and reading the live web, then commits a sourced report. Built on installed raven (the B side of the vendored Raven-Research). IMPORTANT: Only ask this agent to generate a research report.",
+  "owns": "owns research: anything needing the live web read and a sourced write-up. Do not research it yourself.",
+  "enabled": true,
+  "command": "{PYTHON} {SUBAGENT_DIR}/run.py",
+  "cwd": "{SUBAGENT_DIR}",
+  "readyTimeoutMs": 60000,
+  "timeout": null,
+  "maxOutputChars": 30000,
+  "everos": {
+    "userId": "raven-research-ng",
+    "agentId": "raven-research-ng"
+  },
+  "recommendedLlm": {
+    "provider": "openrouter",
+    "model": "openai/gpt-5.6-sol-pro",
+    "apiBase": "https://openrouter.ai/api/v1"
+  }
+}
