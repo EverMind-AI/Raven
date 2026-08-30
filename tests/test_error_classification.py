@@ -62,6 +62,18 @@ def test_classify_by_class_name_rate_limit():
     assert c.category == "rate_limit" and c.retryable and c.should_fallback
 
 
+def test_classify_connect_failure_as_network_despite_litellm_500():
+    # litellm wraps a connect failure in APIError with its default 500; the
+    # message, not the status, says what happened (S-C-01).
+    c = _c(_StatusError("OpenrouterException - Cannot connect to host 127.0.0.1:9", 500))
+    assert c.category == "network" and c.retryable and c.should_fallback
+
+
+def test_classify_connection_refused_as_network():
+    c = _c(_StatusError("Connection refused by proxy", 500))
+    assert c.category == "network" and c.retryable and c.should_fallback
+
+
 def test_classify_context_window_by_class_name_compresses_not_fallback():
     # A bare 400 would look like invalid_request; the class name disambiguates.
     c = _c(ContextWindowExceededError("400"))

@@ -417,6 +417,17 @@ class LLMProvider(_LLMProviderPaper):
         ):
             return ErrorClassification("rate_limit", retryable=True, should_fallback=True)
 
+        # A call that never reached the endpoint is a network problem, not an
+        # upstream 5xx -- litellm stamps its default 500 on connect failures,
+        # so the unambiguous connect indicators outrank the status check.
+        if {"apiconnectionerror", "connecterror", "clientconnectorerror"} & names or has(
+            "cannot connect",
+            "connection refused",
+            "connection error",
+            "failed to connect",
+        ):
+            return ErrorClassification("network", retryable=True, should_fallback=True)
+
         # Transient server / capacity → retry + fallback.
         if (
             status in (500, 502, 503, 504)
@@ -439,7 +450,7 @@ class LLMProvider(_LLMProviderPaper):
         # and empty str() match neither the name set nor the substrings below).
         if (
             isinstance(exc, TimeoutError)
-            or {"timeout", "apitimeouterror", "apiconnectionerror"} & names
+            or {"timeout", "apitimeouterror"} & names
             or has(
                 "timeout",
                 "timed out",
