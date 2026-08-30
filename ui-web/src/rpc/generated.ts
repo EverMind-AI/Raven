@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 147 methods, 89 component schemas.
+// 157 methods, 89 component schemas.
 
 /* eslint-disable */
 /**
@@ -3388,6 +3388,117 @@ export interface KnowledgeSearchParams {
 export interface KnowledgeSearchResult {
   hits: KnowledgeHit[];
 }
+export interface ClipboardPasteParams {}
+export interface ClipboardPasteResult {
+  attached: boolean;
+  message?: string;
+  width?: number;
+  height?: number;
+  token_estimate?: number;
+}
+export interface CommandDispatchParams {
+  name: string;
+  arg?: string;
+}
+export interface CommandDispatchResult {
+  /**
+   * `exec` (a shell-style command ran) or `skill` (the name resolved to a skill).
+   */
+  type: string;
+  output?: string;
+  name?: string;
+  message?: string;
+}
+export interface DelegationStatusParams {}
+export interface DelegationStatusResult {
+  max_concurrent_children: number;
+  max_spawn_depth: number;
+  paused: boolean;
+}
+export interface DelegationPauseParams {
+  paused: boolean;
+}
+export interface DelegationPauseResult {
+  paused: boolean;
+}
+export interface InputDetectDropParams {
+  text: string;
+}
+export interface InputDetectDropResult {
+  matched: boolean;
+  name?: string;
+  /**
+   * The resolved absolute path when matched.
+   */
+  text?: string;
+  is_image?: boolean;
+  width?: number;
+  height?: number;
+  token_estimate?: number;
+}
+export interface SessionInterruptParams {
+  session_id: string;
+}
+export interface SessionInterruptResult {
+  ok: boolean;
+}
+export interface ShellExecParams {
+  command: string;
+}
+export interface ShellExecResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+export interface SkillsManageParams {
+  /**
+   * One of list, inspect, search, browse, install.
+   */
+  action: string;
+  query?: string;
+  page?: number;
+}
+export interface SkillsManageResult {
+  /**
+   * `list`: names grouped by source.
+   */
+  skills?: {
+    [k: string]: string[];
+  };
+  /**
+   * `inspect`: one skill's metadata, {} when unknown.
+   */
+  info?: {
+    [k: string]: JsonValue;
+  };
+  /**
+   * `search`: matches.
+   */
+  results?: {
+    [k: string]: JsonValue;
+  }[];
+  /**
+   * `browse`: one page of the hub.
+   */
+  items?: {
+    [k: string]: JsonValue;
+  }[];
+  page?: number;
+  total?: number;
+  total_pages?: number;
+  /**
+   * `install`.
+   */
+  installed?: boolean;
+  name?: string;
+}
+export interface SubagentInterruptParams {
+  subagent_id: string;
+}
+export interface SubagentInterruptResult {
+  found: boolean;
+  subagent_id: string;
+}
 
 // ---------------------------------------------------------------------------
 // Method map -- generated from the contract's method list.
@@ -3490,6 +3601,7 @@ export interface RpcMethods {
   'settings.usage': { params: SettingsUsageParams; result: SettingsUsageResult };
   'settings.everos': { params: SettingsEverosParams; result: SettingsEverosResult };
   'settings.everosSet': { params: SettingsEverosSetParams; result: SettingsEverosSetResult };
+  'settings.everos_set': { params: SettingsEverosSetParams; result: SettingsEverosSetResult };
   'channels.status': { params: ChannelsStatusParams; result: ChannelsStatusResult };
   'channels.configure': { params: ChannelsConfigureParams; result: ChannelsConfigureResult };
   'channels.qr': { params: ChannelsQrParams; result: ChannelsQrResult };
@@ -3542,6 +3654,15 @@ export interface RpcMethods {
   'knowledge.documents.index': { params: KnowledgeDocumentsIndexParams; result: KnowledgeDocumentsIndexResult };
   'knowledge.documents.delete': { params: KnowledgeDocumentsDeleteParams; result: KnowledgeDocumentsDeleteResult };
   'knowledge.search': { params: KnowledgeSearchParams; result: KnowledgeSearchResult };
+  'clipboard.paste': { params: ClipboardPasteParams; result: ClipboardPasteResult };
+  'command.dispatch': { params: CommandDispatchParams; result: CommandDispatchResult };
+  'delegation.status': { params: DelegationStatusParams; result: DelegationStatusResult };
+  'delegation.pause': { params: DelegationPauseParams; result: DelegationPauseResult };
+  'input.detect_drop': { params: InputDetectDropParams; result: InputDetectDropResult };
+  'session.interrupt': { params: SessionInterruptParams; result: SessionInterruptResult };
+  'shell.exec': { params: ShellExecParams; result: ShellExecResult };
+  'skills.manage': { params: SkillsManageParams; result: SkillsManageResult };
+  'subagent.interrupt': { params: SubagentInterruptParams; result: SubagentInterruptResult };
 }
 
 /** The literal union of callable method names. */
@@ -3568,6 +3689,8 @@ export const RPC_METHODS = [
   "channels.status",
   "clarify.respond",
   "cli.dispatch",
+  "clipboard.paste",
+  "command.dispatch",
   "commands.catalog",
   "complete.path",
   "complete.slash",
@@ -3582,6 +3705,8 @@ export const RPC_METHODS = [
   "cron.set_enabled",
   "dag.get",
   "dag.node",
+  "delegation.pause",
+  "delegation.status",
   "deliverables.list",
   "ext.list",
   "fs.list",
@@ -3590,6 +3715,7 @@ export const RPC_METHODS = [
   "fs.reveal",
   "fs.upload",
   "image.attach",
+  "input.detect_drop",
   "knowledge.bases.create",
   "knowledge.bases.delete",
   "knowledge.bases.list",
@@ -3641,6 +3767,7 @@ export const RPC_METHODS = [
   "session.export",
   "session.get",
   "session.history",
+  "session.interrupt",
   "session.list",
   "session.most_recent",
   "session.pin",
@@ -3653,10 +3780,12 @@ export const RPC_METHODS = [
   "session.usage",
   "settings.everos",
   "settings.everosSet",
+  "settings.everos_set",
   "settings.get",
   "settings.set",
   "settings.usage",
   "setup.status",
+  "shell.exec",
   "skill.list",
   "skill.pin",
   "skill.unpin",
@@ -3664,12 +3793,14 @@ export const RPC_METHODS = [
   "skillhub.install",
   "skillhub.remove",
   "skillhub.search",
+  "skills.manage",
   "skills.reload",
   "slash.exec",
   "spawn_tree.list",
   "spawn_tree.load",
   "spawn_tree.save",
   "subagent.context",
+  "subagent.interrupt",
   "subagent.list",
   "subagents.add",
   "subagents.build",
