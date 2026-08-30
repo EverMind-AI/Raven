@@ -142,14 +142,33 @@ def test_a_failed_build_gives_the_slot_back_without_a_generation_bump() -> None:
 
 
 def test_a_superseded_candidate_is_discarded_not_disposed() -> None:
-    from raven.core.runtime import SwapCoordinator
+    from raven.core.runtime import RavenRuntime, SwapCandidate, SwapCoordinator
 
     swaps = SwapCoordinator(min_interval_s=0.0, clock=lambda: 0.0)
     swaps.release()
     first_rec = _Recorder()
-    first = _candidate(first_rec)
     discarded: list[str] = []
-    first.runtime.discard = lambda: discarded.append("first")  # type: ignore[method-assign]
+
+    class _DiscardSpy(RavenRuntime):
+        """A generation is sealed, so the spy overrides the class, not the instance."""
+
+        def discard(self) -> None:
+            discarded.append("first")
+
+    base = _runtime(first_rec, backend=False)
+    first = SwapCandidate(
+        config=None,
+        ec_config=None,
+        provider=None,
+        router=None,
+        runtime=_DiscardSpy(
+            loop=base.loop,
+            plugin_registry=base.plugin_registry,
+            backend=base.backend,
+            strategies=base.strategies,
+            deliverables=base.deliverables,
+        ),
+    )
     swaps.stage(first)
     swaps.stage(_candidate())
     assert discarded == ["first"]
