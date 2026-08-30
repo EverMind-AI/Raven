@@ -1101,6 +1101,13 @@ class PluginsConfig(_Base):
     disabled: list[str] = Field(default_factory=list)
     """Plugin ids the user opted out of (e.g. ``["everos-memory"]``)."""
 
+    dirs: list[str] = Field(default_factory=list)
+    """Extra plugin roots to scan besides the built-in sources, each holding
+    ``<root>/<id>/raven-plugin.toml`` directories; scanned with project
+    priority. A product that ships plugins beside its own config points here
+    (``.raven/`` is git-ignored, so a checked-in plugin needs a root of its
+    own). Relative paths resolve against the working directory."""
+
     config: dict[str, dict[str, Any]] = Field(default_factory=dict)
     """Per-plugin configuration, keyed by plugin id. Each plugin's
     factory receives ``ctx.config = plugins.config.get(<id>, {})``."""

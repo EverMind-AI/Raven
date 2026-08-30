@@ -117,7 +117,7 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
     plugins: list[dict] = []
     try:
         disabled = set(ec.plugins.disabled)
-        for dp in discover_plugins():
+        for dp in discover_plugins(ec):
             mf = dp.manifest
             plugins.append(
                 {

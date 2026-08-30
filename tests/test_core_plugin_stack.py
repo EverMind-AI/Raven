@@ -18,6 +18,7 @@ from raven.contracts.memory import MemoryBackend
 from raven.core.plugin_stack import (
     build_plugin_registry,
     maybe_build_memory_backend,
+    named_plugin_roots,
 )
 from raven.plugins import PluginRegistry
 
@@ -31,12 +32,14 @@ def _config(
     memory_backend: str | None = "everos",
     disabled: list[str] | None = None,
     plugin_config: dict | None = None,
+    dirs: list[str] | None = None,
 ) -> RavenConfig:
     return RavenConfig(
         memory=MemoryConfig(backend=memory_backend),
         plugins=PluginsConfig(
             disabled=list(disabled or []),
             config=dict(plugin_config or {}),
+            dirs=list(dirs or []),
         ),
     )
 
@@ -212,3 +215,25 @@ class TestServiceLocatorPlumbing:
         backend = maybe_build_memory_backend(tmp_path, config)
         assert backend._services.user_id == "u-distinct"
         assert backend._services.agent_id == "a-distinct"
+
+
+# ---------------------------------------------------------------------------
+# plugins.dirs
+# ---------------------------------------------------------------------------
+
+
+class TestConfiguredDirs:
+    def test_named_roots_resolve_from_config(self, tmp_path: Path) -> None:
+        assert named_plugin_roots(_config(dirs=[str(tmp_path)])) == (tmp_path,)
+        assert named_plugin_roots(_config()) == ()
+        assert named_plugin_roots(None) == ()
+
+    def test_a_plugin_under_a_named_root_activates(self, tmp_path: Path) -> None:
+        root = tmp_path / "plugins"
+        (root / "shelf").mkdir(parents=True)
+        (root / "shelf" / "raven-plugin.toml").write_text(
+            '[plugin]\nid = "shelf"\nversion = "0.1.0"\nenabled_by_default = true\n',
+            encoding="utf-8",
+        )
+        assert "shelf" in build_plugin_registry(_config(dirs=[str(root)])).activated_ids()
+        assert "shelf" not in build_plugin_registry(_config()).activated_ids()

@@ -10,6 +10,7 @@ control instantiate the two pieces directly.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 from raven.plugins.discover import PluginDiscovery
@@ -23,6 +24,7 @@ def assemble_plugin_registry(
     project_dir: Path | None = None,
     entry_points_group: str | None = "raven.plugins",
     disabled: frozenset[str] = frozenset(),
+    extra_dirs: Sequence[Path] = (),
 ) -> PluginRegistry:
     """Discover all manifests, admit the enabled ones, return the registry.
 
@@ -36,6 +38,7 @@ def assemble_plugin_registry(
         user_dir=user_dir,
         project_dir=project_dir,
         entry_points_group=entry_points_group,
+        extra_dirs=extra_dirs,
     )
     registry = PluginRegistry()
     registry.activate(discovery.discover(), disabled=disabled)

@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 
 def plugin_discovery_sources() -> dict:
-    """Resolve the four discovery-source locations the host scans.
+    """Resolve the four fixed discovery-source locations the host scans.
 
     Shared by :func:`build_plugin_registry` (live boot) and the
     ``raven plugins`` CLI command so both see the same set:
@@ -55,6 +55,9 @@ def plugin_discovery_sources() -> dict:
     - user    — ``<raven home>/plugins/`` (``RAVEN_HOME`` or ``~/.raven``).
     - project — ``./.raven/plugins/``.
     - entry_points — the ``raven.plugins`` group.
+
+    The roots a config names itself (``plugins.dirs``) are the fifth source;
+    :func:`named_plugin_roots` resolves them, so this set stays the fixed one.
     """
     import raven
     from raven.home import raven_home
@@ -67,12 +70,22 @@ def plugin_discovery_sources() -> dict:
     }
 
 
-def discover_plugins() -> "list[DiscoveredPlugin]":
-    """Every manifest the four sources hold, before activation: what ``raven
+def named_plugin_roots(config: "RavenConfig | None") -> tuple[Path, ...]:
+    """The extra plugin roots ``plugins.dirs`` names, scanned with project priority.
+
+    Relative paths resolve against the working directory. A config without the
+    field (a stub, an older shape) names no roots.
+    """
+    named = getattr(getattr(config, "plugins", None), "dirs", None) or ()
+    return tuple(Path(d).expanduser() for d in named)
+
+
+def discover_plugins(config: "RavenConfig | None" = None) -> "list[DiscoveredPlugin]":
+    """Every manifest the sources hold, before activation: what ``raven
     plugins`` and ``ext.list`` show, shadowed and disabled ones included."""
     from raven.plugins.discover import PluginDiscovery
 
-    return PluginDiscovery(**plugin_discovery_sources()).discover()
+    return PluginDiscovery(**plugin_discovery_sources(), extra_dirs=named_plugin_roots(config)).discover()
 
 
 def build_plugin_registry(
@@ -86,8 +99,8 @@ def build_plugin_registry(
     caught and logged — the caller receives an **empty** registry so
     AgentLoop can still boot and fall back to the legacy path.
 
-    Discovery spans four sources (priority bundled > user > project >
-    entry_points):
+    Discovery spans four fixed sources plus the roots ``plugins.dirs``
+    names (priority bundled > user > project = named roots > entry_points):
 
     - **bundled** — ``raven/plugins/memory/<id>/`` shipped inside the
       raven package (the EverOS backend lives here).
@@ -100,6 +113,7 @@ def build_plugin_registry(
     try:
         return assemble_plugin_registry(
             **plugin_discovery_sources(),
+            extra_dirs=named_plugin_roots(config),
             disabled=disabled,
         )
     except (PluginConflictError, PluginFactoryImportError) as e:
