@@ -23,6 +23,7 @@ from loguru import logger
 from raven.config.env_file import MIRRORED_KEYS, refresh_env_file
 from raven.rpc import LOCAL_CHANNEL
 from raven.rpc.errors import ConfigValidationError
+from raven.utils.atomic_io import atomic_update
 
 if TYPE_CHECKING:
     from raven.rpc.methods import AgentLoopFactory
@@ -456,13 +457,6 @@ async def settings_get(params: dict, *, agent_loop_factory=None) -> dict:
     return {"settings": _mask_secrets(raw), "config_path": str(path), "raven_version": ver}
 
 
-def _write_config_atomic(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, path)
-
-
 async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
     """Whitelisted dotted-path config writes for a settings surface.
 
@@ -540,23 +534,32 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
 
 
 def _write_raw_key(key: str, value: Any) -> dict:
-    """Dotted-path read-modify-write into config.json, atomic replace."""
+    """Dotted-path read-modify-write into config.json, under the config lock.
+
+    The same ``atomic_update`` transaction the ``update.py`` writers run, so a
+    console save cannot interleave with a CLI save on the same file, and a
+    config held at 0600 keeps its mode across the replace.
+    """
     from raven.config.loader import get_config_path, read_raw_or_raise
 
     path = get_config_path()
-    try:
-        raw = read_raw_or_raise(path)
-    except Exception as e:
-        raise ConfigValidationError(f"config unreadable: {e}") from None
-    node = raw
-    parts = key.split(".")
-    for p in parts[:-1]:
-        node = node.setdefault(p, {})
-        if not isinstance(node, dict):
-            raise ConfigValidationError(f"config path {key} blocked by non-object")
-    prev = node.get(parts[-1])
-    node[parts[-1]] = value
-    _write_config_atomic(path, raw)
+
+    def _apply(_text: str | None) -> tuple[str, Any]:
+        try:
+            raw = read_raw_or_raise(path)
+        except Exception as e:
+            raise ConfigValidationError(f"config unreadable: {e}") from None
+        node = raw
+        parts = key.split(".")
+        for p in parts[:-1]:
+            node = node.setdefault(p, {})
+            if not isinstance(node, dict):
+                raise ConfigValidationError(f"config path {key} blocked by non-object")
+        prev = node.get(parts[-1])
+        node[parts[-1]] = value
+        return json.dumps(raw, indent=2, ensure_ascii=False), prev
+
+    prev = atomic_update(path, _apply)
     return {"applied": True, "previous": prev}
 
 
