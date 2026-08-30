@@ -99,8 +99,18 @@ class AgentHookContext:
     # ── before_user_inbound ──
     turn_request: "TurnRequest | None" = None
     #: The inbound text as the loop will dispatch it: the request's text at
-    #: first, then whatever the hooks before this one rewrote it to.
+    #: first, then whatever the hooks before this one rewrote it to. What a
+    #: hook rewrites here shapes the model's view of THIS turn only -- the
+    #: session record keeps the user's own words.
     inbound_content: str | None = None
+    #: The session's persisted record so far, read-only, populated at the
+    #: inbound and send phases (the iteration phases carry the assembled
+    #: window in ``messages`` instead). "So far" is exact: the send fire
+    #: happens before this turn is filed, so at ``after_send`` the record
+    #: still ends with the PREVIOUS turn. A gate deciding whether a follow-up
+    #: needs new work reads the conversation here, not the window a trimmer
+    #: may have shortened. Never mutate it.
+    session_history: "list[dict[str, Any]] | None" = None
 
     # ── before_iteration / before_execute_tools / after_iteration ──
     iteration: int | None = None
@@ -120,6 +130,11 @@ class AgentHookContext:
     outbound_content: str | None = None
 
     # ── Free-form ──
+    #: One dict per turn when the loop drives all phases: seeded at the
+    #: inbound fire, carried through the iterations (where the loop adds
+    #: ``mode`` / ``mode_overlay``), still present after the send. What a
+    #: hook stashes under ``metadata["observers"]`` (a dict) is filed onto
+    #: the turn's last substantive assistant message at persist time.
     metadata: dict[str, Any] = field(default_factory=dict)
 
 

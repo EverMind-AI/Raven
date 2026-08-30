@@ -523,6 +523,7 @@ class TurnPathMixin:
         on_notice: Callable[[NoticeKind, str], Awaitable[None]] | None = None,
         usage_sink: dict[str, Any] | None = None,
         drain: Drain | None = None,
+        hook_metadata: dict[str, Any] | None = None,
     ) -> tuple[str | None, list[str], list[dict], LoopOutcome]:
         """Run the agent iteration loop.
 
@@ -581,12 +582,19 @@ class TurnPathMixin:
         # hook is registered, so a default install pays nothing here.
         from raven.agent.hook import AgentHookContext
 
+        # One metadata dict serves the whole turn: the entrance seeds it at the
+        # inbound phase and reads it after the send, so what a hook stashes in
+        # one phase group is still there in the next. The mode keys are the
+        # loop's own and overwrite whatever a caller seeded under those names.
+        turn_meta = hook_metadata if hook_metadata is not None else {}
+        turn_meta["mode"] = policy.mode
+        turn_meta["mode_overlay"] = dict(policy.mode_overlay)
         hook_ctx = (
             AgentHookContext(
                 session_key=session_key or "",
                 turn_question=turn_question(initial_messages),
                 turn_base=max(0, len(initial_messages) - 1),
-                metadata={"mode": policy.mode, "mode_overlay": dict(policy.mode_overlay)},
+                metadata=turn_meta,
             )
             if len(self.hooks) > 0
             else None
@@ -1269,6 +1277,16 @@ class TurnPathMixin:
                 messages = self.context.add_assistant_message(messages, final_content)
                 hook_ctx.metadata["turn_end"]["salvaged"] = True
 
+        # A hook chain's per-turn observer record files onto the turn's last
+        # substantive assistant message, where the persist pass keeps every
+        # foreign key. Per turn, on the turn -- not a session-wide last write.
+        if hook_ctx is not None:
+            _observers = hook_ctx.metadata.get("observers")
+            if isinstance(_observers, dict) and _observers:
+                for _m in reversed(messages):
+                    if _m.get("role") == "assistant" and (_m.get("content") or _m.get("tool_calls")):
+                        _m["observers"] = dict(_observers)
+                        break
         _transient = ("_recovery_synthetic", _ATTACHED_IMAGE_KEY)
         if any(any(m.get(k) for k in _transient) for m in messages):
             messages = [m for m in messages if not any(m.get(k) for k in _transient)]
@@ -1351,11 +1369,19 @@ class TurnPathMixin:
         #
         # Skip the user-inbound hooks for Sentinel / subagent turns (by origin).
         skip_user_inbound = origin in _SKIP_USER_INBOUND_ORIGINS
+        # The turn's one hook-metadata dict, and the words the user actually
+        # sent: the first crosses every phase group with the turn, the second
+        # is what history keeps no matter how hooks rewrite the model's view.
+        turn_hook_meta: dict[str, Any] = {}
+        inbound_original = content
         if len(self.hooks) > 0 and not skip_user_inbound:
+            _peeked = self.sessions.peek(msg_session_key)
             _hook_ctx = AgentHookContext(
                 session_key=msg_session_key,
                 turn_request=req,
                 inbound_content=content,
+                session_history=_peeked.messages if _peeked is not None else [],
+                metadata=turn_hook_meta,
             )
             _decision = await self.hooks.before_user_inbound(_hook_ctx)
             if _decision.short_circuit_result is not None:
@@ -1635,6 +1661,7 @@ class TurnPathMixin:
                 on_notice=on_notice,
                 usage_sink=usage_sink,
                 drain=drain,
+                hook_metadata=turn_hook_meta,
             )
         except asyncio.CancelledError:
             # A stop is not a failure, but it is also not amnesia: what already
@@ -1673,13 +1700,17 @@ class TurnPathMixin:
             _send_ctx = AgentHookContext(
                 session_key=key,
                 outbound_content=final_content,
+                session_history=session.messages,
+                metadata=turn_hook_meta,
             )
             _send_decision = await self.hooks.after_send(_send_ctx)
             if _send_decision.modified_content is not None:
                 final_content = _send_decision.modified_content
 
         prev_len = len(session.messages)
-        self._save_turn(session, all_msgs, turn_start_idx, received_at=turn_received_at)
+        self._save_turn(
+            session, all_msgs, turn_start_idx, received_at=turn_received_at, inbound_original=inbound_original
+        )
         self.sessions.save(session)
         await self.context_engine.after_turn(
             key,
@@ -1827,7 +1858,15 @@ class TurnPathMixin:
             entry["origin"] = mark
         session.record(entry)
 
-    def _save_turn(self, session: Session, messages: list[dict], skip: int, *, received_at: str | None = None) -> None:
+    def _save_turn(
+        self,
+        session: Session,
+        messages: list[dict],
+        skip: int,
+        *,
+        inbound_original: str | None = None,
+        received_at: str | None = None,
+    ) -> None:
         """Save new-turn messages into session, truncating large tool results.
 
         ``received_at`` is the wall clock at which the turn's inbound message
@@ -1837,6 +1876,12 @@ class TurnPathMixin:
         as the turn's duration.
         """
         first_user_pending = received_at is not None
+        # The turn's first user entry is the inbound message; hooks may have
+        # rewritten what the model saw (a memo prepended, a reminder appended),
+        # and persisting that view would compound it into every later window.
+        # Same rule as the runtime-context strip below: history keeps the words
+        # the user sent. Block-shaped inbounds pass through as built.
+        inbound_rewrite_pending = inbound_original is not None
         for m in messages[skip:]:
             entry = dict(m)
             role, content = entry.get("role"), entry.get("content")
@@ -1900,6 +1945,10 @@ class TurnPathMixin:
                         entry["content"] = parts[1]
                     else:
                         continue
+                if inbound_rewrite_pending:
+                    inbound_rewrite_pending = False
+                    if isinstance(entry.get("content"), str) and entry["content"] != inbound_original:
+                        entry["content"] = inbound_original
                 if isinstance(content, list):
                     filtered = [
                         c
