@@ -115,7 +115,7 @@ class ToolCall:
 
 
 @dataclass(frozen=True)
-class ToolResult:
+class DialectResult:
     """What a finished call returned, and whether it worked."""
 
     text: str
@@ -229,12 +229,12 @@ class AcpDialect:
 
         return ""
 
-    def result(self, update: dict[str, Any]) -> ToolResult:
+    def result(self, update: dict[str, Any]) -> DialectResult:
         """What the call returned. ``content`` is what the adapter chose to show."""
         text = "".join(content_texts(update.get("content")))
         if not text:
             text = self._raw_output_text(update.get("rawOutput"))
-        return ToolResult(text=text, ok=update.get("status") == "completed")
+        return DialectResult(text=text, ok=update.get("status") == "completed")
 
     @staticmethod
     def _raw_output_text(raw: Any) -> str:
@@ -324,4 +324,4 @@ class AcpDialect:
         return fields
 
 
-__all__ = ["AcpDialect", "ToolCall", "ToolResult", "content_texts"]
+__all__ = ["AcpDialect", "ToolCall", "DialectResult", "content_texts"]
