@@ -166,7 +166,7 @@ def enabled_third_party(configs: Sequence[Any]) -> list[Any]:
 
 - [ ] **Step 5: Apply the filter in both consumers**
 
-In `raven/agent/subagent/manager.py`, import `enabled_third_party` alongside the existing `build_third_party_backend` / `third_party_agent_meta` imports, and change the loop header in `set_third_party_subagents`:
+In `raven/agent/subagent/manager.py`, import `enabled_third_party` alongside the existing `build_third_party_backend` / `third_party_agent_meta` imports, and change the loop header in `add_third_party_subagent`:
 
 ```python
         for cfg in enabled_third_party(configs):
