@@ -8,6 +8,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings
 
+from raven.contracts.path_policy import WORKSPACE_DEFAULT_SENTINEL
 from raven.sandbox.config import SandboxConfig
 
 
@@ -131,7 +132,7 @@ class ChannelsConfig(Base):
 class AgentDefaults(Base):
     """Default agent configuration."""
 
-    workspace: str = "~/.raven/workspace"
+    workspace: str = WORKSPACE_DEFAULT_SENTINEL
     model: str = "anthropic/claude-opus-4-5"
     # The vendor whose credential serves ``model``. Required in practice: an id
     # alone does not name a credential -- `openrouter` serving
@@ -1611,11 +1612,11 @@ class Config(BaseSettings):
         separate home exists to avoid. An explicitly configured workspace is
         always used as written.
         """
-        from raven.config.loader import raven_home
+        from raven.config.paths import default_workspace
 
         raw = self.agents.defaults.workspace
         if raw == AgentDefaults.model_fields["workspace"].default:
-            return raven_home() / "workspace"
+            return default_workspace()
         return Path(raw).expanduser()
 
     def channel_workspaces(self) -> dict[str, str]:

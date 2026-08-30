@@ -59,23 +59,28 @@ def get_logs_dir() -> Path:
     return get_runtime_subdir("logs")
 
 
-def get_workspace_path(workspace: str | None = None) -> Path:
-    """Resolve and ensure the agent workspace path.
+def default_workspace() -> Path:
+    """The workspace a config that never named one means: ``<home>/workspace``.
 
-    The default is anchored on ``raven_home()`` rather than on ``~/.raven`` so
-    that it agrees with ``Config.workspace_path``, which is the other derivation
-    of the same thing. The two are reached by different callers -- the gateway
-    goes through the config, ``raven session list`` and ``raven onboard`` come
-    here -- and a home that moved only one of them writes sessions where the
-    other does not read them.
+    The one derivation ``Config.workspace_path`` and ``get_workspace_path``
+    both read -- two callers reach the workspace by different roads (the
+    gateway through the config, ``raven session list`` / ``raven onboard``
+    through here), and a home that moved only one of them would write
+    sessions where the other does not read them.
     """
-    path = Path(workspace).expanduser() if workspace else raven_home() / "workspace"
+    return raven_home() / "workspace"
+
+
+def get_workspace_path(workspace: str | None = None) -> Path:
+    """Resolve and ensure the agent workspace path."""
+    path = Path(workspace).expanduser() if workspace else default_workspace()
     return ensure_dir(path)
 
 
 def get_bridge_install_dir() -> Path:
-    """Return the shared WhatsApp bridge installation directory."""
-    return Path.home() / ".raven" / "bridge"
+    """Return the WhatsApp bridge installation directory, under the home so a
+    relocated ``RAVEN_HOME`` keeps its own install."""
+    return raven_home() / "bridge"
 
 
 def get_oauth_dir() -> Path:
@@ -91,7 +96,7 @@ def get_oauth_dir() -> Path:
     tokens land world-readable -- and only some of the writers are ours to fix.
     The directory is what holds for the rest, including a writer added later.
     """
-    path = Path.home() / ".raven" / "oauth"
+    path = raven_home() / "oauth"
     path.mkdir(parents=True, exist_ok=True)
     if path.stat().st_mode & 0o077:
         path.chmod(0o700)
@@ -121,4 +126,4 @@ def get_env_file() -> Path:
     shell capture -- still see the tool credentials. Whoever writes it owns
     creating the parent and tightening the mode; see ``restrict_to_owner``.
     """
-    return Path.home() / ".raven" / "env"
+    return raven_home() / "env"
