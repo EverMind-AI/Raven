@@ -70,6 +70,37 @@ class ServiceLocator:
 
 
 @dataclass(frozen=True)
+class RuntimeHandles:
+    """Late-bound grants for a contributed tool that needs the assembled loop.
+
+    A factory runs in the assembly root, before the loop exists, so anything
+    only the living loop owns cannot be a ``ServiceLocator`` field -- it does
+    not exist yet. The loop hands these to a contributed tool that declares
+    ``bind_runtime(handles)``, once, right after plugin tools register: the
+    same register-first-bind-later idiom ``ask_user`` has always used for its
+    transport broker, made a first-class contribution shape. A tool that
+    raises while binding is unregistered loudly rather than left half-bound.
+
+    Same discipline as :class:`ServiceLocator`: every field is a deliberate
+    capability grant, and the dataclass is frozen.
+    """
+
+    session_dir: Path | None = None
+    """Where the host keeps session records; a tool that files per-session
+    artifacts (a playbook run's transcript) roots them here."""
+
+    subagent_registry: Any = None
+    """The live sub-agent registry. A BIG grant -- whoever holds it can
+    enumerate and drive sub-agents -- named as such on purpose: a tool asking
+    for it is asking to orchestrate, and a reviewer should see that in the
+    manifest's own vocabulary rather than discover it in a traceback."""
+
+    subagents_paused: "Callable[[], bool] | None" = None
+    """Whether the operator paused sub-agent work; an orchestrating tool
+    consults this before starting more."""
+
+
+@dataclass(frozen=True)
 class PluginContext:
     """What a plugin factory sees at activation time."""
 
