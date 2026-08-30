@@ -171,6 +171,7 @@ include = [
     "raven/skills/**/*.sh",
     # Bundled model-label snapshot, so a fresh install labels models offline.
     "raven/providers/data/*.json",
+    "raven/providers/data/*.toml",
     # Playbook role-pool defaults and the builtin playbook library.
     "raven/playbook/*.yaml",
     "raven/playbook/builtin/**/*.md",
