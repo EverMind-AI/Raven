@@ -29,8 +29,8 @@ from typing import Any
 
 from loguru import logger
 
-from raven.agent.acp_client import elicitation
-from raven.agent.acp_client.client import UNHANDLED
+from raven.acp_client import elicitation
+from raven.acp_client.client import UNHANDLED
 
 PERMISSION_METHOD = "session/request_permission"
 

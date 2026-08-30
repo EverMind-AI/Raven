@@ -414,7 +414,7 @@ async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
     """
     # Function-level on purpose: the acp client family is future shelf cargo,
     # and this module must not name it at import time (binding-time debt).
-    from raven.agent.acp_client.capabilities import SnapshotStore, verify_agent
+    from raven.acp_client.capabilities import SnapshotStore, verify_agent
 
     snapshot = await verify_agent(cfg)
     if source == "config":
@@ -477,7 +477,7 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any]) -> None:
     a roster that reports an agent stateful and dispatches it stateless until
     the next restart or hot-apply.
     """
-    from raven.agent.acp_client.capabilities import SnapshotStore, verify_agent
+    from raven.acp_client.capabilities import SnapshotStore, verify_agent
 
     store = SnapshotStore()
     recorded = False

@@ -976,8 +976,8 @@ git commit -m "feat(*): give the acp layer a turn-scoped route to the user, user
 
 **Files:**
 - Create: `raven/agent/acp/elicitor.py`
-- Modify: `raven/agent/subagent/acp_dialects/base.py` - the `pair_fields` no-op the elicitor calls
-- Modify: `raven/agent/subagent/backends/acp_agent.py:565-599`
+- Modify: `raven/acp_client/acp_dialects/base.py` - the `pair_fields` no-op the elicitor calls
+- Modify: `raven/acp_client/acp_agent.py:565-599`
 - Modify: `tests/acp_stub_server.py`
 - Test: `tests/test_acp_elicitation.py`, `tests/test_subagent_acp.py`
 
@@ -1316,7 +1316,7 @@ __all__ = ["Elicitor"]
 ```
 
 Then add the no-op hook the elicitor calls, on `AcpDialect` in
-`raven/agent/subagent/acp_dialects/base.py`:
+`raven/acp_client/acp_dialects/base.py`:
 
 ```python
     def pair_fields(self, fields: list[Any]) -> list[Any]:
@@ -1326,7 +1326,7 @@ Then add the no-op hook the elicitor calls, on `AcpDialect` in
 
 - [ ] **Step 4: Attach it in the backend**
 
-In `raven/agent/subagent/backends/acp_agent.py`, beside the collector at `:565`:
+In `raven/acp_client/acp_agent.py`, beside the collector at `:565`:
 
 ```python
             # Built here, in the turn's context, for the reason `_TurnCollector`
@@ -1412,7 +1412,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add raven/agent/acp/elicitor.py raven/agent/subagent/backends/acp_agent.py \
+git add raven/agent/acp/elicitor.py raven/acp_client/acp_agent.py \
         tests/acp_stub_server.py tests/test_acp_elicitation.py tests/test_subagent_acp.py
 git commit -m "feat(agent): ask the user an acp sub-agent's question, one form at a time"
 ```
@@ -1424,7 +1424,7 @@ git commit -m "feat(agent): ask the user an acp sub-agent's question, one form a
 Without it, one `AskUserQuestion` asking two questions becomes four prompts: the adapter emits `question_<n>` plus an optional free-text `question_<n>_custom` per question (its `dist/elicitation.d.ts` documents this as mirroring the CLI's per-question "Other" box), and the clarify sheet already *is* choices plus a free-text box.
 
 **Files:**
-- Modify: `raven/agent/subagent/acp_dialects/claude_code.py`
+- Modify: `raven/acp_client/acp_dialects/claude_code.py`
 - Test: `tests/test_acp_dialects.py`
 
 **Interfaces:**
@@ -1436,7 +1436,7 @@ Without it, one `AskUserQuestion` asking two questions becomes four prompts: the
 ```python
 def test_claude_code_merges_a_question_with_its_custom_box() -> None:
     from raven.agent.acp.elicitation import fields
-    from raven.agent.subagent.acp_dialects.claude_code import ClaudeCodeDialect
+    from raven.acp_client.acp_dialects.claude_code import ClaudeCodeDialect
 
     schema = {"type": "object", "properties": {
         "question_0": {"type": "string", "title": "Which backend?",
@@ -1453,7 +1453,7 @@ def test_claude_code_merges_a_question_with_its_custom_box() -> None:
 
 def test_claude_code_leaves_an_unpaired_custom_field_alone() -> None:
     from raven.agent.acp.elicitation import fields
-    from raven.agent.subagent.acp_dialects.claude_code import ClaudeCodeDialect
+    from raven.acp_client.acp_dialects.claude_code import ClaudeCodeDialect
 
     schema = {"type": "object", "properties": {"notes_custom": {"type": "string"}}}
     merged = ClaudeCodeDialect().pair_fields(fields(schema))
@@ -1463,7 +1463,7 @@ def test_claude_code_leaves_an_unpaired_custom_field_alone() -> None:
 
 def test_the_default_dialect_pairs_nothing() -> None:
     from raven.agent.acp.elicitation import fields
-    from raven.agent.subagent.acp_dialects.base import AcpDialect
+    from raven.acp_client.acp_dialects.base import AcpDialect
 
     schema = {"type": "object", "properties": {
         "a": {"type": "string", "enum": ["x"]}, "a_custom": {"type": "string"}}}
@@ -1511,7 +1511,7 @@ Expected: PASS. `Elicitor` already calls `pair_fields` and already honours `cust
 - [ ] **Step 5: Commit**
 
 ```bash
-git add raven/agent/subagent/acp_dialects/claude_code.py tests/test_acp_dialects.py
+git add raven/acp_client/acp_dialects/claude_code.py tests/test_acp_dialects.py
 git commit -m "feat(agent): ask a claude-code question and its other box as one prompt"
 ```
 

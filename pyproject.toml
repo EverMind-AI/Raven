@@ -417,7 +417,7 @@ include_external_packages = true
 name = "inner layers know no surface"
 type = "forbidden"
 source_modules = [
-    "raven.spine", "raven.contracts", "raven.tracing", "raven.agent", "raven.memory_engine",
+    "raven.spine", "raven.contracts", "raven.tracing", "raven.acp_client", "raven.agent", "raven.memory_engine",
     "raven.context_engine", "raven.providers", "raven.session", "raven.sandbox",
     "raven.routing", "raven.token_wise", "raven.plugins", "raven.channels",
     "raven.gateway", "raven.market", "raven.ops", "raven.security", "raven.auth",
@@ -452,7 +452,7 @@ type = "forbidden"
 # entry here would be new debt, not a carry-over.
 source_modules = ["raven.contracts", "raven.home", "raven.spine", "raven.tracing"]
 forbidden_modules = [
-    "raven.acp", "raven.agent", "raven.auth", "raven.browser",
+    "raven.acp", "raven.acp_client", "raven.agent", "raven.auth", "raven.browser",
     "raven.channels", "raven.cli", "raven.config", "raven.context_engine",
     "raven.core", "raven.eval_engine", "raven.gateway",
     "raven.i18n", "raven.importer", "raven.knowledge", "raven.market", "raven.mcp",
@@ -470,7 +470,7 @@ forbidden_modules = [
 name = "cargo does not import the loop shell"
 type = "forbidden"
 source_modules = [
-    "raven.agent.tools", "raven.agent.subagent", "raven.agent.acp_client",
+    "raven.agent.tools", "raven.agent.subagent", "raven.acp_client",
     "raven.agent.context", "raven.agent.hook", "raven.agent.personalizer",
     "raven.agent.workdir",
 ]

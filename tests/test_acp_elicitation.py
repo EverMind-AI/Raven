@@ -3,13 +3,13 @@
 import json
 from pathlib import Path
 
-from raven.agent.acp_client import autofill
+from raven.acp_client import autofill
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "acp_elicitation_askuser.json"
 
 
 def test_a_real_askuser_request_parses() -> None:
-    from raven.agent.acp_client.elicitation import parse_request
+    from raven.acp_client.elicitation import parse_request
 
     ask = parse_request(json.loads(_FIXTURE.read_text()))
     assert ask is not None
@@ -19,7 +19,7 @@ def test_a_real_askuser_request_parses() -> None:
 
 
 def test_fields_keep_the_schema_write_order() -> None:
-    from raven.agent.acp_client.elicitation import fields
+    from raven.acp_client.elicitation import fields
 
     schema = {
         "type": "object",
@@ -29,7 +29,7 @@ def test_fields_keep_the_schema_write_order() -> None:
 
 
 def test_an_enum_becomes_options_and_oneof_carries_labels() -> None:
-    from raven.agent.acp_client.elicitation import fields
+    from raven.acp_client.elicitation import fields
 
     schema = {
         "type": "object",
@@ -44,7 +44,7 @@ def test_an_enum_becomes_options_and_oneof_carries_labels() -> None:
 
 
 def test_a_multi_select_reads_its_choices_off_items() -> None:
-    from raven.agent.acp_client.elicitation import fields
+    from raven.acp_client.elicitation import fields
 
     schema = {
         "type": "object",
@@ -54,14 +54,14 @@ def test_a_multi_select_reads_its_choices_off_items() -> None:
 
 
 def test_required_is_read_from_the_schema() -> None:
-    from raven.agent.acp_client.elicitation import fields
+    from raven.acp_client.elicitation import fields
 
     schema = {"type": "object", "required": ["a"], "properties": {"a": {"type": "string"}, "b": {"type": "string"}}}
     assert {f.name: f.required for f in fields(schema)} == {"a": True, "b": False}
 
 
 def test_the_prompt_prefers_title_then_description_then_the_name() -> None:
-    from raven.agent.acp_client.elicitation import fields
+    from raven.acp_client.elicitation import fields
 
     schema = {
         "type": "object",
@@ -75,13 +75,13 @@ def test_the_prompt_prefers_title_then_description_then_the_name() -> None:
 
 
 def _field(kind, **kw):
-    from raven.agent.acp_client.elicitation import Field
+    from raven.acp_client.elicitation import Field
 
     return Field(name="x", prompt="x", type=kind, options=kw.pop("options", []), required=False, constraints=kw)
 
 
 def test_coerce_handles_all_five_wire_types() -> None:
-    from raven.agent.acp_client.elicitation import coerce
+    from raven.acp_client.elicitation import coerce
 
     assert coerce(_field("string"), "hi") == (True, "hi")
     assert coerce(_field("integer"), "7") == (True, 7)
@@ -92,7 +92,7 @@ def test_coerce_handles_all_five_wire_types() -> None:
 
 
 def test_coerce_rejects_what_does_not_fit() -> None:
-    from raven.agent.acp_client.elicitation import coerce
+    from raven.acp_client.elicitation import coerce
 
     assert coerce(_field("integer"), "seven") == (False, None)
     assert coerce(_field("string", pattern=r"^v\d+$"), "nope") == (False, None)
@@ -102,7 +102,7 @@ def test_coerce_rejects_what_does_not_fit() -> None:
 
 
 def test_a_malformed_schema_yields_no_fields() -> None:
-    from raven.agent.acp_client.elicitation import fields
+    from raven.acp_client.elicitation import fields
 
     assert fields({}) == []
     assert fields({"type": "object", "properties": "nope"}) == []
@@ -110,7 +110,7 @@ def test_a_malformed_schema_yields_no_fields() -> None:
 
 
 def test_url_and_unknown_modes_parse_but_are_not_form() -> None:
-    from raven.agent.acp_client.elicitation import parse_request
+    from raven.acp_client.elicitation import parse_request
 
     url = parse_request({"message": "m", "mode": "url", "url": "https://x", "elicitationId": "e"})
     assert url is not None and url.mode == "url"
@@ -120,7 +120,7 @@ def test_url_and_unknown_modes_parse_but_are_not_form() -> None:
 
 
 def test_the_response_builders_match_the_protocol() -> None:
-    from raven.agent.acp_client.elicitation import accept, cancel, decline
+    from raven.acp_client.elicitation import accept, cancel, decline
 
     assert accept({"a": 1}) == {"action": "accept", "content": {"a": 1}}
     assert decline() == {"action": "decline"}
@@ -128,7 +128,7 @@ def test_the_response_builders_match_the_protocol() -> None:
 
 
 def test_no_asker_bound_reads_as_unavailable() -> None:
-    from raven.agent.acp_client.asker import current_ask
+    from raven.acp_client.asker import current_ask
 
     assert current_ask() == (None, "")
 
@@ -137,7 +137,7 @@ async def test_a_bound_asker_is_visible_to_a_child_task() -> None:
     """A sub-agent run is a background task; ContextVars copy into it."""
     import asyncio
 
-    from raven.agent.acp_client.asker import current_ask, start_ask_turn
+    from raven.acp_client.asker import current_ask, start_ask_turn
 
     class Tool:
         async def ask(self, prompt, choices, conversation_id):
@@ -154,8 +154,8 @@ async def test_a_bound_asker_is_visible_to_a_child_task() -> None:
 
 
 async def test_a_form_is_asked_field_by_field_and_assembled() -> None:
-    from raven.agent.acp_client.asker import start_ask_turn
-    from raven.agent.acp_client.elicitor import Elicitor
+    from raven.acp_client.asker import start_ask_turn
+    from raven.acp_client.elicitor import Elicitor
 
     asked: list[str] = []
 
@@ -184,8 +184,8 @@ async def test_a_form_is_asked_field_by_field_and_assembled() -> None:
 
 
 async def test_the_prompt_names_the_agent_that_asked() -> None:
-    from raven.agent.acp_client.asker import start_ask_turn
-    from raven.agent.acp_client.elicitor import Elicitor
+    from raven.acp_client.asker import start_ask_turn
+    from raven.acp_client.elicitor import Elicitor
 
     seen: list[str] = []
 
@@ -208,8 +208,8 @@ async def test_the_prompt_names_the_agent_that_asked() -> None:
 
 
 async def test_no_asker_declines() -> None:
-    from raven.agent.acp_client.asker import start_ask_turn
-    from raven.agent.acp_client.elicitor import Elicitor
+    from raven.acp_client.asker import start_ask_turn
+    from raven.acp_client.elicitor import Elicitor
 
     start_ask_turn(None, conversation_id="")
     got = await Elicitor("Coder", "h").elicit(
@@ -224,8 +224,8 @@ async def test_no_asker_declines() -> None:
 
 
 async def test_a_skipped_optional_field_is_omitted_and_a_required_one_declines() -> None:
-    from raven.agent.acp_client.asker import start_ask_turn
-    from raven.agent.acp_client.elicitor import Elicitor
+    from raven.acp_client.asker import start_ask_turn
+    from raven.acp_client.elicitor import Elicitor
 
     class Silent:
         async def ask(self, prompt, choices, conversation_id, **_):
@@ -254,9 +254,9 @@ async def test_a_skipped_optional_field_is_omitted_and_a_required_one_declines()
 
 
 async def test_a_bad_answer_is_re_asked_then_declines() -> None:
-    from raven.agent.acp_client.asker import start_ask_turn
-    from raven.agent.acp_client.elicitation import MAX_FIELD_RETRIES
-    from raven.agent.acp_client.elicitor import Elicitor
+    from raven.acp_client.asker import start_ask_turn
+    from raven.acp_client.elicitation import MAX_FIELD_RETRIES
+    from raven.acp_client.elicitor import Elicitor
 
     tries = 0
 
@@ -286,8 +286,8 @@ async def test_an_unavailable_round_trip_declines_rather_than_accepting_nothing(
     agent a human chose to answer nothing. Distinct from a skip, which is a
     decision the user actually made.
     """
-    from raven.agent.acp_client.asker import start_ask_turn
-    from raven.agent.acp_client.elicitor import Elicitor
+    from raven.acp_client.asker import start_ask_turn
+    from raven.acp_client.elicitor import Elicitor
 
     class NoPath:
         async def ask(self, prompt, choices, conversation_id, **_):
@@ -313,8 +313,8 @@ async def test_a_cancelled_turn_answers_cancel_not_decline() -> None:
     """
     import asyncio
 
-    from raven.agent.acp_client.asker import start_ask_turn
-    from raven.agent.acp_client.elicitor import Elicitor
+    from raven.acp_client.asker import start_ask_turn
+    from raven.acp_client.elicitor import Elicitor
 
     class Cancels:
         async def ask(self, prompt, choices, conversation_id, **_):
@@ -342,8 +342,8 @@ async def test_a_cancelled_run_stops_the_form_rather_than_skipping_one_field() -
     """
     import asyncio
 
-    from raven.agent.acp_client.asker import start_ask_turn
-    from raven.agent.acp_client.elicitor import Elicitor
+    from raven.acp_client.asker import start_ask_turn
+    from raven.acp_client.elicitor import Elicitor
 
     asked: list[str] = []
     parked = asyncio.Event()
@@ -401,8 +401,8 @@ async def test_a_retracted_form_stops_rather_than_putting_its_next_field_up() ->
     """
     import asyncio
 
-    from raven.agent.acp_client.asker import start_ask_turn
-    from raven.agent.acp_client.elicitor import Elicitor
+    from raven.acp_client.asker import start_ask_turn
+    from raven.acp_client.elicitor import Elicitor
 
     asked: list[str] = []
     parked = asyncio.Event()
@@ -441,7 +441,7 @@ async def test_a_retracted_form_stops_rather_than_putting_its_next_field_up() ->
 
 
 async def test_url_and_unknown_modes_decline() -> None:
-    from raven.agent.acp_client.elicitor import Elicitor
+    from raven.acp_client.elicitor import Elicitor
 
     for params in (
         {"sessionId": "s", "mode": "url", "url": "https://x", "elicitationId": "e", "message": "m"},
@@ -463,8 +463,8 @@ async def test_two_forms_on_one_conversation_are_serialised() -> None:
     """
     import asyncio
 
-    from raven.agent.acp_client.asker import start_ask_turn
-    from raven.agent.acp_client.elicitor import Elicitor
+    from raven.acp_client.asker import start_ask_turn
+    from raven.acp_client.elicitor import Elicitor
 
     asked: list[str] = []
     inflight = peak = 0
@@ -507,8 +507,8 @@ def test_a_conversation_lock_does_not_outlive_the_loop_that_contended_it() -> No
     """
     import asyncio
 
-    from raven.agent.acp_client.asker import start_ask_turn
-    from raven.agent.acp_client.elicitor import Elicitor
+    from raven.acp_client.asker import start_ask_turn
+    from raven.acp_client.elicitor import Elicitor
 
     class Slow:
         async def ask(self, prompt, choices, conversation_id, **_):
@@ -542,9 +542,9 @@ async def test_a_form_kept_waiting_for_the_conversation_declines(monkeypatch) ->
     """
     import asyncio
 
-    from raven.agent.acp_client import elicitor as elicitor_module
-    from raven.agent.acp_client.asker import start_ask_turn
-    from raven.agent.acp_client.elicitor import Elicitor
+    from raven.acp_client import elicitor as elicitor_module
+    from raven.acp_client.asker import start_ask_turn
+    from raven.acp_client.elicitor import Elicitor
 
     class Parked:
         async def ask(self, prompt, choices, conversation_id, **_):
@@ -583,9 +583,9 @@ async def test_a_valid_multi_select_answer_lands_on_the_field_not_the_custom_box
     the option strings, which is never true, so every valid multi-select was
     routed to the custom box regardless of whether it was actually off-enum.
     """
-    from raven.agent.acp_client.asker import start_ask_turn
-    from raven.agent.acp_client.elicitor import Elicitor
-    from raven.agent.subagent.acp_dialects.claude_code import ClaudeCodeDialect
+    from raven.acp_client.acp_dialects.claude_code import ClaudeCodeDialect
+    from raven.acp_client.asker import start_ask_turn
+    from raven.acp_client.elicitor import Elicitor
 
     class Tool:
         async def ask(self, prompt, choices, conversation_id, **_):
@@ -603,9 +603,9 @@ async def test_an_off_enum_multi_select_item_still_routes_to_the_custom_box() ->
     the fix to the list-membership check must not swing the other way and
     start treating every multi-select as on-enum.
     """
-    from raven.agent.acp_client.asker import start_ask_turn
-    from raven.agent.acp_client.elicitor import Elicitor
-    from raven.agent.subagent.acp_dialects.claude_code import ClaudeCodeDialect
+    from raven.acp_client.acp_dialects.claude_code import ClaudeCodeDialect
+    from raven.acp_client.asker import start_ask_turn
+    from raven.acp_client.elicitor import Elicitor
 
     class Tool:
         async def ask(self, prompt, choices, conversation_id, **_):
@@ -625,9 +625,9 @@ async def test_a_required_paired_field_declines_rather_than_dropping_its_key() -
     rejects for missing the required one -- exactly what the `invalid` status
     exists to prevent.
     """
-    from raven.agent.acp_client.asker import start_ask_turn
-    from raven.agent.acp_client.elicitor import Elicitor
-    from raven.agent.subagent.acp_dialects.claude_code import ClaudeCodeDialect
+    from raven.acp_client.acp_dialects.claude_code import ClaudeCodeDialect
+    from raven.acp_client.asker import start_ask_turn
+    from raven.acp_client.elicitor import Elicitor
 
     class Tool:
         async def ask(self, prompt, choices, conversation_id, **_):
@@ -660,9 +660,9 @@ async def test_a_paired_question_is_asked_once_and_answered_either_way() -> None
     """The point of pairing: one prompt for what the schema still sends as two
     properties, landing in whichever key matches what the user actually typed.
     """
-    from raven.agent.acp_client.asker import start_ask_turn
-    from raven.agent.acp_client.elicitor import Elicitor
-    from raven.agent.subagent.acp_dialects.claude_code import ClaudeCodeDialect
+    from raven.acp_client.acp_dialects.claude_code import ClaudeCodeDialect
+    from raven.acp_client.asker import start_ask_turn
+    from raven.acp_client.elicitor import Elicitor
 
     schema = {
         "type": "object",
@@ -707,8 +707,8 @@ def test_the_real_askuser_request_still_merges_into_one_question() -> None:
     `required` list constrains either property, so every pairing rule has to
     agree on folding this one.
     """
-    from raven.agent.acp_client.elicitation import fields
-    from raven.agent.subagent.acp_dialects.claude_code import ClaudeCodeDialect
+    from raven.acp_client.acp_dialects.claude_code import ClaudeCodeDialect
+    from raven.acp_client.elicitation import fields
 
     merged = ClaudeCodeDialect().pair_fields(fields(json.loads(_FIXTURE.read_text())["requestedSchema"]))
     assert [f.name for f in merged] == ["question_0"]
@@ -722,9 +722,9 @@ async def test_a_required_custom_box_is_asked_rather_than_folded_away() -> None:
     otherwise be accepted as content missing a key the `requestedSchema`
     demands, which is the one thing no merge is allowed to cost.
     """
-    from raven.agent.acp_client.asker import start_ask_turn
-    from raven.agent.acp_client.elicitor import Elicitor
-    from raven.agent.subagent.acp_dialects.claude_code import ClaudeCodeDialect
+    from raven.acp_client.acp_dialects.claude_code import ClaudeCodeDialect
+    from raven.acp_client.asker import start_ask_turn
+    from raven.acp_client.elicitor import Elicitor
 
     asked: list[str] = []
 
@@ -761,7 +761,7 @@ def test_raven_advertises_form_elicitation_and_never_url() -> None:
     """`url` elicitation exists for out-of-band credential and payment flows, so
     advertising it would let a sub-agent send the user to any URL to enter them.
     The two sub-capabilities are independently advertisable."""
-    from raven.agent.acp_client.protocol import CLIENT_CAPABILITIES
+    from raven.acp_client.protocol import CLIENT_CAPABILITIES
 
     assert CLIENT_CAPABILITIES["elicitation"] == {"form": {}}
     assert "url" not in CLIENT_CAPABILITIES["elicitation"]
@@ -829,8 +829,8 @@ async def _elicit_with(asker, autofill_obj, *, fields: list[str], types: dict[st
     asker and the autofill are read; bound after, the elicitor would have
     neither.
     """
-    from raven.agent.acp_client.asker import start_ask_turn
-    from raven.agent.acp_client.elicitor import Elicitor
+    from raven.acp_client.asker import start_ask_turn
+    from raven.acp_client.elicitor import Elicitor
 
     start_ask_turn(asker, autofill_obj, conversation_id="tui:c1")
     return await Elicitor("raven-code", "a1b2").elicit(_form(fields, types))
@@ -847,7 +847,7 @@ async def test_a_fully_answered_form_never_reaches_the_asker() -> None:
 async def test_a_fully_answered_form_never_takes_the_conversation_lock() -> None:
     import asyncio
 
-    from raven.agent.acp_client.asker import question_lock
+    from raven.acp_client.asker import question_lock
 
     lock = question_lock("tui:c1")
     await lock.acquire()
@@ -920,8 +920,8 @@ async def test_a_fully_answered_form_does_not_accept_for_a_run_that_ended() -> N
     import asyncio
     import contextlib
 
-    from raven.agent.acp_client.asker import start_ask_turn
-    from raven.agent.acp_client.elicitor import Elicitor
+    from raven.acp_client.asker import start_ask_turn
+    from raven.acp_client.elicitor import Elicitor
 
     held: dict = {}
 
@@ -957,8 +957,8 @@ async def test_the_autofill_is_read_at_construction_not_when_the_form_lands() ->
     drift: an elicitor reading at resolve time would see the newest turn's
     autofill -- here, none -- and ask a field raven could have filled.
     """
-    from raven.agent.acp_client.asker import start_ask_turn
-    from raven.agent.acp_client.elicitor import Elicitor
+    from raven.acp_client.asker import start_ask_turn
+    from raven.acp_client.elicitor import Elicitor
 
     asker = _RecordingAsker(answers={None: "asked the user"})
     start_ask_turn(asker, _StubAutofill({"branch": ("answer", "feat/x")}), conversation_id="tui:c1")

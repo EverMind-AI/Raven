@@ -1492,7 +1492,7 @@ class _ModedManager(_FakeManager):
 
     def __init__(self) -> None:
         super().__init__()
-        from raven.agent.acp_client.capabilities import AcpMode
+        from raven.acp_client.capabilities import AcpMode
 
         self._modes = (AcpMode("fast", "Fast", "converges early"), AcpMode("deep", "Deep", "searches longer"))
         self.applied: list[tuple[str, str, str, str | None]] = []

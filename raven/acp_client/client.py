@@ -24,9 +24,9 @@ from typing import Any
 
 from loguru import logger
 
-from raven.agent.acp_client import protocol
-from raven.agent.acp_client.journal import FrameJournal, redact_acp_frame
-from raven.agent.acp_client.protocol import (
+from raven.acp_client import protocol
+from raven.acp_client.journal import FrameJournal, redact_acp_frame
+from raven.acp_client.protocol import (
     CANCEL_REQUEST_METHOD,
     AcpConnectionError,
     AcpProtocolError,

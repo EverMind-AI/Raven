@@ -569,7 +569,7 @@ async def _delete_acp_session(agent: str, session_id: str) -> None:
     Imported here rather than at module level, so the acp pool -- and the
     subprocess layer it drags in -- stays out of the rpc import graph.
     """
-    from raven.agent.acp_client.pool import get_pool
+    from raven.acp_client.pool import get_pool
 
     await get_pool().delete_session(agent, session_id)
 

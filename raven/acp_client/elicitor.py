@@ -1,6 +1,6 @@
 """Turns one `elicitation/create` into questions a human answers, and back.
 
-Separate from `raven.agent.acp_client.elicitation` on purpose: that module decides what a
+Separate from `raven.acp_client.elicitation` on purpose: that module decides what a
 schema means and is pure, this one holds the awaits -- the broker round trip, the
 per-conversation lock -- and is the only part that needs a running loop.
 """
@@ -13,8 +13,8 @@ from typing import Any
 
 from loguru import logger
 
-from raven.agent.acp_client import autofill, elicitation
-from raven.agent.acp_client.asker import attribute, current_ask, current_autofill, question_lock
+from raven.acp_client import autofill, elicitation
+from raven.acp_client.asker import attribute, current_ask, current_autofill, question_lock
 
 LOCK_WAIT_SECONDS = 600.0
 """How long a queued form waits for its conversation before declining.

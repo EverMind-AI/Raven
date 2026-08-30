@@ -14,7 +14,7 @@ import stat
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from raven.agent.acp_client.journal import CALL, FRAME, FrameJournal, enabled, open_journal, prune, redact_acp_frame
+from raven.acp_client.journal import CALL, FRAME, FrameJournal, enabled, open_journal, prune, redact_acp_frame
 
 
 def _records(path: Path) -> list[dict]:

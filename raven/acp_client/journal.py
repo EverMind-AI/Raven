@@ -1,12 +1,12 @@
 """Every frame of one ACP connection, in wire order, on disk.
 
-The turn collector in :mod:`raven.agent.subagent.backends.acp_agent` records the
+The turn collector in :mod:`raven.acp_client.acp_agent` records the
 notifications routed to one session. That is what a reader of a delegated run
 wants, and it is not the same thing as what crossed the wire. Four classes of
 traffic never reached it, each invisible in a different way:
 
 - **The agent's own requests.** ``session/request_permission`` is answered
-  automatically and unattended (see :mod:`raven.agent.acp_client.permissions`), so
+  automatically and unattended (see :mod:`raven.acp_client.permissions`), so
   nothing anywhere could say what raven approved on a sub-agent's behalf.
 - **Raven's outbound frames.** Which session was resumed, whether a cancel was
   sent, what the prompt actually was.

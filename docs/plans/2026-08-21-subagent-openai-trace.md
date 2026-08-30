@@ -45,8 +45,8 @@ sites, so the wire is byte-identical to today and no front end changes.
 | File | Responsibility |
 | --- | --- |
 | Create `raven/agent/subagent/tool_vocabulary.py` | The moved tables (`_KIND_TO_TOOL`, claude's `_TOOL_NAMES`, `ARGUMENT_KEY`, `_SUBJECT_KEYS`) and one pure function that normalizes a stored row for the wire. |
-| Modify `raven/agent/subagent/acp_dialects/base.py` | `tool_name` returns the spec `kind` verbatim; `arguments_json` stops renaming the subject. Tables leave. |
-| Modify `raven/agent/subagent/acp_dialects/claude_code.py` | `tool_name` returns `_meta.claudeCode.toolName` verbatim. Table leaves. |
+| Modify `raven/acp_client/acp_dialects/base.py` | `tool_name` returns the spec `kind` verbatim; `arguments_json` stops renaming the subject. Tables leave. |
+| Modify `raven/acp_client/acp_dialects/claude_code.py` | `tool_name` returns `_meta.claudeCode.toolName` verbatim. Table leaves. |
 | Modify `raven/rpc/methods/instances.py` | `_log_turns` normalizes each row. Covers the live path too. |
 | Modify `raven/rpc/methods/dag.py` | `_with_messages` normalizes before `_map_to_wire`. |
 | Modify `raven/rpc/methods/subagent.py` | `subagent.context` normalizes before its mapper. |
@@ -58,7 +58,7 @@ sites, so the wire is byte-identical to today and no front end changes.
 | --- | --- |
 | Create `raven/agent/subagent/backends/turn_rows.py` | The row shape, and the event constructors that feed it. Knows no transport. |
 | Create `raven/agent/subagent/openai_steps.py` | `reasoning_steps` -> turn events, with the thinking accumulator. |
-| Modify `raven/agent/subagent/backends/acp_agent.py` | `_TurnCollector.messages()` becomes an adapter onto `turn_rows.rows()`. |
+| Modify `raven/acp_client/acp_agent.py` | `_TurnCollector.messages()` becomes an adapter onto `turn_rows.rows()`. |
 | Modify `raven/agent/subagent/backends/openai_api.py` | Feed the reader on both response paths; publish transcript and usage. |
 | Create `tests/fixtures/mirothinker/` | The captured payloads the reader tests run on. |
 | Modify `CONTEXT.md` | Add **Turn Rows** and **Step Dialect**. |
@@ -458,9 +458,9 @@ git commit -m "feat(rpc): normalize a delegated call's tool name on the way out"
 ### Task 3: ACP dialects store the transport's own name
 
 **Files:**
-- Modify: `raven/agent/subagent/acp_dialects/base.py:34-62` (tables out), `:196-202` (`tool_name`), `:118-147` (`arguments_json`)
-- Modify: `raven/agent/subagent/acp_dialects/claude_code.py:26-38` (table out), `:55-59` (`tool_name`)
-- Modify: `raven/agent/subagent/acp_dialects/__init__.py:18,45,264` (drop the `ARGUMENT_KEY` re-export)
+- Modify: `raven/acp_client/acp_dialects/base.py:34-62` (tables out), `:196-202` (`tool_name`), `:118-147` (`arguments_json`)
+- Modify: `raven/acp_client/acp_dialects/claude_code.py:26-38` (table out), `:55-59` (`tool_name`)
+- Modify: `raven/acp_client/acp_dialects/__init__.py:18,45,264` (drop the `ARGUMENT_KEY` re-export)
 - Test: `tests/test_acp_dialects.py`, `tests/test_subagent_acp.py:405-427`
 
 **Interfaces:**
@@ -477,20 +477,20 @@ git commit -m "feat(rpc): normalize a delegated call's tool name on the way out"
 def test_the_base_dialect_reports_the_specs_own_kind() -> None:
     """codex-acp sends no tool name of its own, so `kind` is the finest the
     transport offers. Stored verbatim; the read boundary maps it."""
-    from raven.agent.subagent.acp_dialects.base import AcpDialect
+    from raven.acp_client.acp_dialects.base import AcpDialect
 
     assert AcpDialect().tool_name({"kind": "execute"}) == "execute"
     assert AcpDialect().tool_name({"kind": "read"}) == "read"
 
 
 def test_a_kindless_update_is_the_no_name_case() -> None:
-    from raven.agent.subagent.acp_dialects.base import AcpDialect
+    from raven.acp_client.acp_dialects.base import AcpDialect
 
     assert AcpDialect().tool_name({}) == "tool_call"
 
 
 def test_the_claude_dialect_reports_claudes_own_tool_name() -> None:
-    from raven.agent.subagent.acp_dialects.claude_code import ClaudeCodeDialect
+    from raven.acp_client.acp_dialects.claude_code import ClaudeCodeDialect
 
     update = {"kind": "search", "_meta": {"claudeCode": {"toolName": "Glob"}}}
     assert ClaudeCodeDialect().tool_name(update) == "Glob"
@@ -498,7 +498,7 @@ def test_the_claude_dialect_reports_claudes_own_tool_name() -> None:
 
 def test_arguments_keep_the_adapters_own_spelling() -> None:
     """No key is renamed at write time any more."""
-    from raven.agent.subagent.acp_dialects.base import AcpDialect
+    from raven.acp_client.acp_dialects.base import AcpDialect
     import json
 
     call = AcpDialect().call({"toolCallId": "t1", "kind": "read", "rawInput": {"filePath": "src/a.py"}})
@@ -598,7 +598,7 @@ record - fix it by reading the wire instead, or by calling `normalize_row`.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add raven/agent/subagent/acp_dialects/ tests/test_acp_dialects.py tests/test_subagent_acp.py
+git add raven/acp_client/acp_dialects/ tests/test_acp_dialects.py tests/test_subagent_acp.py
 git commit -m "feat(subagents): record the transport's own tool name, not raven's"
 ```
 
@@ -872,7 +872,7 @@ git commit -m "feat(subagent): give a delegated turn's rows one builder"
 ### Task 6: The ACP collector builds its rows through it
 
 **Files:**
-- Modify: `raven/agent/subagent/backends/acp_agent.py:291-355` (`_TurnCollector.messages`)
+- Modify: `raven/acp_client/acp_agent.py:291-355` (`_TurnCollector.messages`)
 - Test: `tests/test_subagent_acp.py:432-454`
 
 **Interfaces:**
@@ -945,7 +945,7 @@ wrong event field would pass every unit test in the new file.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add raven/agent/subagent/backends/acp_agent.py tests/test_subagent_acp.py
+git add raven/acp_client/acp_agent.py tests/test_subagent_acp.py
 git commit -m "refactor(subagent): build acp rows through the shared builder"
 ```
 
@@ -1117,7 +1117,7 @@ Expected: FAIL - `ModuleNotFoundError: No module named 'raven.agent.subagent.ope
 A deep-research endpoint reports its steps in a response field rather than in a
 notification, so this reads the field: the step's own tool name, its payload,
 and its result with the transport's wrapping removed. Sibling to
-:mod:`raven.agent.subagent.acp_dialects`, for a transport that has no
+:mod:`raven.acp_client.acp_dialects`, for a transport that has no
 notifications to read.
 
 Two response shapes, one accumulator. Buffered, every step arrives whole;

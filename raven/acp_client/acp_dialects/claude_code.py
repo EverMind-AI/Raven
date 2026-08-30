@@ -27,7 +27,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from raven.agent.subagent.acp_dialects.base import AcpDialect, DialectResult, _dict, content_texts
+from raven.acp_client.acp_dialects.base import AcpDialect, DialectResult, _dict, content_texts
 
 # A fence the adapter added, not one the tool's own output contained: it wraps
 # the whole payload, so an inner fence (a result that really is markdown) never

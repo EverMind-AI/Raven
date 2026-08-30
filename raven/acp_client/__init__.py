@@ -9,24 +9,24 @@ older ``kind: "cli"`` which shells out once per task.
 
 The split of concerns here:
 
-- :mod:`raven.agent.acp_client.protocol` -- framing, the protocol version raven speaks,
+- :mod:`raven.acp_client.protocol` -- framing, the protocol version raven speaks,
   and the error types the layers above catch.
-- :mod:`raven.agent.acp_client.client` -- one connection: the child process, the read
+- :mod:`raven.acp_client.client` -- one connection: the child process, the read
   loop, request/response correlation, and a bounded stderr tail.
-- :mod:`raven.agent.acp_client.capabilities` -- turning one ``initialize`` handshake into
+- :mod:`raven.acp_client.capabilities` -- turning one ``initialize`` handshake into
   a stored snapshot of what the agent can actually do, so the roster advertises
   measurements rather than hand-typed declarations.
 """
 
-from raven.agent.acp_client.capabilities import (
+from raven.acp_client.capabilities import (
     CapabilitySnapshot,
     SnapshotStore,
     default_snapshot_path,
     snapshot_fingerprint,
     verify_agent,
 )
-from raven.agent.acp_client.client import AcpClient
-from raven.agent.acp_client.protocol import (
+from raven.acp_client.client import AcpClient
+from raven.acp_client.protocol import (
     PROTOCOL_VERSION,
     AcpConnectionError,
     AcpError,

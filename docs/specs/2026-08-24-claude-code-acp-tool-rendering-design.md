@@ -231,7 +231,7 @@ codex's `update_plan`, so the plan row carries Claude Code's own name too.
 | File | Change |
 |---|---|
 | `raven/agent/subagent/tool_vocabulary.py` | drop 12 `RAVEN_NAME` entries; re-key 11 `ARGUMENT_KEY` entries |
-| `raven/agent/subagent/acp_dialects/claude_code.py` | `plan_tool_name`; docstring |
+| `raven/acp_client/acp_dialects/claude_code.py` | `plan_tool_name`; docstring |
 | `ui-tui/src/domain/claudeCodeTools.ts` | new: `CLAUDE_VERBS`, `claudeRule` |
 | `ui-tui/src/domain/episodeSummary.ts` | consult `claudeRule`; `PATHY`, `QUOTED`, `execLabel` branch; `intent` in `target()` |
 | `ui-tui/src/domain/episodeFold.ts` | populate `intent` |

@@ -1062,11 +1062,15 @@ the runtime out of them; the directory name is provisional by ruling. One ruled 
 reaches `config.admission` for the door vocabulary and builds a loop by hand for replay --
 legal, because it is a harness over recorded runs, not an entrance. One package holds two
 seats: in `agent/`, `agent/loop` is the L2 harness shell every entrance runs, and its
-siblings -- `tools`, `subagent`, `acp_client`, `context`, `hook`, `personalizer`,
+siblings -- `tools`, `subagent`, `context`, `hook`, `personalizer`,
 `workdir` -- are L3 cargo the loop consumes; the "cargo does not import the loop shell"
 import-linter contract keeps the two seats apart in the shared directory, which is why
-the package is not split physically (ruled 2026-08-30).
-`agent/acp_client` is named for its side of ACP (Raven driving somebody else's agent);
+the package is not split physically (ruled 2026-08-30). The one exception the target
+tree always named: the ACP client family -- the client, the `acp_agent` backend that
+speaks it, and the `acp_dialects` that translate other vendors' tool records -- moved
+out to the top-level `acp_client/` shelf (2026-08-31), which joined the inner-layers
+seat list and stays under the cargo contract.
+`acp_client/` is named for its side of ACP (Raven driving somebody else's agent);
 `acp/` is the other side, the entrance.
 
 **Assembly Root** (`core/`):
@@ -1419,7 +1423,7 @@ _Avoid_: conflating it with the roster's `live-progress` tag, which says a trans
 its *intermediate work* (acp only) and is advertised to the model. Reply streaming is
 invisible to the model and is about the answer itself.
 
-**Capability Snapshot** (`raven/agent/acp_client/capabilities.py`):
+**Capability Snapshot** (`raven/acp_client/capabilities.py`):
 What one ACP agent reported at its last handshake - protocol version, whether it can
 resume / fork / load a session, whether it takes a Steer (`canSteer`, from
 `agentCapabilities._meta`), its models and auth methods - recorded by a Test and read
@@ -1436,7 +1440,7 @@ claim no measurement backs. The `/subagents` row for a stale entry asks for a te
 _Avoid_: reading it as a liveness check - it is one measurement, taken at Test time, not a
 statement about the agent right now.
 
-**Unattended Approval** (`raven/agent/acp_client/permissions.py`):
+**Unattended Approval** (`raven/acp_client/permissions.py`):
 How raven answers an ACP Subagent's `session/request_permission`: it approves, choosing
 from the options the agent offered by their protocol `kind` (`allow_always`, then
 `allow_once`) and never by `optionId`, which is the agent's own vocabulary. There is no
@@ -1450,7 +1454,7 @@ Distinct from what raven still refuses: `fs/read_text_file` and its siblings are
 unsupported in `CLIENT_CAPABILITIES`, and a handler returning `UNHANDLED` is how they stay
 that way.
 
-**Steer** (`raven/agent/acp_client/protocol.py`, `raven/agent/subagent/activity.py`,
+**Steer** (`raven/acp_client/protocol.py`, `raven/agent/subagent/activity.py`,
 `raven/agent/subagent/manager.py`):
 A person's words merged into a Subagent's turn while it is still running, read by the agent
 before its next model call, as opposed to a prompt that opens a turn. ACP 1.20.0 has no such
@@ -1470,7 +1474,7 @@ _Avoid_: "inject" for the whole feature - `injected` is one status of a steer, a
 `BusyPolicy.INJECT` is a different thing (a turn queued behind the running one);
 "interrupt" - a steer does not stop the turn.
 
-**Unprompted Turn** (`raven/agent/acp_client/unprompted.py`):
+**Unprompted Turn** (`raven/acp_client/unprompted.py`):
 A turn an ACP Subagent ran with nobody having asked - an on-call agent waking on its own
 schedule is the case it exists for. Every other sink on the session router is attached for
 one run and detached at its end, so these frames used to be dropped as a late usage report;
@@ -1485,7 +1489,7 @@ is the fallback ending.
 _Avoid_: "background turn" - nothing about it is backgrounded; it runs and streams like any
 other turn, and only its *origin* differs.
 
-**Elicitation Pass-Through** (`raven/agent/acp_client/elicitor.py`):
+**Elicitation Pass-Through** (`raven/acp_client/elicitor.py`):
 How an ACP Subagent's `elicitation/create` reaches the user. Form mode only, and advertised
 as only that: `url` elicitation is for out-of-band credential and payment collection, so
 advertising it would let a sub-agent send the reader to an address of its own choosing. The
@@ -1509,7 +1513,7 @@ by default and declines when a dispatch has no reachable user. **Question Autofi
 one thing that answers on this path without asking, and only from what the turn already
 established.
 
-**Ask-User Round Trip** (`raven/agent/acp_client/ask_user.py`):
+**Ask-User Round Trip** (`raven/acp_client/ask_user.py`):
 How an ACP Subagent's question reaches the user when it does not use `elicitation/create`.
 Raven-X routes its deep-research clarify through an extension of its own: the question
 leaves as a `session/update` whose `sessionUpdate` is `ask_user_request`, and the answer
@@ -1533,7 +1537,7 @@ _Avoid_: reading a dropped frame as a no-op. The agent blocks its tool call on t
 ten minutes before falling back to the question's default, so not answering is the stall this
 exists to prevent, not an abstention.
 
-**Question Autofill** (`raven/agent/acp_client/autofill.py`, `raven/agent/acp_client/resolver.py`):
+**Question Autofill** (`raven/acp_client/autofill.py`, `raven/acp_client/resolver.py`):
 The step in which raven answers a Subagent's question from the turn's own context instead
 of putting it to the user. It sits in front of both question routes -- **Elicitation
 Pass-Through** and **Ask-User Round Trip** -- and decides per form rather than per
@@ -1557,7 +1561,7 @@ fail-safe paths return (timeout, cancellation, an undeliverable question, connec
 and autofill never sets one, so a question it deferred and nobody answered is the same
 empty skip it always was.
 
-**Frame Journal** (`raven/agent/acp_client/journal.py`):
+**Frame Journal** (`raven/acp_client/journal.py`):
 Every frame of one ACP connection, both directions, in wire order, on disk. Distinct from
 the run transcript, which holds the `session/update` notifications routed to one session -
 the reading of a delegated run, and not everything that crossed the wire. Four classes of
@@ -1616,7 +1620,7 @@ agreement.
 _Avoid_: reading a step type as a raven tool name - it is the endpoint's, and **Tool
 Vocabulary** maps it.
 
-**ACP Dialect** (`raven/agent/subagent/acp_dialects/`):
+**ACP Dialect** (`raven/acp_client/acp_dialects/`):
 How one ACP adapter's tool-call frames are read into a record: the adapter's own name for the
 tool at the finest grain the transport gives - `_meta.claudeCode.toolName` where the adapter
 sends one, the spec's `kind` otherwise - the subject to show beside it, and output with the
@@ -1670,7 +1674,7 @@ claude-agent-acp name does too; a renderer answers with one of three verb tables
 vocabulary keyed the same way throughout.
 _Avoid_: applying it at write time - that is what this replaced.
 
-**Closing Message** (`raven/agent/subagent/backends/acp_agent.py`, `activity.py`):
+**Closing Message** (`raven/acp_client/acp_agent.py`, `activity.py`):
 What a delegated run said *after its last tool call*, as distinct from its whole reply. An
 ACP turn may narrate as it works - measured on codex-acp: a plan, then a progress note
 before each of three calls, then the report - and the run's returned answer joins all of it,
@@ -1696,7 +1700,7 @@ the record's directory - a task id no reader of a *conversation* ever sees.
 _Avoid_: reading the absence of live rows as "the turn ended" - a transport with no per-step
 visibility reports none for the whole of every turn.
 
-**Stop Reason** (`raven/agent/subagent/backends/acp_agent.py`):
+**Stop Reason** (`raven/acp_client/acp_agent.py`):
 What an ACP agent reports at the end of a turn. Only `end_turn` means it finished; every
 other value (`cancelled`, `max_tokens`, `refusal`, ...) leaves a reply that reads complete
 and is not. Such a reply is kept and carries an appended `[raven]` notice naming the stop

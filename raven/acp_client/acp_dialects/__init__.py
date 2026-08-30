@@ -15,9 +15,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from raven.agent.subagent.acp_dialects.base import AcpDialect, DialectResult, ToolCall, content_texts
-from raven.agent.subagent.acp_dialects.claude_code import ClaudeCodeDialect
-from raven.agent.subagent.acp_dialects.codex import CodexDialect
+from raven.acp_client.acp_dialects.base import AcpDialect, DialectResult, ToolCall, content_texts
+from raven.acp_client.acp_dialects.claude_code import ClaudeCodeDialect
+from raven.acp_client.acp_dialects.codex import CodexDialect
 
 _DIALECTS: tuple[AcpDialect, ...] = (ClaudeCodeDialect(), CodexDialect())
 

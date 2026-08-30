@@ -18,8 +18,8 @@ from uuid import uuid4
 
 from loguru import logger
 
-from raven.agent.acp_client import autofill
-from raven.agent.acp_client.autofill import Question, Resolution
+from raven.acp_client import autofill
+from raven.acp_client.autofill import Question, Resolution
 from raven.spine.events import ToolEvent, ToolPhase
 
 RECALL_BUDGET_S = 5.0
