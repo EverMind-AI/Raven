@@ -973,7 +973,9 @@ The shippable core: the L0 spine, the L1 papers, tracing (whose only import-time
 into the kernel is the paper's instrument decorator), and the address resolver they all
 need. Machine-enforced by the "the kernel stands alone" import-linter contract in
 pyproject.toml, which carries no exceptions; the raven-core wheel is this set as a build
-artifact.
+artifact: `make build-core` runs scripts/build_core_wheel.py, whose roster is read from
+that same contract, and tests/integration/test_kernel_wheel_smoke.py proves the wheel
+stands alone in a clean venv.
 
 **Home** (`home.py`):
 Where raven keeps everything: `RAVEN_HOME` or `~/.raven`, and the config file inside it,

@@ -1,4 +1,4 @@
-.PHONY: help install install-deps lint lint-python lint-tui lint-bridge test test-python test-tui build build-tui build-bridge build-ui check-commits check-pr-title check-large-files check-vendored-invariants beta ci clean coverage coverage-summary coverage-diff coverage-ratchet coverage-baseline-check coverage-baseline-candidate
+.PHONY: help install install-deps lint lint-python lint-tui lint-bridge test test-python test-tui build build-tui build-bridge build-ui build-core check-commits check-pr-title check-large-files check-vendored-invariants beta ci clean coverage coverage-summary coverage-diff coverage-ratchet coverage-baseline-check coverage-baseline-candidate
 
 PYTHON ?= python3
 PYTHON_VERSION ?= 3.12
@@ -106,6 +106,9 @@ build-ui:
 
 build-bridge:
 	npm run build --prefix bridge
+
+build-core:
+	uv run --frozen --python $(PYTHON_VERSION) python scripts/build_core_wheel.py
 
 check-commits:
 	npx commitlint --from origin/main --to HEAD --config commitlint.config.cjs
