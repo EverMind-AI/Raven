@@ -351,7 +351,7 @@ place (raven's `pyproject.toml`). The upgrade surface is one line.
 5. **Finalize**: bump the manifest `version`. Two tests assert it as a
    literal and must be updated with it —
    `test_everos_plugin_discovery.py::test_bundled_shadows_lower_priority_source`
-   and `test_plugin_command.py::TestActiveBackend::test_lists_everos_memory`.
+   and `test_cli_plugin_commands.py::TestActiveBackend::test_lists_everos_memory`.
    Then commit
    `pyproject.toml` + `uv.lock` + adapter changes. Rollback =
    `git revert` (plus data restore if the schema changed — see step 4).
