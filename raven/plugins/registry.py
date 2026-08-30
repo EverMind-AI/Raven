@@ -47,6 +47,7 @@ MemoryBackendFactory = Callable[[Any], Any]
 # ``raven.contracts.tool.Tool``. Typed as Any here so the plugin
 # layer stays import-light (no dependency on the agent package).
 ToolFactory = Callable[[Any], Any]
+HookFactory = Callable[[Any], Any]
 
 
 class PluginError(Exception):
@@ -83,6 +84,7 @@ class PluginRegistry:
         self._manifests: dict[str, PluginManifest] = {}
         self._memory_backends: dict[str, _ActivatedFactory] = {}
         self._tools: dict[str, _ActivatedFactory] = {}
+        self._hooks: dict[str, _ActivatedFactory] = {}
 
     # ── Activation ───────────────────────────────────────────────
 
@@ -164,6 +166,19 @@ class PluginRegistry:
                 factory=factory,
             )
             logger.debug("registered tool %s from %s", tool.name, mf.id)
+        for hook in mf.contributes.hooks:
+            if hook.name in self._hooks:
+                prev = self._hooks[hook.name]
+                raise PluginConflictError(
+                    f"hook {hook.name!r} contributed by both {prev.plugin_id!r} and {mf.id!r}",
+                )
+            factory = self._resolve_factory(mf.id, hook.factory)
+            self._hooks[hook.name] = _ActivatedFactory(
+                plugin_id=mf.id,
+                name=hook.name,
+                factory=factory,
+            )
+            logger.debug("registered hook %s from %s", hook.name, mf.id)
 
     @staticmethod
     def _ensure_importable(source: ManifestOrigin, location: Path | None) -> None:
@@ -251,6 +266,24 @@ class PluginRegistry:
                 f"no tool named {name!r} (registered: {self.tool_names()})",
             ) from e
 
+    def hook_names(self) -> list[str]:
+        """Stable-ordered list of registered plugin-hook names."""
+        return sorted(self._hooks)
+
+    def hook_plugin_id(self, name: str) -> str | None:
+        """Plugin id that contributed hook ``name``, or ``None``."""
+        entry = self._hooks.get(name)
+        return entry.plugin_id if entry is not None else None
+
+    def get_hook_factory(self, name: str) -> HookFactory:
+        """Look up the factory for hook ``name``. Raises ``PluginNotFoundError``."""
+        try:
+            return self._hooks[name].factory
+        except KeyError as e:
+            raise PluginNotFoundError(
+                f"no hook named {name!r} (registered: {self.hook_names()})",
+            ) from e
+
     def manifest_for(self, plugin_id: str) -> PluginManifest | None:
         """Return the manifest of an activated plugin, or None."""
         return self._manifests.get(plugin_id)
@@ -310,6 +343,31 @@ class PluginRegistry:
         )
         return factory(ctx)
 
+    @trace.instrument("plugin.load", extract=semconv.plugin_load("hook"))
+    def build_hook(
+        self,
+        name: str,
+        *,
+        config: dict[str, Any],
+        services: "ServiceLocator",
+        logger: logging.Logger | None = None,
+    ) -> Any:
+        """Resolve the named hook factory and call it with a fresh
+        ``PluginContext``, returning the constructed ``AgentHook``.
+
+        Symmetric with :meth:`build_tool`: synchronous construction,
+        exceptions propagate so the host sees the real cause. The host
+        appends the returned hook to the loop's chain.
+        """
+        factory = self.get_hook_factory(name)
+        config = self._admit(self._hooks[name], config)
+        ctx = PluginContext(
+            config=config,
+            services=services,
+            logger=logger or logging.getLogger(f"raven.plugins.{name}"),
+        )
+        return factory(ctx)
+
     def _admit(self, entry: "_ActivatedFactory", config: dict[str, Any]) -> dict[str, Any]:
         """Admit a config slice against the owning manifest's declaration.
 
@@ -325,6 +383,7 @@ class PluginRegistry:
 
 
 __all__ = [
+    "HookFactory",
     "MemoryBackendFactory",
     "PluginConflictError",
     "PluginError",

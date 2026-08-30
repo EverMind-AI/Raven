@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 def build_hooks_stack(
     *,
     eval_engine: "EvalEngine | None" = None,
+    plugin_hooks: Iterable[AgentHook] | None = None,
     extra_hooks: Iterable[AgentHook] | None = None,
 ) -> CompositeHook:
     """Build a :class:`CompositeHook` from optional contributing engines.
@@ -36,7 +37,10 @@ def build_hooks_stack(
     Order (matches the documented priority in agent/hook/__init__):
       1. Eval Engine's three hooks (before_iteration → tool_audit →
          after_iteration). All three are no-ops in default config.
-      2. Caller-supplied ``extra_hooks``.
+      2. Plugin-contributed hooks, in registry order -- a product's
+         steering runs after the judge has seen the iteration and before
+         the entrance's own outbound modifier.
+      3. Caller-supplied ``extra_hooks``.
 
     The entrances wrap their own callbacks into adapter hooks and pass them
     here as ``extra_hooks``; nothing is wrapped on their behalf.
@@ -45,6 +49,10 @@ def build_hooks_stack(
     if eval_engine is not None:
         chain.extend(eval_engine.hooks())
         logger.debug("Hooks stack: added %d Eval Engine hooks", len(eval_engine.hooks()))
+    if plugin_hooks:
+        for hook in plugin_hooks:
+            chain.append(hook)
+            logger.debug("Hooks stack: appended plugin hook %s", hook.name)
     if extra_hooks is not None:
         for hook in extra_hooks:
             chain.append(hook)

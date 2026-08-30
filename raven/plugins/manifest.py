@@ -83,16 +83,42 @@ class ToolContribution(_ManifestBase):
         return v
 
 
+class HookContribution(_ManifestBase):
+    """One ``[[plugin.contributes.hooks]]`` entry.
+
+    ``factory`` is a ``module.path:callable`` resolving to a
+    ``Callable[[PluginContext], AgentHook]`` -- it returns one
+    :class:`~raven.contracts.loop_hooks.AgentHook` the host appends to the
+    loop's hook chain at boot. This is how product code steers the loop
+    (budget notes, forced finalization, spin breaking) from a plugin
+    directory instead of a fork: the loop fires the phases, the plugin
+    decides on them.
+    """
+
+    name: str = Field(min_length=1)
+    factory: str = Field(min_length=1)
+
+    @field_validator("factory")
+    @classmethod
+    def _factory_is_module_path(cls, v: str) -> str:
+        if not _FACTORY_REF_RE.match(v):
+            raise ValueError(
+                f"factory must be 'module.path:callable', got {v!r}",
+            )
+        return v
+
+
 class Contributes(_ManifestBase):
     """All contribution arrays for a single manifest.
 
-    ``memory_backends`` and ``tools`` are consumed today; the model keeps
-    extra fields silently so future contribution types don't break
-    older hosts reading newer manifests.
+    ``memory_backends``, ``tools`` and ``hooks`` are consumed today; the
+    model keeps extra fields silently so future contribution types don't
+    break older hosts reading newer manifests.
     """
 
     memory_backends: list[MemoryBackendContribution] = Field(default_factory=list)
     tools: list[ToolContribution] = Field(default_factory=list)
+    hooks: list[HookContribution] = Field(default_factory=list)
 
 
 class PluginManifest(_ManifestBase):
@@ -119,6 +145,7 @@ class PluginManifest(_ManifestBase):
         for kind, items in (
             ("memory_backend", self.contributes.memory_backends),
             ("tool", self.contributes.tools),
+            ("hook", self.contributes.hooks),
         ):
             names = [c.name for c in items]
             if len(names) != len(set(names)):

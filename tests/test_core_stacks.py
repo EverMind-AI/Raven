@@ -92,6 +92,19 @@ class TestBuildHooksStack:
         # Extra hook comes after eval engine's three.
         assert hooks[-1] is custom
 
+    def test_plugin_hooks_sit_between_eval_and_extra(self):
+        class _Plugin(AgentHook):
+            pass
+
+        class _Extra(AgentHook):
+            pass
+
+        engine = build_eval_stack()
+        plugin, extra = _Plugin(), _Extra()
+        chain = list(build_hooks_stack(eval_engine=engine, plugin_hooks=[plugin], extra_hooks=[extra]))
+        assert chain[-2] is plugin
+        assert chain[-1] is extra
+
     def test_extra_hooks_only(self):
         class _A(AgentHook):
             pass

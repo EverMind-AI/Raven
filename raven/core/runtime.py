@@ -100,6 +100,7 @@ def build_runtime(
         config.workspace_path, ec_config, registry=plugin_registry, notify=(host.notify if host is not None else None)
     )
     plugin_tools = plugin_stack.build_plugin_tools(config.workspace_path, ec_config, registry=plugin_registry)
+    plugin_hooks = plugin_stack.build_plugin_hooks(config.workspace_path, ec_config, registry=plugin_registry)
     strategies = token_wise_stack.install_from_config(
         ec_config.token_wise,
         supports_caching=token_wise_stack.caching_probe(provider),
@@ -108,6 +109,7 @@ def build_runtime(
         deliverables = DeliverableStore(get_deliverables_path())
 
     host = host or HostWiring()
+    eval_engine = None
     if ec_config.eval_engine.enabled:
         from raven.memory_engine import MemoryStore
 
@@ -116,7 +118,13 @@ def build_runtime(
             memory=MemoryStore(config.workspace_path),
             config=ec_config.eval_engine,
         )
-        host = replace(host, hooks=hooks_stack.build_hooks_stack(eval_engine=eval_engine, extra_hooks=host.hooks))
+    if eval_engine is not None or plugin_hooks:
+        host = replace(
+            host,
+            hooks=hooks_stack.build_hooks_stack(
+                eval_engine=eval_engine, plugin_hooks=plugin_hooks, extra_hooks=host.hooks
+            ),
+        )
     loop = agent_loop.AgentLoop(
         provider=provider,
         workspace=config.workspace_path,
