@@ -27,7 +27,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from raven.agent.subagent.acp_dialects.base import AcpDialect, ToolResult, _dict, content_texts
+from raven.agent.subagent.acp_dialects.base import AcpDialect, DialectResult, _dict, content_texts
 
 # A fence the adapter added, not one the tool's own output contained: it wraps
 # the whole payload, so an inner fence (a result that really is markdown) never
@@ -65,12 +65,12 @@ class ClaudeCodeDialect(AcpDialect):
             return named
         return super().tool_name(update)
 
-    def result(self, update: dict[str, Any]) -> ToolResult:
+    def result(self, update: dict[str, Any]) -> DialectResult:
         ok = update.get("status") == "completed"
         raw = update.get("rawOutput")
         if isinstance(raw, str) and raw.strip():
-            return ToolResult(text=raw, ok=ok)
-        return ToolResult(text=_unfence("".join(content_texts(update.get("content")))), ok=ok)
+            return DialectResult(text=raw, ok=ok)
+        return DialectResult(text=_unfence("".join(content_texts(update.get("content")))), ok=ok)
 
     def pair_fields(self, fields: list[Any]) -> list[Any]:
         """Fold a free-text sibling into its question: choices plus an "Other" box.

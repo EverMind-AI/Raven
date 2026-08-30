@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from raven.agent.subagent.acp_dialects.base import AcpDialect, ToolCall, ToolResult, content_texts
+from raven.agent.subagent.acp_dialects.base import AcpDialect, DialectResult, ToolCall, content_texts
 from raven.agent.subagent.acp_dialects.claude_code import ClaudeCodeDialect
 from raven.agent.subagent.acp_dialects.codex import CodexDialect
 
@@ -46,7 +46,7 @@ __all__ = [
     "ClaudeCodeDialect",
     "CodexDialect",
     "ToolCall",
-    "ToolResult",
+    "DialectResult",
     "content_texts",
     "dialect_for",
 ]

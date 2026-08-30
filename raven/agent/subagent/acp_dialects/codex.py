@@ -17,7 +17,7 @@ import re
 import shlex
 from typing import Any
 
-from raven.agent.subagent.acp_dialects.base import AcpDialect, ToolCall, ToolResult, _dict
+from raven.agent.subagent.acp_dialects.base import AcpDialect, DialectResult, ToolCall, _dict
 
 # Codex's own item types (`codex-rs/protocol/src/items.rs`), which the adapter
 # flattens into five ACP `kind` values on the way out. Recovering them is what
@@ -171,7 +171,7 @@ class CodexDialect(AcpDialect):
             or meta.get("contextCompaction")
         )
 
-    def result(self, update: dict[str, Any]) -> ToolResult:
+    def result(self, update: dict[str, Any]) -> DialectResult:
         ok = update.get("status") == "completed"
         raw = update.get("rawOutput")
         if isinstance(raw, dict):
@@ -182,10 +182,10 @@ class CodexDialect(AcpDialect):
             if isinstance(formatted, str):
                 # An empty-but-present formatted_output is the real answer for a
                 # command that printed nothing, so the exit code is what says so.
-                return ToolResult(text=_clean(formatted) or f"(no output, exit {exit_code})", ok=ok)
+                return DialectResult(text=_clean(formatted) or f"(no output, exit {exit_code})", ok=ok)
 
         text = super().result(update).text
-        return ToolResult(text=_clean(text), ok=ok)
+        return DialectResult(text=_clean(text), ok=ok)
 
     def subject_from_result(self, update: dict[str, Any], *, name: str | None = None) -> str | None:
         """A subject codex reports only once the call has finished.
