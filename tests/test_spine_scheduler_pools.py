@@ -11,6 +11,11 @@ def _req(origin: Origin, text: str = "x") -> TurnRequest:
     return TurnRequest(origin=origin, source=src, text=text)
 
 
+def _direct_req(text: str = "d") -> TurnRequest:
+    src = Source(channel="t", chat_id=text, sender_id="u", chat_type=ChatType.DM)
+    return TurnRequest(origin=Origin.USER, source=src, text=text, direct_target=("agent", "inst"))
+
+
 async def _sink(event) -> None:
     pass
 
@@ -57,3 +62,28 @@ async def test_no_cross_pool_borrow():
         await asyncio.wait_for(asyncio.shield(blocked), timeout=0.1)  # stays blocked, no borrow
     pools._for_origin(Origin.USER).release()  # free the slot; the turn then runs
     assert isinstance(await asyncio.wait_for(blocked, timeout=1.0), TurnOutcome)  # then runs
+
+
+def test_a_direct_chat_routes_to_the_direct_pool_not_the_user_pool():
+    # A direct chat IS a user turn; the request field, not the origin, picks
+    # the pool -- several sub-agents answering must not make the user queue.
+    pools = OriginPools(user=1, system=1, direct=1)
+    assert pools.for_request(_direct_req()) is pools._direct
+    assert pools.for_request(_req(Origin.USER)) is pools._user
+
+
+async def test_three_pools_coexist_a_full_direct_pool_blocks_no_one_else():
+    # Hold the only direct slot: a user turn and a system-origin turn still
+    # run, and a second direct chat queues (waits) rather than erroring.
+    pools = OriginPools(user=1, system=1, direct=1)
+    await pools.for_request(_direct_req()).acquire()
+    lane = Lane(runner=Quick(), pools=pools, sink=_sink, conversation_id="c")
+    user_fut = lane.submit(_req(Origin.USER, "u"))
+    assert isinstance(await asyncio.wait_for(user_fut, timeout=1.0), TurnOutcome)
+    cron_fut = lane.submit(_req(Origin.CRON, "s"))
+    assert isinstance(await asyncio.wait_for(cron_fut, timeout=1.0), TurnOutcome)
+    queued = lane.submit(_direct_req("d2"))
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(asyncio.shield(queued), timeout=0.1)
+    pools._direct.release()
+    assert isinstance(await asyncio.wait_for(queued, timeout=1.0), TurnOutcome)
