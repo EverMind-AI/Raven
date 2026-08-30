@@ -9,7 +9,7 @@ them into a periodic tick loop.
 from raven.proactive_engine.sentinel.executor.defer_manager import DeferManager
 from raven.proactive_engine.sentinel.executor.dispatcher import ExecutionResult, NudgeDispatcher
 from raven.proactive_engine.sentinel.executor.injector import NudgeInjector
-from raven.proactive_engine.sentinel.executor.runner import SentinelRunner, TickOutcome
+from raven.proactive_engine.sentinel.executor.runner import SentinelAssembly, SentinelRunner, TickOutcome
 from raven.proactive_engine.sentinel.executor.spawn import ProactiveSpawn
 from raven.proactive_engine.sentinel.feedback.tracker import (
     FeedbackSignal,
@@ -52,6 +52,7 @@ __all__ = [
     "ProactivityPreferencesReader",
     "Routine",
     "RoutineLearner",
+    "SentinelAssembly",
     "SentinelRunner",
     "TickOutcome",
     "new_nudge_id",
