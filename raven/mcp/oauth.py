@@ -257,7 +257,9 @@ def credentials_path(server: str) -> Path:
 
 
 def delete_credentials(server: str) -> None:
-    credentials_path(server).unlink(missing_ok=True)
+    from raven.utils.atomic_io import remove_with_lock
+
+    remove_with_lock(credentials_path(server))
 
 
 class FileTokenStorage:
