@@ -154,7 +154,6 @@ def _no_real_raven_home(tmp_path_factory, monkeypatch):
     ``setenv`` camp (measured: 3), and setting ``HOME`` beats neither: an attribute
     patch shadows it, and a later ``setenv`` replaces it.
     """
-    from raven.config import loader
 
     # Outside ``tmp_path`` rather than under it, and fresh per test. Tests use
     # ``tmp_path`` as a workspace root and enumerate it, so a directory this
@@ -168,7 +167,7 @@ def _no_real_raven_home(tmp_path_factory, monkeypatch):
     # that without overriding anybody -- a test that wants the variable sets it
     # itself, which lands after this.
     monkeypatch.delenv("RAVEN_HOME", raising=False)
-    monkeypatch.setattr(loader, "_current_config_path", None)
+    monkeypatch.setattr("raven.home._current_config_path", None)
     yield
 
 

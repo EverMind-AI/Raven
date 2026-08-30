@@ -43,6 +43,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
+import raven.home as raven_home_module
 from raven.config.loader import set_config_path
 from raven.rpc.models import METHOD_MODELS
 
@@ -73,9 +74,8 @@ def workspace(tmp_path: Path) -> Path:
     cause is in this file, and it only shows up when collection order puts this
     file first.
     """
-    import raven.config.loader as loader
 
-    previous = loader._current_config_path
+    previous = raven_home_module._current_config_path
     ws = tmp_path / "ws"
     ws.mkdir()
     cfg_path = tmp_path / "config.json"
@@ -85,7 +85,7 @@ def workspace(tmp_path: Path) -> Path:
     cfg_path.write_text(json.dumps({"language": "en", "agents": {"defaults": {"workspace": str(ws)}}}))
     set_config_path(cfg_path)
     yield ws
-    loader._current_config_path = previous
+    raven_home_module._current_config_path = previous
 
 
 # ---------------------------------------------------------------------------

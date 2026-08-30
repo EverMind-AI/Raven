@@ -27,9 +27,8 @@ def _isolated(tmp_path, monkeypatch):
     # The handlers read the loader's own config path (language, configured
     # servers), which is a module global -- point it at the fixture and put it
     # back, or a later test in this process reads a directory that has gone.
-    import raven.config.loader as loader
 
-    monkeypatch.setattr(loader, "_current_config_path", cfg_path)
+    monkeypatch.setattr("raven.home._current_config_path", cfg_path)
     yield {"cfg_path": cfg_path}
 
 

@@ -357,7 +357,7 @@ def test_collect_covers_extension_blocks_and_both_configs(tmp_path, monkeypatch)
     )
     alt_cfg = tmp_path / "alt.json"
     alt_cfg.write_text(json.dumps({"providers": {"openai": {"apiKey": "fk-alternate-key-123456"}}}), encoding="utf-8")
-    monkeypatch.setattr("raven.config.loader._current_config_path", default_cfg)
+    monkeypatch.setattr("raven.home._current_config_path", default_cfg)
 
     secrets, complete = tredact.collect_known_secrets(config_path=alt_cfg, environ={})
 
@@ -379,7 +379,7 @@ def test_placeholder_exemption_scoped_to_api_key_fields(tmp_path, monkeypatch):
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr("raven.config.loader._current_config_path", cfg)
+    monkeypatch.setattr("raven.home._current_config_path", cfg)
 
     secrets, complete = tredact.collect_known_secrets(environ={})
 
@@ -391,7 +391,7 @@ def test_placeholder_exemption_scoped_to_api_key_fields(tmp_path, monkeypatch):
 def test_collect_flags_unreadable_config(tmp_path, monkeypatch):
     broken = tmp_path / "broken.json"
     broken.write_text("{ not json", encoding="utf-8")
-    monkeypatch.setattr("raven.config.loader._current_config_path", broken)
+    monkeypatch.setattr("raven.home._current_config_path", broken)
 
     secrets, complete = tredact.collect_known_secrets(environ={"SOME_API_KEY": "fk-env-still-works-1"})
 
@@ -459,7 +459,7 @@ def test_end_to_end_report_with_real_tracer(tmp_path, monkeypatch):
     # A leaked junk credential (provider tests write these into os.environ)
     # must not corrupt the placeholders of the real secrets.
     monkeypatch.setenv("DEEPSEEK_API_KEY", "k")
-    monkeypatch.setattr("raven.config.loader._current_config_path", config_path)
+    monkeypatch.setattr("raven.home._current_config_path", config_path)
     monkeypatch.setattr("raven.trajectory.bundle._default_workspace", lambda: tmp_path / "ws")
     _spans._store = None
     try:

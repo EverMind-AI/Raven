@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import raven.home as raven_home_module
 from raven.config import update_tools
 from raven.contracts.tool import Tool
 from raven.rpc.methods import console as console_module
@@ -479,19 +480,18 @@ def isolated_config(tmp_path: Path):
     """A config path of our own -- the cron store hangs off its parent."""
     import json
 
-    import raven.config.loader as loader
     from raven.config.loader import set_config_path
 
     # Restored, not cleared: the global outlives this module, and after the rpc
     # rename this file collects ahead of `test_segments.py`, which reads the
     # real config. Clearing left that module reading a different one than it
     # does on its own.
-    previous = loader._current_config_path
+    previous = raven_home_module._current_config_path
     cfg_path = tmp_path / "config.json"
     cfg_path.write_text(json.dumps({"agents": {"defaults": {"workspace": str(tmp_path / "ws")}}}))
     set_config_path(cfg_path)
     yield
-    loader._current_config_path = previous
+    raven_home_module._current_config_path = previous
 
 
 @pytest.mark.asyncio

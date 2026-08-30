@@ -31,9 +31,8 @@ def _isolated(tmp_path, monkeypatch):
 
     monkeypatch.setattr(oauth, "delete_credentials", lambda server: None)
     monkeypatch.setattr(oauth, "_PENDING", {})
-    import raven.config.loader as loader
 
-    monkeypatch.setattr(loader, "_current_config_path", cfg_path)
+    monkeypatch.setattr("raven.home._current_config_path", cfg_path)
     yield {"cfg_path": cfg_path}
 
 
