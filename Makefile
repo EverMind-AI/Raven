@@ -2,14 +2,14 @@
 
 PYTHON ?= python3
 PYTHON_VERSION ?= 3.12
-PYTHON_LINT_TARGETS ?= raven evolver agents tests scripts
+PYTHON_LINT_TARGETS ?= raven evolver agents plugins-dist tests scripts
 COMMIT_RANGE ?= origin/main..HEAD
 COVERAGE_BASE_REF ?= origin/main
 # Required coverage percentage for executable lines changed by a PR.
 COVERAGE_DIFF_THRESHOLD ?= 90
 # Allowed line or branch regression in percentage points to absorb rounding noise.
 COVERAGE_RATCHET_TOLERANCE ?= 0.05
-COVERAGE_REPORT_ARGS = --cov=raven --cov-branch --cov-report=term-missing:skip-covered --cov-report=xml --cov-report=json --cov-report=html
+COVERAGE_REPORT_ARGS = --cov=raven --cov=raven_everos --cov-branch --cov-report=term-missing:skip-covered --cov-report=xml --cov-report=json --cov-report=html
 
 help:
 	@echo "Targets:"

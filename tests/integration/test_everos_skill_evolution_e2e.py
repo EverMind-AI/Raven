@@ -30,7 +30,7 @@ import pytest
 
 from raven.contracts.memory import Memory
 from raven.plugins import PluginContext, ServiceLocator
-from raven.plugins.memory.everos.backend import EverosBackend, _HttpEverosAdapter
+from raven_everos.backend import EverosBackend, _HttpEverosAdapter
 from tests.integration.conftest import as_everos_payload
 
 pytestmark = pytest.mark.real_llm

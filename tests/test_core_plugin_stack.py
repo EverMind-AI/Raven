@@ -1,8 +1,9 @@
 """CLI plugin-stack helper.
 
 Exercises :func:`build_plugin_registry` and
-:func:`maybe_build_memory_backend` against the bundled
-``raven.plugins.memory.everos`` plugin installed via entry points.
+:func:`maybe_build_memory_backend` against the ``raven_everos`` plugin,
+which the dev environment installs from ``plugins-dist/everos-memory`` and
+which discovery finds through the ``raven.plugins`` entry-point group.
 """
 
 from __future__ import annotations

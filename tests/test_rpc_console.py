@@ -385,11 +385,12 @@ async def test_ext_list_reports_a_server_by_the_tools_it_registered(
     assert by_name["data.warehouse"]["tool_count"] == 1, "a sanitised server name lost its tools"
     assert by_name["data.warehouse"]["connected"] is True
 
-    # Non-empty is the load-bearing half. `plugin_discovery_sources()` points its
-    # bundled_dir at `raven/plugins/memory/`, which is in this tree, so discovery
-    # always has something to find -- and an empty list therefore means the block
-    # raised and its `except` swallowed it, which is what the stub above used to
-    # cause. A shape assertion alone would hold vacuously over that empty list.
+    # Non-empty is the load-bearing half. `plugin_discovery_sources()` scans the
+    # `raven.plugins` entry-point group, which the dev environment fills with
+    # `everos-memory`, so discovery always has something to find -- and an empty
+    # list therefore means the block raised and its `except` swallowed it, which
+    # is what the stub above used to cause. A shape assertion alone would hold
+    # vacuously over that empty list.
     assert result["plugins"], "plugin discovery returned nothing; it raised and was swallowed"
     assert all({"id", "display_name", "version", "enabled", "bundled"} <= set(row) for row in result["plugins"]), (
         result["plugins"]

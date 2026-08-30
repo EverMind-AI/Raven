@@ -743,7 +743,7 @@ class TokenWiseConfig(_Base):
 # ---------------------------------------------------------------------------
 #
 # SkillForge owns retrieval + execution + feedback emission. Evolution
-# is handled by the EverOS memory backend (``raven.plugins.memory.everos``).
+# is handled by the EverOS memory backend (``raven_everos``).
 #
 # The config is intentionally kept flat. Component-level knobs
 # (embedding model, BM25 parameters, RRF k, etc.) live in the

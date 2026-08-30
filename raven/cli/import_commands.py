@@ -112,7 +112,7 @@ def _require_memory_service_ready(backend: object) -> None:
     state = getattr(backend, "state", None)
     if state is None:
         return
-    from raven.plugins.memory.everos.backend import ServiceState
+    from raven_everos.backend import ServiceState
 
     if state is ServiceState.READY:
         return
@@ -122,7 +122,7 @@ def _require_memory_service_ready(backend: object) -> None:
         console.print("[red]Memory identity is invalid; nothing would be imported.[/red]")
         console.print("[dim]Fix memory.userId / memory.agentId in your config.json, then: raven import run[/dim]")
         raise typer.Exit(1)
-    from raven.plugins.memory.everos.server import server_log_path
+    from raven_everos.server import server_log_path
 
     console.print(f"[red]Memory service is not available ({state.value}); nothing would be imported.[/red]")
     console.print(f"[dim]Check the server log: {server_log_path()}[/dim]")

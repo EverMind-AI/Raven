@@ -60,7 +60,7 @@ INNER_DIRS = _seated_inner()
 # lazily (function-level) but never at module level.
 ROSTER = {
     "playbook": "raven.playbook",
-    "everos": "raven.plugins.memory.everos",
+    "everos": "raven_everos",
     "importer": "raven.importer",
     "eval_engine": "raven.eval_engine",
     **{
@@ -208,11 +208,11 @@ async def test_add_direction_synthetic_plugin_rides_to_a_real_turn(tmp_path: Pat
 
 
 # Mechanism packages must not house cargo: a self-contained capability living
-# inside a mechanism package rides the wrong wheel at split time. everos is
-# the one known debt (move scheduled for the S stage); this allowlist is that
-# debt's ledger -- shrink it, never grow it.
+# inside a mechanism package rides the wrong wheel at split time. everos was
+# the one known debt and it is paid -- the backend left for
+# plugins-dist/everos-memory -- so the ledger is empty and stays that way.
 _MECHANISM_PACKAGES = ["plugins", "market"]
-_CARGO_DEBT_ALLOWLIST = {"plugins/memory/everos"}
+_CARGO_DEBT_ALLOWLIST: set[str] = set()
 
 
 def test_the_mechanism_roster_names_packages_that_exist():

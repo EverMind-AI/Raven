@@ -47,24 +47,27 @@ logger = logging.getLogger(__name__)
 
 
 def plugin_discovery_sources() -> dict:
-    """Resolve the four fixed discovery-source locations the host scans.
+    """Resolve the three fixed discovery-source locations the host scans.
 
     Shared by :func:`build_plugin_registry` (live boot) and the
     ``raven plugins`` CLI command so both see the same set:
 
-    - bundled — ``raven/plugins/memory/`` inside the package.
     - user    — ``<raven home>/plugins/`` (``RAVEN_HOME`` or ``~/.raven``).
     - project — ``./.raven/plugins/``.
     - entry_points — the ``raven.plugins`` group.
 
-    The roots a config names itself (``plugins.dirs``) are the fifth source;
+    ``bundled_dir`` stays a parameter of :class:`PluginDiscovery` and is not
+    one of these: the wheel ships no plugin of its own since the EverOS
+    backend became its own distribution, so naming a directory inside the
+    package would name a directory nothing puts anything in.
+
+    The roots a config names itself (``plugins.dirs``) are the fourth source;
     :func:`named_plugin_roots` resolves them, so this set stays the fixed one.
     """
-    import raven
     from raven.home import raven_home
 
     return {
-        "bundled_dir": Path(raven.__path__[0]) / "plugins" / "memory",
+        "bundled_dir": None,
         "user_dir": raven_home() / "plugins",
         "project_dir": Path.cwd() / ".raven" / "plugins",
         "entry_points_group": "raven.plugins",
@@ -100,11 +103,9 @@ def build_plugin_registry(
     caught and logged — the caller receives an **empty** registry so
     AgentLoop can still boot and fall back to the legacy path.
 
-    Discovery spans four fixed sources plus the roots ``plugins.dirs``
-    names (priority bundled > user > project = named roots > entry_points):
+    Discovery spans three fixed sources plus the roots ``plugins.dirs``
+    names (priority user > project = named roots > entry_points):
 
-    - **bundled** — ``raven/plugins/memory/<id>/`` shipped inside the
-      raven package (the EverOS backend lives here).
     - **user** — ``~/.raven/plugins/<id>/`` drop-in directories.
     - **project** — ``./.raven/plugins/<id>/`` drop-in directories.
     - **entry_points** — the ``raven.plugins`` group, where
@@ -139,8 +140,8 @@ def maybe_build_memory_backend(
     1. If ``config.memory.backend`` is ``None``, return ``None``
        immediately — user explicitly disabled the plugin path.
     2. Look up the backend factory in the (possibly host-supplied)
-       :class:`PluginRegistry`. If absent (e.g. the everos substrate
-       wasn't installed), log a warning and return ``None``.
+       :class:`PluginRegistry`. If absent (e.g. the ``everos-memory``
+       distribution isn't installed), log a warning and return ``None``.
     3. Resolve the per-plugin config slice from
        ``config.plugins.config`` — first by plugin id (the canonical
        key, e.g. ``"everos-memory"``), then by backend contribution
@@ -172,8 +173,9 @@ def maybe_build_memory_backend(
     except PluginNotFoundError:
         logger.warning(
             "memory.backend=%r requested but no plugin contributes it. "
-            "The everos backend ships bundled with raven — run `uv sync` "
-            "to install its substrate. Continuing without a plugin backend.",
+            "The everos backend is its own distribution — install "
+            "`everos-memory` — and registers itself in the `raven.plugins` "
+            "entry-point group. Continuing without a plugin backend.",
             name,
         )
         return None

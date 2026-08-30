@@ -27,6 +27,7 @@ REPO = Path(__file__).resolve().parent.parent
 #: only about references that claim a repo-rooted path and can be checked.
 ROOTS = (
     "raven/",
+    "plugins-dist/",
     "tests/",
     "docs/",
     "ui-tui/",

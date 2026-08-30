@@ -153,7 +153,7 @@ async def everos_env(
     # Bring up the everos runtime via the production path:
     # EverosBackend.start() ensures the everos server is running.
     from raven.plugins import PluginContext, ServiceLocator
-    from raven.plugins.memory.everos.backend import EverosBackend
+    from raven_everos.backend import EverosBackend
 
     be = EverosBackend(
         PluginContext(

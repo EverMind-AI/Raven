@@ -111,7 +111,7 @@ async def _write_spawn_status(session_key: str | None, agent: str, handle: str, 
 
 def _host_everos_base_url() -> str:
     """The host's own everos service, used by any sub-agent that names none."""
-    from raven.plugins.memory.everos.health import DEFAULT_EVEROS_BASE_URL, configured_base_url
+    from raven_everos.health import DEFAULT_EVEROS_BASE_URL, configured_base_url
 
     try:
         from raven.config.raven import load_raven_config

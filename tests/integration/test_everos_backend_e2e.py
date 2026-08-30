@@ -1,4 +1,4 @@
-"""L3 — raven.plugins.memory.everos backend <-> everos end-to-end (real LLM, embedded).
+"""L3 — raven_everos backend <-> everos end-to-end (real LLM, embedded).
 
 Drives the real :class:`EverosBackend` in embedded mode: ``store`` writes
 turns into everos and ``recall`` reads both tracks back as ``Memory``
@@ -24,7 +24,7 @@ import pytest
 
 from raven.contracts.memory import Memory
 from raven.plugins import PluginContext, ServiceLocator
-from raven.plugins.memory.everos.backend import EverosBackend, _HttpEverosAdapter
+from raven_everos.backend import EverosBackend, _HttpEverosAdapter
 
 pytestmark = pytest.mark.real_llm
 

@@ -35,7 +35,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from raven.plugins.memory.everos.server import (
+from raven_everos.server import (
     _probe_health,
     ome_lock_held,
 )

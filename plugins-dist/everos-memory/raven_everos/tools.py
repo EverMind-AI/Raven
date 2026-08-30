@@ -9,7 +9,7 @@ the user message (see ``render.build_user_content``); the model passes them
 back here.
 
 The tool is deliberately thin: all parsing lives in
-:func:`raven.plugins.memory.everos.multimodal.understand_files`, which reuses the exact
+:func:`raven_everos.multimodal.understand_files`, which reuses the exact
 parser EverOS runs during memory ingest.
 """
 
@@ -19,9 +19,9 @@ import logging
 from typing import Any
 
 from raven.contracts.tool import Tool
-from raven.plugins.memory.everos.multimodal import MultimodalUnavailableError, understand_files
+from raven_everos.multimodal import MultimodalUnavailableError, understand_files
 
-logger = logging.getLogger("raven.plugins.memory.everos")
+logger = logging.getLogger("raven_everos")
 
 
 class UnderstandMediaTool(Tool):

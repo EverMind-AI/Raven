@@ -1,14 +1,16 @@
-"""EverOS memory backend — bundled default plugin.
+"""EverOS memory backend -- Raven's default memory plugin.
 
 Implements the host's :class:`raven.memory_engine.MemoryBackend` Protocol over
 HTTP against a local everos server this plugin probes and starts (see
-``.server``). Discovered via ``raven-plugin.toml`` (bundled source);
-``backend.make_backend`` is the factory the registry calls.
+``.server``). Shipped as its own distribution (``everos-memory``) and found
+through the ``raven.plugins`` entry-point group, which resolves
+``raven-plugin.toml`` out of this package; ``backend.make_backend`` is the
+factory the registry calls.
 
 This module is kept import-cheap on purpose: PluginDiscovery touches it
 during resource resolution, so it must NOT import ``backend`` (which
 lazily pulls the heavy ``everos`` substrate). Import the backend
-explicitly from :mod:`raven.plugins.memory.everos.backend`.
+explicitly from :mod:`raven_everos.backend`.
 
 What the host may reach, declared rather than assumed:
 
