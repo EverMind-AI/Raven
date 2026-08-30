@@ -1032,7 +1032,10 @@ agent for another host). `browser` and `importer` are seated inner (feature
 libraries consumed by surfaces, importing none themselves -- the edge is watched
 by the contract now, not by a ruling note). `evolver` is not a seat at all: it left the
 package for the repo-level `evolver/` tool (outside the wheel) that drives raven as a library,
-and a fifth import-linter contract keeps the runtime from importing it back. One ruled edge: `trajectory` (L3)
+and a fifth import-linter contract keeps the runtime from importing it back. `agents/` is the
+same kind of non-seat: repo-level product definitions (the A/B pilots against the frozen
+`subagents/`) that consume installed raven over `raven acp`, with a sixth contract keeping
+the runtime out of them; the directory name is provisional by ruling. One ruled edge: `trajectory` (L3)
 reaches `config.admission` for the door vocabulary and builds a loop by hand for replay --
 legal, because it is a harness over recorded runs, not an entrance. One package holds two
 seats: in `agent/`, `agent/loop` is the L2 harness shell every entrance runs, and its
