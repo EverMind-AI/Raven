@@ -628,7 +628,8 @@ The ordered blocks `ContextAssembler` renders into the system prompt, one per
 SegmentBuilder: `# Raven` (identity), the Bootstrap Files block, `# Memory`
 (host `user.md` ⊕ EverOS recall), `# Active Skills` (always-on) and `# Skills`
 (SkillForge-routed candidates — see SkillForge), and `# Curator Working State`
-(Segment 6).
+(Segment 6). `context.dropSegments` names, by builder name, the host segments an agent does
+without — a product whose bootstrap files carry its own identity drops `identity`.
 _Avoid_: treating the system prompt as one opaque blob — each segment has an owner and order.
 
 **Inject Mode**:
