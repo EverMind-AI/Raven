@@ -138,6 +138,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         provider_pool: "ProviderPool | None" = None,
         router: "ModelRouter | None" = None,
         sandbox_config: SandboxConfig | None = None,
+        executor: "SandboxExecutor | None" = None,
         mcp_servers: dict | None = None,
         tools: "ToolWiring | None" = None,
         subagents: "SubagentWiring | None" = None,
@@ -357,33 +358,38 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         self._skill_blocklist = list(getattr(skill_forge_config, "blocklist", None) or [])
         self._skill_auto_install = str(getattr(skill_forge_config, "auto_install", "auto") or "auto")
 
-        self.context_engine: "ContextEngine" = build_context_engine(
-            workspace=workspace,
-            config=context_config,
-            builder=self.context,
-            provider=provider,
-            model=self._default_binding.model,
-            # The resolved window, not the constructor argument: unset (the
-            # common case) it is None there and the real size comes from the
-            # ladder in ``providers.rates``.
-            context_window_tokens=self.context_window_tokens,
-            get_tool_definitions=self.tools.get_definitions,
-            # Read through a lambda, not bound here: ``self.subagents`` is built
-            # further down this constructor, and the agent table it exposes is
-            # rebuilt on a hot config apply, so anything captured now would be
-            # either missing or stale by the time a turn asks for it.
-            list_subagents=lambda: self.subagents.list_agents(),
-            get_tool_notices=self._mcp_tool_notices,
-            now_fn=now_fn,
-            # The factory uses these to assemble the unified engine's
-            # SkillForgeRouter + EverOS recall lane.
-            backend=backend,
-            memory_config=self.memory_config,
-            skill_forge_router_config=skill_forge_router_config,
-            skill_forge_config=skill_forge_config,
-            skill_hub_client=self._skill_hub_client,
-            provider_pool=provider_pool,
-        )
+        self.context_engine: "ContextEngine"
+        if engine.context_engine is not None:
+            # The door handed a built engine through the bundle; bind it as-is.
+            self.context_engine = engine.context_engine
+        else:
+            self.context_engine = build_context_engine(
+                workspace=workspace,
+                config=context_config,
+                builder=self.context,
+                provider=provider,
+                model=self._default_binding.model,
+                # The resolved window, not the constructor argument: unset (the
+                # common case) it is None there and the real size comes from the
+                # ladder in ``providers.rates``.
+                context_window_tokens=self.context_window_tokens,
+                get_tool_definitions=self.tools.get_definitions,
+                # Read through a lambda, not bound here: ``self.subagents`` is built
+                # further down this constructor, and the agent table it exposes is
+                # rebuilt on a hot config apply, so anything captured now would be
+                # either missing or stale by the time a turn asks for it.
+                list_subagents=lambda: self.subagents.list_agents(),
+                get_tool_notices=self._mcp_tool_notices,
+                now_fn=now_fn,
+                # The factory uses these to assemble the unified engine's
+                # SkillForgeRouter + EverOS recall lane.
+                backend=backend,
+                memory_config=self.memory_config,
+                skill_forge_router_config=skill_forge_router_config,
+                skill_forge_config=skill_forge_config,
+                skill_hub_client=self._skill_hub_client,
+                provider_pool=provider_pool,
+            )
 
         # Runtime discipline (5th pillar). Bug2 uses ``runtime.checkpoint``;
         # gated by (policy, interactive) — see ``_checkpoint_active``. When
@@ -449,7 +455,13 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # second mount of a directory already covered is what this avoids.
         mount_root = self._workdir_resolver.mount_root() if self._workdir_resolver else workspace
         home_volume = () if workdir.is_within(workspace, mount_root) else ((str(workspace), "/agent-home", "rw"),)
-        self._executor: SandboxExecutor = build_executor(sandbox_config, mount_root, self._owned_ids, home_volume)
+        self._executor: SandboxExecutor = (
+            # A caller that built its own executor hands it here; the mount and
+            # home-volume derivation belong to the builder alone.
+            executor
+            if executor is not None
+            else build_executor(sandbox_config, mount_root, self._owned_ids, home_volume)
+        )
         self._executor_stack: AsyncExitStack | None = None
         self._executor_started: bool = False
         self._executor_start_lock = asyncio.Lock()
