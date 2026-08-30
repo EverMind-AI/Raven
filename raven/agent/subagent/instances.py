@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
@@ -24,17 +23,17 @@ from typing import Any
 from loguru import logger
 
 from raven.utils.atomic_io import atomic_replace, write_transaction
+from raven.utils.paths import mint_slug
 
 _FILENAME = "subagent_instances.json"
 
 _Key = tuple[str, str, str]
 
-_SLUG_SEPARATORS_RE = re.compile(r"[^a-z0-9]+")
 _MAX_SLUG_CHARS = 32
 
 
 def _slug(seed: str) -> str:
-    return _SLUG_SEPARATORS_RE.sub("-", seed.lower()).strip("-")[:_MAX_SLUG_CHARS].strip("-")
+    return mint_slug(seed, max_chars=_MAX_SLUG_CHARS)
 
 
 def mint_handle(seed: str, *, fallback: str = "agent") -> str:
