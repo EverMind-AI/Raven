@@ -74,9 +74,9 @@ def state_dir() -> Path:
     override = os.environ.get("RAVEN_TRACING_DIR")
     if override:
         return Path(override).expanduser()
-    home = os.environ.get("RAVEN_HOME")
-    base = Path(home).expanduser() if home else Path.home() / ".raven"
-    return base / "traces"
+    from raven.home import raven_home
+
+    return raven_home() / "traces"
 
 
 def port() -> int:

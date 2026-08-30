@@ -618,15 +618,15 @@ respawning forever is worse than one that stopped and said why."""
 
 
 def _web_state_path() -> Path:
-    import os
+    from raven.config.loader import raven_home
 
-    return Path(os.environ.get("RAVEN_HOME", Path.home() / ".raven")) / "web.json"
+    return raven_home() / "web.json"
 
 
 def _web_log_path() -> Path:
-    import os
+    from raven.config.loader import raven_home
 
-    return Path(os.environ.get("RAVEN_HOME", Path.home() / ".raven")) / "web.log"
+    return raven_home() / "web.log"
 
 
 def _write_web_state(port: int) -> None:

@@ -164,7 +164,9 @@ def find_node() -> Tuple[Optional[str], Optional[Tuple[int, int, int]]]:
         # nest the binary under bin/ (node-v22.x.y-darwin-arm64/bin/node) while
         # the Windows zip puts node.exe at the top level
         # (node-v22.x.y-win-x64/node.exe) — install.ps1 provisions the latter.
-        runtime_root = Path(os.environ.get("RAVEN_HOME", Path.home() / ".raven")) / "runtime"
+        from raven.config.loader import raven_home
+
+        runtime_root = raven_home() / "runtime"
         if runtime_root.is_dir():
             if _is_windows():
                 direct = runtime_root / "node" / "node.exe"
