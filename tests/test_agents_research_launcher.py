@@ -67,6 +67,49 @@ def test_the_render_merges_secrets_and_pins_the_workspace(grounded, tmp_path):
     assert rendered.parent == tmp_path / "state"
 
 
+def test_the_render_boards_the_flow_plugin_and_the_modes(grounded, tmp_path):
+    rendered = grounded.render_config(RUN_PY.parent / "config.json")
+    data = json.loads(rendered.read_text())
+    assert data["plugins"]["dirs"] == [str(RUN_PY.parent / "plugins")]
+    flow = data["plugins"]["config"]["research-flow"]
+    assert flow["enabled"] is True and flow["version"].startswith("dr@")
+    assert flow["stateRoot"] == str(tmp_path / "state" / "research_flow")
+    assert data["context"]["dropSegments"] == ["identity", "memory", "active_skills", "skills"]
+    modes = data["acp"]["modes"]
+    assert list(modes) == ["fast", "deep", "ultra"] and data["acp"]["defaultMode"] == "fast"
+    assert modes["fast"]["overlay"] == {"drFlow": {}} and modes["fast"]["maxToolIterations"] is None
+    assert modes["deep"]["maxToolIterations"] == 60 and modes["deep"]["overlay"]["maxToolIterations"] == 60
+    assert modes["deep"]["overlay"]["drFlow"]["maxIterations"] == 30
+    assert modes["ultra"]["overlay"]["drFlow"]["sufficiency"] == {"enabled": False}
+
+
+def test_the_modes_are_the_vendored_twins_overlays(tmp_path):
+    ours = RUN_PY.parent / "modes"
+    theirs = REPO / "subagents" / "raven-research" / "modes"
+    for name in ("deep.json", "ultra.json"):
+        assert json.loads((ours / name).read_text()) == json.loads((theirs / name).read_text())
+
+
+def test_the_identity_is_the_vendored_twins_override_verbatim():
+    fork = json.loads((REPO / "subagents" / "raven-research" / "config.json").read_text())
+    assert (RUN_PY.parent / "soul.md").read_text().rstrip("\n") == fork["drFlow"]["identityOverride"].rstrip("\n")
+
+
+def test_the_contract_is_seeded_beside_the_identity_once(grounded, tmp_path):
+    grounded.render_config(RUN_PY.parent / "config.json")
+    profile = tmp_path / "state" / "workspace" / "agent_memory" / "profile"
+    soul = (profile / "soul.md").read_text()
+    assert "## What actually decides this task" in soul, "measured guidance rendered into the identity"
+    assert soul.index("## What actually decides this task") < soul.index("## Reading")
+    contract = profile / "agent.md"
+    text = contract.read_text()
+    assert "## Reading" not in text, "the identity is soul.md's; agent.md carries only the contract"
+    assert "contract" in text.lower()
+    contract.write_text("operator tuned")
+    grounded.render_config(RUN_PY.parent / "config.json")
+    assert contract.read_text() == "operator tuned"
+
+
 def test_the_rendered_file_is_owner_only(grounded):
     rendered = grounded.render_config(RUN_PY.parent / "config.json")
     assert stat.S_IMODE(rendered.stat().st_mode) == 0o600
@@ -160,7 +203,7 @@ def test_the_pilots_tool_face_equals_the_vendored_twins(grounded, tmp_path, monk
     """Build the loop from the rendered config; the model-visible tool set is
     the fork's nine and nothing more."""
     from raven.config.loader import load_config
-    from raven.config.raven import RavenConfig
+    from raven.config.raven import load_raven_config
     from raven.contracts.llm_provider import LLMResponse
     from raven.core import runtime
     from raven.providers.base import LLMProvider
@@ -193,9 +236,19 @@ def test_the_pilots_tool_face_equals_the_vendored_twins(grounded, tmp_path, monk
 
     monkeypatch.setattr(home, "_current_config_path", rendered)
     config = load_config(rendered)
-    rt = runtime.build_runtime(config, RavenConfig(), provider=_StubProvider())
+    ec_config = load_raven_config(rendered)
+    assert ec_config.plugins.dirs == [str(RUN_PY.parent / "plugins")]
+    rt = runtime.build_runtime(config, ec_config, provider=_StubProvider())
     try:
         visible = {d["function"]["name"] for d in rt.loop.tools.get_definitions()}
+        from research_flow.tools.ask_user import DRAskUserTool
+        from research_flow.tools.web import WebFetchTool, WebSearchTool
+
+        assert isinstance(rt.loop.tools.get("web_search"), WebSearchTool), "the plugin's search replaced the built-in"
+        assert isinstance(rt.loop.tools.get("web_fetch"), WebFetchTool)
+        assert isinstance(rt.loop.tools.get("ask_user"), DRAskUserTool)
+        assert any(h.name == "ResearchFlowHook" for h in rt.loop.hooks._hooks), "the flow hook boarded the chain"
+        assert [b.name for b in rt.loop.context_engine._builders][:1] == ["bootstrap"], "identity dropped"
     finally:
         rt.discard()
     assert visible == VENDORED_TOOL_FACE

@@ -1,0 +1,46 @@
+# research-flow: the deep-research harness as a plugin.
+#
+# Config slice (plugins.config["research-flow"]): the product's drFlow block
+# verbatim (camelCase keys - enabled, version, maxIterations, contextWindowTokens,
+# toolsAllowlist, thinkClosingTagRequired, minimalContext, identityOverride,
+# promptSectionOverride, measuredGuidance, fetchMaxChars, search.*, digest.*,
+# verify.*, budgetNote.*, forceFinalize.*, spinBreaker.*, fetchFloor.*,
+# fetchGate.*, sufficiency.*, finalShape.*, conversation.*, askUser.*), plus the
+# plugin-only keys:
+#
+#   search.apiKey   Serper key for web_search; falls back to $SERPER_API_KEY
+#   fetch.apiKey    Jina reader key for web_fetch; falls back to $JINA_API_KEY
+#   proxy           optional HTTP(S) proxy URL for both web tools
+#   stateRoot       session-store root; defaults to <workspace>/research_flow
+#
+# config_schema stays empty on purpose: admission with an empty declaration is
+# verbatim pass-through, and the slice is validated by the plugin's own
+# FlowConfig (research_flow/config.py), which owns the full drFlow shape.
+
+[plugin]
+id = "research-flow"
+version = "0.1.0"
+display_name = "Research Flow"
+enabled_by_default = true
+
+[[plugin.contributes.hooks]]
+name = "research_flow"
+factory = "research_flow.plugin:make_hook"
+
+# The three tools replace the kernel built-ins of the same names (the registry
+# overwrites by name; plugin tools register after the defaults). ask_user's
+# factory declines (returns None) unless askUser.enabled and conversation.enabled
+# are both on - a registered tool the contract never asks for is the mismatch
+# the prompt clause exists to prevent.
+
+[[plugin.contributes.tools]]
+name = "web_search"
+factory = "research_flow.plugin:make_web_search"
+
+[[plugin.contributes.tools]]
+name = "web_fetch"
+factory = "research_flow.plugin:make_web_fetch"
+
+[[plugin.contributes.tools]]
+name = "ask_user"
+factory = "research_flow.plugin:make_ask_user"

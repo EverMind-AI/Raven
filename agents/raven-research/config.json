@@ -29,6 +29,85 @@
         "user_id": "raven-research-ng",
         "agent_id": "raven-research-ng",
         "timeout_s": 360
+      },
+      "research-flow": {
+        "enabled": true,
+        "thinkClosingTagRequired": false,
+        "maxIterations": 20,
+        "budgetNote": {
+          "enabled": true,
+          "warnRatio": 0.3
+        },
+        "forceFinalize": {
+          "enabled": true
+        },
+        "spinBreaker": {
+          "enabled": true
+        },
+        "fetchFloor": {
+          "enabled": true
+        },
+        "fetchGate": {
+          "enabled": true,
+          "k": 15
+        },
+        "sufficiency": {
+          "enabled": true,
+          "minSearches": 1,
+          "minFetches": 2,
+          "timeoutSeconds": 30,
+          "attemptTimeoutSeconds": 15
+        },
+        "verify": {
+          "constraintRubric": true,
+          "strictRejectOnly": true,
+          "timeoutSeconds": 120,
+          "attemptTimeoutSeconds": 40
+        },
+        "digest": {
+          "verbatimHeadChars": 800
+        },
+        "search": {
+          "saturation": {
+            "enabled": true,
+            "k": 5,
+            "onSaturate": "widen"
+          }
+        },
+        "toolsAllowlist": [
+          "web_search",
+          "web_fetch",
+          "read_file",
+          "write_file",
+          "edit_file",
+          "find",
+          "grep",
+          "list_dir"
+        ],
+        "finalShape": {
+          "record": true,
+          "requireMarker": false,
+          "reportStructure": true,
+          "reportFormatOverride": true,
+          "reportDepth": true,
+          "reportReminder": true,
+          "reportBounce": false,
+          "processAppendix": true
+        },
+        "askUser": {
+          "enabled": true,
+          "mode": "when_needed",
+          "delivery": "tool"
+        },
+        "conversation": {
+          "enabled": true,
+          "gate": "agentic",
+          "gateMaxTokens": 4096,
+          "gateTimeoutSeconds": 90,
+          "researchMemo": true,
+          "identityScope": "turn"
+        },
+        "version": "dr@3.5-filetools-askuser"
       }
     }
   },
@@ -58,6 +137,14 @@
       "create_playbook",
       "load_playbook",
       "run_subagent_dag"
+    ]
+  },
+  "context": {
+    "dropSegments": [
+      "identity",
+      "memory",
+      "active_skills",
+      "skills"
     ]
   }
 }

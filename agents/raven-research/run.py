@@ -45,6 +45,31 @@ from raven.home import raven_home
 HERE = Path(__file__).resolve().parent
 DEFAULT_CONFIG = HERE / "config.json"
 IDENTITY_SOURCE = HERE / "soul.md"
+PLUGINS_DIR = HERE / "plugins"
+FLOW_PLUGIN_DIR = PLUGINS_DIR / "research-flow"
+FLOW_PLUGIN_ID = "research-flow"
+MODES_DIR = HERE / "modes"
+BASELINE_MODE = "fast"
+
+# What a client's mode picker shows. The name and blurb live here rather than in
+# the overlay files so a mode's label cannot drift from its diff.
+MODE_LABELS = {
+    "fast": (
+        "Fast",
+        "Bounded budget; converges as soon as the evidence answers the question. "
+        "The default, and right for an ordinary question.",
+    ),
+    "deep": (
+        "Deep",
+        "Keeps searching for longer before the early-convergence gate is consulted. "
+        "For a multi-faceted topic one pass of evidence will not settle.",
+    ),
+    "ultra": (
+        "Ultra",
+        "No early-convergence gate; exhaustive retrieval. For a survey where missing a source is the failure mode.",
+    ),
+}
+OVERLAY_KEYS = frozenset({"drFlow", "agents"})
 
 PRODUCT = "raven-research-ng"
 
@@ -171,17 +196,96 @@ def require_search(config: dict) -> None:
     )
 
 
-def seed_identity(workspace: Path) -> None:
-    """Copy the product identity into the workspace raven reads it from.
+def seed_identity(workspace: Path, flow_slice: dict) -> None:
+    """Seed the product identity into the workspace raven reads it from.
 
-    Once: the workspace copy is the live one afterwards, and a product update
-    must not silently overwrite what an operator tuned in place.
+    Rendered, not copied: the flow inserts its measured guidance into the
+    identity text the way the vendored twin did at prompt-build time, so the
+    workspace copy is the model-visible text. Once: the workspace copy is the
+    live one afterwards, and a product update must not silently overwrite
+    what an operator tuned in place.
     """
     target = workspace / "agent_memory" / "profile" / "soul.md"
     if target.exists():
         return
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(IDENTITY_SOURCE.read_text(encoding="utf-8"), encoding="utf-8")
+    target.write_text(rendered_identity(flow_slice), encoding="utf-8")
+
+
+def _flow_prompts(flow_slice: dict):
+    """Both prompt halves, rendered by the plugin that owns their text.
+
+    The launcher only asks the plugin to render for this product's flow
+    config, so what the model reads is what the gates enforce. Imported from
+    the plugin directory the same way the runtime will import it once
+    ``plugins.dirs`` names that directory.
+    """
+    if str(FLOW_PLUGIN_DIR) not in sys.path:
+        sys.path.insert(0, str(FLOW_PLUGIN_DIR))
+    from research_flow.config import FlowConfig
+    from research_flow.prompts import render_identity_and_contract
+
+    merged = dict(flow_slice)
+    merged["identityOverride"] = IDENTITY_SOURCE.read_text(encoding="utf-8").rstrip("\n")
+    return render_identity_and_contract(FlowConfig.from_slice(merged))
+
+
+def rendered_identity(flow_slice: dict) -> str:
+    """The identity as the model reads it: soul.md with the flow's insertions."""
+    return _flow_prompts(flow_slice)[0]
+
+
+def seed_contract(workspace: Path, flow_slice: dict) -> None:
+    """Write the contract beside the identity, once, as ``agent.md``.
+
+    Bootstrap renders both files in order: the identity from ``soul.md``, the
+    contract from ``agent.md`` -- the two halves of the segment the fork built
+    in code. Same once-only rule as the identity.
+    """
+    target = workspace / "agent_memory" / "profile" / "agent.md"
+    if target.exists():
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(_flow_prompts(flow_slice)[1], encoding="utf-8")
+
+
+def mode_catalogue() -> dict:
+    """The ``acp.modes`` block: one entry per mode, each carrying its own diff.
+
+    Diffs, not merged blocks: the overlay reaches the plugin's hooks through
+    the session policy as ``ctx.metadata["mode_overlay"]``, and the plugin
+    merges it over the baseline flow config per session. The baseline mode
+    carries an empty overlay. An empty dict when this folder ships no
+    ``modes/`` directory, which leaves the rendered config without ``acp.modes``
+    and ``session/set_mode`` method-not-found -- the pre-modes behaviour.
+    """
+    if not MODES_DIR.is_dir():
+        return {}
+    catalogue: dict = {}
+    for mode, (name, description) in MODE_LABELS.items():
+        overlay: dict = {}
+        if mode != BASELINE_MODE:
+            overlay_file = MODES_DIR / f"{mode}.json"
+            if not overlay_file.is_file():
+                continue
+            overlay = json.loads(overlay_file.read_text(encoding="utf-8"))
+            unknown = sorted(set(overlay) - OVERLAY_KEYS)
+            if unknown:
+                raise SystemExit(
+                    f"{overlay_file}: unsupported top-level key(s) {', '.join(unknown)}; "
+                    f"an overlay carries only {', '.join(sorted(OVERLAY_KEYS))}"
+                )
+        cap = (overlay.get("agents") or {}).get("defaults", {}).get("maxToolIterations")
+        entry_overlay: dict = {"drFlow": overlay.get("drFlow", {})}
+        if cap:
+            entry_overlay["maxToolIterations"] = cap
+        catalogue[mode] = {
+            "name": name,
+            "description": description,
+            "maxToolIterations": cap,
+            "overlay": entry_overlay,
+        }
+    return catalogue
 
 
 def sweep_stale_renders(root: Path) -> None:
@@ -233,8 +337,20 @@ def render_config(source: Path) -> Path:
     if not defaults.get("workspace"):
         defaults["workspace"] = str(root / "workspace")
 
+    plugins = config.setdefault("plugins", {})
+    plugins["dirs"] = [str(PLUGINS_DIR)]
+    flow_slice = plugins.setdefault("config", {}).setdefault(FLOW_PLUGIN_ID, {})
+    flow_slice.setdefault("stateRoot", str(root / "research_flow"))
+    catalogue = mode_catalogue()
+    if catalogue:
+        acp = config.setdefault("acp", {})
+        acp["modes"] = catalogue
+        acp["defaultMode"] = BASELINE_MODE
+        log(f"[run] modes: {', '.join(catalogue)} (default {BASELINE_MODE})")
+
     root.mkdir(parents=True, exist_ok=True)
-    seed_identity(Path(defaults["workspace"]))
+    seed_identity(Path(defaults["workspace"]), flow_slice)
+    seed_contract(Path(defaults["workspace"]), flow_slice)
     sweep_stale_renders(root)
 
     rendered = root / f".config.rendered.{os.getpid()}.json"
