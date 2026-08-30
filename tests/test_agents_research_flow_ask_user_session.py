@@ -434,6 +434,10 @@ def test_a_fork_does_not_inherit_a_pending_clarify(tmp_path) -> None:
     copied", because the pending lived in ``session.metadata``. Here the carrier is the
     plugin's own store, so the same guarantee is a property of the key and can be run
     instead of read.
+
+    [merged] The surface file carried a twin of this test (each ported from a
+    different fork original); its non-overlapping assertions -- the fork
+    lineage, the round budget -- live here now. One property, one pin.
     """
     from raven.session.manager import SessionManager
 
@@ -448,7 +452,11 @@ def test_a_fork_does_not_inherit_a_pending_clarify(tmp_path) -> None:
     child = sessions.fork(parent.key)
     assert child is not None
     assert child.key != parent.key
+    assert child.metadata["parent_session_id"] == parent.key, "the lineage is recorded even so"
     assert store.load(child.key).pending_clarify is None
+    assert store.load(child.key).chain_round == 0
+    # The parent's round is untouched: forking is not a way to spend it.
+    assert store.load(parent.key).chain_round == 1
     assert store.load(parent.key).pending_clarify is not None
     # The trunk resets its own interaction wait-state for the same reason.
     assert child.pending_clarification is None
