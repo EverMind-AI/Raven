@@ -107,7 +107,7 @@ LEDGER = {
         "TurnContext",
         "UsageSnapshot",
     },
-    "factory_loop": {"AgentHook", "AgentHookContext", "HookDecision"},
+    "factory_loop": {"AgentHook", "AgentHookContext", "FACTORY_LOOP_SURFACE_VERSION", "HookDecision"},
 }
 
 CONTRACTS_DIR = Path(__file__).resolve().parent.parent / "raven" / "contracts"
