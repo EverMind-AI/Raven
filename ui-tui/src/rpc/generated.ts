@@ -171,7 +171,7 @@ export interface SessionInitInfo {
 /**
  * ``info.usage`` — the boot baseline, refreshed by each turn's completion.
  *
- * Distinct from :class:`UsageSnapshot`, which is the per-turn event payload:
+ * Distinct from :class:`TurnUsage`, which is the per-turn event payload:
  * this one carries the context-window fill a banner draws, and its counters
  * are named for the session rather than for one LLM call.
  *
@@ -985,9 +985,9 @@ export interface DirectTurn {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "UsageSnapshot".
+ * via the `definition` "TurnUsage".
  */
-export interface UsageSnapshot {
+export interface TurnUsage {
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
@@ -1314,7 +1314,7 @@ export interface MessageCompleteEvent {
   type: 'message.complete';
   payload: {
     turn_id: string;
-    usage: UsageSnapshot;
+    usage: TurnUsage;
     target?: DirectTarget;
     /**
      * How long the whole turn took, measured server-side from the moment the runner picked the turn up to the moment it returned. Sent so a live client does not have to time the turn with its own clock: a browser stopwatch starts when the events arrive rather than when the work did, and only exists while that page is open, so the same turn came out one number live and another after a reload. Absent means unknown, same rule as reasoning_ms -- fall back to timing it locally, never to zero.

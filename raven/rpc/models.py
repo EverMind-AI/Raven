@@ -286,7 +286,7 @@ class DirectTurn(_Strict):
     )
 
 
-class UsageSnapshot(_Strict):
+class TurnUsage(_Strict):
     """Token / cost usage reported at the end of a turn."""
 
     prompt_tokens: int
@@ -532,7 +532,7 @@ class ToolCompleteEvent(_Strict):
 
 class MessageCompletePayload(_Strict):
     turn_id: str
-    usage: UsageSnapshot
+    usage: TurnUsage
     target: DirectTarget | None = None
     duration_ms: int | None = Field(
         default=None,
@@ -2284,7 +2284,7 @@ class SkillhubRemoveResult(_Strict):
 class SessionUsage(_Strict):
     """``info.usage`` — the boot baseline, refreshed by each turn's completion.
 
-    Distinct from :class:`UsageSnapshot`, which is the per-turn event payload:
+    Distinct from :class:`TurnUsage`, which is the per-turn event payload:
     this one carries the context-window fill a banner draws, and its counters
     are named for the session rather than for one LLM call.
     """
@@ -3891,7 +3891,7 @@ __all__ = [
     "DirectTurn",
     "ModelOptionProvider",
     "ProviderEndpointInfo",
-    "UsageSnapshot",
+    "TurnUsage",
     "CliResult",
     "StubResult",
     "CommandsCatalogResponse",

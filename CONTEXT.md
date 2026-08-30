@@ -440,6 +440,7 @@ window). A Hermes-faithful `SystemAndTailCacheStrategy` ships alongside as an A/
 **UsageSnapshot**:
 The token/cost accounting unit for a single LLM call: input / output / cache-read /
 cache-write / reasoning tokens plus the estimated USD cost.
+_Avoid_: the turn-end wire payload is `TurnUsage` (rpc/models.py), not UsageSnapshot.
 
 **Provider**:
 An LLM vendor adapter (`providers/`: Anthropic, OpenAI, Gemini, …), shared by the

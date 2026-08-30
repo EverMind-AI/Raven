@@ -7011,7 +7011,7 @@
       },
       "SessionUsage": {
         "additionalProperties": false,
-        "description": "``info.usage`` — the boot baseline, refreshed by each turn's completion.\n\nDistinct from :class:`UsageSnapshot`, which is the per-turn event payload:\nthis one carries the context-window fill a banner draws, and its counters\nare named for the session rather than for one LLM call.",
+        "description": "``info.usage`` — the boot baseline, refreshed by each turn's completion.\n\nDistinct from :class:`TurnUsage`, which is the per-turn event payload:\nthis one carries the context-window fill a banner draws, and its counters\nare named for the session rather than for one LLM call.",
         "properties": {
           "input": {
             "type": "integer"
@@ -8580,7 +8580,7 @@
           }
         }
       },
-      "UsageSnapshot": {
+      "TurnUsage": {
         "type": "object",
         "additionalProperties": false,
         "required": [
@@ -9115,7 +9115,7 @@
                 "type": "string"
               },
               "usage": {
-                "$ref": "#/components/schemas/UsageSnapshot"
+                "$ref": "#/components/schemas/TurnUsage"
               },
               "target": {
                 "$ref": "#/components/schemas/DirectTarget"

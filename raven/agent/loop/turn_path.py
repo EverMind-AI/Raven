@@ -662,7 +662,7 @@ class TurnPathMixin:
             )
             # tui-chat L2-A wire: stream caller (turn.* handler) may want the
             # final-iteration usage to populate `message.complete.payload.usage`
-            # per CAP-CHAT-1 wire shape. Use the wire-contract UsageSnapshot
+            # per CAP-CHAT-1 wire shape. Use the wire-contract TurnUsage
             # fields (prompt_tokens / completion_tokens / total_tokens) — not
             # the agent-internal snapshot with model / cache / cost fields.
             if usage_sink is not None and response.usage:
