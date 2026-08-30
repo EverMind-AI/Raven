@@ -1,8 +1,12 @@
 import asyncio
 from dataclasses import replace
 
+from raven.agent.acp_client.asker import current_ask
+from raven.agent.tools.ask_user import AskUserTool
 from raven.agent.tools.message import MessageTool
 from raven.agent.tools.shell import ExecTool
+from raven.config.raven import SubagentQuestionsConfig
+from raven.contracts.asking import SupportsApprovalTurn, SupportsDirectAsk
 from raven.rpc.spine import (
     RpcOutlet,
     RpcTurnRunner,
@@ -129,6 +133,13 @@ def test_pieces_satisfy_their_spine_protocols():
     assert outlet.capabilities.streaming is True
 
 
+def test_the_real_tools_satisfy_the_asking_seams_the_runner_probes():
+    # The runner binds by shape, so the shapes must keep fitting the tools that
+    # ship: a rename on either side would otherwise fail closed in silence.
+    assert isinstance(ExecTool(executor=_DirectRecordingExecutor()), SupportsApprovalTurn)
+    assert isinstance(AskUserTool(), SupportsDirectAsk)
+
+
 # --- RpcTurnRunner (drives run_turn stream=True; stashes rich usage) ---
 
 
@@ -181,6 +192,101 @@ async def test_cron_turn_does_not_receive_tui_approval_capability(tmp_path):
     assert "requires user approval" in loop.result.model_text
     assert executor.commands == []
     assert responder.requests == []
+
+
+class _ApprovalSeam:
+    """Not an ExecTool -- only the seam the runner binds approval through."""
+
+    def __init__(self) -> None:
+        self.bound: list[tuple[object, str, str]] = []
+
+    def start_approval_turn(self, responder, *, conversation_id: str, turn_id: str) -> None:
+        self.bound.append((responder, conversation_id, turn_id))
+
+
+async def test_the_approval_binding_reaches_any_tool_exposing_the_seam():
+    # An entrance probes capability, not concrete class: whatever a shelf seats
+    # at ``exec`` is bound if it exposes start_approval_turn.
+    tool = _ApprovalSeam()
+    responder = _ApprovalResponder(True)
+    runner = RpcTurnRunner(_RunTurnLoop(tools={"exec": tool}), FakeEmitter(), {}, {}, approval_responder=responder)
+    req = TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1", turn_id="turn-b")
+    _events, emit = _collect()
+
+    await runner.run(req, emit, lambda: [])
+
+    assert tool.bound == [(responder, "tui:c1", "turn-b")]
+
+
+async def test_a_tool_at_exec_without_the_seam_is_left_alone():
+    # A real Tool, just not one with the approval seam: the probe declines, the
+    # turn runs, and nothing reaches a method the tool does not have.
+    tool = MessageTool()
+    runner = RpcTurnRunner(
+        _RunTurnLoop(tools={"exec": tool}), FakeEmitter(), {}, {}, approval_responder=_ApprovalResponder(True)
+    )
+    req = TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1", turn_id="turn-b")
+    _events, emit = _collect()
+
+    outcome = await runner.run(req, emit, lambda: [])
+
+    assert not isinstance(tool, SupportsApprovalTurn)
+    assert outcome.explicit_reply is True
+
+
+class _DirectAsk:
+    """Not an AskUserTool -- only the seam AskViaTool adapts."""
+
+    def __init__(self) -> None:
+        self.asked: list[tuple] = []
+
+    async def ask_direct(self, prompt, choices, conversation_id, timeout_s=None, *, index=0, total=1, batch=None):
+        self.asked.append((prompt, choices, conversation_id, index, total, batch))
+        return "yes"
+
+
+class _AskBindingLoop(_RunTurnLoop):
+    """Records what the turn bound as its asker. Read inside run_turn: that is
+    the context the binding is made in, and the one a sub-agent reads it from."""
+
+    def __init__(self, ask_tool) -> None:
+        super().__init__(tools={"ask_user": ask_tool})
+        self.subagent_questions_config = SubagentQuestionsConfig()
+        self.bound: tuple = (None, "")
+
+    async def run_turn(self, req, emit, drain, **kwargs) -> TurnOutcome:
+        self.bound = current_ask()
+        return await super().run_turn(req, emit, drain, **kwargs)
+
+
+async def test_the_asker_binding_reaches_any_tool_exposing_ask_direct():
+    tool = _DirectAsk()
+    loop = _AskBindingLoop(tool)
+    runner = RpcTurnRunner(loop, FakeEmitter(), {}, {})
+    req = TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1", turn_id="turn-c")
+    _events, emit = _collect()
+
+    await runner.run(req, emit, lambda: [])
+
+    asker, cid = loop.bound
+    assert cid == "tui:c1"
+    assert await asker.ask("proceed?", ["yes", "no"], "tui:c1") == "yes"
+    assert tool.asked == [("proceed?", ["yes", "no"], "tui:c1", 0, 1, None)]
+
+
+async def test_a_tool_at_ask_user_without_ask_direct_binds_no_asker():
+    # Bound to None rather than left unset, so a sub-agent's question declines
+    # instead of reaching a method the tool does not have.
+    tool = MessageTool()
+    loop = _AskBindingLoop(tool)
+    runner = RpcTurnRunner(loop, FakeEmitter(), {}, {})
+    req = TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1", turn_id="turn-c")
+    _events, emit = _collect()
+
+    await runner.run(req, emit, lambda: [])
+
+    assert not isinstance(tool, SupportsDirectAsk)
+    assert loop.bound == (None, "tui:c1")
 
 
 async def test_runner_emits_eve22_synthetic_tool_complete_when_message_tool_fired():
