@@ -219,7 +219,7 @@ still sits beside `description`,
 which answers a different question: `description` is matched against to decide whether to
 run the playbook at all, `task_summary` says what running it dispatches.
 _Avoid_: `label` for this on the spawn path — the tool parameter is gone. The wire field
-`SubagentCall.label` and the span attribute `subagent.label` (`raven/tracing/semconv.py`)
+`SubagentCall.label` and the span attribute `subagent.label` (`raven/observability/semconv.py`)
 keep the name and are filled from the summary.
 
 **Node summary** (`node_summary`, on `DagNodeSpec`):

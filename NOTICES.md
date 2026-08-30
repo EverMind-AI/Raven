@@ -49,9 +49,10 @@ retained in `LICENSES/`.
   `ui-webui` itself. What remains in this repository, and what this notice is
   now about, is the code adopted FROM it and rewritten in place:
   `raven/knowledge/_types.py`, `raven/knowledge/_chunker.py`,
-  `raven/knowledge/_parser.py` and `raven/agent/subagent/dag_projection.py`.
-  Each names its origin in its own module docstring.
-- Modifications: the four modules above are rewritten rather than vendored --
+  and `raven/knowledge/_parser.py`. Each names its origin in its own module
+  docstring. A fourth module, `dag_projection`, carried derived code until it
+  was removed for having no importer; nothing of it remains.
+- Modifications: the three modules above are rewritten rather than vendored --
   they take agentscope's chunking, parsing and DAG-projection logic and nothing
   else, and they carry no agentscope import. The attribution stays because the
   derivation does; the licence text is kept at
@@ -76,9 +77,9 @@ Users install them separately through their respective package managers.
   (2026-05-20) — all 5 acceptance gates S1-S5 passed. Raven does NOT
   vendor, redistribute, or modify `tui-use` source.
 - Fallback contingency: if upstream maintenance halts (>90 days no push) or
-  a severe incompatibility surfaces, the L0-L3 ladder in
-  `docs/RepoMem/temp/tui-auto-test/tier1-backend-comparison.md` defines the
-  vendor-or-pivot strategy. Vendoring (path L1) would require moving
+  a severe incompatibility surfaces, the vendor-or-pivot decision follows the
+  L0-L3 ladder recorded with the original evaluation.
+  Vendoring (path L1) Vendoring (path L1) would require moving
   `tui-use` to `vendor/tui-use/` and adding its LICENSE to `LICENSES/` plus
   updating this section's "Scope" line to "vendored" — same pattern as
   `hermes-agent` above.
