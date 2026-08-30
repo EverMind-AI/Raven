@@ -411,6 +411,10 @@ source_modules = [
     # its earlier surface seat was a misreading of "originates turns" as
     # "is a transport". Seating it here also seats core, the assembly root.
     "raven.proactive_engine", "raven.core", "raven.observability", "raven.home",
+    # Feature libraries consumed by surfaces, importing none themselves
+    # (measured: zero cli/rpc/acp imports in either); seated inner so the
+    # machine watches the edge instead of a ruling note.
+    "raven.browser", "raven.importer",
 ]
 forbidden_modules = ["raven.cli", "raven.rpc", "raven.acp"]
 # Debt allowlist: none. The last allowlisted edge (market reaching the skill

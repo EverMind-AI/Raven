@@ -985,6 +985,16 @@ reads them where it always did.
 _Avoid_: resolving `RAVEN_HOME` again anywhere else -- that is how two directories become
 the answer to one question.
 
+**Historical Plans** (`docs/plans/`):
+An archive, not a promise: a plan describes the tree as it stood on its own
+date, and holding one to today's layout would make it lie about that date. A
+runnable snippet inside one is therefore not a public seam -- the public surface
+the vendored products pin is read out of `subagents/*/install.py`, `install.sh`
+and the README by `tests/test_external_consumer_surface.py`, and the living-doc
+pointer guard deliberately skips this directory.
+_Avoid_: updating an old plan to match a rename -- fix the living document that
+cites it instead, or leave it as the record it is.
+
 **Span Vocabulary** (`observability/`):
 What a raven span means -- the attribute extractors, and the usage block they report --
 as against the machinery that opens and closes one, which is kernel. The split is what
@@ -1005,8 +1015,9 @@ member, seated inner here as well so every package appears in one roster), `conf
 turns through its schedulers and sentinel but is an engine the loop and the assembly root
 consume, not a transport), and `core` (the L2 assembly root). `templates` is packaged data
 and takes no seat. Surfaces: `cli`, `rpc`, and `acp` (an entrance: Raven serving as an
-agent for another host). Deliberately unseated, each awaiting its own ruling: `browser` and
-`importer` (surface-side feature libraries). `evolver` is not a seat at all: it left the
+agent for another host). `browser` and `importer` are seated inner (feature
+libraries consumed by surfaces, importing none themselves -- the edge is watched
+by the contract now, not by a ruling note). `evolver` is not a seat at all: it left the
 package for the repo-level `evolver/` tool (outside the wheel) that drives raven as a library,
 and a fifth import-linter contract keeps the runtime from importing it back. One ruled edge: `trajectory` (L3)
 reaches `config.admission` for the door vocabulary and builds a loop by hand for replay --
