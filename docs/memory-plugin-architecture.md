@@ -28,7 +28,7 @@ into the live boot and (b) move EverOS in-tree under
 
 ## 2. The `MemoryBackend` contract **[DONE]**
 
-`raven/memory_engine/backend.py` defines the single Protocol every
+`raven/contracts/memory.py` defines the single Protocol every
 memory plugin implements. The recall surface was refactored from a
 single prefixed opaque `owner_id` to explicit XOR track ids:
 
@@ -82,9 +82,9 @@ those obsolete keys are still present and disagree.
 
 ## 3. Plugin discovery model **[DONE]**
 
-`raven/plugin/discover.py` scans four sources and deduplicates by
+`raven/plugins/discover.py` scans four sources and deduplicates by
 plugin id. Discovery **reads manifests only — it never imports backend
-code.** `build_plugin_registry` (`raven/cli/_plugin_stack.py`) wires
+code.** `build_plugin_registry` (`raven/core/plugin_stack.py`) wires
 all four via the shared `plugin_discovery_sources()` helper, which the
 `raven plugins` CLI command reuses so both see the same set.
 

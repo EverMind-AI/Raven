@@ -30,8 +30,8 @@ All notable changes to Raven are documented here.
   and the entrances (`cli`, `rpc`, `acp`). Five import-linter contracts run
   in CI: inner layers never import an entrance (with no allowlisted
   exceptions), the twelve channel adapters are mutually independent, the
-  kernel imports nothing else at module level (one lazy read of the host is
-  named, and the list may only shrink), the cargo under `raven/agent` never
+  kernel imports nothing else at module level, with no exception named at
+  all, the cargo under `raven/agent` never
   imports the loop shell it is consumed by, and the runtime never imports the
   repo-level `evolver/` tool that drives it. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger

@@ -491,7 +491,7 @@ change). Each fire is claimed with a pid and timestamp under the lock (with a
 stale-claim TTL) so two processes do not double-fire the same job, and a channel
 filter lets a REPL avoid stealing a job destined for a real channel.
 
-When a job fires, the `on_cron_job` callback (`raven/cli/_cron_handler.py`)
+When a job fires, the `on_cron_job` callback (`raven/core/cron_stack.py`)
 submits a `CRON`-origin `TurnRequest` to the spine, bound to the `cron:<job_id>`
 conversation. Delivery is explicit per branch: a single-target delivering job
 rides the hub to its one outlet; a broadcast or a silent job submits with the
