@@ -11,6 +11,13 @@ What one product directory carries:
 - `subagent.json` -- the roster row template `install.py` registers through
   `raven.config.update_subagents` (the same pinned surface the vendored
   installers use).
+- `plugins/<id>/` -- the product's own harness as raven plugins: hooks on the
+  loop's six phases, replacement tools under the built-in names, its own
+  config slice under `plugins.config["<id>"]`. `run.py` names the directory
+  through `plugins.dirs`; nothing in `raven/` knows the plugin exists.
+- `soul.md` + the contract the plugin renders into `agent.md` -- the product's
+  identity, seeded into the workspace once; `context.dropSegments` keeps the
+  host's own identity segment out of the prompt.
 
 Ground rules:
 
