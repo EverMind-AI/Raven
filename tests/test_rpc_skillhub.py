@@ -583,7 +583,7 @@ async def test_a_redirect_loop_is_refused_rather_than_followed(workspace, monkey
 
 
 def skillhub_max_hops() -> int:
-    from raven.market.trust import MAX_REDIRECTS
+    from raven.market.vetting import MAX_REDIRECTS
 
     return MAX_REDIRECTS
 

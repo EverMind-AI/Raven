@@ -83,7 +83,7 @@ _LOCK_STALE_S = 2 * _DOWNLOAD_DEADLINE
 
 
 def _base_url() -> str:
-    from raven.market.trust import HubTrustError, hub_endpoint
+    from raven.market.vetting import HubTrustError, hub_endpoint
 
     try:
         return hub_endpoint(os.environ.get("RAVEN_SKILLHUB_URL"), DEFAULT_BASE_URL, what="RAVEN_SKILLHUB_URL")
@@ -306,7 +306,7 @@ async def _fetch_capped(url: str, *, check, params: dict | None = None, what: st
       passed ``check`` can 302 anywhere, which erases the check; each hop is
       validated first.
     """
-    from raven.market.trust import MAX_REDIRECTS, HubTrustError, redirect_target
+    from raven.market.vetting import MAX_REDIRECTS, HubTrustError, redirect_target
 
     buf = bytearray()
     target = url
@@ -499,7 +499,7 @@ async def install(skill_id: str, *, agent_loop_factory=None, if_absent: bool = F
     if not isinstance(detail, dict) or not detail.get("name"):
         raise SkillHubRequestError("skill not found on the hub", data={"id": skill_id})
 
-    from raven.market.trust import HubTrustError, require_public_https
+    from raven.market.vetting import HubTrustError, require_public_https
 
     url = f"{_base_url()}/openapi/v1/skills/{hub_id}/download"
     # Redirects are expected here (the hub hands the bytes to a CDN), so they are
