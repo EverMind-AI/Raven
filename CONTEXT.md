@@ -1049,6 +1049,9 @@ import no machinery -- the stdlib, pydantic, the other papers and the spine, not
 (`TYPE_CHECKING` blocks exempt). Two promise tiers, stamped per module via `__tier__`:
 `contract` (frozen for every loop) and `factory_loop` (versioned with the factory loop).
 Both rules are enforced by `tests/test_contracts_two_tier_ledger.py`.
+The contract tier is versioned: `CONTRACTS_VERSION` (`contracts/__init__.py`) moves
+whenever a contract-tier paper's declared surface changes shape (never for prose);
+the surface digest pinned in the same test file makes a silent change a red gate.
 
 ### Security & Access
 
