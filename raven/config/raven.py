@@ -58,7 +58,15 @@ class _Base(BaseModel):
 
 
 class ContextConfig(_Base):
-    """Curator tuning."""
+    """Context engine tuning: which host segments render, and the Curator knobs."""
+
+    drop_segments: list[str] = Field(default_factory=list)
+    """Host prompt segments this agent does without, by builder name
+    (``identity``, ``bootstrap``, ``memory``, ``active_skills``, ``skills``,
+    ``curator``). A product with its own identity and contract in its bootstrap
+    files drops ``identity`` so the model is not told it is two things; a
+    research agent that keeps no long-term memory drops ``memory``. Unknown
+    names are ignored. Empty renders every segment, as before."""
 
     # Curator history-lane knobs.
     fast_path_threshold: float = 0.60

@@ -185,6 +185,9 @@ def build_context_engine(
                 blocklist=(getattr(skill_forge_config, "blocklist", None) if skill_forge_config is not None else None),
             ),
         )
+    dropped = frozenset(getattr(config, "drop_segments", None) or ())
+    if dropped:
+        builders = [b for b in builders if b.name not in dropped]
     engine = ContextAssembler(
         builders, get_tool_definitions, now_fn=now_fn, get_tool_notices=get_tool_notices, scent=scent
     )
