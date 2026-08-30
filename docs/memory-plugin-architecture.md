@@ -96,7 +96,7 @@ all four via the shared `plugin_discovery_sources()` helper, which the
 |---:|---|---|---|
 | 4 | `BUNDLED` | `raven/plugin/memory/<id>/` | first-party, ships with raven |
 | 3 | `USER` | `~/.raven/plugins/<id>/` | local drop-in |
-| 2 | `PROJECT` | `./.raven/plugins/<id>/` | per-project |
+| 2 | `PROJECT` | `./.raven/plugins/<id>/`, and every root in `plugins.dirs` | per-project |
 | 1 | `ENTRY_POINTS` | pip pkg, group `raven.plugins` | third-party distribution |
 
 `bundled > user > project > entry_points` enforces the "builtin shadow

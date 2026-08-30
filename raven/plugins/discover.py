@@ -17,6 +17,7 @@ copy for a pip-installed version while iterating.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import IntEnum
 from importlib import metadata
@@ -60,6 +61,11 @@ class PluginDiscovery:
     tests hermetic — they construct a discovery instance pointing at
     tmp dirs and don't accidentally pick up real plugins on the
     developer's machine.
+
+    ``extra_dirs`` are roots a product names itself (``plugins.dirs``):
+    scanned with the same ``<root>/<id>/raven-plugin.toml`` layout and the
+    same PROJECT priority as the project dir, so a user drop-in of the same
+    id still shadows them.
     """
 
     def __init__(
@@ -69,11 +75,13 @@ class PluginDiscovery:
         user_dir: Path | None = None,
         project_dir: Path | None = None,
         entry_points_group: str | None = None,
+        extra_dirs: Sequence[Path] = (),
     ) -> None:
         self._bundled_dir = bundled_dir
         self._user_dir = user_dir
         self._project_dir = project_dir
         self._entry_points_group = entry_points_group
+        self._extra_dirs = tuple(extra_dirs)
 
     def discover(self) -> list[DiscoveredPlugin]:
         """Run all enabled sources and resolve conflicts.
@@ -92,6 +100,8 @@ class PluginDiscovery:
             all_found.extend(
                 self._scan_dir(self._project_dir, ManifestOrigin.PROJECT),
             )
+        for root in self._extra_dirs:
+            all_found.extend(self._scan_dir(root, ManifestOrigin.PROJECT))
         if self._entry_points_group is not None:
             all_found.extend(self._scan_entry_points(self._entry_points_group))
 

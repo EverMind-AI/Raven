@@ -111,8 +111,8 @@ def register(app: typer.Typer) -> None:
 
         # Discover separately from activation so the table can show
         # both shadowed (lower-priority) plugins AND disabled ones,
-        # not just the live set. Same four sources the live boot scans.
-        discovered = discover_plugins()
+        # not just the live set. Same sources the live boot scans.
+        discovered = discover_plugins(ec_config)
 
         registry = PluginRegistry()
         disabled = frozenset(ec_config.plugins.disabled)

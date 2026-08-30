@@ -176,3 +176,27 @@ class TestDiscoveredPluginRecord:
         rec: DiscoveredPlugin = out[0]
         with pytest.raises(FrozenInstanceError):
             rec.source = ManifestOrigin.USER  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Roots a product names itself (plugins.dirs)
+# ---------------------------------------------------------------------------
+
+
+class TestExtraDirs:
+    def test_named_roots_scan_with_project_priority(self, tmp_path: Path) -> None:
+        user = tmp_path / "user"
+        shelf = tmp_path / "product" / "plugins"
+        _write_manifest(user, "x")
+        _write_manifest(shelf, "x")
+        located = _write_manifest(shelf, "e-only")
+        out = PluginDiscovery(user_dir=user, extra_dirs=[shelf]).discover()
+        by_id = {p.manifest.id: p for p in out}
+        assert {k: v.source for k, v in by_id.items()} == {
+            "e-only": ManifestOrigin.PROJECT,
+            "x": ManifestOrigin.USER,
+        }
+        assert by_id["e-only"].location == located
+
+    def test_absent_named_root_is_silent(self, tmp_path: Path) -> None:
+        assert PluginDiscovery(extra_dirs=[tmp_path / "absent"]).discover() == []
