@@ -215,3 +215,43 @@ async def test_a_session_policy_caps_iterations_and_reaches_the_hooks(tmp_path):
     assert len(provider.calls) <= 3, "the session cap of 2 held (plus the exhaustion wrap-up call)"
     assert seen[0]["mode"] == "deep" and seen[0]["mode_overlay"] == {"k": 10}
     assert loop.session_policy("cli:other").mode == "", "another session runs on the defaults"
+
+
+@pytest.mark.asyncio
+async def test_an_after_iteration_note_lands_on_the_last_message_before_the_next_call(tmp_path):
+    class Nudge(AgentHook):
+        async def after_iteration(self, ctx):
+            if getattr(ctx.response, "has_tool_calls", False):
+                return HookDecision(append_note="[budget warning: most of the budget is spent]")
+            return HookDecision()
+
+    provider = _ScriptedProvider([_tool_call("list_dir", {"path": "."}), _text("done")])
+    loop = _loop(tmp_path, provider, [Nudge()])
+
+    out = await loop._process_message(_req("what is here"))
+
+    assert out is not None
+    last_seen = provider.calls[1]["messages"][-1]
+    assert last_seen["role"] == "tool"
+    assert str(last_seen["content"]).endswith("\n\n[budget warning: most of the budget is spent]")
+    assert "[budget warning" not in str(provider.calls[0]["messages"][-1]["content"]), "landed after, not before"
+
+
+@pytest.mark.asyncio
+async def test_before_user_inbound_can_rewrite_the_inbound_text(tmp_path):
+    seeded: list[str | None] = []
+
+    class Memo(AgentHook):
+        async def before_user_inbound(self, ctx):
+            seeded.append(ctx.inbound_content)
+            return HookDecision(modified_content=f"[research memo]\n\n{ctx.inbound_content}")
+
+    provider = _ScriptedProvider([_text("done")])
+    loop = _loop(tmp_path, provider, [Memo()])
+
+    out = await loop._process_message(_req("what changed since last time?"))
+
+    assert out is not None
+    assert seeded == ["what changed since last time?"]
+    dispatched = str(provider.calls[0]["messages"][-1]["content"])
+    assert "[research memo]" in dispatched and "what changed since last time?" in dispatched

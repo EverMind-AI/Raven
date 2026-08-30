@@ -97,7 +97,9 @@ The turn-loop extension point: an `AgentHook` ABC with six async phases
 `terminal_answerless`, `after_send`), all fired by the loop. A decision may pass through,
 short-circuit, modify outbound content, or roll the iteration back and re-sample (with
 injected messages and generation overrides for that one call); `before_iteration` may also
-withhold tools for the iteration. Multiple hooks chain via `CompositeHook`; the EvalEngine
+withhold tools for the iteration, the iteration phases may leave the model a harness note on
+the last message (`append_note`), and `before_user_inbound` may rewrite the inbound text
+(`modified_content`, chained through `inbound_content`). Multiple hooks chain via `CompositeHook`; the EvalEngine
 wires three concrete implementations, and a product steers the loop with its own.
 _Avoid_: "callback" or "middleware" — neither captures the phase-specific, chain-aware semantics.
 

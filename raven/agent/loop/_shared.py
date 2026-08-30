@@ -305,6 +305,31 @@ class SessionPolicy:
     mode_overlay: dict[str, Any] = field(default_factory=dict)
 
 
+def append_hook_note(messages: list[dict[str, Any]] | None, note: str) -> bool:
+    """Land a hook's ``append_note`` on the last transcript message.
+
+    A blank line separates it from the body, and a block-shaped body gains a
+    text block, so the note reads as part of what the model was already about
+    to read. False when there is nothing to land on or the body's shape is one
+    the loop does not know -- the note is dropped rather than guessed into
+    place, and the caller logs that.
+    """
+    if not messages or not note:
+        return False
+    last = messages[-1]
+    body = last.get("content")
+    if isinstance(body, str):
+        last["content"] = f"{body}\n\n{note}" if body else note
+        return True
+    if isinstance(body, list):
+        last["content"] = body + [{"type": "text", "text": note}]
+        return True
+    if body is None:
+        last["content"] = note
+        return True
+    return False
+
+
 def turn_question(messages: list[dict[str, Any]] | None) -> str:
     """This turn's question: the text of the last user message at loop entry.
 

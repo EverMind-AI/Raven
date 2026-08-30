@@ -39,7 +39,15 @@ Design choices:
      overrides for that one call. How a gate bounces a draft back.
 
    ``modified_tools`` (``before_iteration``) is not a mode but a grant: the
-   tool schemas the model is shown for this one iteration.
+   tool schemas the model is shown for this one iteration. ``append_note``
+   (the three iteration phases) is the other grant: a short harness-authored
+   note the loop appends to the last transcript message before the next
+   model call -- a budget warning, a gate notice -- chained across hooks in
+   order. The note is data the model reads, never a message the user sent;
+   the transcript keeps it where it landed. On ``before_user_inbound``,
+   ``modified_content`` rewrites the inbound text before the loop dispatches
+   it (a memo prepended, a reminder appended), chained through
+   ``ctx.inbound_content``.
 
 4. **HookDecision is immutable from the hook's perspective.** Hooks
    build a fresh decision each call; ``CompositeHook`` is responsible
@@ -90,6 +98,9 @@ class AgentHookContext:
 
     # ── before_user_inbound ──
     turn_request: "TurnRequest | None" = None
+    #: The inbound text as the loop will dispatch it: the request's text at
+    #: first, then whatever the hooks before this one rewrote it to.
+    inbound_content: str | None = None
 
     # ── before_iteration / before_execute_tools / after_iteration ──
     iteration: int | None = None
@@ -143,6 +154,10 @@ class HookDecision:
     for this one iteration. The registry is untouched, so the next
     iteration starts from the full set unless a hook decides again.
 
+    ``append_note`` is the second grant: text the loop appends to the last
+    transcript message (a blank line between) before the next model call, in
+    the three iteration phases. Chained: every hook's note lands, in order.
+
     Hooks should not mix the halting states in a single decision -- the
     first halting state wins and the rest would be moot.
     """
@@ -154,6 +169,7 @@ class HookDecision:
     rollback_overrides: dict[str, Any] | None = None
     rollback_inject: list[dict[str, Any]] | None = None
     modified_tools: list[dict[str, Any]] | None = None
+    append_note: str | None = None
     notes: list[str] = field(default_factory=list)
 
 
@@ -193,8 +209,11 @@ class AgentHook(ABC):
             to mark recent nudges as accepted / dismissed.
           - Personalizer Step 1+2 may short-circuit with a clarification
             question instead of running the main loop.
+          - Rewriting the inbound text before dispatch (``modified_content``):
+            a research memo prepended, a format reminder appended.
 
-        Context fields populated: ``session_key``, ``turn_request``.
+        Context fields populated: ``session_key``, ``turn_request``,
+        ``inbound_content``.
         """
         return HookDecision()
 
@@ -208,6 +227,7 @@ class AgentHook(ABC):
             we'd blow the budget).
           - Pruning (skip iteration when the work is clearly done).
           - Withholding a tool for this iteration (``modified_tools``).
+          - Leaving the model a note before this call (``append_note``).
 
         Context fields populated: ``session_key``, ``iteration``,
         ``messages``, ``tools``, ``turn_question``, ``turn_base``.
@@ -221,6 +241,7 @@ class AgentHook(ABC):
         Used for:
           - Pre-tool-call audit / approval.
           - Discarding the proposal and re-sampling (``rollback``).
+          - Leaving the model a note beside the proposal (``append_note``).
 
         Context fields populated: ``session_key``, ``iteration``,
         ``messages``, ``response`` (the LLM response carrying tool calls).
@@ -237,6 +258,8 @@ class AgentHook(ABC):
             via memory_engine.
           - Bouncing a draft back with feedback (``rollback`` +
             ``rollback_inject``) or replacing it (``short_circuit_result``).
+          - Leaving the model a note on the tool results it is about to read
+            (``append_note``).
 
         Fires twice per iteration shape: after tool results are in (the
         response carried tool calls) and, for a text response, before that
