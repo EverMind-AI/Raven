@@ -45,12 +45,19 @@
       "cron",
       "read_skill",
       "use_skill",
+      "find_skill",
       "tool_search",
       "tool_call",
       "image_generate",
       "text_to_speech",
       "video_generate",
-      "understand_media"
+      "understand_media",
+      "deep_research",
+      "deliver_files",
+      "plugin",
+      "create_playbook",
+      "load_playbook",
+      "run_subagent_dag"
     ]
   }
 }
