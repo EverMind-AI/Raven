@@ -1343,3 +1343,33 @@ async def test_ext_list_carries_the_manager_state_and_the_authorization_url(
     # A configured server the manager has never seen keeps the old reading.
     assert by_name["unknown"]["state"] == "disconnected"
     assert by_name["unknown"]["auth_url"] is None
+
+
+async def test_a_language_switch_reaches_the_running_process(tmp_path, monkeypatch) -> None:
+    """Writing the file is half of it: `t()` answers from a module-level
+    language that only the CLI seeds, so a console switch that stopped at the
+    file left every later reply in the old language until a restart."""
+    from raven import i18n
+    from raven.config import update as config_update
+
+    monkeypatch.setattr(config_update, "set_language", lambda value: "en")
+    monkeypatch.setattr(i18n, "_language", "en")
+
+    result = await console_module.settings_set({"key": "language", "value": "zh"})
+
+    assert result["applied"] is True
+    assert i18n.current_language() == "zh"
+
+
+async def test_a_rejected_language_changes_nothing(tmp_path, monkeypatch) -> None:
+    from raven import i18n
+    from raven.config import update as config_update
+    from raven.rpc.errors import ConfigValidationError as RpcConfigValidationError
+
+    monkeypatch.setattr(config_update, "set_language", lambda value: "en")
+    monkeypatch.setattr(i18n, "_language", "en")
+
+    with pytest.raises(RpcConfigValidationError):
+        await console_module.settings_set({"key": "language", "value": "de"})
+
+    assert i18n.current_language() == "en"
