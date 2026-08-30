@@ -1261,6 +1261,16 @@ async def test_settings_set_of_an_unrelated_key_does_not_create_the_mirror(setti
     assert not (tmp_path / ".raven" / "env").exists()
 
 
+async def test_settings_set_writes_the_config_in_the_shared_formatting(settings_cfg: Path) -> None:
+    """The bytes every ``update_*`` writer lays down: two-space indent, raw
+    UTF-8 rather than ASCII escapes, no trailing newline. A save that drifted
+    from this would rewrite every line of the file on the next change."""
+    await console_module.settings_set({"key": "plugins.disabled", "value": ["caf\u00e9-plugin"]})
+
+    expected = '{\n  "plugins": {\n    "disabled": [\n      "caf\u00e9-plugin"\n    ]\n  }\n}'
+    assert settings_cfg.read_bytes() == expected.encode("utf-8")
+
+
 @pytest.mark.asyncio
 async def test_ext_list_carries_the_manager_state_and_the_authorization_url(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
