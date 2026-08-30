@@ -953,7 +953,10 @@ _Avoid_: "channel config class" (the twelve central classes are retired); cargo 
 read through the dispensed view, never by name on the socket.
 
 **Generation** (`core/runtime.py`, gateway):
-One assembled `RavenRuntime` serving turns. A config change swaps generations at a turn
+One assembled `RavenRuntime` serving turns -- a frozen dataclass: after construction a
+generation is sealed, and a change is generation N+1, never an in-place mutation
+(the composition phases COLLECT / ADMIT / BIND / START / FREEZE; `build_runtime` maps
+its steps to them). A config change swaps generations at a turn
 boundary: BUILD N+1 comes first (a candidate that fails to assemble leaves N serving),
 SWAP re-runs the gateway's generation wiring (spine, sinks, sentinel attach), DISPOSE
 retires N in a pinned order (`RavenRuntime.dispose`). Process-lifetime transports --

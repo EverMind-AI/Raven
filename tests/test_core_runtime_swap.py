@@ -338,3 +338,16 @@ async def test_the_executor_socket_binds_the_instance_the_door_was_handed(tmp_pa
     assert rt.loop._executor is stub
     exec_tool = rt.loop.tools.get("exec")
     assert exec_tool is not None and exec_tool._executor is stub
+
+
+def test_a_generation_is_sealed_after_construction():
+    """FREEZE's machine: composition changes go through the swap path, never setattr."""
+    from dataclasses import FrozenInstanceError
+
+    from raven.core.runtime import RavenRuntime
+
+    rt = RavenRuntime(loop=object(), plugin_registry=None, backend=None, strategies=None, deliverables=None)
+    with pytest.raises(FrozenInstanceError):
+        rt.loop = object()  # type: ignore[misc]
+    with pytest.raises(FrozenInstanceError):
+        rt.backend = object()  # type: ignore[misc]

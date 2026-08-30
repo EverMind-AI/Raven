@@ -22,10 +22,18 @@ if TYPE_CHECKING:
     from raven.contracts.llm_provider import LLMProvider
 
 
-@dataclass
+@dataclass(frozen=True)
 class RavenRuntime:
     """One assembled generation of the agent: the loop plus the parts an
-    entrance still needs handles to after construction."""
+    entrance still needs handles to after construction.
+
+    Frozen: FREEZE is the last of the composition phases (COLLECT, ADMIT,
+    BIND, START, FREEZE), and this is its machine. After construction a
+    generation is sealed -- a change is generation N+1 through the swap path,
+    never an in-place mutation of N. The members it holds stay live objects
+    with their own lifecycles; what cannot change is which objects this
+    generation is made of.
+    """
 
     loop: "AgentLoop"
     plugin_registry: Any
@@ -84,6 +92,14 @@ def build_runtime(
     ``policy`` and ``host`` are the transport's own wiring and pass through
     untouched; everything cargo-shaped is derived here, identically for every
     entrance.
+
+    In the composition draft's phase names: the plugin stack below runs
+    COLLECT (discovery over the fixed sources plus ``plugins.dirs``) and
+    ADMIT (manifest validation, the config-slice admission); the rest of this
+    function is BIND -- pure in-memory assembly a caller may still discard.
+    START stays with the entrance (``loop.start()``, backend start, MCP
+    connect: everything with a side effect and a dispose handle), and the
+    frozen ``RavenRuntime`` this returns is FREEZE.
     """
     from raven.agent.tools.deliverables import DeliverableStore
     from raven.config.paths import get_deliverables_path
