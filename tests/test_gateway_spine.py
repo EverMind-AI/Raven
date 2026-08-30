@@ -437,3 +437,28 @@ async def test_a_channel_that_never_takes_the_send_does_not_hold_the_swap_open()
     await asyncio.wait_for(teardown(), timeout=_DELIVERY_GRACE + 5)
 
     assert ch.sent == []
+
+
+async def test_the_gateway_probes_the_asking_capability_not_the_class():
+    """A shelf may hand the loop another ask tool; the entrance must not care
+    which class it is, only that it can be asked through directly. The probe is
+    the paper the rpc entrance already uses, so both doors read one shape."""
+    import inspect
+
+    from raven.contracts.asking import SupportsDirectAsk
+    from raven.gateway import spine as gateway_spine
+
+    class _DuckAskTool:
+        name = "ask_user"
+
+        async def ask_direct(self, *a, **k):
+            return None
+
+    class _MuteTool:
+        name = "ask_user"
+
+    assert isinstance(_DuckAskTool(), SupportsDirectAsk)
+    assert not isinstance(_MuteTool(), SupportsDirectAsk)
+    source = inspect.getsource(gateway_spine)
+    assert "isinstance(ask_tool, SupportsDirectAsk)" in source
+    assert "isinstance(ask_tool, AskUserTool)" not in source
