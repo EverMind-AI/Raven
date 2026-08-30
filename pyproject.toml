@@ -420,12 +420,13 @@ forbidden_modules = ["raven.cli", "raven.rpc", "raven.acp"]
 [[tool.importlinter.contracts]]
 name = "the kernel stands alone"
 type = "forbidden"
-# The shippable kernel (papers + spine + tracing) must not reach the rest of
-# the tree at import time -- this is what makes a raven-core wheel a build
-# artifact rather than a refactor. The three edges below are tracing's lazy
-# reads of the host (config loader, provider registry, pricing table), each
-# inside a function a kernel-only consumer never calls; the list may only
-# shrink.
+# The shippable kernel (papers + home + spine + tracing) must not reach the
+# rest of the tree at import time -- this is what makes a raven-core wheel a
+# build artifact rather than a refactor. The set carries no exceptions: the
+# three lazy reads tracing once needed closed when its span vocabulary (the
+# provider registry and pricing table reads) moved out to raven/observability
+# and RAVEN_HOME resolution moved in to raven/home.py, so an ignore_imports
+# entry here would be new debt, not a carry-over.
 source_modules = ["raven.contracts", "raven.home", "raven.spine", "raven.tracing"]
 forbidden_modules = [
     "raven.acp", "raven.agent", "raven.auth", "raven.browser",
@@ -437,7 +438,6 @@ forbidden_modules = [
     "raven.observability", "raven.sandbox", "raven.security", "raven.session",
     "raven.skill_hub", "raven.token_wise", "raven.trajectory", "raven.utils",
 ]
-
 
 [[tool.importlinter.contracts]]
 # raven/agent holds two seats: agent/loop is the L2 harness shell every

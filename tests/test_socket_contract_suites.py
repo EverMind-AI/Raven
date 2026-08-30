@@ -5,18 +5,24 @@ Ruling basis (2026-08-26): replacement clears three gates = the paper
 (shape) + the socket conformance test (behavior) + the baseline diff.
 This file is gate two's exemplar: a reusable checker per socket that ANY answer
 (factory, shelf, third-party) must pass before it may occupy the socket. The
-member lists are the MEASURED surfaces (campaign A plus the three
-fields every seven-swap run died on), not
-designed ones. Written against today's de-facto shapes; S2 re-points the
-imports at contracts/ without changing the assertions.
+provider methods are the MEASURED surface (campaign A), not a designed one.
+The response members are read off the paper's dataclass, so the suite checks
+every member the paper declares the day it declares it; the seven the campaign
+measured (campaign A plus the three fields every seven-swap run died on) stay
+pinned as the floor the paper may not drop below.
 """
 
+import dataclasses
 import inspect
 
 import pytest
 
+from raven.contracts.llm_provider import LLMResponse
+
 PROVIDER_METHODS = ("chat", "chat_with_retry", "chat_stream")
-RESPONSE_MEMBERS = (
+# has_tool_calls is a property, not a field, and gets its own shape check below.
+RESPONSE_MEMBERS = tuple(f.name for f in dataclasses.fields(LLMResponse))
+MEASURED_MEMBERS = (
     "content",
     "tool_calls",
     "reasoning_content",
@@ -80,6 +86,9 @@ class _Resp:
     usage: dict = {}
     finish_reason = "stop"
     error_classification = None
+    truncated = False
+    max_tokens = None
+    reasoning_ms = None
 
     has_tool_calls = False
 
@@ -119,14 +128,19 @@ def test_compliant_executor_passes():
 
 
 def test_factory_response_shape_is_compliant():
-    from raven.contracts.llm_provider import LLMResponse
-
     resp = LLMResponse(content="x")
     assert check_provider_response(resp) == []
 
 
-# -- bite tests: built-in mutation audit; the three lethal fields and the --
-# -- async context manager must each draw blood                          --
+def test_the_paper_still_declares_every_measured_member():
+    """Deriving the list from the paper must not let the paper quietly drop a
+    member the campaign found lethal; the seven are the floor."""
+    dropped = sorted(set(MEASURED_MEMBERS) - set(RESPONSE_MEMBERS))
+    assert dropped == [], f"the provider paper no longer declares {dropped}"
+
+
+# -- bite tests: built-in mutation audit; every declared response member --
+# -- and the async context manager must each draw blood                  --
 
 
 def test_sync_chat_is_rejected():
@@ -156,8 +170,8 @@ def test_missing_retry_method_is_rejected():
     assert any("chat_with_retry" in p for p in check_provider(Bad()))
 
 
-@pytest.mark.parametrize("missing", ["usage", "thinking_blocks", "error_classification"])
-def test_response_missing_measured_member_is_rejected(missing):
+@pytest.mark.parametrize("missing", sorted(RESPONSE_MEMBERS))
+def test_response_missing_declared_member_is_rejected(missing):
     resp = _Resp()
 
     class Stripped:
