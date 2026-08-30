@@ -478,9 +478,15 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
     if key == "language":
         if value not in ("en", "zh"):
             raise ConfigValidationError("language must be en | zh")
+        from raven import i18n
         from raven.config.update import set_language
 
         prev = set_language(value)
+        # The file is where the next process reads it; this is where the one
+        # answering right now does. The CLI seeds it at startup
+        # (``cli/commands.py``), and nothing else would until a restart, so a
+        # user who switched language here went on being answered in the old one.
+        i18n.set_language(value)
         return {"applied": True, "previous": prev}
 
     if key in ("cron.defaultTimezone", "cron.forwardChannels"):
