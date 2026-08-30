@@ -146,8 +146,10 @@ def host_identity_env() -> dict[str, str]:
     Read at spawn time because tests and ``raven serve`` may point one process
     at different homes between child launches.
     """
-    home = os.environ.get("RAVEN_HOME", "").strip()
-    return {"RAVEN_HOME": home} if home else {}
+    from raven.contracts.path_policy import HOME_ENV_VAR
+
+    home = os.environ.get(HOME_ENV_VAR, "").strip()
+    return {HOME_ENV_VAR: home} if home else {}
 
 
 __all__ = ["host_identity_env", "login_shell_env"]

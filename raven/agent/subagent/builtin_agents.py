@@ -324,10 +324,13 @@ def _acp_host_override(cfg: Any, *, name: str) -> Any:
     in the child, so propagating regardless would serve that row the host's model
     and provider under its own name.
     """
-    home = os.environ.get("RAVEN_HOME", "").strip() or str(Path.home() / ".raven")
+    from raven.contracts.path_policy import CONFIG_FILENAME, HOME_ENV_VAR
+    from raven.home import raven_home
+
+    home = raven_home()
     env = dict(getattr(cfg, "env", None) or {})
-    row_named_its_own_home = "RAVEN_HOME" in env
-    env.setdefault("RAVEN_HOME", home)
+    row_named_its_own_home = HOME_ENV_VAR in env
+    env.setdefault(HOME_ENV_VAR, str(home))
     command = str(getattr(cfg, "command", "") or "").strip()
     if not command:
         command = host_raven_acp_command()
@@ -337,7 +340,7 @@ def _acp_host_override(cfg: Any, *, name: str) -> Any:
                 "could not be resolved; the row will fail at dispatch",
                 name,
             )
-        elif not row_named_its_own_home and (config_path := get_config_path()) != Path(home) / "config.json":
+        elif not row_named_its_own_home and (config_path := get_config_path()) != home / CONFIG_FILENAME:
             command = f"{command} --config {shlex.quote(str(config_path))}"
     description = str(getattr(cfg, "description", "") or "").strip()
     if not description:

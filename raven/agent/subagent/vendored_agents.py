@@ -95,10 +95,10 @@ def subagents_root() -> Path | None:
     before discovery existed.
     """
     import raven
+    from raven.home import raven_home
 
-    home = os.environ.get("RAVEN_HOME", "").strip() or str(Path.home() / ".raven")
     package = Path(raven.__file__).resolve().parent
-    installed, packaged = Path(home) / "subagents", package / "subagents"
+    installed, packaged = raven_home() / "subagents", package / "subagents"
     if packaged.is_dir():
         _install_packaged_tree(packaged, installed)
     for candidate in (installed, package.parent / "subagents", packaged):
@@ -246,8 +246,10 @@ def host_can_lend_a_key() -> bool:
     same reason: two readers of one credential that disagree would have the
     roster offer what the launcher then refuses.
     """
-    home = os.environ.get("RAVEN_HOME", "").strip() or str(Path.home() / ".raven")
-    config = Path(home) / "config.json"
+    from raven.contracts.path_policy import CONFIG_FILENAME
+    from raven.home import raven_home
+
+    config = raven_home() / CONFIG_FILENAME
     try:
         raw = json.loads(config.read_text(encoding="utf-8"))
     except (OSError, ValueError):
