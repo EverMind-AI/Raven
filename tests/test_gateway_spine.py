@@ -1,3 +1,12 @@
+"""The gateway spine: what ``build_gateway`` wires, and what a turn meets on it.
+
+``raven/gateway/spine.py`` assembles the Scheduler, the delivery sink and the
+channel registry into the object every entrance submits turns to. These pin the
+assembly (it needs a running loop), the sink's lifecycle (``on_turn_complete``,
+and the error reply a ``TurnFailed`` becomes), and the route a turn takes back to
+a human -- the asker and question autofill, which arm on the user origin only.
+"""
+
 import asyncio
 
 import pytest
