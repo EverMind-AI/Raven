@@ -147,10 +147,9 @@ def _write(row: dict[str, Any]) -> Path:
 
 
 def _slug(text: str) -> str:
-    import re
+    from raven.utils.paths import mint_slug
 
-    out = re.sub(r"[^a-z0-9_-]+", "-", text.strip().lower()).strip("-")
-    return out if out and out[0].isalnum() else ""
+    return mint_slug(text)
 
 
 def _ask(label: str, default: str = "", *, required: bool = True) -> str:

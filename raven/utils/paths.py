@@ -13,6 +13,21 @@ def ensure_dir(path: Path) -> Path:
 
 
 _UNSAFE_CHARS = re.compile(r'[<>:"/\\|?*]')
+_MINT_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+def mint_slug(value: str, *, max_chars: int | None = None) -> str:
+    """Lowercase alphanumerics joined by single dashes; empty when nothing survives.
+
+    The mint-time scheme for names that become identifiers -- subagent
+    handles, connection ids, playbook names. Applied once when the id is
+    minted and stored; stored ids are read back literally, so changing the
+    scheme never orphans them.
+    """
+    out = _MINT_SLUG_RE.sub("-", value.lower()).strip("-")
+    if max_chars is not None:
+        out = out[:max_chars].strip("-")
+    return out
 
 
 def safe_filename(name: str) -> str:

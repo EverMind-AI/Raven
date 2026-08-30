@@ -29,6 +29,7 @@ from pydantic.alias_generators import to_camel
 
 from raven.agent.subagent.dag_graph import DagNodeSpec
 from raven.config.schema import MCPServerConfig
+from raven.utils.paths import mint_slug
 
 SPEC_VERSION = 1
 
@@ -39,7 +40,6 @@ the schema alone cannot (``model_copy`` skips validators, and the tool
 argument validator has no ``pattern`` support)."""
 _NAME_RE = NAME_RE
 _NODE_ID_RE = r"^[A-Za-z0-9_-]+$"
-_SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 NodeSpec = DagNodeSpec
 """One step of the graph -- the DAG's own node model, not a second definition.
@@ -60,7 +60,7 @@ as ``SubAgentDagSpec.confirm``), where "approve this" means the whole graph.
 
 
 def slugify(name: str) -> str:
-    slug = _SLUG_RE.sub("-", name.lower()).strip("-")
+    slug = mint_slug(name)
     return slug or "playbook"
 
 
