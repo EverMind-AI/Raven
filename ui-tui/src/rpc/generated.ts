@@ -4590,6 +4590,189 @@ export interface KnowledgeSearchParams {
 export interface KnowledgeSearchResult {
   hits: KnowledgeHit[];
 }
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ClipboardPasteParams".
+ */
+export interface ClipboardPasteParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ClipboardPasteResult".
+ */
+export interface ClipboardPasteResult {
+  attached: boolean;
+  message?: string;
+  width?: number;
+  height?: number;
+  token_estimate?: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CommandDispatchParams".
+ */
+export interface CommandDispatchParams {
+  name: string;
+  arg?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CommandDispatchResult".
+ */
+export interface CommandDispatchResult {
+  /**
+   * `exec` (a shell-style command ran) or `skill` (the name resolved to a skill).
+   */
+  type: string;
+  output?: string;
+  name?: string;
+  message?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DelegationStatusParams".
+ */
+export interface DelegationStatusParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DelegationStatusResult".
+ */
+export interface DelegationStatusResult {
+  max_concurrent_children: number;
+  max_spawn_depth: number;
+  paused: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DelegationPauseParams".
+ */
+export interface DelegationPauseParams {
+  paused: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DelegationPauseResult".
+ */
+export interface DelegationPauseResult {
+  paused: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "InputDetectDropParams".
+ */
+export interface InputDetectDropParams {
+  text: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "InputDetectDropResult".
+ */
+export interface InputDetectDropResult {
+  matched: boolean;
+  name?: string;
+  /**
+   * The resolved absolute path when matched.
+   */
+  text?: string;
+  is_image?: boolean;
+  width?: number;
+  height?: number;
+  token_estimate?: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionInterruptParams".
+ */
+export interface SessionInterruptParams {
+  session_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionInterruptResult".
+ */
+export interface SessionInterruptResult {
+  ok: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ShellExecParams".
+ */
+export interface ShellExecParams {
+  command: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ShellExecResult".
+ */
+export interface ShellExecResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SkillsManageParams".
+ */
+export interface SkillsManageParams {
+  /**
+   * One of list, inspect, search, browse, install.
+   */
+  action: string;
+  query?: string;
+  page?: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SkillsManageResult".
+ */
+export interface SkillsManageResult {
+  /**
+   * `list`: names grouped by source.
+   */
+  skills?: {
+    [k: string]: string[];
+  };
+  /**
+   * `inspect`: one skill's metadata, {} when unknown.
+   */
+  info?: {
+    [k: string]: JsonValue;
+  };
+  /**
+   * `search`: matches.
+   */
+  results?: {
+    [k: string]: JsonValue;
+  }[];
+  /**
+   * `browse`: one page of the hub.
+   */
+  items?: {
+    [k: string]: JsonValue;
+  }[];
+  page?: number;
+  total?: number;
+  total_pages?: number;
+  /**
+   * `install`.
+   */
+  installed?: boolean;
+  name?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentInterruptParams".
+ */
+export interface SubagentInterruptParams {
+  subagent_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentInterruptResult".
+ */
+export interface SubagentInterruptResult {
+  found: boolean;
+  subagent_id: string;
+}
 
 // ---- Schema-name aliases for structurally-deduplicated types ----
 export type BrowserManageResult = StubResult;
