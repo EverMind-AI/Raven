@@ -2460,6 +2460,22 @@ export interface ConfigSetResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ConfigUnsetParams".
+ */
+export interface ConfigUnsetParams {
+  key: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ConfigUnsetResult".
+ */
+export interface ConfigUnsetResult {
+  removed: boolean;
+  previous: JsonValue | null;
+  default: JsonValue | null;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SubagentListParams".
  */
 export interface SubagentListParams {
