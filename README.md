@@ -255,7 +255,7 @@ import which) are recorded under **Layer Seats** in `CONTEXT.md`, routed from
 | `security` | Outbound address policy and prompt-injection fences |
 | `session` | Session export and titles |
 | `skill_hub` | Skill hub: client, install engine, policy and install audit |
-| `spine` | The frozen kernel: submit, lanes, cancel, emit, delivery |
+| `spine` | The kernel: submit, lanes, cancel, emit, delivery |
 | `templates` | Packaged data assets (no Python) |
 | `token_wise` | Token efficiency: cache optimizer, usage tracker |
 | `tracing` | Span capture: context, the instrument decorator, the store |
