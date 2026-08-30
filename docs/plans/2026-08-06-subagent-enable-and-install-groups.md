@@ -34,8 +34,8 @@
 **Files:**
 - Modify: `raven/config/schema.py` (both third-party models)
 - Modify: `raven/agent/subagent/backends/__init__.py` (new helper + `__all__`)
-- Modify: `raven/agent/subagent/manager.py:128-142` (`set_third_party_subagents`)
-- Modify: `raven/agent/subagent_dag/tool.py:120-145` (`set_third_party_subagents`)
+- Modify: `raven/agent/subagent/manager.py:128-142` (`add_third_party_subagent`)
+- Modify: `raven/agent/subagent_dag/tool.py:120-145` (`add_third_party_subagent`)
 - Modify: `ui-webui/frontend/src/api/ravenConfig.ts` (mirror the field in both interfaces)
 - Test: `tests/test_subagent_third_party.py`
 
@@ -172,7 +172,7 @@ In `raven/agent/subagent/manager.py`, import `enabled_third_party` alongside the
         for cfg in enabled_third_party(configs):
 ```
 
-Do the same in `raven/agent/subagent_dag/tool.py`'s `set_third_party_subagents`, adding `enabled_third_party` to its existing import from `raven.agent.subagent.backends`.
+Do the same in `raven/agent/subagent_dag/tool.py`'s `add_third_party_subagent`, adding `enabled_third_party` to its existing import from `raven.agent.subagent.backends`.
 
 Both loops keep their `try` / `except` and their `logger.warning` untouched.
 

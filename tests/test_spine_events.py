@@ -44,7 +44,6 @@ def test_notice_kind_is_closed_enum_with_progress_and_tool_hint():
     assert {k.value for k in NoticeKind} == {
         "progress",
         "tool_hint",
-        "injected",
         "action_blocked",
         "organ_degraded",
     }

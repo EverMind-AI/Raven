@@ -75,8 +75,8 @@ ThirdPartySubagentConfig = Annotated[
 ```mermaid
 graph LR
     cfg["config.json<br/>subagents.thirdParty[]"] --> filter["enabled_third_party"]
-    filter --> mgr["SubagentManager<br/>set_third_party_subagents"]
-    filter --> dagtool["SubAgentDagTool<br/>set_third_party_subagents"]
+    filter --> mgr["SubagentManager<br/>add_third_party_subagent"]
+    filter --> dagtool["SubAgentDagTool<br/>add_third_party_subagent"]
     mgr --> spawn["spawn 工具<br/>agent enum + roster"]
     dagtool --> dag["run_subagent_dag<br/>subagent enum + 能力预检"]
     build["build_third_party_backend<br/>cli | acp | openai"] --- mgr
@@ -327,7 +327,7 @@ acp 条目有 `command`，所以这条路**不会崩**，只会拿 `hermes` 这�
 
 ### 8.4 名字冲突：核实后发现不需要做
 
-初稿写的是「今天同名条目静默覆盖，本期要加写入期校验」。核实后**这一条不成立**：`set_third_party_subagents` 已经拒了——
+初稿写的是「今天同名条目静默覆盖，本期要加写入期校验」。核实后**这一条不成立**：`add_third_party_subagent` 已经拒了——
 
 ```python
 dupes = {n for n in names if names.count(n) > 1}
