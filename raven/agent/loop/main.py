@@ -192,18 +192,6 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         from raven.config.schema import AskUserToolConfig, ExecToolConfig
         from raven.token_wise.registry import StrategyRegistry
 
-        # Optional transform applied to the final assistant content right
-        # before outbound delivery. Signature: (session_key, content) -> content.
-        # Used by Sentinel's NudgeInjector to piggyback on the agent's reply,
-        # but designed as a generic hook (citations, warnings, etc.).
-        # Skipped for SENTINEL-origin turns so Sentinel-initiated messages don't
-        # trigger another layer of inject.
-        self.response_modifier = response_modifier
-        # Optional callback fired at the start of _process_message for
-        # genuinely user-originated inbounds (not Sentinel-origin). Used by
-        # Sentinel to detect engagement with a recent nudge (accept/dismiss).
-        # Exception-safe — a raising callback is logged and swallowed.
-        self.on_user_inbound = on_user_inbound
         # Optional async hook fired BEFORE slash-command parsing + normal
         # processing. Used by Sentinel's DecisionConsumer to short-circuit
         # the agent loop when the user replies to a discovery menu.

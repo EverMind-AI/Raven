@@ -57,9 +57,7 @@ class RpcServer:
         # talk to us" trust boundary. None disables the check (pipe/test paths).
         self._auth_token = auth_token
 
-        self._reader: asyncio.StreamReader | None = None
         self._write_transport: asyncio.WriteTransport | None = None
-        self._write_protocol: asyncio.BaseProtocol | None = None
         # Set on the socket paths only, purely for its ``drain()`` -- writes
         # still go through the transport. The pipe fallback wires a bare
         # ``BaseProtocol``, which carries no flow control to wait on.
@@ -139,9 +137,7 @@ class RpcServer:
         self._sock.setblocking(False)
         transport, _ = await loop.connect_accepted_socket(lambda: reader_protocol, self._sock)
         self._write_transport = transport
-        self._write_protocol = reader_protocol
         self._writer = asyncio.StreamWriter(transport, reader_protocol, reader, loop)
-        self._reader = reader
 
         self._started.set()
         logger.info("rpc: RpcServer started (pid={}, fd={})", os.getpid(), self._sock.fileno())

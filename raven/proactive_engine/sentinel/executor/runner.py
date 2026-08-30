@@ -178,7 +178,6 @@ class SentinelRunner:
         # before it finishes (especially the slow LLM-backed behaviors
         # extractor tick).
         self._background_tasks: set[asyncio.Task] = set()
-        self.memory_writer = None
         self.task_discoverer = task_discoverer
         self.task_discovery_time = _parse_hhmm(task_discovery_time)
         # Each entry is ``(channel, chat_id)`` where ``chat_id == ""`` means
@@ -196,11 +195,8 @@ class SentinelRunner:
         self._decision_source = decision_source
         self._engagement_window = engagement_window_seconds
         self._deadline_outage_fallback = deadline_outage_fallback
-        # Track date-of-last memory writer attempt to ensure we run at most
-        # once per local day even if multiple ticks fall in the same day.
-        self._last_memory_write_date: "datetime | None" = None
-        # Same shape, separate slot — we want discovery to run on a
-        # day-aligned guard independent of memory-writer cooldown.
+        # Day-aligned guard: discovery runs at most once per local day even
+        # if multiple ticks fall in the same day.
         self._last_task_discovery_date: "datetime | None" = None
         # Daily-cadence guard for FeedbackTracker cleanup; keeps the
         # JSONL log bounded so apply_adaptive_tuning's 7-day window
@@ -473,7 +469,6 @@ class SentinelRunner:
                     type(exc).__name__,
                     exc,
                 )
-        self._last_memory_write_date = self._now_fn()
 
     _SENTINEL_INFINITE_IDLE_SECONDS = 10**9  # ~ 31 years; any idle gate clears
 
@@ -640,8 +635,8 @@ class SentinelRunner:
         return []
 
     async def _maybe_run_task_discovery(self) -> None:
-        """Daily TaskDiscoverer pass. Same per-process guard pattern as
-        ``_refresh_memory_state``: only one attempt per local day.
+        """Daily TaskDiscoverer pass. Per-process guard: at most one
+        attempt per local day.
         Cross-process safety lives in PendingDecisionStore (newer write
         supersedes older live decision on the same address) so two
         processes producing menus at 08:00 only result in one menu the

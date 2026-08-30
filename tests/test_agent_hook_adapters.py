@@ -389,3 +389,15 @@ class TestAgentLoopHookWireUp:
         ctx = AgentHookContext(session_key="cli:c1", outbound_content="hi")
         decision = await agent.hooks.after_send(ctx)
         assert decision.modified_content == "hi [appended]"
+
+    def test_callbacks_live_only_in_the_hook_chain(self, workspace):
+        """The adapters are the callbacks' one home: the loop keeps no
+        parallel copy for a caller to read and find stale."""
+        agent = _make_agent(
+            workspace,
+            on_user_inbound=lambda m: None,
+            response_modifier=lambda k, c: c,
+        )
+        assert [type(h) for h in agent.hooks] == [OnUserInboundAdapter, ResponseModifierAdapter]
+        assert not hasattr(agent, "on_user_inbound")
+        assert not hasattr(agent, "response_modifier")
