@@ -10,4 +10,11 @@ two-tier ledger guard (tests/test_contracts_two_tier_ledger.py):
 
 Modules here export declared members only (``__all__`` is the ledger row) and
 import no machinery — a paper describes, it does not do.
+
+The contract tier is versioned: ``CONTRACTS_VERSION`` moves whenever a
+contract-tier paper's declared surface changes shape -- signatures, fields,
+exports; never prose. The surface digest pinned beside the ledger guard
+makes a silent shape change a red gate.
 """
+
+CONTRACTS_VERSION = "1"

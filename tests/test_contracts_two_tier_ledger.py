@@ -200,3 +200,102 @@ def test_import_guard_bites_machinery_and_spares_type_checking(tmp_path):
     )
     got = check_imports(pkg)
     assert got == ["leaky.py:2 imports raven.providers.base", "leaky.py:4 imports loguru"], got
+
+
+# ---------------------------------------------------------------------------
+# The contract tier is versioned: its shape moves only with a version bump
+# ---------------------------------------------------------------------------
+
+PINNED_CONTRACT_SURFACE = ("1", "6567a9ecbea138e4c09fd9e334916a889b306f6ebc455e3191e23f8a359a1f0d")
+
+
+def contract_surface_digest(pkg_dir: Path) -> str:
+    """Digest of the contract tier's declared surface: exported signatures,
+    fields and constants, with prose and function bodies stripped so only a
+    shape change moves it."""
+    import ast
+    import hashlib
+
+    class SurfaceOnly(ast.NodeTransformer):
+        def visit_FunctionDef(self, node):
+            node.body = [ast.Pass()]
+            return node
+
+        visit_AsyncFunctionDef = visit_FunctionDef  # noqa: N815
+
+        def visit_ClassDef(self, node):
+            self.generic_visit(node)
+            node.body = [
+                n for n in node.body if not (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant))
+            ] or [ast.Pass()]
+            return node
+
+    chunks: list[str] = []
+    for py in sorted(pkg_dir.glob("*.py")):
+        if py.name == "__init__.py":
+            continue
+        tree = ast.parse(py.read_text())
+        tier = None
+        exports: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                for tgt in node.targets:
+                    if isinstance(tgt, ast.Name) and tgt.id == "__tier__":
+                        tier = ast.literal_eval(node.value)
+                    if isinstance(tgt, ast.Name) and tgt.id == "__all__":
+                        exports = set(ast.literal_eval(node.value))
+        if tier != "contract":
+            continue
+        for node in tree.body:
+            name = getattr(node, "name", None)
+            if name is None and isinstance(node, ast.Assign) and len(node.targets) == 1:
+                tgt = node.targets[0]
+                name = tgt.id if isinstance(tgt, ast.Name) else None
+            if name is None and isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                name = node.target.id
+            if name in exports:
+                chunks.append(f"{py.name}:{ast.dump(SurfaceOnly().visit(node))}")
+    assert chunks, "no contract-tier surface found; a digest of nothing pins nothing"
+    return hashlib.sha256("\n".join(chunks).encode()).hexdigest()
+
+
+def test_the_version_pin_matches_the_papers():
+    from raven.contracts import CONTRACTS_VERSION
+
+    version, digest = PINNED_CONTRACT_SURFACE
+    assert CONTRACTS_VERSION == version, (
+        f"CONTRACTS_VERSION is {CONTRACTS_VERSION!r} but the pin says {version!r}; move them together"
+    )
+    got = contract_surface_digest(CONTRACTS_DIR)
+    assert got == digest, (
+        "the contract tier's declared surface moved: bump CONTRACTS_VERSION in "
+        "raven/contracts/__init__.py and repin PINNED_CONTRACT_SURFACE to the new "
+        f"digest {got!r}. (A digest shift right after a Python upgrade with no "
+        "paper edits is the AST render changing, not the papers -- repin without "
+        "a bump.)"
+    )
+
+
+def test_the_digest_moves_when_a_signature_changes(tmp_path):
+    import shutil
+
+    work = tmp_path / "contracts"
+    shutil.copytree(CONTRACTS_DIR, work, ignore=shutil.ignore_patterns("__pycache__"))
+    p = work / "token_strategy.py"
+    src = p.read_text()
+    assert "model: str" in src
+    p.write_text(src.replace("model: str", "model_name: str", 1))
+    assert contract_surface_digest(work) != contract_surface_digest(CONTRACTS_DIR)
+
+
+def test_the_digest_ignores_prose(tmp_path):
+    import shutil
+
+    work = tmp_path / "contracts"
+    shutil.copytree(CONTRACTS_DIR, work, ignore=shutil.ignore_patterns("__pycache__"))
+    p = work / "token_strategy.py"
+    src = p.read_text()
+    marker = "Convention: ``input_tokens`` is *fresh* (non-cached) prompt tokens."
+    assert marker in src
+    p.write_text(src.replace(marker, "Rule: input tokens count only the fresh prompt.", 1))
+    assert contract_surface_digest(work) == contract_surface_digest(CONTRACTS_DIR)
