@@ -34,6 +34,7 @@ from raven.i18n import t
 from raven.i18n import zh as zh_catalog
 from raven_everos import roots as _discover_mod
 from raven_everos import server
+from tests._everos_presence import everos_plugin_absent
 
 runner = CliRunner()
 
@@ -1379,6 +1380,37 @@ def test_memory_step_is_skipped_on_native_windows(
 
     assert json.loads(tmp_env.read_text())["memory"]["backend"] is None
     assert not everos_isolated.exists()
+
+
+def test_memory_step_without_the_plugin_says_so_and_writes_nothing(
+    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """The backend moved into its own distribution, and this install lacks it.
+
+    Every lane of the step configures, starts or probes that service, so there
+    is nothing to ask. Turning the backend off would be raven answering for the
+    user a question only installing the plugin settles -- so the note names the
+    distribution and the config is left exactly as it was.
+    """
+    import questionary
+
+    def _explode(*_a, **_kw):
+        raise AssertionError("step 4 must not prompt without the plugin it configures")
+
+    monkeypatch.setattr(questionary, "select", _explode)
+    monkeypatch.setattr(questionary, "text", _explode)
+
+    with everos_plugin_absent():
+        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert "everos-memory" in out
+    assert not tmp_env.exists(), "wrote a config for a backend it could not configure"
+    assert not everos_isolated.exists()
+
+    from raven.config.raven import load_raven_config
+
+    assert load_raven_config().memory.backend == "everos"
 
 
 def test_giving_up_says_what_is_lost(

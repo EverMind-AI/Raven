@@ -41,6 +41,7 @@ from raven.agent.subagent_memory import (
 )
 from raven.config.schema import ExecToolConfig
 from raven.contracts.llm_provider import LLMProvider
+from raven.core.plugin_stack import everos_plugin_installed, everos_plugin_missing_note
 from raven.observability import semconv
 from raven.providers.binding import ModelBinding, resolve
 from raven.sandbox import SandboxConfig, build_executor
@@ -110,7 +111,15 @@ async def _write_spawn_status(session_key: str | None, agent: str, handle: str, 
 
 
 def _host_everos_base_url() -> str:
-    """The host's own everos service, used by any sub-agent that names none."""
+    """The host's own everos service, used by any sub-agent that names none.
+
+    Empty when the plugin is not installed: raven runs no everos then, and the
+    address it would otherwise default to is the plugin's own constant. An
+    agent that named its own address is unaffected -- it never reads this.
+    """
+    if not everos_plugin_installed():
+        logger.warning("Sub-agent memory has no host address: {}", everos_plugin_missing_note())
+        return ""
     from raven_everos.health import DEFAULT_EVEROS_BASE_URL, configured_base_url
 
     try:

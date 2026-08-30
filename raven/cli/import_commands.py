@@ -20,7 +20,12 @@ from raven.cli._theme import POINTER, QMARK
 from raven.cli._tty_guard import die_if_not_tty
 from raven.config.loader import load_config
 from raven.config.schema import Config
-from raven.core.plugin_stack import build_plugin_registry, maybe_build_memory_backend
+from raven.core.plugin_stack import (
+    build_plugin_registry,
+    everos_plugin_installed,
+    everos_plugin_missing_note,
+    maybe_build_memory_backend,
+)
 from raven.importer.orchestrator import ImportSummary, ProgressEvent, run_import
 from raven.importer.skills import SkillOrigin
 from raven.importer.skills.hermes import HermesSkillSource
@@ -146,9 +151,15 @@ async def _build_and_run(
     registry = build_plugin_registry(ec_config)
     backend = maybe_build_memory_backend(workspace, ec_config, registry=registry)
     if backend is None:
-        console.print(
-            "[red]No memory backend configured. Run `raven onboard` first.[/red]",
-        )
+        # Two ways to get no backend, and they need different instructions:
+        # nobody configured one, or the configured one ships separately and is
+        # not installed here. `raven onboard` only fixes the first.
+        if ec_config.memory.backend == "everos" and not everos_plugin_installed():
+            console.print(f"[red]Nothing was imported: {everos_plugin_missing_note()}[/red]")
+        else:
+            console.print(
+                "[red]No memory backend configured. Run `raven onboard` first.[/red]",
+            )
         raise typer.Exit(1)
 
     await backend.start()

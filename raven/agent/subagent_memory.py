@@ -32,6 +32,8 @@ from typing import Any
 import httpx
 from loguru import logger
 
+from raven.core.plugin_stack import everos_plugin_installed, everos_plugin_missing_note
+
 _PAGE_SIZE = 100
 _HTTP_TIMEOUT_S = 30.0
 _FLUSH_TIMEOUT_S = 360.0
@@ -147,6 +149,12 @@ async def prime_from_turn(
         logger.warning("Trace for {} has no {} declared; nothing written", session_id, missing)
         return False
     if not turn:
+        return False
+    if not everos_plugin_installed():
+        # The read path below needs only httpx, so an agent that writes its own
+        # memories still reads back; priming is the half that needs the plugin's
+        # message shapes, and its absence is a status, not a failure.
+        logger.warning("Trace for {} was not written: {}", session_id, everos_plugin_missing_note())
         return False
     from raven_everos.backend import convert_messages
 

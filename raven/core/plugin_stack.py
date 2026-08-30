@@ -19,12 +19,20 @@ rather than crashing the host.
 Lifecycle (``backend.start()`` / ``backend.stop()``) is the **caller's**
 responsibility. These helpers only construct; CLI bootstrap code does
 the await around them.
+
+The same leniency has to reach the host surfaces that talk to the EverOS
+plugin directly rather than through the registry -- ``raven doctor``,
+``raven onboard``, ``raven import``, the ``memory.*`` RPC methods and the
+sub-agent trace writer. :func:`everos_plugin_installed` and
+:func:`everos_plugin_missing_note` are what they ask before importing it.
 """
 
 from __future__ import annotations
 
 import logging
+import sys
 from collections.abc import Callable
+from importlib.util import find_spec
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -44,6 +52,43 @@ if TYPE_CHECKING:
     from raven.plugins.discover import DiscoveredPlugin
 
 logger = logging.getLogger(__name__)
+
+EVEROS_PLUGIN_DISTRIBUTION = "everos-memory"
+"""The distribution that contributes the ``everos`` memory backend."""
+
+_EVEROS_PLUGIN_PACKAGE = "raven_everos"
+
+
+def everos_plugin_installed() -> bool:
+    """Whether the ``everos-memory`` distribution is present in this install.
+
+    Asked of the import system instead of by importing: a spec lookup executes
+    no line of the plugin, so a plugin that IS installed and raises
+    ``ImportError`` from inside itself stays a visible bug rather than being
+    read as an absence. An imported module is present by definition, and asking
+    ``find_spec`` about one whose spec was never set raises instead of
+    answering.
+    """
+    if sys.modules.get(_EVEROS_PLUGIN_PACKAGE) is not None:
+        return True
+    return find_spec(_EVEROS_PLUGIN_PACKAGE) is not None
+
+
+def everos_plugin_missing_note() -> str:
+    """What every host surface says when the plugin it wanted is not installed.
+
+    One sentence in one place because five entry points say it, each in its own
+    register. Plain text and no markup, so a Rich console, a JSON-RPC error and
+    a log line can all carry it. It names what the default is rather than what
+    this config says: two of those callers run for reasons other than the
+    configured backend, and a sentence that assumed the config would be wrong
+    for them.
+    """
+    return (
+        f"the {EVEROS_PLUGIN_DISTRIBUTION} distribution is not installed, so the everos memory "
+        f"backend -- the shipped default for memory.backend -- has nothing behind it. Install "
+        f"{EVEROS_PLUGIN_DISTRIBUTION}, or set memory.backend to null to stop asking for it."
+    )
 
 
 def plugin_discovery_sources() -> dict:
