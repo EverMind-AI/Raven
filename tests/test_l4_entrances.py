@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import ast
 import tempfile
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -22,52 +23,44 @@ import pytest
 from raven.agent.loop.bundles import TurnPolicy
 
 REPO = Path(__file__).resolve().parent.parent
-INNER_DIRS = [
-    "spine",
-    "contracts",
-    "tracing",
-    "agent",
-    "memory_engine",
-    "context_engine",
-    "providers",
-    "session",
-    "sandbox",
-    "routing",
-    "token_wise",
-    "plugins",
-    "channels",
-    "gateway",
-    "market",
-    "ops",
-    # Cross-cutting leaves, seated by CONTEXT.md's Layer Seats: consumed
-    # by inner layers and cargo alike, so they may not know a surface.
-    "security",
-    "auth",
-    # Seated by the 2026-08-29 structural audit: config and utils
-    # are cross-cutting leaves (same rule as auth); the rest are L3
-    # shelf members. proactive_engine is an engine consumed by the
-    # loop and the assembly root, not a transport, and core is the
-    # assembly root itself (see CONTEXT.md, Layer Seats).
-    "config",
-    "utils",
-    "mcp",
-    "playbook",
-    "knowledge",
-    "skill_hub",
-    "trajectory",
-    "eval_engine",
-    "proactive_engine",
-    "core",
-]
+
+
+def _seated_inner() -> list[str]:
+    """The packages the contract seats as inner, read from the contract.
+
+    ``pyproject.toml``'s "inner layers know no surface" is the roster, and this
+    file used to keep a second copy of it. The copy drifted twice without
+    failing anything -- ``i18n`` and ``observability`` were seated in the
+    contract and never added here -- so the guard silently stopped covering the
+    packages it had just been told about. Reading the roster is the fix; the
+    kernel-closure test does the same with the same tomllib call.
+    """
+    data = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))
+    contracts = data["tool"]["importlinter"]["contracts"]
+    inner = next(c for c in contracts if c["name"] == "inner layers know no surface")
+    return sorted(m.removeprefix("raven.") for m in inner["source_modules"])
+
+
+INNER_DIRS = _seated_inner()
+
+
+def _python_files(name: str) -> list[Path]:
+    """Every .py of one seat, whether the seat is a package or a single module."""
+    pkg = REPO / "raven" / name
+    if pkg.is_dir():
+        return [p for p in pkg.rglob("*.py") if "__pycache__" not in p.parts]
+    module = REPO / "raven" / f"{name}.py"
+    assert module.is_file(), f"seat {name!r} is neither a package nor a module"
+    return [module]
+
+
 SURFACES = ("raven.cli", "raven.rpc", "raven.acp")
 
 
 def test_kernel_and_organs_know_no_surface():
     offenders = []
     for d in INNER_DIRS:
-        for p in (REPO / "raven" / d).rglob("*.py"):
-            if "__pycache__" in p.parts:
-                continue
+        for p in _python_files(d):
             try:
                 tree = ast.parse(p.read_text(errors="replace"))
             except SyntaxError:
@@ -144,3 +137,13 @@ async def test_a_new_entrance_needs_only_inward_imports():
         f"exactly one terminal event per turn, got {terminals} "
         "(zero leaks the consumer's slot; two would double-release)"
     )
+
+
+def test_every_seat_the_contract_names_is_something_the_guard_can_walk() -> None:
+    """A seat naming a path that does not exist would be scanned as nothing, and
+    a guard that scans nothing passes."""
+    seats = _seated_inner()
+
+    assert len(seats) >= 28, seats
+    for name in seats:
+        assert _python_files(name), name
