@@ -11,6 +11,7 @@ Two refusals, for two different reasons.
 from __future__ import annotations
 
 import ipaddress
+import os
 import re
 from urllib.parse import urlsplit
 
@@ -36,6 +37,17 @@ _SCHEME_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.\-]*):")
 
 _LINK_LOCAL_V4 = ipaddress.ip_network("169.254.0.0/16")
 _LINK_LOCAL_V6 = ipaddress.ip_network("fe80::/10")
+
+#: Deployment-level tightening, same class of switch as ``RAVEN_TRACING``:
+#: set to 1/true/yes/on to refuse loopback and private-range targets too.
+#: Off by default -- a reader pointing the page at their own dev server is
+#: the ordinary case, and this is a per-deployment stance, not a config key
+#: an agent-driven config write could flip.
+BLOCK_PRIVATE_ENV_VAR = "RAVEN_BROWSER_BLOCK_PRIVATE"
+
+
+def _private_blocked() -> bool:
+    return os.environ.get(BLOCK_PRIVATE_ENV_VAR, "").strip().lower() in ("1", "true", "yes", "on")
 
 
 class NavigationRefusedError(ValueError):
@@ -82,6 +94,10 @@ def check_navigation(url: str) -> str:
         # is the ordinary case, and breaking that to close a hole that link-local
         # already closes would trade a real feature for no gain.
         raise NavigationRefusedError(f"{host} is link-local, which is where instance credentials live")
+    if _private_blocked() and any(a.is_loopback or a.is_private for a in reachable):
+        raise NavigationRefusedError(
+            f"{host} is a private address and this deployment refuses those ({BLOCK_PRIVATE_ENV_VAR} is set)"
+        )
     # Not covered, and it cannot be from here: a *name* that resolves to a
     # link-local address -- metadata.google.internal, or any A record an
     # attacker publishes -- is indistinguishable from any other name on the URL
@@ -109,6 +125,7 @@ def navigation_refusal(url: str) -> str | None:
 __all__ = [
     "ALLOWED_SCHEMES",
     "BLANK",
+    "BLOCK_PRIVATE_ENV_VAR",
     "NavigationRefusedError",
     "check_navigation",
     "navigation_refusal",
