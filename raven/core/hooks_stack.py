@@ -1,13 +1,10 @@
-"""Assembly-root helper for AgentLoop's hook chain (unwired today).
+"""Assembly-root helper for AgentLoop's hook chain.
 
 Composes a :class:`CompositeHook` from optional sub-stacks:
 
-- Sentinel callbacks (passed through AgentLoop's on_user_inbound /
-  decision_consumer / response_modifier params — the AgentLoop constructor
-  wraps them in adapters and registers them into ``self.hooks``;
-  ``build_hooks_stack`` does NOT duplicate that wiring).
 - Eval Engine hooks from :func:`build_eval_stack`.
-- Caller-supplied hooks.
+- Caller-supplied hooks (the entrances' adapter-wrapped callbacks among them;
+  the loop takes finished hooks only).
 
 The helper is intentionally thin — most callers just hand
 ``EvalEngine.hooks()`` to AgentLoop's ``hooks=...`` constructor
@@ -41,12 +38,8 @@ def build_hooks_stack(
          after_iteration). All three are no-ops in default config.
       2. Caller-supplied ``extra_hooks``.
 
-    The Sentinel adapter hooks (OnUserInboundAdapter / DecisionConsumerAdapter
-    / ResponseModifierAdapter) are NOT added here — AgentLoop's constructor
-    wraps the matching parameters into adapters and inserts
-    them around any ``hooks=`` argument it receives. See
-    ``raven.agent.loop.main.AgentLoop.__init__`` for the canonical
-    ordering rationale.
+    The entrances wrap their own callbacks into adapter hooks and pass them
+    here as ``extra_hooks``; nothing is wrapped on their behalf.
     """
     chain = CompositeHook()
     if eval_engine is not None:

@@ -92,9 +92,13 @@ supplies `AgentTurnRunner` (wraps `AgentLoop`). Gateway and TUI variants also ex
 _Avoid_: conflating with Agent Loop — Turn Runner is the Protocol; Agent Loop is one implementation.
 
 **Agent Hook** (`contracts/loop_hooks.py`; implementations in `agent/hook/`):
-The turn-loop extension point: an `AgentHook` ABC with five async phases
-(`before_user_inbound`, `before_iteration`, `before_execute_tools`, `after_iteration`, `after_send`).
-Multiple hooks chain via `CompositeHook`; the EvalEngine wires three concrete implementations.
+The turn-loop extension point: an `AgentHook` ABC with six async phases
+(`before_user_inbound`, `before_iteration`, `before_execute_tools`, `after_iteration`,
+`terminal_answerless`, `after_send`), all fired by the loop. A decision may pass through,
+short-circuit, modify outbound content, or roll the iteration back and re-sample (with
+injected messages and generation overrides for that one call); `before_iteration` may also
+withhold tools for the iteration. Multiple hooks chain via `CompositeHook`; the EvalEngine
+wires three concrete implementations, and a product steers the loop with its own.
 _Avoid_: "callback" or "middleware" — neither captures the phase-specific, chain-aware semantics.
 
 **Subagent** (`agent/subagent/`):

@@ -4,10 +4,12 @@ Factory-loop tier: Versioned with the factory loop, not frozen for every
 loop — a replacement loop may ship its own hook vocabulary and version this
 paper with it. Only the ``contract`` tier is a cross-loop promise.
 
-AgentLoop adapts its callback parameters (``response_modifier`` /
-``on_user_inbound`` / ``decision_consumer``) into hooks of this shape and runs
-them alongside the registered ones; eval_engine builds three concrete hook
-implementations on top.
+The hook chain is the loop's one extension door: the host hands finished
+hooks and the loop fires six phases -- one on the way in, three per ReAct
+iteration, one when a turn ends with nothing to show, one on the way out.
+eval_engine builds three concrete hooks on the iteration phases; a product
+that needs to steer the loop (budget notes, forced finalization, spin
+breaking) builds its own on the same six.
 
 Design choices:
 
@@ -21,17 +23,23 @@ Design choices:
    be added without redoing the interface. Sync callers can simply
    ``return`` immediately.
 
-3. **Three orthogonal return modes**, all expressed via
+3. **Four orthogonal return modes**, all expressed via
    ``HookDecision``:
 
    - *pass-through* — default. Let the next hook / main loop continue.
    - *short_circuit_result* — halt the chain and the AgentLoop returns
      this value as the outbound reply (or processes it as a final
-     answer, depending on the phase). Used by
-     ``decision_consumer`` short-circuit and the personalizer
-     "ask a clarification question" branch.
+     answer, depending on the phase). Used by the Sentinel decision
+     consumer and the personalizer "ask a clarification question" branch.
    - *modified_content* — for ``after_send``: transform the outbound
      text. Used by Sentinel's nudge_inject (append nudge to reply).
+   - *rollback* — for the iteration phases: discard what this iteration
+     appended and re-sample the LLM call without consuming an iteration,
+     optionally with injected messages the re-sample sees and generation
+     overrides for that one call. How a gate bounces a draft back.
+
+   ``modified_tools`` (``before_iteration``) is not a mode but a grant: the
+   tool schemas the model is shown for this one iteration.
 
 4. **HookDecision is immutable from the hook's perspective.** Hooks
    build a fresh decision each call; ``CompositeHook`` is responsible
@@ -89,6 +97,13 @@ class AgentHookContext:
     tools: list[dict[str, Any]] | None = None
     response: Any | None = None  # LLMResponse or dict; left as Any to avoid
     # an import cycle from this base module.
+    #: This turn's question, read once at loop entry from the inbound user
+    #: message -- later the history has grown and "the last user message" may
+    #: be an injection.
+    turn_question: str = ""
+    #: Index in ``messages`` where this turn's own messages start; what a
+    #: hook counts (searches this turn, fetches this turn) is ``messages[turn_base:]``.
+    turn_base: int = 0
 
     # ── after_send ──
     outbound_content: str | None = None
@@ -101,7 +116,7 @@ class AgentHookContext:
 class HookDecision:
     """Result of a hook invocation.
 
-    Three states (mutually compatible only in this combinatorial sense):
+    Four states (mutually compatible only in this combinatorial sense):
 
     - ``pass_through=True``, no short-circuit, no modification — default,
       continue to next hook / main loop.
@@ -110,15 +125,35 @@ class HookDecision:
     - ``modified_content`` is set — only meaningful for the ``after_send``
       phase; the next hook in the chain sees the modified text as
       ``ctx.outbound_content``.
+    - ``rollback=True`` — halt the chain; AgentLoop pops every message the
+      current iteration appended and re-samples the LLM call without
+      consuming an iteration. Honored in ``before_execute_tools`` (the
+      proposed tool calls are discarded unexecuted) and ``after_iteration``
+      (tool side effects, if any ran, stand -- only the history is popped).
+      Bounded per turn by the loop's rollback cap; past the cap the decision
+      degrades to pass-through and the refusal is counted in
+      ``ctx.metadata["rollbacks_refused"]``. ``rollback_overrides`` carries
+      generation-parameter overrides for the re-sample call only (keys
+      outside the loop's allowlist are dropped); ``rollback_inject`` carries
+      messages appended after the pop, so the re-sample sees them -- they
+      persist into history like any prompt the model was shown.
 
-    Hooks should not mix ``short_circuit_result`` and ``modified_content``
-    in a single decision — short-circuit halts further processing, so
-    a content modification would be moot.
+    ``modified_tools`` is a grant, not a halting state: in
+    ``before_iteration`` it replaces the tool schemas the model is shown
+    for this one iteration. The registry is untouched, so the next
+    iteration starts from the full set unless a hook decides again.
+
+    Hooks should not mix the halting states in a single decision -- the
+    first halting state wins and the rest would be moot.
     """
 
     pass_through: bool = True
     short_circuit_result: Any | None = None
     modified_content: str | None = None
+    rollback: bool = False
+    rollback_overrides: dict[str, Any] | None = None
+    rollback_inject: list[dict[str, Any]] | None = None
+    modified_tools: list[dict[str, Any]] | None = None
     notes: list[str] = field(default_factory=list)
 
 
@@ -172,9 +207,10 @@ class AgentHook(ABC):
           - Token budget check (refuse to start another iteration if
             we'd blow the budget).
           - Pruning (skip iteration when the work is clearly done).
+          - Withholding a tool for this iteration (``modified_tools``).
 
         Context fields populated: ``session_key``, ``iteration``,
-        ``messages``, ``tools``.
+        ``messages``, ``tools``, ``turn_question``, ``turn_base``.
         """
         return HookDecision()
 
@@ -184,6 +220,7 @@ class AgentHook(ABC):
 
         Used for:
           - Pre-tool-call audit / approval.
+          - Discarding the proposal and re-sampling (``rollback``).
 
         Context fields populated: ``session_key``, ``iteration``,
         ``messages``, ``response`` (the LLM response carrying tool calls).
@@ -198,9 +235,35 @@ class AgentHook(ABC):
           - Judging loop completion (is this turn done?).
           - Judging case success (did we succeed?) → writes to ``case.md``
             via memory_engine.
+          - Bouncing a draft back with feedback (``rollback`` +
+            ``rollback_inject``) or replacing it (``short_circuit_result``).
+
+        Fires twice per iteration shape: after tool results are in (the
+        response carried tool calls) and, for a text response, before that
+        text is persisted -- so a short-circuit replaces it without leaving
+        the replaced text in history.
 
         Context fields populated: ``session_key``, ``iteration``,
         ``messages``, ``response``.
+        """
+        return HookDecision()
+
+    async def terminal_answerless(self, ctx: AgentHookContext) -> HookDecision:
+        """Fires once, after the loop has ended with no visible answer.
+
+        The iteration phases only see turns that reached a text response; a
+        turn can also end through a provider error or an exhausted budget
+        whose wrap-up came back empty, and those exits reach the user with
+        reasoning but no answer. This is the one seam where a terminal gate
+        can still commit one.
+
+        ``short_circuit_result`` replaces the final answer and is persisted
+        as the turn's last assistant message; ``rollback`` and
+        ``modified_content`` are meaningless here -- the loop is over.
+
+        Context fields populated: ``session_key``, ``messages``,
+        ``metadata["turn_end"]`` (status and iteration count). ``response``
+        is ``None``.
         """
         return HookDecision()
 

@@ -6,8 +6,8 @@ Semantics:
   A → B → C for every phase. Late registrations via ``append`` go to
   the end.
 
-- **Short-circuit halts the chain.** The first hook in a phase that
-  returns ``HookDecision(short_circuit_result=…)`` wins; subsequent
+- **A halting state halts the chain.** The first hook in a phase that
+  returns ``short_circuit_result`` or ``rollback`` wins; subsequent
   hooks in that phase are NOT called. This is critical for the
   ``before_user_inbound`` phase, where Sentinel's decision_consumer
   short-circuits a ``/pick`` reply and the personalizer must not run
@@ -17,7 +17,8 @@ Semantics:
   ``modified_content`` (currently only ``after_send``), each hook's
   output becomes the next hook's input via
   ``ctx.outbound_content``. The final return value carries the
-  fully-chained ``modified_content``.
+  fully-chained ``modified_content``. ``modified_tools`` chains the same
+  way in ``before_iteration`` via ``ctx.tools``.
 
 - **Exceptions are isolated.** A hook that raises is logged and
   treated as a pass-through no-op; the chain continues with the next
@@ -36,6 +37,7 @@ logger = logging.getLogger(__name__)
 
 
 _CHAIN_MODIFIED_PHASES = frozenset({"after_send"})
+_CHAIN_TOOLS_PHASES = frozenset({"before_iteration"})
 
 
 class CompositeHook(AgentHook):
@@ -81,6 +83,9 @@ class CompositeHook(AgentHook):
     async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
         return await self._run_phase("after_iteration", ctx)
 
+    async def terminal_answerless(self, ctx: AgentHookContext) -> HookDecision:
+        return await self._run_phase("terminal_answerless", ctx)
+
     async def after_send(self, ctx: AgentHookContext) -> HookDecision:
         return await self._run_phase("after_send", ctx)
 
@@ -97,7 +102,9 @@ class CompositeHook(AgentHook):
         supports content chaining and any hook produced a modification).
         """
         chain_content = phase in _CHAIN_MODIFIED_PHASES
+        chain_tools = phase in _CHAIN_TOOLS_PHASES
         last_modified: str | None = None
+        last_tools: list[dict] | None = None
 
         for hook in self._hooks:
             method = getattr(hook, phase)
@@ -111,15 +118,18 @@ class CompositeHook(AgentHook):
                 )
                 continue
 
-            if decision.short_circuit_result is not None:
+            if decision.short_circuit_result is not None or decision.rollback:
                 return decision
 
             if chain_content and decision.modified_content is not None:
                 # Propagate to next hook in this phase
                 ctx.outbound_content = decision.modified_content
                 last_modified = decision.modified_content
+            if chain_tools and decision.modified_tools is not None:
+                ctx.tools = decision.modified_tools
+                last_tools = decision.modified_tools
 
-        return HookDecision(modified_content=last_modified)
+        return HookDecision(modified_content=last_modified, modified_tools=last_tools)
 
 
 __all__ = ["CompositeHook"]
