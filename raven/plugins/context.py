@@ -24,7 +24,10 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from raven.contracts.llm_provider import LLMProvider
 
 
 @dataclass(frozen=True)
@@ -57,6 +60,13 @@ class ServiceLocator:
     is off: ..."). The host supplies the renderer (a console, a notice channel);
     a plugin never owns a terminal. ``None`` means the host offers no channel and
     the plugin falls back to its log."""
+
+    provider: "LLMProvider | None" = None
+    """The connection's language model, as the loop itself calls it. A hook or
+    tool that needs a judgement (a draft reviewer, a sufficiency check, a page
+    digest) asks this one instead of building its own from the config: one
+    credential, one pool, one place a model switch lands. ``None`` where the
+    host has no model to lend (a CLI listing plugins, a test building a locator)."""
 
 
 @dataclass(frozen=True)

@@ -16,7 +16,9 @@ from raven.config.raven import (
 )
 from raven.contracts.memory import MemoryBackend
 from raven.core.plugin_stack import (
+    build_plugin_hooks,
     build_plugin_registry,
+    build_plugin_tools,
     maybe_build_memory_backend,
     named_plugin_roots,
 )
@@ -237,3 +239,49 @@ class TestConfiguredDirs:
         )
         assert "shelf" in build_plugin_registry(_config(dirs=[str(root)])).activated_ids()
         assert "shelf" not in build_plugin_registry(_config()).activated_ids()
+
+
+# ---------------------------------------------------------------------------
+# The provider grant
+# ---------------------------------------------------------------------------
+
+
+class _GrantWatch:
+    """A registry stand-in that records what locator each factory was handed."""
+
+    def __init__(self, seen: list) -> None:
+        self._seen = seen
+
+    def hook_names(self):
+        return ["h"]
+
+    def tool_names(self):
+        return ["t"]
+
+    def hook_plugin_id(self, name):
+        return "p"
+
+    def tool_plugin_id(self, name):
+        return "p"
+
+    def build_hook(self, name, *, config, services):
+        self._seen.append(("hook", services.provider))
+        return object()
+
+    def build_tool(self, name, *, config, services):
+        self._seen.append(("tool", services.provider))
+        return object()
+
+
+class TestProviderGrant:
+    def test_the_connections_provider_reaches_hooks_and_tools(self, tmp_path: Path) -> None:
+        seen: list = []
+        lent = object()
+        build_plugin_hooks(tmp_path, _config(), registry=_GrantWatch(seen), provider=lent)
+        build_plugin_tools(tmp_path, _config(), registry=_GrantWatch(seen), provider=lent)
+        assert seen == [("hook", lent), ("tool", lent)]
+
+    def test_no_provider_lends_none(self, tmp_path: Path) -> None:
+        seen: list = []
+        build_plugin_hooks(tmp_path, _config(), registry=_GrantWatch(seen))
+        assert seen == [("hook", None)]

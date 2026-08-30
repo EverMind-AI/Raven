@@ -99,8 +99,12 @@ def build_runtime(
     backend = plugin_stack.maybe_build_memory_backend(
         config.workspace_path, ec_config, registry=plugin_registry, notify=(host.notify if host is not None else None)
     )
-    plugin_tools = plugin_stack.build_plugin_tools(config.workspace_path, ec_config, registry=plugin_registry)
-    plugin_hooks = plugin_stack.build_plugin_hooks(config.workspace_path, ec_config, registry=plugin_registry)
+    plugin_tools = plugin_stack.build_plugin_tools(
+        config.workspace_path, ec_config, registry=plugin_registry, provider=provider
+    )
+    plugin_hooks = plugin_stack.build_plugin_hooks(
+        config.workspace_path, ec_config, registry=plugin_registry, provider=provider
+    )
     strategies = token_wise_stack.install_from_config(
         ec_config.token_wise,
         supports_caching=token_wise_stack.caching_probe(provider),
