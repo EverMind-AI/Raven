@@ -255,3 +255,77 @@ async def test_before_user_inbound_can_rewrite_the_inbound_text(tmp_path):
     assert seeded == ["what changed since last time?"]
     dispatched = str(provider.calls[0]["messages"][-1]["content"])
     assert "[research memo]" in dispatched and "what changed since last time?" in dispatched
+
+
+@pytest.mark.asyncio
+async def test_metadata_is_one_dict_across_all_three_phase_groups(tmp_path):
+    seen: dict[str, object] = {}
+
+    class Stash(AgentHook):
+        async def before_user_inbound(self, ctx):
+            ctx.metadata["stash"] = "from-the-door"
+            seen["inbound_history"] = list(ctx.session_history or [])
+            return HookDecision()
+
+        async def before_iteration(self, ctx):
+            seen["at_iteration"] = ctx.metadata.get("stash")
+            return HookDecision()
+
+        async def after_send(self, ctx):
+            seen["at_send"] = ctx.metadata.get("stash")
+            seen["send_history"] = len(ctx.session_history or [])
+            return HookDecision()
+
+    provider = _ScriptedProvider([_text("done"), _text("again")])
+    loop = _loop(tmp_path, provider, [Stash()])
+
+    out = await loop._process_message(_req("hello"))
+
+    assert out is not None
+    assert seen["at_iteration"] == "from-the-door"
+    assert seen["at_send"] == "from-the-door"
+    assert seen["inbound_history"] == [], "a fresh session has no record yet"
+    assert seen["send_history"] == 0, "the send fires before this turn is filed"
+
+    out2 = await loop._process_message(_req("and now?"))
+
+    assert out2 is not None
+    assert len(seen["inbound_history"]) >= 2, "the second turn's inbound sees the first turn's record"
+
+
+@pytest.mark.asyncio
+async def test_history_keeps_the_users_words_not_the_hooks_rewrite(tmp_path):
+    class Memo(AgentHook):
+        async def before_user_inbound(self, ctx):
+            return HookDecision(modified_content=f"[research memo]\n\n{ctx.inbound_content}\n\n[reminder]")
+
+    provider = _ScriptedProvider([_text("done")])
+    loop = _loop(tmp_path, provider, [Memo()])
+
+    out = await loop._process_message(_req("what changed?"))
+
+    assert out is not None
+    dispatched = str(provider.calls[0]["messages"][-1]["content"])
+    assert "[research memo]" in dispatched, "the model saw the rewrite"
+    session = loop.sessions.get_or_create("cli:c")
+    users = [m for m in session.messages if m.get("role") == "user"]
+    assert users and users[-1]["content"] == "what changed?", "history kept the user's own words"
+
+
+@pytest.mark.asyncio
+async def test_a_hooks_observers_dict_lands_on_the_turns_last_assistant_message(tmp_path):
+    class Counter(AgentHook):
+        async def after_iteration(self, ctx):
+            ctx.metadata.setdefault("observers", {})["gate"] = {"fired": 1}
+            return HookDecision()
+
+    provider = _ScriptedProvider([_tool_call("list_dir", {"path": "."}), _text("done")])
+    loop = _loop(tmp_path, provider, [Counter()])
+
+    out = await loop._process_message(_req("look around"))
+
+    assert out is not None
+    session = loop.sessions.get_or_create("cli:c")
+    stamped = [m for m in session.messages if m.get("observers")]
+    assert len(stamped) == 1 and stamped[0]["role"] == "assistant"
+    assert stamped[0]["observers"] == {"gate": {"fired": 1}}
