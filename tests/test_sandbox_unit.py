@@ -457,6 +457,48 @@ class TestExecToolWithMockExecutor:
         assert "blocked" in result.model_text
         assert len(executor.calls) == 0
 
+    async def test_workspace_restriction_catches_a_path_glued_to_an_equals(self, tmp_path):
+        """--file=/etc/passwd names an outside path with no space before it."""
+        from raven.agent.tools.shell import ExecTool
+
+        executor = MockExecutor()
+        tool = ExecTool(
+            executor=executor,
+            working_dir=str(tmp_path),
+            restrict_to_workspace=True,
+        )
+        result = await tool.execute("tool --file=/etc/passwd", working_dir=str(tmp_path))
+        assert "blocked" in result.model_text
+        assert len(executor.calls) == 0
+
+    async def test_workspace_restriction_catches_a_path_after_a_stdin_redirect(self, tmp_path):
+        """wc -l </etc/passwd reads the file as surely as cat /etc/passwd does."""
+        from raven.agent.tools.shell import ExecTool
+
+        executor = MockExecutor()
+        tool = ExecTool(
+            executor=executor,
+            working_dir=str(tmp_path),
+            restrict_to_workspace=True,
+        )
+        result = await tool.execute("wc -l </etc/passwd", working_dir=str(tmp_path))
+        assert "blocked" in result.model_text
+        assert len(executor.calls) == 0
+
+    async def test_a_device_glued_to_an_equals_is_still_exempt(self, tmp_path):
+        """The new boundaries must not revoke the device exemption."""
+        from raven.agent.tools.shell import ExecTool
+
+        executor = MockExecutor()
+        tool = ExecTool(
+            executor=executor,
+            working_dir=str(tmp_path),
+            restrict_to_workspace=True,
+        )
+        result = await tool.execute("tool --log=/dev/null", working_dir=str(tmp_path))
+        assert "blocked" not in result
+        assert len(executor.calls) == 1
+
     async def test_non_sandboxed_deny_list_runs(self, tmp_path):
         """Non-sandboxed executor: deny-list guard is applied."""
         from raven.agent.tools.shell import ExecTool

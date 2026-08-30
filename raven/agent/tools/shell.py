@@ -418,7 +418,11 @@ class ExecTool(Tool):
 
     @staticmethod
     def _extract_absolute_paths(command: str) -> list[str]:
+        # The boundary class must cover every character a path can be glued
+        # to, not just whitespace: --file=/etc/passwd, </etc/passwd,
+        # cmd;/bin/x, $(/usr/bin/id) and `/bin/x` all name a path with no
+        # space before it, and a boundary the class misses is a fence bypass.
         win_paths = re.findall(r"[A-Za-z]:\\[^\s\"'|><;]+", command)
-        posix_paths = re.findall(r"(?:^|[\s|>'\"])(/[^\s\"'>;|<]+)", command)
-        home_paths = re.findall(r"(?:^|[\s|>'\"])(~[^\s\"'>;|<]*)", command)
+        posix_paths = re.findall(r"(?:^|[\s|>'\"=<;(`])(/[^\s\"'>;|<]+)", command)
+        home_paths = re.findall(r"(?:^|[\s|>'\"=<;(`])(~[^\s\"'>;|<]*)", command)
         return win_paths + posix_paths + home_paths
