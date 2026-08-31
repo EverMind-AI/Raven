@@ -27,11 +27,14 @@ Three boundaries this tool does not cross:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
 from raven.contracts.tool import Tool
+
+if TYPE_CHECKING:
+    from raven.contracts.mcp_host import McpHost
 
 _ACTIONS = ("find", "connect", "authorize", "list", "remove")
 
@@ -87,9 +90,10 @@ class PluginTool(Tool):
 
     timeout_seconds = _TOOL_TIMEOUT
 
-    def __init__(self, loop: Any = None) -> None:
-        # The agent loop itself: it owns the connection manager, the sandbox
-        # executor an stdio server needs, and ``apply_mcp_config``. Held rather than
+    def __init__(self, loop: "McpHost | None" = None) -> None:
+        # The loop through its MCP control face (paper: contracts/mcp_host.py):
+        # the connection organ, ``apply_mcp_config`` and the executor provider a
+        # sandboxed stdio server needs -- and nothing else of it. Held rather than
         # resolved per call because there is exactly one for the life of a loop,
         # and the tool is registered by that loop's own constructor.
         self._loop = loop

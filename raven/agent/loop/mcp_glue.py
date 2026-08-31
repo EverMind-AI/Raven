@@ -20,8 +20,14 @@ class McpGlueMixin:
     """MCP lifecycle glue: connect, sync, prewarm, apply, close. Bodies moved
     verbatim from main.py."""
 
-    async def _mcp_executor(self):
-        """The sandbox executor an MCP connect should run under, started."""
+    async def mcp_executor_provider(self):
+        """The sandbox executor an MCP connect should run under, started.
+
+        Public by design (paper: contracts/mcp_host.py): the market's
+        authorize path passes this bound method to
+        ``MCPConnectionManager.connect`` -- the same provider the loop's own
+        reconciles hand over.
+        """
         await self._start_executor()
         return self._executor
 
@@ -274,7 +280,7 @@ class McpGlueMixin:
         # connect rather than only the first -- an MCP server can register a name
         # that is also in disabled_tools.
         report = await self.mcp_manager.apply_config(
-            cfg_servers, executor_provider=self._mcp_executor, attempts=attempts
+            cfg_servers, executor_provider=self.mcp_executor_provider, attempts=attempts
         )
         # After the apply, not only after a connect: a *detach* can take the last
         # server that served resources with it, and no connect fires for that.

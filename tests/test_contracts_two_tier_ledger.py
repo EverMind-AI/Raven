@@ -112,7 +112,7 @@ LEDGER = {
         "RuntimeHandles",
         "ServiceLocator",
     },
-    "factory_loop": {"AgentHook", "AgentHookContext", "FACTORY_LOOP_SURFACE_VERSION", "HookDecision"},
+    "factory_loop": {"AgentHook", "AgentHookContext", "FACTORY_LOOP_SURFACE_VERSION", "HookDecision", "McpHost"},
 }
 
 CONTRACTS_DIR = Path(__file__).resolve().parent.parent / "raven" / "contracts"

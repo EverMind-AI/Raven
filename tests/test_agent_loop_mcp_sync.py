@@ -1,7 +1,7 @@
 """The seam between a real ``AgentLoop`` and the MCP connection manager.
 
 These use a real loop instance, not a fake one. The whole ``plug.*`` surface
-calls ``loop.apply_mcp_config`` / ``loop.mcp_manager`` / ``loop._mcp_executor``, and a
+calls ``loop.apply_mcp_config`` / ``loop.mcp_manager`` / ``loop.mcp_executor_provider``, and a
 test that stands those up itself proves nothing about whether the loop has them
 -- which is exactly how an earlier revision shipped an RPC surface where every
 one of those calls was an AttributeError.
@@ -118,7 +118,7 @@ def test_the_loop_exposes_exactly_what_the_plug_handlers_call(workspace) -> None
     loop = _loop(workspace)
 
     assert callable(loop.apply_mcp_config)
-    assert callable(loop._mcp_executor)
+    assert callable(loop.mcp_executor_provider)
     manager = loop.mcp_manager
     for method in ("status", "connect", "disconnect", "apply_config", "config_changed", "aclose", "tool_map"):
         assert callable(getattr(manager, method)), method
@@ -305,13 +305,13 @@ async def test_the_loop_hands_the_manager_its_executor_provider(workspace) -> No
     would connect it outside the sandbox instead, silently."""
     loop = _loop(workspace)
     asked: list[bool] = []
-    real = loop._mcp_executor
+    real = loop.mcp_executor_provider
 
     async def _recording():
         asked.append(True)
         return await real()
 
-    loop._mcp_executor = _recording
+    loop.mcp_executor_provider = _recording
 
     with patch(_PATCH, new=_fake_connect(["search"])):
         await loop.apply_mcp_config({"svc": MCPServerConfig(url="https://svc.test/mcp")})
@@ -783,3 +783,13 @@ async def test_the_event_bridge_holds_its_task_until_done(workspace) -> None:
     await asyncio.sleep(0)
     await asyncio.sleep(0)
     assert not loop._mcp_event_tasks, "done tasks are discarded, not accumulated"
+
+
+def test_the_loop_satisfies_the_mcp_host_paper(workspace) -> None:
+    """The market and the plugin tool hold the loop through the McpHost face
+    (contracts/mcp_host.py); the assembled loop must satisfy it, or the paper
+    describes a host that does not exist."""
+    from raven.contracts.mcp_host import McpHost
+
+    loop = _loop(workspace)
+    assert isinstance(loop, McpHost)

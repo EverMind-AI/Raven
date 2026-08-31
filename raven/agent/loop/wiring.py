@@ -1032,7 +1032,3 @@ class WiringMixin:
         """
         self._agent_configs = list(configs)
         self.subagents.apply_agents(configs)
-
-    # The pre-``agents`` spelling, still called by the RPC config handlers and the
-    # web config surface. Kept as a name only: both apply the whole list.
-    apply_third_party_subagents = apply_agents
