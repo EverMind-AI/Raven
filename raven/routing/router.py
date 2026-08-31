@@ -101,12 +101,3 @@ class ModelRouter:
             if self._fallback_model != result.primary.model:
                 fallbacks.append(self._fallback_model)
         return result.primary.model, fallbacks
-
-    @property
-    def profile(self) -> RoutingProfileName:
-        return self._profile
-
-    @profile.setter
-    def profile(self, value: RoutingProfileName) -> None:
-        self._profile = value
-        logger.info("ModelRouter profile changed to '{}'", value)
