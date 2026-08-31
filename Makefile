@@ -1,4 +1,4 @@
-.PHONY: help install install-deps lint lint-python lint-tui lint-bridge test test-python test-tui coverage coverage-summary coverage-diff coverage-ratchet coverage-baseline-check coverage-baseline-candidate build build-tui build-bridge check-commits check-pr-title check-large-files ci clean
+.PHONY: help install install-deps lint lint-python lint-tui lint-bridge lint-vscode-ext test test-python test-tui test-vscode-ext coverage coverage-summary coverage-diff coverage-ratchet coverage-baseline-check coverage-baseline-candidate build build-tui build-bridge build-vscode-ext check-commits check-pr-title check-large-files ci clean
 
 PYTHON ?= python3
 PYTHON_VERSION ?= 3.12
@@ -19,6 +19,7 @@ help:
 	@echo "  lint-python    Ruff-check the current lint target set"
 	@echo "  lint-tui       TypeScript lint + RPC drift check"
 	@echo "  lint-bridge    Bridge package build check"
+	@echo "  lint-vscode-ext VS Code extension lint + type check"
 	@echo "  test           Run focused Python checks and TUI tests"
 	@echo "  coverage       Run the default Python suite with line and branch coverage"
 	@echo "  coverage-diff  Check changed executable lines against COVERAGE_BASE_REF"
@@ -39,8 +40,9 @@ install: install-deps
 	npm ci
 	npm ci --prefix ui-tui
 	npm ci --prefix bridge
+	npm ci --prefix vscode-ext
 
-lint: lint-python lint-tui lint-bridge
+lint: lint-python lint-tui lint-bridge lint-vscode-ext
 
 lint-python:
 	uv run --frozen --python $(PYTHON_VERSION) --extra dev ruff check $(PYTHON_LINT_TARGETS)
@@ -54,7 +56,11 @@ lint-tui:
 lint-bridge:
 	npm run build --prefix bridge
 
-test: test-python test-tui
+lint-vscode-ext:
+	npm run lint --prefix vscode-ext
+	npm run type-check --prefix vscode-ext
+
+test: test-python test-tui test-vscode-ext
 
 test-python:
 	uv run --frozen --python $(PYTHON_VERSION) --all-extras pytest -q
@@ -80,13 +86,19 @@ coverage-baseline-candidate:
 test-tui:
 	npm test --prefix ui-tui
 
-build: build-tui build-bridge
+test-vscode-ext:
+	npm test --prefix vscode-ext
+
+build: build-tui build-bridge build-vscode-ext
 
 build-tui:
 	npm run build --prefix ui-tui
 
 build-bridge:
 	npm run build --prefix bridge
+
+build-vscode-ext:
+	npm run build --prefix vscode-ext
 
 check-commits:
 	npx commitlint --from origin/main --to HEAD --config commitlint.config.cjs
@@ -104,4 +116,5 @@ clean:
 	rm -rf .pytest_cache .ruff_cache .uv-cache .mypy_cache htmlcov coverage.xml coverage.json coverage-baseline-candidate.json dist build
 	rm -rf ui-tui/dist ui-tui/coverage ui-tui/.vitest-cache ui-tui/packages/hermes-ink/dist
 	rm -rf bridge/dist
+	rm -rf vscode-ext/dist
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +
