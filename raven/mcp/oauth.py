@@ -14,7 +14,7 @@ host, and what this module provides:
   self-hosted fallback listener) calls :func:`resolve_callback`
 
 The pending map and callback base are module-global on purpose: the loopback
-redirect URL is a process-wide resource (``serve_commands.SERVE`` follows the
+redirect URL is a process-wide resource (``rpc.serve_control.SERVE`` follows the
 same pattern). The ``state`` value is read from the authorization URL the SDK
 hands to ``redirect_handler`` — the SDK generates it, we only correlate.
 

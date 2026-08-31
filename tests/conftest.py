@@ -111,6 +111,23 @@ def no_vendored_subagents(monkeypatch):
     monkeypatch.setattr("raven.agent.subagent.vendored_agents.subagents_root", lambda: None)
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _console_socket_registered():
+    """Register the real CLI into the rpc console socket, once per worker.
+
+    Production hosts register at assembly (the surfaces law forbids rpc from
+    importing the cli, so the table arrives by registration); the suite
+    registers the same way so method-level tests keep driving dispatch and
+    the catalog as a hosted console. Tests that pin the UNregistered
+    behaviour call ``cli_socket.reset()`` and re-register in their own
+    cleanup.
+    """
+    from raven.cli._console_feature import register_console_feature
+
+    register_console_feature()
+    yield
+
+
 @pytest.fixture(autouse=True)
 def _restore_i18n_language():
     """Undo any ``raven.i18n.set_language`` left over from a prior test.

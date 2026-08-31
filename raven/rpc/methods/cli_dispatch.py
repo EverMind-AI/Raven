@@ -44,7 +44,7 @@ from loguru import logger
 from pydantic import ValidationError
 from rich.console import Console
 
-import raven.cli.commands as ec_cli
+from raven.rpc import cli_socket
 from raven.rpc._ansi_filter import filter_ansi
 from raven.rpc._confirm_injection import confirm_injection
 from raven.rpc._console_injection import inject_consoles
@@ -170,7 +170,8 @@ def _is_dispatch_compatible(argv: list[str]) -> bool:
     registered_commands / registered_groups walks are dict-iteration on
     small lists (<50 entries), microsecond cost; caching would create
     invalidation surface that fights the slash_routing tests that
-    monkeypatch ``ec_cli.app``.
+    monkeypatch ``raven.cli.commands.app`` (the socket hands out the module,
+    and every reader resolves ``.app`` at call time).
 
     Examples:
         >>> _is_dispatch_compatible(["channels", "status"])
@@ -205,6 +206,12 @@ def _is_dispatch_compatible(argv: list[str]) -> bool:
     # _DISPATCH_WHITELIST 19-tuple set). The helper module also serves
     # ``methods/commands.py`` so the two reflection sites can't drift.
     head = argv[0]
+    ec_cli = cli_socket.cli_commands()
+    if ec_cli is None:
+        # No CLI registered on this host (an acp server, a bare test stack):
+        # nothing is dispatch-compatible, and the caller falls through to its
+        # not-a-cli-command path.
+        return False
     app = ec_cli.app
     if head in _collect_command_names(app):
         return True
@@ -242,6 +249,9 @@ def _invoke_ec_cli(argv: list[str]) -> int:
     We resolve ``ec_cli.app`` at call time (not import time) so monkey-patches
     in tests take effect.
     """
+    ec_cli = cli_socket.cli_commands()
+    if ec_cli is None:
+        return 1  # unreachable behind the compatibility check; defensive
     try:
         result = ec_cli.app(argv, standalone_mode=False)
     except SystemExit as exc:
