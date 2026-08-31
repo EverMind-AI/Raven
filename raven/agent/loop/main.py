@@ -493,7 +493,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 # A bridged upstream is spawned by the endpoint, not by this
                 # manager, so the confinement has to travel with the source or a
                 # granted stdio server escapes the sandbox the host configured.
-                self._mcp_executor,
+                self.mcp_executor_provider,
                 # The one place a playbook's own ``mcpServers`` becomes
                 # resolvable in a conversation, and a read rather than a write:
                 # ``self._mcp_servers`` is this process's configuration and stays

@@ -86,7 +86,7 @@ class _FakeLoop:
     async def apply_mcp_config(self, servers) -> None:
         pass
 
-    async def _mcp_executor(self):
+    async def mcp_executor_provider(self):
         return None
 
 
@@ -97,7 +97,7 @@ def _factory(loop):
 def _own_attrs(obj) -> list[str]:
     """Everything the fake itself defines: instance attributes *and* the methods
     on its class. The original bug shipped as fake *methods* (`apply_mcp_config`,
-    `_mcp_executor`), so an instance-only check would have missed it."""
+    `mcp_executor_provider`), so an instance-only check would have missed it."""
     from_class = [k for k, v in vars(type(obj)).items() if not k.startswith("__")]
     return sorted(set(vars(obj)) | set(from_class))
 
@@ -109,7 +109,7 @@ def test_the_fake_loop_does_not_invent_a_contract() -> None:
     for attr in _own_attrs(fake):
         assert hasattr(AgentLoop, attr), f"_FakeLoop.{attr} does not exist on AgentLoop"
 
-    for attr in ("apply_mcp_config", "_mcp_executor", "mcp_manager"):
+    for attr in ("apply_mcp_config", "mcp_executor_provider", "mcp_manager"):
         assert hasattr(AgentLoop, attr), f"AgentLoop is missing {attr}"
 
 

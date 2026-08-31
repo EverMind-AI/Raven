@@ -18,14 +18,21 @@ Connect kicks are bounded by :data:`CONNECT_WAIT`: an OAuth connect legitimately
 parks in the browser for minutes, so a mutating call returns the current
 snapshot after a few seconds and the ``mcp.status`` / ``oauth.pending`` events
 carry the rest of the story.
+
+Both callers hand the loop through its MCP control face (paper:
+:mod:`raven.contracts.mcp_host`) -- the three members named there are all this
+module may reach of it.
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
+
+if TYPE_CHECKING:
+    from raven.contracts.mcp_host import McpHost
 
 CONNECT_WAIT = 8.0
 # How long a *change* is waited for when the focus server is already settled. Long
@@ -204,7 +211,7 @@ async def _await_focus(
         await asyncio.sleep(0.05)
 
 
-async def kick_sync(loop: Any, focus: str | None = None) -> dict | None:
+async def kick_sync(loop: "McpHost | None", focus: str | None = None) -> dict | None:
     """Reconcile live connections with the fresh config, waiting at most
     :data:`CONNECT_WAIT` -- slow (OAuth) connects continue in the background and
     stream their progress over events.
@@ -253,7 +260,7 @@ async def kick_sync(loop: Any, focus: str | None = None) -> dict | None:
     return await _await_focus(manager, focus, before=before, window=window, task=task, park_baseline=baseline)
 
 
-async def install_and_connect(entry_id: Any, form: Any, loop: Any) -> dict:
+async def install_and_connect(entry_id: Any, form: Any, loop: "McpHost | None") -> dict:
     """Install one catalog entry and kick its connection.
 
     Returns ``{"installed", "pending", "ledger", "mcp", "auth_mode"}``. For an
@@ -329,7 +336,7 @@ async def install_and_connect(entry_id: Any, form: Any, loop: Any) -> dict:
     }
 
 
-async def remove(name: Any, loop: Any) -> dict:
+async def remove(name: Any, loop: "McpHost | None") -> dict:
     """Disconnect and uninstall one plugin or hand-written server."""
     from raven.market import uninstall_plugin
     from raven.market.install import PlugInstallError
@@ -348,7 +355,7 @@ async def remove(name: Any, loop: Any) -> dict:
     return result
 
 
-async def authorize(name: Any, loop: Any, *, interactive: bool = True) -> dict:
+async def authorize(name: Any, loop: "McpHost | None", *, interactive: bool = True) -> dict:
     """Force-reconnect one configured server: the explicit (re-)authorize path.
 
     This is the retry entry point of the connection manager, which is the only
@@ -381,7 +388,7 @@ async def authorize(name: Any, loop: Any, *, interactive: bool = True) -> dict:
     before = _state_of(manager, name)[1]
     baseline = _park_baseline(name)
     task = asyncio.create_task(
-        manager.connect(name, cfg, executor_provider=loop._mcp_executor, interactive=interactive)
+        manager.connect(name, cfg, executor_provider=loop.mcp_executor_provider, interactive=interactive)
     )
     snap = await _await_focus(manager, name, before=before, window=CONNECT_WAIT, task=task, park_baseline=baseline)
     if task.done() and not task.cancelled():
@@ -405,7 +412,7 @@ async def authorize(name: Any, loop: Any, *, interactive: bool = True) -> dict:
     return {"name": name, "mcp": snap}
 
 
-def installed_overview(loop: Any) -> list[dict]:
+def installed_overview(loop: "McpHost | None") -> list[dict]:
     """Every installed plugin with its live connection state, stable by name.
 
     Reads the config and the ledgers -- not just the connection manager -- so a

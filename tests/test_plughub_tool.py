@@ -105,7 +105,7 @@ class _FakeLoop:
     async def apply_mcp_config(self, servers) -> None:
         pass
 
-    async def _mcp_executor(self):
+    async def mcp_executor_provider(self):
         return None
 
 
