@@ -965,7 +965,13 @@ read through the dispensed view, never by name on the socket.
 
 **Generation** (`core/runtime.py`, gateway):
 One assembled `RavenRuntime` serving turns -- a frozen dataclass: after construction a
-generation is sealed, and a change is generation N+1, never an in-place mutation
+generation is sealed. What FREEZE seals is member IDENTITY -- which objects the
+generation is made of; a member's own data plane stays its own business, and exactly
+three declared doors reconcile it mid-generation after the durable truth is written
+(the agents table via `apply_agents`, the MCP server set via `apply_mcp_config`, the
+default binding via `set_default_binding` -- criterion and roster on the `RavenRuntime`
+paper, operators pinned by the door-roster guard in `tests/test_core_runtime_swap.py`).
+Every other change is generation N+1, never an in-place mutation
 (the composition phases COLLECT / ADMIT / BIND / START / FREEZE; `build_runtime` maps
 its steps to them). A config change swaps generations at a turn
 boundary: BUILD N+1 comes first (a candidate that fails to assemble leaves N serving),

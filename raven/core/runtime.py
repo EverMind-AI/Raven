@@ -33,6 +33,38 @@ class RavenRuntime:
     never an in-place mutation of N. The members it holds stay live objects
     with their own lifecycles; what cannot change is which objects this
     generation is made of.
+
+    Member identity is what FREEZE seals; a member's own data plane stays
+    that member's business, and exactly three doors reconcile it
+    mid-generation. What makes a door legal: it reconciles an organ's data
+    to the already-written durable truth, it is safe while turns run, and it
+    touches no member identity -- so a swap right after yields the same
+    config-derived composition state (membership and the registered tool
+    surface; deliberately NOT retry/attempt state, and NOT in-flight work,
+    whose preservation is a door's purpose):
+
+    - the agents table, ``loop.apply_agents``: the registry's one write
+      path, shared with startup. Its durable truth is the config file plus
+      the discovered vendored/builtin seeds -- a vendored build hot-applies
+      after a filesystem change with no config write, and that is the same
+      truth.
+    - the MCP server set, ``loop.apply_mcp_config``: reconciles membership
+      to ``tools.mcpServers``; rows parked in error are deliberately not
+      retried here (``connect()`` is the retry door). The manager's
+      per-server verbs are that organ's own vocabulary for its declared
+      operators (paper: contracts/mcp_host.py).
+    - the default binding, ``loop.set_default_binding``: re-points the
+      fallback the subagent manager, the context engine and the consolidator
+      hold, after the config write that is its truth.
+
+    Not doors, by scope: session-owned state (a session's binding, modes,
+    per-session MCP adoption), preferences read through ``config/live.py``
+    (whose docstring is the recorded contrast class), and process-lifetime
+    globals outside the generation. Composition-level plugin contributions
+    (hooks, memory backends) cannot board mid-generation at all -- the
+    market refuses ``python``-kind pieces, so they arrive at the next
+    generation through ``build_runtime``. The door roster and its operators
+    are pinned by the guard in tests/test_core_runtime_swap.py.
     """
 
     loop: "AgentLoop"
