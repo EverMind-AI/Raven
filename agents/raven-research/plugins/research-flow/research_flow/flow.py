@@ -101,6 +101,14 @@ _TURN_SEQ = itertools.count()
 # then it carries our own blocks and the classifier would be reading them.
 _INBOUND: ContextVar[str | None] = ContextVar("dr_turn_inbound", default=None)
 
+# The session file's view of the conversation BEFORE this turn, as the inbound
+# phase received it (``ctx.session_history``). The gate's ``prior`` reads this
+# instead of the iteration window: ``ctx.messages`` is the working transcript
+# after compaction, so a long session's gate would judge on a stump. ``None``
+# when the host populated no history (or it was empty, which the window
+# reproduces anyway) -- the window stays the fallback.
+_INBOUND_HISTORY: ContextVar[tuple[dict[str, Any], ...] | None] = ContextVar("dr_turn_inbound_history", default=None)
+
 # The turn-mode decision, handed from the iteration phase that makes it to the
 # turn-end stamp that records it.
 _TURN_MODE: ContextVar[TurnMode | None] = ContextVar("dr_turn_mode", default=None)
@@ -221,6 +229,7 @@ class TurnFrame(AgentHook):
         _TURN_METADATA.set(None)
         text = ctx.inbound_content or ""
         _INBOUND.set(text)
+        _INBOUND_HISTORY.set(tuple(ctx.session_history) if ctx.session_history else None)
         record = self._store.load(ctx.session_key)
         if self._conversation:
             self._consume_pending_clarify(ctx.session_key, record, text)
@@ -301,7 +310,13 @@ class TurnFrame(AgentHook):
             _TURN_METADATA.set(ctx.metadata)
         if ctx.iteration != 1 or not self._conversation:
             return HookDecision()
-        prior = [m for m in (ctx.messages or [])[: ctx.turn_base] if m.get("role") in ("user", "assistant")]
+        filed = _INBOUND_HISTORY.get()
+        # The filed history, not the trimmed window, whenever the inbound phase
+        # saw one: the fork's gate read the session's own record, and judging
+        # on the post-compaction window makes a long session's gate (and the
+        # first-turn detection below) see a stump.
+        source = list(filed) if filed is not None else (ctx.messages or [])[: ctx.turn_base]
+        prior = [m for m in source if m.get("role") in ("user", "assistant")]
         # ``askUser.mode="first_turn"`` mandates a clarify round on exactly this
         # turn, and the gate cannot see it from a session_key alone.
         set_first_turn(not prior)
