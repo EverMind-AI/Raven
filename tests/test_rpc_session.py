@@ -446,7 +446,7 @@ async def test_session_resume_corrupt_load_falls_back_to_fresh_mint(
         def _load(self, key: str):
             raise RuntimeError("corrupt session store")
 
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: _BoomManager())
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: _BoomManager())
 
     result = await session_resume({"session_id": "tui:20260610_143052_998877"})
 
@@ -472,7 +472,7 @@ async def test_session_resume_prefers_live_cache_with_unflushed_tail(
     mgr.save(session)
     session.add_message("assistant", "unflushed tail")
 
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     result = await session_resume({"session_id": session_key})
 
@@ -515,7 +515,7 @@ async def test_session_close_flushes_dirty_cached_session(tmp_path: Path, monkey
     assert session._persisted_count == 1
     assert len(session.messages) == 2
 
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     result = await session_close({"session_id": session_key})
     assert result == {"ok": True}
@@ -542,7 +542,7 @@ async def test_session_close_save_failure_still_returns_ok(tmp_path: Path, monke
         raise OSError("disk full")
 
     monkeypatch.setattr(mgr, "save", _boom_save)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     result = await session_close({"session_id": session_key})
     assert result == {"ok": True}
@@ -582,7 +582,7 @@ async def test_session_list_returns_sessions_for_tui_channel(tmp_path: Path, mon
         s = mgr.get_or_create(key)
         s.add_message("user", "hello")
         mgr.save(s)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     result = await session_list({})
     assert "sessions" in result
@@ -610,7 +610,7 @@ async def test_session_list_sorted_by_updated_at_desc(tmp_path: Path, monkeypatc
     newer.add_message("user", "new")
     mgr.save(newer)
 
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     result = await session_list({})
     items = result["sessions"]
@@ -631,7 +631,7 @@ async def test_session_list_item_shape(tmp_path: Path, monkeypatch: pytest.Monke
     s.add_message("user", "first user message")
     s.add_message("assistant", "reply")
     mgr.save(s)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     result = await session_list({})
     item = result["sessions"][0]
@@ -659,7 +659,7 @@ async def test_session_list_only_tui_channel(tmp_path: Path, monkeypatch: pytest
     cli_session = mgr.get_or_create("cli:20260610_100000_cli01")
     cli_session.add_message("user", "cli msg")
     mgr.save(cli_session)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     result = await session_list({})
     ids = [item["id"] for item in result["sessions"]]
@@ -680,7 +680,7 @@ async def test_session_list_honors_limit_after_sort(tmp_path: Path, monkeypatch:
         s = mgr.get_or_create(f"tui:{chat_id}")
         s.add_message("user", "x")
         mgr.save(s)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     result = await session_list({"limit": 2})
     items = result["sessions"]
@@ -702,7 +702,7 @@ async def test_session_list_ignores_non_positive_limit(tmp_path: Path, monkeypat
         s = mgr.get_or_create(f"tui:{chat_id}")
         s.add_message("user", "x")
         mgr.save(s)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     for params in ({}, {"limit": 0}, {"limit": -1}, {"limit": "bogus"}):
         result = await session_list(params)
@@ -718,7 +718,7 @@ async def test_session_list_empty_workspace(tmp_path: Path, monkeypatch: pytest.
     from raven.session.manager import SessionManager
 
     mgr = SessionManager(tmp_path)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     result = await session_list({})
     assert result == {"sessions": []}
@@ -736,7 +736,7 @@ async def test_session_delete_removes_session(tmp_path: Path, monkeypatch: pytes
     s = mgr.get_or_create("tui:20260610_100000_rm01")
     s.add_message("user", "bye")
     mgr.save(s)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     result = await session_delete({"session_id": "tui:20260610_100000_rm01"})
     assert result == {"deleted": "tui:20260610_100000_rm01"}
@@ -754,7 +754,7 @@ async def test_session_delete_unknown_key_returns_null(tmp_path: Path, monkeypat
     from raven.session.manager import SessionManager
 
     mgr = SessionManager(tmp_path)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     result = await session_delete({"session_id": "tui:ghost_session"})
     assert result == {"deleted": None}
@@ -769,7 +769,7 @@ async def test_session_delete_missing_param_returns_null(tmp_path: Path, monkeyp
     from raven.session.manager import SessionManager
 
     mgr = SessionManager(tmp_path)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     result = await session_delete({})
     assert result == {"deleted": None}
@@ -787,7 +787,7 @@ async def test_session_most_recent_returns_session_key(tmp_path: Path, monkeypat
     s = mgr.get_or_create("tui:20260610_100000_recent1")
     s.add_message("user", "hi")
     mgr.save(s)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     result = await session_most_recent({})
     assert result["session_id"] == "tui:20260610_100000_recent1"
@@ -804,7 +804,7 @@ async def test_session_most_recent_returns_null_when_no_sessions(
     from raven.session.manager import SessionManager
 
     mgr = SessionManager(tmp_path)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     result = await session_most_recent({})
     assert result["session_id"] is None
@@ -828,7 +828,7 @@ async def test_session_title_on_existing_file_persists_immediately(
     s = mgr.get_or_create("tui:20260610_100000_title1")
     s.add_message("user", "hello")
     mgr.save(s)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     result = await session_title({"session_id": "tui:20260610_100000_title1", "title": "My Chat"})
     assert result["title"] == "My Chat"
@@ -854,7 +854,7 @@ async def test_session_title_on_fresh_session_is_pending_and_writes_no_file(
     from raven.session.manager import SessionManager
 
     mgr = SessionManager(tmp_path)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     result = await session_title({"session_id": "tui:20260610_100000_lazy01", "title": "Early"})
     assert result["title"] == "Early"
@@ -875,7 +875,7 @@ async def test_session_title_missing_session_id_returns_early(
     def _boom(cfg):
         raise AssertionError("manager must not be built for a falsy session_id")
 
-    monkeypatch.setattr(session_module, "_get_or_build_manager", _boom)
+    monkeypatch.setattr("raven.session.resolve.build_manager", _boom)
 
     result = await session_title({})
     assert result == {"title": None, "session_key": "", "pending": False}
@@ -894,7 +894,7 @@ async def test_session_title_get_returns_current_title(tmp_path: Path, monkeypat
     s.metadata["title"] = "Existing Title"
     s.add_message("user", "hello")
     mgr.save(s)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     result = await session_title({"session_id": "tui:20260610_100000_title2"})
     assert result["title"] == "Existing Title"
@@ -909,7 +909,7 @@ async def test_session_list_via_dispatcher(tmp_path: Path, monkeypatch: pytest.M
     from raven.session.manager import SessionManager
 
     mgr = SessionManager(tmp_path)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     d = Dispatcher()
     register_session_methods(d)
@@ -930,7 +930,7 @@ async def test_session_delete_via_dispatcher(tmp_path: Path, monkeypatch: pytest
     s = mgr.get_or_create("tui:20260610_100000_disp1")
     s.add_message("user", "x")
     mgr.save(s)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     d = Dispatcher()
     register_session_methods(d)
@@ -950,7 +950,7 @@ async def test_session_most_recent_via_dispatcher(tmp_path: Path, monkeypatch: p
     from raven.session.manager import SessionManager
 
     mgr = SessionManager(tmp_path)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     d = Dispatcher()
     register_session_methods(d)
@@ -977,7 +977,7 @@ def test_manager_for_reuses_shared_loop_manager(tmp_path: Path, monkeypatch: pyt
     def _boom(_cfg):
         raise AssertionError("must not build a fresh manager when the loop has one")
 
-    monkeypatch.setattr(session_module, "_get_or_build_manager", _boom)
+    monkeypatch.setattr("raven.session.resolve.build_manager", _boom)
 
     assert session_module.manager_for(loop, cfg) is shared
 
@@ -987,7 +987,7 @@ def test_manager_for_falls_through_when_no_loop(tmp_path: Path, monkeypatch: pyt
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
     sentinel = SessionManager(tmp_path)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda _cfg: sentinel)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda _cfg: sentinel)
 
     assert session_module.manager_for(None, cfg) is sentinel
 
@@ -1001,7 +1001,7 @@ def test_manager_for_falls_through_when_loop_sessions_not_a_manager(
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
     sentinel = SessionManager(tmp_path)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda _cfg: sentinel)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda _cfg: sentinel)
     loop = SimpleNamespace(sessions=None)
 
     assert session_module.manager_for(loop, cfg) is sentinel
@@ -1596,7 +1596,7 @@ async def test_session_list_sorted_by_latest_conversation_message(
     newer.add_message("user", "new")
     mgr.save(newer)
 
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     result = await session_list({})
     items = result["sessions"]
@@ -1618,7 +1618,7 @@ async def test_session_list_contract_accepts_real_multichannel_rows(
     session.add_message("user", "run the digest")
     session.add_message("assistant", "digest complete")
     mgr.save(session)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     params_model, result_model = METHOD_MODELS["session.list"]
     params_model.model_validate({"channels": ["tui", "cron"], "limit": 10})
@@ -1635,7 +1635,7 @@ async def test_session_list_scans_once_for_multiple_channels(tmp_path: Path, mon
         session = mgr.get_or_create(key)
         session.add_message("user", key)
         mgr.save(session)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     scans = 0
     scan_file = mgr._scan_file
@@ -1662,7 +1662,7 @@ async def test_session_delete_rejects_a_running_session(tmp_path: Path, monkeypa
     session = mgr.get_or_create(key)
     session.add_message("user", "keep working")
     mgr.save(session)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
     monkeypatch.setattr(turn_module, "is_session_busy", lambda candidate: candidate == key)
 
     with pytest.raises(TurnInProgressError):
@@ -1682,7 +1682,7 @@ async def test_session_most_recent_skips_archived_sessions(tmp_path: Path, monke
     archived.add_message("user", "hide this")
     archived.metadata["archived"] = True
     mgr.save(archived)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     result = await session_most_recent({})
     assert result["session_id"] is None
@@ -1704,7 +1704,7 @@ async def test_session_pin_persists_and_shows_up_in_the_list(tmp_path: Path, mon
     s = mgr.get_or_create("tui:20260610_100000_pin001")
     s.add_message("user", "hello")
     mgr.save(s)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     result = await session_pin({"session_id": "tui:20260610_100000_pin001", "pinned": True})
     assert result == {"pinned": True, "session_key": "tui:20260610_100000_pin001", "pending": False}
@@ -1732,7 +1732,7 @@ async def test_session_archive_persists_and_filters_the_list(tmp_path: Path, mon
     session = mgr.get_or_create(session_key)
     session.add_message("user", "hide this session")
     mgr.save(session)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     result = await session_archive({"session_id": session_key, "archived": True})
     assert result == {"archived": True, "session_key": session_key, "pending": False}
@@ -1756,7 +1756,7 @@ async def test_session_archive_via_dispatcher(tmp_path: Path, monkeypatch: pytes
     session = mgr.get_or_create(session_key)
     session.add_message("user", "archive through dispatcher")
     mgr.save(session)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     dispatcher = Dispatcher()
     register_session_methods(dispatcher)
@@ -1906,7 +1906,7 @@ async def test_session_list_reaches_the_channels_it_was_asked_for(
         s = mgr.get_or_create(key)
         s.add_message("user", "hello")
         mgr.save(s)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     both = await session_list({"channels": ["tui", "cron"]})
     sources = {item["source"] for item in both["sessions"]}
@@ -1944,7 +1944,7 @@ async def test_session_list_orders_by_latest_conversational_activity(
     older_user.add_message("assistant", "finished later", timestamp="2026-06-10T12:00:00")
     mgr.save(older_user)
 
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
     result = await session_list({})
     assert [item["id"] for item in result["sessions"]][0] == "tui:20260610_100000_older1"
 
@@ -1972,7 +1972,7 @@ async def test_session_list_counts_runtime_origin_user_rows_as_activity(
         delegated={"kind": "subagent"},
     )
     mgr.save(injected)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     rows = (await session_list({}))["sessions"]
     assert rows[0]["id"] == "tui:injected"
@@ -2022,7 +2022,7 @@ async def test_session_list_previews_the_first_thing_the_user_said(
     s.add_message("user", "summarise the quarterly report")
     s.add_message("assistant", "sure")
     mgr.save(s)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     result = await session_list({})
     assert result["sessions"][0]["preview"] == "summarise the quarterly report"
@@ -2042,7 +2042,7 @@ async def test_session_list_keeps_identity_separate_from_latest_preview(
     session.add_message("tool", "internal tool output")
     session.add_message("assistant", "latest answer")
     mgr.save(session)
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
 
     [row] = (await session_list({}))["sessions"]
     assert row["preview"] == "original question"
@@ -2145,7 +2145,7 @@ async def test_session_create_persists_the_workdir_override(tmp_path: Path, monk
     cfg.agents.defaults.workspace = str(tmp_path / "home")
     monkeypatch.setattr(session_module, "load_config", lambda: cfg)
     mgr = SessionManager(tmp_path / "home")
-    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda _cfg: mgr)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda _cfg: mgr)
     project = tmp_path / "proj"
     project.mkdir()
 
@@ -2181,7 +2181,7 @@ async def test_session_create_without_workdir_stays_lazy_and_unpinned(
     def _must_not_build(_cfg):
         raise AssertionError("no workdir given, so no manager may be built")
 
-    monkeypatch.setattr(session_module, "_get_or_build_manager", _must_not_build)
+    monkeypatch.setattr("raven.session.resolve.build_manager", _must_not_build)
 
     result = await session_create({"cols": 80})
     assert _SESSION_ID_RE.match(result["session_id"])

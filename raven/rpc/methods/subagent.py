@@ -48,7 +48,8 @@ from raven.agent.subagent.instances import get_registry
 from raven.agent.subagent.tool_vocabulary import normalize_row
 from raven.config.loader import load_config
 from raven.rpc.errors import ConfigValidationError
-from raven.rpc.methods.session import _map_to_wire, _safe_invoke_factory, manager_for
+from raven.rpc.methods.session import _map_to_wire, _safe_invoke_factory
+from raven.session.resolve import manager_for
 
 if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher

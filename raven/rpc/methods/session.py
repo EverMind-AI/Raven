@@ -42,7 +42,8 @@ from raven.rpc.errors import ConfigValidationError, SessionTitleTooLongError, Tu
 from raven.rpc.methods import turn as turn_module
 from raven.rpc.methods.system import _raven_version
 from raven.session.export import default_export_path, write_transcript
-from raven.session.manager import SessionManager, new_chat_id
+from raven.session.manager import new_chat_id
+from raven.session.resolve import manager_for
 from raven.session.title import TITLE_STORAGE_MAX
 from raven.updates.update_notice import update_notice
 from raven.utils.tokens import estimate_prompt_tokens
@@ -226,24 +227,6 @@ async def _default_session_info(
         info["config_notices"] = migrated
 
     return info
-
-
-def _get_or_build_manager(config: "Config") -> SessionManager:
-    """Return a ``SessionManager`` for the configured workspace.
-
-    Module-level so tests can monkeypatch it to inject a pre-populated manager
-    without touching the filesystem (same seam as ``load_config``).
-    """
-    return SessionManager(config.workspace_path)
-
-
-def manager_for(agent_loop: "AgentLoop | None", config: "Config") -> SessionManager:
-    """Prefer the loop's shared manager when available; fall back to a fresh one."""
-    if agent_loop is not None:
-        mgr = getattr(agent_loop, "sessions", None)
-        if isinstance(mgr, SessionManager):
-            return mgr
-    return _get_or_build_manager(config)
 
 
 # Matches both shapes run_subagent_dag's result text can start with:

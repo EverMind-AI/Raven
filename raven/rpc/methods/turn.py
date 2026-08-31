@@ -211,8 +211,9 @@ def _name_session(
     """
     try:
         from raven.config.raven import load_raven_config
-        from raven.rpc.methods.session import _safe_invoke_factory, manager_for
+        from raven.rpc.methods.session import _safe_invoke_factory
         from raven.rpc.session_naming import name_session_alongside_turn
+        from raven.session.resolve import manager_for
 
         agent_loop = _safe_invoke_factory(agent_loop_factory)
         if agent_loop is None:
