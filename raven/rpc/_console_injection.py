@@ -10,34 +10,12 @@ Not internally locked: the ``cli.dispatch`` handler holds a module-level
 synchronous inside the handler's ``redirect_stdout`` chain.
 """
 
-from __future__ import annotations
-
 import contextlib
-import importlib
-import pkgutil
 from collections.abc import Iterator
-from types import ModuleType
 
 from rich.console import Console
 
-import raven.cli
-
-
-def _console_hosts() -> tuple[ModuleType, ...]:
-    """Every module under ``raven.cli`` whose module-level ``console`` is a rich
-    Console. Discovered rather than listed: the list drifted to 12 of 22 while it
-    was maintained by hand, and a command module outside it printed past the TUI."""
-    hosts: list[ModuleType] = []
-    for info in pkgutil.iter_modules(raven.cli.__path__):
-        if info.name.startswith("__"):
-            continue
-        mod = importlib.import_module(f"raven.cli.{info.name}")
-        if isinstance(getattr(mod, "console", None), Console):
-            hosts.append(mod)
-    return tuple(sorted(hosts, key=lambda m: m.__name__))
-
-
-_CONSOLE_HOSTS: tuple[ModuleType, ...] = _console_hosts()
+from raven.rpc import cli_socket
 
 
 @contextlib.contextmanager
@@ -59,9 +37,10 @@ def inject_consoles(out_console: Console) -> Iterator[None]:
     because none of the hosts use a separate stderr Console; revisit if a
     future version introduces ``Console(stderr=True)`` instances.
     """
-    originals = {mod: mod.console for mod in _CONSOLE_HOSTS}
+    hosts = cli_socket.console_hosts()
+    originals = {mod: mod.console for mod in hosts}
     try:
-        for mod in _CONSOLE_HOSTS:
+        for mod in hosts:
             mod.console = out_console
         yield
     finally:
@@ -69,4 +48,4 @@ def inject_consoles(out_console: Console) -> Iterator[None]:
             mod.console = orig
 
 
-__all__ = ["inject_consoles", "_CONSOLE_HOSTS"]
+__all__ = ["inject_consoles"]

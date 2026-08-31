@@ -46,6 +46,7 @@ from typing import Optional
 
 import typer
 
+from raven.rpc.serve_control import SERVE
 from raven.utils import asyncio_runner as bounded_asyncio
 
 # The repository's source tree, and the copy inside an installed wheel. The two
@@ -169,56 +170,6 @@ def _write_serve_state(port: int, token: str, cookie: str = "") -> Optional[Path
         return None
 
 
-class _ServeControl:
-    """What a running gateway exposes to handlers that must restart it.
-
-    ``system.upgrade`` needs four things the RPC layer cannot know on its own:
-    which port to come back on, which shared secret and which browser session
-    cookie to keep (an open browser holds the cookie, and a relauncher holds the
-    token -- carrying only one of them would sign somebody out), and a way to end
-    the serve loop *after* its reply has been flushed.
-    """
-
-    def __init__(self) -> None:
-        self.port: Optional[int] = None
-        self.token: Optional[str] = None
-        self.cookie: Optional[str] = None
-        self._stop: Optional[asyncio.Event] = None
-        self.hosted_by_gateway = False
-
-    def arm(self, port: int, token: str, cookie: str, stop: asyncio.Event) -> None:
-        self.port, self.token, self.cookie, self._stop = port, token, cookie, stop
-
-    def arm_hosted(self, port: int, token: str, cookie: str) -> None:
-        """The gateway hosts the page: record the endpoint facts, no stop event.
-
-        ``system.upgrade``'s restart flow replaces a `raven serve` process with
-        another `raven serve`; ending the gateway's loop that way would drop the
-        IM channels and bring back the wrong process. So a hosted page carries
-        no shutdown handle, and upgrade refuses with its own reason instead
-        (see ``raven.rpc.methods.system.system_upgrade``).
-        """
-        self.port, self.token, self.cookie = port, token, cookie
-        self.hosted_by_gateway = True
-
-    def disarm(self) -> None:
-        self.port = self.token = self.cookie = self._stop = None
-        self.hosted_by_gateway = False
-
-    @property
-    def running(self) -> bool:
-        return self._stop is not None
-
-    def request_shutdown(self) -> bool:
-        if self._stop is None:
-            return False
-        self._stop.set()
-        return True
-
-
-SERVE = _ServeControl()
-
-
 _UPDATE_FIRST_CHECK_S = 90.0
 """When the announcer first looks, covering the boot-time race: the page asks
 ``system.version`` before the launch refresh's daemon thread has finished, so a
@@ -335,8 +286,11 @@ async def _serve_main(port: int, open_browser: bool) -> None:
     from aiohttp import web
     from loguru import logger
 
+    from raven.cli._console_feature import register_console_feature
     from raven.rpc.bootstrap import build_rpc_stack
     from raven.rpc.transports.ws import WsGateway, build_app, pick_port
+
+    register_console_feature()
 
     # Declared before anything can emit a span. The page runs on the terminal's
     # channel by design (one session pool), so `channel.id` cannot tell the two

@@ -284,8 +284,11 @@ async def commands_catalog(params: dict[str, Any]) -> dict[str, Any]:
     TS-side ``createGatewayEventHandler.ts`` graceful-degrade contract.
     """
     try:
-        import raven.cli.commands as ec_commands
+        from raven.rpc import cli_socket
 
+        ec_commands = cli_socket.cli_commands()
+        if ec_commands is None:
+            raise LookupError("no CLI host registered a console on this process")
         app = ec_commands.app
     except Exception as exc:  # noqa: BLE001 — defensive
         logger.warning("commands.catalog: failed to import ec.cli.commands: {!r}", exc)

@@ -313,9 +313,12 @@ async def _run_rpc_server_until_done(
 
     # Lazy import: keeps tui_commands importable without pulling rpc on
     # users who never touch the TUI (e.g. CLI-only workflows).
+    from raven.cli._console_feature import register_console_feature
     from raven.rpc.approval_broker import ApprovalBroker
     from raven.rpc.confirm_broker import ConfirmBroker
     from raven.rpc.dispatcher import Dispatcher
+
+    register_console_feature()
     from raven.rpc.methods import register_aligned_methods_except_system
     from raven.rpc.methods.system import (
         system_hello as _orig_hello,

@@ -210,7 +210,7 @@ async def system_upgrade(params: dict) -> dict:
     """
     import asyncio
 
-    from raven.cli.serve_commands import SERVE
+    from raven.rpc.serve_control import SERVE
     from raven.updates.upgrade import UpgradeError, plan_upgrade, spawn_detached_upgrade
 
     # The dispatcher only lifts `detail` into error.data when no data dict is
