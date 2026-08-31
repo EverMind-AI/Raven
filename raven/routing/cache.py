@@ -185,6 +185,3 @@ class BenchmarkCache:
                 pass
 
         self._refresh_task = asyncio.create_task(_bg())
-
-    def get_fallback(self) -> BenchmarkData:
-        return _load_snapshot()

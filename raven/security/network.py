@@ -146,7 +146,14 @@ def judge_resolved_url(url: str) -> tuple[bool, str, tuple[str, ...]]:
 
 
 def validate_resolved_url(url: str) -> tuple[bool, str]:
-    """Validate a URL after redirect resolution: the scheme, then the address the host resolves to."""
+    """Validate a URL after redirect resolution: the scheme, then the address the host resolves to.
+
+    The resolved-side sibling of :func:`validate_url_target`, kept for API
+    symmetry: production redirects go through :func:`judge_resolved_url`
+    inside ``guarded_fetch`` (one resolution serves verdict and connection),
+    so today this wrapper's callers are the security tests that pin the
+    verdict logic in isolation.
+    """
     ok, err, _ = judge_resolved_url(url)
     return ok, err
 

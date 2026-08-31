@@ -72,7 +72,7 @@ class TokenStrategy(ABC):
         response: dict[str, Any],
         usage: UsageSnapshot,
     ) -> None:
-        """Post-call hook. Used by UsageTracker, BudgetAlerter. Default: no-op."""
+        """Post-call hook, for a strategy that accounts what a call used. Default: no-op."""
 
 
 __all__ = ["TokenStrategy", "UsageSnapshot"]
