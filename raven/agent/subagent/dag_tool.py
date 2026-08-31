@@ -948,7 +948,20 @@ class SubAgentDagTool(Tool):
             self._run_and_announce(spec, run_id, cancel, origin, dirs, call_id, auto_instances, dispatch_backends)
         )
         self._runs[run_id] = task
-        task.add_done_callback(lambda _t: self._runs.pop(run_id, None))
+
+        def _retire(_t: "asyncio.Task") -> None:
+            # A task cancelled before its first tick never enters _run, whose
+            # finally is what normally retires the run's cancel/desk entries --
+            # and that window is real: _adopt indexes the task immediately, so
+            # a same-tick /stop or the shutdown sweep cancels it un-started.
+            # Left behind, active_run_ids() lists the dead run forever and its
+            # node rows stay pinned running. The pops are idempotent with the
+            # finally's own.
+            self._runs.pop(run_id, None)
+            self._cancels.pop(run_id, None)
+            self._desks.pop(run_id, None)
+
+        task.add_done_callback(_retire)
         if self._adopt is not None:
             self._adopt(run_id, task, origin.conversation)
         controls = ""

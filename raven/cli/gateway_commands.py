@@ -747,6 +747,12 @@ def register(app: typer.Typer) -> None:
                 if page_mount is not None:
                     await page_mount.teardown()
                     page_mount = None
+                # The claim followed the mount: the next bind re-adds "tui"
+                # iff the next generation mounts a page, so a reload that
+                # turns the page off stops claiming tui cron jobs the hub
+                # could then only drop. discard() is safe when no page ever
+                # mounted.
+                cron.allowed_channels.discard("tui")
                 if gw_teardown is not None:
                     await gw_teardown()
                     gw_teardown = None

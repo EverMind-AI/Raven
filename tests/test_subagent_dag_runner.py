@@ -5887,3 +5887,37 @@ async def test_a_runner_with_no_mode_source_dispatches_without_one() -> None:
     )
 
     assert execu.calls[0]["mode"] is None
+
+
+async def test_an_unstarted_background_run_retires_every_per_run_entry(tmp_path: Path) -> None:
+    """[leak] A task cancelled before its first tick never enters _run, whose
+    finally is the normal retirement site. The done-callback must retire the
+    per-run entries too, or active_run_ids() lists a dead run forever, its
+    node rows stay pinned running, and request_cancel claims a live run."""
+    import asyncio
+
+    tool = SubAgentDagTool(
+        workspace=tmp_path,
+        agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")],
+    )
+
+    async def _never(*_a, **_kw):
+        await asyncio.sleep(60)
+
+    tool._run_and_announce = _never
+
+    await tool.execute(
+        task_summary="background run for the leak probe",
+        nodes=[{"id": "a", "subagent": "echo", "node_summary": "n", "prompt_template": "p"}],
+        background=True,
+    )
+    (run_id,) = list(tool._runs)
+    assert run_id in tool._cancels
+
+    tool._runs[run_id].cancel()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert run_id not in tool._runs
+    assert run_id not in tool._cancels, "an unstarted run must not pin liveness forever"
+    assert run_id not in tool._desks
