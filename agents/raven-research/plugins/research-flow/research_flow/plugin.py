@@ -226,6 +226,11 @@ class _Shared:
         if not self.cfg.ask_user_on:
             return None
         if self._ask_user is None:
+            # Built once from the BASE config, deliberately: no shipped mode
+            # overlay touches askUser (the launcher tests pin that), while the
+            # gates ARE rebuilt per (session, mode). The day a mode overlay
+            # wants askUser knobs, this must consult the per-(session, mode)
+            # config the gates already resolve -- the tripwire will say so.
             cfg = self.cfg
             self._ask_user = DRAskUserTool(
                 outline=cfg.ask_user.outline,

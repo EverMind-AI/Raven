@@ -398,17 +398,3 @@ def render_identity_and_contract(cfg: "FlowConfig") -> tuple[str, str]:
         ask_user_mode=cfg.ask_user.mode,
         ask_user_delivery=cfg.ask_user.delivery,
     )
-
-
-def render_prompt_texts(cfg: "FlowConfig") -> str:
-    """Identity, language directive (when the config asks for one) and contract,
-    joined with blank lines - the full system-prompt text the product seeds."""
-    from raven.context_engine.segments.render import _language_directive
-
-    identity_text, contract = render_identity_and_contract(cfg)
-    parts = [identity_text]
-    lang = _language_directive()
-    if lang:
-        parts.append(lang)
-    parts.append(contract)
-    return "\n\n".join(parts)
