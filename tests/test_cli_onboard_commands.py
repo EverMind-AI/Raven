@@ -2044,6 +2044,14 @@ def test_memory_rerank_reuse_llm_provider(
     assert everos["rerank"]["base_url"] == "https://api.deepinfra.com/v1/inference"
 
 
+def test_memory_rerank_default_is_qwen8b() -> None:
+    """The rerank role's shipped default is the 8B Qwen3 reranker."""
+    role = onboard_everos._EVEROS_ROLES["rerank"]
+    assert role["example"] == "qwen/qwen3-reranker-8b"
+    for recommendation in role["recommendation"]:
+        assert "qwen/qwen3-reranker-8b" in recommendation
+
+
 def test_memory_seeded_role_is_not_configured(tmp_env: Path, everos_isolated: Path) -> None:
     """A seeded model with an empty api_key does not count as configured."""
     from raven.config.update_everos import set_everos_section
