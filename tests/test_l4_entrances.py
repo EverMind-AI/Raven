@@ -147,3 +147,54 @@ def test_every_seat_the_contract_names_is_something_the_guard_can_walk() -> None
     assert len(seats) >= 28, seats
     for name in seats:
         assert _python_files(name), name
+
+
+def _acp_rpc_facade_strays(pkg_root):
+    """Every import of ``raven.rpc`` from the acp surface that is not on the
+    facade roster, as ``file:line`` strays.
+
+    The surfaces-law contracts pin the zero directions; this pins the one
+    directed edge that legitimately remains -- acp hosts an rpc stack over its
+    translator -- to the single module built for hosting. A second rpc import
+    appearing under raven/acp means someone reached past the facade into the
+    sibling surface's insides, which is the exact disease the law retired.
+    """
+    import ast
+
+    facade = {"raven.rpc.bootstrap"}
+    strays = []
+    for p in sorted(pkg_root.rglob("*.py")):
+        if "__pycache__" in p.parts:
+            continue
+        for node in ast.walk(ast.parse(p.read_text(encoding="utf-8"))):
+            mods = []
+            if isinstance(node, ast.Import):
+                mods = [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                mods = [node.module]
+            for m in mods:
+                if (m == "raven.rpc" or m.startswith("raven.rpc.")) and m not in facade:
+                    strays.append(f"{p.relative_to(pkg_root.parent.parent)}:{node.lineno} -> {m}")
+    return strays
+
+
+def test_acp_reaches_rpc_only_through_the_bootstrap_facade():
+    strays = _acp_rpc_facade_strays(REPO / "raven" / "acp")
+    assert strays == [], (
+        "acp reached past the rpc facade; host through raven.rpc.bootstrap or "
+        "move the shared piece inward, and widen this roster only with the "
+        "reason in the diff:\n" + "\n".join(strays)
+    )
+
+
+def test_the_facade_roster_guard_bites(tmp_path):
+    """Mutation audit, built in: a synthetic reach past the facade turns the
+    checker red, so a green run means looked-and-found-nothing."""
+    pkg = tmp_path / "raven" / "acp"
+    pkg.mkdir(parents=True)
+    (pkg / "sneaky.py").write_text(
+        "from raven.rpc.bootstrap import build_rpc_stack\nfrom raven.rpc.dispatcher import Dispatcher\n",
+        encoding="utf-8",
+    )
+    strays = _acp_rpc_facade_strays(pkg)
+    assert len(strays) == 1 and "dispatcher" in strays[0], strays

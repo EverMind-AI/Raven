@@ -1083,6 +1083,19 @@ seat list and stays under the cargo contract.
 `acp_client/` is named for its side of ACP (Raven driving somebody else's agent);
 `acp/` is the other side, the entrance.
 
+**Surfaces law** (ruled 2026-08-31):
+The three entrances relate asymmetrically. A SERVED surface (`rpc`, `acp`)
+never imports the launcher or a sibling surface's insides -- two import-linter
+contracts pin `{rpc, acp} -x-> cli` and `rpc -x-> acp` with zero exceptions.
+The LAUNCHER direction (`cli -> rpc/acp`) is sanctioned by the existing axiom
+that an entrance brings its own transport-side wiring: the cli is the entrance
+that assembles and hosts the others. What a served surface genuinely needs
+from the cli arrives by registration (`rpc/cli_socket.py` carries the console
+feature's command table; `rpc/serve_control.py` is owned by the reading side
+and armed by the host). The one remaining directed edge -- acp hosting an rpc
+stack over its translator -- is pinned to the single `raven.rpc.bootstrap`
+facade module by the roster guard in `tests/test_l4_entrances.py`.
+
 **Updates** (`updates/`):
 The install's own lifecycle as an inner feature library (the browser/importer
 pattern): release lookup and version keys, the upgrade plan and detached
