@@ -39,7 +39,7 @@ class AzureOpenAIProvider(LLMProvider):
         self,
         api_key: str = "",
         api_base: str = "",
-        default_model: str = "gpt-5.2-chat",
+        default_model: str = "gpt-5.6-sol",
         deployment: str = "",
         api_version: str = "2024-10-21",
     ):
@@ -138,6 +138,9 @@ class AzureOpenAIProvider(LLMProvider):
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = tool_choice or "auto"
+            if "gpt-5" in deployment_name.lower():
+                # GPT-5.x Chat Completions reject tools under any reasoning effort but "none".
+                payload["reasoning_effort"] = "none"
 
         return payload
 
