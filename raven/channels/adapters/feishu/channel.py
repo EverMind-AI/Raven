@@ -39,6 +39,9 @@ _FILE_TYPE = {
     ".pptx": "ppt",
 }
 _DEDUP_CAP = 1000
+_RECONNECT_BACKOFF_INITIAL_S = 5.0
+_RECONNECT_BACKOFF_FACTOR = 2.0
+_RECONNECT_BACKOFF_MAX_S = 300.0
 
 
 class FeishuChannel(ChannelBase):
@@ -106,24 +109,43 @@ class FeishuChannel(ChannelBase):
 
         lark_oapi grabs a module-level ``loop = asyncio.get_event_loop()``;
         giving this thread its own idle loop (and pointing lark's module at
-        it) avoids clashing with the already-running main loop. Reconnects
-        with a fixed backoff until the channel is stopped.
+        it) avoids clashing with the already-running main loop. ``start()``
+        blocks while the connection lives (the SDK reconnects transient
+        drops internally), so it only returns by raising — almost always a
+        ``ClientException``, i.e. a permanent auth/config failure. Retries
+        use exponential backoff capped at ``_RECONNECT_BACKOFF_MAX_S``.
         """
         import lark_oapi.ws.client as lark_ws
+        from lark_oapi.ws.exception import ClientException
 
         ws_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(ws_loop)
         lark_ws.loop = ws_loop
         try:
+            delay = _RECONNECT_BACKOFF_INITIAL_S
             while self._running:
                 try:
                     self._ws_client.start()
+                except ClientException as e:
+                    # Permanent auth/config failure: an immediate retry only
+                    # hammers Feishu's auth endpoint, so back off instead.
+                    logger.error("Feishu WebSocket permanent error: {}", e)
                 except Exception as e:
                     logger.warning("Feishu WebSocket error: {}", e)
                 if self._running:
-                    time.sleep(5)
+                    self._sleep_interruptibly(delay)
+                    delay = min(_RECONNECT_BACKOFF_MAX_S, delay * _RECONNECT_BACKOFF_FACTOR)
         finally:
             ws_loop.close()
+
+    def _sleep_interruptibly(self, seconds: float) -> None:
+        """Sleep in 1s slices so stop() can cut a long backoff short."""
+        deadline = time.monotonic() + seconds
+        while self._running:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(1.0, remaining))
 
     async def stop(self) -> None:
         # lark.ws.Client has no stop(); dropping references + exit closes it.
