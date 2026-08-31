@@ -27,15 +27,32 @@ All notable changes to Raven are documented here.
   (`raven/contracts`, every interface a shelf implements), the assembly root
   (`raven/core`, where config becomes a running agent through one door,
   `build_runtime`), the shelves (channels, plugins, providers, memory, ...),
-  and the entrances (`cli`, `rpc`, `acp`). Five import-linter contracts run
+  and the entrances (`cli`, `rpc`, `acp`). Six import-linter contracts run
   in CI: inner layers never import an entrance (with no allowlisted
   exceptions), the twelve channel adapters are mutually independent, the
   kernel imports nothing else at module level, with no exception named at
   all, the cargo under `raven/agent` never
-  imports the loop shell it is consumed by, and the runtime never imports the
-  repo-level `evolver/` tool that drives it. The papers hold shapes only (machinery such as provider retry
+  imports the loop shell it is consumed by, the runtime never imports the
+  repo-level `evolver/` tool that drives it, and it never imports the
+  `agents/` product definitions built on top of it. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
+- The EverOS memory backend leaves the wheel: it is its own distribution
+  (`plugins-dist/everos-memory`), discovered through the `raven.plugins`
+  entry-point group like any third-party plugin. The default configuration is
+  unchanged; an install without the plugin keeps booting and says loudly that
+  the configured backend is missing.
+- The ACP client family (the client, the `acp_agent` sub-agent backend, the
+  `acp_dialects` translators) moves from `raven/agent` to the top-level
+  `raven/acp_client` package -- an address change only; `raven/acp` remains
+  the server side.
+- The playbook entry tools (`create_playbook`, `load_playbook`) are bundled
+  plugin cargo now (`raven/plugins/bundled/playbook`) and bind the
+  loop-assembled runtime late; `playbooks.enabled: false` behaves exactly as
+  before.
+- A running gateway's composition is sealed per generation: `RavenRuntime` is
+  frozen, and a composition change is the next generation through the swap
+  path (`raven gateway reload`), never an in-place mutation.
 - `raven/agent/subagent/test_state.py` is `probe_state.py`: a production
   module was sitting on pytest's collection pattern.
 - **The second read of every module.** Each package was read against a
@@ -217,6 +234,21 @@ All notable changes to Raven are documented here.
 
 ### Added
 
+- A top-level `agents/` directory holds product definitions built on the
+  installed runtime, A/B-able against the frozen vendored `subagents/`. The
+  first product, Raven-Research-NG, rebuilds the vendored research agent's
+  whole flow as a plugin (`agents/raven-research/plugins/research-flow`) on
+  public seams alone; the sixth import-linter contract keeps the runtime from
+  importing the products back.
+- Plugins can contribute agent hooks (`[[plugin.contributes.hooks]]`) beside
+  memory backends and tools; a config may name extra plugin roots
+  (`plugins.dirs`); a contributed tool that needs what only the assembled
+  loop owns declares `bind_runtime(handles)` and receives the frozen
+  `RuntimeHandles` grants. A factory may decline by returning `None`, a
+  binder by raising `BindDeclinedError` -- both leave the built-in serving.
+- ACP session modes: `acp.modes` in a product's config becomes a client's
+  mode picker (`session/set_mode`), each mode a per-session overlay over the
+  base configuration.
 - `spawn` now records every sub-agent call on disk, the way `run_subagent_dag`
   already recorded every node: one directory per call under
   `<agent home>/sessions/<group>/<chat_id>/subagents/spawn/`, holding
