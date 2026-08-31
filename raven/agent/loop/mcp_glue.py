@@ -42,9 +42,15 @@ class McpGlueMixin:
         if sink is None:
             return
         try:
-            asyncio.get_running_loop().create_task(sink(method, params))
+            task = asyncio.get_running_loop().create_task(sink(method, params))
         except RuntimeError:
-            pass  # no loop (a sync CLI path): nothing is listening anyway
+            return  # no loop (a sync CLI path): nothing is listening anyway
+        # Held rather than dropped: a bare create_task is collectable while it
+        # is the only reference to a running task (the rule this file states
+        # beside the prewarm), and a collected task silently drops an
+        # ``mcp.status`` / ``oauth.pending`` frame.
+        self._mcp_event_tasks.add(task)
+        task.add_done_callback(self._mcp_event_tasks.discard)
 
     @property
     def mcp_manager(self) -> "MCPConnectionManager":
@@ -318,6 +324,12 @@ class McpGlueMixin:
                 await self._mcp_manager.aclose()
             except (RuntimeError, BaseExceptionGroup):
                 pass  # MCP SDK cancel scope cleanup is noisy but harmless
+            # While the manager is still attached: nothing is connected now,
+            # so this withdraws the five meta-tools. After the None below the
+            # sync is a no-op, and a reconnect would find them bound to this
+            # dead manager (the presence check would then skip re-registering
+            # them against the new one).
+            self._sync_mcp_meta_tools()
             self._mcp_manager = None
         self._mcp_connected = False  # reset so _connect_mcp() can reconnect after close
         self._mcp_connecting = False  # reset so a concurrent caller isn't permanently blocked
