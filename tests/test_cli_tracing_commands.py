@@ -360,3 +360,16 @@ def test_tracing_rejects_an_unknown_action_with_bracketed_markup(tmp_path, monke
     assert "[/x]" in r.output
     assert "compact" in r.output
     assert "stop" in r.output
+
+
+def test_a_below_minimum_node_is_refused(monkeypatch):
+    """find_node deliberately returns the best node it saw even below the
+    minimum; the viewer used to discard the version and run on it anyway."""
+    import pytest
+    import typer
+
+    import raven.cli.tracing_commands as tc
+
+    monkeypatch.setattr("raven.cli.tui_commands.find_node", lambda: ("/usr/bin/node", (20, 0, 0)))
+    with pytest.raises(typer.Exit):
+        tc._resolve_node()

@@ -130,9 +130,14 @@ async def test_cron_save_every_and_at(workspace: Path) -> None:
     )
 
 
-async def test_settings_get_and_set(workspace: Path) -> None:
+async def test_settings_get_and_set(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from raven import i18n
     from raven.rpc.methods import console
 
+    # settings.set(language) flips the process-global reply language in-process
+    # (the console wires i18n.set_language); register the undo before driving
+    # it, so this test stops depending silently on the conftest autouse mask.
+    monkeypatch.setattr(i18n, "_language", i18n.current_language())
     _check("settings.get", await console.settings_get({}))
     _check("settings.set", await console.settings_set({"key": "language", "value": "zh"}))
     # The raw-write branch returns the same shape through a different path.

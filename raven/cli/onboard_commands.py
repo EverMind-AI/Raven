@@ -2358,7 +2358,7 @@ def run_wizard(
     skip_test: bool = False,
     show_next_steps: bool = True,
 ) -> None:
-    """Run the 6-step onboarding wizard end-to-end.
+    """Run the seven-step onboarding wizard end-to-end.
 
     The reusable entry point: the ``onboard`` CLI command and the startup gate
     both call this. Screens form a state machine so a ``0) Back`` choice can

@@ -88,8 +88,8 @@ class CancelDagTool(_ControlTool):
     @property
     def description(self) -> str:
         return (
-            "Stop an in-flight DAG run by its run id. Nodes already running finish their "
-            "current step, pending nodes are skipped, and nothing further is announced for "
+            "Stop an in-flight DAG run by its run id. Nodes already running are cancelled "
+            "immediately, pending nodes are skipped, and nothing further is announced for "
             "a cancelled run. Returns every node's state as of the cancellation."
         )
 
@@ -135,8 +135,8 @@ class CancelDagTool(_ControlTool):
                 "dag_status without a run_id lists the runs currently in flight."
             )
         head = (
-            f"Cancellation requested for DAG run {run_id}: nodes stop after their current "
-            "step, pending nodes are skipped, and nothing further is announced for this run."
+            f"Cancellation requested for DAG run {run_id}: running nodes are cancelled "
+            "immediately, pending nodes are skipped, and nothing further is announced for this run."
         )
         try:
             run = await self._read_live(run_id)
