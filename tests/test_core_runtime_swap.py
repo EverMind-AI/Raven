@@ -351,3 +351,85 @@ def test_a_generation_is_sealed_after_construction():
         rt.loop = object()  # type: ignore[misc]
     with pytest.raises(FrozenInstanceError):
         rt.backend = object()  # type: ignore[misc]
+
+
+REPO = Path(__file__).resolve().parent.parent
+
+# The generation doors and the manager vocabulary around them; the law lives
+# on the RavenRuntime paper (core/runtime.py). A spelled reach outside the
+# organ homes must come from a declared operator.
+_GENERATION_DOORS = {
+    "apply_agents",
+    "apply_mcp_config",
+    "set_default_binding",
+    "mcp_manager",
+    "mcp_executor_provider",
+}
+
+# module path -> the doors it operates. Widening this roster is a ruling,
+# not a convenience: the reason belongs in the same diff.
+_DOOR_OPERATORS = {
+    "raven/market/connect.py": {"apply_mcp_config", "mcp_manager", "mcp_executor_provider"},
+    "raven/rpc/methods/reload.py": {"apply_mcp_config"},
+    "raven/rpc/methods/subagents.py": {"apply_agents"},
+    "raven/rpc/methods/config.py": {"set_default_binding"},
+    "raven/agent/tools/plughub.py": {"mcp_manager"},
+}
+
+# The organs' own homes: a door's implementation, and the loop's own use of it.
+_ORGAN_HOMES = ("raven/agent/loop/", "raven/mcp/", "raven/agent/subagent/")
+
+
+def _door_strays(root: Path) -> list[str]:
+    """Every spelling of a generation-door reach outside the organ homes and
+    the operator roster, as ``file:line -> door``. Attribute spellings and the
+    ``getattr``/``hasattr`` string forms count alike -- the string form is how
+    the degrade-gracefully callers probe, and a guard that missed it would
+    certify a hole.
+    """
+    import ast
+
+    strays: list[str] = []
+    for p in sorted((root / "raven").rglob("*.py")):
+        rel = p.relative_to(root).as_posix()
+        if "__pycache__" in p.parts or rel.startswith(_ORGAN_HOMES):
+            continue
+        allowed = _DOOR_OPERATORS.get(rel, frozenset())
+        for node in ast.walk(ast.parse(p.read_text(encoding="utf-8"))):
+            doors: list[str] = []
+            if isinstance(node, ast.Attribute) and node.attr in _GENERATION_DOORS:
+                doors.append(node.attr)
+            elif (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in ("getattr", "hasattr")
+                and len(node.args) >= 2
+                and isinstance(node.args[1], ast.Constant)
+                and node.args[1].value in _GENERATION_DOORS
+            ):
+                doors.append(node.args[1].value)
+            strays.extend(f"{rel}:{node.lineno} -> {door}" for door in doors if door not in allowed)
+    return strays
+
+
+def test_the_generation_doors_have_exactly_their_declared_operators():
+    strays = _door_strays(REPO)
+    assert strays == [], (
+        "a generation-door reach appeared outside the declared operators; the law "
+        "lives on the RavenRuntime paper (core/runtime.py) -- route the need "
+        "through a declared door and add the operator to _DOOR_OPERATORS with the "
+        "reason in the diff, or take the change through a generation swap:\n" + "\n".join(strays)
+    )
+
+
+def test_the_door_roster_guard_bites(tmp_path):
+    """Mutation audit, built in: a synthetic in-place reach turns the checker
+    red, so a green run means looked-and-found-nothing."""
+    pkg = tmp_path / "raven" / "sneaky"
+    pkg.mkdir(parents=True)
+    (pkg / "grab.py").write_text(
+        "async def grab(loop):\n    await loop.apply_mcp_config({})\n    return getattr(loop, 'mcp_manager', None)\n",
+        encoding="utf-8",
+    )
+    strays = _door_strays(tmp_path)
+    assert len(strays) == 2 and all("grab.py" in s for s in strays), strays

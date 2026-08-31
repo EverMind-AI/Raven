@@ -256,6 +256,15 @@ All notable changes to Raven are documented here.
   active binding's window, so a budget-shaped hook needs no config mirror --
   `CompositeHook` chains every child's diagnostic `notes`, and a hook's
   `observers` stash is filed at persist time, after the send fire.
+- The generation freeze law is written where its machine already stood:
+  FREEZE seals member identity, and exactly three declared doors reconcile a
+  member's data plane mid-generation after the durable truth is written --
+  the agents table (`apply_agents`), the MCP server set (`apply_mcp_config`)
+  and the default binding (`set_default_binding`). A door-roster guard pins
+  who may spell those reaches (the `getattr`/`hasattr` string forms
+  included), the plugin market holds the loop through the new `McpHost`
+  paper instead of `Any`, and the Generation glossary body now carries the
+  identity-vs-interior distinction its own carve-out already implied.
 - ACP session modes: `acp.modes` in a product's config becomes a client's
   mode picker (`session/set_mode`), each mode a per-session overlay over the
   base configuration. The mode entry alone carries `maxToolIterations`; the
