@@ -1,12 +1,11 @@
 """The contribution surface's ledger: the plugin-facing vocabulary, pinned.
 
-raven/plugins is not under raven/contracts, but ``ServiceLocator``,
-``RuntimeHandles`` and ``PluginManifest`` are promises all the same: a plugin
-built against them outlives any one refactor of the host (everos-memory is
-its own distribution now, and the bundled shelf rides the same shapes). Same
-discipline as tests/test_contracts_two_tier_ledger.py -- the roster lives
-beside the assertion, so growing the surface is a reviewed change to this
-file with a reason in the diff, never a drift.
+``ServiceLocator`` and ``RuntimeHandles`` are papers now
+(``raven.contracts.plugin_surface``, under the contract tier's version and
+ledger); ``PluginManifest`` stays plugin-side because paper-izing a pydantic
+model would pull pydantic into the kernel closure. This file keeps what the
+tier ledger does not pin: the exact field rosters, the frozenness, the
+manifest vocabulary, and the re-export address plugin authors import from.
 """
 
 from __future__ import annotations
@@ -72,3 +71,15 @@ def test_the_decline_vocabulary_is_two_shapes() -> None:
         "the decline must stay its own class: a loop catches it narrowly, and riding a "
         "builtin would catch real bugs as declines"
     )
+
+
+def test_the_documented_import_address_serves_the_papers_objects() -> None:
+    """Plugin authors import from ``raven.plugins.context``; the definitions
+    live in the papers. Both spellings must hand out the same objects, or two
+    half-surfaces drift apart under one name."""
+    from raven.contracts import plugin_surface
+    from raven.plugins import context
+
+    assert context.ServiceLocator is plugin_surface.ServiceLocator
+    assert context.RuntimeHandles is plugin_surface.RuntimeHandles
+    assert context.BindDeclinedError is plugin_surface.BindDeclinedError

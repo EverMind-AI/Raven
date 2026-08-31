@@ -106,6 +106,11 @@ LEDGER = {
         "TruncationInfo",
         "TurnContext",
         "UsageSnapshot",
+        # The plugin contribution surface (plugin_surface.py): shapes a plugin
+        # implements against from outside this repository.
+        "BindDeclinedError",
+        "RuntimeHandles",
+        "ServiceLocator",
     },
     "factory_loop": {"AgentHook", "AgentHookContext", "FACTORY_LOOP_SURFACE_VERSION", "HookDecision"},
 }
@@ -210,7 +215,7 @@ def test_import_guard_bites_machinery_and_spares_type_checking(tmp_path):
 # The contract tier is versioned: its shape moves only with a version bump
 # ---------------------------------------------------------------------------
 
-PINNED_CONTRACT_SURFACE = ("2", "16391fc32528e1fc405359dcd92ada0fa8d99de435f40cd9e120fc4a7bd57745")
+PINNED_CONTRACT_SURFACE = ("3", "1d14d6c682e77e98c7e2fc23246835af348c376906d61b7a007699e3d4da2455")
 
 
 def contract_surface_digest(pkg_dir: Path) -> str:
