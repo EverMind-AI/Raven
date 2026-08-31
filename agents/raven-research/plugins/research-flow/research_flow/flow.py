@@ -413,6 +413,13 @@ class TurnFrame(AgentHook):
         # "" on every turn of every mode.
         record.mode = self._mode
         record.observers = observers
+        # The trunk stamps this dict onto the turn's last substantive assistant
+        # message at persist -- the seam the fork's loop had natively -- so the
+        # per-turn history survives beyond this record's latest-turn copy. The
+        # stamp is copied after this phase returns, so it reads the dict as
+        # finished here.
+        if observers:
+            ctx.metadata["observers"] = observers
         self._store.save(ctx.session_key, record)
         if changed:
             return HookDecision(modified_content=final_content)

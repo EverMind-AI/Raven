@@ -49,8 +49,11 @@ class SessionRecord:
     counters beside it. ``observers`` is the latest turn's read-only counters -
     every gate namespace the turn wrote, plus the final shape, the conversation
     gate, the process appendix and its rendered trail. The fork attached these
-    to the last assistant message; a plugin cannot reach one, so only the latest
-    turn's survive here.
+    to the last assistant message; the trunk now offers that same seam
+    (``ctx.metadata["observers"]`` is stamped onto the turn's last substantive
+    assistant message at persist) and the flow feeds it at turn end, so this
+    field is the latest turn's readable copy while the message stamp carries
+    the history.
     """
 
     research_memo: dict[str, Any] | None = None

@@ -1094,3 +1094,32 @@ def test_the_withdrawal_after_a_round_trip_is_not_counted_as_withheld() -> None:
     assert state["withdrawn_after_ask"] is True
     assert state["withheld"] == 0
     assert "withheld_reason" not in state
+
+
+def test_a_single_option_question_folds_to_free_form_and_still_reaches_the_broker() -> None:
+    """[A-8] The fork's transport accepted a one-option question; the trunk tool
+    rejects it as "not a decision" -- and a gate-granted round trip must not be
+    spent on that rejection string. The lone suggestion folds into the question
+    text and the entry goes free-form: the same question, in the kernel-legal
+    shape. Duplicate labels count as one, the way the trunk counts them.
+    """
+    broker = _FakeBroker()
+    tool = _tool_delivery_tool(broker)
+
+    async def run():
+        tool.grant_round_trip()
+        return await tool.execute(questions=[_q("which entity?", options=("ACME Corp",))])
+
+    result = _scenario(run)
+    assert broker.calls == [("cli:t", "which entity? (suggested: ACME Corp)", ())]
+    assert "rejected" not in str(result.model_text)
+
+    broker2 = _FakeBroker()
+    dup = _tool_delivery_tool(broker2)
+
+    async def run_dup():
+        dup.grant_round_trip()
+        return await dup.execute(questions=[_q("which market?", options=("EU", "EU"))])
+
+    _scenario(run_dup)
+    assert broker2.calls == [("cli:t", "which market? (suggested: EU)", ())]

@@ -620,3 +620,41 @@ def test_the_rendered_trail_is_kept_where_a_host_can_read_it(tmp_path, monkeypat
     assert observers["research_trail"] in (decision.modified_content or "")
     assert observers["process_appendix"]["emitted"] is True
     assert "research_trail" not in observers["process_appendix"]
+
+
+def test_turn_observers_reach_the_trunk_stamp_seam(tmp_path):
+    """[B-1] The trunk stamps ``ctx.metadata["observers"]`` onto the turn's last
+    substantive assistant message at persist -- the seam the fork's loop had
+    natively. The flow must feed it at turn end, or only the record store's
+    latest-turn copy survives and the per-turn history the fork kept is gone.
+    The send context shares the turn's metadata dict in production, so the
+    test hands it the same object the inbound phase saw.
+    """
+    import asyncio
+
+    from research_flow.config import FlowConfig
+    from research_flow.flow import ResearchFlowHook, ToolHandles
+    from research_flow.state import SessionStore
+
+    from raven.contracts.loop_hooks import AgentHookContext
+
+    store = SessionStore(tmp_path)
+    cfg = FlowConfig.from_slice({"enabled": True})
+    hook = ResearchFlowHook(cfg=cfg, provider=None, tools=ToolHandles(), store=store)
+
+    async def turn():
+        first = AgentHookContext(
+            session_key="s",
+            iteration=1,
+            messages=[{"role": "user", "content": "q"}],
+            metadata={"mode": "", "mode_overlay": {"drFlow": {}}},
+        )
+        await hook.before_iteration(first)
+        send_ctx = AgentHookContext(session_key="s", outbound_content="the answer", metadata=first.metadata)
+        await hook.after_send(send_ctx)
+        return send_ctx
+
+    send_ctx = asyncio.run(turn())
+    stamped = send_ctx.metadata.get("observers")
+    assert isinstance(stamped, dict) and stamped, "after_send must feed the stamp seam"
+    assert stamped == store.load("s").observers, "the stamp and the record read the same counters"

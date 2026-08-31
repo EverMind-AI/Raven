@@ -711,3 +711,53 @@ def test_the_tool_delivery_keeps_the_answer_first_reply_rule() -> None:
     assert "If you are asking the user, the questions are the" not in text
     assert "You may ask the user once" in text
     assert "no shell, no files,\nno stored memory" in text
+
+
+def test_unknown_config_keys_warn_and_declared_wiring_stays_silent():
+    """[C9] A typo'd knob used to validate clean (``extra="ignore"`` with no
+    voice); now the slice door names what it ignores. The wiring keys the
+    plugin's tools read raw -- which FlowConfig deliberately does not model --
+    must stay silent, or every healthy launch cries wolf.
+    """
+    from loguru import logger as _logger
+    from research_flow.config import FlowConfig
+
+    records: list[str] = []
+    sink = _logger.add(lambda m: records.append(str(m)), level="WARNING")
+    try:
+        FlowConfig.from_slice(
+            {
+                "enabled": True,
+                "maxIterationz": 999,
+                "finalShape": {"reportStructur": False},
+                "stateRoot": "/tmp/x",
+                "proxy": "socks5://127.0.0.1:1080",
+                "fetch": {"apiKey": "k"},
+                "search": {"apiKey": "k"},
+                "contextWindowTokens": 100000,
+                "identityOverride": "text",
+            }
+        )
+    finally:
+        _logger.remove(sink)
+    text = "\n".join(records)
+    assert "maxIterationz" in text, "a top-level typo must be named"
+    assert "finalShape.reportStructur" in text, "a nested typo must be named with its path"
+    for silent in ("stateRoot", "proxy", "search.apiKey", "identityOverride", "contextWindowTokens"):
+        assert silent not in text, f"{silent} is declared wiring or a real knob, not a typo"
+
+
+def test_a_mode_overlay_typo_warns_with_its_path():
+    """Same door, other entrance: an overlay is held to the same schema as the
+    base slice, so its typos get the same voice."""
+    from loguru import logger as _logger
+    from research_flow.config import FlowConfig
+
+    cfg = FlowConfig.from_slice({"enabled": True})
+    records: list[str] = []
+    sink = _logger.add(lambda m: records.append(str(m)), level="WARNING")
+    try:
+        cfg.with_overlay({"budgetNote": {"enabledd": True}})
+    finally:
+        _logger.remove(sink)
+    assert "budgetNote.enabledd" in "\n".join(records)

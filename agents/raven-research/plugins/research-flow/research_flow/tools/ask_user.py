@@ -310,6 +310,19 @@ class DRAskUserTool(AskUserTool):
             cleaned = clean_questions(questions, max_questions=self._max_questions)
             if not cleaned:
                 return _FALLBACK_NO_QUESTIONS
+            for entry in cleaned:
+                # Fork parity: the fork's tool passed a single-option question
+                # through (one suggestion, still answerable free-form), while
+                # the trunk tool rejects it as "not a decision" -- and a
+                # gate-granted round trip must not be spent on that rejection
+                # string. The lone suggestion folds into the question text and
+                # the entry goes free-form: the same question the fork's
+                # surface showed, in the shape the kernel accepts. Distinct
+                # labels, the way the trunk counts them.
+                options = list(dict.fromkeys(entry.get("options") or []))
+                if len(options) == 1:
+                    entry["question"] = f"{entry['question']} (suggested: {options[0]})"
+                    entry["options"] = []
             return await super().execute(cleaned)
         return _FALLBACK_NOT_DELIVERED
 

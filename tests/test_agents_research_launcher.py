@@ -414,3 +414,19 @@ def test_the_budget_the_launcher_ships_is_the_one_both_observers_divide_by(groun
         assert (note._max_iterations, breaker._max_iterations) == (expected, expected), name
         assert entry["maxToolIterations"] == expected, f"{name}: and the loop enforces the same number"
         assert (note._context_window_tokens, breaker._context_window_tokens) == (65536, 65536), name
+
+
+def test_no_shipped_mode_overlay_touches_ask_user():
+    """[latent] DRAskUserTool is built once from the base config while the gates
+    are rebuilt per (session, mode): a mode overlay that changed askUser would
+    apply to the gate and silently not to the tool. No shipped mode does --
+    pinned here so the day one wants to, the split surfaces in CI instead of a
+    live session (rebuild the tool per mode first)."""
+    import json as _json
+
+    for overlay_file in sorted((RUN_PY.parent / "modes").glob("*.json")):
+        overlay = _json.loads(overlay_file.read_text(encoding="utf-8"))
+        assert "askUser" not in (overlay.get("drFlow") or {}), (
+            f"{overlay_file.name} touches askUser: make the tool consult the per-mode "
+            "config the gates already resolve before shipping this overlay"
+        )

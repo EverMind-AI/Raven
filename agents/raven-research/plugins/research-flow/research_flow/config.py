@@ -267,6 +267,56 @@ def _warn_retired(raw: dict[str, Any]) -> None:
             )
 
 
+#: Slice keys the plugin's tools read raw and FlowConfig deliberately does
+#: not model (see the module docstring): wiring, not knobs.
+_PASSTHROUGH_KEYS = {
+    "stateRoot",
+    "state_root",
+    "proxy",
+    "fetch",
+    "search.apiKey",
+    "search.api_key",
+    "fetch.apiKey",
+    "fetch.api_key",
+}
+
+
+def _warn_unknown(raw: dict[str, Any], model: type[BaseModel], prefix: str = "") -> None:
+    """Unknown keys stay ignored but never silent.
+
+    A typo'd knob (``maxIterationz``, ``finalShape.reportStructur``) that
+    validates clean is a config that lies to its operator. Same manner as the
+    trunk's admission door: a warning naming the keys, never a refusal --
+    ``extra="ignore"`` still governs what the models keep. The wiring keys the
+    tools read raw stay silent, and the retired knobs keep their own, more
+    specific message.
+    """
+    retired = set(_RETIRED_KEYS) | {snake for snake, _owner in _RETIRED_KEYS.values()}
+    unknown: list[str] = []
+    for key, value in raw.items():
+        if not isinstance(key, str):
+            continue
+        dotted = f"{prefix}{key}"
+        field = None
+        for name, f in model.model_fields.items():
+            if key == name or key == f.alias:
+                field = f
+                break
+        if field is None:
+            if dotted in _PASSTHROUGH_KEYS or key in retired:
+                continue
+            unknown.append(dotted)
+            continue
+        ann = field.annotation
+        if isinstance(value, dict) and isinstance(ann, type) and issubclass(ann, BaseModel):
+            _warn_unknown(value, ann, prefix=f"{dotted}.")
+    if unknown:
+        logger.warning(
+            "research-flow: config keys {} are not knobs this flow reads; ignoring them",
+            ", ".join(sorted(unknown)),
+        )
+
+
 def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
     """Overlay wins; dicts merge recursively; every other value replaces.
 
@@ -344,6 +394,7 @@ class FlowConfig(_Base):
         """Validate the plugin's config slice as the product wrote it."""
         raw = d or {}
         _warn_retired(raw)
+        _warn_unknown(raw, cls)
         return cls.model_validate(raw)
 
     def with_overlay(self, overlay: dict[str, Any] | None) -> "FlowConfig":
@@ -355,6 +406,7 @@ class FlowConfig(_Base):
         if not overlay:
             return self
         _warn_retired(overlay)
+        _warn_unknown(overlay, type(self))
         base = self.model_dump(by_alias=True)
         return type(self).model_validate(_deep_merge(base, overlay))
 
