@@ -265,9 +265,10 @@ def render_config(source: Path) -> Path:
     # Same mirror, same reason as the web keys: the fork's assembly was CALLED
     # with the window the loop had resolved, so both observers that divide by it
     # quoted the model the turn actually ran on. A plugin factory sees its own
-    # slice and nothing else, and an absent window makes the budget note drop its
-    # ``context ~N%`` clause and the spin breaker lose its context arm entirely --
-    # both silently.
+    # slice and nothing else. The loop's resolved window now reaches a turn's
+    # hooks natively (``ctx.context_window_tokens``, hook surface v3) as the
+    # fallback; the mirror stays because it pins the shipped numbers to the
+    # config a reader audits, and config stays the word that wins.
     if window := defaults.get("contextWindowTokens"):
         flow_slice.setdefault("contextWindowTokens", window)
 

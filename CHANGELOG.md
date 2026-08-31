@@ -258,7 +258,9 @@ All notable changes to Raven are documented here.
   `observers` stash is filed at persist time, after the send fire.
 - ACP session modes: `acp.modes` in a product's config becomes a client's
   mode picker (`session/set_mode`), each mode a per-session overlay over the
-  base configuration.
+  base configuration. The mode entry alone carries `maxToolIterations`; the
+  overlay ships no copy, since the loop hands its hooks the enforced cap
+  directly (`ctx.max_iterations`).
 - `spawn` now records every sub-agent call on disk, the way `run_subagent_dag`
   already recorded every node: one directory per call under
   `<agent home>/sessions/<group>/<chat_id>/subagents/spawn/`, holding

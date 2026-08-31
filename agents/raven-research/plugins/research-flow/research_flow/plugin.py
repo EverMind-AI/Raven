@@ -35,9 +35,11 @@ if TYPE_CHECKING:
     from raven.contracts.llm_provider import LLMProvider
     from raven.plugins.context import PluginContext
 
-# The trunk's ``agents.defaults.maxToolIterations`` default. The loop's own
-# resolved cap never reaches a plugin factory, so this stands in for it when
-# neither ``drFlow.maxIterations`` nor a mode's ``maxToolIterations`` is set.
+# The trunk's ``agents.defaults.maxToolIterations`` default. A plugin factory
+# resolves before any turn runs, so this stands in until the loop's enforced
+# cap arrives on the iteration context (``ctx.max_iterations``, hook surface
+# v3); a chain built from a turn reads that instead, and explicit config wins
+# over both.
 _DEFAULT_MAX_ITERATIONS = 40
 
 

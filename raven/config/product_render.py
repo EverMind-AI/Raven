@@ -179,9 +179,11 @@ def mode_catalogue(
     over the baseline per session. The machine here owns the trunk contract
     -- loading ``<mode>.json`` overlays, refusing unknown top-level keys,
     skipping a labeled mode whose overlay file is absent, and stamping the
-    resolved cap into both the entry and its overlay so every mode declares
-    its own budget (the baseline included, whose diff is empty but whose cap
-    is not). ``resolve(overlay)`` is the product's half: it returns the
+    resolved cap into the entry so every mode declares its own budget (the
+    baseline included, whose diff is empty but whose cap is not; the overlay
+    carries no copy -- the loop tells its hooks the enforced cap directly as
+    ``ctx.max_iterations``). ``resolve(overlay)`` is the product's half: it
+    returns the
     mode's iteration cap and the diff the plugin should see -- both sides of
     vocabulary the trunk must not learn. An empty dict when the product
     ships no modes directory, which leaves the rendered config without
@@ -204,8 +206,6 @@ def mode_catalogue(
                     f"an overlay carries only {', '.join(sorted(overlay_keys))}"
                 )
         cap, entry_overlay = resolve(overlay)
-        if cap:
-            entry_overlay["maxToolIterations"] = cap
         catalogue[mode] = {
             "name": name,
             "description": description,

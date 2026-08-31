@@ -92,9 +92,10 @@ def test_every_mode_ships_one_iteration_budget_the_loop_and_the_flow_share(groun
     and the flow reads its own knob, and nothing joined them: fast told the
     model ``iteration N/20`` on a turn the loop would let run to 40, and the
     breaker's ``minBudgetRatio: 0.5`` tripped at iteration 10 of 40 instead of
-    20 of 20. The launcher resolves the twin's rule once and ships the result
-    twice - to the loop as the mode's cap, and inside the overlay, which is the
-    only channel a plugin hook has for it.
+    20 of 20. The launcher resolves the twin's rule once and ships it to the
+    loop as the mode's cap; a turn's hooks read the same number back off the
+    iteration context (``ctx.max_iterations``, hook surface v3), so the
+    overlay carries no copy.
     """
     data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
     modes = data["acp"]["modes"]
@@ -104,7 +105,9 @@ def test_every_mode_ships_one_iteration_budget_the_loop_and_the_flow_share(groun
         "ultra": 150,
     }
     for name, entry in modes.items():
-        assert entry["overlay"]["maxToolIterations"] == entry["maxToolIterations"], name
+        assert "maxToolIterations" not in entry["overlay"], (
+            f"{name}: the cap reaches hooks as ctx.max_iterations, not as an overlay copy"
+        )
     # ``ultra`` is the mode that declines the override (``maxIterations: null``),
     # so its budget is its own ``maxToolIterations`` rather than the baseline 20.
     assert modes["ultra"]["overlay"]["drFlow"]["maxIterations"] is None
@@ -403,6 +406,8 @@ def test_the_budget_the_launcher_ships_is_the_one_both_observers_divide_by(groun
             AgentHookContext(
                 session_key=f"s-{name}",
                 iteration=1,
+                max_iterations=entry["maxToolIterations"],
+                context_window_tokens=65536,
                 metadata={"mode": name, "mode_overlay": entry["overlay"]},
             )
         )

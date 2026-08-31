@@ -609,7 +609,11 @@ def test_the_rendered_trail_is_kept_where_a_host_can_read_it(tmp_path, monkeypat
         path = ledger_mod.ledger_path()
         Path(path).write_text("\n".join(json.dumps(r) for r in LEDGER) + "\n", encoding="utf-8")
         return await hook.after_send(
-            AgentHookContext(session_key="s", outbound_content="the answer cites https://a.example/one")
+            AgentHookContext(
+                session_key="s",
+                outbound_content="the answer cites https://a.example/one",
+                metadata=ctx.metadata,
+            )
         )
 
     decision = asyncio.run(turn())
