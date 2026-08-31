@@ -250,6 +250,35 @@ def test_missing_dependency_channels_reports_only_enabled_import_failures(monkey
     assert missing_dependency_channels(config) == ["telegram"]
 
 
+def test_missing_dependency_channels_probes_with_the_dispensed_view(monkeypatch):
+    """The probe builds exactly what ``_init_channels`` builds. On the raw
+    section a factory that reads declared cargo dies on a plain-dict extra
+    before it reaches its SDK import, the other-failure swallow eats that, and
+    the missing dependency this probe exists to see goes unreported."""
+    from raven.gateway.manager import missing_dependency_channels
+
+    def reads_cargo_then_fails_import(section):
+        assert section.mention.require_in_groups is True
+        raise ImportError("No module named 'mochat_sdk'")
+
+    spec = ChannelSpec(
+        display_name="Fake",
+        factory=reads_cargo_then_fails_import,
+        capabilities=Capabilities(),
+        config_schema={
+            "mention": {
+                "type": "object",
+                "fields": {"require_in_groups": {"type": "boolean", "default": True}},
+            },
+        },
+    )
+    monkeypatch.setattr("raven.channels.registry.discover_specs", lambda: {"fake": spec})
+    monkeypatch.setattr("raven.config.loader.channel_cargo_slice", lambda name: {})
+    config = _config({"fake": SimpleNamespace(enabled=True, allow_from=["*"])})
+
+    assert missing_dependency_channels(config) == ["fake"]
+
+
 # ── start_one / stop_one (a channel enabled while the gateway runs) ────
 
 
@@ -297,6 +326,68 @@ async def test_start_one_builds_a_channel_enabled_after_launch(monkeypatch):
     # meant the next start received on the new adapter and replied through the
     # stopped one.
     assert retired == ["fake"]
+
+
+@pytest.mark.asyncio
+async def test_start_one_dispenses_declared_cargo_before_the_factory(monkeypatch):
+    """A declaring channel hot-started by the control plane must receive the
+    same door-dispensed view `_init_channels` hands out. On the raw section a
+    declared nested table is a plain dict extra, so the adapter's attribute
+    read (`config.mention.require_in_groups`) breaks on the first matching
+    message rather than at start."""
+    spec = ChannelSpec(
+        display_name="Fake",
+        factory=_FakeChannel,
+        capabilities=Capabilities(),
+        config_schema={
+            "mention": {
+                "type": "object",
+                "fields": {"require_in_groups": {"type": "boolean", "default": True}},
+            },
+        },
+    )
+    mgr = _hot(
+        monkeypatch,
+        {"fake": spec},
+        _config({"fake": SimpleNamespace(enabled=False, allow_from=["*"])}),
+        _config({"fake": SimpleNamespace(enabled=True, allow_from=["*"])}),
+    )
+    monkeypatch.setattr(
+        "raven.config.loader.channel_cargo_slice",
+        lambda name: {"mention": {"requireInGroups": False}},
+    )
+
+    assert await mgr.start_one("fake") == "started"
+    config = mgr.channels["fake"].config
+    assert config.mention.require_in_groups is False
+    assert config.enabled is True
+
+
+@pytest.mark.asyncio
+async def test_start_one_answers_bad_config_when_the_door_refuses(monkeypatch):
+    """Cargo the declaration refuses is a state the caller draws, not an
+    exception escaping to the control-plane frame handler: the door's message
+    names the owner and key in the log, and the gateway keeps running."""
+    spec = ChannelSpec(
+        display_name="Fake",
+        factory=_FakeChannel,
+        capabilities=Capabilities(),
+        config_schema={"port": {"type": "integer", "default": 1}},
+    )
+    mgr = _hot(
+        monkeypatch,
+        {"fake": spec},
+        _config({"fake": SimpleNamespace(enabled=False, allow_from=["*"])}),
+        _config({"fake": SimpleNamespace(enabled=True, allow_from=["*"])}),
+    )
+    monkeypatch.setattr(
+        "raven.config.loader.channel_cargo_slice",
+        lambda name: {"port": "not-a-number"},
+    )
+
+    assert await mgr.start_one("fake") == "bad_config"
+    assert "fake" not in mgr.channels
+    assert mgr.enabled_channels == []
 
 
 @pytest.mark.asyncio

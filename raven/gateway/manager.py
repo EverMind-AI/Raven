@@ -16,7 +16,7 @@ from typing import Any
 
 from loguru import logger
 
-from raven.channels.contract import Channel
+from raven.channels.contract import Channel, ChannelSpec
 from raven.config.schema import Config
 from raven.providers.transcription import transcription_api_key
 
@@ -62,6 +62,7 @@ def missing_dependency_channels(config: Config) -> list[str]:
     channel that can never start is visible before the gateway is run.
     """
     from raven.channels.registry import discover_specs
+    from raven.config.admission import dispense_channel_config
 
     missing: list[str] = []
     for modname, spec in discover_specs().items():
@@ -69,7 +70,10 @@ def missing_dependency_channels(config: Config) -> list[str]:
         if not section or not getattr(section, "enabled", False):
             continue
         try:
-            spec.factory(section)
+            # Dispensed like the real build: on the raw section a factory that
+            # reads declared cargo fails before its SDK import, and the swallow
+            # below would mask the missing dependency this probe exists to see.
+            spec.factory(dispense_channel_config(spec, section, channel=modname))
         except ImportError:
             missing.append(modname)
         except Exception:
@@ -109,23 +113,12 @@ class ChannelManager:
         """
         from raven.channels.registry import discover_specs
 
-        groq_key = transcription_api_key(self.config)
-
         for modname, spec in discover_specs().items():
             section = getattr(self.config.channels, modname, None)
             if not section or not getattr(section, "enabled", False):
                 continue
             try:
-                # Storage handover: every declaring channel's factory receives
-                # the door-dispensed view (declared keys from the admitted
-                # slice, socket fields from the central section, frozen). An
-                # undeclaring channel keeps the verbatim section.
-                from raven.config.admission import dispense_channel_config
-
-                section = dispense_channel_config(spec, section, channel=modname)
-                channel = spec.factory(section)
-                channel.transcription_api_key = groq_key
-                self.channels[modname] = channel
+                self.channels[modname] = self._build_channel(modname, spec, section)
                 logger.info("{} channel enabled", spec.display_name)
             except ImportError as e:
                 logger.warning(
@@ -136,6 +129,23 @@ class ChannelManager:
                 )
 
         self._validate_allow_from()
+
+    def _build_channel(self, name: str, spec: ChannelSpec, section: Any) -> Channel:
+        """The one build path every entrance shares: dispense, then factory.
+
+        Storage handover: every declaring channel's factory receives the
+        door-dispensed view (declared keys from the admitted slice, socket
+        fields from the central section, frozen); an undeclaring channel keeps
+        the verbatim section. Raises what the door or the factory raises --
+        ImportError for a missing SDK, PluginConfigError for cargo the
+        declaration refuses -- and each entrance draws its own state from it.
+        """
+        from raven.config.admission import dispense_channel_config
+
+        section = dispense_channel_config(spec, section, channel=name)
+        channel = spec.factory(section)
+        channel.transcription_api_key = transcription_api_key(self.config)
+        return channel
 
     def _validate_allow_from(self) -> None:
         for name, ch in self.channels.items():
@@ -193,8 +203,9 @@ class ChannelManager:
         Answers a word rather than raising, because every outcome is a state the
         caller draws: ``started``, ``already``, ``unknown`` (no such channel),
         ``disabled`` (config does not enable it), ``deny_all`` (empty allowFrom,
-        which start-up treats as fatal and a live gateway must not), or
-        ``missing_dep``.
+        which start-up treats as fatal and a live gateway must not),
+        ``missing_dep``, or ``bad_config`` (the door refused the section's
+        cargo; the log names the owner and key).
 
         The section is re-read from disk, not taken from ``self.config``: that is
         the snapshot this gateway launched with, and in it the channel is still
@@ -215,6 +226,7 @@ class ChannelManager:
                 return "already"
             await self.stop_one(name)
         from raven.channels.registry import discover_specs
+        from raven.config.admission import PluginConfigError
         from raven.config.loader import load_config
 
         spec = discover_specs().get(name)
@@ -226,11 +238,13 @@ class ChannelManager:
         if getattr(section, "allow_from", None) == []:
             return "deny_all"
         try:
-            channel = spec.factory(section)
+            channel = self._build_channel(name, spec, section)
         except ImportError as e:
             logger.warning("{} channel not started: missing dependency ({}). {}", name, e, missing_dep_hint())
             return "missing_dep"
-        channel.transcription_api_key = transcription_api_key(self.config)
+        except PluginConfigError as e:
+            logger.warning("{} channel not started: {}", name, e)
+            return "bad_config"
         self.channels[name] = channel
         if self.on_started is not None:
             try:
