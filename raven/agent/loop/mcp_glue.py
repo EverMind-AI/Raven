@@ -59,6 +59,17 @@ class McpGlueMixin:
         task.add_done_callback(self._mcp_event_tasks.discard)
 
     @property
+    def mcp_manager_if_started(self) -> "MCPConnectionManager | None":
+        """The connection organ if one exists -- never created by asking.
+
+        The console's status peek must not build a manager just to learn that
+        nothing is connected; the lazy ``mcp_manager`` property below is for
+        operators about to use one. The object returned is the organ itself,
+        so the door-roster guard pins who may spell this too.
+        """
+        return self._mcp_manager
+
+    @property
     def mcp_manager(self) -> "MCPConnectionManager":
         """The per-server connection lifecycle, created on first use.
 
