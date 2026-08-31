@@ -16,6 +16,7 @@ import pytest
 from raven.agent.hook import AgentHook, HookDecision
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import HostWiring, ToolWiring, TurnPolicy
+from raven.agent.loop.turn_path import _stamp_turn_observers
 from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
 from raven.spine import ChatType, Origin, Source, TurnRequest
 
@@ -396,3 +397,24 @@ async def test_an_observers_stash_written_at_after_send_reaches_the_persisted_me
     stamped = [m for m in session.messages if m.get("observers")]
     assert len(stamped) == 1 and stamped[0]["role"] == "assistant"
     assert stamped[0]["observers"] == {"send_gate": {"fired": 1}}
+
+
+def test_the_persist_stamp_never_crosses_the_turn_base_into_filed_history():
+    """The stamp's bound: the paper files observers on THE TURN'S message.
+
+    An answerless turn has no seat, and the assembled window can share dict
+    objects with the session record (the curator candidate view), so an
+    unbounded search would rewrite a previous turn's filed message in
+    place -- this turn's measurements stamped onto last turn's answer."""
+
+    prior_assistant = {"role": "assistant", "content": "earlier answer"}
+    messages = [
+        {"role": "user", "content": "earlier question"},
+        prior_assistant,
+        {"role": "user", "content": "now this"},
+    ]
+
+    _stamp_turn_observers(messages, {"observers": {"gate": {"fired": 1}}}, turn_base=2)
+
+    assert "observers" not in prior_assistant, "filed history must not be rewritten in place"
+    assert not any("observers" in m for m in messages), "an answerless turn stamps nothing"

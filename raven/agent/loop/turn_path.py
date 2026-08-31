@@ -79,6 +79,26 @@ if TYPE_CHECKING:
     from raven.spine.turn import TurnRequest
 
 
+def _stamp_turn_observers(messages: list[dict[str, Any]], metadata: dict[str, Any] | None, turn_base: int) -> None:
+    """File the turn's observer record onto its last substantive assistant message.
+
+    The loop_hooks paper files ``metadata["observers"]`` on THE TURN'S message
+    at persist time, so the search never crosses ``turn_base``: an answerless
+    turn has no seat, and the assembled window can share dict objects with the
+    session record (the curator candidate view), so stamping an earlier
+    message would rewrite filed history in place.
+    """
+    if not metadata:
+        return
+    observers = metadata.get("observers")
+    if not isinstance(observers, dict) or not observers:
+        return
+    for message in reversed(messages[turn_base:]):
+        if message.get("role") == "assistant" and (message.get("content") or message.get("tool_calls")):
+            message["observers"] = dict(observers)
+            break
+
+
 class TurnPathMixin:
     """The turn execution path: dispatch, the agent loop, streaming, recovery,
     persistence."""
@@ -1711,12 +1731,7 @@ class TurnPathMixin:
         # so a stash from any phase, ``after_send`` included, reaches the filed
         # record. Per turn, on the turn -- not a session-wide last write.
         if len(self.hooks) > 0:
-            _observers = turn_hook_meta.get("observers")
-            if isinstance(_observers, dict) and _observers:
-                for _m in reversed(all_msgs):
-                    if _m.get("role") == "assistant" and (_m.get("content") or _m.get("tool_calls")):
-                        _m["observers"] = dict(_observers)
-                        break
+            _stamp_turn_observers(all_msgs, turn_hook_meta, turn_start_idx)
 
         prev_len = len(session.messages)
         self._save_turn(
