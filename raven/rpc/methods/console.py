@@ -376,7 +376,8 @@ async def cron_runs(params: dict, *, agent_loop_factory=None) -> dict:
     from datetime import datetime
 
     from raven.config.loader import load_config
-    from raven.rpc.methods.session import _safe_invoke_factory, manager_for
+    from raven.rpc.methods.session import _safe_invoke_factory
+    from raven.session.resolve import manager_for
 
     job_id = str(params.get("id", ""))
     svc = _cron_service(_safe_loop(agent_loop_factory))

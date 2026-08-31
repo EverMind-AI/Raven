@@ -534,7 +534,7 @@ class AcpMethods:
         if self._agent_loop is None:
             return []
         from raven.config import load_config
-        from raven.rpc.methods.session import manager_for
+        from raven.session.resolve import manager_for
 
         try:
             entries = manager_for(self._agent_loop, load_config()).list_sessions(channel=self._channel)
@@ -1042,7 +1042,7 @@ class AcpMethods:
         edited the wrong tree" is not a failure anyone would trace back to here.
         """
         from raven.config import load_config
-        from raven.rpc.methods.session import manager_for
+        from raven.session.resolve import manager_for
 
         if self._agent_loop is None:
             logger.warning("acp: no engine, so {} cannot be pinned to {}", session_key, cwd)
@@ -1058,7 +1058,7 @@ class AcpMethods:
         they need and let the no-engine case fall through to its honest no-op.
         """
         from raven.config import load_config
-        from raven.rpc.methods.session import manager_for
+        from raven.session.resolve import manager_for
 
         return manager_for(self._agent_loop, load_config())
 
