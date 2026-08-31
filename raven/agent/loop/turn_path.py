@@ -524,6 +524,7 @@ class TurnPathMixin:
         usage_sink: dict[str, Any] | None = None,
         drain: Drain | None = None,
         hook_metadata: dict[str, Any] | None = None,
+        session_history: list[dict[str, Any]] | None = None,
     ) -> tuple[str | None, list[str], list[dict], LoopOutcome]:
         """Run the agent iteration loop.
 
@@ -535,6 +536,10 @@ class TurnPathMixin:
         checkpoint commit only; usage attribution deliberately carries an
         empty session key, since widening it would start filling per-session
         cost buckets that have always been empty.
+
+        ``session_history`` is the filed record of the session this turn
+        persists into -- still ending with the previous turn -- stamped once
+        onto the iteration hook context. The caller owns which record that is.
         """
         messages = initial_messages
         iteration = 0
@@ -594,6 +599,9 @@ class TurnPathMixin:
                 session_key=session_key or "",
                 turn_question=turn_question(initial_messages),
                 turn_base=max(0, len(initial_messages) - 1),
+                session_history=session_history,
+                max_iterations=iteration_cap,
+                context_window_tokens=self.context_window_tokens,
                 metadata=turn_meta,
             )
             if len(self.hooks) > 0
@@ -1277,16 +1285,6 @@ class TurnPathMixin:
                 messages = self.context.add_assistant_message(messages, final_content)
                 hook_ctx.metadata["turn_end"]["salvaged"] = True
 
-        # A hook chain's per-turn observer record files onto the turn's last
-        # substantive assistant message, where the persist pass keeps every
-        # foreign key. Per turn, on the turn -- not a session-wide last write.
-        if hook_ctx is not None:
-            _observers = hook_ctx.metadata.get("observers")
-            if isinstance(_observers, dict) and _observers:
-                for _m in reversed(messages):
-                    if _m.get("role") == "assistant" and (_m.get("content") or _m.get("tool_calls")):
-                        _m["observers"] = dict(_observers)
-                        break
         _transient = ("_recovery_synthetic", _ATTACHED_IMAGE_KEY)
         if any(any(m.get(k) for k in _transient) for m in messages):
             messages = [m for m in messages if not any(m.get(k) for k in _transient)]
@@ -1662,6 +1660,7 @@ class TurnPathMixin:
                 usage_sink=usage_sink,
                 drain=drain,
                 hook_metadata=turn_hook_meta,
+                session_history=session.messages,
             )
         except asyncio.CancelledError:
             # A stop is not a failure, but it is also not amnesia: what already
@@ -1706,6 +1705,18 @@ class TurnPathMixin:
             _send_decision = await self.hooks.after_send(_send_ctx)
             if _send_decision.modified_content is not None:
                 final_content = _send_decision.modified_content
+
+        # A hook chain's per-turn observer record files onto the turn's last
+        # substantive assistant message at persist time -- after the send fire,
+        # so a stash from any phase, ``after_send`` included, reaches the filed
+        # record. Per turn, on the turn -- not a session-wide last write.
+        if len(self.hooks) > 0:
+            _observers = turn_hook_meta.get("observers")
+            if isinstance(_observers, dict) and _observers:
+                for _m in reversed(all_msgs):
+                    if _m.get("role") == "assistant" and (_m.get("content") or _m.get("tool_calls")):
+                        _m["observers"] = dict(_observers)
+                        break
 
         prev_len = len(session.messages)
         self._save_turn(

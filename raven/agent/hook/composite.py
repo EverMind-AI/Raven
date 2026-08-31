@@ -14,11 +14,15 @@ Semantics:
   on what it would mis-classify as a fresh request.
 
 - **Content modifications chain.** For phases that produce a
-  ``modified_content`` (currently only ``after_send``), each hook's
-  output becomes the next hook's input via
+  ``modified_content`` (``after_send`` and ``before_user_inbound``), each
+  hook's output becomes the next hook's input via
   ``ctx.outbound_content``. The final return value carries the
   fully-chained ``modified_content``. ``modified_tools`` chains the same
   way in ``before_iteration`` via ``ctx.tools``.
+
+- **Notes chain.** Every child's diagnostic ``notes`` are collected in
+  order onto the decision the composite returns; a halting decision
+  carries the notes gathered before it, then its own.
 
 - **Exceptions are isolated.** A hook that raises is logged and
   treated as a pass-through no-op; the chain continues with the next
@@ -29,6 +33,7 @@ Semantics:
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import Iterable
 
 from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
@@ -108,6 +113,7 @@ class CompositeHook(AgentHook):
         last_modified: str | None = None
         last_tools: list[dict] | None = None
         notes: list[str] = []
+        trail: list[str] = []
 
         for hook in self._hooks:
             method = getattr(hook, phase)
@@ -122,7 +128,7 @@ class CompositeHook(AgentHook):
                 continue
 
             if decision.short_circuit_result is not None or decision.rollback:
-                return decision
+                return replace(decision, notes=[*trail, *decision.notes])
 
             if chain_content and decision.modified_content is not None:
                 # Propagate to next hook in this phase
@@ -136,11 +142,13 @@ class CompositeHook(AgentHook):
                 last_tools = decision.modified_tools
             if chain_notes and decision.append_note:
                 notes.append(decision.append_note)
+            trail.extend(decision.notes)
 
         return HookDecision(
             modified_content=last_modified,
             modified_tools=last_tools,
             append_note="\n\n".join(notes) or None,
+            notes=trail,
         )
 
 

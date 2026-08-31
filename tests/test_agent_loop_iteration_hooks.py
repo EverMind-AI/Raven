@@ -329,3 +329,70 @@ async def test_a_hooks_observers_dict_lands_on_the_turns_last_assistant_message(
     stamped = [m for m in session.messages if m.get("observers")]
     assert len(stamped) == 1 and stamped[0]["role"] == "assistant"
     assert stamped[0]["observers"] == {"gate": {"fired": 1}}
+
+
+@pytest.mark.asyncio
+async def test_iteration_phases_read_the_filed_record_which_still_ends_with_the_previous_turn(tmp_path):
+    histories: list[list] = []
+
+    class Reader(AgentHook):
+        async def before_iteration(self, ctx):
+            if ctx.iteration == 1:
+                histories.append(list(ctx.session_history or []))
+            return HookDecision()
+
+    provider = _ScriptedProvider([_text("first answer"), _text("second answer")])
+    loop = _loop(tmp_path, provider, [Reader()])
+
+    await loop._process_message(_req("first"))
+    await loop._process_message(_req("second"))
+
+    assert histories[0] == [], "a fresh session has no filed record yet"
+    assert histories[1], "the second turn's iterations see the first turn's record"
+    assert any("first answer" in str(m.get("content")) for m in histories[1])
+    assert all("second" != str(m.get("content")) for m in histories[1]), "the running turn is not filed yet"
+
+
+@pytest.mark.asyncio
+async def test_iteration_phases_carry_the_cap_the_loop_enforces_and_the_bindings_window(tmp_path):
+    seen: dict[str, object] = {}
+
+    class Reader(AgentHook):
+        async def before_iteration(self, ctx):
+            seen.setdefault("cap", ctx.max_iterations)
+            seen.setdefault("window", ctx.context_window_tokens)
+            return HookDecision()
+
+        async def before_user_inbound(self, ctx):
+            seen["inbound_cap"] = ctx.max_iterations
+            return HookDecision()
+
+    provider = _ScriptedProvider([_text("done")])
+    loop = _loop(tmp_path, provider, [Reader()], max_iterations=6)
+    loop.set_session_policy("cli:c", max_iterations=2)
+
+    out = await loop._process_message(_req())
+
+    assert out is not None
+    assert seen["cap"] == 2, "the stamped cap is the session policy's -- the one the loop enforces"
+    assert isinstance(seen["window"], int) and seen["window"] > 0
+    assert seen["inbound_cap"] is None, "the inbound fire predates the loop's one policy read"
+
+
+@pytest.mark.asyncio
+async def test_an_observers_stash_written_at_after_send_reaches_the_persisted_message(tmp_path):
+    class SendCounter(AgentHook):
+        async def after_send(self, ctx):
+            ctx.metadata.setdefault("observers", {})["send_gate"] = {"fired": 1}
+            return HookDecision()
+
+    provider = _ScriptedProvider([_text("done")])
+    loop = _loop(tmp_path, provider, [SendCounter()])
+
+    out = await loop._process_message(_req("hello"))
+
+    assert out is not None
+    session = loop.sessions.get_or_create("cli:c")
+    stamped = [m for m in session.messages if m.get("observers")]
+    assert len(stamped) == 1 and stamped[0]["role"] == "assistant"
+    assert stamped[0]["observers"] == {"send_gate": {"fired": 1}}
