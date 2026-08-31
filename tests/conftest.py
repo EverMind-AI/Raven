@@ -112,6 +112,23 @@ def no_vendored_subagents(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _restore_i18n_language():
+    """Undo any ``raven.i18n.set_language`` left over from a prior test.
+
+    The reply language is a module-level global only the CLI seeds at startup
+    and the console's live switch now mutates in-process. Once one test flips
+    it -- directly or through any path that applies a config -- every later
+    test on that xdist worker renders the other language's templates, and
+    which tests share a worker moves whenever the suite grows.
+    """
+    from raven import i18n
+
+    before = i18n.current_language()
+    yield
+    i18n.set_language(before)
+
+
+@pytest.fixture(autouse=True)
 def _restore_loguru_enabled_state():
     """Undo any ``loguru.logger.disable("raven")`` left over from a
     prior test.

@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.agent.loop.bundles import ToolWiring, TurnPolicy
+from raven.agent.loop.bundles import HostWiring, ToolWiring, TurnPolicy
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -244,3 +244,183 @@ def test_no_new_cargo_inside_mechanism_packages():
         f"new cargo appeared inside a mechanism package: {offenders}. "
         "Capabilities live on the shelf, not inside the shelf's machinery."
     )
+
+
+@pytest.mark.asyncio
+async def test_add_direction_the_first_real_product_rides_to_a_real_turn(tmp_path: Path, monkeypatch):
+    """The synthetic ride above proves a four-member toy boards; the first real
+    product's port proved that a toy passing is not a product passing -- six
+    seams leaked around it, all closed since. This rides the REAL
+    research-flow plugin through the same doors production uses, zero inner
+    diff: extra_dirs discovery (plugins.dirs' machinery), keyed registration
+    (a keyless web_search declines instead of serving an error string per
+    call), the hook chain on a live turn, built-in shadowing by name, and the
+    flow filing its session record at turn end.
+    """
+    from raven.plugins.bootstrap import assemble_plugin_registry
+    from raven.plugins.context import ServiceLocator
+    from raven.spine.message import ChatType, Source
+    from raven.spine.turn import Origin, TurnRequest
+
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+
+    class _Resp:
+        content = "ok"
+        tool_calls: list = []
+        reasoning_content = None
+        thinking_blocks = None
+        usage: dict = {}
+        finish_reason = "stop"
+        error_classification = None
+
+        def has_tool_calls(self):
+            return False
+
+    class _Provider:
+        async def chat(self, messages, **kw):
+            return _Resp()
+
+        async def chat_with_retry(self, **kw):
+            return _Resp()
+
+        def get_default_model(self):
+            return "fake/default"
+
+    provider = _Provider()
+
+    root = REPO / "agents" / "raven-research" / "plugins"
+    reg = assemble_plugin_registry(extra_dirs=[root], entry_points_group=None)
+    assert "research-flow" in reg.activated_ids()
+
+    # The shared plugin state is keyed by workspace, so the keyless probe gets
+    # its own workspace and cannot leak into the keyed boarding below.
+    keyless = reg.build_tool(
+        "web_search",
+        config={"enabled": True},
+        # The locator lends the provider the way production does -- without one the
+        # plugin declines wholesale (its LLM gates would be dead), which is its own
+        # behaviour, not the one under test here.
+        services=ServiceLocator(workspace=tmp_path / "keyless-ws", user_id="t", agent_id="t", provider=provider),
+    )
+    assert keyless is None, "a keyless web_search must decline, not serve error strings"
+
+    services = ServiceLocator(workspace=tmp_path / "ws", user_id="t", agent_id="t", provider=provider)
+    slice_ = {
+        "enabled": True,
+        "conversation": {"enabled": False},
+        "search": {"apiKey": "test-key"},
+        "stateRoot": str(tmp_path / "state"),
+    }
+    tools = [reg.build_tool(n, config=slice_, services=services) for n in ("web_search", "web_fetch")]
+    assert [t.name for t in tools if t is not None] == ["web_search", "web_fetch"], (
+        "the replacement tools board once the key is in the slice"
+    )
+    hook = reg.build_hook("research_flow", config=slice_, services=services)
+    assert hook is not None, "the flow hook boards whenever the plugin is installable"
+
+    from raven.agent.loop.main import AgentLoop
+
+    loop = AgentLoop(
+        provider=provider,
+        workspace=tmp_path / "ws",
+        model="f",
+        policy=TurnPolicy(interactive=False),
+        tools=ToolWiring(plugin_tools=[t for t in tools if t is not None]),
+        host=HostWiring(hooks=[hook]),
+    )
+
+    async def _noop(**_kw):
+        return None
+
+    loop._start_executor = _noop
+    loop._connect_mcp = _noop
+
+    assert loop.tools.get("web_search") is tools[0], "the plugin's tool shadows the built-in by name"
+
+    reply, _ = await loop._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="cli", chat_id="c", sender_id="u", chat_type=ChatType.DM),
+            text="hello there",
+            conversation="cli:ride",
+        )
+    )
+    assert reply == "ok"
+    records = list((tmp_path / "state" / "sessions").glob("*.json"))
+    assert records, "the flow's turn-end frame files a session record through the real chain"
+
+
+def _product_plugin_redline_strays(plugin_roots):
+    """The cargo redlines, applied to product plugin trees.
+
+    (1) never raven.spine -- a product reaches the kernel through papers;
+    (2) never a private module or symbol of the trunk;
+    (3) never another cargo's insides: channel adapters, a different product
+        plugin's package, or a shipped plugin distribution's package.
+    raven.agent's shelf is deliberately NOT forbidden: it is the shared
+    service layer a product may extend (the ask_user gate subclasses the
+    kernel tool by design, measured 2026-08-31).
+    """
+    packages = {}
+    for plugin_root in plugin_roots:
+        for d in sorted(plugin_root.iterdir()):
+            if d.is_dir() and (d / "__init__.py").exists():
+                packages[d.name] = plugin_root
+    strays = []
+    for plugin_root in plugin_roots:
+        for p in sorted(plugin_root.rglob("*.py")):
+            if "__pycache__" in p.parts:
+                continue
+            rel_file = p.relative_to(plugin_root.parent.parent.parent)
+            for node in ast.walk(ast.parse(p.read_text(errors="replace"))):
+                mods, names = [], []
+                if isinstance(node, ast.Import):
+                    mods = [a.name for a in node.names]
+                elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                    mods = [node.module]
+                    names = [a.name for a in node.names]
+                for m in mods:
+                    top = m.split(".")[0]
+                    if top == "raven":
+                        if m == "raven.spine" or m.startswith("raven.spine."):
+                            strays.append(f"{rel_file}:{node.lineno} imports {m} (kernel through papers only)")
+                        if any(part.startswith("_") for part in m.split(".")):
+                            strays.append(f"{rel_file}:{node.lineno} imports private module {m}")
+                        for n in names:
+                            if n.startswith("_") and n != "_":
+                                strays.append(f"{rel_file}:{node.lineno} imports private symbol {m}.{n}")
+                        if m.startswith("raven.channels.adapters"):
+                            strays.append(f"{rel_file}:{node.lineno} reaches another cargo's insides ({m})")
+                    elif top == "raven_everos":
+                        strays.append(f"{rel_file}:{node.lineno} imports a shipped distribution's package ({m})")
+                    elif top in packages and packages[top] != plugin_root:
+                        strays.append(f"{rel_file}:{node.lineno} imports another product plugin ({m})")
+    return strays
+
+
+def test_product_plugins_obey_the_cargo_redlines():
+    """The first product broke redline one (a private context-engine symbol)
+    while every machine stayed green, because the redlines only watched the
+    factory-shipped roster. Product plugin trees are cargo too; same law."""
+    roots = sorted(p for p in (REPO / "agents").glob("*/plugins/*") if p.is_dir())
+    assert roots, "the first product exists; an empty glob means the tree moved"
+    strays = _product_plugin_redline_strays(roots)
+    assert strays == [], "product plugin redline breaches:\n" + "\n".join(strays)
+
+
+def test_the_product_redline_guard_bites(tmp_path: Path):
+    """Mutation audit, built in: each redline turns the checker red on a
+    synthetic tree, so a green real-tree run means looked-and-found-nothing."""
+    plugin = tmp_path / "agents" / "prod" / "plugins" / "bad-plugin"
+    pkg = plugin / "bad_pkg"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "mod.py").write_text(
+        "import raven.spine.turn\n"
+        "from raven.context_engine.segments.render import _language_directive\n"
+        "from raven.channels.adapters.telegram import adapter\n"
+        "import raven_everos\n",
+        encoding="utf-8",
+    )
+    strays = _product_plugin_redline_strays([plugin])
+    assert len(strays) == 4, strays
