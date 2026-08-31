@@ -475,6 +475,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         self._mcp_servers = mcp_servers or {}
         self._mcp_manager: MCPConnectionManager | None = None
         self._mcp_event_sink = None
+        self._mcp_event_tasks: set = set()
         self._mcp_connected = False
         self._mcp_connecting = False
         self._mcp_prewarm_task: asyncio.Task | None = None

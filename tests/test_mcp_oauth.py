@@ -830,3 +830,42 @@ def test_delete_credentials_takes_the_lock_sidecar_with_it(tmp_path, monkeypatch
     assert not path.exists()
     assert not lock.exists()
     oauth.delete_credentials("example")
+
+
+async def test_concurrent_first_use_binds_one_listener_and_one_uri(monkeypatch):
+    """[race] apply gathers its connect attempts, so two OAuth servers on a
+    process's first apply reach the endpoint bootstrap together. Unlocked,
+    each bound its own listener and registered a different redirect URI --
+    the exact port drift the fixed port exists to prevent."""
+    import asyncio
+
+    monkeypatch.setattr(mcp_oauth, "_callback_base", None)
+    monkeypatch.setattr(mcp_oauth, "_fallback_runner", None)
+
+    started: list[int] = []
+
+    class _Site:
+        def __init__(self, _runner, _host, port):
+            self._port = port
+
+        async def start(self):
+            await asyncio.sleep(0)
+            started.append(self._port)
+
+    class _Runner:
+        def __init__(self, _app):
+            pass
+
+        async def setup(self):
+            await asyncio.sleep(0)
+
+    monkeypatch.setattr("aiohttp.web.TCPSite", _Site)
+    monkeypatch.setattr("aiohttp.web.AppRunner", _Runner)
+
+    a, b = await asyncio.gather(
+        mcp_oauth._ensure_callback_endpoint(),
+        mcp_oauth._ensure_callback_endpoint(),
+    )
+
+    assert a == b, "two first-use connects must agree on one redirect URI"
+    assert started == [mcp_oauth.CALLBACK_PORT], "one listener, not one per racer"

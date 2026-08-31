@@ -761,3 +761,25 @@ async def test_the_prewarm_holds_its_own_attempt_token_for_the_reap(workspace) -
 
     assert seen == [token], "the reap passed a different mapping than the prewarm began"
     assert loop._mcp_prewarm_attempts == {}, "the token must not survive its own reap"
+
+
+async def test_the_event_bridge_holds_its_task_until_done(workspace) -> None:
+    """A bare create_task is collectable while it is the only reference to a
+    running task -- the rule the prewarm block in the same file states -- and a
+    collected task silently drops the frame the browser round-trip needs. The
+    bridge holds the task in a set and discards on completion."""
+    import asyncio
+
+    loop = _loop(workspace)
+    gate = asyncio.Event()
+
+    async def _sink(method, params):
+        await gate.wait()
+
+    loop.set_mcp_event_sink(_sink)
+    loop._emit_mcp_event("mcp.status", {})
+    assert len(loop._mcp_event_tasks) == 1, "the bridge must hold a reference while the sink runs"
+    gate.set()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert not loop._mcp_event_tasks, "done tasks are discarded, not accumulated"

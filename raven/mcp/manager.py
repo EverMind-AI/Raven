@@ -749,12 +749,20 @@ class MCPConnectionManager:
             conn.stack = stack
             conn.session = result.session
             conn.capabilities = result.capabilities
-            if self._post_connect is not None:
-                self._post_connect()
             # No local copy of ``registered``: the blacklist may have just
             # unregistered some of those names, and the registry is what knows.
             live = self._registry.names_from(name)
             self._set_state(conn, "connected")
+            # After the state flip, not before: post_connect runs the loop's
+            # meta-tool sync, and ``servers_offering`` only counts a record
+            # once it is "connected" -- pre-flip, the sync could never see the
+            # server this commit just connected, so a plug.auth connect of the
+            # sole resources server never gained (or, on a forced reconnect,
+            # silently lost) the five meta-tools. The old order guarded a
+            # blacklist that unregistered names at connect; it is report-only
+            # now.
+            if self._post_connect is not None:
+                self._post_connect()
             logger.info("MCP server '{}': connected, {} tools registered", name, len(live))
             return self._snapshot(conn)
 

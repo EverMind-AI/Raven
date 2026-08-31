@@ -75,6 +75,7 @@ class OAuthUnavailableError(Exception):
 
 _callback_base: str | None = None
 _fallback_runner: Any = None
+_callback_lock = asyncio.Lock()
 
 
 class _Pending(NamedTuple):
@@ -137,52 +138,61 @@ async def _ensure_callback_endpoint() -> str:
     if _callback_base:
         return f"{_callback_base}{_CALLBACK_PATH}"
 
-    from aiohttp import web
+    async with _callback_lock:
+        # Re-checked inside the lock: two first-use connects run
+        # concurrently (apply gathers its connect attempts), and the
+        # loser would otherwise bind a second listener and register a
+        # second redirect URI -- the exact port drift the fixed port
+        # exists to prevent.
+        if _callback_base:
+            return f"{_callback_base}{_CALLBACK_PATH}"
 
-    async def _handler(request: "web.Request") -> "web.Response":
-        ok, html = resolve_callback(dict(request.query))
-        return web.Response(
-            text=html,
-            content_type="text/html",
-            status=200 if ok else 400,
-            headers={"Content-Security-Policy": CALLBACK_CSP, "X-Content-Type-Options": "nosniff"},
-        )
+        from aiohttp import web
 
-    app = web.Application()
-    app.router.add_get(_CALLBACK_PATH, _handler)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = None
-    for candidate in range(CALLBACK_PORT, CALLBACK_PORT + CALLBACK_PORT_TRIES):
-        try:
-            site = web.TCPSite(runner, "127.0.0.1", candidate)
+        async def _handler(request: "web.Request") -> "web.Response":
+            ok, html = resolve_callback(dict(request.query))
+            return web.Response(
+                text=html,
+                content_type="text/html",
+                status=200 if ok else 400,
+                headers={"Content-Security-Policy": CALLBACK_CSP, "X-Content-Type-Options": "nosniff"},
+            )
+
+        app = web.Application()
+        app.router.add_get(_CALLBACK_PATH, _handler)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        port = None
+        for candidate in range(CALLBACK_PORT, CALLBACK_PORT + CALLBACK_PORT_TRIES):
+            try:
+                site = web.TCPSite(runner, "127.0.0.1", candidate)
+                await site.start()
+            except OSError:
+                continue
+            port = candidate
+            if candidate != CALLBACK_PORT:
+                # Worth saying: the ladder is deterministic, so this stays true on
+                # the next launch -- but it explains the one re-authorization the
+                # move costs, and names the port to free if that is unwanted.
+                logger.info("MCP OAuth: callback port {} is taken; using {} instead", CALLBACK_PORT, candidate)
+            break
+        if port is None:
+            # Every candidate is held. An ephemeral port still completes the flow
+            # that is running now; it only costs this registration its stability,
+            # which beats failing the authorization outright.
+            logger.warning(
+                "MCP OAuth: ports {}-{} are all taken; falling back to an ephemeral one, "
+                "which will force a re-registration on every start until one frees up",
+                CALLBACK_PORT,
+                CALLBACK_PORT + CALLBACK_PORT_TRIES - 1,
+            )
+            site = web.TCPSite(runner, "127.0.0.1", 0)
             await site.start()
-        except OSError:
-            continue
-        port = candidate
-        if candidate != CALLBACK_PORT:
-            # Worth saying: the ladder is deterministic, so this stays true on
-            # the next launch -- but it explains the one re-authorization the
-            # move costs, and names the port to free if that is unwanted.
-            logger.info("MCP OAuth: callback port {} is taken; using {} instead", CALLBACK_PORT, candidate)
-        break
-    if port is None:
-        # Every candidate is held. An ephemeral port still completes the flow
-        # that is running now; it only costs this registration its stability,
-        # which beats failing the authorization outright.
-        logger.warning(
-            "MCP OAuth: ports {}-{} are all taken; falling back to an ephemeral one, "
-            "which will force a re-registration on every start until one frees up",
-            CALLBACK_PORT,
-            CALLBACK_PORT + CALLBACK_PORT_TRIES - 1,
-        )
-        site = web.TCPSite(runner, "127.0.0.1", 0)
-        await site.start()
-        port = site._server.sockets[0].getsockname()[1]  # noqa: SLF001 — aiohttp has no public accessor
-    _fallback_runner = runner
-    _callback_base = f"http://127.0.0.1:{port}"
-    logger.info("MCP OAuth: callback listener on {}", _callback_base)
-    return f"{_callback_base}{_CALLBACK_PATH}"
+            port = site._server.sockets[0].getsockname()[1]  # noqa: SLF001 — aiohttp has no public accessor
+        _fallback_runner = runner
+        _callback_base = f"http://127.0.0.1:{port}"
+        logger.info("MCP OAuth: callback listener on {}", _callback_base)
+        return f"{_callback_base}{_CALLBACK_PATH}"
 
 
 def resolve_callback(query: dict[str, Any]) -> tuple[bool, str]:
