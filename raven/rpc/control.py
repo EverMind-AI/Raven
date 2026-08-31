@@ -122,7 +122,7 @@ class ChannelsStartResult(_Strict):
     outcome: str = Field(
         ...,
         description=(
-            "started | already | stopped | absent | disabled | deny_all | missing_dep | unknown | no_manager."
+            "started | already | stopped | absent | disabled | deny_all | missing_dep | bad_config | unknown | no_manager."
         ),
     )
 

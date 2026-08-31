@@ -337,7 +337,9 @@ install_raven() {
     # shellcheck disable=SC2086  # $c_args is an intentional word-split option pair.
     p_args=""
     if [ -n "${everos_url:-}" ]; then
-      p_args="--with everos-memory @ $everos_url"
+      # No spaces in the requirement: unquoted expansion must yield exactly
+      # "--with" plus one argument, or uv rejects the extra words.
+      p_args="--with everos-memory@$everos_url"
       info "  with memory plugin $everos_url"
     else
       warn "This release carries no EverOS memory plugin wheel; long-term memory stays off (raven doctor explains)."

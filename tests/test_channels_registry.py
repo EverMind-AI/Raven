@@ -95,6 +95,17 @@ def test_an_adapter_without_a_spec_is_skipped_silently(scratch_adapters: Path):
     assert not [w for w in warnings if "specless" in w]
 
 
+def test_a_plain_module_beside_the_adapters_is_not_a_channel(scratch_adapters: Path):
+    """Only packages are adapters. ``discover_specs`` already skips plain
+    modules, and the names scan must agree with it, or a stray helper file
+    becomes a phantom channel in every roster derived from the names."""
+    (scratch_adapters / "stray.py").write_text("")
+    importlib.invalidate_caches()
+
+    assert "stray" not in discover_channel_names()
+    assert "stray" not in discover_specs()
+
+
 def test_a_spec_that_imports_a_missing_module_is_skipped_with_a_warning(scratch_adapters: Path):
     """The adapters defer their SDK imports into ``SPEC.factory``, so a spec that
     fails to import is a broken adapter, not an absent one. It must not take

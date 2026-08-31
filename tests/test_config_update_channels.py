@@ -10,6 +10,7 @@ import pytest
 from raven.config.admission import PluginConfigError
 from raven.config.update_channels import (
     channel_field_specs,
+    channel_names,
     disable_channel,
     enable_channel,
     get_channel_config,
@@ -241,24 +242,29 @@ def test_field_specs_unknown_channel_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Coverage across every channel registered in ChannelsConfig
+# Coverage across every channel the spec registry discovers
 # ---------------------------------------------------------------------------
 
 
 def _all_channel_names() -> list[str]:
-    from pydantic import BaseModel
+    # The registry, not ChannelsConfig: channel sections are dynamic extras
+    # since the per-channel schema classes moved to the adapter specs, so
+    # reflecting over model_fields collects nothing and skips every case.
+    from raven.channels.registry import discover_channel_names
 
-    from raven.config.schema import ChannelsConfig
-
-    out: list[str] = []
-    for fname, finfo in ChannelsConfig.model_fields.items():
-        ann = finfo.annotation
-        if isinstance(ann, type) and issubclass(ann, BaseModel):
-            out.append(fname)
-    return out
+    return sorted(discover_channel_names())
 
 
 ALL_CHANNELS = _all_channel_names()
+
+
+def test_all_channels_roster_is_nonempty_and_matches_the_writer() -> None:
+    """The failure mode this guards was "collect zero, stay green": a stale
+    derivation skipped every parametrized case below without failing anything.
+    Pinning the roster to the writer's own public universe arms that tripwire
+    and keeps the two derivations from diverging silently."""
+    assert ALL_CHANNELS
+    assert set(ALL_CHANNELS) == set(channel_names())
 
 
 @pytest.mark.parametrize("name", ALL_CHANNELS)

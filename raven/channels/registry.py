@@ -47,9 +47,10 @@ def discover_specs() -> dict[str, ChannelSpec]:
 def discover_channel_names() -> list[str]:
     """Return adapter names by scanning the adapters package (zero imports).
 
-    One sub-package per adapter, one level deep, so helper modules nested
-    inside an adapter are not listed and never get mistaken for a channel.
+    One sub-package per adapter, one level deep: a plain module beside the
+    adapters is not a channel (same rule ``discover_specs`` applies), and
+    helper modules nested inside an adapter are never listed either.
     """
     import raven.channels.adapters as pkg
 
-    return [name for _, name, _ in pkgutil.iter_modules(pkg.__path__)]
+    return [name for _, name, ispkg in pkgutil.iter_modules(pkg.__path__) if ispkg]
