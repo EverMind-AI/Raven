@@ -1083,6 +1083,15 @@ seat list and stays under the cargo contract.
 `acp_client/` is named for its side of ACP (Raven driving somebody else's agent);
 `acp/` is the other side, the entrance.
 
+**Updates** (`updates/`):
+The install's own lifecycle as an inner feature library (the browser/importer
+pattern): release lookup and version keys, the upgrade plan and detached
+handoff (`upgrade`), the startup update nudge (`update_notice`), the beta
+channel pointer (`beta_channel`), and the install-integrity record
+(`install_guard`). Consumed by the cli (which keeps only the `raven upgrade`
+typer shell) and by `rpc.methods.system` -- the largest chunk of the
+rpc-imports-cli edges retired by moving it inward (2026-08-31).
+
 **Assembly Root** (`core/`):
 The package that composes a running agent out of parts: one `*_stack` builder per assembly
 concern, and `runtime.build_runtime` as the one door every entrance assembles through --

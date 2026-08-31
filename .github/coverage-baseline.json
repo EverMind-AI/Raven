@@ -1544,7 +1544,7 @@
       "line_percent": 78.723404,
       "statements": 47
     },
-    "raven/cli/_install_guard.py": {
+    "raven/updates/install_guard.py": {
       "branch_percent": 96.153846,
       "branches": 26,
       "covered_branches": 25,
@@ -1640,7 +1640,7 @@
       "line_percent": 87.878788,
       "statements": 132
     },
-    "raven/cli/beta_channel.py": {
+    "raven/updates/beta_channel.py": {
       "branch_percent": 89.285714,
       "branches": 28,
       "covered_branches": 25,
@@ -1864,7 +1864,7 @@
       "line_percent": 79.138322,
       "statements": 441
     },
-    "raven/cli/update_notice.py": {
+    "raven/updates/update_notice.py": {
       "branch_percent": 100.0,
       "branches": 36,
       "covered_branches": 36,

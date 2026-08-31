@@ -264,7 +264,7 @@ def _update_poll_seconds() -> float:
     file appearing or being deleted, and a resident gateway that outlives the
     change should follow it without a restart.
     """
-    from raven.cli import beta_channel
+    from raven.updates import beta_channel
 
     return _UPDATE_POLL_BETA_S if beta_channel.is_active() else _UPDATE_POLL_STABLE_S
 
@@ -298,7 +298,7 @@ async def _announce_updates(broadcast, stop: asyncio.Event) -> None:
     """
     from importlib import metadata
 
-    from raven.cli.update_notice import Checked, check_now
+    from raven.updates.update_notice import Checked, check_now
 
     try:
         current = metadata.version("raven")
@@ -380,7 +380,7 @@ async def _serve_main(port: int, open_browser: bool) -> None:
     # `raven tui` did this before, so someone who only ever runs the gateway
     # never learned a newer version existed (see cli/update_notice.py).
     try:
-        from raven.cli.update_notice import maybe_refresh_async
+        from raven.updates.update_notice import maybe_refresh_async
 
         maybe_refresh_async()
     except Exception as exc:  # never let a version check keep the gateway down
@@ -451,7 +451,7 @@ def _refuse_incomplete_install() -> None:
     """
     import time
 
-    from raven.cli._install_guard import inspect_install
+    from raven.updates.install_guard import inspect_install
 
     fault = inspect_install()
     if fault is None:

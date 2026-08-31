@@ -199,7 +199,7 @@ def _no_update_check(tmp_path, monkeypatch):
     which is exactly the state that spawns the fetch -- so opt out by env for
     the whole suite. Tests that exercise the notice clear the variable.
     """
-    from raven.cli import update_notice
+    from raven.updates import update_notice
 
     monkeypatch.setenv(update_notice._OPT_OUT_ENV, "1")
     monkeypatch.setattr(update_notice, "_cache_path", lambda: tmp_path / "update_check.json")

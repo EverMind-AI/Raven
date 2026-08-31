@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.cli import _install_guard as guard
+from raven.updates import install_guard as guard
 
 
 @pytest.fixture(autouse=True)

@@ -17,8 +17,8 @@ from pathlib import Path
 import httpx
 import pytest
 
-from raven.cli import beta_channel, update_notice
-from raven.cli.upgrade_commands import UpgradeError
+from raven.updates import beta_channel, update_notice
+from raven.updates.upgrade import UpgradeError
 
 _PROJECT = "85454048"
 _TOKEN = "gldt-secret"

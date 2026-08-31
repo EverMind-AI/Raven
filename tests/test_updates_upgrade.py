@@ -16,8 +16,8 @@ import httpx
 import pytest
 from typer.testing import CliRunner
 
-from raven.cli import upgrade_commands
 from raven.cli.commands import app
+from raven.updates import upgrade as upgrade_commands
 
 WHEEL_NAME = "raven-0.1.4-py3-none-any.whl"
 WHEEL_URL = "https://github.com/EverMind-AI/Raven/releases/download/v0.1.4/raven-0.1.4-py3-none-any.whl"

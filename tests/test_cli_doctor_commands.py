@@ -690,7 +690,7 @@ class TestTheInstallationSection:
     fails, it is the only one printed."""
 
     def _fault(self, monkeypatch: pytest.MonkeyPatch, reason: str, detail: str, missing: list[str]) -> None:
-        from raven.cli import _install_guard
+        from raven.updates import install_guard as _install_guard
 
         monkeypatch.setattr(_install_guard, "inspect_install", lambda: _install_guard.InstallFault(reason, detail))
         monkeypatch.setattr(_install_guard, "missing_pieces", lambda: missing)

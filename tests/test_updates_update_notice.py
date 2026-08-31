@@ -1,4 +1,4 @@
-"""Tests for the TUI startup update nudge (raven/cli/update_notice.py)."""
+"""Tests for the TUI startup update nudge (raven/updates/update_notice.py)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from raven.cli import update_notice as un
+from raven.updates import update_notice as un
 
 
 @pytest.fixture
@@ -155,7 +155,7 @@ def test_failed_refresh_still_backs_off_and_keeps_version(cache, monkeypatch):
     def _boom():
         raise RuntimeError("offline")
 
-    monkeypatch.setitem(sys.modules, "raven.cli.upgrade_commands", _FakeUpgrade(_boom))
+    monkeypatch.setitem(sys.modules, "raven.updates.upgrade", _FakeUpgrade(_boom))
     un._refresh()
 
     saved = json.loads(cache.read_text(encoding="utf-8"))
@@ -164,7 +164,7 @@ def test_failed_refresh_still_backs_off_and_keeps_version(cache, monkeypatch):
 
 
 def test_successful_refresh_records_fetched_version(cache, monkeypatch):
-    monkeypatch.setitem(sys.modules, "raven.cli.upgrade_commands", _FakeUpgrade(lambda: "0.3.0"))
+    monkeypatch.setitem(sys.modules, "raven.updates.upgrade", _FakeUpgrade(lambda: "0.3.0"))
     un._refresh()
 
     saved = json.loads(cache.read_text(encoding="utf-8"))
@@ -174,7 +174,7 @@ def test_successful_refresh_records_fetched_version(cache, monkeypatch):
 def test_refresh_uses_the_quota_free_lookup(cache, monkeypatch):
     # The daily check runs on every install behind a shared egress; routing it through
     # the API is what drains the 60/hour unauthenticated bucket.
-    import raven.cli.upgrade_commands as upgrade
+    import raven.updates.upgrade as upgrade
 
     monkeypatch.setattr(upgrade, "_fetch_latest_release", _forbidden_api_call)
     monkeypatch.setattr(upgrade, "fetch_latest_version", lambda: "0.4.0")
@@ -194,7 +194,7 @@ class _FakeThread:
 
 
 class _FakeUpgrade:
-    """Stands in for raven.cli.upgrade_commands during _refresh()."""
+    """Stands in for raven.updates.upgrade during _refresh()."""
 
     UpgradeError = RuntimeError
 
@@ -215,7 +215,7 @@ class _FakeUpgrade:
 
 def test_upgrade_command_works_follows_the_install_kind(monkeypatch) -> None:
     """It delegates to the uv-tool probe, so editable installs are not nudged."""
-    import raven.cli.upgrade_commands as upgrade
+    import raven.updates.upgrade as upgrade
 
     monkeypatch.setattr(upgrade, "_is_uv_tool_install", lambda: True)
     assert un._upgrade_command_works() is True
@@ -226,7 +226,7 @@ def test_upgrade_command_works_follows_the_install_kind(monkeypatch) -> None:
 
 def test_upgrade_command_works_treats_a_probe_failure_as_no(monkeypatch) -> None:
     """A malformed uv receipt raises; unknown must read as "cannot upgrade"."""
-    import raven.cli.upgrade_commands as upgrade
+    import raven.updates.upgrade as upgrade
 
     def _boom() -> bool:
         raise RuntimeError("malformed uv receipt")
@@ -251,7 +251,7 @@ def _speaking_fake(version: str) -> _FakeUpgrade:
 
 
 def test_check_for_update_names_the_newer_build(cache, monkeypatch):
-    monkeypatch.setitem(sys.modules, "raven.cli.upgrade_commands", _speaking_fake("0.3.0"))
+    monkeypatch.setitem(sys.modules, "raven.updates.upgrade", _speaking_fake("0.3.0"))
     monkeypatch.setattr(un, "_upgrade_command_works", lambda: True)
 
     assert un.check_for_update("0.2.0") == "0.3.0"
@@ -260,7 +260,7 @@ def test_check_for_update_names_the_newer_build(cache, monkeypatch):
 
 
 def test_check_for_update_is_silent_when_current_is_the_latest(cache, monkeypatch):
-    monkeypatch.setitem(sys.modules, "raven.cli.upgrade_commands", _speaking_fake("0.3.0"))
+    monkeypatch.setitem(sys.modules, "raven.updates.upgrade", _speaking_fake("0.3.0"))
     monkeypatch.setattr(un, "_upgrade_command_works", lambda: True)
 
     assert un.check_for_update("0.3.0") is None
@@ -274,7 +274,7 @@ def test_check_for_update_respects_the_opt_out(cache, monkeypatch):
         fetched["n"] += 1
         return "0.9.9"
 
-    monkeypatch.setitem(sys.modules, "raven.cli.upgrade_commands", _FakeUpgrade(_fetch))
+    monkeypatch.setitem(sys.modules, "raven.updates.upgrade", _FakeUpgrade(_fetch))
 
     assert un.check_for_update("0.1.0") is None
     assert fetched["n"] == 0, "opting out must skip the fetch, not just the answer"
@@ -292,7 +292,7 @@ def beta(cache, monkeypatch):
     The channel is faked at `channel()` rather than by writing a beta.json, so
     the test never depends on whether the machine running it has joined.
     """
-    from raven.cli import beta_channel
+    from raven.updates import beta_channel
 
     chan = beta_channel.BetaChannel(project="85454048", username="raven-beta", token="gldt-secret")
     monkeypatch.setattr(beta_channel, "channel", lambda: chan)
@@ -343,7 +343,7 @@ def test_an_unchanged_pointer_still_stamps_the_check(cache, beta, monkeypatch):
 
 
 def test_a_moved_pointer_updates_both_the_version_and_the_validator(cache, beta, monkeypatch):
-    from raven.cli.upgrade_commands import ReleaseInfo
+    from raven.updates.upgrade import ReleaseInfo
 
     _write_read(cache, "0.1.12b6", etag='"old"')
     release = ReleaseInfo(version="0.1.12b7", wheel_url="https://gitlab.com/wheel")
@@ -377,7 +377,7 @@ def test_a_validator_without_a_version_is_not_offered(cache, beta, monkeypatch):
     is nothing for that to mean, and offering the validator anyway would pin the
     notice off until the pointer happened to move."""
     cache.write_text(json.dumps({"checked_at": 0.0, "etag": '"orphan"'}), encoding="utf-8")
-    from raven.cli.upgrade_commands import ReleaseInfo
+    from raven.updates.upgrade import ReleaseInfo
 
     release = ReleaseInfo(version="0.1.12b6", wheel_url="https://gitlab.com/wheel")
     offered = _answering(beta, monkeypatch, beta.PointerRead(release=release, etag='"fresh"', unchanged=False))
@@ -393,7 +393,7 @@ def test_the_stable_path_keeps_no_validator(cache, stable, monkeypatch):
     validator for; a leftover one from a machine that left the channel must not
     survive as a key nothing sets."""
     _write_read(cache, "0.2.0", etag='"leftover"')
-    monkeypatch.setitem(sys.modules, "raven.cli.upgrade_commands", _FakeUpgrade(lambda: "0.3.0"))
+    monkeypatch.setitem(sys.modules, "raven.updates.upgrade", _FakeUpgrade(lambda: "0.3.0"))
 
     un._refresh()
 
@@ -416,13 +416,13 @@ def stable(monkeypatch):
     whether the developer running it happens to have joined the channel, and on a
     machine that has, it fetches the real registry instead of the fake.
     """
-    from raven.cli import beta_channel
+    from raven.updates import beta_channel
 
     monkeypatch.setattr(beta_channel, "channel", lambda: None)
 
 
 def test_check_now_reports_a_reached_source_separately_from_a_newer_build(cache, stable, monkeypatch):
-    monkeypatch.setitem(sys.modules, "raven.cli.upgrade_commands", _speaking_fake("0.3.0"))
+    monkeypatch.setitem(sys.modules, "raven.updates.upgrade", _speaking_fake("0.3.0"))
 
     assert un.check_now("0.2.0") == ("0.3.0", True)
     assert un.check_now("0.3.0") == (None, True), "nothing newer is still a reached source"
@@ -432,7 +432,7 @@ def test_check_now_reports_a_source_that_never_answered(cache, stable, monkeypat
     def _boom():
         raise RuntimeError("offline")
 
-    monkeypatch.setitem(sys.modules, "raven.cli.upgrade_commands", _FakeUpgrade(_boom))
+    monkeypatch.setitem(sys.modules, "raven.updates.upgrade", _FakeUpgrade(_boom))
 
     assert un.check_now("0.2.0") == (None, False)
 
