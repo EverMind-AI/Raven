@@ -23,8 +23,32 @@ _BLOCKED_NETWORKS = [
     ipaddress.ip_network("fe80::/10"),
 ]
 
+_NAT64_WELL_KNOWN = ipaddress.ip_network("64:ff9b::/96")
+
+
+def _embedded_ipv4(addr: ipaddress.IPv6Address) -> ipaddress.IPv4Address | None:
+    """The embedded IPv4 destination of an IPv6-to-IPv4 transition address.
+
+    IPv4-mapped IPv6 (::ffff:a.b.c.d), 6to4 (2002::/16), and NAT64
+    (64:ff9b::/96) all route to an IPv4 destination, so the guard must
+    judge that destination rather than the IPv6 literal spelling.
+    """
+    mapped = getattr(addr, "ipv4_mapped", None)
+    if mapped is not None:
+        return mapped
+    sixtofour = getattr(addr, "sixtofour", None)
+    if sixtofour is not None:
+        return sixtofour
+    if addr in _NAT64_WELL_KNOWN:
+        return ipaddress.IPv4Address(int(addr) & 0xFFFFFFFF)
+    return None
+
 
 def _is_private(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    if isinstance(addr, ipaddress.IPv6Address):
+        embedded = _embedded_ipv4(addr)
+        if embedded is not None:
+            addr = embedded
     return any(addr in net for net in _BLOCKED_NETWORKS)
 
 
