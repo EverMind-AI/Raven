@@ -459,12 +459,12 @@ def test_the_accept_set_survives_a_metadata_round_trip():
 # One turn, three hook contexts                                               #
 # --------------------------------------------------------------------------- #
 #
-# ``ctx.metadata`` is not one dict per turn. The loop builds a fresh
-# AgentHookContext for the inbound rewrite, another for the whole iteration run
-# (the only one carrying ``mode`` / ``mode_overlay``), and a third for the
-# outbound. Everything below drives all three, in order, exactly as the loop
-# does - because every defect this section covers is invisible to a test that
-# reuses one context.
+# The loop builds a fresh AgentHookContext per phase group (inbound, the
+# iteration run, the outbound). Since the hook paper's second pass they share
+# ONE ``metadata`` dict per turn -- but they are still three objects, and only
+# the iteration one carries ``mode`` / ``mode_overlay``. Everything below
+# drives all three, in order, exactly as the loop does - because every defect
+# this section covers is invisible to a test that reuses one context.
 
 
 def _turn_hook(tmp_path, slice_, provider=None):
@@ -641,3 +641,40 @@ def test_the_mode_the_turn_ran_in_governs_its_exit_and_is_recorded(tmp_path):
     assert record.mode == "deep", "the profile the turn ran under, not the empty one after_send is handed"
     assert "final_shape" not in record.observers, "the mode turned recording off and the exit obeyed it"
     assert list(hook.session_gear) == ["s"], "the turn must not discard its own session's tool gear"
+
+
+def test_the_gate_reads_the_filed_history_not_the_trimmed_window(tmp_path):
+    """[B-7] The fork's gate judged on the session's own record. The port read
+    ``ctx.messages[:turn_base]`` -- the working transcript after compaction --
+    so a long session's gate judged on a stump. The inbound phase carries the
+    filed history now; the gate's ``prior`` must be that view, with the window
+    only as fallback (the existing window-driven tests in this file are the
+    fallback's proof: they hand no ``session_history`` and still reach the
+    gate). The gate lives inside the per-session chain, so the probe is the
+    classifier prompt the provider receives.
+    """
+    provider = _Provider(_Reply('{"research": true, "why": "asks for a new figure"}'))
+    hook = _turn_hook(tmp_path, _BASE_SLICE, provider=provider)
+
+    filed = [{"role": "user", "content": f"filed-q{i}"} for i in range(6)] + [
+        {"role": "assistant", "content": "filed-a6"}
+    ]
+
+    async def turn():
+        inbound = AgentHookContext(session_key="s", inbound_content="and now?", session_history=filed)
+        await hook.before_user_inbound(inbound)
+        iter_ctx = AgentHookContext(
+            session_key="s",
+            iteration=1,
+            messages=[{"role": "assistant", "content": "the window stump"}, {"role": "user", "content": "and now?"}],
+            turn_base=1,
+            turn_question="and now?",
+            metadata={"mode": "", "mode_overlay": {"drFlow": {}}},
+        )
+        await hook.before_iteration(iter_ctx)
+
+    asyncio.run(turn())
+    assert provider.calls, "a non-empty prior must reach the classifier"
+    prompt = provider.calls[0]["messages"][1]["content"]
+    assert "filed-a6" in prompt, "the gate reads the filed history's tail"
+    assert "the window stump" not in prompt, "the post-compaction window must not be the gate's view"
