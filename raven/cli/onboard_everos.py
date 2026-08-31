@@ -583,7 +583,7 @@ def _match_provider_by_url(base_url: Optional[str]) -> Optional[str]:
 _EVEROS_ROLES: dict[str, dict[str, Any]] = {
     "llm": {
         "label": ("Memory LLM", "记忆 LLM"),
-        "example": "gpt-4.1-mini",
+        "example": "qwen/qwen3.8-flash",
         "optional": False,
         "verify": True,
         "purpose": (
@@ -594,8 +594,8 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
         # the user's own main model, because a recommended id is only reachable
         # if their key carries it. This tells them how to judge their own.
         "recommendation": (
-            "Capability floor: [bold]gpt-4.1-mini[/bold] -- weaker models degrade extraction",
-            "能力下限参考 [bold]gpt-4.1-mini[/bold]：低于这个水平会明显影响提取质量",
+            "Capability floor: [bold]qwen/qwen3.8-flash[/bold] -- weaker models degrade extraction",
+            "能力下限参考 [bold]qwen/qwen3.8-flash[/bold]：低于这个水平会明显影响提取质量",
         ),
         "continue_hint": ("memory extraction may fail", "记忆抽取可能失败"),
     },
@@ -637,7 +637,7 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
     },
     "rerank": {
         "label": ("Memory rerank", "记忆 rerank"),
-        "example": "Qwen/Qwen3-Reranker-4B",
+        "example": "qwen/qwen3-reranker-8b",
         "optional": True,
         "verify": True,
         "purpose": (
@@ -649,8 +649,8 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
             "[accent]（可选，建议配置）[/accent]",
         ),
         "recommendation": (
-            "Recommended: [bold]Qwen/Qwen3-Reranker-4B[/bold]",
-            "推荐 [bold]Qwen/Qwen3-Reranker-4B[/bold]",
+            "Recommended: [bold]qwen/qwen3-reranker-8b[/bold]",
+            "推荐 [bold]qwen/qwen3-reranker-8b[/bold]",
         ),
         "continue_hint": ("rerank quality may degrade", "rerank 精度可能下降"),
         "skip_note": (
@@ -660,7 +660,7 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
     },
     "multimodal": {
         "label": ("Memory multimodal", "记忆多模态"),
-        "example": "google/gemini-3-flash-preview",
+        "example": "google/gemini-3.7-flash",
         "optional": True,
         "verify": True,
         "purpose": (
@@ -673,8 +673,8 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
             "不配置：这类文件不进入记忆；有这类文件并不等于需要，确有此需求时再配即可。",
         ),
         "recommendation": (
-            "Recommended: [bold]google/gemini-3-flash-preview[/bold]",
-            "推荐 [bold]google/gemini-3-flash-preview[/bold]",
+            "Recommended: [bold]google/gemini-3.7-flash[/bold]",
+            "推荐 [bold]google/gemini-3.7-flash[/bold]",
         ),
         "skip_note": (
             "  [dim]Skipped; nothing else is affected -- configure it if you come to need\n  multimodal memory.[/dim]",
@@ -834,8 +834,8 @@ def _fetch_multimodal_models(
 def _match_everos_default(example: str, models: list[str]) -> str:
     """Find the best match for ``example`` in the fetched model list.
 
-    The example (e.g. ``gpt-4.1-mini``) is a bare model name, while
-    ``models`` may carry provider prefixes (``openai/gpt-4.1-mini``).
+    The example (e.g. ``qwen/qwen3.8-flash``) is a bare model name, while
+    ``models`` may carry provider prefixes (``openrouter/qwen/qwen3.8-flash``).
     Returns the first model whose id ends with ``/example`` or equals
     ``example`` exactly; falls back to the bare example string so the
     autocomplete input is pre-filled even if no exact match exists.

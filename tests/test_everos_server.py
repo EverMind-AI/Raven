@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+import raven.plugin.memory.everos._server as everos_server
 from raven.plugin.memory.everos._server import (
     EverosNotConfiguredError,
     StopOutcome,
@@ -113,6 +115,210 @@ def _write_llm_section(cfg, *, model="mem-llm", api_key="k"):
     if api_key is not None:
         body += f'api_key = "{api_key}"\n'
     cfg.write_text(body, encoding="utf-8")
+
+
+@pytest.fixture(autouse=True)
+def _deterministic_inotify_gate(request, monkeypatch):
+    """Spawn tests must not depend on the host's inotify headroom.
+
+    ``_inotify_gate`` scans procfs and refuses the spawn when the per-user
+    cap is exhausted -- real behaviour that ``TestInotifyGate`` covers
+    explicitly, and a wall the other tests should not have to pass on a host
+    that happens to be near the cap.
+    """
+    if request.cls is TestInotifyGate:
+        return
+    monkeypatch.setattr("raven.plugin.memory.everos._server._inotify_gate", lambda: None)
+
+
+class TestInotifyGate:
+    """The inotify headroom check keeps a spawn that cannot survive off the host."""
+
+    @pytest.fixture
+    def _logs(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("raven.plugin.memory.everos._server.get_logs_dir", lambda: tmp_path)
+        return tmp_path / "everos-server.log"
+
+    def test_usage_is_none_when_the_cap_is_unreadable(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setattr(everos_server, "_INOTIFY_LIMIT_PATH", tmp_path / "missing")
+
+        assert everos_server._inotify_usage() is None
+
+    def test_usage_counts_same_uid_instances(self, monkeypatch, tmp_path) -> None:
+        cap = tmp_path / "max"
+        cap.write_text("128\n", encoding="ascii")
+        monkeypatch.setattr(everos_server, "_INOTIFY_LIMIT_PATH", cap)
+        proc = tmp_path / "proc"
+        (proc / "111" / "fd").mkdir(parents=True)
+        (proc / "111" / "fd" / "3").symlink_to("anon_inode:inotify")
+        (proc / "111" / "fd" / "4").symlink_to("socket:[123]")
+        (proc / "222" / "fd").mkdir(parents=True)
+        (proc / "222" / "fd" / "5").symlink_to("anon_inode:inotify")
+        (proc / "111" / "fd" / "9").symlink_to(proc / "vanished")
+        (proc / "333").symlink_to(proc / "vanished")
+        (proc / "947").mkdir()
+        (proc / "947" / "fd").write_text("not a dir", encoding="ascii")
+        (proc / "notaproc" / "fd").mkdir(parents=True)
+        monkeypatch.setattr(everos_server, "_PROC_ROOT", proc)
+
+        assert everos_server._inotify_usage() == (2, 128)
+
+    def test_usage_ignores_other_users_instances(self, monkeypatch, tmp_path) -> None:
+        cap = tmp_path / "max"
+        cap.write_text("128\n", encoding="ascii")
+        monkeypatch.setattr(everos_server, "_INOTIFY_LIMIT_PATH", cap)
+        proc = tmp_path / "proc"
+        (proc / "111" / "fd").mkdir(parents=True)
+        (proc / "111" / "fd" / "3").symlink_to("anon_inode:inotify")
+        monkeypatch.setattr(everos_server, "_PROC_ROOT", proc)
+        monkeypatch.setattr(everos_server.os, "getuid", lambda: 424242)
+
+        assert everos_server._inotify_usage() == (0, 128)
+
+    def test_raise_limit_writes_a_floor_and_reports_it(self, monkeypatch, tmp_path) -> None:
+        cap = tmp_path / "max"
+        cap.write_text("128\n", encoding="ascii")
+        monkeypatch.setattr(everos_server, "_INOTIFY_LIMIT_PATH", cap)
+
+        assert everos_server._try_raise_inotify_limit() == 1024
+        assert cap.read_text(encoding="ascii") == "1024"
+
+    def test_raise_limit_is_none_when_the_write_is_refused(self, monkeypatch) -> None:
+        class _RefusingCap:
+            def read_text(self, *a, **kw):
+                return "128"
+
+            def write_text(self, *a, **kw):
+                raise OSError("read-only /proc/sys")
+
+        monkeypatch.setattr(everos_server, "_INOTIFY_LIMIT_PATH", _RefusingCap())
+
+        assert everos_server._try_raise_inotify_limit() is None
+
+    def test_raise_limit_is_none_when_the_cap_is_unreadable(self, monkeypatch, tmp_path) -> None:
+        cap_dir = tmp_path / "maxdir"
+        cap_dir.mkdir()
+        monkeypatch.setattr(everos_server, "_INOTIFY_LIMIT_PATH", cap_dir)
+
+        assert everos_server._try_raise_inotify_limit() is None
+
+    def test_gate_is_open_with_headroom(self, monkeypatch) -> None:
+        monkeypatch.setattr(everos_server, "_inotify_usage", lambda: (10, 128))
+        monkeypatch.setattr(everos_server, "_try_raise_inotify_limit", lambda: pytest.fail("must not raise"))
+
+        assert everos_server._inotify_gate() is None
+
+    def test_gate_is_open_when_the_kernel_cannot_be_measured(self, monkeypatch) -> None:
+        monkeypatch.setattr(everos_server, "_inotify_usage", lambda: None)
+
+        assert everos_server._inotify_gate() is None
+
+    def test_gate_raises_the_cap_when_privileged(self, monkeypatch) -> None:
+        calls = {"n": 0}
+
+        def usage():
+            calls["n"] += 1
+            return (128, 128) if calls["n"] == 1 else (128, 1024)
+
+        monkeypatch.setattr(everos_server, "_inotify_usage", usage)
+        raised = []
+        monkeypatch.setattr(everos_server, "_try_raise_inotify_limit", lambda: raised.append(1) or 1024)
+
+        assert everos_server._inotify_gate() is None
+        assert raised == [1]
+
+    @pytest.mark.parametrize(
+        ("usage", "expected"),
+        [((128, 128), "1024"), ((2048, 2048), "4096")],
+        ids=["under-the-floor", "at-or-above-the-floor"],
+    )
+    def test_gate_returns_the_fix_text_when_raising_fails(self, monkeypatch, usage, expected) -> None:
+        monkeypatch.setattr(everos_server, "_inotify_usage", lambda: usage)
+        monkeypatch.setattr(everos_server, "_try_raise_inotify_limit", lambda: None)
+
+        msg = everos_server._inotify_gate()
+        assert msg is not None
+        used, limit = usage
+        assert f"{used} of the {limit}" in msg
+        assert f"sudo sysctl -w fs.inotify.max_user_instances={expected}" in msg
+        assert "/etc/sysctl.d/99-inotify-limits.conf" in msg
+
+    @pytest.mark.asyncio
+    async def test_an_exhausted_cap_refuses_to_spawn(self, everos_toml, monkeypatch) -> None:
+        _write_llm_section(everos_toml)
+        monkeypatch.setattr(
+            "raven.plugin.memory.everos._server._inotify_gate",
+            lambda: "no inotify room; run sudo sysctl.",
+        )
+        spawn = MagicMock()
+        monkeypatch.setattr("raven.plugin.memory.everos._server._start_server_if_unlocked", spawn)
+
+        with patch("raven.plugin.memory.everos._server._probe_health", return_value=False):
+            with pytest.raises(RuntimeError, match="no inotify room"):
+                await ensure_everos_server("http://localhost:18791", timeout=5.0)
+
+        spawn.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_the_gate_is_consulted_before_a_spawn(self, everos_toml, monkeypatch) -> None:
+        _write_llm_section(everos_toml)
+        gate = MagicMock(return_value=None)
+        monkeypatch.setattr("raven.plugin.memory.everos._server._inotify_gate", gate)
+        monkeypatch.setattr(
+            "raven.plugin.memory.everos._server._start_server_if_unlocked",
+            lambda *a, **kw: _live_child(),
+        )
+
+        with patch("raven.plugin.memory.everos._server._probe_health", side_effect=[False, True]):
+            await ensure_everos_server("http://localhost:18791", timeout=5.0)
+
+        gate.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_inotify_log_failure_carries_the_fix(self, everos_toml, _logs, monkeypatch) -> None:
+        _write_llm_section(everos_toml)
+        _logs.parent.mkdir(parents=True, exist_ok=True)
+        _logs.write_text(
+            "OSError: [Errno 24] inotify instance limit reached\nApplication startup failed. Exiting.\n",
+            encoding="utf-8",
+        )
+        dead = MagicMock()
+        dead.poll.return_value = 3
+        dead.returncode = 3
+        monkeypatch.setattr(
+            "raven.plugin.memory.everos._server._start_server_if_unlocked",
+            lambda *a, **kw: dead,
+        )
+        monkeypatch.setattr(
+            "raven.plugin.memory.everos._server._inotify_gate",
+            MagicMock(side_effect=[None, "inotify fix: sudo sysctl -w fs.inotify.max_user_instances=1024"]),
+        )
+
+        with patch("raven.plugin.memory.everos._server._probe_health", return_value=False):
+            with pytest.raises(RuntimeError, match="inotify.*sudo sysctl"):
+                await ensure_everos_server("http://localhost:18791", timeout=5.0)
+
+    @pytest.mark.asyncio
+    async def test_unrelated_failure_keeps_the_gate_out(self, everos_toml, _logs, monkeypatch) -> None:
+        _write_llm_section(everos_toml)
+        _logs.parent.mkdir(parents=True, exist_ok=True)
+        _logs.write_text("EngineLockHeldError: held\n", encoding="utf-8")
+        dead = MagicMock()
+        dead.poll.return_value = 3
+        dead.returncode = 3
+        monkeypatch.setattr(
+            "raven.plugin.memory.everos._server._start_server_if_unlocked",
+            lambda *a, **kw: dead,
+        )
+        gate = MagicMock(return_value=None)
+        monkeypatch.setattr("raven.plugin.memory.everos._server._inotify_gate", gate)
+
+        with patch("raven.plugin.memory.everos._server._probe_health", return_value=False):
+            with pytest.raises(RuntimeError, match="EngineLockHeldError") as exc:
+                await ensure_everos_server("http://localhost:18791", timeout=5.0)
+
+        gate.assert_called_once()
+        assert "fs.inotify" not in str(exc.value)
 
 
 class TestSpawnPreflight:
@@ -361,6 +567,31 @@ class TestThePrimitivesAgainstTheRealOS:
         from raven.plugin.memory.everos._server import ome_lock_held
 
         assert ome_lock_held(tmp_path / "never-started") is False
+
+    @pytest.mark.skipif(sys.platform != "linux", reason="inotify is Linux-only")
+    def test_zero_watch_instances_count_against_the_cap(self) -> None:
+        import ctypes
+
+        from raven.plugin.memory.everos import _server
+
+        libc = ctypes.CDLL(None, use_errno=True)
+        libc.inotify_init.restype = ctypes.c_int
+        before = _server._inotify_usage()
+        assert before is not None
+        fds = []
+        try:
+            for _ in range(2):
+                fd = libc.inotify_init()
+                if fd < 0:
+                    pytest.skip("per-user inotify cap is exhausted on this host")
+                fds.append(fd)
+            after = _server._inotify_usage()
+        finally:
+            for fd in fds:
+                libc.close(fd)
+        assert after is not None
+        assert after[0] >= before[0] + 2
+        assert after[1] == before[1]
 
     def test_a_held_ome_lock_is_detected(self, tmp_path) -> None:
         """The signal the whole "served elsewhere" state rests on.
