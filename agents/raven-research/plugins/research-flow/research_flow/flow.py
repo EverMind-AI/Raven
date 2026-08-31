@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import itertools
 import os
-from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -82,47 +81,27 @@ if TYPE_CHECKING:
 # its turn (same scheme as the fork's loop).
 _TURN_SEQ = itertools.count()
 
-# ``ctx.metadata`` is NOT one dict per turn. The loop builds a fresh
-# AgentHookContext for the inbound rewrite (``turn_path.py:1355``), another for
-# the whole iteration run (``turn_path.py:583``, the only one carrying ``mode``
-# and ``mode_overlay``), and a third for the outbound (``turn_path.py:1673``) --
-# each with its own empty ``metadata``. So anything that has to cross those
-# three groups travels in a ContextVar: a turn is one asyncio task, and every
-# phase of it is awaited inside the same one. Same reasoning, and the same bug
-# class, as ``_RESEARCH_TURN`` in gates/conversation.py.
-#
-# Each is read ONCE and cleared, for the reason ``take_pending_clarify`` states:
-# ``before_user_inbound`` is skipped for some turn origins, and a value that
-# survived into the next turn would classify the previous turn's question or
-# stamp its counters on this turn's record.
+# ``ctx.metadata`` is ONE dict per turn on this host: the loop seeds it at
+# the inbound fire and hands the same dict to the iteration run (where it
+# stamps ``mode`` / ``mode_overlay``) and to the outbound -- pinned by the
+# trunk's ``test_metadata_is_one_dict_across_all_three_phase_groups`` -- and
+# it is fresh every turn, whatever the origin. Per-turn state the plugin
+# hands from one phase group to another rides that dict under the keys
+# below, each read ONCE and popped, for the reason ``take_pending_clarify``
+# states: ``before_user_inbound`` is skipped for some turn origins, and a
+# value that survived by accident would classify the previous turn's
+# question or stamp its verdict on this turn's record. (The gates keep their
+# own cross-phase state in ContextVars -- gates/conversation.py -- under
+# that file's rules.)
 
 # What the USER wrote, before the memo / brief / reminder were folded in.
-# ``ctx.turn_question`` is read after the rewrite (``turn_path.py:587``), so by
-# then it carries our own blocks and the classifier would be reading them.
-_INBOUND: ContextVar[str | None] = ContextVar("dr_turn_inbound", default=None)
+# ``ctx.turn_question`` is read after the inbound rewrite, so by then it
+# carries our own blocks and the classifier would be reading them.
+_USER_TEXT_KEY = "dr_user_text"
 
-# The session file's view of the conversation BEFORE this turn, as the inbound
-# phase received it (``ctx.session_history``). The gate's ``prior`` reads this
-# instead of the iteration window: ``ctx.messages`` is the working transcript
-# after compaction, so a long session's gate would judge on a stump. ``None``
-# when the host populated no history (or it was empty, which the window
-# reproduces anyway) -- the window stays the fallback.
-_INBOUND_HISTORY: ContextVar[tuple[dict[str, Any], ...] | None] = ContextVar("dr_turn_inbound_history", default=None)
-
-# The turn-mode decision, handed from the iteration phase that makes it to the
-# turn-end stamp that records it.
-_TURN_MODE: ContextVar[TurnMode | None] = ContextVar("dr_turn_mode", default=None)
-
-# The iteration context's own ``metadata`` dict, by reference. That dict IS the
-# per-turn scratchpad every gate writes its counters into; the reference is what
-# lets the turn-end stamp read them from a context that is not it.
-_TURN_METADATA: ContextVar[dict[str, Any] | None] = ContextVar("dr_turn_metadata", default=None)
-
-
-def _take(var: ContextVar[Any]) -> Any:
-    value = var.get()
-    var.set(None)
-    return value
+# The turn-mode decision, handed from the iteration phase that makes it to
+# the turn-end stamp that records it.
+_TURN_MODE_KEY = "dr_turn_mode"
 
 
 @dataclass
@@ -225,11 +204,9 @@ class TurnFrame(AgentHook):
         set_clarify_verdict(None)
         set_first_turn(False)
         set_prior_sources(())
-        _TURN_MODE.set(None)
-        _TURN_METADATA.set(None)
+        ctx.metadata.pop(_TURN_MODE_KEY, None)
         text = ctx.inbound_content or ""
-        _INBOUND.set(text)
-        _INBOUND_HISTORY.set(tuple(ctx.session_history) if ctx.session_history else None)
+        ctx.metadata[_USER_TEXT_KEY] = text
         record = self._store.load(ctx.session_key)
         if self._conversation:
             self._consume_pending_clarify(ctx.session_key, record, text)
@@ -299,23 +276,16 @@ class TurnFrame(AgentHook):
         ``ctx.messages``; everything before ``ctx.turn_base`` is prior history.
         The flag it sets defaults to True, so with the feature off nothing
         downstream can tell this method exists.
-
-        The iteration context's ``metadata`` is captured here and not in
-        ``after_send``, because that phase is handed a different context: this
-        dict is where every gate below writes its counters, and the reference is
-        what makes them readable at turn end. Captured before the early return,
-        so the counters survive with the conversation surface off too.
         """
-        if ctx.iteration == 1:
-            _TURN_METADATA.set(ctx.metadata)
         if ctx.iteration != 1 or not self._conversation:
             return HookDecision()
-        filed = _INBOUND_HISTORY.get()
-        # The filed history, not the trimmed window, whenever the inbound phase
-        # saw one: the fork's gate read the session's own record, and judging
-        # on the post-compaction window makes a long session's gate (and the
-        # first-turn detection below) see a stump.
-        source = list(filed) if filed is not None else (ctx.messages or [])[: ctx.turn_base]
+        # The filed record, not the trimmed window: the fork's gate read the
+        # session's own record, and judging on the post-compaction window makes
+        # a long session's gate (and the first-turn detection below) see a
+        # stump. The iteration context carries that record natively (hook
+        # surface v3); the window slice stays the fallback for a host that
+        # populates none.
+        source = list(ctx.session_history) if ctx.session_history else (ctx.messages or [])[: ctx.turn_base]
         prior = [m for m in source if m.get("role") in ("user", "assistant")]
         # ``askUser.mode="first_turn"`` mandates a clarify round on exactly this
         # turn, and the gate cannot see it from a session_key alone.
@@ -332,10 +302,10 @@ class TurnFrame(AgentHook):
         elif self._gate is None:
             mode = TurnMode(True, "config_always")
         else:
-            text = str(_take(_INBOUND) or "") or ctx.turn_question
+            text = str(ctx.metadata.pop(_USER_TEXT_KEY, None) or "") or ctx.turn_question
             mode = await self._gate.decide(text, prior)
         set_research_turn(mode.research)
-        _TURN_MODE.set(mode)
+        ctx.metadata[_TURN_MODE_KEY] = mode
         if not mode.research:
             logger.info("conversation-gate: answering from context ({}) - {}", mode.source, mode.why)
         return HookDecision()
@@ -344,10 +314,14 @@ class TurnFrame(AgentHook):
 
     async def after_send(self, ctx: AgentHookContext) -> HookDecision:
         record = self._store.load(ctx.session_key)
+        # The plugin's own handoff keys come off before the counters are read:
+        # they are phase-to-phase freight, not a gate's measurement.
+        turn_mode = ctx.metadata.pop(_TURN_MODE_KEY, None)
+        ctx.metadata.pop(_USER_TEXT_KEY, None)
         # The gates' own counters first, the turn-level ones over them - the
         # order the fork stamped them in, and the one that lets a turn-level key
         # win a name collision.
-        observers: dict[str, Any] = turn_observers(_take(_TURN_METADATA))
+        observers: dict[str, Any] = turn_observers(ctx.metadata)
         final_content = ctx.outbound_content or ""
         changed = False
 
@@ -367,7 +341,7 @@ class TurnFrame(AgentHook):
                     **ReportShape(shaped.visible).counters(),
                 }
 
-        mode = _take(_TURN_MODE)
+        mode = turn_mode
         if isinstance(mode, TurnMode):
             observers["conversation_gate"] = mode.counters()
 
@@ -423,9 +397,9 @@ class TurnFrame(AgentHook):
                 record.chain_round = int(pending.get("chain_round") or 1)
             except (TypeError, ValueError):
                 record.chain_round = 1
-        # The chain's own mode, not the context's: ``after_send`` is handed a
-        # fresh context that carries no mode at all, so reading it there wrote
-        # "" on every turn of every mode.
+        # The chain's own mode, not the context's metadata: the chain IS what
+        # governed the turn, and a host that hands a bare send context still
+        # gets the right label.
         record.mode = self._mode
         record.observers = observers
         # The trunk stamps this dict onto the turn's last substantive assistant
@@ -689,9 +663,9 @@ class ResearchFlowHook(AgentHook):
     tools' per-session slots - when the session switches mode, so the next
     turn's tool state is rebuilt against the new chain's instances.
 
-    Only an ITERATION context names the session's mode (``turn_path.py:589``);
-    the inbound and outbound phases are handed contexts whose ``metadata`` is
-    empty. A chain is therefore built from an iteration context alone, and the
+    Only an ITERATION context is guaranteed to name the session's mode: the
+    loop stamps ``mode`` / ``mode_overlay`` at its entry, after the inbound
+    fire. A chain is therefore built from an iteration context alone, and the
     other two phases reuse the one the session's last iteration resolved -
     otherwise every turn built a second, base-config chain for the rewrite,
     threw the real one away, and ran the turn's exit under the wrong knobs.
@@ -752,10 +726,16 @@ class ResearchFlowHook(AgentHook):
                     e,
                 )
                 cfg = self.cfg
+            # The loop's own enforced cap and resolved window (hook surface
+            # v3), when a turn is driving; the activation values stand in for
+            # a host that stamps neither. Explicit config wins over both
+            # inside build_chain, so the shipped numbers do not move.
             max_iterations = self.max_iterations
-            mode_cap = overlay.get("maxToolIterations")
-            if isinstance(mode_cap, int) and mode_cap > 0:
-                max_iterations = mode_cap
+            if isinstance(ctx.max_iterations, int) and ctx.max_iterations > 0:
+                max_iterations = ctx.max_iterations
+            window = self.context_window_tokens
+            if isinstance(ctx.context_window_tokens, int) and ctx.context_window_tokens > 0:
+                window = ctx.context_window_tokens
             er = evidence_round_for(cfg)
             sat = saturation_for(cfg)
             self.session_gear[key] = SessionGear(evidence_round=er, saturation=sat)
@@ -763,7 +743,7 @@ class ResearchFlowHook(AgentHook):
                 cfg,
                 self.provider,
                 max_iterations=max_iterations,
-                context_window_tokens=self.context_window_tokens,
+                context_window_tokens=window,
                 tools=self.tools,
                 store=self.store,
                 evidence_round=er,

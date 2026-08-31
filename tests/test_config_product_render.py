@@ -103,14 +103,14 @@ def test_mode_catalogue_assembles_the_acp_modes_contract(tmp_path):
         tmp_path, labels, baseline="fast", overlay_keys=frozenset({"flow"}), resolve=resolve
     )
     assert set(catalogue) == {"fast", "deep"}, "a labeled mode without its overlay file is skipped"
-    assert catalogue["fast"]["overlay"] == {"flow": {}, "maxToolIterations": 20}, (
-        "the baseline's diff is empty but its cap is not"
+    assert catalogue["fast"]["overlay"] == {"flow": {}}, (
+        "the overlay is the product's diff alone; the loop hands hooks the cap as ctx.max_iterations"
     )
     assert catalogue["deep"] == {
         "name": "Deep",
         "description": "longer",
         "maxToolIterations": 60,
-        "overlay": {"flow": {"maxIterations": 60}, "maxToolIterations": 60},
+        "overlay": {"flow": {"maxIterations": 60}},
     }
 
 

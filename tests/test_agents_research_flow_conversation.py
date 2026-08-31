@@ -493,29 +493,32 @@ _BASE_SLICE = {
 def _run_turn(hook, text, *, prior=(), mode="", overlay=None, iteration_writes=None):
     """One turn through the three contexts the loop actually builds.
 
-    One ``asyncio.run`` for the whole turn, not one per phase: the plugin hands
-    state between the phase groups in ContextVars, and ``asyncio.run`` copies
-    the context into a fresh task, so a per-phase driver would lose exactly what
-    is under test here. The loop awaits all three inside one coroutine.
+    One metadata dict for all three, the way the trunk hands it (pinned by
+    ``test_metadata_is_one_dict_across_all_three_phase_groups``), and one
+    ``asyncio.run`` for the whole turn: the gates still hand state between
+    phases in ContextVars (gates/support), and ``asyncio.run`` copies the
+    context into a fresh task, so a per-phase driver would lose it.
     """
 
     async def turn():
-        inbound = AgentHookContext(session_key="s", inbound_content=text)
+        meta: dict = {}
+        inbound = AgentHookContext(session_key="s", inbound_content=text, metadata=meta)
         content = (await hook.before_user_inbound(inbound)).modified_content or text
 
+        meta.update({"mode": mode, "mode_overlay": overlay if overlay is not None else {"drFlow": {}}})
         iter_ctx = AgentHookContext(
             session_key="s",
             iteration=1,
             messages=[*prior, {"role": "user", "content": content}],
             turn_base=len(prior),
             turn_question=content,
-            metadata={"mode": mode, "mode_overlay": overlay if overlay is not None else {"drFlow": {}}},
+            metadata=meta,
         )
         await hook.before_iteration(iter_ctx)
         if iteration_writes:
             iter_ctx.metadata.update(iteration_writes)
 
-        await hook.after_send(AgentHookContext(session_key="s", outbound_content="the answer"))
+        await hook.after_send(AgentHookContext(session_key="s", outbound_content="the answer", metadata=meta))
         return content
 
     return asyncio.run(turn()), hook.store.load("s")
@@ -553,11 +556,10 @@ def test_the_turn_stamp_carries_the_gate_verdict_and_every_gate_namespace(tmp_pa
 
     The twin stamped one ``observers`` dict on the turn's last assistant
     message: the gate counters the iteration phases wrote, plus the turn-level
-    ones. Here the iteration phases write into a context ``after_send`` is not
-    handed, so both halves were lost - ``conversation_gate`` was never written
-    at all, and every gate counter ended with the turn that produced it, which
-    makes "the gate never fired" and "the gate was never installed" the same
-    reading.
+    ones. The counters live in the turn's one metadata dict and ``after_send``
+    reads them off its own context - lose the shared dict and every gate
+    counter ends with the turn that produced it, which makes "the gate never
+    fired" and "the gate was never installed" the same reading.
     """
     provider = _Provider(_Reply('{"research": false, "why": "reformat only"}'))
     hook = _turn_hook(tmp_path, _BASE_SLICE, provider)
@@ -607,12 +609,16 @@ def test_a_stamp_cannot_be_inherited_by_the_next_turn(tmp_path):
             turn_question="reformat that",
             metadata={"mode": "", "mode_overlay": {"drFlow": {}}},
         )
-        await hook.before_user_inbound(AgentHookContext(session_key="s", inbound_content="reformat that"))
+        await hook.before_user_inbound(
+            AgentHookContext(session_key="s", inbound_content="reformat that", metadata=ctx.metadata)
+        )
         await hook.before_iteration(ctx)
-        await hook.after_send(AgentHookContext(session_key="s", outbound_content="a"))
+        await hook.after_send(AgentHookContext(session_key="s", outbound_content="a", metadata=ctx.metadata))
         first = hook.store.load("s").observers
-        # The second turn's inbound phase never ran: the origin was one the loop
-        # skips it for.
+        assert "dr_turn_mode" not in ctx.metadata, "the verdict is freight: read once and popped"
+        # The second turn's inbound phase never ran (a skip origin), and the
+        # host hands every turn a fresh metadata dict; the verdict was popped
+        # at the first turn's exit, so nothing is left to inherit.
         await hook.after_send(AgentHookContext(session_key="s", outbound_content="b"))
         return first, hook.store.load("s").observers
 
@@ -635,7 +641,7 @@ def test_the_mode_the_turn_ran_in_governs_its_exit_and_is_recorded(tmp_path):
         hook,
         "survey the field",
         mode="deep",
-        overlay={"drFlow": {"finalShape": {"record": False}}, "maxToolIterations": 30},
+        overlay={"drFlow": {"finalShape": {"record": False}}},
     )
 
     assert record.mode == "deep", "the profile the turn ran under, not the empty one after_send is handed"
@@ -646,12 +652,13 @@ def test_the_mode_the_turn_ran_in_governs_its_exit_and_is_recorded(tmp_path):
 def test_the_gate_reads_the_filed_history_not_the_trimmed_window(tmp_path):
     """[B-7] The fork's gate judged on the session's own record. The port read
     ``ctx.messages[:turn_base]`` -- the working transcript after compaction --
-    so a long session's gate judged on a stump. The inbound phase carries the
-    filed history now; the gate's ``prior`` must be that view, with the window
-    only as fallback (the existing window-driven tests in this file are the
-    fallback's proof: they hand no ``session_history`` and still reach the
-    gate). The gate lives inside the per-session chain, so the probe is the
-    classifier prompt the provider receives.
+    so a long session's gate judged on a stump. The iteration context carries
+    the filed record natively (hook surface v3); the gate's ``prior`` must be
+    that view, with the window only as fallback (the existing window-driven
+    tests in this file are the fallback's proof: they hand no
+    ``session_history`` and still reach the gate). The gate lives inside the
+    per-session chain, so the probe is the classifier prompt the provider
+    receives.
     """
     provider = _Provider(_Reply('{"research": true, "why": "asks for a new figure"}'))
     hook = _turn_hook(tmp_path, _BASE_SLICE, provider=provider)
@@ -669,6 +676,7 @@ def test_the_gate_reads_the_filed_history_not_the_trimmed_window(tmp_path):
             messages=[{"role": "assistant", "content": "the window stump"}, {"role": "user", "content": "and now?"}],
             turn_base=1,
             turn_question="and now?",
+            session_history=filed,
             metadata={"mode": "", "mode_overlay": {"drFlow": {}}},
         )
         await hook.before_iteration(iter_ctx)
