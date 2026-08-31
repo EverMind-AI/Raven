@@ -504,3 +504,26 @@ name = "the runtime does not import the agents pilots"
 type = "forbidden"
 source_modules = ["raven"]
 forbidden_modules = ["agents"]
+
+[[tool.importlinter.contracts]]
+# The surfaces law, first half (2026-08-31): a served surface never imports
+# the launcher. The reverse direction -- cli assembling the rpc/acp stacks it
+# hosts -- is the sanctioned one: an entrance brings its own transport-side
+# wiring, and the launcher is the entrance that starts the others. What the
+# console feature and the serve-restart handshake need from the cli arrives
+# by registration instead (rpc/cli_socket.py; rpc/serve_control.py is armed
+# by the host).
+name = "the served surfaces do not import the launcher"
+type = "forbidden"
+source_modules = ["raven.rpc", "raven.acp"]
+forbidden_modules = ["raven.cli"]
+
+[[tool.importlinter.contracts]]
+# The surfaces law, second half: the served dialects stay strangers in this
+# direction. The other direction is acp hosting an rpc stack over its own
+# translator -- pinned to the single bootstrap facade module by the facade
+# roster in tests/test_l4_entrances.py, never widened silently.
+name = "rpc does not import acp"
+type = "forbidden"
+source_modules = ["raven.rpc"]
+forbidden_modules = ["raven.acp"]

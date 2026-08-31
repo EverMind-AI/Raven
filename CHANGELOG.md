@@ -27,14 +27,17 @@ All notable changes to Raven are documented here.
   (`raven/contracts`, every interface a shelf implements), the assembly root
   (`raven/core`, where config becomes a running agent through one door,
   `build_runtime`), the shelves (channels, plugins, providers, memory, ...),
-  and the entrances (`cli`, `rpc`, `acp`). Six import-linter contracts run
+  and the entrances (`cli`, `rpc`, `acp`). Eight import-linter contracts run
   in CI: inner layers never import an entrance (with no allowlisted
   exceptions), the twelve channel adapters are mutually independent, the
   kernel imports nothing else at module level, with no exception named at
   all, the cargo under `raven/agent` never
   imports the loop shell it is consumed by, the runtime never imports the
-  repo-level `evolver/` tool that drives it, and it never imports the
-  `agents/` product definitions built on top of it. The papers hold shapes only (machinery such as provider retry
+  repo-level `evolver/` tool that drives it, it never imports the
+  `agents/` product definitions built on top of it, and the surfaces law
+  holds: the served surfaces (`rpc`, `acp`) never import the launcher and
+  rpc never imports acp -- what a served surface needs from the cli arrives
+  by registration, and acp reaches rpc only through the bootstrap facade. The papers hold shapes only (machinery such as provider retry
   and tool-argument validation lives with the code that runs it, and a ledger
   test keeps it there). `CONTEXT.md` records every package's seat.
 - The EverOS memory backend leaves the wheel: it is its own distribution
