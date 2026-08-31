@@ -435,7 +435,7 @@ source_modules = [
     # Feature libraries consumed by surfaces, importing none themselves
     # (measured: zero cli/rpc/acp imports in either); seated inner so the
     # machine watches the edge instead of a ruling note.
-    "raven.browser", "raven.importer",
+    "raven.browser", "raven.importer", "raven.updates",
 ]
 forbidden_modules = ["raven.cli", "raven.rpc", "raven.acp"]
 # Debt allowlist: none. The last allowlisted edge (market reaching the skill
@@ -461,7 +461,7 @@ forbidden_modules = [
     "raven.memory_engine", "raven.ops", "raven.playbook", "raven.plugins",
     "raven.proactive_engine", "raven.providers", "raven.routing", "raven.rpc",
     "raven.observability", "raven.sandbox", "raven.security", "raven.session",
-    "raven.skill_hub", "raven.token_wise", "raven.trajectory", "raven.utils",
+    "raven.skill_hub", "raven.token_wise", "raven.trajectory", "raven.updates", "raven.utils",
 ]
 
 [[tool.importlinter.contracts]]

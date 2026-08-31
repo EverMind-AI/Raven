@@ -28,7 +28,7 @@ from urllib.parse import quote, urlparse
 
 import httpx
 
-from raven.cli.upgrade_commands import ReleaseInfo, UpgradeError
+from raven.updates.upgrade import ReleaseInfo, UpgradeError
 
 _STATE_NAME = "beta.json"
 _POINTER_PATH = "latest/latest.json"

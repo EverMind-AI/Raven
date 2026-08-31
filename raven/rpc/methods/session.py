@@ -36,7 +36,6 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
-from raven.cli.update_notice import update_notice
 from raven.config.loader import drain_migration_notices, load_config
 from raven.providers.rates import resolve_context_window
 from raven.rpc.errors import ConfigValidationError, SessionTitleTooLongError, TurnInProgressError
@@ -45,6 +44,7 @@ from raven.rpc.methods.system import _raven_version
 from raven.session.export import default_export_path, write_transcript
 from raven.session.manager import SessionManager, new_chat_id
 from raven.session.title import TITLE_STORAGE_MAX
+from raven.updates.update_notice import update_notice
 from raven.utils.tokens import estimate_prompt_tokens
 
 if TYPE_CHECKING:

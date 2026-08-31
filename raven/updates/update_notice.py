@@ -94,8 +94,8 @@ def _version_key(value: str) -> tuple[int, ...] | None:
     ``0.1.12b2`` are two different builds -- so that channel's ordering reads
     the version whole instead of reducing it to the release it builds on.
     """
-    from raven.cli import beta_channel
-    from raven.cli.upgrade_commands import UpgradeError
+    from raven.updates import beta_channel
+    from raven.updates.upgrade import UpgradeError
 
     if beta_channel.is_active():
         try:
@@ -103,7 +103,7 @@ def _version_key(value: str) -> tuple[int, ...] | None:
         except UpgradeError:
             return None
 
-    from raven.cli.upgrade_commands import _version_key as strict_key
+    from raven.updates.upgrade import _version_key as strict_key
 
     try:
         return strict_key(_release_prefix(value))
@@ -155,8 +155,8 @@ def _refresh() -> bool:
     seen_etag = seen if isinstance(seen, str) and keep is not None else None
 
     try:
-        from raven.cli import beta_channel
-        from raven.cli.upgrade_commands import fetch_latest_version
+        from raven.updates import beta_channel
+        from raven.updates.upgrade import fetch_latest_version
 
         chan = beta_channel.channel()
         if chan is None:
@@ -208,7 +208,7 @@ def _upgrade_command_works() -> bool:
     users points them at a command that always exits 1.
     """
     try:
-        from raven.cli.upgrade_commands import _is_uv_tool_install
+        from raven.updates.upgrade import _is_uv_tool_install
 
         return _is_uv_tool_install()
     except Exception:

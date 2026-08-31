@@ -856,7 +856,7 @@ def tui_launch_spies(monkeypatch: pytest.MonkeyPatch, tmp_path):
     dist = tmp_path / "entry.js"
     dist.write_text("", encoding="utf-8")
     monkeypatch.setattr(tui_commands, "resolve_dist_entry", lambda: dist)
-    monkeypatch.setattr("raven.cli.update_notice.maybe_refresh_async", lambda: None)
+    monkeypatch.setattr("raven.updates.update_notice.maybe_refresh_async", lambda: None)
 
     def embedded(*args: Any, **kwargs: Any) -> int:
         calls["embedded"] = kwargs

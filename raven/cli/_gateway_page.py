@@ -143,7 +143,7 @@ async def mount_page(agent_loop: Any, preferred_port: int) -> PageMount | None:
     SERVE.arm_hosted(bound_port, ws_gateway.session_token, ws_gateway.session_cookie)
 
     try:
-        from raven.cli.update_notice import maybe_refresh_async
+        from raven.updates.update_notice import maybe_refresh_async
 
         maybe_refresh_async()
     except Exception as exc:

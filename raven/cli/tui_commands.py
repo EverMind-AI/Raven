@@ -923,7 +923,7 @@ def tui(
     # launch, throttled, best-effort) so the status bar can nudge
     # `raven upgrade`. The gateway reads that cache when it builds the session
     # info bundle.
-    from raven.cli.update_notice import maybe_refresh_async
+    from raven.updates.update_notice import maybe_refresh_async
 
     maybe_refresh_async()
 

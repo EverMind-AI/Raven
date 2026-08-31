@@ -246,7 +246,7 @@ class DoctorReport:
 
 
 def _gather_install() -> InstallInfo:
-    from raven.cli._install_guard import inspect_install, missing_pieces
+    from raven.updates.install_guard import inspect_install, missing_pieces
 
     fault = inspect_install()
     if fault is None:
