@@ -249,6 +249,13 @@ All notable changes to Raven are documented here.
   loop owns declares `bind_runtime(handles)` and receives the frozen
   `RuntimeHandles` grants. A factory may decline by returning `None`, a
   binder by raising `BindDeclinedError` -- both leave the built-in serving.
+- The agent-hook surface is at version 3: `ctx.session_history` is populated
+  at every phase (the iteration phases included, post-consolidation), the
+  iteration context carries the turn's `max_iterations` and
+  `context_window_tokens` -- the cap the loop actually enforces and the
+  active binding's window, so a budget-shaped hook needs no config mirror --
+  `CompositeHook` chains every child's diagnostic `notes`, and a hook's
+  `observers` stash is filed at persist time, after the send fire.
 - ACP session modes: `acp.modes` in a product's config becomes a client's
   mode picker (`session/set_mode`), each mode a per-session overlay over the
   base configuration.

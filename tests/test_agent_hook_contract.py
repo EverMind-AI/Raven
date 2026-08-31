@@ -143,6 +143,8 @@ class TestAgentHookContext:
         assert c.metadata == {}
         assert c.turn_question == ""
         assert c.turn_base == 0
+        assert c.max_iterations is None
+        assert c.context_window_tokens is None
 
     def test_fields_can_be_set(self):
         c = AgentHookContext(
@@ -605,6 +607,26 @@ class TestNoteAndInboundGrants:
         assert decision.append_note == "[budget: half spent]\n\n[gate: open a page before searching again]"
         assert (await CompositeHook([Budget()]).after_send(ctx)).append_note is None, "not an iteration phase"
 
+    async def test_decision_notes_chain_through_the_composite_and_survive_a_halt(self, ctx):
+        class Quiet(AgentHook):
+            async def after_iteration(self, ctx):
+                return HookDecision(notes=["quiet: looked, passed"])
+
+        class Halter(AgentHook):
+            async def after_iteration(self, ctx):
+                return HookDecision(short_circuit_result="done", notes=["halter: replaced the draft"])
+
+        class Never(AgentHook):
+            async def after_iteration(self, ctx):
+                return HookDecision(notes=["never runs"])
+
+        halted = await CompositeHook([Quiet(), Halter(), Never()]).after_iteration(ctx)
+        assert halted.short_circuit_result == "done"
+        assert halted.notes == ["quiet: looked, passed", "halter: replaced the draft"]
+
+        chained = await CompositeHook([Quiet(), Quiet()]).after_iteration(ctx)
+        assert chained.notes == ["quiet: looked, passed", "quiet: looked, passed"]
+
     async def test_inbound_text_chains_through_inbound_content(self, ctx):
         class Memo(AgentHook):
             async def before_user_inbound(self, ctx):
@@ -646,6 +668,43 @@ def test_the_factory_loop_surface_is_versioned() -> None:
             "context": [
                 "inbound_content",
                 "iteration",
+                "messages",
+                "metadata",
+                "outbound_content",
+                "response",
+                "session_history",
+                "session_key",
+                "tools",
+                "turn_base",
+                "turn_question",
+                "turn_request",
+            ],
+            "decision": [
+                "append_note",
+                "modified_content",
+                "modified_tools",
+                "notes",
+                "pass_through",
+                "rollback",
+                "rollback_inject",
+                "rollback_overrides",
+                "short_circuit_result",
+            ],
+            "phases": [
+                "after_iteration",
+                "after_send",
+                "before_execute_tools",
+                "before_iteration",
+                "before_user_inbound",
+                "terminal_answerless",
+            ],
+        },
+        3: {
+            "context": [
+                "context_window_tokens",
+                "inbound_content",
+                "iteration",
+                "max_iterations",
                 "messages",
                 "metadata",
                 "outbound_content",

@@ -103,13 +103,17 @@ class AgentHookContext:
     #: hook rewrites here shapes the model's view of THIS turn only -- the
     #: session record keeps the user's own words.
     inbound_content: str | None = None
-    #: The session's persisted record so far, read-only, populated at the
-    #: inbound and send phases (the iteration phases carry the assembled
-    #: window in ``messages`` instead). "So far" is exact: the send fire
-    #: happens before this turn is filed, so at ``after_send`` the record
-    #: still ends with the PREVIOUS turn. A gate deciding whether a follow-up
-    #: needs new work reads the conversation here, not the window a trimmer
-    #: may have shortened. Never mutate it.
+    #: The session's persisted record so far, read-only, populated at every
+    #: phase. "So far" is exact: the turn is filed only after the send fire,
+    #: so even at ``after_send`` the record still ends with the PREVIOUS
+    #: turn. A gate deciding whether a follow-up needs new work reads the
+    #: conversation here, not the working window a trimmer may have
+    #: shortened (the iteration phases carry that window in ``messages``).
+    #: Two seams to know: the inbound fire reads the message's own session,
+    #: before a caller-supplied key takes over and before token
+    #: consolidation runs; from the iteration phases on this is the
+    #: post-consolidation record of the session the turn actually runs and
+    #: persists into. Never mutate it.
     session_history: "list[dict[str, Any]] | None" = None
 
     # ── before_iteration / before_execute_tools / after_iteration ──
@@ -125,6 +129,18 @@ class AgentHookContext:
     #: Index in ``messages`` where this turn's own messages start; what a
     #: hook counts (searches this turn, fetches this turn) is ``messages[turn_base:]``.
     turn_base: int = 0
+    #: The iteration cap the loop enforces THIS turn: the per-session mode
+    #: policy's cap when one is set, else the loop default, read once at
+    #: turn entry -- ``iteration`` counts toward this denominator. A hook
+    #: rollback re-runs an iteration without moving either. Populated at the
+    #: iteration phases and ``terminal_answerless``.
+    max_iterations: int | None = None
+    #: The context window of the turn's active model binding, resolved
+    #: configured-first and never over the network. It is the budget the
+    #: loop plans by, not a per-call guarantee: a router-picked model or a
+    #: mid-turn provider fallback can run this turn on a window that
+    #: differs. Populated with ``max_iterations``.
+    context_window_tokens: int | None = None
 
     # ── after_send ──
     outbound_content: str | None = None
@@ -134,7 +150,9 @@ class AgentHookContext:
     #: inbound fire, carried through the iterations (where the loop adds
     #: ``mode`` / ``mode_overlay``), still present after the send. What a
     #: hook stashes under ``metadata["observers"]`` (a dict) is filed onto
-    #: the turn's last substantive assistant message at persist time.
+    #: the turn's last substantive assistant message at persist time, after
+    #: the ``after_send`` fire -- a stash from any phase, the send included,
+    #: reaches the filed record.
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -172,6 +190,12 @@ class HookDecision:
     ``append_note`` is the second grant: text the loop appends to the last
     transcript message (a blank line between) before the next model call, in
     the three iteration phases. Chained: every hook's note lands, in order.
+
+    ``notes`` is the diagnostic trail: free-form strings a hook leaves about
+    what it saw and decided. The loop deliberately does not act on them;
+    ``CompositeHook`` chains them in hook order onto the decision it returns
+    -- a halting decision carries the notes collected before it, then its
+    own -- so a caller or harness reads one ordered list.
 
     Hooks should not mix the halting states in a single decision -- the
     first halting state wins and the rest would be moot.
@@ -245,7 +269,8 @@ class AgentHook(ABC):
           - Leaving the model a note before this call (``append_note``).
 
         Context fields populated: ``session_key``, ``iteration``,
-        ``messages``, ``tools``, ``turn_question``, ``turn_base``.
+        ``messages``, ``tools``, ``turn_question``, ``turn_base``,
+        ``session_history``, ``max_iterations``, ``context_window_tokens``.
         """
         return HookDecision()
 
@@ -259,7 +284,8 @@ class AgentHook(ABC):
           - Leaving the model a note beside the proposal (``append_note``).
 
         Context fields populated: ``session_key``, ``iteration``,
-        ``messages``, ``response`` (the LLM response carrying tool calls).
+        ``messages``, ``response`` (the LLM response carrying tool calls),
+        ``session_history``, ``max_iterations``, ``context_window_tokens``.
         """
         return HookDecision()
 
@@ -282,7 +308,8 @@ class AgentHook(ABC):
         the replaced text in history.
 
         Context fields populated: ``session_key``, ``iteration``,
-        ``messages``, ``response``.
+        ``messages``, ``response``, ``session_history``,
+        ``max_iterations``, ``context_window_tokens``.
         """
         return HookDecision()
 
@@ -300,8 +327,9 @@ class AgentHook(ABC):
         ``modified_content`` are meaningless here -- the loop is over.
 
         Context fields populated: ``session_key``, ``messages``,
-        ``metadata["turn_end"]`` (status and iteration count). ``response``
-        is ``None``.
+        ``metadata["turn_end"]`` (status and iteration count),
+        ``session_history``, ``max_iterations``, ``context_window_tokens``.
+        ``response`` is ``None``.
         """
         return HookDecision()
 
@@ -317,7 +345,8 @@ class AgentHook(ABC):
           - Personalizer ``post_learn`` observes the final exchange
             and updates user behaviors (no short-circuit, no mod).
 
-        Context fields populated: ``session_key``, ``outbound_content``.
+        Context fields populated: ``session_key``, ``outbound_content``,
+        ``session_history``.
         Returning ``HookDecision(modified_content=...)`` rewrites the
         outbound text — ``CompositeHook`` chains modifications so a
         downstream hook sees the upstream one's output.
@@ -327,11 +356,15 @@ class AgentHook(ABC):
 
 #: The hook surface's own version, bumped whenever the vocabulary grows or a
 #: phase changes meaning (2: the turn-scoped ``metadata`` dict,
-#: ``session_history``, and the ``before_user_inbound`` rewrite grant). The
+#: ``session_history``, and the ``before_user_inbound`` rewrite grant;
+#: 3: ``session_history`` at every phase, the turn's ``max_iterations`` and
+#: ``context_window_tokens`` on the iteration context, ``HookDecision.notes``
+#: chained by the composite, and the observers stamp moved to persist time,
+#: after the send fire). The
 #: fingerprint test (tests/test_agent_hook_contract.py) pins the field and
 #: phase rosters to this number, so growth is a bump a reviewer -- and a
 #: product hook author -- sees, rather than a drift nobody counted.
-FACTORY_LOOP_SURFACE_VERSION = 2
+FACTORY_LOOP_SURFACE_VERSION = 3
 
 __tier__ = "factory_loop"
 __all__ = ["AgentHook", "AgentHookContext", "FACTORY_LOOP_SURFACE_VERSION", "HookDecision"]
