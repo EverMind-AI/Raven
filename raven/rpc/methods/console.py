@@ -168,7 +168,7 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
             from raven.mcp.client import resolve_transport
             from raven.mcp.oauth import pending_url
 
-            mgr = getattr(loop, "_mcp_manager", None)
+            mgr = getattr(loop, "mcp_manager_if_started", None)
             live = {snap["name"]: snap for snap in mgr.status()} if mgr is not None else {}
             for name, sc in servers.items():
                 count = owned.get(name, 0)

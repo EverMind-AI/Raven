@@ -1339,7 +1339,7 @@ async def test_ext_list_carries_the_manager_state_and_the_authorization_url(
     loop = SimpleNamespace(
         context=SimpleNamespace(skills=_Catalog()),
         tools=ToolRegistry(),
-        _mcp_manager=_Manager(),
+        mcp_manager_if_started=_Manager(),
     )
 
     result = await console_module.ext_list({}, agent_loop_factory=lambda: loop)

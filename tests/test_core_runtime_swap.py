@@ -363,6 +363,8 @@ _GENERATION_DOORS = {
     "apply_mcp_config",
     "set_default_binding",
     "mcp_manager",
+    "mcp_manager_if_started",
+    "_mcp_manager",
     "mcp_executor_provider",
 }
 
@@ -374,6 +376,9 @@ _DOOR_OPERATORS = {
     "raven/rpc/methods/subagents.py": {"apply_agents"},
     "raven/rpc/methods/config.py": {"set_default_binding"},
     "raven/agent/tools/plughub.py": {"mcp_manager"},
+    # The console's read-only status peek; the private slot itself has no
+    # operators at all, so any out-of-organ spelling of it is a stray.
+    "raven/rpc/methods/console.py": {"mcp_manager_if_started"},
 }
 
 # The organs' own homes: a door's implementation, and the loop's own use of it.
