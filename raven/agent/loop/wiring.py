@@ -593,33 +593,16 @@ class WiringMixin:
         skipped: binding what the table no longer serves grants power to a
         dead reference.
         """
-        from raven.plugins.context import BindDeclinedError, RuntimeHandles
+        from raven.plugins.context import BindDeclinedError
 
-        base = dict(
-            session_dir=self.sessions.session_dir,
-            subagent_registry=self.subagents.registry,
-            subagents_paused=lambda: self.subagents.paused,
-            playbook_runtime=self._playbooks,
-        )
-        cron = self.cron_service
         for tool in self.plugin_tools:
             bind = getattr(tool, "bind_runtime", None)
             if not callable(bind):
                 continue
             if self.tools.get(tool.name) is not tool:
                 continue
-            # The wake grant is namespaced to the contributing plugin, so the
-            # handles are minted per tool: a holder's keys can neither see
-            # nor move another plugin's wakes (paper: contracts/scheduling.py).
-            # None where the host runs no scheduler, or the tool arrived
-            # outside the plugin build (no stamped identity to namespace by).
-            wake = None
             namespace = getattr(tool, "contributed_by", None)
-            if cron is not None and namespace:
-                from raven.proactive_engine.schedulers.cron.grant import NamespacedWakeScheduler
-
-                wake = NamespacedWakeScheduler(cron, str(namespace))
-            handles = RuntimeHandles(**base, wake_scheduler=wake)
+            handles = self.mint_runtime_handles(str(namespace) if namespace else None)
             try:
                 bind(handles)
             except BindDeclinedError as decline:
@@ -628,6 +611,75 @@ class WiringMixin:
             except Exception:
                 logger.exception("plugin tool {} raised in bind_runtime; unregistering it", tool.name)
                 self.tools.unregister(tool.name)
+
+    def mint_runtime_handles(self, namespace: "str | None"):
+        """The late-bound grants, minted per holder.
+
+        One minting path for tools and services alike. The wake grant is
+        namespaced to the contributing plugin (paper: contracts/scheduling.py):
+        a holder's keys can neither see nor move another plugin's wakes, nor
+        any plain reminder. None where the host runs no scheduler, or the
+        holder carries no stamped identity to namespace by.
+        """
+        from raven.plugins.context import RuntimeHandles
+
+        wake = None
+        if self.cron_service is not None and namespace:
+            from raven.proactive_engine.schedulers.cron.grant import NamespacedWakeScheduler
+
+            wake = NamespacedWakeScheduler(self.cron_service, namespace)
+        return RuntimeHandles(
+            session_dir=self.sessions.session_dir,
+            subagent_registry=self.subagents.registry,
+            subagents_paused=lambda: self.subagents.paused,
+            playbook_runtime=self._playbooks,
+            wake_scheduler=wake,
+        )
+
+    # Contributed background services, attached by the assembly root (inert)
+    # and run only by a resident host; a one-shot turn never starts them.
+    plugin_services: tuple = ()
+    _plugin_services_started = False
+    _started_services: tuple = ()
+
+    async def start_plugin_services(self) -> None:
+        """Start every contributed background service, once.
+
+        Loud on error per the paper (contracts/services.py): a service that
+        fails to start is reported and left out of the started set -- never
+        retried silently, because a watcher that is secretly dead is the lie
+        a watching product exists to prevent.
+        """
+        if self._plugin_services_started:
+            return
+        self._plugin_services_started = True
+        started = []
+        for service in self.plugin_services:
+            namespace = getattr(service, "contributed_by", None)
+            handles = self.mint_runtime_handles(str(namespace) if namespace else None)
+            try:
+                await service.start(handles)
+            except Exception:
+                logger.exception(
+                    "plugin service {} failed to start; it stays stopped",
+                    getattr(service, "contributed_by", service),
+                )
+                continue
+            started.append(service)
+        self._started_services = tuple(started)
+
+    async def stop_plugin_services(self) -> None:
+        """Stop started services, newest first; idempotent, loud on error."""
+        services, self._started_services = self._started_services, ()
+        self._plugin_services_started = False
+        for service in reversed(services):
+            try:
+                await service.stop()
+            except Exception:
+                logger.exception(
+                    "plugin service {} raised while stopping; continuing shutdown",
+                    getattr(service, "contributed_by", service),
+                )
 
     def _build_playbooks(self) -> None:
         """Build the playbook runtime for the bundled entry tools to bind.

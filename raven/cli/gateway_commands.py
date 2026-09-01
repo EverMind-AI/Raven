@@ -846,6 +846,13 @@ def register(app: typer.Typer) -> None:
                 # shutdown. DISPOSE of N happens only after N+1 is in hand.
                 nonlocal config, ec_config, provider, router, runtime, agent, backend
                 while True:
+                    # One call site covers generation one and every swap: a
+                    # fresh generation's loop has a fresh started-flag, and
+                    # the call is idempotent within a generation.
+                    try:
+                        await agent.start_plugin_services()
+                    except Exception:
+                        _logger.exception("plugin services failed to start; continuing without them")
                     # Release right before run(): the slot stays claimed
                     # through wiring so no trigger can stop a loop that has
                     # not started yet.
@@ -1038,6 +1045,10 @@ def register(app: typer.Typer) -> None:
                 # Stop the memory-backend plugin last so any
                 # in-flight backend.store / backend.feedback calls
                 # spawned during AgentLoop teardown can complete.
+                try:
+                    await agent.stop_plugin_services()
+                except Exception:
+                    _logger.exception("plugin services stop failed; continuing shutdown")
                 if backend is not None:
                     try:
                         dropped = await agent.drain_backend_stores()
