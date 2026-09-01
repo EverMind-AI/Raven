@@ -44,7 +44,7 @@ def test_the_runtime_handles_grants_are_ledgered() -> None:
 def test_the_manifest_kinds_are_the_ledgered_three() -> None:
     from raven.plugins.manifest import Contributes, PluginManifest
 
-    assert sorted(Contributes.model_fields) == ["hooks", "memory_backends", "tools"], (
+    assert sorted(Contributes.model_fields) == ["hooks", "memory_backends", "services", "tools"], (
         "a new contribution kind changes what every raven-plugin.toml can say: "
         "ledger it here in the change that teaches the registry to consume it"
     )
@@ -86,3 +86,59 @@ def test_the_documented_import_address_serves_the_papers_objects() -> None:
     assert context.ServiceLocator is plugin_surface.ServiceLocator
     assert context.RuntimeHandles is plugin_surface.RuntimeHandles
     assert context.BindDeclinedError is plugin_surface.BindDeclinedError
+
+
+def test_a_service_contribution_parses_registers_and_builds(tmp_path) -> None:
+    """[seam-2] The fourth kind travels the same road as the other three:
+    manifest row -> activation (duplicate names refused across plugins) ->
+    factory call with a fresh PluginContext -> an inert object the host may
+    start. The paper's face is what the built object satisfies."""
+    import textwrap
+    from types import SimpleNamespace
+
+    from raven.contracts.services import PluginService
+    from raven.plugins.manifest import PluginManifest
+
+    toml = textwrap.dedent("""
+        [plugin]
+        id = "watcher-plug"
+        version = "0.1.0"
+        [[plugin.contributes.services]]
+        name = "event_watcher"
+        factory = "raven.plugins.manifest:PluginManifest"
+    """)
+    mf = PluginManifest.from_toml_str(toml)
+    assert [s.name for s in mf.contributes.services] == ["event_watcher"]
+    assert mf.contributes.services[0].factory.endswith(":PluginManifest")
+
+    class _Svc:
+        def __init__(self) -> None:
+            self.started = []
+
+        async def start(self, handles) -> None:
+            self.started.append(handles)
+
+        async def stop(self) -> None:
+            pass
+
+    assert isinstance(_Svc(), PluginService), "the paper face is start/stop"
+
+    class _Reg:
+        def service_names(self):
+            return ["event_watcher"]
+
+        def service_plugin_id(self, name):
+            return "watcher-plug"
+
+        def build_service(self, name, config, services):
+            return _Svc()
+
+    from raven.core.plugin_stack import build_plugin_services
+
+    cfg = SimpleNamespace(
+        memory=SimpleNamespace(user_id="u", agent_id="a"),
+        plugins=SimpleNamespace(config={}),
+    )
+    built = build_plugin_services(tmp_path, cfg, registry=_Reg(), provider=None)
+    assert len(built) == 1
+    assert built[0].contributed_by == "watcher-plug"

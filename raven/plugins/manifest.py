@@ -108,17 +108,41 @@ class HookContribution(_ManifestBase):
         return v
 
 
+class ServiceContribution(_ManifestBase):
+    """One ``[[plugin.contributes.services]]`` entry.
+
+    ``factory`` is a ``module.path:callable`` resolving to a
+    ``Callable[[PluginContext], PluginService]`` -- it returns one object
+    satisfying :class:`~raven.contracts.services.PluginService`. Only a
+    resident host starts it; the host owns the lifecycle, and the paper pins
+    the two disciplines (no assembly mutation, loud stop on error).
+    """
+
+    name: str = Field(min_length=1)
+    factory: str = Field(min_length=1)
+
+    @field_validator("factory")
+    @classmethod
+    def _factory_is_module_path(cls, v: str) -> str:
+        if not _FACTORY_REF_RE.match(v):
+            raise ValueError(
+                f"factory must be 'module.path:callable', got {v!r}",
+            )
+        return v
+
+
 class Contributes(_ManifestBase):
     """All contribution arrays for a single manifest.
 
-    ``memory_backends``, ``tools`` and ``hooks`` are consumed today; the
-    model keeps extra fields silently so future contribution types don't
-    break older hosts reading newer manifests.
+    ``memory_backends``, ``tools``, ``hooks`` and ``services`` are consumed
+    today; the model keeps extra fields silently so future contribution
+    types don't break older hosts reading newer manifests.
     """
 
     memory_backends: list[MemoryBackendContribution] = Field(default_factory=list)
     tools: list[ToolContribution] = Field(default_factory=list)
     hooks: list[HookContribution] = Field(default_factory=list)
+    services: list[ServiceContribution] = Field(default_factory=list)
 
 
 class PluginManifest(_ManifestBase):

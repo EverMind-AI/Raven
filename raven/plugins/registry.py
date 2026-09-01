@@ -85,6 +85,7 @@ class PluginRegistry:
         self._memory_backends: dict[str, _ActivatedFactory] = {}
         self._tools: dict[str, _ActivatedFactory] = {}
         self._hooks: dict[str, _ActivatedFactory] = {}
+        self._services: dict[str, _ActivatedFactory] = {}
 
     # ── Activation ───────────────────────────────────────────────
 
@@ -179,6 +180,19 @@ class PluginRegistry:
                 factory=factory,
             )
             logger.debug("registered hook %s from %s", hook.name, mf.id)
+        for service in mf.contributes.services:
+            if service.name in self._services:
+                prev = self._services[service.name]
+                raise PluginConflictError(
+                    f"service {service.name!r} contributed by both {prev.plugin_id!r} and {mf.id!r}",
+                )
+            factory = self._resolve_factory(mf.id, service.factory)
+            self._services[service.name] = _ActivatedFactory(
+                plugin_id=mf.id,
+                name=service.name,
+                factory=factory,
+            )
+            logger.debug("registered service %s from %s", service.name, mf.id)
 
     @staticmethod
     def _ensure_importable(source: ManifestOrigin, location: Path | None) -> None:
@@ -269,6 +283,15 @@ class PluginRegistry:
     def hook_names(self) -> list[str]:
         """Stable-ordered list of registered plugin-hook names."""
         return sorted(self._hooks)
+
+    def service_names(self) -> list[str]:
+        """Stable-ordered list of registered plugin-service names."""
+        return sorted(self._services)
+
+    def service_plugin_id(self, name: str) -> str | None:
+        """Plugin id that contributed service ``name``, or ``None``."""
+        entry = self._services.get(name)
+        return entry.plugin_id if entry is not None else None
 
     def hook_plugin_id(self, name: str) -> str | None:
         """Plugin id that contributed hook ``name``, or ``None``."""
@@ -367,6 +390,32 @@ class PluginRegistry:
             logger=logger or logging.getLogger(f"raven.plugins.{name}"),
         )
         return factory(ctx)
+
+    def build_service(
+        self,
+        name: str,
+        *,
+        config: dict[str, Any],
+        services: "ServiceLocator",
+        logger: logging.Logger | None = None,
+    ) -> Any:
+        """Resolve the named service factory and call it with a fresh
+        ``PluginContext``, returning the constructed ``PluginService``.
+
+        Symmetric with :meth:`build_hook`. The host starts the returned
+        service only when it is resident, and owns its lifecycle.
+        """
+        try:
+            entry = self._services[name]
+        except KeyError as e:
+            raise PluginNotFoundError(f"no plugin service named {name!r}") from e
+        config = self._admit(entry, config)
+        ctx = PluginContext(
+            config=config,
+            services=services,
+            logger=logger or logging.getLogger(f"raven.plugins.{name}"),
+        )
+        return entry.factory(ctx)
 
     def _admit(self, entry: "_ActivatedFactory", config: dict[str, Any]) -> dict[str, Any]:
         """Admit a config slice against the owning manifest's declaration.
