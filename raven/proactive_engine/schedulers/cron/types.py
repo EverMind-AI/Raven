@@ -46,6 +46,10 @@ class CronPayload:
     # land in the pane the operator is already looking at.
     direct_agent: str | None = None
     direct_handle: str | None = None
+    # Keyed-wake resilience: fire this past-due one-shot once at startup
+    # instead of dropping it. Only the keyed-wake verbs set it; a plain
+    # reminder keeps the documented drop-plus-notice startup behavior.
+    fire_missed: bool = False
 
 
 @dataclass
