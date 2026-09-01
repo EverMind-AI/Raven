@@ -342,3 +342,32 @@ class TestEverosPresence:
         note = everos_plugin_missing_note()
         assert "everos-memory" in note
         assert "memory.backend" in note
+
+
+def test_build_plugin_tools_stamps_the_contributing_plugin(tmp_path):
+    """[seam-1] The wake grant's namespace comes from this stamp; a plugin
+    that could name its own namespace could steal another's partition."""
+    from types import SimpleNamespace
+
+    from raven.core.plugin_stack import build_plugin_tools
+
+    class _Tool:
+        name = "t1"
+
+    class _Reg:
+        def tool_names(self):
+            return ["t1"]
+
+        def tool_plugin_id(self, name):
+            return "plug-a"
+
+        def build_tool(self, name, config, services):
+            return _Tool()
+
+    cfg = SimpleNamespace(
+        memory=SimpleNamespace(user_id="u", agent_id="a"),
+        plugins=SimpleNamespace(config={}),
+    )
+    tools = build_plugin_tools(tmp_path, cfg, registry=_Reg(), provider=None)
+    assert len(tools) == 1
+    assert tools[0].contributed_by == "plug-a"

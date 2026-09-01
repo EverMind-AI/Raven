@@ -104,6 +104,13 @@ class RuntimeHandles:
     in this loop or the funnel failed to build, which a binder treats as a
     decline."""
 
+    wake_scheduler: Any = None
+    """Keyed one-shot wakes on the host's scheduler, namespaced to the
+    contributing plugin (paper: contracts/scheduling.py) -- a holder's keys
+    can neither see nor move another plugin's wakes, nor any plain reminder.
+    ``None`` where the host runs no scheduler (a one-shot ``raven agent -m``,
+    a test locator), which a binder treats as a decline."""
+
 
 class BindDeclinedError(Exception):
     """Raised inside ``bind_runtime`` to decline serving.

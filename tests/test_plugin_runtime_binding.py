@@ -147,3 +147,37 @@ def test_a_loop_without_playbooks_takes_the_bundled_tools_off_the_table(tmp_path
     assert loop.tools.get("load_playbook") is None, "an unbound loader must not serve"
     assert loop.tools.get("create_playbook") is None
     assert loop.tools.get("plain_probe") is not None, "a decline does not take the others down"
+
+
+def test_the_wake_grant_is_namespaced_by_the_build_stamp(tmp_path):
+    """[seam-1] The loop mints the wake grant per tool from the identity the
+    plugin build stamped -- a namespace the plugin chose for itself would be a
+    namespace it could steal -- and a tool without a stamp, or a host without
+    a scheduler, gets None."""
+    import time
+
+    from raven.proactive_engine.schedulers.cron.service import CronService
+
+    stamped = _Bindable()
+    stamped.contributed_by = "plug-a"
+    bare = _Bindable()
+    bare.name = "bindable_bare"
+
+    cron = CronService(tmp_path / "jobs.json", allowed_channels=None)
+    loop = _loop(tmp_path, [stamped, bare])
+    assert stamped.bound[0].wake_scheduler is None, "no scheduler on this host, no grant"
+
+    loop2 = AgentLoop(
+        provider=_Provider(),
+        workspace=tmp_path,
+        model="fake/model",
+        policy=TurnPolicy(max_iterations=2),
+        host=HostWiring(cron_service=cron),
+        tools=ToolWiring(restrict_to_workspace=True, plugin_tools=[stamped, bare]),
+    )
+    granted = stamped.bound[-1].wake_scheduler
+    assert granted is not None
+    job = granted.schedule_wake("c1", int(time.time() * 1000) + 60_000, "look", channel="tui")
+    assert job.id == "wake:plug-a:c1"
+    assert bare.bound[-1].wake_scheduler is None, "no stamped identity, no namespace to grant into"
+    assert loop2 is not None

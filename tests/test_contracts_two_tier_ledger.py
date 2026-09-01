@@ -111,6 +111,9 @@ LEDGER = {
         "BindDeclinedError",
         "RuntimeHandles",
         "ServiceLocator",
+        # The wake-scheduling grant (scheduling.py): keyed one-shot wakes,
+        # namespaced per holder.
+        "WakeScheduler",
     },
     "factory_loop": {"AgentHook", "AgentHookContext", "FACTORY_LOOP_SURFACE_VERSION", "HookDecision", "McpHost"},
 }
@@ -215,7 +218,7 @@ def test_import_guard_bites_machinery_and_spares_type_checking(tmp_path):
 # The contract tier is versioned: its shape moves only with a version bump
 # ---------------------------------------------------------------------------
 
-PINNED_CONTRACT_SURFACE = ("3", "1d14d6c682e77e98c7e2fc23246835af348c376906d61b7a007699e3d4da2455")
+PINNED_CONTRACT_SURFACE = ("4", "61e2af7887288abc9f7c55a400cfe57e77191d43daff40c2a8887c50fbd85b85")
 
 
 def contract_surface_digest(pkg_dir: Path) -> str:
