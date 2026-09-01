@@ -33,7 +33,7 @@ from oncall_flow.interruption import ContractGuard, InterruptionContract  # noqa
 from oncall_flow.ledger import Ledger  # noqa: E402
 from oncall_flow.mock_backend import JobPlan, MockJobBackend  # noqa: E402
 from oncall_flow.policy import (  # noqa: E402
-    RetryPolicy,
+    RetryPolicy,  # noqa: E402
     attempt_key,
     attempt_no,
     base_trial,
@@ -314,3 +314,18 @@ def test_anything_running_reads_the_ledger_file(tmp_path: Path) -> None:
 
     led.set_result("t1", JobResult(JobStatus.FAILED, error="done"))
     assert anything_running(cdir) is False
+
+
+# ── fork test_ops_policy.py, merged (2c-ii) ─────────────────────────
+
+
+def test_default_policy_never_retries() -> None:
+    policy = RetryPolicy()
+    assert policy.should_retry(1) is False
+
+
+def test_max_retries_allows_that_many_further_attempts() -> None:
+    policy = RetryPolicy(max_retries=2)
+    assert policy.should_retry(1) is True
+    assert policy.should_retry(2) is True
+    assert policy.should_retry(3) is False

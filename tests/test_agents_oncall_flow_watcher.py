@@ -16,6 +16,7 @@ from __future__ import annotations
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 from loguru import logger
 
@@ -34,7 +35,7 @@ from oncall_flow.instrument import (  # noqa: E402
     write_meta,
 )
 from oncall_flow.ledger import Ledger, LedgerCorruptError  # noqa: E402
-from oncall_flow.watcher import OpsEventWatcher, make_event_watcher  # noqa: E402
+from oncall_flow.watcher import OpsEventWatcher, _unhealthy, make_event_watcher  # noqa: E402
 
 from raven.contracts.services import PluginService  # noqa: E402
 from raven.plugins.context import PluginContext, RuntimeHandles, ServiceLocator  # noqa: E402
@@ -392,3 +393,73 @@ async def test_start_is_once_and_restart_after_stop_works(tmp_path: Path) -> Non
     await watcher.start(handles)
     assert watcher.running
     await watcher.stop()
+
+
+# ── fork test_ops_event_watcher.py, merged (2c-ii) ──────────────────
+
+
+def test_unhealthy_detects_nonfinite_only() -> None:
+    assert _unhealthy({"step": 3, "loss": float("nan")})
+    assert _unhealthy({"residual": float("inf")})
+    assert not _unhealthy({"step": 3, "loss": 2.5})
+
+
+class _RecordingProbe:
+    def __init__(self) -> None:
+        self.polled: list[str] = []
+
+    async def poll(self, handle):
+        self.polled.append(handle.job_id)
+        return JobStatus.SUCCEEDED
+
+    async def fetch_result(self, handle):
+        return JobResult(status=JobStatus.SUCCEEDED, metrics={}, output="", error=None)
+
+    async def fetch_progress(self, handle, tail=1):
+        return []
+
+
+async def test_the_backend_named_in_meta_is_the_one_polled(monkeypatch, tmp_path: Path) -> None:
+    from oncall_flow import backends as backends_mod
+
+    recorder = _RecordingProbe()
+    monkeypatch.setitem(backends_mod._FACTORIES, "recording", lambda meta: recorder)
+
+    svc, grant = _grant(tmp_path)
+    store = CampaignStore(tmp_path / "state")
+    cdir = _campaign(store, "c1", meta={"backend": "recording", **ROUTE})
+    watcher = _watcher(tmp_path, probe_from_meta=backends_mod.backend_from_meta)
+    await watcher.start(SimpleNamespace(wake_scheduler=grant))
+    try:
+        acted = await watcher.tick()
+    finally:
+        await watcher.stop()
+
+    assert recorder.polled == ["job-1"]
+    assert acted == ["c1"]
+    data = read_events(cdir)
+    assert any(e["kind"] == "trial_terminal_observed" for e in data)
+
+
+async def test_an_unresolvable_backend_is_reported_not_swallowed(tmp_path: Path) -> None:
+    """A campaign naming a backend nobody registered fails identically to a quiet
+    campaign, so the first occurrence has to reach the log at warning level."""
+    svc, grant = _grant(tmp_path)
+    store = CampaignStore(tmp_path / "state")
+    _campaign(store, "c1", meta={"backend": "no-such-backend"})
+
+    from oncall_flow import backends as backends_mod
+
+    seen: list[str] = []
+    sink_id = logger.add(lambda m: seen.append(m.record["level"].name + ":" + m.record["message"]), level="DEBUG")
+    watcher = _watcher(tmp_path, probe_from_meta=backends_mod.backend_from_meta)
+    await watcher.start(SimpleNamespace(wake_scheduler=grant))
+    try:
+        assert await watcher.tick() == []
+        assert any(s.startswith("WARNING") and "c1" in s for s in seen)
+        seen.clear()
+        assert await watcher.tick() == []
+        assert all(not s.startswith("WARNING") for s in seen)
+    finally:
+        await watcher.stop()
+        logger.remove(sink_id)
