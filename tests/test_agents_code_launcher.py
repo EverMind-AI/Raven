@@ -120,17 +120,46 @@ def _hermetic_build(rendered, tmp_path, monkeypatch):
 # --- byte parity: the one prompt asset and the roster identity --------------
 
 
-def test_the_carried_guide_is_the_forks_template_byte_for_byte():
+#: The only bytes where the carried guide may differ from the fork template:
+#: the search tool ships as find on trunk, and a guide teaching the fork's
+#: glob spelling would never self-heal (Rank A audit, G3). The workbench-tool
+#: mentions keep the fork's bytes -- their wave restores those tools.
+GUIDE_RESPELLINGS = [
+    (
+        "## grep / glob — search, truncation, spill",
+        "## grep / find — search, truncation, spill",
+    ),
+    (
+        "- When `grep`/`glob` results overflow the cap",
+        "- When `grep`/`find` results overflow the cap",
+    ),
+]
+
+
+def _respelled_fork_template() -> bytes:
+    text = FORK_TEMPLATE.read_text()
+    for fork_spelling, product_spelling in GUIDE_RESPELLINGS:
+        assert text.count(fork_spelling) == 1, fork_spelling
+        text = text.replace(fork_spelling, product_spelling)
+    return text.encode()
+
+
+def test_the_carried_guide_is_the_forks_template_modulo_the_respellings():
     """The fork's TOOLS.md is a whole-file drift (exec sessions, background
     jobs, the 30k spill), not an appended section like oncall's; the product
-    carries it as one asset, byte-equal, no respelling list."""
-    assert (
-        RUN_PY.parent / "plugins" / "code-flow" / "prompts" / "TOOLS_CODE.md"
-    ).read_bytes() == FORK_TEMPLATE.read_bytes()
+    carries it as one asset, byte-equal after the enumerated respellings --
+    pinned from both ends so neither side can drift silently."""
+    carried = (RUN_PY.parent / "plugins" / "code-flow" / "prompts" / "TOOLS_CODE.md").read_bytes()
+    assert carried == _respelled_fork_template()
+    text = carried.decode()
+    for fork_spelling, product_spelling in GUIDE_RESPELLINGS:
+        assert fork_spelling not in text
+        assert text.count(product_spelling) == 1
 
 
 def test_the_seeded_guide_is_the_forks_wording(grounded, tmp_path):
-    """What lands in the state partition equals what the fork engine wrote.
+    """What lands in the state partition equals what the fork engine wrote,
+    modulo the same enumerated respellings the carried guide holds.
 
     Raven writes workspace templates only for files still missing, so seeding
     first keeps the fork's tool guidance in front of the model instead of the
@@ -138,7 +167,7 @@ def test_the_seeded_guide_is_the_forks_wording(grounded, tmp_path):
     """
     _render(grounded)
     seeded = (tmp_path / "state" / "acp" / "TOOLS.md").read_bytes()
-    assert seeded == FORK_TEMPLATE.read_bytes()
+    assert seeded == _respelled_fork_template()
 
 
 def test_the_guide_is_seeded_once_and_never_overwritten(grounded, tmp_path):
@@ -670,6 +699,11 @@ VENDORED_TOOL_FACE = {
     "write_file",
 }
 
+#: Tools trunk's acp assembly wires that the fork's never registered; they
+#: board the live face past the hermetic fixture, so only their disable rows
+#: hold the line (Rank A audit, G1).
+ACP_HOST_EXTRAS = {"cron"}
+
 #: Tools trunk grew after the fork was cut; none may reach this product's face.
 TRUNK_NEW_SIX = {
     "create_playbook",
@@ -699,4 +733,5 @@ def test_the_products_tool_face_is_the_forks_config_intent_minus_the_ledger(grou
     assert gates == ["WorkspaceGate"], "the write gate must be cast at assembly, from the rendered slice"
     disabled = set(json.loads((RUN_PY.parent / "config.json").read_text())["tools"]["disabledTools"])
     assert TRUNK_NEW_SIX <= disabled, "the trunk-new six stay disabled by config, not by luck"
+    assert ACP_HOST_EXTRAS <= disabled, "the acp assembly extras stay disabled by config, not by luck"
     assert {"exec", "ask_user"} & disabled == set(), "the coding lane and the gate's asking channel stay open"

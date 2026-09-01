@@ -53,7 +53,8 @@
       "find_skill",
       "load_playbook",
       "plugin",
-      "run_subagent_dag"
+      "run_subagent_dag",
+      "cron"
     ]
   },
   "memory": {
