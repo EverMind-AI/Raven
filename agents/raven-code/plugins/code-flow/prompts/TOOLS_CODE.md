@@ -62,9 +62,9 @@ done, and stopping it on the way out fails the task.
   matters
 - Absence of a truncation marker means you saw the complete requested range
 
-## grep / glob — search, truncation, spill
+## grep / find — search, truncation, spill
 
-- When `grep`/`glob` results overflow the cap, the COMPLETE result is saved to a
+- When `grep`/`find` results overflow the cap, the COMPLETE result is saved to a
   file whose path appears in the output — `grep`/`read_file` that file instead of
   re-running blind with a narrower pattern when the cut part may matter
 
