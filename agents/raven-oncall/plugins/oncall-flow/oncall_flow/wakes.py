@@ -17,6 +17,12 @@ raven/contracts/scheduling.py) and this module is the whole translation:
 - **replace is silent in the grant**, so the "this replaced the previous
   pending wake" half of the fork's note is recovered by reading the pending
   wake before scheduling.
+- **the route is a campaign fact.** The fork addressed a wake by the
+  scheduling window's live channel/chat_id (plus the owner-window store the
+  seam ruling retired); a resident watcher has no session, so where a
+  campaign's wakes land is recorded in its own declaration (``wake_route``
+  in meta) -- ``channel``+``to``, or ``direct_agent``, the D9 rebuilt
+  addressing.
 
 Every function takes the scheduler explicitly and answers in the fork's own
 note text when it cannot schedule: the caller (a tool, the watcher) owes the
@@ -33,6 +39,26 @@ if TYPE_CHECKING:
 
 NO_SCHEDULER_NOTE = "No scheduler available; check ops_tune_status manually when results are due."
 NO_CONTEXT_NOTE = "No session context to schedule a wake; check ops_tune_status manually when results are due."
+
+_ROUTE_KEYS = ("channel", "to", "direct_agent", "direct_handle")
+
+
+def wake_route(meta: dict[str, Any]) -> dict[str, str]:
+    """The campaign's declared wake route, as ``schedule_next_look`` kwargs.
+
+    Empty when the declaration names no usable route -- usable means
+    ``channel`` + ``to``, or ``direct_agent`` (the same guard the scheduling
+    verb applies). The scheduling tools (part 2b) record the route whenever
+    they schedule from a live session, which is what lets a cold resident
+    watcher raise a wake for a campaign whose window is long gone.
+    """
+    declared = meta.get("wake_route")
+    if not isinstance(declared, dict):
+        return {}
+    route = {k: str(v) for k, v in declared.items() if k in _ROUTE_KEYS and v}
+    if (route.get("channel") and route.get("to")) or route.get("direct_agent"):
+        return route
+    return {}
 
 
 def schedule_next_look(
@@ -168,14 +194,36 @@ def after_action_message(*, campaign: str, name: str, at: str, key: str) -> str:
     )
 
 
+def escalation_message(*, campaign: str, trial: str, error: str, attempt: int, ledger: str) -> str:
+    """The escalation wake: a trial failed and its retry budget is exhausted.
+
+    Raised at most once per trial (the ledger's ``escalated`` flag); the fork
+    fired its escalation handler from Campaign under the same flag, and this
+    is that handler said as a wake -- the agent decides, and interrupting a
+    person stays behind ops_ask_owner's contract guard (D4).
+    """
+    return (
+        f"[Ops campaign '{campaign}' escalation] Trial '{trial}' FAILED and its retry "
+        f"budget is exhausted (attempt {attempt} was the last allowed; error: "
+        f"{error or 'unrecorded'}). This escalation is raised at most once for this trial. "
+        f"Call ops_tune_status(ledger='{ledger}') to read the campaign, then decide from "
+        f"what the failure text actually states: ops_submit a changed config as the next "
+        f"round if the budget allows and the cause is addressable, ops_finish with "
+        f"outcome='failed' to hand it back, or ops_ask_owner if the decision is genuinely "
+        f"the owner's."
+    )
+
+
 __all__ = [
     "NO_CONTEXT_NOTE",
     "NO_SCHEDULER_NOTE",
     "advance_look",
     "after_action_message",
     "cancel_look",
+    "escalation_message",
     "pending_look",
     "recheck_message",
     "round_due_message",
     "schedule_next_look",
+    "wake_route",
 ]
