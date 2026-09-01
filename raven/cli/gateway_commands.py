@@ -452,6 +452,24 @@ def register(app: typer.Typer) -> None:
                 )
 
         async def run():
+            # `raven web --stop` and a systemd stop deliver SIGTERM. Parity
+            # with Ctrl-C means cancelling THIS task in-loop so the graceful
+            # chain below runs: the stdlib runner converts only SIGINT into a
+            # main-task cancel, and a handler that raises KeyboardInterrupt
+            # escapes run_until_complete without cancelling anything --
+            # teardown then fell to the runner's 2-second sweep.
+            main_task = asyncio.current_task()
+            term_signalled = False
+
+            def _on_term() -> None:
+                nonlocal term_signalled
+                if term_signalled or main_task is None:
+                    return
+                term_signalled = True
+                main_task.cancel()
+
+            with suppress(NotImplementedError, RuntimeError, ValueError):
+                asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, _on_term)
             health_server = None
             gw_teardown = None
             gw_scheduler = None
@@ -969,11 +987,15 @@ def register(app: typer.Typer) -> None:
             except KeyboardInterrupt:
                 console.print("\nShutting down...")
             except asyncio.CancelledError:
-                # gateway.shutdown cancels this task on purpose; anything else
-                # cancelling it is not ours to swallow.
-                if not shutdown_requested:
+                # gateway.shutdown cancels this task on purpose, and so does
+                # the SIGTERM handler above; anything else cancelling it is
+                # not ours to swallow.
+                if term_signalled:
+                    console.print("\nShutting down...")
+                elif shutdown_requested:
+                    console.print("\nShutting down (control plane)...")
+                else:
                     raise
-                console.print("\nShutting down (control plane)...")
             finally:
                 if health_server is not None:
                     health_server.close()
@@ -1025,16 +1047,6 @@ def register(app: typer.Typer) -> None:
                         _logger.exception(
                             "memory backend stop failed; continuing shutdown",
                         )
-
-        # `raven web --stop` reaches this process with SIGTERM. Route it onto
-        # the same path as Ctrl-C so run()'s teardown chain executes; the
-        # default action kills the process with zero teardown. suppress: only
-        # the main thread may set signal handlers.
-        def _on_term(_signum: int, _frame: object) -> None:
-            raise KeyboardInterrupt
-
-        with suppress(ValueError):
-            signal.signal(signal.SIGTERM, _on_term)
 
         bounded_asyncio.run(run())
 
