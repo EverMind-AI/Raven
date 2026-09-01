@@ -65,7 +65,7 @@ from raven.observability import semconv
 from raven.providers.base import send_max_tokens
 from raven.providers.binding import ModelBinding, active_binding, use_binding
 from raven.providers.capabilities import image_placeholder_text, supports_image_tool_result, vision_verdict
-from raven.providers.rates import resolve_context_window
+from raven.providers.rates import resolve_context_window, resolve_max_output_tokens
 from raven.providers.streaming import stream_llm_call
 from raven.sandbox import SandboxConfig, SandboxExecutor, SandboxInitError, build_executor
 from raven.session.manager import Session, SessionManager

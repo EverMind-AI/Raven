@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from raven.agent.loop import compaction
 from raven.agent.loop._shared import (
     _ABORTED_ACTION_REPLY,
     _ATTACHED_IMAGE_KEY,
@@ -48,6 +49,7 @@ from raven.agent.loop._shared import (
     autofill_resolver,
     classify_empty_response,
     current_autofill,
+    estimate_prompt_tokens,
     failure_class,
     image_placeholder_text,
     is_hard_tool_failure,
@@ -59,6 +61,7 @@ from raven.agent.loop._shared import (
     loop_break_nudge,
     replace,
     resolve_context_window,
+    resolve_max_output_tokens,
     semconv,
     session_of,
     stream_llm_call,
@@ -429,6 +432,62 @@ class TurnPathMixin:
             elided += 1
         return out, elided
 
+    async def _summarize_head(self, messages: list[dict], model: str | None) -> tuple[list[dict], str]:
+        """Replace the transcript head with one LLM-written handoff brief.
+
+        The system prefix and the first user message never enter the summary,
+        and a recent tail (``preserve_recent_tokens`` budget) stays verbatim so
+        the model keeps its most recent working state. The summary runs on the
+        turn's own provider and model: a pinned summary model would outlive a
+        model switch and then route every summary to a retired endpoint.
+
+        Returns ``(messages, verdict)`` with verdict one of ``"changed"``
+        (head replaced), ``"failed"`` (a summary call was paid for and freed
+        nothing -- the caller must count it against the shared retry budget or
+        a failing endpoint would be paid once per iteration) or ``"skipped"``
+        (no call was made: the head is too small to be worth one). Anything
+        but ``"changed"`` returns the input untouched, so the caller degrades
+        to pruning plus the existing overflow path and is never worse off
+        than today.
+        """
+        cfg = self._compaction
+        limit = self.context_window_tokens
+        reserved = compaction.reserved_tokens(
+            cfg.reserved_tokens,
+            resolve_max_output_tokens(model or self.model, allow_fetch=False),
+        )
+        budget = compaction.tail_budget(cfg.preserve_recent_tokens, limit, reserved)
+        split = compaction.select_split(messages, budget, estimate_prompt_tokens)
+        protect_end = compaction.protected_prefix_end(messages)
+        if split is None or protect_end is None:
+            return messages, "skipped"
+        transcript = compaction.render_transcript(messages[protect_end:split])
+        try:
+            response = await self.provider.chat(
+                messages=[
+                    {"role": "system", "content": compaction.SUMMARY_INSTRUCTIONS},
+                    {"role": "user", "content": transcript},
+                ],
+                tools=None,
+                model=model or self.model,
+                max_tokens=compaction.SUMMARY_MAX_TOKENS,
+            )
+        except Exception as exc:
+            logger.warning("Transcript head summary call raised: {}", exc)
+            return messages, "failed"
+        summary = (response.content or "").strip()
+        if response.finish_reason == "error" or not summary:
+            # The reason decides the fix (transcript too long vs endpoint
+            # refusal vs empty completion), so record it.
+            logger.warning(
+                "Transcript head summary failed ({} head message(s), {} chars): {}",
+                split - protect_end,
+                len(transcript),
+                str(response.content or "empty summary")[:300],
+            )
+            return messages, "failed"
+        return compaction.build_compacted(messages, split, summary), "changed"
+
     async def _synthesize_final_on_exhaustion(
         self,
         messages: list[dict],
@@ -575,6 +634,15 @@ class TurnPathMixin:
         # Context-overflow recovery: bound the number of emergency shrinks so a
         # turn that overflows even after eliding can't loop forever.
         compress_retries = 0
+        # In-turn transcript compaction (config-gated, factory-off). The
+        # proactive trigger arms on the billed context size of the last
+        # successful call: 0 until the first usage report and after any
+        # compaction, so it only ever fires on fresh data.
+        last_context_used = 0
+        # The reactive summary is a last resort, once per turn: an overflow
+        # retry that finds nothing left to elide may summarize the head
+        # instead of surfacing a fatal error.
+        reactive_summary_tried = False
         # Image-demotion recovery: bound per turn, same reason.
         image_demote_retries = 0
         # Tool-failure-loop break (#1b): track consecutive hard failures of the
@@ -702,6 +770,54 @@ class TurnPathMixin:
                         messages.append({"role": "user", "content": inj_text})
                         logger.info("inject: merged a mid-turn user message")
 
+            # Proactive compaction layer (config-gated, factory-off): the same
+            # usage reading the overflow recovery consults, acted on before the
+            # next call so recovery does not have to wait for the window to
+            # blow. Deterministic pruning runs first; the LLM head summary runs
+            # only when pruning is not enough, and shares the overflow-retry
+            # budget so summary calls stay bounded per turn. Placed above the
+            # autofill publish: compaction rebinds ``messages``, and a snapshot
+            # published before the rebind would go quietly stale.
+            if self._compaction.enabled and last_context_used:
+                limit = self.context_window_tokens
+                reserved = compaction.reserved_tokens(
+                    self._compaction.reserved_tokens,
+                    resolve_max_output_tokens(effective_model, allow_fetch=False),
+                )
+                if compaction.should_compact(last_context_used, limit, reserved, self._compaction.trigger_ratio):
+                    projected = last_context_used
+                    if self._compaction.prune:
+                        pruned, elided = self._emergency_shrink(messages)
+                        if elided > 0:
+                            # No server reading exists for the pruned list until
+                            # the next response, so judge the summary tier by
+                            # projecting the estimated savings onto the observed
+                            # size (local estimates do not know the server's
+                            # tokenizer; the delta is safer than the absolute).
+                            saved = max(0, estimate_prompt_tokens(messages) - estimate_prompt_tokens(pruned))
+                            messages = pruned
+                            projected = max(0, last_context_used - saved)
+                            last_context_used = 0
+                            logger.warning(
+                                "Context near window; elided {} older transcript item(s) before the next call",
+                                elided,
+                            )
+                    if (
+                        compaction.should_compact(projected, limit, reserved, self._compaction.trigger_ratio)
+                        and compress_retries < self._MAX_COMPRESS_RETRIES
+                    ):
+                        summarized, verdict = await self._summarize_head(messages, effective_model)
+                        if verdict != "skipped":
+                            compress_retries += 1
+                        if verdict == "changed":
+                            messages = summarized
+                            last_context_used = 0
+                            logger.warning(
+                                "Context near window; summarized the transcript head before the next call ({}/{})",
+                                compress_retries,
+                                self._MAX_COMPRESS_RETRIES,
+                            )
+
             # Same seam and the same reason as the drain above: only the loop's
             # own task may touch ``messages``, and only here is every tool
             # result already in. Reading the turn's autofill is safe at this
@@ -794,9 +910,16 @@ class TurnPathMixin:
             # per CAP-CHAT-1 wire shape. Use the wire-contract TurnUsage
             # fields (prompt_tokens / completion_tokens / total_tokens) — not
             # the agent-internal snapshot with model / cache / cost fields.
-            if usage_sink is not None and response.usage:
+            if response.usage:
                 prompt_tokens = int(response.usage.get("prompt_tokens", 0) or 0)
                 completion_tokens = int(response.usage.get("completion_tokens", 0) or 0)
+                # One reading for both consumers: the sink gauge below and the
+                # proactive compaction trigger at the top of the next
+                # iteration. They differ in their thresholds, not in what
+                # they measure.
+                if prompt_tokens + completion_tokens > 0:
+                    last_context_used = prompt_tokens + completion_tokens
+            if usage_sink is not None and response.usage:
                 # An explicitly configured window always wins over the live
                 # table -- that is what setting it means. Otherwise the live
                 # window from the model's provider table (e.g. OpenRouter,
@@ -836,6 +959,7 @@ class TurnPathMixin:
                     messages = shrunk
                     compress_retries += 1
                     iteration -= 1  # the overflowed call did no work; don't bill it
+                    last_context_used = 0
                     logger.warning(
                         "Context overflow; elided {} old tool result(s), retrying ({}/{})",
                         elided,
@@ -843,6 +967,21 @@ class TurnPathMixin:
                         self._MAX_COMPRESS_RETRIES,
                     )
                     continue
+                if self._compaction.enabled and not reactive_summary_tried:
+                    reactive_summary_tried = True
+                    summarized, verdict = await self._summarize_head(messages, call_model or effective_model)
+                    if verdict == "changed":
+                        messages = summarized
+                        compress_retries += 1
+                        iteration -= 1  # same discipline: the overflowed call did no work
+                        last_context_used = 0
+                        logger.warning(
+                            "Context overflow with nothing left to elide; summarized the "
+                            "transcript head, retrying ({}/{})",
+                            compress_retries,
+                            self._MAX_COMPRESS_RETRIES,
+                        )
+                        continue
 
             # Image-in-tool-result refused: this endpoint takes a picture only in
             # a user message. Rebuild onto the placeholder path -- the shape a

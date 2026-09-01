@@ -129,6 +129,39 @@ class ChannelsConfig(Base):
         return {name for name, socket in self.channel_entries().items() if socket.enabled}
 
 
+class CompactionConfig(Base):
+    """In-turn transcript compaction for long agentic turns.
+
+    Off by default: the loop's only in-turn shrink is then the reactive,
+    deterministic elision it has always run on a provider's overflow error.
+    Enabled, two layers join it, on the same usage readings:
+
+    - Proactive: before an LLM call, once the last observed context size
+      crosses the trigger, older tool-result bodies are pruned first
+      (deterministic, no LLM call) and, only if that is not enough, the
+      transcript head is replaced by an LLM summary while a recent tail
+      stays verbatim.
+    - Reactive completion: an overflow retry that finds nothing left to
+      elide may take the summary path instead of surfacing a fatal error.
+
+    Summaries always run on the turn's own model and provider -- a pinned
+    summary model outlives a model switch and then routes every summary to
+    a retired endpoint. A legacy ``model`` key in saved configs is accepted
+    and ignored.
+    """
+
+    enabled: bool = False
+    prune: bool = True
+    # None derives min(20000, resolved max output tokens) -- room for the reply.
+    reserved_tokens: int | None = None
+    # None keeps the sole trigger at ``window - reserved_tokens``; a fraction
+    # in (0, 1) also compacts once context crosses ``trigger_ratio * window``.
+    trigger_ratio: float | None = None
+    # None derives 25% of the usable window clamped to [2000, 8000] -- the
+    # verbatim tail preserved through a summary compaction.
+    preserve_recent_tokens: int | None = None
+
+
 class AgentDefaults(Base):
     """Default agent configuration."""
 
@@ -152,6 +185,8 @@ class AgentDefaults(Base):
     # window at construction time. A positive value pins the window, taking
     # priority over whatever the model's own catalogue reports.
     context_window_tokens: int | None = None
+    # In-turn transcript compaction knobs; factory-off (see CompactionConfig).
+    compaction: CompactionConfig = Field(default_factory=CompactionConfig)
     temperature: float = 0.1
     # Per-call wall-clock cap (seconds) for every LLM request (main loop and
     # sub-agents). Bounds a stalled backend that trickles bytes without ever
