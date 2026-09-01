@@ -351,6 +351,7 @@ class FindTool(_FsTool):
     """Find files by glob pattern, sorted by recency. Pure-Python (pathlib)."""
 
     _DEFAULT_LIMIT = 1000
+    timeout_seconds = 30.0
 
     @property
     def name(self) -> str:
@@ -413,11 +414,14 @@ class FindTool(_FsTool):
         # recursively (fd-style), so 'foo.py' finds it at any depth.
         glob_expr = pattern if "/" in pattern else f"**/{pattern}"
         try:
-            matches = [
-                p for p in base.glob(glob_expr) if not any(part in _IGNORE_DIRS for part in p.relative_to(base).parts)
-            ]
+            return await asyncio.to_thread(self._run_find, base, glob_expr, cap)
         except (ValueError, OSError) as e:
             return f"Error running find: {e}"
+
+    def _run_find(self, base: Path, glob_expr: str, cap: int) -> str:
+        matches = [
+            p for p in base.glob(glob_expr) if not any(part in _IGNORE_DIRS for part in p.relative_to(base).parts)
+        ]
         if not matches:
             return "No files found matching pattern."
 
