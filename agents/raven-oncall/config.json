@@ -1,0 +1,71 @@
+{
+  "providers": {
+    "custom": {
+      "apiBase": "https://openrouter.ai/api/v1",
+      "models": [
+        "anthropic/claude-opus-5"
+      ]
+    }
+  },
+  "agents": {
+    "defaults": {
+      "workspace": "workspace",
+      "model": "anthropic/claude-opus-5",
+      "provider": "custom",
+      "reasoningEffort": "high",
+      "temperature": 1.0,
+      "maxTokens": 32768,
+      "contextWindowTokens": 400000,
+      "maxToolIterations": 150,
+      "llmCallTimeout": 1800
+    }
+  },
+  "tools": {
+    "restrictToWorkspace": false,
+    "sandbox": {
+      "backend": "none"
+    },
+    "exec": {
+      "timeout": 600,
+      "maxTimeout": 1200
+    },
+    "web": {
+      "search": {
+        "maxResults": 5
+      }
+    },
+    "disabledTools": [
+      "spawn",
+      "cron",
+      "read_skill",
+      "use_skill",
+      "hub",
+      "tool_search",
+      "tool_call",
+      "deep_research",
+      "image_generate",
+      "text_to_speech",
+      "video_generate"
+    ]
+  },
+  "memory": {
+    "backend": "everos",
+    "userId": "raven-oncall",
+    "agentId": "raven-oncall",
+    "memoryTopK": 5
+  },
+  "plugins": {
+    "config": {
+      "everos-memory": {
+        "mode": "http",
+        "base_url": "http://localhost:18791",
+        "user_id": "raven-oncall",
+        "agent_id": "raven-oncall",
+        "timeout_s": 360
+      },
+      "oncall-flow": {
+        "enabled": true
+      }
+    }
+  }
+}
