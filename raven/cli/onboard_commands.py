@@ -1714,7 +1714,8 @@ def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
     _step_header(2, t("Choose where Raven runs code / commands"))
 
     if skip or non_interactive:
-        console.print(t("  [dim]Keeping run location: host (direct).[/dim]"))
+        run_loc = t("Host (direct)") if _current_sandbox_backend() == "none" else t("Sandbox (boxlite)")
+        console.print(t("  [dim]Keeping run location: {location}.[/dim]", location=run_loc))
         if _current_sandbox_backend() == "none":
             _warn_host_risk()
         return None

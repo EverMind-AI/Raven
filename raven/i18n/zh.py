@@ -179,7 +179,7 @@ MESSAGES: dict[str, str] = {
     "  [green]✓ Connected!{suffix}[/green]": "  [green]✓ 连接成功!{suffix}[/green]",
     "  [dim]Default: {default_value} — recommended balance of quality/cost for daily use.[/dim]": "  [dim]默认:{default_value} — 质量/成本均衡,适合日常使用。[/dim]",
     "  [dim]Couldn't fetch the model list — enter the model id by hand.[/dim]": "  [dim]未能拉取模型列表,请手动输入模型 id。[/dim]",
-    "  [dim]Keeping run location: host (direct).[/dim]": "  [dim]保持运行位置:本机直接运行。[/dim]",
+    "  [dim]Keeping run location: {location}.[/dim]": "  [dim]保持运行位置:{location}。[/dim]",
     "  [green]✓ Running directly on the host.[/green]": "  [green]✓ 将在本机直接运行。[/green]",
     "  [dim]Setup complete - starting the TUI...[/dim]": "  [dim]配置完成,正在进入 TUI...[/dim]",
     "  [dim]Skipped via --skip-import.[/dim]": "  [dim]已通过 --skip-import 跳过。[/dim]",
