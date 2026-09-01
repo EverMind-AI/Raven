@@ -60,13 +60,30 @@ class Verdict:
         return next((m for m in self.machines if str(m.get("id")) == machine_id), None)
 
 
-def runs_on_machines(agent: str) -> bool:
-    """Whether this agent's manifest declares it runs work on the owner's machines.
+def _config_rows() -> list[dict]:
+    """The editable roster rows; module-level so tests pin the roster."""
+    from raven.config.update_subagents import get_agents
 
-    Read off the vendored folder's own ``subagent.json`` rather than the applied
-    config rows: the manifest is present before any config merge has happened,
-    and a flag misread as False only silences a check, never breaks a dispatch.
+    return get_agents()
+
+
+def runs_on_machines(agent: str) -> bool:
+    """Whether this agent's roster row declares it runs work on the owner's machines.
+
+    The applied config rows are the first truth -- the same rows a migrated
+    product registers with, so the flag survives its vendored folder's
+    retirement. The folder's own ``subagent.json`` stays the fallback for a
+    discovered seed no config row names yet: the agents-door truth, config
+    plus discovered seeds. A named row is authoritative either way, and a
+    roster that cannot be read refuses nothing -- a flag misread as False
+    only silences a check, never breaks a dispatch.
     """
+    try:
+        for row in _config_rows():
+            if row.get("name") == agent:
+                return bool(row.get("runsOnMachines"))
+    except Exception as exc:  # noqa: BLE001 -- a roster that cannot be read refuses nothing
+        logger.debug("machines: cannot read config roster for {}: {}", agent, exc)
     try:
         from raven.agent.subagent.vendored_agents import vendored_folder
 
