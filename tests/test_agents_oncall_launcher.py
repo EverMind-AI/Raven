@@ -20,6 +20,7 @@ REPO = Path(__file__).resolve().parent.parent
 RUN_PY = REPO / "agents" / "raven-oncall" / "run.py"
 FORK = REPO / "subagents" / "raven-oncall"
 FORK_SECTION = FORK / "Raven-Oncall" / "raven" / "templates" / "TOOLS_ONCALL.md"
+PRODUCT_SECTION = RUN_PY.parent / "plugins" / "oncall-flow" / "prompts" / "TOOLS_ONCALL.md"
 
 
 @pytest.fixture()
@@ -88,7 +89,7 @@ def test_the_oncall_section_is_the_vendored_twins_modulo_the_ops_exec_respelling
     for theirs, ours in OPS_EXEC_RESPELLINGS:
         assert expected.count(theirs) == 1, f"fork sentence moved: {theirs[:40]!r}"
         expected = expected.replace(theirs, ours)
-    assert (RUN_PY.parent / "TOOLS_ONCALL.md").read_text(encoding="utf-8") == expected
+    assert PRODUCT_SECTION.read_text(encoding="utf-8") == expected
 
 
 def test_the_seeded_guide_is_the_trunk_template_plus_the_section(grounded, tmp_path):
@@ -104,7 +105,7 @@ def test_the_seeded_guide_is_the_trunk_template_plus_the_section(grounded, tmp_p
     grounded.render_config(RUN_PY.parent / "config.json")
     seeded = (tmp_path / "state" / "workspace" / "TOOLS.md").read_bytes()
     base = (Path(templates.__file__).resolve().parent / "TOOLS.md").read_text(encoding="utf-8")
-    section = (RUN_PY.parent / "TOOLS_ONCALL.md").read_text(encoding="utf-8")
+    section = PRODUCT_SECTION.read_text(encoding="utf-8")
     assert seeded == (base.rstrip("\n") + "\n\n" + section).encode("utf-8")
 
 

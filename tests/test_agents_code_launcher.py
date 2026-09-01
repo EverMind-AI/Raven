@@ -60,7 +60,9 @@ def test_the_carried_guide_is_the_forks_template_byte_for_byte():
     """The fork's TOOLS.md is a whole-file drift (exec sessions, background
     jobs, the 30k spill), not an appended section like oncall's; the product
     carries it as one asset, byte-equal, no respelling list."""
-    assert (RUN_PY.parent / "TOOLS_CODE.md").read_bytes() == FORK_TEMPLATE.read_bytes()
+    assert (
+        RUN_PY.parent / "plugins" / "code-flow" / "prompts" / "TOOLS_CODE.md"
+    ).read_bytes() == FORK_TEMPLATE.read_bytes()
 
 
 def test_the_seeded_guide_is_the_forks_wording(grounded, tmp_path):
