@@ -225,6 +225,17 @@ async def build_rpc_stack(
 
         agent_loop.set_mcp_event_sink(_mcp_event)
 
+        # Contributed background services: every host of this stack is
+        # resident (the served page, an acp connection, a tui mounting its
+        # own loop), so this is where they start. Idempotent, so a host that
+        # already started them pays nothing; loud on failure, never fatal.
+        try:
+            await agent_loop.start_plugin_services()
+        except Exception:
+            from loguru import logger as _logger
+
+            _logger.exception("rpc: plugin services failed to start; continuing without them")
+
     def _agent_loop_factory():
         if agent_loop is not None:
             return agent_loop
@@ -332,6 +343,13 @@ async def build_rpc_stack(
         # the ACP pool are the host process's to close, not this stack's.
         if not owns_loop:
             return
+        # Contributed services stop first of all -- producers before drains,
+        # the same order dispose follows.
+        if agent_loop is not None:
+            try:
+                await agent_loop.stop_plugin_services()
+            except Exception:
+                logger.exception("plugin services stop failed; continuing shutdown")
         # Same order every host follows: drain, cancel, then close. Cancelling
         # after the pool closed would report each in-flight turn as a connection
         # failure instead of as the stop it is. Sub-agents also go before the
