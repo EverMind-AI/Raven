@@ -485,6 +485,7 @@ async def _run_rpc_server_until_done(
     )
 
     serve_task = asyncio.create_task(server.serve_forever())
+    backend_start_task: "asyncio.Task | None" = None
 
     try:
         # Wait until EITHER handshake completes OR deadline expires OR child exits.
@@ -522,7 +523,11 @@ async def _run_rpc_server_until_done(
                     )
                 _strip_tty_stream_handlers()
 
-            asyncio.create_task(_start_backend())
+            # Held, not dropped: the event loop keeps only a weak reference to
+            # a bare task (the GC hazard the MCP event bridge already guards
+            # against), and the teardown below must be able to settle a start
+            # still spawning EverOS before it drains and stops the backend.
+            backend_start_task = asyncio.create_task(_start_backend())
 
         await proc_done.wait()
         return True
@@ -567,6 +572,15 @@ async def _run_rpc_server_until_done(
             from loguru import logger as _logger
 
             _logger.exception("tui: acp pool close failed; continuing shutdown")
+        # A backend start still in flight (an EverOS spawn takes up to 30s)
+        # must not race the drain and stop below: settle it first.
+        if backend_start_task is not None and not backend_start_task.done():
+            backend_start_task.cancel()
+        if backend_start_task is not None:
+            try:
+                await backend_start_task
+            except (asyncio.CancelledError, Exception):
+                pass
         # Release the embedded index lock so the next process can start.
         if agent_loop is not None and agent_loop.backend is not None:
             try:
