@@ -294,6 +294,15 @@ def build_plugin_tools(
                 name,
             )
             continue
+        # The contributing plugin's identity rides the tool to bind time: the
+        # loop derives the wake grant's namespace from it, and a namespace a
+        # plugin could choose for itself would be a namespace it could steal.
+        # A factory may return anything tool-shaped; a product that cannot
+        # carry the stamp simply gets no namespaced grant at bind time.
+        try:
+            tool.contributed_by = plugin_id or name
+        except (AttributeError, TypeError):
+            pass
         tools.append(tool)
     return tools
 

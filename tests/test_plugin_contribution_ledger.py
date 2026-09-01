@@ -26,7 +26,7 @@ def test_the_service_locator_grants_are_the_ledgered_five() -> None:
     assert ServiceLocator.__dataclass_params__.frozen, "grants are handed over, never handed back"
 
 
-def test_the_runtime_handles_grants_are_the_ledgered_four() -> None:
+def test_the_runtime_handles_grants_are_ledgered() -> None:
     from raven.plugins.context import RuntimeHandles
 
     assert sorted(f.name for f in dataclasses.fields(RuntimeHandles)) == [
@@ -34,6 +34,9 @@ def test_the_runtime_handles_grants_are_the_ledgered_four() -> None:
         "session_dir",
         "subagent_registry",
         "subagents_paused",
+        # Keyed one-shot wakes on the host scheduler, namespaced to the
+        # contributing plugin (paper: contracts/scheduling.py).
+        "wake_scheduler",
     ], "a new field here is a new late-bound grant: ledger it and name the power it hands over"
     assert RuntimeHandles.__dataclass_params__.frozen, "grants are handed over, never handed back"
 

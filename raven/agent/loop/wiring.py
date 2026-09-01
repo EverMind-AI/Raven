@@ -595,18 +595,31 @@ class WiringMixin:
         """
         from raven.plugins.context import BindDeclinedError, RuntimeHandles
 
-        handles = RuntimeHandles(
+        base = dict(
             session_dir=self.sessions.session_dir,
             subagent_registry=self.subagents.registry,
             subagents_paused=lambda: self.subagents.paused,
             playbook_runtime=self._playbooks,
         )
+        cron = self.cron_service
         for tool in self.plugin_tools:
             bind = getattr(tool, "bind_runtime", None)
             if not callable(bind):
                 continue
             if self.tools.get(tool.name) is not tool:
                 continue
+            # The wake grant is namespaced to the contributing plugin, so the
+            # handles are minted per tool: a holder's keys can neither see
+            # nor move another plugin's wakes (paper: contracts/scheduling.py).
+            # None where the host runs no scheduler, or the tool arrived
+            # outside the plugin build (no stamped identity to namespace by).
+            wake = None
+            namespace = getattr(tool, "contributed_by", None)
+            if cron is not None and namespace:
+                from raven.proactive_engine.schedulers.cron.grant import NamespacedWakeScheduler
+
+                wake = NamespacedWakeScheduler(cron, str(namespace))
+            handles = RuntimeHandles(**base, wake_scheduler=wake)
             try:
                 bind(handles)
             except BindDeclinedError as decline:
