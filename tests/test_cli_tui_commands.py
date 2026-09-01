@@ -1132,3 +1132,21 @@ def test_check_sets_raven_tui_check_env_var(monkeypatch):
         "--check must export RAVEN_TUI_CHECK=1 so the node child can take "
         "the early-exit smoke path; missing means the smoke test hangs."
     )
+
+
+def test_backend_start_task_is_held_and_settled_before_the_drain() -> None:
+    """[N7-F6] The memory-backend start used to be a bare create_task: the
+    loop holds only a weak reference (the documented GC hazard), and nothing
+    joined it -- quitting during the up-to-30s EverOS spawn let the finally's
+    drain/stop race a still-running start(). The task must be held, and the
+    teardown must cancel-and-await it before the backend is drained and
+    stopped."""
+    import inspect
+
+    from raven.cli import tui_commands
+
+    src = inspect.getsource(tui_commands._run_rpc_server_until_done)
+    assert "backend_start_task = asyncio.create_task(_start_backend())" in src
+    cancel_at = src.index("backend_start_task.cancel()")
+    drain_at = src.index("drain_backend_stores()")
+    assert cancel_at < drain_at, "the start must be settled before the backend is drained and stopped"
