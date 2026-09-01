@@ -701,6 +701,27 @@ class TestSessionDelete:
 
         assert rig.engine.sessions.peek(session_id) is None
 
+    async def test_the_delete_face_reaches_the_shared_stores_observers(self, rig):
+        """[code seam-2] Every delete face resolves to the loop's shared
+        manager, so an observer attached there hears an ACP delete too --
+        with the removal outcome (paper: contracts/session_events.py)."""
+        heard: list[tuple[str, bool]] = []
+
+        class _Probe:
+            def on_session_deleted(self, session_key: str, removed: bool) -> None:
+                heard.append((session_key, removed))
+
+        session = rig.engine.sessions.get_or_create("acp:observed")
+        session.add_message("user", "hi")
+        rig.engine.sessions.save(session)
+        rig.engine.sessions.set_delete_observers((_Probe(),))
+        await rig.handshake()
+
+        response = await rig.call("session/delete", {"sessionId": "acp:observed"})
+
+        assert response["result"] == {}
+        assert heard == [("acp:observed", True)]
+
 
 class TestSessionInfoUpdate:
     async def test_a_change_of_title_is_announced_after_the_turn(self, rig):

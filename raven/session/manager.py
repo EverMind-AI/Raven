@@ -282,6 +282,13 @@ class SessionManager:
         self.project_dir = project_dir
         self.sessions_dir = ensure_dir(self.workspace / "sessions")
         self._cache: dict[str, Session] = {}
+        self._delete_observers: tuple = ()
+
+    def set_delete_observers(self, observers: tuple) -> None:
+        """Replace the whole deletion-observer tuple. A START-phase verb owned
+        by the resident host: attach at service start, detach with ``()`` at
+        stop; assembly never calls it (paper: contracts/session_events.py)."""
+        self._delete_observers = tuple(observers)
 
     def _group_dir(self, key: str) -> Path:
         """The directory grouping this session: project slug, or channel.
@@ -674,17 +681,25 @@ class SessionManager:
 
         Returns True only if a file was actually removed; False if no file
         existed or the removal failed. Deleting an unknown key is a safe no-op.
+        Attached observers hear every delete request after the store has acted,
+        with the removal outcome; an observer that raises is logged and skipped
+        (paper: contracts/session_events.py), so none can change this verdict.
         """
         path = self.session_path(key)
         self.invalidate(key)
+        removed = False
         if path.exists():
             try:
                 path.unlink()
+                removed = True
             except OSError:
                 logger.warning("session.delete: failed to remove file for {}", key)
-                return False
-            return True
-        return False
+        for observer in self._delete_observers:
+            try:
+                observer.on_session_deleted(key, removed)
+            except Exception:
+                logger.exception("session.delete: observer failed for {}; the deletion stands", key)
+        return removed
 
     def exists(self, key: str) -> bool:
         """Return True if the session has a file on disk (lazy sessions don't)."""

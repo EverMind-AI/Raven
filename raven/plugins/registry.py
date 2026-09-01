@@ -49,6 +49,7 @@ MemoryBackendFactory = Callable[[Any], Any]
 ToolFactory = Callable[[Any], Any]
 HookFactory = Callable[[Any], Any]
 ToolGateFactory = Callable[[Any], Any]
+SessionObserverFactory = Callable[[Any], Any]
 
 
 class PluginError(Exception):
@@ -88,6 +89,7 @@ class PluginRegistry:
         self._hooks: dict[str, _ActivatedFactory] = {}
         self._services: dict[str, _ActivatedFactory] = {}
         self._tool_gates: dict[str, _ActivatedFactory] = {}
+        self._session_observers: dict[str, _ActivatedFactory] = {}
 
     # ── Activation ───────────────────────────────────────────────
 
@@ -208,6 +210,19 @@ class PluginRegistry:
                 factory=factory,
             )
             logger.debug("registered tool_gate %s from %s", gate.name, mf.id)
+        for observer in mf.contributes.session_observers:
+            if observer.name in self._session_observers:
+                prev = self._session_observers[observer.name]
+                raise PluginConflictError(
+                    f"session_observer {observer.name!r} contributed by both {prev.plugin_id!r} and {mf.id!r}",
+                )
+            factory = self._resolve_factory(mf.id, observer.factory)
+            self._session_observers[observer.name] = _ActivatedFactory(
+                plugin_id=mf.id,
+                name=observer.name,
+                factory=factory,
+            )
+            logger.debug("registered session_observer %s from %s", observer.name, mf.id)
 
     @staticmethod
     def _ensure_importable(source: ManifestOrigin, location: Path | None) -> None:
@@ -329,6 +344,24 @@ class PluginRegistry:
         except KeyError as e:
             raise PluginNotFoundError(
                 f"no tool_gate named {name!r} (registered: {self.tool_gate_names()})",
+            ) from e
+
+    def session_observer_names(self) -> list[str]:
+        """Stable-ordered list of registered session-observer names."""
+        return sorted(self._session_observers)
+
+    def session_observer_plugin_id(self, name: str) -> str | None:
+        """Plugin id that contributed session_observer ``name``, or ``None``."""
+        entry = self._session_observers.get(name)
+        return entry.plugin_id if entry is not None else None
+
+    def get_session_observer_factory(self, name: str) -> SessionObserverFactory:
+        """Look up the factory for session_observer ``name``. Raises ``PluginNotFoundError``."""
+        try:
+            return self._session_observers[name].factory
+        except KeyError as e:
+            raise PluginNotFoundError(
+                f"no session_observer named {name!r} (registered: {self.session_observer_names()})",
             ) from e
 
     def get_hook_factory(self, name: str) -> HookFactory:
@@ -476,6 +509,32 @@ class PluginRegistry:
         )
         return factory(ctx)
 
+    @trace.instrument("plugin.load", extract=semconv.plugin_load("session_observer"))
+    def build_session_observer(
+        self,
+        name: str,
+        *,
+        config: dict[str, Any],
+        services: "ServiceLocator",
+        logger: logging.Logger | None = None,
+    ) -> Any:
+        """Resolve the named session-observer factory and call it with a fresh
+        ``PluginContext``, returning the constructed ``SessionObserver``.
+
+        Symmetric with :meth:`build_tool_gate`: synchronous construction,
+        exceptions propagate so the host sees the real cause. A resident host
+        attaches the returned observer to the session store for the
+        generation (paper: contracts/session_events.py).
+        """
+        factory = self.get_session_observer_factory(name)
+        config = self._admit(self._session_observers[name], config)
+        ctx = PluginContext(
+            config=config,
+            services=services,
+            logger=logger or logging.getLogger(f"raven.plugins.{name}"),
+        )
+        return factory(ctx)
+
     def _admit(self, entry: "_ActivatedFactory", config: dict[str, Any]) -> dict[str, Any]:
         """Admit a config slice against the owning manifest's declaration.
 
@@ -498,6 +557,7 @@ __all__ = [
     "PluginFactoryImportError",
     "PluginNotFoundError",
     "PluginRegistry",
+    "SessionObserverFactory",
     "ToolFactory",
     "ToolGateFactory",
 ]

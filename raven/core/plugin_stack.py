@@ -457,6 +457,56 @@ def build_plugin_tool_gates(
     return built
 
 
+def build_plugin_session_observers(
+    workspace: Path,
+    config: "RavenConfig",
+    *,
+    registry: PluginRegistry | None = None,
+    provider: "LLMProvider | None" = None,
+) -> list:
+    """Construct every plugin-contributed session observer admitted by ``config``.
+
+    Mirrors :func:`build_plugin_tool_gates` for the ``session_observers``
+    contribution point, with the same leniency: a failing factory is logged
+    and skipped, a factory returning ``None`` has declined -- the sanctioned
+    opt-out for a plugin with nothing to release. The built observers are
+    inert until a resident host attaches them to the session store for the
+    generation (paper: contracts/session_events.py). Each is stamped with the
+    contributing plugin's identity the way tools and services are.
+
+    Returns an empty list when no plugin contributes a session observer.
+    """
+    observer_names = getattr(registry, "session_observer_names", None)
+    names = observer_names() if callable(observer_names) else []
+    if not names:
+        return []
+    services = ServiceLocator(
+        workspace=workspace,
+        user_id=config.memory.user_id,
+        agent_id=config.memory.agent_id,
+        provider=provider,
+    )
+    slices = config.plugins.config
+    built = []
+    for name in names:
+        plugin_id = registry.session_observer_plugin_id(name)
+        plugin_slice = (plugin_id and slices.get(plugin_id)) or slices.get(name) or {}
+        try:
+            observer = registry.build_session_observer(name, config=plugin_slice, services=services)
+        except Exception as e:
+            logger.warning("plugin session_observer %r factory raised at construction (%s); skipping it.", name, e)
+            continue
+        if observer is None:
+            logger.debug("plugin session_observer %r factory opted out (returned None); skipping it.", name)
+            continue
+        try:
+            observer.contributed_by = plugin_id or name
+        except (AttributeError, TypeError):
+            pass
+        built.append(observer)
+    return built
+
+
 def _resolve_plugin_config_slice(
     registry: PluginRegistry,
     config: "RavenConfig",
@@ -510,6 +560,7 @@ __all__ = [
     "build_plugin_registry",
     "build_plugin_tools",
     "build_plugin_services",
+    "build_plugin_session_observers",
     "build_plugin_tool_gates",
     "discover_plugins",
     "maybe_build_memory_backend",

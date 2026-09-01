@@ -442,6 +442,124 @@ def test_delete_does_not_touch_other_sessions(tmp_path: Path):
     assert not (tmp_path / "sessions" / "tui" / "del03.jsonl").exists()
 
 
+class _DeleteProbe:
+    """A paper-shaped observer (contracts/session_events.py) recording calls."""
+
+    def __init__(self, tag: str = "probe", log: list | None = None) -> None:
+        self.tag = tag
+        self.log = log if log is not None else []
+
+    def on_session_deleted(self, session_key: str, removed: bool) -> None:
+        self.log.append((self.tag, session_key, removed))
+
+
+def _saved(mgr: SessionManager, key: str) -> Path:
+    session = mgr.get_or_create(key)
+    session.add_message("user", "x")
+    mgr.save(session)
+    return mgr.session_path(key)
+
+
+def test_a_fresh_manager_notifies_nobody(tmp_path: Path):
+    """The empty roster is the default: a manager nobody attached to (the CLI
+    face builds exactly this shape) deletes as it always did. Cross-process
+    deletion staying out of sight is the paper's third discipline."""
+    mgr = SessionManager(tmp_path)
+    assert mgr._delete_observers == ()
+    _saved(mgr, "tui:obs00")
+    assert mgr.delete("tui:obs00") is True
+
+
+def test_delete_notifies_observers_with_removed_true(tmp_path: Path):
+    """A delete that removed a file reports removed=True, after the store acted."""
+    mgr = SessionManager(tmp_path)
+    probe = _DeleteProbe()
+    mgr.set_delete_observers((probe,))
+    path = _saved(mgr, "tui:obs01")
+
+    assert mgr.delete("tui:obs01") is True
+    assert not path.exists()
+    assert probe.log == [("probe", "tui:obs01", True)]
+
+
+def test_delete_notifies_observers_with_removed_false_when_no_file(tmp_path: Path):
+    """The observer fires for every delete request the store handles -- a
+    cache-only session (minted, never saved) still notifies, with removed=False."""
+    mgr = SessionManager(tmp_path)
+    probe = _DeleteProbe()
+    mgr.set_delete_observers((probe,))
+    mgr.get_or_create("tui:obs02")
+
+    assert mgr.delete("tui:obs02") is False
+    assert probe.log == [("probe", "tui:obs02", False)]
+
+
+def test_delete_notifies_observers_with_removed_false_when_unlink_fails(tmp_path: Path, monkeypatch):
+    mgr = SessionManager(tmp_path)
+    probe = _DeleteProbe()
+    mgr.set_delete_observers((probe,))
+    _saved(mgr, "tui:obs03")
+
+    def _boom_unlink(self, missing_ok=False):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(Path, "unlink", _boom_unlink)
+    assert mgr.delete("tui:obs03") is False
+    assert probe.log == [("probe", "tui:obs03", False)]
+
+
+def test_delete_observers_hear_in_registration_order_each_once(tmp_path: Path):
+    mgr = SessionManager(tmp_path)
+    log: list = []
+    mgr.set_delete_observers((_DeleteProbe("first", log), _DeleteProbe("second", log)))
+    _saved(mgr, "tui:obs04")
+
+    mgr.delete("tui:obs04")
+    assert log == [("first", "tui:obs04", True), ("second", "tui:obs04", True)]
+
+
+def test_a_raising_observer_is_skipped_and_the_rest_still_hear(tmp_path: Path):
+    """An observer that raises is logged and skipped: the deletion's outcome is
+    already decided, the return value stands, and later observers still hear."""
+
+    class _Broken:
+        def on_session_deleted(self, session_key: str, removed: bool) -> None:
+            raise RuntimeError("ledger unreachable")
+
+    mgr = SessionManager(tmp_path)
+    probe = _DeleteProbe()
+    mgr.set_delete_observers((_Broken(), probe))
+    path = _saved(mgr, "tui:obs05")
+
+    assert mgr.delete("tui:obs05") is True
+    assert not path.exists()
+    assert probe.log == [("probe", "tui:obs05", True)]
+
+
+def test_set_delete_observers_replaces_the_whole_tuple(tmp_path: Path):
+    """The setter is whole-tuple replacement, idempotent: re-attaching the same
+    tuple never doubles a notification, and attaching () detaches."""
+    mgr = SessionManager(tmp_path)
+    log: list = []
+    first, second = _DeleteProbe("first", log), _DeleteProbe("second", log)
+
+    mgr.set_delete_observers((first,))
+    mgr.set_delete_observers((first,))
+    _saved(mgr, "tui:obs06")
+    mgr.delete("tui:obs06")
+    assert log == [("first", "tui:obs06", True)]
+
+    mgr.set_delete_observers((second,))
+    _saved(mgr, "tui:obs07")
+    mgr.delete("tui:obs07")
+    assert log == [("first", "tui:obs06", True), ("second", "tui:obs07", True)]
+
+    mgr.set_delete_observers(())
+    _saved(mgr, "tui:obs08")
+    mgr.delete("tui:obs08")
+    assert len(log) == 2
+
+
 def test_peek_returns_cached_session_without_extra_load(tmp_path: Path):
     """peek() returns the cached Session when already in memory."""
     mgr = SessionManager(tmp_path)

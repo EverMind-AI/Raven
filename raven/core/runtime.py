@@ -239,6 +239,14 @@ def build_runtime(
             config.workspace_path, ec_config, registry=plugin_registry, provider=provider
         )
     )
+    # Contributed session observers ride the same lifecycle: built inert here
+    # (BIND touches no store), attached to the session store only when a
+    # resident host starts the plugin services, detached when it stops them.
+    loop.session_observers = tuple(
+        plugin_stack.build_plugin_session_observers(
+            config.workspace_path, ec_config, registry=plugin_registry, provider=provider
+        )
+    )
     return RavenRuntime(
         loop=loop,
         plugin_registry=plugin_registry,
