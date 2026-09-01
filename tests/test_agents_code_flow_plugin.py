@@ -60,13 +60,26 @@ def ctx_for(tmp_path: Path, config: dict) -> PluginContext:
 
 
 def armed_slice(tmp_path: Path) -> dict:
-    """The slice exactly as the scaffold renders it (run.py render_config)."""
+    """The slice exactly as the launcher's ACP hosting renders it (run.py)."""
     return {
         "enabled": True,
         "workspaceGate": {
             "allocBase": str(tmp_path / "state" / "acp"),
             "reposRoot": str(tmp_path / "state" / "repos"),
             "stateBucket": "acp",
+        },
+    }
+
+
+def cli_armed_slice(tmp_path: Path) -> dict:
+    """The slice exactly as the launcher's CLI hosting renders it (run.py):
+    the fork's ALLOC_DIR/INSTANCE env pair, spelled as the ruled config keys."""
+    return {
+        "enabled": True,
+        "workspaceGate": {
+            "allocDir": str(tmp_path / "state" / "instance-conv-1"),
+            "instance": "instance-conv-1",
+            "reposRoot": str(tmp_path / "state" / "repos"),
         },
     }
 
@@ -141,6 +154,41 @@ def test_enabled_without_the_gate_arming_builds_hook_but_no_gate(tmp_path):
     assert make_write_gate(ctx_for(tmp_path, on_only)) is None
     assert make_release_observer(ctx_for(tmp_path, on_only)) is None
     assert isinstance(make_flow_hook(ctx_for(tmp_path, on_only)), CodeFlowHook)
+
+
+def test_the_cli_layout_arms_the_one_conversation_gate(tmp_path):
+    """The other fork layout (ALLOC_DIR + INSTANCE, workspace_gate.py:74-77),
+    as config: the gate binds the per-instance record, not a per-session base."""
+    gate = make_write_gate(ctx_for(tmp_path, cli_armed_slice(tmp_path)))
+    assert gate._alloc_dir == tmp_path / "state" / "instance-conv-1"
+    assert gate._env_instance == "instance-conv-1"
+    assert gate._alloc_base is None
+    assert gate._identity() == "instance-conv-1"
+    assert gate._allocation_path("instance-conv-1") == gate._alloc_dir / "allocation.json"
+
+
+def test_the_cli_layout_boards_no_release_observer(tmp_path):
+    """The one-conversation layout keys no records by session, so a session's
+    death frees nothing it holds: the record retires with its instance
+    partition, the fork's own CLI posture."""
+    assert make_release_observer(ctx_for(tmp_path, cli_armed_slice(tmp_path))) is None
+
+
+def test_a_layout_arms_only_whole(tmp_path):
+    """The fork's decision order, kept: repos is required always, allocDir
+    without instance is not a layout, and a half-armed slice falls through
+    to the base layout or to no gate at all."""
+    no_repos = {"enabled": True, "workspaceGate": {"allocDir": str(tmp_path / "d"), "instance": "i"}}
+    assert make_write_gate(ctx_for(tmp_path, no_repos)) is None
+    dir_only = {
+        "enabled": True,
+        "workspaceGate": {"allocDir": str(tmp_path / "d"), "reposRoot": str(tmp_path / "r")},
+    }
+    assert make_write_gate(ctx_for(tmp_path, dir_only)) is None
+    both = dict(cli_armed_slice(tmp_path))
+    both["workspaceGate"] = dict(both["workspaceGate"], allocBase=str(tmp_path / "state" / "acp"))
+    gate = make_write_gate(ctx_for(tmp_path, both))
+    assert gate._alloc_dir is not None, "the one-conversation pair wins, the fork's order"
 
 
 MALFORMED_SLICE = {"enabled": True, "workspaceGate": "not-a-table"}
