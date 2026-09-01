@@ -54,6 +54,7 @@ def test_the_manifest_kinds_are_ledgered() -> None:
         "hooks",
         "memory_backends",
         "services",
+        "session_observers",
         "tool_gates",
         "tools",
     ], (

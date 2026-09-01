@@ -4,7 +4,9 @@ The lifecycle half of the services seam: the loop starts what the assembly
 attached, exactly once, minting each service the same namespaced grants a
 tool receives at bind time; a service that fails to start is left out
 loudly; stop runs newest-first and is idempotent. Disposal order is pinned
-by the dispose-roster guard beside the swap tests.
+by the dispose-roster guard beside the swap tests. The contributed session
+observers ride this same lifecycle: attached to the session store when the
+services start, detached when they stop, never attached on a one-shot host.
 """
 
 from __future__ import annotations
@@ -116,6 +118,50 @@ async def test_a_started_service_receives_the_namespaced_wake_grant(tmp_path):
 
     job = granted.schedule_wake("c1", int(time.time() * 1000) + 60_000, "look", channel="tui")
     assert job.id == "wake:plug-a:c1", "the same namespaced grant a tool gets at bind"
+
+
+class _Heard:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, bool]] = []
+
+    def on_session_deleted(self, session_key: str, removed: bool) -> None:
+        self.calls.append((session_key, removed))
+
+
+@pytest.mark.asyncio
+async def test_start_attaches_the_observers_and_stop_detaches_them(tmp_path):
+    """[code seam-2] Attach rides the services lifecycle -- even with zero
+    services contributed -- and both verbs stay idempotent."""
+    observer = _Heard()
+    loop = _loop(tmp_path)
+    loop.session_observers = (observer,)
+    assert loop.sessions._delete_observers == (), "assembly attaches nothing"
+
+    await loop.start_plugin_services()
+    await loop.start_plugin_services()
+    assert loop.sessions._delete_observers == (observer,), "attached once, replacement semantics"
+
+    loop.sessions.delete("tui:lifecycle01")
+    assert observer.calls == [("tui:lifecycle01", False)]
+
+    await loop.stop_plugin_services()
+    await loop.stop_plugin_services()
+    assert loop.sessions._delete_observers == ()
+    loop.sessions.delete("tui:lifecycle02")
+    assert len(observer.calls) == 1, "a detached observer hears nothing"
+
+
+@pytest.mark.asyncio
+async def test_a_one_shot_host_never_attaches_observers(tmp_path):
+    """A one-shot turn never starts the plugin services, so its deletes fire
+    no observer -- the seam is zero-cost for every non-resident host."""
+    observer = _Heard()
+    loop = _loop(tmp_path)
+    loop.session_observers = (observer,)
+
+    loop.sessions.delete("tui:oneshot01")
+    assert observer.calls == []
+    assert loop.sessions._delete_observers == ()
 
 
 def test_every_resident_host_starts_and_stops_the_services() -> None:

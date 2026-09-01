@@ -120,6 +120,9 @@ LEDGER = {
         # The per-call tool adjudication grant (tool_gate.py): a gate cast
         # over the registry at assembly, fixed for the generation.
         "ToolGate",
+        # The session-retirement notification (session_events.py): the store
+        # says a session is gone, with the removal outcome.
+        "SessionObserver",
     },
     "factory_loop": {"AgentHook", "AgentHookContext", "FACTORY_LOOP_SURFACE_VERSION", "HookDecision", "McpHost"},
 }
@@ -224,7 +227,7 @@ def test_import_guard_bites_machinery_and_spares_type_checking(tmp_path):
 # The contract tier is versioned: its shape moves only with a version bump
 # ---------------------------------------------------------------------------
 
-PINNED_CONTRACT_SURFACE = ("5", "702262d457f3a416281dc4bfd926466e3cbb51752293ce7713cfd885d05b160b")
+PINNED_CONTRACT_SURFACE = ("5", "7586411af1dbc77f14896763dfeb6877a5765495a285e95ad1161adc4380da6b")
 
 
 def contract_surface_digest(pkg_dir: Path) -> str:

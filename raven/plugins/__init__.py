@@ -28,6 +28,7 @@ from raven.plugins.manifest import (
     HookContribution,
     MemoryBackendContribution,
     PluginManifest,
+    SessionObserverContribution,
     ToolContribution,
     ToolGateContribution,
 )
@@ -39,6 +40,7 @@ from raven.plugins.registry import (
     PluginFactoryImportError,
     PluginNotFoundError,
     PluginRegistry,
+    SessionObserverFactory,
     ToolFactory,
     ToolGateFactory,
 )
@@ -60,6 +62,8 @@ __all__ = [
     "PluginNotFoundError",
     "PluginRegistry",
     "ServiceLocator",
+    "SessionObserverContribution",
+    "SessionObserverFactory",
     "ManifestOrigin",
     "ToolContribution",
     "ToolFactory",

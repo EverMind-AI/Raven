@@ -154,6 +154,21 @@ class TestMemoryBackends:
         with pytest.raises(ValidationError, match="duplicate tool_gate"):
             PluginManifest.from_toml_str(toml)
 
+    def test_duplicate_session_observer_name_rejected(self) -> None:
+        toml = textwrap.dedent("""
+            [plugin]
+            id = "x"
+            version = "0.1"
+            [[plugin.contributes.session_observers]]
+            name = "release"
+            factory = "a.b:c"
+            [[plugin.contributes.session_observers]]
+            name = "release"
+            factory = "a.b:d"
+        """)
+        with pytest.raises(ValidationError, match="duplicate session_observer"):
+            PluginManifest.from_toml_str(toml)
+
     def test_multiple_contributions_different_names(self) -> None:
         toml = textwrap.dedent("""
             [plugin]

@@ -690,9 +690,11 @@ class WiringMixin:
         workdir.repoint(resolved)
         return resolved
 
-    # Contributed background services, attached by the assembly root (inert)
-    # and run only by a resident host; a one-shot turn never starts them.
+    # Contributed background services and session observers, attached by the
+    # assembly root (inert) and run only by a resident host; a one-shot turn
+    # never starts the services, so it never attaches the observers either.
     plugin_services: tuple = ()
+    session_observers: tuple = ()
     _plugin_services_started = False
     _started_services: tuple = ()
 
@@ -703,6 +705,10 @@ class WiringMixin:
         fails to start is reported and left out of the started set -- never
         retried silently, because a watcher that is secretly dead is the lie
         a watching product exists to prevent.
+
+        The contributed session observers ride this same lifecycle: attached
+        to the session store here, detached in :meth:`stop_plugin_services`
+        (paper: contracts/session_events.py).
         """
         if self._plugin_services_started:
             return
@@ -721,9 +727,15 @@ class WiringMixin:
                 continue
             started.append(service)
         self._started_services = tuple(started)
+        self.sessions.set_delete_observers(self.session_observers)
 
     async def stop_plugin_services(self) -> None:
-        """Stop started services, newest first; idempotent, loud on error."""
+        """Stop started services, newest first; idempotent, loud on error.
+
+        Detaches the session observers first, so a retiring generation stops
+        hearing deletions before its services wind down.
+        """
+        self.sessions.set_delete_observers(())
         services, self._started_services = self._started_services, ()
         self._plugin_services_started = False
         for service in reversed(services):

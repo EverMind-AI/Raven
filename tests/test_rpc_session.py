@@ -744,6 +744,36 @@ async def test_session_delete_removes_session(tmp_path: Path, monkeypatch: pytes
     assert not path.exists()
 
 
+async def test_session_delete_reaches_the_shared_stores_observers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """[code seam-2] Every delete face resolves to the shared manager, so an
+    observer attached there hears an rpc session.delete too -- with the
+    removal outcome (paper: contracts/session_events.py)."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    from raven.session.manager import SessionManager
+
+    heard: list[tuple[str, bool]] = []
+
+    class _Probe:
+        def on_session_deleted(self, session_key: str, removed: bool) -> None:
+            heard.append((session_key, removed))
+
+    mgr = SessionManager(tmp_path)
+    s = mgr.get_or_create("tui:20260610_100000_ob01")
+    s.add_message("user", "bye")
+    mgr.save(s)
+    mgr.set_delete_observers((_Probe(),))
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
+
+    result = await session_delete({"session_id": "tui:20260610_100000_ob01"})
+    assert result == {"deleted": "tui:20260610_100000_ob01"}
+    assert heard == [("tui:20260610_100000_ob01", True)]
+
+
 async def test_session_delete_unknown_key_returns_null(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """session.delete on a missing session returns {deleted: null} so the UI
     can distinguish a typo from a real removal."""
