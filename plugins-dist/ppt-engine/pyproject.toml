@@ -1,0 +1,38 @@
+[project]
+name = "ppt-engine"
+version = "0.0.1"
+description = "Raven-PPT deck engine as a standalone raven plugin -- template payload machinery this wave, the engine itself the next"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [
+    {name = "EverMind"}
+]
+keywords = ["raven", "raven-plugin", "ppt", "deck"]
+
+# No dependencies and no `raven.plugins` entry point yet, on purpose: this
+# wave the distribution exists so the template payload machinery has the home
+# the engine will ship from (uv admits a `plugins-dist/*` directory only as a
+# workspace member). The engine wave adds the entry point, the manifest, the
+# engine packages and their dependencies (python-pptx, PyMuPDF, Pillow,
+# cairosvg) -- a package raven's discovery cannot see yet cannot half-load.
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["raven_ppt"]
+
+[tool.hatch.build]
+include = [
+    "raven_ppt/**/*.py",
+    "raven_ppt/prompts/*.md",
+    "raven_ppt/assets/templates/*.pptx",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "raven_ppt/",
+    "pyproject.toml",
+]
