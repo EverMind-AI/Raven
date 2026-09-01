@@ -337,7 +337,7 @@ def test_onboard_non_interactive_skips_optional_steps(
         ],
     )
     assert r.exit_code == 0, r.stdout
-    assert "Keeping run location: host" in r.stdout
+    assert "Keeping run location: Host (direct)" in r.stdout
     assert "Long-term memory stays off" in r.stdout
     assert "Setup complete" in r.stdout
     # Memory left unconfigured (no llm model) → backend resolves to None.
@@ -5994,6 +5994,19 @@ def test_sandbox_non_interactive_host_warns(
     onboard_commands._step2_sandbox(skip=False, non_interactive=True)
     out = capsys.readouterr().out
     assert re.search(r"full host privileges|host access", out, re.I)
+
+
+def test_step2_skip_path_reports_the_backend_it_actually_keeps(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    """[N7-F7] The skip/non-interactive branch used to print "host (direct)"
+    unconditionally while writing nothing -- re-running over a boxlite config
+    kept boxlite and told the user it kept host. The message must render the
+    backend it actually keeps."""
+    monkeypatch.setattr(onboard_commands.console, "_width", 200)
+    monkeypatch.setattr(onboard_commands, "_current_sandbox_backend", lambda: "boxlite")
+    onboard_commands._step2_sandbox(skip=True, non_interactive=False)
+    out = capsys.readouterr().out
+    assert "Sandbox (boxlite)" in out
+    assert "Host (direct)" not in out
 
 
 def test_everos_role_optionality_matches_design():
