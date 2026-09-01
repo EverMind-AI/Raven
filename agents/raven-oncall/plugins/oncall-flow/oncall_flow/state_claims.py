@@ -1,13 +1,43 @@
-"""State the tool layer probed, and the basis-freshness gate over it.
+"""What the harness itself knows about the world, so a claim about it can be checked.
 
-Part 2a carries the decision-basis half of the fork's ``state_claims``
-module, kept name-for-name: :class:`StateFacts` and its file (the probe's
-own record -- written by the tool layer only, so nothing the loop says can
-add or change a fact), the decision counter, and :func:`basis_problems` --
-the gate that refuses a wait/kill/resubmit whose basis does not rest on an
-observation just made. The narrative contradiction checker
-(``check()``/``collect_facts`` and the claim regex families) is the report
-gate's half and lands with ``ops_finish`` in part 2b (verdict features 2/3).
+The failure this exists for: an on-call loop wrote that
+``keep_recent_checkpoints=3`` meant only the three most recent checkpoints were
+kept and the best one had probably already been discarded. It was wrong, and it
+had not looked. ``action_log`` catches a claim about an *action* the loop says it
+took; ``_comparative_words`` catches a claim that is *relative* while declaring
+itself absolute. Neither catches a claim about the *state of the world*, which is
+the class the loop got wrong.
+
+Three decisions carry this file:
+
+  - **only state the harness already holds.** Budget, job status and the
+    checkpoint listing are things the tool layer probes anyway. Anything else --
+    what the loss curve means, whether the run is converging, which checkpoint is
+    best -- is not here and must not be added: computing "which is best" for the
+    loop is the comparison the loop is being scored on.
+  - **refuse on contradiction, never on uncertainty.** A hedged claim is still
+    checked (the round-1 claim was hedged, and its factual half was false), but a
+    claim is only refused when the facts say otherwise. No facts means no
+    refusal.
+  - **misses are counted, not hidden.** Every family reports what it saw and
+    could not resolve, because a heuristic that silently drops what it cannot
+    parse is the bug this line has already hit repeatedly.
+
+**What this deliberately does not catch** -- read this before trusting a pass:
+
+  - English only. A narrative in any other language passes every check here.
+  - Only the three families below. A false claim about GPU memory, dataset size,
+    learning rate, wall-clock, or anything else the harness does not probe is
+    invisible.
+  - A claim with no number and no identifier ("some checkpoints were dropped",
+    "the budget is nearly gone") is counted as unresolved and passes.
+  - "The best checkpoint was discarded" with no step id cannot be resolved:
+    knowing which one was best is a comparison this module is not allowed to
+    make. It is counted as unresolved and passes.
+  - Paraphrase outside the word lists passes. The lists can only add refusals.
+  - The facts themselves are a snapshot taken when the tool layer last probed.
+    A claim that was true at probe time and false now (or the reverse) is judged
+    against the snapshot, and ``observed_at_ms`` is what says how stale that is.
 """
 
 from __future__ import annotations
@@ -20,6 +50,115 @@ from pathlib import Path
 from typing import Any
 
 FACTS_FILE = "state_facts.json"
+
+# Budget claims within this much of the probed value are not contradictions.
+# Wide on purpose: the loop rounds, and the probe itself moves between the poll
+# and the report. A tolerance this loose only ever lets claims through.
+_BUDGET_ABS_TOLERANCE_MIN = 2.0
+_BUDGET_REL_TOLERANCE = 0.10
+
+_NUMBER_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5}
+
+# A checkpoint identifier as the training scripts write it: step-<n>.
+_STEP_ID = re.compile(r"\bstep-(\d+)\b", re.I)
+
+# "step-1200 was discarded" -- a named checkpoint asserted absent. The verb has
+# to be adjacent to the id, so "step-1200 scored 0.36 before the pruning ran"
+# does not match.
+_ABSENT_NAMED = re.compile(
+    r"\bstep-(\d+)\b[^.;\n]{0,40}?\b(?:was |were |has been |have been |is |are )?"
+    r"(discarded|deleted|pruned|removed|dropped|lost|gone|overwritten|no longer (?:there|present|available))\b",
+    re.I,
+)
+_PRESENT_NAMED = re.compile(
+    r"\bstep-(\d+)\b[^.;\n]{0,40}?\b(?:was |were |has been |have been |is |are )?"
+    r"(still (?:there|present|available)|saved|kept|retained|on disk|present)\b",
+    re.I,
+)
+
+# "only the three most recent checkpoints are kept" -- a count of what exists.
+# Requires an explicit only/just plus an existence verb, so quoting the config
+# value ("keep_recent_checkpoints=3") is not itself a claim.
+_COUNT_KEPT = re.compile(
+    r"\b(?:only|just)\b[^.;\n]{0,40}?\b(\d+|one|two|three|four|five)\b[^.;\n]{0,40}?"
+    r"\b(?:checkpoints?|ckpts?)\b[^.;\n]{0,30}?\b(?:are |is |were |remain|exist|kept|saved|retained)",
+    re.I,
+)
+_COUNT_KEPT_ALT = re.compile(
+    r"\b(?:keeps?|keeping|retains?|saves?)\b[^.;\n]{0,20}?\b(?:only|just)\b[^.;\n]{0,30}?"
+    r"\b(?:the )?(?:most recent |last |latest )?(\d+|one|two|three|four|five)\b",
+    re.I,
+)
+
+# An unresolved checkpoint-absence claim: the words are there, no id, no count.
+_ABSENT_VAGUE = re.compile(
+    r"\b(?:checkpoints?|ckpts?)\b[^.;\n]{0,60}?"
+    r"\b(discarded|deleted|pruned|removed|dropped|lost|gone|overwritten)\b",
+    re.I,
+)
+
+# "42 minutes remaining", "12 min left", "budget is 3.5 minutes".
+_BUDGET_NUMBER = re.compile(
+    r"\b(\d+(?:\.\d+)?)\s*(?:gpu[- ])?(?:minutes?|mins?|min)\b[^.;\n]{0,20}?"
+    r"\b(remaining|left|of budget|in the budget)\b"
+    r"|\b(?:remaining|left|budget(?: is| of)?)\b[^.;\n]{0,20}?\b(\d+(?:\.\d+)?)\s*(?:gpu[- ])?(?:minutes?|mins?|min)\b",
+    re.I,
+)
+_BUDGET_VAGUE = re.compile(
+    r"\b(?:budget)\b[^.;\n]{0,40}?\b(?:remaining|left|exhausted|spent|gone|used up)\b"
+    r"|\b(?:remaining|left)\b[^.;\n]{0,20}?\b(?:budget)\b",
+    re.I,
+)
+
+# Job-state words, grouped by what they assert. Only these three buckets: they
+# are what poll() can distinguish.
+_ALIVE = "alive"
+_SUCCEEDED = "succeeded"
+_FAILED = "failed"
+
+_STATUS_WORDS: dict[str, str] = {
+    "still running": _ALIVE,
+    "is running": _ALIVE,
+    "are running": _ALIVE,
+    "still training": _ALIVE,
+    "still alive": _ALIVE,
+    "in progress": _ALIVE,
+    "has finished": _SUCCEEDED,
+    "have finished": _SUCCEEDED,
+    "is finished": _SUCCEEDED,
+    "has completed": _SUCCEEDED,
+    "is complete": _SUCCEEDED,
+    "ran to completion": _SUCCEEDED,
+    "has crashed": _FAILED,
+    "is crashed": _FAILED,
+    "has died": _FAILED,
+    "is dead": _FAILED,
+    "has failed": _FAILED,
+    "is stopped": _FAILED,
+    "was killed": _FAILED,
+    "has been killed": _FAILED,
+}
+
+# How a probed status value maps onto those buckets. A value absent here is not
+# judged, which is why the map is explicit rather than a prefix test.
+_STATUS_BUCKET: dict[str, str] = {
+    "pending": _ALIVE,
+    "queued": _ALIVE,
+    "running": _ALIVE,
+    "succeeded": _SUCCEEDED,
+    "failed": _FAILED,
+    "cancelled": _FAILED,
+    "canceled": _FAILED,
+    "timeout": _FAILED,
+    "lost": _FAILED,
+}
+
+
+def _as_int(token: str) -> int | None:
+    token = (token or "").strip().lower()
+    if token.isdigit():
+        return int(token)
+    return _NUMBER_WORDS.get(token)
 
 
 @dataclass(frozen=True)
@@ -82,6 +221,197 @@ class StateFacts:
             probe_seq=int(data.get("probe_seq") or 0),
             shown_values=tuple(float(x) for x in (data.get("shown_values") or ())),
         )
+
+
+@dataclass
+class StateFindings:
+    """Contradictions, and everything the checker could not resolve.
+
+    ``contradicted`` is the only field that refuses anything. The other two
+    exist so a pass can be read for what it is: ``unresolved`` is a claim the
+    patterns saw and could not pin to a value, ``unverifiable`` is a claim with
+    no fact to check it against. Any rate computed from this must print all
+    three counts alongside it.
+    """
+
+    contradicted: list[str] = field(default_factory=list)
+    unresolved: list[str] = field(default_factory=list)
+    unverifiable: list[str] = field(default_factory=list)
+
+    @property
+    def checked(self) -> int:
+        return len(self.contradicted) + len(self.unresolved) + len(self.unverifiable)
+
+    def counts(self) -> dict[str, int]:
+        return {
+            "contradicted": len(self.contradicted),
+            "unresolved": len(self.unresolved),
+            "unverifiable": len(self.unverifiable),
+            "claims_seen": self.checked,
+        }
+
+
+def _check_checkpoints(text: str, facts: StateFacts, out: StateFindings) -> None:
+    have = facts.checkpoints
+    named_absent = {m.group(1) for m in _ABSENT_NAMED.finditer(text)}
+    named_present = {m.group(1) for m in _PRESENT_NAMED.finditer(text)}
+    counts = [_as_int(m.group(1)) for m in _COUNT_KEPT.finditer(text)]
+    counts += [_as_int(m.group(1)) for m in _COUNT_KEPT_ALT.finditer(text)]
+    counts = [c for c in counts if c is not None]
+
+    claims = bool(named_absent or named_present or counts)
+    if have is None:
+        if claims or _ABSENT_VAGUE.search(text):
+            out.unverifiable.append("a claim about which checkpoints exist; none were listed")
+        return
+
+    present_ids = {m.group(1) for name in have for m in [_STEP_ID.search(name)] if m}
+    for step in sorted(named_absent, key=lambda s: int(s)):
+        if step in present_ids:
+            out.contradicted.append(f"step-{step} is described as gone; the recorded listing disagrees")
+    for step in sorted(named_present, key=lambda s: int(s)):
+        if step not in present_ids:
+            out.contradicted.append(f"step-{step} is described as kept; the recorded listing disagrees")
+    for count in counts:
+        if count != len(have):
+            out.contradicted.append(f"the text says {count} checkpoint(s) are kept; the recorded listing disagrees")
+
+    # Vague absence with no id and no count: the words are there but there is
+    # nothing to compare. Counted, never refused.
+    if _ABSENT_VAGUE.search(text) and not claims:
+        out.unresolved.append("a checkpoint is described as gone, without naming which or how many")
+
+
+# Refusals name the disagreement and stop, without printing the recorded value.
+# Two reasons. The remaining-budget subtraction is deliberately NOT done by
+# ops_tune_status, because deciding when to look again is the judgement being
+# measured -- printing it in a refusal hands it over through the back door. And a
+# refusal is free to retry: the state check runs before dedupe registration, so a
+# refused report neither lands on disk nor consumes its dedupe_key, which would
+# make "guess a number, read the truth off the refusal, send a correct one" a
+# reliable way to read state the tools do not expose. The baseline family is the
+# exception and does print the value, because there the recorded value is one the
+# loop was already given.
+def _check_budget(text: str, facts: StateFacts, out: StateFindings) -> None:
+    claimed: list[float] = []
+    for m in _BUDGET_NUMBER.finditer(text):
+        raw = m.group(1) or m.group(3)
+        if raw:
+            try:
+                claimed.append(float(raw))
+            except ValueError:
+                continue
+
+    if facts.remaining_minutes is None:
+        if claimed or _BUDGET_VAGUE.search(text):
+            out.unverifiable.append("a claim about remaining budget; no budget reading was taken")
+        return
+
+    actual = float(facts.remaining_minutes)
+    tolerance = max(_BUDGET_ABS_TOLERANCE_MIN, actual * _BUDGET_REL_TOLERANCE)
+    for value in claimed:
+        if abs(value - actual) > tolerance:
+            out.contradicted.append(f"the text says {value:g} minute(s) remain; the recorded reading disagrees")
+    if not claimed and _BUDGET_VAGUE.search(text):
+        out.unresolved.append("the budget is described without a number")
+
+
+def _check_job_status(text: str, facts: StateFacts, out: StateFindings) -> None:
+    lowered = (text or "").lower()
+    asserted = {phrase: bucket for phrase, bucket in _STATUS_WORDS.items() if phrase in lowered}
+    if not asserted:
+        return
+    if facts.job_statuses is None:
+        out.unverifiable.append("a claim about whether the job is running; no status was polled")
+        return
+
+    observed_raw = list(facts.job_statuses)
+    observed = {_STATUS_BUCKET[s] for s in observed_raw if s in _STATUS_BUCKET}
+    unmapped = [s for s in observed_raw if s not in _STATUS_BUCKET]
+    if unmapped:
+        # A status value with no row in the table cannot be compared. Reported
+        # rather than treated as agreement, because the likeliest cause is a
+        # missing row rather than a lying loop.
+        out.unresolved.append(f"polled status not in the table: {', '.join(sorted(set(unmapped)))}")
+    if not observed:
+        return
+    polled = ", ".join(sorted(set(observed_raw)))
+    for phrase in sorted(asserted):
+        if asserted[phrase] not in observed:
+            out.contradicted.append(f'the text says the job "{phrase}"; the poll returned: {polled}')
+
+
+def check(narrative: str, facts: StateFacts) -> StateFindings:
+    """Claims about harness-held state that the facts contradict.
+
+    Narrow by construction: see the module docstring for what it cannot see.
+    Adding a family here can only add refusals, never remove one.
+    """
+    out = StateFindings()
+    text = narrative or ""
+    if not text.strip():
+        return out
+    _check_checkpoints(text, facts, out)
+    _check_budget(text, facts, out)
+    _check_job_status(text, facts, out)
+    return out
+
+
+async def collect_facts(backend: Any, records: list[Any], *, now_ms: int) -> StateFacts:
+    """Probe the three fact classes off a backend that already has the handles.
+
+    Duck-typed on purpose: a backend without ``remaining_minutes`` or
+    ``list_artifacts`` yields ``None`` for that class, which refuses nothing.
+
+    The checkpoint listing is only kept when exactly one trial produced one. With
+    two, a bare "step-1200 was discarded" cannot be attributed to a trial, and a
+    union across trials would refuse a true claim about the other one.
+    """
+    statuses: list[str] = []
+    for rec in records:
+        value = getattr(getattr(rec, "status", None), "value", None)
+        if isinstance(value, str):
+            statuses.append(value)
+
+    remaining: float | None = None
+    sources: dict[str, str] = {}
+    getter = getattr(backend, "remaining_minutes", None)
+    if callable(getter):
+        try:
+            remaining = await getter()
+            if remaining is not None:
+                sources["remaining_minutes"] = f"{type(backend).__name__}.remaining_minutes()"
+        except Exception:
+            remaining = None
+
+    listings: list[tuple[str, tuple[str, ...]]] = []
+    lister = getattr(backend, "list_artifacts", None)
+    if callable(lister):
+        for rec in records:
+            handle = getattr(rec, "handle", None)
+            if handle is None:
+                continue
+            try:
+                found = await lister(handle)
+            except Exception:
+                found = None
+            if found is not None:
+                listings.append((getattr(rec, "idem_key", "?"), tuple(found)))
+
+    checkpoints: tuple[str, ...] | None = None
+    if len(listings) == 1:
+        key, checkpoints = listings[0]
+        sources["checkpoints"] = f"{type(backend).__name__}.list_artifacts() on {key}"
+    elif len(listings) > 1:
+        sources["checkpoints"] = f"not kept: {len(listings)} trials returned a listing, so a bare step id is ambiguous"
+
+    return StateFacts(
+        checkpoints=checkpoints,
+        remaining_minutes=remaining,
+        job_statuses=tuple(statuses) if statuses else None,
+        observed_at_ms=now_ms,
+        sources=sources,
+    )
 
 
 def write_facts(campaign_dir: str | Path, facts: StateFacts) -> None:

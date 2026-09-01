@@ -13,15 +13,13 @@ key and still resolves). Two kinds of client plug in here:
     that already runs.
 
 Connection-name resolution (a campaign that names an owner-registered machine
-instead of carrying an address) is a seam here, not an import: the connections
-module is the trunk's -- already upstream, and deliberately not a contracts
-paper (verdict feature 13 / C2) -- so the plugin cannot reach it at runtime.
-The launcher-side wiring lands with the part-2b tool port; until then a host
-installs a resolver with :func:`set_connection_resolver`, and a campaign with
-no resolver is handed its meta untouched, exactly the fork's no-connection
-path. Round-zero host preparation (``prepare_from_meta``) travels with the
-submit tool in part 2b for the same reason: it belongs to the round-zero
-setup, not to the watch.
+instead of carrying an address) stays a seam: the trunk connections module is
+deliberately not a contracts paper (verdict feature 13 / C2), so the plugin
+carries its own read-only reader over the same store
+(``oncall_flow.connections``, the seam-ruling shape) and that reader is the
+default resolver here. A host may still install a different one with
+:func:`set_connection_resolver` -- the part-2a seam, kept -- and installing
+``None`` restores the default rather than disabling resolution.
 """
 
 from __future__ import annotations
@@ -51,10 +49,20 @@ def set_connection_resolver(resolve: "Callable[[dict[str, Any]], dict[str, Any]]
 
     The fork resolved through its connections registry at this one seam so
     every backend keeps reading the same meta keys it always did; the plugin
-    keeps the seam and lets the assembly (part 2b) supply the reader.
+    keeps the seam. With nothing installed the plugin's own reader answers
+    (``oncall_flow.connections.resolve_into``), which is the seam ruling's
+    landing: the registry file is the host's, the reading of it is ours.
     """
     global _CONNECTION_RESOLVER
     _CONNECTION_RESOLVER = resolve
+
+
+def _resolve(meta: dict[str, Any]) -> dict[str, Any]:
+    if _CONNECTION_RESOLVER is not None:
+        return _CONNECTION_RESOLVER(meta)
+    from oncall_flow.connections import resolve_into
+
+    return resolve_into(meta)
 
 
 def backend_name(meta: dict[str, Any]) -> str:
@@ -64,10 +72,9 @@ def backend_name(meta: dict[str, Any]) -> str:
 def backend_from_meta(meta: dict[str, Any]) -> JobBackend:
     # A campaign that names a connection gets its address from there rather than
     # repeating it. Resolved at this one seam so every backend keeps reading the
-    # same meta keys it always did, and a campaign with no connection -- or a
-    # host with no resolver installed -- is handed its meta untouched.
-    if _CONNECTION_RESOLVER is not None:
-        meta = _CONNECTION_RESOLVER(meta)
+    # same meta keys it always did, and a campaign with no connection is handed
+    # its meta untouched.
+    meta = _resolve(meta)
     name = backend_name(meta)
     try:
         factory = _FACTORIES[name]
@@ -75,6 +82,29 @@ def backend_from_meta(meta: dict[str, Any]) -> JobBackend:
         known = ", ".join(sorted(_FACTORIES)) or "none"
         raise ValueError(f"unknown ops backend {name!r} (registered: {known})") from None
     return factory(meta)
+
+
+def prepare_from_meta(meta: dict[str, Any], *, app_dir: str) -> None:
+    """Round-zero setup for backends that need it; a no-op for those that don't."""
+    if backend_name(meta) != DEFAULT_BACKEND:
+        return
+    from oncall_flow.docker_backend import make_ssh_runner
+    from oncall_flow.runner import make_ssh_sync, prepare_remote
+
+    # Same seam as backend_from_meta: a campaign that names a connection has no
+    # address of its own, and reading meta["host"] here raised KeyError on the
+    # first campaign an agent created for itself (2026-08-18).
+    meta = _resolve(meta)
+    key_path = os.path.expanduser(meta.get("key", "~/.ssh/id_rsa"))
+    host, port = meta["host"], int(meta.get("port", 22))
+    remote_dir = meta.get("remote_dir", "/root/raven-ops")
+    prepare_remote(
+        make_ssh_runner(host, port, key_path),
+        make_ssh_sync(host, port, key_path),
+        image=meta.get("image", "python:3.12-slim"),
+        app_local=os.path.abspath(app_dir) + "/",
+        app_remote=f"{remote_dir}/app",
+    )
 
 
 def _process_from_meta(meta: dict[str, Any]) -> JobBackend:
