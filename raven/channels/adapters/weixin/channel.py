@@ -608,8 +608,9 @@ class WeixinChannel(ChannelBase):
     async def _send_text(self, to_user: str, text: str, ctx_token: str) -> None:
         item_list = [{"type": p.ITEM_TEXT, "text_item": {"text": text}}] if text else []
         data = await self._post("ilink/bot/sendmessage", {"msg": self._bot_msg(to_user, ctx_token, item_list)})
-        if errcode := data.get("errcode", 0):
-            raise RuntimeError(f"WeChat send text error (code {errcode}): {data.get('errmsg', '')}")
+        ret, errcode = data.get("ret", 0), data.get("errcode", 0)
+        if (ret and ret != 0) or (errcode and errcode != 0):
+            raise RuntimeError(f"WeChat send text error: ret={ret} errcode={errcode} errmsg={data.get('errmsg', '')}")
 
     async def _send_media_file(self, to_user: str, media_path: str, ctx_token: str) -> None:
         """Upload to the iLink CDN (AES-encrypted) and send it as a media message."""

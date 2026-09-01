@@ -231,6 +231,14 @@ def test_send_raises_when_context_token_missing():
         asyncio.run(ch.send("u1", "hi"))
 
 
+def test_send_text_rejects_nonzero_ret_even_when_errcode_is_zero():
+    ch = _channel()
+    ch._post = AsyncMock(return_value={"ret": -2, "errcode": 0, "errmsg": "prepare failed"})
+
+    with pytest.raises(RuntimeError, match=r"ret=-2.*errcode=0.*prepare failed"):
+        asyncio.run(ch._send_text("u1", "hi", "ctok"))
+
+
 # ── _process_message gating + dedup (text path, no network) ───────────
 
 
