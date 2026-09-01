@@ -25,11 +25,13 @@ gone. How the user is asked depends on the grants the loop lends at bind time:
   session's working directory through the ``rebind_workdir`` grant, and the
   model is told to re-issue its change there.
 - **Between turns (no asking transport, or no grant bound):** the question is
-  persisted to the allocation record and the turn is stopped. The fork's
-  launcher-side relay (question as the reply, next turn parsed as the answer)
-  has no trunk counterpart this wave -- it returns with the exec-target swap's
-  CLI hosting; until then every write is denied until an asking channel
-  exists, which is the fail-closed direction.
+  persisted to the allocation record and the turn is stopped. There is no
+  launcher-side relay to port: the fork tree carries none, and its CLI
+  hosting never armed the gate at all (measured: fork run.py exports no
+  RAVEN_WORKSPACE_ALLOC_* in its one-turn mode). The product's CLI hosting
+  does arm the one-conversation layout, so a write stays denied until an
+  asking channel exists -- fail-closed, and strictly more guarded than the
+  fork's own ungated CLI turns.
 
 Read-only tools never trigger allocation, so an instance that only analyzes
 code allocates nothing.
@@ -1395,9 +1397,10 @@ def make_write_gate(ctx: "PluginContext") -> "WorkspaceGate | MisconfiguredGate 
     workspace_gate.py:1241-1253), and "not armed means no gate at all"
     survives the move to config (verdict D6). A slice that does not PARSE is
     neither off nor unarmed: it casts the fail-closed
-    :class:`MisconfiguredGate` (see there). Only the multiplexed layout is
-    rendered today; the one-conversation CLI layout returns with the
-    exec-target swap's CLI hosting.
+    :class:`MisconfiguredGate` (see there). Both fork layouts arm here, in
+    the fork's own decision order (config.WorkspaceGateSlice.armed): the
+    launcher renders the multiplexed keys for its ACP hosting and the
+    one-conversation keys for its CLI adjudication hosting.
     """
     try:
         cfg = FlowConfig.from_slice(dict(ctx.config or {}))
@@ -1406,11 +1409,16 @@ def make_write_gate(ctx: "PluginContext") -> "WorkspaceGate | MisconfiguredGate 
         return MisconfiguredGate(_MALFORMED_SLICE_ERROR)
     if not cfg.enabled:
         return None
-    armed = cfg.workspace_gate.armed()
-    if armed is None:
+    arming = cfg.workspace_gate.armed()
+    if arming is None:
         return None
-    alloc_base, repos_root = armed
-    return WorkspaceGate(Path(ctx.services.workspace), repos_root, alloc_base=alloc_base)
+    return WorkspaceGate(
+        Path(ctx.services.workspace),
+        arming.repos_root,
+        instance=arming.instance,
+        alloc_dir=arming.alloc_dir,
+        alloc_base=arming.alloc_base,
+    )
 
 
 def make_release_observer(ctx: "PluginContext") -> WorkspaceReleaseObserver | None:
@@ -1420,7 +1428,10 @@ def make_release_observer(ctx: "PluginContext") -> WorkspaceReleaseObserver | No
     (the sanctioned opt-out; an unarmed deploy allocated nothing). A slice
     that does not parse declines too -- unlike the gate, an absent observer
     leaks toward KEEPING allocations and worktrees, which is the safe
-    direction (release never deletes work anyway).
+    direction (release never deletes work anyway). Only the multiplexed
+    layout boards an observer: the one-conversation layout keys no records
+    by session, so a session's death frees nothing it holds -- its record
+    retires with its instance partition, the fork's own CLI posture.
     """
     try:
         cfg = FlowConfig.from_slice(dict(ctx.config or {}))
@@ -1429,8 +1440,7 @@ def make_release_observer(ctx: "PluginContext") -> WorkspaceReleaseObserver | No
         return None
     if not cfg.enabled:
         return None
-    armed = cfg.workspace_gate.armed()
-    if armed is None:
+    arming = cfg.workspace_gate.armed()
+    if arming is None or arming.alloc_base is None:
         return None
-    alloc_base, repos_root = armed
-    return WorkspaceReleaseObserver(alloc_base, repos_root)
+    return WorkspaceReleaseObserver(arming.alloc_base, arming.repos_root)

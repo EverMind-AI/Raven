@@ -7,15 +7,16 @@ snake_case (``alias_generator=to_camel`` + ``populate_by_name``) and ignores
 unknown keys instead of forbidding them.
 
 The ``workspaceGate`` block replaces the fork's ``RAVEN_WORKSPACE_ALLOC_*``
-environment arming (fork workspace_gate.py:76-79, build_workspace_gate
+environment arming (fork workspace_gate.py:74-77, build_workspace_gate
 :1241-1253): the launcher used to export the env, now it renders the same
-three facts into this slice (verdict D6). The "unarmed means no gate at all"
-contract survives the move: an absent or incomplete block makes ``armed()``
-answer None and the factories decline.
+facts into this slice (verdict D6), one layout per hosting. The "unarmed
+means no gate at all" contract survives the move: an absent or incomplete
+block makes ``armed()`` answer None and the factories decline.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -33,25 +34,63 @@ class _Base(BaseModel):
     )
 
 
+@dataclass(frozen=True)
+class GateArming:
+    """A parsed arming: which layout the launcher rendered, made explicit.
+
+    Exactly one of ``alloc_dir`` (with ``instance``) and ``alloc_base`` is
+    set; ``repos_root`` names the repo-level records in both layouts.
+    """
+
+    repos_root: Path
+    alloc_base: Path | None = None
+    alloc_dir: Path | None = None
+    instance: str = ""
+
+
 class WorkspaceGateSlice(_Base):
     """The launcher-rendered gate arming: the scaffold owns these spellings.
 
-    ``state_bucket`` (rendered as ``stateBucket``) is accepted and carried but
-    not consumed by the gate: it names the session-state partition the fork's
-    config.paths reads, and boards with the state-partition wave.
+    Two layouts, the fork's own pair spelled as config instead of env (fork
+    ALLOC_DIR/INSTANCE/ALLOC_BASE/REPOS env quartet, workspace_gate.py:74-77):
+
+    - ``allocDir`` + ``instance``: one process serves one conversation (the
+      CLI adjudication hosting); the record is ``<dir>/allocation.json``.
+    - ``allocBase``: one process serves many sessions (the ACP server
+      multiplexes them on one connection); each session's record lives under
+      ``<base>/allocations/``.
+
+    ``reposRoot`` names the repo-level records (locks, owners, worktrees) in
+    both layouts, and no layout arms without it. ``stateBucket`` (rendered on
+    the ACP layout) is accepted and carried but not consumed by the gate: it
+    names the session-state partition the fork's config.paths read, and
+    boards with the state-partition wave.
     """
 
     alloc_base: str = ""
+    alloc_dir: str = ""
+    instance: str = ""
     repos_root: str = ""
     state_bucket: str = ""
 
-    def armed(self) -> tuple[Path, Path] | None:
-        """(allocation base, repos root), or None when the launcher armed nothing."""
-        base = self.alloc_base.strip()
+    def armed(self) -> GateArming | None:
+        """The arming, or None when the launcher armed nothing.
+
+        The fork's own decision order (build_workspace_gate :1244-1253):
+        repos first and always, then the one-conversation pair, then the
+        multiplexed base.
+        """
         repos = self.repos_root.strip()
-        if not (base and repos):
+        if not repos:
             return None
-        return Path(base), Path(repos)
+        alloc_dir = self.alloc_dir.strip()
+        instance = self.instance.strip()
+        if alloc_dir and instance:
+            return GateArming(repos_root=Path(repos), alloc_dir=Path(alloc_dir), instance=instance)
+        base = self.alloc_base.strip()
+        if base:
+            return GateArming(repos_root=Path(repos), alloc_base=Path(base))
+        return None
 
 
 class FlowConfig(_Base):
@@ -69,4 +108,4 @@ class FlowConfig(_Base):
         return cls.model_validate(dict(raw or {}))
 
 
-__all__ = ["FlowConfig", "WorkspaceGateSlice"]
+__all__ = ["FlowConfig", "GateArming", "WorkspaceGateSlice"]

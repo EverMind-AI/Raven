@@ -6,8 +6,13 @@
 # (agents/raven-code/run.py render_config):
 #
 #   workspaceGate.allocBase    per-session allocation records live under
-#                              <allocBase>/allocations/ (the acp partition)
+#                              <allocBase>/allocations/ (the ACP hosting)
+#   workspaceGate.allocDir     one-conversation allocation record at
+#                              <allocDir>/allocation.json (the CLI hosting)
+#   workspaceGate.instance     the CLI conversation's instance identity,
+#                              rendered beside allocDir
 #   workspaceGate.reposRoot    repo-level records: locks, owners, worktrees
+#                              (required by both layouts)
 #   workspaceGate.stateBucket  the session-state partition name; accepted and
 #                              carried, consumed by the state-partition wave
 #

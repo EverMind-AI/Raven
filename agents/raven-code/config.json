@@ -47,7 +47,13 @@
       "deep_research",
       "image_generate",
       "text_to_speech",
-      "video_generate"
+      "video_generate",
+      "create_playbook",
+      "deliver_files",
+      "find_skill",
+      "load_playbook",
+      "plugin",
+      "run_subagent_dag"
     ]
   },
   "memory": {
