@@ -4789,6 +4789,40 @@ export interface SubagentInterruptResult {
   found: boolean;
   subagent_id: string;
 }
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentCancelSessionParams".
+ */
+export interface SubagentCancelSessionParams {
+  session_key: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentCancelSessionResult".
+ */
+export interface SubagentCancelSessionResult {
+  cancelled: number;
+  session_key: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentCancelInstanceParams".
+ */
+export interface SubagentCancelInstanceParams {
+  session_key?: string;
+  agent: string;
+  handle: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentCancelInstanceResult".
+ */
+export interface SubagentCancelInstanceResult {
+  found: boolean;
+  session_key: string;
+  agent: string;
+  handle: string;
+}
 
 // ---- Schema-name aliases for structurally-deduplicated types ----
 export type BrowserManageResult = StubResult;

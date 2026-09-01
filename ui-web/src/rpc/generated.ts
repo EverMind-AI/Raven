@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 158 methods, 89 component schemas.
+// 160 methods, 89 component schemas.
 
 /* eslint-disable */
 /**
@@ -3507,6 +3507,24 @@ export interface SubagentInterruptResult {
   found: boolean;
   subagent_id: string;
 }
+export interface SubagentCancelSessionParams {
+  session_key: string;
+}
+export interface SubagentCancelSessionResult {
+  cancelled: number;
+  session_key: string;
+}
+export interface SubagentCancelInstanceParams {
+  session_key?: string;
+  agent: string;
+  handle: string;
+}
+export interface SubagentCancelInstanceResult {
+  found: boolean;
+  session_key: string;
+  agent: string;
+  handle: string;
+}
 
 // ---------------------------------------------------------------------------
 // Method map -- generated from the contract's method list.
@@ -3672,6 +3690,8 @@ export interface RpcMethods {
   'shell.exec': { params: ShellExecParams; result: ShellExecResult };
   'skills.manage': { params: SkillsManageParams; result: SkillsManageResult };
   'subagent.interrupt': { params: SubagentInterruptParams; result: SubagentInterruptResult };
+  'subagent.cancel_session': { params: SubagentCancelSessionParams; result: SubagentCancelSessionResult };
+  'subagent.cancel_instance': { params: SubagentCancelInstanceParams; result: SubagentCancelInstanceResult };
 }
 
 /** The literal union of callable method names. */
@@ -3809,6 +3829,8 @@ export const RPC_METHODS = [
   "spawn_tree.list",
   "spawn_tree.load",
   "spawn_tree.save",
+  "subagent.cancel_instance",
+  "subagent.cancel_session",
   "subagent.context",
   "subagent.interrupt",
   "subagent.list",

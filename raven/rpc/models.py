@@ -3710,6 +3710,28 @@ class SubagentInterruptResult(_Strict):
     subagent_id: str
 
 
+class SubagentCancelSessionParams(_Strict):
+    session_key: str
+
+
+class SubagentCancelSessionResult(_Strict):
+    cancelled: int
+    session_key: str
+
+
+class SubagentCancelInstanceParams(_Strict):
+    session_key: str | None = Field(default=None, description="Session lane; omitted addresses the default lane.")
+    agent: str
+    handle: str
+
+
+class SubagentCancelInstanceResult(_Strict):
+    found: bool
+    session_key: str
+    agent: str
+    handle: str
+
+
 METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     # knowledge.* -- bases and their documents, served by the in-process engine
     "knowledge.status": (KnowledgeStatusParams, KnowledgeStatusResult),
@@ -3777,6 +3799,8 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "shell.exec": (ShellExecParams, ShellExecResult),
     "skills.manage": (SkillsManageParams, SkillsManageResult),
     "subagent.interrupt": (SubagentInterruptParams, SubagentInterruptResult),
+    "subagent.cancel_session": (SubagentCancelSessionParams, SubagentCancelSessionResult),
+    "subagent.cancel_instance": (SubagentCancelInstanceParams, SubagentCancelInstanceResult),
     "channels.status": (ChannelsStatusParams, ChannelsStatusResult),
     "channels.configure": (ChannelsConfigureParams, ChannelsConfigureResult),
     "channels.qr": (ChannelsQrParams, ChannelsQrResult),
