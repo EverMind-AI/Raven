@@ -95,14 +95,36 @@ async def _started(watcher: OpsEventWatcher, grant) -> None:
     await watcher.stop()
 
 
-def test_the_manifest_contributes_exactly_the_watcher_service() -> None:
+def test_the_manifest_contributes_the_watcher_service_and_the_ops_tools() -> None:
     manifest = PluginManifest.from_toml_path(PLUGIN_DIR / "raven-plugin.toml")
     assert manifest.id == NS
     assert [s.name for s in manifest.contributes.services] == ["oncall_event_watcher"]
     assert manifest.contributes.services[0].factory == "oncall_flow.watcher:make_event_watcher"
-    assert manifest.contributes.tools == [] and manifest.contributes.hooks == [], (
-        "part 2a still declares only what it implements; the gate axes and "
-        "ops tools add their own entries when they land (2b/2c)"
+    # Part 2b's roster: the fork's thirteen agent tools plus the machine face
+    # under its own name (ops_exec; the exec shadow is an open ruling). No
+    # entry shadows a built-in, ops_tune_launch stays off the menu on purpose,
+    # and the gate axes still add their own [[hooks]] rows when 2c lands.
+    assert [t.name for t in manifest.contributes.tools] == [
+        "ops_tune_status",
+        "ops_submit",
+        "ops_check_later",
+        "ops_note",
+        "ops_campaigns",
+        "ops_connections",
+        "ops_declare",
+        "ops_kill",
+        "ops_outputs",
+        "ops_edit_case_dict",
+        "ops_case_changes",
+        "ops_ask_owner",
+        "ops_finish",
+        "ops_exec",
+    ]
+    assert all(t.factory == f"oncall_flow.tools:make_{t.name}" for t in manifest.contributes.tools), (
+        "one factory per face, all in oncall_flow.tools"
+    )
+    assert manifest.contributes.hooks == [], (
+        "part 2b still declares only what it implements; the gate axes add their own entries when they land (2c)"
     )
 
 
