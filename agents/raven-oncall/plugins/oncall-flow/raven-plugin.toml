@@ -1,0 +1,35 @@
+# oncall-flow: the on-call watch loop as a plugin.
+#
+# Config slice (plugins.config["oncall-flow"]): enabled (the product gate --
+# absent or false means no surface is cast, the D6 shape), the optional
+# watcher.pollIntervalSeconds knob (default 20.0, the fork's event-watcher
+# interval), plus the plugin-only key:
+#
+#   stateRoot   campaign-state root; the launcher injects it at render time
+#               (run.py setdefault), defaulting to <workspace>/oncall_flow
+#
+# config_schema stays empty on purpose: admission with an empty declaration is
+# verbatim pass-through, and the slice is validated by the plugin's own
+# FlowConfig (oncall_flow/config.py), which owns the slice shape.
+
+[plugin]
+id = "oncall-flow"
+version = "0.1.0"
+display_name = "Oncall Flow"
+enabled_by_default = true
+
+# Part one contributes only the resident event watcher (paper:
+# raven/contracts/services.py): a dumb no-LLM poll loop that pulls a
+# campaign's pending keyed wake forward when its jobs go terminal or its
+# progress turns unhealthy. Only a resident host starts it; the factory
+# declines (returns None) when the slice leaves the flow off.
+#
+# The turn-frame hooks (the eight gate axes) and the ops tool set are part
+# two of this plugin's landing: they will add their own [[hooks]] and
+# [[tools]] entries here when they land -- nothing is pre-declared for them,
+# a declared contribution whose factory does not exist yet would fail the
+# registry at activation.
+
+[[plugin.contributes.services]]
+name = "oncall_event_watcher"
+factory = "oncall_flow.watcher:make_event_watcher"
