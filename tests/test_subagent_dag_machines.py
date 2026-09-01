@@ -22,6 +22,14 @@ import pytest
 from raven.agent.subagent import dag_machines as _machines
 
 
+@pytest.fixture(autouse=True)
+def _empty_config_roster(monkeypatch):
+    """Pin the config roster empty: these tests drive the seed-manifest lane
+    unless a test installs rows of its own, and the developer machine's real
+    config must never leak into them."""
+    monkeypatch.setattr(_machines, "_config_rows", lambda: [])
+
+
 @pytest.fixture
 def oncall_flagged(monkeypatch):
     """Raven-Oncall's manifest claims machines; nobody else's does."""
@@ -276,3 +284,41 @@ def test_whitespace_equivalent_duplicate_ids_also_strand_the_graph(monkeypatch, 
     stranded = _machines.machineless(["Raven-Oncall"])
 
     assert stranded is not None and stranded.usable == 0
+
+
+def test_the_config_roster_row_is_the_first_truth(monkeypatch):
+    """[C1] The flag must survive its vendored folder's retirement: a config
+    row is enough on its own, with no folder anywhere."""
+    monkeypatch.setattr(_machines, "_config_rows", lambda: [{"name": "Raven-Oncall", "runsOnMachines": True}])
+    monkeypatch.setattr("raven.agent.subagent.vendored_agents.vendored_folder", lambda agent, root=None: None)
+
+    assert _machines.runs_on_machines("Raven-Oncall") is True
+
+
+def test_a_named_config_row_overrides_the_seed_manifest(monkeypatch, tmp_path):
+    """A row that names the agent is authoritative in both directions -- a
+    False in config silences the check even while a stale folder claims True."""
+    folder = tmp_path / "raven-oncall"
+    folder.mkdir()
+    (folder / "subagent.json").write_text(
+        json.dumps({"name": "Raven-Oncall", "runsOnMachines": True}), encoding="utf-8"
+    )
+    monkeypatch.setattr("raven.agent.subagent.vendored_agents.vendored_folder", lambda agent, root=None: folder)
+    monkeypatch.setattr(_machines, "_config_rows", lambda: [{"name": "Raven-Oncall", "runsOnMachines": False}])
+
+    assert _machines.runs_on_machines("Raven-Oncall") is False
+
+
+def test_an_unreadable_config_roster_still_reaches_the_seed(monkeypatch, tmp_path):
+    def _boom():
+        raise OSError("config unreadable")
+
+    folder = tmp_path / "raven-oncall"
+    folder.mkdir()
+    (folder / "subagent.json").write_text(
+        json.dumps({"name": "Raven-Oncall", "runsOnMachines": True}), encoding="utf-8"
+    )
+    monkeypatch.setattr(_machines, "_config_rows", _boom)
+    monkeypatch.setattr("raven.agent.subagent.vendored_agents.vendored_folder", lambda agent, root=None: folder)
+
+    assert _machines.runs_on_machines("Raven-Oncall") is True
