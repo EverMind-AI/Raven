@@ -19,9 +19,9 @@ the decision, not an oversight -- a sub-agent that is answering is left to finis
 and its record is the evidence either way (see the concurrent-direct-chats
 design, D3). ``SubagentManager.chat`` still unwinds cleanly if the lane is torn
 down for another reason (shutdown, session delete): the record is finished
-``cancelled`` and the registry row follows. The web surface keeps its own
-(``raven.subagents.instances.cancel``) because a spawn there is a background task
-with no turn to cancel.
+``cancelled`` and the registry row follows. A host where a spawn is a
+background task with no turn to cancel reaches it over the wire through
+``subagent.cancel_instance``.
 """
 
 from __future__ import annotations

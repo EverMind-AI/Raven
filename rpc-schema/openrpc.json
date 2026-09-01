@@ -6857,6 +6857,92 @@
           "type": "object"
         }
       }
+    },
+    {
+      "name": "subagent.cancel_session",
+      "summary": "Cancel every background sub-agent a session left running.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "SubagentCancelSessionResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "cancelled": {
+              "type": "integer"
+            },
+            "session_key": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "cancelled",
+            "session_key"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "subagent.cancel_instance",
+      "summary": "Cancel the spawns behind one rendered (agent, handle) pair.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "agent",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "handle",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "SubagentCancelInstanceResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "found": {
+              "type": "boolean"
+            },
+            "session_key": {
+              "type": "string"
+            },
+            "agent": {
+              "type": "string"
+            },
+            "handle": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "found",
+            "session_key",
+            "agent",
+            "handle"
+          ],
+          "type": "object"
+        }
+      }
     }
   ],
   "components": {

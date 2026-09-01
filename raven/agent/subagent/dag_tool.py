@@ -277,7 +277,8 @@ class SubAgentDagTool(Tool):
     """Orchestrate a graph of sub-agent tasks in one call (file-based passing)."""
 
     timeout_seconds = 1800.0
-    # Manual stop (request_cancel / the cancel RPCs) replaces the timer
+    # Manual stop (request_cancel / ``subagent.interrupt`` on the run id /
+    # ``subagent.cancel_session``) replaces the timer
     # ceiling: the registry skips asyncio.wait_for for blocking_interaction
     # tools, so a long-running DAG is ended by hand, not by a clock. Declared
     # for every call, background or not, the same way ``spawn`` declares it
@@ -1213,7 +1214,8 @@ class SubAgentDagTool(Tool):
             await self._close_graph(emit, run_id, len(spec.nodes), {"error": str(exc)})
             return f"Error running DAG {run_id}: {exc}"
         except asyncio.CancelledError:
-            # The other way a run is stopped. ``dag.cancel`` sets the event and
+            # The other way a run is stopped. The model's ``cancel_dag`` tool
+            # (via ``cancel_dag_run``) sets the event and
             # lets ``run_dag`` return, so the graph settles on its own manifest;
             # ``/stop`` and the shutdown sweep instead cancel the task, a route
             # this branch opened by adopting the run into the manager's index.

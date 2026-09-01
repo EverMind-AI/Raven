@@ -913,9 +913,9 @@ class SubagentManager:
         It also makes ``cancel_by_instance`` able to stop one. The TUI does not
         use that: a direct chat runs on its own lane, so ``turn.cancel`` -- which
         looks up the session's turn -- does not reach it, and not reaching it is
-        the decision (see the concurrent-direct-chats design, D3). The web
-        surface does use it, an instance's work there being a background task
-        with no turn behind it.
+        the decision (see the concurrent-direct-chats design, D3). A host where
+        an instance's work is a background task with no turn behind it reaches
+        it over the wire through ``subagent.cancel_instance``.
 
         Deliberately not registered in ``_session_tasks``. That index backs
         "cancel this session's sub-agents", and the task here is the user's own
