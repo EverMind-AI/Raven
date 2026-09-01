@@ -793,3 +793,29 @@ def test_the_loop_satisfies_the_mcp_host_paper(workspace) -> None:
 
     loop = _loop(workspace)
     assert isinstance(loop, McpHost)
+
+
+async def test_a_closed_executor_parks_connected_stdio_servers_in_error(workspace) -> None:
+    """[N3-C1] A turn exception closes the sandbox executor: connected stdio
+    servers' child processes die with it, and a record left ``connected`` is
+    a lie no reload retries (the config never changed). close_executor tells
+    the organ; stdio rows park in ``error`` with their tools withdrawn (the
+    retry door heals them with a provider-fresh executor) while http rows,
+    which do not ride the executor, stay connected."""
+    loop = _loop(workspace)
+    with patch(_PATCH, new=_fake_connect(["search"])):
+        await loop.apply_mcp_config(
+            {
+                "sd": MCPServerConfig(command="echo", args=["hi"]),
+                "web": MCPServerConfig(url="https://svc.test/mcp"),
+            }
+        )
+    assert loop.tools.has("mcp_sd_search") and loop.tools.has("mcp_web_search")
+
+    await loop.close_executor()
+
+    states = {s["name"]: (s["state"], s["error"]) for s in loop.mcp_manager.status()}
+    assert states["sd"] == ("error", "sandbox executor closed")
+    assert states["web"][0] == "connected", "an http transport does not ride the executor"
+    assert not loop.tools.has("mcp_sd_search"), "the dead transport's tools are withdrawn"
+    assert loop.tools.has("mcp_web_search")

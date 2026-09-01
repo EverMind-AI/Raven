@@ -318,6 +318,35 @@ class MCPConnectionManager:
         async with self._lock:
             await self._disconnect_locked(name, drop=drop)
 
+    async def executor_lost(self, reason: str) -> list[str]:
+        """Every connected stdio server just lost its child process: the
+        sandbox executor those transports ran under closed. Detach them and
+        park the records in ``error`` -- the state the retry door
+        (``connect``/authorize) owns -- instead of letting ``connected``
+        stand for processes that are gone, which no reload would ever retry
+        (the config did not change). HTTP and SSE transports do not ride the
+        executor and are untouched; the next connect brings a fresh executor,
+        because connects take a provider, not an instance.
+        """
+        lost: list[str] = []
+        async with self._lock:
+            for conn in list(self._conns.values()):
+                if conn.state != "connected" or resolve_transport(conn.config) != "stdio":
+                    continue
+                conn.epoch = None
+                for t in self._registry.names_from(conn.name):
+                    self._registry.unregister(t)
+                if conn.stack is not None:
+                    await self._close_stack(conn.stack)
+                    conn.stack = None
+                conn.session = None
+                conn.capabilities = None
+                self._set_state(conn, "error", reason)
+                lost.append(conn.name)
+        if lost:
+            logger.warning("MCP: sandbox executor closed under connected stdio server(s): {}", ", ".join(lost))
+        return lost
+
     def config_changed(self, cfg_servers: dict) -> bool:
         """Whether :meth:`apply_config` would do anything -- without doing it.
 
