@@ -5,6 +5,9 @@ product gate (an absent or disabled slice casts no surface at all -- the D6
 shape, same as the watcher's factory), and the shared wiring (the campaign
 root from the slice's ``stateRoot``, installed once into ``tools.base``).
 Declining is returning ``None``; the plugin lane skips a decliner quietly.
+Every constructed face is adopted onto the roster in ``tools.base`` on the way
+out: the part-2c turn hook contexts and reads the SAME instances the loop
+registered, and the roster is the two lanes' one meeting point.
 
 The scheduling faces (ops_submit, ops_check_later, ops_ask_owner, ops_finish)
 additionally declare ``bind_runtime`` (on ``tools.base._OpsScheduler``) and
@@ -49,7 +52,7 @@ def make_ops_tune_status(ctx: "PluginContext"):
         return None
     from oncall_flow.tools.ops import OpsTuneStatusTool
 
-    return OpsTuneStatusTool()
+    return base.adopt(OpsTuneStatusTool())
 
 
 def make_ops_submit(ctx: "PluginContext"):
@@ -57,7 +60,7 @@ def make_ops_submit(ctx: "PluginContext"):
         return None
     from oncall_flow.tools.ops import OpsSubmitTool
 
-    return OpsSubmitTool()
+    return base.adopt(OpsSubmitTool())
 
 
 def make_ops_check_later(ctx: "PluginContext"):
@@ -65,7 +68,7 @@ def make_ops_check_later(ctx: "PluginContext"):
         return None
     from oncall_flow.tools.ops import OpsCheckLaterTool
 
-    return OpsCheckLaterTool()
+    return base.adopt(OpsCheckLaterTool())
 
 
 def make_ops_note(ctx: "PluginContext"):
@@ -73,7 +76,7 @@ def make_ops_note(ctx: "PluginContext"):
         return None
     from oncall_flow.tools.ops import OpsNoteTool
 
-    return OpsNoteTool()
+    return base.adopt(OpsNoteTool())
 
 
 def make_ops_campaigns(ctx: "PluginContext"):
@@ -81,7 +84,7 @@ def make_ops_campaigns(ctx: "PluginContext"):
         return None
     from oncall_flow.tools.ops import OpsCampaignsTool
 
-    return OpsCampaignsTool()
+    return base.adopt(OpsCampaignsTool())
 
 
 def make_ops_kill(ctx: "PluginContext"):
@@ -89,7 +92,7 @@ def make_ops_kill(ctx: "PluginContext"):
         return None
     from oncall_flow.tools.ops import OpsKillTool
 
-    return OpsKillTool()
+    return base.adopt(OpsKillTool())
 
 
 def make_ops_connections(ctx: "PluginContext"):
@@ -97,7 +100,7 @@ def make_ops_connections(ctx: "PluginContext"):
         return None
     from oncall_flow.tools.ops_connections import OpsConnectionsTool
 
-    return OpsConnectionsTool()
+    return base.adopt(OpsConnectionsTool())
 
 
 def make_ops_declare(ctx: "PluginContext"):
@@ -105,7 +108,7 @@ def make_ops_declare(ctx: "PluginContext"):
         return None
     from oncall_flow.tools.ops_declare import OpsDeclareTool
 
-    return OpsDeclareTool()
+    return base.adopt(OpsDeclareTool())
 
 
 def make_ops_outputs(ctx: "PluginContext"):
@@ -113,7 +116,7 @@ def make_ops_outputs(ctx: "PluginContext"):
         return None
     from oncall_flow.tools.ops_observe import OpsOutputsTool
 
-    return OpsOutputsTool()
+    return base.adopt(OpsOutputsTool())
 
 
 def make_ops_edit_case_dict(ctx: "PluginContext"):
@@ -121,7 +124,7 @@ def make_ops_edit_case_dict(ctx: "PluginContext"):
         return None
     from oncall_flow.tools.ops_case_dict import OpsEditCaseDictTool
 
-    return OpsEditCaseDictTool()
+    return base.adopt(OpsEditCaseDictTool())
 
 
 def make_ops_case_changes(ctx: "PluginContext"):
@@ -129,7 +132,7 @@ def make_ops_case_changes(ctx: "PluginContext"):
         return None
     from oncall_flow.tools.ops_case_dict import OpsCaseChangesTool
 
-    return OpsCaseChangesTool()
+    return base.adopt(OpsCaseChangesTool())
 
 
 def make_ops_ask_owner(ctx: "PluginContext"):
@@ -137,7 +140,7 @@ def make_ops_ask_owner(ctx: "PluginContext"):
         return None
     from oncall_flow.tools.ops_escalation import OpsAskOwnerTool
 
-    return OpsAskOwnerTool()
+    return base.adopt(OpsAskOwnerTool())
 
 
 def make_ops_finish(ctx: "PluginContext"):
@@ -145,7 +148,7 @@ def make_ops_finish(ctx: "PluginContext"):
         return None
     from oncall_flow.tools.ops_escalation import OpsFinishTool
 
-    return OpsFinishTool()
+    return base.adopt(OpsFinishTool())
 
 
 def make_ops_exec(ctx: "PluginContext"):
@@ -153,4 +156,4 @@ def make_ops_exec(ctx: "PluginContext"):
         return None
     from oncall_flow.tools.ops_exec import OpsExecTool
 
-    return OpsExecTool()
+    return base.adopt(OpsExecTool())
