@@ -116,3 +116,23 @@ async def test_a_started_service_receives_the_namespaced_wake_grant(tmp_path):
 
     job = granted.schedule_wake("c1", int(time.time() * 1000) + 60_000, "look", channel="tui")
     assert job.id == "wake:plug-a:c1", "the same namespaced grant a tool gets at bind"
+
+
+def test_every_resident_host_starts_and_stops_the_services() -> None:
+    """[seam-2] The resident hosts are exactly three assemblies: the gateway's
+    generation loop, the rpc stack (serving the page and acp connections), and
+    the tui's hand-built server. Each must both start and stop the services --
+    a host that starts what it never stops leaks producers into teardown, and
+    one that stops what it never started is a dead affordance."""
+    import inspect
+
+    from raven.cli import gateway_commands, tui_commands
+    from raven.rpc import bootstrap
+
+    for name, src in (
+        ("build_rpc_stack", inspect.getsource(bootstrap.build_rpc_stack)),
+        ("tui server", inspect.getsource(tui_commands._run_rpc_server_until_done)),
+        ("gateway", inspect.getsource(gateway_commands.register)),
+    ):
+        assert "start_plugin_services" in src, f"{name} never starts the services"
+        assert "stop_plugin_services" in src, f"{name} never stops the services"

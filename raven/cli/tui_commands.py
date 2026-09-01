@@ -510,6 +510,16 @@ async def _run_rpc_server_until_done(
             return False
         # Handshake OK — start memory backend in background (may spawn
         # EverOS server, up to 30s) so it doesn't block first render.
+        # Contributed background services: the tui is a resident host, and it
+        # assembles its rpc server by hand rather than through build_rpc_stack,
+        # so it starts them itself.
+        if agent_loop is not None:
+            try:
+                await agent_loop.start_plugin_services()
+            except Exception:
+                from loguru import logger as _logger
+
+                _logger.exception("tui: plugin services failed to start; continuing without them")
         if agent_loop is not None and agent_loop.backend is not None:
 
             async def _start_backend() -> None:
@@ -547,6 +557,15 @@ async def _run_rpc_server_until_done(
                 await turn_teardown()
             except Exception:
                 pass
+        # Contributed services stop before everything else -- producers
+        # before drains, the order dispose follows.
+        if agent_loop is not None:
+            try:
+                await agent_loop.stop_plugin_services()
+            except Exception:
+                from loguru import logger as _logger
+
+                _logger.exception("tui: plugin services stop failed; continuing shutdown")
         # Sub-agents go first, and before the memory drain in particular: a run
         # still going is a run that can hand the backend another write, so
         # draining while they live is draining into a queue that is still being
