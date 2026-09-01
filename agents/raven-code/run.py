@@ -39,7 +39,7 @@ DEFAULT_CONFIG = HERE / "config.json"
 # The fork engine this launcher still hosts; retired at the exec-target swap.
 DEFAULT_CHECKOUT = HERE.parent.parent / "subagents" / "raven-code" / "Raven-main"
 FLOW_PLUGIN_ID = "code-flow"
-GUIDE = HERE / "TOOLS_CODE.md"
+GUIDE = HERE / "plugins" / FLOW_PLUGIN_ID / "prompts" / "TOOLS_CODE.md"
 
 PRODUCT = "raven-code"
 

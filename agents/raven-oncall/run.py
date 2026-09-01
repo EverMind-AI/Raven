@@ -44,7 +44,7 @@ HERE = Path(__file__).resolve().parent
 DEFAULT_CONFIG = HERE / "config.json"
 PLUGINS_DIR = HERE / "plugins"
 FLOW_PLUGIN_ID = "oncall-flow"
-GUIDE_SECTION = HERE / "TOOLS_ONCALL.md"
+GUIDE_SECTION = PLUGINS_DIR / FLOW_PLUGIN_ID / "prompts" / "TOOLS_ONCALL.md"
 
 PRODUCT = "raven-oncall"
 
