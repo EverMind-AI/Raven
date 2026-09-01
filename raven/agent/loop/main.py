@@ -629,6 +629,18 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Error closing Skill Hub client: %s", exc)
             self._skill_hub_client = None
+        # Connected stdio servers ran their child processes under this
+        # executor; with it gone, a record left ``connected`` is a lie no
+        # reload retries. Tell the organ so those rows park in ``error``,
+        # where the retry door heals them with a provider-fresh executor.
+        # On the close_mcp path the manager is already detached (a no-op).
+        if self._mcp_manager is not None:
+            try:
+                lost = await self._mcp_manager.executor_lost("sandbox executor closed")
+                if lost:
+                    self._sync_mcp_meta_tools()
+            except Exception as exc:  # noqa: BLE001 -- teardown must not die on bookkeeping
+                logger.warning("Error marking MCP servers after executor close: %s", exc)
 
     def _register_real_deep_research(self, cfg: DeepResearchToolConfig) -> None:
         """Build the working deep_research tool (+ async manager) and register it.
