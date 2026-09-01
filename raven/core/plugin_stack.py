@@ -356,6 +356,56 @@ def build_plugin_hooks(
     return hooks
 
 
+def build_plugin_services(
+    workspace: Path,
+    config: "RavenConfig",
+    *,
+    registry: PluginRegistry | None = None,
+    provider: "LLMProvider | None" = None,
+) -> list:
+    """Construct every plugin-contributed background service admitted by ``config``.
+
+    Mirrors :func:`build_plugin_hooks` for the ``services`` contribution
+    point, with the same leniency: a failing factory is logged and skipped, a
+    factory returning ``None`` has declined. The built objects are inert --
+    only a resident host starts them, and the host owns the lifecycle
+    (paper: contracts/services.py). Each is stamped with the contributing
+    plugin's identity the way tools are, so the bind-time grants can be
+    namespaced.
+
+    Returns an empty list when no plugin contributes a service.
+    """
+    service_names = getattr(registry, "service_names", None)
+    names = service_names() if callable(service_names) else []
+    if not names:
+        return []
+    services = ServiceLocator(
+        workspace=workspace,
+        user_id=config.memory.user_id,
+        agent_id=config.memory.agent_id,
+        provider=provider,
+    )
+    slices = config.plugins.config
+    built = []
+    for name in names:
+        plugin_id = registry.service_plugin_id(name)
+        plugin_slice = (plugin_id and slices.get(plugin_id)) or slices.get(name) or {}
+        try:
+            service = registry.build_service(name, config=plugin_slice, services=services)
+        except Exception as e:
+            logger.warning("plugin service %r factory raised at construction (%s); skipping it.", name, e)
+            continue
+        if service is None:
+            logger.debug("plugin service %r factory opted out (returned None); skipping it.", name)
+            continue
+        try:
+            service.contributed_by = plugin_id or name
+        except (AttributeError, TypeError):
+            pass
+        built.append(service)
+    return built
+
+
 def _resolve_plugin_config_slice(
     registry: PluginRegistry,
     config: "RavenConfig",
@@ -408,6 +458,7 @@ __all__ = [
     "build_plugin_hooks",
     "build_plugin_registry",
     "build_plugin_tools",
+    "build_plugin_services",
     "discover_plugins",
     "maybe_build_memory_backend",
     "plugin_discovery_sources",
