@@ -7,13 +7,45 @@
 
 import type { JsonRpcErrorObject } from './generated.js'
 
+/** Fields the server puts in `error.data` to explain a failure (see
+ *  `raven/tui_rpc/errors.py` and `_build_tui_agent_loop`). `frame.message` is a
+ *  fixed code name like `internal_error`, so without these the user is told
+ *  nothing actionable. */
+const DETAIL_KEYS = ['detail', 'exception_message', 'reason'] as const
+
+const readString = (data: Record<string, unknown>, key: string): string | undefined => {
+  const value = data[key]
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+/** `[rpc -32603] internal_error: <cause> (see ~/.raven/logs/tui.log)`.
+ *  Callers render `err.message` directly, so the cause has to live there. */
+export function formatRpcError(frame: JsonRpcErrorObject): string {
+  let text = `[rpc ${frame.code}] ${frame.message}`
+  if (typeof frame.data !== 'object' || frame.data === null || Array.isArray(frame.data)) {
+    return text
+  }
+  const data = frame.data as Record<string, unknown>
+  const detail = DETAIL_KEYS.map(key => readString(data, key)).find(Boolean)
+  // A one-line detail reads inline; a multi-line one (a config error listing
+  // every offending field, say) keeps its shape below the summary.
+  if (detail) {
+    text += detail.includes('\n') ? `:\n${detail}` : `: ${detail}`
+  }
+  const logPath = readString(data, 'log_path')
+  if (logPath) {
+    text += `\n(details in ${logPath})`
+  }
+  return text
+}
+
 /** Base class for all JSON-RPC error responses surfaced to callers. */
 export class RpcError extends Error {
   readonly code: number
   readonly data: unknown
 
   constructor(frame: JsonRpcErrorObject) {
-    super(`[rpc ${frame.code}] ${frame.message}`)
+    super(formatRpcError(frame))
     this.name = 'RpcError'
     this.code = frame.code
     this.data = frame.data

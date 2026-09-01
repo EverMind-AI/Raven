@@ -26,7 +26,7 @@ from pydantic import ValidationError
 
 from raven.spine import ChatType, Media, Origin, Source, TurnHandle, TurnRequest
 from raven.spine.scheduler import Scheduler, SchedulerDrainingError
-from raven.tui_rpc.errors import RpcError, TurnInProgressError
+from raven.tui_rpc.errors import RpcError, TurnInProgressError, error_data
 from raven.tui_rpc.models import (
     TurnCancelParams,
     TurnSendParams,
@@ -134,16 +134,45 @@ def _resolve_model(parsed: TurnSendParams) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _build_error_detail(exc: RpcError) -> str | None:
+    """Human-readable cause of a latched init crash.
+
+    ``message`` is only the code name (``internal_error``), so without this the
+    TUI shows a turn failing for no stated reason. ``log_path`` rides along
+    because an init crash is usually only fully diagnosable from the log.
+
+    It rides in *front* of the cause, not behind it: the TUI renders the first
+    line of this string and nothing else (``chatStream.ts``), and the crash this
+    exists for -- a config the running build cannot parse -- raises a
+    ``ValidationError`` whose ``str()`` is always multi-line (7 lines for two bad
+    fields). Appended, the pointer landed on the last line and never reached
+    anyone; the one case that needs the log was the one case that lost it.
+    """
+    data = error_data(exc) or {}
+    detail = data.get("detail") or data.get("exception_message")
+    if not isinstance(detail, str) or not detail.strip():
+        return None
+    log_path = data.get("log_path")
+    if isinstance(log_path, str) and log_path.strip():
+        return f"(details in {log_path.strip()}) {detail.strip()}"
+    return detail.strip()
+
+
 async def _emit_start_then_error(
-    emitter: SubscriptionEmitter, session_key: str, turn_id: str, code: int, message: str
+    emitter: SubscriptionEmitter,
+    session_key: str,
+    turn_id: str,
+    code: int,
+    message: str,
+    detail: str | None = None,
 ) -> None:
     # message.start first so the front-end has a turn to clear, then the error
     # clears it (its onError resets turnId) — same shape the old per-turn task used.
     await emitter.emit(session_key, {"type": "message.start", "payload": {"turn_id": turn_id}})
-    await emitter.emit(
-        session_key,
-        {"type": "error", "payload": {"code": code, "message": message, "reason": "internal"}},
-    )
+    payload: dict[str, Any] = {"code": code, "message": message, "reason": "internal"}
+    if detail:
+        payload["detail"] = detail
+    await emitter.emit(session_key, {"type": "error", "payload": payload})
 
 
 async def turn_send(
@@ -182,7 +211,12 @@ async def turn_send(
         if emitter is not None:
             if build_error is not None:
                 await _emit_start_then_error(
-                    emitter, parsed.session_key, turn_id, build_error.code, build_error.message
+                    emitter,
+                    parsed.session_key,
+                    turn_id,
+                    build_error.code,
+                    build_error.message,
+                    _build_error_detail(build_error),
                 )
             else:
                 await _emit_start_then_error(emitter, parsed.session_key, turn_id, -32008, "model_not_available")

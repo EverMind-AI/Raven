@@ -188,6 +188,71 @@ async def test_turn_send_without_scheduler_surfaces_build_error_code() -> None:
     assert emitter.emitted[-1][1]["payload"]["code"] == -32603
 
 
+async def test_turn_send_emits_the_build_error_cause_not_just_its_code() -> None:
+    # -32603 internal_error names no cause on its own; the init crash detail and
+    # the log path are what make the failure diagnosable in the transcript.
+    class _BuildErr(RpcError):
+        CODE = -32603
+        MESSAGE = "internal_error"
+
+    emitter = FakeEmitter()
+    build_error = _BuildErr(
+        "Config at ~/.raven/config.json fails schema validation",
+        {"reason": "tui_init_crash", "log_path": "~/.raven/logs/tui.log"},
+    )
+    await turn_send(
+        {"session_key": "tui:default", "content": "x"},
+        emitter=emitter,
+        scheduler=None,
+        build_error=build_error,
+    )
+
+    payload = emitter.emitted[-1][1]["payload"]
+    assert payload["detail"] == (
+        "(details in ~/.raven/logs/tui.log) Config at ~/.raven/config.json fails schema validation"
+    )
+
+
+async def test_the_log_path_survives_the_transcript_renderer_on_a_multiline_cause() -> None:
+    # The TUI renders the first line of `detail` and nothing else. The crash this
+    # detail exists for is an unparseable config, whose ValidationError str() runs
+    # to several lines -- so a trailing pointer was dropped for exactly the case
+    # that needs it. Asserts the surviving slice, not just the whole string.
+    class _BuildErr(RpcError):
+        CODE = -32603
+        MESSAGE = "internal_error"
+
+    emitter = FakeEmitter()
+    multiline = "2 validation errors for RavenConfig\nagents.defaults.model\n  Input should be a valid string"
+    await turn_send(
+        {"session_key": "tui:default", "content": "x"},
+        emitter=emitter,
+        scheduler=None,
+        build_error=_BuildErr(multiline, {"reason": "tui_init_crash", "log_path": "~/.raven/logs/tui.log"}),
+    )
+
+    detail = emitter.emitted[-1][1]["payload"]["detail"]
+    rendered = detail.split("\n")[0][:200]  # ui-tui/src/app/chatStream.ts
+    assert "~/.raven/logs/tui.log" in rendered
+    assert "2 validation errors for RavenConfig" in rendered
+
+
+async def test_turn_send_omits_detail_when_the_build_error_has_no_cause() -> None:
+    class _BuildErr(RpcError):
+        CODE = -32603
+        MESSAGE = "internal_error"
+
+    emitter = FakeEmitter()
+    await turn_send(
+        {"session_key": "tui:default", "content": "x"},
+        emitter=emitter,
+        scheduler=None,
+        build_error=_BuildErr(),
+    )
+
+    assert "detail" not in emitter.emitted[-1][1]["payload"]
+
+
 # --- Params validation ---
 
 
