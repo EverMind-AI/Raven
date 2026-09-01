@@ -156,6 +156,9 @@ def build_runtime(
     plugin_hooks = plugin_stack.build_plugin_hooks(
         config.workspace_path, ec_config, registry=plugin_registry, provider=provider
     )
+    plugin_tool_gates = plugin_stack.build_plugin_tool_gates(
+        config.workspace_path, ec_config, registry=plugin_registry, provider=provider
+    )
     strategies = token_wise_stack.install_from_config(
         ec_config.token_wise,
         supports_caching=token_wise_stack.caching_probe(provider),
@@ -201,6 +204,7 @@ def build_runtime(
             restrict_to_workspace=config.tools.restrict_to_workspace,
             tool_search_config=config.tools.tool_search,
             plugin_tools=plugin_tools,
+            plugin_tool_gates=plugin_tool_gates,
             deliverables=deliverables,
         ),
         subagents=SubagentWiring(

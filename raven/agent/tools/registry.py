@@ -2,7 +2,7 @@
 
 import asyncio
 import copy
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from raven.agent import workdir
 from raven.agent.tools.params import cast_params, validate_params
 from raven.contracts.llm_provider import RunMeta, TruncationInfo
 from raven.contracts.tool import RAW_ARGUMENTS_KEY, Continuation, Tool, ToolOutput, ToolResult
@@ -169,8 +170,15 @@ class ToolRegistry:
     # internal timeout that never returns), not to enforce a tight per-tool SLA.
     DEFAULT_TOOL_TIMEOUT_S = 300.0
 
-    def __init__(self):
+    def __init__(self, *, tool_gates: "Sequence[Any]" = ()):
         self._tools: dict[str, Tool] = {}
+        # Cast at assembly, fixed for the generation (paper:
+        # contracts/tool_gate.py): no setter, no latch -- changing gates is a
+        # generation swap. Ordered by (name, contributed_by) so adjudication
+        # is deterministic whatever order the builder yielded them in.
+        self._tool_gates: tuple[Any, ...] = tuple(
+            sorted(tool_gates, key=lambda g: (str(getattr(g, "name", "")), str(getattr(g, "contributed_by", ""))))
+        )
         # The admitted, frozen specs, keyed like ``_tools``. The registry's own
         # machinery reads data from here and calls behaviour on the body; the
         # pair is written together in register() and nowhere else.
@@ -207,6 +215,12 @@ class ToolRegistry:
         # let whichever turn entered last decide what the other one can see.
         self._session_tools: dict[str, dict[str, Tool]] = {}
         self._overlay: ContextVar[dict[str, Tool] | None] = ContextVar("tool_registry_overlay", default=None)
+
+    @property
+    def tool_gates(self) -> tuple[Any, ...]:
+        """The gates cast over this registry at construction, in adjudication
+        order. Read-only on purpose: the paper's first discipline."""
+        return self._tool_gates
 
     def set_withheld_source(self, source: "Callable[[], frozenset[str]] | None") -> None:
         """Install the answer to "which tools has the operator switched off".
@@ -607,6 +621,13 @@ class ToolRegistry:
             if errors:
                 return f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors) + _hint
 
+            # Post-validation, pre-dispatch: the point the paper names. Guarded
+            # so a registry with no gates runs today's path byte for byte.
+            if self._tool_gates:
+                verdict = await self._adjudicate(name, params)
+                if verdict is not None:
+                    return verdict
+
             ceiling = (spec or tool).timeout_seconds or self.DEFAULT_TOOL_TIMEOUT_S
             if tool.blocking_for(params):
                 # Intentionally waits on a human — must not be timer-killed.
@@ -666,6 +687,29 @@ class ToolRegistry:
             return f"Error: Tool '{name}' timed out after {ceiling:.0f}s." + _hint
         except Exception as e:
             return f"Error executing {name}: {str(e)}" + _hint
+
+    async def _adjudicate(self, name: str, params: dict[str, Any]) -> str | None:
+        """Run the cast gates over one validated call; the first non-None
+        verdict replaces it.
+
+        A verdict is returned verbatim -- no retry hint appended: the
+        adjudication text is the complete result. A gate that raises refuses
+        the call it was adjudicating (fail-closed, naming the gate), because
+        failing open would make a gate's bugs silent permission grants. The
+        turn's working directory is passed explicitly so a gate never fishes
+        it out of params; None outside a bound turn (a subagent backend, an
+        internally-initiated call), and the gate decides for itself.
+        """
+        session_workdir = workdir.current()
+        for gate in self._tool_gates:
+            gate_name = getattr(gate, "name", None) or type(gate).__name__
+            try:
+                verdict = await gate.adjudicate(name, params, session_workdir=session_workdir)
+            except Exception as e:
+                return f"Error: tool call '{name}' was refused by gate {gate_name}: {e}"
+            if verdict is not None:
+                return verdict
+        return None
 
     @property
     def tool_names(self) -> list[str]:

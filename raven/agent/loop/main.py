@@ -169,6 +169,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         media_config = tools.media_config
         deep_research_config = tools.deep_research_config
         plugin_tools = tools.plugin_tools
+        plugin_tool_gates = tools.plugin_tool_gates
         deliverables = tools.deliverables
         agents = subagents.agents
         max_concurrent_subagents = subagents.max_concurrent_subagents
@@ -318,7 +319,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # backgrounded DAG submission -- including default deploys, where an
         # unset attribute would raise instead of answering "no route".
         self.tool_search_controller = None
-        self.tools = ToolRegistry()
+        self.tools = ToolRegistry(tool_gates=plugin_tool_gates or ())
         # Asked once per assembled tool array, so an off switch flipped now is
         # honoured by the next request rather than the next restart.
         self.tools.set_withheld_source(self._withheld_tool_names)

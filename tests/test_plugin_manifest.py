@@ -124,6 +124,36 @@ class TestMemoryBackends:
         with pytest.raises(ValidationError, match="duplicate memory_backend"):
             PluginManifest.from_toml_str(toml)
 
+    def test_duplicate_service_name_rejected(self) -> None:
+        toml = textwrap.dedent("""
+            [plugin]
+            id = "x"
+            version = "0.1"
+            [[plugin.contributes.services]]
+            name = "watcher"
+            factory = "a.b:c"
+            [[plugin.contributes.services]]
+            name = "watcher"
+            factory = "a.b:d"
+        """)
+        with pytest.raises(ValidationError, match="duplicate service"):
+            PluginManifest.from_toml_str(toml)
+
+    def test_duplicate_tool_gate_name_rejected(self) -> None:
+        toml = textwrap.dedent("""
+            [plugin]
+            id = "x"
+            version = "0.1"
+            [[plugin.contributes.tool_gates]]
+            name = "gate"
+            factory = "a.b:c"
+            [[plugin.contributes.tool_gates]]
+            name = "gate"
+            factory = "a.b:d"
+        """)
+        with pytest.raises(ValidationError, match="duplicate tool_gate"):
+            PluginManifest.from_toml_str(toml)
+
     def test_multiple_contributions_different_names(self) -> None:
         toml = textwrap.dedent("""
             [plugin]

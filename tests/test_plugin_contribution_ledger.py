@@ -30,7 +30,13 @@ def test_the_runtime_handles_grants_are_ledgered() -> None:
     from raven.plugins.context import RuntimeHandles
 
     assert sorted(f.name for f in dataclasses.fields(RuntimeHandles)) == [
+        # The loop's own user-question face, lent to a bound holder. A BIG
+        # grant: whoever holds it can interrupt the user.
+        "direct_ask",
         "playbook_runtime",
+        # Repoints one session's working root, durable truth first. A BIG
+        # grant: whoever holds it moves where every subsequent write lands.
+        "rebind_workdir",
         "session_dir",
         "subagent_registry",
         "subagents_paused",
@@ -41,10 +47,16 @@ def test_the_runtime_handles_grants_are_ledgered() -> None:
     assert RuntimeHandles.__dataclass_params__.frozen, "grants are handed over, never handed back"
 
 
-def test_the_manifest_kinds_are_the_ledgered_three() -> None:
+def test_the_manifest_kinds_are_ledgered() -> None:
     from raven.plugins.manifest import Contributes, PluginManifest
 
-    assert sorted(Contributes.model_fields) == ["hooks", "memory_backends", "services", "tools"], (
+    assert sorted(Contributes.model_fields) == [
+        "hooks",
+        "memory_backends",
+        "services",
+        "tool_gates",
+        "tools",
+    ], (
         "a new contribution kind changes what every raven-plugin.toml can say: "
         "ledger it here in the change that teaches the registry to consume it"
     )

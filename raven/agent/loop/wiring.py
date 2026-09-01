@@ -592,6 +592,14 @@ class WiringMixin:
         half-bound. A tool that was withheld or shadowed after registering is
         skipped: binding what the table no longer serves grants power to a
         dead reference.
+
+        The registry's cast gates bind through the same minting path, with
+        the opposite failure rule: a gate whose bind raises fails the whole
+        assembly (the candidate generation is discarded, or first boot
+        refuses to serve). Quietly taking a gate off the table -- the tools'
+        unregister path, declines included -- would turn a binding bug into
+        a silent permission grant; a gate's sanctioned opt-out is its
+        factory returning None, before anything was cast.
         """
         from raven.plugins.context import BindDeclinedError
 
@@ -611,12 +619,18 @@ class WiringMixin:
             except Exception:
                 logger.exception("plugin tool {} raised in bind_runtime; unregistering it", tool.name)
                 self.tools.unregister(tool.name)
+        for gate in self.tools.tool_gates:
+            bind = getattr(gate, "bind_runtime", None)
+            if not callable(bind):
+                continue
+            namespace = getattr(gate, "contributed_by", None)
+            bind(self.mint_runtime_handles(str(namespace) if namespace else None))
 
     def mint_runtime_handles(self, namespace: "str | None"):
         """The late-bound grants, minted per holder.
 
-        One minting path for tools and services alike. The wake grant is
-        namespaced to the contributing plugin (paper: contracts/scheduling.py):
+        One minting path for tools, services and gates alike. The wake grant
+        is namespaced to the contributing plugin (paper: contracts/scheduling.py):
         a holder's keys can neither see nor move another plugin's wakes, nor
         any plain reminder. None where the host runs no scheduler, or the
         holder carries no stamped identity to namespace by.
@@ -634,7 +648,47 @@ class WiringMixin:
             subagents_paused=lambda: self.subagents.paused,
             playbook_runtime=self._playbooks,
             wake_scheduler=wake,
+            direct_ask=self._direct_ask,
+            rebind_workdir=self._rebind_workdir,
         )
+
+    async def _direct_ask(
+        self,
+        prompt: str,
+        choices: "list[str] | None",
+        conversation_id: str,
+        timeout_s: "float | None" = None,
+    ) -> "str | None":
+        """The loop's own user-question face, lent as ``RuntimeHandles.direct_ask``.
+
+        Resolved per call, never at mint: the ask broker is injected by the
+        transport after this loop is built, so a mint-time snapshot would
+        forever answer None on those hosts. Answers None when no asking
+        transport is bound, exactly as the graph-confirm flow experiences it.
+        """
+        tool = self.tools.get("ask_user")
+        if not isinstance(tool, AskUserTool):
+            return None
+        return await tool.ask_direct(prompt, choices, conversation_id, timeout_s)
+
+    def _rebind_workdir(self, session_key: str, target: "str | Path") -> Path:
+        """Repoint one session's working directory, now and from now on
+        (``RuntimeHandles.rebind_workdir``).
+
+        Persists the override into the session's metadata -- the durable
+        truth ``WorkdirResolver`` reads back (explicit > persisted >
+        default) -- then repoints the live binding so the very next tool
+        call in the current task resolves the new root. The turn-end reset
+        of ``workdir.bind`` still runs; the next turn reads the persisted
+        value. Targets pass ``workdir.validate_override`` against this
+        loop's agent home.
+        """
+        resolved = workdir.validate_override(target, self.workspace)
+        session = self.sessions.get_or_create(session_key)
+        session.metadata["workdir"] = str(resolved)
+        self.sessions.save(session)
+        workdir.repoint(resolved)
+        return resolved
 
     # Contributed background services, attached by the assembly root (inert)
     # and run only by a resident host; a one-shot turn never starts them.

@@ -48,6 +48,7 @@ MemoryBackendFactory = Callable[[Any], Any]
 # layer stays import-light (no dependency on the agent package).
 ToolFactory = Callable[[Any], Any]
 HookFactory = Callable[[Any], Any]
+ToolGateFactory = Callable[[Any], Any]
 
 
 class PluginError(Exception):
@@ -86,6 +87,7 @@ class PluginRegistry:
         self._tools: dict[str, _ActivatedFactory] = {}
         self._hooks: dict[str, _ActivatedFactory] = {}
         self._services: dict[str, _ActivatedFactory] = {}
+        self._tool_gates: dict[str, _ActivatedFactory] = {}
 
     # ── Activation ───────────────────────────────────────────────
 
@@ -193,6 +195,19 @@ class PluginRegistry:
                 factory=factory,
             )
             logger.debug("registered service %s from %s", service.name, mf.id)
+        for gate in mf.contributes.tool_gates:
+            if gate.name in self._tool_gates:
+                prev = self._tool_gates[gate.name]
+                raise PluginConflictError(
+                    f"tool_gate {gate.name!r} contributed by both {prev.plugin_id!r} and {mf.id!r}",
+                )
+            factory = self._resolve_factory(mf.id, gate.factory)
+            self._tool_gates[gate.name] = _ActivatedFactory(
+                plugin_id=mf.id,
+                name=gate.name,
+                factory=factory,
+            )
+            logger.debug("registered tool_gate %s from %s", gate.name, mf.id)
 
     @staticmethod
     def _ensure_importable(source: ManifestOrigin, location: Path | None) -> None:
@@ -297,6 +312,24 @@ class PluginRegistry:
         """Plugin id that contributed hook ``name``, or ``None``."""
         entry = self._hooks.get(name)
         return entry.plugin_id if entry is not None else None
+
+    def tool_gate_names(self) -> list[str]:
+        """Stable-ordered list of registered tool-gate names."""
+        return sorted(self._tool_gates)
+
+    def tool_gate_plugin_id(self, name: str) -> str | None:
+        """Plugin id that contributed tool_gate ``name``, or ``None``."""
+        entry = self._tool_gates.get(name)
+        return entry.plugin_id if entry is not None else None
+
+    def get_tool_gate_factory(self, name: str) -> ToolGateFactory:
+        """Look up the factory for tool_gate ``name``. Raises ``PluginNotFoundError``."""
+        try:
+            return self._tool_gates[name].factory
+        except KeyError as e:
+            raise PluginNotFoundError(
+                f"no tool_gate named {name!r} (registered: {self.tool_gate_names()})",
+            ) from e
 
     def get_hook_factory(self, name: str) -> HookFactory:
         """Look up the factory for hook ``name``. Raises ``PluginNotFoundError``."""
@@ -417,6 +450,32 @@ class PluginRegistry:
         )
         return entry.factory(ctx)
 
+    @trace.instrument("plugin.load", extract=semconv.plugin_load("tool_gate"))
+    def build_tool_gate(
+        self,
+        name: str,
+        *,
+        config: dict[str, Any],
+        services: "ServiceLocator",
+        logger: logging.Logger | None = None,
+    ) -> Any:
+        """Resolve the named tool-gate factory and call it with a fresh
+        ``PluginContext``, returning the constructed ``ToolGate``.
+
+        Symmetric with :meth:`build_hook`: synchronous construction,
+        exceptions propagate so the host sees the real cause. The host casts
+        the returned gate over the agent's tool registry at assembly
+        (paper: contracts/tool_gate.py).
+        """
+        factory = self.get_tool_gate_factory(name)
+        config = self._admit(self._tool_gates[name], config)
+        ctx = PluginContext(
+            config=config,
+            services=services,
+            logger=logger or logging.getLogger(f"raven.plugins.{name}"),
+        )
+        return factory(ctx)
+
     def _admit(self, entry: "_ActivatedFactory", config: dict[str, Any]) -> dict[str, Any]:
         """Admit a config slice against the owning manifest's declaration.
 
@@ -440,4 +499,5 @@ __all__ = [
     "PluginNotFoundError",
     "PluginRegistry",
     "ToolFactory",
+    "ToolGateFactory",
 ]

@@ -117,6 +117,9 @@ LEDGER = {
         # The background-service contribution (services.py): a resident host
         # runs it and owns it.
         "PluginService",
+        # The per-call tool adjudication grant (tool_gate.py): a gate cast
+        # over the registry at assembly, fixed for the generation.
+        "ToolGate",
     },
     "factory_loop": {"AgentHook", "AgentHookContext", "FACTORY_LOOP_SURFACE_VERSION", "HookDecision", "McpHost"},
 }
@@ -221,7 +224,7 @@ def test_import_guard_bites_machinery_and_spares_type_checking(tmp_path):
 # The contract tier is versioned: its shape moves only with a version bump
 # ---------------------------------------------------------------------------
 
-PINNED_CONTRACT_SURFACE = ("4", "ed442d3395f7b01ab79f4bcb698b64235b4e0120c62b98aa51c588b8489a0217")
+PINNED_CONTRACT_SURFACE = ("5", "702262d457f3a416281dc4bfd926466e3cbb51752293ce7713cfd885d05b160b")
 
 
 def contract_surface_digest(pkg_dir: Path) -> str:

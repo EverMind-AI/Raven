@@ -111,6 +111,23 @@ class RuntimeHandles:
     ``None`` where the host runs no scheduler (a one-shot ``raven agent -m``,
     a test locator), which a binder treats as a decline."""
 
+    direct_ask: Any = None
+    """Put one question to the user mid-turn and await the answer, as the
+    loop itself does (the graph-confirm flow in the loop's wiring calls the
+    registered ask_user tool's ``ask_direct`` the same way). An async
+    callable ``(prompt, choices, conversation_id, timeout_s) -> str | None``;
+    answers None when no asking transport is bound. A BIG grant: whoever
+    holds it can interrupt the user."""
+
+    rebind_workdir: Any = None
+    """Repoint one session's working directory: a callable
+    ``(session_key, target) -> Path`` that persists the override into the
+    session's metadata (the durable truth ``WorkdirResolver`` reads back,
+    explicit > persisted > default) and, when called from inside that
+    session's own turn, repoints the live binding so the very next tool call
+    resolves the new root. Targets pass ``workdir.validate_override``. A BIG
+    grant: whoever holds it moves where every subsequent write lands."""
+
 
 class BindDeclinedError(Exception):
     """Raised inside ``bind_runtime`` to decline serving.

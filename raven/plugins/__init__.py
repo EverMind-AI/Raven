@@ -29,6 +29,7 @@ from raven.plugins.manifest import (
     MemoryBackendContribution,
     PluginManifest,
     ToolContribution,
+    ToolGateContribution,
 )
 from raven.plugins.registry import (
     HookFactory,
@@ -39,6 +40,7 @@ from raven.plugins.registry import (
     PluginNotFoundError,
     PluginRegistry,
     ToolFactory,
+    ToolGateFactory,
 )
 
 __all__ = [
@@ -61,4 +63,6 @@ __all__ = [
     "ManifestOrigin",
     "ToolContribution",
     "ToolFactory",
+    "ToolGateContribution",
+    "ToolGateFactory",
 ]
