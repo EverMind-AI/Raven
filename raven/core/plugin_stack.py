@@ -406,6 +406,57 @@ def build_plugin_services(
     return built
 
 
+def build_plugin_tool_gates(
+    workspace: Path,
+    config: "RavenConfig",
+    *,
+    registry: PluginRegistry | None = None,
+    provider: "LLMProvider | None" = None,
+) -> list:
+    """Construct every plugin-contributed tool gate admitted by ``config``.
+
+    Mirrors :func:`build_plugin_services` for the ``tool_gates`` contribution
+    point, with the same leniency: a failing factory is logged and skipped, a
+    factory returning ``None`` has declined -- the sanctioned opt-out for a
+    policy with nothing configured to enforce. The built gates are inert
+    until the agent's tool registry receives them at construction, cast for
+    the generation (paper: contracts/tool_gate.py). Each is stamped with the
+    contributing plugin's identity the way tools and services are, so the
+    bind-time grants can be namespaced and adjudication order stays stable.
+
+    Returns an empty list when no plugin contributes a tool gate.
+    """
+    gate_names = getattr(registry, "tool_gate_names", None)
+    names = gate_names() if callable(gate_names) else []
+    if not names:
+        return []
+    services = ServiceLocator(
+        workspace=workspace,
+        user_id=config.memory.user_id,
+        agent_id=config.memory.agent_id,
+        provider=provider,
+    )
+    slices = config.plugins.config
+    built = []
+    for name in names:
+        plugin_id = registry.tool_gate_plugin_id(name)
+        plugin_slice = (plugin_id and slices.get(plugin_id)) or slices.get(name) or {}
+        try:
+            gate = registry.build_tool_gate(name, config=plugin_slice, services=services)
+        except Exception as e:
+            logger.warning("plugin tool_gate %r factory raised at construction (%s); skipping it.", name, e)
+            continue
+        if gate is None:
+            logger.debug("plugin tool_gate %r factory opted out (returned None); skipping it.", name)
+            continue
+        try:
+            gate.contributed_by = plugin_id or name
+        except (AttributeError, TypeError):
+            pass
+        built.append(gate)
+    return built
+
+
 def _resolve_plugin_config_slice(
     registry: PluginRegistry,
     config: "RavenConfig",
@@ -459,6 +510,7 @@ __all__ = [
     "build_plugin_registry",
     "build_plugin_tools",
     "build_plugin_services",
+    "build_plugin_tool_gates",
     "discover_plugins",
     "maybe_build_memory_backend",
     "plugin_discovery_sources",

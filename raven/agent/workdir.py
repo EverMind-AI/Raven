@@ -71,6 +71,17 @@ def bind(path: Path) -> Iterator[None]:
         _CURRENT.reset(token)
 
 
+def repoint(path: Path) -> None:
+    """Repoint the running turn's binding so the very next read sees ``path``.
+
+    For the one caller that moves a session's root mid-turn (the
+    ``rebind_workdir`` grant), after persisting the override it repoints.
+    The enclosing ``bind``'s finally still resets the variable at turn end;
+    the next turn resolves the persisted override instead.
+    """
+    _CURRENT.set(path)
+
+
 def is_within(path: Path, root: Path) -> bool:
     """Whether ``path`` sits inside ``root``, comparing physical paths.
 

@@ -6,9 +6,10 @@ contribution points, and config schema — everything the registry needs
 to know without importing the plugin's code.
 
 The single root table is ``[plugin]``. Contribution arrays are
-``[[plugin.contributes.<kind>]]``; the two kinds consumed today are
-``memory_backends`` and ``tools``, and the model ignores kinds it does not
-know so a manifest written for a later host still loads.
+``[[plugin.contributes.<kind>]]``; the five kinds consumed today are
+``memory_backends``, ``tools``, ``hooks``, ``services`` and ``tool_gates``,
+and the model ignores kinds it does not know so a manifest written for a
+later host still loads.
 
 Validation rules worth flagging:
 
@@ -131,18 +132,45 @@ class ServiceContribution(_ManifestBase):
         return v
 
 
+class ToolGateContribution(_ManifestBase):
+    """One ``[[plugin.contributes.tool_gates]]`` entry.
+
+    ``factory`` is a ``module.path:callable`` resolving to a
+    ``Callable[[PluginContext], ToolGate]`` -- it returns one object
+    satisfying :class:`~raven.contracts.tool_gate.ToolGate`, or ``None`` to
+    decline (no policy configured means no gate). The host casts the built
+    gates over the agent's tool registry at assembly; the paper pins the
+    three disciplines (cast at assembly, a verdict replaces one call, an
+    error refuses it).
+    """
+
+    name: str = Field(min_length=1)
+    factory: str = Field(min_length=1)
+
+    @field_validator("factory")
+    @classmethod
+    def _factory_is_module_path(cls, v: str) -> str:
+        if not _FACTORY_REF_RE.match(v):
+            raise ValueError(
+                f"factory must be 'module.path:callable', got {v!r}",
+            )
+        return v
+
+
 class Contributes(_ManifestBase):
     """All contribution arrays for a single manifest.
 
-    ``memory_backends``, ``tools``, ``hooks`` and ``services`` are consumed
-    today; the model keeps extra fields silently so future contribution
-    types don't break older hosts reading newer manifests.
+    ``memory_backends``, ``tools``, ``hooks``, ``services`` and
+    ``tool_gates`` are consumed today; the model keeps extra fields silently
+    so future contribution types don't break older hosts reading newer
+    manifests.
     """
 
     memory_backends: list[MemoryBackendContribution] = Field(default_factory=list)
     tools: list[ToolContribution] = Field(default_factory=list)
     hooks: list[HookContribution] = Field(default_factory=list)
     services: list[ServiceContribution] = Field(default_factory=list)
+    tool_gates: list[ToolGateContribution] = Field(default_factory=list)
 
 
 class PluginManifest(_ManifestBase):
@@ -170,6 +198,8 @@ class PluginManifest(_ManifestBase):
             ("memory_backend", self.contributes.memory_backends),
             ("tool", self.contributes.tools),
             ("hook", self.contributes.hooks),
+            ("service", self.contributes.services),
+            ("tool_gate", self.contributes.tool_gates),
         ):
             names = [c.name for c in items]
             if len(names) != len(set(names)):

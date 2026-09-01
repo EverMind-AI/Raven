@@ -25,6 +25,7 @@ class ToolWiring:
     media_config: Any = None
     deep_research_config: Any = None
     plugin_tools: Any = None
+    plugin_tool_gates: Any = None
     deliverables: Any = None
 
 
