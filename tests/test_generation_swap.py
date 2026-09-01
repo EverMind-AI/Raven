@@ -34,6 +34,9 @@ class _StubLoop:
         self._rec = rec
         self.subagents = _StubSubagents(rec)
 
+    async def stop_plugin_services(self) -> None:
+        self._rec.calls.append("stop_plugin_services")
+
     async def close_mcp(self) -> None:
         self._rec.calls.append("close_mcp")
 
@@ -66,6 +69,7 @@ def test_dispose_order_with_backend() -> None:
     rec = _Recorder()
     asyncio.run(_runtime(rec, backend=True).dispose())
     assert rec.calls == [
+        "stop_plugin_services",
         "subagents.cancel_all",
         "close_mcp",
         "stop",
@@ -77,7 +81,7 @@ def test_dispose_order_with_backend() -> None:
 def test_dispose_without_backend_skips_the_drain() -> None:
     rec = _Recorder()
     asyncio.run(_runtime(rec, backend=False).dispose())
-    assert rec.calls == ["subagents.cancel_all", "close_mcp", "stop"]
+    assert rec.calls == ["stop_plugin_services", "subagents.cancel_all", "close_mcp", "stop"]
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +244,7 @@ def test_every_generation_organ_has_a_dispose_call() -> None:
     from raven.core.runtime import RavenRuntime
 
     organs = {
+        "plugin services": "self.loop.stop_plugin_services",
         "sub-agents": "self.loop.subagents.cancel_all",
         "mcp connections": "self.loop.close_mcp",
         "the loop itself": "self.loop.stop",
