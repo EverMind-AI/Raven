@@ -167,3 +167,64 @@ def record_wake_route(cdir: Path, route: dict[str, str]) -> None:
         write_meta(cdir, meta)
     except OSError:
         pass
+
+
+# ── The face roster (part 2c) ───────────────────────────────────────
+# The fork's loop shared one tool table with its glue naturally; here the
+# tools and the turn hook are two plugin lanes, and this module -- already
+# the tools' shared ground -- is their one meeting point. Module-global like
+# ``_HOME``: one activated oncall-flow per process (a duplicate id refuses
+# activation).
+
+_FACES: dict[str, Tool] = {}
+
+
+def adopt(tool: Tool) -> Tool:
+    """File a constructed face on the activation's roster; the factories call it.
+
+    Keyed by name, so a factory re-run (a test building twice) replaces its
+    own earlier instance rather than stacking ghosts the hook would context.
+    """
+    _FACES[tool.name] = tool
+    return tool
+
+
+def faces() -> tuple[Tool, ...]:
+    return tuple(_FACES.values())
+
+
+def reset_faces() -> None:
+    """Tests only: a fresh roster so one test's faces cannot serve another's."""
+    _FACES.clear()
+
+
+def set_turn_context(channel: str, chat_id: str, session_key: str, task: str) -> int:
+    """Push this turn's window context onto every adopted face that takes one.
+
+    The fork's ``_set_tool_context`` walked the loop's tool table each turn;
+    the part-2c hook walks this roster. A face without ``set_context`` (the
+    read-only ones) resolves through the explicit-name and one-live-campaign
+    tiers exactly as it did in the fork. Returns how many faces took it.
+    """
+    count = 0
+    for tool in _FACES.values():
+        setter = getattr(tool, "set_context", None)
+        if callable(setter):
+            setter(channel, chat_id, session_key, task)
+            count += 1
+    return count
+
+
+def granted_scheduler() -> "WakeScheduler | None":
+    """The wake grant one of the scheduling faces holds, or None.
+
+    The turn hook pulls a campaign's pending wake forward when the owner
+    answers; hooks are never bind_runtime targets, so the grant is read off
+    the roster's bound faces rather than minted a second time -- the same
+    namespaced scheduler the wake it advances was written through.
+    """
+    for tool in _FACES.values():
+        scheduler = getattr(tool, "_scheduler", None)
+        if scheduler is not None:
+            return scheduler
+    return None

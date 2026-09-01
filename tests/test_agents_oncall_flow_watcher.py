@@ -102,8 +102,8 @@ def test_the_manifest_contributes_the_watcher_service_and_the_ops_tools() -> Non
     assert manifest.contributes.services[0].factory == "oncall_flow.watcher:make_event_watcher"
     # Part 2b's roster: the fork's thirteen agent tools plus the machine face
     # under its own name (ops_exec; the exec shadow is an open ruling). No
-    # entry shadows a built-in, ops_tune_launch stays off the menu on purpose,
-    # and the gate axes still add their own [[hooks]] rows when 2c lands.
+    # entry shadows a built-in, and ops_tune_launch stays off the menu on
+    # purpose.
     assert [t.name for t in manifest.contributes.tools] == [
         "ops_tune_status",
         "ops_submit",
@@ -123,9 +123,10 @@ def test_the_manifest_contributes_the_watcher_service_and_the_ops_tools() -> Non
     assert all(t.factory == f"oncall_flow.tools:make_{t.name}" for t in manifest.contributes.tools), (
         "one factory per face, all in oncall_flow.tools"
     )
-    assert manifest.contributes.hooks == [], (
-        "part 2b still declares only what it implements; the gate axes add their own entries when they land (2c)"
+    assert [h.name for h in manifest.contributes.hooks] == ["oncall_flow"], (
+        "part 2c contributes the turn-frame hook as one row (the registry serves hook names sorted, so the axis order lives inside the hook)"
     )
+    assert manifest.contributes.hooks[0].factory == "oncall_flow.flow:make_flow_hook"
 
 
 def test_the_watcher_satisfies_the_services_paper(tmp_path: Path) -> None:

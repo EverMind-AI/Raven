@@ -8,7 +8,7 @@ Run and watch          the owner wants something run, and the answer takes more
                        than one go: a solver case, a training run, a sweep.
                        Usually carries a budget, a "tell me when it's done", and
                        a result worth waiting for.
-                       → ops_connections, exec(machine=...), ops_declare, ops_submit
+                       → ops_connections, ops_exec(machine=...), ops_declare, ops_submit
                        → you get a ledger, spend counted against the budget, a
                          working directory per round, and a wake when it lands
 
@@ -103,8 +103,8 @@ actions    {name, command, repeat} -- what may be DONE when what you are
 ```
 
 Take an action with `ops_submit(action='buy', values={...}, basis=...)`, never with
-`exec`. Looking through `exec` is fine -- doing it twice costs a round trip. Acting
-through `exec` leaves no record, and a wake that comes back after your turn is gone
+`ops_exec`. Looking through `ops_exec` is fine -- doing it twice costs a round trip. Acting
+through `ops_exec` leaves no record, and a wake that comes back after your turn is gone
 has nothing but the record to tell it the thing was already done. That is how three
 shares become six. If you looked and nothing needs doing, that is
 `ops_check_later(basis=...)`, which records the look.
@@ -121,10 +121,10 @@ own name for each, what it is, and what it has installed. You never need a host,
 a port, a user or a key: those belong to the connection and the tools use them
 for you. A task statement that names no machine is normal.
 
-**`exec` takes a `machine`** — an id from `ops_connections`, or a campaign name —
+**`ops_exec` takes a `machine`** — an id from `ops_connections`, or a campaign name —
 and runs the command there instead of on this computer. Use it to look at anything
 on one of those machines: list a directory, read or grep a file, tail a log, check
-a size or a hash. Without `machine` it runs here, which is why a path on someone
+a size or a hash. Plain `exec` runs here, which is why a path on someone
 else's machine looks missing. Looking before you spend compute is cheap and
 expected — reading the case, the solver script and the inputs before the first
 submit costs seconds, and has repeatedly been what separated a useful first round
@@ -165,7 +165,7 @@ Do NOT reproduce the remote computation locally: do not use `exec` to run the
 experiment yourself, do not ssh to the host to hunt for paths or ports, and do
 not pull a domain skill (`use_skill`) to compute the result in this process.
 Those bypass the durable, round-by-round Ops loop, and there is nothing to guess
-at: `exec` with a `machine` already reaches it for looking, and `ops_submit` is
+at: `ops_exec` with a `machine` already reaches it for looking, and `ops_submit` is
 what starts work there. A command that would outlive its call is refused on those
 machines for exactly that reason. A skill or reference is
 fine only as background for CHOOSING configs — never for executing the
