@@ -184,6 +184,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         skill_forge_config = engine.skill_forge_config
         skill_forge_router_config = engine.skill_forge_router_config
         memory_config = engine.memory_config
+        compaction_config = engine.compaction_config
         backend = engine.backend
         playbook_config = engine.playbook_config
         max_iterations = policy.max_iterations
@@ -194,7 +195,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         cron_service = host.cron_service
         channels_config = host.channels_config
         from raven.agent.hook import CompositeHook
-        from raven.config.schema import AskUserToolConfig, ExecToolConfig
+        from raven.config.schema import AskUserToolConfig, CompactionConfig, ExecToolConfig
         from raven.token_wise.registry import StrategyRegistry
 
         self.channels_config = channels_config
@@ -250,6 +251,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         self.memory_config = memory_config or MemoryConfig()
         self.exec_config = exec_config or ExecToolConfig()
         self.ask_user_config = ask_user_config or AskUserToolConfig()
+        self._compaction = compaction_config or CompactionConfig()
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
         # TokenWise strategies — empty registry acts as pure pass-through.
