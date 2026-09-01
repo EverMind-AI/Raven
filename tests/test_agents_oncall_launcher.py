@@ -220,3 +220,109 @@ def test_a_preexisting_own_registry_stays(grounded, tmp_path):
     own.parent.mkdir(parents=True, exist_ok=True)
     own.write_text("[]")
     assert grounded.connections_registry() == own
+
+
+# --- the visible tool face ----------------------------------------------------
+
+
+#: The vendored twin's visible tool face, hermetically rebuilt: the fork's
+#: config-intent face plus the ledgered ops_exec addition. Intent, not leak --
+#: the fork's ACP host never passed disabled_tools, so its live face showed
+#: four tools its own config disables; trunk enforces the list. Trunk also
+#: grew six tools the fork never had (create_playbook, deliver_files,
+#: find_skill, load_playbook, plugin, run_subagent_dag), and every one must
+#: be disabled by the product config, not by luck. The two playbook tools and
+#: the everos understand_media only register outside this hermetic fixture;
+#: their disable rows are pinned below instead.
+VENDORED_TOOL_FACE = {
+    "ask_user",
+    "edit_file",
+    "exec",
+    "find",
+    "grep",
+    "list_dir",
+    "message",
+    "ops_ask_owner",
+    "ops_campaigns",
+    "ops_case_changes",
+    "ops_check_later",
+    "ops_connections",
+    "ops_declare",
+    "ops_edit_case_dict",
+    "ops_exec",
+    "ops_finish",
+    "ops_kill",
+    "ops_note",
+    "ops_outputs",
+    "ops_submit",
+    "ops_tune_status",
+    "read_file",
+    "web_fetch",
+    "write_file",
+}
+
+#: Tools trunk grew after the fork was cut; none may reach this product's face.
+TRUNK_NEW_SIX = {
+    "create_playbook",
+    "deliver_files",
+    "find_skill",
+    "load_playbook",
+    "plugin",
+    "run_subagent_dag",
+}
+
+
+def test_the_products_tool_face_equals_the_forks_config_intent(grounded, tmp_path, monkeypatch):
+    """Build the loop from the rendered config; the model-visible tool set is
+    the fork's config intent and nothing more, pinned from both ends."""
+    from raven.config.loader import load_config
+    from raven.config.raven import load_raven_config
+    from raven.contracts.llm_provider import LLMResponse
+    from raven.core import plugin_stack, runtime
+    from raven.providers.base import LLMProvider
+
+    class _StubProvider(LLMProvider):
+        def __init__(self) -> None:
+            super().__init__(api_key="test")
+
+        async def chat(
+            self,
+            messages,
+            tools=None,
+            model=None,
+            max_tokens=4096,
+            temperature=0.7,
+            reasoning_effort=None,
+            tool_choice=None,
+            **kwargs,
+        ):
+            return LLMResponse(content="", tool_calls=[])
+
+        def get_default_model(self):
+            return "test-model"
+
+    monkeypatch.setattr(
+        plugin_stack,
+        "plugin_discovery_sources",
+        lambda: {
+            "bundled_dir": tmp_path / "none",
+            "user_dir": tmp_path / "none",
+            "project_dir": tmp_path / "none",
+            "entry_points_group": None,
+        },
+    )
+    rendered = grounded.render_config(RUN_PY.parent / "config.json")
+    import raven.home as home
+
+    monkeypatch.setattr(home, "_current_config_path", rendered)
+    config = load_config(rendered)
+    ec_config = load_raven_config(rendered)
+    rt = runtime.build_runtime(config, ec_config, provider=_StubProvider())
+    try:
+        visible = {d["function"]["name"] for d in rt.loop.tools.get_definitions()}
+    finally:
+        rt.discard()
+    assert visible == VENDORED_TOOL_FACE
+    disabled = set(json.loads((RUN_PY.parent / "config.json").read_text())["tools"]["disabledTools"])
+    assert TRUNK_NEW_SIX <= disabled, "the trunk-new six stay disabled by config, not by luck"
+    assert {"exec", "message"} & disabled == set(), "the ruled-open pair stays open"
