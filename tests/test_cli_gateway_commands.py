@@ -833,3 +833,21 @@ def test_gateway_reload_renders_build_failed_and_no_gateway(monkeypatch) -> None
     monkeypatch.setattr(live_probe, "reload", _nobody)
     r = runner.invoke(app, ["gateway", "reload"])
     assert r.exit_code == 1 and "No running gateway" in r.stdout
+
+
+def test_sigterm_cancels_the_main_task_instead_of_raising_ki() -> None:
+    """[N7-F5] The old SIGTERM handler raised KeyboardInterrupt from a signal
+    frame; the stdlib runner converts only SIGINT into a main-task cancel, so
+    that KI escaped run_until_complete WITHOUT cancelling the main task -- the
+    graceful chain never ran and teardown fell to the runner's 2-second sweep.
+    Parity is an in-loop add_signal_handler(SIGTERM, main_task.cancel), and
+    the cancelled branch must own the SIGTERM case."""
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    assert "add_signal_handler(signal.SIGTERM" in src
+    assert "main_task = asyncio.current_task()" in src
+    assert "raise KeyboardInterrupt" not in src, "the signal-frame KI shortcut must stay gone"
+    assert "if term_signalled:" in src, "the cancelled branch owns the SIGTERM case"
