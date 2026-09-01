@@ -183,6 +183,7 @@ class _CompactionScriptProvider(LLMProvider):
         self._fail_summary = fail_summary
         self.main_calls: list[list[dict]] = []
         self.summary_calls: list[list[dict]] = []
+        self.summary_models: list[str | None] = []
 
     async def chat(
         self,
@@ -196,6 +197,7 @@ class _CompactionScriptProvider(LLMProvider):
     ):
         if messages and messages[0].get("content") == compaction.SUMMARY_INSTRUCTIONS:
             self.summary_calls.append([dict(m) for m in messages])
+            self.summary_models.append(model)
             if self._fail_summary:
                 return LLMResponse(content="", finish_reason="error")
             return LLMResponse(content=self._summary_text, finish_reason="stop")
@@ -475,3 +477,88 @@ async def test_a_config_slice_with_compaction_enabled_activates_the_layers(works
     assert final == "answer after compaction"
     assert outcome.status == "completed"
     assert len(provider.summary_calls) == 1
+
+
+# --------------------------------------------------------------------------- #
+# ported from the fork's tests/test_agent_loop_compaction.py (cp3): the       #
+# fork-only pins that hold on the landed w99 faces. The breaker trio, the     #
+# growth-projection trio and the opaque-400 density pin are deliberately not  #
+# ported (w99 ruling; cp3 deviations 17-19).                                  #
+# --------------------------------------------------------------------------- #
+
+
+def _history(rounds: int, result_chars: int = 40) -> list[dict]:
+    msgs: list[dict] = [{"role": "system", "content": "sys"}, {"role": "user", "content": "task"}]
+    for i in range(rounds):
+        msgs.append({"role": "assistant", "content": "", "tool_calls": [{"id": f"t{i}"}]})
+        msgs.append({"role": "tool", "content": f"result {i} " + "x" * result_chars})
+    return msgs
+
+
+def _char_estimate(msgs: list[dict]) -> int:
+    return sum(len(str(m.get("content") or "")) for m in msgs)
+
+
+def test_should_compact_trigger_ratio_lowers_line():
+    # Base line is 180k (window - reserved). A 0.6 ratio pulls it down to 120k.
+    assert compaction.should_compact(130_000, 200_000, 20_000) is False  # below base, no ratio
+    assert compaction.should_compact(130_000, 200_000, 20_000, 0.6) is True  # 130k >= 0.6*200k
+    assert compaction.should_compact(119_999, 200_000, 20_000, 0.6) is False
+    # Ratio never raises the line above the base trigger.
+    assert compaction.should_compact(185_000, 200_000, 20_000, 0.95) is True
+    # Out-of-range ratios are ignored (fall back to base trigger).
+    assert compaction.should_compact(130_000, 200_000, 20_000, 0.0) is False
+    assert compaction.should_compact(130_000, 200_000, 20_000, 1.0) is False
+
+
+def test_prune_is_idempotent_on_placeholders():
+    msgs = _history(6)
+    once, _ = AgentLoop._emergency_shrink(msgs)
+    twice, elided = AgentLoop._emergency_shrink(once)
+    assert elided == 0 and twice == once
+
+
+def test_split_protects_system_and_first_user():
+    msgs = _history(8)
+    split = compaction.select_split(msgs, budget=200, estimate=_char_estimate)
+    assert split is not None
+    assert split > 2  # system + first user never enter the summarized head
+
+
+def test_split_never_starts_tail_on_a_tool_result():
+    msgs = _history(8)
+    for budget in (50, 120, 300, 900):
+        split = compaction.select_split(msgs, budget=budget, estimate=_char_estimate)
+        if split is None:
+            continue
+        assert msgs[split].get("role") != "tool"
+
+
+def test_split_none_when_history_too_short_to_summarize():
+    msgs = _history(1)
+    assert compaction.select_split(msgs, budget=10_000, estimate=_char_estimate) is None
+
+
+def test_build_compacted_structure():
+    msgs = _history(8)
+    split = compaction.select_split(msgs, budget=200, estimate=_char_estimate)
+    out = compaction.build_compacted(msgs, split, "SUMMARY OF WORK")
+    assert out[0]["role"] == "system" and out[1]["content"] == "task"
+    assert out[2]["role"] == "user" and compaction.SUMMARY_MARKER in out[2]["content"]
+    assert "SUMMARY OF WORK" in out[2]["content"]
+    assert out[3:] == msgs[split:]
+
+
+@pytest.mark.asyncio
+async def test_summary_always_uses_the_session_model(workspace):
+    """Summaries must ride the turn's own model: a pinned summary model would
+    outlive a model switch and route every compaction to a retired endpoint
+    (the fork's incident; the trunk config accepts and ignores the legacy
+    ``model`` key, pinned in test_config_schema)."""
+    provider = _CompactionScriptProvider([_tool_step(1, usage=_HUGE_USAGE), _answer()])
+    agent = _agent(workspace, provider, cfg=_cfg(prune=False))
+
+    final, _used, _messages, _outcome = await agent._run_agent_loop(_initial(seed_rounds=6))
+
+    assert final == "answer after compaction"
+    assert provider.summary_models and all(m == "stub" for m in provider.summary_models)
