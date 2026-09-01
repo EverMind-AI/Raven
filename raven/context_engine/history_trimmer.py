@@ -176,6 +176,46 @@ class HistoryTrimmer:
                 return pos
         return 0 if ids else None
 
+    @staticmethod
+    def _tool_exchange_ids(messages: list[dict[str, Any]], mid: int) -> set[int]:
+        """Return every message that must be dropped with ``mid``.
+
+        One assistant message may request several tools.  Its call message and
+        every corresponding result therefore form one structural unit: keeping
+        only part of that unit produces an invalid provider request.
+        """
+        message = messages[mid]
+        parent_idx: int | None = None
+        if message.get("role") == "assistant" and message.get("tool_calls"):
+            parent_idx = mid
+        elif message.get("role") == "tool" and message.get("tool_call_id"):
+            call_id = str(message["tool_call_id"])
+            for idx, candidate in enumerate(messages):
+                if candidate.get("role") != "assistant":
+                    continue
+                if any(
+                    isinstance(tool_call, dict) and str(tool_call.get("id", "")) == call_id
+                    for tool_call in candidate.get("tool_calls") or []
+                ):
+                    parent_idx = idx
+                    break
+
+        if parent_idx is None:
+            return {mid}
+
+        call_ids = {
+            str(tool_call["id"])
+            for tool_call in messages[parent_idx].get("tool_calls") or []
+            if isinstance(tool_call, dict) and tool_call.get("id")
+        }
+        exchange = {parent_idx}
+        exchange.update(
+            idx
+            for idx, candidate in enumerate(messages)
+            if candidate.get("role") == "tool" and str(candidate.get("tool_call_id", "")) in call_ids
+        )
+        return exchange
+
     # ------------------------------------------------------------------
     # Budget-driven trimming
     # ------------------------------------------------------------------
@@ -228,8 +268,10 @@ class HistoryTrimmer:
             drop_idx = self._first_droppable(trimmed_ids, protected_ids)
             if drop_idx is None:
                 break
-            dropped = trimmed_ids.pop(drop_idx)
-            warnings.append(f"dropped message {dropped} to fit budget")
+            dropped = trimmed_ids[drop_idx]
+            dropped_group = self._tool_exchange_ids(session_messages, dropped)
+            trimmed_ids = [mid for mid in trimmed_ids if mid not in dropped_group]
+            warnings.extend(f"dropped message {mid} to fit budget" for mid in sorted(dropped_group))
             history = self.history_from_ids(session_messages, trimmed_ids)
             messages = build_messages(history)
             estimated, source = estimate_prompt_tokens_chain(
