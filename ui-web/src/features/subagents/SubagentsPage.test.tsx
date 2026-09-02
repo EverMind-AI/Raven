@@ -805,6 +805,36 @@ describe('subagents island, an instance detail', () => {
     expect(said).toEqual(['第一句'])
   })
 
+  it('does not send the keystroke that confirms an IME candidate', async () => {
+    /* Typing Chinese, the Enter that picks the candidate arrives while the
+       composition is still open. Sent then, it went out half-typed; and since the
+       conversion changed the text afterwards the box was not emptied, so the
+       reader pressed Enter again -- one line typed, one sent and one queued
+       behind it. */
+    const said: string[] = []
+    await openInstance(inst({ handle: 'chatty', status: 'completed', resumable: true }), {
+      instanceSend: async (_a, _h, text) => {
+        said.push(text)
+      },
+    })
+    const box = document.querySelector('.sasend textarea') as HTMLTextAreaElement
+    box.value = '帮我做个ppt'
+    await act(async () => {
+      box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true }))
+    })
+    expect(said).toEqual([])
+    /* The older spelling some IMEs still send instead of `isComposing`. */
+    await act(async () => {
+      box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 229, bubbles: true }))
+    })
+    expect(said).toEqual([])
+    /* The keystroke that follows, once the composition has closed, sends. */
+    await act(async () => {
+      box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+    expect(said).toEqual(['帮我做个ppt'])
+  })
+
   it('offers no composer for an instance that cannot continue', async () => {
     /* A stateless agent starts from nothing every turn, so what looked like a
        conversation would be a run of unrelated first turns. */
