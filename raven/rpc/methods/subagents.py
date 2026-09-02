@@ -712,7 +712,7 @@ def _find(name: str, source: str) -> Any:
     return _as_configs([entry])[0]
 
 
-async def subagents_test(params: dict) -> dict:
+async def subagents_test(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
     """Dispatch the real agent once and report the verdict.
 
     This spends the agent's own quota, so it is only ever reached by an explicit
@@ -763,6 +763,23 @@ async def subagents_test(params: dict) -> dict:
         detail=result.detail,
         tested_at_ms=int(time.time() * 1000),
     )
+    # Exactly the case where `_test_acp` wrote a capability snapshot. What an acp
+    # test changes is measured capability, which lives in that store -- and the
+    # roster reads `stateful` off a snapshot taken the last time `apply` ran, so
+    # leaving the table alone strands the agent on the old measurement:
+    # `subagents.list` re-reads the store and reports the new one, while
+    # `create_instance` reads the table and refuses the very agent the picker just
+    # offered. Same door a build takes after a filesystem change, for the same
+    # reason -- a write to durable truth the table has not been re-derived from.
+    if result.kind == "acp" and source == "config":
+        try:
+            _hot_apply(agent_loop_factory)
+        except Exception as exc:  # noqa: BLE001 - the measurement is already recorded
+            # The snapshot is on disk, so the verdict the caller asked for is real
+            # whatever the table does with it, and the next hot-apply picks it up.
+            # Raising would show a successful measurement as a failed test -- and
+            # the door re-reads a config file any other client may be writing.
+            logger.warning("subagent tested but the agent table was not re-composed: {}", exc)
     return {
         "ok": result.ok,
         "detail": result.detail,
@@ -808,12 +825,17 @@ def register_subagents_methods(
         # the model still cannot name it.
         return await subagents_build(params, agent_loop_factory=agent_loop_factory)
 
+    async def _test(params: dict) -> dict:
+        # Wrapped like the writes above: an acp test measures capabilities, and
+        # the table has to be re-derived from the snapshot it just recorded.
+        return await subagents_test(params, agent_loop_factory=agent_loop_factory)
+
     dispatcher.register("subagents.add", _add)
     dispatcher.register("subagents.update", _update)
     dispatcher.register("subagents.toggle", _toggle)
     dispatcher.register("subagents.remove", _remove)
     dispatcher.register("subagents.build", _build)
-    dispatcher.register("subagents.test", subagents_test)
+    dispatcher.register("subagents.test", _test)
     dispatcher.register("subagents.test_cancel", subagents_test_cancel)
 
 
