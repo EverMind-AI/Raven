@@ -19,16 +19,101 @@ import type { DeliveryRow } from './types'
    delivered again took that turn's card away with it (the section, and the
    whole products card when the turn changed no files). Collapsing by path is
    the shelf's business, and happens in `list`/`byPath` below. */
-let rows: DeliveryRow[] = []
+/* Which stream delivered it. The empty string is the conversation itself; a
+   delegated run gets one of its own, because its turns are numbered from one
+   like everybody else's and `ofTurn` would otherwise hand a sub-agent's card
+   the files the conversation underneath delivered in its first turn -- and hand
+   the conversation's card the sub-agent's. The scope is what keeps the two
+   apart. It used to be an emptied registry instead, which kept them apart by
+   leaving only one of them anything to read: every repaint of a delegated
+   stream threw away the deliveries the conversation was still showing.
+
+   Only `ofTurn` is scoped. The session-wide readers -- the shelf, the pane, the
+   tab's count -- are about files this session handed over, whoever handed them
+   over, and read every row. */
+type Held = DeliveryRow & { at: number; when: number | null; call: string }
+
+let rows: Held[] = []
+/* When a row arrived, which is the only clock the streams share. Their turn
+   numbers are not one: a delegated run counts from one exactly as the
+   conversation does, so a sub-agent's tenth turn read as newer than the
+   conversation's second -- the shelf put the older row on top, and a path both
+   of them delivered resolved to the older one's title and token. Arrival is
+   comparable across streams because there is one of it. */
+let arrivals = 0
+/* The arrivals of the rows the last `dropScope` took, by the identity `put`
+   keys on. The conversation's rows are dropped and re-recorded on every main-lane
+   replay, and for an unstamped row arrival is the only key it has -- re-recording
+   handed it a fresh higher one while a sub-agent's stayed put, so the same two
+   deliveries answered differently before and after a replay. Handing the arrival
+   back makes the replay what it claims to be: the same rows, read again.
+
+   Holds one drop at a time. It exists for the re-record that follows immediately,
+   so the next drop replaces it and a fresh registry clears it. */
+let dropped = new Map<string, number>()
 let version = 0
 const listeners = new Set<() => void>()
 
 export const getVersion = (): number => version
 
-/* A row from the registry has no turn, and sorts as older than any turn the
-   reader watched happen -- which is what it is: something this conversation
-   delivered, recovered rather than witnessed. */
-const rank = (row: DeliveryRow): number => (row.turn == null ? -1 : row.turn)
+/* Newest first, on one clock.
+ *
+ * How the session-wide readers -- the shelf and the pane -- order rows they may
+ * have taken from different streams. A row from the gateway's registry has no
+ * turn, and sorts as older than anything the reader watched arrive, which is
+ * what it is: something this conversation delivered, recovered rather than
+ * witnessed.
+ *
+ * `when` is the manifest's own `delivered_at` -- written by the gateway when the
+ * delivery happened, in epoch milliseconds UTC, and carried by the identical
+ * object down both paths: the live event and the replayed message. So there is
+ * one clock here and no inference about where a row came from. Ordering by paint
+ * order inverted a lazily replayed history against a newer delivery; ordering a
+ * stored stamp against the browser's clock compared two clocks; ordering live
+ * above replayed encoded the event source as chronology, and a background
+ * sub-agent that delivers later but paints afterwards is exactly the case that
+ * breaks. A field written where the delivery happens is the only thing that is
+ * none of those.
+ *
+ * A manifest with no `delivered_at` predates that field and sorts oldest, as does
+ * a row recovered from the gateway's registry -- something this conversation
+ * delivered, recovered rather than witnessed.
+ *
+ * Two STAMPED rows can only share a stamp by coming from different producers,
+ * since one producer's stamps never repeat. There is no chronological fact left
+ * to read then, so the call that made each one decides -- stable, assigned where
+ * the delivery happened, and the same answer however the page came to learn of
+ * them.
+ *
+ * Two UNSTAMPED rows are a different case and must not be sorted that way. They
+ * are manifests written before the field existed, so a whole legacy history is
+ * unstamped, and their call ids carry no order at all -- ranking by them would
+ * pick an arbitrary row where replay order at least follows the transcript. They
+ * keep arrival, which is what they had.
+ *
+ * A total order either way: one key per row, compared the same way every time. */
+const later = (row: Held, than: Held): boolean => {
+  const seen = row.turn == null
+  const other = than.turn == null
+  if (seen !== other) return other
+  const a = row.when
+  const b = than.when
+  if (a == null || b == null) {
+    /* An unstamped row is older than a stamped one -- the field is newer than it
+       is -- and two unstamped ones keep the order they were replayed in. */
+    if (a !== b) return b == null
+    return row.at > than.at
+  }
+  if (a !== b) return a > b
+  if (row.call !== than.call) return row.call > than.call
+  return row.at > than.at
+}
+
+const newestFirst = (a: Held, b: Held): number => (later(a, b) ? -1 : later(b, a) ? 1 : 0)
+
+/* The conversation's own stream. Written out rather than left implicit so the
+   readers that mean "the session" say so. */
+export const SESSION = ''
 
 export function subscribe(listener: () => void): () => void {
   listeners.add(listener)
@@ -40,30 +125,42 @@ function bump(): void {
   listeners.forEach((listener) => listener())
 }
 
-/* The shelf: one row per path at the turn that last delivered it, newest turn
-   first, manifest order inside a turn -- it reads top-down as "what just
-   happened, then what came before". */
+/* The shelf: one row per path, at the delivery that handed it over last, newest
+   first -- it reads top-down as "what just happened, then what came before". */
 export function list(): DeliveryRow[] {
-  const newest = new Map<string, { row: DeliveryRow; index: number }>()
+  const newest = new Map<string, { row: Held; index: number }>()
   rows.forEach((row, index) => {
     const seen = newest.get(row.path)
-    if (!seen || rank(row) > rank(seen.row)) newest.set(row.path, { row, index })
+    if (!seen || later(row, seen.row)) newest.set(row.path, { row, index })
   })
   return [...newest.values()]
-    .sort((a, b) => rank(b.row) - rank(a.row) || a.index - b.index)
+    .sort((a, b) => newestFirst(a.row, b.row) || a.index - b.index)
     .map(({ row }) => row)
 }
 
-/* What that turn delivered, which is what its own card in the transcript shows.
-   Unaffected by anything a later turn delivered. */
-export const ofTurn = (turn: number): DeliveryRow[] => rows.filter((row) => row.turn === turn)
+/* What that turn delivered, which is what the turn's own products card shows.
+   Unaffected by anything a later turn delivered. One row per path: a turn that
+   handed the same file over from two calls produced it once, and the card is
+   about the turn's products, not about its calls. */
+export function ofTurn(scope: string, turn: number): DeliveryRow[] {
+  const mine = rows.filter((row) => row.scope === scope && row.turn === turn)
+  const newest = new Map<string, Held>()
+  mine.forEach((row) => {
+    const seen = newest.get(row.path)
+    if (!seen || row.at >= seen.at) newest.set(row.path, row)
+  })
+  return mine.filter((row) => newest.get(row.path) === row)
+}
 
-/* The newest row for a path: what the pane says about the file that is open. */
+/* The newest row for a path: what the pane says about the file that is open.
+   Session-wide, because the pane is -- it shows the file, not the stream that
+   last handed it over. */
 export const byPath = (path: string): DeliveryRow | null =>
-  rows.reduce<DeliveryRow | null>(
-    (best, row) => (row.path === path && (!best || rank(row) > rank(best)) ? row : best),
+  rows.reduce<Held | null>(
+    (best, row) => (row.path === path && (!best || later(row, best)) ? row : best),
     null,
   )
+
 
 /* What the shelf shows, so the tab's number matches its list: paths, not rows.
    The path is also each row's identity for the seen record -- one file the
@@ -77,7 +174,8 @@ export const count = (): number => paths().length
 /* One delivered file, from either door: the wire shape is the same in a turn
    event's manifest and in the gateway's registry, because both are written from
    the same record. */
-function rowOf(entry: unknown, turn: number | null): DeliveryRow | null {
+function rowOf(entry: unknown, turn: number | null, scope: string, at: number,
+  call: string, when: number | null): Held | null {
   if (!entry || typeof entry !== 'object') return null
   const item = entry as Record<string, unknown>
   const path = String(item.path || '')
@@ -85,6 +183,10 @@ function rowOf(entry: unknown, turn: number | null): DeliveryRow | null {
   const name = String(item.name || path.split('/').pop() || path)
   const dot = name.lastIndexOf('.')
   return {
+    scope,
+    at,
+    when,
+    call,
     path,
     name,
     title: String(item.title || name),
@@ -98,25 +200,50 @@ function rowOf(entry: unknown, turn: number | null): DeliveryRow | null {
   }
 }
 
-function put(next: DeliveryRow): boolean {
-  const at = rows.findIndex((row) => row.turn === next.turn && row.path === next.path)
-  if (at >= 0) {
-    rows[at] = next
+/* One row per (stream, delivery, path). The delivery is the call that made it;
+   the turn is what it is filed under. Written once and read by both the merge and
+   the arrival memory, so those two cannot key on different things. */
+const identity = (row: Held): string => `${row.scope}\u0000${row.call}\u0000${row.turn}\u0000${row.path}`
+
+function put(next: Held): boolean {
+  /* Keyed by the turn alone, two calls in one turn handing over the same path
+     were one row and the earlier card read the later manifest. */
+  const key = identity(next)
+  const seen = rows.findIndex((row) => identity(row) === key)
+  if (seen >= 0) {
+    /* The same delivery, recorded again -- live and then replayed from history,
+       or a re-read of the same turn. It keeps the arrival it already had: this
+       is not the file being handed over a second time, and moving it to the
+       front of the shelf would say it was. */
+    rows[seen] = { ...next, at: (rows[seen] as Held).at }
     return true
   }
-  rows.push(next)
+  /* Same delivery, and the row for it was dropped a moment ago rather than being
+     here to find -- a replay. It keeps its arrival for the same reason. */
+  const before = dropped.get(key)
+  rows.push(before == null ? next : { ...next, at: before })
   return true
 }
 
-export function record(turn: number, metadata: unknown): void {
+export function record(scope: string, turn: number, metadata: unknown, call = ''): void {
   const root = metadata && typeof metadata === 'object' ? metadata as Record<string, unknown> : null
   const raw = root && root.raven_delivery && typeof root.raven_delivery === 'object'
     ? root.raven_delivery as Record<string, unknown> : null
   const files = raw && Array.isArray(raw.files) ? raw.files : []
   if (!files.length) return
   let changed = false
+  /* One arrival for the manifest, not one per file: the files in it were handed
+     over together, and the array order they are pushed in is what keeps them in
+     manifest order inside their own delivery. */
+  arrivals += 1
+  const at = arrivals
+  /* When the delivery happened, as the gateway wrote it into this manifest. The
+     same object reaches the live event and the replayed message, so both read one
+     clock; a manifest written before the field existed has none. */
+  const stamped = raw ? raw.delivered_at : null
+  const moment = typeof stamped === 'number' && Number.isFinite(stamped) ? stamped : null
   files.forEach((entry) => {
-    const next = rowOf(entry, turn)
+    const next = rowOf(entry, turn, scope, at, call, moment)
     if (next) changed = put(next) || changed
   })
   if (changed) bump()
@@ -132,8 +259,12 @@ export function record(turn: number, metadata: unknown): void {
 export function seed(files: unknown): void {
   if (!Array.isArray(files)) return
   let changed = false
+  arrivals += 1
   for (let i = files.length - 1; i >= 0; i -= 1) {
-    const next = rowOf(files[i], null)
+    /* A row recovered from the gateway's registry sorts before anything the
+       reader watched arrive, whatever moment it carries -- `order` answers -1 for
+       a row with no turn -- so this only has to be a number. */
+    const next = rowOf(files[i], null, SESSION, arrivals, '', null)
     if (!next) continue
     /* Nothing to recover for a path a turn already accounted for. */
     if (rows.some((row) => row.path === next.path && row.turn != null)) continue
@@ -158,13 +289,47 @@ export function markMissing(path: string): void {
 export const snapshot = (): DeliveryRow[] => rows
 
 export function restore(next: DeliveryRow[]): void {
-  rows = Array.isArray(next) ? next : []
+  /* A row that arrives without one belongs to the conversation: the only rows
+     written from outside this module are a test's, and the parked snapshot is
+     this module's own rows going back where they came from, scope and all. */
+  /* The parked rows carry their own arrival back; a row written from outside
+     this module (a test) gets one now, and they keep the order they came in. */
+  dropped = new Map()
+  rows = Array.isArray(next)
+    ? next.map((row, i) => ({ at: arrivals + 1 + i, when: null, call: '', ...row, scope: row.scope || SESSION } as Held))
+    : []
+  arrivals += Array.isArray(next) ? next.length : 0
   bump()
 }
 
+
+/* Everything, for a registry that is starting over. */
 export function reset(): void {
+  dropped = new Map()
   if (!rows.length) return
   rows = []
+  bump()
+}
+
+/* One stream's rows, and only one stream's.
+ *
+ * The one caller is the transcript's replay, which passes `SESSION`: the
+ * conversation's own rows are about to be replayed, or it is a different
+ * conversation now. What matters is the "only one" -- clearing the whole
+ * registry there emptied the deliveries of the conversation underneath every
+ * time a reader opened a sub-agent panel.
+ *
+ * Deliberately not called on lane release. A pane closing is not the delegated
+ * stream's rows going away: the shelf is session-wide and records what this
+ * conversation delivered, sub-agents included, so a reader who closes a panel
+ * would otherwise lose the record of work that really happened. Those rows end
+ * where the conversation does -- `resetView` (`live/080-overrides.js`) calls
+ * `wsReset`, and the workspace store's `resetShared` restores an empty registry
+ * across every scope. */
+export function dropScope(scope: string): void {
+  if (!rows.some((row) => row.scope === scope)) return
+  dropped = new Map(rows.filter((row) => row.scope === scope).map((row) => [identity(row), row.at]))
+  rows = rows.filter((row) => row.scope !== scope)
   bump()
 }
 
