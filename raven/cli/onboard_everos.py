@@ -544,7 +544,7 @@ def _match_provider_by_url(base_url: Optional[str]) -> Optional[str]:
 _EVEROS_ROLES: dict[str, dict[str, Any]] = {
     "llm": {
         "label": "Memory LLM",
-        "example": "gpt-4.1-mini",
+        "example": "qwen/qwen3.8-flash",
         "optional": False,
         "verify": True,
         "purpose": "Reads each conversation to judge what matters and extract the key points.",
@@ -552,7 +552,7 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
         # starts on, but a key that cannot reach it is no reason to stop -- the
         # point is the capability level, and the fetched list is there to pick
         # an equivalent from.
-        "recommendation": "Capability floor: [bold]gpt-4.1-mini[/bold] -- weaker models degrade extraction",
+        "recommendation": "Capability floor: [bold]qwen/qwen3.8-flash[/bold] -- weaker models degrade extraction",
         "continue_hint": "memory extraction may fail",
     },
     "embedding": {
@@ -576,24 +576,24 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
     },
     "rerank": {
         "label": "Memory rerank",
-        "example": "Qwen/Qwen3-Reranker-4B",
+        "example": "qwen/qwen3-reranker-8b",
         "optional": True,
         "verify": True,
         "purpose": "Re-ranks what semantic search found so the best match comes first, at a small\n  latency cost.",
         "tag": "[accent](optional, advised)[/accent]",
-        "recommendation": "Recommended: [bold]Qwen/Qwen3-Reranker-4B[/bold]",
+        "recommendation": "Recommended: [bold]qwen/qwen3-reranker-8b[/bold]",
         "continue_hint": "rerank quality may degrade",
         "skip_note": "  [dim]Skipped rerank; memory retrieval still works.[/dim]",
     },
     "multimodal": {
         "label": "Memory multimodal",
-        "example": "google/gemini-3-flash-preview",
+        "example": "google/gemini-3.7-flash",
         "optional": True,
         "verify": True,
         "purpose": "Lets Raven understand and recall images / PDFs / audio as memory.",
         "cost": "Without it: those files stay out of memory. Having such files is not the same\n"
         "  as needing them remembered -- configure it when you do.",
-        "recommendation": "Recommended: [bold]google/gemini-3-flash-preview[/bold]",
+        "recommendation": "Recommended: [bold]google/gemini-3.7-flash[/bold]",
         "skip_note": "  [dim]Skipped; nothing else is affected -- configure it if you come to need\n  multimodal memory.[/dim]",
     },
 }
@@ -749,8 +749,8 @@ def _fetch_multimodal_models(
 def _match_everos_default(example: str, models: list[str]) -> str:
     """The catalog entry to start the model field on, or ``""`` for none.
 
-    The example (e.g. ``gpt-4.1-mini``) is a bare model name, while ``models``
-    may carry provider prefixes (``openai/gpt-4.1-mini``), so a match is the
+    The example (e.g. ``qwen/qwen3.8-flash``) is a bare model name, while ``models``
+    may carry provider prefixes (``openrouter/qwen/qwen3.8-flash``), so a match is the
     first id equal to ``example`` or ending in ``/example``.
 
     A catalog with no such entry pre-fills nothing. Falling back to the bare
