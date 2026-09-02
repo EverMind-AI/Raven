@@ -159,8 +159,8 @@ export function artifacts(turn: number): void {
   store.artifacts(mainLane(), turn)
 }
 
-export function delivery(turn: number, metadata: unknown, callId?: string | null): void {
-  store.recordDelivery(mainLane(), turn, metadata, callId)
+export function delivery(turn: number, metadata: unknown): void {
+  store.recordDelivery(mainLane(), turn, metadata)
 }
 
 export function turnKept(): boolean {

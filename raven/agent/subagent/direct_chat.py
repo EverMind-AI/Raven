@@ -29,7 +29,7 @@ from typing import Any, NamedTuple
 from loguru import logger
 
 from raven.agent.subagent.activity import persisted_output
-from raven.agent.subagent.history import add_turn_to_instance_log, make_call_id, open_instance_log_for
+from raven.agent.subagent.history import add_turn_to_instance_log, make_call_id
 from raven.utils.atomic_io import atomic_replace
 from raven.utils.paths import safe_path_segment
 
@@ -150,25 +150,6 @@ class DirectChatRecord:
             )
         except OSError as exc:
             logger.warning("Direct chat [{}] history could not be opened at {}: {}", task_id, record.dir, exc)
-        # An instance the reader started themselves has no dispatch to take a
-        # name from, so it is named by its opening message -- and named now, not
-        # when the first turn ends, because the panel a reader is watching is the
-        # one whose turn is still running. Outside the try above, which guards the
-        # record directory: the instance log is a separate file with its own
-        # failure handling.
-        #
-        # From the identity in hand, not re-read from the meta this call just
-        # wrote. The two subtrees fail independently -- a file where
-        # `subagents/direct` wants a directory takes the record down while the
-        # sibling instance log stays perfectly writable -- and reading the identity
-        # back through the failed one made the log's fate depend on the record's,
-        # which is the separation the paragraph above exists to keep.
-        open_instance_log_for(
-            record.session_dir,
-            meta={"agent": agent, "handle": handle},
-            kind="direct",
-            prompt=task,
-        )
         return record
 
     def finish(self, *, status: str, output: str | None = None, error: str | None = None, activity: Any = None) -> None:

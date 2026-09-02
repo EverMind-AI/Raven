@@ -299,14 +299,6 @@ export interface Lane {
   /* agent stage bookkeeping: messages already drawn, running glyph */
   agentKey: string | null
   agentDrawn: number
-  /* How many turns of this delegated stream have been painted. A delegated lane
-     is painted a slice at a time, and each slice's turns are counted from where
-     the last one stopped: `history` counts from zero over what it is given, so a
-     lane that only ever sees the newly appended rows would number every poll's
-     turns from one and file each turn's deliveries under the previous turn's
-     key. The conversation's own lane is handed its whole list and starts at zero
-     every time, which is why this is not on that path. */
-  agentTurn: number
   /* How many segments were settled at the end of the last paint. Anything past
      it is the answer still being written, redrawn from the record on every
      paint rather than appended to; 0 means nothing is provisional. */
@@ -407,10 +399,7 @@ export interface TranscriptSource {
      Read to turn a restored card's task id into the record id its stream is
      read by -- once per conversation, not once per card. */
   spawnList?: () => Promise<SpawnListRow[]>
-  /* The node's own summary rides with its id: the pane that opens is headed by
-     it, and the id is a slug from the plan. Optional, so a caller that has only
-     an id still opens the node. */
-  openDagNode?: (runId: string, nodeId: string, summary?: string | null) => void
+  openDagNode?: (runId: string, nodeId: string) => void
   openSpawn?: (agent: string, label: string) => void
   /* Open the delegated GRAPH a delivery came from. One verb rather than the
      live event handler doing it inline, because the replayed row has to open

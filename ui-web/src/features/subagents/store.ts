@@ -629,10 +629,7 @@ export function openRow(it: AgentRow): void {
    ways has to land in one place, or the two views drift and only one of them
    grows the next thing (the direct-chat composer was on exactly one of them).
    A stateless node has no instance, and keeps its own record view. */
-export function openDagNode(
-  runId: string,
-  n: { id: string; subagent?: string | null; summary?: string | null },
-): void {
+export function openDagNode(runId: string, n: { id: string; subagent?: string | null }): void {
   const row = instanceOf(runId, n.id)
   if (row) {
     openInstance(row)
@@ -640,15 +637,9 @@ export function openDagNode(
   }
   stageFresh = true
   paintedStatus = null
-  /* What the node DID, when the run says: `node_summary` is a sentence the
-     planner wrote, and `id` is a slug from the same plan. A pane headed
-     `create_august_ppt` is the id, and it is what a reader was shown until the
-     summary was carried this far -- every caller handed over `{ id }` alone. The
-     id stays the fallback: a run old enough to have no summary still has one. */
-  const label = n.summary || n.id
-  set({ open: { kind: 'dag', run_id: runId, node: n.id, agent: n.subagent, label }, who: null })
+  set({ open: { kind: 'dag', run_id: runId, node: n.id, agent: n.subagent, label: n.id }, who: null })
   const workspace = window.RavenIslands?.workspace as { openAgentRecord?: (row: AgentRow) => void } | undefined
-  workspace?.openAgentRecord?.({ kind: 'dag', run_id: runId, node: n.id, agent: n.subagent, label })
+  workspace?.openAgentRecord?.({ kind: 'dag', run_id: runId, node: n.id, agent: n.subagent, label: n.id })
   /* Opened before this panel had ever asked for its rows: ask now, and the
      refresh promotes this to the instance view if a row turns up. */
   refreshInstances(true)
