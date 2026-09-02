@@ -54,15 +54,10 @@ def new_chat_id(now: datetime | None = None) -> str:
 _AUTO_TITLE_MAX_CHARS = 40
 
 
-def derive_title(content: Any) -> str | None:
+def _derive_title(content: Any) -> str | None:
     """Derive an auto-title from message content: first non-empty line,
     whitespace collapsed, truncated to 40 characters. None when the
-    content is not a usable string (e.g. structured multimodal parts).
-
-    Public because a sub-agent instance is named by the same rule: an instance
-    the reader started themselves has no dispatch to take a name from, and one
-    named differently from a conversation would read as a different kind of
-    thing on a screen that shows both."""
+    content is not a usable string (e.g. structured multimodal parts)."""
     if not isinstance(content, str):
         return None
     stripped = content.strip()
@@ -75,8 +70,30 @@ def derive_title(content: Any) -> str | None:
 def _first_user_auto_title(messages: list[dict[str, Any]]) -> str | None:
     for m in messages:
         if m.get("role") == "user":
-            return derive_title(m.get("content"))
+            return _derive_title(m.get("content"))
     return None
+
+
+_FORK_SUFFIX = " (fork)"
+
+
+def _fork_title(parent_title: str) -> str:
+    """Name a fork after its parent, short enough for ``set_title`` to accept.
+
+    Nobody typed this name, so the refusal ``set_title`` gives an over-long
+    human title is the wrong tail here: there is no author to hand the text back
+    to, and the fork would land nameless -- the very hole that inheriting the
+    parent's name was added to close. The parent's part gives way instead, and
+    only for a parent already within the suffix's width of the storage ceiling.
+    The suffix is what makes this a name for the fork rather than for what it was
+    forked from, so it is the part kept whole.
+    """
+    collapsed = collapse_to_line(parent_title)
+    room = TITLE_STORAGE_MAX - len(_FORK_SUFFIX)
+    if len(collapsed) > room:
+        logger.debug("fork: parent title cut to {} chars to leave room for the fork suffix", room)
+        collapsed = collapsed[:room].rstrip()
+    return collapsed + _FORK_SUFFIX
 
 
 @dataclass(frozen=True)
@@ -128,9 +145,11 @@ class Session:
     def set_title(self, title: str) -> None:
         """Set a human-given title.
 
-        Clears the ``title_auto`` marker so fork inheritance treats the
-        title as human even when the session was auto-named before. Every
-        rename path must come through here, not assign metadata directly.
+        Clears the ``title_auto`` marker, which is what keeps a generated title
+        from replacing this one later -- ``set_generated_title`` declines against
+        a title no marker calls machine-made. Every rename path must come through
+        here, not assign metadata directly. The marker no longer decides what a
+        fork inherits: a fork carries its parent's name whatever made it.
 
         Collapsed to one line -- a metadata record is one JSON line and every
         surface renders a title on one row, so an embedded newline has nowhere
@@ -148,9 +167,12 @@ class Session:
     def set_generated_title(self, title: str) -> bool:
         """Record a machine-made title. False when it was declined.
 
-        Stamped ``title_auto`` like the one ``save`` derives, so a generated
-        title is "not human" for fork inheritance exactly as the mechanical one
-        is -- no third state, no change to what forks carry.
+        Stamped ``title_auto`` like the one ``save`` derives: both are machine
+        titles, and the marker is what lets a later *generation* replace them,
+        where a human title is declined below. A rename does not consult it --
+        ``set_title`` overwrites either kind and clears the marker on the way
+        through. Nor does it say anything about what a fork inherits; a fork
+        carries its parent's name whatever made it, and takes no marker with it.
 
         Declined when a person has already named the session: the call that
         produced this ran concurrently with the turn, so a rename typed while it
@@ -587,9 +609,11 @@ class SessionManager:
 
         An untitled session is auto-named here from its first user message
         (first line, collapsed whitespace, capped at 40 chars); a title set
-        by the user is never overwritten. Forked children are excluded —
-        their first user message names the fork point's ancestor, not the
-        fork — so they stay untitled unless titled explicitly.
+        by the user is never overwritten. Forked children are excluded — their
+        first user message names the fork point's ancestor, not the fork. They
+        are not left nameless by that: ``fork`` gives the child its parent's
+        name with ``(fork)`` after it, which is a name for the fork rather than
+        for what it was forked from.
         """
         path = self.session_path(session.key)
 
@@ -682,12 +706,26 @@ class SessionManager:
         matches the source at the fork point) and resets ``pending_clarification``
         (interaction wait-state is not history). The child is persisted eagerly.
 
-        Only a human-given source title is inherited (as ``<title> (fork)``);
-        a title stamped with the ``title_auto`` metadata marker (written by
-        ``save`` when it auto-names) is not carried over, so children of
-        never-explicitly-titled sessions stay untitled. A title without the
-        marker counts as human, which keeps sessions saved before the marker
-        existed inheriting as before.
+        Whatever the source is called, the child is called ``<title> (fork)``
+        -- typed by hand, derived by ``save`` from the first user message, or
+        generated. Inheritance used to be restricted to human titles, which
+        crossed with ``save``'s rule that a fork is never auto-named to leave
+        the forks of auto-named sessions with no title at all; the front ends
+        then headed them with a placeholder, so every fork of an unnamed
+        conversation read the same. The reason a fork is not auto-named stands
+        and is a different one: its first user message names the fork point's
+        ancestor, not the fork. The parent's name, marked as the fork it is,
+        does name the fork.
+
+        The child's title carries no ``title_auto`` marker, whatever the
+        source's said. It is the fork's own name from here: a rename still
+        wins, and nothing regenerates it behind the reader's back.
+
+        The derived name goes in through ``set_title`` like every other name, so
+        it obeys the one line and the one ceiling that rule states. Where a human
+        title too long for the record is refused, this one is not: a parent named
+        right up to the ceiling gives up its tail so the fork keeps a name
+        (``_fork_title``).
 
         Returns the persisted child, or None when the source does not exist or
         has zero messages (a fork of an empty session has no value).
@@ -706,8 +744,8 @@ class SessionManager:
             child.metadata["title"] = title
         else:
             parent_title = (source.metadata or {}).get("title")
-            if parent_title and not (source.metadata or {}).get("title_auto"):
-                child.metadata["title"] = f"{parent_title} (fork)"
+            if parent_title:
+                child.set_title(_fork_title(parent_title))
         child.metadata["parent_session_id"] = source_key
         # A fork continues its parent's conversation, so it continues on its
         # parent's model. The caller re-points the live binding, but that lives
