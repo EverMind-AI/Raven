@@ -45,9 +45,21 @@ interface PaneProps {
 
 function Pane({ pane, onGrab, refPane }: PaneProps): JSX.Element {
   const state = useSyncExternalStore(desk.subscribe, desk.getState)
+  /* The instance as the list has it NOW, not as it was when the pane opened.
+     `pane.row` is the snapshot the desk stored on the way in, and an instance
+     the reader started themselves has no name until its first message lands --
+     which is after the pane exists. Headed by the snapshot, such a pane kept the
+     handle forever while the composer one file over, which re-reads the list,
+     had already started addressing it by name: two names for one instance on one
+     screen. The pane falls back to its snapshot for a row the list has since
+     dropped, so a forgotten instance's window keeps its heading. */
+  const live = useSyncExternalStore(agents.subscribe, agents.getState)
+  const row = pane.kind === 'agent'
+    ? live.instances.find((it) => it.agent === pane.row.agent && it.handle === pane.row.handle) || pane.row
+    : null
   const full = state.solo === pane.id
   const title = pane.kind === 'agent'
-    ? pane.row.title || pane.row.nodeId || pane.row.handle
+    ? row!.title || row!.nodeId || row!.handle
     : pane.kind === 'agent-record'
       /* What it did before what it is called. `label` is the node's own summary
          for a graph node and the run's label for a spawn; `node` is the plan's

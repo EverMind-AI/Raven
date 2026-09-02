@@ -426,7 +426,11 @@ export function InstanceConversation({ row }: { row: InstanceRow }): JSX.Element
         ? (
           <InstanceComposer
             open={{ kind: 'instance', agent: current.agent, handle: current.handle }}
-            name={current.nodeId || current.handle}
+            /* What the instance is for, ahead of the slug and the handle -- the
+               order the panel's own header already uses. Asking for the id first
+               addressed the reader to `raven-f5caf2` inside a pane headed by the
+               task, which reads as two different things on one screen. */
+            name={current.title || current.nodeId || current.handle}
             fail={store.sendFailOf(current.agent, current.handle)}
           />
         )

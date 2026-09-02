@@ -54,10 +54,15 @@ def new_chat_id(now: datetime | None = None) -> str:
 _AUTO_TITLE_MAX_CHARS = 40
 
 
-def _derive_title(content: Any) -> str | None:
+def derive_title(content: Any) -> str | None:
     """Derive an auto-title from message content: first non-empty line,
     whitespace collapsed, truncated to 40 characters. None when the
-    content is not a usable string (e.g. structured multimodal parts)."""
+    content is not a usable string (e.g. structured multimodal parts).
+
+    Public because a sub-agent instance is named by the same rule: an instance
+    the reader started themselves has no dispatch to take a name from, and one
+    named differently from a conversation would read as a different kind of
+    thing on a screen that shows both."""
     if not isinstance(content, str):
         return None
     stripped = content.strip()
@@ -70,7 +75,7 @@ def _derive_title(content: Any) -> str | None:
 def _first_user_auto_title(messages: list[dict[str, Any]]) -> str | None:
     for m in messages:
         if m.get("role") == "user":
-            return _derive_title(m.get("content"))
+            return derive_title(m.get("content"))
     return None
 
 
