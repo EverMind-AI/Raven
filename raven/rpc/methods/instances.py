@@ -245,6 +245,40 @@ def _mark_resumable(rows: list[dict[str, Any]], manager: Any) -> list[dict[str, 
     return [{**row, "resumable": resumable(row)} for row in rows]
 
 
+def _drop_nodes_that_never_ran(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Leave out the graph nodes that were declared and never dispatched.
+
+    A graph declares every node up front, and the runner writes a registry row
+    for one the moment it reaches a terminal status -- including the nodes it
+    never reached at all. ``skipped`` is exactly that state and says so in the
+    runner's own words: ``_mark_stopped`` turns a ``pending`` node into a
+    ``skipped`` one because "a `pending` one was never dispatched, which is what
+    `skipped` means everywhere else", and ``_cascade_failures`` skips whatever
+    depended on a node that failed.
+
+    Such a node has no conversation, no transcript and no handle of its own, so
+    a list of the instances a conversation has used is the wrong place for it:
+    one failure at the top of a graph filled the panel with rows that never did
+    anything. The graph sheet still draws them, out of the graph, where a node
+    that did not run is worth seeing next to the one that stopped it.
+
+    ``cancelled`` is deliberately kept. The runner distinguishes the two -- a
+    cancelled node "already has a real start time from its dispatch" -- so it
+    ran, however briefly, and what it managed to do before the stop is a real
+    part of the conversation's history.
+
+    Applied BEFORE ``_collapse_dag_rows``, not after. That helper pairs a legacy
+    handle row -- one written before nodes carried a ``nodeId`` -- by name, and
+    refuses to guess when two nodes answer to it. A skipped node makes that
+    second answer: with one completed ``synthesize`` and one skipped
+    ``synthesize``, the completed run's handle row paired with neither, so the
+    one invocation came back twice -- once un-attributed and once as the node --
+    and the skipped row was dropped only afterwards, too late to stop having
+    caused it. Filtered first, it never takes part in the pairing.
+    """
+    return [r for r in rows if not (r.get("kind") == "dag-node" and r.get("status") == "skipped")]
+
+
 async def instances_list(
     params: dict[str, Any],
     *,
@@ -265,7 +299,7 @@ async def instances_list(
     )
     return {
         "instances": _mark_titles(
-            _mark_resumable(_collapse_dag_rows(reconciled), manager),
+            _mark_resumable(_collapse_dag_rows(_drop_nodes_that_never_ran(reconciled)), manager),
             _session_dir(agent_loop_factory, session_key),
         ),
         "pending_handoff_count": handoff.pending_count(session_key) if handoff is not None else 0,
