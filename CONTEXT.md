@@ -254,6 +254,13 @@ wholesale, so a copy would be one dropped key away from vanishing. A run title i
 rather than empty when the instance came from no graph, so its presence is what a reader
 tests to decide whether to draw a source at all; a missing instance title falls back to the
 handle.
+
+Three sources, in precedence: a spawn's `task_summary`, a graph node's `node_summary`, and --
+for an instance nobody dispatched, one the reader started themselves -- the first line of the
+message that opened it, by `derive_title`, the same rule that names an untitled session. That
+third one is taken *once*, when the log is opened, so the opening message names the instance
+and later ones do not rename it; the header is written on `open` rather than on the first
+completed turn, or a panel would be headed by an id until something finished.
 _Avoid_: reading either as the node id or the handle - those are addresses. A playbook
 namespaces every node id with its own name and a run tag, which is exactly why they read
 badly as titles.
