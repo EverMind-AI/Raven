@@ -412,6 +412,37 @@ describe('rail island', () => {
     expect(document.getElementById('title')!.textContent).toBe('renamed inline')
   })
 
+  it('sizes the rename box from the name as it is drawn', () => {
+    /* It used to be the width of the rail whatever it held -- a two-character
+       title in a box eight times its length, which reads as a form field waiting
+       to be filled in rather than a name being corrected.
+
+       The width is not computed here: the wrapper renders `data-value` in the
+       same grid cell with the same font and the column takes that width, so the
+       browser measures the drawn text. Counting characters cannot -- the face is
+       proportional, and `WWWW` needs four times what `iiii` does.
+
+       So what this pins is the mechanism, which is all that is assertable
+       without layout: the mirror carries exactly what the field holds, and the
+       field declares no width of its own. Whether the resulting box fits the
+       glyphs is a question only a real browser can answer, and is checked by
+       hand there. */
+    install({ rows: [row({ id: 'b', title: '你好' })], cur: 'b' })
+    const host = mount()
+    fireEvent.doubleClick(rowByTitle(host, '你好'))
+    const input = host.querySelector<HTMLInputElement>('input.ren')!
+    const sizer = host.querySelector<HTMLElement>('.rensize')!
+
+    expect(sizer.dataset.value).toBe('你好')
+    expect(input.style.width).toBe('')
+
+    fireEvent.change(input, { target: { value: 'WWWW' } })
+    expect(sizer.dataset.value).toBe('WWWW')
+
+    fireEvent.change(input, { target: { value: 'a much longer name than that one' } })
+    expect(sizer.dataset.value).toBe('a much longer name than that one')
+  })
+
   /* A source that can delete gets the whole action, and the island does none
      of the local work -- no splice, no undo, no moving off the row. */
   it('hands the delete to a source that can do it', () => {
