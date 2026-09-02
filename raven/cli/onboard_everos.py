@@ -548,9 +548,10 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
         "optional": False,
         "verify": True,
         "purpose": "Reads each conversation to judge what matters and extract the key points.",
-        # Worded as a floor rather than a default: the field is pre-filled with
-        # the user's own main model, because a recommended id is only reachable
-        # if their key carries it. This tells them how to judge their own.
+        # Worded as a floor rather than a default: this id is what the field
+        # starts on, but a key that cannot reach it is no reason to stop -- the
+        # point is the capability level, and the fetched list is there to pick
+        # an equivalent from.
         "recommendation": "Capability floor: [bold]gpt-4.1-mini[/bold] -- weaker models degrade extraction",
         "continue_hint": "memory extraction may fail",
     },
@@ -746,36 +747,82 @@ def _fetch_multimodal_models(
 
 
 def _match_everos_default(example: str, models: list[str]) -> str:
-    """Find the best match for ``example`` in the fetched model list.
+    """The catalog entry to start the model field on, or ``""`` for none.
 
-    The example (e.g. ``gpt-4.1-mini``) is a bare model name, while
-    ``models`` may carry provider prefixes (``openai/gpt-4.1-mini``).
-    Returns the first model whose id ends with ``/example`` or equals
-    ``example`` exactly; falls back to the bare example string so the
-    autocomplete input is pre-filled even if no exact match exists.
+    The example (e.g. ``gpt-4.1-mini``) is a bare model name, while ``models``
+    may carry provider prefixes (``openai/gpt-4.1-mini``), so a match is the
+    first id equal to ``example`` or ending in ``/example``.
+
+    A catalog with no such entry pre-fills nothing. Falling back to the bare
+    example put an id the catalog had just denied under the cursor, and Enter
+    submits the default: picking a provider that does not serve the recommended
+    model cost a verification round trip to learn what the list already said.
     """
     lower = example.lower()
     suffix = f"/{lower}"
     for mid in models:
         if mid.lower() == lower or mid.lower().endswith(suffix):
             return mid
-    return example
+    return ""
 
 
-def _preferred_memory_model(section: str, main_model: Optional[str], chosen_provider: Optional[str]) -> Optional[str]:
-    """The main chat model, when it is a sensible pre-fill for this role.
+# Where a reused key came from. The provider list is tagged with it so the user
+# can see which providers cost nothing to pick, and the same origin names the
+# note printed when the key is taken -- a key that arrives without being typed
+# has to say where it came from.
+_KEY_REUSE_TAG: dict[str, str] = {
+    "main": "{label} (main model provider, reuse Key)",
+    "llm": "{label} (memory LLM provider, reuse Key)",
+    "config": "{label} (configured, reuse Key)",
+}
+_KEY_REUSE_NOTE: dict[str, str] = {
+    "main": "  [dim]API key and endpoint reused from main chat model.[/dim]",
+    "llm": "  [dim]API key and endpoint reused from memory LLM.[/dim]",
+    "config": "  [dim]API key and endpoint reused from this provider's Raven configuration.[/dim]",
+}
 
-    Only the llm role -- an embedding / rerank / multimodal endpoint does not
-    serve a chat model. Only when the picked provider is the main model's own: no
-    other provider carries that id, and pre-filling one it cannot serve turns
-    Enter into a verification failure. A custom endpoint has no resolved provider
-    and is left alone for the same reason.
+
+def _reusable_creds(
+    section: str, prov: dict[str, Any], main_model: Optional[str], llm_section: dict[str, Any]
+) -> tuple[Optional[dict[str, str]], str]:
+    """The credentials raven already holds for ``prov``, and which store lent them.
+
+    ``(None, "")`` when nothing is on file -- the only case that still costs a
+    key entry. A key and the address it was issued for are one group and travel
+    together: a section can hold its key in an ``endpoints`` entry pointing at a
+    private gateway, and pairing that key with the curated vendor URL would send
+    a private credential to the public endpoint.
+
+    Two stores. The memory LLM's own section answers first for the roles
+    configured after it, because a key typed into that step lives there and
+    nowhere else. Otherwise ``borrow_provider_credentials`` reads the provider
+    section, which is the one place that knows the precedence a section can be
+    written in -- ``endpoints``, then ``api_key_list``, then the flat pair. The
+    origin only names which store answered, and separates the main chat model's
+    provider from any other configured one for the note the user sees.
     """
-    if section != "llm" or not main_model or chosen_provider is None:
-        return None
-    if chosen_provider != _resolve_model_provider(main_model):
-        return None
-    return _resolve_reuse_llm_creds(main_model).get("model")
+    provider = prov["name"]
+    if section != "llm" and _match_provider_by_url(llm_section.get("base_url")) == provider:
+        key = llm_section.get("api_key")
+        if key:
+            return {"api_key": str(key), "base_url": str(llm_section.get("base_url") or "")}, "llm"
+    from raven.config.update_everos import borrow_provider_credentials
+
+    try:
+        lent = borrow_provider_credentials(provider)
+    except (KeyError, ValueError):
+        return None, ""
+    # rerank reaches a different service path on the same vendor, and a key
+    # issued for some other address cannot speak for that path. Declining beats
+    # both alternatives: pointing the borrowed key at the curated rerank URL is
+    # the mismatch this function exists to prevent, and deriving a rerank path
+    # from a private base URL is a guess about someone else's deployment.
+    if section == "rerank" and prov.get("rerank_base_url"):
+        lent_url = str(lent.get("base_url") or "")
+        if lent_url and lent_url.rstrip("/") != str(prov["base_url"]).rstrip("/"):
+            return None, ""
+    origin = "main" if main_model and _resolve_model_provider(main_model) == provider else "config"
+    return lent, origin
 
 
 def _everos_pick_model(
@@ -787,33 +834,37 @@ def _everos_pick_model(
     section: str = "llm",
     provider_name: Optional[str] = None,
     recommendation: Optional[str] = None,
-    preferred: Optional[str] = None,
 ) -> Any:
     """Pick a model id for an EverOS endpoint: fetch ``/models`` for a
     fuzzy-searchable list, else fall back to free text. Empty submit = back.
 
-    ``preferred`` pre-fills a model the user is already known to have access to
-    -- their main chat model. It wins over ``example`` because a recommended
-    model is only a recommendation if the user's key can reach it, and many keys
-    cannot; ``example`` then reads as the capability floor rather than the
-    default (see ``recommendation``).
+    The field starts on ``example`` -- the role's own recommended model --
+    matched against the fetched list so a provider-prefixed id is offered whole.
+    Reusing a provider does not carry that provider's model over: the roles want
+    different models, and the memory LLM is not the main chat model.
     """
     questionary = oc._require_questionary()
     from raven.cli._styles import RAVEN_STYLE
 
     oc.console.print(t("  [dim]⏳ Loading models…[/dim]"))
     models = _fetch_everos_models(base_url, api_key, section=section, provider_name=provider_name)
-    if preferred:
-        oc.console.print(
-            t(
-                "  [dim]Pre-filled with your main model [bold]{preferred}[/bold] -- press Enter to accept.[/dim]",
-                preferred=preferred,
-            )
-        )
     if recommendation:
         oc.console.print(f"  [dim]{t(recommendation)}[/dim]")
     if models:
-        default_model = preferred or _match_everos_default(example, models)
+        default_model = _match_everos_default(example, models)
+        # An empty field where a value is expected reads as a broken prompt, so
+        # say who left it empty and why. The recommendation printed just above
+        # is a capability floor, and this endpoint not carrying that exact id
+        # says nothing about whether it carries an equal.
+        if not default_model:
+            oc.console.print(
+                t(
+                    "  [dim]This endpoint does not list [bold]{example}[/bold] -- pick one of its own\n"
+                    "  at that level from the list below.[/dim]",
+                    example=example,
+                ),
+                highlight=False,
+            )
         question = questionary.autocomplete(
             t("Model ({a0} available — type to filter):", a0=len(models)),
             choices=models,
@@ -838,7 +889,7 @@ def _everos_pick_model(
         oc.console.print(t("  [dim]Couldn't list models from this endpoint — type the id manually.[/dim]"))
         chosen = questionary.text(
             t("Model id (e.g. {example}):", example=example),
-            default=preferred or "",
+            default="",
             placeholder=oc._back_placeholder(allow_back),
             style=RAVEN_STYLE,
             qmark=oc._QMARK,
@@ -871,34 +922,30 @@ def _everos_pick_creds_and_model(
 
     llm_section = _everos_section("llm")
 
-    # For the LLM role, default to the main chat model's provider.
-    # For other roles (embedding/rerank/multimodal), default to whichever
-    # provider the LLM step just configured — the user likely has the
-    # same API key and only needs to pick a different model.
+    # Which provider the cursor lands on. For the LLM role, the main chat
+    # model's. For the others, whichever provider the LLM step just configured —
+    # the same key usually serves both and only the model differs. Landing there
+    # is all this decides: every provider raven already holds a key for is
+    # reusable, so moving the cursor off the default costs nothing either.
     if section == "llm":
         default_provider = _resolve_model_provider(main_model or "")
-        reuse_source = "main"
     else:
         default_provider = _match_provider_by_url(llm_section.get("base_url"))
-        reuse_source = "llm"
 
     while True:  # source picker — a field-level back rewinds here
+        offered = [p for p in _EVEROS_PROVIDERS if section in p.get("supports", set())]
+        held = {p["name"]: _reusable_creds(section, p, main_model, llm_section) for p in offered}
         choices: list[Any] = []
         default_choice = None
-        for prov in _EVEROS_PROVIDERS:
-            if section not in prov.get("supports", set()):
-                continue
-            is_default = default_provider is not None and prov["name"] == default_provider
-            if is_default:
-                if reuse_source == "main":
-                    label = t("{label} (main model provider, reuse Key)", label=t(prov["label"]))
-                else:
-                    label = t("{label} (memory LLM provider, reuse Key)", label=t(prov["label"]))
-            else:
-                label = t(prov["label"])
+        for prov in offered:
+            # Tagged by what raven actually holds, not by which entry is
+            # highlighted: a default with no key on file still asks for one, and
+            # a label promising reuse there would be a lie.
+            _creds, origin = held[prov["name"]]
+            label = t(_KEY_REUSE_TAG[origin], label=t(prov["label"])) if origin else t(prov["label"])
             choice = questionary.Choice(label, value=("provider", prov))
             choices.append(choice)
-            if is_default:
+            if prov["name"] == default_provider:
                 default_choice = choice.value
         choices.append(
             questionary.Choice(
@@ -926,21 +973,16 @@ def _everos_pick_creds_and_model(
         chosen_provider: Optional[str] = None
         if kind == "provider":
             chosen_provider = src[1]["name"]
-            base_url = src[1]["base_url"]
-            prefilled_key: Optional[str] = None
-            if default_provider == src[1]["name"]:
-                if reuse_source == "main":
-                    prefilled_key = _resolve_reuse_llm_creds(main_model or "").get("api_key")
-                else:
-                    prefilled_key = llm_section.get("api_key")
-            if prefilled_key:
-                if reuse_source == "main":
-                    oc.console.print(t("  [dim]API key reused from main chat model.[/dim]"))
-                else:
-                    oc.console.print(t("  [dim]API key reused from memory LLM.[/dim]"))
-                api_key = prefilled_key
+            creds, origin = held[chosen_provider]
+            if creds:
+                # The lent address, not the curated one: a borrowed key is only
+                # valid against the endpoint it was issued for.
+                api_key = creds["api_key"]
+                base_url = creds.get("base_url") or src[1]["base_url"]
+                oc.console.print(t(_KEY_REUSE_NOTE[origin]))
             else:
-                api_key = oc._prompt_api_key(src[1]["name"], allow_back=True)
+                base_url = src[1]["base_url"]
+                api_key = oc._prompt_api_key(chosen_provider, allow_back=True)
                 if api_key is oc._BACK:
                     continue
         else:  # custom
@@ -991,7 +1033,6 @@ def _everos_pick_creds_and_model(
             section=section,
             provider_name=chosen_provider,
             recommendation=recommendation,
-            preferred=_preferred_memory_model(section, main_model, chosen_provider),
         )
         if model is oc._BACK:
             continue
