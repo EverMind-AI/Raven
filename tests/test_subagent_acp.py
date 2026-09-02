@@ -538,6 +538,31 @@ def test_acp_meta_reads_the_stored_snapshot_when_none_is_passed(tmp_path: Path, 
     assert third_party_agent_meta(cfg).stateful is True
 
 
+def test_a_refresh_makes_a_newly_resumable_agent_addressable(tmp_path: Path, monkeypatch) -> None:
+    """The read-back for a re-measurement: not "was the snapshot recorded" but
+    "will the manager now let a direct chat address it".
+
+    ``create_instance`` refuses a stateless agent through ``declared_stateful``,
+    which reads the row the table materialized -- so an agent measured stateless
+    once stays unaddressable until the table is re-derived, however many times it
+    is re-measured. This is the whole reason ``subagents.test`` takes the
+    agents-table door after an acp measurement.
+    """
+    path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: path)
+    cfg = stub_config("a")
+    SnapshotStore(path=path).record(_snapshot("a", cfg, can_resume=False))
+
+    mgr = SubagentManager(provider=_StubProvider(), workspace=tmp_path, max_concurrent=1, agents=[cfg])
+    assert mgr.declared_stateful("a") is False
+
+    SnapshotStore(path=path).record(_snapshot("a", cfg, can_resume=True))
+    assert mgr.declared_stateful("a") is False, "the table holds the measurement it was built with"
+
+    mgr.apply_agents([cfg])
+    assert mgr.declared_stateful("a") is True
+
+
 def test_acp_backend_statefulness_follows_the_snapshot() -> None:
     cfg = stub_config("a")
     assert build_third_party_backend(cfg).is_stateful is False
