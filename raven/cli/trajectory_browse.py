@@ -11,8 +11,20 @@ Control flow contracts:
 
 - Every ``.ask()`` goes through :func:`_ask`; a ``None`` answer (Ctrl+C/EOF)
   raises :class:`_CancelledError`, caught only at the top level for a clean exit.
-- Once an action runs — normally, refused, or failing controlled — the
-  browser rescans everything (``_REFRESH``): actions like report bundle
+- Every prompt gets an Escape binding injected after construction by merging a
+  fresh key-binding registry (text/confirm expose a read-only
+  ``_MergedKeyBindings``, so ``.add`` on the existing one is not an option).
+  Esc on a list screen returns ``_BACK`` and navigates one level up (the
+  session screen exits); Esc inside a running action goes through
+  :func:`_ask_action`, which raises :class:`_ActionCancelledError`, caught only at
+  the action boundary — the sentinel never reaches a conversion or the data
+  layer. A cancelled report keeps its pre-confirm side effects (bundle + pin),
+  matching the declined-report contract.
+- Prompts erase themselves once answered (``erase_when_done``); navigation is
+  kept legible as breadcrumb lines whose dynamic text is markup-escaped
+  (titles and previews are untrusted input).
+- Once an action runs — normally, refused, cancelled, or failing controlled —
+  the browser rescans everything (``_REFRESH``): actions like report bundle
   before confirming, so even an aborted one may have pinned the attempt.
 - Action errors are presented as fixed, id-free messages; the original
   exception goes to the debug log (data-layer messages embed ids).
@@ -54,6 +66,20 @@ _TITLE_LIMIT = 48
 _PREVIEW_LIMIT = 32
 _STALE_MESSAGE = "The action was rejected or the selected attempt is no longer available; the list was refreshed."
 
+_HELP_SESSION = (
+    "Sessions with recorded trajectories, most recent first.",
+    "↑↓ move · Enter open · Esc quit",
+)
+_HELP_ATTEMPT = (
+    "Attempts in the selected session, oldest first.",
+    "↑↓ move · Enter actions · Esc back",
+)
+_HELP_ACTION = (
+    "Run one action on the selected attempt.",
+    "↑↓ move · Enter run · Esc back",
+)
+_VERDICT_HINT = "↑↓ move · Enter record · Esc cancel"
+
 _QUESTIONARY_INSTALL_HINT = (
     "[red]The interactive browser needs the questionary package.[/red]"
     " Install it with [cyan]uv add questionary[/cyan], or use the subcommands"
@@ -63,6 +89,20 @@ _QUESTIONARY_INSTALL_HINT = (
 
 class _CancelledError(Exception):
     """A prompt was cancelled (Ctrl+C / EOF); unwinds to the browser top."""
+
+
+class _ActionCancelledError(Exception):
+    """An action-scoped prompt was dismissed with Esc; unwinds only to the
+    action boundary (:func:`_run_action` / :func:`_merge_action`)."""
+
+
+@dataclass(frozen=True)
+class _KeyHit:
+    """An injected extra key was pressed on a list screen; ``value`` carries
+    the pointed row's choice value (None when no list control is present)."""
+
+    key: str
+    value: Any
 
 
 def _require_questionary() -> Any:
@@ -80,6 +120,117 @@ def _ask(prompt: Any) -> Any:
     if value is None:
         raise _CancelledError()
     return value
+
+
+def _find_inquirer_control(app: Any) -> Any:
+    from questionary.prompts.common import InquirerControl
+
+    for control in app.layout.find_all_controls():
+        if isinstance(control, InquirerControl):
+            return control
+    return None
+
+
+def _restyle_pointed_row(control: Any) -> None:
+    """Restore row highlighting for formatted-text titles.
+
+    questionary highlights the pointed row only for plain-string titles; token
+    lists render verbatim. The appended fragment deliberately carries no
+    foreground color so a cell's own semantic color (e.g. a green check)
+    survives — ``class:highlighted`` would override it with the body color.
+    """
+    original = control.text
+
+    def _with_bold_pointed_row() -> list:
+        tokens = []
+        pointed = False
+        for token in original():
+            if token[0] == "[SetCursorPosition]":
+                pointed = True
+            elif pointed:
+                token = (f"{token[0]} bold noreverse", *token[1:])
+                if "\n" in token[1]:
+                    pointed = False
+            tokens.append(token)
+        return tokens
+
+    control.text = _with_bold_pointed_row
+
+
+def _inject_bindings(question: Any, extra_keys: tuple[str, ...] = ()) -> None:
+    """Wire Esc (and optional extra keys) into a questionary prompt.
+
+    Bindings go through a fresh registry merged over the existing one, never
+    ``.add`` on it: text/confirm prompts expose a read-only
+    ``_MergedKeyBindings``. A prompt without a real application (a test fake)
+    is left untouched.
+    """
+    app = getattr(question, "application", None)
+    if app is None:
+        return
+    from prompt_toolkit.key_binding import KeyBindings, merge_key_bindings
+
+    control = _find_inquirer_control(app)
+    if control is not None:
+        _restyle_pointed_row(control)
+
+    injected = KeyBindings()
+
+    @injected.add("escape", eager=True)
+    def _escape(event: Any) -> None:
+        event.app.exit(result=_BACK)
+
+    for key in extra_keys:
+
+        def _hit(event: Any, _key: str = key) -> None:
+            pointed = control.get_pointed_at() if control is not None else None
+            event.app.exit(result=_KeyHit(_key, getattr(pointed, "value", None)))
+
+        injected.add(key)(_hit)
+
+    app.key_bindings = merge_key_bindings([app.key_bindings, injected]) if app.key_bindings else injected
+    app.erase_when_done = True
+
+
+def _ask_action(prompt: Any) -> Any:
+    """Ask a prompt that belongs to a running action; Esc cancels the action."""
+    _inject_bindings(prompt)
+    value = _ask(prompt)
+    if value is _BACK:
+        raise _ActionCancelledError()
+    return value
+
+
+def _select_screen(
+    questionary: Any,
+    style: Any,
+    message: str,
+    help_lines: tuple[str, ...],
+    choices: list,
+    *,
+    extra_keys: tuple[str, ...] = (),
+    default: Any = None,
+) -> Any:
+    """One list screen: help separators under the title, Esc returning
+    ``_BACK``, extra keys returning a :class:`_KeyHit`."""
+    items: list[Any] = [questionary.Separator(line) for line in help_lines]
+    items.extend(choices)
+    # A single-space instruction suppresses questionary's default
+    # "(Use arrow keys)" hint, which would duplicate the help separator.
+    question = questionary.select(
+        message, choices=items, style=style, qmark=QMARK, pointer=POINTER, default=default, instruction=" "
+    )
+    _inject_bindings(question, extra_keys)
+    return _ask(question)
+
+
+def _crumb(label: str, text: str) -> None:
+    """Echo one erased screen as a breadcrumb. ``text`` is untrusted: it is
+    collapsed to one plain line here (newlines/control characters would break
+    the single-line record), then markup-escaped, with the auto-highlighter
+    disabled."""
+    line = _label_text(text, _TITLE_LIMIT) or "?"
+    console.print(f"[dim]{label} ❯[/dim] {escape(line)}", highlight=False)
 
 
 def _str(value: Any) -> str | None:
@@ -307,7 +458,7 @@ def _run_action(action: str, row: AttemptRow, workspace: Path, questionary: Any,
     concurrent race, not an exception) — those must not read as success."""
 
     def _confirm(message: str) -> bool:
-        return bool(_ask(questionary.confirm(message, style=style, qmark=QMARK)))
+        return bool(_ask_action(questionary.confirm(message, style=style, qmark=QMARK)))
 
     try:
         if action == "save":
@@ -333,17 +484,22 @@ def _run_action(action: str, row: AttemptRow, workspace: Path, questionary: Any,
             console.print(f"[green]✓[/green] Cassette written to [cyan]{escape(str(report.cassette_dir))}[/cyan]")
             console.print(f"  spans kept: {report.span_count}/{report.source_span_count}")
         elif action == "verdict":
-            status = _ask(
+            status = _ask_action(
                 questionary.select(
-                    "Verdict:", choices=list(VERDICT_STATUSES), style=style, qmark=QMARK, pointer=POINTER
+                    "Verdict:",
+                    choices=[questionary.Separator(_VERDICT_HINT), *VERDICT_STATUSES],
+                    style=style,
+                    qmark=QMARK,
+                    pointer=POINTER,
+                    instruction=" ",
                 )
             )
-            why = _ask(questionary.text("Why (optional):", style=style, qmark=QMARK))
-            notes = _ask(questionary.text("Notes (optional):", style=style, qmark=QMARK))
+            why = _ask_action(questionary.text("Why (optional):", style=style, qmark=QMARK))
+            notes = _ask_action(questionary.text("Notes (optional):", style=style, qmark=QMARK))
             record_verdict(row.key, status, source="user", why=why or None, notes=notes or None)
             console.print(f"[green]✓[/green] Recorded verdict [cyan]{escape(status)}[/cyan]")
         elif action == "pin":
-            reason = _ask(questionary.text("Reason (optional):", style=style, qmark=QMARK))
+            reason = _ask_action(questionary.text("Reason (optional):", style=style, qmark=QMARK))
             tstore.pin_attempt(row.key, reason=reason)
             console.print("[green]✓[/green] Pinned the selected attempt")
         elif action == "unpin":
@@ -362,6 +518,8 @@ def _run_action(action: str, row: AttemptRow, workspace: Path, questionary: Any,
                     console.print("The attempt is no longer merged; the list was refreshed.")
                 else:
                     console.print(f"[green]✓[/green] Split into {len(members)} member trace(s)")
+    except _ActionCancelledError:
+        pass
     except (ValueError, LookupError) as exc:
         _action_error(exc)
     except typer.Exit:
@@ -372,19 +530,21 @@ def _merge_action(session_row: SessionRow, questionary: Any, style: Any) -> None
     choices = [
         questionary.Choice(attempt_label(i, row), value=row.key) for i, row in enumerate(session_row.attempts, start=1)
     ]
-    picked = _ask(
-        questionary.checkbox(
-            "Select 2+ attempts to merge:",
-            choices=choices,
-            style=style,
-            qmark=QMARK,
-            pointer=POINTER,
-            validate=lambda picked: len(picked) >= 2 or "Select at least two attempts",
-        )
-    )
     try:
+        picked = _ask_action(
+            questionary.checkbox(
+                "Select 2+ attempts to merge:",
+                choices=choices,
+                style=style,
+                qmark=QMARK,
+                pointer=POINTER,
+                validate=lambda picked: len(picked) >= 2 or "Select at least two attempts",
+            )
+        )
         tstore.merge_attempts(list(picked))
         console.print(f"[green]✓[/green] Merged {len(picked)} attempts into one")
+    except _ActionCancelledError:
+        pass
     except (ValueError, LookupError) as exc:
         _action_error(exc)
     except typer.Exit:
@@ -395,32 +555,35 @@ def _attempt_screen(session_row: SessionRow, workspace: Path, questionary: Any, 
     """Pick an attempt and run one action. Returns _BACK or _REFRESH."""
     while True:
         choices = [
-            questionary.Choice(attempt_label(i, row), value=row) for i, row in enumerate(session_row.attempts, start=1)
+            questionary.Choice(attempt_label(i, row), value=(i, row))
+            for i, row in enumerate(session_row.attempts, start=1)
         ]
         if len(session_row.attempts) >= 2:
             choices.append(questionary.Choice("Merge attempts…", value=_MERGE))
-        choices.append(questionary.Choice("Back", value=_BACK))
-        picked = _ask(questionary.select("Attempt:", choices=choices, style=style, qmark=QMARK, pointer=POINTER))
+        picked = _select_screen(questionary, style, "Attempt:", _HELP_ATTEMPT, choices)
         if picked is _BACK:
             return _BACK
         if picked is _MERGE:
             _merge_action(session_row, questionary, style)
             return _REFRESH
+        index, row = picked
+        _crumb("Attempt", f"#{index}")
 
-        row = picked
         actions = [
-            questionary.Choice("Save (bundle)", value="save"),
-            questionary.Choice("Report (redact + tarball)", value="report"),
-            questionary.Choice("Minimize (cassette)", value="minimize"),
-            questionary.Choice("Verdict", value="verdict"),
-            questionary.Choice("Unpin" if row.pinned else "Pin", value="unpin" if row.pinned else "pin"),
+            ("Save (bundle)", "save"),
+            ("Report (redact + tarball)", "report"),
+            ("Minimize (cassette)", "minimize"),
+            ("Verdict", "verdict"),
+            ("Unpin", "unpin") if row.pinned else ("Pin", "pin"),
         ]
         if row.merged:
-            actions.append(questionary.Choice("Split", value="split"))
-        actions.append(questionary.Choice("Back", value=_BACK))
-        action = _ask(questionary.select("Action:", choices=actions, style=style, qmark=QMARK, pointer=POINTER))
+            actions.append(("Split", "split"))
+        action = _select_screen(
+            questionary, style, "Action:", _HELP_ACTION, [questionary.Choice(t, value=v) for t, v in actions]
+        )
         if action is _BACK:
             continue
+        _crumb("Action", {v: t for t, v in actions}[action])
         _run_action(action, row, workspace, questionary, style)
         return _REFRESH
 
@@ -443,14 +606,12 @@ def browse_trajectories(workspace: Path | None = None) -> None:
             if selected is None:
                 current_key = _UNSET
                 choices = [questionary.Choice(session_label(s), value=s) for s in sessions]
-                choices.append(questionary.Choice("Exit", value=_BACK))
-                picked = _ask(
-                    questionary.select("Session:", choices=choices, style=RAVEN_STYLE, qmark=QMARK, pointer=POINTER)
-                )
+                picked = _select_screen(questionary, RAVEN_STYLE, "Session:", _HELP_SESSION, choices)
                 if picked is _BACK:
                     return
                 selected = picked
                 current_key = selected.key
+                _crumb("Session", selected.title)
             outcome = _attempt_screen(selected, ws, questionary, RAVEN_STYLE)
             if outcome is _BACK:
                 current_key = _UNSET
