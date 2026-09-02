@@ -84,7 +84,11 @@ def test_an_honest_but_large_ceiling_does_not_eat_the_window(workspace, monkeypa
     budget = _loop(workspace, window=202_800, ceiling=131_000, monkeypatch=monkeypatch)._make_token_budget()
 
     assert budget.reserved_output == 131_000, "the model really can emit this much"
-    assert budget.available_history > 65_000
+    # 60_000 rather than 65_000: the system prompt embeds the workspace path,
+    # so the measured figure rides a few dozen tokens with tmp-path length.
+    # The bound guards history keeping most of the leftover window, not an
+    # exact split, so it stands clear of the boundary instead of on it.
+    assert budget.available_history > 60_000
 
 
 def test_a_ceiling_below_the_share_is_reserved_in_full(workspace, monkeypatch) -> None:
