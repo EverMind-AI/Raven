@@ -44,6 +44,8 @@ class _FakeQuestionary:
     Each prompt pops one scripted answer. An answer may be:
     - ``("pick", substr)``  — select the first choice whose title contains substr;
     - ``("pickall", [substr, ...])`` — checkbox: the values of all matching choices;
+    - ``("hit", key, substr)`` — an injected extra key fired on the matching
+      choice: returns ``_KeyHit(key, value)``;
     - ``_CANCEL``           — ``ask()`` returns None (Ctrl+C / EOF);
     - ``_BACK``             — the injected Esc binding fired (returned verbatim);
     - a zero-arg callable   — invoked at answer time (side effects), its return used;
@@ -90,6 +92,9 @@ class _FakeQuestionary:
             value = [
                 next(c.value for c in choices if hasattr(c, "value") and s in self._title_text(c)) for s in answer[1]
             ]
+        elif isinstance(answer, tuple) and answer and answer[0] == "hit":
+            picked = next(c.value for c in choices if hasattr(c, "value") and answer[2] in self._title_text(c))
+            value = tbrowse._KeyHit(answer[1], picked)
         else:
             value = answer
         return type("_Ask", (), {"ask": staticmethod(lambda: value)})()
@@ -105,6 +110,9 @@ class _FakeQuestionary:
 
     def text(self, message, **kw):
         return self._resolve("text", message, None, kw)
+
+    def press_any_key_to_continue(self, message=None, **kw):
+        return self._resolve("press", message, None, kw)
 
 
 @pytest.fixture
@@ -1228,6 +1236,257 @@ def test_below_floor_rows_render_clipped_and_selectable():
     raw = buf.getvalue()
     assert "VERDICT" in raw  # the visible region reached the stream
     assert "MERGED" not in raw  # the clipped tail was never emitted, so no wrap row exists
+
+
+# ── space preview ─────────────────────────────────────────────────────
+
+
+def _turn_span(trace_id, span_id, start, inp=None, out=None):
+    s = _span(trace_id, session_key="cli:a", span_id=span_id)
+    s["startTime"] = start
+    if inp is not None:
+        s["attributes"]["turn.input_preview"] = inp
+    if out is not None:
+        s["attributes"]["turn.output_preview"] = out
+    return s
+
+
+def test_turn_previews_sorted_and_table_preview_derived(state, workspace):
+    """Turn order and the table PREVIEW cell both come from the sorted
+    collection, never from log source order."""
+    spans = [
+        _turn_span("trace-1", "s3", "2026-08-20T10:02:00+00:00", inp="third in", out="third out"),
+        _turn_span("trace-1", "s1", "2026-08-20T10:00:00+00:00", inp="first in"),
+        _turn_span("trace-1", "s2", "2026-08-20T10:01:00+00:00", out="second out"),
+    ]
+    _write_log(state / "logs" / "audit-spans.log", spans)
+    (srow,) = tbrowse.scan_sessions(workspace)
+    (row,) = srow.attempts
+
+    assert [t.input for t in row.turn_previews] == ["first in", "", "third in"]
+    assert [t.output for t in row.turn_previews] == ["", "second out", "third out"]
+    assert row.preview == "first in"
+
+    _write_log(state / "logs" / "audit-spans.log", list(reversed(spans)))
+    (srow2,) = tbrowse.scan_sessions(workspace)
+    (row2,) = srow2.attempts
+    assert row2.turn_previews == row.turn_previews
+    assert row2.preview == "first in"
+
+
+def test_turn_previews_checkpoint_final_dedup(state, workspace):
+    checkpoint = _turn_span("trace-1", "root", "2026-08-20T10:00:00+00:00", inp="ask")
+    final = _turn_span("trace-1", "root", "2026-08-20T10:00:00+00:00", inp="ask", out="answer")
+    _write_log(state / "logs" / "audit-spans.log", [checkpoint, final])
+
+    (srow,) = tbrowse.scan_sessions(workspace)
+    (row,) = srow.attempts
+
+    (turn,) = row.turn_previews
+    assert turn.input == "ask" and turn.output == "answer"  # the final record won
+
+
+def test_turn_previews_missing_span_ids_stable(state, workspace):
+    """Same start, one record with a spanId and one without: no TypeError,
+    and the order does not follow the input order."""
+    start = "2026-08-20T10:00:00+00:00"
+    a = _turn_span("trace-1", "sX", start, inp="with id")
+    b = _turn_span("trace-1", "tmp", start, inp="without id")
+    del b["spanId"]
+
+    _write_log(state / "logs" / "audit-spans.log", [a, b])
+    (srow,) = tbrowse.scan_sessions(workspace)
+    (row,) = srow.attempts
+    assert len(row.turn_previews) == 2
+
+    _write_log(state / "logs" / "audit-spans.log", [b, a])
+    (srow2,) = tbrowse.scan_sessions(workspace)
+    (row2,) = srow2.attempts
+    assert row2.turn_previews == row.turn_previews
+
+
+def test_turn_previews_sanitize_types_and_length(state, workspace):
+    bad = _turn_span("trace-1", "s1", "2026-08-20T10:00:00+00:00")
+    bad["attributes"]["turn.input_preview"] = 123
+    long_turn = _turn_span("trace-1", "s2", "2026-08-20T10:01:00+00:00", inp="x" * 500, out="y\nz\x07w")
+    _write_log(state / "logs" / "audit-spans.log", [bad, long_turn])
+
+    (srow,) = tbrowse.scan_sessions(workspace)
+    (row,) = srow.attempts
+
+    t1, t2 = row.turn_previews
+    assert t1.input == ""
+    assert len(t2.input) == 400 and t2.input.endswith("…")
+    assert t2.output == "y z w"
+    assert len(row.preview) == 32 and row.preview.endswith("…")
+
+
+def test_preview_screen_placeholder_and_escape(monkeypatch):
+    from io import StringIO
+
+    from rich.console import Console
+
+    buf = StringIO()
+    monkeypatch.setattr(tbrowse, "console", Console(file=buf, force_terminal=True, color_system="truecolor", width=500))
+
+    tbrowse._preview_screen(1, _mk_attempt())
+    tbrowse._preview_screen(
+        2, _mk_attempt(turn_previews=(tbrowse._TurnPreview("s", "i", "t", "x[red]y", "pre[/dim]view"),))
+    )
+    tbrowse._preview_screen(3, _mk_attempt(turn_previews=(tbrowse._TurnPreview("s", "i", "t", "", ""),)))
+
+    out = buf.getvalue()
+    assert "(no turns recorded)" in out
+    assert "x[red]y" in out and "pre[/dim]view" in out
+    assert "(no preview recorded)" in out  # turns exist, but nothing is displayable
+    assert "\x1b[31" not in out
+
+
+@pytest.mark.parametrize(
+    "key, done",
+    [("x", True), ("\x1b", True), ("\x1b[A", True), ("\x7f", True), ("\x03", False)],
+    ids=["any-key", "esc", "up", "backspace", "ctrl-c"],
+)
+def test_preview_wait_key_paths(key, done):
+    """The waiter maps any key/Esc to the non-None _DONE; only Ctrl+C keeps
+    the browser-wide cancel result (None)."""
+    questionary = pytest.importorskip("questionary")
+    create_pipe_input, DummyOutput = _pipe_io()
+
+    with create_pipe_input() as pipe:
+        q = tbrowse._wait_question(questionary, None, input=pipe, output=DummyOutput())
+        pipe.send_text(key)
+        result = q.application.run()
+
+    assert (result is tbrowse._DONE) if done else (result is None)
+
+
+def test_preview_wait_passes_cpr_response_through():
+    """A terminal's CPR reply is an internal event, not a keypress: it must
+    reach the renderer (default semantics) and never finish the waiter."""
+    import threading
+
+    questionary = pytest.importorskip("questionary")
+    create_pipe_input, DummyOutput = _pipe_io()
+
+    with create_pipe_input() as pipe:
+        q = tbrowse._wait_question(questionary, None, input=pipe, output=DummyOutput())
+        reported = []
+        q.application.renderer.report_absolute_cursor_row = reported.append
+        result = []
+        thread = threading.Thread(target=lambda: result.append(q.application.run()), daemon=True)
+        thread.start()
+        pipe.send_text("\x1b[35;1R")
+        thread.join(timeout=1)
+        assert thread.is_alive()  # the CPR reply alone must not finish the waiter
+        pipe.send_text("x")
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+
+    assert result == [tbrowse._DONE]
+    assert reported == [35]
+
+
+def test_space_key_binding_returns_pointed_attempt():
+    """The real Space keypress must reach the injected binding (questionary
+    has its own catch-all bindings a fake-returned _KeyHit would bypass)."""
+    questionary = pytest.importorskip("questionary")
+    create_pipe_input, DummyOutput = _pipe_io()
+
+    with create_pipe_input() as pipe:
+        q = questionary.select(
+            "m",
+            choices=[questionary.Choice("first", value=(1, "row")), questionary.Choice("second", value=(2, "row"))],
+            input=pipe,
+            output=DummyOutput(),
+        )
+        tbrowse._inject_bindings(q, extra_keys=(" ",))
+        pipe.send_text(" ")
+        hit = q.application.run()
+
+    assert isinstance(hit, tbrowse._KeyHit)
+    assert hit.key == " " and hit.value == (1, "row")
+
+
+def test_space_previews_and_keeps_cursor(state, workspace, monkeypatch, capsys):
+    _two_turn_log(state)
+    assert "Space preview" in tbrowse._HELP_ATTEMPT[1]
+    scans = []
+    real_scan = tbrowse.scan_sessions
+    monkeypatch.setattr(tbrowse, "scan_sessions", lambda ws: scans.append(1) or real_scan(ws))
+
+    fake = _browse(
+        monkeypatch,
+        [("pick", "session"), ("hit", " ", "#1"), tbrowse._DONE, _BACK, _BACK],
+        workspace,
+    )
+
+    out = capsys.readouterr().out
+    assert "Preview ❯ #1" in out
+    assert "fix the bug" in out
+    assert [k for k, _m, _t in fake.prompts] == ["select", "select", "press", "select", "select"]
+    attempt_calls = [kw for kind, m, kw in fake.calls if kind == "select" and m == "Attempt:"]
+    assert attempt_calls[0].get("default") is None
+    kept = attempt_calls[1].get("default")
+    assert kept is not None and kept[0] == 1
+    assert len(scans) == 2  # the preview itself never rescans
+
+
+def test_non_space_keyhit_on_attempt_row_is_noop(state, workspace, monkeypatch, capsys):
+    """Dispatch is by key, not by value shape: a future extra key (step 4's
+    'm') pointing at an attempt tuple must not fall into the preview path."""
+    _two_turn_log(state)
+
+    fake = _browse(
+        monkeypatch,
+        [("pick", "session"), ("hit", "m", "#1"), _BACK, _BACK],
+        workspace,
+    )
+
+    out = capsys.readouterr().out
+    assert "Preview ❯" not in out
+    assert "press" not in [k for k, _m, _t in fake.prompts]
+    attempt_calls = [kw for kind, m, kw in fake.calls if kind == "select" and m == "Attempt:"]
+    kept = attempt_calls[1]["default"]
+    assert kept is not None and kept[0] == 1  # cursor kept on the row
+    assert fake.answers == []
+
+
+def test_space_on_merge_entry_is_noop(state, workspace, monkeypatch, capsys):
+    _two_turn_log(state)
+
+    fake = _browse(
+        monkeypatch,
+        [("pick", "session"), ("hit", " ", "Merge attempts"), _BACK, _BACK],
+        workspace,
+    )
+
+    out = capsys.readouterr().out
+    assert "Preview ❯" not in out
+    assert "press" not in [k for k, _m, _t in fake.prompts]
+    assert [m for k, m, _t in fake.prompts if k == "select"] == ["Session:", "Attempt:", "Attempt:", "Session:"]
+    attempt_calls = [kw for kind, m, kw in fake.calls if kind == "select" and m == "Attempt:"]
+    assert attempt_calls[1]["default"] is tbrowse._MERGE
+    assert fake.answers == []
+
+
+def test_space_on_merge_entry_then_merge_still_works(state, workspace, monkeypatch):
+    _two_turn_log(state)
+
+    _browse(
+        monkeypatch,
+        [
+            ("pick", "session"),
+            ("hit", " ", "Merge attempts"),
+            ("pick", "Merge attempts"),
+            ("pickall", ["#1", "#2"]),
+            _BACK,
+            _BACK,
+        ],
+        workspace,
+    )
+
+    assert len(tstore.definitions(state)) == 1
 
 
 # ── real questionary key bindings ─────────────────────────────────────

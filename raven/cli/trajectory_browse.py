@@ -29,6 +29,12 @@ Control flow contracts:
   overlong lines are clipped at the terminal edge — prompt_toolkit does not
   wrap option rows). Every dynamic cell is collapsed to one plain line before
   any width math, and fixed column widths always fit their headers.
+- Space on an attempt row prints that attempt's per-turn previews, collected
+  in the same snapshot scan and sorted by a fully-stringified key (ordering
+  never follows log source order; the table PREVIEW cell derives from the
+  same sorted collection). The follow-up waiter maps any key or Esc to a
+  non-None sentinel, so only Ctrl+C keeps the browser-wide cancel meaning;
+  on any non-attempt row Space is a cursor-keeping no-op.
 - Once an action runs — normally, refused, cancelled, or failing controlled —
   the browser rescans everything (``_REFRESH``): actions like report bundle
   before confirming, so even an aborted one may have pinned the attempt.
@@ -68,9 +74,11 @@ _BACK = object()
 _MERGE = object()
 _REFRESH = object()
 _UNSET = object()
+_DONE = object()
 
 _TITLE_LIMIT = 48
 _PREVIEW_LIMIT = 32
+_TURN_TEXT_LIMIT = 400
 _TITLE_MIN = 12
 _PREVIEW_MIN = 8
 _COL_GAP = "  "
@@ -84,7 +92,7 @@ _HELP_SESSION = (
 )
 _HELP_ATTEMPT = (
     "Attempts in the selected session, oldest first.",
-    "↑↓ move · Enter actions · Esc back",
+    "↑↓ move · Enter actions · Space preview · Esc back",
 )
 _HELP_ACTION = (
     "Run one action on the selected attempt.",
@@ -238,6 +246,72 @@ def _select_screen(
     )
     _inject_bindings(question, extra_keys)
     return _ask(question)
+
+
+def _preview_screen(index: int, row: AttemptRow) -> None:
+    """Print one attempt's conversation previews (input/output per turn).
+
+    All text is untrusted log content: collapsed at scan time, markup-escaped
+    here, auto-highlighter off (the same boundary as breadcrumbs)."""
+    console.print(f"[dim]Preview ❯[/dim] #{index}", highlight=False)
+    if not row.turn_previews:
+        console.print("[dim](no turns recorded)[/dim]", highlight=False)
+        return
+    # Old or damaged logs may yield turns whose previews are all empty; the
+    # emptiness check must look at displayable content, not tuple length.
+    if not any(t.input or t.output for t in row.turn_previews):
+        console.print("[dim](no preview recorded)[/dim]", highlight=False)
+        return
+    for turn in row.turn_previews:
+        if turn.input:
+            console.print(f"[dim]❯[/dim] {escape(turn.input)}", highlight=False)
+        if turn.output:
+            console.print(f"[dim]←[/dim] {escape(turn.output)}", highlight=False)
+
+
+def _wait_question(questionary: Any, style: Any, **kwargs: Any) -> Any:
+    """Build the post-preview waiter.
+
+    ``press_any_key_to_continue`` maps every key — Ctrl+C included — to a
+    None result, which :func:`_ask` defines as the browser-wide cancel. Its
+    bindings are therefore replaced outright: any key or Esc exits with the
+    non-None ``_DONE``, and only Ctrl+C keeps the cancel meaning."""
+    question = questionary.press_any_key_to_continue("Press any key to go back…", style=style, **kwargs)
+    app = getattr(question, "application", None)
+    if app is None:
+        return question
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.keys import Keys
+
+    kb = KeyBindings()
+
+    # Everything must be eager: the key processor still merges the default
+    # registry, whose exact non-eager bindings (Up, Backspace, ...) would
+    # otherwise win over a lazy wildcard and leave the waiter stuck.
+    @kb.add("escape", eager=True)
+    @kb.add(Keys.Any, eager=True)
+    def _done(event: Any) -> None:
+        event.app.exit(result=_DONE)
+
+    @kb.add("c-c", eager=True)
+    def _cancel(event: Any) -> None:
+        event.app.exit(result=None)
+
+    # The eager wildcard would also swallow the terminal's CPR reply (an
+    # internal event, not a keypress) and finish the waiter on its own;
+    # mirror prompt_toolkit's default CPR handling instead.
+    @kb.add(Keys.CPRResponse, eager=True)
+    def _cpr(event: Any) -> None:
+        row, _col = map(int, event.data[2:-1].split(";"))
+        event.app.renderer.report_absolute_cursor_row(row)
+
+    app.key_bindings = kb
+    app.erase_when_done = True
+    return question
+
+
+def _preview_wait(questionary: Any, style: Any) -> None:
+    _ask(_wait_question(questionary, style))
 
 
 def _crumb(label: str, text: str) -> None:
@@ -416,6 +490,19 @@ def _attempt_table(rows: list[AttemptRow], width: int) -> tuple[str, list[list[t
     return _header_line(layout), out
 
 
+@dataclass(frozen=True, order=True)
+class _TurnPreview:
+    """One turn's preview texts plus its sort identity. Field order is the
+    sort key: every component is an already-collapsed string (missing -> ""),
+    so ordering can never raise on None and never follows log source order."""
+
+    start: str
+    span_id: str
+    trace_id: str
+    input: str
+    output: str
+
+
 @dataclass
 class AttemptRow:
     key: str
@@ -429,6 +516,7 @@ class AttemptRow:
     pinned: bool
     preview: str | None
     merged: bool
+    turn_previews: tuple[_TurnPreview, ...] = ()
 
 
 @dataclass
@@ -516,7 +604,7 @@ def scan_sessions(workspace: Path, state_dir: Path | None = None) -> list[Sessio
                 "end": None,
                 "spans": 0,
                 "turns": 0,
-                "preview": None,
+                "turn_previews": [],
             },
         )
         g["spans"] += 1
@@ -533,8 +621,15 @@ def scan_sessions(workspace: Path, state_dir: Path | None = None) -> list[Sessio
             g["end"] = end
         if span.get("name") == "session.turn":
             g["turns"] += 1
-            if g["preview"] is None:
-                g["preview"] = _label_text(attrs.get("turn.input_preview"), _PREVIEW_LIMIT)
+            g["turn_previews"].append(
+                _TurnPreview(
+                    start=_label_text(span.get("startTime"), _TURN_TEXT_LIMIT) or "",
+                    span_id=_label_text(span.get("spanId"), _TURN_TEXT_LIMIT) or "",
+                    trace_id=_label_text(span.get("traceId"), _TURN_TEXT_LIMIT) or "",
+                    input=_label_text(attrs.get("turn.input_preview"), _TURN_TEXT_LIMIT) or "",
+                    output=_label_text(attrs.get("turn.output_preview"), _TURN_TEXT_LIMIT) or "",
+                )
+            )
 
     latest: dict[str, tuple[int, str]] = {}
     for idx, v in enumerate(verdict_rows):
@@ -557,6 +652,10 @@ def scan_sessions(workspace: Path, state_dir: Path | None = None) -> list[Sessio
     by_session: dict[str | None, list[AttemptRow]] = {}
     channel_by_session: dict[str | None, str] = {}
     for aid, g in groups.items():
+        # The table PREVIEW cell derives from the same sorted collection the
+        # preview page shows — a first-seen pick would follow log source order.
+        turns = tuple(sorted(g["turn_previews"]))
+        first_input = next((t.input for t in turns if t.input), None)
         row = AttemptRow(
             key=aid,
             traces=tuple(g["traces"]),
@@ -567,8 +666,9 @@ def scan_sessions(workspace: Path, state_dir: Path | None = None) -> list[Sessio
             turns=g["turns"],
             verdict=_verdict_of(aid),
             pinned=_pinned(aid, g["traces"]),
-            preview=g["preview"],
+            preview=_label_text(first_input, _PREVIEW_LIMIT),
             merged=aid in defs,
+            turn_previews=turns,
         )
         by_session.setdefault(row.session_key, []).append(row)
         if g["channel"] and row.session_key not in channel_by_session:
@@ -711,6 +811,7 @@ def _merge_action(session_row: SessionRow, questionary: Any, style: Any) -> None
 
 def _attempt_screen(session_row: SessionRow, workspace: Path, questionary: Any, style: Any) -> object:
     """Pick an attempt and run one action. Returns _BACK or _REFRESH."""
+    default: Any = None
     while True:
         width = shutil.get_terminal_size((80, 24)).columns
         header, row_tokens = _attempt_table(session_row.attempts, width)
@@ -720,9 +821,23 @@ def _attempt_screen(session_row: SessionRow, workspace: Path, questionary: Any, 
         ]
         if len(session_row.attempts) >= 2:
             choices.append(questionary.Choice("Merge attempts…", value=_MERGE))
-        picked = _select_screen(questionary, style, "Attempt:", _HELP_ATTEMPT, choices, header=header)
+        picked = _select_screen(
+            questionary, style, "Attempt:", _HELP_ATTEMPT, choices, header=header, extra_keys=(" ",), default=default
+        )
+        default = None
         if picked is _BACK:
             return _BACK
+        if isinstance(picked, _KeyHit):
+            # Dispatch by key, then by row: only Space on an attempt row
+            # previews. Any other injected key, and any non-attempt row (the
+            # merge entry, no pointed value), is a cursor-keeping no-op —
+            # the value must never be unpacked blindly.
+            default = picked.value
+            if picked.key == " " and isinstance(picked.value, tuple):
+                index, row = picked.value
+                _preview_screen(index, row)
+                _preview_wait(questionary, style)
+            continue
         if picked is _MERGE:
             _merge_action(session_row, questionary, style)
             return _REFRESH
