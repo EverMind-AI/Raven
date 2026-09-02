@@ -80,13 +80,22 @@ export function artifactsOf(lane: Lane, turn: number): ArtifactRow[] {
 }
 
 /* Not held here: the desk's shelf lists the same rows for the whole session, so
-   the registry they live in is shared ground (workspace/deliveries.ts). The lane
-   is not a parameter of it -- only the main lane ever delivered. */
-export function recordDelivery(_lane: Lane, turn: number, metadata: unknown): void {
-  deliveries.record(turn, metadata)
+   the registry they live in is shared ground (workspace/deliveries.ts).
+
+   The lane IS a parameter of it, though the comment here used to say otherwise.
+   `history()` records a delivery off any lane it replays, and `agentPaintLane`
+   replays a delegated run through it -- so a sub-agent's deliveries land in the
+   same registry as the conversation's, under turn numbers that both count from
+   one. The scope is what keeps them apart. */
+export function recordDelivery(lane: Lane, turn: number, metadata: unknown, callId?: string | null): void {
+  deliveries.record(scopeOf(lane), turn, metadata, String(callId || ''))
 }
 
-export const deliveriesOf = (_lane: Lane, turn: number): DeliveryRow[] => deliveries.ofTurn(turn)
+const scopeOf = (lane: Lane): string =>
+  (lane.main ? deliveries.SESSION : `agent:${lane.agentKey || '?'}`)
+
+export const deliveriesOf = (lane: Lane, turn: number): DeliveryRow[] =>
+  deliveries.ofTurn(scopeOf(lane), turn)
 
 /* Straight to the renderer rather than out through the shell: prose.ts is a
    pure function in this same bundle, and a bridge verb would round-trip
@@ -305,7 +314,7 @@ export function newLane(key: string, main: boolean): Lane {
   const lane: Lane = {
     key, main, epoch: 0, listV: 0, scrollReq: 0, segs: [], listeners: new Set(),
     pend: '', pendStep: null, flush: null,
-    agentKey: null, agentDrawn: 0, agentHold: 0, running: false, empty: '',
+    agentKey: null, agentDrawn: 0, agentHold: 0, agentTurn: 0, running: false, empty: '',
   }
   lanes.add(lane)
   return lane
@@ -1508,7 +1517,21 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
      socket was down. */
   if (lane.main) spawnRoster = null
   const src = source()
-  deliveries.reset()
+  /* This conversation's own delivery rows go: they are about to be replayed, or
+     it is a different conversation now. Its scope, and only its scope.
+
+     `lane.main` again, and load-bearing for the same reason as the roster above.
+     `agentPaintLane` replays through here on a lane of its own, four times per
+     poll, to draw a delegated run -- and clearing the whole registry on those
+     emptied the deliveries of the conversation underneath. Nothing brought them
+     back either: `loadDeliveries` only runs when a conversation is opened. So
+     the turn's card and the desk's shelf, which read the same registry, both
+     went blank the moment a reader opened a sub-agent panel.
+
+     A delegated stream's own rows are not cleared here. They end where the
+     conversation does -- `resetView` calls `wsReset`, and the workspace store's
+     `resetShared` restores an empty registry. */
+  if (lane.main) deliveries.dropScope(deliveries.SESSION)
   let toolRun: StepHandle | null = null
   const sealTools = (): void => { if (toolRun) { toolRun.seal(); toolRun = null } }
   const calls = callIndex(messages)
@@ -1559,8 +1582,13 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
      readers of one numbering rather than a number passed between them, because
      the panel's replay and this one are separate entry points on the same
      payload -- but that makes the rule itself the contract, so it is stated
-     here and there in the same words. */
-  let turnNo = 0
+     here and there in the same words.
+
+     A delegated lane resumes its own count rather than starting over: it is
+     painted a slice at a time, so counting from zero over each slice filed every
+     poll's first turn under the same key as the last poll's. The conversation's
+     lane is handed its whole list and genuinely starts at zero. */
+  let turnNo = lane.main ? 0 : lane.agentTurn || 0
   /* The fold and the answer the turn was holding. */
   const closeTurn = (endAt: number): void => {
     foldClose(endAt)
@@ -1681,7 +1709,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
       return
     }
     if (m.role === 'tool') {
-      recordDelivery(lane, turnNo, m.metadata)
+      recordDelivery(lane, turnNo, m.metadata, m.tool_call_id)
       if (!toolRun) toolRun = newStep(lane)
       const hit = calls.get(String(m.tool_call_id || '')) || { name: '', args: null }
       const parts = callParts(hit.name || m.name || 'tool')
@@ -1699,6 +1727,8 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
   /* The last turn has no following question to close it. */
   closeTurn(0)
   closeProducts()
+  /* Where the next slice of this stream picks the count up. */
+  if (!lane.main) lane.agentTurn = turnNo
 }
 
 /* The composer bakes an "[attachments]" note plus "- path" bullets into the
@@ -1773,6 +1803,7 @@ export function agentPaintLane(lane: Lane, r: AgentCtxLike | null,
     lane.agentKey = key
     lane.agentDrawn = 0
     lane.agentHold = 0
+    lane.agentTurn = 0
     lane.epoch += 1
   }
   /* An answer still being written is redrawn rather than appended: it is the
@@ -1851,8 +1882,8 @@ export function branchOf(lane: Lane): ((text: string) => void) | null {
   try { return source().branch || null } catch { return null }
 }
 
-export function openDagNode(runId: string, nodeId: string): void {
-  try { source().openDagNode?.(runId, nodeId) } catch { /* no opener wired */ }
+export function openDagNode(runId: string, nodeId: string, summary?: string | null): void {
+  try { source().openDagNode?.(runId, nodeId, summary) } catch { /* no opener wired */ }
 }
 
 export function openSpawn(agent: string, label: string): void {
@@ -1863,6 +1894,13 @@ export function openSpawn(agent: string, label: string): void {
 
 /* Test seam. */
 export function _resetForTests(): void {
+  /* The delivery registry too. It was never cleared here: the unconditional
+     `deliveries.reset()` at the top of `history()` happened to wipe the previous
+     case's rows, so every test that painted a transcript started clean by
+     accident. Scoping that reset to the conversation took the accident away and
+     the leak showed up as a count that was one too high -- in a case that passes
+     on its own and fails in the file. Cleared deliberately now. */
+  deliveries.reset()
   lanes.clear()
   dagLive.clear()
   dagByCall.clear()

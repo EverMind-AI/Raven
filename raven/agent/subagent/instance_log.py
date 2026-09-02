@@ -68,15 +68,17 @@ def _header(*, session_key: str, agent: str, handle: str, kind: str, title: str 
     rest of it: an instance is reached through several, which is the reason this
     file exists.
 
-    ``title`` is what the dispatch that opened this instance said it was for --
-    a node's ``node_summary``, a spawn's ``task_summary``. It belongs on the
+    ``title`` is what this instance is for -- a node's ``node_summary``, a
+    spawn's ``task_summary``, or, for an instance the reader started themselves
+    and so has no dispatch behind it, the first line of the message that opened
+    it, by the rule a conversation with no title is named by. It belongs on the
     header rather than on the turn because it describes the instance, and it
     lives here rather than in the instance registry because this file is already
     addressed by ``(agent, handle)``: a reader that has a registry row has the
     key to this file, while the registry would have to carry a copy that every
-    status write could drop. Omitted when the lane that opened the file has no
-    dispatch behind it (a direct chat, a hand-made instance) -- the reader falls
-    back to the handle rather than showing an empty line.
+    status write could drop. Omitted only when there was nothing to name it
+    from -- the reader then falls back to the handle rather than showing an
+    empty line.
     """
     now = datetime.now().isoformat()
     meta: dict[str, Any] = {
@@ -97,9 +99,13 @@ def _header(*, session_key: str, agent: str, handle: str, kind: str, title: str 
 
 
 def _append(path: Path, records: list[dict[str, Any]], *, header: dict[str, Any]) -> None:
-    """Append ``records``, writing ``header`` first if the file is new."""
-    if not records:
-        return
+    """Append ``records``, writing ``header`` first if the file is new.
+
+    Called with no records to write the header alone, which is how an instance
+    gets a name before it has said anything. On a file that already exists that
+    call is a no-op: the header is written once, by whichever lane opened the
+    instance.
+    """
     lines = [json.dumps(r, ensure_ascii=False, default=str) + "\n" for r in records]
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -108,6 +114,8 @@ def _append(path: Path, records: list[dict[str, Any]], *, header: dict[str, Any]
         # convention as atomic_io's helpers.
         with file_lock(path.parent / ".lock" / (path.name + ".lock")):
             exists = path.exists()
+            if exists and not lines:
+                return
             with path.open("a", encoding="utf-8") as handle:
                 if not exists:
                     handle.write(json.dumps(header, ensure_ascii=False) + "\n")
@@ -143,6 +151,37 @@ def build_turn(
     if error is not None:
         turn.append({"role": "assistant", "content": f"[failed] {error}", "timestamp": datetime.now().isoformat()})
     return turn
+
+
+def open_instance_log(
+    session_dir: Path | None,
+    *,
+    agent: str,
+    handle: str,
+    session_key: str,
+    kind: str = "",
+    title: str = "",
+) -> None:
+    """Name this instance now, before it has said anything.
+
+    The header used to be written by the first ``append_turn``, and that lands
+    when the dispatch *finishes*. Until then ``instance_title`` read a file that
+    did not exist and answered ``""``, so every surface that heads a panel by
+    what the instance was dispatched for fell back to the handle -- an id -- for
+    exactly as long as the run was still going, which is when a reader is
+    watching it.
+
+    A no-op once the file exists. The first lane to open an instance names it;
+    a later dispatch of the same handle joins that conversation rather than
+    renaming it, which is the rule ``append_turn`` already followed.
+
+    Typed loosely and failing silently for the reason the rest of this module
+    is: an audit trail must never take down the run it describes.
+    """
+    if session_dir is None or not agent or not handle:
+        return
+    header = _header(session_key=session_key, agent=agent, handle=handle, kind=kind, title=title)
+    _append(transcript_path(session_dir, agent, handle), [], header=header)
 
 
 def append_turn(
