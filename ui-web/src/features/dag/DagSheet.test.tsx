@@ -467,4 +467,58 @@ describe('the two live reports the sheet takes', () => {
     expect(clocks()[1]).toBe('')
     expect(run('a')?.done).toBe(true)
   })
+
+  it('closes a node the closing manifest did not name', () => {
+    /* A run that ends without a manifest -- collapsed, or stopped -- carries no
+       `files`, and `settle` writes a status only for the nodes one names. The
+       node the run last reported as running therefore stayed running under a
+       graph that says done, and its duration went on counting. `raven/rpc/spine.py`
+       states the obligation and `ui-tui/src/domain/dagRun.ts` honours it; this
+       side did not. Only a running node moves: pending and terminal ones the
+       manifest omits are left exactly as they were. */
+    act(() => { start('a', graph('r1')) })
+    act(() => {
+      advance('a', { run_id: 'r1', node: 'one', status: 'running', started_at: 1_000 })
+    })
+
+    act(() => {
+      settle('a', { run_id: 'r1', dir: '', summary: { total: 2, completed: 0 }, files: [] })
+    })
+
+    const d = run('a')!
+    expect(d.nodes.get('one')!.status).toBe('interrupted')
+    expect(d.nodes.get('two')!.status).toBe('pending')
+    expect(clocks()[0]).toBe('')
+  })
+
+  it('leaves a finished run open, because the fold belongs to the reader', () => {
+    /* It used to collapse itself the moment the run ended -- which is the moment
+       its result is worth reading, and it collapsed a sheet the reader had
+       opened in order to watch. */
+    act(() => { start('a', graph('r1')) })
+
+    act(() => {
+      settle('a', {
+        run_id: 'r1',
+        dir: '/w/.ravenx_dag/r1',
+        summary: { total: 1, completed: 1 },
+        files: [{ node: 'one', status: 'completed' }],
+      })
+    })
+
+    expect(run('a')?.done).toBe(true)
+    expect(run('a')?.folded).toBe(false)
+  })
+
+  it('keeps a fold the reader took themselves', () => {
+    act(() => { start('a', graph('r1')) })
+    const d = run('a')!
+    d.folded = true
+
+    act(() => {
+      settle('a', { run_id: 'r1', dir: '', summary: { total: 1, completed: 1 }, files: [] })
+    })
+
+    expect(run('a')?.folded).toBe(true)
+  })
 })

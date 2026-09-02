@@ -148,7 +148,11 @@ export function advance(key: string, p: NodeWire): void {
   store.touch()
 }
 
-/* The run's last word: each node's final status, the tally, and the fold.
+/* The run's last word: each node's final status, the tally, and `done`.
+ *
+ * Not the fold. That belongs to the reader, and a run finishing is news about
+ * the run rather than an instruction about the sheet -- see the note further
+ * down where the fold used to be written.
  *
  * The status and nothing else. This used to stamp `Date.now()` on any node whose
  * own end nobody had reported, which measured that node from its own start to
@@ -161,14 +165,35 @@ export function settle(key: string, p: CompletionWire): void {
   const d = store.run(key)
   if (!d || d.run_id !== String(p.run_id)) return
   const files = Array.isArray(p.files) ? p.files : []
+  const named = new Set<string>()
   files.forEach((f) => {
     const n = f && typeof f === 'object' ? d.nodes.get(String((f as NodeWire).node)) : undefined
-    if (n) n.status = text((f as NodeWire).status) || n.status
+    if (!n) return
+    named.add(n.id)
+    n.status = text((f as NodeWire).status) || n.status
+  })
+  /* A node the closing manifest did not name, that the run last reported as
+     running, cannot still be running: the run has closed. A run that ends
+     without a manifest -- collapsed, or stopped -- carries no `files` at all, and
+     `raven/rpc/spine.py` says the coercion that turns that into an empty list is
+     load-bearing rather than defensive, precisely so a consumer can close the
+     graph rather than crash. `ui-tui/src/domain/dagRun.ts` reads it that way and
+     this side did not, so the last reported node stayed running under a graph
+     that says done and its duration went on counting.
+     Only a running node moves. Pending and terminal nodes the manifest omits are
+     left exactly as they were -- a node that never started did not get
+     interrupted. */
+  d.nodes.forEach((n) => {
+    if (!named.has(n.id) && n.status === 'running') n.status = 'interrupted'
   })
   d.summary = (p.summary || null) as DagSummary | null
   d.dir = text(p.dir) || null
   d.done = true
-  d.folded = true
+  /* The fold is the reader's, and finishing is not a reason to take it. This
+     used to collapse itself the moment the run ended, which is the moment its
+     result is worth reading -- and it collapsed a sheet the reader had just
+     opened to watch, so the graph they were following disappeared at the end.
+     A finished sheet stays as they left it and closes when they close it. */
   store.touch()
 }
 
