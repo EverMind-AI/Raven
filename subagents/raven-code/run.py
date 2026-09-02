@@ -29,6 +29,7 @@ running this by hand.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -114,6 +115,146 @@ def state_root() -> Path:
         override = Path(raw).expanduser()
         return override if override.is_absolute() else host_agent_home() / override
     return host_agent_home() / "subagent_sessions" / "raven-code"
+
+
+def acp_home() -> Path:
+    """Return the ACP engine's own Agent home -- never inside the host's.
+
+    The host hands a session's working directory to whatever it dispatches to,
+    and on a surface with no checkout of its own -- a web page -- that
+    directory is the host's Agent home. A raven engine refuses to work in a
+    directory that CONTAINS its own home, because the per-turn checkpoint runs
+    `add -A` over the working directory and would commit its config and its
+    provider tokens into a shadow repository.
+
+    Homing this engine under the host's Agent home therefore made every
+    dispatch to it fail before it started -- `cwd is not usable: working
+    directory must not contain the agent home directory` -- while `Connect`
+    still passed, because capability probing opens its session on a temporary
+    directory instead. So the engine is homed under the raven data directory,
+    which is never handed out as a working directory.
+
+    Checked against the CONFIGURED host Agent home, not against the default one.
+    `host_agent_home()` honours `agents.defaults.workspace`, so an operator who
+    points it at `$RAVEN_HOME` -- or at any ancestor of it -- puts the raven data
+    directory back inside the very tree being handed over, and the refusal
+    returns. When the default lands inside it, the engine is homed beside the
+    host's Agent home instead, which cannot be inside it whatever it is set to.
+
+    Being outside the host Agent home is not on its own enough: the fallback
+    lands beside whatever that home is, and beside a home like `~` that is
+    `/Users`, which no run may write to. So a placement is refused when it is
+    unusable as well as when it is inside -- otherwise the first `mkdir` raises a
+    bare `PermissionError` naming nothing the operator can act on, in place of
+    the `CODE_ACP_HOME` guidance the refusal beside it already gives.
+
+    ``CODE_ACP_HOME`` overrides, for an operator who wants it elsewhere; it is
+    their business then whether the host can reach it. ``CODE_STATE_ROOT``
+    still governs everything else the product keeps -- its repos, its
+    per-instance buckets -- which is work, and belongs where the work is.
+    """
+    raw = env_value("CODE_ACP_HOME")
+    if raw:
+        return Path(raw).expanduser()
+    host = host_agent_home()
+    candidate = _RAVEN_HOME / "subagent_sessions" / "raven-code" / "acp"
+    if not outside(candidate, host):
+        candidate = host.parent / f".raven-code-{instance_tag()}" / "acp"
+    if not outside(candidate, host):
+        raise SystemExit(
+            "error: cannot place the Raven-Code ACP home outside the host Agent home "
+            f"({host}); set CODE_ACP_HOME to a directory outside it"
+        )
+    if not creatable(candidate):
+        raise SystemExit(
+            f"error: the Raven-Code ACP home {candidate} cannot be created -- its nearest "
+            "existing parent is not a directory this run may write to; set CODE_ACP_HOME "
+            f"to a writable directory outside the host Agent home ({host})"
+        )
+    return candidate
+
+
+def creatable(path: Path) -> bool:
+    """True when ``path`` could be made -- asked without making anything.
+
+    A check that created the directory to find out would answer the question by
+    destroying it: `adopt_legacy_acp_home` reads an existing destination as "this
+    run already has a home here, and it is the live one". So walk up to the
+    nearest ancestor that does exist and ask whether it is a directory this
+    process may create under.
+
+    Advisory, not authoritative: a run with an effective uid that overrides the
+    write bit is told yes and proceeds exactly as it did before this check. What
+    it removes is the case where the answer is knowably no and the operator
+    learns it from a bare `PermissionError`.
+    """
+    probe = Path(path).expanduser()
+    for ancestor in (probe, *probe.parents):
+        if ancestor.exists():
+            return ancestor.is_dir() and os.access(ancestor, os.W_OK | os.X_OK)
+    return False
+
+
+def instance_tag() -> str:
+    """A name for THIS raven instance, for a path shared with its siblings.
+
+    Two instances on one machine are told apart by their `RAVEN_HOME`, and the
+    sibling fallback below puts its directory beside the Agent home rather than
+    inside it -- which is a place their siblings can reach. Without the instance
+    in the name, `/srv/a` and `/srv/b` both land on `/srv/.raven-code`, and the
+    ACP session store and the allocation base underneath it -- one instance's
+    conversations -- are shared with the other. That is the isolation
+    `RAVEN_HOME` exists to give.
+
+    The directory's own name for legibility, and a digest of the resolved path
+    because two instances can be named the same under different parents.
+    """
+    resolved = _RAVEN_HOME.expanduser().resolve()
+    digest = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:8]
+    return f"{safe_name(resolved.name)}-{digest}"
+
+
+def outside(path: Path, home: Path) -> bool:
+    """True when ``path`` is neither ``home`` nor anything under it.
+
+    The one property the runtime's own guard cares about: a working directory
+    must not contain the agent home it is handed to, and the host hands its Agent
+    home over as the working directory.
+    """
+    p = Path(path).expanduser().resolve()
+    h = Path(home).expanduser().resolve()
+    return p != h and h not in p.parents
+
+
+def adopt_legacy_acp_home(dest: Path) -> None:
+    """Move a previous ACP home into ``dest``, once, if one is there.
+
+    The engine's runtime data directory is derived from where its config sits, so
+    moving the home moves the `sessions/` tree with it -- and the host's instance
+    registry still holds the session ids the old tree knows. Left behind, the
+    next turn's `session/load` is answered `unknown session`, the backend unbinds
+    the handle, and a conversation the reader was in the middle of starts again
+    from nothing.
+
+    Only when the destination does not exist: a home already in the new place is
+    the live one, and nothing may be written over it. A failed move is reported
+    and not retried -- the run continues on the new home, which is the same
+    outcome as before this function existed, and the operator is told where the
+    old one is.
+    """
+    legacy = state_root() / "acp"
+    if dest.exists() or not legacy.is_dir():
+        return
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        legacy.rename(dest)
+    except OSError:
+        try:
+            shutil.move(str(legacy), str(dest))
+        except OSError as exc:
+            log(f"[run] acp: could not move the previous ACP home {legacy} -> {dest}: {exc}")
+            return
+    log(f"[run] acp: adopted the previous ACP home from {legacy}")
 
 
 def dig(data: dict, path: tuple) -> str:
@@ -267,12 +408,36 @@ _VERBOSE = False
 
 
 def log(message: str) -> None:
-    """Record a diagnostic without contaminating the reply."""
+    """Record a diagnostic without contaminating the reply.
+
+    The directory is made here rather than assumed. On the ACP path the first
+    thing recorded is `adopt_legacy_acp_home`'s report, and that runs before the
+    home is created -- deliberately, since creating it first would make every run
+    look like one that already had a home in the new place. A logger that raised
+    in that window killed the run from inside the handler that exists to let it
+    continue.
+
+    Which makes the logger part of that ordering: the `mkdir` here is the same
+    one the caller does moments later, so it is free where it stands, and fatal
+    if a `log()` is ever moved above the adoption. See the note at that call.
+
+    A write that still fails costs the line, not the run. On a `--run` turn
+    stderr is folded into the subagent's reply, so an unwritable log has nowhere
+    to report itself that would not paste launcher noise into the conversation as
+    something the agent said. `--verbose` is the one mode where stderr is a
+    human's terminal, and there the reason is given.
+    """
     if _VERBOSE:
         print(message, file=sys.stderr, flush=True)
-    if _LOG_FILE is not None:
+    if _LOG_FILE is None:
+        return
+    try:
+        _LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
         with _LOG_FILE.open("a", encoding="utf-8") as stream:
             stream.write(message + "\n")
+    except OSError as exc:
+        if _VERBOSE:
+            print(f"[run] log: {_LOG_FILE} is not writable: {exc}", file=sys.stderr, flush=True)
 
 
 def safe_name(value: str) -> str:
@@ -473,8 +638,15 @@ def _serve_acp(args) -> int:
 
     global _LOG_FILE, _VERBOSE
     _VERBOSE = args.verbose
-    acp_state = state_root() / "acp"
+    acp_state = acp_home()
     _LOG_FILE = acp_state / "launcher.log"
+    # Before the directory is made: `adopt_legacy_acp_home` will not move onto an
+    # existing destination, and creating it first would make every run look like
+    # one that already had a home in the new place. Nothing may log between the
+    # line above and this one either -- `log()` creates the directory it writes
+    # into, which is this one, so a diagnostic here would answer the question
+    # before it is asked.
+    adopt_legacy_acp_home(acp_state)
     acp_state.mkdir(parents=True, exist_ok=True)
 
     config = render_config(Path(args.config).resolve(), acp_state)
