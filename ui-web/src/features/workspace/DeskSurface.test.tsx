@@ -80,6 +80,49 @@ describe('the desk handle', () => {
   })
 })
 
+describe("the header of a graph node's pane", () => {
+  beforeEach(() => {
+    /* The pane asks the agents seam for the node's record; the header is what
+       this is about, so an empty answer is enough. */
+    setCurrent('s1')
+    window.DS = {
+      ...window.DS,
+      agents: { list: async () => [], instances: async () => [], node: async () => ({ messages: [] }) },
+    } as typeof window.DS
+  })
+
+  afterEach(() => {
+    agents.reset()
+    setCurrent(null)
+  })
+
+  /* Reported against the running page: a node panel headed `create_august_ppt`.
+     That is the plan's slug for the node. The run knows a sentence for it --
+     `node_summary`, which the graph and the trail both show -- and this header
+     read `row.node` before `row.label`, so the slug won whatever arrived. */
+  it('reads what the node did before what it is called', async () => {
+    render(<DeskSurface />)
+    await act(async () => {
+      desk.openDeskAgentRecord({
+        kind: 'dag', run_id: 'r1', node: 'create_august_ppt', agent: 'Raven-PPT',
+        label: 'Build the August deck from the research',
+      })
+    })
+    expect(document.querySelector('.desk-pane header b')?.textContent)
+      .toBe('Build the August deck from the research')
+  })
+
+  it('falls back to the node id when the run knows no summary', async () => {
+    render(<DeskSurface />)
+    await act(async () => {
+      desk.openDeskAgentRecord({
+        kind: 'dag', run_id: 'r1', node: 'create_august_ppt', agent: 'Raven-PPT', label: '',
+      })
+    })
+    expect(document.querySelector('.desk-pane header b')?.textContent).toBe('create_august_ppt')
+  })
+})
+
 describe('the pane of a delivered file', () => {
   /* The pane shows the file, and only the file. It used to carry a strip above
      the body naming the delivery -- title, one-line description, kind, size and
