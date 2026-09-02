@@ -45,7 +45,11 @@ class _AuthServer:
         self.revoked: set[str] = set()
         self.insufficient_scope = False
         self.omit_expires_in = False
+        self.base = ""
         self._n = 0
+
+    def hits(self, path: str) -> int:
+        return sum(1 for c in self.calls if c.get("path") == path)
 
     def seed_client(self, client_id: str, redirects: list[str]) -> None:
         self.clients[client_id] = redirects
@@ -87,6 +91,7 @@ class _AuthServer:
         return web.Response(status=302, headers={"Location": f"{redirect}?code={code}&state={q.get('state', '')}"})
 
     async def _token(self, request: web.Request) -> web.Response:
+        self.calls.append({"call": "token_path", "path": request.path})
         form = await request.post()
         grant, cid = form.get("grant_type", ""), str(form.get("client_id", ""))
         if grant == "refresh_token":
@@ -113,6 +118,36 @@ class _AuthServer:
             body["expires_in"] = 3600
         return web.json_response(body)
 
+    async def _guessed_token(self, request: web.Request) -> web.Response:
+        self.calls.append({"call": "token_path", "path": request.path})
+        return web.json_response({"error": "not_found"}, status=404)
+
+    async def _prm(self, request: web.Request) -> web.Response:
+        self.calls.append({"call": "discovery", "path": request.path})
+        return web.json_response(
+            {
+                "resource": f"{self.base}/mcp",
+                "authorization_servers": [self.base],
+                "bearer_methods_supported": ["header"],
+                "scopes_supported": ["read"],
+            }
+        )
+
+    async def _asm(self, request: web.Request) -> web.Response:
+        """What a server without a catalog entry answers discovery with -- note
+        the token endpoint is nowhere near the address the SDK would guess."""
+        self.calls.append({"call": "discovery", "path": request.path})
+        return web.json_response(
+            {
+                "issuer": self.base,
+                "authorization_endpoint": f"{self.base}/authorize",
+                "token_endpoint": f"{self.base}/oauth/token",
+                "registration_endpoint": f"{self.base}/register",
+                "response_types_supported": ["code"],
+                "scopes_supported": ["read"],
+            }
+        )
+
     async def _resource(self, request: web.Request) -> web.Response:
         auth = request.headers.get("Authorization", "")
         token = auth[7:] if auth.lower().startswith("bearer ") else ""
@@ -135,8 +170,18 @@ class _AuthServer:
         app = web.Application()
         app.router.add_post("/register", self._register)
         app.router.add_get("/authorize", self._authorize)
-        app.router.add_post("/token", self._token)
+        app.router.add_post("/oauth/token", self._token)
+        # The address the SDK guesses when it holds no metadata. Nothing useful
+        # lives at the origin root on a real server -- sentry answers 500 there,
+        # openseo 404 -- so answering here would let a guess pass for knowledge.
+        app.router.add_post("/token", self._guessed_token)
+        # Neither the real endpoint nor the one the SDK guesses: an address only
+        # a wrong catalog entry would name, so a test can tell the two apart.
+        app.router.add_post("/wrong/token", self._guessed_token)
         app.router.add_get("/mcp", self._resource)
+        app.router.add_get("/.well-known/oauth-protected-resource/mcp", self._prm)
+        app.router.add_get("/.well-known/oauth-protected-resource", self._prm)
+        app.router.add_get("/.well-known/oauth-authorization-server", self._asm)
         return app
 
 
@@ -164,8 +209,14 @@ class _Browser:
         return self._result
 
 
-def _write_drifted_credentials(path: Path, *, refresh_token: str | None, expires_in: float) -> None:
-    """The starting state: a registration minted for a port that has moved."""
+def _write_drifted_credentials(
+    path: Path, *, refresh_token: str | None, expires_in: float, no_drift: bool = False
+) -> None:
+    """The starting state: a registration minted for a port that has moved.
+
+    ``no_drift`` writes it for the live port instead, for the tests whose subject
+    is not the drift.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     tokens = {"access_token": "at-old", "token_type": "Bearer"}
     if refresh_token:
@@ -175,7 +226,7 @@ def _write_drifted_credentials(path: Path, *, refresh_token: str | None, expires
             {
                 "client_info": {
                     "client_id": OLD_CID,
-                    "redirect_uris": [DRIFTED_REDIRECT],
+                    "redirect_uris": [LIVE_REDIRECT if no_drift else DRIFTED_REDIRECT],
                     "grant_types": ["authorization_code", "refresh_token"],
                     "response_types": ["code"],
                     "token_endpoint_auth_method": "none",
@@ -210,6 +261,7 @@ async def drifted(tmp_path, monkeypatch):
     site = web.TCPSite(runner, "127.0.0.1", 0)
     await site.start()
     base = f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}"  # noqa: SLF001
+    srv.base = base
 
     monkeypatch.setattr(mcp_oauth, "_credentials_dir", lambda: tmp_path)
     monkeypatch.setattr(mcp_oauth, "_callback_base", f"http://127.0.0.1:{LIVE_PORT}")
@@ -221,7 +273,7 @@ async def drifted(tmp_path, monkeypatch):
         oauth=MCPOAuthConfig(
             issuer=base,
             authorization_endpoint=f"{base}/authorize",
-            token_endpoint=f"{base}/token",
+            token_endpoint=f"{base}/oauth/token",
             registration_endpoint=f"{base}/register",
             scopes=["read"],
             resource=f"{base}/mcp",
@@ -380,6 +432,121 @@ async def test_a_server_that_omits_expires_in_is_refreshed_once_not_per_request(
 
     assert drifted.srv.counts("token", grant="refresh_token") == 1
     assert "expires_at" in json.loads(drifted.creds.read_text())
+
+
+async def test_a_refresh_uses_the_declared_token_endpoint_not_the_guess(drifted):
+    """The first refresh of a process must reach the real token endpoint.
+
+    Discovery only runs after a 401, so at the moment of a refresh the SDK holds
+    no metadata and falls back to `<origin>/token`. That address belongs to no
+    real server, so every restart's first refresh failed there and fell through
+    to a browser -- which is the whole failure this branch's ancestor set out to
+    remove. The endpoint the config declares has to reach the refresh.
+    """
+    drifted.srv.seed_client(OLD_CID, [LIVE_REDIRECT])
+    _write_drifted_credentials(drifted.creds, refresh_token="rt-old", expires_in=-60, no_drift=True)
+    browser, response, error = await _connect(drifted)
+
+    assert error is None and response is not None and response.status_code == 200
+    assert drifted.srv.hits("/token") == 0, "the refresh went to the guessed address"
+    assert drifted.srv.hits("/oauth/token") == 1
+    assert browser.opened == 0
+    assert drifted.srv.counts("register") == 0
+
+
+async def test_a_rejected_catalog_endpoint_is_not_kept_by_the_next_process(drifted):
+    """Disarming a wrong catalog entry has to survive a restart.
+
+    A seeded document lives in ``context.oauth_metadata`` from construction, so
+    writing that field down without asking where it came from records the
+    catalog's answer as if the server had given it. The server then refuses the
+    endpoint, the seed is disarmed -- and the next process reloads the same
+    rejected document from disk and posts to it again, which makes a wrong
+    catalog entry immortal and buys a browser on every restart.
+    """
+    drifted.srv.seed_client(OLD_CID, [LIVE_REDIRECT])
+    _write_drifted_credentials(drifted.creds, refresh_token="rt-old", expires_in=-60, no_drift=True)
+    # A catalog that names the one address the server refuses.
+    wrong = MCPServerConfig(
+        url=drifted.cfg.url,
+        auth="oauth",
+        oauth=MCPOAuthConfig(
+            **{
+                **drifted.cfg.oauth.model_dump(exclude_none=True),
+                "token_endpoint": f"{drifted.srv.base}/wrong/token",
+            }
+        ),
+    )
+    ctx = SimpleNamespace(**{**vars(drifted), "cfg": wrong})
+
+    await _connect(ctx)
+    assert drifted.srv.hits("/wrong/token") >= 1, "the first process must have tried the declared endpoint"
+    assert "oauth_seed_stale" in json.loads(drifted.creds.read_text()), "the seed should be disarmed"
+
+    stored = json.loads(drifted.creds.read_text())
+    stored["expires_at"] = time.time() - 60
+    drifted.creds.write_text(json.dumps(stored))
+    drifted.srv.calls.clear()
+
+    _, response, error = await _connect(ctx)
+
+    # A hit on the guessed address is expected and unavoidable before discovery;
+    # a hit on the declared one means the rejected document came back from disk.
+    assert drifted.srv.hits("/wrong/token") == 0, "the rejected endpoint was reloaded from disk"
+    # The guard promises two things, and an absence only pins the first. This run
+    # has no seed, so what discovery taught it must be written down -- without
+    # that half the next process starts blank again and every restart buys a
+    # browser, which an assertion about what did *not* happen cannot see.
+    assert error is None and response is not None and response.status_code == 200
+    noted = json.loads(drifted.creds.read_text()).get("oauth_metadata") or {}
+    assert noted.get("token_endpoint", "").endswith("/oauth/token"), "the real endpoint was not recorded"
+
+    stored = json.loads(drifted.creds.read_text())
+    stored["expires_at"] = time.time() - 60
+    drifted.creds.write_text(json.dumps(stored))
+    drifted.srv.calls.clear()
+
+    browser, response, error = await _connect(ctx)
+
+    # Third process: the note carries it, so the refresh lands first time.
+    assert error is None and response is not None and response.status_code == 200
+    assert browser.opened == 0
+    assert drifted.srv.hits("/oauth/token") == 1
+    assert drifted.srv.hits("/wrong/token") == 0 and drifted.srv.hits("/token") == 0
+
+
+async def test_a_server_that_declares_nothing_remembers_its_endpoint(drifted):
+    """Not every server ships a catalog entry, and those still must not guess.
+
+    A server whose config declares no endpoints only learns them from discovery,
+    which the SDK keeps in memory and drops on exit. Written down instead, the
+    next process refreshes at the address the server itself named -- so the
+    authorization the first process needed is not needed again.
+    """
+    drifted.srv.seed_client(OLD_CID, [LIVE_REDIRECT])
+    _write_drifted_credentials(drifted.creds, refresh_token="rt-old", expires_in=-60, no_drift=True)
+    # No catalog: discovery has to answer for itself, so serve the documents.
+    bare = MCPServerConfig(url=drifted.cfg.url, auth="oauth")
+    ctx = SimpleNamespace(**{**vars(drifted), "cfg": bare})
+
+    # First process: nothing is known, so the refresh guesses, fails, and the
+    # 401 path discovers for real and authorizes.
+    _, response, error = await _connect(ctx)
+    assert error is None and response is not None and response.status_code == 200
+    stored = json.loads(drifted.creds.read_text())
+    assert stored["oauth_metadata"]["token_endpoint"].endswith("/oauth/token")
+
+    stored["expires_at"] = time.time() - 60
+    drifted.creds.write_text(json.dumps(stored))
+    drifted.srv.calls.clear()
+
+    # Second process: the note is there, so no guess and no browser.
+    browser, response, error = await _connect(ctx)
+
+    assert error is None and response is not None and response.status_code == 200
+    assert drifted.srv.hits("/token") == 0
+    assert drifted.srv.hits("/oauth/token") == 1
+    assert browser.opened == 0
 
 
 async def test_a_drifted_registration_still_refreshes_silently(drifted):
