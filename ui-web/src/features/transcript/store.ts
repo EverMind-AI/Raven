@@ -1851,8 +1851,8 @@ export function branchOf(lane: Lane): ((text: string) => void) | null {
   try { return source().branch || null } catch { return null }
 }
 
-export function openDagNode(runId: string, nodeId: string): void {
-  try { source().openDagNode?.(runId, nodeId) } catch { /* no opener wired */ }
+export function openDagNode(runId: string, nodeId: string, summary?: string | null): void {
+  try { source().openDagNode?.(runId, nodeId, summary) } catch { /* no opener wired */ }
 }
 
 export function openSpawn(agent: string, label: string): void {
