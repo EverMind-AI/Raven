@@ -8,7 +8,7 @@
 2. **GUI**:消息发出后标题位先用生成动画占住,标题返回时填入。
 3. **TUI**:`resume` 时展示 title。
 
-不在范围内:重命名/重生成 UI、fork 继承真值表的行为变更、`ui-webui`(它有独立的 session 模型,连机械标题都没有)。
+不在范围内:重命名/重生成 UI、`ui-webui`(它有独立的 session 模型,连机械标题都没有)。fork 继承原本也不在范围内,是本次实现中改掉的一条,见下。
 
 ## 2. 现状锚点
 
@@ -17,7 +17,7 @@
 | 标题真源 | `raven/session/manager.py:561`(`save()` 内) | 未命名会话取首条 user 消息首行、折叠空白、截 40 字符,打 `title_auto: True` |
 | 派生函数 | `manager.py:57` `_derive_title` / `:70` `_first_user_auto_title` | 纯字符串操作,不碰 provider |
 | 人工标题 | `manager.py:123` `set_title` | 清掉 `title_auto`,即"人工"标记 |
-| fork 继承 | `manager.py:674` | `title_auto` 为真的标题不继承 |
+| fork 继承 | `manager.py:746` | 不再读 `title_auto`:有名字就继承,标记是谁打的都一样 |
 | RPC | `raven/rpc/methods/session.py:630` `session.title` | 只有 get/set,**没有服务端主动推的通道** |
 | 事件通道 | `raven/rpc/methods/turn.py:181` | `emitter.emit(session_key, {"type", "payload"})`,会话作用域 |
 | 事件类型 | `raven/rpc/models.py:317` 起 | `Literal[...]`,新增须同步 regen `ui/src/rpc/generated.ts` 与 `ui-tui/src/rpc/generated.ts`(签入且有门禁) |
@@ -41,7 +41,9 @@
 
 ### D2 标记:沿用 `title_auto`,不新增字段
 
-模型标题写入时照样打 `title_auto: True`,含义不变——"机器起的,不是人打的"。`set_title()` 清它([manager.py:131](../../raven/session/manager.py))、fork 继承读它([manager.py:674](../../raven/session/manager.py))两处逻辑一个字不动,**fork 行为零变化**。
+模型标题写入时照样打 `title_auto: True`,含义不变——"机器起的,不是人打的";`set_title()` 依旧清它([manager.py:145](../../raven/session/manager.py))。
+
+但 **fork 行为要变**,原文写的"零变化"在本设计落地后不成立。fork 继承此前只认没打标记的标题,而模型标题一律带标记,于是每个被命名过的会话 fork 出来都是无名的——`save` 又刻意不给 fork 自动起名(它只在既无标题、又无 `parent_session_id` 时才补),所以那个洞没人补。现在 fork 不再读标记([manager.py:746](../../raven/session/manager.py)):父会话有名字就继承,加 `(fork)` 后缀,并且经 `set_title` 存入,与其他所有命名路径同一条规则、同一个上限。
 
 早先草稿里提过再加一个 `title_source` 三态字段区分"机械截取/模型生成/人工",已否决:防覆盖靠 `title_auto` 缺失即可判定人工;模型调用只在首条消息触发一次,不存在幂等问题;UI 也没有标注标题来源的需求。多一个持久化字段就多一份存量会话的兼容判断,收益为零。
 
@@ -112,7 +114,7 @@ TUI 不做生成动画:新会话标题生成时用户正在看 agent 输出,标�
 
 按 §5.1 落进现有文件,不新建:
 
-- `tests/test_session_manager.py` — 模型标题打 `title_auto` 后 fork 继承行为不变(现有用例在 `:889`)
+- `tests/test_session_manager.py` — 打了 `title_auto` 的模型标题照样被 fork 继承、而标记不被继承(`:1064`);父标题顶到存储上限时,让出尾部以容下后缀,而不是让 fork 失去名字(`:899`)
 - `tests/test_rpc_session.py` — 竞态丢弃、懒会话 pending、事件是会话作用域
 - GUI:`ui/src/features/rail/RailPage.test.tsx` 一侧加 pending 行渲染;超时落回需要独立用例
 
