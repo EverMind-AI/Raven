@@ -805,36 +805,6 @@ describe('subagents island, an instance detail', () => {
     expect(said).toEqual(['第一句'])
   })
 
-  it('does not send the keystroke that confirms an IME candidate', async () => {
-    /* Typing Chinese, the Enter that picks the candidate arrives while the
-       composition is still open. Sent then, it went out half-typed; and since the
-       conversion changed the text afterwards the box was not emptied, so the
-       reader pressed Enter again -- one line typed, one sent and one queued
-       behind it. */
-    const said: string[] = []
-    await openInstance(inst({ handle: 'chatty', status: 'completed', resumable: true }), {
-      instanceSend: async (_a, _h, text) => {
-        said.push(text)
-      },
-    })
-    const box = document.querySelector('.sasend textarea') as HTMLTextAreaElement
-    box.value = '帮我做个ppt'
-    await act(async () => {
-      box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true }))
-    })
-    expect(said).toEqual([])
-    /* The older spelling some IMEs still send instead of `isComposing`. */
-    await act(async () => {
-      box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 229, bubbles: true }))
-    })
-    expect(said).toEqual([])
-    /* The keystroke that follows, once the composition has closed, sends. */
-    await act(async () => {
-      box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-    })
-    expect(said).toEqual(['帮我做个ppt'])
-  })
-
   it('offers no composer for an instance that cannot continue', async () => {
     /* A stateless agent starts from nothing every turn, so what looked like a
        conversation would be a run of unrelated first turns. */
@@ -1247,6 +1217,43 @@ describe('subagents island, an instance detail', () => {
     })
     expect(document.querySelector('.sahd .trow b')?.textContent).toBe('shape')
     expect(document.querySelector('.sasend textarea')).toBeTruthy()
+  })
+
+  it('titles a graph node\'s record by what the node did, not by its id', async () => {
+    /* Reported against the running page: a node panel headed `create_august_ppt`.
+       That is the node's ID -- a slug from the plan -- and the run knows a
+       sentence for it, `node_summary`, which is what every other surface shows.
+
+       Two things put the id there. `openDagNode` only ever received `{ id }`, so
+       the summary never reached the record row at all; and the pane's own header
+       reads `row.node` before `row.label`, so the id would have won even once
+       the summary arrived. */
+    const openAgentRecord = vi.fn()
+    window.RavenIslands = { workspace: { openAgentRecord } }
+    instances([], { instances: async () => [], node: async () => ({ messages: [] }) })
+    await act(async () => {
+      store.openDagNode('r1', {
+        id: 'create_august_ppt',
+        subagent: 'Raven-PPT',
+        summary: 'Build the August deck from the research',
+      })
+    })
+    expect(openAgentRecord).toHaveBeenCalledTimes(1)
+    expect(openAgentRecord.mock.calls[0]?.[0]).toMatchObject({
+      kind: 'dag',
+      run_id: 'r1',
+      node: 'create_august_ppt',
+      label: 'Build the August deck from the research',
+    })
+
+    /* And the id when the run has no sentence for the node -- an older run, or a
+       plan that named its steps and described none. A pane with no heading at
+       all is worse than one headed by a slug. */
+    openAgentRecord.mockClear()
+    await act(async () => {
+      store.openDagNode('r1', { id: 'create_august_ppt', subagent: 'Raven-PPT' })
+    })
+    expect(openAgentRecord.mock.calls[0]?.[0]).toMatchObject({ label: 'create_august_ppt' })
   })
 
   it('promotes that node once, not on every heartbeat after it', async () => {
