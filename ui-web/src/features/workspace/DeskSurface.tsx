@@ -49,11 +49,7 @@ function Pane({ pane, onGrab, refPane }: PaneProps): JSX.Element {
   const title = pane.kind === 'agent'
     ? pane.row.title || pane.row.nodeId || pane.row.handle
     : pane.kind === 'agent-record'
-      /* What it did before what it is called. `label` is the node's own summary
-         for a graph node and the run's label for a spawn; `node` is the plan's
-         slug, a name for the machine. Read the other way round, a graph node's
-         pane was headed by its id whatever the run knew about it. */
-      ? pane.row.label || pane.row.node || pane.row.id || t('gui.ws.agents')
+      ? pane.row.node || pane.row.label || pane.row.id || t('gui.ws.agents')
       : pane.kind === 'file' ? pane.file.path.split('/').pop() || pane.file.path : pane.change.name
   return (
     <section

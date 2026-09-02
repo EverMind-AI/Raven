@@ -399,10 +399,7 @@ export interface TranscriptSource {
      Read to turn a restored card's task id into the record id its stream is
      read by -- once per conversation, not once per card. */
   spawnList?: () => Promise<SpawnListRow[]>
-  /* The node's own summary rides with its id: the pane that opens is headed by
-     it, and the id is a slug from the plan. Optional, so a caller that has only
-     an id still opens the node. */
-  openDagNode?: (runId: string, nodeId: string, summary?: string | null) => void
+  openDagNode?: (runId: string, nodeId: string) => void
   openSpawn?: (agent: string, label: string) => void
   /* Open the delegated GRAPH a delivery came from. One verb rather than the
      live event handler doing it inline, because the replayed row has to open
