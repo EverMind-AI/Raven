@@ -165,9 +165,15 @@ class AskUserResponder:
         if not question:
             return ""
         asker, conversation_id = self._asker, self._conversation_id
-        if asker is None or not conversation_id or self._cancelled:
-            # No reachable user (a CRON or other background turn), or a run that
-            # ended while this frame was in flight.
+        if self._cancelled:
+            # A run that ended while this frame was in flight.
+            return ""
+        if asker is None or not conversation_id:
+            logger.warning(
+                "acp agent {!r}: ask_user declined for conversation {!r}: no asker bound",
+                self._agent,
+                conversation_id,
+            )
             return ""
         auto = self._autofill
         known = ""
