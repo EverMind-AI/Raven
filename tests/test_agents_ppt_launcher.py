@@ -1,30 +1,32 @@
-"""The agents/ ppt launcher: rendering, refusals, the fork exec, the carried assets.
+"""The agents/ ppt launcher: rendering, refusals, the trunk exec, the pinned face.
 
-The B-side product must hold the same launch contract as its vendored twin
-while the exec target is still the fork engine: an own key reaches every
-provider block, PPT_MODEL/PPT_API_BASE apply on the own-key branch only,
-the context window recalibrates from the host's model catalog, secrets
-merge into a rendered 0600 config whose parent decides the data dir, and
-the served process is the fork checkout's own ``raven acp`` run from the
-checkout. The render is double-audienced -- the fork engine consumes it
-today, the trunk loader must already accept it for the exec-target swap
-that follows the ppt-engine wheel -- so both loaders round-trip it here.
-No hermetic tool-face pin yet: a trunk loop built from this render would
-lack every ppt_* tool until the engine wheel lands, so no face equality
-exists to pin (the code family reached its pin the same way, swap wave).
+The exec target is installed raven's own ``raven acp``; the deck capability
+reaches it as the ppt-engine wheel through the entry-point group, never by
+directory. The launch contract is still the fork launcher's ACP half: an own
+key reaches every provider block, PPT_MODEL/PPT_API_BASE apply on the own-key
+branch only, the context window recalibrates from the host's model catalog,
+secrets merge into a rendered 0600 config whose parent decides the data dir.
+Three renders are this hosting's own trunk seats: the agent home pinned under
+the state root (a pooled loop must not share the host's), the engine skill
+directory mounted through skillForge.localDirs, and the retired tools.ppt
+block dropped from a carried config with the successor named (D4's floor).
 
-The fork's identity trio (SOUL.md/AGENTS.md/TOOLS.md, all three genuinely
-drifted and delivered per ACP session by the fork engine's own workspace
-sync) is carried byte-for-byte at the engine wheel's prompts home; this
-launcher seeds none of them, because on this lane the engine still seeds
-its own from inside the checkout.
+The hermetic tool-face pin is live now (the code family's w96 shape): the
+loop built from this render advertises the fork's config intent respelled to
+plugin admission -- ten deck tools plus the fork's base face -- with every
+trunk-new tool the fork never registered held out by config, not by luck.
+The key-gated pair (web_search, ppt_image_search) joins only with a Serper
+key, the fork's own registration refusal.
+
+The fork's identity trio (SOUL.md/AGENTS.md/TOOLS.md) is carried
+byte-for-byte at the engine wheel's prompts home; the engine plugin's hook
+seeds it into the pinned home at first turn (tests in the plugin family),
+so this launcher still seeds none of them.
 """
 
 import importlib.util
 import json
-import os
 import stat
-import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -73,15 +75,47 @@ def test_the_roster_row_is_the_vendored_twins_byte_for_byte():
     assert row["recommendedLlm"]["provider"] == "ppt"
 
 
-def test_the_config_is_the_forks_modulo_the_engine_slice():
-    """One structural addition and only one: the ppt-engine plugin slice,
-    pre-named for the engine wave (D4's keys), inert on both of today's
-    loaders. Every other byte of shipped intent is the fork's."""
+#: Trunk tools the fork loop never registered under this product's config;
+#: every one is held out of the face by a config row, not by luck (the code
+#: family's ledger discipline). tool_call/tool_search additionally keep the
+#: fork's face: its meta-pair registers only under tools.toolSearch.enabled,
+#: default False and never set by this config (the threshold only folds).
+TRUNK_HELD_OUT = {
+    "create_playbook",
+    "cron",
+    "deliver_files",
+    "find_skill",
+    "hub",
+    "load_playbook",
+    "plugin",
+    "read_skill",
+    "run_subagent_dag",
+    "tool_call",
+    "tool_search",
+}
+
+
+def test_the_config_is_the_forks_modulo_the_swap_ledger():
+    """Three deltas against the fork wrapper's config, each a ledgered row of
+    the exec swap: the engine slice carries the retired tools.ppt knobs
+    verbatim (D4), tools.ppt itself is gone (the slice is the only reading),
+    and disabledTools grows exactly the trunk-new hold-out set. Every other
+    byte of shipped intent is the fork's."""
     ours = json.loads((RUN_PY.parent / "config.json").read_text())
     theirs = json.loads((FORK / "config.json").read_text())
     slice_ = ours["plugins"]["config"].pop("ppt-engine")
-    assert ours == theirs
     assert slice_ == theirs["tools"]["ppt"]
+    fork_tools = dict(theirs["tools"])
+    retired = fork_tools.pop("ppt")
+    assert retired == slice_
+    ours_disabled = set(ours["tools"].pop("disabledTools"))
+    fork_disabled = set(fork_tools.pop("disabledTools"))
+    assert ours_disabled - fork_disabled == TRUNK_HELD_OUT
+    assert fork_disabled <= ours_disabled, "no fork disable row may be quietly re-enabled"
+    assert ours["tools"] == fork_tools
+    ours.pop("tools")
+    theirs.pop("tools")
+    assert ours == theirs
 
 
 def test_the_everos_identity_agrees_in_all_its_places():
@@ -213,14 +247,85 @@ def test_the_rendered_file_is_owner_only_under_the_state_root(grounded, tmp_path
     assert rendered.parent == tmp_path / "state"
 
 
-def test_the_render_pins_no_workspace_and_declares_no_plugin_dirs(grounded):
-    """Two deliberate absences, both the fork's own shape: its launcher never
-    pinned agents.defaults.workspace (the ACP engine fences per-session deck
-    projects itself), and its plugins block forbids fields it does not know
-    -- while the ppt-engine wheel arrives by entry point, never by dirs."""
+def test_the_render_pins_the_home_mounts_the_skill_and_declares_no_plugin_dirs(grounded, tmp_path):
+    """Three renders of the swap, one absence kept. The agent home is pinned
+    under the state root -- a pooled loop reads identity, sessions and skills
+    from ONE home, and unpinned it would share the host's (the oncall/code
+    partition shape). The engine's skill directory is mounted through
+    skillForge.localDirs with always-on semantics (the verdict's feature-14
+    collapse). plugins.dirs stays absent: the wheel arrives by entry point."""
+    import raven_ppt
+
     data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
-    assert "workspace" not in data["agents"]["defaults"]
+    assert data["agents"]["defaults"]["workspace"] == str(tmp_path / "state" / "workspace")
+    mounts = data["skillForge"]["localDirs"]
+    assert mounts == [
+        {"path": str(Path(raven_ppt.__file__).parent / "skill"), "name": "ppt-engine", "alwaysEnabled": True}
+    ]
     assert "dirs" not in data["plugins"]
+
+
+def test_an_operators_own_workspace_and_skill_mounts_survive_the_render(grounded, tmp_path):
+    """The home pin is a default, never an override; the skill mount is a
+    per-entry merge, never a whole-list default -- an operator who mounts a
+    directory of their own keeps it AND keeps the deck skill, whose
+    site-packages path is nothing they could re-spell by hand."""
+    import raven_ppt
+
+    source = json.loads((RUN_PY.parent / "config.json").read_text())
+    source.setdefault("agents", {}).setdefault("defaults", {})["workspace"] = str(tmp_path / "mine")
+    source["skillForge"] = {"localDirs": [{"path": str(tmp_path / "skills")}]}
+    custom = tmp_path / "custom.json"
+    custom.write_text(json.dumps(source))
+    data = json.loads(grounded.render_config(custom).read_text())
+    assert data["agents"]["defaults"]["workspace"] == str(tmp_path / "mine")
+    engine_row = {"path": str(Path(raven_ppt.__file__).parent / "skill"), "name": "ppt-engine", "alwaysEnabled": True}
+    assert data["skillForge"]["localDirs"] == [{"path": str(tmp_path / "skills")}, engine_row]
+
+    # And a render of an already-rendered config stacks no duplicate row.
+    again = tmp_path / "again.json"
+    again.write_text(json.dumps(data))
+    twice = json.loads(grounded.render_config(again).read_text())
+    assert twice["skillForge"]["localDirs"].count(engine_row) == 1
+
+
+def test_a_carried_tools_ppt_block_is_dropped_with_the_successor_named(grounded, tmp_path, capsys):
+    """D4's migration floor: the trunk loader would ignore the retired fork
+    key without a word -- the knobs would look honoured and be dead. The
+    render drops it and says where the same knobs live now."""
+    source = json.loads((RUN_PY.parent / "config.json").read_text())
+    source["tools"]["ppt"] = {"enabled": True, "renderDpi": 300}
+    custom = tmp_path / "custom.json"
+    custom.write_text(json.dumps(source))
+    data = json.loads(grounded.render_config(custom).read_text())
+    assert "ppt" not in data["tools"]
+    assert 'plugins.config["ppt-engine"]' in capsys.readouterr().err
+
+
+def test_the_serper_key_reaches_both_search_consumers(grounded, tmp_path, monkeypatch):
+    """One key, two readers, ONE source of truth: the slice key is copied from
+    the tools.web slot after the secret merge, so every admission source --
+    the product env var here, the host config's own key below -- reaches
+    trunk's web_search and the engine's ppt_image_search together. The
+    hosting never exports $SERPER_API_KEY to the child."""
+    monkeypatch.setenv("PPT_SERPER_API_KEY", "sk-serper")
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    assert data["tools"]["web"]["search"]["apiKey"] == "sk-serper"
+    assert data["plugins"]["config"]["ppt-engine"]["imageSearch"]["apiKey"] == "sk-serper"
+
+
+def test_a_host_config_serper_key_reaches_both_search_consumers(grounded, tmp_path, monkeypatch):
+    """The per-slot host fallback is a supported admission source (pinned
+    above for the slot); rendered from the env var alone, a host-keyed deploy
+    would register web_search while the deck's own image search silently
+    declined -- the fork on that same deploy had working image search."""
+    monkeypatch.delenv("PPT_SERPER_API_KEY", raising=False)
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(json.dumps({"tools": {"web": {"search": {"apiKey": "host-serper"}}}}))
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    assert data["tools"]["web"]["search"]["apiKey"] == "host-serper"
+    assert data["plugins"]["config"]["ppt-engine"]["imageSearch"]["apiKey"] == "host-serper"
 
 
 def test_the_render_loads_through_trunks_own_loader(grounded):
@@ -230,66 +335,37 @@ def test_the_render_loads_through_trunks_own_loader(grounded):
     rendered = grounded.render_config(RUN_PY.parent / "config.json")
     config = load_config(rendered)
     assert config.agents.defaults.model == "anthropic/claude-sonnet-5"
-    # The fork-only tools.ppt block passes through the trunk loader unknown
-    # and unloaded -- the engine wave moves its keys into the plugin slice.
+    # tools.ppt is retired from the shipped config; the loader must see none.
     assert getattr(config.tools, "ppt", None) is None
     extensions = load_raven_config(rendered)
     assert extensions.plugins.config["ppt-engine"]["profile"] == "script_author"
     assert extensions.plugins.disabled == []
+    mounts = extensions.skill_forge.local_dirs
+    assert len(mounts) == 1 and mounts[0].always_enabled and mounts[0].path.endswith("skill")
 
 
-def test_the_render_loads_through_the_forks_own_loader(grounded, tmp_path):
-    """The render's live consumer this wave is the fork engine; its config
-    stack is imported in a subprocess (PYTHONPATH at the fork tree, cwd off
-    the repo so the fork wins the import) and must accept the render whole,
-    tools.ppt included."""
-    rendered = grounded.render_config(RUN_PY.parent / "config.json")
-    code = (
-        "import sys; from pathlib import Path;"
-        "from raven.config.loader import load_config;"
-        "from raven.config.raven import load_raven_config;"
-        "cfg = load_config(Path(sys.argv[1]));"
-        "extensions = load_raven_config(Path(sys.argv[1]));"
-        "print(cfg.tools.ppt.profile, cfg.agents.defaults.provider, 'ppt-engine' in extensions.plugins.config)"
-    )
-    env = dict(os.environ)
-    env["PYTHONPATH"] = str(FORK / "Raven-PPT")
-    proc = subprocess.run(
-        [sys.executable, "-c", code, str(rendered)],
-        capture_output=True,
-        text=True,
-        cwd=str(tmp_path),
-        env=env,
-    )
-    assert proc.returncode == 0, proc.stderr.strip()[-800:]
-    assert proc.stdout.split() == ["script_author", "ppt", "True"]
+# --- the exec lane: installed raven, by entry point ---------------------------
 
 
-# --- the exec lane: the fork engine, from the checkout -----------------------
-
-
-def test_a_missing_fork_venv_refuses_before_rendering(grounded, tmp_path):
-    """The fork launcher's order: the engine precheck answers first, names
-    the build command, and no file holding merged secrets exists for a run
-    that cannot start."""
-    args = SimpleNamespace(checkout=str(tmp_path / "empty"), config=str(RUN_PY.parent / "config.json"))
+def test_a_missing_engine_wheel_refuses_before_rendering(grounded, tmp_path, monkeypatch):
+    """The fork launcher's order, kept: the engine precheck answers first,
+    names what to install, and no file holding merged secrets exists for a
+    run that cannot start."""
+    monkeypatch.setattr(grounded.importlib.util, "find_spec", lambda name: None)
+    args = SimpleNamespace(config=str(RUN_PY.parent / "config.json"))
     with pytest.raises(SystemExit) as excinfo:
         grounded.serve(args)
-    assert "uv sync --extra ppt" in str(excinfo.value)
+    assert "ppt-engine" in str(excinfo.value)
     assert not (tmp_path / "state").exists()
 
 
-def test_the_exec_lane_is_the_fork_engines_from_the_checkout(grounded, tmp_path, monkeypatch):
-    """The served argv is the checkout venv's own ``raven acp``, the process
-    chdirs into the checkout first (bundled templates and skills resolve
-    from there), and the rendered file exists when the exec takes over --
-    execv replaces the image, so the pid sweep is the only cleaner."""
-    checkout = tmp_path / "checkout"
-    raven_bin = checkout / ".venv" / "bin" / "raven"
-    raven_bin.parent.mkdir(parents=True)
-    raven_bin.write_text("#!/bin/sh\n")
-    raven_bin.chmod(0o755)
-
+def test_the_exec_lane_is_installed_ravens_acp_with_no_chdir(grounded, tmp_path, monkeypatch):
+    """The served argv is this interpreter's ``python -m raven acp`` (the
+    roster row's {PYTHON} resolves at install to one that imports raven), the
+    rendered file exists when the exec takes over, and nothing chdirs: the
+    fork engine resolved assets from its checkout, the wheel resolves them
+    from its own package -- execv replaces the image, so the pid sweep is
+    the only cleaner."""
     calls = {}
 
     def fake_chdir(path):
@@ -298,30 +374,162 @@ def test_the_exec_lane_is_the_fork_engines_from_the_checkout(grounded, tmp_path,
     def fake_execv(binary, argv):
         calls["binary"] = binary
         calls["argv"] = list(argv)
-        calls["rendered_alive"] = Path(argv[3]).is_file()
+        calls["rendered_alive"] = Path(argv[5]).is_file()
         raise RuntimeError("execv reached")
 
     monkeypatch.setattr(grounded.os, "chdir", fake_chdir)
     monkeypatch.setattr(grounded.os, "execv", fake_execv)
     with pytest.raises(RuntimeError, match="execv reached"):
-        grounded.serve(SimpleNamespace(checkout=str(checkout), config=str(RUN_PY.parent / "config.json")))
+        grounded.serve(SimpleNamespace(config=str(RUN_PY.parent / "config.json")))
 
-    expected_bin = str(checkout.resolve() / ".venv" / "bin" / "raven")
-    assert calls["binary"] == expected_bin
-    assert calls["argv"][:3] == [expected_bin, "acp", "--config"]
-    assert Path(calls["argv"][3]).parent == tmp_path / "state"
+    assert calls["binary"] == sys.executable
+    assert calls["argv"][:5] == [sys.executable, "-m", "raven", "acp", "--config"]
+    assert Path(calls["argv"][5]).parent == tmp_path / "state"
     assert calls["rendered_alive"]
-    assert calls["cwd"] == str(checkout.resolve())
-
-
-def test_the_default_checkout_is_the_vendored_tree(launcher):
-    """Until the engine wheel lands, the engine this product hosts is the
-    frozen fork checkout inside this repo -- read-only consumption, no
-    modification (the freeze guard keeps that honest)."""
-    assert launcher.DEFAULT_CHECKOUT == REPO / "subagents" / "raven-ppt" / "Raven-PPT"
+    assert "cwd" not in calls
 
 
 def test_the_state_root_override_wins_and_the_default_sits_under_the_home(grounded, tmp_path, monkeypatch):
     assert grounded.state_root() == tmp_path / "state"
     monkeypatch.delenv("PPT_STATE_ROOT", raising=False)
     assert grounded.state_root() == tmp_path / "home" / "workspace" / "subagent_sessions" / "raven-ppt"
+
+
+# --- the pinned tool face: fork config intent, said as plugin admission -------
+
+#: The fork engine's config-intent face, measured: its AgentLoop built under
+#: this product's published config (the four media/deep-research disable rows
+#: applied, no Serper key, everos on) registers exactly these -- the six
+#: filesystem tools and exec, the two web tools (search key-gated, so absent
+#: hermetically), message/spawn/ask_user, use_skill (registry reachable;
+#: read_skill needs a Hub endpoint the config never names), everos's
+#: understand_media, and the ten deck tools. Its tool_search meta-pair
+#: registers only under tools.toolSearch.enabled, default False and never
+#: set by this config.
+FORK_CONFIG_INTENT = {
+    "ask_user",
+    "edit_file",
+    "exec",
+    "find",
+    "grep",
+    "list_dir",
+    "message",
+    "read_file",
+    "spawn",
+    "understand_media",
+    "use_skill",
+    "web_fetch",
+    "write_file",
+}
+
+DECK_TOOLS = {
+    "ppt_prepare",
+    "ppt_brief",
+    "ppt_fetch",
+    "ppt_generate_image",
+    "ppt_ingest",
+    "ppt_figure_inspect",
+    "ppt_outline",
+    "ppt_template",
+    "ppt_build",
+    "ppt_review",
+}
+
+#: The product's visible tool face, hermetically rebuilt from the render: the
+#: fork's config intent plus the deck tools as plugin contributions. The
+#: key-gated pair (web_search from the merged tools.web slot, ppt_image_search
+#: from the rendered slice key) joins only when a Serper key is present -- the
+#: fork's own refusal to register keyless search. Every trunk-new name is held
+#: out by the TRUNK_HELD_OUT config rows pinned above.
+VENDORED_TOOL_FACE = FORK_CONFIG_INTENT | DECK_TOOLS
+KEY_GATED = {"web_search", "ppt_image_search"}
+
+
+def _hermetic_build(rendered, tmp_path, monkeypatch):
+    """Build the runtime from a rendered config: user/project plugin dirs
+    pinched to nothing, the entry-point group kept live (that is this
+    product's delivery lane), a stub provider, the config path pinned.
+    Returns the visible tool names."""
+    from raven.config.loader import load_config
+    from raven.config.raven import load_raven_config
+    from raven.contracts.llm_provider import LLMResponse
+    from raven.core import plugin_stack, runtime
+    from raven.providers.base import LLMProvider
+
+    class _StubProvider(LLMProvider):
+        def __init__(self) -> None:
+            super().__init__(api_key="test")
+
+        async def chat(
+            self,
+            messages,
+            tools=None,
+            model=None,
+            max_tokens=4096,
+            temperature=0.7,
+            reasoning_effort=None,
+            tool_choice=None,
+            **kwargs,
+        ):
+            return LLMResponse(content="", tool_calls=[])
+
+        def get_default_model(self):
+            return "test-model"
+
+    monkeypatch.setattr(
+        plugin_stack,
+        "plugin_discovery_sources",
+        lambda: {
+            "bundled_dir": tmp_path / "none",
+            "user_dir": tmp_path / "none",
+            "project_dir": tmp_path / "none",
+            "entry_points_group": "raven.plugins",
+        },
+    )
+    import raven.home as home
+
+    monkeypatch.setattr(home, "_current_config_path", rendered)
+    config = load_config(rendered)
+    ec_config = load_raven_config(rendered)
+    rt = runtime.build_runtime(config, ec_config, provider=_StubProvider())
+    try:
+        visible = {d["function"]["name"] for d in rt.loop.tools.get_definitions()}
+    finally:
+        rt.discard()
+    return visible
+
+
+def test_the_products_tool_face_is_the_forks_config_intent_plus_the_deck(grounded, tmp_path, monkeypatch):
+    """Build the loop from the rendered config; the model-visible tool set is
+    the ledgered face and nothing more -- the ppt-engine plugin is discovered
+    through the live entry point, its eleven rows admitted by the rendered
+    slice, and every trunk-new name stays out through the config rows."""
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    rendered = grounded.render_config(RUN_PY.parent / "config.json")
+    visible = _hermetic_build(rendered, tmp_path, monkeypatch)
+    assert visible == VENDORED_TOOL_FACE
+    disabled = set(json.loads((RUN_PY.parent / "config.json").read_text())["tools"]["disabledTools"])
+    assert TRUNK_HELD_OUT <= disabled, "the trunk-new names stay disabled by config, not by luck"
+    assert not (KEY_GATED | DECK_TOOLS) & disabled
+
+
+def test_a_serper_key_admits_exactly_the_gated_pair(grounded, tmp_path, monkeypatch):
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    monkeypatch.setenv("PPT_SERPER_API_KEY", "sk-serper")
+    rendered = grounded.render_config(RUN_PY.parent / "config.json")
+    visible = _hermetic_build(rendered, tmp_path, monkeypatch)
+    assert visible == VENDORED_TOOL_FACE | KEY_GATED
+
+
+def test_a_host_config_serper_key_admits_the_same_pair(grounded, tmp_path, monkeypatch):
+    """The pair joins and leaves together on EVERY admission source: a key
+    that arrives by the host-config fallback must not split the face the way
+    an env-only slice render would have."""
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    monkeypatch.delenv("PPT_SERPER_API_KEY", raising=False)
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(json.dumps({"tools": {"web": {"search": {"apiKey": "host-serper"}}}}))
+    rendered = grounded.render_config(RUN_PY.parent / "config.json")
+    visible = _hermetic_build(rendered, tmp_path, monkeypatch)
+    assert visible == VENDORED_TOOL_FACE | KEY_GATED
