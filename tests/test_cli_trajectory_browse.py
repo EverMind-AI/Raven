@@ -49,7 +49,9 @@ class _FakeQuestionary:
     - a zero-arg callable   — invoked at answer time (side effects), its return used;
     - anything else         — returned verbatim.
     Every prompt is recorded as (kind, message, [choice titles]); separator
-    lines are recorded like choices but are never matched by a pick.
+    lines are recorded like choices but are never matched by a pick. A title
+    may be a styled token list (table rows) — it is flattened to plain text
+    for recording and matching, like a terminal renders it.
     """
 
     class Choice:
@@ -66,8 +68,15 @@ class _FakeQuestionary:
         self.prompts: list[tuple[str, str, list[str]]] = []
         self.calls: list[tuple[str, str, dict]] = []
 
+    @staticmethod
+    def _title_text(choice):
+        title = getattr(choice, "title", "")
+        if isinstance(title, list):
+            return "".join(seg[1] for seg in title)
+        return title
+
     def _resolve(self, kind, message, choices, kwargs=None):
-        titles = [c.title for c in choices] if choices else []
+        titles = [self._title_text(c) for c in choices] if choices else []
         self.prompts.append((kind, message, titles))
         self.calls.append((kind, message, kwargs or {}))
         answer = self.answers.pop(0)
@@ -76,9 +85,11 @@ class _FakeQuestionary:
         if answer is _CANCEL:
             value = None
         elif isinstance(answer, tuple) and answer and answer[0] == "pick":
-            value = next(c.value for c in choices if hasattr(c, "value") and answer[1] in c.title)
+            value = next(c.value for c in choices if hasattr(c, "value") and answer[1] in self._title_text(c))
         elif isinstance(answer, tuple) and answer and answer[0] == "pickall":
-            value = [next(c.value for c in choices if hasattr(c, "value") and s in c.title) for s in answer[1]]
+            value = [
+                next(c.value for c in choices if hasattr(c, "value") and s in self._title_text(c)) for s in answer[1]
+            ]
         else:
             value = answer
         return type("_Ask", (), {"ask": staticmethod(lambda: value)})()
@@ -134,6 +145,20 @@ _IDS = ("trace-1", "trace-2", "cli:a", "att-")
 def _assert_no_ids(text: str, ids=_IDS) -> None:
     for id_ in ids:
         assert id_ not in text, f"{id_!r} leaked into: {text!r}"
+
+
+def _data_rows(titles):
+    """Attempt-table data rows among one screen's recorded titles (the header
+    line also starts with '#', but is followed by padding, not a digit)."""
+    return [t for t in titles if t[:1] == "#" and t[1:2].isdigit()]
+
+
+def _cell_of(titles, row_text, col):
+    """Text under fixed column ``col`` of one data row, located by the header
+    (fixed columns are exactly as wide as their headers here)."""
+    header = next(t for t in titles if t.startswith("#") and "STARTED" in t)
+    start = header.index(col)
+    return row_text[start : start + len(col)]
 
 
 # ── aggregation / labels (pure functions) ─────────────────────────────
@@ -276,13 +301,14 @@ def test_label_normalization(state, workspace):
 
 def test_fallback_title_prefers_span_channel(state, workspace):
     """With no session file and a separator-less key, the span's own channel
-    attribute still yields a human label (normalized to one line)."""
+    attribute still yields a human label (normalized to one line). The time
+    lives in the table's LAST ACTIVITY column, not in the title."""
     span = _span("trace-1", session_key="weirdkey", attrs={"channel": "discord\nextra"})
     _write_log(state / "logs" / "audit-spans.log", [span])
 
     (srow,) = tbrowse.scan_sessions(workspace)
 
-    assert srow.title == "discord extra session · 2026-08-20 10:00"
+    assert srow.title == "discord extra session"
     assert "\n" not in srow.title
     assert "weirdkey" not in srow.title
 
@@ -470,17 +496,19 @@ def test_full_cycle_merge_verdict_save_split(state, workspace, monkeypatch, caps
 
     selects = [(m, titles) for kind, m, titles in fake.prompts if kind == "select"]
     attempt_screens = [titles for m, titles in selects if m == "Attempt:"]
-    # after merge: one merged row, no more merge entry
-    assert sum("merged" in t for t in attempt_screens[1]) == 1
+    # after merge: one row with a MERGED check, no more merge entry
+    merged_rows = _data_rows(attempt_screens[1])
+    assert sum(_cell_of(attempt_screens[1], t, "MERGED").strip() == "✓" for t in merged_rows) == 1
     assert not any("Merge attempts" in t for t in attempt_screens[1])
     # after verdict: the row shows it
-    assert any("fail" in t for t in attempt_screens[2])
+    assert any("fail" in t for t in _data_rows(attempt_screens[2]))
     # after save: the action menu offers Unpin (auto-pin happened)
     action_screens = [titles for m, titles in selects if m == "Action:"]
     assert any("Unpin" in t for t in action_screens[2])
     # after split: two rows again, none merged
-    assert sum(t.startswith("#") for t in attempt_screens[4]) == 2
-    assert not any("merged" in t for t in attempt_screens[4])
+    split_rows = _data_rows(attempt_screens[4])
+    assert len(split_rows) == 2
+    assert not any(_cell_of(attempt_screens[4], t, "MERGED").strip() == "✓" for t in split_rows)
 
     assert tstore.definitions(state) == {}
     assert {"trace-1", "trace-2"} <= set(tstore.pins(state))  # split moved the pin down
@@ -857,6 +885,9 @@ def test_menu_screens_hide_back_exit_and_show_help(state, workspace, monkeypatch
         titles = screens[message]
         assert titles[: len(help_lines)] == list(help_lines)
         assert "Back" not in titles and "Exit" not in titles
+    # the table header separator sits right after the help lines
+    assert "LAST ACTIVITY" in screens["Session:"][len(tbrowse._HELP_SESSION)]
+    assert "STARTED" in screens["Attempt:"][len(tbrowse._HELP_ATTEMPT)]
 
 
 @pytest.mark.parametrize(
@@ -983,6 +1014,220 @@ def test_breadcrumbs_echo_navigation(state, workspace, monkeypatch, capsys):
     assert "Session ❯ x[red]y title" in out
     assert "Attempt ❯ #1" in out
     assert "Action ❯ Verdict" in out
+
+
+# ── table layout ──────────────────────────────────────────────────────
+
+
+def _mk_attempt(**kw):
+    base = dict(
+        key="trace-x",
+        traces=("trace-x",),
+        session_key="cli:a",
+        start="2026-08-20T10:00:00+00:00",
+        end="2026-08-20T10:00:01+00:00",
+        spans=1,
+        turns=1,
+        verdict=None,
+        pinned=False,
+        preview=None,
+        merged=False,
+    )
+    base.update(kw)
+    return tbrowse.AttemptRow(**base)
+
+
+def _flat(tokens):
+    return "".join(t[1] for t in tokens)
+
+
+def _row_cap(width):
+    return width - tbrowse._ROW_INDENT - tbrowse._WIDTH_MARGIN
+
+
+def test_attempt_table_fits_budget_and_drops_preview():
+    rows = [
+        _mk_attempt(verdict="pass", pinned=True, merged=True, preview="fix the bug in the long preview"),
+        _mk_attempt(key="trace-y", preview="another attempt preview text"),
+    ]
+
+    h80, rows80 = tbrowse._attempt_table(rows, 80)
+    h60, rows60 = tbrowse._attempt_table(rows, 60)
+
+    assert "PREVIEW" in h80 and "PREVIEW" not in h60
+    for width, header, row_tokens in [(80, h80, rows80), (60, h60, rows60)]:
+        assert tbrowse._cell_width(header) <= _row_cap(width)
+        for tokens in row_tokens:
+            line = _flat(tokens)
+            assert "\n" not in line
+            assert tbrowse._cell_width(line) <= _row_cap(width)
+            _assert_no_ids(line, ("trace-", "cli:a"))
+
+
+def test_table_headers_complete_and_columns_aligned():
+    rows = [_mk_attempt(verdict="pass", pinned=True, preview="p"), _mk_attempt(key="trace-y", merged=True)]
+
+    header, row_tokens = tbrowse._attempt_table(rows, 100)
+
+    for col in ("#", "STARTED", "TURNS", "SPANS", "VERDICT", "PIN", "MERGED", "PREVIEW"):
+        assert col in header
+    layout = tbrowse._attempt_layout(100, len(rows))
+    gap = tbrowse._cell_width(tbrowse._COL_GAP)
+    offsets, off = [], 0
+    for _h, w in layout:
+        offsets.append(off)
+        off += w + gap
+    for (h, _w), start in zip(layout, offsets):
+        assert header[start : start + len(h)] == h
+    lines = [header, *(_flat(t) for t in row_tokens)]
+    for start in offsets[1:]:
+        for line in lines:
+            if len(line) >= start:
+                assert line[start - gap : start] == tbrowse._COL_GAP
+
+
+def test_session_table_time_column_and_fit():
+    sessions = [
+        tbrowse.SessionRow(
+            key="cli:a", title="My debugging run", attempts=[_mk_attempt()], end="2026-08-20T11:22:33+00:00"
+        ),
+        tbrowse.SessionRow(key="cli:b", title="cli session", attempts=[_mk_attempt(key="t2")], end=None),
+    ]
+
+    header, rows = tbrowse._session_table(sessions, 80)
+
+    assert "TITLE" in header and "ATTEMPTS" in header and "LAST ACTIVITY" in header
+    line0, line1 = _flat(rows[0]), _flat(rows[1])
+    assert "2026-08-20 11:22" in line0
+    assert line1.rstrip().endswith("?")
+    for line in (line0, line1):
+        assert tbrowse._cell_width(line) <= _row_cap(80)
+
+
+def test_table_min_width_boundary_and_growth():
+    rows = [_mk_attempt(preview="p", verdict="pass")]
+    floor = tbrowse._table_min_width(tbrowse._attempt_fixed(len(rows)))
+
+    h_at, rows_at = tbrowse._attempt_table(rows, floor)
+    h_below, _ = tbrowse._attempt_table(rows, floor - 1)
+
+    assert "PREVIEW" not in h_at
+    assert tbrowse._cell_width(h_at) <= _row_cap(floor)
+    assert all(tbrowse._cell_width(_flat(t)) <= _row_cap(floor) for t in rows_at)
+    assert h_below == h_at  # the tightest layout stops deforming below the floor
+    assert tbrowse._cell_width(h_below) > _row_cap(floor - 1)  # the declared clipping floor
+    assert (
+        tbrowse._table_min_width(tbrowse._attempt_fixed(10)) == tbrowse._table_min_width(tbrowse._attempt_fixed(9)) + 1
+    )
+
+
+def test_table_cjk_cells_stay_within_budget():
+    rows = [_mk_attempt(preview="宽字符预览" * 8, verdict="pass")]
+
+    _header, row_tokens = tbrowse._attempt_table(rows, 80)
+    assert tbrowse._cell_width(_flat(row_tokens[0])) <= _row_cap(80)
+
+    sessions = [tbrowse.SessionRow(key="cli:a", title="中文标题" * 12, attempts=rows, end=None)]
+    _sh, srows = tbrowse._session_table(sessions, 80)
+    assert tbrowse._cell_width(_flat(srows[0])) <= _row_cap(80)
+
+
+def test_table_sanitizes_untrusted_cells(state, workspace):
+    """A corrupt verdict sidecar or malformed timestamp must not split a table
+    row: read_verdicts only guarantees a non-empty string status, and cwidth
+    math alone would let newlines and control characters through."""
+    span = _span("trace-1", session_key="cli:a")
+    span["startTime"] = "2026-\n08\t20T1\x07:00:00"
+    span["endTime"] = "2026-\r08-20T11:00:00"
+    _write_log(state / "logs" / "audit-spans.log", [span])
+    (state / "verdicts.jsonl").write_text(
+        json.dumps({"attempt_id": "trace-1", "status": "bad\nsta\rtus\x07x", "source": "user", "ts": "t"}) + "\n",
+        encoding="utf-8",
+    )
+
+    (srow,) = tbrowse.scan_sessions(workspace)
+    _ah, row_tokens = tbrowse._attempt_table(srow.attempts, 100)
+    _sh, srows = tbrowse._session_table([srow], 100)
+
+    for line in [_flat(row_tokens[0]), _flat(srows[0])]:
+        assert "\n" not in line and "\r" not in line and "\x07" not in line
+        assert tbrowse._cell_width(line) <= _row_cap(100)
+
+
+def test_boolean_cells_use_success_style_and_resolve_green():
+    rows = [_mk_attempt(pinned=True, merged=False), _mk_attempt(key="t2", pinned=False, merged=True)]
+
+    _h, row_tokens = tbrowse._attempt_table(rows, 100)
+
+    assert [(s, t) for s, t in row_tokens[0] if t == "✓"] == [("class:success", "✓")]
+    assert [(s, t) for s, t in row_tokens[1] if t == "✓"] == [("class:success", "✓")]
+
+    questionary = pytest.importorskip("questionary")
+    create_pipe_input, DummyOutput = _pipe_io()
+    from raven.cli._theme import PALETTE, build_questionary_style
+
+    with create_pipe_input() as pipe:
+        q = questionary.select(
+            "m",
+            choices=[questionary.Choice(tokens, value=i) for i, tokens in enumerate(row_tokens)],
+            input=pipe,
+            output=DummyOutput(),
+        )
+        tbrowse._inject_bindings(q)
+        control = tbrowse._find_inquirer_control(q.application)
+        styles = [tok[0] for tok in control.text() if tok[1] == "✓"]
+
+    style = build_questionary_style("dark")
+    success = PALETTE["dark"]["success"].lstrip("#")
+    pointed = style.get_attrs_for_style_str(styles[0])
+    plain = style.get_attrs_for_style_str(styles[1])
+    assert pointed.color == success and pointed.bold
+    assert plain.color == success and not plain.bold
+
+
+def test_below_floor_rows_render_clipped_and_selectable():
+    """Below the floor the real renderer clips overlong lines at the terminal
+    edge (prompt_toolkit never wraps option rows) and the menu stays usable.
+
+    The width puts the MERGED column entirely beyond the right edge: a
+    clipping renderer never emits that column name at all, while a wrapping
+    one would write it contiguously on a continuation row — so its absence
+    from the raw output stream pins clipping without any ANSI parsing."""
+    import io
+
+    questionary = pytest.importorskip("questionary")
+    from prompt_toolkit.data_structures import Size
+    from prompt_toolkit.output.vt100 import Vt100_Output
+
+    create_pipe_input, _dummy = _pipe_io()
+
+    rows = [_mk_attempt(verdict="pass", pinned=True, merged=True)]
+    layout = tbrowse._attempt_fixed(len(rows))
+    width = tbrowse._table_min_width(layout) - 10
+    gap = tbrowse._cell_width(tbrowse._COL_GAP)
+    merged_start = tbrowse._ROW_INDENT + sum(w + gap for _h, w in layout[:-1])
+    assert merged_start >= width  # premise: MERGED lies fully beyond the edge
+    header, row_tokens = tbrowse._attempt_table(rows, width)
+
+    class _Buf(io.StringIO):
+        encoding = "utf-8"
+
+    buf = _Buf()
+    output = Vt100_Output(buf, lambda: Size(rows=24, columns=width), term="xterm-256color")
+    with create_pipe_input() as pipe:
+        q = questionary.select(
+            "m",
+            choices=[questionary.Separator(header), questionary.Choice(row_tokens[0], value="v")],
+            input=pipe,
+            output=output,
+        )
+        tbrowse._inject_bindings(q)
+        pipe.send_text("\r")
+        assert q.application.run() == "v"
+
+    raw = buf.getvalue()
+    assert "VERDICT" in raw  # the visible region reached the stream
+    assert "MERGED" not in raw  # the clipped tail was never emitted, so no wrap row exists
 
 
 # ── real questionary key bindings ─────────────────────────────────────
@@ -1214,7 +1459,7 @@ def test_nondefault_workspace_flows_into_save_and_minimize(state, tmp_path, monk
     _browse(
         monkeypatch,
         [
-            ("pick", "attempt(s)"),
+            ("pick", "hello"),
             ("pick", "#1"),
             ("pick", "Save"),
             ("pick", "#1"),

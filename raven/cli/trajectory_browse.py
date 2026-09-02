@@ -23,6 +23,12 @@ Control flow contracts:
 - Prompts erase themselves once answered (``erase_when_done``); navigation is
   kept legible as breadcrumb lines whose dynamic text is markup-escaped
   (titles and previews are untrusted input).
+- Session and attempt lists are fixed-width table rows laid out for the
+  terminal width read at screen build time (a resize re-applies on the next
+  rebuild; below a table's minimum width the tightest layout is kept and
+  overlong lines are clipped at the terminal edge — prompt_toolkit does not
+  wrap option rows). Every dynamic cell is collapsed to one plain line before
+  any width math, and fixed column widths always fit their headers.
 - Once an action runs — normally, refused, cancelled, or failing controlled —
   the browser rescans everything (``_REFRESH``): actions like report bundle
   before confirming, so even an aborted one may have pinned the attempt.
@@ -37,6 +43,7 @@ Control flow contracts:
 from __future__ import annotations
 
 import logging
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -64,6 +71,11 @@ _UNSET = object()
 
 _TITLE_LIMIT = 48
 _PREVIEW_LIMIT = 32
+_TITLE_MIN = 12
+_PREVIEW_MIN = 8
+_COL_GAP = "  "
+_ROW_INDENT = 3
+_WIDTH_MARGIN = 1
 _STALE_MESSAGE = "The action was rejected or the selected attempt is no longer available; the list was refreshed."
 
 _HELP_SESSION = (
@@ -208,12 +220,16 @@ def _select_screen(
     help_lines: tuple[str, ...],
     choices: list,
     *,
+    header: str | None = None,
     extra_keys: tuple[str, ...] = (),
     default: Any = None,
 ) -> Any:
-    """One list screen: help separators under the title, Esc returning
-    ``_BACK``, extra keys returning a :class:`_KeyHit`."""
+    """One list screen: help separators under the title (then an optional
+    table header line), Esc returning ``_BACK``, extra keys returning a
+    :class:`_KeyHit`."""
     items: list[Any] = [questionary.Separator(line) for line in help_lines]
+    if header is not None:
+        items.append(questionary.Separator(header))
     items.extend(choices)
     # A single-space instruction suppresses questionary's default
     # "(Use arrow keys)" hint, which would duplicate the help separator.
@@ -237,17 +253,25 @@ def _str(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _collapse_text(value: Any) -> str | None:
+    """One plain line from an untrusted value: non-printable characters become
+    spaces and whitespace runs collapse. The single sanitization gate every
+    dynamic menu/table/breadcrumb text must pass before layout math."""
+    s = _str(value)
+    if s is None:
+        return None
+    collapsed = " ".join("".join(ch if ch.isprintable() else " " for ch in s).split())
+    return collapsed or None
+
+
 def _label_text(value: Any, limit: int) -> str | None:
     """Normalize an untrusted value into one plain menu-safe line.
 
     questionary renders plain text (no Rich markup, so no escaping), but the
     value may carry newlines or control characters that would break the
     one-item-one-line layout — collapse them, then truncate."""
-    s = _str(value)
-    if s is None:
-        return None
-    collapsed = " ".join("".join(ch if ch.isprintable() else " " for ch in s).split())
-    if not collapsed:
+    collapsed = _collapse_text(value)
+    if collapsed is None:
         return None
     return collapsed if len(collapsed) <= limit else collapsed[: limit - 1] + "…"
 
@@ -256,6 +280,140 @@ def _fmt_ts(ts: str | None) -> str:
     # Timestamps are unvalidated record strings too: normalize the slice so a
     # newline or control character cannot break the one-line menu layout.
     return _label_text((ts or "")[5:16].replace("T", " "), 16) or "?"
+
+
+def _fmt_ts_full(ts: str | None) -> str:
+    # Table time cells keep the year: the short menu stamp is ambiguous across
+    # years, and the column header names what the value means.
+    return _label_text((ts or "")[:16].replace("T", " "), 16) or "?"
+
+
+def _cell_width(text: str) -> int:
+    from prompt_toolkit.utils import get_cwidth
+
+    return get_cwidth(text)
+
+
+def _cell_truncate(text: str, width: int) -> str:
+    """Truncate by terminal display width (CJK cells are 2 wide; ``len()``
+    would misalign every following column)."""
+    if _cell_width(text) <= width:
+        return text
+    out: list[str] = []
+    used = 0
+    for ch in text:
+        w = _cell_width(ch)
+        if used + w > width - 1:
+            break
+        out.append(ch)
+        used += w
+    return "".join(out) + "…"
+
+
+def _cell_pad(text: str, width: int) -> str:
+    return text + " " * max(0, width - _cell_width(text))
+
+
+def _content_budget(width: int, ncols: int) -> int:
+    """Cells available for column content: the terminal width minus the
+    option-row indent, a 1-cell safety margin (the qmark sits on the message
+    line, not on option rows), and the inter-column gaps."""
+    return width - _ROW_INDENT - _WIDTH_MARGIN - (ncols - 1) * _cell_width(_COL_GAP)
+
+
+def _table_min_width(columns: list[tuple[str, int]]) -> int:
+    """Terminal width needed to fit these columns; below it the layout stops
+    deforming and the renderer clips overlong lines at the terminal edge
+    (the declared floor behavior — option rows never wrap)."""
+    return _ROW_INDENT + _WIDTH_MARGIN + sum(w for _, w in columns) + (len(columns) - 1) * _cell_width(_COL_GAP)
+
+
+def _session_layout(width: int) -> list[tuple[str, int]]:
+    avail = _content_budget(width, 3) - 8 - 16
+    return [("TITLE", max(_TITLE_MIN, min(_TITLE_LIMIT, avail))), ("ATTEMPTS", 8), ("LAST ACTIVITY", 16)]
+
+
+def _attempt_fixed(count: int) -> list[tuple[str, int]]:
+    # Fixed widths are max(header, widest legal value): VERDICT is its 7-cell
+    # header (statuses reach 5), so headers never need truncation.
+    return [
+        ("#", 1 + len(str(count))),
+        ("STARTED", 16),
+        ("TURNS", 5),
+        ("SPANS", 5),
+        ("VERDICT", 7),
+        ("PIN", 3),
+        ("MERGED", 6),
+    ]
+
+
+def _attempt_layout(width: int, count: int) -> list[tuple[str, int]]:
+    fixed = _attempt_fixed(count)
+    avail = _content_budget(width, len(fixed) + 1) - sum(w for _, w in fixed)
+    if avail >= _PREVIEW_MIN:
+        return [*fixed, ("PREVIEW", min(_PREVIEW_LIMIT, avail))]
+    return fixed
+
+
+def _header_line(layout: list[tuple[str, int]]) -> str:
+    cells = [h if i == len(layout) - 1 else _cell_pad(h, w) for i, (h, w) in enumerate(layout)]
+    return _COL_GAP.join(cells)
+
+
+def _row_tokens(cells: list[tuple[str, str]], layout: list[tuple[str, int]]) -> list[tuple[str, str]]:
+    """One table row as styled tokens; the last column is never padded so the
+    row ends at its content."""
+    tokens: list[tuple[str, str]] = []
+    for i, ((style, text), (_header, w)) in enumerate(zip(cells, layout)):
+        text = _cell_truncate(text, w)
+        pad = "" if i == len(layout) - 1 else " " * (w - _cell_width(text)) + _COL_GAP
+        if style == "class:text":
+            if text + pad:
+                tokens.append((style, text + pad))
+        else:
+            if text:
+                tokens.append((style, text))
+            if pad:
+                tokens.append(("class:text", pad))
+    return tokens
+
+
+def _session_table(sessions: list[SessionRow], width: int) -> tuple[str, list[list[tuple[str, str]]]]:
+    """Header line + one styled token row per session, fitted to ``width``."""
+    layout = _session_layout(width)
+    rows = []
+    for s in sessions:
+        cells = [
+            ("class:text", _collapse_text(s.title) or "?"),
+            ("class:text", str(len(s.attempts))),
+            ("class:text", _fmt_ts_full(s.end)),
+        ]
+        rows.append(_row_tokens(cells, layout))
+    return _header_line(layout), rows
+
+
+def _attempt_table(rows: list[AttemptRow], width: int) -> tuple[str, list[list[tuple[str, str]]]]:
+    """Header line + one styled token row per attempt.
+
+    Dynamic cells pass the collapse gate before any width math: verdicts come
+    from a sidecar that only guarantees a non-empty string, and ``get_cwidth``
+    does not neutralize newlines or control characters."""
+    layout = _attempt_layout(width, len(rows))
+    out = []
+    for i, r in enumerate(rows, start=1):
+        cells = [
+            ("class:text", f"#{i}"),
+            ("class:text", _fmt_ts_full(r.start)),
+            ("class:text", str(r.turns)),
+            ("class:text", str(r.spans)),
+            ("class:text", _collapse_text(r.verdict) or ""),
+            ("class:success", "✓") if r.pinned else ("class:text", ""),
+            ("class:success", "✓") if r.merged else ("class:text", ""),
+        ]
+        if len(layout) > len(cells):
+            cells.append(("class:text", _collapse_text(r.preview) or ""))
+        out.append(_row_tokens(cells, layout))
+    return _header_line(layout), out
 
 
 @dataclass
@@ -301,18 +459,18 @@ def _session_titles(workspace: Path) -> dict[str, str]:
     return titles
 
 
-def _fallback_title(session_key: str | None, start: str | None, channel: str | None = None) -> str:
+def _fallback_title(session_key: str | None, channel: str | None = None) -> str:
     if session_key is None:
         return "(no session)"
     # The span's own channel attribute is the primary source; only a
     # well-formed "<channel>:<chat>" key yields a prefix fallback — a
     # malformed key must not surface whole (menus never show session ids).
+    # No timestamp here: the table's LAST ACTIVITY column carries the time,
+    # so equally-named fallbacks stay distinguishable there.
     label = _label_text(channel, 16)
     if label is None and ":" in session_key:
         label = _label_text(session_key.split(":", 1)[0], 16)
-    stamp = _label_text((start or "")[:16].replace("T", " "), 16)
-    head = f"{label} session" if label else "unknown session"
-    return f"{head} · {stamp}" if stamp else head
+    return f"{label} session" if label else "unknown session"
 
 
 def scan_sessions(workspace: Path, state_dir: Path | None = None) -> list[SessionRow]:
@@ -421,7 +579,7 @@ def scan_sessions(workspace: Path, state_dir: Path | None = None) -> list[Sessio
     for key, rows in by_session.items():
         rows.sort(key=lambda r: r.start or "")
         title = _label_text(titles.get(key) if key else None, _TITLE_LIMIT) or _fallback_title(
-            key, rows[0].start, channel_by_session.get(key)
+            key, channel_by_session.get(key)
         )
         sessions.append(SessionRow(key=key, title=title, attempts=rows, end=max((r.end or "" for r in rows))))
     sessions.sort(key=lambda s: s.end or "", reverse=True)
@@ -554,13 +712,15 @@ def _merge_action(session_row: SessionRow, questionary: Any, style: Any) -> None
 def _attempt_screen(session_row: SessionRow, workspace: Path, questionary: Any, style: Any) -> object:
     """Pick an attempt and run one action. Returns _BACK or _REFRESH."""
     while True:
+        width = shutil.get_terminal_size((80, 24)).columns
+        header, row_tokens = _attempt_table(session_row.attempts, width)
         choices = [
-            questionary.Choice(attempt_label(i, row), value=(i, row))
-            for i, row in enumerate(session_row.attempts, start=1)
+            questionary.Choice(tokens, value=(i, row))
+            for i, (tokens, row) in enumerate(zip(row_tokens, session_row.attempts), start=1)
         ]
         if len(session_row.attempts) >= 2:
             choices.append(questionary.Choice("Merge attempts…", value=_MERGE))
-        picked = _select_screen(questionary, style, "Attempt:", _HELP_ATTEMPT, choices)
+        picked = _select_screen(questionary, style, "Attempt:", _HELP_ATTEMPT, choices, header=header)
         if picked is _BACK:
             return _BACK
         if picked is _MERGE:
@@ -605,8 +765,10 @@ def browse_trajectories(workspace: Path | None = None) -> None:
             selected = next((s for s in sessions if current_key is not _UNSET and s.key == current_key), None)
             if selected is None:
                 current_key = _UNSET
-                choices = [questionary.Choice(session_label(s), value=s) for s in sessions]
-                picked = _select_screen(questionary, RAVEN_STYLE, "Session:", _HELP_SESSION, choices)
+                width = shutil.get_terminal_size((80, 24)).columns
+                header, row_tokens = _session_table(sessions, width)
+                choices = [questionary.Choice(tokens, value=s) for tokens, s in zip(row_tokens, sessions)]
+                picked = _select_screen(questionary, RAVEN_STYLE, "Session:", _HELP_SESSION, choices, header=header)
                 if picked is _BACK:
                     return
                 selected = picked
