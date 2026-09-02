@@ -53,6 +53,7 @@ def grounded(launcher, tmp_path, monkeypatch):
     """A launcher pointed at a scratch home and state root, secrets set."""
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("PPT_STATE_ROOT", str(tmp_path / "state"))
+    monkeypatch.delenv("PPT_ACP_HOME", raising=False)
     monkeypatch.setenv("PPT_API_KEY", "sk-own")
     for name in ("PPT_MODEL", "PPT_API_BASE", "PPT_SERPER_API_KEY", "PPT_JINA_API_KEY"):
         monkeypatch.delenv(name, raising=False)
@@ -249,20 +250,50 @@ def test_the_rendered_file_is_owner_only_under_the_state_root(grounded, tmp_path
 
 def test_the_render_pins_the_home_mounts_the_skill_and_declares_no_plugin_dirs(grounded, tmp_path):
     """Three renders of the swap, one absence kept. The agent home is pinned
-    under the state root -- a pooled loop reads identity, sessions and skills
-    from ONE home, and unpinned it would share the host's (the oncall/code
-    partition shape). The engine's skill directory is mounted through
+    in the raven DATA directory, outside the host Agent home the surfaces
+    hand over as a session cwd (w109) -- a pooled loop reads identity,
+    sessions and skills from ONE home, and unpinned it would share the
+    host's. The engine's skill directory is mounted through
     skillForge.localDirs with always-on semantics (the verdict's feature-14
     collapse). plugins.dirs stays absent: the wheel arrives by entry point."""
     import raven_ppt
 
     data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
-    assert data["agents"]["defaults"]["workspace"] == str(tmp_path / "state" / "workspace")
+    assert data["agents"]["defaults"]["workspace"] == str(tmp_path / "home" / "subagent_sessions" / "raven-ppt" / "acp")
     mounts = data["skillForge"]["localDirs"]
     assert mounts == [
         {"path": str(Path(raven_ppt.__file__).parent / "skill"), "name": "ppt-engine", "alwaysEnabled": True}
     ]
     assert "dirs" not in data["plugins"]
+
+
+def test_the_engine_home_is_never_inside_the_configured_host_home(grounded, tmp_path):
+    """The w109 containment pin, both ways: the rendered engine home is outside
+    the host Agent home, and the runtime's own guard accepts the host home as a
+    session working directory against that engine home -- the exact dispatch
+    the web surface performs, which used to refuse."""
+    from raven.agent.workdir import validate_override
+
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    engine_home = Path(data["agents"]["defaults"]["workspace"]).resolve()
+    host_home = (tmp_path / "home" / "workspace").resolve()
+    assert engine_home != host_home
+    assert host_home not in engine_home.parents
+    host_home.mkdir(parents=True, exist_ok=True)
+    assert validate_override(str(host_home), agent_home=engine_home) == host_home
+    # And the other half of the fork's concern stays refused: the raven data
+    # directory (config.json, oauth tokens) now CONTAINS the engine home, and
+    # the engine home itself is nobody's working directory.
+    with pytest.raises(ValueError):
+        validate_override(str(tmp_path / "home"), agent_home=engine_home)
+    with pytest.raises(ValueError):
+        validate_override(str(engine_home), agent_home=engine_home)
+
+
+def test_ppt_acp_home_override_wins_outright(grounded, tmp_path, monkeypatch):
+    monkeypatch.setenv("PPT_ACP_HOME", str(tmp_path / "elsewhere" / "acp"))
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    assert data["agents"]["defaults"]["workspace"] == str(tmp_path / "elsewhere" / "acp")
 
 
 def test_an_operators_own_workspace_and_skill_mounts_survive_the_render(grounded, tmp_path):

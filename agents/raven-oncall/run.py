@@ -146,9 +146,23 @@ def render_config(source: Path) -> Path:
 
     root = state_root()
     defaults = config.setdefault("agents", {}).setdefault("defaults", {})
-    workspace = Path(defaults.get("workspace") or "workspace")
-    if not workspace.is_absolute():
-        workspace = (root / workspace).resolve()
+    # The engine's Agent home must sit OUTSIDE the host Agent home (the host
+    # hands its home over as the session cwd, and the runtime refuses a cwd
+    # that contains the engine's home), so the default comes from the shared
+    # placement helper -- the raven data directory, ONCALL_ACP_HOME overrides.
+    # The shipped config spells the default as the literal "workspace" (the
+    # fork's own spelling); that sentinel means "the default", wherever it
+    # should live today. An operator's own value is honoured as written
+    # (relative paths keep resolving under the state root, their documented
+    # shape); the state root itself still holds the work (oncall_flow store,
+    # rendered configs).
+    configured = defaults.get("workspace")
+    if configured and configured != "workspace":
+        workspace = Path(configured)
+        if not workspace.is_absolute():
+            workspace = (root / workspace).resolve()
+    else:
+        workspace = render.product_acp_home(PRODUCT, override=env_value("ONCALL_ACP_HOME"))
     defaults["workspace"] = str(workspace)
 
     plugins = config.setdefault("plugins", {})

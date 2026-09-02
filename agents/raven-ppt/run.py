@@ -210,9 +210,14 @@ def render_config(source: Path) -> Path:
 
     # The pooled loop reads identity, sessions, transcripts and the skill pool
     # from ONE agent home; unpinned it would be the host's own (the launcher
-    # inherits RAVEN_HOME), which this agent must not share -- the oncall/code
-    # partition shape. setdefault, so an operator's explicit workspace wins.
-    defaults.setdefault("workspace", str(root / "workspace"))
+    # inherits RAVEN_HOME), which this agent must not share -- and it must sit
+    # OUTSIDE the host Agent home, which the host hands over as the session
+    # cwd (the runtime refuses a cwd that contains the engine's home). The
+    # shared placement helper seats it in the raven data directory;
+    # PPT_ACP_HOME overrides. The state root keeps the work (rendered
+    # configs, sweep) exactly as before. setdefault, so an operator's
+    # explicit workspace wins.
+    defaults.setdefault("workspace", str(render.product_acp_home(PRODUCT, override=env_value("PPT_ACP_HOME"))))
 
     # The engine wheel ships the deck-authoring skill as package data; the
     # catalog mounts configured directories with always_enabled semantics
