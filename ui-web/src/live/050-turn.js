@@ -271,15 +271,7 @@ DS.transcript.openDagRun = function (runId) {
   if (id) {
     const d = RavenIslands.dag.run(sheetSession());
     const last = d && d.run_id === id ? d.order[d.order.length - 1] : null;
-    if (last) {
-      /* With what the node is FOR, not only its id. The run holds every node's
-         summary and this row handed over the slug alone, so a pane opened from
-         the trail was headed by a name for the machine while the same node opened
-         from the sheet was headed by what it did. */
-      const n = d.nodes && d.nodes.get ? d.nodes.get(last) : null;
-      dagOpenNode(id, { id: last, summary: (n && n.node_summary) || null });
-      return;
-    }
+    if (last) { dagOpenNode(id, { id: last }); return; }
   }
   setWs(true, 'agents');
 };
