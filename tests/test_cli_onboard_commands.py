@@ -2284,6 +2284,31 @@ def test_memory_rerank_reuse_llm_provider(
     assert everos["rerank"]["base_url"] == "https://api.deepinfra.com/v1/inference"
 
 
+def test_memory_rerank_default_is_qwen8b() -> None:
+    """The rerank role's shipped default is the 8B Qwen3 reranker; the 4B one
+    OpenRouter used to serve has been retired."""
+    role = onboard_everos._EVEROS_ROLES["rerank"]
+
+    assert role["example"] == "qwen/qwen3-reranker-8b"
+    assert "qwen/qwen3-reranker-8b" in role["recommendation"]
+
+
+def test_every_role_recommends_the_model_its_field_starts_on() -> None:
+    """The example is what the model field starts on. A recommendation naming a
+    different id sends the reader after a model the wizard will not offer."""
+    for name, role in onboard_everos._EVEROS_ROLES.items():
+        assert role["example"] in role["recommendation"], name
+
+
+def test_every_recommendation_reaches_the_catalog() -> None:
+    """A recommendation's English text is its catalog key, and `t()` answers
+    with the English source when a key is missing. Refreshing a model id
+    therefore drops that line's Chinese unless `zh.py` moves with it, and
+    nothing else in the suite would notice."""
+    for name, role in onboard_everos._EVEROS_ROLES.items():
+        assert role["recommendation"] in zh_catalog.MESSAGES, name
+
+
 def test_memory_seeded_role_is_not_configured(tmp_env: Path, everos_isolated: Path) -> None:
     """A seeded model with an empty api_key does not count as configured."""
     from raven.config.update_everos import set_everos_section
