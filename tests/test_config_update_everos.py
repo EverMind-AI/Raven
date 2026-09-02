@@ -470,3 +470,62 @@ def test_a_section_nobody_wrote_reads_as_empty(everos_home: Path) -> None:
 
     assert ue.everos_section("embedding") == {}
     assert ue.everos_section("llm") != {}
+
+
+class TestWhatABorrowedCredentialMustCarry:
+    """A url/key/header group is reachable only whole, and an everos section
+    holds a model, an api_key and a base_url. Anything the section cannot hold
+    is not lent at all -- lending the representable part hands over a
+    credential the far end refuses, which reads as a broken provider."""
+
+    @staticmethod
+    def _configure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fields: dict) -> None:
+        from raven.config.loader import set_config_path
+        from raven.config.update_providers import set_provider_fields
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        set_config_path(tmp_path / "config.json")
+        monkeypatch.setattr("raven.config.paths.get_workspace_path", lambda: tmp_path / "ws")
+        set_provider_fields("openai", fields)
+
+    def test_a_header_authenticated_group_is_declined(self, tmp_path, monkeypatch) -> None:
+        self._configure(
+            tmp_path,
+            monkeypatch,
+            {
+                "endpoints": [
+                    {
+                        "label": "tenant",
+                        "apiKey": "relay-key",
+                        "apiBase": "https://relay.internal/v1",
+                        "extraHeaders": {"X-Tenant": "acme"},
+                    }
+                ]
+            },
+        )
+
+        with pytest.raises(ValueError, match="X-Tenant"):
+            ue.borrow_provider_credentials("openai")
+
+    def test_flat_headers_reach_an_endpoint_that_names_none(self, tmp_path, monkeypatch) -> None:
+        """``provider_endpoints`` lets an entry inherit the section's flat
+        headers, so the group needs them even though the entry is silent."""
+        self._configure(
+            tmp_path,
+            monkeypatch,
+            {
+                "extra_headers": {"X-Tenant": "acme"},
+                "endpoints": [{"label": "a", "apiKey": "relay-key", "apiBase": "https://relay.internal/v1"}],
+            },
+        )
+
+        with pytest.raises(ValueError, match="X-Tenant"):
+            ue.borrow_provider_credentials("openai")
+
+    def test_a_group_with_no_headers_still_lends_key_and_address(self, tmp_path, monkeypatch) -> None:
+        self._configure(tmp_path, monkeypatch, {"api_key": "relay-key", "api_base": "https://relay.internal/v1"})
+
+        assert ue.borrow_provider_credentials("openai") == {
+            "api_key": "relay-key",
+            "base_url": "https://relay.internal/v1",
+        }

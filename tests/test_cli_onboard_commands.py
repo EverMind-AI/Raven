@@ -4575,35 +4575,12 @@ def test_the_wizard_stays_quiet_on_a_server_that_cannot_report(
     assert capsys.readouterr().out.strip() == ""
 
 
-# --------------------------------------------------------------------------- memory model pre-fill
+# --------------------------------------------------------------------------- memory model default
 
 
-def test_the_llm_role_pre_fills_the_users_own_main_model() -> None:
-    """A recommended model id is only a recommendation if the user's key can
-    reach it, and many keys cannot. Their main model is one they demonstrably
-    have, and the routing prefix has to come off for EverOS's bare client."""
-    got = onboard_everos._preferred_memory_model("llm", "openrouter/anthropic/claude-sonnet-4-5", "openrouter")
-
-    assert got == "anthropic/claude-sonnet-4-5"
-
-
-def test_no_pre_fill_when_the_picked_provider_is_not_the_main_models() -> None:
-    """No other provider carries that model id; pre-filling one it cannot serve
-    would turn Enter into a verification failure."""
-    got = onboard_everos._preferred_memory_model("llm", "openrouter/anthropic/claude-sonnet-4-5", "deepseek")
-
-    assert got is None
-
-
-def test_no_pre_fill_for_roles_that_do_not_serve_a_chat_model() -> None:
-    for section in ("embedding", "rerank", "multimodal"):
-        got = onboard_everos._preferred_memory_model(section, "openrouter/anthropic/claude-sonnet-4-5", "openrouter")
-        assert got is None, section
-
-
-def test_the_pre_filled_model_beats_the_recommended_one(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The recommendation is now a capability floor shown alongside, not the
-    value the field starts on."""
+def test_the_recommended_model_is_what_the_field_starts_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reusing a provider carries the key over, not the model. The roles want
+    different models, and the memory LLM is not the main chat model."""
     import questionary
 
     captured: dict = {}
@@ -4620,21 +4597,25 @@ def test_the_pre_filled_model_beats_the_recommended_one(monkeypatch: pytest.Monk
         return _FQ()
 
     monkeypatch.setattr(questionary, "autocomplete", _autocomplete)
-    monkeypatch.setattr(onboard_everos, "_fetch_everos_models", lambda *a, **kw: ["a/b", "gpt-4.1-mini"])
+    monkeypatch.setattr(
+        onboard_everos,
+        "_fetch_everos_models",
+        lambda *a, **kw: ["anthropic/claude-sonnet-4-5", "openai/gpt-4.1-mini"],
+    )
 
     onboard_everos._everos_pick_model(
         base_url="https://x/v1",
         api_key="k",
         example="gpt-4.1-mini",
         allow_back=False,
-        preferred="anthropic/claude-sonnet-4-5",
     )
 
-    assert captured["default"] == "anthropic/claude-sonnet-4-5"
+    assert captured["default"] == "openai/gpt-4.1-mini"
 
 
-def test_without_a_pre_fill_the_recommended_model_is_still_the_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Roles with no main model to reuse keep the old behaviour."""
+def test_a_prefixed_catalog_entry_is_offered_whole(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The recommendation is a bare id; the catalog carries routing prefixes.
+    The field has to start on the id the endpoint actually accepts."""
     import questionary
 
     captured: dict = {}
@@ -4654,10 +4635,432 @@ def test_without_a_pre_fill_the_recommended_model_is_still_the_default(monkeypat
         api_key="k",
         example="gpt-4.1-mini",
         allow_back=False,
-        preferred=None,
     )
 
     assert captured["default"] == "x/gpt-4.1-mini"
+
+
+def test_a_catalog_without_the_recommendation_pre_fills_nothing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Enter submits the default. Seeding the bare recommendation into a field
+    whose own catalog has just denied it buys a verification failure to learn
+    what the list already said."""
+    import questionary
+
+    captured: dict = {}
+
+    class _FQ:
+        def __init__(self) -> None:
+            self.application = SimpleNamespace(pre_run_callables=[])
+
+        def ask(self):
+            return "deepseek-chat"
+
+    monkeypatch.setattr(questionary, "autocomplete", lambda _m, **kw: (captured.update(kw), _FQ())[1])
+    monkeypatch.setattr(onboard_everos, "_fetch_everos_models", lambda *a, **kw: ["deepseek-chat", "deepseek-reasoner"])
+
+    onboard_everos._everos_pick_model(
+        base_url="https://api.deepseek.com/v1",
+        api_key="k",
+        example="gpt-4.1-mini",
+        allow_back=False,
+    )
+
+    assert captured["default"] == ""
+    # An unexplained empty field reads as a broken prompt.
+    out = " ".join(capsys.readouterr().out.split())
+    assert "does not list" in out and "gpt-4.1-mini" in out
+
+
+def test_the_recommendation_is_never_pre_filled_past_its_own_catalog(
+    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reusing the main model's provider stops at the key. When that provider
+    does not serve the recommended id, the field must not start on it -- that
+    is the case the removed main-model pre-fill used to carry."""
+    import questionary
+
+    from raven.config.update_providers import set_provider_fields
+
+    set_provider_fields("deepseek", {"api_key": "sk-ds"})
+
+    captured: dict = {}
+
+    class _FQ:
+        def __init__(self, a: object) -> None:
+            self._a = a
+            self.application = SimpleNamespace(pre_run_callables=[])
+
+        def ask(self) -> object:
+            return self._a
+
+    deepseek = next(p for p in onboard_everos._EVEROS_PROVIDERS if p["name"] == "deepseek")
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(("provider", deepseek)))
+    monkeypatch.setattr(questionary, "autocomplete", lambda _m, **kw: (captured.update(kw), _FQ("deepseek-chat"))[1])
+    monkeypatch.setattr(onboard_everos, "_fetch_everos_models", lambda *a, **kw: ["deepseek-chat", "deepseek-reasoner"])
+
+    result = onboard_everos._everos_pick_creds_and_model(
+        section="llm",
+        example="gpt-4.1-mini",
+        main_model="deepseek/deepseek-chat",
+        non_interactive=False,
+    )
+
+    assert captured["default"] == ""
+    assert result["api_key"] == "sk-ds"
+
+
+# --------------------------------------------------------------------------- memory key reuse
+
+
+def _everos_prov(name: str) -> dict:
+    """The curated provider entry the picker would hand the credential lookup."""
+    return next(p for p in onboard_everos._EVEROS_PROVIDERS if p["name"] == name)
+
+
+def test_a_provider_configured_in_raven_needs_no_second_key_entry(tmp_env: Path, everos_isolated: Path) -> None:
+    """The reuse that matters is not limited to the provider a previous step
+    used: embedding and rerank routinely move to another vendor, and raven
+    already holds that vendor's key."""
+    from raven.config.update_everos import set_everos_section
+    from raven.config.update_providers import set_provider_fields
+
+    set_provider_fields("siliconflow", {"api_key": "sk-sf"})
+    set_everos_section("llm", {"model": "m", "api_key": "k-llm", "base_url": "https://openrouter.ai/api/v1"})
+
+    creds, origin = onboard_everos._reusable_creds(
+        "embedding",
+        _everos_prov("siliconflow"),
+        "openrouter/anthropic/claude-sonnet-4-5",
+        onboard_everos._everos_section("llm"),
+    )
+
+    assert origin == "config"
+    assert creds == {"api_key": "sk-sf", "base_url": "https://api.siliconflow.cn/v1"}
+
+
+def test_the_memory_llms_own_key_answers_first_for_the_roles_after_it(tmp_env: Path, everos_isolated: Path) -> None:
+    """A key typed into the memory-LLM step lives in that section and nowhere
+    else, so it has to be read from there or it is lost."""
+    from raven.config.update_everos import set_everos_section
+
+    set_everos_section("llm", {"model": "m", "api_key": "k-llm", "base_url": "https://api.siliconflow.cn/v1"})
+
+    creds, origin = onboard_everos._reusable_creds(
+        "rerank", _everos_prov("siliconflow"), None, onboard_everos._everos_section("llm")
+    )
+
+    assert origin == "llm"
+    assert creds == {"api_key": "k-llm", "base_url": "https://api.siliconflow.cn/v1"}
+
+
+def test_the_main_chat_models_key_answers_for_the_memory_llm(tmp_env: Path, everos_isolated: Path) -> None:
+    from raven.config.update_providers import set_provider_fields
+
+    set_provider_fields("openrouter", {"api_key": "sk-or"})
+
+    creds, origin = onboard_everos._reusable_creds(
+        "llm", _everos_prov("openrouter"), "openrouter/anthropic/claude-sonnet-4-5", {}
+    )
+
+    assert origin == "main"
+    assert creds == {"api_key": "sk-or", "base_url": "https://openrouter.ai/api/v1"}
+
+
+def test_a_provider_with_nothing_on_file_still_costs_a_key_entry(tmp_env: Path, everos_isolated: Path) -> None:
+    """The reuse must not invent a key: an unconfigured provider has to ask,
+    and the picker's label has to stay silent about reuse for it."""
+    creds, origin = onboard_everos._reusable_creds("embedding", _everos_prov("dashscope"), None, {})
+
+    assert (creds, origin) == (None, "")
+
+
+def test_an_endpoint_held_key_is_lent_with_its_own_address(tmp_env: Path, everos_isolated: Path) -> None:
+    """A non-empty `endpoints` list replaces the flat api_key outright. Reading
+    the flat field lends a stale credential, and pairing it with the curated
+    vendor URL sends a private-gateway key to the public endpoint."""
+    from raven.config.update_providers import set_provider_fields
+
+    set_provider_fields(
+        "openrouter",
+        {
+            "api_key": "stale-flat",
+            "endpoints": [{"label": "gw", "apiKey": "endpoint-key", "apiBase": "https://endpoint.example/v1"}],
+        },
+    )
+
+    creds, origin = onboard_everos._reusable_creds("embedding", _everos_prov("openrouter"), None, {})
+
+    assert origin == "config"
+    assert creds == {"api_key": "endpoint-key", "base_url": "https://endpoint.example/v1"}
+
+
+def test_a_header_authenticated_provider_is_not_offered_for_reuse(
+    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An everos section carries a key and an address and no headers, so a group
+    that authenticates with one cannot be lent. The label has to stay silent
+    about reuse for it, or the step promises what it then cannot do."""
+    import questionary
+
+    from raven.config.update_providers import set_provider_fields
+
+    set_provider_fields(
+        "openai",
+        {
+            "endpoints": [
+                {
+                    "label": "tenant",
+                    "apiKey": "relay-key",
+                    "apiBase": "https://relay.internal/v1",
+                    "extraHeaders": {"X-Tenant": "acme"},
+                }
+            ]
+        },
+    )
+
+    assert onboard_everos._reusable_creds("llm", _everos_prov("openai"), "openai/gpt-4o-mini", {}) == (None, "")
+
+    labels: list[str] = []
+    asked: list[str] = []
+
+    class _FQ:
+        def __init__(self, **kw: object) -> None:
+            for choice in kw.get("choices", []):  # type: ignore[union-attr]
+                title = getattr(choice, "title", None)
+                if title:
+                    labels.append(str(title))
+
+        def ask(self) -> object:
+            return onboard_commands._BACK
+
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(**kw))
+    monkeypatch.setattr(_onboard_shared, "_prompt_api_key", lambda p, **kw: (asked.append(p), "k")[1])
+
+    onboard_everos._everos_pick_creds_and_model(
+        section="llm", example="gpt-4.1-mini", main_model="openai/gpt-4o-mini", non_interactive=False
+    )
+
+    offered = [line for line in labels if "OpenAI" in line and "OpenRouter" not in line]
+    assert offered and all("reuse Key" not in line for line in offered), offered
+
+
+def test_a_loan_that_cannot_speak_for_the_rerank_path_is_declined(tmp_env: Path, everos_isolated: Path) -> None:
+    """rerank reaches a different service path on the same vendor. A key issued
+    for some other address cannot speak for that path, and pointing it at the
+    curated rerank URL is exactly the pairing the lender exists to prevent."""
+    from raven.config.update_providers import set_provider_fields
+
+    set_provider_fields(
+        "dashscope",
+        {"endpoints": [{"label": "gw", "apiKey": "gw-key", "apiBase": "https://private.example/v1"}]},
+    )
+
+    dashscope = _everos_prov("dashscope")
+    assert dashscope["rerank_base_url"], "this test is about the roles that need a service-specific path"
+
+    declined, origin = onboard_everos._reusable_creds("rerank", dashscope, None, {})
+    # The same section still lends for a role that speaks the chat protocol.
+    lent, lent_origin = onboard_everos._reusable_creds("embedding", dashscope, None, {})
+
+    assert (declined, origin) == (None, "")
+    assert (lent, lent_origin) == (
+        {"api_key": "gw-key", "base_url": "https://private.example/v1"},
+        "config",
+    )
+
+
+def test_the_picker_dials_the_lent_address_not_the_curated_one(
+    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end: the key and the address it was issued for reach the everos
+    section as one group."""
+    import questionary
+
+    from raven.config.update_providers import set_provider_fields
+
+    set_provider_fields(
+        "openrouter",
+        {
+            "api_key": "stale-flat",
+            "endpoints": [{"label": "gw", "apiKey": "endpoint-key", "apiBase": "https://endpoint.example/v1"}],
+        },
+    )
+
+    dialled: dict = {}
+
+    class _FQ:
+        def __init__(self, a: object) -> None:
+            self._a = a
+            self.application = SimpleNamespace(pre_run_callables=[])
+
+        def ask(self) -> object:
+            return self._a
+
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(("provider", _everos_prov("openrouter"))))
+    monkeypatch.setattr(questionary, "text", lambda *a, **kw: _FQ("some/model"))
+    monkeypatch.setattr(
+        onboard_everos,
+        "_fetch_everos_models",
+        lambda base_url, api_key, **kw: dialled.update(base_url=base_url, api_key=api_key) or None,
+    )
+    monkeypatch.setattr(
+        _onboard_shared, "_prompt_api_key", lambda *a, **kw: pytest.fail("asked for a key raven already holds")
+    )
+
+    result = onboard_everos._everos_pick_creds_and_model(
+        section="embedding",
+        example="Qwen/Qwen3-Embedding-4B",
+        main_model=None,
+        non_interactive=False,
+    )
+
+    assert dialled == {"base_url": "https://endpoint.example/v1", "api_key": "endpoint-key"}
+    assert result["base_url"] == "https://endpoint.example/v1"
+    assert result["api_key"] == "endpoint-key"
+
+
+@pytest.mark.parametrize(
+    ("lang", "tag"),
+    [("en", "(configured, reuse Key)"), ("zh", "（已配置，复用 Key）")],
+)
+def test_the_picker_tags_every_provider_whose_key_is_on_file(
+    tmp_env: Path,
+    everos_isolated: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    lang: str,
+    tag: str,
+) -> None:
+    """Reuse the user cannot see is reuse they will not use -- they back out and
+    go hunt for the key instead."""
+    import questionary
+
+    from raven.config.update_everos import set_everos_section
+    from raven.config.update_providers import set_provider_fields
+
+    monkeypatch.setattr(i18n, "_language", lang)
+    set_provider_fields("siliconflow", {"api_key": "sk-sf"})
+    set_everos_section("llm", {"model": "m", "api_key": "k-llm", "base_url": "https://openrouter.ai/api/v1"})
+
+    labels: list[str] = []
+
+    class _FQ:
+        def __init__(self, **kw: object) -> None:
+            for choice in kw.get("choices", []):  # type: ignore[union-attr]
+                labels.append(str(getattr(choice, "title", "")))
+
+        def ask(self) -> object:
+            return onboard_commands._BACK
+
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(**kw))
+
+    out = onboard_everos._everos_pick_creds_and_model(
+        section="embedding",
+        example="Qwen/Qwen3-Embedding-4B",
+        main_model="openrouter/anthropic/claude-sonnet-4-5",
+        non_interactive=False,
+    )
+
+    assert out is onboard_commands._BACK
+    # Provider names go through the catalog too, so the name to look for is the
+    # one this language renders, not the English source.
+    tagged = [line for line in labels if tag in line]
+    assert any(t(_everos_prov("siliconflow")["label"]) in line for line in tagged), labels
+    assert not any(t(_everos_prov("deepinfra")["label"]) in line for line in tagged), labels
+
+
+def test_reusing_a_provider_does_not_reuse_its_model(
+    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The llm role reuses the main model's provider and key, and stops there:
+    the model field starts on the role's recommendation, not on the chat model
+    the user talks to."""
+    import questionary
+
+    from raven.config.update_providers import set_provider_fields
+
+    set_provider_fields("openrouter", {"api_key": "sk-or"})
+
+    captured: dict = {}
+
+    class _FQ:
+        def __init__(self, a: object) -> None:
+            self._a = a
+            self.application = SimpleNamespace(pre_run_callables=[])
+
+        def ask(self) -> object:
+            return self._a
+
+    openrouter = next(p for p in onboard_everos._EVEROS_PROVIDERS if p["name"] == "openrouter")
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(("provider", openrouter)))
+    monkeypatch.setattr(
+        questionary,
+        "autocomplete",
+        lambda _m, **kw: (captured.update(kw), _FQ("qwen/qwen3.8-flash"))[1],
+    )
+    monkeypatch.setattr(
+        onboard_everos,
+        "_fetch_everos_models",
+        lambda *a, **kw: ["anthropic/claude-sonnet-4-5", "openai/gpt-4.1-mini"],
+    )
+
+    onboard_everos._everos_pick_creds_and_model(
+        section="llm",
+        example="gpt-4.1-mini",
+        main_model="openrouter/anthropic/claude-sonnet-4-5",
+        non_interactive=False,
+    )
+
+    assert captured["default"] == "openai/gpt-4.1-mini"
+
+
+def test_picking_another_configured_provider_does_not_ask_for_its_key(
+    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end: the memory LLM is on OpenRouter, embedding moves to
+    SiliconFlow, and raven already holds a SiliconFlow key."""
+    import tomllib
+
+    import questionary
+
+    from raven.config.update_everos import set_everos_section
+    from raven.config.update_providers import set_provider_fields
+
+    set_provider_fields("siliconflow", {"api_key": "sk-sf"})
+    set_everos_section("llm", {"model": "m", "api_key": "k-llm", "base_url": "https://openrouter.ai/api/v1"})
+
+    class _FQ:
+        def __init__(self, a: object) -> None:
+            self._a = a
+
+        def ask(self) -> object:
+            return self._a
+
+    siliconflow = next(p for p in onboard_everos._EVEROS_PROVIDERS if p["name"] == "siliconflow")
+    answers = iter(["redo", ("provider", siliconflow)])
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(answers)))
+    monkeypatch.setattr(questionary, "text", lambda *a, **kw: _FQ("Qwen/Qwen3-Embedding-4B"))
+    monkeypatch.setattr(onboard_everos, "_fetch_everos_models", lambda *a, **kw: None)
+    monkeypatch.setattr(onboard_everos, "_verify_embedding_dim", lambda **kw: True)
+    monkeypatch.setattr(
+        _onboard_shared,
+        "_prompt_api_key",
+        lambda *a, **kw: pytest.fail("asked for a key raven already holds"),
+    )
+
+    onboard_everos._config_everos_role(
+        section="embedding",
+        main_model="openrouter/anthropic/claude-sonnet-4-5",
+        non_interactive=False,
+        warnings=[],
+    )
+
+    with everos_isolated.open("rb") as f:
+        everos = tomllib.load(f)
+    assert everos["embedding"]["api_key"] == "sk-sf"
+    assert everos["embedding"]["base_url"] == "https://api.siliconflow.cn/v1"
+    assert everos["embedding"]["model"] == "Qwen/Qwen3-Embedding-4B"
 
 
 # --------------------------------------------------------------------------- capability tiers
