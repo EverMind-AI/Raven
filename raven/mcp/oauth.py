@@ -106,14 +106,15 @@ CALLBACK_PORT = int(os.environ.get("RAVEN_OAUTH_CALLBACK_PORT") or 18860)
 
 The redirect URI is part of the registration an authorization server stores, so
 it has to survive restarts -- and it used to be the gateway's own port, which
-does not: ``serve`` probes forward when its preferred port is taken, and the
-browser then arrives at a redirect the registration does not hold, so the
-authorization has to be re-registered and the user sits through it again.
+does not: ``serve`` probes forward when its preferred port is taken, and
+``FileTokenStorage.get_client_info`` correctly refuses a registration whose
+redirect no longer matches. The consequence was silent and expensive: a port
+change re-ran dynamic client registration, the new client could not use the
+tokens minted for the old one, and a plugin the user had already authorized
+asked to be authorized again -- opening a browser to do it.
 
 A dedicated port, unrelated to whatever the page is served on, keeps one
-registration valid for the life of the install. When it drifts anyway the
-registration survives the drift and only an authorization-code flow pays for it
--- see ``_drop_drifted_registration``."""
+registration valid for the life of the install."""
 
 CALLBACK_PORT_TRIES = 8
 """How many consecutive ports to try before giving up on a stable one.
@@ -274,11 +275,10 @@ def delete_credentials(server: str) -> None:
 class FileTokenStorage:
     """``mcp.client.auth.TokenStorage`` backed by one JSON file per server.
 
-    A stored registration outlives a moved callback port: it is the
-    ``client_id`` half of the stored credential, and a refresh needs nothing
-    else. Only an authorization-code flow cares about the redirect, and that is
-    where the drift is acted on -- see the provider's
-    ``_drop_drifted_registration``.
+    ``get_client_info`` returns ``None`` when the stored registration's
+    redirect URIs don't include the current callback URL (serve's port
+    drifted) — the SDK then re-runs dynamic client registration; tokens are
+    kept and revalidated by the normal 401/refresh path.
     """
 
     def __init__(self, server: str, redirect_uri: str) -> None:
@@ -328,31 +328,16 @@ class FileTokenStorage:
         if atomic_update(self._path, _apply):
             os.chmod(self._path, 0o600)
 
-    def _tokens_in(self, data: dict):
+    async def get_tokens(self):
         from mcp.shared.auth import OAuthToken
 
-        raw = data.get("tokens")
+        raw = self._read().get("tokens")
         if not raw:
             return None
         try:
             return OAuthToken.model_validate(raw)
         except Exception:  # noqa: BLE001 — corrupt tokens mean "not authorized", not a crash
             return None
-
-    async def get_tokens(self):
-        return self._tokens_in(self._read())
-
-    async def get_credential(self):
-        """Tokens, their deadline, and the client that minted them, from one read.
-
-        Read together because they are one credential. A peer's refresh replaces
-        the tokens and a peer's handoff replaces the client, and taking them from
-        separate reads can land the tokens from after such a write beside the
-        client from before it -- a pair the authorization server answers with
-        ``invalid_grant``, which costs a browser for a credential that works.
-        """
-        data = self._read()
-        return self._tokens_in(data), self._expiry_in(data), self._client_in(data)
 
     async def set_tokens(self, tokens) -> None:
         payload = tokens.model_dump(mode="json", exclude_none=True)
@@ -367,53 +352,37 @@ class FileTokenStorage:
             # browser authorization, not the silent refresh the stored
             # refresh_token was for. Anchor the deadline so provider_for can seed
             # it back (see stored_token_expiry).
-            # Written even when there is no deadline, as an explicit null. The
-            # key's presence is what separates "this build stored these tokens
-            # and the server stated no expiry" from "written before the anchor
-            # existed, so their age is unknown" -- and those two have opposite
-            # answers. Popping it collapsed them, and a server that omits
-            # expires_in (legal, and usual for long-lived tokens) then read as
-            # unknown-age on every single flow: refresh per request, and with a
-            # rotating refresh token, a rotation per request.
-            data["expires_at"] = time.time() + float(expires_in) if expires_in is not None else None
+            if expires_in is not None:
+                data["expires_at"] = time.time() + float(expires_in)
+            else:
+                data.pop("expires_at", None)
             return data
 
         self._transact(_store)
 
     def stored_token_expiry(self) -> float | None:
-        """Absolute expiry of the stored tokens, for re-seeding the SDK."""
-        return self._expiry_in(self._read())
+        """Absolute expiry of the stored tokens, for re-seeding the SDK.
 
-    def _expiry_in(self, data: dict) -> float | None:
-        """When the stored tokens die; ``None`` for "they do not".
-
-        Three states, and the middle one only exists because the anchor was
-        added after the file format:
-
-        - ``expires_at`` holds a number: that instant.
-        - the key is missing and there is a refresh_token: age unknown, so 1.0
-          -- long expired, which makes the next request refresh rather than
-          trust an access token that may be days old. Not 0.0: the SDK's
-          ``is_token_valid`` tests ``not self.token_expiry_time``, so a falsy
-          expiry reads as "no expiry, still valid" and the heal never fires.
-          One-shot by construction: ``set_tokens`` always writes the key, so the
-          refresh this triggers is also what retires the state.
-        - the key holds null: this build stored these tokens and the server
-          stated no expiry. They do not expire, and re-deciding that on every
-          flow is what turned a one-time heal into a refresh per request.
+        ``None`` means "do not seed": no tokens, or tokens that declared no
+        expiry. A file written before ``expires_at`` existed but holding a
+        refresh_token returns 1.0 -- long expired -- so the first request
+        refreshes instead of trusting an access token of unknown age. Not 0.0:
+        the SDK's ``is_token_valid`` tests ``not self.token_expiry_time``, so a
+        falsy expiry reads as "no expiry, still valid" and the heal never fires.
         """
+        data = self._read()
         tokens = data.get("tokens")
         if not tokens:
             return None
-        if "expires_at" not in data:
-            return 1.0 if tokens.get("refresh_token") else None
-        expires_at = data["expires_at"]
-        if expires_at is None:
-            return None
-        try:
-            return float(expires_at)
-        except (TypeError, ValueError):
-            return None
+        expires_at = data.get("expires_at")
+        if expires_at is not None:
+            try:
+                return float(expires_at)
+            except (TypeError, ValueError):
+                return None
+        if tokens.get("refresh_token"):
+            return 1.0
+        return None
 
     def use_preregistered_client(self, client_info) -> None:
         """Stand in for dynamic registration when the file holds none.
@@ -424,47 +393,22 @@ class FileTokenStorage:
         """
         self._preregistered = client_info
 
-    def forget_client_info(self) -> None:
-        """Drop a stored registration that has just been superseded in memory.
-
-        Used where a drifted registration hands off to the catalog-declared
-        client: the tokens minted next belong to the declared client, and
-        leaving the superseded one here would have the next process pair them
-        with a ``client_id`` that did not mint them -- an ``invalid_grant`` on
-        the first refresh after a restart. The declared client is not written in
-        its place, for the reason ``use_preregistered_client`` gives: a copy
-        here would outlive the catalog entry that justified it.
-        """
-
-        def _drop(data: dict) -> dict | None:
-            if "client_info" not in data:
-                return None
-            data.pop("client_info", None)
-            return data
-
-        self._transact(_drop)
-
-    def preregistered_client(self):
-        """The catalog-declared client, if this storage was given one.
-
-        Read where a drifted registration is finally dropped: this one is
-        declared against the redirect in use, so it can run the browser flow the
-        dropped one cannot, and using it skips a registration round trip.
-        """
-        return self._preregistered
-
     async def get_client_info(self):
-        return self._client_in(self._read())
-
-    def _client_in(self, data: dict):
         from mcp.shared.auth import OAuthClientInformationFull
 
-        raw = data.get("client_info")
+        raw = self._read().get("client_info")
         if not raw:
             return self._preregistered
         try:
             info = OAuthClientInformationFull.model_validate(raw)
         except Exception:  # noqa: BLE001
+            return self._preregistered
+        if self._redirect_uri not in [str(u) for u in info.redirect_uris or []]:
+            # Port drift. A registration raven minted is dead the moment its
+            # redirect stops matching, but a pre-registered one is declared
+            # against a redirect of its own and was only accepted because that
+            # redirect is the one in use -- so it is the better fallback here
+            # than re-running registration.
             return self._preregistered
         return info
 
@@ -472,17 +416,7 @@ class FileTokenStorage:
         payload = client_info.model_dump(mode="json", exclude_none=True)
 
         def _store(data: dict) -> dict:
-            previous = (data.get("client_info") or {}).get("client_id")
             data["client_info"] = payload
-            if previous and previous != payload.get("client_id"):
-                # The tokens were minted for the client that just got replaced
-                # and for no other, so nothing can spend them any more. Leaving
-                # them is not merely untidy: the SDK writes the new registration
-                # before the browser step, so an authorization the user
-                # abandons would strand a token pair belonging to nobody, and
-                # the next connect spends a round trip learning that.
-                data.pop("tokens", None)
-                data.pop("expires_at", None)
             return data
 
         self._transact(_store)
@@ -949,10 +883,6 @@ def _coordinated_provider_class(base: type) -> type:
     closes the window where both read the same token before either stores its
     replacement -- and the waiter re-reads inside it, so it usually finds a valid
     access token and never refreshes at all.
-
-    It also decides when a registration whose redirect has drifted is finally
-    spent (:meth:`_drop_drifted_registration`), for the same reason: both are
-    about not throwing away a credential that still works.
     """
 
     class CoordinatedOAuthClientProvider(base):  # type: ignore[misc, valid-type]
@@ -972,97 +902,15 @@ def _coordinated_provider_class(base: type) -> type:
             if not self._initialized:
                 await self._initialize()
                 return
-            tokens, expiry, client = await self.context.storage.get_credential()
+            tokens = await self.context.storage.get_tokens()
             if tokens is not None:
                 self.context.current_tokens = tokens
-                # The deadline travels with the token, and it is read back from
-                # the same anchor provider_for seeds at construction rather than
-                # recomputed. ``update_token_expiry`` is ``now + expires_in``,
-                # which is only true at the moment a token is minted: applied to
-                # one read off disk it hands an hour-old access token a fresh
-                # hour, and an expired credential then reads as valid. The
-                # refresh branch never runs, the stale token 401s, and the
-                # handler for that is a browser -- the silent refresh this whole
-                # coordination exists to make possible, skipped.
-                self.context.token_expiry_time = expiry
-                # The client comes with them. A peer that hands authorization to
-                # the declared client stores tokens minted under it while this
-                # provider still holds the one it replaced, and spending the new
-                # pair under the old client_id is `invalid_grant` -- a browser
-                # for a credential that works. Tokens and client are one thing;
-                # adopting half of it is the bug this whole class exists to stop.
-                self.context.client_info = client
-
-        def _drop_drifted_registration(self) -> None:
-            """Forget a registration the current callback port has outlived.
-
-            Called at one place only -- the 401 that starts an authorization --
-            because that is the first and only moment the redirect matters. Up
-            to there the registration is worth keeping: a refresh sends
-            ``client_id`` and nothing else, so a moved port cannot spoil it. An
-            authorization is the opposite: it sends the redirect raven is
-            listening on right now, and against a client registered for a
-            different one the server answers ``invalid_redirect_uri`` -- an
-            error page where the user expected a login, with no way out but
-            deleting the credential by hand.
-
-            Deciding this at the entry to the flow instead does not work. "Will
-            this turn into an authorization" is not knowable there: a token the
-            anchor still calls valid can be revoked server-side, and that 401
-            reaches authorization without any refresh being attempted.
-            """
-            info = self.context.client_info
-            declared = self.context.client_metadata.redirect_uris
-            if info is None or not declared:
-                return
-            ours = str(declared[0])
-            if ours in [str(u) for u in info.redirect_uris or []]:
-                return
-            replacement = self.context.storage.preregistered_client()
-            if replacement is not None:
-                # Nothing else will overwrite the superseded registration on this
-                # path: with a client already in hand the SDK skips registration,
-                # so ``set_client_info`` never runs and the file would keep
-                # naming a client that did not mint the tokens about to land.
-                self.context.storage.forget_client_info()
-            logger.info(
-                "MCP OAuth: '{}' is registered for a callback that moved; {} on {}",
-                self._server_name,
-                "using the declared client" if replacement is not None else "registering again",
-                ours,
-            )
-            self.context.client_info = replacement
-
-        def _on_reply(self, reply) -> None:  # type: ignore[no-untyped-def]
-            """Watch the flow for the transitions the redirect starts mattering at.
-
-            The SDK reaches ``_perform_authorization`` from exactly two places: a
-            401, and a 403 whose ``WWW-Authenticate`` says ``insufficient_scope``.
-            Both send the redirect raven listens on now, so both have to be told
-            that a drifted registration is spent.
-
-            They differ in what happens next, and only in how much it costs. The
-            401 path passes the registration check, so clearing there earns a
-            fresh client on the port in hand. The 403 step-up authorizes without
-            passing it, so clearing there only exchanges the server's
-            ``invalid_redirect_uri`` for a local "no client info" -- unless a
-            catalog-declared client is available to hand over, which is aimed at
-            the redirect in use and does recover. Measured against a loopback
-            server, both outcomes match what the base branch did.
-
-            A 403 without ``insufficient_scope`` is left alone: the SDK does not
-            authorize on it, and clearing would leave this provider unable to
-            refresh for the rest of its life.
-            """
-            status = getattr(reply, "status_code", None)
-            if status == 403:
-                from mcp.client.auth.utils import extract_field_from_www_auth
-
-                if extract_field_from_www_auth(reply, "error") != "insufficient_scope":
-                    return
-            elif status != 401:
-                return
-            self._drop_drifted_registration()
+                # The deadline travels with the token. Adopting one without it
+                # left this provider judging a fresh access token against the
+                # expiry of the one it replaced, so a waiter that had just been
+                # handed a working credential refreshed it again immediately --
+                # spending a generation of a rotating token to learn nothing.
+                self.context.update_token_expiry(tokens)
 
         async def async_auth_flow(self, request):  # type: ignore[no-untyped-def]
             await self._adopt_stored_tokens()
@@ -1079,7 +927,6 @@ def _coordinated_provider_class(base: type) -> type:
                         except StopAsyncIteration:
                             return
                         reply = yield outgoing
-                        self._on_reply(reply)
                 finally:
                     await inner.aclose()
             lock = _REFRESH_LOCKS.setdefault(self._server_name, asyncio.Lock())
@@ -1117,7 +964,6 @@ def _coordinated_provider_class(base: type) -> type:
                         except StopAsyncIteration:
                             return
                         reply = yield outgoing
-                        self._on_reply(reply)
                 finally:
                     await inner.aclose()
             finally:

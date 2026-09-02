@@ -49,10 +49,12 @@ export function subscribe(l: () => void): () => void {
 export function touch(): void {
   epoch += 1
   /* Written from here rather than from the three callers, because in-place
-     mutation is how this store works: `dag.run_completed` folds the run by
-     writing `d.folded` and calling this, so a fold recorded only in `fold()`
-     would miss the one the run does to itself. Cheap enough to do per event --
-     two ids per open sheet, and there are never many. */
+     mutation is how this store works: a fold recorded only in `fold()` would
+     miss one written straight onto the run and announced through here. Nothing
+     does that today -- `dag.run_completed` used to fold the run itself and no
+     longer touches the flag -- but the persistence still belongs on the
+     announcement rather than on one of the ways to reach it. Cheap enough to do
+     per event: two ids per open sheet, and there are never many. */
   for (const [key, r] of RUNS) KEPT.write(key, { run: r.run_id, folded: !!r.folded })
   for (const l of listeners) l()
 }

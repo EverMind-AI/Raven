@@ -95,12 +95,8 @@ function DeliverableRow({ row, here }: { row: DeliveryRow; here: boolean }): JSX
   const size = deliveries.humanSize(row.size)
   /* A row recovered from the gateway's registry has no turn to name -- it says
      what the file is and leaves the reading position out rather than inventing
-     one. A delegated stream's row is the same case for a different reason: it
-     HAS a turn, and that turn is its own stream's. Each of them counts from one,
-     so drawing it here would put a sub-agent's second turn on a conversation
-     that has had five and call it the same number. */
-  const mine = row.scope === deliveries.SESSION
-  const when = here || !mine || row.turn == null ? '' : t('gui.ws.dlv_turn', { n: String(row.turn) })
+     one. */
+  const when = here || row.turn == null ? '' : t('gui.ws.dlv_turn', { n: String(row.turn) })
   const meta = [row.name, size, when].filter(Boolean).join(' \u00b7 ')
   return (
     <button
@@ -136,25 +132,16 @@ function DeliverablesNav(): JSX.Element {
     return <DeskEmpty kind="deliverables" title={t('gui.ws.dlv_none')} hint={t('gui.ws.dlv_none_sub')} />
   }
   const now = workspace.currentTurn()
-  /* "This turn" is the reader's position in THIS conversation, so only a row the
-     conversation delivered can be in it. A delegated stream counts its own turns
-     from one, and a sub-agent's fifth was grouped as "this turn" whenever the
-     conversation happened to be on five. */
-  const here = (row: DeliveryRow): boolean => row.scope === deliveries.SESSION && row.turn === now
-  /* Two headings for two groups, not one per run of rows. Emitting a heading
-     whenever the key changed from the row before was right while the list was
-     sorted by turn and same-turn rows were therefore adjacent; ranked by when
-     each delivery happened, two streams interleave and that drew "This turn" /
-     "Earlier" / "This turn". Each group keeps the ranking inside it. */
-  const groups: Array<[string, DeliveryRow[]]> = [
-    ['gui.ws.turn_now', rows.filter(here)],
-    ['gui.ws.turn_earlier', rows.filter((row) => !here(row))],
-  ]
   const out: JSX.Element[] = []
-  groups.forEach(([key, group]) => {
-    if (!group.length) return
-    out.push(<div key={`grp:${key}`} className="desk-grp">{t(key)}</div>)
-    group.forEach((row) => out.push(<DeliverableRow key={row.path} row={row} here={here(row)} />))
+  let group: string | null = null
+  rows.forEach((row) => {
+    const here = row.turn === now
+    const key = here ? 'gui.ws.turn_now' : 'gui.ws.turn_earlier'
+    if (key !== group) {
+      group = key
+      out.push(<div key={`grp:${key}:${row.path}`} className="desk-grp">{t(key)}</div>)
+    }
+    out.push(<DeliverableRow key={row.path} row={row} here={here} />)
   })
   return <div className="desk-list">{out}</div>
 }

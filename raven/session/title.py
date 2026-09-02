@@ -2,7 +2,7 @@
 
 Naming a session is a side errand, not part of the turn: the caller fires this
 concurrently with the turn it names and takes the mechanical title already in
-place (``manager.derive_title``) whenever anything here declines to answer.
+place (``manager._derive_title``) whenever anything here declines to answer.
 Every failure mode therefore returns ``None`` rather than raising -- a session
 that could not be named is not a session that failed.
 

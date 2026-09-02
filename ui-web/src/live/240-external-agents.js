@@ -154,7 +154,7 @@ function dagOpenNode(runId, n) {
    answer. Assigned as fields, the way live/060-parked.js and
    live/190-session-actions.js add theirs -- the source object itself was built
    back in live/040-history.js. */
-DS.transcript.openDagNode = (runId, nodeId, summary) => dagOpenNode(runId, { id: nodeId, summary });
+DS.transcript.openDagNode = (runId, nodeId) => dagOpenNode(runId, { id: nodeId });
 
 /* Per-node status for a card whose events are long gone: `dag.get` reads the
    run back off disk, reconciled against the registry, so a graph reopened from

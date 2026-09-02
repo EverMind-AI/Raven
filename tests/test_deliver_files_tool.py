@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from pathlib import Path
 
 import pytest
@@ -66,39 +65,6 @@ async def test_happy_path_manifest_shape(tool, tmp_path) -> None:
     assert entry["token"]
     assert entry["download_path"] == f"/files/download?token={entry['token']}"
     assert "bytes" not in entry and "content" not in entry
-
-
-async def test_the_manifest_says_when_the_delivery_happened(tool, tmp_path) -> None:
-    """One clock for both sides of the wire.
-
-    The page ranks deliveries against each other and had nothing to rank them by:
-    the message's own stamp is naive local wall time and only exists once the turn
-    is stored, so a delivery still streaming had no time at all. This field rides
-    the same manifest object down the live event and the replayed message, so both
-    read the same number.
-    """
-    before = int(time.time() * 1000)
-    _write(tmp_path / "chanwork", "report.pdf", b"12345")
-
-    await tool.execute(files=[{"path": "report.pdf"}], message="here")
-
-    manifest = tool.take_metadata()["raven_delivery"]
-    assert isinstance(manifest["delivered_at"], int)
-    assert before <= manifest["delivered_at"] <= int(time.time() * 1000) + 100
-
-
-def test_no_two_deliveries_share_a_stamp() -> None:
-    """A clock alone is not enough. `time.time()` repeats inside a millisecond --
-    fifty sequential calls through this tool were measured producing thirty-five
-    distinct values -- and two deliveries sharing a stamp leave the reader ranking
-    them by the order the page happened to paint them, which is the thing the
-    stamp exists to stop."""
-    from raven.agent.tools.deliver import _stamp
-
-    seen = [_stamp() for _ in range(50)]
-
-    assert len(set(seen)) == 50
-    assert all(b > a for a, b in zip(seen, seen[1:]))
 
 
 async def test_take_metadata_is_consumed_once(tool, tmp_path) -> None:
