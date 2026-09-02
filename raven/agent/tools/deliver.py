@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import mimetypes
-import time
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,36 +13,6 @@ from raven.agent import workdir
 from raven.agent.tools.deliverables import DeliverableStore
 from raven.agent.tools.filesystem import _with_current_root, resolve_path
 from raven.contracts.tool import Tool
-
-_last_stamp = 0
-
-
-def _stamp() -> int:
-    """Epoch milliseconds, and never the same number twice in one process.
-
-    The page ranks deliveries against each other and had nothing to rank them by:
-    the message's own stamp is naive local wall time and only exists once the turn
-    is stored, so a delivery still streaming had no time at all and a stored one
-    could not be compared against a browser's clock. One field written here rides
-    the same manifest down both paths -- the live event and the replayed message
-    carry the identical object -- so both sides read one clock.
-
-    A clock alone is not enough: `time.time()` on an ordinary box repeats inside a
-    millisecond, and fifty sequential calls through this tool were measured
-    producing thirty-five distinct values. Two deliveries sharing a stamp leave
-    the reader ranking them by the order the page happened to paint them, which is
-    the very thing this field exists to stop. So the value only ever moves
-    forward: it follows the wall clock, and steps by one when the clock has not
-    moved. The drift that introduces is a millisecond per collision, against a
-    number nothing measures durations from.
-
-    Module level rather than per instance: two tools in one process are two lanes
-    of one producer, and their deliveries have one order.
-    """
-    global _last_stamp
-    now = int(time.time() * 1000)
-    _last_stamp = now if now > _last_stamp else _last_stamp + 1
-    return _last_stamp
 
 
 @dataclass(frozen=True)
@@ -212,14 +181,7 @@ class DeliverFilesTool(Tool):
 
         if delivered:
             self._pending[ctx.session_key] = {
-                "raven_delivery": {
-                    "message": message,
-                    "files": delivered,
-                    "invalid": invalid,
-                    # When this delivery happened, once for the manifest because
-                    # its files were handed over together. See `_stamp`.
-                    "delivered_at": _stamp(),
-                }
+                "raven_delivery": {"message": message, "files": delivered, "invalid": invalid}
             }
         else:
             # A manifest nobody collected (the loop skipped take_metadata) must not

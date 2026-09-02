@@ -62,11 +62,7 @@ async function replay(intent: DeskIntent): Promise<void> {
      the node's own record and promotes it to the instance when the row lands,
      which is exactly what it does for a click on the sheet. */
   if (intent.run && intent.node) {
-    /* With the heading the reader had. The summary that produces it lives on the
-       run, and `resumeDag` reads that concurrently with this replay -- so asking
-       the run for it here is a race, and loses outright when the run's directory
-       has been cleaned. The note carries it instead. */
-    agents.openDagNode(intent.run, { id: intent.node, summary: intent.k === 'record' ? intent.label : null })
+    agents.openDagNode(intent.run, { id: intent.node })
     return
   }
   if (intent.k === 'agent') {

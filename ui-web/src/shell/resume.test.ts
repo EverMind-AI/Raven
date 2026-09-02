@@ -169,22 +169,6 @@ describe('opening a conversation after a reload', () => {
     expect(agentsState().open).toMatchObject({ kind: 'dag', run_id: 'r1', node: 'brief' })
   })
 
-  it('brings a graph node back headed by what it did', async () => {
-    /* The heading comes off the run's `node_summary`, and the run is read
-       concurrently with this replay -- and not at all once its directory has
-       been cleaned. Asking for it here would be a race that loses either way, so
-       the reader's own note carries it. */
-    openDeskAgentRecord({
-      kind: 'dag', run_id: 'r1', node: 'brief', agent: 'raven',
-      label: '写一份八月热点简报',
-    })
-    reload()
-
-    await resume('s1')
-
-    expect(agentsState().open).toMatchObject({ label: '写一份八月热点简报' })
-  })
-
   it('waits for the instance list before opening a direct chat', async () => {
     const row: InstanceRow = { sessionKey: 's1', agent: 'hermes', handle: 'h7', kind: 'cli', resumable: true }
     openDeskAgent(row)
