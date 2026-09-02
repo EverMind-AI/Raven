@@ -425,9 +425,9 @@ def _with_pictures(plan: IntakePlan, state: deck_state.DeckState) -> tuple[Erran
             how=(
                 "web_fetch on the URLs the material cites, for the pages themselves before their "
                 "pictures -- a page's own words are material, and on a deck about whoever wrote it they "
-                'are the most direct material there is. Then web_fetch(extractMode="images") on the '
-                "same URLs, which returns each picture with the caption its author wrote; a listing "
-                "that carries no caption is telling you the page gave its pictures no words, so those "
+                "are the most direct material there is. The fetched pages also show their pictures: "
+                "take each image link with the words printed beside it, the caption its author wrote; "
+                "a picture whose page printed no words about it arrives with nothing but pixels, so those "
                 "want ppt_figure_inspect before they are chosen. A paper cited as an abstract keeps its "
                 "figures in the PDF, so ppt_fetch that and ingest extracts them, and a source the "
                 "material names without linking is what web_search is for. ppt_fetch what you will "

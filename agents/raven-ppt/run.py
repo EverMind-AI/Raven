@@ -188,6 +188,16 @@ def render_config(source: Path) -> Path:
         engine_slice = config.setdefault("plugins", {}).setdefault("config", {}).setdefault(ENGINE_PLUGIN_ID, {})
         engine_slice.setdefault("imageSearch", {}).setdefault("apiKey", serper_key)
 
+    # The proxy walks the same bridge (G3, the Serper key's shape again): the
+    # fork's one tools.web.proxy fed the web tools AND every deck tool, and
+    # ppt_fetch is trust_env=False on purpose, so an environment proxy cannot
+    # stand in -- a config that proxies web_search while the deck tools dial
+    # bare would split the face without a sound.
+    web_proxy = ((config.get("tools") or {}).get("web") or {}).get("proxy")
+    if web_proxy:
+        engine_slice = config.setdefault("plugins", {}).setdefault("config", {}).setdefault(ENGINE_PLUGIN_ID, {})
+        engine_slice.setdefault("webProxy", web_proxy)
+
     # The migration floor for the retired fork key (D4): the shipped config no
     # longer carries tools.ppt, but an operator's carried copy might, and the
     # trunk loader would ignore it without a word -- the knobs look honoured
