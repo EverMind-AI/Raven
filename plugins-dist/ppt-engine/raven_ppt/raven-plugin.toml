@@ -1,0 +1,80 @@
+# ppt-engine: the Raven-PPT deck engine as a standalone plugin distribution.
+#
+# Config slice (plugins.config["ppt-engine"]): enabled (the product gate --
+# absent or false means no surface is cast, the D6 shape) plus the fork's
+# tools.ppt knobs in the product config's camelCase: profile, composerModel,
+# renderDpi, renderConcurrency, and the two the shipped slice leaves to their
+# fork defaults, viewsPerCall and deckName. Plugin-only keys: webProxy and
+# imageSearch.apiKey (falls back to $SERPER_API_KEY).
+#
+# config_schema stays empty on purpose: admission with an empty declaration is
+# verbatim pass-through, and the slice is validated by the plugin's own
+# EngineConfig (raven_ppt/plugin/config.py), which owns the slice shape.
+
+[plugin]
+id = "ppt-engine"
+version = "0.1.0"
+display_name = "PPT Engine"
+enabled_by_default = true
+
+# The turn-frame hook: material staging into the turn's working directory on
+# the way in (before_user_inbound, rewriting the model's view of the task
+# text), deck verification and the MEDIA announcement on the way out
+# (after_send). One row because the two phases share one bookkeeping: what a
+# turn staged is what its prompt block lists, and the before-snapshot the
+# inbound fire takes is what the send fire verifies against.
+
+[[plugin.contributes.hooks]]
+name = "ppt_engine"
+factory = "raven_ppt.plugin:make_hook"
+
+# The deck tool set. Every factory declines when the slice leaves the engine
+# off, and the ten fork tools also decline when python-pptx/Pillow cannot
+# import -- the fork assembly's returns-[] contract, said as plugin admission.
+# No row shadows a built-in: the fork's web_search(kind="images") face is
+# contributed under its own name (ppt_image_search, D2), which also declines
+# without a Serper key rather than advertise a tool whose every call errors.
+
+[[plugin.contributes.tools]]
+name = "ppt_prepare"
+factory = "raven_ppt.plugin:make_ppt_prepare"
+
+[[plugin.contributes.tools]]
+name = "ppt_brief"
+factory = "raven_ppt.plugin:make_ppt_brief"
+
+[[plugin.contributes.tools]]
+name = "ppt_fetch"
+factory = "raven_ppt.plugin:make_ppt_fetch"
+
+[[plugin.contributes.tools]]
+name = "ppt_generate_image"
+factory = "raven_ppt.plugin:make_ppt_generate_image"
+
+[[plugin.contributes.tools]]
+name = "ppt_ingest"
+factory = "raven_ppt.plugin:make_ppt_ingest"
+
+[[plugin.contributes.tools]]
+name = "ppt_figure_inspect"
+factory = "raven_ppt.plugin:make_ppt_figure_inspect"
+
+[[plugin.contributes.tools]]
+name = "ppt_outline"
+factory = "raven_ppt.plugin:make_ppt_outline"
+
+[[plugin.contributes.tools]]
+name = "ppt_template"
+factory = "raven_ppt.plugin:make_ppt_template"
+
+[[plugin.contributes.tools]]
+name = "ppt_build"
+factory = "raven_ppt.plugin:make_ppt_build"
+
+[[plugin.contributes.tools]]
+name = "ppt_review"
+factory = "raven_ppt.plugin:make_ppt_review"
+
+[[plugin.contributes.tools]]
+name = "ppt_image_search"
+factory = "raven_ppt.plugin:make_ppt_image_search"
