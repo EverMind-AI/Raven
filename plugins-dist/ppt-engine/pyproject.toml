@@ -1,7 +1,7 @@
 [project]
 name = "ppt-engine"
-version = "0.1.0"
-description = "Raven-PPT deck engine as a standalone raven plugin: eleven deck tools and the material/deck turn hook"
+version = "0.2.0"
+description = "Raven-PPT deck engine as a standalone raven plugin: eleven deck tools and the material/identity turn hook"
 requires-python = ">=3.12"
 license = "Apache-2.0"
 authors = [

@@ -13,16 +13,18 @@
 
 [plugin]
 id = "ppt-engine"
-version = "0.1.0"
+version = "0.2.0"
 display_name = "PPT Engine"
 enabled_by_default = true
 
-# The turn-frame hook: material staging into the turn's working directory on
-# the way in (before_user_inbound, rewriting the model's view of the task
-# text), deck verification and the MEDIA announcement on the way out
-# (after_send). One row because the two phases share one bookkeeping: what a
-# turn staged is what its prompt block lists, and the before-snapshot the
-# inbound fire takes is what the send fire verifies against.
+# The turn-frame hook: on the way in (before_user_inbound) the first turn
+# seeds the carried deck identity into the granted agent home (write-if-
+# missing, then the host's own template sync), and every turn stages the
+# task's material into the turn's working directory, rewriting the model's
+# view of the task text; on the way out (after_send) the published deck is
+# verified and announced. One row because the phases share one bookkeeping:
+# what a turn staged is what its prompt block lists, and the before-snapshot
+# the inbound fire takes is what the send fire verifies against.
 
 [[plugin.contributes.hooks]]
 name = "ppt_engine"

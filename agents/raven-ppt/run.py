@@ -1,35 +1,33 @@
 #!/usr/bin/env python
-"""Host-side launcher for the Raven-PPT ACP server -- the B side.
+"""Host-side launcher for the Raven-PPT ACP server -- the B side, swapped.
 
-The vendored Raven-PPT (subagents/raven-ppt) carries a whole fork checkout;
-this product carries its assets only. It renders its config the way every
-agents/ product does -- secrets merged into a 0600 copy whose parent decides
-the data dir -- but the process it starts is still the fork checkout's own
-engine. The trunk runtime cannot serve this product yet for one reason with
-no gate-shaped second: installed raven has no deck engine at all -- no
-ppt_* tools, no template catalogue, no render loop -- until the engine lands
-as the ppt-engine plugin wheel (verdict C3, ruled (ii): a standalone
-distribution under plugins-dist/, its templates as sha256-pinned package
-data). Swapping the exec target today would install a deck agent that
-cannot build decks. The swap to ``python -m raven acp`` is the engine
-wave's own step; the rendered config already loads on both engines so that
-swap changes one exec line, not this file's shape.
+The engine this launcher serves is installed raven's own: the deck capability
+arrives as the ppt-engine wheel (plugins-dist/ppt-engine), discovered through
+the ``raven.plugins`` entry-point group -- eleven deck tools and the
+material/deck turn hook, with the twelve templates as sha256-pinned package
+data. The vendored fork checkout is no longer on the exec path; what remains
+of it here is the A side of the A/B verification, run by its own wrapper.
 
-The launch contract is the fork launcher's ACP half, and only that half:
-the one-turn CLI job hosting (material staging, deck verification, the 3h
-watchdog, MEDIA delivery) is dead freight -- its only callers were the
-fork's own benchmarks (dead-freight ruling 3) -- and is not rebuilt.
-What remains is the fork's render: refuse without any LLM key, give an
-own key to every provider block, honour PPT_MODEL/PPT_API_BASE on the
-own-key branch only, recalibrate the context window from the host's model
-catalog for whichever model won, and exec the checkout's own ``raven acp``
-from the checkout (its bundled templates and skills resolve from there).
+The launch contract is still the fork launcher's ACP half: refuse without any
+LLM key, give an own key to every provider block, honour PPT_MODEL/PPT_API_BASE
+on the own-key branch only, recalibrate the context window from the host's
+model catalog for whichever model won, render into a 0600 copy whose parent
+decides the data dir. Three renders are this hosting's own, each the trunk
+runtime's seat for something the fork engine did per checkout: the agent home
+is pinned under the state root (the fork fenced per-session workspaces inside
+its own process; a pooled loop reads identity, sessions and skills from ONE
+home, and that home must not be the host's), the engine's skill directory is
+mounted through ``skillForge.localDirs`` (the fork shipped the skill inside
+its checkout; the wheel ships it inside the package), and the retired
+``tools.ppt`` block is dropped from an operator's carried config with a
+one-line hint at its successor (the plugin slice renders the same knobs).
 stdout belongs to the protocol; every diagnostic goes to stderr.
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import sys
@@ -40,10 +38,8 @@ from raven.home import raven_home
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_CONFIG = HERE / "config.json"
-# The fork engine this launcher still hosts; retired at the exec-target swap,
-# which the ppt-engine wheel (plugins-dist/ppt-engine) must land first.
-DEFAULT_CHECKOUT = HERE.parent.parent / "subagents" / "raven-ppt" / "Raven-PPT"
 ENGINE_PLUGIN_ID = "ppt-engine"
+ENGINE_PACKAGE = "raven_ppt"
 
 PRODUCT = "raven-ppt"
 
@@ -74,6 +70,20 @@ def state_root() -> Path:
 def log(message: str) -> None:
     """Record a diagnostic without contaminating the protocol stream."""
     print(message, file=sys.stderr, flush=True)
+
+
+def engine_skill_dir() -> Path | None:
+    """The deck-authoring skill directory inside the installed engine wheel.
+
+    ``None`` when the wheel is absent -- serve() has already refused by then,
+    so this answers only for the render, and a config mounting a directory
+    that does not exist would earn a warning from the catalog rather than the
+    clean absence a None caller renders.
+    """
+    spec = importlib.util.find_spec(ENGINE_PACKAGE)
+    if spec is None or not spec.origin:
+        return None
+    return Path(spec.origin).parent / "skill"
 
 
 def recommended_llm() -> str:
@@ -165,42 +175,81 @@ def render_config(source: Path) -> Path:
     else:
         log(f"[run] window: {shipped_window} from config; the host catalog has no entry for {model or '(no model)'}")
 
-    # No plugins.dirs and no workspace pin, both deliberate. The fork engine
-    # consuming this render forbids plugins fields it does not know, and the
-    # ppt-engine wheel will arrive by entry point, never by directory; the
-    # fork's ACP hosting fences per-session deck projects itself and its
-    # launcher pinned no workspace, so pinning one here would be a new claim
-    # the A side never made.
+    # The picture-search key reaches both consumers from ONE source of truth:
+    # the tools.web slot AFTER apply_secret_slots, which is the env key when
+    # one is set and the host config's own tools.web.search.apiKey when not
+    # (the per-slot fallback this family pins). trunk's web_search reads that
+    # slot; the engine's ppt_image_search reads its slice key, so the merged
+    # value is copied across -- rendered from the env var alone, a host-keyed
+    # deploy would register web_search while the deck's own image search
+    # silently declined. setdefault twice: a slice that shipped a key keeps it.
+    serper_key = (((config.get("tools") or {}).get("web") or {}).get("search") or {}).get("apiKey")
+    if serper_key:
+        engine_slice = config.setdefault("plugins", {}).setdefault("config", {}).setdefault(ENGINE_PLUGIN_ID, {})
+        engine_slice.setdefault("imageSearch", {}).setdefault("apiKey", serper_key)
+
+    # The migration floor for the retired fork key (D4): the shipped config no
+    # longer carries tools.ppt, but an operator's carried copy might, and the
+    # trunk loader would ignore it without a word -- the knobs look honoured
+    # and are not. Dropped here, once, with the successor named.
+    tools = config.get("tools")
+    if isinstance(tools, dict) and tools.pop("ppt", None) is not None:
+        log(f'[run] config: tools.ppt retired; the engine reads plugins.config["{ENGINE_PLUGIN_ID}"] (same knobs)')
+
     root = state_root()
+
+    # The pooled loop reads identity, sessions, transcripts and the skill pool
+    # from ONE agent home; unpinned it would be the host's own (the launcher
+    # inherits RAVEN_HOME), which this agent must not share -- the oncall/code
+    # partition shape. setdefault, so an operator's explicit workspace wins.
+    defaults.setdefault("workspace", str(root / "workspace"))
+
+    # The engine wheel ships the deck-authoring skill as package data; the
+    # catalog mounts configured directories with always_enabled semantics
+    # (the verdict's feature-14 collapse), so the mount is one rendered row.
+    # Merged per entry, keyed by path: an operator who mounts directories of
+    # their own keeps every row they wrote AND the engine row -- a whole-list
+    # default would silently unmount the deck skill the moment they added one,
+    # and the wheel's site-packages path is nothing they could re-spell by
+    # hand. The fork shipped this skill unconditionally with its checkout.
+    if skill_dir := engine_skill_dir():
+        rows = config.setdefault("skillForge", {}).setdefault("localDirs", [])
+        if isinstance(rows, list) and not any(
+            isinstance(row, dict) and row.get("path") == str(skill_dir) for row in rows
+        ):
+            rows.append({"path": str(skill_dir), "name": ENGINE_PLUGIN_ID, "alwaysEnabled": True})
+
+    # Still no plugins.dirs: the ppt-engine wheel arrives by entry point,
+    # never by directory (the everos-memory shape).
     root.mkdir(parents=True, exist_ok=True)
     render.sweep_stale_renders(root)
     return render.write_rendered(config, root)
 
 
 def serve(args: argparse.Namespace) -> int:
-    """Render the config, then become the fork engine's ``raven acp`` on stdio.
+    """Render the config, then become installed raven's ``raven acp`` on stdio.
 
-    The venv precheck comes before the render, the fork launcher's order: a
+    The engine precheck comes before the render, the fork launcher's order: a
     missing engine is the answer whoever installed this needs first, and no
     file holding merged secrets should exist for a run that cannot start.
-    ``execv``, not a subprocess -- stdin and stdout are the protocol, and a
-    middleman is one more buffer to flush. The chdir is load-bearing: the
-    fork runtime resolves its bundled templates and skills relative to the
-    checkout. Nothing runs after the exec, so the pid-liveness sweep in
+    After rendering, this process execs ``python -m raven acp`` on its own
+    interpreter (the roster row's ``{PYTHON}`` resolves at install time to
+    one that imports raven), so the server inherits this pid, process group
+    and stdio untouched. No chdir: the fork engine resolved its templates and
+    skills relative to its checkout, the wheel resolves them relative to its
+    own package. Nothing runs after the exec, so the pid-liveness sweep in
     render_config is the only cleanup this hosting has.
     """
-    checkout = Path(args.checkout).expanduser().resolve()
-    raven_bin = checkout / ".venv" / "bin" / "raven"
-    if not (raven_bin.is_file() and os.access(raven_bin, os.X_OK)):
+    if importlib.util.find_spec(ENGINE_PACKAGE) is None:
         raise SystemExit(
-            f"error: {raven_bin} is not an executable. Build the checkout's venv first:\n"
-            f"  cd {checkout} && uv sync --extra ppt"
+            f"error: the {ENGINE_PLUGIN_ID} plugin is not installed in this environment "
+            f"({sys.executable}). The deck engine ships as the {ENGINE_PLUGIN_ID} wheel "
+            f"(plugins-dist/{ENGINE_PLUGIN_ID}); install it where raven is installed."
         )
 
     rendered = render_config(Path(args.config).resolve())
-    log(f"[run] acp: serving from {checkout} with {rendered}")
-    os.chdir(checkout)
-    os.execv(str(raven_bin), [str(raven_bin), "acp", "--config", str(rendered)])
+    log(f"[run] exec {sys.executable} -m raven acp (config {rendered})")
+    os.execv(sys.executable, [sys.executable, "-m", "raven", "acp", "--config", str(rendered)])
     raise AssertionError("unreachable: execv does not return")
 
 
@@ -212,7 +261,6 @@ def main() -> int:
     # pending rebuild (dead-freight ruling 3).
     parser.add_argument("--acp", action="store_true", help="serve ACP on stdio (the only hosting)")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG))
-    parser.add_argument("--checkout", default=str(DEFAULT_CHECKOUT), help="fork checkout hosting the engine")
     args = parser.parse_args()
     return serve(args)
 

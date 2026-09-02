@@ -129,7 +129,10 @@ class _Shared:
 
     def hook(self) -> PptEngineHook:
         if self._hook is None:
-            self._hook = PptEngineHook()
+            # The locator's workspace is the agent home whose bootstrap seats
+            # the host's context builder reads; it is where the first-touch
+            # identity seeding lands (see hook.seed_identity).
+            self._hook = PptEngineHook(home=Path(self._ctx.services.workspace))
         return self._hook
 
     def deck_capable(self) -> bool:

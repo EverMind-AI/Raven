@@ -2563,7 +2563,7 @@ wheels = [
 
 [[package]]
 name = "ppt-engine"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "plugins-dist/ppt-engine" }
 dependencies = [
     { name = "cairosvg" },

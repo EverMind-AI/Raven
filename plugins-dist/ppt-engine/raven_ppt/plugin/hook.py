@@ -24,20 +24,31 @@ themselves on first touch, so a session reopened on an existing directory
 neither re-lists nor overwrites what an earlier process staged -- the fork's
 ``rehydrate`` semantics, keyed the way this host addresses sessions.
 
-The pw2b seat, named so the next wave lands in the right place: the fork
-seeded its three drifted identity prompts into every session's workspace
-(fork ``acp/engine.py:112-116`` -> ``sync_workspace_templates``). Those three
-files ride this wheel as package data (``raven_ppt/prompts/``); the write-if-
-missing seeding of ``workdir.current()`` belongs HERE, at the top of
-``before_user_inbound``, and lands with the exec swap -- not in this wave.
+Identity delivery (the exec-swap wave, landing the seat pw2a named): the
+fork seeded its three drifted identity prompts into every session's workspace
+(fork ``acp/engine.py:112-116`` -> ``sync_workspace_templates``), and its
+per-session ContextBuilder read them back from there. The trunk host pools
+one loop whose bootstrap seats live in the AGENT HOME workspace
+(``agent_memory/profile/soul.md`` / ``agent_memory/profile/agent.md`` /
+``TOOLS.md`` -- context builder and per-turn segments both read exactly
+these), so seeding ``workdir.current()`` would feed a directory nothing
+reads. The first ``before_user_inbound`` therefore seeds the HOME the
+locator granted this plugin (``ServiceLocator.workspace``): the three
+carried prompts from this wheel's package data first, write-if-missing, then
+the host's own ``sync_workspace_templates`` for the rest of the template
+set, exactly the fork's per-session order collapsed to once per home -- a
+later turn, or an operator's in-place edit, is never overwritten.
 """
 
 from __future__ import annotations
 
+import logging
+from importlib.resources import files as pkg_files
 from pathlib import Path
 
 from raven.agent import workdir
 from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
+from raven.utils.workspace import sync_workspace_templates
 from raven_ppt.plugin import materials
 
 MATERIALS_DIRNAME = "materials"
@@ -51,6 +62,41 @@ per-session ACP layer, which does not board; this hook is their home now.)
 """
 
 _METADATA_KEY = "ppt_engine"
+
+logger = logging.getLogger(__name__)
+
+#: Where each carried prompt lands in the agent home: the exact seats the
+#: host's context builder reads (builder BOOTSTRAP_FILES and the per-turn
+#: segment renderer name these three paths and no others).
+IDENTITY_SEATS = (
+    ("SOUL.md", Path("agent_memory") / "profile" / "soul.md"),
+    ("AGENTS.md", Path("agent_memory") / "profile" / "agent.md"),
+    ("TOOLS.md", Path("TOOLS.md")),
+)
+
+
+def seed_identity(home: Path) -> list[str]:
+    """Seed the deck identity into ``home``, write-if-missing, and report what landed.
+
+    The three drifted prompts first -- so the host's template sync below finds
+    them present and leaves them alone -- then the host's own sync for the
+    rest of the template set (USER/HEARTBEAT and the L4 stubs), which is the
+    fork's per-session ``sync_workspace_templates(session.root)`` collapsed to
+    once per home. Write-if-missing on every file: an operator's in-place edit
+    outlives every later launch, the fork's own contract.
+    """
+    seeded: list[str] = []
+    prompts = pkg_files("raven_ppt") / "prompts"
+    for name, seat in IDENTITY_SEATS:
+        target = home / seat
+        if target.exists():
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text((prompts / name).read_text(encoding="utf-8"), encoding="utf-8")
+        seeded.append(str(seat))
+    seeded.extend(sync_workspace_templates(home, silent=True))
+    return seeded
+
 
 _MALFORMED_SLICE_ERROR = 'the ppt-engine config slice is malformed; fix plugins.config["ppt-engine"]'
 
@@ -85,7 +131,9 @@ class MisconfiguredEngineHook(AgentHook):
 class PptEngineHook(AgentHook):
     """Material staging in, deck verification out, per turn."""
 
-    def __init__(self) -> None:
+    def __init__(self, home: Path | None = None) -> None:
+        self._home = home
+        self._seeded = False
         self._books: dict[str, tuple[list[tuple[str, Path]], set[str]]] = {}
 
     @property
@@ -101,6 +149,20 @@ class PptEngineHook(AgentHook):
         return books
 
     async def before_user_inbound(self, ctx: AgentHookContext) -> HookDecision:
+        if not self._seeded:
+            # First touch, not construction: the factory runs while the host
+            # is still assembling, and a seat this instance never serves a
+            # turn on is a home it has no business writing into.
+            self._seeded = True
+            if self._home is not None:
+                try:
+                    if seeded := seed_identity(Path(self._home)):
+                        logger.info("ppt-engine: seeded the deck identity into %s: %s", self._home, seeded)
+                except OSError as exc:
+                    # The turn must run either way; a home that cannot be
+                    # written is loud in the log, and the next process
+                    # retries because nothing was marked done on disk.
+                    logger.warning("ppt-engine: seeding the deck identity failed: %s", exc)
         bound = workdir.current()
         text = ctx.inbound_content
         if bound is None or not text or not text.strip():
@@ -148,4 +210,11 @@ class PptEngineHook(AgentHook):
         )
 
 
-__all__ = ["MATERIALS_DIRNAME", "OUT_DIRNAME", "MisconfiguredEngineHook", "PptEngineHook"]
+__all__ = [
+    "IDENTITY_SEATS",
+    "MATERIALS_DIRNAME",
+    "OUT_DIRNAME",
+    "MisconfiguredEngineHook",
+    "PptEngineHook",
+    "seed_identity",
+]

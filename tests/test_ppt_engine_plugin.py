@@ -316,3 +316,63 @@ def test_discovery_sees_the_distribution_through_the_entry_point() -> None:
 
     found = {record.manifest.id for record in PluginDiscovery(entry_points_group="raven.plugins").discover()}
     assert "ppt-engine" in found
+
+
+def test_the_first_turn_seeds_the_deck_identity_into_the_granted_home(tmp_path: Path) -> None:
+    """The fork seeded its three drifted prompts into every session workspace
+    and its per-session context builder read them back; the trunk host reads
+    identity from ONE agent home, so the hook's first turn seeds that home:
+    the wheel's carried bytes into the exact seats the context builder names,
+    then the host's own template sync for the rest -- write-if-missing all
+    the way down (bu5: the identity pieces ride the plugin that teaches the
+    behaviour, and the tree delivers what the charter says it carries)."""
+    import raven_ppt
+    from raven_ppt.plugin.hook import IDENTITY_SEATS
+
+    home = tmp_path / "home"
+    hook = plugin_module.make_hook(_ctx(dict(ENABLED), home))
+    wd = tmp_path / "session"
+    wd.mkdir()
+
+    async def run():
+        with workdir.bind(wd):
+            return await hook.before_user_inbound(AgentHookContext(session_key="s", inbound_content="a deck please"))
+
+    asyncio.run(run())
+    prompts = Path(raven_ppt.__file__).parent / "prompts"
+    for name, seat in IDENTITY_SEATS:
+        assert (home / seat).read_bytes() == (prompts / name).read_bytes(), seat
+    # The host's own template sync covered the rest of the set.
+    assert (home / "HEARTBEAT.md").is_file()
+    assert (home / "user_memory" / "profile" / "user.md").is_file()
+    # And the identity landed in the home, never in the turn's directory.
+    assert not (wd / "agent_memory").exists()
+
+
+def test_an_operators_identity_edit_outlives_every_later_first_turn(tmp_path: Path) -> None:
+    """Write-if-missing is the fork's own contract: a soul tuned in place is
+    never overwritten, by this process or the next."""
+    home = tmp_path / "home"
+    seat = home / "agent_memory" / "profile" / "soul.md"
+    seat.parent.mkdir(parents=True)
+    seat.write_text("my own deck voice\n", encoding="utf-8")
+    hook = plugin_module.make_hook(_ctx(dict(ENABLED), home))
+    wd = tmp_path / "session"
+    wd.mkdir()
+
+    async def run():
+        with workdir.bind(wd):
+            await hook.before_user_inbound(AgentHookContext(session_key="s", inbound_content="hi there"))
+
+    asyncio.run(run())
+    assert seat.read_text(encoding="utf-8") == "my own deck voice\n"
+    assert (home / "TOOLS.md").is_file(), "the missing seats are still filled"
+
+
+def test_the_sentinel_never_seeds(tmp_path: Path) -> None:
+    """A misconfigured slice proves nothing about intent; the fail-closed
+    seat refuses turns and writes nothing anywhere."""
+    home = tmp_path / "home"
+    sentinel = plugin_module.make_hook(_ctx({"enabled": "false"}, home))
+    asyncio.run(sentinel.before_user_inbound(AgentHookContext(session_key="s", inbound_content="hi")))
+    assert not home.exists()
