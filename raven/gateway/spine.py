@@ -73,11 +73,8 @@ class GatewayTurnRunner(AgentTurnRunner):
         # on TurnEnded/TurnFailed so the daemon does not accumulate.
         cid = _cid(req)
         self._sources[cid] = req.source
-        # The same per-turn rebinding RpcTurnRunner applies, but deliberately
-        # not its SUBAGENT widening: a channel session has no watched-signal to
-        # gate on, and widening here would regress an abandoned-channel
-        # question from an instant decline to a 600s stall. A channel user can
-        # answer (gateway_commands wires a QuestionBroker onto
+        # The same per-turn rebinding and origin gate RpcTurnRunner applies: a
+        # channel user can answer (gateway_commands wires a QuestionBroker onto
         # this tool, which renders clarify.request as an outbound message and
         # routes the reply back), while a CRON or otherwise background turn has
         # no reader and must decline rather than wait on nobody. Without this the

@@ -52,9 +52,6 @@ class FakeEmitter:
     def types(self) -> list[str]:
         return [e["type"] for _k, e in self.emitted]
 
-    def has_subscribers(self, session_key: str) -> bool:
-        return False
-
 
 class _RunTurnLoop:
     """Fake AgentLoop whose run_turn emits scripted spine events and fills the
@@ -290,64 +287,6 @@ async def test_a_tool_at_ask_user_without_ask_direct_binds_no_asker():
 
     assert not isinstance(tool, SupportsDirectAsk)
     assert loop.bound == (None, "tui:c1")
-
-
-class _WatchedEmitter(FakeEmitter):
-    """FakeEmitter that pretends a set of conversations have live viewers."""
-
-    def __init__(self, watched: set[str]):
-        super().__init__()
-        self._watched = watched
-
-    def has_subscribers(self, session_key: str) -> bool:
-        return session_key in self._watched
-
-
-async def test_a_subagent_relay_in_a_watched_conversation_binds_the_asker():
-    tool = _DirectAsk()
-    loop = _AskBindingLoop(tool)
-    runner = RpcTurnRunner(loop, _WatchedEmitter({"tui:c1"}), {}, {})
-    req = TurnRequest(
-        origin=Origin.SUBAGENT,
-        source=_src(),
-        text="done",
-        conversation="tui:c1",
-        turn_id="turn-s",
-        delegated={"kind": "dag", "label": "r1", "status": "ok"},
-    )
-    _events, emit = _collect()
-
-    await runner.run(req, emit, lambda: [])
-
-    asker, cid = loop.bound
-    assert cid == "tui:c1"
-    assert asker is not None
-    assert await asker.ask("proceed?", ["yes", "no"], "tui:c1") == "yes"
-    assert tool.asked == [("proceed?", ["yes", "no"], "tui:c1", 0, 1, None)]
-
-
-async def test_a_subagent_relay_nobody_watches_binds_no_asker():
-    tool = _DirectAsk()
-    loop = _AskBindingLoop(tool)
-    runner = RpcTurnRunner(loop, _WatchedEmitter(set()), {}, {})
-    req = TurnRequest(origin=Origin.SUBAGENT, source=_src(), text="done", conversation="tui:c1", turn_id="turn-s")
-    _events, emit = _collect()
-
-    await runner.run(req, emit, lambda: [])
-
-    assert loop.bound == (None, "tui:c1")
-
-
-async def test_a_cron_turn_binds_no_asker_even_in_a_watched_conversation():
-    tool = _DirectAsk()
-    loop = _AskBindingLoop(tool)
-    runner = RpcTurnRunner(loop, _WatchedEmitter({"tui:c1"}), {}, {})
-    req = TurnRequest(origin=Origin.CRON, source=_src(), text="job", conversation="cron:j1", turn_id="turn-c")
-    _events, emit = _collect()
-
-    await runner.run(req, emit, lambda: [])
-
-    assert loop.bound == (None, "cron:j1")
 
 
 async def test_runner_emits_eve22_synthetic_tool_complete_when_message_tool_fired():

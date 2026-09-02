@@ -968,27 +968,3 @@ async def test_the_autofill_is_read_at_construction_not_when_the_form_lands() ->
 
     assert result == {"action": "accept", "content": {"branch": "feat/x"}}
     assert asker.asked == []
-
-
-async def test_no_asker_declines_and_logs_why():
-    from loguru import logger
-
-    from raven.acp_client.asker import start_ask_turn
-    from raven.acp_client.elicitor import Elicitor
-
-    records: list[str] = []
-    sink_id = logger.add(lambda message: records.append(message.record["message"]), level="WARNING")
-    try:
-        start_ask_turn(None, conversation_id="")
-        got = await Elicitor("Coder", "h").elicit(
-            {
-                "sessionId": "s",
-                "mode": "form",
-                "message": "m",
-                "requestedSchema": {"type": "object", "properties": {"b": {"type": "string"}}},
-            }
-        )
-    finally:
-        logger.remove(sink_id)
-    assert got == {"action": "decline"}
-    assert any("no asker bound" in message for message in records)

@@ -134,11 +134,6 @@ class Elicitor:
             return elicitation.decline()
         asker, conversation_id = self._asker, self._conversation_id
         if asker is None or not conversation_id:
-            logger.warning(
-                "acp agent {!r}: elicitation declined for conversation {!r}: no asker bound",
-                self._agent,
-                conversation_id,
-            )
             return elicitation.decline()
 
         if self._cancelled:

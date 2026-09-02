@@ -597,19 +597,3 @@ async def test_the_autofill_is_read_at_construction_not_when_the_question_lands(
 
     assert sent.sent[0]["answer"] == "feat/x"
     assert asker.asked == []
-
-
-async def test_a_declined_question_logs_that_no_asker_was_bound():
-    """The decline is silent today, which left the 08:28 incident invisible in
-    the host log: the frame journal showed the question and the empty answer,
-    and nothing said nobody could answer it."""
-    from loguru import logger
-
-    records: list[str] = []
-    sink_id = logger.add(lambda message: records.append(message.record["message"]), level="WARNING")
-    try:
-        answer = await _ask_with(None, None, question="authorize write?")
-    finally:
-        logger.remove(sink_id)
-    assert answer == ""
-    assert any("no asker bound" in message for message in records)

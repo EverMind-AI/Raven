@@ -972,6 +972,137 @@ async def test_test_can_target_an_unconfigured_preset(config_path: Path, monkeyp
     assert out["ok"] is True
 
 
+async def test_an_acp_test_recomposes_the_live_agent_table(config_path: Path, monkeypatch) -> None:
+    # An acp test is a measurement, and `_test_acp` records the snapshot the
+    # roster reads `stateful` from. Without re-composing, the live table keeps the
+    # measurement it was built with, and an agent that just proved it can resume
+    # is still refused by `create_instance`.
+    from raven.agent.subagent.probe import TestResult
+
+    applied: list[list] = []
+
+    class _Loop:
+        def apply_agents(self, configs: list) -> None:
+            applied.append(configs)
+
+    async def fake_run_test(cfg, *, source):
+        return TestResult(cfg.name, source, "acp", True, "connected", None, 5)
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.run_test", fake_run_test)
+    out = await subagents_test({"name": "Coder", "source": "config"}, agent_loop_factory=lambda: _Loop())
+    assert out["ok"] is True
+    assert len(applied) == 1
+    assert "Coder" in [c.name for c in applied[0]]
+
+
+async def test_the_dispatcher_reaches_the_wrapper_that_carries_the_loop(config_path: Path, monkeypatch) -> None:
+    # The re-compose lives in the registration wrapper, not in `subagents_test`,
+    # which takes the loop as a keyword the tests above hand it directly. So
+    # registering the bare function instead leaves every real caller on
+    # `agent_loop_factory=None`, `_hot_apply` returns on its first line, and the
+    # stale-table bug is back in full with the rest of this file still green.
+    # Dispatching through the registered name is what pins the wiring;
+    # `test_rpc_registration.py` asserts only that the name is registered.
+    from raven.agent.subagent.probe import TestResult
+
+    applied: list[list] = []
+
+    class _Loop:
+        def apply_agents(self, configs: list) -> None:
+            applied.append(configs)
+
+    async def fake_run_test(cfg, *, source):
+        return TestResult(cfg.name, source, "acp", True, "connected", None, 5)
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.run_test", fake_run_test)
+    dispatcher = Dispatcher()
+    register_subagents_methods(dispatcher, agent_loop_factory=lambda: _Loop())
+
+    frame = await dispatcher.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "subagents.test",
+            "params": {"name": "Coder", "source": "config"},
+        }
+    )
+    assert "error" not in frame, frame
+    assert frame["result"]["ok"] is True
+    assert len(applied) == 1
+    assert "Coder" in [c.name for c in applied[0]]
+
+
+async def test_a_cli_test_leaves_the_agent_table_alone(config_path: Path, monkeypatch) -> None:
+    # A cli test writes no capability snapshot, so there is nothing new for the
+    # table to pick up, and the door re-reads config for nothing.
+    from raven.agent.subagent.probe import TestResult
+
+    applied: list[list] = []
+
+    class _Loop:
+        def apply_agents(self, configs: list) -> None:
+            applied.append(configs)
+
+    async def fake_run_test(cfg, *, source):
+        return TestResult(cfg.name, source, "cli", True, "ok", "PONG", 5)
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.run_test", fake_run_test)
+    await subagents_test({"name": "Coder", "source": "config"}, agent_loop_factory=lambda: _Loop())
+    assert applied == []
+
+
+async def test_testing_a_preset_leaves_the_agent_table_alone(config_path: Path, monkeypatch) -> None:
+    # A preset is a template no config claims, so `_test_acp` records no snapshot
+    # for it and the table has nothing to re-derive.
+    from raven.agent.subagent.probe import TestResult
+
+    applied: list[list] = []
+
+    class _Loop:
+        def apply_agents(self, configs: list) -> None:
+            applied.append(configs)
+
+    async def fake_run_test(cfg, *, source):
+        return TestResult(cfg.name, source, "acp", True, "connected", None, 5)
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.run_test", fake_run_test)
+    await subagents_test({"name": "opencode", "source": "preset"}, agent_loop_factory=lambda: _Loop())
+    assert applied == []
+
+
+async def test_a_failing_recompose_does_not_mask_the_verdict(config_path: Path, monkeypatch) -> None:
+    # The snapshot is already on disk by the time the door runs, so the verdict
+    # the caller asked for is real whatever the table does with it. Raising here
+    # would report a successful measurement as a failed test.
+    from raven.agent.subagent.probe import TestResult
+
+    class _Loop:
+        def apply_agents(self, configs: list) -> None:
+            raise RuntimeError("table rebuild failed")
+
+    async def fake_run_test(cfg, *, source):
+        return TestResult(cfg.name, source, "acp", True, "connected", None, 5)
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.run_test", fake_run_test)
+    out = await subagents_test({"name": "Coder", "source": "config"}, agent_loop_factory=lambda: _Loop())
+    assert out["ok"] is True
+    assert out["detail"] == "connected"
+
+
+async def test_an_acp_test_without_a_live_loop_still_reports(config_path: Path, monkeypatch) -> None:
+    # The demo runner has no loop, and a test is a read: a missing loop must not
+    # turn a completed measurement into an error.
+    from raven.agent.subagent.probe import TestResult
+
+    async def fake_run_test(cfg, *, source):
+        return TestResult(cfg.name, source, "acp", True, "connected", None, 5)
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.run_test", fake_run_test)
+    assert (await subagents_test({"name": "Coder", "source": "config"}))["ok"] is True
+    out = await subagents_test({"name": "Coder", "source": "config"}, agent_loop_factory=lambda: None)
+    assert out["ok"] is True
+
+
 async def test_cancel_stops_a_running_test(config_path: Path, monkeypatch) -> None:
     started = asyncio.Event()
 
