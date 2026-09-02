@@ -108,6 +108,77 @@ def dag_root(session_dir: Path) -> Path:
     return session_history_root(session_dir) / _DAG_DIRNAME
 
 
+def _instance_identity(meta: dict[str, Any], prompt: str | None = None) -> tuple[str, str, str, str]:
+    """``(agent, handle, session_key, title)`` for the instance this meta describes.
+
+    Shared by the two lanes that touch an instance log -- the one that opens it
+    and the one that appends to it -- so an instance cannot be opened under one
+    name and appended to under another.
+
+    The dispatched title has both spellings, because the two lanes that dispatch
+    write different ones: a spawn record's meta says ``task_summary``, a graph
+    node's says ``node_summary``.
+
+    An instance the reader started themselves has no dispatch behind it and so
+    neither spelling, and it used to be left unnamed -- every panel of one was
+    headed by its handle, which is an id. It is named the way a conversation
+    with no title is named, by the same rule from the same function: the first
+    line of the message that opened it. The header is written once, so that
+    first message names the instance and later ones do not rename it -- which is
+    exactly what ``save`` does for a session, and the reason a title derived
+    this way is stable enough to head a panel.
+    """
+    return (
+        str(meta.get("agent") or ""),
+        str(meta.get("handle") or meta.get("instance") or ""),
+        str(meta.get("session_key") or ""),
+        str(meta.get("task_summary") or meta.get("node_summary") or "") or _derived(prompt),
+    )
+
+
+def _derived(prompt: str | None) -> str:
+    """The opening message's first line as a name, or ``""``.
+
+    Imported where it is used rather than at module scope: this module is loaded
+    on the dispatch path and the session manager is a heavier import than an
+    audit trail should force on it.
+    """
+    if not prompt:
+        return ""
+    try:
+        from raven.session.manager import derive_title
+
+        return derive_title(prompt) or ""
+    except Exception as exc:  # noqa: BLE001 - a missing name never fails a run
+        # Said here or nowhere. This runs before the try blocks in
+        # `open_instance_log_for` and `add_turn_to_instance_log`, so neither of
+        # their warnings sees a failure in here -- an instance would simply be
+        # headed by its handle, which is also what an unnamed one looks like.
+        logger.warning("Instance title could not be derived from the opening message: {}", exc)
+        return ""
+
+
+def open_instance_log_for(
+    session_dir: Path | None, *, meta: dict[str, Any], kind: str = "", prompt: str | None = None
+) -> None:
+    """Name the instance this call is about to run, before it runs.
+
+    Called when a record opens rather than when it finishes, so a panel opened
+    while the run is still going is headed by what the run is for instead of by
+    the handle. See ``instance_log.open_instance_log``.
+
+    ``prompt`` is the message that opened the instance, used as its name when no
+    dispatch named it -- see ``_instance_identity``.
+    """
+    agent, handle, session_key, title = _instance_identity(meta, prompt)
+    try:
+        from raven.agent.subagent.instance_log import open_instance_log
+
+        open_instance_log(session_dir, agent=agent, handle=handle, session_key=session_key, kind=kind, title=title)
+    except Exception as exc:  # noqa: BLE001 - the instance log may not break a run
+        logger.warning("Subagent instance log could not be opened: {}", exc)
+
+
 def add_turn_to_instance_log(
     session_dir: Path | None,
     *,
@@ -133,8 +204,7 @@ def add_turn_to_instance_log(
     everos for extraction reads back exactly what landed on disk instead of
     building its own copy that could drift from it.
     """
-    agent = str(meta.get("agent") or "")
-    handle = str(meta.get("handle") or meta.get("instance") or "")
+    agent, handle, session_key, title = _instance_identity(meta, prompt)
     if session_dir is None or not agent or not handle:
         return []
     # A transport that narrated as it went already has that prose on the steps it
@@ -150,13 +220,9 @@ def add_turn_to_instance_log(
             session_dir,
             agent=agent,
             handle=handle,
-            session_key=str(meta.get("session_key") or ""),
+            session_key=session_key,
             kind=kind,
-            # Both spellings, because the two lanes that dispatch write different
-            # ones: a spawn record's meta says `task_summary`, a graph node's
-            # says `node_summary`. A direct chat has neither, and must not: its
-            # meta describes one turn, not what the instance is for.
-            title=str(meta.get("task_summary") or meta.get("node_summary") or ""),
+            title=title,
             prompt=prompt,
             messages=getattr(activity, "transcript", None),
             answer=answer,
@@ -211,6 +277,10 @@ class SpawnRecord:
             record._write_meta({**meta, "status": "running", "started_at_ms": int(time.time() * 1000)})
         except OSError as exc:
             logger.warning("Subagent [{}] history could not be opened at {}: {}", task_id, record.dir, exc)
+        # Outside the try above, which guards the record directory: the instance
+        # log is a separate file with its own failure handling, and a record that
+        # could not be written is still a run whose instance deserves a name.
+        open_instance_log_for(record.session_dir, meta=meta, kind="spawn", prompt=task)
         return record
 
     def finish(

@@ -275,8 +275,21 @@ describe('what a reload finds on the desk', () => {
       .toEqual([{ k: 'agent', agent: 'raven', handle: 'brief-9f', run: 'r1', node: 'brief' }])
   })
 
-  it('records a graph node record by run and node', () => {
-    desk.openDeskAgentRecord({ kind: 'dag', run_id: 'r1', node: 'brief', agent: 'raven', label: 'brief' })
+  it('records a graph node record by run and node, and by its heading', () => {
+    /* The pair names the work; the heading is what the reader was looking at, and
+       the pair alone cannot rebuild it -- the summary behind it lives on the run,
+       which a replay reads concurrently and cannot read at all once the run's
+       directory has been cleaned. */
+    desk.openDeskAgentRecord({
+      kind: 'dag', run_id: 'r1', node: 'brief', agent: 'raven', label: '写一份八月热点简报',
+    })
+
+    expect(desk.saved('s1')!.open)
+      .toEqual([{ k: 'record', run: 'r1', node: 'brief', label: '写一份八月热点简报' }])
+  })
+
+  it('records a graph node with no heading by the pair alone', () => {
+    desk.openDeskAgentRecord({ kind: 'dag', run_id: 'r1', node: 'brief', agent: 'raven', label: '' })
 
     expect(desk.saved('s1')!.open).toEqual([{ k: 'record', run: 'r1', node: 'brief' }])
   })

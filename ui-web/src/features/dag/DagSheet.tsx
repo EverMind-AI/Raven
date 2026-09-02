@@ -93,7 +93,7 @@ export function Sheet({ sess, host, onClose }: { sess: string; host: HTMLElement
       </div>
       <DagGraph dims={SHEET} nodes={nodes} now={Date.now()} surface="sheet"
         selectedId={sel && sel.run_id === d.run_id ? sel.node : null}
-        onPick={(n) => ds<TranscriptSource>('transcript').openDagNode?.(d.run_id, n.id)} />
+        onPick={(n) => ds<TranscriptSource>('transcript').openDagNode?.(d.run_id, n.id, n.node_summary)} />
     </>
   )
 }
