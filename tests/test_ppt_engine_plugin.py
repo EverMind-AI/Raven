@@ -113,6 +113,10 @@ def test_a_malformed_slice_casts_the_fail_closed_sentinel(tmp_path: Path) -> Non
         {"enabled": True, "viewsPerCall": 0},
         {"enabled": True, "renderDpi": "300"},
         {"enabled": "false"},
+        # G2: the fork refused a route typo at config load, naming the
+        # alternatives; a fallback to script_author with only a process log
+        # would be the silent inverse of that contract.
+        {"enabled": True, "profile": "script_writer"},
     )
     for index, slice_ in enumerate(bad_slices):
         ctx = _ctx(dict(slice_), tmp_path / str(index))
@@ -134,6 +138,12 @@ def test_a_malformed_slice_casts_the_fail_closed_sentinel(tmp_path: Path) -> Non
             )
         ).short_circuit_result[0]
     )
+    profile_reply = asyncio.run(
+        plugin_module.make_hook(
+            _ctx({"enabled": True, "profile": "script_writer"}, tmp_path / "routes")
+        ).before_user_inbound(AgentHookContext(session_key="s", inbound_content="hi"))
+    ).short_circuit_result[0]
+    assert "script_writer" in profile_reply and "script_author" in profile_reply
 
 
 def test_a_well_typed_slice_never_meets_the_sentinel(tmp_path: Path) -> None:

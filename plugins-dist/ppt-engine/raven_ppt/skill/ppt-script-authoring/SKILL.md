@@ -48,7 +48,7 @@ nobody agreed to.
 ## 2. Write the outline before you write the program
 
 **Go looking for the deck's pictures first, and look widely.** Not for a page but for
-the pool the outline gets to choose from. `web_search(kind="images")` returns each
+the pool the outline gets to choose from. `ppt_image_search` returns each
 candidate with its pixel size and the page it came from. Search the things the material
 *names* as well as the things it links — a paper, a benchmark, a product, a release —
 and the ordinary furniture too, the logo and the product shot, which every deck wants and
@@ -88,7 +88,7 @@ edit and an expensive one: what refuses an outline, and what it only reports, is
 
 And `needs` is where gathering belongs — this is the first moment anything knows
 what each page will show. Go through the outline page by page and name the picture
-each one wants, then find it with `web_search(kind="images")` and bring it in with
+each one wants, then find it with `ppt_image_search` and bring it in with
 `ppt_fetch`. A fetch joins the deck's own source set and is read on arrival, so there
 is no separate ingest to remember; `ppt_ingest` is for bringing in another directory
 of the user's, or re-reading after you have edited a source by hand.
@@ -1430,7 +1430,7 @@ is written:
 | a **figure id the catalogue does not hold** | take the id from the catalogue |
 | a **layout id the catalogue does not carry** -- `P1` to `P41` are page structures, `M1` to `M26` modifier layers, not zero-padded | open [deck/build/references/layouts.md](deck/build/references/layouts.md); an id not in it can only come from not having opened it |
 | with a template bound, an outline whose **cover, index and closing** do not name the template's own pages | name them |
-| when ingest extracted no figures at all, a **cited page nobody opened** | `web_fetch(extractMode="images")` each URL the materials cite, then `ppt_fetch` what you will use -- or the PDF behind an abstract, so `ppt_ingest` extracts its figures |
+| when ingest extracted no figures at all, a **cited page nobody opened** | `web_fetch` each URL the materials cite and take its image links, then `ppt_fetch` what you will use -- or the PDF behind an abstract, so `ppt_ingest` extracts its figures |
 
 For each URL that holds nothing usable, or will not load, say so in `ppt_outline`'s
 `swept`:

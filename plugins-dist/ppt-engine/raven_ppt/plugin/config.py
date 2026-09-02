@@ -85,9 +85,21 @@ class EngineConfig:
         key = image_search.get("apiKey", "")
         if not isinstance(key, str):
             raise ValueError(f"imageSearch.apiKey must be a string, got {key!r}")
+        # The fork validated the route name at config load ("a typo in a
+        # config file is a startup error naming the alternatives, not a
+        # silent fallback" -- fork schema.py:872-880); without this check a
+        # typo would ride to assembly's fallback branch and boot
+        # script_author with only a process log to say so. The registry is
+        # the one list of routes; a raise here walks the sentinel path like
+        # every other malformed key (G2).
+        from raven_ppt.profiles import registry
+
+        profile = _text(raw, "profile", "script_author")
+        if profile not in registry.names():
+            raise ValueError(f"unknown ppt profile {profile!r}; known routes are {', '.join(sorted(registry.names()))}")
         return cls(
             enabled=_flag(raw, "enabled", False),
-            profile=_text(raw, "profile", "script_author"),
+            profile=profile,
             composer_model=_text(raw, "composerModel", ""),
             render_dpi=_count(raw, "renderDpi", 144, 72, 300),
             render_concurrency=_count(raw, "renderConcurrency", 2, 1, 8),

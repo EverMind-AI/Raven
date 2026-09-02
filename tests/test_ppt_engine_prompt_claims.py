@@ -314,9 +314,77 @@ def _fail(problems: list[str], what: str) -> None:
     assert not problems, f"{what}:\n  " + "\n  ".join(problems)
 
 
+def _visible_literals(source: str) -> str:
+    """String constants that can reach a model: docstrings excluded.
+
+    ``_string_literals`` keeps docstrings because for the name checks a stale
+    name in a docstring is still a defect worth naming; the retired-spelling
+    gate below is stricter about what "ships" means -- a docstring recounting
+    the fork's history is not guidance a model reads, while every other
+    string constant (tool replies, hints, errand text) is.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:  # pragma: no cover
+        return ""
+    docstrings: set[tuple[int, int]] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            body = getattr(node, "body", [])
+            if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+                first = body[0].value
+                if isinstance(first.value, str):
+                    docstrings.add((first.lineno, first.col_offset))
+    return "\n".join(
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and (node.lineno, node.col_offset) not in docstrings
+    )
+
+
+def _model_visible_corpus() -> dict[str, str]:
+    """corpus(), narrowed to what actually ships to a model.
+
+    The .py pieces are re-read without their docstrings, and the plugin
+    package joins the sweep: ``materials.describe`` and the manifest's tool
+    faces live there, outside TALKING_PACKAGES.
+    """
+    pieces = dict(corpus())
+    engine = ROOT / "plugins-dist" / "ppt-engine" / "raven_ppt"
+    for where in TALKING_PACKAGES:
+        for path in sorted((engine / where).glob("*.py")):
+            pieces[f"raven_ppt/{where}/{path.name}"] = _visible_literals(path.read_text(encoding="utf-8"))
+    for path in sorted((engine / "plugin").glob("*.py")):
+        pieces[f"raven_ppt/plugin/{path.name}"] = _visible_literals(path.read_text(encoding="utf-8"))
+    for name in WRAPPER_FILES:
+        path = WRAPPER / name
+        if name.endswith(".py") and path.is_file():
+            pieces[f"agents/raven-ppt/{name}"] = _visible_literals(path.read_text(encoding="utf-8"))
+    return pieces
+
+
 # ---------------------------------------------------------------------------
 # The gate
 # ---------------------------------------------------------------------------
+
+
+def test_no_model_visible_text_ships_a_retired_fork_spelling() -> None:
+    """The fork grew its image surfaces on the shared web tools and those
+    faces retired with D2: trunk's web_search has no ``kind`` (an unknown
+    param is swallowed, so a model following stale guidance runs a PAGE
+    search believing it searched pictures) and web_fetch's extractMode enum
+    refuses "images" outright. Guidance is respelled at every seat it ships
+    from -- skill prose included, which came in as a byte-parity copy and is
+    a deliberately-respelled carrier from this wave on (G1)."""
+    retired = ('kind="images"', "kind='images'", 'extractMode="images"', "extractMode='images'")
+    problems = []
+    for where, text in sorted(_model_visible_corpus().items()):
+        for spelling in retired:
+            if spelling in text:
+                problems.append(f"{where}: ships {spelling}")
+    _fail(problems, "these ship a retired fork spelling")
 
 
 def test_the_retired_names_are_not_in_use() -> None:

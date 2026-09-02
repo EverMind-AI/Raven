@@ -314,6 +314,26 @@ def test_the_serper_key_reaches_both_search_consumers(grounded, tmp_path, monkey
     assert data["plugins"]["config"]["ppt-engine"]["imageSearch"]["apiKey"] == "sk-serper"
 
 
+def test_a_web_proxy_reaches_both_tool_families(grounded, tmp_path):
+    """The fork's one tools.web.proxy fed the web tools AND every deck tool;
+    landed, the deck tools read the slice's webProxy, so the render bridges
+    the config's own proxy value across (G3, the Serper bridge's shape).
+    ppt_fetch is trust_env=False on purpose -- an environment proxy cannot
+    stand in, so an unbridged render would proxy web_search while the deck
+    tools dialled bare, without a sound. setdefault: a slice that shipped
+    its own webProxy keeps it."""
+    source = json.loads((RUN_PY.parent / "config.json").read_text())
+    source["tools"]["web"]["proxy"] = "http://proxy.example:3128"
+    custom = tmp_path / "custom.json"
+    custom.write_text(json.dumps(source))
+    data = json.loads(grounded.render_config(custom).read_text())
+    assert data["tools"]["web"]["proxy"] == "http://proxy.example:3128"
+    assert data["plugins"]["config"]["ppt-engine"]["webProxy"] == "http://proxy.example:3128"
+
+    shipped = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    assert "webProxy" not in shipped["plugins"]["config"]["ppt-engine"], "no proxy configured renders no row"
+
+
 def test_a_host_config_serper_key_reaches_both_search_consumers(grounded, tmp_path, monkeypatch):
     """The per-slot host fallback is a supported admission source (pinned
     above for the slot); rendered from the env var alone, a host-keyed deploy

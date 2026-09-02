@@ -44,8 +44,16 @@ def ok(cond, what):
         fails.append(what)
 
 
-# 1. every ppt_* tool the skill names is registered
-tools = {t.name for t in build_ppt_tools(Path("/tmp/skillcheck"))}
+# 1. every ppt_* tool the skill names is registered. The registered face is
+# the assembly's ten plus the manifest's own contributions -- ppt_image_search
+# never lived in build_ppt_tools (D2: it is the plugin's self-named row), and
+# the skill's gathering guidance names it from the G1 respell on. Read from
+# the manifest so a renamed row breaks this claim with it.
+import tomllib
+
+_manifest = ROOT / "plugins-dist/ppt-engine/raven_ppt/raven-plugin.toml"
+_rows = tomllib.loads(_manifest.read_text(encoding="utf-8"))["plugin"]["contributes"]["tools"]
+tools = {t.name for t in build_ppt_tools(Path("/tmp/skillcheck"))} | {row["name"] for row in _rows}
 named = set(re.findall(r"\bppt_[a-z_]+", skill)) - {
     "ppt_theme",
     "ppt_icons",
