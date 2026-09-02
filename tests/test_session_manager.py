@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from raven.session.manager import Session, SessionManager, new_chat_id
+from raven.session.title import TITLE_STORAGE_MAX
 
 
 def _turn_worker(workspace_str: str, key: str, writer_id: int) -> None:
@@ -880,13 +881,37 @@ def test_fork_default_title_appends_fork_suffix(tmp_path: Path):
 
 
 def test_fork_untitled_parent_yields_no_title(tmp_path: Path):
-    """An untitled parent yields a child with no title (no bare '(fork)')."""
+    """A parent with no title at all yields a child with none: no bare '(fork)'.
+
+    A conversation that opened with something other than a user message has
+    nothing for ``save`` to auto-name it from, which is the one way a saved
+    session still holds no title.
+    """
     mgr = SessionManager(tmp_path)
-    _seed(mgr, "cli:src11", ("user", "x"))
+    _seed(mgr, "cli:src11", ("assistant", "x"))
+    assert mgr.peek("cli:src11").metadata.get("title") is None
 
     child = mgr.fork("cli:src11")
 
     assert child.metadata.get("title") is None
+
+
+def test_fork_of_a_parent_at_the_storage_ceiling_keeps_a_storable_name(tmp_path: Path):
+    """The derived name obeys the storage ceiling instead of overshooting it.
+
+    A fork name is not typed by anyone, so the parent's tail gives way to the
+    suffix rather than the fork losing its name to a refusal.
+    """
+    mgr = SessionManager(tmp_path)
+    src = mgr.get_or_create("cli:src15")
+    src.set_title("p" * TITLE_STORAGE_MAX)
+    src.add_message("user", "x")
+    mgr.save(src)
+
+    child = mgr.fork("cli:src15")
+
+    assert len(child.metadata["title"]) == TITLE_STORAGE_MAX
+    assert child.metadata["title"].endswith(" (fork)")
 
 
 def test_fork_explicit_title_overrides(tmp_path: Path):
@@ -913,9 +938,15 @@ def test_fork_inherits_human_title_equal_to_auto_derivation(tmp_path: Path):
     assert child.metadata["title"] == "Plan the trip (fork)"
 
 
-def test_fork_skips_auto_named_title_via_marker(tmp_path: Path):
-    """An auto-named source carries title_auto in its persisted metadata and
-    the child does not inherit the title, even after a disk round-trip."""
+def test_fork_inherits_an_auto_named_title_too(tmp_path: Path):
+    """An auto-named source is still a named source, and its fork carries that
+    name, even after a disk round-trip.
+
+    A fork is never auto-named -- its first user message names the fork point's
+    ancestor -- so when inheritance skipped auto-named titles as well, the fork
+    of an auto-named conversation ended up with no title at all and every one of
+    them read alike under the front end's placeholder.
+    """
     mgr = SessionManager(tmp_path)
     _seed(mgr, "cli:src14", ("user", "Plan the trip"))
 
@@ -926,7 +957,9 @@ def test_fork_skips_auto_named_title_via_marker(tmp_path: Path):
 
     child = reloaded_mgr.fork("cli:src14")
 
-    assert child.metadata.get("title") is None
+    assert child.metadata["title"] == "Plan the trip (fork)"
+    # The fork's own name from here: nothing regenerates it behind the reader.
+    assert child.metadata.get("title_auto") is None
 
 
 # ── resolve_key (shared cross-channel resolution core) ─────────────────
@@ -1028,9 +1061,14 @@ def test_generated_title_is_declined_once_a_person_named_the_session(tmp_path: P
     assert session.metadata["title"] == "Release checklist"
 
 
-def test_generated_title_keeps_the_marker_so_forks_do_not_inherit_it(tmp_path: Path):
-    """A generated title is 'not human' for fork inheritance exactly as the
-    mechanical one is -- the whole reason no third marker state was added."""
+def test_generated_title_is_carried_by_a_fork_and_the_marker_is_not(tmp_path: Path):
+    """A generated title names the conversation, so the fork carries it.
+
+    The marker still says the source's title is not human -- that is what keeps
+    a later *generation* able to replace it, where a rename overwrites either
+    kind without consulting it -- but the marker does not travel: the child's
+    name is the fork's own from the moment it is minted.
+    """
     mgr = SessionManager(tmp_path)
     source = _seed(mgr, "cli:title5", ("user", "plan the trip in detail"))
     source.set_generated_title("Plan the trip")
@@ -1039,7 +1077,8 @@ def test_generated_title_keeps_the_marker_so_forks_do_not_inherit_it(tmp_path: P
     child = mgr.fork("cli:title5")
 
     assert source.metadata.get("title_auto") is True
-    assert child.metadata.get("title") is None
+    assert child.metadata["title"] == "Plan the trip (fork)"
+    assert child.metadata.get("title_auto") is None
 
 
 def test_generated_title_is_declined_when_it_is_past_the_storage_ceiling(tmp_path: Path):

@@ -2641,6 +2641,10 @@ async def test_the_instance_gets_a_transcript_in_the_session_log_format(tmp_path
         "agent": "a",
         "handle": "h1",
         "opened_by": "spawn",
+        # No `task_summary` was dispatched, so the instance is named by the first
+        # line of the message that opened it -- the rule a conversation with no
+        # title is named by.
+        "title": "ping",
     }
     assert rows[1] == {"role": "user", "content": "ping", "timestamp": rows[1]["timestamp"]}
     assert any(r.get("tool_calls") for r in rows[2:]), "the steps the transport could see"

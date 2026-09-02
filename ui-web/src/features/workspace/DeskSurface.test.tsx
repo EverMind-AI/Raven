@@ -80,6 +80,49 @@ describe('the desk handle', () => {
   })
 })
 
+describe("the header of a graph node's pane", () => {
+  beforeEach(() => {
+    /* The pane asks the agents seam for the node's record; the header is what
+       this is about, so an empty answer is enough. */
+    setCurrent('s1')
+    window.DS = {
+      ...window.DS,
+      agents: { list: async () => [], instances: async () => [], node: async () => ({ messages: [] }) },
+    } as typeof window.DS
+  })
+
+  afterEach(() => {
+    agents.reset()
+    setCurrent(null)
+  })
+
+  /* Reported against the running page: a node panel headed `create_august_ppt`.
+     That is the plan's slug for the node. The run knows a sentence for it --
+     `node_summary`, which the graph and the trail both show -- and this header
+     read `row.node` before `row.label`, so the slug won whatever arrived. */
+  it('reads what the node did before what it is called', async () => {
+    render(<DeskSurface />)
+    await act(async () => {
+      desk.openDeskAgentRecord({
+        kind: 'dag', run_id: 'r1', node: 'create_august_ppt', agent: 'Raven-PPT',
+        label: 'Build the August deck from the research',
+      })
+    })
+    expect(document.querySelector('.desk-pane header b')?.textContent)
+      .toBe('Build the August deck from the research')
+  })
+
+  it('falls back to the node id when the run knows no summary', async () => {
+    render(<DeskSurface />)
+    await act(async () => {
+      desk.openDeskAgentRecord({
+        kind: 'dag', run_id: 'r1', node: 'create_august_ppt', agent: 'Raven-PPT', label: '',
+      })
+    })
+    expect(document.querySelector('.desk-pane header b')?.textContent).toBe('create_august_ppt')
+  })
+})
+
 describe('the pane of a delivered file', () => {
   /* The pane shows the file, and only the file. It used to carry a strip above
      the body naming the delivery -- title, one-line description, kind, size and
@@ -450,5 +493,56 @@ describe('the collapsed launcher', () => {
     })
 
     expect(document.querySelector('.desk-follow-toggle')).toBeNull()
+  })
+})
+
+describe('a pane headed by an instance', () => {
+  beforeEach(() => {
+    agentRows = []
+    setCurrent('s1')
+    window.DS = {
+      ...window.DS,
+      agents: { list: async () => [], instances: async () => agentRows },
+    } as typeof window.DS
+  })
+
+  afterEach(() => {
+    agents.reset()
+    setCurrent(null)
+  })
+
+  it('follows the instance list, so a name that arrives late still lands', async () => {
+    /* An instance the reader started themselves has no name until its first
+       message does. The pane opens before that, and it used to be headed by the
+       snapshot the desk stored on the way in -- so it kept the handle forever
+       while the composer, which re-reads the list, had already started
+       addressing it by name. */
+    const row: InstanceRow = { sessionKey: 's1', agent: 'raven', handle: 'raven-f4f31a', kind: 'cli', status: 'running' }
+    agentRows = [row]
+    render(<DeskSurface />)
+    await act(async () => { await agents.refreshInstances(true) })
+    await act(async () => { desk.openDeskAgent(row) })
+
+    expect(document.querySelector('.desk-pane header b')?.textContent).toBe('raven-f4f31a')
+
+    agentRows = [{ ...row, title: '用一句话说明为什么天空是蓝色的' }]
+    await act(async () => { await agents.refreshInstances(true) })
+
+    expect(document.querySelector('.desk-pane header b')?.textContent).toBe('用一句话说明为什么天空是蓝色的')
+  })
+
+  it('keeps its heading when the list drops the row', async () => {
+    /* A forgotten instance's window must not lose its name. */
+    const row: InstanceRow = { sessionKey: 's1', agent: 'raven', handle: 'h9', kind: 'cli', status: 'done', title: '做一版 PPT' }
+    agentRows = [row]
+    render(<DeskSurface />)
+    await act(async () => { await agents.refreshInstances(true) })
+    await act(async () => { desk.openDeskAgent(row) })
+    expect(document.querySelector('.desk-pane header b')?.textContent).toBe('做一版 PPT')
+
+    agentRows = []
+    await act(async () => { await agents.refreshInstances(true) })
+
+    expect(document.querySelector('.desk-pane header b')?.textContent).toBe('做一版 PPT')
   })
 })

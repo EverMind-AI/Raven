@@ -937,7 +937,7 @@ export interface InstanceRow {
    */
   resumable?: boolean;
   /**
-   * What this instance was asked, in one line: a graph node's node_summary, or a spawn's task_summary. Absent for an instance nobody dispatched (one the user made by hand) and for work that ran before those fields existed; a reader falls back to the handle.
+   * What this instance was asked, in one line: a spawn's task_summary, or a graph node's node_summary, or -- for an instance nobody dispatched, one the user made by hand -- the first line of the message that opened it, taken once so later messages do not rename it. Absent only for work that ran before any of those existed, or when that first message yielded nothing; a reader falls back to the handle.
    */
   title?: string;
   /**
