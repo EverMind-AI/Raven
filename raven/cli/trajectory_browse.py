@@ -2,8 +2,9 @@
 
 A bare ``raven trajectory`` on a TTY opens a three-screen questionary flow:
 session list -> attempt list -> action menu (save / report / minimize /
-verdict / pin|unpin / split, plus a multi-select merge entry). The machine
-face (id-taking subcommands) lives in :mod:`raven.cli.trajectory_commands`;
+verdict / pin|unpin / split); with two or more attempts, the M key opens the
+multi-select merge. The machine face (id-taking subcommands) lives in
+:mod:`raven.cli.trajectory_commands`;
 this module never shows a session key, trace id, or attempt id in menus,
 labels, or action messages — only artifact paths may carry ids.
 
@@ -29,12 +30,15 @@ Control flow contracts:
   overlong lines are clipped at the terminal edge — prompt_toolkit does not
   wrap option rows). Every dynamic cell is collapsed to one plain line before
   any width math, and fixed column widths always fit their headers.
-- Space on an attempt row prints that attempt's per-turn previews, collected
-  in the same snapshot scan and sorted by a fully-stringified key (ordering
-  never follows log source order; the table PREVIEW cell derives from the
-  same sorted collection). The follow-up waiter maps any key or Esc to a
-  non-None sentinel, so only Ctrl+C keeps the browser-wide cancel meaning;
-  on any non-attempt row Space is a cursor-keeping no-op.
+- Injected keys dispatch by key first: Space on an attempt row prints that
+  attempt's per-turn previews, collected in the same snapshot scan and sorted
+  by a fully-stringified key (ordering never follows log source order; the
+  table PREVIEW cell derives from the same sorted collection); M (either
+  case) opens the multi-select merge and is only bound — and only advertised —
+  when two or more attempts exist. Anything else, and Space on a non-attempt
+  row, is a cursor-keeping no-op. The preview's follow-up waiter maps any key
+  or Esc to a non-None sentinel, so only Ctrl+C keeps the browser-wide cancel
+  meaning.
 - Once an action runs — normally, refused, cancelled, or failing controlled —
   the browser rescans everything (``_REFRESH``): actions like report bundle
   before confirming, so even an aborted one may have pinned the attempt.
@@ -71,7 +75,6 @@ console = Console()
 _log = logging.getLogger("raven.cli.trajectory_browse")
 
 _BACK = object()
-_MERGE = object()
 _REFRESH = object()
 _UNSET = object()
 _DONE = object()
@@ -94,6 +97,11 @@ _HELP_ATTEMPT = (
     "Attempts in the selected session, oldest first.",
     "↑↓ move · Enter actions · Space preview · Esc back",
 )
+_HELP_ATTEMPT_MERGE = (
+    "Attempts in the selected session, oldest first.",
+    "↑↓ move · Enter actions · Space preview · M merge · Esc back",
+)
+_MERGE_HINT = "Space toggle · Enter confirm · Esc cancel"
 _HELP_ACTION = (
     "Run one action on the selected attempt.",
     "↑↓ move · Enter run · Esc back",
@@ -785,9 +793,10 @@ def _run_action(action: str, row: AttemptRow, workspace: Path, questionary: Any,
 
 
 def _merge_action(session_row: SessionRow, questionary: Any, style: Any) -> None:
-    choices = [
+    choices: list[Any] = [questionary.Separator(_MERGE_HINT)]
+    choices.extend(
         questionary.Choice(attempt_label(i, row), value=row.key) for i, row in enumerate(session_row.attempts, start=1)
-    ]
+    )
     try:
         picked = _ask_action(
             questionary.checkbox(
@@ -796,6 +805,7 @@ def _merge_action(session_row: SessionRow, questionary: Any, style: Any) -> None
                 style=style,
                 qmark=QMARK,
                 pointer=POINTER,
+                instruction=" ",
                 validate=lambda picked: len(picked) >= 2 or "Select at least two attempts",
             )
         )
@@ -819,28 +829,34 @@ def _attempt_screen(session_row: SessionRow, workspace: Path, questionary: Any, 
             questionary.Choice(tokens, value=(i, row))
             for i, (tokens, row) in enumerate(zip(row_tokens, session_row.attempts), start=1)
         ]
-        if len(session_row.attempts) >= 2:
-            choices.append(questionary.Choice("Merge attempts…", value=_MERGE))
+        can_merge = len(session_row.attempts) >= 2
         picked = _select_screen(
-            questionary, style, "Attempt:", _HELP_ATTEMPT, choices, header=header, extra_keys=(" ",), default=default
+            questionary,
+            style,
+            "Attempt:",
+            _HELP_ATTEMPT_MERGE if can_merge else _HELP_ATTEMPT,
+            choices,
+            header=header,
+            extra_keys=(" ", "m", "M") if can_merge else (" ",),
+            default=default,
         )
         default = None
         if picked is _BACK:
             return _BACK
         if isinstance(picked, _KeyHit):
-            # Dispatch by key, then by row: only Space on an attempt row
-            # previews. Any other injected key, and any non-attempt row (the
-            # merge entry, no pointed value), is a cursor-keeping no-op —
-            # the value must never be unpacked blindly.
+            # Dispatch by key, then by row: M is a screen-level action, Space
+            # previews the pointed attempt row only. Anything else, and Space
+            # on a non-attempt row (no pointed value), is a cursor-keeping
+            # no-op — the value must never be unpacked blindly.
+            if picked.key in ("m", "M"):
+                _merge_action(session_row, questionary, style)
+                return _REFRESH
             default = picked.value
             if picked.key == " " and isinstance(picked.value, tuple):
                 index, row = picked.value
                 _preview_screen(index, row)
                 _preview_wait(questionary, style)
             continue
-        if picked is _MERGE:
-            _merge_action(session_row, questionary, style)
-            return _REFRESH
         index, row = picked
         _crumb("Attempt", f"#{index}")
 

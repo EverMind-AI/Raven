@@ -484,7 +484,7 @@ def test_full_cycle_merge_verdict_save_split(state, workspace, monkeypatch, caps
         monkeypatch,
         [
             ("pick", "session"),
-            ("pick", "Merge attempts"),
+            ("hit", "m", "#1"),
             ("pickall", ["#1", "#2"]),
             ("pick", "#1"),
             ("pick", "Verdict"),
@@ -507,7 +507,7 @@ def test_full_cycle_merge_verdict_save_split(state, workspace, monkeypatch, caps
     # after merge: one row with a MERGED check, no more merge entry
     merged_rows = _data_rows(attempt_screens[1])
     assert sum(_cell_of(attempt_screens[1], t, "MERGED").strip() == "✓" for t in merged_rows) == 1
-    assert not any("Merge attempts" in t for t in attempt_screens[1])
+    assert not any("Merge attempts" in t for titles in attempt_screens for t in titles)
     # after verdict: the row shows it
     assert any("fail" in t for t in _data_rows(attempt_screens[2]))
     # after save: the action menu offers Unpin (auto-pin happened)
@@ -583,7 +583,7 @@ def test_action_outputs_carry_no_ids(state, workspace, monkeypatch, capsys):
         monkeypatch,
         [
             ("pick", "session"),
-            ("pick", "Merge attempts"),
+            ("hit", "m", "#1"),
             ("pickall", ["#1", "#2"]),
             ("pick", "#1"),
             ("pick", "Verdict"),
@@ -623,7 +623,7 @@ def test_action_outputs_carry_no_ids(state, workspace, monkeypatch, capsys):
         (
             [
                 ("pick", "session"),
-                ("pick", "Merge attempts"),
+                ("hit", "m", "#1"),
                 ("pickall", ["#1", "#2"]),
                 _BACK,
                 _BACK,
@@ -834,7 +834,7 @@ def test_data_wiped_after_action_ends_controlled(state, workspace, monkeypatch, 
     "script",
     [
         [("pick", "session"), ("pick", "#1"), ("pick", "Report"), _CANCEL],
-        [("pick", "session"), ("pick", "Merge attempts"), _CANCEL],
+        [("pick", "session"), ("hit", "m", "#1"), _CANCEL],
         [("pick", "session"), ("pick", "#1"), ("pick", "Verdict"), "fail", _CANCEL],
         [("pick", "session"), ("pick", "#1"), ("pick", "Split"), _CANCEL],
         [("pick", "session"), ("pick", "#1"), ("pick", "Unpin"), _CANCEL],
@@ -887,7 +887,7 @@ def test_menu_screens_hide_back_exit_and_show_help(state, workspace, monkeypatch
     screens = {m: titles for kind, m, titles in fake.prompts if kind == "select"}
     for message, help_lines in [
         ("Session:", tbrowse._HELP_SESSION),
-        ("Attempt:", tbrowse._HELP_ATTEMPT),
+        ("Attempt:", tbrowse._HELP_ATTEMPT_MERGE),  # two attempts: merge advertised
         ("Action:", tbrowse._HELP_ACTION),
     ]:
         titles = screens[message]
@@ -895,7 +895,7 @@ def test_menu_screens_hide_back_exit_and_show_help(state, workspace, monkeypatch
         assert "Back" not in titles and "Exit" not in titles
     # the table header separator sits right after the help lines
     assert "LAST ACTIVITY" in screens["Session:"][len(tbrowse._HELP_SESSION)]
-    assert "STARTED" in screens["Attempt:"][len(tbrowse._HELP_ATTEMPT)]
+    assert "STARTED" in screens["Attempt:"][len(tbrowse._HELP_ATTEMPT_MERGE)]
 
 
 @pytest.mark.parametrize(
@@ -933,7 +933,7 @@ def test_escape_cancels_action_without_side_effects(
     defs_before = dict(tstore.definitions(state))
 
     if action_pick == "Merge attempts":
-        script = [("pick", "session"), ("pick", "Merge attempts"), *extra_answers, _BACK, _BACK, _BACK]
+        script = [("pick", "session"), ("hit", "m", "#1"), *extra_answers, _BACK, _BACK, _BACK]
     else:
         script = [("pick", "session"), ("pick", "#1"), ("pick", action_pick), *extra_answers, _BACK, _BACK, _BACK]
 
@@ -1433,13 +1433,13 @@ def test_space_previews_and_keeps_cursor(state, workspace, monkeypatch, capsys):
 
 
 def test_non_space_keyhit_on_attempt_row_is_noop(state, workspace, monkeypatch, capsys):
-    """Dispatch is by key, not by value shape: a future extra key (step 4's
-    'm') pointing at an attempt tuple must not fall into the preview path."""
+    """Dispatch is by key, not by value shape: a foreign injected key
+    pointing at an attempt tuple must not fall into the preview path."""
     _two_turn_log(state)
 
     fake = _browse(
         monkeypatch,
-        [("pick", "session"), ("hit", "m", "#1"), _BACK, _BACK],
+        [("pick", "session"), ("hit", "z", "#1"), _BACK, _BACK],
         workspace,
     )
 
@@ -1452,41 +1452,71 @@ def test_non_space_keyhit_on_attempt_row_is_noop(state, workspace, monkeypatch, 
     assert fake.answers == []
 
 
-def test_space_on_merge_entry_is_noop(state, workspace, monkeypatch, capsys):
+@pytest.mark.parametrize("key", ["m", "M"])
+def test_m_key_opens_merge_and_merges(state, workspace, monkeypatch, capsys, key):
     _two_turn_log(state)
 
     fake = _browse(
         monkeypatch,
-        [("pick", "session"), ("hit", " ", "Merge attempts"), _BACK, _BACK],
-        workspace,
-    )
-
-    out = capsys.readouterr().out
-    assert "Preview ❯" not in out
-    assert "press" not in [k for k, _m, _t in fake.prompts]
-    assert [m for k, m, _t in fake.prompts if k == "select"] == ["Session:", "Attempt:", "Attempt:", "Session:"]
-    attempt_calls = [kw for kind, m, kw in fake.calls if kind == "select" and m == "Attempt:"]
-    assert attempt_calls[1]["default"] is tbrowse._MERGE
-    assert fake.answers == []
-
-
-def test_space_on_merge_entry_then_merge_still_works(state, workspace, monkeypatch):
-    _two_turn_log(state)
-
-    _browse(
-        monkeypatch,
-        [
-            ("pick", "session"),
-            ("hit", " ", "Merge attempts"),
-            ("pick", "Merge attempts"),
-            ("pickall", ["#1", "#2"]),
-            _BACK,
-            _BACK,
-        ],
+        [("pick", "session"), ("hit", key, "#2"), ("pickall", ["#1", "#2"]), _BACK, _BACK],
         workspace,
     )
 
     assert len(tstore.definitions(state)) == 1
+    assert "Merged 2 attempts into one" in capsys.readouterr().out
+    assert [k for k, _m, _t in fake.prompts if k == "checkbox"] == ["checkbox"]
+
+
+def test_merge_checkbox_shows_help_and_suppresses_instruction(state, workspace, monkeypatch):
+    _two_turn_log(state)
+
+    fake = _browse(
+        monkeypatch,
+        [("pick", "session"), ("hit", "m", "#1"), _BACK, _BACK, _BACK],
+        workspace,
+    )
+
+    (checkbox,) = [
+        (titles, kw) for (kind, _m, titles), (_k, _m2, kw) in zip(fake.prompts, fake.calls) if kind == "checkbox"
+    ]
+    titles, kw = checkbox
+    assert titles[0] == tbrowse._MERGE_HINT
+    assert kw.get("instruction") == " "
+
+
+def test_merge_key_only_bound_with_multiple_attempts(state, workspace, monkeypatch):
+    _two_turn_log(state)
+    recorded = []
+    real = tbrowse._select_screen
+
+    def spy(questionary, style, message, help_lines, choices, **kw):
+        recorded.append((message, help_lines, kw.get("extra_keys", ())))
+        return real(questionary, style, message, help_lines, choices, **kw)
+
+    monkeypatch.setattr(tbrowse, "_select_screen", spy)
+    _browse(monkeypatch, [("pick", "session"), _BACK, _BACK], workspace)
+
+    message, help_lines, extra_keys = next(r for r in recorded if r[0] == "Attempt:")
+    assert "M merge" in help_lines[1]
+    assert {"m", "M"} <= set(extra_keys)
+
+
+def test_merge_key_absent_with_single_attempt(state, workspace, monkeypatch):
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+    recorded = []
+    real = tbrowse._select_screen
+
+    def spy(questionary, style, message, help_lines, choices, **kw):
+        recorded.append((message, help_lines, kw.get("extra_keys", ()), [getattr(c, "title", "") for c in choices]))
+        return real(questionary, style, message, help_lines, choices, **kw)
+
+    monkeypatch.setattr(tbrowse, "_select_screen", spy)
+    fake = _browse(monkeypatch, [("pick", "session"), _BACK, _BACK], workspace)
+
+    message, help_lines, extra_keys, _titles = next(r for r in recorded if r[0] == "Attempt:")
+    assert "M merge" not in help_lines[1]
+    assert "m" not in extra_keys and "M" not in extra_keys
+    assert not any("Merge attempts" in t for _k, _m, titles in fake.prompts for t in titles)
 
 
 # ── real questionary key bindings ─────────────────────────────────────
@@ -1522,7 +1552,8 @@ def test_escape_binding_installs_on_every_prompt_kind(kind):
         assert q.application.run() is tbrowse._BACK
 
 
-def test_extra_key_reports_pointed_row():
+@pytest.mark.parametrize("key", ["m", "M"])
+def test_extra_key_reports_pointed_row(key):
     questionary = pytest.importorskip("questionary")
     create_pipe_input, DummyOutput = _pipe_io()
 
@@ -1533,12 +1564,12 @@ def test_extra_key_reports_pointed_row():
             input=pipe,
             output=DummyOutput(),
         )
-        tbrowse._inject_bindings(q, extra_keys=("m",))
-        pipe.send_text("m")
+        tbrowse._inject_bindings(q, extra_keys=("m", "M"))
+        pipe.send_text(key)
         hit = q.application.run()
 
     assert isinstance(hit, tbrowse._KeyHit)
-    assert hit.key == "m" and hit.value == "v1"
+    assert hit.key == key and hit.value == "v1"
 
 
 def test_pointed_row_restyle_keeps_semantic_color():
@@ -1582,7 +1613,7 @@ def test_selects_share_prompt_chrome(state, workspace, monkeypatch):
         monkeypatch,
         [
             ("pick", "session"),
-            ("pick", "Merge attempts"),
+            ("hit", "m", "#1"),
             ("pickall", ["#1", "#2"]),
             ("pick", "#1"),
             ("pick", "Verdict"),
@@ -1613,7 +1644,7 @@ def test_merge_checkbox_validates_minimum(state, workspace, monkeypatch):
         monkeypatch,
         [
             ("pick", "session"),
-            ("pick", "Merge attempts"),
+            ("hit", "m", "#1"),
             ("pickall", ["#1", "#2"]),
             _BACK,
             _BACK,
