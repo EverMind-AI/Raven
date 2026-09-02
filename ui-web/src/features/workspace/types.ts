@@ -62,6 +62,16 @@ export interface DeliveryRow {
      own registry rather than from a manifest on a turn event -- the registry
      is what a conversation delivered, not when in the reading it happened. */
   turn: number | null
+  /* Which stream delivered it: `deliveries.SESSION` for the conversation's own,
+     `agent:<key>` for a delegated one. Declared here rather than kept inside the
+     registry because `turn` cannot be read without it -- each stream counts its
+     turns from one, so a delegated row's `7` is not this conversation's seventh
+     and must not be drawn or grouped as though it were.
+
+     Optional because a row handed to `restore` from outside the registry may not
+     carry one, and that one belongs to the conversation; every row the registry
+     gives back has it, filled in on the way in. */
+  scope?: string
 }
 
 /* The stable workspace record owned by the island store. */
