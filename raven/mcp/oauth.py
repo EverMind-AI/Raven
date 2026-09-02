@@ -424,6 +424,35 @@ class FileTokenStorage:
         """
         self._preregistered = client_info
 
+    def remember_metadata(self, asm: dict) -> None:
+        """Keep the authorization-server document this server actually answered.
+
+        The SDK only learns it during the discovery that follows a 401, and it
+        keeps it in memory. A refresh, by contrast, runs *before* any discovery
+        on a fresh process, so the SDK falls back to guessing ``<origin>/token``
+        -- an address no real server answers (sentry replies 500 there, openseo
+        404). Every restart's first refresh therefore failed at the wrong URL and
+        fell through to a browser, which is the failure the surrounding code
+        exists to prevent.
+
+        Written rather than re-derived from config: a server that declares
+        nothing has no other way to remember, and one that declares wrongly is
+        corrected by what the server itself said.
+        """
+
+        def _store(data: dict) -> dict | None:
+            if data.get("oauth_metadata") == asm:
+                return None
+            data["oauth_metadata"] = asm
+            return data
+
+        self._transact(_store)
+
+    def remembered_metadata(self) -> dict | None:
+        """The stored authorization-server document, for re-seeding the SDK."""
+        asm = self._read().get("oauth_metadata")
+        return asm if isinstance(asm, dict) and asm.get("token_endpoint") else None
+
     def forget_client_info(self) -> None:
         """Drop a stored registration that has just been superseded in memory.
 
@@ -960,6 +989,8 @@ def _coordinated_provider_class(base: type) -> type:
             super().__init__(*args, **kwargs)
             self._server_name = server_name
             self._can_park = can_park
+            self._asm_noted: Any = None
+            self._asm_from_catalog = False
 
         async def _adopt_stored_tokens(self) -> None:
             """This provider's view of the credential, brought level with the file.
@@ -1033,6 +1064,39 @@ def _coordinated_provider_class(base: type) -> type:
             )
             self.context.client_info = replacement
 
+        def _remember_metadata(self) -> None:
+            """Persist what discovery taught this flow, so the next process can
+            refresh without guessing.
+
+            Called from ``_on_reply``, which runs on every response, rather than
+            when the flow ends: httpx stops driving the generator once it has its
+            final response, so a ``finally`` there runs whenever the object is
+            collected -- which is not a time anything can depend on. Guarded by
+            object identity, so steady-state requests cost one comparison.
+            """
+            # A server whose config declares its endpoints owns them there, and
+            # nothing about this flow can tell the catalog's answer from the
+            # server's: the seeded provider hands that same document back as the
+            # discovery response, so even the object identity changes. Writing it
+            # down would file a catalog fact as if the server had stated it, and
+            # a catalog the server later refuses would then outlive its own
+            # disarming -- `_seed_for` returning None on the next start while
+            # this copy fed the rejected endpoint straight back in.
+            #
+            # So only servers with nothing declared record anything. When a
+            # seed *is* disarmed, the next start has none, and that run's live
+            # discovery is written down like any other.
+            if self._asm_from_catalog:
+                return
+            asm = getattr(self.context, "oauth_metadata", None)
+            if asm is None or asm is self._asm_noted:
+                return
+            try:
+                self.context.storage.remember_metadata(asm.model_dump(mode="json", exclude_none=True))
+                self._asm_noted = asm
+            except Exception as e:  # noqa: BLE001 — a note for next time must not fail this connect
+                logger.warning("MCP OAuth: could not record the endpoints for '{}': {}", self._server_name, e)
+
         def _on_reply(self, reply) -> None:  # type: ignore[no-untyped-def]
             """Watch the flow for the transitions the redirect starts mattering at.
 
@@ -1054,6 +1118,7 @@ def _coordinated_provider_class(base: type) -> type:
             authorize on it, and clearing would leave this provider unable to
             refresh for the rest of its life.
             """
+            self._remember_metadata()
             status = getattr(reply, "status_code", None)
             if status == 403:
                 from mcp.client.auth.utils import extract_field_from_www_auth
@@ -1199,6 +1264,7 @@ async def provider_for(
         cls = _coordinated_provider_class(_seeded_provider_class(OAuthClientProvider))
         kwargs = {"seed": seed, "on_rejected": lambda: storage.disarm_seed(seed.fingerprint)}
     kwargs["server_name"] = server
+    catalog_endpoints = seed is not None
     kwargs["can_park"] = can_park
     provider = cls(
         server_url=cfg.url,
@@ -1220,6 +1286,26 @@ async def provider_for(
     # refreshes, it 401s and re-authorizes in a browser instead. Seed the expiry
     # we anchored at set_tokens time and the refresh branch works across
     # restarts; authorization is then an install-time event, not a recurring one.
+    # Seeded for the same reason as the expiry below: the SDK's initialize
+    # restores neither, and a refresh runs before any discovery -- so without
+    # this the first refresh of every process goes to a guessed token endpoint,
+    # which no real server answers.
+    #
+    # The catalog wins when there is one. That is not a second source of truth:
+    # ``_seeded_provider_class`` already answers the discovery request with this
+    # exact document, so seeding it here only makes the refresh path agree with
+    # the discovery path instead of guessing behind its back. Everything else
+    # falls back to what the server itself last said.
+    asm = seed.asm if seed is not None else storage.remembered_metadata()
+    if asm is not None:
+        try:
+            from mcp.shared.auth import OAuthMetadata
+
+            provider.context.oauth_metadata = OAuthMetadata.model_validate(asm)
+            provider._asm_noted = provider.context.oauth_metadata
+        except Exception as e:  # noqa: BLE001 — a stale note degrades to the old guess, not a failed connect
+            logger.warning("MCP OAuth: endpoints for '{}' are unusable ({}); discovering instead", server, e)
+    provider._asm_from_catalog = catalog_endpoints
     expiry = storage.stored_token_expiry()
     if expiry is not None:
         try:
