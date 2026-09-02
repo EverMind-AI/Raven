@@ -6,7 +6,9 @@ into a private copy and execs ``python -m raven acp``. What every such
 launcher repeats is here -- reading a setting from the process environment
 with a ``.env`` fallback, merging declared secret slots, inheriting the
 host's LLM block when the product has no key of its own, pinning a state
-root under the host's home, seeding a workspace file once, assembling the
+root under the host's home and an engine home OUTSIDE it (the home lives in
+the raven data directory, the work stays where the work is), seeding a
+workspace file once, assembling the
 ``acp.modes`` catalogue from overlay files, sweeping stale renders by pid
 liveness, and writing the rendered copy owner-only.
 
@@ -26,13 +28,15 @@ requirement.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from raven.contracts.path_policy import CONFIG_FILENAME
+from raven.contracts.path_policy import CONFIG_FILENAME, WORKSPACE_DEFAULT_SENTINEL
 from raven.home import raven_home
+from raven.utils.paths import safe_path_segment
 
 
 def env_value(name: str, *, env_file: Path | None = None) -> str | None:
@@ -138,15 +142,165 @@ def inherit_llm(config: dict, host: dict) -> str:
 
 
 def product_state_root(product: str, *, override: str | None = None) -> Path:
-    """Where a product persists everything -- never in its own folder.
+    """Where a product keeps its WORK -- never in its own folder.
 
-    The default seats every product's state under the host home's sub-agent
-    sessions, one directory per product name; ``override`` is the resolved
-    value of the product's own state-root variable, when it names one.
+    The default seats every product's working state (repos, instance buckets,
+    flow stores, rendered configs) under the host home's sub-agent sessions,
+    one directory per product name; ``override`` is the resolved value of the
+    product's own state-root variable, when it names one. The engine's own
+    Agent home is deliberately NOT here: it goes through
+    :func:`product_acp_home`, outside the host Agent home, because the host
+    hands its home over as a session's working directory and the runtime
+    refuses a working directory that contains the engine's home. Work where
+    the work is, the home in the data directory.
     """
     if override:
         return Path(override).expanduser()
     return raven_home() / "workspace" / "subagent_sessions" / product
+
+
+def host_agent_home() -> Path:
+    """The Agent home the HOST raven is configured to use.
+
+    Read from the host config rather than assumed: an operator who moved
+    ``agents.defaults.workspace`` moved the tree the host hands out as a
+    session's working directory, and the containment guard below must be
+    measured against that tree, not against the default. The sentinel and the
+    comparison are the trunk's own (``Config.workspace_path`` compares the raw
+    value against the paper's ``WORKSPACE_DEFAULT_SENTINEL``, no trimming), so
+    the two readers of one question cannot drift apart.
+    """
+    raw = ((host_config().get("agents") or {}).get("defaults") or {}).get("workspace")
+    if isinstance(raw, str) and raw and raw != WORKSPACE_DEFAULT_SENTINEL:
+        return Path(raw).expanduser()
+    return raven_home() / "workspace"
+
+
+def _outside(path: Path, home: Path) -> bool:
+    """True when ``path`` is neither ``home`` nor anything under it.
+
+    The one property the runtime's own guard cares about: a working directory
+    must not contain the agent home it is handed to, and the host hands its
+    Agent home over as the working directory.
+
+    Asked of the filesystem, not only of the spelling: ``resolve()`` does not
+    fold case, APFS default volumes do, so a home spelled as a case variant of
+    ``RAVEN_HOME`` would pass a string comparison while naming the very tree
+    being handed over -- the alias-blind fail-open an adversarial review
+    reproduced live. Every EXISTING ancestor of the candidate is compared with
+    ``os.path.samefile`` (st_dev/st_ino, which sees through case variants and
+    firmlinks alike); the string comparison stays for tails that do not exist
+    yet and for a home that does not exist at all.
+    """
+    p = Path(path).expanduser().resolve()
+    h = Path(home).expanduser().resolve()
+    if p == h or h in p.parents:
+        return False
+    if h.exists():
+        for ancestor in (p, *p.parents):
+            if not ancestor.exists():
+                continue
+            try:
+                if os.path.samefile(ancestor, h):
+                    return False
+            except OSError:
+                continue
+    return True
+
+
+def _creatable(path: Path) -> bool:
+    """True when ``path`` could be made -- asked without making anything.
+
+    Walk up to the nearest ancestor that exists and ask whether it is a
+    directory this process may create under. Advisory, not authoritative: a
+    run whose effective uid overrides the write bit is told yes and proceeds
+    exactly as before this check. What it removes is the case where the
+    answer is knowably no and the operator would otherwise learn it from a
+    bare ``PermissionError`` naming nothing they can act on.
+    """
+    probe = Path(path).expanduser()
+    for ancestor in (probe, *probe.parents):
+        if ancestor.exists():
+            return ancestor.is_dir() and os.access(ancestor, os.W_OK | os.X_OK)
+    return False
+
+
+def _instance_tag() -> str:
+    """A name for THIS raven instance, for a path shared with its siblings.
+
+    Two instances on one machine are told apart by their ``RAVEN_HOME``, and
+    the sibling fallback in :func:`product_acp_home` puts its directory beside
+    the host Agent home -- a place their siblings can reach. Without the
+    instance in the name, two instances under one parent would share one
+    engine home, which is the isolation ``RAVEN_HOME`` exists to give. The
+    directory's own name for legibility, and a digest of the resolved path
+    because two instances can be named the same under different parents.
+    """
+    resolved = raven_home().expanduser().resolve()
+    digest = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:8]
+    return f"{safe_path_segment(resolved.name)}-{digest}"
+
+
+def _acp_home_var(product: str) -> str:
+    """The product's own override variable, derived the way its siblings are.
+
+    ``raven-code`` answers to ``CODE_ACP_HOME`` the way it answers to
+    ``CODE_STATE_ROOT``: the ``raven-`` prefix drops, the rest upper-cases
+    with hyphens as underscores.
+    """
+    stem = product.removeprefix("raven-").replace("-", "_").upper()
+    return f"{stem}_ACP_HOME"
+
+
+def product_acp_home(product: str, *, override: str | None = None) -> Path:
+    """The ACP engine's own Agent home -- never inside the host's.
+
+    The host hands a session's working directory to whatever it dispatches
+    to, and on a surface with no checkout of its own -- a web page -- that
+    directory is the host's Agent home. A raven engine refuses to work in a
+    directory that CONTAINS its own home, because the per-turn checkpoint
+    runs ``add -A`` over the working directory and would commit its config
+    and its provider tokens into a shadow repository. Homing an engine under
+    the host's Agent home therefore made every dispatch to it fail before it
+    started, while capability probing still passed (it opens its session on a
+    temporary directory). So the engine is homed under the raven DATA
+    directory, which is never handed out as a working directory.
+
+    Checked against the CONFIGURED host Agent home (:func:`host_agent_home`):
+    an operator who points ``agents.defaults.workspace`` at ``$RAVEN_HOME``
+    -- or any ancestor of it -- puts the data directory back inside the very
+    tree being handed over, and the refusal returns. When the default lands
+    inside it, the engine is homed beside the host's Agent home instead,
+    tagged per instance so two ravens under one parent do not share it.
+
+    Being outside is not on its own enough: beside a home like ``~`` sits
+    ``/Users``, which no run may write to -- so a placement is refused when
+    it is unusable as well as when it is inside, with the product's own
+    override variable named instead of a bare ``PermissionError``.
+
+    ``override`` (the resolved value of that variable) wins outright: where
+    the home goes is then the operator's business, reachability included.
+    The product's state root is untouched by all of this -- repos, instance
+    buckets and flow stores are work, and stay where the work is.
+    """
+    if override:
+        return Path(override).expanduser()
+    host = host_agent_home()
+    candidate = raven_home() / "subagent_sessions" / product / "acp"
+    if not _outside(candidate, host):
+        candidate = host.parent / f".{product}-{_instance_tag()}" / "acp"
+    if not _outside(candidate, host):
+        raise SystemExit(
+            f"error: cannot place the {product} ACP home outside the host Agent home "
+            f"({host}); set {_acp_home_var(product)} to a directory outside it"
+        )
+    if not _creatable(candidate):
+        raise SystemExit(
+            f"error: the {product} ACP home {candidate} cannot be created -- its nearest "
+            f"existing parent is not a directory this run may write to; set "
+            f"{_acp_home_var(product)} to a writable directory outside the host Agent home ({host})"
+        )
+    return candidate
 
 
 def seed_once(target: Path, render: Callable[[], str]) -> bool:

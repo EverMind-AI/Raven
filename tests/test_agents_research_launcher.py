@@ -51,6 +51,7 @@ def grounded(launcher, tmp_path, monkeypatch):
     """A launcher pointed at a scratch home and state root, secrets set."""
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("RESEARCH_NG_STATE_ROOT", str(tmp_path / "state"))
+    monkeypatch.delenv("RESEARCH_NG_ACP_HOME", raising=False)
     monkeypatch.setenv("RESEARCH_API_KEY", "sk-own")
     monkeypatch.setenv("RESEARCH_SERPER_API_KEY", "serper-key")
     monkeypatch.delenv("SERPER_API_KEY", raising=False)
@@ -58,12 +59,39 @@ def grounded(launcher, tmp_path, monkeypatch):
     return launcher
 
 
+def test_the_engine_home_is_never_inside_the_configured_host_home(grounded, tmp_path):
+    """The w109 containment pin, both ways, plus the refusal half: the rendered
+    engine home sits outside the host Agent home; the runtime guard accepts
+    the host home as a session cwd against it, and still refuses the raven
+    data directory and the engine home itself."""
+    from raven.agent.workdir import validate_override
+
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    engine_home = Path(data["agents"]["defaults"]["workspace"]).resolve()
+    host_home = (tmp_path / "home" / "workspace").resolve()
+    assert engine_home != host_home and host_home not in engine_home.parents
+    host_home.mkdir(parents=True, exist_ok=True)
+    assert validate_override(str(host_home), agent_home=engine_home) == host_home
+    with pytest.raises(ValueError):
+        validate_override(str(tmp_path / "home"), agent_home=engine_home)
+    with pytest.raises(ValueError):
+        validate_override(str(engine_home), agent_home=engine_home)
+
+
+def test_research_acp_home_override_wins_over_the_default(grounded, tmp_path, monkeypatch):
+    monkeypatch.setenv("RESEARCH_NG_ACP_HOME", str(tmp_path / "elsewhere" / "acp"))
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    assert data["agents"]["defaults"]["workspace"] == str(tmp_path / "elsewhere" / "acp")
+
+
 def test_the_render_merges_secrets_and_pins_the_workspace(grounded, tmp_path):
     rendered = grounded.render_config(RUN_PY.parent / "config.json")
     data = json.loads(rendered.read_text())
     assert data["providers"]["openrouter"]["apiKey"] == "sk-own"
     assert data["tools"]["web"]["search"]["apiKey"] == "serper-key"
-    assert data["agents"]["defaults"]["workspace"] == str(tmp_path / "state" / "workspace")
+    assert data["agents"]["defaults"]["workspace"] == str(
+        tmp_path / "home" / "subagent_sessions" / "raven-research-ng" / "acp"
+    )
     assert rendered.parent == tmp_path / "state"
 
 
@@ -158,7 +186,7 @@ def test_the_identity_is_the_vendored_twins_override_verbatim():
 
 def test_the_contract_is_seeded_beside_the_identity_once(grounded, tmp_path):
     grounded.render_config(RUN_PY.parent / "config.json")
-    profile = tmp_path / "state" / "workspace" / "agent_memory" / "profile"
+    profile = tmp_path / "home" / "subagent_sessions" / "raven-research-ng" / "acp" / "agent_memory" / "profile"
     soul = (profile / "soul.md").read_text()
     assert "## What actually decides this task" in soul, "measured guidance rendered into the identity"
     assert soul.index("## What actually decides this task") < soul.index("## Reading")
@@ -187,7 +215,9 @@ def test_the_render_loads_through_trunks_own_loader(grounded):
 
 def test_the_identity_is_seeded_once_and_never_overwritten(grounded, tmp_path):
     grounded.render_config(RUN_PY.parent / "config.json")
-    soul = tmp_path / "state" / "workspace" / "agent_memory" / "profile" / "soul.md"
+    soul = (
+        tmp_path / "home" / "subagent_sessions" / "raven-research-ng" / "acp" / "agent_memory" / "profile" / "soul.md"
+    )
     assert "research agent" in soul.read_text()
     soul.write_text("operator tuned")
     grounded.render_config(RUN_PY.parent / "config.json")

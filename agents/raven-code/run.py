@@ -202,8 +202,16 @@ def render_config(source: Path, partition: Path, gate: dict[str, str]) -> Path:
 
 
 def render_acp_config(source: Path) -> Path:
-    """The ACP hosting's render: the acp partition, the multiplexed arming."""
-    acp_state = (state_root() / "acp").resolve()
+    """The ACP hosting's render: the acp partition, the multiplexed arming.
+
+    The partition is the engine's Agent home and must sit OUTSIDE the host
+    Agent home (the host hands its home over as the session cwd, and the
+    runtime refuses a cwd that contains the engine's home) -- so it comes
+    from the shared placement helper, not from the state root. Everything
+    else this product keeps (repos, per-instance buckets) is work and stays
+    under CODE_STATE_ROOT; CODE_ACP_HOME overrides the home alone.
+    """
+    acp_state = render.product_acp_home(PRODUCT, override=env_value("CODE_ACP_HOME")).resolve()
     return render_config(
         source,
         acp_state,

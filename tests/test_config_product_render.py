@@ -154,3 +154,111 @@ def test_write_rendered_is_owner_only_and_pid_named(tmp_path):
     assert rendered.name == f".config.rendered.{os.getpid()}.json"
     assert stat.S_IMODE(rendered.stat().st_mode) == 0o600
     assert json.loads(rendered.read_text()) == {"a": 1}
+
+
+# --- product_acp_home: the engine home never inside the host's (w109) ---------
+
+
+@pytest.fixture()
+def homed(tmp_path, monkeypatch):
+    """A scratch RAVEN_HOME with a host config the helper reads."""
+    home = tmp_path / "rhome"
+    home.mkdir()
+    monkeypatch.setenv("RAVEN_HOME", str(home))
+    (home / "config.json").write_text("{}", encoding="utf-8")
+    return home
+
+
+def test_acp_home_defaults_into_the_data_dir_outside_the_host_home(homed):
+    got = render.product_acp_home("raven-ppt")
+    assert got == homed / "subagent_sessions" / "raven-ppt" / "acp"
+    host = render.host_agent_home()
+    assert host == homed / "workspace"
+    assert got != host and host not in got.parents
+
+
+def test_acp_home_falls_beside_a_host_home_that_swallows_the_default(homed):
+    """An operator who points agents.defaults.workspace at RAVEN_HOME (or any
+    ancestor) puts the data directory inside the very tree being handed over;
+    the seat then falls beside that home, tagged per instance."""
+    (homed / "config.json").write_text(
+        json.dumps({"agents": {"defaults": {"workspace": str(homed)}}}), encoding="utf-8"
+    )
+    got = render.product_acp_home("raven-ppt")
+    assert got.parent.parent == homed.parent
+    assert got.name == "acp"
+    assert got.parent.name.startswith(".raven-ppt-")
+    assert got != homed and homed not in got.parents
+
+
+def test_acp_home_refuses_loud_when_no_outside_placement_exists(homed, monkeypatch):
+    """A host home at the filesystem root leaves nowhere beside it; the
+    refusal names the product's own override variable."""
+    (homed / "config.json").write_text(json.dumps({"agents": {"defaults": {"workspace": "/"}}}), encoding="utf-8")
+    with pytest.raises(SystemExit) as caught:
+        render.product_acp_home("raven-ppt")
+    assert "PPT_ACP_HOME" in str(caught.value)
+
+
+def test_acp_home_refuses_an_uncreatable_placement_actionably(homed, monkeypatch):
+    """Outside is not enough: a seat whose nearest existing ancestor is not
+    writable is refused naming the override, not with a bare PermissionError."""
+    monkeypatch.setattr(render.os, "access", lambda *_a, **_k: False)
+    with pytest.raises(SystemExit) as caught:
+        render.product_acp_home("raven-code")
+    assert "CODE_ACP_HOME" in str(caught.value)
+    assert "cannot be created" in str(caught.value)
+
+
+def test_acp_home_override_wins_outright(homed):
+    got = render.product_acp_home("raven-oncall", override="~/elsewhere/acp")
+    assert got == render.Path("~/elsewhere/acp").expanduser()
+
+
+def test_acp_home_var_derivation_matches_the_state_root_family():
+    assert render._acp_home_var("raven-code") == "CODE_ACP_HOME"
+    assert render._acp_home_var("raven-research-ng") == "RESEARCH_NG_ACP_HOME"
+
+
+def _case_insensitive_fs(tmp_path) -> bool:
+    """Probe, don't assume: APFS defaults one way, CI filesystems the other."""
+    probe = tmp_path / "CaseProbe"
+    probe.touch()
+    return (tmp_path / "caseprobe").exists()
+
+
+def test_acp_home_sees_through_a_case_variant_host_home(tmp_path, monkeypatch):
+    """The HIGH-1 regression pin: a workspace spelled as a case variant of
+    RAVEN_HOME names the same physical tree on a case-insensitive volume;
+    resolve() keeps the given spelling, so a string comparison calls the
+    default seat "outside" while it sits physically INSIDE the tree the host
+    hands over. The guard asks the filesystem (samefile over existing
+    ancestors) and must fall beside instead."""
+    if not _case_insensitive_fs(tmp_path):
+        pytest.skip("filesystem is case-sensitive; the alias cannot be built here")
+    home = tmp_path / "rhome"
+    home.mkdir()
+    monkeypatch.setenv("RAVEN_HOME", str(home))
+    variant = tmp_path / "RHOME"
+    (home / "config.json").write_text(
+        json.dumps({"agents": {"defaults": {"workspace": str(variant)}}}), encoding="utf-8"
+    )
+    got = render.product_acp_home("raven-ppt")
+    assert os.path.samefile(variant, home), "probe premise: the two spellings are one directory"
+    got_existing = next(a for a in (got, *got.parents) if a.exists())
+    assert not os.path.samefile(got_existing, home)
+    assert got.parent.name.startswith(".raven-ppt-")
+    assert got.name == "acp"
+
+
+def test_acp_home_instance_tag_tells_same_named_homes_apart(tmp_path, monkeypatch):
+    """Two instances named alike under different parents must not share the
+    sibling seat (the isolation RAVEN_HOME exists to give)."""
+    tags = []
+    for parent in ("one", "two"):
+        home = tmp_path / parent / "rhome"
+        home.mkdir(parents=True)
+        monkeypatch.setenv("RAVEN_HOME", str(home))
+        tags.append(render._instance_tag())
+    assert tags[0] != tags[1]
+    assert all(tag.startswith("rhome-") for tag in tags)

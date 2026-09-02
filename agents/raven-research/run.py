@@ -252,8 +252,14 @@ def render_config(source: Path) -> Path:
 
     root = state_root()
     defaults = config.setdefault("agents", {}).setdefault("defaults", {})
+    # The engine's Agent home must sit OUTSIDE the host Agent home (the host
+    # hands its home over as the session cwd, and the runtime refuses a cwd
+    # that contains the engine's home): the default comes from the shared
+    # placement helper -- the raven data directory, RESEARCH_NG_ACP_HOME
+    # overrides (the NG spelling matches this product's own state variable).
+    # The state root keeps the work (research_flow store, rendered configs).
     if not defaults.get("workspace"):
-        defaults["workspace"] = str(root / "workspace")
+        defaults["workspace"] = str(render.product_acp_home(PRODUCT, override=env_value("RESEARCH_NG_ACP_HOME")))
 
     plugins = config.setdefault("plugins", {})
     plugins["dirs"] = [str(PLUGINS_DIR)]

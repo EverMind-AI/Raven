@@ -36,6 +36,7 @@ def grounded(launcher, tmp_path, monkeypatch):
     """A launcher pointed at a scratch home and state root, secrets set."""
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("ONCALL_STATE_ROOT", str(tmp_path / "state"))
+    monkeypatch.delenv("ONCALL_ACP_HOME", raising=False)
     monkeypatch.setenv("ONCALL_API_KEY", "sk-own")
     monkeypatch.delenv("ONCALL_SERPER_API_KEY", raising=False)
     monkeypatch.delenv("ONCALL_JINA_API_KEY", raising=False)
@@ -103,7 +104,7 @@ def test_the_seeded_guide_is_the_trunk_template_plus_the_section(grounded, tmp_p
     from raven import templates
 
     grounded.render_config(RUN_PY.parent / "config.json")
-    seeded = (tmp_path / "state" / "workspace" / "TOOLS.md").read_bytes()
+    seeded = (tmp_path / "home" / "subagent_sessions" / "raven-oncall" / "acp" / "TOOLS.md").read_bytes()
     base = (Path(templates.__file__).resolve().parent / "TOOLS.md").read_text(encoding="utf-8")
     section = PRODUCT_SECTION.read_text(encoding="utf-8")
     assert seeded == (base.rstrip("\n") + "\n\n" + section).encode("utf-8")
@@ -111,10 +112,49 @@ def test_the_seeded_guide_is_the_trunk_template_plus_the_section(grounded, tmp_p
 
 def test_the_guide_is_seeded_once_and_never_overwritten(grounded, tmp_path):
     grounded.render_config(RUN_PY.parent / "config.json")
-    guide = tmp_path / "state" / "workspace" / "TOOLS.md"
+    guide = tmp_path / "home" / "subagent_sessions" / "raven-oncall" / "acp" / "TOOLS.md"
     guide.write_text("operator tuned")
     grounded.render_config(RUN_PY.parent / "config.json")
     assert guide.read_text() == "operator tuned"
+
+
+def test_the_engine_home_is_never_inside_the_configured_host_home(grounded, tmp_path):
+    """The w109 containment pin: the shipped config's literal "workspace" is
+    the default spelling, so the rendered engine home sits in the raven DATA
+    directory, outside the host Agent home the surfaces hand over as a
+    session cwd -- and the runtime's own guard accepts that cwd against it."""
+    from raven.agent.workdir import validate_override
+
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    engine_home = Path(data["agents"]["defaults"]["workspace"]).resolve()
+    assert engine_home == (tmp_path / "home" / "subagent_sessions" / "raven-oncall" / "acp").resolve()
+    host_home = (tmp_path / "home" / "workspace").resolve()
+    assert engine_home != host_home and host_home not in engine_home.parents
+    host_home.mkdir(parents=True, exist_ok=True)
+    assert validate_override(str(host_home), agent_home=engine_home) == host_home
+    # And the other half of the fork's concern stays refused: the raven data
+    # directory (config.json, oauth tokens) now CONTAINS the engine home, and
+    # the engine home itself is nobody's working directory.
+    with pytest.raises(ValueError):
+        validate_override(str(tmp_path / "home"), agent_home=engine_home)
+    with pytest.raises(ValueError):
+        validate_override(str(engine_home), agent_home=engine_home)
+
+
+def test_an_operators_own_workspace_survives_and_the_override_wins(grounded, tmp_path, monkeypatch):
+    """An explicit operator value is not the shipped sentinel: it stays as
+    written (relative under the state root, the documented shape); and
+    ONCALL_ACP_HOME moves the default outright."""
+    source = json.loads((RUN_PY.parent / "config.json").read_text())
+    source["agents"]["defaults"]["workspace"] = "my-own-seat"
+    custom = tmp_path / "custom.json"
+    custom.write_text(json.dumps(source))
+    data = json.loads(grounded.render_config(custom).read_text())
+    assert data["agents"]["defaults"]["workspace"] == str((tmp_path / "state" / "my-own-seat").resolve())
+
+    monkeypatch.setenv("ONCALL_ACP_HOME", str(tmp_path / "elsewhere" / "acp"))
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    assert data["agents"]["defaults"]["workspace"] == str(tmp_path / "elsewhere" / "acp")
 
 
 def test_the_roster_row_identity_is_the_vendored_twins():
@@ -160,7 +200,9 @@ def test_the_render_merges_secrets_pins_workspace_and_boards_the_plugin(grounded
     rendered = grounded.render_config(RUN_PY.parent / "config.json")
     data = json.loads(rendered.read_text())
     assert data["providers"]["custom"]["apiKey"] == "sk-own"
-    assert data["agents"]["defaults"]["workspace"] == str((tmp_path / "state" / "workspace").resolve())
+    assert data["agents"]["defaults"]["workspace"] == str(
+        tmp_path / "home" / "subagent_sessions" / "raven-oncall" / "acp"
+    )
     assert data["plugins"]["dirs"] == [str(RUN_PY.parent / "plugins")]
     flow = data["plugins"]["config"]["oncall-flow"]
     assert flow["enabled"] is True

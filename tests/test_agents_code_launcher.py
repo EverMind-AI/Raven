@@ -46,6 +46,7 @@ def grounded(launcher, tmp_path, monkeypatch):
     """A launcher pointed at a scratch home and state root, secrets set."""
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("CODE_STATE_ROOT", str(tmp_path / "state"))
+    monkeypatch.delenv("CODE_ACP_HOME", raising=False)
     monkeypatch.setenv("CODE_API_KEY", "sk-own")
     monkeypatch.delenv("CODE_SERPER_API_KEY", raising=False)
     monkeypatch.delenv("CODE_JINA_API_KEY", raising=False)
@@ -166,13 +167,13 @@ def test_the_seeded_guide_is_the_forks_wording(grounded, tmp_path):
     trunk template that would otherwise land there.
     """
     _render(grounded)
-    seeded = (tmp_path / "state" / "acp" / "TOOLS.md").read_bytes()
+    seeded = (tmp_path / "home" / "subagent_sessions" / "raven-code" / "acp" / "TOOLS.md").read_bytes()
     assert seeded == _respelled_fork_template()
 
 
 def test_the_guide_is_seeded_once_and_never_overwritten(grounded, tmp_path):
     _render(grounded)
-    guide = tmp_path / "state" / "acp" / "TOOLS.md"
+    guide = tmp_path / "home" / "subagent_sessions" / "raven-code" / "acp" / "TOOLS.md"
     guide.write_text("operator tuned")
     _render(grounded)
     assert guide.read_text() == "operator tuned"
@@ -221,9 +222,13 @@ def test_the_everos_identity_agrees_in_all_three_places():
 
 
 def test_the_render_merges_secrets_pins_workspace_and_arms_the_gate_slice(grounded, tmp_path):
+    """The acp partition (the engine home, the alloc base, the rendered file's
+    parent) sits in the raven DATA directory, outside the host Agent home the
+    surfaces hand over as a session cwd (w109); the work -- repos, the state
+    bucket -- stays under CODE_STATE_ROOT."""
     rendered = _render(grounded)
     data = json.loads(rendered.read_text())
-    acp = (tmp_path / "state" / "acp").resolve()
+    acp = (tmp_path / "home" / "subagent_sessions" / "raven-code" / "acp").resolve()
     assert data["providers"]["custom"]["apiKey"] == "sk-own"
     assert data["agents"]["defaults"]["workspace"] == str(acp)
     flow = data["plugins"]["config"]["code-flow"]
@@ -234,6 +239,35 @@ def test_the_render_merges_secrets_pins_workspace_and_arms_the_gate_slice(ground
         "stateBucket": "acp",
     }
     assert rendered.parent == acp
+
+
+def test_the_engine_home_is_never_inside_the_configured_host_home(grounded, tmp_path):
+    """The w109 containment pin, both ways: the rendered engine home is outside
+    the host Agent home, and the runtime's own guard accepts the host home as a
+    session working directory against that engine home -- the exact dispatch
+    the web surface performs, which used to refuse."""
+    from raven.agent.workdir import validate_override
+
+    data = json.loads(_render(grounded).read_text())
+    engine_home = Path(data["agents"]["defaults"]["workspace"]).resolve()
+    host_home = (tmp_path / "home" / "workspace").resolve()
+    assert engine_home != host_home
+    assert host_home not in engine_home.parents
+    host_home.mkdir(parents=True, exist_ok=True)
+    assert validate_override(str(host_home), agent_home=engine_home) == host_home
+    # And the other half of the fork's concern stays refused: the raven data
+    # directory (config.json, oauth tokens) now CONTAINS the engine home, and
+    # the engine home itself is nobody's working directory.
+    with pytest.raises(ValueError):
+        validate_override(str(tmp_path / "home"), agent_home=engine_home)
+    with pytest.raises(ValueError):
+        validate_override(str(engine_home), agent_home=engine_home)
+
+
+def test_code_acp_home_override_wins_outright(grounded, tmp_path, monkeypatch):
+    monkeypatch.setenv("CODE_ACP_HOME", str(tmp_path / "elsewhere" / "acp"))
+    data = json.loads(_render(grounded).read_text())
+    assert data["agents"]["defaults"]["workspace"] == str(tmp_path / "elsewhere" / "acp")
 
 
 def test_the_render_declares_the_plugin_dirs(grounded):
@@ -347,7 +381,7 @@ def test_the_acp_exec_lane_is_installed_ravens(grounded, tmp_path, monkeypatch):
     with pytest.raises(SystemExit):
         grounded.serve(SimpleNamespace(config=str(RUN_PY.parent / "config.json")))
 
-    acp = (tmp_path / "state" / "acp").resolve()
+    acp = (tmp_path / "home" / "subagent_sessions" / "raven-code" / "acp").resolve()
     assert calls["binary"] == sys.executable
     assert calls["argv"][:5] == [sys.executable, "-m", "raven", "acp", "--config"]
     rendered = Path(calls["argv"][5])
