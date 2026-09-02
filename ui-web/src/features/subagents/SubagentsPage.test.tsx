@@ -654,8 +654,9 @@ describe('subagents island, an instance detail', () => {
     instances([row], { instanceHistory: async () => ({ turns: [] }), ...over })
     await mount()
     await act(async () => {
-      /* By what the row shows, which is the node's name where it has one. */
-      ;(await screen.findByText(row.nodeId || row.handle)).closest('.sarow')!
+      /* By what the row shows: what the instance is for, then the node's name,
+         then the handle -- the same order the row itself renders. */
+      ;(await screen.findByText(row.title || row.nodeId || row.handle)).closest('.sarow')!
         .dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
     await act(async () => {
@@ -822,6 +823,31 @@ describe('subagents island, an instance detail', () => {
     )
     const box = document.querySelector('.sasend textarea') as HTMLTextAreaElement
     expect(box.getAttribute('placeholder')).toBe('gui.ws.instance_say_hint {"name":"research_a2a"}')
+  })
+
+  it('addresses the composer by what the instance is for, not by its id', async () => {
+    /* A pane headed by the task whose composer says "carry on with
+       raven-f5caf2" reads as two different things on one screen. */
+    await openInstance(
+      inst({ handle: 'raven-f5caf2', status: 'completed', resumable: true, title: '用一句话解释光合作用' }),
+      { instanceSend: async () => {} },
+    )
+    const box = document.querySelector('.sasend textarea') as HTMLTextAreaElement
+    expect(box.getAttribute('placeholder')).toBe('gui.ws.instance_say_hint {"name":"用一句话解释光合作用"}')
+  })
+
+  it('names the desk pane composer the same way the pane is headed', async () => {
+    /* The desk pane is the surface that showed the handle: its composer asked
+       for `nodeId || handle` and never looked at the title at all, so a pane
+       headed "用一句话解释光合作用" invited the reader to carry on with
+       `raven-f5caf2`. */
+    const row = inst({ handle: 'raven-f5caf2', status: 'completed', resumable: true, title: '用一句话解释光合作用' })
+    instances([row], { instanceHistory: async () => ({ turns: [] }), instanceSend: async () => {} })
+    render(<InstanceConversation row={row} />, { container: document.getElementById('wsBody')! })
+    await act(async () => { await Promise.resolve() })
+
+    const box = document.querySelector('.sasend textarea') as HTMLTextAreaElement
+    expect(box.getAttribute('placeholder')).toBe('gui.ws.instance_say_hint {"name":"用一句话解释光合作用"}')
   })
 
   /* A direct turn's events arrive on the session's one subscription, tagged with

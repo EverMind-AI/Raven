@@ -452,3 +452,54 @@ describe('the collapsed launcher', () => {
     expect(document.querySelector('.desk-follow-toggle')).toBeNull()
   })
 })
+
+describe('a pane headed by an instance', () => {
+  beforeEach(() => {
+    agentRows = []
+    setCurrent('s1')
+    window.DS = {
+      ...window.DS,
+      agents: { list: async () => [], instances: async () => agentRows },
+    } as typeof window.DS
+  })
+
+  afterEach(() => {
+    agents.reset()
+    setCurrent(null)
+  })
+
+  it('follows the instance list, so a name that arrives late still lands', async () => {
+    /* An instance the reader started themselves has no name until its first
+       message does. The pane opens before that, and it used to be headed by the
+       snapshot the desk stored on the way in -- so it kept the handle forever
+       while the composer, which re-reads the list, had already started
+       addressing it by name. */
+    const row: InstanceRow = { sessionKey: 's1', agent: 'raven', handle: 'raven-f4f31a', kind: 'cli', status: 'running' }
+    agentRows = [row]
+    render(<DeskSurface />)
+    await act(async () => { await agents.refreshInstances(true) })
+    await act(async () => { desk.openDeskAgent(row) })
+
+    expect(document.querySelector('.desk-pane header b')?.textContent).toBe('raven-f4f31a')
+
+    agentRows = [{ ...row, title: '用一句话说明为什么天空是蓝色的' }]
+    await act(async () => { await agents.refreshInstances(true) })
+
+    expect(document.querySelector('.desk-pane header b')?.textContent).toBe('用一句话说明为什么天空是蓝色的')
+  })
+
+  it('keeps its heading when the list drops the row', async () => {
+    /* A forgotten instance's window must not lose its name. */
+    const row: InstanceRow = { sessionKey: 's1', agent: 'raven', handle: 'h9', kind: 'cli', status: 'done', title: '做一版 PPT' }
+    agentRows = [row]
+    render(<DeskSurface />)
+    await act(async () => { await agents.refreshInstances(true) })
+    await act(async () => { desk.openDeskAgent(row) })
+    expect(document.querySelector('.desk-pane header b')?.textContent).toBe('做一版 PPT')
+
+    agentRows = []
+    await act(async () => { await agents.refreshInstances(true) })
+
+    expect(document.querySelector('.desk-pane header b')?.textContent).toBe('做一版 PPT')
+  })
+})
