@@ -130,7 +130,7 @@ describe('the pane of a delivered file', () => {
      where a reader is choosing between products, and by the time one is open
      they are reading it. */
   it('opens as the file, with nothing above it about the delivery', async () => {
-    deliveries.record(2, manifest([{
+    deliveries.record(deliveries.SESSION, 2, manifest([{
       path: '/w/a.md', name: 'a.md', title: 'Comparison', description: 'Three products, one table', size: 1824,
     }]))
     render(<DeskSurface />)
@@ -148,7 +148,7 @@ describe('the pane of a delivered file', () => {
 
   /* A picture that failed to load says nothing about why. */
   it('probes before marking a picture missing, and believes only a 404', async () => {
-    deliveries.record(2, manifest([
+    deliveries.record(deliveries.SESSION, 2, manifest([
       { path: '/w/gone.png', name: 'gone.png' },
       { path: '/w/huge.png', name: 'huge.png' },
     ]))
@@ -170,7 +170,7 @@ describe('the pane of a delivered file', () => {
 
   /* 404 is the only status that means the file is gone. */
   it('marks the shelf from a read that 404s, and not from one that is refused', async () => {
-    deliveries.record(2, manifest([
+    deliveries.record(deliveries.SESSION, 2, manifest([
       { path: '/w/gone.md', name: 'gone.md' },
       { path: '/w/denied.md', name: 'denied.md' },
     ]))
@@ -371,7 +371,7 @@ describe('the collapsed launcher', () => {
   const popped = (): boolean => btn().querySelector('.desk-count')?.hasAttribute('data-pop') ?? false
   const deliver = async (...paths: string[]): Promise<void> => {
     await act(async () => {
-      deliveries.record(1, manifest(paths.map((path) => ({ path, name: path.split('/').pop() }))))
+      deliveries.record(deliveries.SESSION, 1, manifest(paths.map((path) => ({ path, name: path.split('/').pop() }))))
     })
   }
 
