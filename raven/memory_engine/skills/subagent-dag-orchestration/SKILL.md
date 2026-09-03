@@ -101,12 +101,16 @@ message naming the node, what is missing, and which downstream nodes are blocked
 That message arrives mid-run, not at the end. The rest of the graph keeps going: only the
 blocked branch waits.
 
-Answer it with `resolve_dag_node`:
+Answer it by calling `resolve_dag_node` through `tool_call`: it is not in your tool list,
+and `tool_call` is the only way to name it. The report you receive spells the exact
+arguments; the two shapes are
 
-- `resolve_dag_node("<run_id>", "<node_id>", "continue", "<message>")` sends your message to
-  the node and lets it try again, keeping the graph and everything it has already done.
-- `resolve_dag_node("<run_id>", "<node_id>", "abandon")` gives up on that node. Its
-  dependents are skipped; the other branches finish normally.
+- `tool_call` with name `resolve_dag_node` and arguments
+  `{"run_id": ..., "node_id": ..., "decision": "continue", "message": "<what to try next>"}`
+  sends your message to the node and lets it try again, keeping the graph and everything
+  it has already done.
+- the same with `"decision": "abandon"` gives up on that node. Its dependents are skipped;
+  the other branches finish normally.
 
 Pick `continue` whenever you can supply what the report says is missing. **If only the user
 can supply it -- a credential, a decision, a fact about what they want -- ask them first,
@@ -122,8 +126,8 @@ message to you and no `resolve_dag_node` to call: the question goes straight to 
 and the answer is applied before your call returns, so what you get back already reflects
 whatever they decided.
 
-To stop the whole run rather than one node, use `cancel_dag`. Re-planning means `cancel_dag`
-followed by a fresh graph.
+To stop the whole run rather than one node, call `cancel_dag` the same way, through
+`tool_call`. Re-planning means `cancel_dag` followed by a fresh graph.
 
 Each run costs one unit of the same per-hour budget `spawn` draws on
 (`max_subagent_spawns_per_hour`), whatever its node count. Submitting graphs in a loop
