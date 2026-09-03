@@ -36,6 +36,7 @@ from raven.plugin import (
     PluginRegistry,
     ServiceLocator,
     assemble_plugin_registry,
+    default_discovery_sources,
 )
 
 if TYPE_CHECKING:
@@ -48,22 +49,11 @@ logger = logging.getLogger(__name__)
 def plugin_discovery_sources() -> dict:
     """Resolve the four discovery-source locations the host scans.
 
-    Shared by :func:`build_plugin_registry` (live boot) and the
-    ``raven plugins`` CLI command so both see the same set:
-
-    - bundled — ``raven/plugin/memory/`` inside the package.
-    - user    — ``~/.raven/plugin/``.
-    - project — ``./.raven/plugin/``.
-    - entry_points — the ``raven.plugins`` group.
+    Thin alias for :func:`raven.plugin.default_discovery_sources`, kept so
+    :func:`build_plugin_registry` (live boot) and the ``raven plugins`` CLI
+    command keep their existing import site.
     """
-    import raven
-
-    return {
-        "bundled_dir": Path(raven.__path__[0]) / "plugin" / "memory",
-        "user_dir": Path.home() / ".raven" / "plugins",
-        "project_dir": Path.cwd() / ".raven" / "plugins",
-        "entry_points_group": "raven.plugins",
-    }
+    return default_discovery_sources()
 
 
 def build_plugin_registry(

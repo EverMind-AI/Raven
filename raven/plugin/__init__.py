@@ -21,7 +21,7 @@ Two principles, both load-bearing:
 
 from __future__ import annotations
 
-from raven.plugin.bootstrap import assemble_plugin_registry
+from raven.plugin.bootstrap import assemble_plugin_registry, default_discovery_sources
 from raven.plugin.context import PluginContext, ServiceLocator
 from raven.plugin.discover import DiscoveredPlugin, PluginDiscovery, Source
 from raven.plugin.manifest import (
@@ -44,6 +44,7 @@ __all__ = [
     "Contributes",
     "DiscoveredPlugin",
     "assemble_plugin_registry",
+    "default_discovery_sources",
     "MemoryBackendContribution",
     "MemoryBackendFactory",
     "PluginConflictError",

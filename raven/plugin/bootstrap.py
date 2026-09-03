@@ -11,9 +11,29 @@ control instantiate the two pieces directly.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from raven.plugin.discover import PluginDiscovery
 from raven.plugin.registry import PluginRegistry
+
+
+def default_discovery_sources() -> dict[str, Any]:
+    """The four discovery-source locations the host scans, as
+    :class:`PluginDiscovery` constructor kwargs:
+
+    - bundled — ``raven/plugin/memory/`` inside the package.
+    - user    — ``~/.raven/plugins/``.
+    - project — ``./.raven/plugins/``.
+    - entry_points — the ``raven.plugins`` group.
+    """
+    import raven
+
+    return {
+        "bundled_dir": Path(raven.__path__[0]) / "plugin" / "memory",
+        "user_dir": Path.home() / ".raven" / "plugins",
+        "project_dir": Path.cwd() / ".raven" / "plugins",
+        "entry_points_group": "raven.plugins",
+    }
 
 
 def assemble_plugin_registry(
@@ -42,4 +62,4 @@ def assemble_plugin_registry(
     return registry
 
 
-__all__ = ["assemble_plugin_registry"]
+__all__ = ["assemble_plugin_registry", "default_discovery_sources"]

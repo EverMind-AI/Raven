@@ -227,4 +227,45 @@ class PluginDiscovery:
         return sorted(by_id.values(), key=lambda p: p.manifest.id)
 
 
-__all__ = ["DiscoveredPlugin", "PluginDiscovery", "Source"]
+def entry_point_manifests_without_import(group: str) -> list[DiscoveredPlugin]:
+    """Read each entry point's manifest from distribution metadata alone.
+
+    The regular entry-points scan resolves the manifest through
+    ``importlib.resources``, which imports the plugin package's
+    ``__init__`` — unacceptable for read-only consumers such as a bug
+    report's environment summary, where generating a report must never be
+    the first execution of third-party code. This variant locates
+    ``raven-plugin.toml`` in the distribution's recorded file list
+    instead; an installer that recorded no file list simply contributes
+    nothing here.
+    """
+    out: list[DiscoveredPlugin] = []
+    try:
+        eps = metadata.entry_points(group=group)
+    except Exception as e:  # noqa: BLE001 — a broken metadata backend must not break the caller
+        logger.warning("entry-points metadata scan failed (%s); skipping", e)
+        return out
+    for ep in eps:
+        package_parts = tuple(ep.value.split(":", 1)[0].split("."))
+        dist = getattr(ep, "dist", None)
+        if dist is None:
+            continue
+        try:
+            record = next(
+                (f for f in dist.files or [] if tuple(f.parts) == (*package_parts, _MANIFEST_FILENAME)),
+                None,
+            )
+            if record is None:
+                continue
+            manifest_path = Path(record.locate())
+            if not manifest_path.is_file():
+                continue
+            mf = PluginManifest.from_toml_path(manifest_path)
+        except Exception as e:  # noqa: BLE001 — one unreadable distribution must not hide the rest
+            logger.warning("manifest metadata read for entry-point %s failed (%s); skipping", ep.name, e)
+            continue
+        out.append(DiscoveredPlugin(manifest=mf, source=Source.ENTRY_POINTS, location=manifest_path))
+    return out
+
+
+__all__ = ["DiscoveredPlugin", "PluginDiscovery", "Source", "entry_point_manifests_without_import"]

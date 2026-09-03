@@ -6,7 +6,7 @@ store into a single directory that survives log rotation, artifact cleanup,
 and being copied to another machine::
 
     <out>/<attempt_id>/
-      manifest.json     # format version, ids, time range, counts, raven version
+      manifest.json     # format version, ids, time range, counts, environment summary
       spans.jsonl       # every span of the attempt, in write order
       artifacts/        # every file the spans' *.artifact_path attrs referenced
       session.jsonl     # the session's conversation record (omitted if missing)
@@ -25,7 +25,9 @@ trajectory corpus, so the id is auto-pinned.
 from __future__ import annotations
 
 import json
+import platform
 import shutil
+import subprocess
 import tempfile
 from dataclasses import asdict
 from pathlib import Path
@@ -34,6 +36,7 @@ from typing import Any
 from raven import __version__
 from raven.config.paths import get_workspace_path
 from raven.tracing import config as tracing_config
+from raven.tracing.spans import SCHEMA_VERSION
 from raven.trajectory.store import attempt_alias_ids, iter_spans, pin, pin_attempt, resolve_attempt_id
 from raven.trajectory.verdict import read_verdicts
 
@@ -89,6 +92,156 @@ def _session_source(session_key: str, workspace: Path | None) -> Path:
     from raven.session.manager import SessionManager
 
     return SessionManager(workspace or _default_workspace())._get_session_path(session_key)
+
+
+def _git_revision(package_dir: Path | None = None) -> str | None:
+    """HEAD of the source checkout ``package_dir`` (the raven package) belongs to.
+
+    None unless the checkout's toplevel is the package directory's own
+    parent — a wheel under site-packages resolves ``git rev-parse`` to
+    whatever repository happens to contain the virtualenv, and that host
+    project's HEAD (possibly a private repo's) must not leak into a report.
+    """
+    import raven
+
+    git = shutil.which("git")
+    if git is None:
+        return None
+    package = (package_dir or Path(raven.__path__[0])).resolve()
+
+    def run(*args: str) -> str | None:
+        result = subprocess.run(
+            [git, "-C", str(package.parent), *args],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        value = result.stdout.strip()
+        return value if result.returncode == 0 and value else None
+
+    toplevel = run("rev-parse", "--show-toplevel")
+    if toplevel is None or Path(toplevel).resolve() != package.parent:
+        return None
+    return run("rev-parse", "HEAD")
+
+
+def _configured_provider_names() -> list[str]:
+    """Names of providers `credential_status` deems usable, canonicalized.
+
+    Delegates the judgement entirely to ``providers.auth.credential_status``
+    (the single authority — duplicating the rule here is what once made a
+    Gemini section holding only ``api_key_list`` invisible to routing while
+    ``provider list`` showed it as configured). ``include_external=True``
+    mirrors ``provider list``: an OAuth token held outside the config counts.
+    """
+    from raven.config.loader import load_config
+    from raven.providers.auth import credential_status
+    from raven.providers.registry import canonical_provider_name
+
+    providers = load_config().providers
+    candidates = set(type(providers).model_fields) | {str(name) for name in (providers.model_extra or {})}
+    configured: set[str] = set()
+    for name in candidates:
+        section = providers.get(name)
+        if section is None:
+            continue
+        try:
+            ok = credential_status(name, section, include_external=True).ok
+        except Exception:  # noqa: BLE001 — one unresolvable section must not hide the rest
+            continue
+        if ok:
+            configured.add(canonical_provider_name(name))
+    return sorted(configured)
+
+
+def _enabled_channel_names() -> list[str]:
+    from raven.config.loader import load_config
+
+    return sorted(load_config().channels.enabled_channel_names())
+
+
+def _mcp_server_names() -> list[str]:
+    from raven.config.loader import load_config
+
+    return sorted(str(name) for name in load_config().tools.mcp_servers)
+
+
+def _discovered_plugins() -> list[dict[str, Any]]:
+    """Discovered plugin manifests — discovery, not activation.
+
+    File-based sources are pure TOML reads; entry-point manifests are read
+    from distribution metadata so no plugin code runs (the live scan's
+    resource resolution imports the package, which a report path must never
+    do first). ``admitted`` says the manifest passes the registry's
+    admission gate (not user-disabled, enabled by default); whether its
+    factory actually imported at boot is unknowable here without running
+    plugin code, so the field deliberately claims discovery only.
+    """
+    from raven.config.raven import load_raven_config
+    from raven.plugin.bootstrap import default_discovery_sources
+    from raven.plugin.discover import PluginDiscovery, entry_point_manifests_without_import
+
+    sources = default_discovery_sources()
+    group = sources.pop("entry_points_group")
+    disabled = set(load_raven_config().plugins.disabled)
+    by_id = {p.manifest.id: p for p in entry_point_manifests_without_import(group)}
+    # File-based sources win over entry points, matching live discovery priority.
+    by_id.update({p.manifest.id: p for p in PluginDiscovery(**sources).discover()})
+    return [
+        {
+            "id": p.manifest.id,
+            "version": p.manifest.version,
+            "admitted": p.manifest.id not in disabled and p.manifest.enabled_by_default,
+        }
+        for _, p in sorted(by_id.items())
+    ]
+
+
+def _config_structure() -> dict[str, Any]:
+    from raven.config.loader import get_config_path
+
+    path = get_config_path()
+    keys = None
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            data = None
+        if isinstance(data, dict):
+            keys = sorted(str(k) for k in data)
+    return {"path": str(path), "exists": path.exists(), "top_level_keys": keys}
+
+
+def _collect_environment() -> dict[str, Any]:
+    """Structure-only environment snapshot for the manifest.
+
+    Records names, versions, and structural keys — never a config leaf value
+    (no tokens, endpoints, or header values). Every probe is independent and
+    best-effort: a failing field becomes null; this block must never fail
+    the pack.
+    """
+
+    def probe(fn: Any) -> Any:
+        try:
+            return fn()
+        except Exception:  # noqa: BLE001 — any probe failure degrades to null
+            return None
+
+    return {
+        "raven_version": probe(lambda: __version__),
+        "git_revision": probe(_git_revision),
+        "python_version": probe(platform.python_version),
+        "os": probe(platform.system),
+        "arch": probe(platform.machine),
+        "providers": probe(_configured_provider_names),
+        "channels": probe(_enabled_channel_names),
+        "mcp_servers": probe(_mcp_server_names),
+        "discovered_plugins": probe(_discovered_plugins),
+        "config": probe(_config_structure),
+        "tracing_schema": SCHEMA_VERSION,
+        "bundle_format": BUNDLE_FORMAT_VERSION,
+    }
 
 
 def collect_bundle(
@@ -191,6 +344,7 @@ def collect_bundle(
             "session_included": session_included,
             "verdict_count": len(verdicts),
             "raven_version": __version__,
+            "environment": _collect_environment(),
         }
         (staging / "manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

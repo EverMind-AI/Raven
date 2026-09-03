@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
+import sys
 
 import pytest
 
@@ -425,3 +427,190 @@ def test_bundle_pin_falls_back_to_member_traces_when_attempt_vanishes(state, mon
     registry = tstore.pins(state)
     assert registry["trace-1"]["reason"] == "bundled"
     assert registry["trace-2"]["reason"] == "bundled"
+
+
+def _point_config_at(monkeypatch, path):
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.config.raven.get_config_path", lambda: path)
+
+
+class TestManifestEnvironment:
+    _SECRETS = ("sk-super-secret-123", "tg-secret-456", "secret-host", "Bearer abc", "gm-secret-789")
+
+    def _write_config(self, tmp_path, monkeypatch):
+        cfg = tmp_path / "config.json"
+        cfg.write_text(
+            json.dumps(
+                {
+                    "providers": {
+                        "openrouter": {"apiKey": "sk-super-secret-123"},
+                        "gemini": {"apiKeyList": ["gm-secret-789"]},
+                        "anthropic": {},
+                        "mystery": {},
+                    },
+                    "channels": {"telegram": {"enabled": True, "token": "tg-secret-456"}},
+                    "tools": {
+                        "mcpServers": {
+                            "search": {"url": "http://secret-host:9/x", "headers": {"Authorization": "Bearer abc"}}
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        _point_config_at(monkeypatch, cfg)
+        return cfg
+
+    def _pack_manifest_text(self, state, workspace):
+        _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:chat1")])
+        bundle_dir = tbundle.collect_bundle("trace-1", state_dir=state, workspace=workspace)
+        return (bundle_dir / "manifest.json").read_text(encoding="utf-8")
+
+    def test_environment_block_present(self, state, workspace, tmp_path, monkeypatch):
+        cfg = self._write_config(tmp_path, monkeypatch)
+
+        manifest = json.loads(self._pack_manifest_text(state, workspace))
+
+        assert manifest["format_version"] == 1
+        assert manifest["raven_version"]
+        env = manifest["environment"]
+        assert env["raven_version"] == manifest["raven_version"]
+        assert env["python_version"] and env["os"] and env["arch"]
+        assert {"openrouter", "gemini"} <= set(env["providers"])
+        assert "anthropic" not in env["providers"]
+        assert "mystery" not in env["providers"]
+        assert env["channels"] == ["telegram"]
+        assert env["mcp_servers"] == ["search"]
+        assert env["tracing_schema"] == "audit.span.v1"
+        assert env["bundle_format"] == tbundle.BUNDLE_FORMAT_VERSION
+        assert env["config"]["path"] == str(cfg)
+        assert env["config"]["exists"] is True
+        assert set(env["config"]["top_level_keys"]) == {"providers", "channels", "tools"}
+        assert isinstance(env["discovered_plugins"], list)
+        assert all(p["id"] and p["version"] and isinstance(p["admitted"], bool) for p in env["discovered_plugins"])
+
+    def test_no_secret_values_reach_the_manifest(self, state, workspace, tmp_path, monkeypatch):
+        self._write_config(tmp_path, monkeypatch)
+
+        text = self._pack_manifest_text(state, workspace)
+
+        for secret in self._SECRETS:
+            assert secret not in text
+
+    def test_failed_probe_degrades_to_null(self, state, workspace, tmp_path, monkeypatch):
+        self._write_config(tmp_path, monkeypatch)
+
+        def boom(*_a, **_k):
+            raise RuntimeError("probe blew up")
+
+        monkeypatch.setattr(tbundle.platform, "python_version", boom)
+        monkeypatch.setattr(tbundle, "_configured_provider_names", boom)
+
+        manifest = json.loads(self._pack_manifest_text(state, workspace))
+
+        env = manifest["environment"]
+        assert env["python_version"] is None
+        assert env["providers"] is None
+        assert env["os"] and env["arch"]
+
+    def test_missing_git_and_config_yield_nulls(self, state, workspace, tmp_path, monkeypatch):
+        _point_config_at(monkeypatch, tmp_path / "nope" / "config.json")
+
+        def no_git(*_a, **_k):
+            raise FileNotFoundError("git not installed")
+
+        monkeypatch.setattr(tbundle.subprocess, "run", no_git)
+
+        manifest = json.loads(self._pack_manifest_text(state, workspace))
+
+        env = manifest["environment"]
+        assert env["git_revision"] is None
+        # Not asserted empty: credential_status(include_external=True) may
+        # accept ambient material (env vars, OAuth token files) on the host.
+        assert isinstance(env["providers"], list)
+        assert env["channels"] == []
+        assert env["mcp_servers"] == []
+        assert env["config"]["exists"] is False
+        assert env["config"]["top_level_keys"] is None
+
+    def test_entry_point_plugin_discovered_without_import(self, state, workspace, tmp_path, monkeypatch):
+        self._write_config(tmp_path, monkeypatch)
+        site = tmp_path / "site"
+        pkg = site / "evil_plugin"
+        pkg.mkdir(parents=True)
+        marker = tmp_path / "imported.marker"
+        (pkg / "__init__.py").write_text(
+            f"import pathlib\npathlib.Path({str(marker)!r}).write_text('imported')\n", encoding="utf-8"
+        )
+        (pkg / "raven-plugin.toml").write_text(
+            '[plugin]\nid = "evil-plugin"\nversion = "9.9"\nenabled_by_default = true\n', encoding="utf-8"
+        )
+        dist_info = site / "evil_plugin-9.9.dist-info"
+        dist_info.mkdir()
+        (dist_info / "METADATA").write_text(
+            "Metadata-Version: 2.1\nName: evil-plugin\nVersion: 9.9\n", encoding="utf-8"
+        )
+        (dist_info / "entry_points.txt").write_text("[raven.plugins]\nevil = evil_plugin\n", encoding="utf-8")
+        (dist_info / "RECORD").write_text(
+            "evil_plugin/__init__.py,,\n"
+            "evil_plugin/raven-plugin.toml,,\n"
+            "evil_plugin-9.9.dist-info/METADATA,,\n"
+            "evil_plugin-9.9.dist-info/entry_points.txt,,\n"
+            "evil_plugin-9.9.dist-info/RECORD,,\n",
+            encoding="utf-8",
+        )
+        monkeypatch.syspath_prepend(str(site))
+
+        manifest = json.loads(self._pack_manifest_text(state, workspace))
+
+        assert "evil_plugin" not in sys.modules
+        assert not marker.exists()
+        plugins = {p["id"]: p for p in manifest["environment"]["discovered_plugins"]}
+        assert plugins["evil-plugin"] == {"id": "evil-plugin", "version": "9.9", "admitted": True}
+
+    def test_admission_flags_follow_disabled_and_default(self, state, workspace, tmp_path, monkeypatch):
+        cfg = tmp_path / "config.json"
+        cfg.write_text(json.dumps({"plugins": {"disabled": ["plug-off"]}}), encoding="utf-8")
+        _point_config_at(monkeypatch, cfg)
+        user_dir = tmp_path / "plugins"
+        for pid, default in (("plug-on", "true"), ("plug-off", "true"), ("plug-optin", "false")):
+            d = user_dir / pid
+            d.mkdir(parents=True)
+            (d / "raven-plugin.toml").write_text(
+                f'[plugin]\nid = "{pid}"\nversion = "1.0"\nenabled_by_default = {default}\n', encoding="utf-8"
+            )
+        monkeypatch.setattr(
+            "raven.plugin.bootstrap.default_discovery_sources",
+            lambda: {
+                "bundled_dir": tmp_path / "none",
+                "user_dir": user_dir,
+                "project_dir": tmp_path / "none",
+                "entry_points_group": "raven.plugins.none-such-group",
+            },
+        )
+
+        manifest = json.loads(self._pack_manifest_text(state, workspace))
+
+        plugins = {p["id"]: p["admitted"] for p in manifest["environment"]["discovered_plugins"]}
+        assert plugins == {"plug-on": True, "plug-off": False, "plug-optin": False}
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+def test_git_revision_binds_to_the_raven_checkout_only(tmp_path):
+    repo = tmp_path / "checkout"
+    (repo / "raven").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-q", "-m", "x"],
+        cwd=repo,
+        check=True,
+    )
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+    assert tbundle._git_revision(repo / "raven") == head
+
+    nested = repo / "venv" / "site-packages" / "raven"
+    nested.mkdir(parents=True)
+    assert tbundle._git_revision(nested) is None
