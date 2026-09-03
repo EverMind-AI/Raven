@@ -12,6 +12,7 @@ so it is registered unconditionally and must stay that way.
 
 from __future__ import annotations
 
+import json
 import tempfile
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from raven.agent.loop import AgentLoop
 from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.web import WebSearchTool
+from raven.contracts.tool import Tool
 from raven.providers.base import LLMProvider, LLMResponse
 from tests._wiring import wire
 
@@ -63,21 +65,24 @@ def _loop(workspace: Path, **kw) -> AgentLoop:
 
 
 def test_web_search_is_withheld_without_a_key(workspace) -> None:
+    # Registered but withheld: registration stopped being the gate so a key
+    # added while the process runs can surface the tool without a restart.
     loop = _loop(workspace)
 
-    assert not loop.tools.has("web_search"), (
+    assert not loop.tools.offers_by_name("web_search"), (
         "offering a search that cannot run makes the model relay the tool's setup error to the user"
     )
-    assert loop.tools.has("web_fetch"), "web_fetch needs no key and must stay unconditional"
+    assert loop.tools.has("web_search"), "withheld, not unregistered -- the switch must stay reversible"
+    assert loop.tools.offers_by_name("web_fetch"), "web_fetch needs no key and must stay unconditional"
 
 
-def test_a_configured_key_registers_web_search(workspace) -> None:
+def test_a_configured_key_offers_web_search(workspace) -> None:
     loop = _loop(workspace, brave_api_key="sk-serper")
 
-    assert loop.tools.has("web_search")
+    assert loop.tools.offers_by_name("web_search")
 
 
-def test_the_env_var_alone_registers_web_search(workspace, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_env_var_alone_offers_web_search(workspace, monkeypatch: pytest.MonkeyPatch) -> None:
     # The tool resolves its key at call time from the config value *or*
     # SERPER_API_KEY, so a gate that reads only the config would withdraw the
     # tool from a deploy that exports the variable and configures nothing.
@@ -85,7 +90,23 @@ def test_the_env_var_alone_registers_web_search(workspace, monkeypatch: pytest.M
 
     loop = _loop(workspace)
 
-    assert loop.tools.has("web_search")
+    assert loop.tools.offers_by_name("web_search")
+
+
+def test_a_key_added_after_start_surfaces_web_search(workspace, tmp_path: Path, monkeypatch) -> None:
+    # The reversibility the registration gate could not give: the user edits the
+    # config file, nothing re-registers, and the next assembly reads a different
+    # answer -- both the veil and the credential the call then uses.
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({}), encoding="utf-8")
+    monkeypatch.setattr("raven.home._current_config_path", cfg)
+    loop = _loop(workspace)
+    assert not loop.tools.offers_by_name("web_search")
+
+    cfg.write_text(json.dumps({"tools": {"web": {"search": {"apiKey": "sk-added-later"}}}}), encoding="utf-8")
+
+    assert loop.tools.offers_by_name("web_search")
+    assert loop.tools.get("web_search").api_key == "sk-added-later"
 
 
 def test_the_subagent_loop_applies_the_same_rule(workspace, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -144,3 +165,73 @@ async def test_the_unconfigured_error_names_the_config_actually_in_force(tmp_pat
 
     assert str(chosen) in out
     assert "~/.raven/config.json" not in out
+
+
+class _PluginSearch(Tool):
+    """A plugin's own web_search, registered last so it shadows the built-in."""
+
+    name = "web_search"
+    description = "plugin search with its own credential story"
+    parameters = {"type": "object", "properties": {}}
+
+    async def execute(self, **kwargs) -> str:
+        return "plugin ran"
+
+
+def test_a_plugin_shadowing_web_search_is_not_gated_by_the_builtin_config(workspace) -> None:
+    # Plugin tools register last precisely so one can replace a built-in by
+    # name; the unconfigured gate reads the BUILT-IN's config and must judge
+    # only the built-in instance, or it hides the plugin behind a section that
+    # says nothing about it.
+    plugin = _PluginSearch()
+    loop = _loop(workspace, plugin_tools=[plugin])
+
+    assert loop.tools.get("web_search") is plugin
+    assert loop.tools.offers_by_name("web_search"), "the built-in's empty section must not gate the plugin"
+
+
+def test_a_plugin_subclass_of_web_search_is_not_gated_either(workspace) -> None:
+    # The ownership check is identity, not type: an isinstance gate read a
+    # plugin SUBCLASS as the built-in itself and withheld it on the built-in's
+    # empty section, even though the subclass carries its own credential story.
+    class _PluginSubclassSearch(WebSearchTool):
+        def __init__(self) -> None:
+            super().__init__(api_key="sk-plugin-own")
+
+    plugin = _PluginSubclassSearch()
+    loop = _loop(workspace, plugin_tools=[plugin])
+
+    assert loop.tools.get("web_search") is plugin
+    assert loop.tools.offers_by_name("web_search")
+
+
+def test_a_subagent_exec_tool_reads_the_live_deny_source(workspace, tmp_path: Path, monkeypatch) -> None:
+    """A tightened permission gates a delegated shell the same call it gates a
+    direct one: the sub-agent's ExecTool reads the same live deny source the
+    main loop's does, not a construction-time snapshot."""
+    import asyncio
+
+    from raven.agent.tools.shell import ExecTool
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"tools": {"exec": {"extraDenyPatterns": []}}}), encoding="utf-8")
+    monkeypatch.setattr("raven.home._current_config_path", cfg)
+
+    captured: list[ExecTool] = []
+    real = ToolRegistry.register
+
+    def _spy(self, tool, **kw):  # noqa: ANN001, ANN202
+        real(self, tool, **kw)
+        if isinstance(tool, ExecTool):
+            captured.append(tool)
+
+    monkeypatch.setattr(ToolRegistry, "register", _spy)
+    backend = RavenLoopBackend(provider=_StubProvider(), model="stub", agent_home=workspace / "home")
+    asyncio.run(backend.run("task", task_id="t1", workspace=workspace, executor=None))
+    assert captured, "the backend registered no ExecTool"
+    tool = captured[-1]
+
+    cfg.write_text(json.dumps({"tools": {"exec": {"extraDenyPatterns": ["\\bosascript\\b"]}}}), encoding="utf-8")
+
+    result = asyncio.run(tool.execute("osascript -e beep"))
+    assert "blocked" in result.model_text

@@ -14,7 +14,7 @@ the model, one per family, each a different shape:
     media x3     an api_key *or* a model, either one counting as configured
 
 For the media family, being offered to the model and being usable are two
-different questions: a section naming only a model is registered, because a
+different questions: a section naming only a model is offered, because a
 model alone counts as asking for the tool, and then every call fails on a
 missing key. :func:`is_configured` answers the first and the tools' ``has_key``
 answers the second -- collapsing them is how a report ends up ticking a
@@ -22,14 +22,14 @@ capability that cannot run.
 
 Each rule is defensible where it sits. What is missing is anywhere to *read*
 them. A deployer cannot ask what this install lacks, and since an unconfigured
-tool stopped being registered there is no surface at all saying the capability
-exists: the model is not offered it, no document lists it, and ``raven doctor``
-reports on providers and memory but has never mentioned tools.
+tool is withheld from the model there is no surface at all saying the
+capability exists: the model is not offered it, no document lists it, and
+``raven doctor`` reports on providers and memory but has never mentioned tools.
 
 This module is that surface. It describes the rules rather than replacing them
 -- ``is_configured`` mirrors the loop's judgement instead of inventing a second
 one -- and ``tests/test_tool_capabilities.py`` pins the description against what
-the loop actually registers, so the two cannot drift apart quietly. Drifting
+the loop actually offers, so the two cannot drift apart quietly. Drifting
 descriptions of the same fact is the failure this exists to avoid repeating.
 
 ``deep_research`` is deliberately absent: it is moving to the sub-agent surface

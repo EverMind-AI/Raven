@@ -279,7 +279,7 @@ def register(app: typer.Typer) -> None:
         if banner is not None:
             console.print(banner, style="bold red", markup=False)
         sync_workspace_templates(config.workspace_path, notify=lambda m: console.print(f"  [dim]{m}[/dim]"))
-        provider = make_resolving_provider(config)
+        provider = make_resolving_provider(config, config_supplier=lambda: load_runtime_config(None, None))
         session_manager = SessionManager(config.workspace_path)
         session_root = None
         if workspace:
@@ -792,7 +792,9 @@ def register(app: typer.Typer) -> None:
                     # must not quietly move the workspace.
                     new_config = load_runtime_config(config_path_arg, home=home)
                     new_ec = load_raven_config()
-                    new_provider = make_resolving_provider(new_config)
+                    new_provider = make_resolving_provider(
+                        new_config, config_supplier=lambda: load_runtime_config(None, None)
+                    )
                     new_router, new_provider = build_model_routing(new_config, new_provider)
                     nxt = build_runtime(
                         new_config,

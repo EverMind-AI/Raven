@@ -16,6 +16,26 @@ if TYPE_CHECKING:
     from raven.mcp.report import ApplyReport
 
 
+async def _swallow_terminal_cancel(task: "asyncio.Task") -> None:
+    """Await a task that was just cancelled, swallowing only ITS terminal state.
+
+    Awaiting a cancelled task re-raises ``CancelledError`` -- the same type a
+    cancellation addressed to the awaiting task itself arrives as. Swallowing
+    both (a bare ``suppress``) let a second supersession's cancel vanish here:
+    the superseded apply survived its own cancellation, started its stale
+    handshake, and starved the newest admitted answer behind it. The two are
+    told apart by the current task's own cancellation count.
+    """
+    try:
+        await task
+    except asyncio.CancelledError:
+        current = asyncio.current_task()
+        if current is not None and current.cancelling():
+            raise
+    except Exception:  # noqa: BLE001 - the predecessor's failure is not ours to re-raise
+        pass
+
+
 class McpGlueMixin:
     """MCP lifecycle glue: connect, sync, prewarm, apply, close. Bodies moved
     verbatim from main.py."""
@@ -213,7 +233,17 @@ class McpGlueMixin:
         be bound first, or the authorization URL an OAuth server parks on is
         minted with nobody to publish it to.
         """
-        if self._mcp_connected or self._mcp_connecting or not self._mcp_servers:
+        if self._mcp_connected or self._mcp_connecting:
+            return
+        live = self._live_mcp_servers()
+        if live is not None:
+            # Consume the admitted live answer rather than the construction
+            # snapshot: an edit that landed after boot must not have the stale
+            # set connected over it -- and a racing caller that wins the claim
+            # below applies the same truth, which is what makes the supersede
+            # path in ``reconcile_mcp_from_live`` safe to retry.
+            self._mcp_servers = live
+        if not self._mcp_servers:
             return
         # Claimed here rather than inside the task, which is the whole reason
         # this does not just call ``_connect_mcp``: a coroutine handed to
@@ -264,6 +294,107 @@ class McpGlueMixin:
             await self.apply_mcp_config(self._mcp_servers)
         finally:
             self._mcp_connecting = False
+
+    def reconcile_mcp_from_live(self) -> None:
+        """Apply an out-of-band edit of ``tools.mcpServers`` at the turn boundary.
+
+        The RPC write paths call ``apply_mcp_config`` themselves; what this
+        covers is the file changed behind the process's back -- a hand edit,
+        another process -- which today only takes effect on whichever frontends
+        remember to poll the reload RPC. Checked here because the turn boundary
+        is when the answer is next consumed: an idle process deliberately does
+        not reconcile, since no turn means no consumer for the tools.
+
+        Fire and forget for the same reason ``prewarm_mcp`` is -- a turn must
+        not inherit a handshake. What this can do to the running turn is
+        asymmetric, and deliberately so: an *attach* cannot grow the turn's
+        array (``ToolRegistry.turn_scope`` freezes arrivals), while a *detach*
+        can still take tools out mid-turn -- that is the tightening rule, and a
+        call that races the teardown gets the worded absent-tool answer from
+        ``ToolRegistry.execute`` rather than a bare miss.
+
+        Lane ownership is one rule with no owner exempt: WHOEVER STILL AGREES
+        WITH THE FILE KEEPS THE LANE. A pending prewarm, and equally a pending
+        apply this method itself started earlier, holds the lane only while
+        the file matches the set it is applying; the moment the file says
+        otherwise the stale attempt is reaped -- cancelled, its servers
+        returned to a retryable state -- and the live answer is applied. A
+        handshake can park for minutes (OAuth), and an owner exempt from
+        supersession would defer an addition indefinitely and keep a revoked
+        server's handshake alive, breaking the tightening rule.
+        """
+        servers = self._live_mcp_servers()
+        if servers is None:
+            return
+        pending = self._mcp_reconcile_task
+        if pending is not None and not pending.done():
+            if self._same_mcp_config(servers, self._mcp_reconcile_target or {}):
+                return
+            self._spawn_live_apply(servers, prior=(pending, self._mcp_reconcile_attempts))
+            return
+        if self._mcp_connecting or (not self._mcp_connected and bool(self._mcp_servers)):
+            if self._same_mcp_config(servers, self._mcp_servers):
+                return
+            self._spawn_live_apply(servers, prior=None)
+            return
+        if not self.mcp_config_changed(servers):
+            return
+        self._spawn_live_apply(servers, prior=None)
+
+    def _spawn_live_apply(self, servers: dict, *, prior: "tuple[asyncio.Task, dict] | None") -> None:
+        """Start the background apply of the admitted live answer, superseding
+        whatever stale attempt still holds the lane.
+
+        ``prior`` is a pending apply this reconcile started earlier, captured
+        before the bookkeeping below overwrites it. A pending prewarm needs no
+        handle: ``reap_mcp_prewarm`` is idempotent and reaps it by its own
+        bookkeeping (and no-ops when there is none). Both reaps return their
+        servers to a retryable state -- a cancelled handshake left in ``error``
+        would be deliberately never retried.
+        """
+        attempts: dict[str, object] = {}
+        self._mcp_reconcile_attempts = attempts
+        self._mcp_reconcile_target = servers
+
+        async def _run() -> None:
+            try:
+                await self.reap_mcp_prewarm()
+                if prior is not None:
+                    prior_task, prior_attempts = prior
+                    prior_task.cancel()
+                    try:
+                        await _swallow_terminal_cancel(prior_task)
+                    finally:
+                        # The predecessor's attempt reset survives THIS task's
+                        # own cancellation: each layer settles the one before
+                        # it even while dying, so a chain of supersessions
+                        # leaves no attempt parked in ``error``.
+                        if self._mcp_manager is not None and prior_attempts:
+                            with suppress(Exception):
+                                await self._mcp_manager.reset_for_retry(prior_attempts)
+                await self.apply_mcp_config(servers, attempts=attempts)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("MCP live reconcile failed; the servers it did not reach keep their state")
+
+        # Held rather than dropped: a bare create_task is collectable while it
+        # is the only reference to a running task.
+        self._mcp_reconcile_task = asyncio.create_task(_run())
+
+    @staticmethod
+    def _same_mcp_config(a: dict, b: dict) -> bool:
+        """Whether two desired server sets are the same config, by the same
+        per-server fingerprint the manager reconciles with."""
+        from raven.mcp.manager import _cfg_fingerprint
+
+        return {n: _cfg_fingerprint(c) for n, c in a.items()} == {n: _cfg_fingerprint(c) for n, c in b.items()}
+
+    def _live_mcp_servers(self) -> dict | None:
+        """The MCP server set the file names now, or ``None`` for "no answer"."""
+        from raven.config.live import mcp_server_configs
+
+        return mcp_server_configs(self._live_config)
 
     def mcp_config_changed(self, cfg_servers: dict) -> bool:
         """Whether :meth:`apply_mcp_config` would do anything, without doing it.
@@ -320,22 +451,31 @@ class McpGlueMixin:
         if task is None or task.done():
             return
         task.cancel()
-        with suppress(BaseException):
-            await task
-        # Cancelling is not enough on its own. The cancel reaches the handshake
-        # through the SDK, and the manager cannot tell that apart from the
-        # transport aborting the flow itself -- so the record lands in ``error``,
-        # which no later apply or reload retries. Measured: without this the
-        # server was gone until a restart.
-        attempts = self._mcp_prewarm_attempts
-        self._mcp_prewarm_attempts = {}
-        if self._mcp_manager is not None and attempts:
-            with suppress(Exception):
-                await self._mcp_manager.reset_for_retry(attempts)
+        try:
+            await _swallow_terminal_cancel(task)
+        finally:
+            # Cancelling is not enough on its own. The cancel reaches the
+            # handshake through the SDK, and the manager cannot tell that apart
+            # from the transport aborting the flow itself -- so the record lands
+            # in ``error``, which no later apply or reload retries. Measured:
+            # without this the server was gone until a restart. In a ``finally``
+            # so the reset also survives THIS reap's caller being cancelled
+            # mid-await by a second supersession.
+            attempts = self._mcp_prewarm_attempts
+            self._mcp_prewarm_attempts = {}
+            if self._mcp_manager is not None and attempts:
+                with suppress(Exception):
+                    await self._mcp_manager.reset_for_retry(attempts)
 
     async def close_mcp(self) -> None:
         """Close MCP connections and the sandbox executor."""
         await self.reap_mcp_prewarm()
+        task = self._mcp_reconcile_task
+        self._mcp_reconcile_task = None
+        if task is not None and not task.done():
+            task.cancel()
+            with suppress(BaseException):
+                await task
         if self._mcp_manager is not None:
             try:
                 await self._mcp_manager.aclose()

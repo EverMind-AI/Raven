@@ -17,6 +17,7 @@
 The five-layer vocabulary lives in `CONTEXT.md`; look these up there:
 **Kernel** (spine + contracts + tracing), **Paper** and the two tiers, **Assembly Root**
 (`core/`, `build_runtime`), **Admission** and **Config-with-cargo**, **Channel Socket**,
-**Generation** (the swap model), **Control Plane** (`rpc/control.py` / `gateway/live_probe.py`),
+**Generation** (the swap model), **Live preference** (`config/live.py`, the pull lane),
+**Control Plane** (`rpc/control.py` / `gateway/live_probe.py`),
 **Wire Schema** (`rpc-schema/openrpc.json`), **Layer Seats** (where every package sits and which
 are deliberately unseated).

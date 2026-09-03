@@ -43,10 +43,18 @@ def build_model_routing(config, provider):
         logger.warning("routing enabled but no OpenRouter API key found; routing disabled")
         return None, provider
 
+    from raven.config.live import LiveConfig, default_model, routing_profile
     from raven.routing.types import RoutingProfileName
 
     profile: RoutingProfileName = config.routing.profile  # type: ignore[assignment]
-    router = ModelRouter(api_key=api_key, profile=profile, fallback_model=config.agents.defaults.model)
+    live = LiveConfig()
+    router = ModelRouter(
+        api_key=api_key,
+        profile=profile,
+        fallback_model=config.agents.defaults.model,
+        profile_source=lambda: routing_profile(live),
+        fallback_source=lambda: default_model(live),
+    )
     return router, provider
 
 

@@ -482,6 +482,9 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         self._mcp_connected = False
         self._mcp_connecting = False
         self._mcp_prewarm_task: asyncio.Task | None = None
+        self._mcp_reconcile_task: asyncio.Task | None = None
+        self._mcp_reconcile_target: dict | None = None
+        self._mcp_reconcile_attempts: dict = {}
         self._mcp_prewarm_attempts: dict[str, object] = {}
 
         from raven.agent.subagent.dag_mcp_scope import run_mcp_servers
@@ -777,12 +780,24 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         concurrently, which is the point.
         """
         session_key = req.conversation or f"{req.source.channel}:{req.source.chat_id}"
+        # Pick up a mid-session `deep-research enable` BEFORE the freeze below
+        # captures the turn's pairs. The promotion re-registers the offer
+        # stand-in's name with the working tool; inside the scope that reads as
+        # a mid-turn replacement and waits a turn, but here no model call has
+        # happened yet -- it is a turn-boundary action, and the working tool
+        # becomes this turn's entry instance (the stream-callback wiring in
+        # turn_path then finds it in place).
+        self._maybe_promote_deep_research()
         # The tools a session brought with it become visible here, for the same
         # reason the model binding does: this is where the turn's task begins.
         # The request handler that accepted them cannot open the scope itself --
         # it submits the turn onto the spine and the turn runs on a task that
         # inherits nothing from it.
-        with use_binding(self.binding_for_session(session_key)), self.tools.session_scope_for(session_key):
+        with (
+            use_binding(self.binding_for_session(session_key)),
+            self.tools.session_scope_for(session_key),
+            self.tools.turn_scope(),
+        ):
             return await self._run_turn(
                 req,
                 emit,
