@@ -160,3 +160,25 @@ def test_the_wav_declares_the_rate_the_model_emits(tmp_path: Path) -> None:
         assert w.getnchannels() == 1
         assert w.getsampwidth() == 2
         assert w.getnframes() == 240
+
+
+def test_a_config_callable_is_read_per_call_not_at_construction(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The live form: the loop passes a reader over the config file, so a key
+    added or rotated there serves the next call with no re-registration."""
+    from raven.config.schema import MediaToolConfig
+
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    holder = {"cfg": MediaToolConfig()}
+    tool = ImageGenerateTool(lambda: holder["cfg"])
+    assert tool.api_key == ""
+
+    holder["cfg"] = MediaToolConfig(api_key="sk-added-later", model="some/model")
+    assert tool.api_key == "sk-added-later"
+    assert tool._model(None) == "some/model"
+
+
+def test_a_plain_config_section_stays_a_snapshot() -> None:
+    from raven.config.schema import MediaToolConfig
+
+    tool = ImageGenerateTool(MediaToolConfig(api_key="sk-static"))
+    assert tool.api_key == "sk-static"

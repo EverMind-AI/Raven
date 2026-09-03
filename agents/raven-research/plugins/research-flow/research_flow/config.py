@@ -54,8 +54,8 @@ class SearchConfig(_Base):
 
     include_answer_box: bool = False
     include_knowledge_graph: bool = False
-    include_snippets: bool = True
-    snippet_dedup_by_docid: bool = True
+    include_snippets: bool = False
+    snippet_dedup_by_docid: bool = False
     cross_query_dedup: bool = False
     search_depth: int = 20
     rendered_width: int = 5
@@ -70,7 +70,7 @@ class DigestConfig(_Base):
     model: str | None = None
     threshold_chars: int = 8000
     timeout_seconds: float = 120.0
-    verbatim_head_chars: int = 800
+    verbatim_head_chars: int = 0
 
 
 class VerifyConfig(_Base):
@@ -85,8 +85,8 @@ class VerifyConfig(_Base):
     max_revisions: int = 1
     review_final_draft: bool = False
     max_tokens: int = 8192
-    constraint_rubric: bool = True
-    strict_reject_only: bool = True
+    constraint_rubric: bool = False
+    strict_reject_only: bool = False
     fail_open_on_elided_evidence: bool = True
     evidence_round: bool = False
     evidence_round_searches: int = 6
@@ -103,7 +103,7 @@ class BudgetNoteConfig(_Base):
 class ForceFinalizeConfig(_Base):
     """Forced-termination backstop: nudge an answerless terminal, then salvage."""
 
-    enabled: bool = True
+    enabled: bool = False
     max_nudges: int = 1
     model: str | None = None
     timeout_seconds: float = 240.0
@@ -118,7 +118,7 @@ class ForceFinalizeConfig(_Base):
 class SpinBreakerConfig(_Base):
     """Restart-language circuit breaker on the iteration phases."""
 
-    enabled: bool = True
+    enabled: bool = False
     phrase_hits: int = 2
     min_budget_ratio: float = 0.5
     min_entity_overlap: int = 2
@@ -128,7 +128,7 @@ class SpinBreakerConfig(_Base):
 class FetchFloorConfig(_Base):
     """Search-without-fetch pathology guard: an in-history nudge to open pages."""
 
-    enabled: bool = True
+    enabled: bool = False
     min_searches: int = 5
     max_notes: int = 2
 
@@ -209,9 +209,9 @@ class AskUserConfig(_Base):
     brief: bool = False
 
 
-# Two rejection classes, both denylists (an invented label passes). First the
-# base label of a superseded build: suffixed variants are legitimate - they name
-# a profile, not a semantics - so only the base is checked here.
+# One rejection class: the base label of a superseded build. A denylist, so an
+# invented label passes; suffixed variants ("dr@3.5-filetools-askuser") are
+# legitimate - they name a profile, not a semantics - and only the base is checked.
 SUPERSEDED_VERSIONS: tuple[str, ...] = (
     "dr@1",
     "dr@1.0",
@@ -240,16 +240,6 @@ SUPERSEDED_VERSIONS: tuple[str, ...] = (
     "dr@3.3",
     "dr@3.4",
 )
-
-# Second, a whole profile label whose distribution moved while its base rung
-# did not - the one case the base match cannot see. Retired label -> successor,
-# so the refusal says where to go. Mirrors the fork's ``_SUPERSEDED_PROFILES``
-# entry for entry: the two launchers load the same twin config.
-SUPERSEDED_PROFILES: dict[str, str] = {
-    # 2026-09-02: the identity gained the derive-and-recommend reply rules and
-    # search snippets turned on. Same base rung, different distribution.
-    "dr@3.5-filetools-askuser": "dr@3.5-filetools-askuser-derive",
-}
 
 
 # Knobs the fork's LOOP consumed, which no seam here reaches. They are kept OFF
@@ -372,24 +362,16 @@ class FlowConfig(_Base):
     ask_user: AskUserConfig = Field(default_factory=AskUserConfig)
 
     _SUPERSEDED_VERSIONS: ClassVar[tuple[str, ...]] = SUPERSEDED_VERSIONS
-    _SUPERSEDED_PROFILES: ClassVar[dict[str, str]] = SUPERSEDED_PROFILES
 
     @model_validator(mode="after")
     def _version_matches_build(self) -> "FlowConfig":
-        """Reject a superseded label on this build, by profile or by base.
+        """Reject a superseded base label on this build.
 
-        The profile table matches the whole string and names the successor. The
-        base table matches the base label only: suffixes name a profile, not a
-        semantics, so ``dr@3.5-futurex`` passes while a superseded base label -
-        suffixed or not - is refused. The current label comes from the field
-        default, never a literal, so a bump has one place to land.
+        Match the base label, not the whole string: suffixes name a profile, not
+        a semantics, so ``dr@3.5-filetools-askuser`` passes while a bare
+        superseded label - suffixed or not - is refused. The current label comes
+        from the field default, never a literal, so a bump has one place to land.
         """
-        successor = self._SUPERSEDED_PROFILES.get(self.version)
-        if self.enabled and successor is not None:
-            raise ValueError(
-                f"drFlow.version={self.version!r} is a superseded profile label on this "
-                f"build; set drFlow.version to {successor!r}"
-            )
         base = self.version.split("-", 1)[0]
         if self.enabled and base in self._SUPERSEDED_VERSIONS:
             current = type(self).model_fields["version"].default
@@ -430,7 +412,6 @@ class FlowConfig(_Base):
 
 
 __all__ = [
-    "SUPERSEDED_PROFILES",
     "SUPERSEDED_VERSIONS",
     "AskUserConfig",
     "BudgetNoteConfig",

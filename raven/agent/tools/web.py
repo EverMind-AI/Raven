@@ -2,6 +2,7 @@
 
 import json
 import os
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -25,15 +26,24 @@ class WebSearchTool(Tool):
         "required": ["query"],
     }
 
-    def __init__(self, api_key: str | None = None, max_results: int = 5, proxy: str | None = None):
-        self._init_api_key = api_key
+    def __init__(
+        self,
+        api_key: "str | Callable[[], str] | None" = None,
+        max_results: int = 5,
+        proxy: str | None = None,
+    ):
+        # A callable is the live form (a reader over the config file), so a key
+        # added there serves the next call; a plain string stays a snapshot.
+        self._api_key_source = api_key if callable(api_key) else None
+        self._init_api_key = None if callable(api_key) else api_key
         self.max_results = max_results
         self.proxy = proxy
 
     @property
     def api_key(self) -> str:
         """Resolve API key at call time so env/config changes are picked up."""
-        return self._init_api_key or os.environ.get("SERPER_API_KEY", "")
+        configured = self._api_key_source() if self._api_key_source is not None else self._init_api_key
+        return configured or os.environ.get("SERPER_API_KEY", "")
 
     @classmethod
     def is_configured(cls, config_key: str | None) -> bool:

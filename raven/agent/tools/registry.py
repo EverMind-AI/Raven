@@ -199,10 +199,14 @@ class ToolRegistry:
         # Asked, not stored: the operator's off switches are a *preference*, and
         # a preference read once at startup is one the operator cannot change.
         # See ``set_withheld_source``.
-        # ``_withheld`` and ``_schema_hidden`` are distinct axes: the first is an
-        # operator off switch (a withheld tool is unreachable everywhere), the
-        # second a design property (a hidden tool stays callable -- ``tool_call``
-        # resolves by registry, never by schema -- it is just not advertised).
+        # ``_withheld``, ``_schema_hidden`` and the turn freeze below are
+        # distinct axes: the first is an operator off switch (a withheld tool is
+        # unreachable everywhere), the second a design property (a hidden tool
+        # stays callable -- ``tool_call`` resolves by registry, never by schema
+        # -- it is just not advertised), and the freeze is per turn (a mid-turn
+        # arrival is unreachable through every surface until the next turn --
+        # ``offers`` consults it for schema and tool-search, and ``execute``
+        # consults it for dispatch, so the three cannot disagree).
         self._withheld: Callable[[], frozenset[str]] | None = None
         self._schema_hidden: set[str] = set()
         # The tools a session brought with it, keyed by session, plus the
@@ -215,6 +219,21 @@ class ToolRegistry:
         # let whichever turn entered last decide what the other one can see.
         self._session_tools: dict[str, dict[str, Tool]] = {}
         self._overlay: ContextVar[dict[str, Tool] | None] = ContextVar("tool_registry_overlay", default=None)
+        # The tools this turn may be shown, captured at turn entry as the
+        # (name, instance) pairs themselves. Instances and not names: a
+        # same-name re-registration is a different tool wearing a familiar
+        # label, and admitting it by name would swap the served schema between
+        # two model calls of one turn. A ContextVar for the reason ``_channel``
+        # gives; ``None`` (no turn scope) advertises everything, which is what
+        # registries that never enter one -- a sub-agent's, the curator's -- get.
+        self._turn_names: ContextVar[dict[str, Tool] | None] = ContextVar("tool_registry_turn_names", default=None)
+        # The off switches as they stood at turn entry. Unioned into
+        # ``withheld_names`` so a switch that turns a tool ON mid-turn lands on
+        # the next turn -- the tool array is the prompt-cache prefix, and a
+        # live un-withholding would move it between two model calls exactly the
+        # way a late registration would. Turning a tool OFF stays live: the
+        # union can only add entries, never mask one the current read carries.
+        self._turn_withheld: ContextVar[frozenset[str] | None] = ContextVar("tool_registry_turn_withheld", default=None)
 
     @property
     def tool_gates(self) -> tuple[Any, ...]:
@@ -239,14 +258,20 @@ class ToolRegistry:
         self._withheld = source
 
     def withheld_names(self) -> frozenset[str]:
-        """The current off switches, or an empty set when nobody installed a source."""
+        """The current off switches, or an empty set when nobody installed a source.
+
+        Inside a turn scope, whatever was withheld at the turn's entry stays
+        withheld for the whole turn (see ``_turn_withheld``); switches that
+        tighten mid-turn still land on this very read.
+        """
+        frozen = self._turn_withheld.get() or frozenset()
         if self._withheld is None:
-            return frozenset()
+            return frozen
         try:
-            return self._withheld()
+            return self._withheld() | frozen
         except Exception:  # noqa: BLE001 - a bad read must not cost the turn its tools
             logger.warning("tools: could not read the disabled-tool list; offering everything")
-            return frozenset()
+            return frozen
 
     def hide_from_schema(self, *names: str) -> None:
         """Keep tools registered and callable, but out of the provider's tool schema.
@@ -306,15 +331,46 @@ class ToolRegistry:
         The one predicate behind both surfaces a tool can be reached through --
         the schema and tool-search -- so a tool cannot be hidden from one and
         found through the other. That invariant is why the off switch belongs
-        here and not at either call site.
+        here and not at either call site -- and why the turn freeze does too: a
+        mid-turn arrival kept out of the schema but findable through tool-search
+        would be the same disagreement.
 
         ``withheld`` is passed in when a caller is testing many tools at once, so
         the source is asked once per assembly rather than once per tool.
         """
         if not self.offers_on_this_channel(tool):
             return False
+        if not self._visible_to_this_turn(tool.name):
+            return False
         names = self.withheld_names() if withheld is None else withheld
         return tool.name not in names
+
+    def _visible_to_this_turn(self, name: str) -> bool:
+        """Whether the turn freeze admits this name; always true outside a scope.
+
+        Admission is by identity, not by name: the entry pair must still be the
+        registered pair. A same-name re-registration therefore reads as the
+        removal it starts with -- the name drops out for the rest of the turn,
+        which the asymmetry allows -- and the replacement is an addition that
+        lands on the next turn like any other, instead of changing an admitted
+        entry's schema between two model calls.
+
+        Consulted by ``offers`` (schema, tool-search) and by ``execute``
+        (dispatch): a name the turn cannot see is one the turn cannot run,
+        or a call composed against the entry instance's schema would be
+        dispatched to whatever now wears the name.
+
+        Session-overlay tools are admitted by name: they enter with the turn
+        that carries them, after the freeze captured the base registry.
+        """
+        frozen = self._turn_names.get()
+        if frozen is None:
+            return True
+        entry = frozen.get(name)
+        if entry is not None and self._tools.get(name) is entry:
+            return True
+        overlay = self._overlay.get()
+        return bool(overlay and name in overlay)
 
     def register(self, tool: Tool, *, origin: "MCPToolRef | None" = None) -> None:
         """Register a tool, recording where it came from if it has an origin.
@@ -395,6 +451,44 @@ class ToolRegistry:
         """:meth:`session_scope` over whatever this session bound, if anything."""
         with self.session_scope(self._session_tools.get(session_key)):
             yield
+
+    @contextmanager
+    def turn_scope(self) -> Iterator[None]:
+        """Freeze which registered tools this turn's schema may carry.
+
+        A tool that registers while the turn runs -- an MCP handshake finishing
+        in the background is the ordinary case since ``prewarm_mcp`` -- joins the
+        next turn instead of appearing in this one's tool array between two model
+        calls. The array is the first segment of the prompt-cache prefix, so a
+        mid-turn arrival rebuilds the whole cached prompt; the arrival loses
+        nothing by waiting, because ``_mcp_tool_notices`` already tells the model
+        the server is still connecting.
+
+        The freeze is against ADDITIONS to the array, whatever their mechanism:
+        a registration that lands mid-turn, and equally an off switch that turns
+        a tool back ON mid-turn (the withheld set as of entry is unioned into
+        every ``withheld_names`` read for the turn). Removals pass through both
+        axes -- a tool that left the registry has no schema to serve, and a
+        switch that tightens mid-turn must bind the very next call.
+        A same-name re-registration is both at once -- a removal followed by an
+        addition wearing the old label -- and each half keeps its own timing:
+        the entry drops out of this turn (captured pairs are checked by
+        identity, see ``_visible_to_this_turn``), and the replacement joins the
+        next one. Anything else would swap an admitted entry's schema in place,
+        moving the array as surely as a new name would. The one lane that may
+        still re-render mid-turn is a tool that DECLARED a dynamic schema
+        (``schema_dynamic``): its instance is stable and its variability is its
+        contract, so the freeze pins the pair and leaves the rendering to it.
+        Session-overlay tools are exempt: they enter with the turn that carries
+        them.
+        """
+        token = self._turn_names.set(dict(self._tools))
+        wtoken = self._turn_withheld.set(self.withheld_names())
+        try:
+            yield
+        finally:
+            self._turn_withheld.reset(wtoken)
+            self._turn_names.reset(token)
 
     def session_tools_in_scope(self) -> dict[str, Tool]:
         """The session tools this turn can see; empty outside any scope.
@@ -549,11 +643,17 @@ class ToolRegistry:
         #
         # The channel half of ``offers`` cannot move in here: its ContextVar is
         # unset on internally-initiated calls, so testing it would refuse them all.
+        # The turn freeze CAN and must: a call composed against the entry
+        # instance's schema would otherwise dispatch to a same-name replacement
+        # that landed mid-turn, running arguments shaped for a tool that is no
+        # longer registered. The freeze admits on an unset scope (a registry
+        # that never enters one, an internally-initiated call), so unlike the
+        # channel gate it refuses nothing it should not.
         tool = self._visible(name)
         # A registered tool answers data questions from its admitted spec; a
         # session overlay tool never passed the door and answers live.
         spec = self._specs.get(name) if tool is not None and self._tools.get(name) is tool else None
-        if not tool or name in self.withheld_names():
+        if not tool or name in self.withheld_names() or not self._visible_to_this_turn(name):
             # No catalog listing on the end of it. Unfolded, every schema is
             # already in this request and a list only repeats it; folded, a
             # cataloged tool is reached through ``tool_call``, which appends the

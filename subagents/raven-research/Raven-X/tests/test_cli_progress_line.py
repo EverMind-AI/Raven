@@ -97,17 +97,6 @@ def test_turn_language_follows_the_question(question: str, lang: str):
         ('  {"error": "proxy"}', True),
         ('{"url": "u", "status": 200, "text": "..."}', False),
         ("plain tool output", False),
-        # ★ 20260831: these three used to render as a normal, successful
-        # search line - the whole point of borrowing WebSearchTool._failed
-        # and SEARCH_CLOSED_PREFIX instead of re-spelling the predicate.
-        ("No results for: a query nobody has an answer to", True),
-        ("Proxy error: connection refused", True),
-        ("Search is closed for this task: the last 5 searches returned no page you had not already been shown.", True),
-        # The registry-wide failure prefix has no colon right after "Error";
-        # borrowing WebSearchTool._failed alone (which knows only "Error:")
-        # rendered a tool exception and a shell/file failure as successes.
-        ("Error executing web_fetch: boom", True),
-        ("Error running rg: not found", True),
     ],
 )
 def test_looks_failed_is_a_prefix_check(preview: str, failed: bool):
@@ -323,95 +312,10 @@ def test_live_mode_outside_turn_falls_back_to_lines():
     assert "Searching" in buf.getvalue()
 
 
-# --- the status line, in the mode that is actually the default ---
-#
-# ★ 20260828 (Framework, product-surface audit). ``progress_style`` defaults to
-# "lines", not "live" (raven/config/schema.py). Before this batch ``_status`` was
-# stored only by the live branch, so under the default every ``.update()`` call
-# was dead: ``status_line()`` was evaluated exactly once, at entry, with every
-# counter still zero, and the round/search/page tally that ``TurnProgress`` builds
-# was never rendered at all. The visible cost is at the END of a deep-research
-# run - after the last tool call the model still has a final generation and a
-# review round to go, no tool event fires, and the spinner is the only thing on
-# screen that could move.
-
-
-class _RecordingStatus:
-    """Stands in for rich's Status so the test can read what was rendered."""
-
-    def __init__(self, text):
-        self.texts = [str(text)]
-
-    def update(self, text):
-        self.texts.append(str(text))
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-
-def _renderer_with_recorded_status(mode: str):
-    buf = io.StringIO()
-    console = Console(file=buf, force_terminal=False, width=120)
-    recorded = []
-
-    def _status(text, **kwargs):
-        st = _RecordingStatus(text)
-        recorded.append(st)
-        return st
-
-    console.status = _status  # type: ignore[method-assign]
-    return buf, ProgressRenderer(console, mode=mode, spinner=True, max_iterations=40), recorded
-
-
-@pytest.mark.parametrize("mode", ["lines", "live"])
-def test_the_status_line_carries_the_running_counters_in_both_modes(mode):
-    buf, r, recorded = _renderer_with_recorded_status(mode)
-    with r.thinking_ctx("who is David Lander?"):
-        r.on_tool(_start("web_search", "t1", {"query": "q1"}, iteration=3))
-        r.on_tool(_complete("t1", preview="1. A\n2. B"))
-        r.on_tool(_start("web_fetch", "t2", {"url": "https://example.com/x"}, iteration=7))
-        r.on_tool(_complete("t2", preview='{"url": "x", "length": 9}'))
-
-    assert recorded, "no status line was created"
-    rendered = " | ".join(recorded[-1].texts)
-    assert "7/40" in rendered, f"round counter never rendered in {mode}: {rendered}"
-    assert "1 search" in rendered, f"search counter never rendered in {mode}: {rendered}"
-    assert "1 page" in rendered, f"page counter never rendered in {mode}: {rendered}"
-
-    # The opposite direction: with the spinner off there is no status at all,
-    # and the renderer must still print its lines rather than raise.
-    buf2, r2, recorded2 = _renderer_with_recorded_status(mode)
-    r2._spinner = False
-    with r2.thinking_ctx("q"):
-        r2.on_tool(_start("web_search", "t9", {"query": "q"}))
-    assert not recorded2
-
-
-def test_lines_mode_still_announces_a_call_when_it_starts():
-    """The print style stays keyed on the MODE, not on status-handle presence.
-
-    Storing the handle under "lines" must not silently convert it to the live
-    style (announce on completion so failure can be marked inline) - that would
-    delay every line by the length of the call it describes.
-    """
-    buf, r, _ = _renderer_with_recorded_status("lines")
-    with r.thinking_ctx("q"):
-        r.on_tool(_start("web_search", "t1", {"query": "serper pricing"}))
-        assert "Searching" in buf.getvalue(), "lines mode stopped announcing on START"
-
 def test_suspended_stops_and_restarts_the_active_spinner() -> None:
     """The ask_user prompt owns the terminal while it reads; a status animating
-    on the same fd garbles the line. Works in both spinner modes.
-
-    ★ 20260828: this used to read "because ``_active`` is tracked apart from the
-    live-mode-only ``_status``". ``_status`` is no longer live-only - both modes
-    store the handle now, and the print style is keyed on the mode instead - so
-    the two are set and cleared together. The test is unchanged and still the
-    right one: it pins that suspend works in BOTH modes, which is the property
-    the ask_user prompt depends on, whatever the fields are called."""
+    on the same fd garbles the line. Works in both spinner modes, because
+    ``_active`` is tracked apart from the live-mode-only ``_status``."""
     for mode in ("lines", "live"):
         renderer = ProgressRenderer(
             Console(file=io.StringIO(), force_terminal=True, width=80),

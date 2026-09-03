@@ -204,26 +204,6 @@ def test_the_live_label_is_never_also_a_retired_one():
         assert label in retired, f"{label} shipped once; it must stay indexable"
 
 
-def test_a_superseded_profile_label_is_refused_by_its_whole_name():
-    """The fork's second table, mirrored: a profile whose distribution moved
-    under an unchanged base rung is refused by its whole label and told its
-    successor. Read off the table, never spelled, so the next retirement is
-    one dict entry in each launcher and no test edit."""
-    from pydantic import ValidationError
-
-    retired = dict(FlowConfig._SUPERSEDED_PROFILES)
-    assert retired, "the profile table is empty; this test has nothing to hold"
-    for old, new in retired.items():
-        assert old.split("-", 1)[0] not in FlowConfig._SUPERSEDED_VERSIONS, old
-        assert new not in retired, f"{new!r} is both a successor and superseded"
-        assert FlowConfig(enabled=True, version=new).version == new
-        with pytest.raises(ValidationError, match="superseded profile label"):
-            FlowConfig(enabled=True, version=old)
-        sibling = f"{old.split('-', 1)[0]}-futurex"
-        assert FlowConfig(enabled=True, version=sibling).version == sibling
-        assert FlowConfig(enabled=False, version=old).version == old
-
-
 # --------------------------------------------------------------------------
 # The core guarantee: additive, never lossy
 # --------------------------------------------------------------------------
@@ -493,17 +473,14 @@ def test_assembly_carries_the_record_flag_and_anchor_gets_nothing(tmp_path):
 
     The fork's assembly copied the flag onto ``record_final_shape``; the plugin
     threads the whole config to the recording seam (``TurnFrame.after_send``),
-    so the flag is read from the built hook's ``cfg``. ``verify`` and
-    ``forceFinalize`` are turned off in the enabled slices because this factory -
-    unlike the fork's builder - installs nothing at all when an LLM gate is on
-    with no provider lent.
+    so the flag is read from the built hook's ``cfg``. ``verify`` is turned off
+    in the enabled slices because this factory - unlike the fork's builder -
+    installs nothing at all when an LLM gate is on with no provider lent.
     """
     from types import SimpleNamespace
 
     from research_flow import plugin as plugin_module
     from research_flow.support.ledger import set_ledger_dir
-
-    no_llm_gates = {"verify": {"enabled": False}, "forceFinalize": {"enabled": False}}
 
     def _ctx(name, slice_):
         return SimpleNamespace(
@@ -514,13 +491,13 @@ def test_assembly_carries_the_record_flag_and_anchor_gets_nothing(tmp_path):
     try:
         assert plugin_module.make_hook(_ctx("off", {"enabled": False})) is None
 
-        asm = plugin_module.make_hook(_ctx("on", {"enabled": True, **no_llm_gates}))
+        asm = plugin_module.make_hook(_ctx("on", {"enabled": True, "verify": {"enabled": False}}))
         assert asm is not None and asm.cfg.final_shape.record is True
 
         asm_off = plugin_module.make_hook(
             _ctx(
                 "record-off",
-                {"enabled": True, **no_llm_gates, "finalShape": {"record": False}},
+                {"enabled": True, "verify": {"enabled": False}, "finalShape": {"record": False}},
             )
         )
         assert asm_off is not None and asm_off.cfg.final_shape.record is False

@@ -838,45 +838,10 @@ class WebSearchTool(Tool):
         if self.corpus_endpoint:
             return await self._search_corpus(query, count, k)
         if not self.api_key:
-            # ★ 20260828 (Framework, product-surface audit). Split in two: the
-            # model is told the capability is gone, the OPERATOR is told where
-            # to fix it. Before this the single string did both, and it was
-            # wrong in the direction that matters on a live demo -- it named
-            # ``~/.raven/config.json`` while the run was almost certainly
-            # started with ``--config <something else>``, told the operator to
-            # "restart the gateway" when a CLI demo has no gateway, and, being
-            # a tool return value, put our config path into the model's context
-            # where it gets narrated back to whoever is watching.
-            #
-            # Reachability: this branch requires NO Serper key at all, a state
-            # in which every search of the run fails, so no batch reading can
-            # come from it -- the launcher's live-endpoint preflight refuses to
-            # start such a batch. The model-visible bytes therefore move only
-            # on runs that were already void.
-            #
-            # The "Error: " prefix is load-bearing and preserved: it is what
-            # ``_failed`` keys on to keep this out of the replay cache, and
-            # what the CLI's ``looks_failed`` now borrows to render the call
-            # red instead of showing it as a normal search.
-            try:
-                from raven.config.loader import get_config_path
-
-                where = str(get_config_path())
-            except Exception:
-                where = "your Raven config file"
-            logger.error(
-                "WebSearch: no {} API key. Set {} in {} "
-                "or export {}, then start the run again.",
-                self.spec.label,
-                self.spec.config_path,
-                where,
-                self.spec.env_var,
-            )
             return (
-                "Error: web search is unavailable on this run - the search "
-                "backend is not configured. Do not retry it. Answer from what "
-                "you have already retrieved, and say plainly in your answer "
-                "which part you could not verify.",
+                f"Error: {self.spec.label} API key not configured. Set it in "
+                f"~/.raven/config.json under {self.spec.config_path} "
+                f"(or export {self.spec.env_var}), then restart the gateway.",
                 [],
                 dict(_NO_SHAPING),
             )
@@ -1153,39 +1118,10 @@ def fetch_result_ok(out: object) -> bool:
     caliber the ledger already used, and it is the safe direction here: an
     unparseable body cannot be shown to be a page, and a gate that released on
     one would release on every malformed response.
-
-    ★ 20260828 (Framework, product-surface audit). ``raw_decode``, not
-    ``loads``: the envelope has to be recognised even when a harness note has
-    been appended after it. ``loads`` demands that the JSON be the WHOLE
-    string, and the fetch-gate seam reads a message body that several observers
-    are entitled to write on -- ``BudgetNoteObserver`` appends
-    ``[budget: iteration N/M | context ~P%]`` to the newest tool result,
-    ``FetchFloorObserver`` appends its note, and the gate appends its own
-    notice. BudgetNote is FIRST in the DR observer order and the gate is THIRD,
-    so on every iteration whose last tool result is the fetch, the gate parsed
-    a string that BudgetNote had already made unparseable.
-
-    That is the SECOND time this predicate has been defeated by what was
-    wrapped around it rather than by what it says. dr@3.5 repaired the first
-    one (the untrusted fence) by unfencing at the call site; the repair was
-    verified against a clean fenced payload, which the seam never actually
-    sees. Both bugs share a shape worth naming: the gate's own mechanism
-    endpoint is identically zero while this returns False, so its verification
-    passes either way -- a broken release valve and a valve that was never
-    needed are output-identical.
-
-    Fixing it here rather than at the seam because the seam is not special:
-    ANY caller reading a tool message body, present or future, faces the same
-    annotation. The ledger is unaffected either way -- it is handed the raw
-    return value, which no observer has touched, so it parses identically
-    under both spellings.
     """
-    text = out if isinstance(out, str) else None
-    if text is None:
-        return False
     try:
-        payload, _end = json.JSONDecoder().raw_decode(text.lstrip())
-    except ValueError:
+        payload = json.loads(out)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
         return False
     if not isinstance(payload, dict):
         return False
@@ -1405,16 +1341,7 @@ class WebFetchTool(Tool):
                              ("digested", "digested"), ("docid", "docid"),
                              ("truncated", "truncated"), ("error", "error"),
                              ("encoding_lost", "encoding_lost"),
-                             ("extractor", "extractor"),
-                             # 20260831. The digest keeps what the model asked for and
-                             # discards the rest - a median 29,587 source chars down to
-                             # 1,541, so 94% of the page never reaches it. Any later work
-                             # on what was discarded has to say how its candidates relate
-                             # to what was ASKED FOR, and until now the ledger could not:
-                             # the envelope carried this field and the row dropped it, so
-                             # orthogonality was unauditable at collection time. Write-only,
-                             # like every column here; nothing reads it back into a prompt.
-                             ("info_to_extract", "info_to_extract")):
+                             ("extractor", "extractor")):
             if key in payload:
                 record[out_key] = payload[key]
         return record

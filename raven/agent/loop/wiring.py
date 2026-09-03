@@ -4,6 +4,7 @@ workdir and sinks.
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 from raven.agent.loop._shared import (
@@ -116,7 +117,81 @@ class WiringMixin:
         withheld: set[str] = set()
         for entry in configured:
             withheld.update(self.tools.resolve_configured(entry))
+        withheld.update(self._unconfigured_tool_names())
         return frozenset(withheld - (RESOURCE_TOOL_NAMES | PROMPT_TOOL_NAMES))
+
+    def _unconfigured_tool_names(self) -> set[str]:
+        """Registered tools whose config asks for nothing right now, read live.
+
+        The old registration gate, moved to the withheld axis so it works in
+        both directions while the process runs. The rules themselves are
+        unchanged: a media tool counts as configured only when its own section
+        names a model or a key -- an OpenRouter key set for chat alone must not
+        surface tools that bill per call -- and web_search counts a key from
+        the file or the environment.
+
+        Gates the built-in INSTANCE, by identity: plugin tools register last
+        precisely so one can shadow a built-in by name -- subclassing it or
+        not -- and whatever replaced the entry carries its own credential
+        story, which the built-in's config section says nothing about. An
+        ``isinstance`` check read a plugin *subclass* as the built-in itself
+        and withheld it on the built-in's empty section.
+        """
+        media = self.media_config
+        gated = getattr(self, "_config_gated_tools", {})
+        names: set[str] = set()
+        for cls, kind, fallback in (
+            (ImageGenerateTool, "image", media.image),
+            (SpeechGenerateTool, "speech", media.speech),
+            (VideoGenerateTool, "video", media.video),
+        ):
+            if self.tools.get(cls.name) is not gated.get(cls.name):
+                continue
+            cfg = self._live_media_config(kind, fallback)
+            if not (cfg.api_key or cfg.model):
+                names.add(cls.name)
+        if self.tools.get(WebSearchTool.name) is gated.get(WebSearchTool.name) and not (
+            self._live_web_search_key() or os.environ.get("SERPER_API_KEY")
+        ):
+            names.add(WebSearchTool.name)
+        return names
+
+    def _live_exec_extra_deny(self) -> list[str] | None:
+        """The exec deny extras the file names now; None keeps the boot extras."""
+        from raven.config.live import exec_extra_deny_patterns
+
+        return exec_extra_deny_patterns(self._live_config)
+
+    def _live_web_search_key(self) -> str:
+        """The Serper key the file names now, else the boot value.
+
+        The boot value is the lane eval harnesses pass a key through with no
+        file behind it; a file with a section governs entirely, including an
+        empty value, which is how a key gets revoked without a restart.
+        """
+        from raven.config.live import web_search_key
+
+        answer = web_search_key(self._live_config)
+        if answer is None:
+            return self.brave_api_key or ""
+        return answer
+
+    def _media_config_reader(self, kind: str, fallback) -> "Callable[[], Any]":
+        def read():
+            return self._live_media_config(kind, fallback)
+
+        return read
+
+    def _live_media_config(self, kind: str, fallback):
+        """The media section the file names now; the boot config when it names none.
+
+        The boot config is the lane eval harnesses pass a section through with
+        no file behind it, and the last good answer while the file is mid-write.
+        """
+        from raven.config.live import media_tool_config
+
+        cfg = media_tool_config(self._live_config, kind)
+        return fallback if cfg is None else cfg
 
     @property
     def provider(self) -> LLMProvider:
@@ -197,10 +272,61 @@ class WiringMixin:
         choice sitting unread in its own record.
         """
         binding = self._session_bindings.get(session_key)
+        if binding is None:
+            self._restore_once(session_key)
+            binding = self._session_bindings.get(session_key)
         if binding is not None:
+            fresh = self._rebound(binding)
+            if fresh is not binding:
+                self._session_bindings[session_key] = fresh
+            return fresh
+        fresh = self._rebound(self._default_binding)
+        if fresh is not self._default_binding:
+            # Adopt the pool's object as the default, through the setter so the
+            # out-of-turn fallbacks (subagents, context engine, consolidator)
+            # follow the same credential edit. Adopting is also what keeps the
+            # identity stable: compared against a default that never moves, the
+            # pool's instance would read as "provider changed" on every ask and
+            # the transport-verdict caches would never survive a turn.
+            self.set_default_binding(fresh)
+        return fresh
+
+    def _rebound(self, binding: ModelBinding) -> ModelBinding:
+        """The same pair, re-asked from the pool -- so an edited credential
+        serves the session's next turn instead of its next process.
+
+        The pool already drops its cache when the credentials fingerprint
+        changes; what was missing was a caller asking it again. Asked every
+        time rather than behind a change gate: the unchanged round trip is
+        1.6 ms (measured; the supplier reloads the config for the
+        fingerprint), which is noise at turn entry, and a gate shared across
+        sessions let the first asker consume the change for all of them.
+
+        A pair that can no longer be built -- the credential was removed, not
+        rotated -- keeps the binding it has: a turn on the provider that
+        answered a second ago beats no turn at all, matching what
+        ``restore_session_model`` does with the same failure.
+        """
+        pool = self._provider_pool
+        if pool is None:
             return binding
-        self._restore_once(session_key)
-        return self._session_bindings.get(session_key, self._default_binding)
+        provider_name = getattr(binding.provider, "provider_name", "") or ""
+        if not provider_name:
+            # A provider that cannot name its vendor cannot be re-paired safely:
+            # deriving one from the model id is a guess about whose credential
+            # pays, and the gateway's default is a ResolvingProvider -- a
+            # multi-vendor dispatcher that a single direct binding must never
+            # replace. Its credential liveness is its own concern; this path
+            # refreshes only pairs the pool built.
+            return binding
+        try:
+            fresh = pool.bind(binding.model, provider_name)
+        except Exception as exc:
+            logger.warning("cannot rebuild the provider for {!r} ({}); keeping the current one", binding.model, exc)
+            return binding
+        if fresh.provider is not binding.provider:
+            self._forget_transport_verdicts()
+        return fresh
 
     def _restore_once(self, session_key: str) -> None:
         """Read this session's stored model, at most once per key per process.
@@ -369,43 +495,44 @@ class WiringMixin:
                 path_append=self.exec_config.path_append,
                 executor=self._executor,
                 extra_deny_patterns=self.exec_config.extra_deny_patterns,
+                extra_deny_source=self._live_exec_extra_deny,
                 extra_allowed_dirs=(self.workspace,),
             )
         )
-        # web_search needs a Serper key it does not have by default, and offering
-        # it anyway is worse than withholding it: the model reaches for it, the
-        # call fails, and the error text -- naming a config file and an env var --
-        # gets relayed to whoever is on the other end of the channel. Ask the tool
-        # rather than the config, because it resolves the key at call time from
-        # either source; gating on `brave_api_key` alone would withdraw the tool
-        # from a deploy that only exports SERPER_API_KEY.
-        web_search = WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy)
-        if web_search.api_key:
-            self.tools.register(web_search)
+        # web_search and the media tools register whatever the config holds and
+        # are *withheld* while their section asks for nothing -- see
+        # ``_unconfigured_tool_names``. Registration used to be the gate, which
+        # made the switch one-way: a key added while the process ran could not
+        # surface a tool nothing had registered. Withholding is reversible per
+        # model call, and the tools read their key through a live reader, so the
+        # same edit that lifts the veil also serves the call.
+        # The exact objects the config gate below may judge. Identity, not
+        # type: a plugin that shadows one of these names -- even with a
+        # subclass -- replaces the entry, and the built-in's config section
+        # says nothing about the replacement's credential story.
+        self._config_gated_tools: dict[str, Any] = {}
+        web_search = WebSearchTool(api_key=self._live_web_search_key, proxy=self.web_proxy)
+        self.tools.register(web_search)
+        self._config_gated_tools[web_search.name] = web_search
         # web_fetch is unconditional by contrast: it works without a key, and the
         # Jina one only upgrades the extraction.
         self.tools.register(WebFetchTool(api_key=self.jina_api_key, proxy=self.web_proxy))
-        # Media tools (image/speech/video) are opt-in: a tool is registered only
-        # when the user configured it (a model or apiKey under tools.media.<tool>),
-        # which Config.effective_media_config() surfaces as a resolved key/model.
-        # An OpenRouter key set for chat alone never enables them.
         media = self.media_config
         media_tools = (
-            (ImageGenerateTool, media.image),
-            (SpeechGenerateTool, media.speech),
-            (VideoGenerateTool, media.video),
+            (ImageGenerateTool, "image", media.image),
+            (SpeechGenerateTool, "speech", media.speech),
+            (VideoGenerateTool, "video", media.video),
         )
-        for cls, tool_cfg in media_tools:
-            if tool_cfg.api_key or tool_cfg.model:
-                self.tools.register(
-                    cls(
-                        tool_cfg,
-                        workspace=self.workspace,
-                        proxy=media.proxy,
-                        output_subdir=media.output_subdir,
-                        restrict_to_workspace=self.restrict_to_workspace,
-                    )
-                )
+        for cls, kind, tool_cfg in media_tools:
+            tool = cls(
+                self._media_config_reader(kind, tool_cfg),
+                workspace=self.workspace,
+                proxy=media.proxy,
+                output_subdir=media.output_subdir,
+                restrict_to_workspace=self.restrict_to_workspace,
+            )
+            self.tools.register(tool)
+            self._config_gated_tools[tool.name] = tool
         # Deep research (MiroThinker) is a paid, minute-scale HTTP engine, so it is
         # never a plain default tool. Two modes: ``real`` (key configured) is the
         # working tool + async manager; ``offer`` (no key) is a same-named stand-in

@@ -63,35 +63,9 @@ def unwrap_untrusted(text: object) -> str:
     of one string" shape, and this fence carries a nonce - so a re-spelling would
     have to guess the nonce and would silently fall back to "not fenced".
 
-    Conservative by construction: it unwraps only when the opening line and a
-    closing line agree on the SAME nonce. A body that merely contains a fake marker
+    Conservative by construction: it unwraps only when the opening line and the
+    final line agree on the SAME nonce. A body that merely contains a fake marker
     is left alone, which is the whole point of the nonce.
-
-    ★ 20260828 (Framework, product-surface audit). The close marker no longer has
-    to be the LAST line, and that is the difference between this function working
-    and not working at its only call site. It used to ``rsplit("\n", 1)`` and
-    demand that the tail be the END marker -- but a fenced tool result does not
-    stay final. ``BudgetNoteObserver`` appends ``[budget: iteration N/M | context
-    ~P%]`` to the newest tool result, ``FetchFloorObserver`` appends its note, and
-    ``FetchGateObserver`` appends its own notice; BudgetNote runs FIRST in the DR
-    observer order and the gate runs THIRD, so on every iteration whose newest
-    tool result was the fetch, the gate handed this function a string whose last
-    line was a budget note, got the whole fenced string back unchanged, and
-    ``fetch_result_ok`` then refused it for starting with ``[BEGIN UNTRUSTED``.
-
-    So the dr@3.5 repair described above was correct and still had no effect:
-    it was verified against a clean fenced payload, which that seam never sees.
-    Both failures share one shape -- the predicate was defeated by what was
-    wrapped AROUND the payload, not by what it says about the payload -- and both
-    were invisible for the same reason: the gate's own mechanism endpoint is
-    identically zero while the release condition is stuck False, so its
-    pre-registered check "passes" either way.
-
-    Scanning from the END, not the start, keeps the nonce discipline intact and
-    is strictly the safer direction: untrusted content that guessed the nonce and
-    echoed a fake close marker mid-body cannot truncate the payload, because the
-    genuine marker sits later and wins. When the close marker IS the final line -
-    every case that exists today - the returned bytes are unchanged.
     """
     body = text if isinstance(text, str) else str(text)
     if not body.startswith("[BEGIN UNTRUSTED "):
@@ -102,10 +76,11 @@ def unwrap_untrusted(text: object) -> str:
     marker = head.rsplit("#", 1)[-1].split()[0] if "#" in head else ""
     if not marker:
         return body
-    lines = rest.split("\n")
-    for i in range(len(lines) - 1, -1, -1):
-        line = lines[i]
-        if line.startswith("[END UNTRUSTED ") and line.rstrip().endswith(f"#{marker}]"):
-            return "\n".join(lines[:i])
-    return body
+    lines = rest.rsplit("\n", 1)
+    if len(lines) != 2:
+        return body
+    inner, tail = lines
+    if not (tail.startswith("[END UNTRUSTED ") and tail.rstrip().endswith(f"#{marker}]")):
+        return body
+    return inner
 

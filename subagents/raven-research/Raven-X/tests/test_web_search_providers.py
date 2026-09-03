@@ -285,28 +285,9 @@ def test_an_unknown_provider_degrades_to_the_default() -> None:
 
 @pytest.mark.asyncio
 async def test_the_unconfigured_error_names_the_selected_provider() -> None:
-    """Named to the OPERATOR, on stderr - not to the model.
+    rendered, urls, _ = await WebSearchTool(provider="serpapi")._search("q", 5)
 
-    The message is split on purpose (main's product-surface audit): the tool
-    return value tells the model the capability is gone and not to retry, and
-    must not carry our config path, which a return value gets narrated back to
-    whoever is watching. The provider's name, config path and env var go to the
-    log instead - still per-spec, so a selected provider's missing key is never
-    reported as another provider's.
-    """
-    from loguru import logger
-
-    lines: list[str] = []
-    sink_id = logger.add(lines.append, level="ERROR")
-    try:
-        rendered, urls, _ = await WebSearchTool(provider="serpapi")._search("q", 5)
-    finally:
-        logger.remove(sink_id)
-
-    assert rendered.startswith("Error: web search is unavailable")
-    assert "apiKey" not in rendered
-    log = "".join(lines)
-    assert "SerpApi" in log
-    assert "tools.web.providers.serpapi.apiKey" in log
-    assert "SERPAPI_API_KEY" in log
+    assert "SerpApi API key not configured" in rendered
+    assert "tools.web.providers.serpapi.apiKey" in rendered
+    assert "SERPAPI_API_KEY" in rendered
     assert urls == []

@@ -348,11 +348,11 @@ def test_the_dr_prompt_bytes_match_the_batch_that_measured_them() -> None:
     # The product surface: both clauses, still purely appended. This pin moves
     # with every report-clause rewrite: the fold replaced dr@2.8's ordered-prose
     # value (41d7d4d2b582bd55, the dr@2.8-3.4 live-web batches) with the fixed
-    # template (878aa5a6e11d81a1), and the same label added the format-override rule.
+    # template (93ab746e00264baf), and the same label added the format-override rule.
     # Superseded readings reproduce from their own arm_env.json stamps, not from
     # this build.
     seg = asyncio.run(DRModeSegmentBuilder(ask_user=False).build(None))
-    assert sha(seg.text) == "c5335e1d1b33870d"
+    assert sha(seg.text) == "75d2ad71c15aacc0"
     assert seg.text.startswith(marker_only.text.rstrip())
 
     # The pre-override surface stays reachable: the override passage rides its own
@@ -362,7 +362,7 @@ def test_the_dr_prompt_bytes_match_the_batch_that_measured_them() -> None:
     no_override = asyncio.run(
         DRModeSegmentBuilder(report_format_override=False, ask_user=False).build(None)
     )
-    assert sha(no_override.text) == "878aa5a6e11d81a1"
+    assert sha(no_override.text) == "93ab746e00264baf"
     assert no_override.text.startswith(marker_only.text.rstrip())
 
     # Guidance ablation, held at its measured length by pinning the other knob too:

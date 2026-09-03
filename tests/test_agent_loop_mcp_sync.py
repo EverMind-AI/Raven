@@ -9,6 +9,8 @@ one of those calls was an AttributeError.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -336,8 +338,6 @@ async def test_state_changes_reach_the_event_sink(workspace) -> None:
 
     with patch(_PATCH, new=_fake_connect(["search"])):
         await loop.apply_mcp_config({"svc": MCPServerConfig(url="https://svc.test/mcp")})
-    import asyncio
-
     await asyncio.sleep(0)  # the bridge is fire-and-forget
 
     methods = [m for m, _ in seen]
@@ -361,8 +361,6 @@ async def test_the_oauth_flow_reaches_the_same_sink(workspace) -> None:
     manager = loop.mcp_manager
     assert manager.on_oauth_event is not None
     manager.on_oauth_event("oauth.pending", {"server": "svc", "url": "https://idp.example/authorize?x=1"})
-    import asyncio
-
     await asyncio.sleep(0)
 
     assert seen == [("oauth.pending", {"server": "svc", "url": "https://idp.example/authorize?x=1"})]
@@ -376,8 +374,6 @@ async def test_a_turn_does_not_wait_for_a_server_that_is_waiting_on_a_person(wor
     turn used to survive it with a 90s bound; now it does not join the handshake
     at all, and the connect must still not be cancelled to get there.
     """
-    import asyncio
-
     released = asyncio.Event()
 
     async def parked(name, cfg, registry, stack, executor=None, http_auth=None):
@@ -819,3 +815,418 @@ async def test_a_closed_executor_parks_connected_stdio_servers_in_error(workspac
     assert states["web"][0] == "connected", "an http transport does not ride the executor"
     assert not loop.tools.has("mcp_sd_search"), "the dead transport's tools are withdrawn"
     assert loop.tools.has("mcp_web_search")
+
+
+# ---------------------------------------------------------------------------
+# Reconcile from the live config file at the turn boundary
+# ---------------------------------------------------------------------------
+
+
+def _live_file(tmp_path: Path, monkeypatch, servers: dict) -> Path:
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"tools": {"mcpServers": servers}}), encoding="utf-8")
+    monkeypatch.setattr("raven.home._current_config_path", cfg)
+    return cfg
+
+
+async def test_an_out_of_band_edit_is_applied_at_the_turn_boundary(workspace, tmp_path: Path, monkeypatch) -> None:
+    """A server added by hand to config.json attaches on the next turn, with no
+    poll and no RPC -- the gap that used to depend on which frontend remembered
+    to call the reload method."""
+    cfg = _live_file(tmp_path, monkeypatch, {})
+    loop = _loop(workspace)
+
+    with patch(_PATCH, new=_fake_connect(["search"])):
+        await loop.apply_mcp_config({})
+        cfg.write_text(
+            json.dumps({"tools": {"mcpServers": {"svc": {"url": "https://svc.test/mcp"}}}}),
+            encoding="utf-8",
+        )
+        loop.reconcile_mcp_from_live()
+        assert loop._mcp_reconcile_task is not None, "a changed file must start an apply"
+        await loop._mcp_reconcile_task
+
+    assert loop.tools.has("mcp_svc_search")
+
+
+async def test_an_unchanged_file_reconciles_nothing(workspace, tmp_path: Path, monkeypatch) -> None:
+    _live_file(tmp_path, monkeypatch, {"svc": {"url": "https://svc.test/mcp"}})
+    loop = _loop(workspace)
+
+    with patch(_PATCH, new=_fake_connect(["search"])):
+        await loop.apply_mcp_config({"svc": MCPServerConfig(url="https://svc.test/mcp")})
+        loop.reconcile_mcp_from_live()
+
+    assert loop._mcp_reconcile_task is None, "unchanged config must not reach a transport"
+
+
+async def test_a_boot_configured_set_defers_its_first_connect_to_prewarm(
+    workspace, tmp_path: Path, monkeypatch
+) -> None:
+    # While a boot-configured set has its one-time connect pending, prewarm
+    # owns the lane and applies the same live answer; a reconcile here would
+    # race the same handshakes.
+    _live_file(tmp_path, monkeypatch, {"svc": {"url": "https://svc.test/mcp"}})
+    loop = _loop(workspace, servers={"svc": MCPServerConfig(url="https://svc.test/mcp")})
+
+    loop.reconcile_mcp_from_live()
+
+    assert loop._mcp_reconcile_task is None
+
+
+async def test_an_empty_boot_attaches_a_server_added_to_the_file(workspace, tmp_path: Path, monkeypatch) -> None:
+    """A process booted with no MCP servers has no prewarm coming -- the file
+    is the only door a server can ever arrive through, so the turn-boundary
+    reconcile owns the lane from the first turn."""
+    _live_file(tmp_path, monkeypatch, {"svc": {"url": "https://svc.test/mcp"}})
+    loop = _loop(workspace)
+    assert not loop._mcp_servers
+
+    with patch(_PATCH, new=_fake_connect(["search"])):
+        loop.reconcile_mcp_from_live()
+        assert loop._mcp_reconcile_task is not None, "no prewarm is coming; the reconcile must start the attach"
+        await loop._mcp_reconcile_task
+
+    assert loop.tools.has("mcp_svc_search")
+    assert loop._mcp_connected
+
+
+async def test_removing_the_whole_section_detaches_nothing(workspace, tmp_path: Path, monkeypatch) -> None:
+    """No section is "no answer", not "no servers": a config that never named
+    mcpServers must not tear down servers an RPC attached."""
+    cfg = _live_file(tmp_path, monkeypatch, {})
+    loop = _loop(workspace)
+
+    with patch(_PATCH, new=_fake_connect(["search"])):
+        await loop.apply_mcp_config({"svc": MCPServerConfig(url="https://svc.test/mcp")})
+        cfg.write_text(json.dumps({"tools": {}}), encoding="utf-8")
+        loop.reconcile_mcp_from_live()
+
+    assert loop._mcp_reconcile_task is None
+    assert loop.tools.has("mcp_svc_search")
+
+
+async def test_an_emptied_section_detaches_everything(workspace, tmp_path: Path, monkeypatch) -> None:
+    """An empty section is a real answer, and the one way a hand edit revokes."""
+    cfg = _live_file(tmp_path, monkeypatch, {"svc": {"url": "https://svc.test/mcp"}})
+    loop = _loop(workspace)
+
+    with patch(_PATCH, new=_fake_connect(["search"])):
+        await loop.apply_mcp_config({"svc": MCPServerConfig(url="https://svc.test/mcp")})
+        cfg.write_text(json.dumps({"tools": {"mcpServers": {}}}), encoding="utf-8")
+        loop.reconcile_mcp_from_live()
+        assert loop._mcp_reconcile_task is not None
+        await loop._mcp_reconcile_task
+
+    assert not loop.tools.has("mcp_svc_search")
+
+
+def _stalling_connect(started: asyncio.Event, release: asyncio.Event, tool_names: list[str]):
+    """A connect that parks mid-handshake until released -- the OAuth shape."""
+
+    async def fake(name, cfg, registry, stack, executor=None, http_auth=None):
+        started.set()
+        await release.wait()
+        out = []
+        for t in tool_names:
+            full = f"mcp_{name}_{t}"
+            registry.register(_FakeTool(full), origin=MCPToolRef(name=full, server=name, tool=t))
+            out.append(full)
+        return _connected(out)
+
+    return fake
+
+
+async def test_a_live_replacement_supersedes_an_in_flight_boot_prewarm(workspace, tmp_path: Path, monkeypatch) -> None:
+    """The starvation case: while a boot server's handshake is parked (OAuth can
+    hold one for minutes), the file replaces it. The pending prewarm owns the
+    lane only while the file agrees with it -- a differing admitted answer
+    reaps the stale attempt and connects the live set on this same boundary."""
+    import asyncio
+
+    cfg = _live_file(tmp_path, monkeypatch, {"boot": {"url": "https://boot.test/mcp"}})
+    loop = _loop(workspace, servers={"boot": MCPServerConfig(url="https://boot.test/mcp")})
+    started, release = asyncio.Event(), asyncio.Event()
+
+    with patch(_PATCH, new=_stalling_connect(started, release, ["search"])):
+        loop.prewarm_mcp()
+        await started.wait()
+        assert loop._mcp_connecting
+
+        cfg.write_text(
+            json.dumps({"tools": {"mcpServers": {"live": {"url": "https://live.test/mcp"}}}}), encoding="utf-8"
+        )
+        with patch(_PATCH, new=_fake_connect(["search"])):
+            loop.reconcile_mcp_from_live()
+            assert loop._mcp_reconcile_task is not None, "a differing live answer must supersede the pending prewarm"
+            await loop._mcp_reconcile_task
+
+    assert loop.tools.has("mcp_live_search")
+    assert not loop.tools.has("mcp_boot_search"), "the stale boot handshake was reaped, not completed"
+
+
+async def test_a_live_revocation_supersedes_an_in_flight_boot_prewarm(workspace, tmp_path: Path, monkeypatch) -> None:
+    """The tightening half: emptying the section mid-handshake must not leave a
+    revoked server's handshake alive until it completes on its own."""
+    import asyncio
+
+    cfg = _live_file(tmp_path, monkeypatch, {"boot": {"url": "https://boot.test/mcp"}})
+    loop = _loop(workspace, servers={"boot": MCPServerConfig(url="https://boot.test/mcp")})
+    started, release = asyncio.Event(), asyncio.Event()
+
+    with patch(_PATCH, new=_stalling_connect(started, release, ["search"])):
+        loop.prewarm_mcp()
+        await started.wait()
+
+        cfg.write_text(json.dumps({"tools": {"mcpServers": {}}}), encoding="utf-8")
+        loop.reconcile_mcp_from_live()
+        assert loop._mcp_reconcile_task is not None
+        await loop._mcp_reconcile_task
+
+    assert not loop.tools.has("mcp_boot_search")
+    assert loop.mcp_manager.status() == [] or all(s["state"] != "connected" for s in loop.mcp_manager.status())
+
+
+async def test_a_matching_file_leaves_the_pending_prewarm_alone(workspace, tmp_path: Path, monkeypatch) -> None:
+    import asyncio
+
+    _live_file(tmp_path, monkeypatch, {"boot": {"url": "https://boot.test/mcp"}})
+    loop = _loop(workspace, servers={"boot": MCPServerConfig(url="https://boot.test/mcp")})
+    started, release = asyncio.Event(), asyncio.Event()
+
+    with patch(_PATCH, new=_stalling_connect(started, release, ["search"])):
+        loop.prewarm_mcp()
+        await started.wait()
+
+        loop.reconcile_mcp_from_live()
+        assert loop._mcp_reconcile_task is None, "an agreeing file must not reap its own prewarm"
+
+        release.set()
+        await loop._mcp_prewarm_task
+
+    assert loop.tools.has("mcp_boot_search")
+
+
+async def test_prewarm_consumes_the_admitted_live_answer(workspace, tmp_path: Path, monkeypatch) -> None:
+    """An edit that lands after boot but before the first connect: the prewarm
+    applies the file's truth, not the construction snapshot."""
+    _live_file(tmp_path, monkeypatch, {"live": {"url": "https://live.test/mcp"}})
+    loop = _loop(workspace, servers={"boot": MCPServerConfig(url="https://boot.test/mcp")})
+
+    with patch(_PATCH, new=_fake_connect(["search"])):
+        loop.prewarm_mcp()
+        await loop._mcp_prewarm_task
+
+    assert loop.tools.has("mcp_live_search")
+    assert not loop.tools.has("mcp_boot_search")
+
+
+async def test_a_live_revocation_supersedes_a_pending_reconcile(workspace, tmp_path: Path, monkeypatch) -> None:
+    """The rule has no exempt owner: a pending apply this reconcile itself
+    started earlier is superseded exactly as a pending prewarm is. Without
+    that, a parked live addition starved a later revocation, and releasing the
+    handshake connected a server the file had already revoked."""
+    cfg = _live_file(tmp_path, monkeypatch, {"added": {"url": "https://added.test/mcp"}})
+    loop = _loop(workspace)
+    started, release = asyncio.Event(), asyncio.Event()
+
+    with patch(_PATCH, new=_stalling_connect(started, release, ["search"])):
+        loop.reconcile_mcp_from_live()
+        first = loop._mcp_reconcile_task
+        assert first is not None
+        await started.wait()
+
+        cfg.write_text(json.dumps({"tools": {"mcpServers": {}}}), encoding="utf-8")
+        loop.reconcile_mcp_from_live()
+        assert loop._mcp_reconcile_task is not first, "a differing file must supersede the pending apply"
+        await loop._mcp_reconcile_task
+
+        release.set()
+
+    assert not loop.tools.has("mcp_added_search"), "the revoked server's parked handshake must not land"
+
+
+async def test_a_live_replacement_supersedes_a_pending_reconcile(workspace, tmp_path: Path, monkeypatch) -> None:
+    cfg = _live_file(tmp_path, monkeypatch, {"added": {"url": "https://added.test/mcp"}})
+    loop = _loop(workspace)
+    started, release = asyncio.Event(), asyncio.Event()
+
+    with patch(_PATCH, new=_stalling_connect(started, release, ["search"])):
+        loop.reconcile_mcp_from_live()
+        await started.wait()
+
+        cfg.write_text(
+            json.dumps({"tools": {"mcpServers": {"live2": {"url": "https://live2.test/mcp"}}}}), encoding="utf-8"
+        )
+        with patch(_PATCH, new=_fake_connect(["search"])):
+            loop.reconcile_mcp_from_live()
+            await loop._mcp_reconcile_task
+        release.set()
+
+    assert loop.tools.has("mcp_live2_search")
+    assert not loop.tools.has("mcp_added_search")
+
+
+async def test_an_agreeing_file_leaves_the_pending_reconcile_alone(workspace, tmp_path: Path, monkeypatch) -> None:
+    _live_file(tmp_path, monkeypatch, {"added": {"url": "https://added.test/mcp"}})
+    loop = _loop(workspace)
+    started, release = asyncio.Event(), asyncio.Event()
+
+    with patch(_PATCH, new=_stalling_connect(started, release, ["search"])):
+        loop.reconcile_mcp_from_live()
+        first = loop._mcp_reconcile_task
+        await started.wait()
+
+        loop.reconcile_mcp_from_live()
+        assert loop._mcp_reconcile_task is first, "an agreeing file must not reap its own apply"
+
+        release.set()
+        await first
+
+    assert loop.tools.has("mcp_added_search")
+
+
+async def test_the_supersession_outruns_the_parked_handshake(workspace, tmp_path: Path, monkeypatch) -> None:
+    """Completing is not enough: without cancelling the pending apply, the
+    superseder still finishes -- behind the full connect timeout of the very
+    handshake it exists to displace, which is the starvation relocated rather
+    than removed. The time bound is what pins the cancel."""
+    cfg = _live_file(tmp_path, monkeypatch, {"added": {"url": "https://added.test/mcp"}})
+    loop = _loop(workspace)
+    started, release = asyncio.Event(), asyncio.Event()
+
+    with patch(_PATCH, new=_stalling_connect(started, release, ["search"])):
+        loop.reconcile_mcp_from_live()
+        await started.wait()
+
+        cfg.write_text(json.dumps({"tools": {"mcpServers": {}}}), encoding="utf-8")
+        loop.reconcile_mcp_from_live()
+        await asyncio.wait_for(loop._mcp_reconcile_task, timeout=5)
+
+    assert not release.is_set(), "the parked handshake was displaced, not waited out"
+    assert not loop.tools.has("mcp_added_search")
+
+
+def _grouped_cancel_connect(started: asyncio.Event):
+    """A connect whose cancellation surfaces as an ExceptionGroup -- the shape
+    an anyio transport's task group hands back. The handshake watchdog is what
+    keeps that shape from parking the record in ``error``; this fake keeps the
+    lane exercised with the hostile teardown, not the polite one."""
+
+    async def fake(name, cfg, registry, stack, executor=None, http_auth=None):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError as e:
+            raise BaseExceptionGroup("transport teardown", [e]) from None
+        raise AssertionError("unreachable")
+
+    return fake
+
+
+async def test_a_superseded_server_the_file_still_wants_is_retried(workspace, tmp_path: Path, monkeypatch) -> None:
+    """The other half of displacing an attempt: settling it. ``apply_config``
+    skips any record that is not ``disconnected`` for unchanged config, so a
+    displaced attempt that fails to settle leaves a server the new answer
+    still names dead for the life of the process. This asserts the guarantee
+    end to end -- displaced, then immediately reconnected by the superseding
+    apply -- with the transport tearing down in the wrapped-cancel shape."""
+    cfg = _live_file(tmp_path, monkeypatch, {"added": {"url": "https://added.test/mcp"}})
+    loop = _loop(workspace)
+    started = asyncio.Event()
+
+    with patch(_PATCH, new=_grouped_cancel_connect(started)):
+        loop.reconcile_mcp_from_live()
+        await started.wait()
+
+        cfg.write_text(
+            json.dumps(
+                {
+                    "tools": {
+                        "mcpServers": {
+                            "added": {"url": "https://added.test/mcp"},
+                            "extra": {"url": "https://extra.test/mcp"},
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        with patch(_PATCH, new=_fake_connect(["search"])):
+            loop.reconcile_mcp_from_live()
+            await loop._mcp_reconcile_task
+
+    assert loop.tools.has("mcp_extra_search")
+    assert loop.tools.has("mcp_added_search"), "the displaced attempt must be retryable, not parked in error"
+
+
+def _held_teardown_connect(started: asyncio.Event, cleanup_release: asyncio.Event):
+    """A connect whose cancellation cleanup itself parks -- the slow-teardown
+    shape a remote transport makes possible."""
+
+    async def fake(name, cfg, registry, stack, executor=None, http_auth=None):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            await cleanup_release.wait()
+            raise
+
+    return fake
+
+
+async def test_a_third_answer_supersedes_a_superseder_stuck_in_cleanup(workspace, tmp_path: Path, monkeypatch) -> None:
+    """The chained shape: A is connecting; B superseded it and is parked
+    awaiting A's cancellation cleanup; the file changes to C. C's cancel is
+    addressed to B itself -- swallowed by a bare suppress, B would survive,
+    start its stale handshake, and starve C behind it. B must die instead,
+    and C must land.
+
+    One connect fake routed by server name, not one patch per phase: with
+    nested patches a surviving B would call whichever fake is innermost and
+    the staleness this pins would be invisible.
+    """
+    cfg = _live_file(tmp_path, monkeypatch, {"a": {"url": "https://a.test/mcp"}})
+    loop = _loop(workspace)
+    a_started, a_cleanup_release = asyncio.Event(), asyncio.Event()
+    b_started = asyncio.Event()
+
+    async def routed(name, cfg_, registry, stack, executor=None, http_auth=None):
+        if name == "a":
+            a_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                await a_cleanup_release.wait()
+                raise
+        if name == "b":
+            b_started.set()
+            await asyncio.Event().wait()
+        full = f"mcp_{name}_search"
+        registry.register(_FakeTool(full), origin=MCPToolRef(name=full, server=name, tool="search"))
+        return _connected([full])
+
+    with patch(_PATCH, new=routed):
+        loop.reconcile_mcp_from_live()
+        await a_started.wait()
+
+        cfg.write_text(json.dumps({"tools": {"mcpServers": {"b": {"url": "https://b.test/mcp"}}}}), encoding="utf-8")
+        loop.reconcile_mcp_from_live()
+        b_task = loop._mcp_reconcile_task
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert b_task is not None and not b_task.done(), "B is parked awaiting A's held cleanup"
+
+        cfg.write_text(json.dumps({"tools": {"mcpServers": {"c": {"url": "https://c.test/mcp"}}}}), encoding="utf-8")
+        loop.reconcile_mcp_from_live()
+        c_task = loop._mcp_reconcile_task
+        assert c_task is not b_task
+
+        a_cleanup_release.set()
+        for _ in range(20):
+            await asyncio.sleep(0)
+        assert not b_started.is_set(), "the superseded intermediate apply must never start its handshake"
+        await c_task
+
+    assert loop.tools.has("mcp_c_search"), "the newest admitted answer lands at its own boundary"
+    assert not loop.tools.has("mcp_a_search")

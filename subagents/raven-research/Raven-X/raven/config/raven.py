@@ -1495,30 +1495,9 @@ class DRFlowSearchConfig(_Base):
 
     include_answer_box: bool = False
     include_knowledge_graph: bool = False
-    include_snippets: bool = True
-    """The shaping strips the result-list snippet so the model cannot
+    include_snippets: bool = False
+    """Default false: the shaping strips the result-list snippet so the model cannot
     answer off the SERP without opening a page.
-    Promoted to on, 20260829 - the third step of the landing ritual this repo had
-    been skipping. Land a mechanism default-off so it is structurally unreachable,
-    measure it in a batch, and then raise the default once it is measured and kept.
-    Skip the third step and "the default flow" is a version we already decided
-    against: the shipped config writes only ``enabled`` and four ``finalShape``
-    booleans, everything else falls to class defaults, and the class defaults were
-    all off - so it ran eleven knobs weaker than every measured arm.
-
-    No existing arm's effective value moves. Every config that expressed "off" by
-    INHERITING it was made explicit first (two futurex arms, the nosnip ablation,
-    four retired configs), leaving only ``examples/`` and future configs to pick up
-    the new default, which is what they are for. That ordering is a rule, not a
-    courtesy: a default that moves silently inverts an ablation which said "off" by
-    staying quiet.
-
-    Its own measurement is weak: the dr@2.4 ablation arm read +2.50pp at p=0.69,
-    i.e. accuracy unproven. It is promoted not because it was shown to gain, but
-    because EVERY measured arm turns it on - so leaving the default off drops a new
-    config into a combination nobody has ever tested.
-
-    Original documentation follows:
 
     dr@2.4 keeps this default false but lets an arm restore it per-config
     (``search.includeSnippets=true``). The read-rate diagnosis found ranking is not the
@@ -1531,24 +1510,9 @@ class DRFlowSearchConfig(_Base):
     live-web DR arms keep it off. The flow-off anchor already renders snippets
     (WebSearchTool default), so restoring it on a treated arm narrows a self-inflicted
     gap and does not move the anchor."""
-    snippet_dedup_by_docid: bool = True
+    snippet_dedup_by_docid: bool = False
     """Render a snippet only the first time a result appears in a turn; later
     appearances get a short marker.
-    Promoted to on, 20260829 - the third step of the landing ritual this repo had
-    been skipping. Land a mechanism default-off so it is structurally unreachable,
-    measure it in a batch, and then raise the default once it is measured and kept.
-    Skip the third step and "the default flow" is a version we already decided
-    against: the shipped config writes only ``enabled`` and four ``finalShape``
-    booleans, everything else falls to class defaults, and the class defaults were
-    all off - so it ran eleven knobs weaker than every measured arm.
-
-    No existing arm's effective value moves. Every config that expressed "off" by
-    INHERITING it was made explicit first (two futurex arms, the nosnip ablation,
-    four retired configs), leaving only ``examples/`` and future configs to pick up
-    the new default, which is what they are for. That ordering is a rule, not a
-    courtesy: a default that moves silently inverts an ablation which said "off" by
-    staying quiet.
-
 
     Snippet cost is per result slot, not per search: the corpus renders one for every
     rank of every search, so a document surfaced by ten queries is paid for ten times.
@@ -1674,29 +1638,9 @@ class DRFlowDigestConfig(_Base):
     """Measured on a shared production endpoint: long-prompt digest calls
     routinely exceed 45s, so a tight timeout silently degrades every fetch
     to truncation. Degradation stays as the fuse, not the norm."""
-    verbatim_head_chars: int = 800
+    verbatim_head_chars: int = 0
     """When > 0, append this many verbatim chars of the page head to the
     digest output, so downstream review can back-substitute exact quotes
-    Promoted from 0 to 800, 20260829 - the third step of the landing ritual this repo had
-    been skipping. Land a mechanism default-off so it is structurally unreachable,
-    measure it in a batch, and then raise the default once it is measured and kept.
-    Skip the third step and "the default flow" is a version we already decided
-    against: the shipped config writes only ``enabled`` and four ``finalShape``
-    booleans, everything else falls to class defaults, and the class defaults were
-    all off - so it ran eleven knobs weaker than every measured arm.
-
-    No existing arm's effective value moves. Every config that expressed "off" by
-    INHERITING it was made explicit first (two futurex arms, the nosnip ablation,
-    four retired configs), leaving only ``examples/`` and future configs to pick up
-    the new default, which is what they are for. That ordering is a rule, not a
-    courtesy: a default that moves silently inverts an ablation which said "off" by
-    staying quiet.
-
-    0 was the most expensive default in this family: the digest replaces the whole
-    page with a cheap model's paraphrase, so ``verbatim_head_chars=0`` means not one
-    character of the source survives. The shipped config sat at 0.
-
-    Original documentation follows:
     without re-fetching and the model can second-guess a digest that
     reports "not found" on a relevant page. 0 disables."""
 
@@ -1772,45 +1716,12 @@ class DRFlowVerifyConfig(_Base):
     think block BEFORE the verdict JSON; at the provider default (4096) the
     generation can be cut mid-think and the verdict never appears — the gate
     then fail-opens on every draft. Sized so think + JSON always fit."""
-    constraint_rubric: bool = True
+    constraint_rubric: bool = False
     """Ask the reviewer to check the drafted answer against EACH constraint
     the task pins (dates, places, names, quantities, relationships), one by
     one. The signature failure of deep multi-hop tasks is an answer that
-    satisfies most constraints but not all.
-    Promoted to on, 20260829 - the third step of the landing ritual this repo had
-    been skipping. Land a mechanism default-off so it is structurally unreachable,
-    measure it in a batch, and then raise the default once it is measured and kept.
-    Skip the third step and "the default flow" is a version we already decided
-    against: the shipped config writes only ``enabled`` and four ``finalShape``
-    booleans, everything else falls to class defaults, and the class defaults were
-    all off - so it ran eleven knobs weaker than every measured arm.
-
-    No existing arm's effective value moves. Every config that expressed "off" by
-    INHERITING it was made explicit first (two futurex arms, the nosnip ablation,
-    four retired configs), leaving only ``examples/`` and future configs to pick up
-    the new default, which is what they are for. That ordering is a rule, not a
-    courtesy: a default that moves silently inverts an ablation which said "off" by
-    staying quiet.
-    """
-    strict_reject_only: bool = True
-    """Reject only for a draft that fails to answer, or whose decisive claim is
-    contradicted by or absent from the evidence - never for style, breadth,
-    uncited background detail, or claims the reviewer merely cannot verify.
-    Promoted to on, 20260829 - the third step of the landing ritual this repo had
-    been skipping. Land a mechanism default-off so it is structurally unreachable,
-    measure it in a batch, and then raise the default once it is measured and kept.
-    Skip the third step and "the default flow" is a version we already decided
-    against: the shipped config writes only ``enabled`` and four ``finalShape``
-    booleans, everything else falls to class defaults, and the class defaults were
-    all off - so it ran eleven knobs weaker than every measured arm.
-
-    No existing arm's effective value moves. Every config that expressed "off" by
-    INHERITING it was made explicit first (two futurex arms, the nosnip ablation,
-    four retired configs), leaving only ``examples/`` and future configs to pick up
-    the new default, which is what they are for. That ordering is a rule, not a
-    courtesy: a default that moves silently inverts an ablation which said "off" by
-    staying quiet.
-    """
+    satisfies most constraints but not all."""
+    strict_reject_only: bool = False
     fail_open_on_elided_evidence: bool = True
     """Degrade a rejection to a pass when the context carries elided tool results.
 
@@ -1864,23 +1775,7 @@ class DRFlowForceFinalizeConfig(_Base):
     if the retry still carries no answer, an independent-context call
     salvages the best evidence-supported candidate from working memory."""
 
-    enabled: bool = True
-    """The answerless backstop: commit nudge first, salvage synthesis second.
-    Promoted to on, 20260829 - the third step of the landing ritual this repo had
-    been skipping. Land a mechanism default-off so it is structurally unreachable,
-    measure it in a batch, and then raise the default once it is measured and kept.
-    Skip the third step and "the default flow" is a version we already decided
-    against: the shipped config writes only ``enabled`` and four ``finalShape``
-    booleans, everything else falls to class defaults, and the class defaults were
-    all off - so it ran eleven knobs weaker than every measured arm.
-
-    No existing arm's effective value moves. Every config that expressed "off" by
-    INHERITING it was made explicit first (two futurex arms, the nosnip ablation,
-    four retired configs), leaving only ``examples/`` and future configs to pick up
-    the new default, which is what they are for. That ordering is a rule, not a
-    courtesy: a default that moves silently inverts an ablation which said "off" by
-    staying quiet.
-    """
+    enabled: bool = False
     max_nudges: int = 1
     model: str | None = None
     """Salvage model. ``None`` uses the provider's default model."""
@@ -1937,23 +1832,7 @@ class DRFlowSpinBreakerConfig(_Base):
     keep legitimate re-anchoring alive: repeated restart language, late
     budget, and entity overlap with the previous restart."""
 
-    enabled: bool = True
-    """The spin-entry circuit breaker.
-    Promoted to on, 20260829 - the third step of the landing ritual this repo had
-    been skipping. Land a mechanism default-off so it is structurally unreachable,
-    measure it in a batch, and then raise the default once it is measured and kept.
-    Skip the third step and "the default flow" is a version we already decided
-    against: the shipped config writes only ``enabled`` and four ``finalShape``
-    booleans, everything else falls to class defaults, and the class defaults were
-    all off - so it ran eleven knobs weaker than every measured arm.
-
-    No existing arm's effective value moves. Every config that expressed "off" by
-    INHERITING it was made explicit first (two futurex arms, the nosnip ablation,
-    four retired configs), leaving only ``examples/`` and future configs to pick up
-    the new default, which is what they are for. That ordering is a rule, not a
-    courtesy: a default that moves silently inverts an ablation which said "off" by
-    staying quiet.
-    """
+    enabled: bool = False
     phrase_hits: int = 2
     """Restart-phrase iterations needed before intercepting; the first
     "different approach" of a turn is normal research, not a spin entry."""
@@ -1973,23 +1852,7 @@ class DRFlowFetchFloorConfig(_Base):
     Appends an in-history note — the only train-serve-safe channel —
     nudging the model to open sources."""
 
-    enabled: bool = True
-    """The search-without-fetch floor.
-    Promoted to on, 20260829 - the third step of the landing ritual this repo had
-    been skipping. Land a mechanism default-off so it is structurally unreachable,
-    measure it in a batch, and then raise the default once it is measured and kept.
-    Skip the third step and "the default flow" is a version we already decided
-    against: the shipped config writes only ``enabled`` and four ``finalShape``
-    booleans, everything else falls to class defaults, and the class defaults were
-    all off - so it ran eleven knobs weaker than every measured arm.
-
-    No existing arm's effective value moves. Every config that expressed "off" by
-    INHERITING it was made explicit first (two futurex arms, the nosnip ablation,
-    four retired configs), leaving only ``examples/`` and future configs to pick up
-    the new default, which is what they are for. That ordering is a rule, not a
-    courtesy: a default that moves silently inverts an ablation which said "off" by
-    staying quiet.
-    """
+    enabled: bool = False
     min_searches: int = 5
     max_notes: int = 2
 
@@ -2813,21 +2676,12 @@ class DRFlowConfig(_Base):
         "dr@3.4",
     )
 
-    # The second table is keyed on the WHOLE label. The base match below lets
-    # every suffix through on purpose - a suffix names a profile, not a
-    # semantics - which leaves one hole: a profile whose own distribution moves
-    # while the base rung stays. Its old label is then still loadable, and a
-    # launcher nobody re-synced keeps stamping it on a build that generates
-    # something else, which is the mislabelling AGENTS.md 0.2 exists to stop.
-    # Each entry maps the retired profile label to its successor so the refusal
-    # can say where to go. (The FOLDED tier that used to sit here was a
-    # different thing - base labels upstream had spent - and the launch
-    # convention retired it on 2026-08-25; see the ``version`` note.)
-    _SUPERSEDED_PROFILES: dict[str, str] = {
-        # 2026-09-02: the identity gained the derive-and-recommend reply rules
-        # and search snippets turned on. Same base rung, different distribution.
-        "dr@3.5-filetools-askuser": "dr@3.5-filetools-askuser-derive",
-    }
+    # There is no second table. Under the launch convention a label names the
+    # code a batch ran under, so dr@3.5/3.6/3.7 are ordinary future rungs and
+    # the "folded, therefore rejected" tier they used to occupy has no members
+    # left. Removed rather than emptied: a branch that can never fire is
+    # indistinguishable from one that is absent, and this repo has been bitten
+    # by a never-firing clause before.
 
     @model_validator(mode="after")
     def _version_matches_build(self) -> "DRFlowConfig":
@@ -3180,24 +3034,15 @@ class DRFlowConfig(_Base):
     nothing is refused for having been absorbed. What survives from that episode is
     the reason the whole scheme is safe to renumber: a reading's join key is
     ``dr_segment_sha`` (AGENTS.md 0.2), never the label.
-    Two denylists since 2026-09-02: the base table above, and
-    ``_SUPERSEDED_PROFILES``, matched on the whole label, for a profile whose
-    distribution moved under an unchanged base rung. Note what this validator
-    still does NOT do: both are denylists, so an invented label ("dr@9.9-foo")
-    passes. Closing that needs the current label's own successors enumerated,
-    which is a different guarantee from this one.
+    Note what this validator still does NOT do: it is a denylist, so an invented
+    label ("dr@9.9-foo") passes. Closing that needs the current label's own
+    successors enumerated, which is a different guarantee from this one.
     """
         # Match the base label, not the whole string. A suffixed variant such as
         # "dr@1.9-futurex" is not a member of the tuple, so exact membership let a
         # superseded label through and the batch was silently mislabelled - the one
         # outcome AGENTS.md 0.2 exists to prevent. Suffixes are legitimate (they name
         # a profile, not a semantics), so the base version is what has to be checked.
-        successor = self._SUPERSEDED_PROFILES.get(self.version)
-        if self.enabled and successor is not None:
-            raise ValueError(
-                f"drFlow.version={self.version!r} is a superseded profile label on this "
-                f"build; set drFlow.version to {successor!r}"
-            )
         base = self.version.split("-", 1)[0]
         if self.enabled and base in self._SUPERSEDED_VERSIONS:
             # Name the current label from the field default, never a literal. A literal

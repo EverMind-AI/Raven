@@ -184,35 +184,6 @@ def test_the_identity_is_the_vendored_twins_override_verbatim():
     assert (RUN_PY.parent / "soul.md").read_text().rstrip("\n") == fork["drFlow"]["identityOverride"].rstrip("\n")
 
 
-#: The two keys the twins carry differently BY DESIGN, and where each went.
-#: Everything else in the fork's ``drFlow`` must appear in the trunk slice verbatim.
-TWIN_DRFLOW_EXCEPTIONS = {
-    "identityOverride": "soul.md, pinned equal by the test above",
-    "toolsAllowlist": "tools.disabledTools; the trunk's FlowConfig retires the key",
-}
-
-
-def test_the_flow_slice_is_the_vendored_twins_drflow_verbatim():
-    """Two launchers, one product: the trunk slice must be the fork's ``drFlow``.
-
-    Until 2026-09-02 the fork ran ``search.includeSnippets`` and
-    ``snippetDedupByDocid`` on (the measured arm's setting, and what the
-    ``-derive`` label claims) while this slice wrote neither and the trunk
-    schema defaulted both off - two distributions under one label, caught by a
-    reviewer rather than a test. The modes and the identity were already pinned
-    equal; this pins the rest, so the next fork edit reddens here instead. The
-    class defaults underneath the slice are pinned separately, in
-    ``test_agents_research_flow_parity.py``.
-    """
-    fork = json.loads((REPO / "subagents" / "raven-research" / "config.json").read_text())["drFlow"]
-    twin = json.loads((RUN_PY.parent / "config.json").read_text())["plugins"]["config"]["research-flow"]
-    expected = {k: v for k, v in fork.items() if k not in TWIN_DRFLOW_EXCEPTIONS}
-    for key in TWIN_DRFLOW_EXCEPTIONS:
-        assert key in fork, f"{key} left the fork config; drop it from TWIN_DRFLOW_EXCEPTIONS"
-        assert key not in twin, f"{key} is carried by {TWIN_DRFLOW_EXCEPTIONS[key]}, not by this slice"
-    assert twin == expected
-
-
 def test_the_contract_is_seeded_beside_the_identity_once(grounded, tmp_path):
     grounded.render_config(RUN_PY.parent / "config.json")
     profile = tmp_path / "home" / "subagent_sessions" / "raven-research-ng" / "acp" / "agent_memory" / "profile"

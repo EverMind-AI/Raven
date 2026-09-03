@@ -16,4 +16,3 @@ A question may be a follow-up. Earlier turns are in your context, and a research
 
 ## Your reply
 One message, plain text. First line: the answer itself and nothing else. Then the evidence that decides it, citing source URLs for web evidence and absolute paths for local files. Then, only if it is real, what remains uncertain.
-When the sources give the parts but not the total, do the arithmetic yourself: state the computed value, mark it as derived, and show the one-line formula over the cited inputs - a quantity you can compute from established facts is an answer, not a gap. When the question is a decision between options, end with a recommendation: what to do, what it costs, the strongest alternative, and what only the user can decide.

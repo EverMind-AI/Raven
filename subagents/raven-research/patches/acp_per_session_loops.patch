@@ -1,83 +1,115 @@
-diff --git a/raven/acp/capabilities.py b/raven/acp/capabilities.py
-index e0bdf92..a785832 100644
---- a/raven/acp/capabilities.py
-+++ b/raven/acp/capabilities.py
-@@ -60,9 +60,12 @@ def agent_capabilities() -> dict[str, Any]:
-             "audio": False,
-             "embeddedContext": False,
-         },
--        # MCP is connected once per process from raven's own config; nothing
--        # scopes a server to one session. Declaring http/sse would invite
--        # exactly the request that has to be refused.
-+        # A session may bring stdio servers of its own -- they are connected
-+        # into a registry that session owns and are visible to its turns alone.
-+        # http and sse stay false because every server a dispatcher hands a
-+        # sub-agent arrives as one stdio stanza pointing at a host endpoint,
-+        # whatever the upstream transport is, and declaring a transport means
-+        # honouring a definition (and its credentials) inside this process.
-         "mcpCapabilities": {"http": False, "sse": False},
-         # No auth: nothing to log out of either.
-         "auth": {},
-@@ -71,7 +74,11 @@ def agent_capabilities() -> dict[str, Any]:
-         # accept ``_raven/clarify_respond`` -- honoured by AcpMethods once the
-         # CLIENT also declares it (both sides must opt in; this key is how the
-         # consuming raven knows offering its UI is worthwhile).
--        "_meta": {"raven": {"askUser": True}},
-+        # ``SESSION_MCP_CAPABILITY`` is a promise, not a feature flag: it says
-+        # the servers a session brings really are connected, and the tools behind
-+        # them are reachable from that session's turns and from no sibling
-+        # session on this connection.
-+        "_meta": {"raven": {"askUser": True}, protocol.SESSION_MCP_CAPABILITY: {}},
-     }
+diff --git a/ACP_INTEGRATION_PLAN.md b/ACP_INTEGRATION_PLAN.md
+index 2942c7b..38129de 100644
+--- a/ACP_INTEGRATION_PLAN.md
++++ b/ACP_INTEGRATION_PLAN.md
+@@ -169,12 +169,18 @@ Raven-X 的 ACP 消费者**不是编辑器（Zed 等），而是主 raven 的 su
+   （`raven/rpc/spine.py:553`），而本仓 `OriginPools` 根本没有 direct 池。
+   但**不能靠调大池来解决**：`WebSearchTool` / `WebFetchTool` 的 per-turn 状态是共享实例
+   属性（`raven/agent/tools/web.py`，全文件无 ContextVar），并发 turn 会互相清 saturation /
+-  evidence round / seen 集合与预算。所以池**固定 1**，见 §6 决策 B。
++  evidence round / seen 集合与预算。所以池**固定 1**，见 §6 决策 B
++  —— 以及其后的“决策 B 的后续”，那里改成了一个 session 一套 loop。
+   另需审一遍其余进程级共享状态（`tui_rpc/methods/turn.py` 模块级 `_active_turns`、
+   memory、token_wise、tracing）。
+ - **`cwd` / workspace 语义**（更正第一稿的自相矛盾）：
+   一进程一 engine（主仓 `server.py` 明写 "one engine per process"），
+   AgentLoop 的 workspace 在构造期固定，**不可能**按 session id 派生。
++  （“决策 B 的后续”改了后半句：一 session 一 engine 之后，engine 是在
++  `session/new` 时才构造的，所以**文件工具的根**确实按 session id 派生了
++  —— `<workspace>/acp_workspaces/<chat_id>`。但 `workspace` 本身仍然共享且
++  仍在构造期固定，因为 system prompt 的记忆段和 skill 目录都从它读；
++  两者的区别见 `CONTEXT.md` 的 Session File Root。）
+   run.py 之所以要 workspace-per-session-id，前提是"每次调用都是一个新进程"
+   且 `get_data_dir()` 从 config 文件父目录推导、没有单独的 session 目录旋钮
+   （run.py:216-223）—— in-process 时这条教训不适用：`SessionManager` 本来就按
+@@ -184,6 +190,17 @@ Raven-X 的 ACP 消费者**不是编辑器（Zed 等），而是主 raven 的 su
+   **Phase 0 要查的是：除 session JSONL 之外还有什么是 workspace 级的**
+   （报告产物、memory、tracing 落盘路径）—— 那些才是并发会话真会撞的东西，
+   查完再决定是否需要 per-session 子目录。
++  （盘点结果，评审补的一项：**Checkpoint 的 shadow repo**
++  `<workspace>/.raven/shadow.git` 也是 workspace 级的，而且是并发下最会撞的一个 ——
++  `interactive=True` 让每个 session engine 各建一个 `CheckpointService`，却都指向同一个
++  git-dir，并发 turn 收尾会同时 `git add -A` / `commit`：轻则一方报
++  `could not lock config file` 降级成 `(None, [])`，重则即使 git 串行化了，
++  每次快照 stage 的仍是整棵共享工作树，把别的 session 的改动算进本 turn 的
++  `edited_files`，进而写进下一 turn 的 recovery prompt。做法是让快照跟着
++  **写入根**走（`file_workspace`，即文件/exec/media 工具的根），而不是跟着共享
++  `workspace` 走 —— 其他入口 `file_workspace` 就是 `workspace`，行为不变。
++  memory backend 是进程内一份、按 session_id 分 key，写入闸门共享有界；
++  tracing 未在本期改动范围内。）
+ - **答案语义：ACP turn 跑非流式（`stream=False`），答案 = turn 最终提交的一条 `Text`**。
+   真 LLM e2e 实测：`stream=True` 下 token 流承载模型整个 turn 说出的一切——工具调用前的
+   叙述、DR verify/finalize 对答案的重述——报告在 message 流里出现了两次；而消费者把
+@@ -222,6 +239,7 @@ Raven-X 的 ACP 消费者**不是编辑器（Zed 等），而是主 raven 的 su
+   **但 Phase 1 期间不把 `kind: "acp"` 注册进主仓**（决策 A 末条）：本期的验收全部走本仓
+   stub client，主仓的第一次探测留到 Phase 2 之后，从而绕开 config-digest 型 snapshot 缓存。
+ - 装配 Scheduler 时 `user_pool` 固定 1（§6 决策 B），并在构造处写明原因。
++  （已被“决策 B 的后续”取代：现在是 `acp.userPool`，默认 2，非 per-session 注册表时启动即 fail loud。）
+ - `session/new`：铸 session id，映射 `Source(channel="acp", chat_id=<sessionId>)`。
+ - `session/prompt`：构造 `TurnRequest(Origin.USER)` 提交 Scheduler，per-session future 等 turn 终结。
+ - `session/cancel`。
+@@ -278,9 +296,12 @@ Raven-X 的 ACP 消费者**不是编辑器（Zed 等），而是主 raven 的 su
+   `can_resume=True` 且 `can_load=True`。这条测试是防 A 类回归的唯一闸门。
+ - **dialect 断言**：`dialect_for(<我们的 initialize 响应>)` 返回 spec 基类。
+ - **stdout 纯净度**：子进程拉起 `raven acp`，跑完一轮，断言 stdout 全部字节被 framing 消费完。
+-- **并发闸门**：断言 `user_pool` 只接受 1（>1 时启动 fail loud），并断言同一连接上两个
+-  session 并发 prompt 时第二个排队而非并行进入 `run_turn`（§6 决策 B 的回归闸门）。
+-  同时断言 `_active_turns` 等进程级状态不互相踩。
++- **并发闸门**（已按“决策 B 的后续”改口径）：断言 `user_pool > 1` 在**非** per-session
++  注册表上启动即 fail loud；断言两个**不同** session 并发 prompt 时确实并行（总墙钟约等于
++  最慢的一个，且各自跑在自己的 engine 上）；断言同一 session 上的第二个 prompt 仍被
++  `TurnAlreadyRunningError` 拒。同时断言进程级状态不互相踩 —— 现在具体是
++  `WebSearchTool` / `WebFetchTool` 的 per-turn 状态每 session 一份，
++  而 memory 写入闸门每进程一份。
+ - 冒烟：对照 `tests/integration/test_tui_rpc_production_smoke.py` 写 acp 版
+   （子进程拉起 `raven acp`，走 initialize → new → prompt → update 全链）。
+ - e2e：主仓 spawn Raven-X 跑完整"澄清 → 回答 → follow-up"一轮，验证 stateful 路径。
+@@ -295,6 +316,8 @@ Raven-X 的 ACP 消费者**不是编辑器（Zed 等），而是主 raven 的 su
+    清对方的 saturation / evidence round / seen 集合与预算。功能上不报错，只是分布被污染，
+    且 §0.2 意义上无从记录。闸门：不提供旋钮 + §4 并发测试断言 >1 时 fail loud。
+    代价（N 个 research task 串行）见 §6 决策 B 末段与 §7。
++   该串行化已由 per-session loop 解除，见“决策 B 的后续”；这条风险现在指的是
++   在**非** per-session 注册表上调大池子，闸门是启动时 fail loud。
+ 3. **stdout 污染**：一行日志就打碎 framing。Phase 0 完成前不接任何真实 turn。
+ 4. **`ok` 缺失导致转录说谎（双向）**：status 由 `_looks_failed` 启发式（结果预览以
+    `Error` / `{"error"` 开头）推断，两个方向都会错——不符合注册表约定的失败被标
+@@ -411,12 +434,29 @@ handle 绑定行为。为一个 agent 动所有 agent 的共用判据，收益
+   现在看这不是疏忽，是同一个约束。
  
- 
-diff --git a/raven/acp/protocol.py b/raven/acp/protocol.py
-index 22745db..3de752b 100644
---- a/raven/acp/protocol.py
-+++ b/raven/acp/protocol.py
-@@ -18,6 +18,16 @@ from __future__ import annotations
- import json
- from typing import Any
- 
-+SESSION_MCP_CAPABILITY = "raven.mcp.session"
-+"""Declared under ``agentCapabilities._meta`` when a session may bring its own MCP servers.
+ **代价明写**：pool=1 意味着 N 个并发 research task 串行，相对今天 N 个 run.py 子进程
+-真并行是回退。见 §7 待确认。
++真并行是回退。
 +
-+The spec has nowhere to say this: stdio servers are the ACP baseline, so
-+accepting them cannot be advertised, and ``mcpCapabilities`` says nothing about
-+isolation. A build that answers ``mcpServers`` with ``-32602`` is otherwise
-+indistinguishable from one that honours it, so a client reading no declaration
-+has to assume the refusal.
-+"""
++#### 决策 B 的后续（已落地，见 `raven/acp/loops.py`）
 +
- PROTOCOL_VERSION = 1
- """The ACP major version this agent implements.
++上面的论证仍然成立，但两点按实际改了：
++
++1. **§7 的待确认已有答案：会并发。** 所以决策 B 末段那一期已经做了 ——
++   `AcpLoops` 按 conversation id 一个 session 一套 `AgentLoop`（一套 tools + flow 对象），
++   provider / `SessionManager` / memory backend / token_wise 仍进程内一份。
++2. **"前置是搬 ContextVar"这句是错的。** per-session loop 之后每个 session 持**自己的**
++   tool 实例，跨 session 并发不共享任何对象；同 session 内并发被两道闸挡着
++   （`AcpSessions.begin_turn` 抛 `TurnAlreadyRunningError`，宿主侧 `session_lock` 更在前面）。
++   ContextVar 化只在"同一 session 内并发多 turn"时才需要，而协议层本来就禁止 ——
++   因此它可以独立排期，甚至永远不做。
++
++"数字旋钮"那条按原文的逃生阀形状实现：`acp.userPool`（默认 2）+ `acp.maxLoops`，
++且 `build_acp` 在 `user_pool > 1` 而注册表不是 per-session 时**启动即 fail loud**。
++`AcpLoops.single()` 就是那个非 per-session 形状。
  
-@@ -159,6 +169,7 @@ __all__ = [
-     "PROTOCOL_VERSION",
-     "REQUEST_CANCELLED",
-     "RESOURCE_NOT_FOUND",
-+    "SESSION_MCP_CAPABILITY",
-     "STOP_REASONS",
-     "AcpProtocolError",
-     "decode",
-diff --git a/raven/acp/replay.py b/raven/acp/replay.py
-index 697a985..ffd63f7 100644
---- a/raven/acp/replay.py
-+++ b/raven/acp/replay.py
-@@ -127,6 +127,11 @@ def _tool_call(call: Any, *, cwd: str | None) -> dict[str, Any] | None:
-         "kind": tool_kind(name),
-         "status": "pending",
-     }
-+    # The tool's own name, on the same terms the live path sends it: ``kind``
-+    # is ten values wide and the title is whatever the runtime chose to show a
-+    # person, so neither is a name a client can read back.
-+    if isinstance(name, str) and name:
-+        update["_meta"] = {"raven.toolName": name}
-     found = locations(arguments, cwd)
-     if found:
-         update["locations"] = found
+ ## 7. 待确认（不阻塞开工）
+ 
+-- **DR 场景会不会并发 spawn / DAG 并行发 research 任务？** 若会，决策 B 的串行化是硬吞吐
+-  上限，需要在 Phase 3 接入前决定是接受，还是先做 per-session AgentLoop 那一期。
+-  若 research 委派实际上是会话内串行的，则此回退无实际影响。
++- ~~**DR 场景会不会并发 spawn / DAG 并行发 research 任务？**~~ **会。** 已按决策 B 末段
++  做成 per-session AgentLoop，见上面"决策 B 的后续"。
+ - `idSource: provisioned` 在 acp kind 下是否仍被读取（不在 `_ACP_FIELDS` 内）—— Phase 3 确认。
+-- workspace 级资源盘点结果（§3 workspace 一条）—— Phase 0 产出。
++- ~~workspace 级资源盘点结果（§3 workspace 一条）~~ 见 §3 该条末段的盘点结果：
++  文件工具根与 Checkpoint 的 shadow repo 都已按 session 分开；tracing 落盘路径未改。
 diff --git a/raven/acp/spine.py b/raven/acp/spine.py
-index c076511..1579aa7 100644
+index c076511..9085586 100644
 --- a/raven/acp/spine.py
 +++ b/raven/acp/spine.py
 @@ -34,9 +34,9 @@ from dataclasses import dataclass
@@ -211,21 +243,16 @@ index c076511..1579aa7 100644
          # status "in_progress", not "pending": by the time this event exists the
          # call is running, and a pending row that never changes reads as a hang.
          # rawInput is deliberately absent -- for exec it is the whole command
-@@ -282,7 +305,12 @@ class AcpOutlet:
+@@ -282,7 +305,7 @@ class AcpOutlet:
              "kind": tool_kind(ev.name or None),
              "status": "in_progress",
          }
 -        found = locations(ev.arguments, self._cwd)
-+        # The name itself, which neither of the two fields above carries:
-+        # ``kind`` is ten values wide and a tool this build never filed lands on
-+        # ``other``, while the title is written for a person to read.
-+        if ev.name:
-+            update["_meta"] = {"raven.toolName": ev.name}
 +        found = locations(ev.arguments, self._cwd_for(session_id) if self._cwd_for else None)
          if found:
              update["locations"] = found
          return update
-@@ -337,6 +365,7 @@ def _make_acp_sink(
+@@ -337,6 +360,7 @@ def _make_acp_sink(
      sessions: AcpSessions,
      usages: dict[str, dict[str, Any]],
      channel: str,
@@ -233,7 +260,7 @@ index c076511..1579aa7 100644
  ) -> Callable[[TurnEvent], Awaitable[None]]:
      """The scheduler's EventSink: deliverables route through the hub, and a
      turn's ending settles its session's prompt after the render barrier, so
-@@ -346,6 +375,13 @@ def _make_acp_sink(
+@@ -346,6 +370,13 @@ def _make_acp_sink(
          await hub.close_stream(conversation_id)
          await hub.wait_idle(channel)
  
@@ -247,7 +274,7 @@ index c076511..1579aa7 100644
      async def sink(event: TurnEvent) -> None:
          if isinstance(event, TurnEnded):
              cid = event.conversation_id or ""
-@@ -358,7 +394,7 @@ def _make_acp_sink(
+@@ -358,7 +389,7 @@ def _make_acp_sink(
              update = _usage_update(usage)
              if update is not None:
                  outlet.update(cid, update)
@@ -256,7 +283,7 @@ index c076511..1579aa7 100644
              return
          if isinstance(event, TurnFailed):
              cid = event.conversation_id or ""
-@@ -367,7 +403,7 @@ def _make_acp_sink(
+@@ -367,7 +398,7 @@ def _make_acp_sink(
              if sessions.get(cid) is None:
                  return
              if event.cancelled:
@@ -265,7 +292,7 @@ index c076511..1579aa7 100644
                  return
              # The failure is content, never a JSON-RPC error: an error in reply
              # to a turn-shaped request makes clients tear down the whole turn.
-@@ -377,7 +413,7 @@ def _make_acp_sink(
+@@ -377,7 +408,7 @@ def _make_acp_sink(
              # answered it, this text would land on a turn that is over.
              if sessions.pending(cid):
                  outlet.say(cid, redact(f"The turn failed: {event.error or 'internal error'}"))
@@ -274,7 +301,7 @@ index c076511..1579aa7 100644
              return
          if isinstance(event, TurnStarted):
              # The session/prompt request is itself the record that a turn began.
-@@ -388,39 +424,55 @@ def _make_acp_sink(
+@@ -388,39 +419,55 @@ def _make_acp_sink(
  
  
  def build_acp(
@@ -339,157 +366,8 @@ index c076511..1579aa7 100644
      "AcpOutlet",
      "AcpSession",
      "AcpSessions",
-diff --git a/raven/agent/tools/registry.py b/raven/agent/tools/registry.py
-index 9de848d..96a8f62 100644
---- a/raven/agent/tools/registry.py
-+++ b/raven/agent/tools/registry.py
-@@ -1,6 +1,9 @@
- """Tool registry for dynamic tool management."""
- 
- import asyncio
-+from collections.abc import Iterator, Mapping
-+from contextlib import contextmanager
-+from contextvars import ContextVar
- from typing import Any
- 
- from raven.agent.tools.base import Tool
-@@ -35,6 +38,74 @@ class ToolRegistry:
- 
-     def __init__(self):
-         self._tools: dict[str, Tool] = {}
-+        # The tools a session brought with it, keyed by session, and the
-+        # turn-local view of one session's set. Split because the two facts have
-+        # different lifetimes: the binding lasts as long as the session, the
-+        # visibility only as long as the turn running under it.
-+        self._session_tools: dict[str, dict[str, Tool]] = {}
-+        # Turn-local, not a field: one registry serves turns from two sessions
-+        # concurrently, and a field would let whichever turn entered last decide
-+        # what the other one can see.
-+        self._overlay: ContextVar[dict[str, Tool] | None] = ContextVar("tool_registry_overlay", default=None)
-+
-+    def bind_session_tools(self, session_key: str, tools: Mapping[str, Tool]) -> None:
-+        """Record the tools one session brought, without registering them.
-+
-+        Registering would publish them process-wide, and one registry serves
-+        every session on a connection. Held aside instead, and made visible only
-+        inside :meth:`session_scope_for`. Replaces any earlier set for the same
-+        session.
-+        """
-+        self._session_tools[session_key] = dict(tools)
-+
-+    def release_session_tools(self, session_key: str) -> None:
-+        """Forget one session's tools. Idempotent -- most sessions bring none."""
-+        self._session_tools.pop(session_key, None)
-+
-+    @contextmanager
-+    def session_scope(self, tools: Mapping[str, Tool] | None) -> Iterator[None]:
-+        """Make ``tools`` visible for the current task, and only there.
-+
-+        Entered where the turn runs, not where it was requested: the turn is
-+        submitted onto the spine and runs on its own task, which inherits no
-+        context from the request handler.
-+
-+        Passing nothing is not a no-op -- it clears the overlay for this task. A
-+        turn whose session brought no servers must not see another session's.
-+        """
-+        token = self._overlay.set(dict(tools) if tools else None)
-+        try:
-+            yield
-+        finally:
-+            self._overlay.reset(token)
-+
-+    @contextmanager
-+    def session_scope_for(self, session_key: str) -> Iterator[None]:
-+        """:meth:`session_scope` over whatever this session bound, if anything."""
-+        with self.session_scope(self._session_tools.get(session_key)):
-+            yield
-+
-+    def session_tools_in_scope(self) -> dict[str, Tool]:
-+        """The session tools this turn can see; empty outside any scope."""
-+        return dict(self._overlay.get() or {})
-+
-+    def _visible(self, name: str) -> Tool | None:
-+        """One name resolved the way this turn sees it: its session's tools, then the process's.
-+
-+        The single lookup behind ``get`` / ``has`` / ``execute``, so a session
-+        tool cannot be advertised through one and missing from another.
-+        """
-+        overlay = self._overlay.get()
-+        if overlay is not None and name in overlay:
-+            return overlay[name]
-+        return self._tools.get(name)
-+
-+    def _visible_tools(self) -> dict[str, Tool]:
-+        """Every tool this turn can reach, session tools last so a clash resolves to them."""
-+        overlay = self._overlay.get()
-+        if not overlay:
-+            return self._tools
-+        return {**self._tools, **overlay}
- 
-     def register(self, tool: Tool) -> None:
-         """Register a tool."""
-@@ -46,28 +117,33 @@ class ToolRegistry:
- 
-     def get(self, name: str) -> Tool | None:
-         """Get a tool by name."""
--        return self._tools.get(name)
-+        return self._visible(name)
- 
-     def has(self, name: str) -> bool:
-         """Check if a tool is registered."""
--        return name in self._tools
-+        return self._visible(name) is not None
- 
-     def names(self) -> list[str]:
--        """Registered tool names, registration-ordered."""
-+        """Registered tool names, registration-ordered.
-+
-+        The registration view, not the turn's -- what an MCP connect diffs to
-+        learn what it added. What this turn can reach is ``get_definitions``.
-+        """
-         return list(self._tools)
- 
-     def get_definitions(self) -> list[dict[str, Any]]:
-         """Get all tool definitions in OpenAI format."""
--        return [tool.to_schema() for tool in self._tools.values()]
-+        return [tool.to_schema() for tool in self._visible_tools().values()]
- 
-     @trace.instrument("tool.call", extract=semconv.tool_call)
-     async def execute(self, name: str, params: dict[str, Any]) -> str:
-         """Execute a tool by name with given parameters."""
-         _hint = _TOOL_ERROR_HINT
- 
--        tool = self._tools.get(name)
-+        visible = self._visible_tools()
-+        tool = visible.get(name)
-         if not tool:
--            return f"Error: Tool '{name}' not found. Available: {', '.join(self.tool_names)}"
-+            return f"Error: Tool '{name}' not found. Available: {', '.join(visible)}"
- 
-         try:
-             # Attempt to cast parameters to match schema types
-@@ -95,11 +171,17 @@ class ToolRegistry:
- 
-     @property
-     def tool_names(self) -> list[str]:
--        """Get list of registered tool names."""
-+        """Get list of registered tool names.
-+
-+        The registration view, like :meth:`names`: the BM25 tool-search index is
-+        built once off this and shared by every concurrent turn, so a session's
-+        own tools have to be read on the search side (see
-+        ``session_tools_in_scope``) rather than indexed here.
-+        """
-         return list(self._tools.keys())
- 
-     def __len__(self) -> int:
-         return len(self._tools)
- 
-     def __contains__(self, name: str) -> bool:
--        return name in self._tools
-+        return self._visible(name) is not None
 diff --git a/raven/config/raven.py b/raven/config/raven.py
-index 2e4b955..24bb836 100644
+index abdb298..08864d1 100644
 --- a/raven/config/raven.py
 +++ b/raven/config/raven.py
 @@ -1235,9 +1235,9 @@ SkillForgeConfig.model_rebuild()
@@ -519,197 +397,8 @@ index 2e4b955..24bb836 100644
  
  
  class RuntimeConfig(_Base):
-@@ -1709,6 +1713,32 @@ class DRFlowVerifyConfig(_Base):
-     a dead pooled connection after the long draft stream (the call never
-     errors, it just stalls); a fresh attempt completes in seconds, so the
-     budget is spent as short attempts rather than one long wait."""
-+    attempt_http_timeout_seconds: float | None = None
-+    """Transport-level deadline for each reviewer call, forwarded to the
-+    provider as a per-call HTTP timeout. Set it a few seconds inside
-+    ``attempt_timeout_seconds`` so the transport fires before the wait_for
-+    cancellation: a cancelled coroutine names nothing, while the transport's
-+    own exception class says where the call hung (connect vs read) - the one
-+    datum a stalled attempt can still yield. ``None`` (default) sends no
-+    per-call deadline, byte-identical to every measured arm. A knob rather
-+    than unconditional because it is not purely observational: a stall
-+    surfaced early enough for the retry ladder to answer inside the same
-+    slice can produce a verdict a cancelled attempt never could (0.2)."""
-+    reasoning_effort: str | None = None
-+    """Reasoning effort for the reviewer call.
-+
-+    The task is "check the draft's claims against the evidence", not "solve the
-+    task again" - the same rationale as ``force_finalize.reasoning_effort`` and
-+    ``sufficiency.reasoning_effort``, which both default to "low". This one
-+    defaults to ``None`` because the reviewer has history at the inherited
-+    effort: with the knob unset the call carries no reasoning_effort parameter
-+    and ``chat_with_retry`` resolves it to the provider's generation default,
-+    which is what every measured arm ran. ``None`` therefore means "inherit",
-+    not "suppress" - the wiring passes the parameter only when this is set,
-+    because an explicit ``None`` at the call site would suppress it instead
-+    (a different request shape on every backend that distinguishes the two).
-+    Product profiles set "low"; an arm that measures verify latency pins it
-+    explicitly."""
-     max_revisions: int = 1
-     review_final_draft: bool = False
-     """dr@3.0: review the draft that actually ships, even once the revision budget
-@@ -1991,6 +2021,84 @@ class DRFlowFetchGateConfig(_Base):
-     zero-score bucket only the treated arm can fall into."""
- 
- 
-+class DRFlowSufficiencyConfig(_Base):
-+    """First-round sufficiency gate: once the turn has searched and opened a page,
-+    ask an independent context whether the evidence already answers the task, and
-+    when it does, say so in history so the turn stops researching and writes.
-+
-+    Why this one is judged on retrieved evidence rather than on the question. Three
-+    earlier candidates for "answer the easy ones quickly" were rejected for sharing a
-+    defect: their gate was the model's prior confidence about whether it needed to look
-+    something up - a query-text triage in front of the loop, a prompt clause exempting
-+    "widely-known facts", and a plain-first arm holding an escalate tool. None of those
-+    judgments can be checked against anything. This gate fires only after the contract's
-+    grounding floor has already been paid (one search, one page opened), so its question
-+    is "do these pages answer it", which the evidence in front of it either supports or
-+    does not.
-+
-+    Fail-open direction is toward more research. Timeout, transport error, an unparsed
-+    verdict, or a verdict of insufficient all leave the turn exactly as it was; only an
-+    explicit sufficient verdict writes anything. A gate that fails toward stopping would
-+    trade the one thing the flow exists to produce.
-+
-+    What catches a wrong "sufficient". The note is an instruction in history, not a
-+    tool removal - the model may keep researching, and the draft it does write still
-+    goes through ``verify``, whose rejection can buy a bounded retrieval round when
-+    ``verify.evidence_round`` is on. So the failure path is early draft -> reviewer
-+    reject -> revision, not an unreviewed shallow answer.
-+
-+    Off by default, and gated on the flow, so the anchor cannot reach it. On, it changes
-+    which turns re-sample and therefore the generated distribution: it carries no label
-+    of its own (under the launch convention labels advance when a batch finishes), so an
-+    A/B arm that switches it on pins the current default version plus a ``-suff`` suffix
-+    in its own config, the way ``dr@3.4-askuser`` did.
-+
-+    Unmeasured, and the direction of its risk is known from a smaller dose of the same
-+    push: the four-line measured-guidance block's "correct runs are short" was read as
-+    "commit early", and two same-config replicates differed by 5 items fixed and 9
-+    broken, 5 of the 9 previously correct. This gate is a stronger version of that
-+    pressure, applied once, at a point where evidence exists to justify it. It needs its
-+    own arm pair before it goes on anywhere a number is published.
-+    """
-+
-+    enabled: bool = False
-+    model: str | None = None
-+    """Judge model. ``None`` uses the provider's default model. A small fast model is
-+    the point of the knob: this call sits inside every turn that opens a page, and on a
-+    question the judge calls insufficient it is pure added latency."""
-+    min_searches: int = 1
-+    min_fetches: int = 1
-+    """The trigger, spelled as two counts rather than "after the first round" so the
-+    shape stays readable when a turn opens a page the user pasted without searching
-+    first (set ``min_searches: 0`` for that surface). Fetches are counted only when the
-+    result parsed as a successful open - a failed fetch gathered no evidence, and
-+    counting it would fire the judge over a search listing."""
-+    timeout_seconds: float = 60.0
-+    attempt_timeout_seconds: float = 30.0
-+    """Per-attempt slice of ``timeout_seconds``, same shape as ``verify``: a call
-+    stalled on a dead pooled connection never errors and never returns, while a fresh
-+    attempt completes in seconds. The judge's transport deadline is DERIVED from this
-+    (5s inside the slice) rather than knobbed like ``verify.attemptHttpTimeoutSeconds``:
-+    this whole gate is anchor-unreachable and unmeasured, so there is no byte-equivalence
-+    to guard with a default-off switch."""
-+    max_tokens: int = 2048
-+    """Completion budget for a verdict that is one boolean and one short reason.
-+
-+    Sized against the conversation gate's history rather than against the payload: at
-+    256 and again at 512 a reasoning model spent the whole budget on
-+    ``reasoning_content`` and returned empty ``content``, so the verdict read as
-+    unparsed. The cure is ``reasoning_effort`` below; this is headroom, not the fix."""
-+    reasoning_effort: str | None = "low"
-+    """The task is "does this evidence answer the question", not "answer it".
-+    ``None`` leaves the provider default, for backends that reject the parameter."""
-+    evidence_items: int = 4
-+    evidence_item_chars: int = 2000
-+    """How much of the turn's evidence the judge reads. Harness-authored bodies
-+    (elision placeholders, the search-closed and fetch-gate notices) are skipped rather
-+    than packed, because a judge shown a placeholder is being asked whether the harness's
-+    own sentence answers the question."""
-+
-+
- class DRFlowFinalShapeConfig(_Base):
-     """Terminal-answer shaping: make the turn's ending an observable.
- 
-@@ -2675,6 +2783,14 @@ class DRFlowConfig(_Base):
-     """dr@3.3. Off by default, and unlike the reactive clamp this one DOES carry a
-     version bump: an arm that switches it on changes both what the model reads and
-     which tools it can call, so the label has to be able to tell that arm apart."""
-+    sufficiency: DRFlowSufficiencyConfig = Field(
-+        default_factory=DRFlowSufficiencyConfig
-+    )
-+    """First-round sufficiency gate, off by default. No version bump, on the
-+    reactive clamp's reasoning: structurally unreachable on every arm until its
-+    own knob is switched on, and its action is an appended note the model may
-+    disregard - it removes no tools, which is the line that separates it from
-+    ``fetch_gate`` above."""
-     final_shape: DRFlowFinalShapeConfig = Field(default_factory=DRFlowFinalShapeConfig)
-     conversation: DRFlowConversationConfig = Field(default_factory=DRFlowConversationConfig)
-     """dr@3.0 product surface: multi-turn. Off by default and turn-two-onwards
-@@ -2697,12 +2813,21 @@ class DRFlowConfig(_Base):
-         "dr@3.4",
-     )
- 
--    # There is no second table. Under the launch convention a label names the
--    # code a batch ran under, so dr@3.5/3.6/3.7 are ordinary future rungs and
--    # the "folded, therefore rejected" tier they used to occupy has no members
--    # left. Removed rather than emptied: a branch that can never fire is
--    # indistinguishable from one that is absent, and this repo has been bitten
--    # by a never-firing clause before.
-+    # The second table is keyed on the WHOLE label. The base match below lets
-+    # every suffix through on purpose - a suffix names a profile, not a
-+    # semantics - which leaves one hole: a profile whose own distribution moves
-+    # while the base rung stays. Its old label is then still loadable, and a
-+    # launcher nobody re-synced keeps stamping it on a build that generates
-+    # something else, which is the mislabelling AGENTS.md 0.2 exists to stop.
-+    # Each entry maps the retired profile label to its successor so the refusal
-+    # can say where to go. (The FOLDED tier that used to sit here was a
-+    # different thing - base labels upstream had spent - and the launch
-+    # convention retired it on 2026-08-25; see the ``version`` note.)
-+    _SUPERSEDED_PROFILES: dict[str, str] = {
-+        # 2026-09-02: the identity gained the derive-and-recommend reply rules
-+        # and search snippets turned on. Same base rung, different distribution.
-+        "dr@3.5-filetools-askuser": "dr@3.5-filetools-askuser-derive",
-+    }
- 
-     @model_validator(mode="after")
-     def _version_matches_build(self) -> "DRFlowConfig":
-@@ -3055,15 +3180,24 @@ class DRFlowConfig(_Base):
-     nothing is refused for having been absorbed. What survives from that episode is
-     the reason the whole scheme is safe to renumber: a reading's join key is
-     ``dr_segment_sha`` (AGENTS.md 0.2), never the label.
--    Note what this validator still does NOT do: it is a denylist, so an invented
--    label ("dr@9.9-foo") passes. Closing that needs the current label's own
--    successors enumerated, which is a different guarantee from this one.
-+    Two denylists since 2026-09-02: the base table above, and
-+    ``_SUPERSEDED_PROFILES``, matched on the whole label, for a profile whose
-+    distribution moved under an unchanged base rung. Note what this validator
-+    still does NOT do: both are denylists, so an invented label ("dr@9.9-foo")
-+    passes. Closing that needs the current label's own successors enumerated,
-+    which is a different guarantee from this one.
-     """
-         # Match the base label, not the whole string. A suffixed variant such as
-         # "dr@1.9-futurex" is not a member of the tuple, so exact membership let a
-         # superseded label through and the batch was silently mislabelled - the one
-         # outcome AGENTS.md 0.2 exists to prevent. Suffixes are legitimate (they name
-         # a profile, not a semantics), so the base version is what has to be checked.
-+        successor = self._SUPERSEDED_PROFILES.get(self.version)
-+        if self.enabled and successor is not None:
-+            raise ValueError(
-+                f"drFlow.version={self.version!r} is a superseded profile label on this "
-+                f"build; set drFlow.version to {successor!r}"
-+            )
-         base = self.version.split("-", 1)[0]
-         if self.enabled and base in self._SUPERSEDED_VERSIONS:
-             # Name the current label from the field default, never a literal. A literal
 diff --git a/tests/test_acp_methods.py b/tests/test_acp_methods.py
-index 191e902..a060b34 100644
+index 191e902..b117aba 100644
 --- a/tests/test_acp_methods.py
 +++ b/tests/test_acp_methods.py
 @@ -28,11 +28,20 @@ class _StubHandle:
@@ -750,82 +439,7 @@ index 191e902..a060b34 100644
      def _submit(self, req):
          self.submitted.append(req)
          if self._on_submit is not None:
-@@ -133,11 +149,21 @@ async def test_session_new_mints_channel_prefixed_id_and_ignores_cwd():
-     assert h.sessions.get(sid) is not None
- 
- 
--async def test_session_new_refuses_per_session_mcp():
-+async def test_session_new_drops_per_session_mcp_with_no_registry_to_scope_it():
-+    """The field is honoured now (see ``test_acp_per_session_mcp.py``), but only
-+    where the session's engine has a registry to scope it in. This harness builds
-+    none, so the field can do nothing -- and doing nothing must not fail the
-+    dispatch, which is the whole session.
-+
-+    The stanza is well formed on purpose: this is about an engine that cannot
-+    scope it, not about a shape nobody can parse.
-+    """
-     h = _Harness()
-     await h.start()
--    response = await h.call("session/new", {"cwd": "/tmp", "mcpServers": [{"name": "x"}]})
--    assert response["error"]["code"] == protocol.INVALID_PARAMS
-+    stanza = {"name": "x", "command": "/usr/bin/raven", "args": ["mcp", "bridge", "/tmp/s.sock"], "env": []}
-+    response = await h.call("session/new", {"cwd": "/tmp", "mcpServers": [stanza]})
-+    assert "error" not in response, response
-+    assert h.sessions.sessions() != (), "the session is the dispatch and must survive"
- 
- 
- async def test_unknown_session_is_resource_not_found():
-@@ -436,14 +462,16 @@ async def test_load_without_an_engine_is_resource_not_found():
-     assert response["error"]["code"] == protocol.RESOURCE_NOT_FOUND
- 
- 
--async def test_load_refuses_per_session_mcp_and_requires_an_id(tmp_path):
-+async def test_load_drops_unscopable_per_session_mcp_but_still_requires_an_id(tmp_path):
-+    """Two different failures, and only one of them is the request being
-+    unanswerable. A stanza this build cannot serve is an attachment it drops; a
-+    missing ``sessionId`` is the call itself having nothing to act on."""
-     from raven.session.manager import SessionManager
- 
-     h = _Harness(session_manager=SessionManager(tmp_path))
-     await h.start()
--    assert (await h.call("session/load", {"sessionId": "acp:x", "mcpServers": [{"name": "s"}]}))["error"][
--        "code"
--    ] == protocol.INVALID_PARAMS
-+    dropped = await h.call("session/load", {"sessionId": "acp:x", "mcpServers": [{"name": "s"}]})
-+    assert dropped.get("error", {}).get("data", {}).get("field") != "mcpServers", dropped
-     assert (await h.call("session/load", {}))["error"]["code"] == protocol.INVALID_PARAMS
- 
- 
-@@ -456,10 +484,13 @@ async def test_initialize_arms_ask_user_from_the_client_declaration():
-     directions on a re-initialize."""
-     armed: list[bool] = []
-     h = _Harness(arm_ask_user=armed.append)
--    await h.call("initialize", {
--        "protocolVersion": 1,
--        "clientCapabilities": {"_meta": {"raven": {"askUser": True}}},
--    })
-+    await h.call(
-+        "initialize",
-+        {
-+            "protocolVersion": 1,
-+            "clientCapabilities": {"_meta": {"raven": {"askUser": True}}},
-+        },
-+    )
-     await h.call("initialize", {"protocolVersion": 1, "clientCapabilities": {}})
-     assert armed == [True, False]
- 
-@@ -498,9 +529,7 @@ async def test_clarify_respond_resolves_a_pending_question():
-     h = _Harness(question_broker=broker)
-     await h.start()
- 
--    question = asyncio.ensure_future(
--        broker.await_question("acp:chat1", prompt="which year?", choices=["2023", "2024"])
--    )
-+    question = asyncio.ensure_future(broker.await_question("acp:chat1", prompt="which year?", choices=["2023", "2024"]))
-     await asyncio.sleep(0)
-     request_id = frames[0]["params"]["update"]["requestId"]
-     response = await h.call(CLARIFY_RESPOND_METHOD, {"requestId": request_id, "answer": "2024"})
-@@ -533,3 +562,38 @@ async def test_clarify_respond_is_gated_on_initialize():
+@@ -533,3 +549,38 @@ async def test_clarify_respond_is_gated_on_initialize():
      h = _Harness()
      response = await h.call(CLARIFY_RESPOND_METHOD, {"requestId": "r", "answer": "x"})
      assert response["error"]["code"] == protocol.INVALID_REQUEST
@@ -864,704 +478,6 @@ index 191e902..a060b34 100644
 +
 +    assert response["error"]["code"] == protocol.INTERNAL_ERROR
 +    assert h.sessions.sessions() == ()
-diff --git a/tests/test_acp_per_session_mcp.py b/tests/test_acp_per_session_mcp.py
-new file mode 100644
-index 0000000..7e28819
---- /dev/null
-+++ b/tests/test_acp_per_session_mcp.py
-@@ -0,0 +1,692 @@
-+"""The MCP servers a session brings to this fork over ACP (raven/acp/methods.py).
-+
-+This agent used to refuse ``mcpServers`` outright, and the refusal's stated
-+reason was half right: MCP is connected once per process, and nothing scoped a
-+server to one session. The second half is what these pin down.
-+
-+What arrives is not a server definition in any interesting sense -- it is a stdio
-+stanza pointing at an endpoint the dispatcher already opened, holding no
-+credentials. So the tests here are about the two things this agent still owns:
-+connecting what it was handed, and making it reachable from that session's turns
-+and nowhere else. Plus the reclaim, because a connection nothing closes is a
-+subprocess nothing kills.
-+
-+The reclaim is the one place this surface differs from its siblings. It has no
-+``session/close`` and no ``session/delete`` -- a session lives as long as the
-+connection does -- so there are exactly two release points, a re-adopt and
-+``AcpMethods.aclose`` on the way out, and ``raven/acp/server.py`` is what calls
-+the second. Both are asserted below.
-+
-+The isolation half is asserted twice: once through the registry (see
-+``test_tool_registry_session_overlay.py``, which holds two scopes open at the
-+same time) and once here, through the ACP surface that binds them.
-+"""
-+
-+from __future__ import annotations
-+
-+from typing import Any
-+from unittest.mock import patch
-+
-+import pytest
-+
-+from raven.acp import protocol
-+from raven.acp.capabilities import agent_capabilities
-+from raven.acp.methods import AcpMethods
-+from raven.acp.spine import AcpSessions
-+from raven.agent.tools.base import Tool
-+from raven.agent.tools.registry import ToolRegistry
-+
-+_PATCH = "raven.agent.tools.mcp.connect_mcp_servers"
-+
-+
-+class _Stub(Tool):
-+    def __init__(self, name: str) -> None:
-+        self._name = name
-+
-+    @property
-+    def name(self) -> str:
-+        return self._name
-+
-+    @property
-+    def description(self) -> str:
-+        return "stub"
-+
-+    @property
-+    def parameters(self) -> dict[str, Any]:
-+        return {"type": "object", "properties": {}}
-+
-+    async def execute(self, **kwargs: Any) -> str:
-+        return "ran"
-+
-+
-+class _StubHandle:
-+    def __init__(self) -> None:
-+        self.cancelled = False
-+
-+    def cancel(self) -> None:
-+        self.cancelled = True
-+
-+    async def result(self):
-+        return None
-+
-+
-+class _Upstream:
-+    """A stand-in for ``connect_mcp_servers`` that records what it was asked to connect."""
-+
-+    def __init__(self, *, tools: tuple[str, ...] = ("probe",), fail: Exception | None = None) -> None:
-+        self.tools = tools
-+        self.fail = fail
-+        self.connected: list[tuple[str, Any]] = []
-+        self.stacks: list[Any] = []
-+
-+    async def __call__(self, servers, registry, stack, executor=None):
-+        self.stacks.append(stack)
-+        for name, cfg in servers.items():
-+            self.connected.append((name, cfg))
-+        if self.fail is not None:
-+            raise self.fail
-+        for name in servers:
-+            for tool in self.tools:
-+                registry.register(_Stub(f"mcp_{name}_{tool}"))
-+
-+
-+class _Engine:
-+    """The part of an agent loop this layer touches: its tool registry."""
-+
-+    def __init__(self, tools: Any) -> None:
-+        self.tools = tools
-+
-+
-+class _Rig:
-+    """AcpMethods against a scripted submit and real tool registries.
-+
-+    ``shared`` picks which engine shape is under test. One registry for every
-+    session is ``AcpLoops.single`` -- the shape where the session scoping is the
-+    only thing keeping two sessions apart, which is why it stays the default
-+    here. ``shared=False`` is the deployed shape, one engine per session, where
-+    the scoping rides on top of a structural separation.
-+    """
-+
-+    def __init__(self, session_manager=None, *, shared: bool = True, engineless: bool = False) -> None:
-+        self.frames: list[dict] = []
-+        self.sessions = AcpSessions()
-+        self.tools = ToolRegistry()
-+        self.tools.register(_Stub("read_file"))
-+        self.shared = shared
-+        self.engineless = engineless
-+        self.engines: dict[str, Any] = {}
-+        self.built: list[str] = []
-+        self.submitted: list = []
-+        self.methods = AcpMethods(
-+            submit=self._submit,
-+            sessions=self.sessions,
-+            emit=self.frames.append,
-+            session_manager=session_manager,
-+            on_session_open=self._open,
-+            peek_session_loop=self.engines.get,
-+        )
-+
-+    async def _open(self, conversation: str) -> Any:
-+        self.built.append(conversation)
-+        engine = self.engines.get(conversation)
-+        if engine is None:
-+            if self.engineless:
-+                engine = object()
-+            elif self.shared:
-+                engine = _Engine(self.tools)
-+            else:
-+                registry = ToolRegistry()
-+                registry.register(_Stub("read_file"))
-+                engine = _Engine(registry)
-+            self.engines[conversation] = engine
-+        return engine
-+
-+    def evict(self, conversation: str) -> None:
-+        """What ``AcpLoops`` does to an idle session over its cap: the engine and
-+        the registry that held its bindings are dropped, and the next turn gets a
-+        newly built one."""
-+        self.engines.pop(conversation, None)
-+
-+    def registry_for(self, conversation: str) -> Any:
-+        return self.engines[conversation].tools
-+
-+    def _submit(self, req):
-+        self.submitted.append(req)
-+        return _StubHandle()
-+
-+    async def call(self, method: str, params: dict | None = None, *, request_id: int | str = 1):
-+        frame: dict[str, Any] = {"jsonrpc": "2.0", "id": request_id, "method": method}
-+        if params is not None:
-+            frame["params"] = params
-+        return await self.methods.handle(frame)
-+
-+    async def handshake(self):
-+        return await self.call("initialize", {"protocolVersion": 1})
-+
-+    async def new_session(self, servers: list[dict] | None = None) -> dict:
-+        return await self.call("session/new", {"cwd": "/tmp", "mcpServers": servers or []})
-+
-+    def offered_to(self, session_id: str) -> set[str]:
-+        registry = self.engines[session_id].tools if session_id in self.engines else self.tools
-+        with registry.session_scope_for(session_id):
-+            return {d["function"]["name"] for d in registry.get_definitions()}
-+
-+
-+def _stanza(name: str = "bridged", *, command: str = "/usr/bin/raven", args: list[str] | None = None, **extra) -> dict:
-+    entry = {"name": name, "command": command, "args": args if args is not None else ["mcp", "bridge", "/tmp/s.sock"]}
-+    entry.setdefault("env", [])
-+    entry.update(extra)
-+    return entry
-+
-+
-+@pytest.fixture
-+def rig():
-+    return _Rig()
-+
-+
-+@pytest.fixture
-+def stored_rig(tmp_path):
-+    """A rig whose session manager already holds one ``acp:`` conversation.
-+
-+    ``session/load`` and ``session/resume`` both refuse an id this channel did
-+    not mint, so a stored session is what makes those two reachable at all.
-+    """
-+    from raven.session.manager import SessionManager
-+
-+    manager = SessionManager(tmp_path)
-+    session = manager.get_or_create("acp:old")
-+    manager.save(session)
-+    return _Rig(session_manager=manager)
-+
-+
-+class TestTheFieldIsAccepted:
-+    async def test_a_session_can_bring_a_stdio_server(self, rig) -> None:
-+        await rig.handshake()
-+        upstream = _Upstream()
-+
-+        with patch(_PATCH, new=upstream):
-+            response = await rig.new_session([_stanza()])
-+
-+        assert "error" not in response, response
-+        assert [name for name, _cfg in upstream.connected] == ["bridged"]
-+        assert rig.offered_to(response["result"]["sessionId"]) == {"read_file", "mcp_bridged_probe"}
-+
-+    async def test_the_stanza_is_connected_verbatim(self, rig) -> None:
-+        """The command is the dispatcher's bridge process and the args are its
-+        endpoint. Rewriting either would point the connection at nothing."""
-+        await rig.handshake()
-+        upstream = _Upstream()
-+
-+        with patch(_PATCH, new=upstream):
-+            await rig.new_session(
-+                [
-+                    _stanza(
-+                        command="/opt/raven/bin/raven",
-+                        args=["mcp", "bridge", "/tmp/mcp-a1b2.sock"],
-+                        env=[{"name": "RAVEN_MCP_DEBUG", "value": "1"}],
-+                    )
-+                ]
-+            )
-+
-+        (_name, cfg) = upstream.connected[0]
-+        assert cfg.type == "stdio"
-+        assert cfg.command == "/opt/raven/bin/raven"
-+        assert cfg.args == ["mcp", "bridge", "/tmp/mcp-a1b2.sock"]
-+        assert cfg.env == {"RAVEN_MCP_DEBUG": "1"}
-+        assert cfg.url == ""
-+
-+    async def test_env_as_a_mapping_says_the_same_thing(self, rig) -> None:
-+        await rig.handshake()
-+        upstream = _Upstream()
-+
-+        with patch(_PATCH, new=upstream):
-+            await rig.new_session([_stanza(env={"TOKEN": "abc"})])
-+
-+        assert upstream.connected[0][1].env == {"TOKEN": "abc"}
-+
-+    async def test_an_empty_list_is_still_the_normal_value(self, rig) -> None:
-+        await rig.handshake()
-+
-+        response = await rig.new_session([])
-+
-+        assert "error" not in response, response
-+        assert rig.offered_to(response["result"]["sessionId"]) == {"read_file"}
-+
-+    async def test_a_session_load_can_bring_them_too(self, stored_rig) -> None:
-+        await stored_rig.handshake()
-+        upstream = _Upstream()
-+
-+        with patch(_PATCH, new=upstream):
-+            response = await stored_rig.call(
-+                "session/load", {"sessionId": "acp:old", "cwd": "/tmp", "mcpServers": [_stanza()]}
-+            )
-+
-+        assert "error" not in response, response
-+        assert stored_rig.offered_to("acp:old") == {"read_file", "mcp_bridged_probe"}
-+
-+    async def test_a_session_resume_can_bring_them_too(self, stored_rig) -> None:
-+        """The field is on all three session requests. Resume used to ignore it,
-+        which is the one outcome the old refusal existed to prevent: a promptable
-+        session whose client believes it has tools."""
-+        await stored_rig.handshake()
-+        upstream = _Upstream()
-+
-+        with patch(_PATCH, new=upstream):
-+            response = await stored_rig.call(
-+                "session/resume", {"sessionId": "acp:old", "cwd": "/tmp", "mcpServers": [_stanza()]}
-+            )
-+
-+        assert "error" not in response, response
-+        assert stored_rig.offered_to("acp:old") == {"read_file", "mcp_bridged_probe"}
-+
-+
-+class TestWhatIsDropped:
-+    """A stanza this build cannot serve costs the session those tools, never the
-+    session. The servers a dispatcher attaches are a capability on top of the
-+    task, so failing ``session/new`` over one means the sub-agent never runs at
-+    all -- the worse answer by far.
-+    """
-+
-+    async def test_an_http_stanza_is_dropped_because_the_capability_said_so(self, rig) -> None:
-+        await rig.handshake()
-+
-+        response = await rig.new_session([{"name": "remote", "type": "http", "url": "https://x/mcp"}])
-+
-+        assert "error" not in response, response
-+        assert rig.offered_to(response["result"]["sessionId"]) == {"read_file"}
-+
-+    async def test_a_stanza_without_a_command_is_dropped(self, rig) -> None:
-+        await rig.handshake()
-+
-+        response = await rig.new_session([{"name": "broken"}])
-+
-+        assert "error" not in response, response
-+        assert rig.offered_to(response["result"]["sessionId"]) == {"read_file"}
-+
-+    async def test_one_bad_stanza_does_not_take_the_good_one_with_it(self, rig) -> None:
-+        """Dropped per entry: a dispatcher that attached two servers and got one
-+        stanza wrong must still deliver the other."""
-+        await rig.handshake()
-+
-+        with patch(_PATCH, new=_Upstream()):
-+            response = await rig.new_session([{"name": "broken"}, _stanza("good")])
-+
-+        assert "error" not in response, response
-+        assert "mcp_good_probe" in rig.offered_to(response["result"]["sessionId"])
-+
-+    async def test_an_engine_with_no_registry_to_scope_it_drops_the_field(self) -> None:
-+        """An engine that cannot scope them means no turn could ever reach the
-+        tools, so the field does nothing. It is dropped and the session is minted:
-+        the session is the dispatch, and the servers were an attachment to it.
-+        """
-+        rig = _Rig(engineless=True)
-+        await rig.handshake()
-+
-+        response = await rig.new_session([_stanza()])
-+
-+        assert "error" not in response, response
-+        assert rig.sessions.sessions() != (), "the session is the dispatch and must survive"
-+
-+
-+class TestOneSessionOnly:
-+    async def test_a_sibling_session_is_not_offered_them(self, rig) -> None:
-+        await rig.handshake()
-+
-+        with patch(_PATCH, new=_Upstream()):
-+            brought = (await rig.new_session([_stanza()]))["result"]["sessionId"]
-+        bare = (await rig.new_session([]))["result"]["sessionId"]
-+
-+        assert rig.offered_to(brought) == {"read_file", "mcp_bridged_probe"}
-+        assert rig.offered_to(bare) == {"read_file"}
-+
-+    async def test_two_sessions_bringing_the_same_server_name_stay_apart(self, rig) -> None:
-+        """The playbook case: two nodes on one fork, each handed its own bridge."""
-+        await rig.handshake()
-+
-+        with patch(_PATCH, new=_Upstream(tools=("alpha",))):
-+            first = (await rig.new_session([_stanza()]))["result"]["sessionId"]
-+        with patch(_PATCH, new=_Upstream(tools=("beta",))):
-+            second = (await rig.new_session([_stanza()]))["result"]["sessionId"]
-+
-+        assert rig.offered_to(first) == {"read_file", "mcp_bridged_alpha"}
-+        assert rig.offered_to(second) == {"read_file", "mcp_bridged_beta"}
-+
-+    async def test_nothing_is_registered_process_wide(self, rig) -> None:
-+        await rig.handshake()
-+
-+        with patch(_PATCH, new=_Upstream()):
-+            await rig.new_session([_stanza()])
-+
-+        assert rig.tools.names() == ["read_file"]
-+        assert rig.tools.get("mcp_bridged_probe") is None
-+
-+
-+class TestTheReclaim:
-+    async def test_aclose_hides_and_disconnects_every_session_s(self, rig) -> None:
-+        """This surface's only reclaim point. Each connection is a subprocess of
-+        ours, and with no ``session/close`` nothing else would kill them."""
-+        await rig.handshake()
-+        upstream = _Upstream()
-+
-+        with patch(_PATCH, new=upstream):
-+            first = (await rig.new_session([_stanza("one")]))["result"]["sessionId"]
-+            second = (await rig.new_session([_stanza("two")]))["result"]["sessionId"]
-+
-+        await rig.methods.aclose()
-+
-+        assert rig.methods._session_mcp == {}
-+        assert all(not stack._exit_callbacks for stack in upstream.stacks)
-+        assert rig.offered_to(first) == {"read_file"}
-+        assert rig.offered_to(second) == {"read_file"}
-+
-+    async def test_aclose_is_idempotent(self, rig) -> None:
-+        await rig.handshake()
-+
-+        with patch(_PATCH, new=_Upstream()):
-+            await rig.new_session([_stanza()])
-+
-+        await rig.methods.aclose()
-+        await rig.methods.aclose()
-+
-+        assert rig.methods._session_mcp == {}
-+
-+    async def test_re_adopting_replaces_the_earlier_set(self, stored_rig) -> None:
-+        """The other release point: ``session/resume`` on a session that already
-+        brought servers means the new set, and the old connections are nobody's."""
-+        await stored_rig.handshake()
-+        first = _Upstream(tools=("alpha",))
-+        second = _Upstream(tools=("beta",))
-+
-+        with patch(_PATCH, new=first):
-+            await stored_rig.call("session/resume", {"sessionId": "acp:old", "mcpServers": [_stanza()]})
-+        with patch(_PATCH, new=second):
-+            await stored_rig.call("session/resume", {"sessionId": "acp:old", "mcpServers": [_stanza()]})
-+
-+        assert stored_rig.offered_to("acp:old") == {"read_file", "mcp_bridged_beta"}
-+        assert not first.stacks[0]._exit_callbacks
-+
-+    async def test_the_server_calls_aclose_on_the_way_out(self) -> None:
-+        """The wiring, not the method: a reclaim nothing calls is not a reclaim.
-+
-+        ``serve`` is driven to EOF with a stub loop, and the registry it hands the
-+        methods layer is the stub's own -- which is also what makes the
-+        ``mcpServers`` field acceptable in the first place.
-+        """
-+        import asyncio
-+        import io
-+
-+        from raven.acp.loops import AcpLoops
-+        from raven.acp.server import serve
-+
-+        tools = ToolRegistry()
-+        tools.register(_Stub("read_file"))
-+
-+        class _StubLoop:
-+            def __init__(self, _conversation: str | None = None) -> None:
-+                self.tools = tools
-+                self.sessions = None
-+                self.workspace = None
-+
-+        reader = asyncio.StreamReader()
-+        for frame in (
-+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": 1}},
-+            {
-+                "jsonrpc": "2.0",
-+                "id": 2,
-+                "method": "session/new",
-+                "params": {"cwd": "/tmp", "mcpServers": [_stanza()]},
-+            },
-+        ):
-+            reader.feed_data(protocol.encode(frame))
-+        reader.feed_eof()
-+
-+        upstream = _Upstream()
-+        with patch(_PATCH, new=upstream):
-+            # One engine for every session (``AcpLoops.single``): the shape where
-+            # the session scoping is the only thing holding two sessions apart,
-+            # and the one whose registry this test can reach from out here.
-+            await serve(reader, io.BytesIO(), loops=AcpLoops.single(_StubLoop()))
-+
-+        assert upstream.stacks, "the session's servers were never connected"
-+        assert not upstream.stacks[0]._exit_callbacks, "serve() exited without reclaiming them"
-+        assert tools._session_tools == {}
-+
-+
-+class TestAnEmptyReplacementIsStillAReplacement:
-+    """An empty set is one of the values a replacement can take, not a no-op.
-+
-+    ``session/load`` and ``session/resume`` carry the dispatch's whole server
-+    list, so a session reopened with none is being told it has none -- and the
-+    dispatcher has already closed the endpoints the earlier set pointed at.
-+    Leaving them bound would offer the next turn a tool whose socket is gone.
-+
-+    Both shapes say it: an explicit empty list, and the field left out. They meet
-+    in ``_validated_mcp_servers``, which maps either to an empty mapping.
-+    """
-+
-+    @staticmethod
-+    def _spy_on_close(stack) -> list[str]:
-+        """Record that ``aclose`` ran, not merely that the reference went away."""
-+        closed: list[str] = []
-+        inherited = stack.aclose
-+
-+        async def _aclose() -> None:
-+            closed.append("aclose")
-+            await inherited()
-+
-+        stack.aclose = _aclose
-+        return closed
-+
-+    async def _first_dispatch(self, stored_rig) -> list[str]:
-+        await stored_rig.handshake()
-+        upstream = _Upstream(tools=("alpha",))
-+        with patch(_PATCH, new=upstream):
-+            response = await stored_rig.call("session/resume", {"sessionId": "acp:old", "mcpServers": [_stanza()]})
-+        assert "error" not in response, response
-+        assert stored_rig.offered_to("acp:old") == {"read_file", "mcp_bridged_alpha"}
-+        return self._spy_on_close(upstream.stacks[0])
-+
-+    async def test_an_explicit_empty_list_hides_the_earlier_tools(self, stored_rig) -> None:
-+        closed = await self._first_dispatch(stored_rig)
-+
-+        response = await stored_rig.call("session/resume", {"sessionId": "acp:old", "mcpServers": []})
-+
-+        assert "error" not in response, response
-+        assert stored_rig.offered_to("acp:old") == {"read_file"}
-+        assert closed == ["aclose"]
-+        assert "acp:old" not in stored_rig.methods._session_mcp
-+
-+    async def test_the_field_left_out_says_the_same_thing(self, stored_rig) -> None:
-+        closed = await self._first_dispatch(stored_rig)
-+
-+        response = await stored_rig.call("session/resume", {"sessionId": "acp:old"})
-+
-+        assert "error" not in response, response
-+        assert stored_rig.offered_to("acp:old") == {"read_file"}
-+        assert closed == ["aclose"]
-+        assert "acp:old" not in stored_rig.methods._session_mcp
-+
-+    async def test_a_load_with_none_drops_them_too(self, stored_rig) -> None:
-+        closed = await self._first_dispatch(stored_rig)
-+
-+        response = await stored_rig.call("session/load", {"sessionId": "acp:old", "cwd": "/tmp", "mcpServers": []})
-+
-+        assert "error" not in response, response
-+        assert stored_rig.offered_to("acp:old") == {"read_file"}
-+        assert closed == ["aclose"]
-+
-+
-+class TestOneEnginePerSession:
-+    """The deployed shape: ``AcpLoops`` builds an engine per conversation, so a
-+    session's servers are scoped in the registry that engine owns."""
-+
-+    async def test_the_tools_land_in_that_sessions_own_engine(self) -> None:
-+        rig = _Rig(shared=False)
-+        await rig.handshake()
-+
-+        with patch(_PATCH, new=_Upstream()):
-+            brought = (await rig.new_session([_stanza("one")]))["result"]["sessionId"]
-+        bare = (await rig.new_session([]))["result"]["sessionId"]
-+
-+        assert "mcp_one_probe" in rig.offered_to(brought)
-+        assert rig.offered_to(bare) == {"read_file"}
-+        # Not merely invisible to the sibling -- absent from its registry, which
-+        # is the separation the per-session engines add underneath the scoping.
-+        assert "mcp_one_probe" not in set(rig.registry_for(bare).names())
-+
-+    async def test_an_evicted_engine_does_not_cost_the_session_its_tools(self) -> None:
-+        """``AcpLoops`` drops the engine of an *idle* session to stay under its
-+        cap and builds a new one on the session's next turn. The connections are
-+        held per session and survive that; the binding lived in the registry that
-+        went with the old engine, so it has to be made again.
-+
-+        Without the rebind the tools are gone between two turns of a stateful
-+        session that did nothing wrong, and the turn reports no tool rather than
-+        an error -- which reads as the server having nothing to offer.
-+        """
-+        rig = _Rig(shared=False)
-+        await rig.handshake()
-+
-+        upstream = _Upstream()
-+        with patch(_PATCH, new=upstream):
-+            session_id = (await rig.new_session([_stanza("one")]))["result"]["sessionId"]
-+        assert "mcp_one_probe" in rig.offered_to(session_id)
-+
-+        rig.evict(session_id)
-+        rebuilt = await rig.methods._open_session(session_id)
-+        rig.methods.rebind_session_mcp(rebuilt, session_id)
-+
-+        assert "mcp_one_probe" in rig.offered_to(session_id)
-+        # Rebound, not reconnected: a second connect would spawn a second bridge
-+        # against an endpoint the dispatcher opened once.
-+        assert len(upstream.stacks) == 1
-+
-+    async def test_a_session_that_brought_none_is_not_rebound(self) -> None:
-+        """Which is every session on a connection whose dispatcher configured no
-+        per-session servers, so the hook has to be free on that path."""
-+        rig = _Rig(shared=False)
-+        await rig.handshake()
-+        session_id = (await rig.new_session([]))["result"]["sessionId"]
-+
-+        rig.evict(session_id)
-+        rebuilt = await rig.methods._open_session(session_id)
-+        rig.methods.rebind_session_mcp(rebuilt, session_id)
-+
-+        assert rig.offered_to(session_id) == {"read_file"}
-+
-+
-+class TestAServerThatWillNotConnect:
-+    async def test_the_session_is_still_minted(self, rig) -> None:
-+        """One unreachable server must not turn into a sub-agent that cannot
-+        answer at all -- the dispatcher already tells the reader it was degraded."""
-+        await rig.handshake()
-+
-+        with patch(_PATCH, new=_Upstream(fail=RuntimeError("no such socket"))):
-+            response = await rig.new_session([_stanza()])
-+
-+        assert "error" not in response, response
-+        assert rig.offered_to(response["result"]["sessionId"]) == {"read_file"}
-+
-+
-+class TestTheDeclaration:
-+    def test_the_capability_is_declared(self) -> None:
-+        """A build that answers the field with -32602 is otherwise
-+        indistinguishable from this one, so the host reads this before sending."""
-+        assert protocol.SESSION_MCP_CAPABILITY in agent_capabilities()["_meta"]
-+
-+    def test_the_ask_user_extension_is_still_declared_beside_it(self) -> None:
-+        """Same ``_meta`` object; adding one key must not have replaced the other."""
-+        assert agent_capabilities()["_meta"]["raven"] == {"askUser": True}
-+
-+    def test_and_the_transports_it_does_not_take_are_still_false(self) -> None:
-+        assert agent_capabilities()["mcpCapabilities"] == {"http": False, "sse": False}
-+
-+
-+class TestTheScopeIsOpenedWhereTheTurnRuns:
-+    """The third leg. Binding the tools and declaring the capability are worth
-+    nothing if the scope is opened in the wrong place.
-+
-+    The ACP prompt handler cannot open it: it calls ``submit``, and the turn then
-+    runs on a task that inherits no context from the handler. So
-+    ``AgentLoop.run_turn`` opens it, keyed off the same session id the ACP layer
-+    bound the tools under.
-+    """
-+
-+    @staticmethod
-+    def _loop(registry):
-+        from raven.agent.loop.main import AgentLoop
-+
-+        class _Stubbed:
-+            def __init__(self) -> None:
-+                self.tools = registry
-+                self.seen: dict[str, Any] = {}
-+
-+            async def _run_turn(self, req, emit, drain, **kwargs):
-+                self.seen["offered"] = {d["function"]["name"] for d in self.tools.get_definitions()}
-+                self.seen["kwargs"] = kwargs
-+                return "outcome"
-+
-+        loop = _Stubbed()
-+        loop.run_turn = AgentLoop.run_turn.__get__(loop, _Stubbed)
-+        return loop
-+
-+    @staticmethod
-+    def _request(conversation: str | None, *, chat_id: str = "c1"):
-+        from raven.spine import ChatType, Origin, Source, TurnRequest
-+
-+        return TurnRequest(
-+            origin=Origin.USER,
-+            source=Source(channel="acp", chat_id=chat_id, sender_id="u", chat_type=ChatType.DM),
-+            text="hello",
-+            conversation=conversation,
-+        )
-+
-+    async def test_the_turn_runs_with_its_own_session_s_tools_visible(self) -> None:
-+        registry = ToolRegistry()
-+        registry.register(_Stub("read_file"))
-+        registry.bind_session_tools("acp:one", {"mcp_a_probe": _Stub("mcp_a_probe")})
-+        loop = self._loop(registry)
-+
-+        outcome = await loop.run_turn(self._request("acp:one"), None, None, stream=False)
-+
-+        assert outcome == "outcome"
-+        assert loop.seen["offered"] == {"read_file", "mcp_a_probe"}
-+
-+    async def test_and_a_sibling_session_s_turn_does_not(self) -> None:
-+        registry = ToolRegistry()
-+        registry.register(_Stub("read_file"))
-+        registry.bind_session_tools("acp:one", {"mcp_a_probe": _Stub("mcp_a_probe")})
-+        loop = self._loop(registry)
-+
-+        await loop.run_turn(self._request("acp:two"), None, None)
-+
-+        assert loop.seen["offered"] == {"read_file"}
-+
-+    async def test_the_scope_closes_when_the_turn_returns(self) -> None:
-+        registry = ToolRegistry()
-+        registry.bind_session_tools("acp:one", {"mcp_a_probe": _Stub("mcp_a_probe")})
-+        loop = self._loop(registry)
-+
-+        await loop.run_turn(self._request("acp:one"), None, None)
-+
-+        assert registry.get("mcp_a_probe") is None
-+
-+    async def test_the_session_key_falls_back_to_channel_and_chat_id(self) -> None:
-+        registry = ToolRegistry()
-+        registry.bind_session_tools("acp:c9", {"mcp_a_probe": _Stub("mcp_a_probe")})
-+        loop = self._loop(registry)
-+
-+        await loop.run_turn(self._request(None, chat_id="c9"), None, None)
-+
-+        assert loop.seen["offered"] == {"mcp_a_probe"}
-+
-+    async def test_every_keyword_reaches_the_turn_unchanged(self) -> None:
-+        """The wrapper is a pass-through; a dropped sink is a silent behaviour change."""
-+        registry = ToolRegistry()
-+        loop = self._loop(registry)
-+        usage: dict[str, Any] = {}
-+        text: dict[str, Any] = {}
-+
-+        await loop.run_turn(self._request("acp:one"), None, None, stream=False, usage_sink=usage, text_sink=text)
-+
-+        assert loop.seen["kwargs"] == {"stream": False, "usage_sink": usage, "text_sink": text}
 diff --git a/tests/test_acp_server.py b/tests/test_acp_server.py
 index 2da92cf..e7074be 100644
 --- a/tests/test_acp_server.py
@@ -2171,53 +1087,6 @@ index 926e797..434d124 100644
  # ---------------------------------------------------------------------------
  # Legacy compatibility — pre-AG-1 callsites still pass
  # ---------------------------------------------------------------------------
-diff --git a/tests/test_config_raven_loader.py b/tests/test_config_raven_loader.py
-index 7b85447..5591f3d 100644
---- a/tests/test_config_raven_loader.py
-+++ b/tests/test_config_raven_loader.py
-@@ -362,6 +362,42 @@ def test_the_bump_ritual_moves_the_old_label_into_the_superseded_tuple():
-     # semantics to name, so the validator must stay out of the way.
-     assert DRFlowConfig(enabled=False, version=previous).version == previous
- 
-+
-+def test_a_superseded_profile_label_is_refused_by_its_whole_name():
-+    """The base match cannot see a profile that moved on its own.
-+
-+    A suffix names a profile, not a semantics, so ``_SUPERSEDED_VERSIONS`` lets
-+    every suffix of a live base through - correctly. The hole that leaves is a
-+    profile whose distribution changes while the base rung does not (2026-09-02:
-+    the product identity gained two reply rules and search snippets turned on
-+    under an unchanged ``dr@3.5``). AGENTS.md 0.2 wants the old label REFUSED,
-+    not documented, so ``_SUPERSEDED_PROFILES`` matches the whole label and
-+    names the successor. Everything here is read off the table, never spelled.
-+    """
-+    from raven.config.raven import DRFlowConfig
-+
-+    tuples = DRFlowConfig()
-+    retired = dict(tuples._SUPERSEDED_PROFILES)
-+    assert retired, "the profile table is empty; this test has nothing to hold"
-+    for old, new in retired.items():
-+        # An entry whose base is already superseded is dead: the base table
-+        # refuses it first and this one can never fire.
-+        assert old.split("-", 1)[0] not in tuples._SUPERSEDED_VERSIONS, old
-+        # The successor must itself be live, or every config that followed the
-+        # refusal's advice fails to load.
-+        assert new not in retired, f"{new!r} is both a successor and superseded"
-+        assert DRFlowConfig(enabled=True, version=new).version == new
-+        with pytest.raises(ValidationError, match="superseded profile label"):
-+            DRFlowConfig(enabled=True, version=old)
-+        # A sibling profile on the same base rung is untouched: the match is on
-+        # the whole label, so only the named profile is refused.
-+        sibling = f"{old.split('-', 1)[0]}-futurex"
-+        assert DRFlowConfig(enabled=True, version=sibling).version == sibling
-+        # The anchor arm keeps historical labels loadable, exactly as for the
-+        # base table.
-+        assert DRFlowConfig(enabled=False, version=old).version == old
-+
-+
- def test_the_shipped_example_configs_load_on_this_build():
-     """The examples are the only surface a new user touches, and nothing else
-     checked them.
 diff --git a/tests/test_runtime_checkpoint_bug2_deep.py b/tests/test_runtime_checkpoint_bug2_deep.py
 index c4d8cbe..a28fd5e 100644
 --- a/tests/test_runtime_checkpoint_bug2_deep.py
@@ -2326,240 +1195,3 @@ index c4d8cbe..a28fd5e 100644
  # =============================================================================
  # D2 bonus — loop wraps degrade
  # =============================================================================
-diff --git a/tests/test_tool_registry_session_overlay.py b/tests/test_tool_registry_session_overlay.py
-new file mode 100644
-index 0000000..afbb838
---- /dev/null
-+++ b/tests/test_tool_registry_session_overlay.py
-@@ -0,0 +1,231 @@
-+"""The per-session tool overlay on ToolRegistry (raven/agent/tools/registry.py).
-+
-+One registry serves every session on an ACP connection, so the tools a session
-+brings cannot be *registered*: a register publishes them process-wide, and the
-+next session on the same process would find them. They are held aside by session
-+key instead and made visible only inside ``session_scope_for``, whose visibility
-+is turn-local.
-+
-+Turn-local is the load-bearing word, and it is why the overlay is a ContextVar
-+rather than a field. A playbook can put two nodes on the same fork and run them
-+in parallel -- two sessions, two turns, one registry, both live at once -- and a
-+field would let whichever turn entered last decide what the other one can see.
-+The concurrency test below is the one that pins that down; it holds both scopes
-+open on an ``asyncio.Event`` rather than a sleep, so it fails for the right
-+reason instead of racing.
-+"""
-+
-+from __future__ import annotations
-+
-+import asyncio
-+from typing import Any
-+
-+import pytest
-+
-+from raven.agent.tools.base import Tool
-+from raven.agent.tools.registry import ToolRegistry
-+
-+
-+class _Stub(Tool):
-+    def __init__(self, name: str, reply: str = "ran") -> None:
-+        self._name = name
-+        self._reply = reply
-+
-+    @property
-+    def name(self) -> str:
-+        return self._name
-+
-+    @property
-+    def description(self) -> str:
-+        return "stub"
-+
-+    @property
-+    def parameters(self) -> dict[str, Any]:
-+        return {"type": "object", "properties": {}, "required": []}
-+
-+    async def execute(self, **kwargs: Any) -> str:
-+        return self._reply
-+
-+
-+@pytest.fixture
-+def registry() -> ToolRegistry:
-+    reg = ToolRegistry()
-+    reg.register(_Stub("read_file"))
-+    return reg
-+
-+
-+def _offered(reg: ToolRegistry) -> set[str]:
-+    return {d["function"]["name"] for d in reg.get_definitions()}
-+
-+
-+class TestBindingDoesNotPublish:
-+    def test_a_bound_tool_is_invisible_outside_any_scope(self, registry) -> None:
-+        registry.bind_session_tools("s1", {"mcp_a_probe": _Stub("mcp_a_probe")})
-+
-+        assert registry.get("mcp_a_probe") is None
-+        assert not registry.has("mcp_a_probe")
-+        assert "mcp_a_probe" not in registry
-+        assert _offered(registry) == {"read_file"}
-+
-+    def test_binding_leaves_the_registration_view_alone(self, registry) -> None:
-+        """``tool_names`` / ``len`` stay the registration view: the tool-search
-+        index is built off them once and shared by every concurrent turn."""
-+        registry.bind_session_tools("s1", {"mcp_a_probe": _Stub("mcp_a_probe")})
-+
-+        with registry.session_scope_for("s1"):
-+            assert registry.tool_names == ["read_file"]
-+            assert registry.names() == ["read_file"]
-+            assert len(registry) == 1
-+            assert registry.session_tools_in_scope() == {"mcp_a_probe": registry.get("mcp_a_probe")}
-+
-+
-+class TestTheScopeMakesThemReachable:
-+    def test_every_lookup_agrees_inside_the_scope(self, registry) -> None:
-+        registry.bind_session_tools("s1", {"mcp_a_probe": _Stub("mcp_a_probe")})
-+
-+        with registry.session_scope_for("s1"):
-+            assert registry.get("mcp_a_probe") is not None
-+            assert registry.has("mcp_a_probe")
-+            assert "mcp_a_probe" in registry
-+            assert _offered(registry) == {"read_file", "mcp_a_probe"}
-+
-+    async def test_a_session_tool_is_callable_inside_the_scope(self, registry) -> None:
-+        registry.bind_session_tools("s1", {"mcp_a_probe": _Stub("mcp_a_probe", "probe ran")})
-+
-+        with registry.session_scope_for("s1"):
-+            assert str(await registry.execute("mcp_a_probe", {})) == "probe ran"
-+
-+    async def test_and_not_callable_outside_it(self, registry) -> None:
-+        registry.bind_session_tools("s1", {"mcp_a_probe": _Stub("mcp_a_probe")})
-+
-+        out = str(await registry.execute("mcp_a_probe", {}))
-+
-+        assert "not found" in out
-+
-+    def test_a_session_tool_shadows_a_process_tool_of_the_same_name(self, registry) -> None:
-+        registry.bind_session_tools("s1", {"read_file": _Stub("read_file", "session copy")})
-+
-+        with registry.session_scope_for("s1"):
-+            assert registry.get("read_file")._reply == "session copy"
-+        assert registry.get("read_file")._reply == "ran"
-+
-+    def test_an_empty_scope_states_no_tools_rather_than_inheriting(self, registry) -> None:
-+        """A turn whose session brought nothing must not see the outer scope's
-+        tools -- which is why entering with no tools clears the overlay."""
-+        registry.bind_session_tools("s1", {"mcp_a_probe": _Stub("mcp_a_probe")})
-+
-+        with registry.session_scope_for("s1"):
-+            with registry.session_scope_for("s2"):
-+                assert registry.get("mcp_a_probe") is None
-+                assert _offered(registry) == {"read_file"}
-+            assert registry.get("mcp_a_probe") is not None
-+
-+
-+class TestRelease:
-+    def test_release_forgets_the_binding(self, registry) -> None:
-+        registry.bind_session_tools("s1", {"mcp_a_probe": _Stub("mcp_a_probe")})
-+        registry.release_session_tools("s1")
-+
-+        with registry.session_scope_for("s1"):
-+            assert registry.get("mcp_a_probe") is None
-+
-+    def test_release_is_idempotent(self, registry) -> None:
-+        registry.release_session_tools("never-bound")
-+        registry.release_session_tools("never-bound")
-+
-+    def test_rebinding_replaces_rather_than_merges(self, registry) -> None:
-+        """``session/load`` on a session that already brought servers means the
-+        new set, not both."""
-+        registry.bind_session_tools("s1", {"mcp_a_probe": _Stub("mcp_a_probe")})
-+        registry.bind_session_tools("s1", {"mcp_b_probe": _Stub("mcp_b_probe")})
-+
-+        with registry.session_scope_for("s1"):
-+            assert registry.get("mcp_a_probe") is None
-+            assert registry.get("mcp_b_probe") is not None
-+
-+
-+class TestTwoTurnsAtOnce:
-+    """The requirement a playbook actually makes: two nodes on one fork, parallel.
-+
-+    Two barriers, not one, and the second is the one that does the work. With a
-+    single "both entered" barrier the task that entered *first* only resumes once
-+    the second has already left its scope, so a plain instance field would pass:
-+    the writes happen to unwind in the order that hides the bug. Parking both
-+    tasks inside their scopes until both have read is what forces the interleave
-+    a field cannot survive -- verified by swapping the ContextVar for a field and
-+    watching these go red.
-+    """
-+
-+    @staticmethod
-+    async def _both_inside(registry, keys, observe):
-+        entered = {key: asyncio.Event() for key in keys}
-+        has_read = {key: asyncio.Event() for key in keys}
-+
-+        async def turn(mine: str, other: str):
-+            with registry.session_scope_for(mine):
-+                entered[mine].set()
-+                await asyncio.wait_for(entered[other].wait(), timeout=5)
-+                observed = observe(mine)
-+                # Held here, still inside the scope, until the other task has
-+                # read too: leaving would restore whatever it saved on entry.
-+                has_read[mine].set()
-+                await asyncio.wait_for(has_read[other].wait(), timeout=5)
-+                return observed
-+
-+        first, second = keys
-+        return await asyncio.gather(turn(first, second), turn(second, first))
-+
-+    async def test_neither_turn_can_see_the_other_s_tools(self, registry) -> None:
-+        registry.bind_session_tools("s1", {"mcp_a_probe": _Stub("mcp_a_probe")})
-+        registry.bind_session_tools("s2", {"mcp_b_probe": _Stub("mcp_b_probe")})
-+
-+        def observe(_mine: str) -> dict[str, Any]:
-+            return {
-+                "a": registry.get("mcp_a_probe") is not None,
-+                "b": registry.get("mcp_b_probe") is not None,
-+                "offered": _offered(registry),
-+                "in_scope": set(registry.session_tools_in_scope()),
-+            }
-+
-+        one, two = await self._both_inside(registry, ("s1", "s2"), observe)
-+
-+        assert one["a"] and not one["b"], "session 1's turn could see session 2's tools"
-+        assert two["b"] and not two["a"], "session 2's turn could see session 1's tools"
-+        assert one["offered"] == {"read_file", "mcp_a_probe"}
-+        assert two["offered"] == {"read_file", "mcp_b_probe"}
-+        assert one["in_scope"] == {"mcp_a_probe"}
-+        assert two["in_scope"] == {"mcp_b_probe"}
-+
-+    async def test_a_turn_that_brought_nothing_sees_nothing_of_a_live_sibling(self, registry) -> None:
-+        registry.bind_session_tools("s1", {"mcp_a_probe": _Stub("mcp_a_probe")})
-+
-+        one, two = await self._both_inside(registry, ("s1", "s2"), lambda _mine: _offered(registry))
-+
-+        assert one == {"read_file", "mcp_a_probe"}
-+        assert two == {"read_file"}
-+
-+    async def test_a_shadowing_session_tool_does_not_shadow_the_sibling_s(self, registry) -> None:
-+        """Both sessions bring their own ``read_file``. Each turn must reach its
-+        own, and the process copy must survive both."""
-+        registry.bind_session_tools("s1", {"read_file": _Stub("read_file", "one")})
-+        registry.bind_session_tools("s2", {"read_file": _Stub("read_file", "two")})
-+
-+        one, two = await self._both_inside(registry, ("s1", "s2"), lambda _mine: registry.get("read_file")._reply)
-+
-+        assert (one, two) == ("one", "two")
-+        assert registry.get("read_file")._reply == "ran"
-+
-+    async def test_the_scope_does_not_leak_into_a_task_it_spawns_after_exit(self, registry) -> None:
-+        registry.bind_session_tools("s1", {"mcp_a_probe": _Stub("mcp_a_probe")})
-+
-+        async def look() -> bool:
-+            return registry.get("mcp_a_probe") is not None
-+
-+        with registry.session_scope_for("s1"):
-+            inherited = await asyncio.create_task(look())
-+        after = await asyncio.create_task(look())
-+
-+        # A task created inside the scope inherits the context, which is what
-+        # makes the turn's own helpers work; one created after it does not.
-+        assert inherited is True
-+        assert after is False

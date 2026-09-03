@@ -42,6 +42,7 @@ import os
 import shutil
 import uuid
 import wave
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -74,18 +75,29 @@ class _OpenRouterMediaTool(Tool):
 
     def __init__(
         self,
-        config: "MediaToolConfig | None" = None,
+        config: "MediaToolConfig | Callable[[], MediaToolConfig | None] | None" = None,
         *,
         workspace: Path | None = None,
         proxy: str | None = None,
         output_subdir: str = "generated",
         restrict_to_workspace: bool = False,
     ):
-        self._config = config
+        # A callable is the live form: the loop passes a reader over the config
+        # file so a key added or rotated there serves the next call without a
+        # re-registration. A plain section (tests, one-shot embedders) stays a
+        # snapshot, which for them is also the current file.
+        self._config_source = config if callable(config) else None
+        self._config_static = None if callable(config) else config
         self._workspace = Path(workspace) if workspace else Path.cwd()
         self._proxy = proxy
         self._output_subdir = output_subdir
         self._restrict_to_workspace = restrict_to_workspace
+
+    @property
+    def _config(self) -> "MediaToolConfig | None":
+        if self._config_source is not None:
+            return self._config_source()
+        return self._config_static
 
     # ── config resolution (at call time, so env/config edits are picked up) ──
 
@@ -155,8 +167,8 @@ class _OpenRouterMediaTool(Tool):
                 "error": (
                     f"{self.name}: no API key configured. Set it in "
                     f"~/.raven/config.json under tools.media.*.apiKey, "
-                    f"providers.openrouter.apiKey, or export OPENROUTER_API_KEY, "
-                    f"then restart the gateway."
+                    f"providers.openrouter.apiKey, or export OPENROUTER_API_KEY; "
+                    f"it takes effect on the next call."
                 )
             },
             ensure_ascii=False,

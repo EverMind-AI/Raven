@@ -779,6 +779,13 @@ def test_no_surface_writes_the_default_model_without_naming_its_provider():
                     offenders.append(f"{path.relative_to(root.parent)}:{node.lineno} (set_default_model)")
                 continue
 
+            if name in {"get", "_get_nested", "get_nested"}:
+                # A read of the key is not a write of it. LiveConfig.get in
+                # provider_stack reads the default model as the router's live
+                # fallback; flagging it would demand a provider write in a file
+                # that writes nothing.
+                continue
+
             targets = [a.value for a in node.args if isinstance(a, ast.Constant) and isinstance(a.value, str)]
             if "agents.defaults.model" in targets and not writes_provider:
                 offenders.append(f"{path.relative_to(root.parent)}:{node.lineno} (raw key write)")

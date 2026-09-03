@@ -2373,11 +2373,6 @@ class TurnPathMixin:
 
             message_tool.set_send_callback(_route_to_stream)
 
-        # Pick up a mid-session `deep-research enable` before the wiring below, so
-        # a promoted working tool gets THIS turn's stream callback and (in
-        # _process_message) routing context -- not just the next turn's.
-        self._maybe_promote_deep_research()
-
         # deep_research (streaming surfaces only): stream its progress live and
         # deliver its finished answer inline, so the tool returns a compact
         # receipt and the model relays instead of re-emitting/rewriting. Progress
@@ -2433,8 +2428,11 @@ class TurnPathMixin:
                     # through here (the TUI has no other path at all, and this is
                     # also the reconnect after close_mcp and the retry after a
                     # prewarm that failed). Idempotent, so an in-flight connect is
-                    # not restarted.
+                    # not restarted. Once connected, the reconcile beside it picks
+                    # up an out-of-band edit of tools.mcpServers the same way --
+                    # the turn boundary is the one place every host passes.
                     self.prewarm_mcp()
+                    self.reconcile_mcp_from_live()
                     out = await self._process_message(
                         req,
                         session_key=cid,

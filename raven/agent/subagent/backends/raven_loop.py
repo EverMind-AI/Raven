@@ -27,6 +27,7 @@ from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.shell import ExecTool
 from raven.agent.tools.web import WebFetchTool, WebSearchTool
+from raven.config.live import LiveConfig, exec_extra_deny_patterns
 from raven.config.schema import ExecToolConfig
 from raven.contracts.llm_provider import LLMProvider
 from raven.contracts.subagent_backend import SubagentActionAbortedError, SubagentNoAnswerError
@@ -36,6 +37,18 @@ from raven.providers.streaming import generation_kwargs, stream_llm_call
 from raven.providers.tool_calls import openai_tool_call
 from raven.security.trust import wrap_untrusted
 from raven.utils.messages import build_assistant_message
+
+_LIVE_CONFIG = LiveConfig()
+
+
+def _live_exec_extra_deny() -> list[str] | None:
+    """The operator's live exec deny extras, shared by every sub-agent run.
+
+    Module-level so the byte-compare cache is warm across runs; the answer is
+    identical to the main loop's reader, which is the point -- a tightened
+    permission gates a delegated shell the same call it gates a direct one.
+    """
+    return exec_extra_deny_patterns(_LIVE_CONFIG)
 
 
 def build_subagent_prompt(
@@ -255,6 +268,10 @@ class RavenLoopBackend:
                     path_append=self.exec_config.path_append,
                     executor=executor,
                     extra_deny_patterns=self.exec_config.extra_deny_patterns,
+                    # The same live deny source the main loop's ExecTool reads:
+                    # a tightened permission must gate a delegated shell the
+                    # same call it gates a direct one.
+                    extra_deny_source=_live_exec_extra_deny,
                     extra_allowed_dirs=allowed_dirs,
                     follow_binding=False,
                 )

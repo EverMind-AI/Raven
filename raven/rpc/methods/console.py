@@ -196,13 +196,20 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
             logger.exception("ext.list: config mcp merge failed")
         for name in loop.tools.tool_names:
             tool = loop.tools.get(name)
+            # Asked, not inferred from membership: a tool the operator switched
+            # off -- or one registered without the credential it needs -- stays
+            # in the registry by construction, so "registered" stopped meaning
+            # "the model can call it". ``offers_by_name`` is the one predicate
+            # that answers the latter, and reporting anything else here tells a
+            # deployer a capability is on while the model is never offered it.
+            offered = loop.tools.offers_by_name(name)
             tools.append(
                 {
                     "name": name,
                     "description": (getattr(tool, "description", "") or "")[:200],
-                    "enabled": True,
+                    "enabled": offered,
                     "mcp_server": tool_owner.get(name),
-                    "needs": None,
+                    "needs": None if offered else _needs_of(name),
                 }
             )
         tools.extend(_gated_tools({t["name"] for t in tools}))
@@ -216,6 +223,42 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
 # on the other end of a channel -- but the same decision also erased them from
 # the user's view, so the feature looked deleted rather than unconfigured.
 _KEY_GATED_TOOLS: tuple[tuple[str, str, str], ...] = (("web_search", "tools.web.search.apiKey", "SERPER_API_KEY"),)
+
+
+def _needs_of(name: str) -> dict | None:
+    """The credential an unavailable tool is missing, or None if it lacks none.
+
+    ``agent/tools/capabilities.py`` is the single description of which tool
+    wants which credential, pinned against what the loop actually offers. Asked
+    here rather than restated, because a second table is how the three media
+    tools ended up with no setup affordance while web_search had one.
+
+    Only the credential gate answers. A tool can be unavailable for two
+    unrelated reasons, and ``is_disabled``'s own docstring names the cost of
+    collapsing them: a switched-off tool usually has its key set, so reporting
+    it as needing one sends the deployer to set a credential already there. An
+    off switch is the operator's own doing and needs no instructions.
+
+    ``key_path``, never ``config_path``: for the media family the latter is the
+    *model* field, and naming it as the missing credential sends the reader to
+    edit a line that holds no key.
+    """
+    from raven.agent.tools.capabilities import CAPABILITIES, Need, is_configured
+    from raven.config.loader import load_config
+
+    for cap in CAPABILITIES:
+        if cap.tool != name or cap.need is Need.NOTHING:
+            continue
+        if not (cap.key_path or cap.env_var):
+            return None
+        try:
+            if is_configured(cap, load_config()):
+                return None
+        except Exception:  # noqa: BLE001 - an unreadable config is not a credential verdict
+            logger.warning("ext.list: could not read the config to explain why {} is unavailable", name)
+            return None
+        return {"setting": cap.key_path, "env": cap.env_var}
+    return None
 
 
 def _gated_tools(registered: set[str]) -> list[dict]:
