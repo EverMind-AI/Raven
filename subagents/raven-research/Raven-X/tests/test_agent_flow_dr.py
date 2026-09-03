@@ -73,12 +73,41 @@ def test_build_dr_flow_assembly_shape():
     # version is exactly X"; the exact-label rules live in test_config_raven_loader.py.
     assert assembly.version == DRFlowConfig().version
     assert assembly.max_iterations == 48
-    assert [type(o).__name__ for o in assembly.observers] == ["BudgetNoteObserver", "DraftReviewerGate"]
+    # ★ 20260829. Was ``["BudgetNoteObserver", "DraftReviewerGate"]``. The four
+    # mechanisms in between - fetch floor, spin breaker, forced finalize - were
+    # measured, kept, and then left default-OFF for ten versions, so "the default
+    # flow" was a version we had already decided against. The shipped product
+    # config inherited exactly that and ran 11 knobs weaker than every measured
+    # arm. Raising the defaults is the third step of the landing ritual (see
+    # CLAUDE.md); this line is the contract that now says so.
+    #
+    # Every arm that had ever run pinned these explicitly, and the handful that
+    # expressed "off" by INHERITING it (two futurex arms, the nosnip ablation,
+    # four retired configs) were made explicit first - so no existing arm's
+    # effective value moved. That ordering is the rule, not a courtesy: a
+    # default that moves silently inverts an ablation which said "off" by
+    # staying quiet.
+    assert [type(o).__name__ for o in assembly.observers] == [
+        "BudgetNoteObserver",
+        "FetchFloorObserver",
+        "SpinEntryBreaker",
+        "ForcedFinalizeGate",
+        "DraftReviewerGate",
+    ]
     assert assembly.web_search_kwargs == {
         "include_answer_box": False,
         "include_knowledge_graph": False,
-        "include_snippets": False,
-        "snippet_dedup_by_docid": False,
+        # ★ 20260829, same promotion. These two are the only ones here that change
+        # what the SEARCH TOOL receives, so they are the ones that end the old
+        # "a bare flow-on profile issues exactly the requests dr@2.7 issued"
+        # guarantee. That guarantee was worth keeping while the knobs were
+        # unmeasured; it is not worth keeping once every measured arm turns them
+        # on, because then the default is the one combination nobody has tested.
+        # ``max_results`` and ``cross_query_dedup`` below are deliberately NOT
+        # promoted - the first because 5 is what the anchor's own tool renders,
+        # the second because it has no measured accuracy reading at all.
+        "include_snippets": True,
+        "snippet_dedup_by_docid": True,
         # dr@2.8, both off by default. False and None here are the anchor contract:
         # a profile that only turns the flow on gets a search tool whose request
         # depth and result selection are identical to dr@2.7's.

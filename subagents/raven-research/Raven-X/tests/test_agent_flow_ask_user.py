@@ -133,13 +133,24 @@ def test_the_allowlist_is_not_widened_twice() -> None:
 
 def test_the_off_state_bytes_do_not_move() -> None:
     """The whole point of the feature's shape: the anchor and every bench arm
-    render the prompt they were measured with, to the byte."""
-    assert _sha(_seg(ask_user=False)) == "75d2ad71c15aacc0"
+    render the prompt they were measured with, to the byte.
+
+    ★ 20260901 (Framework): four of the five pins below moved, and the fifth -
+    ``593c46c416c3f4cf``, the state every bench arm and the anchor render - did
+    NOT. That asymmetry is the acceptance criterion for the change that moved
+    them: one sentence added to both report templates naming the ``web_fetch
+    #...`` fence tag as data rather than a citation. ``report_structure`` is
+    ``True`` in exactly one profile in the tree (``student_sglang.json``, the
+    shipped product config) plus three ``examples/``, and in none of the 27
+    bench profiles - enumerated through the real loader, not asserted. So every
+    pin that moved describes a prompt no batch has ever run.
+    """
+    assert _sha(_seg(ask_user=False)) == "c5335e1d1b33870d"
     assert _sha(
         _seg(require_answer_marker=False, report_structure=False, ask_user=False)
     ) == "593c46c416c3f4cf"
-    assert _sha(_seg(report_format_override=False, ask_user=False)) == "93ab746e00264baf"
-    assert _sha(_seg(measured_guidance=False, ask_user=False)) == "18314d08ccd3aaa5"
+    assert _sha(_seg(report_format_override=False, ask_user=False)) == "878aa5a6e11d81a1"
+    assert _sha(_seg(measured_guidance=False, ask_user=False)) == "78afe5acd1e573ac"
 
 
 def test_the_four_on_state_shas_are_pinned() -> None:
@@ -154,13 +165,13 @@ def test_the_four_on_state_shas_are_pinned() -> None:
     # mode x outline. ``when_needed`` keeps the bytes it had before the mode knob
     # existed, which is what makes it the byte-identical way back from the default.
     assert _sha(_seg(ask_user=True, ask_user_outline=True,
-                     ask_user_mode="when_needed")) == "f5ffda547fb5cff5"
+                     ask_user_mode="when_needed")) == "316a491fa459f783"
     assert _sha(_seg(ask_user=True, ask_user_outline=False,
-                     ask_user_mode="when_needed")) == "1e45c78cb003dfa7"
+                     ask_user_mode="when_needed")) == "b73b3e5e14ae5d40"
     assert _sha(_seg(ask_user=True, ask_user_outline=True,
-                     ask_user_mode="first_turn")) == "2434cb68b0262b88"
+                     ask_user_mode="first_turn")) == "693fdafe6b8d6c8b"
     assert _sha(_seg(ask_user=True, ask_user_outline=False,
-                     ask_user_mode="first_turn")) == "49e85c6acad4460b"
+                     ask_user_mode="first_turn")) == "afb17ee272b826c2"
 
 
 def test_both_modes_name_the_call_as_the_way_to_ask() -> None:
@@ -1112,10 +1123,17 @@ def test_the_reviewer_and_the_bar_are_wrapped_only_when_ask_user_is_on() -> None
     """The off-state is the object graph this build had before the feature: with
     the knob off there is no wrapper to reason about, which is the same guarantee
     ``GatedHook`` makes about ``conversation.enabled``."""
+    # ★ 20260829: fetch floor and spin breaker are pinned OFF here rather than
+    # left to the default, which now turns them on. This test is about ONE thing -
+    # which observers get the ClarifyExempt wrapper when ask_user is on - and two
+    # extra unwrapped observers in the list would be noise that hides the answer.
+    # Pinned rather than deleted from the expectation, so that a future default
+    # change still cannot alter what this test is measuring.
     shape = {"report_structure": True, "report_bounce": True}
+    quiet = {"fetch_floor": {"enabled": False}, "spin_breaker": {"enabled": False}}
     on = build_dr_flow(DRFlowConfig(
         enabled=True, conversation={"enabled": True}, ask_user={"enabled": True},
-        final_shape=shape, force_finalize={"enabled": True}), None, 20, 200_000)
+        final_shape=shape, force_finalize={"enabled": True}, **quiet), None, 20, 200_000)
     assert [o.name for o in on.observers] == [
         "Gated(BudgetNoteObserver)",
         "Gated(ClarifyExempt(ForcedFinalizeGate))",
@@ -1125,7 +1143,7 @@ def test_the_reviewer_and_the_bar_are_wrapped_only_when_ask_user_is_on() -> None
     ]
     off = build_dr_flow(DRFlowConfig(
         enabled=True, conversation={"enabled": True}, final_shape=shape,
-        force_finalize={"enabled": True}), None, 20, 200_000)
+        force_finalize={"enabled": True}, **quiet), None, 20, 200_000)
     assert [o.name for o in off.observers] == [
         "Gated(BudgetNoteObserver)",
         "Gated(ForcedFinalizeGate)",
@@ -2382,9 +2400,9 @@ def test_when_needed_reverts_the_mode_and_only_the_mode() -> None:
     """
     when_needed = _seg(ask_user=True, ask_user_mode="when_needed")
     first_turn = _seg(ask_user=True, ask_user_mode="first_turn")
-    assert _sha(when_needed) == "f5ffda547fb5cff5"
-    assert _sha(first_turn) == "2434cb68b0262b88"
-    assert _sha(_seg(ask_user=False)) == "75d2ad71c15aacc0"
+    assert _sha(when_needed) == "316a491fa459f783"
+    assert _sha(first_turn) == "693fdafe6b8d6c8b"
+    assert _sha(_seg(ask_user=False)) == "c5335e1d1b33870d"
 
     # Everything outside the mode's own sentences is shared, in BOTH states.
     for shared in ("An outline names decisions",
@@ -2478,9 +2496,9 @@ def test_the_outline_off_state_is_untouched_by_that_wording() -> None:
     """The sentence lives in the outline slot, so turning the outline off must leave
     both mode variants byte-identical to what they were."""
     assert _sha(_seg(ask_user=True, ask_user_outline=False,
-                     ask_user_mode="when_needed")) == "1e45c78cb003dfa7"
+                     ask_user_mode="when_needed")) == "b73b3e5e14ae5d40"
     assert _sha(_seg(ask_user=True, ask_user_outline=False,
-                     ask_user_mode="first_turn")) == "49e85c6acad4460b"
+                     ask_user_mode="first_turn")) == "afb17ee272b826c2"
 
 
 def test_the_handoff_is_written_in_the_second_person() -> None:
