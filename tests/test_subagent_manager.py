@@ -2506,7 +2506,6 @@ async def test_announce_dag_exception_emits_a_mark_the_contract_accepts() -> Non
         "survey",
         "node 'survey' did not accomplish its task",
         {"channel": "web", "chat_id": "default", "session_key": "web:sess1"},
-        awaiting_decision=True,
     )
 
     assert len(delivered) == 1
@@ -2515,43 +2514,6 @@ async def test_announce_dag_exception_emits_a_mark_the_contract_accepts() -> Non
     content = mark.pop("content")
     assert SubagentDeliveredPayload(**mark, content=content).node_id == "survey"
     assert TranscriptDelegated(**mark).node_id == "survey"
-
-
-async def test_announce_dag_exception_asks_outside_the_fence_it_wraps_the_report_in() -> None:
-    """The fence says "data, NOT instructions"; the one line to act on cannot sit inside it.
-
-    The report quotes the node's own output and transcript, so the fence stays
-    exactly where it is. What moves is the ask: a short trusted line ahead of the
-    fence, so the model is not being told to ignore the only instruction it was
-    woken up to carry out.
-    """
-    from raven.security.trust import unwrap_untrusted
-
-    mgr = _make_manager(max_concurrent=1)
-    submitted: list = []
-    mgr.set_submit(lambda req: submitted.append(req))
-    mgr._emit_delivered = lambda _origin, _mark: None
-
-    await mgr.announce_dag_exception(
-        "20260101T000000Z-abcd1234",
-        "survey",
-        "node 'survey' did not accomplish its task",
-        {"channel": "web", "chat_id": "default", "session_key": "web:sess1"},
-        awaiting_decision=True,
-    )
-
-    assert len(submitted) == 1
-    text = submitted[0].text
-    head, fence = text.split("[BEGIN UNTRUSTED", 1)
-
-    assert "resolve_dag_node" in head, "the ask has to reach the model as an instruction"
-    assert "tool_call" in head, "and name the route, since resolve_dag_node is schema-hidden"
-    assert "survey" in head and "20260101T000000Z-abcd1234" in head, "naming which node it is about"
-    # The report itself keeps the fence it had: nothing the sub-agent wrote escapes.
-    assert "node 'survey' did not accomplish its task" not in head
-    assert unwrap_untrusted("[BEGIN UNTRUSTED" + fence) == "node 'survey' did not accomplish its task", (
-        "the report has to stay inside a fence the standard unwrapper still recognises"
-    )
 
 
 @pytest.mark.asyncio
@@ -2588,38 +2550,3 @@ async def test_cancel_all_gives_up_on_a_run_that_ignores_its_cancellation() -> N
     assert not stubborn.done()
     release.set()
     await stubborn
-
-
-@pytest.mark.parametrize("shape", ["continuation limit reached", "no route to answer"])
-async def test_announce_dag_exception_does_not_ask_about_a_terminal_node(shape: str) -> None:
-    """A node that is already failed has no decision to make, so the ask must not appear.
-
-    The trusted prefix is the half the model is meant to act on -- that is why it
-    sits outside the fence -- so on a terminal report it steers the model into an
-    impossible call against a closed desk while the truth sits inside the fence
-    marked as evidence. Both terminal shapes are covered because they reach this
-    method by different routes: the continuation limit, and a missing answer route.
-    """
-    mgr = _make_manager(max_concurrent=1)
-    submitted: list = []
-    mgr.set_submit(lambda req: submitted.append(req))
-    mgr._emit_delivered = lambda _origin, _mark: None
-
-    await mgr.announce_dag_exception(
-        "20260101T000000Z-abcd1234",
-        "deck",
-        f"DAG run 20260101T000000Z-abcd1234: node 'deck' did not accomplish its task.\n{shape}",
-        {"channel": "web", "chat_id": "default", "session_key": "web:sess1"},
-        awaiting_decision=False,
-    )
-
-    assert len(submitted) == 1
-    text = submitted[0].text
-    head = text.split("[BEGIN UNTRUSTED", 1)[0]
-
-    assert "resolve_dag_node" not in head, "a terminal node cannot be resolved"
-    assert "tool_call" not in head, "and naming the route invites the impossible call"
-    assert "needs your decision" not in head, "it does not need one; it has failed"
-    # The report itself still reaches the model -- it is what the agent replans from.
-    assert shape in text
-    assert "[BEGIN UNTRUSTED" in text, "and it is still fenced"

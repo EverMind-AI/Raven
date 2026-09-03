@@ -16,7 +16,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from loguru import logger
 
@@ -62,17 +62,9 @@ def _now_ms() -> int:
 
 ProgressPublisher = Callable[[str, dict], Awaitable[None]]
 
-
-# (run_id, node_id, report, origin, *, awaiting_decision) -> awaitable. How a
-# node's report reaches the main agent; the host supplies
-# ``SubagentManager.announce_dag_exception``. ``awaiting_decision`` is False for a
-# report the node has already been failed on, and the keyword is required rather
-# than defaulted: the wrong value tells the model to answer a closed desk.
-class ExceptionAnnouncer(Protocol):
-    async def __call__(
-        self, run_id: str, node_id: str, report: str, origin: dict, *, awaiting_decision: bool
-    ) -> None: ...
-
+# (run_id, node_id, report, origin) -> awaitable. How a suspended node's report
+# reaches the main agent; the host supplies ``SubagentManager.announce_dag_exception``.
+ExceptionAnnouncer = Callable[[str, str, str, dict], Awaitable[None]]
 
 # asyncio only holds a weak reference to a running task, so a fire-and-forget
 # record has to be kept alive by its scheduler until it finishes.
@@ -169,7 +161,6 @@ async def run_dag(
     max_continuations: int = 2,
     origin: dict | None = None,
     adjudicate: "Callable[[str, str, float | None], Awaitable[str | None]] | None" = None,
-    control_reachable: "Callable[[], bool] | None" = None,
 ) -> DagRunResult:
     """Run a validated DAG, passing messages through files.
 
@@ -434,7 +425,6 @@ async def run_dag(
                         dependents=dependents,
                         adjudication_timeout_s=adjudication_timeout_s,
                         answered_in_turn=adjudicate is not None,
-                        control_reachable=control_reachable,
                     )
                     for nids in groups.values()
                 ),
@@ -529,23 +519,6 @@ def _tally(status: dict[str, str]) -> dict:
     }
 
 
-def _route_available(control_reachable: "Callable[[], bool] | None") -> bool:
-    """Whether the main agent has a way to call `resolve_dag_node`.
-
-    ``None`` means the host never wired the predicate, which has to keep reading
-    as reachable: every runner fixture that predates the predicate omits it, and
-    reading absent as unreachable would turn all of them into instant failures. A
-    predicate that raises reads as unreachable, matching how the graph tool's
-    acceptance text already treats one.
-    """
-    if control_reachable is None:
-        return True
-    try:
-        return bool(control_reachable())
-    except Exception:  # noqa: BLE001 - an unanswerable predicate is not a reachable route
-        return False
-
-
 def _exception_report(
     *,
     run_id: str,
@@ -556,7 +529,6 @@ def _exception_report(
     blocked: list[str],
     timeout_s: float,
     answered_in_turn: bool = False,
-    route_available: bool = True,
 ) -> str:
     """The text the main agent is woken with. Everything it needs to decide, once.
 
@@ -585,16 +557,6 @@ def _exception_report(
             "no adjudication is being awaited. Its dependents are skipped. Re-plan if this line matters."
         )
         return "\n".join(lines)
-    if not route_available and not answered_in_turn:
-        # The announce is not gated on suspension, so this text still reaches the
-        # model for a node that has already failed. Naming a call would ask it to
-        # answer something that accepts no answer, through a route it does not have.
-        lines.append(
-            f"attempt {attempt}; {remaining} continuation(s) left, but there is no route for you to "
-            "answer this node (tool_call is not available), so it has failed and its dependents are "
-            "skipped. Re-plan if this line matters."
-        )
-        return "\n".join(lines)
     if answered_in_turn:
         lines.append(f"attempt {attempt}; {remaining} continuation(s) left")
         lines.append(
@@ -602,17 +564,10 @@ def _exception_report(
         )
         return "\n".join(lines)
     lines.append(f"attempt {attempt}; {remaining} continuation(s) left; deciding within {timeout_s:g}s")
-    # The invocation rather than the bare call: `resolve_dag_node` is hidden from the
-    # provider schema, so a model that reads its own tool list finds no such tool and
-    # reports it cannot answer -- which spends the whole timeout and then reads as the
-    # agent declining a question it was never able to make.
     lines.append(
-        f'Answer by calling tool_call with name "resolve_dag_node" and arguments '
-        f'{{"run_id": "{run_id}", "node_id": "{node.id}", "decision": "continue", '
-        f'"message": "<what the node should try next>"}}, or the same with "decision": "abandon" '
-        "to give up on this node and everything waiting on it. "
-        "resolve_dag_node is not in your tool list; tool_call is how you reach it. "
-        "Ask the user first if only they can supply what is missing."
+        f'Answer with resolve_dag_node("{run_id}", "{node.id}", "continue", "<message to the node>") '
+        f'or resolve_dag_node("{run_id}", "{node.id}", "abandon"). Ask the user first if only they '
+        "can supply what is missing."
     )
     return "\n".join(lines)
 
@@ -709,7 +664,6 @@ async def _apply_verdict(
     dependents: dict[str, list[str]],
     adjudication_timeout_s: float,
     answered_in_turn: bool = False,
-    control_reachable: "Callable[[], bool] | None" = None,
 ) -> None:
     """Turn a finished node's verdict into a status, and report a bad one.
 
@@ -739,7 +693,6 @@ async def _apply_verdict(
     # input, whatever happens next.
     output_paths.pop(node.id, None)
     remaining = max_continuations - (attempt - 1)
-    answerable = _route_available(control_reachable)
     report = _exception_report(
         run_id=store.run_id,
         node=node,
@@ -749,7 +702,6 @@ async def _apply_verdict(
         blocked=sorted(dependents.get(node.id, [])),
         timeout_s=adjudication_timeout_s,
         answered_in_turn=answered_in_turn,
-        route_available=answerable,
     )
     # `origin` is part of this predicate because whoever is going to be asked is
     # reached through it: a node suspended on a report that cannot be delivered
@@ -757,10 +709,7 @@ async def _apply_verdict(
     # question they never received. Which channel counts depends on the lane -- the
     # model is woken by `announce_exception`, the person is asked from the wave
     # loop -- so a foreground run suspends on the adjudicator being wired instead.
-    # The same reasoning applied to the return leg: the model answers by naming a
-    # schema-hidden tool through `tool_call`, so without that route the report is
-    # delivered to someone who cannot reply.
-    deliverable = (announce_exception is not None and answerable) if not answered_in_turn else True
+    deliverable = announce_exception is not None if not answered_in_turn else True
     suspending = remaining > 0 and desk is not None and deliverable and origin is not None
     # Opened before the announce, not after: the announce can be answered
     # synchronously (a host that dispatches the turn inline, every test that
@@ -774,21 +723,9 @@ async def _apply_verdict(
         desk.open(node.id, report)
     else:
         status[node.id] = "failed"
-        if not answerable and remaining > 0:
-            # Appended, not substituted: this is the run record's own `error` field,
-            # which the manifest carries and `dag_status` renders, so it is the only
-            # place either fact reaches a reader asking about the *node*. The report
-            # is durable too -- it persists as the injected turn -- but it is found by
-            # reading the conversation, not by reading the run. Why nobody could be
-            # asked and why the node failed are different facts, and someone looking
-            # at the node is usually after the second.
-            errors[node.id] = (
-                f"{reason} There is no route to answer this node (tool_call is not "
-                "available to the agent), so it could not be adjudicated."
-            )
     if announce_exception is not None and origin is not None and not answered_in_turn:
         try:
-            await announce_exception(store.run_id, node.id, report, origin, awaiting_decision=suspending)
+            await announce_exception(store.run_id, node.id, report, origin)
         except Exception as exc:  # noqa: BLE001 - the node's fate must not depend on delivery
             logger.opt(exception=True).warning("DAG node {} exception report could not be delivered: {}", node.id, exc)
             if suspending:
@@ -990,7 +927,6 @@ async def _run_group(
     dependents: dict[str, list[str]] | None = None,
     adjudication_timeout_s: float = 600.0,
     answered_in_turn: bool = False,
-    control_reachable: "Callable[[], bool] | None" = None,
 ) -> None:
     """Run one instance-group's nodes sequentially, in id order."""
     for nid in nids:
@@ -1030,7 +966,6 @@ async def _run_group(
             dependents=dependents,
             adjudication_timeout_s=adjudication_timeout_s,
             answered_in_turn=answered_in_turn,
-            control_reachable=control_reachable,
         )
 
 
@@ -1163,7 +1098,6 @@ async def _run_node(
     dependents: dict[str, list[str]] | None = None,
     adjudication_timeout_s: float = 600.0,
     answered_in_turn: bool = False,
-    control_reachable: "Callable[[], bool] | None" = None,
 ) -> None:
     """Render, dispatch to the node's backend, and record one node."""
     async with semaphore:
@@ -1324,7 +1258,6 @@ async def _run_node(
                 dependents=dependents or {},
                 adjudication_timeout_s=adjudication_timeout_s,
                 answered_in_turn=answered_in_turn,
-                control_reachable=control_reachable,
             )
         turn = await _add_node_to_instance_log(subagents_root, node, did, session_key, errors.get(node.id), node_output)
         ended_at_ms = _now_ms()
