@@ -100,6 +100,10 @@ export interface SettingsSource {
   usage(): Promise<UsageStats | null>
   provider(op: ProviderOp, params: Record<string, unknown>): Promise<SettingsSnapshot>
   model(): string
+  /* The configured default provider, paired with model() above: the default
+     badge must move with a cross-provider default pick without reopening the
+     page. Optional because the offline demo has no live default to track. */
+  defaultProvider?(): string
   version(): string | null
   checkUpdate(btn: HTMLButtonElement): void | Promise<void>
   pickModel?(anchor: HTMLElement, after: () => void): void
