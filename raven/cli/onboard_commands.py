@@ -29,6 +29,7 @@ already written.
 
 from __future__ import annotations
 
+import os
 import sys
 from typing import Any, Callable, Optional
 
@@ -138,6 +139,7 @@ _CURATED_GROUPS: list[dict[str, Any]] = [
                 "label": "MiniMax (open-source partner)",
                 "label_zh": "MiniMax(开源合作伙伴)",
             },
+            {"name": "minimaxi", "label": "MiniMax CN", "label_zh": "MiniMax CN(国内站)"},
             {"name": "deepseek", "label": "DeepSeek", "label_zh": "DeepSeek"},
             {"name": "zai", "label": "Z.ai (Zhipu)", "label_zh": "Z.ai(智谱)"},
             {"name": "dashscope", "label": "DashScope", "label_zh": "阿里云百炼"},
@@ -1246,6 +1248,12 @@ def _run_test_probe(
             _t(
                 "  [dim]Run 'raven provider test' to re-check, or confirm the model is served by this provider.[/dim]",
                 "  [dim]可运行 'raven provider test' 复查,或确认该模型确由此服务商提供。[/dim]",
+            )
+        )
+        console.print(
+            _t(
+                "  [dim]For the redacted wire request: RAVEN_DEBUG_HTTP=1 raven doctor --probe[/dim]",
+                "  [dim]查看已脱敏的实际请求: RAVEN_DEBUG_HTTP=1 raven doctor --probe[/dim]",
             )
         )
         print_probe_troubleshooting(provider)
@@ -2789,6 +2797,7 @@ def run_wizard(
     yes: bool = False,
     reset: bool = False,
     skip_test: bool = False,
+    debug_http: bool = False,
     show_next_steps: bool = True,
 ) -> None:
     """Run the 6-step onboarding wizard end-to-end.
@@ -2804,6 +2813,9 @@ def run_wizard(
     from loguru import logger as _logger
 
     _logger.disable("raven")
+    previous_debug = os.environ.get("RAVEN_DEBUG_HTTP")
+    if debug_http:
+        os.environ["RAVEN_DEBUG_HTTP"] = "1"
     try:
         _run_wizard_body(
             provider=provider,
@@ -2823,6 +2835,11 @@ def run_wizard(
             show_next_steps=show_next_steps,
         )
     finally:
+        if debug_http:
+            if previous_debug is None:
+                os.environ.pop("RAVEN_DEBUG_HTTP", None)
+            else:
+                os.environ["RAVEN_DEBUG_HTTP"] = previous_debug
         _logger.enable("raven")
 
 
@@ -3044,6 +3061,11 @@ def register(app: typer.Typer) -> None:
             "--skip-test",
             help="Skip the one-shot test message (avoids a billed call; connectivity is still checked)",
         ),
+        debug_http: bool = typer.Option(
+            False,
+            "--debug-http",
+            help="Print the redacted HTTP request for the one-shot test message",
+        ),
     ) -> None:
         """Six-step setup wizard: LLM provider → sandbox → channel → memory → deep research → import."""
         run_wizard(
@@ -3061,6 +3083,7 @@ def register(app: typer.Typer) -> None:
             yes=yes,
             reset=reset,
             skip_test=skip_test,
+            debug_http=debug_http,
         )
 
 
