@@ -888,10 +888,24 @@ def fetch_result_ok(out: object) -> bool:
     caliber the ledger already used, and it is the safe direction here: an
     unparseable body cannot be shown to be a page, and a gate that released on
     one would release on every malformed response.
+
+    ``raw_decode``, not ``loads``: the envelope is recognised even when a
+    harness note trails it. ``loads`` demands that the JSON be the WHOLE
+    string, and the fetch-gate and sufficiency seams read a message body that
+    several observers are entitled to write on - ``BudgetNoteObserver`` appends
+    ``[budget: iteration N/M | context ~P%]`` to the newest tool result, the
+    fetch floor and the gate append their notes. ``unwrap_untrusted`` now drops
+    what follows the fence's close marker, so those seams normally hand this a
+    clean envelope; this is the second line, for a body that reaches a caller
+    annotated but unfenced. The ledger is unaffected either way - it is handed
+    the raw return value, which no observer has touched.
     """
+    text = out if isinstance(out, str) else None
+    if text is None:
+        return False
     try:
-        payload = json.loads(out)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+        payload, _end = json.JSONDecoder().raw_decode(text.lstrip())
+    except ValueError:
         return False
     if not isinstance(payload, dict):
         return False

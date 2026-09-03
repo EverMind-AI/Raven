@@ -1,0 +1,21 @@
+{
+  "providers": {
+    "custom": {
+      "apiKey": "EMPTY",
+      "apiBase": "https://sd95nv4dicbd59grhalr0.apigateway-cn-shanghai.volceapi.com/v1",
+      "extraBody": {"chat_template_kwargs": {"enable_thinking": false}}
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": "GLM-5.2-NVFP4",
+      "provider": "custom",
+      "temperature": 1.0,
+      "reasoningEffort": "high",
+      "maxToolIterations": 150,
+      "maxTokens": 16384,
+      "contextWindowTokens": 131072
+    }
+  },
+  "memory": {"backend": null}
+}

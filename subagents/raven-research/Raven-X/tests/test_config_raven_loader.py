@@ -362,6 +362,42 @@ def test_the_bump_ritual_moves_the_old_label_into_the_superseded_tuple():
     # semantics to name, so the validator must stay out of the way.
     assert DRFlowConfig(enabled=False, version=previous).version == previous
 
+
+def test_a_superseded_profile_label_is_refused_by_its_whole_name():
+    """The base match cannot see a profile that moved on its own.
+
+    A suffix names a profile, not a semantics, so ``_SUPERSEDED_VERSIONS`` lets
+    every suffix of a live base through - correctly. The hole that leaves is a
+    profile whose distribution changes while the base rung does not (2026-09-02:
+    the product identity gained two reply rules and search snippets turned on
+    under an unchanged ``dr@3.5``). AGENTS.md 0.2 wants the old label REFUSED,
+    not documented, so ``_SUPERSEDED_PROFILES`` matches the whole label and
+    names the successor. Everything here is read off the table, never spelled.
+    """
+    from raven.config.raven import DRFlowConfig
+
+    tuples = DRFlowConfig()
+    retired = dict(tuples._SUPERSEDED_PROFILES)
+    assert retired, "the profile table is empty; this test has nothing to hold"
+    for old, new in retired.items():
+        # An entry whose base is already superseded is dead: the base table
+        # refuses it first and this one can never fire.
+        assert old.split("-", 1)[0] not in tuples._SUPERSEDED_VERSIONS, old
+        # The successor must itself be live, or every config that followed the
+        # refusal's advice fails to load.
+        assert new not in retired, f"{new!r} is both a successor and superseded"
+        assert DRFlowConfig(enabled=True, version=new).version == new
+        with pytest.raises(ValidationError, match="superseded profile label"):
+            DRFlowConfig(enabled=True, version=old)
+        # A sibling profile on the same base rung is untouched: the match is on
+        # the whole label, so only the named profile is refused.
+        sibling = f"{old.split('-', 1)[0]}-futurex"
+        assert DRFlowConfig(enabled=True, version=sibling).version == sibling
+        # The anchor arm keeps historical labels loadable, exactly as for the
+        # base table.
+        assert DRFlowConfig(enabled=False, version=old).version == old
+
+
 def test_the_shipped_example_configs_load_on_this_build():
     """The examples are the only surface a new user touches, and nothing else
     checked them.

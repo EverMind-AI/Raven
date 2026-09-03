@@ -1,0 +1,47 @@
+{
+  "providers": {
+    "custom": {
+      "apiKey": "EMPTY",
+      "apiBase": "http://WORKER3_IP:30000/v1"
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": "student",
+      "provider": "custom",
+      "temperature": 0.7,
+      "reasoningEffort": "high",
+      "maxToolIterations": 150,
+      "maxTokens": 16384,
+      "contextWindowTokens": 65536,
+      "requestTimeoutSeconds": 900
+    }
+  },
+  "memory": {
+    "backend": null
+  },
+  "drFlow": {
+    "enabled": true,
+    "version": "dr@1.4",
+    "forceFinalize": {
+      "enabled": true
+    },
+    "spinBreaker": {
+      "enabled": true
+    },
+    "fetchFloor": {
+      "enabled": true
+    },
+    "verify": {
+      "constraintRubric": true,
+      "strictRejectOnly": true
+    },
+    "digest": {
+      "verbatimHeadChars": 800
+    },
+    "search": {
+      "includeSnippets": false,
+      "snippetDedupByDocid": false
+    }
+  }
+}

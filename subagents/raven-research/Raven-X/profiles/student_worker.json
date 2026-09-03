@@ -1,0 +1,6 @@
+{
+  "providers": {"custom": {"apiKey": "EMPTY", "apiBase": "http://192.168.0.83:30010/v1"}},
+  "agents": {"defaults": {"model": "student", "provider": "custom", "temperature": 0.7,
+    "reasoningEffort": "high", "maxToolIterations": 150, "maxTokens": 16384, "contextWindowTokens": 65536}},
+  "memory": {"backend": null}
+}

@@ -68,6 +68,8 @@
           "verbatimHeadChars": 800
         },
         "search": {
+          "includeSnippets": true,
+          "snippetDedupByDocid": true,
           "saturation": {
             "enabled": true,
             "k": 5,
@@ -97,7 +99,7 @@
           "researchMemo": true,
           "identityScope": "turn"
         },
-        "version": "dr@3.5-filetools-askuser"
+        "version": "dr@3.5-filetools-askuser-derive"
       }
     }
   },
