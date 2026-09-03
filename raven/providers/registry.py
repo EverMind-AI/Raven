@@ -486,7 +486,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         model_overrides=(),
         # Needed by `provider test` and the wizard preflight, which probe
         # /v1/models before any LiteLLM call resolves an endpoint.
-        default_api_base="https://api.minimax.io/v1",
+        default_api_base="https://api.minimaxi.com/v1",
     ),
     ProviderSpec(
         name="minimax_global",

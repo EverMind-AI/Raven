@@ -881,6 +881,12 @@ def _verify_provider(provider: str, *, skip_test: bool = False) -> tuple[bool, s
     else:
         console.print(_t("  [dim]⏳ Verifying your API key…[/dim]", "  [dim]⏳ 正在验证 API Key…[/dim]"))
     result = probe(provider)
+    # Named before the verdict: the address is resolved from the config, the
+    # registry default or LiteLLM, so on a failure it is the one thing the user
+    # cannot otherwise see.
+    probed_base = result.get("api_base")
+    if probed_base:
+        console.print(_t(f"  [dim]Endpoint: {probed_base}[/dim]", f"  [dim]接入地址:{probed_base}[/dim]"))
     if result["ok"]:
         models = result.get("models_count")
         suffix = _t(f" ({models} models available)", f"(共 {models} 个可用模型)") if models else ""
