@@ -16,32 +16,11 @@ from __future__ import annotations
 
 import logging as _stdlib_logging
 import os
-import re
 import sys
 from collections.abc import Callable
 from pathlib import Path
 
 from raven.config.paths import get_logs_dir
-
-_SECRET_QUERY = re.compile(
-    r"([?&](?:api[_-]?key|key|token|secret|password|access[_-]?token|auth)=)[^&\s\"']+",
-    re.IGNORECASE,
-)
-
-
-def _no_secrets(message: str) -> str:
-    """Blank out a credential carried in a URL query string.
-
-    A vendor that takes its key as a query parameter puts it in every URL, and
-    httpx logs each request at INFO on the success path, so the key reaches the
-    retained file without any exception being raised. Redacting rather than
-    dropping the record keeps the host, path, query and status readable.
-    """
-    return _SECRET_QUERY.sub(r"\1<redacted>", message)
-
-
-def _redact_record(record: dict) -> None:
-    record["message"] = _no_secrets(record["message"])
 
 
 def redirect_loguru_to_file(
@@ -66,10 +45,6 @@ def redirect_loguru_to_file(
     log_path = get_logs_dir() / filename
 
     logger.remove()
-    # On the patcher rather than at each call site or in the stdlib bridge: it
-    # is the one hook both lanes cross, so a loguru call that formats a URL is
-    # covered alongside every intercepted third-party record.
-    logger.configure(patcher=_redact_record)
     logger.add(
         str(log_path),
         level=file_level,

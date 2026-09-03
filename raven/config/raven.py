@@ -1379,15 +1379,9 @@ class SubagentDagConfig(_Base):
     here: the task is one enum plus a sentence, not the reasoning the conversation
     needs."""
 
-    verdict_timeout_seconds: float = 180.0
+    verdict_timeout_seconds: float = 30.0
     """Wall clock for one judge call. Past this the node is treated as having
-    accomplished its task, which is what the previous behaviour was.
-
-    It has to leave room for the retry ladder it contains: `chat_with_retry` makes
-    four attempts with roughly 7s of jittered backoff between them, so a ceiling
-    close to the length of a few slow calls truncates the ladder instead of bounding
-    it -- and the truncation lands on the fail-open, judging an unjudged node
-    accomplished. 30s, the previous value, had no such room."""
+    accomplished its task, which is what the previous behaviour was."""
 
     evidence_budget_chars: int = 8000
     """Characters of the node's transcript, taken from the end, shown to the judge.

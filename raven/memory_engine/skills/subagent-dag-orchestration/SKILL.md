@@ -82,10 +82,8 @@ reach you before that one: a node that could not do its job asking you what to d
 - Tell the user the work is under way, without promising the outcome you have not seen yet.
 
 Pass `background: false` only when you genuinely cannot continue without the outputs — for
-instance when the very next thing you must do is read them. That blocks your turn until the
-graph finishes, or until a node reports it could not do its job, whichever comes first. In the
-second case the call returns that node's report instead of the summary; see below for what to
-do with it.
+instance when the very next thing you must do is read them. That blocks your turn until every
+node is done and returns the summary below as the call's result.
 
 A malformed graph is rejected in your own turn either way, before anything is dispatched, so
 a call that returns "started" has already passed every check.
@@ -123,13 +121,10 @@ Two limits worth knowing. A node gets a small number of continuations before it 
 good, so a message that does not actually change anything wastes one. And the run does not
 wait forever -- if nobody answers, the node fails on its own and its dependents are skipped.
 
-In a `background: false` call the report does not arrive as a message: it is the call's own
-return value, and the graph keeps running while you read it. Answer it the same way, with
-`resolve_dag_node` -- which, for a blocking run, waits and returns the next report or the
-final summary, so keep calling it until you have the summary. While your turn is running the
-graph waits for you without a deadline; ask the user first if only they can supply what is
-missing. If you end your turn with a report unanswered, the run carries on as a background
-run: the report is re-sent to you as a message and the usual deadline starts.
+All of this is about a backgrounded run. In a `background: false` call there is no
+message to you and no `resolve_dag_node` to call: the question goes straight to the user
+and the answer is applied before your call returns, so what you get back already reflects
+whatever they decided.
 
 To stop the whole run rather than one node, call `cancel_dag` the same way, through
 `tool_call`. Re-planning means `cancel_dag` followed by a fresh graph.

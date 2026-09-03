@@ -39,7 +39,7 @@ and its tool is going away.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
@@ -104,10 +104,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         tool="web_fetch",
         summary="Read a web page the agent already has the URL for",
         need=Need.NOTHING,
-        # The vendor slot of whichever reader is selected; see ``resolve``.
-        config_path="tools.web.providers.jina.apiKey",
-        env_var="JINA_API_KEY",
-        obtain_from="https://jina.ai/reader",
+        config_path="tools.web.jinaApiKey",
     ),
     Capability(
         tool="image_generate",
@@ -140,33 +137,11 @@ CAPABILITIES: tuple[Capability, ...] = (
         tool="web_search",
         summary="Search the web",
         need=Need.NEW_ACCOUNT,
-        # Serper's slot, the default vendor; ``resolve`` swaps in the selected one.
-        config_path="tools.web.providers.serper.apiKey",
+        config_path="tools.web.search.apiKey",
         env_var="SERPER_API_KEY",
         obtain_from="https://serper.dev",
     ),
 )
-
-
-def resolve(cap: Capability, config: "Config") -> Capability:
-    """The row as it applies to this deployment's vendor choice.
-
-    The table is static; the web rows are not, because which config slot, env
-    var and sign-up page a deployer has to act on depends on the vendor
-    ``tools.web.search.provider`` / ``tools.web.fetch.provider`` selected. A
-    Tavily deployment told to fill Serper's slot would fill the wrong one.
-    """
-    if cap.tool == "web_search":
-        from raven.agent.tools.web import SEARCH_PROVIDERS
-
-        spec = SEARCH_PROVIDERS[config.tools.web.search.provider]
-        return replace(cap, config_path=spec.config_path, env_var=spec.env_var, obtain_from=spec.signup)
-    if cap.tool == "web_fetch":
-        from raven.agent.tools.web import FETCH_PROVIDERS
-
-        spec = FETCH_PROVIDERS[config.tools.web.fetch.provider]
-        return replace(cap, config_path=spec.config_path, env_var=spec.env_var, obtain_from=spec.signup)
-    return cap
 
 
 def _resolved_media(cap: Capability, config: "Config") -> Any:
@@ -196,8 +171,7 @@ def is_configured(cap: Capability, config: "Config") -> bool:
 
     from raven.agent.tools.web import WebSearchTool
 
-    provider = config.tools.web.search.provider
-    return WebSearchTool.is_configured(config.tools.web.vendor_key(provider), provider)
+    return WebSearchTool.is_configured(config.tools.web.search.api_key)
 
 
 def is_disabled(cap: Capability, config: "Config") -> bool:
@@ -272,17 +246,9 @@ def configured_from(cap: Capability, config: "Config") -> str:
         # but absent in the raw section came from the provider entry.
         if _resolved_media(cap, config).api_key:
             return f"borrowed: {_OPENROUTER_KEY}"
-    else:
-        # Name the slot that actually holds the key: the vendor slot first, then
-        # the pre-vendor Serper leaf a config written before the vendor layout
-        # still carries.
-        provider = config.tools.web.search.provider
-        if config.tools.web.providers.key_for(provider):
-            return f"tools.web.providers.{provider}.apiKey"
-        if provider == "serper" and config.tools.web.search.api_key:
-            return "tools.web.search.apiKey"
-    env_var = resolve(cap, config).env_var
-    return env_var if os.environ.get(env_var) else ""
+    elif config.tools.web.search.api_key:
+        return cap.key_path
+    return cap.env_var if os.environ.get(cap.env_var) else ""
 
 
 def borrowable_credential(cap: Capability, config: "Config") -> str:

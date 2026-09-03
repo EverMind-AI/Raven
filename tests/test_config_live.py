@@ -239,31 +239,6 @@ class TestExecExtraDenySlice:
         live = self._live(tmp_path, {"tools": {"web": {"search": {"apiKey": 123}}}})
         assert web_search_key(live) is None
 
-    def test_a_vendor_slot_is_read_live(self, tmp_path):
-        from raven.config.live import web_provider_key
-
-        live = self._live(tmp_path, {"tools": {"web": {"providers": {"tavily": {"apiKey": "tv"}}}}})
-        assert web_provider_key(live, "tavily") == "tv"
-        assert web_provider_key(live, "serper") == "", "a present subtree answers for every vendor in it"
-
-    def test_no_providers_subtree_is_no_answer(self, tmp_path):
-        from raven.config.live import web_provider_key
-
-        live = self._live(tmp_path, {"tools": {"web": {"search": {"apiKey": "sk"}}}})
-        assert web_provider_key(live, "serper") is None
-
-    def test_an_invalid_providers_subtree_dispenses_no_answer(self, tmp_path):
-        from raven.config.live import web_provider_key
-
-        live = self._live(tmp_path, {"tools": {"web": {"providers": {"tavily": {"apiKey": 123}}}}})
-        assert web_provider_key(live, "tavily") is None
-
-    def test_an_unknown_vendor_reads_empty_rather_than_raising(self, tmp_path):
-        from raven.config.live import web_provider_key
-
-        live = self._live(tmp_path, {"tools": {"web": {"providers": {"tavily": {"apiKey": "tv"}}}}})
-        assert web_provider_key(live, "bing") == ""
-
 
 class TestRejectedCandidatesKeepTheLastAdmittedSlice:
     """A schema-rejected edit must not roll a credential back to the boot
@@ -289,20 +264,6 @@ class TestRejectedCandidatesKeepTheLastAdmittedSlice:
 
         self._write(path, {"tools": {"web": {"search": {"apiKey": 123}}}})
         assert web_search_key(live) == "sk-live", "a rejected candidate must not reach the boot fallback"
-
-    def test_two_vendors_last_good_answers_do_not_collide(self, tmp_path):
-        """One memo slot for the pair would have the second vendor's rejected
-        edit serve the first vendor's key."""
-        from raven.config.live import web_provider_key
-
-        live, path = self._live(tmp_path)
-        self._write(path, {"tools": {"web": {"providers": {"serper": {"apiKey": "sk"}, "tavily": {"apiKey": "tv"}}}}})
-        assert web_provider_key(live, "serper") == "sk"
-        assert web_provider_key(live, "tavily") == "tv"
-
-        self._write(path, {"tools": {"web": {"providers": {"serper": {"apiKey": "sk"}, "tavily": {"apiKey": 123}}}}})
-        assert web_provider_key(live, "tavily") == "tv", "a rejected edit keeps this vendor's last answer"
-        assert web_provider_key(live, "serper") == "sk", "and does not hand it the other vendor's"
 
     def test_a_removed_section_forgets_the_memory(self, tmp_path):
         from raven.config.live import web_search_key

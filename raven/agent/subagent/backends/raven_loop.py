@@ -26,7 +26,7 @@ from raven.agent.subagent.mcp_grant import (
 from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.shell import ExecTool
-from raven.agent.tools.web import WebFetchTool, WebSearchTool, resolve_vendor_key
+from raven.agent.tools.web import WebFetchTool, WebSearchTool
 from raven.config.live import LiveConfig, exec_extra_deny_patterns
 from raven.config.schema import ExecToolConfig
 from raven.contracts.llm_provider import LLMProvider
@@ -138,12 +138,9 @@ class RavenLoopBackend:
         agent_home: Path,
         restrict_to_workspace: bool = False,
         exec_config: "ExecToolConfig | None" = None,
-        search_api_key: str | None = None,
+        brave_api_key: str | None = None,
         jina_api_key: str | None = None,
         web_proxy: str | None = None,
-        web_search_provider: str = "serper",
-        web_fetch_provider: str = "jina",
-        web_provider_keys: dict[str, str] | None = None,
         tools_allow: Collection[str] | None = None,
         skills_allow: Collection[str] | None = None,
         mcp_allow: Collection[str] | None = None,
@@ -156,12 +153,9 @@ class RavenLoopBackend:
         self.agent_home = Path(agent_home)
         self.restrict_to_workspace = restrict_to_workspace
         self.exec_config = exec_config or ExecToolConfig()
-        self.search_api_key = search_api_key
+        self.brave_api_key = brave_api_key
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
-        self.web_search_provider = web_search_provider
-        self.web_fetch_provider = web_fetch_provider
-        self.web_provider_keys = web_provider_keys
         # Per-role capability whitelists (playbook roles build one backend per
         # role). None = current full set; [] = none; a list = only those.
         # skills_allow additionally stacks with the tool-based skill filter.
@@ -169,9 +163,6 @@ class RavenLoopBackend:
         self.skills_allow = skills_allow
         self.mcp_allow = list(mcp_allow) if mcp_allow is not None else None
         self.mcp_source: McpSource | None = None
-
-    def _web_key(self, vendor: str) -> str | None:
-        return resolve_vendor_key(vendor, self.web_provider_keys, self.search_api_key, self.jina_api_key)
 
     def set_mcp_source(self, source: McpSource | None) -> None:
         """Late-bind the host MCP view without rebuilding this cached backend."""
@@ -290,19 +281,11 @@ class RavenLoopBackend:
         # text ends up in the parent turn. The whitelist stacks on top: a
         # whitelisted web_search without a key is still withheld.
         if allowed("web_search"):
-            search_provider = self.web_search_provider
-            web_search = WebSearchTool(
-                api_key=self._web_key(search_provider), proxy=self.web_proxy, provider=search_provider
-            )
+            web_search = WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy)
             if web_search.api_key:
                 tools.register(web_search)
         if allowed("web_fetch"):
-            fetch_provider = WebFetchTool.effective_provider(
-                self.web_fetch_provider, self._web_key(self.web_fetch_provider)
-            )
-            tools.register(
-                WebFetchTool(api_key=self._web_key(fetch_provider), proxy=self.web_proxy, provider=fetch_provider)
-            )
+            tools.register(WebFetchTool(api_key=self.jina_api_key, proxy=self.web_proxy))
 
         # A resumed instance brings its own history, system prompt included;
         # rebuilding the prompt here would append a second system turn. A

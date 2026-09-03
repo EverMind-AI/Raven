@@ -1026,7 +1026,7 @@ def test_doctor_lists_a_capability_that_is_not_configured(healthy_config: Path) 
     assert "Tool capabilities" in result.stdout
     assert "web_search" in result.stdout
     assert "serper.dev" in result.stdout, "a deployer cannot act without being told where to go"
-    assert "tools.web.providers.serper.apiKey" in result.stdout
+    assert "tools.web.search.apiKey" in result.stdout
 
 
 def test_doctor_says_a_paid_capability_bills_before_it_is_switched_on(healthy_config: Path) -> None:
@@ -1119,7 +1119,7 @@ def test_a_config_path_is_never_split_across_lines(healthy_config: Path) -> None
     is why each fact is printed on its own line rather than in a sentence."""
     result = runner.invoke(app, ["doctor"])
 
-    for path in ("tools.web.providers.serper.apiKey", "tools.media.image.model", "SERPER_API_KEY"):
+    for path in ("tools.web.search.apiKey", "tools.media.image.model", "SERPER_API_KEY"):
         assert path in result.stdout, f"{path} was broken across a line wrap"
 
 

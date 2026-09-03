@@ -35,17 +35,9 @@ def mod(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "RESEARCH_ANYSEARCH_API_KEY",
         "RESEARCH_SERPAPI_API_KEY",
         "RESEARCH_JINA_API_KEY",
-        "RESEARCH_TAVILY_API_KEY",
-        "RESEARCH_EXA_API_KEY",
-        "RESEARCH_BRAVE_API_KEY",
-        "RESEARCH_FIRECRAWL_API_KEY",
         "SERPER_API_KEY",
         "ANYSEARCH_API_KEY",
         "SERPAPI_API_KEY",
-        "TAVILY_API_KEY",
-        "EXA_API_KEY",
-        "BRAVE_API_KEY",
-        "FIRECRAWL_API_KEY",
     ):
         monkeypatch.delenv(name, raising=False)
     return launcher
@@ -314,70 +306,6 @@ def test_the_hosts_pre_vendor_key_is_still_inherited(mod, tmp_path: Path, monkey
     web = json.loads(rendered.read_text(encoding="utf-8"))["tools"]["web"]
     assert web["providers"]["serper"]["apiKey"] == "host-serper"
     assert web["providers"]["jina"]["apiKey"] == "host-jina"
-
-
-def test_the_hosts_vendor_choice_is_inherited_when_the_folder_names_none(mod, tmp_path: Path, monkeypatch):
-    """The host wizard is where a vendor gets picked, and a folder config that
-    says nothing about vendors runs the way its host does. A folder that does
-    name one keeps its own, and a vendor this checkout cannot serve is ignored."""
-    src = tmp_path / "config.json"
-    src.write_text(json.dumps({"tools": {"web": {"search": {"maxResults": 5}}}}), encoding="utf-8")
-    host = tmp_path / "host.json"
-    host.write_text(
-        json.dumps(
-            {
-                "tools": {
-                    "web": {
-                        "search": {"provider": "tavily"},
-                        "fetch": {"provider": "firecrawl"},
-                        "providers": {"tavily": {"apiKey": "host-tv"}, "firecrawl": {"apiKey": "host-fc"}},
-                    }
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(mod, "HOST_CONFIG", host)
-    monkeypatch.setenv("RESEARCH_API_KEY", "sk-own")
-
-    web = json.loads(mod.render_config(src).read_text(encoding="utf-8"))["tools"]["web"]
-    assert web["search"]["provider"] == "tavily" and web["fetch"]["provider"] == "firecrawl"
-    assert web["providers"]["tavily"]["apiKey"] == "host-tv"
-
-    src.write_text(json.dumps({"tools": {"web": {"search": {"provider": "serper"}}}}), encoding="utf-8")
-    monkeypatch.setenv("RESEARCH_SERPER_API_KEY", "own-serper")
-    web = json.loads(mod.render_config(src).read_text(encoding="utf-8"))["tools"]["web"]
-    assert web["search"]["provider"] == "serper", "the folder's own choice wins"
-
-    host.write_text(json.dumps({"tools": {"web": {"search": {"provider": "not-a-vendor"}}}}), encoding="utf-8")
-    src.write_text(json.dumps({"tools": {"web": {}}}), encoding="utf-8")
-    web = json.loads(mod.render_config(src).read_text(encoding="utf-8"))["tools"]["web"]
-    assert "provider" not in web["search"], "an unknown host vendor is not copied into a config that must load"
-
-
-def test_a_host_vendor_without_a_key_here_is_not_inherited(mod, tmp_path: Path, monkeypatch):
-    """The host wizard lets a keyed reader be picked with its key left blank and
-    falls back to Jina at registration. The launcher's gate refuses that state,
-    so copying the choice without the key would turn a host that runs into a
-    sub-agent that exits; the choice is skipped and the default reader runs."""
-    src = tmp_path / "config.json"
-    src.write_text(json.dumps({"tools": {"web": {}}}), encoding="utf-8")
-    host = tmp_path / "host.json"
-    host.write_text(
-        json.dumps({"tools": {"web": {"search": {"provider": "tavily"}, "fetch": {"provider": "firecrawl"}}}}),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(mod, "HOST_CONFIG", host)
-    monkeypatch.setenv("RESEARCH_API_KEY", "sk-own")
-    monkeypatch.setenv("RESEARCH_SERPER_API_KEY", "own-serper")
-
-    web = json.loads(mod.render_config(src).read_text(encoding="utf-8"))["tools"]["web"]
-    assert "provider" not in web["fetch"], "firecrawl needs a key none resolves; the default reader stays"
-    assert "provider" not in web["search"], "tavily has no key here; the serper default the checkout can run stays"
-
-    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-env")
-    web = json.loads(mod.render_config(src).read_text(encoding="utf-8"))["tools"]["web"]
-    assert web["fetch"]["provider"] == "firecrawl", "a bare export counts, as it does for the gate itself"
 
 
 def test_a_keyless_fetch_provider_refuses_to_launch(mod, searchable, tmp_path: Path, monkeypatch) -> None:

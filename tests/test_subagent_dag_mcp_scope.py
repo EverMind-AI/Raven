@@ -336,10 +336,9 @@ async def test_a_run_that_raises_still_drops_its_scope(tmp_path: Path) -> None:
     backend = _Backend(mcp_source=_loop_source(host, ToolRegistry()))
     tool = _tool(_Exploding, backend, tmp_path)
 
-    result = await tool.execute(_nodes(), task_summary="audit", background=False, mcp_servers={"local-pg": _pg("run")})
+    with pytest.raises(RuntimeError):
+        await tool.execute(_nodes(), task_summary="audit", background=False, mcp_servers={"local-pg": _pg("run")})
 
-    assert str(getattr(result, "model_text", result)).startswith("Error running DAG "), result
-    assert "the graph fell over" in str(getattr(result, "model_text", result))
     assert backend.seen == ["run"]
     assert run_mcp_servers() == {}
     assert backend.mcp_source.server("local-pg") is None
@@ -373,7 +372,7 @@ async def test_a_backgrounded_run_keeps_its_scope_while_the_turn_moves_on(tmp_pa
     resolved: asyncio.Queue[str] = asyncio.Queue()
 
     class _Late(_NoDispatch):
-        async def _run_detached(self, *args: Any, **kwargs: Any) -> None:
+        async def _run_and_announce(self, *args: Any, **kwargs: Any) -> None:
             servers = run_mcp_servers()
             await resolved.put(",".join(sorted(servers)))
 

@@ -1,7 +1,7 @@
 """Atomic operations for tool config sections under ``tools.*``.
 
 This module is the ONLY write path for tool configuration
-(``tools.deepResearch``, ``tools.web.*``, ``tools.media.<tool>``). Entry
+(``tools.deepResearch``, ``tools.web.search``, ``tools.media.<tool>``). Entry
 points -- CLI commands, the onboard wizard, the web UI's tools page -- must call
 functions here; direct load_config / save_config on the tools section is
 forbidden, matching update_channels / update_providers.
@@ -21,14 +21,7 @@ from loguru import logger
 from pydantic import BaseModel, ValidationError
 
 from raven.config.loader import ConfigReadError, get_config_path, read_raw_or_raise
-from raven.config.schema import (
-    DeepResearchToolConfig,
-    MediaToolConfig,
-    WebFetchConfig,
-    WebProvidersConfig,
-    WebSearchConfig,
-    WebToolsConfig,
-)
+from raven.config.schema import DeepResearchToolConfig, MediaToolConfig, WebSearchConfig, WebToolsConfig
 from raven.utils.atomic_io import atomic_update
 
 _SECTION = "deepResearch"  # camelCase alias of ToolsConfig.deep_research
@@ -102,12 +95,7 @@ def reset_deep_research(*, config_path: Path | None = None) -> None:
 # which is what the caller has to tell the user.
 
 _WEB_SEARCH_PATH = ("web", "search")  # camelCase aliases of ToolsConfig.web.search
-_WEB_FETCH_PATH = ("web", "fetch")
 _JINA_KEY = "jinaApiKey"  # camelCase alias of ToolsConfig.web.jina_api_key
-_PROVIDERS_KEY = "providers"
-_API_KEY = "apiKey"
-WEB_VENDORS = tuple(WebProvidersConfig.model_fields)
-"""Every web vendor a key can be held for, in schema order."""
 MEDIA_TOOLS = ("image", "speech", "video")
 """The ``tools.media`` sub-sections, in the order the UI shows them."""
 
@@ -177,12 +165,12 @@ def _patch_subtree(
 
 
 def set_web_search(fields: dict[str, Any], *, config_path: Path | None = None) -> dict[str, Any]:
-    """Patch ``tools.web.search`` fields (``provider`` / ``api_key`` / ``max_results``)."""
+    """Patch ``tools.web.search`` fields (``api_key`` / ``max_results``)."""
     return _patch_subtree(_WEB_SEARCH_PATH, WebSearchConfig, fields, config_path, "web_search")
 
 
 def get_web_search(*, redact: bool = True, config_path: Path | None = None) -> dict[str, Any]:
-    """Return ``tools.web.search`` as ``{provider, api_key, max_results}``.
+    """Return ``tools.web.search`` as ``{api_key, max_results}``.
 
     ``api_key`` is redacted by default: ``'****set****'`` when set, ``'(empty)'``
     otherwise -- the same two markers ``get_deep_research`` uses.
@@ -190,83 +178,22 @@ def get_web_search(*, redact: bool = True, config_path: Path | None = None) -> d
     data = read_raw_or_raise(config_path or get_config_path())
     inst = _current_subtree(data, _WEB_SEARCH_PATH, WebSearchConfig)
     key = ("****set****" if inst.api_key else "(empty)") if redact else inst.api_key
-    return {"provider": inst.provider, "api_key": key, "max_results": inst.max_results}
-
-
-def set_web_fetch(fields: dict[str, Any], *, config_path: Path | None = None) -> dict[str, Any]:
-    """Patch ``tools.web.fetch`` fields (``provider``)."""
-    return _patch_subtree(_WEB_FETCH_PATH, WebFetchConfig, fields, config_path, "web_fetch")
-
-
-def get_web_fetch(*, config_path: Path | None = None) -> dict[str, Any]:
-    """Return ``tools.web.fetch`` as ``{provider}``. Nothing here is a secret."""
-    data = read_raw_or_raise(config_path or get_config_path())
-    return {"provider": _current_subtree(data, _WEB_FETCH_PATH, WebFetchConfig).provider}
-
-
-def _vendor(vendor: str) -> str:
-    if vendor not in WEB_VENDORS:
-        raise KeyError(f"Unknown web vendor '{vendor}'. Available: {list(WEB_VENDORS)}")
-    return vendor
-
-
-def set_web_provider_key(vendor: str, key: str, *, config_path: Path | None = None) -> str:
-    """Set ``tools.web.providers.<vendor>.apiKey``. Returns the previous value.
-
-    A leaf write for the same reason ``set_jina_api_key`` is one: the narrowest
-    node holding this value is a string, and round-tripping ``tools.web``
-    through the schema would drop what the user hand-added under it.
-    """
-    _vendor(vendor)
-    validated = WebToolsConfig.model_validate({"providers": {vendor: {"apiKey": key}}}).vendor_key(vendor)
-    path = config_path or get_config_path()
-
-    def _apply(_text: str | None) -> tuple[str, str]:
-        data = read_raw_or_raise(path)
-        node = data.setdefault("tools", {})
-        if not isinstance(node, dict):
-            node = data["tools"] = {}
-        for step in ("web", _PROVIDERS_KEY, vendor):
-            child = node.get(step)
-            if not isinstance(child, dict):
-                child = node[step] = {}
-            node = child
-        prev = node.get(_API_KEY)
-        node[_API_KEY] = validated
-        return json.dumps(data, indent=2, ensure_ascii=False), prev if isinstance(prev, str) else ""
-
-    return atomic_update(path, _apply)
-
-
-def get_web_provider_key(vendor: str, *, redact: bool = True, config_path: Path | None = None) -> str:
-    """Return one vendor's key, the legacy Serper / Jina leaves included.
-
-    ``tools.web.providers.<vendor>.apiKey`` first; for ``serper`` and ``jina``
-    the pre-vendor leaves (``tools.web.search.apiKey``, ``tools.web.jinaApiKey``)
-    still count, so a config written before the vendor layout keeps working.
-    """
-    _vendor(vendor)
-    data = read_raw_or_raise(config_path or get_config_path())
-    key = _current_subtree(data, ("web",), WebToolsConfig).vendor_key(vendor)
-    return ("****set****" if key else "(empty)") if redact else key
-
-
-def get_web_provider_keys(*, config_path: Path | None = None) -> dict[str, str]:
-    """Every vendor with a resolved key, unredacted: the mirror's input."""
-    data = read_raw_or_raise(config_path or get_config_path())
-    return _current_subtree(data, ("web",), WebToolsConfig).vendor_keys()
+    return {"api_key": key, "max_results": inst.max_results}
 
 
 def get_serper_api_key(*, redact: bool = True, config_path: Path | None = None) -> str:
-    """The Serper key, wherever it sits (see ``get_web_provider_key``).
+    """Return just ``tools.web.search.apiKey``, redacted by default.
 
-    A caller that wants only the credential would otherwise subscript it out
-    of ``get_web_search``, which is the read ``test_provider_auth_method``'s
-    credential invariant flags at the call site. Reading it here keeps that
-    read in the one module the invariant already sanctions for tool
-    credentials, and pairs with ``get_jina_api_key``.
+    ``get_web_search`` already returns it inside the section; a caller that
+    wants only the credential would have to subscript it back out, which is the
+    read ``test_provider_auth_method``'s credential invariant flags at the call
+    site. Reading it here keeps that read in the one module the invariant
+    already sanctions for tool credentials, and pairs with
+    ``get_jina_api_key``.
     """
-    return get_web_provider_key("serper", redact=redact, config_path=config_path)
+    data = read_raw_or_raise(config_path or get_config_path())
+    inst = _current_subtree(data, _WEB_SEARCH_PATH, WebSearchConfig)
+    return ("****set****" if inst.api_key else "(empty)") if redact else inst.api_key
 
 
 def set_jina_api_key(key: str, *, config_path: Path | None = None) -> str:
@@ -298,8 +225,14 @@ def set_jina_api_key(key: str, *, config_path: Path | None = None) -> str:
 
 
 def get_jina_api_key(*, redact: bool = True, config_path: Path | None = None) -> str:
-    """The Jina key, wherever it sits (see ``get_web_provider_key``)."""
-    return get_web_provider_key("jina", redact=redact, config_path=config_path)
+    """Return ``tools.web.jinaApiKey``, redacted by default.
+
+    Redaction uses the same two markers as ``get_web_search`` / ``get_media``.
+    """
+    data = read_raw_or_raise(config_path or get_config_path())
+    raw = _subtree(data, ("web",)).get(_JINA_KEY)
+    key = raw if isinstance(raw, str) else ""
+    return ("****set****" if key else "(empty)") if redact else key
 
 
 def _media_path(tool: str) -> tuple[str, str]:
@@ -329,20 +262,14 @@ def get_media(tool: str, *, redact: bool = True, config_path: Path | None = None
 __all__ = [
     "ConfigReadError",
     "MEDIA_TOOLS",
-    "WEB_VENDORS",
     "get_deep_research",
     "get_jina_api_key",
     "get_media",
     "get_serper_api_key",
-    "get_web_fetch",
-    "get_web_provider_key",
-    "get_web_provider_keys",
     "get_web_search",
     "reset_deep_research",
     "set_deep_research",
     "set_jina_api_key",
     "set_media",
-    "set_web_fetch",
-    "set_web_provider_key",
     "set_web_search",
 ]

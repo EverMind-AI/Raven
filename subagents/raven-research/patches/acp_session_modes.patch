@@ -1447,10 +1447,10 @@ index 61de584..0a6fd3f 100644
 +
  __all__ = ["acp_app"]
 diff --git a/raven/config/schema.py b/raven/config/schema.py
-index abd4aa4..0392e10 100644
+index abd4aa4..839ebfb 100644
 --- a/raven/config/schema.py
 +++ b/raven/config/schema.py
-@@ -733,19 +733,145 @@ class GatewayConfig(Base):
+@@ -733,19 +733,140 @@ class GatewayConfig(Base):
      log: GatewayLogConfig = Field(default_factory=GatewayLogConfig)
  
  
@@ -1540,31 +1540,26 @@ index abd4aa4..0392e10 100644
 +    anysearch: WebProviderKey = Field(default_factory=WebProviderKey)
 +    serpapi: WebProviderKey = Field(default_factory=WebProviderKey)
 +    jina: WebProviderKey = Field(default_factory=WebProviderKey)
-+    tavily: WebProviderKey = Field(default_factory=WebProviderKey)
-+    exa: WebProviderKey = Field(default_factory=WebProviderKey)
-+    brave: WebProviderKey = Field(default_factory=WebProviderKey)
-+    firecrawl: WebProviderKey = Field(default_factory=WebProviderKey)
 +
 +
  class WebSearchConfig(Base):
      """Web search tool configuration."""
  
 -    api_key: str = ""  # Serper API key
-+    provider: Literal["serper", "anysearch", "serpapi", "tavily", "exa", "brave", "firecrawl"] = "serper"
++    provider: Literal["serper", "anysearch", "serpapi"] = "serper"
 +    """Which backend ``web_search`` calls. Default keeps the measured wire traffic.
 +
 +    The key itself lives under ``tools.web.providers.<name>``, so switching does
-+    not require re-pasting one and switching back restores the previous. AnySearch,
-+    Tavily, Exa and Firecrawl serve no result offset, which the tool declares to
-+    the saturation rule up front (``paginates``) rather than issuing a request it
-+    cannot serve."""
++    not require re-pasting one and switching back restores the previous. AnySearch
++    serves no page beyond the first, which the tool declares to the saturation
++    rule up front (``paginates``) rather than issuing a request it cannot serve."""
      max_results: int = 5
  
  
 +class WebFetchConfig(Base):
 +    """Web fetch tool configuration."""
 +
-+    provider: Literal["jina", "anysearch", "tavily", "exa", "firecrawl"] = "jina"
++    provider: Literal["jina", "anysearch"] = "jina"
 +    """Which backend ``web_fetch`` reads pages through. Default keeps the
 +    measured wire traffic (``r.jina.ai``, unauthenticated when no key is set).
 +
@@ -1573,7 +1568,7 @@ index abd4aa4..0392e10 100644
 +    27,786 for the same page, because it keeps the navigation chrome Jina strips,
 +    and it carries no publication date. An arm reading pages through it is a
 +    different arm, not the same arm on another vendor."""
-+    fallback: list[Literal["jina", "anysearch", "tavily", "exa", "firecrawl"]] = Field(default_factory=list)
++    fallback: list[Literal["jina", "anysearch"]] = Field(default_factory=list)
 +    """Backends to try, in order, when the selected one fails to return a page.
 +
 +    Empty by default, which is the behaviour every measured run so far had. It
@@ -1598,7 +1593,7 @@ index abd4aa4..0392e10 100644
      corpus_endpoint: str | None = None
      """Route ``web_search`` / ``web_fetch`` at a fixed-corpus retrieval service
      instead of the live web (e.g. ``http://127.0.0.1:8765`` for BrowseComp-Plus).
-@@ -860,6 +986,7 @@ class Config(BaseSettings):
+@@ -860,6 +981,7 @@ class Config(BaseSettings):
      channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
      providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
      gateway: GatewayConfig = Field(default_factory=GatewayConfig)

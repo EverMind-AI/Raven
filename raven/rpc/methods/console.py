@@ -16,12 +16,11 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, get_args
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
 from raven.config.env_file import MIRRORED_KEYS, refresh_env_file
-from raven.config.schema import WEB_VENDOR_ENV_VARS, WebFetchProvider, WebSearchProvider
 from raven.rpc import LOCAL_CHANNEL
 from raven.rpc.errors import ConfigValidationError
 from raven.utils.atomic_io import atomic_update
@@ -213,7 +212,7 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
                     "needs": None if offered else _needs_of(name),
                 }
             )
-        tools.extend(_gated_tools({t["name"] for t in tools}, getattr(loop, "web_search_provider", "serper")))
+        tools.extend(_gated_tools({t["name"] for t in tools}))
 
     return {"skills": skills, "plugins": plugins, "tools": tools, "mcp": mcp}
 
@@ -223,14 +222,7 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
 # model reaches for it and relays a failure naming a config path to whoever is
 # on the other end of a channel -- but the same decision also erased them from
 # the user's view, so the feature looked deleted rather than unconfigured.
-def _key_gated_tools(search_provider: str) -> tuple[tuple[str, str, str], ...]:
-    """``(tool, setting, env)`` for each key-gated tool, keyed to the vendor the
-    loop actually selected: a Tavily deployment is told to fill the Tavily slot,
-    not Serper's."""
-    from raven.config.schema import WEB_VENDOR_ENV_VARS
-
-    vendor = search_provider if search_provider in WEB_VENDOR_ENV_VARS else "serper"
-    return (("web_search", f"tools.web.providers.{vendor}.apiKey", WEB_VENDOR_ENV_VARS[vendor]),)
+_KEY_GATED_TOOLS: tuple[tuple[str, str, str], ...] = (("web_search", "tools.web.search.apiKey", "SERPER_API_KEY"),)
 
 
 def _needs_of(name: str) -> dict | None:
@@ -269,11 +261,11 @@ def _needs_of(name: str) -> dict | None:
     return None
 
 
-def _gated_tools(registered: set[str], search_provider: str = "serper") -> list[dict]:
+def _gated_tools(registered: set[str]) -> list[dict]:
     """Rows for key-gated tools that are not registered, so the page can offer
     the field instead of showing nothing at all."""
     rows: list[dict] = []
-    for name, setting, env in _key_gated_tools(search_provider):
+    for name, setting, env in _KEY_GATED_TOOLS:
         if name in registered:
             continue
         rows.append(
@@ -576,10 +568,9 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
     if checker is not None:
         written = _write_raw_key(key, checker(value))
         if key in MIRRORED_KEYS:
-            # cli/acp sub-agents read every web credential from the
-            # environment, not from the config, so the ~/.raven/env mirror has
-            # to follow the write or they keep running on the key this call
-            # just replaced.
+            # cli/acp sub-agents read these two from the environment, not from
+            # the config, so the ~/.raven/env mirror has to follow the write or
+            # they keep running on the key this call just replaced.
             refresh_env_file()
         return written
 
@@ -673,14 +664,6 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "tools.exec.timeout": _chk_int("tools.exec.timeout", 5, 3600),
     "tools.web.search.apiKey": _chk_str("tools.web.search.apiKey", 200),
     "tools.web.jinaApiKey": _chk_str("tools.web.jinaApiKey", 200),
-    "tools.web.search.provider": _chk_enum("tools.web.search.provider", *get_args(WebSearchProvider)),
-    "tools.web.fetch.provider": _chk_enum("tools.web.fetch.provider", *get_args(WebFetchProvider)),
-    # One slot per vendor: the same low-risk shape as the two legacy keys above,
-    # a credential the deployment already chose to hold, not a containment control.
-    **{
-        f"tools.web.providers.{vendor}.apiKey": _chk_str(f"tools.web.providers.{vendor}.apiKey", 200)
-        for vendor in WEB_VENDOR_ENV_VARS
-    },
     "tools.media.image.apiKey": _chk_str("tools.media.image.apiKey", 200),
     "tools.deepResearch.apiKey": _chk_str("tools.deepResearch.apiKey", 200),
     "channels.sendProgress": _chk_bool("channels.sendProgress"),

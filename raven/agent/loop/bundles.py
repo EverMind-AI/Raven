@@ -16,14 +16,9 @@ class ToolWiring:
 
     exec_config: Any = None
     ask_user_config: Any = None
-    search_api_key: str | None = None
+    brave_api_key: str | None = None
     jina_api_key: str | None = None
     web_proxy: str | None = None
-    # Which vendor each web tool calls, and every vendor's key by name. The two
-    # scalars above stay as the Serper / Jina carriers the loops always had.
-    web_search_provider: str = "serper"
-    web_fetch_provider: str = "jina"
-    web_provider_keys: dict[str, str] | None = None
     restrict_to_workspace: bool = False
     disabled_tools: list[str] | None = None
     tool_search_config: Any = None

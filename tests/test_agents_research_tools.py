@@ -13,7 +13,6 @@ an error string while the launch reports success.
 
 from __future__ import annotations
 
-import json
 import socket
 import sys
 from pathlib import Path
@@ -60,61 +59,6 @@ class _PageTransport(httpx.AsyncBaseTransport):
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, text="page body")
-
-
-class _StatusTransport(httpx.AsyncBaseTransport):
-    """Answers every request with a status error, the URL and query intact."""
-
-    def __init__(self, status: int) -> None:
-        self._status = status
-
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        return httpx.Response(self._status, request=request, json={})
-
-
-# --------------------------------------------------------------------------
-# What a vendor's refusal is allowed to say
-# --------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_a_search_status_error_names_the_vendor_and_status_only(monkeypatch):
-    """httpx puts the whole request URL in a status error's text. This pair
-    authenticates by header, so nothing leaks today -- but the search ledger's
-    row lands on disk and the rendering reaches the model, so neither may carry
-    a request. A vendor keyed by query parameter is one edit away."""
-    _patch_client(monkeypatch, _StatusTransport(401))
-    set_current_session("t")
-    tool = WebSearchTool(api_key="SECRET-KEY-123")
-    # Driven through ``execute`` so the row captured here is the one a run
-    # writes to disk, rather than a shaping dict assembled by the test.
-    rows: list[dict] = []
-    monkeypatch.setattr(
-        type(tool),
-        "_log_search",
-        lambda self, state, query, n, urls, rendered, shaping, **kw: rows.append(shaping),
-    )
-
-    rendered = await tool.execute(query="q1", count=3)
-
-    assert rendered == "Error: Serper answered HTTP 401"
-    assert "SECRET-KEY-123" not in rendered and "serper.dev" not in rendered
-    # Not vacuous: the row exists and stays diagnosable, and the status is what
-    # the rollout-time balance polling reads off it.
-    assert len(rows) == 1, "the failed search still writes its ledger row"
-    assert rows[0]["status"] == 401 and rows[0]["quota_err"] is True
-    assert "SECRET-KEY-123" not in rows[0]["error"] and "serper.dev" not in rows[0]["error"]
-
-
-@pytest.mark.asyncio
-async def test_a_fetch_status_error_names_the_reader_and_status_only(monkeypatch):
-    _patch_client(monkeypatch, _StatusTransport(402))
-    set_current_session("t")
-
-    answer = await WebFetchTool(api_key="SECRET-KEY-123").execute(url="https://example.com/a")
-
-    assert json.loads(answer)["error"] == "Jina Reader answered HTTP 402"
-    assert "SECRET-KEY-123" not in answer and "r.jina.ai" not in answer
 
 
 # --------------------------------------------------------------------------

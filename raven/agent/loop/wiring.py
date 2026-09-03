@@ -4,6 +4,7 @@ workdir and sinks.
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 from raven.agent.loop._shared import (
@@ -32,7 +33,6 @@ from raven.agent.loop._shared import (
     active_binding,
     deep_research_mode,
     logger,
-    resolve_vendor_key,
     workdir,
 )
 
@@ -150,13 +150,9 @@ class WiringMixin:
             cfg = self._live_media_config(kind, fallback)
             if not (cfg.api_key or cfg.model):
                 names.add(cls.name)
-        search = self.tools.get(WebSearchTool.name)
-        # Asked of the tool, not restated here: it resolves the selected
-        # vendor's key from the live reader below or from that vendor's own
-        # environment variable. A predicate spelled out again here was reading
-        # SERPER_API_KEY whatever the deployment had chosen, which withheld a
-        # keyed Tavily search.
-        if search is not None and search is gated.get(WebSearchTool.name) and not search.api_key:
+        if self.tools.get(WebSearchTool.name) is gated.get(WebSearchTool.name) and not (
+            self._live_web_search_key() or os.environ.get("SERPER_API_KEY")
+        ):
             names.add(WebSearchTool.name)
         return names
 
@@ -167,35 +163,18 @@ class WiringMixin:
         return exec_extra_deny_patterns(self._live_config)
 
     def _live_web_search_key(self) -> str:
-        """The selected vendor's search key the file names now, else the boot value.
+        """The Serper key the file names now, else the boot value.
 
         The boot value is the lane eval harnesses pass a key through with no
         file behind it; a file with a section governs entirely, including an
         empty value, which is how a key gets revoked without a restart.
-
-        Both key layouts are read live, canonical slot first, in the same order
-        ``WebToolsConfig.vendor_key`` resolves them: reading only the
-        pre-vendor leaf made the restart-free behaviour reachable exclusively
-        by the layout this schema retired, so a key pasted into the slot the
-        settings page writes -- Serper's included -- left the tool withheld
-        until the next process. The leaf is Serper's alone, hence consulted
-        only when Serper is the selection.
         """
-        from raven.config.live import web_provider_key, web_search_key
+        from raven.config.live import web_search_key
 
-        vendor = self.web_search_provider
-        slot = web_provider_key(self._live_config, vendor)
-        if slot:
-            return slot
-        if vendor == "serper":
-            leaf = web_search_key(self._live_config)
-            if leaf is not None:
-                return leaf
-        # An empty-but-present slot is a revocation, not a miss: fall through to
-        # the boot value only when the file answered nothing at all.
-        if slot == "":
-            return ""
-        return self._web_key(vendor) or ""
+        answer = web_search_key(self._live_config)
+        if answer is None:
+            return self.brave_api_key or ""
+        return answer
 
     def _media_config_reader(self, kind: str, fallback) -> "Callable[[], Any]":
         def read():
@@ -497,9 +476,6 @@ class WiringMixin:
         self.enable_personalization = enable
         logger.info("Personalization flow: {}", "enabled" if enable else "disabled")
 
-    def _web_key(self, vendor: str) -> str | None:
-        return resolve_vendor_key(vendor, self.web_provider_keys, self.search_api_key, self.jina_api_key)
-
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
         allowed_dirs = (self.workspace,) if self.restrict_to_workspace else ()
@@ -535,24 +511,12 @@ class WiringMixin:
         # subclass -- replaces the entry, and the built-in's config section
         # says nothing about the replacement's credential story.
         self._config_gated_tools: dict[str, Any] = {}
-        web_search = WebSearchTool(
-            api_key=self._live_web_search_key, proxy=self.web_proxy, provider=self.web_search_provider
-        )
+        web_search = WebSearchTool(api_key=self._live_web_search_key, proxy=self.web_proxy)
         self.tools.register(web_search)
         self._config_gated_tools[web_search.name] = web_search
-        # web_fetch registers the same way and is never withheld: Jina needs no
-        # key, so a keyed backend selected without one is replaced by Jina
-        # rather than left to fail.
-        fetch_provider = WebFetchTool.effective_provider(
-            self.web_fetch_provider, self._web_key(self.web_fetch_provider)
-        )
-        self.tools.register(
-            WebFetchTool(api_key=self._web_key(fetch_provider), proxy=self.web_proxy, provider=fetch_provider)
-        )
-        # Media tools (image/speech/video) are opt-in: a tool is registered only
-        # when the user configured it (a model or apiKey under tools.media.<tool>),
-        # which Config.effective_media_config() surfaces as a resolved key/model.
-        # An OpenRouter key set for chat alone never enables them.
+        # web_fetch is unconditional by contrast: it works without a key, and the
+        # Jina one only upgrades the extraction.
+        self.tools.register(WebFetchTool(api_key=self.jina_api_key, proxy=self.web_proxy))
         media = self.media_config
         media_tools = (
             (ImageGenerateTool, "image", media.image),
@@ -614,6 +578,7 @@ class WiringMixin:
                 ask=self._confirm_graph,
                 control_reachable=self.dag_control_reachable,
                 provider_for=self._verdict_provider,
+                adjudicate=self._adjudicate_node,
                 verdict_config=self.subagent_dag_config,
             )
         )
@@ -982,6 +947,7 @@ class WiringMixin:
             # a playbook step is an ordinary DAG node, so it is judged on the same
             # terms once judgement is wired in.
             provider_for=self._verdict_provider,
+            adjudicate=self._adjudicate_node,
             control_reachable=self.dag_control_reachable,
             verdict_config=self.subagent_dag_config,
         )
@@ -1081,6 +1047,35 @@ class WiringMixin:
         if answer is None:
             return True
         return answer.strip().lower() in {"run it", "run", "yes", "y", "ok", "go", "sure"}
+
+    async def _adjudicate_node(self, conversation_id: str, report: str, timeout_s: float | None = None) -> str | None:
+        """A foreground graph's route to a decision about a node that fell short.
+
+        A backgrounded run reports to the model and waits for `resolve_dag_node`,
+        which works because the turn that submitted it has already returned. A
+        foreground run has not: its own tool call is still on the stack, the
+        scheduler serialises the conversation's lane, and the turn that would
+        answer cannot start until this one ends. Every foreground suspension
+        would therefore wait out its whole timeout and then blame the agent.
+
+        So in foreground the question goes to the person watching the blocking
+        call instead, over the same round trip the confirm gate uses. Free text,
+        not a yes/no: a continuation with nothing to say is already treated as a
+        failure, so a bool could only ever abandon.
+
+        ``timeout_s`` is the runner's remaining budget for the whole round, not
+        this question's own: the broker allows one pending question per
+        conversation, so a graph with several suspended nodes asks them in
+        series, and without a shared budget N nodes would cost N timeouts.
+
+        ``None`` means the round trip is structurally unavailable -- no broker,
+        no conversation -- and the caller falls back to failing the node, which
+        is what happened before any of this existed.
+        """
+        tool = self.tools.get("ask_user")
+        if not isinstance(tool, AskUserTool):
+            return None
+        return await tool.ask_direct(report, ["Continue", "Abandon"], conversation_id, timeout_s)
 
     def _dag_guide_skill_id(self) -> str | None:
         """The orchestration guide's id for the DAG tool description, or None.

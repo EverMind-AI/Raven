@@ -295,16 +295,7 @@ def test_load_config_warns_but_still_loads_on_unknown_key(tmp_path: Path) -> Non
 # switch exists to prevent.
 
 
-_SEEDABLE = (
-    "SERPER_API_KEY",
-    "ANYSEARCH_API_KEY",
-    "SERPAPI_API_KEY",
-    "TAVILY_API_KEY",
-    "EXA_API_KEY",
-    "BRAVE_API_KEY",
-    "FIRECRAWL_API_KEY",
-    "JINA_API_KEY",
-)
+_SEEDABLE = ("SERPER_API_KEY", "ANYSEARCH_API_KEY", "SERPAPI_API_KEY", "JINA_API_KEY")
 
 
 @pytest.fixture

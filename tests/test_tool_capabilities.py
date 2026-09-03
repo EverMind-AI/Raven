@@ -119,7 +119,7 @@ def test_the_table_names_exactly_the_credential_gated_tools(workspace, tmp_path:
     for attr in _media_attrs():
         getattr(full.tools.media, attr).model = "some/model"
     full.providers.openrouter.api_key = "sk-or-test"
-    loop_full = _loop(workspace, full, search_api_key="sk-serper")
+    loop_full = _loop(workspace, full, brave_api_key="sk-serper")
 
     def offered(loop) -> set[str]:
         return {n for n in loop.tools.tool_names if loop.tools.offers_by_name(n)}
@@ -146,7 +146,7 @@ def test_the_table_agrees_with_the_loop_when_unconfigured(cap, workspace, tmp_pa
 def test_a_configured_search_key_agrees_on_both_sides(workspace, tmp_path: Path) -> None:
     config = _config(tmp_path)
     config.tools.web.search.api_key = "sk-serper"
-    loop = _loop(workspace, config, search_api_key="sk-serper")
+    loop = _loop(workspace, config, brave_api_key="sk-serper")
 
     cap = next(c for c in CAPABILITIES if c.tool == "web_search")
     assert is_configured(cap, config) and loop.tools.offers_by_name("web_search")
@@ -358,7 +358,7 @@ def test_a_switched_off_tool_is_configured_and_still_not_offered(workspace, tmp_
     config.tools.disabled_tools = ["web_search"]
     # Passed in, the way the CLI entry points do: the loop takes the list as an
     # argument rather than reading the config.
-    loop = _loop(workspace, config, search_api_key="sk-serper", disabled_tools=config.tools.disabled_tools)
+    loop = _loop(workspace, config, brave_api_key="sk-serper", disabled_tools=config.tools.disabled_tools)
     cap = next(c for c in CAPABILITIES if c.tool == "web_search")
 
     assert _on_offer(loop, "web_search") is False
@@ -381,11 +381,11 @@ def test_being_offered_matches_the_registry_for_every_capability(cap, workspace,
         getattr(config.tools.media, attr).model = "some/model"
     config.providers.openrouter.api_key = "sk-or-test"
 
-    on = _loop(workspace, config, search_api_key="sk-serper")
+    on = _loop(workspace, config, brave_api_key="sk-serper")
     assert is_offered(cap, config) is _on_offer(on, cap.tool)
 
     config.tools.disabled_tools = [cap.tool]
-    off = _loop(workspace, config, search_api_key="sk-serper", disabled_tools=config.tools.disabled_tools)
+    off = _loop(workspace, config, brave_api_key="sk-serper", disabled_tools=config.tools.disabled_tools)
     assert is_offered(cap, config) is _on_offer(off, cap.tool)
     assert _on_offer(off, cap.tool) is False
 
@@ -450,28 +450,3 @@ def test_a_plugin_subclass_of_a_media_tool_is_not_gated_either(workspace, tmp_pa
 
     assert loop.tools.get("image_generate") is plugin
     assert loop.tools.offers_by_name("image_generate"), "identity, not type: a subclass is not the built-in"
-
-
-def test_the_web_rows_resolve_to_the_selected_vendor(tmp_path: Path) -> None:
-    """The table is static; the deployer's instructions are not. A Tavily
-    deployment is sent to Tavily's slot, env var and sign-up page, and the
-    source named for a satisfied row is the slot that actually holds the key."""
-    from raven.agent.tools.capabilities import configured_from, resolve
-
-    config = _config(tmp_path)
-    config.tools.web.search.provider = "tavily"
-    config.tools.web.fetch.provider = "firecrawl"
-    rows = {c.tool: resolve(c, config) for c in CAPABILITIES}
-    assert rows["web_search"].config_path == "tools.web.providers.tavily.apiKey"
-    assert rows["web_search"].env_var == "TAVILY_API_KEY"
-    assert rows["web_search"].obtain_from == "https://tavily.com"
-    assert rows["web_fetch"].config_path == "tools.web.providers.firecrawl.apiKey"
-    assert rows["web_fetch"].need is Need.NOTHING, "web_fetch is always offered; a keyless reader falls back to Jina"
-
-    search = next(c for c in CAPABILITIES if c.tool == "web_search")
-    config.tools.web.providers.tavily.api_key = "tv"
-    assert configured_from(search, config) == "tools.web.providers.tavily.apiKey"
-
-    legacy = _config(tmp_path)
-    legacy.tools.web.search.api_key = "sk-serper"
-    assert configured_from(search, legacy) == "tools.web.search.apiKey", "the pre-vendor leaf is named as itself"

@@ -3138,8 +3138,8 @@ def test_onboard_cli_writes_the_keys_passed_as_flags(
     assert r.exit_code == 0, r.stdout
 
     web = json.loads(tmp_env.read_text())["tools"]["web"]
-    assert web["providers"]["serper"]["apiKey"] == "sk-flag"
-    assert web["providers"]["jina"]["apiKey"] == "jina-flag"
+    assert web["search"]["apiKey"] == "sk-flag"
+    assert web["jinaApiKey"] == "jina-flag"
 
 
 def test_load_raw_config_raises_on_malformed(tmp_env: Path) -> None:
@@ -6909,7 +6909,7 @@ class TestALeftoverRootIsOnlyTakenOverOnPurpose:
 
 
 # ---------------------------------------------------------------------------
-# Step 5 — web access (vendor pick + key per vendor)
+# Step 5 — web tool keys (Serper / Jina)
 # ---------------------------------------------------------------------------
 
 
@@ -7207,83 +7207,29 @@ def test_step5_writes_both_keys_and_the_env_file(tmp_env: Path, monkeypatch: pyt
     from raven.cli import onboard_web
 
     answers = iter(["sk-serper", "jina-abc"])
-    monkeypatch.setattr(onboard_web, "_pick_provider", lambda kind, current: current)
     monkeypatch.setattr(onboard_web, "_prompt_key", lambda **_: next(answers))
     monkeypatch.setattr(onboard_web, "_confirm_rc", lambda _rc: False)
 
     onboard_web._step5_web(skip=False, non_interactive=False)
 
     web = json.loads(tmp_env.read_text())["tools"]["web"]
-    assert web["search"]["provider"] == "serper" and web["fetch"]["provider"] == "jina"
-    assert web["providers"]["serper"]["apiKey"] == "sk-serper"
-    assert web["providers"]["jina"]["apiKey"] == "jina-abc"
-    body = (Path.home() / ".raven" / "env").read_text(encoding="utf-8")
-    assert "export SERPER_API_KEY=sk-serper" in body and "export JINA_API_KEY=jina-abc" in body
-
-
-def test_step5_picking_a_vendor_asks_for_that_vendors_key(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The key prompt follows the pick: a Tavily deployment is asked for a
-    Tavily key and the answer lands in Tavily's slot, and because Tavily also
-    reads pages, choosing it for web_fetch too asks for nothing a second time."""
-    picks = iter(["tavily", "tavily"])
-    prompts: list[str] = []
-
-    def _prompt(**kw):
-        prompts.append(kw["label"])
-        return "tv-key"
-
-    monkeypatch.setattr(onboard_web, "_pick_provider", lambda kind, current: next(picks))
-    monkeypatch.setattr(onboard_web, "_prompt_key", _prompt)
-    monkeypatch.setattr(onboard_web, "_confirm_rc", lambda _rc: False)
-
-    onboard_web._step5_web(skip=False, non_interactive=False)
-
-    web = json.loads(tmp_env.read_text())["tools"]["web"]
-    assert web["search"]["provider"] == "tavily" and web["fetch"]["provider"] == "tavily"
-    assert web["providers"]["tavily"]["apiKey"] == "tv-key"
-    assert prompts == ["Tavily API key"], "one account serves both tools, so the key is asked for once"
-    body = (Path.home() / ".raven" / "env").read_text(encoding="utf-8")
-    assert "export TAVILY_API_KEY=tv-key" in body
-    assert "export SERPER_API_KEY" not in body
-
-
-def test_step5_a_keyed_reader_is_asked_for_its_key(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    picks = iter(["serper", "firecrawl"])
-    answers = iter(["sk-serper", "fc-key"])
-    notes: list[str] = []
-
-    def _prompt(**kw):
-        notes.append(kw["optional_note"])
-        return next(answers)
-
-    monkeypatch.setattr(onboard_web, "_pick_provider", lambda kind, current: next(picks))
-    monkeypatch.setattr(onboard_web, "_prompt_key", _prompt)
-    monkeypatch.setattr(onboard_web, "_confirm_rc", lambda _rc: False)
-
-    onboard_web._step5_web(skip=False, non_interactive=False)
-
-    web = json.loads(tmp_env.read_text())["tools"]["web"]
-    assert web["fetch"]["provider"] == "firecrawl"
-    assert web["providers"]["firecrawl"]["apiKey"] == "fc-key"
-    assert notes[1] == " required for web_fetch", "a reader with no anonymous tier must not be offered as optional"
+    assert web["search"]["apiKey"] == "sk-serper"
+    assert web["jinaApiKey"] == "jina-abc"
+    assert "export SERPER_API_KEY=sk-serper" in (Path.home() / ".raven" / "env").read_text(encoding="utf-8")
 
 
 def test_step5_empty_answer_keeps_the_key_already_configured(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from raven.cli import onboard_web
 
     _set_keys(tmp_env, serper="sk-existing", jina="jina-existing")
-    monkeypatch.setattr(onboard_web, "_pick_provider", lambda kind, current: current)
     monkeypatch.setattr(onboard_web, "_prompt_key", lambda **_: "")
     monkeypatch.setattr(onboard_web, "_confirm_rc", lambda _rc: False)
 
     onboard_web._step5_web(skip=False, non_interactive=False)
 
-    # The pre-vendor leaves are left where they were, not blanked and not
-    # copied: an empty answer means "keep it", and the tools read those leaves.
     web = json.loads(tmp_env.read_text())["tools"]["web"]
     assert web["search"]["apiKey"] == "sk-existing"
     assert web["jinaApiKey"] == "jina-existing"
-    assert "export SERPER_API_KEY=sk-existing" in (Path.home() / ".raven" / "env").read_text(encoding="utf-8")
 
 
 def test_step5_leaves_the_rc_alone_unless_the_user_confirms(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -7292,7 +7238,6 @@ def test_step5_leaves_the_rc_alone_unless_the_user_confirms(tmp_env: Path, monke
     rc = Path.home() / ".bashrc"
     rc.write_text("export PATH=/x\n", encoding="utf-8")
     monkeypatch.setenv("SHELL", "/bin/bash")
-    monkeypatch.setattr(onboard_web, "_pick_provider", lambda kind, current: current)
     monkeypatch.setattr(onboard_web, "_prompt_key", lambda **_: "sk-serper")
     monkeypatch.setattr(onboard_web, "_confirm_rc", lambda _targets: False)
 
@@ -7317,7 +7262,6 @@ def test_yes_answers_the_rc_confirmation_instead_of_stopping_on_it(
     rc = Path.home() / ".bashrc"
     rc.write_text("export PATH=/x\n", encoding="utf-8")
     monkeypatch.setenv("SHELL", "/bin/bash")
-    monkeypatch.setattr(onboard_web, "_pick_provider", lambda kind, current: current)
     monkeypatch.setattr(onboard_web, "_prompt_key", lambda **_: "sk-serper")
     monkeypatch.setattr(
         onboard_web,
@@ -7347,7 +7291,6 @@ def test_step5_appends_to_every_target_on_confirmation(tmp_env: Path, monkeypatc
     rc = Path.home() / ".bashrc"
     rc.write_text("export PATH=/x\n", encoding="utf-8")
     monkeypatch.setenv("SHELL", "/bin/bash")
-    monkeypatch.setattr(onboard_web, "_pick_provider", lambda kind, current: current)
     monkeypatch.setattr(onboard_web, "_prompt_key", lambda **_: "sk-serper")
     monkeypatch.setattr(onboard_web, "_confirm_rc", lambda _targets: True)
 
@@ -7376,43 +7319,6 @@ def test_step5_key_flags_are_written_even_though_the_step_is_skipped(tmp_env: Pa
     )
 
     web = json.loads(tmp_env.read_text())["tools"]["web"]
-    assert web["providers"]["serper"]["apiKey"] == "sk-flag"
-    assert web["providers"]["jina"]["apiKey"] == "jina-flag"
+    assert web["search"]["apiKey"] == "sk-flag"
+    assert web["jinaApiKey"] == "jina-flag"
     assert "export SERPER_API_KEY=sk-flag" in (Path.home() / ".raven" / "env").read_text(encoding="utf-8")
-
-
-def test_step5_refuses_an_unknown_vendor_flag_before_writing(tmp_env: Path) -> None:
-    """A vendor the tools cannot serve is a usage error, not a traceback, and
-    nothing lands in config on the way to it."""
-    import click
-
-    from raven.cli import onboard_web
-
-    with pytest.raises(click.BadParameter, match="bing"):
-        onboard_web._step5_web(skip=False, non_interactive=True, search_provider="bing", search_api_key="k")
-    with pytest.raises(click.BadParameter, match="google") as caught:
-        onboard_web._step5_web(skip=False, non_interactive=True, fetch_provider="google")
-    assert caught.value.param_hint == "--fetch-provider", "the usage line names the flag to fix"
-    assert not tmp_env.exists()
-
-
-def test_step5_role_flags_select_the_vendor_and_file_its_key(tmp_env: Path) -> None:
-    """``--search-provider exa --search-api-key K`` is the scripted form of the
-    pick-then-key screen: the key lands under the vendor the flag names, and a
-    role key given without a provider goes to the vendor already configured."""
-    from raven.cli import onboard_web
-
-    onboard_web._step5_web(
-        skip=False,
-        non_interactive=True,
-        search_provider="exa",
-        search_api_key="exa-flag",
-        fetch_api_key="jina-flag",
-    )
-
-    web = json.loads(tmp_env.read_text())["tools"]["web"]
-    assert web["search"]["provider"] == "exa"
-    assert web["providers"]["exa"]["apiKey"] == "exa-flag"
-    assert web["providers"]["jina"]["apiKey"] == "jina-flag", "no --fetch-provider, so the configured reader (jina)"
-    body = (Path.home() / ".raven" / "env").read_text(encoding="utf-8")
-    assert "export EXA_API_KEY=exa-flag" in body and "export JINA_API_KEY=jina-flag" in body

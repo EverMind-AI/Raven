@@ -90,13 +90,7 @@ def _error_shaping(exc: Exception) -> dict:
     """
     shaping = dict(_NO_SHAPING)
     status = getattr(getattr(exc, "response", None), "status_code", None)
-    # A status error's own text repeats the request URL, and SerpApi carries
-    # its key as a query parameter: the ledger is written to disk, so the row
-    # gets the status and nothing of the URL.
-    if isinstance(exc, httpx.HTTPStatusError):
-        shaping["error"] = f"HTTPStatusError: HTTP {status}"
-    else:
-        shaping["error"] = f"{type(exc).__name__}: {exc}"[:500]
+    shaping["error"] = f"{type(exc).__name__}: {exc}"[:500]
     shaping["status"] = int(status) if status is not None else None
     shaping["quota_err"] = status in (401, 402, 403)
     return shaping
@@ -154,37 +148,6 @@ SEARCH_PROVIDERS: dict[str, SearchProviderSpec] = {
         # ``start`` is an offset in results, so page N maps onto start=(N-1)*num.
         paginates=True,
     ),
-    "tavily": SearchProviderSpec(
-        vendor="tavily",
-        label="Tavily",
-        env_var="TAVILY_API_KEY",
-        # No documented result-offset parameter; breadth here comes from wider
-        # single-shot queries, not paging, so the rung is declared unavailable
-        # up front like AnySearch.
-        paginates=False,
-    ),
-    "exa": SearchProviderSpec(
-        vendor="exa",
-        label="Exa",
-        env_var="EXA_API_KEY",
-        # Neural search over Exa's own index has no documented page offset.
-        paginates=False,
-    ),
-    "brave": SearchProviderSpec(
-        vendor="brave",
-        label="Brave Search",
-        env_var="BRAVE_API_KEY",
-        # ``offset`` is a page index, not a result offset like SerpApi's
-        # ``start``, documented up to 9 pages past the first.
-        paginates=True,
-    ),
-    "firecrawl": SearchProviderSpec(
-        vendor="firecrawl",
-        label="Firecrawl",
-        env_var="FIRECRAWL_API_KEY",
-        # ``/v1/search`` documents no result-offset parameter.
-        paginates=False,
-    ),
 }
 
 
@@ -199,7 +162,7 @@ class FetchProviderSpec:
     on the other end of the channel.
 
     ``extractor`` is an instrument column, not a label: it is what the fetch
-    ledger records as having served the page, and the backends are not
+    ledger records as having served the page, and the two backends are not
     comparable (see ``WebFetchConfig.provider``).
     """
 
@@ -233,28 +196,6 @@ FETCH_PROVIDERS: dict[str, FetchProviderSpec] = {
         label="AnySearch",
         env_var="ANYSEARCH_API_KEY",
         extractor="anysearch-extract",
-        needs_key=True,
-    ),
-    "tavily": FetchProviderSpec(
-        vendor="tavily",
-        label="Tavily",
-        env_var="TAVILY_API_KEY",
-        extractor="tavily-extract",
-        needs_key=True,
-    ),
-    "exa": FetchProviderSpec(
-        vendor="exa",
-        label="Exa",
-        env_var="EXA_API_KEY",
-        extractor="exa-contents",
-        needs_key=True,
-    ),
-    "firecrawl": FetchProviderSpec(
-        vendor="firecrawl",
-        label="Firecrawl",
-        env_var="FIRECRAWL_API_KEY",
-        extractor="firecrawl-scrape",
-        # No anonymous tier.
         needs_key=True,
     ),
 }
@@ -1045,12 +986,6 @@ class WebSearchTool(Tool):
                 self._saturation.observe(urls)
             shaping["snippet_repeat_marks"] = self._snippet_repeat_marks
             return "\n".join(lines), urls, shaping
-        except httpx.HTTPStatusError as e:
-            # Vendor and status only, never the exception text: httpx puts the
-            # full request URL in it, and SerpApi's URL carries the key.
-            status = e.response.status_code
-            logger.error("WebSearch error: {} answered HTTP {}", self.spec.label, status)
-            return f"Error: {self.spec.label} answered HTTP {status}", [], _error_shaping(e)
         except httpx.ProxyError as e:
             logger.error("WebSearch proxy error: {}", e)
             return f"Proxy error: {e}", [], _error_shaping(e)
@@ -1093,71 +1028,6 @@ class WebSearchTool(Tool):
                 headers={"Accept": "application/json"},
                 timeout=10.0,
             )
-        if self.provider == "tavily":
-            # ``page`` cannot appear here: no documented result-offset parameter,
-            # which is why ``spec.paginates`` is False for this vendor.
-            return await client.post(
-                "https://api.tavily.com/search",
-                json={"query": query, "max_results": n},
-                headers={
-                    "Accept": "application/json",
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {self.api_key}",
-                },
-                timeout=10.0,
-            )
-        if self.provider == "exa":
-            # Same reasoning as Tavily: no page offset, so ``paginates`` is False.
-            # ``contents.highlights`` asks for a query-scored excerpt, which is
-            # what the render path reads as the snippet. Not ``text``: that is
-            # the whole page, and ``_snippet_line`` renders whatever it is
-            # handed - probed live, five results carried 138k chars of text
-            # against 1.5k of capped highlights. ``maxCharacters`` is the bound
-            # that holds; ``numSentences``/``highlightsPerUrl`` did not (one
-            # "sentence" came back at 1.3k chars). Highlights are a separately
-            # billed add-on, so they are only requested when snippets are
-            # rendered - a deep-research profile sets ``include_snippets=False``
-            # and would discard them unread.
-            body: dict[str, Any] = {"query": query, "numResults": n}
-            if self.include_snippets:
-                body["contents"] = {"highlights": {"maxCharacters": 300}}
-            return await client.post(
-                "https://api.exa.ai/search",
-                json=body,
-                headers={
-                    "Accept": "application/json",
-                    "Content-Type": "application/json",
-                    "x-api-key": self.api_key,
-                },
-                timeout=10.0,
-            )
-        if self.provider == "brave":
-            # ``offset`` is a page index (unlike SerpApi's result-count
-            # ``start``), so page N maps onto offset=(N-1) directly.
-            params: dict[str, Any] = {"q": query, "count": n}
-            if page > 1:
-                params["offset"] = page - 1
-            return await client.get(
-                "https://api.search.brave.com/res/v1/web/search",
-                params=params,
-                headers={
-                    "Accept": "application/json",
-                    "X-Subscription-Token": self.api_key,
-                },
-                timeout=10.0,
-            )
-        if self.provider == "firecrawl":
-            # No page offset here either, same as Tavily and Exa.
-            return await client.post(
-                "https://api.firecrawl.dev/v1/search",
-                json={"query": query, "limit": n},
-                headers={
-                    "Accept": "application/json",
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {self.api_key}",
-                },
-                timeout=10.0,
-            )
         # AnySearch. ``page`` cannot appear here: the provider serves no offset,
         # which is why ``spec.paginates`` is False and the saturation rule is told
         # so at construction - the rung is unreachable rather than unanswerable.
@@ -1188,71 +1058,6 @@ class WebSearchTool(Tool):
             if kg := data.get("knowledge_graph"):
                 out["knowledgeGraph"] = kg
             return out
-        if self.provider == "tavily":
-            organic = [
-                {
-                    "title": str(item.get("title") or ""),
-                    "link": str(item.get("url") or ""),
-                    "snippet": item.get("content") or "",
-                }
-                for item in data.get("results") or []
-                if isinstance(item, dict)
-            ]
-            out = {"organic": organic}
-            # Tavily returns ``answer`` only when the request opts in with
-            # ``include_answer``, which the request above does not send, so
-            # this slot is empty today. Kept on the answerBox path so an opt-in
-            # later renders through the channel a deep-research profile
-            # already switches off.
-            if answer := data.get("answer"):
-                out["answerBox"] = {"answer": answer}
-            return out
-        if self.provider == "exa":
-            organic = [
-                {
-                    "title": str(item.get("title") or ""),
-                    "link": str(item.get("url") or ""),
-                    # Highlights only, never ``text``: a page body in this slot
-                    # is rendered whole. Whitespace collapsed because a highlight
-                    # carries newlines and the snippet line is indented once.
-                    "snippet": " ".join(
-                        " ".join(h.split()) for h in (item.get("highlights") or []) if isinstance(h, str) and h
-                    ),
-                }
-                for item in data.get("results") or []
-                if isinstance(item, dict)
-            ]
-            return {"organic": organic}
-        if self.provider == "brave":
-            web = data.get("web") if isinstance(data.get("web"), dict) else {}
-            organic = [
-                {
-                    "title": str(item.get("title") or ""),
-                    "link": str(item.get("url") or ""),
-                    "snippet": item.get("description") or "",
-                }
-                for item in (web.get("results") if isinstance(web, dict) else None) or []
-                if isinstance(item, dict)
-            ]
-            return {"organic": organic}
-        if self.provider == "firecrawl":
-            # Errors normally arrive status-coupled (400/500 with ``success:
-            # false``, probed live) and raise in ``_send_with_retry``. This
-            # catches an in-envelope refusal inside a 200 so it renders as an
-            # error rather than a dry search: a zero-hit advances the
-            # saturation streak, and "the endpoint refused" must not.
-            if data.get("success") is False:
-                raise ValueError(f"Firecrawl: {data.get('error') or 'search failed'}")
-            organic = [
-                {
-                    "title": str(item.get("title") or ""),
-                    "link": str(item.get("url") or ""),
-                    "snippet": item.get("description") or "",
-                }
-                for item in data.get("data") or []
-                if isinstance(item, dict)
-            ]
-            return {"organic": organic}
         # AnySearch publishes the request shape but not the response. Parse
         # tolerantly: results may sit at the top level or inside the
         # ``{code, message, data}`` envelope its auth endpoint uses, and an item
@@ -1592,7 +1397,7 @@ class WebFetchTool(Tool):
         if not isinstance(payload, dict):
             return record
         # ``extractor`` names the backend that actually served the page. It is a
-        # measurement column, not a label: the live-web backends are not
+        # measurement column, not a label: the two live-web backends are not
         # interchangeable (AnySearch keeps the navigation chrome Jina strips, so
         # the same article arrives ~1.8x longer), and a fallback chain means the
         # selected provider is not always the one that answered.
@@ -1701,11 +1506,6 @@ class WebFetchTool(Tool):
                     raise _ProviderPageError(f"{candidate} returned no page content")
                 served = candidate
                 break
-            except httpx.HTTPStatusError as e:
-                # Same rule as the search tool: no request URL in the text.
-                status = e.response.status_code
-                logger.error("WebFetch error for {} via {}: HTTP {}", url, candidate, status)
-                failure = f"{candidate} answered HTTP {status}"
             except httpx.ProxyError as e:
                 logger.error("WebFetch proxy error for {} via {}: {}", url, candidate, e)
                 failure = f"Proxy error: {e}"
@@ -1799,93 +1599,6 @@ class WebFetchTool(Tool):
                 r = await self._get_with_retry(url, {**headers, "x-no-cache": "true"})
                 text = r.text
             return text, r.status_code, {}
-
-        if provider == "tavily":
-            headers = {
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self._key_for('tavily')}",
-            }
-
-            async def _send_tavily() -> httpx.Response:
-                async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
-                    return await client.post(
-                        "https://api.tavily.com/extract", json={"urls": [url]}, headers=headers
-                    )
-
-            r = await _send_with_retry(_send_tavily, op="fetch_retry", key=url, budget=self._retry_budget)
-            data = r.json()
-            results = data.get("results") if isinstance(data, dict) else None
-            # A single-URL request has at most one hit; Tavily may normalise the
-            # URL (trailing slash, scheme) so this does not match on equality.
-            hit = results[0] if isinstance(results, list) and results and isinstance(results[0], dict) else None
-            if hit is None:
-                failed = data.get("failed_results") if isinstance(data, dict) else None
-                reason = failed[0].get("error") if isinstance(failed, list) and failed and isinstance(failed[0], dict) else None
-                raise _ProviderPageError(f"Tavily: {reason or 'extract failed'}")
-            text = str(hit.get("raw_content") or "")
-            if not text:
-                raise _ProviderPageError("Tavily returned no page content")
-            return text, r.status_code, {}
-
-        if provider == "exa":
-            headers = {
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-                "x-api-key": self._key_for("exa"),
-            }
-
-            async def _send_exa() -> httpx.Response:
-                async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
-                    return await client.post(
-                        "https://api.exa.ai/contents",
-                        json={"urls": [url], "text": True},
-                        headers=headers,
-                    )
-
-            r = await _send_with_retry(_send_exa, op="fetch_retry", key=url, budget=self._retry_budget)
-            data = r.json()
-            results = data.get("results") if isinstance(data, dict) else None
-            hit = results[0] if isinstance(results, list) and results and isinstance(results[0], dict) else None
-            if hit is None:
-                raise _ProviderPageError("Exa returned no page content")
-            text = str(hit.get("text") or "")
-            if not text:
-                raise _ProviderPageError("Exa returned no page content")
-            extras: dict[str, Any] = {}
-            if title := hit.get("title"):
-                extras["title"] = str(title)
-            return text, r.status_code, extras
-
-        if provider == "firecrawl":
-            headers = {
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self._key_for('firecrawl')}",
-            }
-
-            async def _send_fc() -> httpx.Response:
-                async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
-                    return await client.post(
-                        "https://api.firecrawl.dev/v1/scrape",
-                        json={"url": url, "formats": ["markdown"]},
-                        headers=headers,
-                    )
-
-            r = await _send_with_retry(_send_fc, op="fetch_retry", key=url, budget=self._retry_budget)
-            data = r.json()
-            if not isinstance(data, dict) or not data.get("success"):
-                message = (data.get("error") or "scrape failed") if isinstance(data, dict) else "malformed response"
-                raise _ProviderPageError(f"Firecrawl: {message}")
-            body = data.get("data") if isinstance(data.get("data"), dict) else {}
-            text = str(body.get("markdown") or "")
-            if not text:
-                raise _ProviderPageError("Firecrawl returned no page content")
-            extras: dict[str, Any] = {}
-            metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
-            if title := metadata.get("title"):
-                extras["title"] = str(title)
-            return text, r.status_code, extras
 
         # AnySearch. No cache-bust header is published, so the garbled-page
         # re-read above has no counterpart here; the encoding check still runs on

@@ -43,7 +43,6 @@ def tmp_logs(tmp_path: Path, monkeypatch):
         from loguru import logger
 
         logger.remove()
-        logger.configure(patcher=None)
         root.handlers = saved_handlers
         root.filters = saved_filters
         root.level = saved_level
@@ -235,70 +234,3 @@ def test_strip_tty_stream_handlers_keeps_root_non_tty_handler(tmp_logs: Path) ->
 
 
 # ---------------------------------------------------------------------------
-# Credentials must not reach the persisted file
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "query",
-    [
-        "?engine=google&q=cats&api_key=SECRET-VALUE-1",
-        "?api_key=SECRET-VALUE-1&engine=google",
-        "?api_key=SECRET-VALUE-1",
-        "?apiKey=SECRET-VALUE-1&q=cats",
-        "?q=cats&token=SECRET-VALUE-1",
-    ],
-)
-def test_a_url_borne_credential_never_reaches_the_file(tmp_logs: Path, query: str) -> None:
-    """Driven through real httpx rather than a hand-written line: the record
-    that leaks is httpx's own success-path INFO, so its wording is what the
-    pattern has to match, and only httpx can say what that wording is.
-
-    The level is set here rather than inherited: importing litellm anywhere in
-    the process raises the ``httpx`` logger to WARNING as an import side
-    effect, which would leave every assertion below vacuously true.
-    """
-    import asyncio
-
-    import httpx
-
-    httpx_logger = logging.getLogger("httpx")
-    saved_level = httpx_logger.level
-    log_path = redirect_loguru_to_file("gateway.log", file_level="INFO", terminal_level=None)
-
-    async def _get() -> None:
-        transport = httpx.MockTransport(lambda request: httpx.Response(200, json={}))
-        async with httpx.AsyncClient(transport=transport) as client:
-            await client.get(f"https://vendor.test/search{query}")
-
-    try:
-        httpx_logger.setLevel(logging.INFO)
-        asyncio.run(_get())
-        text = _flush_and_read(log_path)
-    finally:
-        httpx_logger.setLevel(saved_level)
-
-    assert "HTTP Request" in text, "the httpx record itself must still be persisted"
-    assert "SECRET-VALUE-1" not in text
-    assert "<redacted>" in text
-
-
-def test_redaction_keeps_the_rest_of_the_url(tmp_logs: Path) -> None:
-    from loguru import logger
-
-    log_path = redirect_loguru_to_file("gateway.log", file_level="INFO", terminal_level=None)
-    logger.error("WebFetch error for {}: {}", "https://vendor.test/v1?q=cats&api_key=SECRET-VALUE-2", "boom")
-
-    text = _flush_and_read(log_path)
-    assert "SECRET-VALUE-2" not in text
-    assert "https://vendor.test/v1?q=cats&api_key=<redacted>" in text
-    assert "boom" in text
-
-
-def test_a_line_carrying_no_credential_is_untouched(tmp_logs: Path) -> None:
-    from loguru import logger
-
-    log_path = redirect_loguru_to_file("gateway.log", file_level="INFO", terminal_level=None)
-    logger.info("channel=whatsapp status=ready keys=3")
-
-    assert "channel=whatsapp status=ready keys=3" in _flush_and_read(log_path)

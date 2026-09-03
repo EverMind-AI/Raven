@@ -1,14 +1,11 @@
 """Web tools: ``web_search`` and ``web_fetch`` for the research flow.
 
 These replace the kernel's built-in tools of the same names. Search goes to Serper
-(``POST https://google.serper.dev/search``) and fetch through the Jina reader
-(``GET https://r.jina.ai/{url}``), each a fixed endpoint with its own key in this
-plugin's config slice. The built-ins no longer work that way: they route through
-a vendor the deployment picks, so a host on Tavily or Firecrawl still needs a
-Serper key for this pair. What the pair adds is the research harness around the
-call - the per-turn replay cache and repeat notice, snippet and cross-query
-dedup, the saturation rule, the evidence round, the digest path, a bounded retry
-policy, and a ledger row for every call.
+(``POST https://google.serper.dev/search``), fetch goes through the Jina reader
+(``GET https://r.jina.ai/{url}``), exactly as the built-ins do; what this pair adds
+is the research harness around the call - the per-turn replay cache and repeat
+notice, snippet and cross-query dedup, the saturation rule, the evidence round,
+the digest path, a bounded retry policy, and a ledger row for every call.
 
 Per-session state
 -----------------
@@ -130,13 +127,6 @@ _NO_SHAPING = {
 }
 
 
-#: What each half of this pair calls out to, for an error line that must name a
-#: vendor without quoting the request. Literals rather than a table: this module
-#: serves one backend per tool, unlike the fork's selectable pair.
-_SEARCH_VENDOR = "Serper"
-_FETCH_VENDOR = "Jina Reader"
-
-
 def _error_shaping(exc: Exception) -> dict:
     """Shaping payload for a search that died in transport.
 
@@ -148,13 +138,7 @@ def _error_shaping(exc: Exception) -> dict:
     """
     shaping = dict(_NO_SHAPING)
     status = getattr(getattr(exc, "response", None), "status_code", None)
-    # A status error's own text repeats the request URL, and this row lands on
-    # disk: the status alone is what makes the row diagnosable, and a vendor
-    # that authenticates by query parameter would otherwise write its key here.
-    if isinstance(exc, httpx.HTTPStatusError):
-        shaping["error"] = f"HTTPStatusError: HTTP {status}"
-    else:
-        shaping["error"] = f"{type(exc).__name__}: {exc}"[:500]
+    shaping["error"] = f"{type(exc).__name__}: {exc}"[:500]
     shaping["status"] = int(status) if status is not None else None
     shaping["quota_err"] = status in (401, 402, 403)
     return shaping
@@ -881,13 +865,6 @@ class WebSearchTool(Tool):
                 saturation.observe(urls)
             shaping["snippet_repeat_marks"] = state.snippet_repeat_marks
             return "\n".join(lines), urls, shaping
-        except httpx.HTTPStatusError as e:
-            # Vendor and status only, never the exception text: httpx puts the
-            # full request URL in it, so a key carried as a query parameter
-            # would reach the model and the log through this line.
-            status = e.response.status_code
-            logger.error("WebSearch error: {} answered HTTP {}", _SEARCH_VENDOR, status)
-            return f"Error: {_SEARCH_VENDOR} answered HTTP {status}", [], _error_shaping(e)
         except httpx.ProxyError as e:
             logger.error("WebSearch proxy error: {}", e)
             return f"Proxy error: {e}", [], _error_shaping(e)
@@ -1180,12 +1157,6 @@ class WebFetchTool(Tool):
         )
         try:
             text, status = await self._read_page(url)
-        except httpx.HTTPStatusError as e:
-            # Same rule as the search half: the reader and the status, not a
-            # message that repeats the request URL.
-            status = e.response.status_code
-            logger.error("WebFetch error for {}: {} answered HTTP {}", url, _FETCH_VENDOR, status)
-            return json.dumps({"error": f"{_FETCH_VENDOR} answered HTTP {status}", "url": url}, ensure_ascii=False)
         except httpx.ProxyError as e:
             logger.error("WebFetch proxy error for {}: {}", url, e)
             return json.dumps({"error": f"Proxy error: {e}", "url": url}, ensure_ascii=False)
