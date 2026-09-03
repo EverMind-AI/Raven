@@ -3044,7 +3044,7 @@ def register(app: typer.Typer) -> None:
             False,
             "--skip-test",
             help="Skip the one-shot test message (avoids a billed call; connectivity is still checked)",
-        )
+        ),
     ) -> None:
         """Six-step setup wizard: LLM provider → sandbox → channel → memory → deep research → import."""
         run_wizard(
@@ -3061,7 +3061,7 @@ def register(app: typer.Typer) -> None:
             non_interactive=non_interactive,
             yes=yes,
             reset=reset,
-            skip_test=skip_test
+            skip_test=skip_test,
         )
 
 
