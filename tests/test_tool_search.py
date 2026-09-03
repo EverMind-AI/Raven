@@ -760,30 +760,3 @@ class TestAnAbsentNameOnTheFoldedPath:
         ctrl = ToolSearchController(reg, always_visible=set())
         ctrl.refresh()
         assert [h["name"] for h in ctrl.search("openseo search")] == []
-
-
-def test_tool_call_describes_the_provenance_a_report_gives_a_name() -> None:
-    """A schema-hidden tool can be named by something that is not a tool result.
-
-    The DAG exception report reaches the model as an injected turn, not as the
-    result of a call it made, and it tells the model to invoke `resolve_dag_node`
-    through this tool. A description enumerating only `tool_search` and "another
-    tool's result" contradicts that instruction at the moment it has to be obeyed,
-    which is the same broken promise the hidden-tool route exists to close.
-    """
-    tool = ToolCallTool(ToolSearchController(ToolRegistry(), always_visible=set()))
-    # Both authored strings ship to the provider inside one tool definition, and the
-    # second is what the model is reading at the moment it fills that argument in, so
-    # a provenance named in one and not the other is a contradiction on the wire.
-    texts = {
-        "description": tool.description,
-        "name parameter": tool.parameters["properties"]["name"]["description"],
-    }
-
-    for where, text in texts.items():
-        assert TOOL_SEARCH_NAME in text, f"{where}: the search-first provenance stays"
-        assert "result" in text, f"{where}: and the tool-result provenance stays"
-        assert any(word in text for word in ("report", "notice")), (
-            f"{where}: a name handed over in a report or notice is a third provenance and has "
-            f"to be named, or the DAG report asks for something this text denies: {text!r}"
-        )

@@ -2499,6 +2499,17 @@ class AgentLoop:
         there was nothing worth eliding (caller should not bother retrying).
         """
         placeholder = TOOL_OUTPUT_ELIDED
+        # INVARIANT: only ``role == "tool"`` messages are candidates, and only their
+        # ``content`` is rewritten. The assistant message that ISSUED the call is never
+        # touched, so its ``tool_calls`` - which carry the url - survive intact, and
+        # ``_ALLOWED_MSG_KEYS`` passes them to the wire. An elided context is therefore
+        # lossy in the BODY and lossless in the ADDRESS: anything elided can be fetched
+        # again, which is what the DR contract tells the model to do.
+        #
+        # This has never been stated, only implied by the predicate below, and widening
+        # it by one role would delete the addresses with no symptom whatsoever - the run
+        # would simply stop being able to re-open what it dropped. Pinned by
+        # tests/test_agent_loop_shrink_keeps_the_address.py.
         tool_idxs = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
         if len(tool_idxs) <= cls._SHRINK_KEEP_RECENT_TOOL_RESULTS:
             return messages, 0

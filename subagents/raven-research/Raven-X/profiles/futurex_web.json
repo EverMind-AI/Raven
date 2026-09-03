@@ -1,0 +1,83 @@
+{
+  "agents": {
+    "defaults": {
+      "model": "student",
+      "provider": "custom",
+      "temperature": 0.7,
+      "reasoningEffort": "high",
+      "maxToolIterations": 150,
+      "maxTokens": 16384,
+      "contextWindowTokens": 65536,
+      "requestTimeoutSeconds": 1800
+    }
+  },
+  "providers": {
+    "custom": {
+      "apiBase": "http://WORKER3_IP:30000/v1",
+      "apiKey": "EMPTY"
+    }
+  },
+  "tools": {
+    "disabledTools": [
+      "exec",
+      "spawn",
+      "message",
+      "ask_user",
+      "cron",
+      "read_file",
+      "write_file",
+      "edit_file",
+      "find",
+      "grep",
+      "list_dir",
+      "read_skill",
+      "use_skill",
+      "tool_search",
+      "tool_call",
+      "image_generate",
+      "text_to_speech",
+      "video_generate",
+      "understand_media"
+    ]
+  },
+  "memory": {
+    "backend": null
+  },
+  "drFlow": {
+    "enabled": true,
+    "version": "dr@3.5-futurex",
+    "thinkClosingTagRequired": false,
+    "forceFinalize": {
+      "enabled": true
+    },
+    "spinBreaker": {
+      "enabled": true
+    },
+    "fetchFloor": {
+      "enabled": true
+    },
+    "verify": {
+      "enabled": false,
+      "constraintRubric": false,
+      "strictRejectOnly": false
+    },
+    "digest": {
+      "verbatimHeadChars": 800
+    },
+    "search": {
+      "includeSnippets": true,
+      "snippetDedupByDocid": false
+    },
+    "toolsAllowlist": [
+      "web_search",
+      "web_fetch"
+    ],
+    "promptSectionOverride": "# Forecasting Mode\n\nYou answer a question about an event that has not been graded yet. Rules:\n\n1. Do not ask the user clarifying questions - there is no further turn. State your\n   working assumptions explicitly and proceed.\n2. Today's date matters. Many of these questions ask for \"the latest published\"\n   value of a series that updates on a schedule (rankings, indices, weekly\n   reports, box office), or for an aggregate over a period that is already\n   nearly complete. Find the CURRENT published value first - it is usually the\n   single best predictor - and only then reason about how much it can move\n   before the resolution date.\n3. Search results carry titles, links and snippets. A snippet that already\n   states the figure you need is usable evidence; confirm it with web_fetch when\n   the figure decides the answer, and always pass info_to_extract.\n4. Prefer the primary publisher of the series (the exchange, the federation,\n   the statistical office, the studio's own tracker) over commentary about it.\n   Note the publication date of every figure you use - a stale value read as\n   current is the main way these questions are lost.\n5. You must commit. Refusing, hedging, or saying you cannot predict the future\n   scores zero. When the evidence is thin, name the best-supported outcome and\n   say it is uncertain.\n6. Output shape is graded mechanically and is not negotiable. Write your\n   reasoning and the evidence you used first, then close with the exact box\n   format the question specifies, as the LAST thing in your reply. Nothing may\n   follow the box.\n7. For lettered options the grade is all-or-nothing over the SET: naming an\n   extra option scores the same as naming the wrong one. Give exactly one\n   option unless the question explicitly asks which options (plural) hold.",
+    "finalShape": {
+      "record": true,
+      "requireMarker": false,
+      "reportStructure": false,
+      "processAppendix": false
+    }
+  }
+}

@@ -1,4 +1,4 @@
-"""Validate and resolve input placeholders shared by delegation surfaces."""
+"""Resolve the file and literal placeholder forms shared by both surfaces."""
 
 from collections.abc import Mapping
 from typing import Any
@@ -127,7 +127,7 @@ async def render_template(
             graph node (which has no meaning without a graph), or for any of the
             reasons that :func:`resolve_file_placeholder` raises.
     """
-    check_input_contract(template, inputs)
+    check_inputs_referenced(template, inputs)
     parts: list[str] = []
     last = 0
     cache: dict[str, str] = {}
@@ -189,62 +189,6 @@ def check_inputs_referenced(template: str, inputs: Mapping[str, Any], *, prefix:
             "the sub-agent only where a placeholder puts it, so add {{ inputs.<key> }} to the "
             "template where it belongs, or drop the entry"
         )
-
-
-def check_input_contract(
-    template: str,
-    inputs: Mapping[str, Any],
-    *,
-    prefix: str = "",
-    require_references: bool = True,
-) -> None:
-    """Validate input value shapes and the placeholders that consume them."""
-    for key, spec in inputs.items():
-        if isinstance(spec, str):
-            continue
-        if spec is None:
-            raise DagValidationError(
-                f"{prefix}input '{key}' is not defined -- add it to this task's inputs, "
-                "or drop its placeholder from the prompt"
-            )
-        if not isinstance(spec, dict):
-            raise DagValidationError(
-                f'{prefix}input \'{key}\' must be a literal string, {{"file": <path>}}, or {{"node": <id>}}'
-            )
-        forms = set(spec) & {"file", "node"}
-        if not forms:
-            raise DagValidationError(
-                f"{prefix}input '{key}' is an object naming neither a file nor a node -- "
-                'give it a literal string, {"file": <path>}, or {"node": <id>}'
-            )
-        if "node" in forms and (extra := set(spec) - {"node"}):
-            raise DagValidationError(
-                f"{prefix}input '{key}' mixes a node reference with {sorted(extra)}; a node input takes "
-                "only 'node' -- an id already names one node per conversation, so there is nothing more to qualify"
-            )
-        if len(forms) != 1 or len(spec) != 1:
-            raise DagValidationError(
-                f"{prefix}input '{key}' must contain exactly one of 'file' or 'node', with no other fields"
-            )
-        form = next(iter(forms))
-        target = spec[form]
-        if not isinstance(target, str) or not target.strip():
-            raise DagValidationError(f"{prefix}input '{key}' {form!r} must be a non-empty string")
-
-    if require_references:
-        check_inputs_referenced(template, inputs, prefix=prefix)
-    for _, _, ph in iter_placeholders(template):
-        if ph.kind in ("input", "input_path") and ph.name not in inputs:
-            raise DagValidationError(
-                f"{prefix}input '{ph.name}' is not defined -- add it to this task's inputs, "
-                f"or drop {ph.raw} from the prompt"
-            )
-        if ph.kind == "input_path":
-            spec = inputs.get(ph.name)
-            if not isinstance(spec, dict) or not ({"file", "node"} & set(spec)):
-                raise DagValidationError(
-                    f"{prefix}input '{ph.name}' is not a file or node input, so '.path' cannot be referenced"
-                )
 
 
 def needs_a_graph(ph: Placeholder, inputs: Mapping[str, Any]) -> bool:

@@ -84,10 +84,78 @@ _CJK = (
     "—…·"  # em dash, ellipsis, middle dot: outside both blocks
 )
 _URL_RE = re.compile(r"https?://[^\s<>\"'\)\]`" + _CJK + r"]+", re.I)
+# ★ 20260901 (Framework, report-comparison audit). Disclosure only, and the word
+# "only" is the whole design. A product run was observed writing every one of its
+# 43 references as a bare host - ``kyutai.org/blog/2026-04-28-arc-encoder/`` - so
+# ``_URL_RE`` above matched nothing, ``urls_cited`` was 0, and the grounding check
+# correctly reported that it did not apply. The appendix then said "nothing to
+# check" over an answer that had read 49 pages, which is true and useless.
+#
+# The fix people reach for is to widen ``_URL_RE`` to accept a missing scheme. That
+# is refused here: ``citation_grounding_rate`` has readings on disk, and widening
+# its extractor moves that number's denominator while its name stays put - the
+# failure this repo has logged more often than any other. So this second pattern
+# feeds a *separate* counter that never touches ``cited``, the rate, or either
+# ``cited_*`` list. It answers one question and no other: when the check found no
+# links, was that because the answer cited nothing, or because it cited in a shape
+# the check cannot read? Those two need opposite responses - a prompt fix versus an
+# integrity alarm - and one number could not tell them apart.
+#
+# The TLD list is closed, and the direction of its error is the point. A TLD it
+# lacks means this counter undercounts, and the appendix falls back to the generic
+# "nothing to check" - exactly today's behaviour, so a miss costs nothing new. An
+# over-broad list turns paths this repo writes constantly (``pipeline/lib/isolate.sh``,
+# ``notes/README.md``) into cited sources, and a disclosure counter with false
+# positives gets ignored, which costs the whole mechanism. ``sh`` and ``md`` are real
+# TLDs and are absent for that reason.
+#
+# A path separator is required. Without it every ``Fig.2`` and ``v1.5`` is a host,
+# and a disclosure counter that cries wolf gets ignored, which costs more than not
+# having it. The lookbehind keeps it off the tail of a scheme-ful URL that
+# ``_URL_RE`` already owns, and off e-mail addresses.
+_SCHEMELESS_RE = re.compile(
+    r"(?<![\w/:.@-])"
+    r"((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+"
+    r"(?:com|org|net|io|ai|edu|gov|dev|co|info|blog|uk|cn|de|fr|jp|eu|xyz|tech|cloud)"
+    r"/[^\s<>\"'\)\]`" + _CJK + r"]*)",
+    re.I,
+)
+# ★ 20260902 (Framework, product feedback). The third disclosure shape, and the one
+# the 20260901 audit measured as dominant: 75 of one product run's 87 citation
+# handles were ``"<claim>" (web_fetch #cd8187b0)`` - the security fence's nonce,
+# the shortest token in context that reads like a handle. The report templates now
+# say out loud that the fence tag is not a citation, but a template asks and a
+# model sometimes does otherwise, and when it does the grounding check reported
+# "nothing to check" over an answer whose every reference pointed at a page the
+# run really had opened - the false-green this module exists to prevent.
+#
+# Disclosure ONLY, like ``_SCHEMELESS_RE`` above and for the same reason: the
+# nonce is minted by ``wrap_untrusted`` at context-assembly time and never reaches
+# the ledger, so a tag cannot be resolved to a URL here - by design, a security
+# boundary is not a citation index. Feeding these into ``cited`` would put
+# unresolvable strings under ``citation_grounding_rate``'s unchanged name. So the
+# counter answers one question: when the check found no links, did the answer cite
+# fence tags instead? That is a generation-side formatting failure with a page
+# behind every reference, and it must not wear the costume of "cited nothing".
+#
+# The id is 4-16 hex characters rather than exactly the 8 ``token_hex(4)`` mints,
+# because the model is quoting from context and a truncated quote of a fence tag
+# is still a fence tag, not a citation this check could suddenly read.
+_FENCE_TAG_RE = re.compile(r"\b(web_fetch|web_search)\s*#([0-9a-f]{4,16})\b", re.I)
 # Backtick and asterisk join the trailing set for the markdown case (`url`, **url**),
 # which the character class above cannot catch for the asterisk without banning it
 # from paths outright.
 _TRAILING = ".,;:!?`*"
+
+# ★ 20260902 (Framework, product feedback). The verify outcomes whose shipped
+# answer carries NO verdict at all. ``budget_spent_reviewed`` is deliberately
+# absent: its whole point is that the shipped draft WAS reviewed for the record.
+# A ``None`` outcome is also not here - an arm with no reviewer configured made a
+# config choice, and a banner on every such run would cry wolf until ignored.
+_UNREVIEWED_OUTCOMES = {
+    "budget_spent": "the revision budget was spent before any review ran",
+    "unavailable": "the reviewer was unavailable and the gate failed open",
+}
 
 _MAX_LISTED = 40
 # Below this a fetch returned a redirect stub, an empty JSON, or an error page.
@@ -187,6 +255,73 @@ class ResearchTrail:
     unsupported: list[str] = field(default_factory=list)
     cited: list[str] = field(default_factory=list)
     cited_not_opened: list[str] = field(default_factory=list)
+    cited_never_surfaced: list[str] = field(default_factory=list)
+    """The subset of ``cited_not_opened`` that no search ever returned either.
+
+    ★ 20260828 (Framework, product-surface audit). A strict subset, added because
+    the one line in this appendix that accuses the answer could not tell its two
+    causes apart. "Cited a link the search listed but never opened" breaks the
+    contract's first rule - answer from fetched pages, never from the listing -
+    and the reader can still go read it. "Cited a link that appears nowhere in
+    this run at all" is a fabricated citation. One warning covered both, in the
+    same words, and the second is the only one worth interrupting a reader for.
+
+    The ledger always carried what was needed: ``web.py``'s search rows write an
+    ordered ``urls`` list, and the fold simply discarded it.
+
+    ``cited_not_opened`` is deliberately left alone, because
+    ``citation_grounding_rate`` is computed from it and has readings on disk.
+    Splitting the number would have moved a published metric while its name
+    stayed put - this repo's most repeated failure."""
+    span_seconds: float | None = None
+    """Wall-clock from the turn's first ledger row to its last, or ``None`` for one row.
+
+    ★ 20260901 (Framework). Derived, not instrumented: every ledger row already carries
+    ``ts``, so this needed no new plumbing and cannot fail to be written for a run that
+    did any research at all.
+
+    **Caliber, and it is not the turn's wall clock.** It spans the first research event
+    to the last, so it excludes the final generation that happens after the last tool
+    call - measured against one product run's own header, 1,815s here against 1,884s for
+    the turn, an undercount of 69s. Naming it ``research_seconds`` rather than
+    ``elapsed`` is the point: a number that gets compared against a turn duration would
+    make the gap look like a discrepancy instead of a definition.
+
+    It exists because the product surface has no wall-clock budget of any kind - the
+    5400s cap belongs to ``bench/rollout.py``'s subprocess and the CLI cannot reach it -
+    and one observed product question spent 31m24s. A caller that can see the number can
+    set a timeout at the process level, which is the only place a timeout is safe here.
+
+    ⚠️ A deadline INSIDE the loop is deliberately not built. Stopping research at a clock
+    and then asking for an answer is the shape this repo has already measured: replaying
+    25 genuinely stuck questions through a repaired forced-finalize produced content on
+    23 of them, hit gold on **0**, and every one read as a confident wrong answer. It
+    converts a detectable zero into an undetectable error, and it removes the trigger the
+    best-measured lever in the project (conditional rerun on a dud) depends on. So the
+    number is surfaced and the decision is left outside."""
+
+    cited_schemeless: list[str] = field(default_factory=list)
+    """Scheme-less references in the answer that ``_URL_RE`` structurally cannot see.
+
+    ★ 20260901 (Framework). Never folded into ``cited``, and never into the
+    grounding rate - see ``_SCHEMELESS_RE``. Its only job is to give the
+    "no links were cited" line a cause, so a formatting problem in the answer
+    stops looking like an answer that cited nothing."""
+
+    cited_fence_tags: list[str] = field(default_factory=list)
+    """Distinct fence tags cited in the answer, in their own words (``web_fetch #cd81...``,
+    ``web_search #aa11...``): the tool name travels with the id, so the rendered line
+    quotes what the answer wrote and can never claim a ``web_search`` tag was a
+    ``web_fetch`` - an integrity appendix that misstates the event it discloses
+    would be its own counterexample.
+
+    ★ 20260902 (Framework, product feedback). Never folded into ``cited`` and never
+    into the rate - see ``_FENCE_TAG_RE``. A fence tag has a fetched page behind it
+    that this module structurally cannot name (the nonce never reaches the ledger),
+    so its job is the same as ``cited_schemeless``'s: give the "no links were
+    cited" line its cause, so a report whose every reference points at a really
+    opened page stops reading as one that cited nothing."""
+
     opened_earlier: int = 0
     """How many URLs the grounding check accepted on an earlier turn's authority.
 
@@ -194,8 +329,21 @@ class ResearchTrail:
     change without saying so is one nobody can compare across runs. ``0`` on every
     single-turn run, which is every measured arm."""
 
+    def _page_split(self) -> tuple[list[tuple[str, int, bool]], int, int]:
+        """``(substantive, thin, failed)``.
+
+        ★ 20260901 (Framework). Extracted so ``counters()`` and ``render()`` cannot
+        drift: the thin-page count was rendered from dr@2.8 on but never emitted as a
+        counter, so the one number that says "this fetch returned a stub, not a page"
+        was human-readable and machine-invisible. Two implementations of the same
+        split is the shape this repo keeps paying for; one is enough."""
+        substantive = [p for p in self.pages if p[2] and p[1] >= _THIN_PAGE_CHARS]
+        opened_ok = sum(1 for _, _, ok in self.pages if ok)
+        return substantive, opened_ok - len(substantive), len(self.pages) - opened_ok
+
     def counters(self) -> dict[str, Any]:
         opened_ok = sum(1 for _, _, ok in self.pages if ok)
+        _, thin, failed = self._page_split()
         return {
             "emitted": True,
             "searches": self.searches,
@@ -204,11 +352,34 @@ class ResearchTrail:
             "zero_hit_searches": self.zero_hit,
             "pages_opened": len(self.pages),
             "pages_ok": opened_ok,
+            # ★ 20260901 (Framework). Rendered since dr@2.8, emitted only now.
+            # ``ok`` is a transport verdict, not a content one, and every downstream
+            # fetch-productivity reading was computed over ``pages_ok``.
+            #
+            # ⚠️ The threshold is deliberately NOT moved here, and the reason is worth
+            # keeping: the motivating observation was four OpenReview forum fetches in
+            # one product run that each returned exactly 440 characters of JavaScript
+            # shell - and 440 is **above** ``_THIN_PAGE_CHARS``, so this counter does
+            # not catch them. It catches the 199-to-391-character stubs it was
+            # calibrated on. Raising the bar to 600 would cover that run (9 thin pages
+            # becomes 13) on the evidence of a single trajectory, which is how this
+            # repo has twice adopted a direction that reversed on the next batch.
+            #
+            # The signal that would actually catch a JS shell is not length at all: it
+            # is **four different URLs returning byte-identical lengths**, which no
+            # threshold can express. Left unbuilt on purpose - it is a new mechanism on
+            # n=1 evidence, and this change set is about making existing numbers stop
+            # lying, not about adding detectors.
+            "thin_pages": thin,
+            "pages_failed": failed,
             "urls_cited": len(self.cited),
             # The integrity number. Null-safe on purpose: a rate over zero
             # citations is not 1.0, it is undefined, and reporting 1.0 would make
             # an answer that cites nothing look perfectly grounded.
             "cited_not_opened": len(self.cited_not_opened),
+            # Additive, and a strict subset of the key above, so every landed
+            # reading of ``cited_not_opened`` and of the rate keeps its meaning.
+            "cited_never_surfaced": len(self.cited_never_surfaced),
             "citation_grounding_rate": (
                 round(1 - len(self.cited_not_opened) / len(self.cited), 4) if self.cited else None
             ),
@@ -217,6 +388,25 @@ class ResearchTrail:
             # whose denominator the measured arm chooses, so it may not be read
             # without this and ``urls_cited`` next to it.
             "cites_nothing": not self.cited,
+            # ★ 20260901 (Framework). The two keys below split ``cites_nothing`` by
+            # cause, because it had two and they need opposite responses.
+            #
+            # ``read_but_cited_nothing``: pages were opened and the answer names no
+            # link at all. This is the state in which the grounding check reports
+            # that it did not apply - correct, and easy to read as "passed" when
+            # scanned in a table of runs. It is emitted so a batch can count how
+            # often its integrity check was inapplicable rather than satisfied.
+            #
+            # ``cited_schemeless``: how many references the answer wrote in a shape
+            # ``_URL_RE`` cannot see. Non-zero next to ``urls_cited: 0`` means the
+            # answer did cite its sources and the check simply could not read them -
+            # a generation-side formatting fix, not an integrity alarm.
+            "read_but_cited_nothing": bool(self.pages) and opened_ok > 0 and not self.cited,
+            # Rounded to whole seconds: sub-second precision on a multi-minute research
+            # turn is noise that invites false comparison between runs.
+            "research_seconds": None if self.span_seconds is None else round(self.span_seconds),
+            "cited_schemeless": len(self.cited_schemeless),
+            "cited_fence_tags": len(self.cited_fence_tags),
             # dr@3.0: non-zero means the grounding rate above was computed over this
             # conversation's fetches, not this turn's. Two runs whose scopes differ
             # are not comparable on the rate, so the scope travels with it.
@@ -228,10 +418,28 @@ class ResearchTrail:
 
     def render(self) -> str:
         opened_ok = sum(1 for _, _, ok in self.pages if ok)
+        substantive, thin, failed = self._page_split()
+        # ★ 20260901 (Framework). "N distinct" was read as "N different things were
+        # looked for". It is not: the rule is whitespace/case folding, deliberately the
+        # same key ``WebSearchTool.execute`` uses for its repeat cache, so that this
+        # line cannot contradict the ``replay`` flags printed from the same rows. Seven
+        # near-synonym rewrites of one intent all count as distinct, and calling that
+        # "distinct" flatters the run. The wording changes; the rule and the
+        # ``distinct_queries`` counter key do not, because that key has landed readings
+        # and renaming a number while its definition stays put is how a metric loses
+        # its history.
         head = (
-            f"{self.searches} searches ({len(self.distinct_queries)} distinct), "
-            f"{opened_ok} pages read"
+            f"{self.searches} searches ({len(self.distinct_queries)} unique query "
+            f"strings), {opened_ok} pages read"
         )
+        if thin:
+            # Beside "pages read", because the number above counts the stubs too.
+            head += f" ({thin} returned almost nothing)"
+        if self.span_seconds is not None and self.span_seconds >= 60:
+            # Minutes only, and only past a minute: a product answer that took half an
+            # hour is a fact the reader is entitled to, and one that took 40 seconds is
+            # not worth a clause.
+            head += f", {int(self.span_seconds // 60)}m of research"
         if self.verify_outcome:
             head += f", reviewer: {self.verify_outcome}"
             if self.unsupported:
@@ -247,7 +455,22 @@ class ResearchTrail:
             # A salvaged answer never reaches the reviewer (observer order). Saying
             # nothing here would let it wear the same trail as a reviewed turn.
             head += ", reviewer: skipped (salvaged answer)"
-        lines = ["", "---", "", f"**Research trail** — {head}", ""]
+        lines = ["", "---", ""]
+        # ★ 20260902 (Framework, product feedback). A run whose shipped answer no
+        # reviewer ever saw used to disclose that as one word in the head above -
+        # ``reviewer: budget_spent`` - which a reader scanning for a verdict reads
+        # right past. The state changes how much the whole answer can be trusted,
+        # so it leads the block instead of trailing it. The head keeps the word:
+        # this banner names the state, the head stays the machine-greppable record.
+        if self.salvaged:
+            unreviewed = "the shipped text is a salvage synthesis the reviewer never saw"
+        else:
+            unreviewed = _UNREVIEWED_OUTCOMES.get(self.verify_outcome or "")
+        if unreviewed:
+            lines.append(f"> ⚠️ **This answer shipped unreviewed** — {unreviewed}.")
+            lines.append("")
+        lines.append(f"**Research trail** — {head}")
+        lines.append("")
 
         # The grounding line, stated in both directions. Until dr@3.3 only the
         # failing direction was rendered, so a reader saw a warning when something
@@ -263,22 +486,75 @@ class ResearchTrail:
             # Explicitly not 1.0. An answer that cites nothing has an undefined
             # grounding rate, and the sentence has to say the check did not apply
             # rather than let a missing warning imply it passed.
-            lines.append("> No links were cited above, so there was nothing to check.")
+            # ★ 20260901 (Framework). The sentence was true and unactionable. Two
+            # very different runs reach it: one that answered from nothing, and one
+            # that cited every source as a bare host the extractor cannot parse. The
+            # second was observed writing 43 references and reading 49 pages, and the
+            # reader was told there was nothing to check. Naming the cause is the
+            # whole fix; the rate itself stays undefined either way.
+            # Both causes can be present in one answer, and each is rendered on its
+            # own line: folding them into one sentence would make the count of one
+            # explain the other.
+            if self.cited_fence_tags:
+                lines.append(
+                    f"> ⚠️ No links were cited, but the answer references "
+                    f"{len(self.cited_fence_tags)} tool-result fence tag(s) "
+                    f"(e.g. `{self.cited_fence_tags[0]}`). A fence tag is a data "
+                    "boundary, not a URL - the grounding check cannot resolve it "
+                    "to a page. Nothing above was verified."
+                )
+            if self.cited_schemeless:
+                lines.append(
+                    f"> ⚠️ No links were cited in a checkable form, but the answer "
+                    f"names {len(self.cited_schemeless)} source(s) without a URL "
+                    f"scheme (e.g. `{self.cited_schemeless[0]}`), so the grounding "
+                    "check could not read them. Nothing above was verified."
+                )
+            if not (self.cited_fence_tags or self.cited_schemeless):
+                if opened_ok:
+                    lines.append(
+                        f"> ⚠️ {opened_ok} page(s) were read but the answer cites no "
+                        "link, so nothing above can be traced to a source."
+                    )
+                else:
+                    lines.append("> No links were cited above, so there was nothing to check.")
             lines.append("")
         elif self.cited_not_opened:
             # Stated first and in plain words: it is the one line here that says
-            # something is wrong with the answer above.
-            lines.append(
-                f"> ⚠️ {len(self.cited_not_opened)} of {len(self.cited)} link(s) cited "
-                "above were never opened during this research: "
-                + ", ".join(self.cited_not_opened[:5])
-            )
+            # something is wrong with the answer above. Two sentences rather than
+            # one, because the two causes need different things from the reader -
+            # a listed-but-unopened link is a link they can still go read, an
+            # unseen one is a citation with nothing behind it.
+            listed = [u for u in self.cited_not_opened if u not in set(self.cited_never_surfaced)]
+            if self.cited_never_surfaced:
+                lines.append(
+                    f"> ⚠️ {len(self.cited_never_surfaced)} of {len(self.cited)} link(s) cited "
+                    "above appear nowhere in this run - no search returned them and no page "
+                    "was opened at them: " + ", ".join(self.cited_never_surfaced[:5])
+                )
+            if listed:
+                lines.append(
+                    f"> ⚠️ {len(listed)} of {len(self.cited)} link(s) cited above were "
+                    "returned by a search but never opened, so nothing here rests on "
+                    "reading them: " + ", ".join(listed[:5])
+                )
             lines.append("")
         else:
             n = len(self.cited)
             lines.append(
                 f"> ✓ All {n} cited link{'s' if n > 1 else ''} "
                 f"{'were' if n > 1 else 'was'} opened during this research."
+            )
+            lines.append("")
+
+        if self.cited and self.cited_fence_tags:
+            # The scope note for the mixed case: with real URLs present the check
+            # runs and may even print its ✓, and without this line that ✓ silently
+            # covers references it never saw.
+            lines.append(
+                f"> ({len(self.cited_fence_tags)} further reference(s) are "
+                f"tool-result fence tags (e.g. `{self.cited_fence_tags[0]}`), "
+                "which are not URLs and could not be checked.)"
             )
             lines.append("")
 
@@ -312,9 +588,6 @@ class ResearchTrail:
             # line, because "23 pages read" over 9 real ones is the kind of number
             # that stops being audit and starts being decoration; they just do not
             # each get a URL.
-            substantive = [p for p in self.pages if p[2] and p[1] >= _THIN_PAGE_CHARS]
-            thin = opened_ok - len(substantive)
-            failed = len(self.pages) - opened_ok
             lines.append("<details><summary>Pages read</summary>")
             lines.append("")
             lines += [f"- {u} ({c:,} chars)" for u, c, _ in substantive[:_MAX_LISTED]]
@@ -376,6 +649,7 @@ def build_trail(
     t = ResearchTrail()
     seen_q: set[str] = set()
     opened: set[str] = set()
+    surfaced: set[str] = set()
     for r in rows:
         op = r.get("op")
         if op == "search":
@@ -393,6 +667,14 @@ def build_trail(
             if key and key not in seen_q:
                 seen_q.add(key)
                 t.distinct_queries.append(q)
+            # Ordered on disk, membership here: rank is what the "on screen and
+            # never opened" diagnosis needs, and this check only asks whether the
+            # run ever saw the URL at all. Normalised on the way in so it meets
+            # the cited side under one rule.
+            for u in r.get("urls") or ():
+                cleaned = _clean(str(u or ""))
+                if cleaned:
+                    surfaced.add(_norm(cleaned))
         elif op == "fetch":
             url = _clean(str(r.get("url") or ""))
             if not url:
@@ -409,6 +691,10 @@ def build_trail(
                 t.unsupported = [str(c) for c in claims]
         elif op == "force_finalize" and r.get("event") == "salvage":
             t.salvaged = True
+
+    stamps = [float(r["ts"]) for r in rows if isinstance(r.get("ts"), (int, float))]
+    if len(stamps) > 1:
+        t.span_seconds = max(stamps) - min(stamps)
 
     raw_cited = []
     for m in _URL_RE.finditer(answer or ""):
@@ -448,6 +734,40 @@ def build_trail(
             t.opened_earlier += 1
         elif this_turn is None:
             t.cited_not_opened.append(form)
+    # Through ``_match_form``, not bare set membership: the recoveries it makes
+    # against opened pages (a truncated path, glued prose, a citation tail) are
+    # the extractor's own artefacts, and a link a search did list must not be
+    # called fabricated -- the heavier accusation -- for a defect the opened
+    # check forgives.
+    t.cited_never_surfaced = [u for u in t.cited_not_opened if _match_form(u, surfaced) is None]
+    # ★ 20260901 (Framework). Disclosure pass, deliberately last and deliberately
+    # read-only with respect to everything above: ``cited``, ``cited_not_opened``,
+    # ``cited_never_surfaced`` and the rate derived from them are already final at
+    # this point, so no reading on disk can move because of this block.
+    #
+    # Anything ``_URL_RE`` already claimed is excluded under the same normalisation
+    # the rest of the module uses, so a scheme-ful citation is never counted twice
+    # and a run that cites properly reports zero here.
+    norm_cited = {_norm(u) for u in raw_cited}
+    seen_bare: set[str] = set()
+    for m in _SCHEMELESS_RE.finditer(answer or ""):
+        u = _clean(m.group(1))
+        k = _norm(u)
+        if not k or k in norm_cited or k in seen_bare:
+            continue
+        seen_bare.add(k)
+        t.cited_schemeless.append(u)
+    # ★ 20260902 (Framework, product feedback). Same contract as the pass above:
+    # read-only with respect to ``cited`` and the rate, distinct ids only. No
+    # ledger lookup is attempted - the nonce never reaches the ledger, so there
+    # is nothing to look up (see ``_FENCE_TAG_RE``).
+    seen_tags: set[str] = set()
+    for m in _FENCE_TAG_RE.finditer(answer or ""):
+        tag = f"{m.group(1).lower()} #{m.group(2).lower()}"
+        if tag in seen_tags:
+            continue
+        seen_tags.add(tag)
+        t.cited_fence_tags.append(tag)
     return t
 
 

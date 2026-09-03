@@ -54,8 +54,69 @@ def test_a_cited_url_that_was_never_opened_is_named_as_such():
 
     assert t.cited_not_opened == ["https://never.example/x"]
     assert t.counters()["citation_grounding_rate"] == 0.5
-    assert "never opened" in t.render()
+    # No search row in LEDGER carries a ``urls`` list, so nothing was ever on
+    # screen: this is the fabricated-citation branch.
+    assert t.cited_never_surfaced == ["https://never.example/x"]
+    assert "appear nowhere in this run" in t.render()
     assert "https://never.example/x" in t.render()
+
+
+def test_the_warning_separates_a_fabricated_link_from_one_merely_left_unopened():
+    """Both branches, and the number that must not move between them.
+
+    "Cited a link the search listed but never opened" and "cited a link that
+    appears nowhere in this run" were one sentence in one wording. The first
+    breaks the contract's read-before-you-cite rule and the reader can still go
+    read the link; the second is a citation with nothing behind it. Collapsing
+    them made the appendix's only accusation unactionable.
+
+    ``cited_not_opened`` and ``citation_grounding_rate`` are asserted unchanged
+    across both branches on purpose: they have readings on disk, and the split
+    is additive by construction (``cited_never_surfaced`` is a strict subset).
+    """
+    ledger = [
+        {
+            "op": "search",
+            "query": "q",
+            "replay": False,
+            "zero_hit": False,
+            "urls": ["https://a.example/one", "https://listed.example/two"],
+        },
+        {"op": "fetch", "url": "https://a.example/one", "chars": 900, "ok": True},
+    ]
+    answer = "opened https://a.example/one , listed https://listed.example/two , invented https://ghost.example/three"
+    t = build_trail(ledger, answer)
+    assert t.cited_not_opened == ["https://listed.example/two", "https://ghost.example/three"]
+    assert t.cited_never_surfaced == ["https://ghost.example/three"]
+    assert t.counters()["citation_grounding_rate"] == round(1 - 2 / 3, 4)
+    assert t.counters()["cited_never_surfaced"] == 1
+    rendered = t.render()
+    assert "appear nowhere in this run" in rendered
+    assert "https://ghost.example/three" in rendered
+    assert "returned by a search but never opened" in rendered
+    assert "https://listed.example/two" in rendered
+    clean = build_trail(ledger, "only https://a.example/one")
+    assert clean.cited_not_opened == [] and clean.cited_never_surfaced == []
+    assert clean.counters()["citation_grounding_rate"] == 1.0
+    assert "\u26a0" not in clean.render()
+
+
+def test_a_truncated_citation_of_a_listed_link_is_unopened_not_fabricated():
+    """The same recovery the opened check makes, applied to the surfaced set.
+
+    A model citing a long listed path truncates it the way it truncates opened
+    ones (``_match_form``'s unique-prefix rule). Bare set membership called that
+    "appear nowhere in this run" - a fabrication charge - for a link the reader
+    can go and find in the search results. Unopened, yes; invented, no.
+    """
+    listed = "https://listed.example/wiki/a-long-article-path/section-three"
+    ledger = [{"op": "search", "query": "q", "replay": False, "zero_hit": False, "urls": [listed]}]
+    t = build_trail(ledger, "see https://listed.example/wiki/a-long-article-path/sec and that is all")
+    assert t.cited_not_opened == ["https://listed.example/wiki/a-long-article-path/sec"]
+    assert t.cited_never_surfaced == []
+    rendered = t.render()
+    assert "returned by a search but never opened" in rendered
+    assert "appear nowhere in this run" not in rendered
 
 
 def test_trailing_punctuation_does_not_manufacture_a_fabricated_citation():
@@ -136,7 +197,10 @@ def test_the_rendered_trail_leads_with_the_summary_and_folds_the_detail():
 
     assert lines[0] == "---"
     assert lines[1].startswith("**Research trail**")
-    assert "3 searches (2 distinct), 1 pages read" in lines[1]
+    # "distinct" reworded: the folding rule is unchanged - ``distinct_queries``
+    # still counts two - only the noun stops claiming two different things were
+    # looked for.
+    assert "3 searches (2 unique query strings), 1 pages read" in lines[1]
     assert text.count("<details>") == 2  # queries + pages; no open points on a pass
     assert text.index("<details>") > text.index("**Research trail**")
 
@@ -449,10 +513,16 @@ def test_a_clean_answer_says_so_instead_of_saying_nothing():
 
 
 def test_an_answer_that_cites_nothing_is_not_rendered_as_perfect():
-    """Undefined, not 1.0 - the ``counters()`` rule, now also on the page."""
+    """Undefined, not 1.0 - the ``counters()`` rule, now also on the page.
+
+    The invariant is that a zero-citation answer never renders as verified, and
+    it is asserted as an invariant rather than as one sentence, because the
+    sentence now depends on *why* there were no citations.
+    """
     t = build_trail(LEDGER, "no links here at all")
     out = t.render()
-    assert "nothing to check" in out
+    assert "\u2713" not in out
+    assert "Nothing above was verified." in out or "cites no link" in out
     assert "All 0" not in out
     assert t.counters()["citation_grounding_rate"] is None
 
@@ -569,6 +639,295 @@ def test_an_ambiguous_prefix_stays_an_accusation():
 # --------------------------------------------------------------------------- #
 # Where the rendered trail is parked                                          #
 # --------------------------------------------------------------------------- #
+
+
+# ── why "no links were cited": the causes, split ──────────────────────
+#
+# The grounding check reporting that it did not apply is correct and easy to
+# read as "passed". These give the line its cause: pages read but nothing
+# cited, sources named without a scheme, or a run that really did nothing.
+
+
+def test_the_generic_nothing_to_check_line_survives_when_no_page_was_read():
+    """Separating the causes must not delete the case the line was written for:
+    a turn that opened no page and cited no link has an inapplicable check for
+    the ordinary reason, and accusing it of citing nothing after reading would
+    be a false alarm."""
+    searches_only = [r for r in LEDGER if r["op"] != "fetch"]
+    out = build_trail(searches_only, "no links here at all").render()
+    assert "nothing to check" in out
+    assert "\u26a0" not in out
+    assert build_trail(searches_only, "x").counters()["read_but_cited_nothing"] is False
+
+
+def test_reading_pages_and_citing_nothing_is_called_out():
+    """The state the grounding check cannot see into."""
+    c = build_trail(LEDGER, "no links here at all").counters()
+    assert c["read_but_cited_nothing"] is True
+    assert c["cited_schemeless"] == 0
+    assert c["citation_grounding_rate"] is None
+    assert "1 page(s) were read but the answer cites no link" in build_trail(LEDGER, "no links here at all").render()
+
+
+def test_a_scheme_less_citation_is_disclosed_without_moving_the_rate():
+    """A product run wrote all 43 of its references as bare hosts, so ``_URL_RE``
+    saw none of them and the appendix reported that there was nothing to check.
+    That is a generation-side formatting problem wearing the costume of an answer
+    that cited nothing. Widening ``_URL_RE`` was refused: it would move
+    ``citation_grounding_rate``'s denominator under an unchanged name.
+
+    Real TLDs on purpose: ``.example`` is reserved for documentation, and adding
+    it to the production pattern to make a test pass would be fitting the code to
+    the fixture. The counter does not consult the ledger, so these hosts need not
+    appear in ``LEDGER``."""
+    t = build_trail(LEDGER, "evidence: kyutai.org/blog/arc and github.com/x/y (web_fetch #ab12)")
+    c = t.counters()
+    assert c["urls_cited"] == 0
+    assert c["citation_grounding_rate"] is None
+    assert c["cited_not_opened"] == 0 and c["cited_never_surfaced"] == 0
+    assert c["cited_schemeless"] == 2
+    assert "without a URL scheme" in t.render()
+
+
+def test_a_scheme_ful_citation_is_never_counted_twice():
+    """``arxiv.org/x`` inside ``https://arxiv.org/x`` is one citation; a counter
+    that double-counts the well-behaved case fires on every correct answer."""
+    t = build_trail(LEDGER, "see https://a.example/one")
+    assert t.counters()["urls_cited"] == 1
+    assert t.counters()["cited_schemeless"] == 0
+    assert t.counters()["read_but_cited_nothing"] is False
+
+
+def test_the_scheme_less_pattern_does_not_fire_on_ordinary_prose():
+    """A path separator is required precisely so version numbers, figure
+    references and ratios are not hosts."""
+    noise = "arXiv:2510.20535, Fig.2/3, v1.5/beta, 4x/8x, 1.0/2.0, user@host.com/x"
+    assert build_trail(LEDGER, noise).counters()["cited_schemeless"] == 0
+
+
+def test_a_page_cited_both_with_and_without_its_scheme_is_one_reference():
+    """``_norm`` drops the scheme, so a reference list writing the URL in full and
+    prose naming the same page bare fold to one key. The host needs a TLD
+    ``_SCHEMELESS_RE`` actually lists; ``.example`` is not one."""
+    url = "https://kyutai.org/blog/arc-encoder/"
+    ledger = [*LEDGER, {"op": "fetch", "url": url, "chars": 9001, "ok": True}]
+    t = build_trail(ledger, f"see {url} and, as kyutai.org/blog/arc-encoder/ explains, it holds")
+    c = t.counters()
+    assert c["urls_cited"] == 1
+    assert c["cited_schemeless"] == 0, t.cited_schemeless
+
+
+def test_research_seconds_spans_the_ledger_not_the_turn():
+    """Derived from ``ts``: first research event to last, so it excludes the
+    final generation. That is a definition, not a defect, and pinning it stops
+    the gap from being read as one."""
+    rows = [
+        {"op": "search", "query": "q", "ts": 1000.0, "replay": False, "zero_hit": False},
+        {"op": "fetch", "url": "https://a.org/x", "chars": 9000, "ok": True, "ts": 1130.4},
+    ]
+    t = build_trail(rows, "https://a.org/x")
+    assert t.counters()["research_seconds"] == 130
+    one = build_trail([rows[0]], "x")
+    assert one.counters()["research_seconds"] is None
+    no_ts = build_trail([{"op": "search", "query": "q"}, {"op": "search", "query": "r"}], "x")
+    assert no_ts.counters()["research_seconds"] is None
+
+
+def test_a_sub_minute_research_span_is_not_rendered():
+    short = [
+        {"op": "search", "query": "q", "ts": 0.0},
+        {"op": "fetch", "url": "https://a.org/x", "chars": 9000, "ok": True, "ts": 40.0},
+    ]
+    long_ = [
+        {"op": "search", "query": "q", "ts": 0.0},
+        {"op": "fetch", "url": "https://a.org/x", "chars": 9000, "ok": True, "ts": 1815.0},
+    ]
+    assert "of research" not in build_trail(short, "https://a.org/x").render()
+    assert "30m of research" in build_trail(long_, "https://a.org/x").render()
+
+
+def test_thin_pages_are_counted_not_only_rendered():
+    """``ok`` is a transport verdict, not a content one: a 199-character stub
+    counts as ``pages_ok``. The split was rendered but never emitted, so every
+    fetch-productivity reading downstream could not tell a page from a wrapper."""
+    rows = [
+        {"op": "search", "query": "q", "replay": False, "zero_hit": False},
+        {"op": "fetch", "url": "https://a.example/real", "chars": 12431, "ok": True},
+        {"op": "fetch", "url": "https://a.example/stub", "chars": 199, "ok": True},
+        {"op": "fetch", "url": "https://a.example/dead", "chars": 0, "ok": False},
+    ]
+    t = build_trail(rows, "https://a.example/real")
+    c = t.counters()
+    assert c["pages_ok"] == 2
+    assert c["thin_pages"] == 1
+    assert c["pages_failed"] == 1
+    assert "(1 returned almost nothing)" in t.render()
+
+
+def test_a_truncated_fence_tag_is_still_a_fence_tag():
+    """The ``{4,16}`` width. ``token_hex(4)`` mints exactly 8, so ``{8}`` looks
+    right and passes every other test here; a clipped quote is still a fence tag."""
+    t = build_trail(LEDGER, 'halves it ("quote" web_fetch #cd81)')
+    c = t.counters()
+    assert c["urls_cited"] == 0
+    assert c["cited_fence_tags"] == 1
+    assert "fence tag" in t.render()
+
+
+# ── the twin is the fork's module, and a test says so ─────────────────
+
+
+def _module_body(path: Path) -> str:
+    """The module with every docstring and comment removed, re-printed from its AST.
+
+    Prose is where the two files legitimately differ (this repo avoids literal
+    CJK in code and names its own seams); code is where they must not.
+    """
+    import ast
+
+    class _Strip(ast.NodeTransformer):
+        def generic_visit(self, node):
+            super().generic_visit(node)
+            body = getattr(node, "body", None)
+            if isinstance(body, list):
+                kept = [
+                    b
+                    for b in body
+                    if not (
+                        isinstance(b, ast.Expr) and isinstance(b.value, ast.Constant) and isinstance(b.value.value, str)
+                    )
+                ]
+                node.body = kept or [ast.Pass()]
+            return node
+
+    return ast.unparse(_Strip().visit(ast.parse(path.read_text(encoding="utf-8"))))
+
+
+def test_the_appendix_twin_is_the_forks_module_body():
+    """The third layer of the twin, after config values and class defaults.
+
+    A fix that lands on the fork's appendix and not here ships a launcher whose
+    integrity appendix says something the fork's no longer does - the fence-tag
+    disclosure did exactly that for one review round. Docstrings and comments
+    are stripped before comparing, so the two files may explain themselves in
+    their own words; the code has to be one.
+    """
+    fork = REPO / "subagents" / "raven-research" / "Raven-X" / "raven" / "agent" / "process_appendix.py"
+    twin = PLUGIN_DIR / "research_flow" / "support" / "process_appendix.py"
+    assert _module_body(twin) == _module_body(fork), "port the fork's change or the twin's, so the two agree"
+
+
+# ── fence-tag citations, and the unreviewed banner ─────────────────────
+#
+# Ported from the fork's fix: one product run wrote 75 of its 87 citation
+# handles as the security fence's nonce - ``(web_fetch #cd8187b0)`` - and the
+# grounding check, seeing no URL, said there was nothing to check over an answer
+# whose every reference pointed at a page the run had really opened. The trunk
+# runtime wraps tool results in the same nonce-tagged fences, so the shape is
+# reachable on this launcher too. The counter gives "no links were cited" its
+# cause, and the banner keeps "the reviewer never saw this" from hiding in one
+# word of the head line.
+
+
+def test_a_fence_tag_citation_is_disclosed_without_moving_the_rate():
+    """Same contract as every other disclosure here: the landed metric cannot move.
+
+    The tag is NOT resolved to a URL - the fence nonce never reaches the ledger,
+    and a disclosure counter that guessed would accuse or absolve on data it does
+    not have. Repeats of one tag are one reference."""
+    t = build_trail(
+        LEDGER,
+        'halves it ("quote" web_fetch #cd8187b0), again (web_fetch #cd8187b0), listed at (web_search #aa11bb22)',
+    )
+    c = t.counters()
+
+    assert c["urls_cited"] == 0
+    assert c["citation_grounding_rate"] is None
+    assert c["cited_not_opened"] == 0 and c["cited_never_surfaced"] == 0
+    assert c["cites_nothing"] is True
+    assert c["cited_fence_tags"] == 2
+    out = t.render()
+    assert "fence tag" in out
+    assert "Nothing above was verified." in out
+    assert "nothing to check" not in out
+
+
+def test_the_fence_tag_pattern_needs_the_tool_name():
+    """A bare ``#hex`` is an issue number, an anchor, a color. Only the tool-name
+    prefix marks the token as a quoted fence, and a counter that fired on GitHub
+    issue references would get ignored - which costs the whole mechanism."""
+    noise = "see issue #cd8187b0, color #ab12cd, and the web_fetch tool itself"
+    t = build_trail(LEDGER, noise)
+    assert t.counters()["cited_fence_tags"] == 0
+    assert "fence tag" not in t.render()
+
+
+def test_fence_tags_beside_real_urls_are_noted_not_folded():
+    """The mixed case: the check runs over the real URLs and prints its ✓, and
+    without the scope note that ✓ silently covers references it never saw."""
+    t = build_trail(LEDGER, "see https://a.example/one (web_fetch #cd8187b0)")
+    out = t.render()
+
+    assert t.counters()["urls_cited"] == 1
+    assert t.counters()["citation_grounding_rate"] == 1.0
+    assert t.counters()["cited_fence_tags"] == 1
+    assert "All 1 cited link was opened" in out
+    assert "could not be checked" in out
+
+
+def test_a_web_search_tag_is_never_reported_as_a_web_fetch():
+    """The rendered example quotes what the answer wrote, tool name included: an
+    integrity line that misstates the event it discloses is its own counterexample."""
+    t = build_trail(LEDGER, "per (web_search #aa11bb22) it holds")
+    out = t.render()
+    assert t.cited_fence_tags == ["web_search #aa11bb22"]
+    assert "web_search #aa11bb22" in out
+    assert "web_fetch" not in out
+
+    mixed = build_trail(LEDGER, "see https://a.example/one and (web_search #aa11bb22)")
+    assert "web_search #aa11bb22" in mixed.render()
+    assert "web_fetch" not in mixed.render()
+
+
+def test_an_unreviewed_run_wears_its_banner_before_the_head():
+    """``reviewer: budget_spent`` was one word in the head - a reader scanning
+    for a verdict reads right past it. The state bounds how much the whole
+    answer can be trusted, so it leads the block."""
+    rows = [r for r in LEDGER if r["op"] != "verify"] + [{"op": "verify", "outcome": "budget_spent", "reviewed": False}]
+    out = build_trail(rows, "see https://a.example/one").render()
+    assert "shipped unreviewed" in out
+    assert "revision budget" in out
+    assert out.index("shipped unreviewed") < out.index("**Research trail**")
+
+
+def test_a_fail_open_review_banners_too():
+    rows = [r for r in LEDGER if r["op"] != "verify"] + [{"op": "verify", "outcome": "unavailable"}]
+    out = build_trail(rows, "x").render()
+    assert "shipped unreviewed" in out and "unavailable" in out
+
+
+def test_a_salvaged_answer_banners_as_unreviewed():
+    """Salvage is the third unreviewed-shipped state, and it can hide behind a
+    verdict on a draft that never shipped (reject -> revision -> salvage)."""
+    rows = list(LEDGER) + [{"op": "force_finalize", "event": "salvage", "seam": "terminal"}]
+    out = build_trail(rows, "x").render()
+    assert "shipped unreviewed" in out
+    assert "salvage synthesis" in out
+
+
+def test_a_reviewed_or_unconfigured_run_has_no_banner():
+    """``budget_spent_reviewed`` reviewed the shipped draft - that is its whole
+    point - and a None outcome is an arm with no reviewer configured, where a
+    banner on every run would cry wolf until ignored."""
+    assert "shipped unreviewed" not in build_trail(LEDGER, "x").render()
+
+    reviewed = [r for r in LEDGER if r["op"] != "verify"] + [
+        {"op": "verify", "outcome": "budget_spent_reviewed", "unsupported_claims": ["c1"]}
+    ]
+    assert "shipped unreviewed" not in build_trail(reviewed, "x").render()
+
+    no_reviewer = [r for r in LEDGER if r["op"] != "verify"]
+    assert "shipped unreviewed" not in build_trail(no_reviewer, "x").render()
 
 
 def test_the_rendered_trail_is_kept_where_a_host_can_read_it(tmp_path, monkeypatch):

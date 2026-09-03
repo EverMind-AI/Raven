@@ -13,6 +13,43 @@ keys replaced by placeholders. Copy one, fill in the placeholders, pass it with 
 | `dr_ask_user.json` | `dr_multi_turn.json` plus the **ask_user clarify round**: on a conversation's first turn the agent may ask up to 3 questions (tool delivery) before researching. | same as `dr_live_web.json` |
 | `dr_shallow.json` | **A product profile, not a measured arm.** `dr_multi_turn.json` with the priced convergence gates on and the deep report template off - "simple questions get less research". | same as `dr_live_web.json` |
 
+## These are the measured flow, and a test keeps them that way
+
+★ 20260829. Every knob that decides **how a question gets researched** is now identical
+between these configs and `profiles/student_sglang_web_dr.json` — the live-web treatment arm
+that actually produced our published numbers. Type a benchmark question into
+`dr_live_web.json` and you get the flow we measured, not a lighter cousin of it.
+
+That was not true before. The shipped product config ran **eleven knobs weaker** than every
+measured arm — all three anti-spin backstops off, both reviewer rubrics off, SERP shaping off —
+because it wrote only `enabled` plus four `finalShape` booleans and everything else fell to
+class defaults, and the class defaults were all off. Nothing caught it: every gate in this repo
+is scoped to "does this change the next batch's distribution", and a shipped config takes part
+in no batch, so it was structurally invisible to all of them.
+
+Two changes fixed it and one keeps it fixed:
+
+- **The defaults now are the measured flow.** A mechanism that has been measured and kept gets
+  its class default raised — that is the third step of landing it, and this repo had been doing
+  only the first two for ten versions.
+- **`profiles/` is in this repository.** The configs that produced the numbers ship with the
+  code that produced them.
+- **`tests/test_shipped_flow_parity.py` fails if any of these drifts again.** It compares
+  effective values (not written keys) against the measured arm and refuses any difference that
+  is not on a named allowlist with a written reason. It runs with `make test`, so it does not
+  depend on anyone remembering to invoke it — which is exactly how the drift happened.
+
+**What is still allowed to differ, and why:**
+
+| Family | Why it may differ |
+|---|---|
+| `finalShape.*` | Answer *shape*, not research. The anchor arm (`drFlow.enabled=false`) is structurally unable to receive anything under `drFlow`, so switching these on for a benchmark arm would hand one side an answer-extraction advantage unrelated to research quality. They are on here because a person reading an answer wants the report; they are off in a benchmark because the grader must not be handed a free win. |
+| `thinkClosingTagRequired` | Depends on the **backend**, not on bench-vs-product: every sglang config sets it true, every channel-separated backend false. |
+| `maxToolIterations` | A bound. It does not change how any single call comes out, so a demo may cap it. (Contrast `requestTimeoutSeconds`, which *can* kill a generation mid-flight and therefore produce a failure mode the measured runs never had — that one is unified.) |
+| `askUser.*`, `conversation.*` | Only in the two configs whose whole purpose is to demonstrate those features. |
+
+Anything outside that table is a bug in the config, and the test says so by name.
+
 **Name the real gateway in `providers`, not `custom`.** The two OpenRouter configs use a
 `providers.openrouter` slot; the two self-hosted ones use `custom`, which is the correct slot for an
 unlabelled OpenAI-compatible endpoint. Pointing `custom` at a gateway the registry knows silently

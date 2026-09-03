@@ -387,10 +387,10 @@ class ToolCallTool(Tool):
     def description(self) -> str:
         return (
             "Invoke a tool by name that is not in your tool list, passing its "
-            "arguments. The name may come from tool_search, from another tool's "
-            "result, or from a report or notice you were sent that named the call "
-            "to make. If the arguments don't fit the tool's schema the registry "
-            "returns a validation error describing the fix; adjust and call again."
+            "arguments -- one found via tool_search, or one that another tool's "
+            "result told you to call. If the arguments don't fit the tool's schema "
+            "the registry returns a validation error describing the fix; adjust "
+            "and call again."
         )
 
     @property
@@ -400,10 +400,7 @@ class ToolCallTool(Tool):
             "properties": {
                 "name": {
                     "type": "string",
-                    "description": (
-                        "Exact tool name, from a tool_search result, from a tool result that "
-                        "named it, or from a report or notice that named the call to make."
-                    ),
+                    "description": "Exact tool name, from a tool_search result or from a tool result that named it.",
                 },
                 "arguments": {
                     "type": "object",

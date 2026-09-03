@@ -14,7 +14,7 @@ import pytest
 
 from raven.agent.loop.bundles import SubagentWiring, ToolWiring, TurnPolicy
 from raven.agent.subagent.dag_capabilities import validate_capabilities
-from raven.agent.subagent.dag_graph import collect_static_graph_errors, parse_dag_spec, validate_and_order
+from raven.agent.subagent.dag_graph import parse_dag_spec, validate_and_order
 from raven.agent.subagent.dag_reader import DagReadError, read_node, read_run
 from raven.agent.subagent.dag_render import render_prompt
 from raven.agent.subagent.dag_store import DagRunStore, SessionNodes, make_run_id
@@ -45,111 +45,6 @@ def test_topo_order_and_parse() -> None:
         }
     )
     assert validate_and_order(spec) == ["a", "b"]
-
-
-def test_duplicate_node_error_names_the_duplicate_ids() -> None:
-    spec = parse_dag_spec(
-        {
-            "task_summary": "reject duplicate node ids",
-            "nodes": [
-                {"id": "a", "subagent": "x", "node_summary": "first", "prompt_template": "one"},
-                {"id": "a", "subagent": "x", "node_summary": "second", "prompt_template": "two"},
-            ],
-        }
-    )
-
-    assert collect_static_graph_errors(spec.nodes)[0] == "duplicate node ids: ['a']"
-    with pytest.raises(DagValidationError) as exc_info:
-        validate_and_order(spec)
-    assert str(exc_info.value) == "duplicate node ids: ['a']"
-
-
-@pytest.mark.parametrize(
-    "value",
-    [None, 3, {}, {"file": ""}, {"node": ""}, {"file": "a.md", "extra": "x"}, {"file": "a", "node": "b"}],
-)
-def test_static_validation_rejects_every_unsupported_input_shape(value: object) -> None:
-    spec = parse_dag_spec(
-        {
-            "task_summary": "validate one node input",
-            "nodes": [
-                {
-                    "id": "a",
-                    "subagent": "x",
-                    "node_summary": "consume one input",
-                    "prompt_template": "use {{ inputs.material }}",
-                    "inputs": {"material": value},
-                }
-            ],
-        }
-    )
-
-    assert collect_static_graph_errors(spec.nodes)
-    with pytest.raises(DagValidationError):
-        validate_and_order(spec)
-
-
-def test_static_validation_can_check_an_unfilled_playbook_node_without_weakening_dispatch() -> None:
-    spec = parse_dag_spec(
-        {
-            "task_summary": "load a fillable playbook node",
-            "nodes": [
-                {
-                    "id": "a",
-                    "subagent": "x",
-                    "node_summary": "fill the prompt later",
-                    "prompt_template": "",
-                    "inputs": {"material": "still validate this shape"},
-                }
-            ],
-        }
-    )
-
-    assert collect_static_graph_errors(spec.nodes, allowed_blank_fields=frozenset({"prompt_template"})) == []
-    with pytest.raises(DagValidationError, match="cannot run without"):
-        validate_and_order(spec)
-
-
-def test_allowing_a_blank_prompt_does_not_allow_a_malformed_input() -> None:
-    spec = parse_dag_spec(
-        {
-            "task_summary": "load a fillable playbook node",
-            "nodes": [
-                {
-                    "id": "a",
-                    "subagent": "x",
-                    "node_summary": "fill the prompt later",
-                    "prompt_template": "",
-                    "inputs": {"material": 3},
-                }
-            ],
-        }
-    )
-
-    errors = collect_static_graph_errors(spec.nodes, allowed_blank_fields=frozenset({"prompt_template"}))
-
-    assert any("literal string" in error for error in errors)
-
-
-@pytest.mark.parametrize("instance", ["", " ", " handle", "handle "])
-def test_instance_rejects_blank_or_invisible_edge_whitespace(instance: str) -> None:
-    with pytest.raises(DagValidationError):
-        parse_dag_spec(
-            {
-                "task_summary": "reject an ambiguous instance handle",
-                "nodes": [
-                    {
-                        "id": "a",
-                        "subagent": "x",
-                        "node_summary": "run one node",
-                        "prompt_template": "hello",
-                        "instance": instance,
-                    }
-                ],
-            }
-        )
-
-    assert _NODE_SCHEMA["properties"]["instance"]["minLength"] == 1
 
 
 @pytest.mark.parametrize("name", ["General Audit", "MiniMax M2.5", "Исследователь", "claude_code", "a"])

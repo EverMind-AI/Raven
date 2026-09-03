@@ -821,7 +821,6 @@ class WiringMixin:
             # terms once judgement is wired in.
             provider_for=self._verdict_provider,
             adjudicate=self._adjudicate_node,
-            control_reachable=self.dag_control_reachable,
             verdict_config=self.subagent_dag_config,
         )
         from raven.playbook import (

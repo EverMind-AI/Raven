@@ -34,7 +34,7 @@ from raven.security.network import validate_url_target  # noqa: E402
 
 # The gates that need a model. Off, so a context with no provider still installs
 # the flow and these tests measure the key rather than the provider.
-_NO_LLM_GATES = {"verify": {"enabled": False}}
+_NO_LLM_GATES = {"verify": {"enabled": False}, "forceFinalize": {"enabled": False}}
 
 
 def _ctx(tmp_path: Path, slice_: dict, *, provider: object | None = None) -> PluginContext:
