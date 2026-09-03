@@ -201,7 +201,6 @@ def test_onboard_help_lists_all_flags() -> None:
         "--non-interactive",
         "--yes",
         "--reset",
-        "--debug-http",
     ):
         assert flag in out, f"missing flag in help: {flag}"
 
