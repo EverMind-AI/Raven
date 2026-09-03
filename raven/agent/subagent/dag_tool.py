@@ -256,6 +256,8 @@ _NODE_SCHEMA: dict[str, Any] = {
         },
         "instance": {
             "type": "string",
+            "minLength": 1,
+            "pattern": r"^\S(?:.*\S)?$",
             "description": (
                 "Optional stable handle; nodes sharing it run sequentially and reuse one sub-agent "
                 "session, including across separate runs in this conversation. Only give the same "

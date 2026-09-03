@@ -2316,7 +2316,7 @@ class TestValidationErrorGuidesRetry:
             ],
         )
 
-        assert "node ids must be unique. No sub-agent was run." in out
+        assert "duplicate node ids: ['a']. No sub-agent was run." in out
 
 
 # --- references across runs in one conversation ---------------------------
