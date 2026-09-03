@@ -965,13 +965,8 @@ class SubAgentDagTool(Tool):
         task.add_done_callback(_retire)
         if self._adopt is not None:
             self._adopt(run_id, task, origin.conversation)
-        controls = ""
         if self._control_reachable is None:
-            controls = (
-                f'Check its progress with dag_status("{run_id}") and stop it with cancel_dag("{run_id}"). '
-                "If a node reports it could not accomplish its task, you will be told, and you answer "
-                "with resolve_dag_node. "
-            )
+            reachable = True
         else:
             # Fail closed: the predicate runs after the background task is
             # already created, so a failure here must mute the hint rather
@@ -980,12 +975,18 @@ class SubAgentDagTool(Tool):
                 reachable = self._control_reachable()
             except Exception:  # noqa: BLE001
                 reachable = False
-            if reachable:
-                controls = (
-                    f'Check its progress with dag_status("{run_id}") and stop it with cancel_dag("{run_id}"). '
-                    "If a node reports it could not accomplish its task, you will be told, and you answer "
-                    "with resolve_dag_node. "
-                )
+        # None of the three are in your tool schema, so the hint names the route
+        # as well as the name -- a model that looks one up and does not find it
+        # reads the whole advertisement as stale.
+        controls = (
+            f'Check its progress with tool_call name "dag_status" arguments {{"run_id": "{run_id}"}}, '
+            f'and stop it with tool_call name "cancel_dag" arguments {{"run_id": "{run_id}"}}. '
+            "If a node reports it could not accomplish its task, you will be told, and you answer the "
+            'same way with "resolve_dag_node". These three are not in your tool list; tool_call is how '
+            "you reach them. "
+            if reachable
+            else ""
+        )
         return _with_notices(
             ToolResult(
                 model_text=(
@@ -1202,6 +1203,7 @@ class SubAgentDagTool(Tool):
                 max_continuations=self._verdict_config.max_continuations,
                 adjudication_timeout_s=self._verdict_config.adjudication_timeout_seconds,
                 adjudicate=self._adjudicate if foreground else None,
+                control_reachable=self._control_reachable,
             )
         except DagValidationError as exc:
             return self._validation_error(exc)
