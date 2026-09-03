@@ -48,6 +48,15 @@ describe('the approval sheet', () => {
     expect(sheets()[0]!.dataset.sess).toBe(session())
   })
 
+  it('marks itself as asking, so whatever else is docked can step aside', () => {
+    /* The reader cannot get on until they answer this, and the rack is shared --
+       a running graph is tall enough to push the question below the fold. The
+       rack passes the mark on through `watchAsking`. */
+    open('rm -rf build/')
+
+    expect(sheets()[0]!.dataset.asks).toBe('1')
+  })
+
   /* Which conversation asked is the caller's to say, because it is not always
      the one on screen: a turn the reader stepped away from can block on an
      approval at any moment. Filed under the open conversation instead, the
