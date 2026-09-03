@@ -15,10 +15,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Callable
 
-from raven.agent.tools.base import Tool
+from raven.contracts.tool import Tool
+from raven.plugins.context import BindDeclinedError
 
 if TYPE_CHECKING:
     from raven.playbook import PlaybookGenerator, PlaybookStore
+    from raven.plugins.context import RuntimeHandles
 
 
 class CreatePlaybookTool(Tool):
@@ -29,8 +31,8 @@ class CreatePlaybookTool(Tool):
 
     def __init__(
         self,
-        generator: "PlaybookGenerator",
-        store: "PlaybookStore",
+        generator: "PlaybookGenerator | None" = None,
+        store: "PlaybookStore | None" = None,
         *,
         adopt: Callable[[str], bool] | None = None,
     ) -> None:
@@ -40,6 +42,21 @@ class CreatePlaybookTool(Tool):
         #: CLI's creation entry has no runtime to hand it to -- the next process
         #: reads the file anyway.
         self._adopt = adopt
+
+    def bind_runtime(self, handles: "RuntimeHandles") -> None:
+        """Bind creation to the loop's funnel: same library, same composer.
+
+        The runtime carries the generator and store precisely so this tool can
+        bind one object, and ``adopt`` hands the written file to the live
+        library in the same conversation. A loop with no funnel gets a
+        decline, which unregisters the tool quietly.
+        """
+        runtime = handles.playbook_runtime
+        if runtime is None:
+            raise BindDeclinedError("this loop built no playbook runtime")
+        self._generator = runtime.generator
+        self._store = runtime.store
+        self._adopt = runtime.adopt
 
     @property
     def name(self) -> str:

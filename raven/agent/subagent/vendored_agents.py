@@ -7,7 +7,7 @@ tree into table rows so a raven that *has* the tree offers them without anyone
 registering them by hand.
 
 Discovery, deliberately, rather than a hard-coded list: adding a folder is then
-adding a folder, which is the same reason :func:`raven.cli.subagent_setup.discover`
+adding a folder, which is the same reason the onboarding wizard's discovery
 scans instead of naming them. And discovery only -- nothing here writes config.
 A row is materialized from the manifest on every start, so a folder whose
 manifest changes (a new command template after an upgrade) is picked up without a
@@ -29,8 +29,8 @@ hide the folder from the operations view too, where "present but not set up" is
 exactly what a user needs to see. So it is listed and disabled.
 
 This module owns the three facts about where the tree is and what state a folder
-is in; :mod:`raven.cli.subagent_setup` imports them for the onboarding flow
-rather than keeping its own answers. Two readers that disagree about whether a
+is in; the onboarding wizard imports them rather than keeping its own
+answers. Two readers that disagree about whether a
 folder is ready would offer to install one this refuses to advertise.
 """
 
@@ -95,10 +95,10 @@ def subagents_root() -> Path | None:
     before discovery existed.
     """
     import raven
+    from raven.home import raven_home
 
-    home = os.environ.get("RAVEN_HOME", "").strip() or str(Path.home() / ".raven")
     package = Path(raven.__file__).resolve().parent
-    installed, packaged = Path(home) / "subagents", package / "subagents"
+    installed, packaged = raven_home() / "subagents", package / "subagents"
     if packaged.is_dir():
         _install_packaged_tree(packaged, installed)
     for candidate in (installed, package.parent / "subagents", packaged):
@@ -246,8 +246,10 @@ def host_can_lend_a_key() -> bool:
     same reason: two readers of one credential that disagree would have the
     roster offer what the launcher then refuses.
     """
-    home = os.environ.get("RAVEN_HOME", "").strip() or str(Path.home() / ".raven")
-    config = Path(home) / "config.json"
+    from raven.contracts.path_policy import CONFIG_FILENAME
+    from raven.home import raven_home
+
+    config = raven_home() / CONFIG_FILENAME
     try:
         raw = json.loads(config.read_text(encoding="utf-8"))
     except (OSError, ValueError):

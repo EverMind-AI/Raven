@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from raven.config.raven import DailyAnalysisConfig
+from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
 from raven.memory_engine.consolidate.consolidator import MemoryStore
 from raven.proactive_engine.sentinel.attention_producers import (
     BehaviorPatternsProducer,
@@ -30,7 +31,6 @@ from raven.proactive_engine.sentinel.predictor.daily_analysis import (
 from raven.proactive_engine.sentinel.predictor.routine_store import (
     RoutineStore,
 )
-from raven.providers.base import LLMResponse, ToolCallRequest
 from raven.session.manager import SessionManager
 
 

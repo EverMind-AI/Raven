@@ -1,0 +1,21 @@
+{
+  "name": "Raven-PPT",
+  "kind": "acp",
+  "description": "A powerful deck-building agent that turns your given material into a .pptx, reviewing every rendered page before it publishes. Use this agent to get a presentation deck; name existing absolute paths in the task text when you have source documents. IMPORTANT: give detailed requirements of the deck and sufficient material about the topic, such as an investigation or survey report.",
+  "owns": "owns decks and slides. Do not build the deck yourself.",
+  "enabled": true,
+  "command": "{PYTHON} {SUBAGENT_DIR}/run.py --acp",
+  "cwd": "{SUBAGENT_DIR}",
+  "readyTimeoutMs": 180000,
+  "timeout": null,
+  "maxOutputChars": 60000,
+  "everos": {
+    "userId": "raven-ppt",
+    "agentId": "raven-ppt"
+  },
+  "recommendedLlm": {
+    "provider": "ppt",
+    "model": "anthropic/claude-sonnet-5",
+    "apiBase": "https://openrouter.ai/api/v1"
+  }
+}

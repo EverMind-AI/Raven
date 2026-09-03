@@ -23,6 +23,8 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
+from raven.utils.atomic_io import locked_append
+
 logger = logging.getLogger(__name__)
 
 
@@ -47,9 +49,7 @@ def record_install(
         "dir": skill_dir,
     }
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        locked_append(path, [json.dumps(record, ensure_ascii=False)])
     except OSError:
         logger.warning("failed to append skill install audit record to %s", path, exc_info=True)
 

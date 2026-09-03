@@ -94,9 +94,9 @@ def test_asked_for_takes_the_last_user_message_and_strips_the_metadata_block():
         {"role": "system", "content": "be raven"},
         {"role": "user", "content": "old request"},
         {"role": "assistant", "content": "done"},
-        {"role": "user", "content": "[Runtime Context]\nnow=12:00\n\n跑一个算例,25 分钟"},
+        {"role": "user", "content": "[Runtime Context]\nnow=12:00\n\nrun a case, 25 min budget"},
     ]
-    assert watch_work.asked_for(messages) == "跑一个算例,25 分钟"
+    assert watch_work.asked_for(messages) == "run a case, 25 min budget"
 
 
 def test_asked_for_handles_block_content_and_empty_history():
@@ -213,7 +213,7 @@ def oncall_on_roster(monkeypatch):
 async def test_a_look_at_the_named_path_gains_the_line(oncall_on_roster):
     loop, state = _loop()
     out = await loop._note_watch_work(
-        state, "read_file", {"path": "/tmp/arena/run.sh"}, "file contents", "跑 /tmp/arena,预算 25 分钟"
+        state, "read_file", {"path": "/tmp/arena/run.sh"}, "file contents", "run /tmp/arena, 25 min budget"
     )
     assert "spawn `Raven-Oncall`" in out
     assert out.startswith("file contents"), "the result itself must survive intact"
@@ -223,7 +223,7 @@ async def test_a_look_at_the_named_path_gains_the_line(oncall_on_roster):
 async def test_exec_commands_are_searched_for_the_path(oncall_on_roster):
     loop, state = _loop()
     out = await loop._note_watch_work(
-        state, "exec", {"command": "cd /tmp/arena/runs && bash run.sh"}, "ok", "跑 /tmp/arena"
+        state, "exec", {"command": "cd /tmp/arena/runs && bash run.sh"}, "ok", "run /tmp/arena"
     )
     assert "spawn `Raven-Oncall`" in out
 
@@ -232,29 +232,29 @@ async def test_exec_commands_are_searched_for_the_path(oncall_on_roster):
 async def test_the_judgement_is_paid_once_per_turn(oncall_on_roster):
     loop, state = _loop()
     for _ in range(3):
-        await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "跑 /tmp/arena")
+        await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "run /tmp/arena")
     assert loop._llm_calls == 1
 
 
 @pytest.mark.asyncio
 async def test_a_not_watched_verdict_leaves_every_result_alone(oncall_on_roster):
     loop, state = _loop(verdict='{"watched": false, "paths": []}')
-    out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "读一下这个文件")
+    out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "read this file for me")
     assert out == "r"
 
 
 @pytest.mark.asyncio
 async def test_a_look_elsewhere_stays_clean_even_on_a_watched_turn(oncall_on_roster):
     loop, state = _loop()
-    out = await loop._note_watch_work(state, "read_file", {"path": "/etc/hosts"}, "r", "跑 /tmp/arena")
+    out = await loop._note_watch_work(state, "read_file", {"path": "/etc/hosts"}, "r", "run /tmp/arena")
     assert out == "r"
 
 
 @pytest.mark.asyncio
 async def test_after_a_real_oncall_dispatch_the_turn_goes_quiet(oncall_on_roster):
     loop, state = _loop()
-    await loop._note_watch_work(state, "spawn", {"subagent": "Raven-Oncall"}, ACCEPTED, "跑 /tmp/arena")
-    out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "跑 /tmp/arena")
+    await loop._note_watch_work(state, "spawn", {"subagent": "Raven-Oncall"}, ACCEPTED, "run /tmp/arena")
+    out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "run /tmp/arena")
     assert out == "r"
     assert loop._llm_calls == 0, "a handed-over turn must not pay for the judgement"
 
@@ -265,9 +265,9 @@ async def test_an_unrelated_spawn_silences_nothing(oncall_on_roster):
     suppressed the next matching path nudge."""
     loop, state = _loop(names=("Raven-Code", "Raven-Oncall"))
     await loop._note_watch_work(
-        state, "spawn", {"subagent": "Raven-Code"}, ACCEPTED.replace("x", "code job"), "跑 /tmp/arena"
+        state, "spawn", {"subagent": "Raven-Code"}, ACCEPTED.replace("x", "code job"), "run /tmp/arena"
     )
-    out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "跑 /tmp/arena")
+    out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "run /tmp/arena")
     assert "spawn `Raven-Oncall`" in out
 
 
@@ -281,8 +281,8 @@ async def test_an_unrelated_spawn_silences_nothing(oncall_on_roster):
 )
 async def test_a_refused_dispatch_of_any_shape_silences_nothing(oncall_on_roster, refusal):
     loop, state = _loop()
-    await loop._note_watch_work(state, "spawn", {"subagent": "Raven-Oncall"}, refusal, "跑 /tmp/arena")
-    out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "跑 /tmp/arena")
+    await loop._note_watch_work(state, "spawn", {"subagent": "Raven-Oncall"}, refusal, "run /tmp/arena")
+    out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "run /tmp/arena")
     assert "spawn `Raven-Oncall`" in out
 
 
@@ -294,8 +294,8 @@ async def test_two_interleaved_turns_never_share_watch_state(oncall_on_roster):
     loop, state_a = _loop()
     state_b = watch_work.TurnWatch()
 
-    await loop._note_watch_work(state_b, "spawn", {"subagent": "Raven-Oncall"}, ACCEPTED, "跑 /tmp/arena")
-    out_a = await loop._note_watch_work(state_a, "read_file", {"path": "/tmp/arena/x"}, "r", "跑 /tmp/arena")
+    await loop._note_watch_work(state_b, "spawn", {"subagent": "Raven-Oncall"}, ACCEPTED, "run /tmp/arena")
+    out_a = await loop._note_watch_work(state_a, "read_file", {"path": "/tmp/arena/x"}, "r", "run /tmp/arena")
 
     assert "spawn `Raven-Oncall`" in out_a, "B's hand-off silenced A"
     assert state_b.dispatched and not state_a.dispatched
@@ -305,7 +305,7 @@ async def test_two_interleaved_turns_never_share_watch_state(oncall_on_roster):
 @pytest.mark.asyncio
 async def test_a_roster_without_the_specialist_asks_no_judgement(oncall_on_roster):
     loop, state = _loop(names=("Raven-Code",))
-    out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "跑 /tmp/arena")
+    out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "run /tmp/arena")
     assert out == "r"
     assert loop._llm_calls == 0
 
@@ -318,7 +318,7 @@ async def test_a_judgement_that_blows_up_never_reaches_the_result(oncall_on_rost
         raise RuntimeError("probe exploded")
 
     monkeypatch.setattr(watch_work, "oncall_agent", broken)
-    out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "跑 /tmp/arena")
+    out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "run /tmp/arena")
     assert out == "r"
 
 
@@ -393,10 +393,10 @@ async def test_a_machineless_refusal_keeps_the_turn_nudged_and_sharpens_it(oncal
     to run trials by hand."""
     loop, state = _loop()
     refusal = "'Raven-Oncall' runs work on the owner's machines...\nNothing was dispatched. Ask the owner..."
-    out = await loop._note_watch_work(state, "spawn", {"subagent": "Raven-Oncall"}, refusal, "跑 /tmp/arena")
+    out = await loop._note_watch_work(state, "spawn", {"subagent": "Raven-Oncall"}, refusal, "run /tmp/arena")
     assert out == refusal, "the refusal itself is not annotated"
 
-    after = await loop._note_watch_work(state, "exec", {"command": "bash /tmp/arena/run.sh"}, "ok", "跑 /tmp/arena")
+    after = await loop._note_watch_work(state, "exec", {"command": "bash /tmp/arena/run.sh"}, "ok", "run /tmp/arena")
     assert "STOP running this by hand" in after
     assert "end your turn" in after
 
@@ -404,8 +404,8 @@ async def test_a_machineless_refusal_keeps_the_turn_nudged_and_sharpens_it(oncal
 @pytest.mark.asyncio
 async def test_a_successful_dispatch_still_goes_quiet(oncall_on_roster):
     loop, state = _loop()
-    await loop._note_watch_work(state, "spawn", {"subagent": "Raven-Oncall"}, ACCEPTED, "跑 /tmp/arena")
-    out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "跑 /tmp/arena")
+    await loop._note_watch_work(state, "spawn", {"subagent": "Raven-Oncall"}, ACCEPTED, "run /tmp/arena")
+    out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "run /tmp/arena")
     assert out == "r"
 
 
@@ -452,9 +452,9 @@ async def test_a_declined_graph_silences_nothing(oncall_on_roster):
         "run_subagent_dag",
         {"nodes": [{"id": "watch", "subagent": "Raven-Oncall"}]},
         "The user did not approve this graph, so nothing was run. Do not re-submit it; ask what to change.",
-        "跑 /tmp/arena",
+        "run /tmp/arena",
     )
-    out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "跑 /tmp/arena")
+    out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "run /tmp/arena")
     assert "spawn `Raven-Oncall`" in out
 
 
@@ -466,9 +466,9 @@ async def test_a_graph_that_merely_mentions_the_agent_silences_nothing(oncall_on
         "run_subagent_dag",
         {"nodes": [{"id": "build", "subagent": "Raven-Code", "prompt_template": "hand off to Raven-Oncall later"}]},
         "DAG run r1 started in the background (1 nodes).",
-        "跑 /tmp/arena",
+        "run /tmp/arena",
     )
-    out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "跑 /tmp/arena")
+    out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "run /tmp/arena")
     assert "spawn `Raven-Oncall`" in out
 
 
@@ -480,7 +480,7 @@ async def test_an_accepted_graph_with_an_oncall_node_goes_quiet(oncall_on_roster
         "run_subagent_dag",
         {"nodes": [{"id": "build", "subagent": "Raven-Code"}, {"id": "watch", "subagent": "Raven-Oncall"}]},
         "DAG run r2 started in the background (2 nodes).",
-        "跑 /tmp/arena",
+        "run /tmp/arena",
     )
-    out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "跑 /tmp/arena")
+    out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "run /tmp/arena")
     assert out == "r"

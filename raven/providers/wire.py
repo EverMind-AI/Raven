@@ -1,4 +1,4 @@
-"""Storage form to wire form: the one place a stored model id becomes a sent one.
+"""The one place a Model Ref becomes a Wire Model.
 
 A model id is written down in one shape and sent in another. `openrouter/x` is
 stored with its gateway named so the picker and the router agree on who serves
@@ -6,12 +6,10 @@ it, but MiniMax's own client wants the prefix gone, LiteLLM wants the vendor it
 routes on in front, and Azure wants the bare deployment name because the id
 lands in a URL path.
 
-That conversion used to be spelled at each client. The spellings drifted: the
-standard path grew a canonicalizer for prefixes written in a former or
-hyphenated spelling and the gateway path never got one, so a local deployment
-addressed as "hosted-vllm/..." came out double-prefixed. Collapsing the two
-here is what made that one fix rather than two, and it is fixed --
-`tests/data/wire_model_baseline.json` records the single-prefix result.
+One module builds the prefixes, so a canonicalizer for a former or hyphenated
+spelling cannot exist on one path and not the other (which is how a local
+deployment addressed as "hosted-vllm/..." comes out double-prefixed);
+`tests/data/wire_model_baseline.json` pins the result.
 
 So callers ask here rather than building the prefix themselves -- an invariant
 test keeps `model_prefix` / `skip_prefixes` readable only by this module and the

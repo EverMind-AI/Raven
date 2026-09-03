@@ -154,9 +154,8 @@ def _file_log_level(verbose: bool = False) -> str:
     ``print_args_passed_to_litellm`` writes the whole request -- system prompt,
     history, every tool schema -- as one DEBUG record per call, measured at
     146 KiB on a single line. Those lines also reach the client over fd 2, and a
-    client whose reader gives up on one deadlocks this process at its next write
-    (see ``AcpClient._read_stderr``, which no longer does). INFO keeps the volume
-    off that path by default rather than relying on the reader to survive it.
+    client whose reader gives up on one deadlocks this process at its next
+    write, so INFO keeps the volume off that path by default.
 
     ``RAVEN_ACP_LOG_LEVEL`` is the way back to a full trace, for a session where
     the payloads are the thing being debugged, and ``--verbose`` asks the same

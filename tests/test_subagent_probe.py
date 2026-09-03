@@ -346,7 +346,7 @@ async def test_probe_result_wire_shape_is_camel_case(tmp_path: Path) -> None:
 async def test_probe_all_attaches_a_verdict_to_the_matching_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from raven.agent.subagent.test_state import LastTest
+    from raven.agent.subagent.probe_state import LastTest
 
     monkeypatch.setattr(probe_mod, "_login_path", lambda: str(tmp_path))
     a = _cli("a {prompt}", name="a")
@@ -358,7 +358,7 @@ async def test_probe_all_attaches_a_verdict_to_the_matching_result(
 
 
 async def test_probe_wire_shape_carries_last_test(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from raven.agent.subagent.test_state import LastTest
+    from raven.agent.subagent.probe_state import LastTest
 
     monkeypatch.setattr(probe_mod, "_login_path", lambda: str(tmp_path))
     cfg = _cli("nope {prompt}", name="a")
@@ -557,9 +557,9 @@ class TestAutomaticSnapshotVerification:
             return Snap()
 
         monkeypatch.setattr(probe_mod, "acp_snapshot_for", fake_snapshot_for)
-        monkeypatch.setattr(probe_mod, "verify_agent", fake_verify)
+        monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
         monkeypatch.setattr(
-            "raven.agent.subagent.probe.SnapshotStore",
+            "raven.acp_client.capabilities.SnapshotStore",
             lambda: type("S", (), {"record": staticmethod(lambda s: recorded.append(getattr(s, "status")))})(),
         )
         monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
@@ -591,9 +591,9 @@ class TestAutomaticSnapshotVerification:
             )()
 
         monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: None)
-        monkeypatch.setattr(probe_mod, "verify_agent", fake_verify)
+        monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
         monkeypatch.setattr(
-            "raven.agent.subagent.probe.SnapshotStore",
+            "raven.acp_client.capabilities.SnapshotStore",
             lambda: type("S", (), {"record": staticmethod(lambda s: None)})(),
         )
         monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
@@ -620,9 +620,9 @@ class TestAutomaticSnapshotVerification:
             called.append("verified")
             return type("S", (), {"status": "ready"})()
 
-        monkeypatch.setattr(probe_mod, "verify_agent", fake_verify)
+        monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
         monkeypatch.setattr(
-            "raven.agent.subagent.probe.SnapshotStore",
+            "raven.acp_client.capabilities.SnapshotStore",
             lambda: type("S", (), {"record": staticmethod(lambda s: None)})(),
         )
         monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
@@ -646,9 +646,9 @@ class TestAutomaticSnapshotVerification:
             called.append(cfg.name)
             return type("S", (), {"status": "ready"})()
 
-        monkeypatch.setattr(probe_mod, "verify_agent", fake_verify)
+        monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
         monkeypatch.setattr(
-            "raven.agent.subagent.probe.SnapshotStore",
+            "raven.acp_client.capabilities.SnapshotStore",
             lambda: type("S", (), {"record": staticmethod(lambda s: None)})(),
         )
         monkeypatch.setattr(probe_mod, "_SCHEDULED", False)

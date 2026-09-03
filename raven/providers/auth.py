@@ -1,13 +1,11 @@
 """How a provider is connected to: what material it needs, and whether it is there.
 
-Authentication used to be described by one boolean (``ProviderSpec.is_oauth``)
-and one string (``env_key``). Underneath sit shapes those two cannot express:
-Azure needs a key *and* an address; Gemini takes a key *or* a list of them;
-Bedrock needs neither because the environment already holds AWS credentials;
-four providers hold a token in a file, written by three unrelated flows.
-
-Because the shape was not stated, "is this provider usable" was answered
-independently wherever it was needed, and the answers diverged. Routing skipped
+A provider's requirement is an AND of OR-groups: Azure needs a key *and* an
+address; Gemini takes a key *or* a list of them; Bedrock needs neither because
+the environment already holds AWS credentials; four providers hold a token in a
+file, written by three unrelated flows. Callers ask :func:`credential_status`
+rather than reading a section themselves, because an unstated shape is answered
+independently wherever it is needed, and the answers diverge. Routing skipped
 a Gemini section configured with ``api_key_list``; ``provider list`` showed the
 same section as ready; startup refused to run on it. Azure with a key and no
 address was accepted by routing and display and rejected at startup.
@@ -103,12 +101,9 @@ class AuthMethod:
 class MissingCredentialsError(Exception):
     """A provider cannot be used because its credentials are absent.
 
-    Raised where the gate is decided, not where it is reported. The check runs
-    behind three entry points -- the CLI, the gateway, and the TUI -- and used to
-    end in ``console.print`` plus ``typer.Exit``, which is one of them speaking.
-    Through the other two the message went to a log nobody was reading and the
-    user got ``internal_error`` with ``exception_message: "1"``: the exit code,
-    stringified.
+    Raised where the gate is decided, not where it is reported: the check runs
+    behind three entry points (the CLI, the gateway and the TUI) and each renders
+    the refusal its own way.
     """
 
     def __init__(self, summary: str, *, provider: str = "", remedy: str = ""):
@@ -172,9 +167,9 @@ def _present(section: Any, name: str) -> bool:
 
 
 def _token_present(provider: str) -> bool:
-    from raven.config.update_providers import _oauth_credentials_present
+    from raven.config.update_providers import oauth_credentials_present
 
-    return _oauth_credentials_present(provider)
+    return oauth_credentials_present(provider)
 
 
 def credential_files(provider: str) -> list[Path]:
@@ -193,9 +188,9 @@ def credential_files(provider: str) -> list[Path]:
     from raven.config.paths import get_oauth_dir
 
     if provider == "github_copilot":
-        from raven.config.update_providers import _COPILOT_TOKEN_FILES, _copilot_token_dir
+        from raven.config.update_providers import COPILOT_TOKEN_FILES, copilot_token_dir
 
-        return [_copilot_token_dir() / name for name in _COPILOT_TOKEN_FILES]
+        return [copilot_token_dir() / name for name in COPILOT_TOKEN_FILES]
 
     if provider == "openai_codex":
         from raven.providers.chatgpt_token import auth_file
@@ -230,7 +225,7 @@ _ADDRESS = Requirement(("api_base",), "an address", "an address -- run `raven pr
 #: one anyway (`custom`'s localhost gateway). `is_local` keeps the plain
 #: `_ADDRESS`: a local deployment's spec default (Ollama's standard port)
 #: must not make it look configured before the user has pointed it anywhere,
-#: which is the bug `_has_credentials`'s docstring already names.
+#: which is the bug `section_has_credentials`'s docstring already names.
 _ADDRESS_OR_SPEC_DEFAULT = Requirement(
     ("api_base",),
     "an address",

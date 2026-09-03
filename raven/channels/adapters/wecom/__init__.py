@@ -1,4 +1,4 @@
-"""WeCom channel adapter (migrated to the capability contract).
+"""WeCom channel adapter.
 
 Intentionally does NOT re-export ``WecomChannel`` — that would import
 wecom_aibot_sdk at package import and defeat cheap spec discovery

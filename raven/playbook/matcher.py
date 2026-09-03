@@ -3,19 +3,7 @@
 ``TriggerIndex`` normalizes a library's keywords once and substring-matches a
 message against them. That is all this module does now.
 
-**What was removed, and why.** This file used to hold a second stage: one LLM
-call per nominated message (``gate``) that judged intent, extracted parameters and
-adjudicated between overlapping candidates, after which a hit *dispatched* --
-before the main agent had seen the message at all. Three things were wrong with
-that. The judge had less information than the agent it pre-empted (one message, no
-conversation history). The cheap decision was modelled and the expensive one was
-not: a skill hit only injects text and still goes through the model, while a
-playbook hit started a whole background graph without it. And it needed a
-cross-turn memory of refusals (``declines``) whose only purpose was to undo its
-own side effect -- the user had said no to something the model never knew it was
-asked about.
-
-So the decision moved to where the context is. The model sees the playbooks in
+The decision belongs where the context is. The model sees the playbooks in
 ``load_playbook``'s description and chooses, exactly as it chooses between
 ``spawn`` and ``run_subagent_dag``. Keywords still earn a playbook its place in
 that description when the library is too big to list whole
@@ -49,8 +37,8 @@ class TriggerIndex:
         The count, not just the fact: a message matching three of a playbook's
         words is a better fit than one matching a single generic word, and that
         difference is the whole ranking signal
-        (:mod:`raven.playbook.router`). ``match`` used to be the only reader and it
-        threw the count away, because a funnel only needed "nominated or not".
+        (:mod:`raven.playbook.router`). Iterating the result gives the ids in
+        first-hit order, for a caller that only needs "which ones".
         """
         text = normalize(message)
         if not text:
@@ -60,17 +48,6 @@ class TriggerIndex:
             if entry in text:
                 counts[pid] = counts.get(pid, 0) + 1
         return counts
-
-    def match(self, message: str) -> list[str]:
-        """Playbook ids this message mentions, first-hit order, deduped."""
-        text = normalize(message)
-        if not text:
-            return []
-        hits: list[str] = []
-        for entry, pid in self._entries:
-            if pid not in hits and entry in text:
-                hits.append(pid)
-        return hits
 
 
 __all__ = ["TriggerIndex"]

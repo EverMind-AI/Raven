@@ -1,35 +1,12 @@
-"""RPC method handler subpackage.
+"""RPC method handlers, one module per domain.
 
-Each module corresponds to a domain (system / setup / reload / config /
-cli_dispatch / session / terminal / stubs / …) and exposes a
-``register_<domain>_methods()`` helper that the server loop calls at startup.
-
-The umbrella :func:`register_aligned_methods` registers every handler that
-the ui-tui frontend currently calls:
-
-* ``system.*`` (3) — handshake / ping / version
-* ``cli.dispatch`` (1) — in-process EC CLI runner
-* ``setup.status`` (1) — provider detect
-* ``reload.mcp`` (1) — hermes 5s poll no-op
-* ``config.get`` / ``config.set`` (2) — hot-changeable config
-* ``subagents.list`` / ``subagents.probe`` (2) — third-party sub-agent roster
-* ``session.{create, close, resume}`` (3) — Wave 6.5 lifecycle return-shape
-  stubs (real SessionManager wiring deferred)
-* ``terminal.resize`` (1) — Wave 6.5 SIGWINCH no-op + cols record
-* ``delegation.{status, pause}`` / ``subagent.interrupt`` (3) — spawn HUD caps,
-  the pause kill switch, and the overlay's per-row kill
-* ``shell.exec`` (1) — the composer's ``!command`` escape
-* ``skills.manage`` (1) — ``/skills`` over the on-disk registry and the hub
-* ``clipboard.paste`` / ``input.detect_drop`` (2) — pasted image and dropped path
-* ``command.dispatch`` (1) — slash fallback: skill load, else CLI
-* ``session.interrupt`` (1) — Ctrl+C on the pre-typed-chat path
-* hermes-only stub groups (27 names after Wave 6.5): 6 original groups
-  (voice / browser / spawn_tree / process.stop / rollback / tools.configure)
-  + 17 Wave 6.5 unaligned method names that return -32012
-
-``skill.*`` and ``mcp.*`` are still declared in the contract with no handler, so
-they answer -32601; ``tests/test_rpc_registration.py`` allowlists them by
-name and fails on any addition to that set.
+Each module exposes a ``register_<domain>_methods()`` helper; the umbrella
+:func:`register_aligned_methods` calls every one of them, so a dispatcher
+built by any spawn path (the TUI wrapper, ``raven serve``, ``raven acp``)
+answers the same method set. The wire schema ``rpc-schema/openrpc.json`` is
+the list of record for that set; ``tests/test_rpc_registration.py`` pins the
+registered names against it, including the stub names that answer -32012 and
+the declared names that answer -32601.
 """
 
 from __future__ import annotations
@@ -100,9 +77,8 @@ def register_aligned_methods(
 ) -> None:
     """Register every aligned RPC handler on a dispatcher.
 
-    Used by both the v0.0.1 demo runner (``scripts/run_v001_demo.py``) and
-    the production ``tui_commands.run_subprocess_with_rpc`` wrapper. Keeping
-    a single registration point avoids drift between the two spawn paths.
+    Used by every spawn path (the TUI wrapper, ``raven serve``, ``raven acp``),
+    so one registration point keeps them from drifting.
 
     ``emitter`` and the build_rpc_spine bundle (``scheduler`` / ``turn_ids`` /
     ``build_error``) are forwarded to :func:`register_turn_methods` — when
@@ -252,7 +228,7 @@ def register_aligned_methods_except_system(
     register_playbooks_methods(dispatcher)
     # skillhub.* / plughub.* / plug.* — the catalogue half of two things raven
     # already runs: skills (memory_engine.skill_forge) and plugins
-    # (raven.plugin). Registered unconditionally so a network failure reads as a
+    # (raven.plugins). Registered unconditionally so a network failure reads as a
     # handler error a caller can show, not as -32601.
     register_skillhub_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_plughub_methods(dispatcher, agent_loop_factory=agent_loop_factory)

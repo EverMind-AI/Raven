@@ -1025,6 +1025,54 @@ async def test_a_stateless_node_keeps_the_only_row_it_has(_isolated_registry: An
     assert [(r["kind"], r["handle"]) for r in out["instances"]] == [("dag-node", "r1/shape")]
 
 
+async def test_a_node_that_never_ran_is_not_an_instance(_isolated_registry: Any) -> None:
+    """A graph declares every node, and one failure at the top skips the rest --
+    each of which then had a row in a list of the instances this conversation
+    has used, having never run, never spoken and never held a handle.
+
+    ``skipped`` is the runner's word for never dispatched: ``_mark_stopped``
+    turns a pending node into a skipped one, and ``_cascade_failures`` skips
+    whatever depended on a node that failed."""
+    await _isolated_registry.upsert_dag_node("s1", "r1", "research", "hermes", "failed")
+    await _isolated_registry.upsert_dag_node("s1", "r1", "write_up", "hermes", "skipped")
+    await _isolated_registry.upsert_dag_node("s1", "r1", "review", "hermes", "skipped")
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(_FakeManager())))
+
+    assert [r["nodeId"] for r in out["instances"]] == ["research"]
+
+
+async def test_a_skipped_node_does_not_confuse_a_legacy_handle_row(_isolated_registry: Any) -> None:
+    """The filter runs before the pairing, not after it.
+
+    ``_collapse_dag_rows`` pairs a handle row written before nodes carried a
+    ``nodeId`` by name, and refuses to guess when two nodes answer to it. A
+    skipped node is a second answer: with one completed ``synthesize`` and one
+    skipped ``synthesize``, the completed run's handle row paired with neither and
+    the single invocation came back twice -- once un-attributed, once as the node.
+    """
+    await _isolated_registry.upsert_dag_node("s1", "r-done", "synthesize", "hermes", "completed")
+    await _isolated_registry.commit("s1", "hermes", "synthesize", "agent-1")
+    await _isolated_registry.upsert_dag_node("s1", "r-failed", "synthesize", "hermes", "skipped")
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(_FakeManager())))
+
+    assert [(r["handle"], r.get("status"), r.get("runId")) for r in out["instances"]] == [
+        ("synthesize", "completed", "r-done")
+    ]
+
+
+async def test_a_cancelled_node_is_still_an_instance(_isolated_registry: Any) -> None:
+    """It ran, however briefly. The runner keeps the two apart on purpose -- a
+    cancelled node already has a real start time from its dispatch -- and what
+    it managed to do before the stop is part of the conversation's history."""
+    await _isolated_registry.upsert_dag_node("s1", "r1", "research", "hermes", "cancelled")
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(_FakeManager())))
+
+    assert [r["nodeId"] for r in out["instances"]] == ["research"]
+
+
 async def test_a_node_that_committed_under_its_own_id_is_paired_too(_isolated_registry: Any) -> None:
     """Rows written before the link existed carry no ``nodeId``. A node that
     declared no handle commits under its task id, which is the node id, so that
@@ -1492,7 +1540,7 @@ class _ModedManager(_FakeManager):
 
     def __init__(self) -> None:
         super().__init__()
-        from raven.agent.acp.capabilities import AcpMode
+        from raven.acp_client.capabilities import AcpMode
 
         self._modes = (AcpMode("fast", "Fast", "converges early"), AcpMode("deep", "Deep", "searches longer"))
         self.applied: list[tuple[str, str, str, str | None]] = []

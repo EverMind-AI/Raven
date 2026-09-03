@@ -609,3 +609,73 @@ async def test_register_without_startup_events_emits_nothing(
     await emitter.register("tui:default")
     await asyncio.sleep(COALESCE_WINDOW_S * 3)
     assert _collect_emitted_events(send_frame) == []
+
+
+async def test_an_overflowing_subscriber_closes_alone_and_the_producer_never_waits(
+    send_frame: AsyncMock,
+) -> None:
+    """The isolation half of backpressure: one full queue closes that
+    subscription only -- the peer still receives, and emit() returns without
+    waiting for anyone to drain."""
+    emitter = SubscriptionEmitter(send_frame=send_frame)
+    slow = await emitter.register("tui:default")
+    healthy = await emitter.register("tui:default")
+
+    slow_queue = emitter._by_id[slow].queue
+    for i in range(QUEUE_CAPACITY):
+        slow_queue.put_nowait({"type": "token.delta", "payload": {"text": str(i)}})
+
+    await emitter.emit("tui:default", {"type": "turn.started", "payload": {}})
+
+    assert slow not in emitter._by_id
+    assert healthy in emitter._by_id
+    await asyncio.sleep(COALESCE_WINDOW_S * 3)
+    events = _collect_emitted_events(send_frame)
+    assert any(e.get("type") == "turn.started" for e in events)
+
+
+# ---------------------------------------------------------------------------
+# has_subscribers
+# ---------------------------------------------------------------------------
+
+
+async def test_has_subscribers_false_when_nobody_registered(emitter):
+    assert emitter.has_subscribers("tui:c1") is False
+
+
+async def test_has_subscribers_true_after_register_and_false_after_unregister(emitter):
+    sub_id = await emitter.register("tui:c1")
+    assert emitter.has_subscribers("tui:c1") is True
+    await emitter.unregister(sub_id)
+    assert emitter.has_subscribers("tui:c1") is False
+
+
+async def test_has_subscribers_false_after_close_session(emitter):
+    await emitter.register("tui:c1")
+    await emitter.close_session("tui:c1")
+    assert emitter.has_subscribers("tui:c1") is False
+
+
+async def test_has_subscribers_false_after_the_watchers_connection_drops(emitter):
+    """An abrupt disconnect never unregisters the subscription, so liveness
+    must come from the connection registry, not from the bucket alone."""
+    from raven.rpc import connection
+
+    token = connection.bind_connection()
+    await emitter.register("tui:c1")
+    assert emitter.has_subscribers("tui:c1") is True
+    connection.unbind_connection(token)
+    assert emitter.has_subscribers("tui:c1") is False
+
+
+async def test_has_subscribers_true_while_any_watchers_connection_lives(emitter):
+    from raven.rpc import connection
+
+    token_a = connection.bind_connection()
+    await emitter.register("tui:c1")
+    connection.unbind_connection(token_a)
+    token_b = connection.bind_connection()
+    await emitter.register("tui:c1")
+    assert emitter.has_subscribers("tui:c1") is True
+    connection.unbind_connection(token_b)
+    assert emitter.has_subscribers("tui:c1") is False

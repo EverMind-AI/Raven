@@ -1,10 +1,10 @@
-"""ContextAssembler — builds PlannerContext for each Sentinel tick.
+"""PlannerContextAssembler — builds PlannerContext for each Sentinel tick.
 
 Pulls from existing Raven infrastructure (MemoryStore, SessionManager,
 RoutineLearner, NudgePolicy) and packages the state into the shape
 ProactivePlanner.decide() expects. No LLM calls here — pure aggregation.
 
-In production the SentinelRunner instantiates one ContextAssembler and
+In production the SentinelRunner instantiates one PlannerContextAssembler and
 calls ``assemble()`` each tick.
 """
 
@@ -24,7 +24,7 @@ from typing import Any, Callable
 from loguru import logger
 
 from raven.config.raven import DEFAULT_PLANNER_ATTENTION_SECTIONS
-from raven.memory_engine.consolidate.consolidator import MemoryStore
+from raven.memory_engine import MemoryStore
 from raven.proactive_engine.sentinel.predictor.routine_learner import RoutineLearner
 from raven.proactive_engine.sentinel.trigger_policy.policy import NudgePolicy
 from raven.proactive_engine.sentinel.trigger_policy.prefs import (
@@ -119,7 +119,7 @@ def _filter_memory_md(raw: str, cfg) -> str:
     return out
 
 
-class ContextAssembler:
+class PlannerContextAssembler:
     """Bundles Planner inputs. Cheap enough to invoke per tick."""
 
     def __init__(
@@ -222,7 +222,7 @@ class ContextAssembler:
             text = path.read_text(encoding="utf-8")
         except OSError:
             return ""
-        from raven.memory_engine.consolidate.attention import parse_attention
+        from raven.memory_engine import parse_attention
 
         sections = parse_attention(text)
         parts: list[str] = []
@@ -249,7 +249,7 @@ class ContextAssembler:
             return ""
         from datetime import timedelta as _td
 
-        from raven.memory_engine.consolidate.behaviors import (
+        from raven.memory_engine import (
             parse_behaviors,
             render_folded_block,
             slice_after_day,
@@ -324,7 +324,7 @@ class ContextAssembler:
                 "recent_dismissals": dismissed,
             }
         except Exception as exc:
-            logger.warning("ContextAssembler.fire_history failed: {}", exc)
+            logger.warning("PlannerContextAssembler.fire_history failed: {}", exc)
             return {}
 
     # ------------------------------------------------------------------
@@ -346,7 +346,7 @@ class ContextAssembler:
         try:
             raw = self.memory_store.read_long_term() or ""
         except Exception as exc:
-            logger.warning("ContextAssembler memory read failed: {}", exc)
+            logger.warning("PlannerContextAssembler memory read failed: {}", exc)
             return ""
         # Smart loading: section allowlist / blocklist / size cap.
         cfg = getattr(self.nudge_policy, "config", None) if self.nudge_policy else None
@@ -368,7 +368,7 @@ class ContextAssembler:
         try:
             lines = p.read_text(encoding="utf-8").splitlines()
         except OSError as exc:
-            logger.warning("ContextAssembler history read failed: {}", exc)
+            logger.warning("PlannerContextAssembler history read failed: {}", exc)
             return ""
         return "\n".join(lines[-self.history_tail_lines :])
 
@@ -443,8 +443,8 @@ class ContextAssembler:
             items = self._calendar_fn() or []
             return [str(x) for x in items if x]
         except Exception as exc:
-            logger.warning("ContextAssembler calendar source failed: {}", exc)
+            logger.warning("PlannerContextAssembler calendar source failed: {}", exc)
             return []
 
 
-__all__ = ["ContextAssembler"]
+__all__ = ["PlannerContextAssembler"]

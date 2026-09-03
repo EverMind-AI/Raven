@@ -1,7 +1,7 @@
 """ask_user tool — pause the turn to ask the user a question and await the reply.
 
 Blocking interaction: the registry does NOT wrap this in a timeout (the
-QuestionBroker manages its own fail-safe). On execute the tool hands the turn's
+injected responder manages its own fail-safe). On execute the tool hands the turn's
 conversation_id and the prompt to the broker, which emits a ``clarify.request``
 notification and blocks until an inbound answer arrives (or the broker's
 fail-safe default fires). The returned answer is rendered as a natural-language
@@ -19,8 +19,14 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
-from raven.agent.tools.base import Tool, ToolResult
-from raven.rpc.question_broker import DEFAULT_TIMEOUT_S, QuestionBroker
+from raven.contracts.asking import QuestionResponder
+from raven.contracts.tool import Tool, ToolResult
+
+# Last-resort wait for one whole call when the responder exposes no
+# ``default_timeout_s`` of its own. The broker machinery ships the same value;
+# duplicated rather than imported so this module names no concrete machine.
+DEFAULT_TIMEOUT_S = 600.0
+
 
 # How many times an argument may be JSON-decoded before it is treated as text.
 _MAX_JSON_LAYERS = 3
@@ -179,7 +185,7 @@ class AskUserTool(Tool):
     """Ask the user a question mid-turn and wait for their answer.
 
     Wiring: the layer that builds the per-turn tool set must inject a
-    :class:`QuestionBroker` (constructor or :meth:`set_broker`) and the turn's
+    :class:`QuestionResponder` (constructor or :meth:`set_broker`) and the turn's
     conversation_id via :meth:`set_context` — the same conversation_id the
     scheduler derives (``req.conversation or f"{channel}:{chat_id}"``).
     """
@@ -188,7 +194,7 @@ class AskUserTool(Tool):
 
     def __init__(
         self,
-        broker: QuestionBroker | None = None,
+        broker: QuestionResponder | None = None,
         conversation_id: str = "",
         timeout_s: float | None = None,
     ) -> None:
@@ -204,8 +210,8 @@ class AskUserTool(Tool):
         # failure in the path of the RPC server coming up.
         self._timeout_s = timeout_s
 
-    def set_broker(self, broker: QuestionBroker | None) -> None:
-        """Set the QuestionBroker. ``None`` disables the round-trip."""
+    def set_broker(self, broker: QuestionResponder | None) -> None:
+        """Set the question responder. ``None`` disables the round-trip."""
         self._broker = broker
 
     def set_context(self, conversation_id: str) -> None:
@@ -331,7 +337,7 @@ class AskUserTool(Tool):
 
         This hook is where the registry expects the adjustment, so the schema
         stays honest about what the model should send while a near miss still
-        reaches the user. Runs before ``super()`` so the base cast can coerce
+        reaches the user. Runs before the registry's schema cast so it can coerce
         the leaves this exposes -- a non-string ``question``, options that are
         not strings -- exactly as it does for a well-formed call.
         """
@@ -344,7 +350,7 @@ class AskUserTool(Tool):
                     entry["options"] = _normalize_options(entry["options"])
                 entries.append(entry)
             params["questions"] = entries
-        return super().cast_params(params)
+        return params
 
     def display_call(self, args: dict[str, Any]) -> str | None:
         """Show the question itself, not the raw arguments blob. A batch keeps

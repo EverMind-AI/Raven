@@ -3,9 +3,9 @@
 Watches the workspace skill tree and invalidates the registry cache
 per-source when SKILL.md files appear / change / disappear. This is
 what lets a hand-edited ``<workspace>/skills/foo/SKILL.md`` surface to
-the in-process selector without a process restart — complementing the
-existing :meth:`SkillService.invalidate_skill_cache` hook used by the
-everos evolver for its own writes.
+the in-process selector without a process restart — complementing
+:meth:`LocalSkillCatalog.invalidate_skill_cache`, which a writer calls for
+its own writes.
 
 Design notes:
 

@@ -2,7 +2,7 @@
 
 The ``## User overrides`` H2 in attention.md is the canonical slot for
 user-authored proactivity overrides — it's the first section in
-``ATTENTION_SECTIONS``, has Chinese/English aliases (``## 用户指令``),
+``ATTENTION_SECTIONS``, has legacy Chinese aliases (``zh_lexicon.LEGACY_ATTENTION_HEADERS``),
 and is preserved across Sentinel ticks (no producer overwrites it).
 
 This module reads that section's body and extracts structured DND
@@ -26,14 +26,15 @@ from __future__ import annotations
 import re
 
 from raven.config.raven import DndWindow
-from raven.memory_engine.consolidate.attention import parse_attention
+from raven.i18n import zh_lexicon
+from raven.memory_engine import DAILY_FIRE_PLAN_HEADER, parse_attention
 
 # ``- dnd: 22:30-06:00 [weekdays=...] [reason=...]``
 _DND_RE = re.compile(
-    r"^\s*[-*]?\s*(?:dnd|quiet[_\s]?hours?)\s*[:：]\s*"
-    r"(?P<sh>\d{1,2})[:：](?P<sm>\d{2})"
+    r"^\s*[-*]?\s*(?:dnd|quiet[_\s]?hours?)\s*" + zh_lexicon.COLON_CLASS + r"\s*"
+    r"(?P<sh>\d{1,2})" + zh_lexicon.COLON_CLASS + r"(?P<sm>\d{2})"
     r"\s*[-—~]\s*"
-    r"(?P<eh>\d{1,2})[:：](?P<em>\d{2})"
+    r"(?P<eh>\d{1,2})" + zh_lexicon.COLON_CLASS + r"(?P<em>\d{2})"
     r"(?P<rest>.*)$",
     re.IGNORECASE,
 )
@@ -155,7 +156,7 @@ def parse_user_overrides_dnd(attention_md: str) -> list[DndWindow]:
 
 _PLAN_HEAD_RE = re.compile(
     r"^\s*[-*]\s*"
-    r"(?P<h>\d{1,2})[:：](?P<m>\d{2})\s+"
+    r"(?P<h>\d{1,2})" + zh_lexicon.COLON_CLASS + r"(?P<m>\d{2})\s+"
     r"(?P<tag>[A-Za-z0-9_]+)"
     r"(?P<rest>.*)$",
 )
@@ -170,7 +171,7 @@ _PLAN_MSG_RE = re.compile(
 
 
 def parse_daily_plan(attention_md: str) -> list[dict]:
-    """Read attention.md ``## 今日 fire 计划`` body, return list of
+    """Read the attention.md daily fire plan section, return list of
     ``{"time_hhmm","topic_tag","priority","user_message","rationale"}`` entries.
 
     Lines that don't match the DSL are ignored (HTML comments,
@@ -187,7 +188,7 @@ def parse_daily_plan(attention_md: str) -> list[dict]:
     if not attention_md:
         return []
     sections = parse_attention(attention_md)
-    body = sections.get("## 今日 fire 计划", "")
+    body = sections.get(DAILY_FIRE_PLAN_HEADER, "")
     if not body.strip():
         return []
     out: list[dict] = []

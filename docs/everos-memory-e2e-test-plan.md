@@ -102,6 +102,7 @@ uv run pytest tests/integration -m real_llm
 
 ## Naming compliance note (AGENTS.md §5.2)
 
-The production-path / demo smokes were renamed to drop their
-ticket/version scope: `tests/integration/test_rpc_production_smoke.py`
-and `tests/integration/test_rpc_demo_smoke.py`.
+The production-path smoke was renamed to drop its ticket/version scope and
+then again for the client it no longer belongs to:
+`tests/integration/test_tui_rpc_production_smoke.py`. The demo smoke that stood
+beside it is gone -- it drove a demo that was never in this repository.

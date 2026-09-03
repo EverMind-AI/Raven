@@ -1,13 +1,11 @@
-"""Write Eval Engine verdicts back into MemoryEngine.
+"""Write Eval Engine verdicts into HISTORY.md.
 
-Writes a one-line HISTORY.md entry per judged turn through the
-MemoryEngine facade. When ``MemoryEngine`` gains a dedicated
-``write_observations`` method, the adapter will switch to it; for now
-``append_history`` keeps the audit trail visible
-to Sentinel ContextAssembler without inventing new file types.
+Writes one HISTORY.md line per judged turn through
+:meth:`MemoryStore.append_history`, where the Sentinel's PlannerContextAssembler
+reads it back; no new file type is involved.
 
 The adapter is intentionally a thin shim — it doesn't perform any I/O
-of its own beyond the MemoryEngine call. All semantic decisions
+of its own beyond the MemoryStore call. All semantic decisions
 (verdict mapping, formatting) live here so the hook stays focused on
 when-to-fire logic.
 """
@@ -19,19 +17,13 @@ from datetime import datetime
 from typing import Callable
 
 from raven.eval_engine.judge.judge import JudgeVerdict
-from raven.memory_engine.consolidate.consolidator import MemoryStore
+from raven.memory_engine import MemoryStore
 
 logger = logging.getLogger(__name__)
 
 
 class EvalAdapter:
-    """Writes judge verdicts to the long-term ``HISTORY.md`` via :class:`MemoryStore`.
-
-    Phase B-3: re-targeted from the deleted ``MemoryEngine`` facade
-    to ``MemoryStore`` directly. The only method this adapter needed
-    was ``append_history``, which is on ``MemoryStore`` anyway —
-    removing the facade indirection just makes the dependency honest.
-    """
+    """Writes judge verdicts to the long-term ``HISTORY.md`` via :meth:`MemoryStore.append_history`."""
 
     def __init__(
         self,
@@ -53,7 +45,7 @@ class EvalAdapter:
 
         ``unknown`` verdicts are intentionally NOT recorded — they're
         signal noise. ``completed`` and ``failed`` go through so the
-        Sentinel ContextAssembler's history tail sees recent outcomes.
+        Sentinel PlannerContextAssembler's history tail sees recent outcomes.
         """
         if verdict is JudgeVerdict.unknown:
             return

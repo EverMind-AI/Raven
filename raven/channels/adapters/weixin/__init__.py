@@ -1,4 +1,4 @@
-"""Personal WeChat (iLink) channel adapter (migrated to the capability contract).
+"""Personal WeChat (iLink) channel adapter.
 
 Intentionally does NOT re-export ``WeixinChannel`` — that would import httpx at
 package import and defeat cheap spec discovery (``registry.discover_specs``

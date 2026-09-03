@@ -1,31 +1,30 @@
 """``cli.dispatch`` RPC handler — in-process EC CLI command runner.
 
 Design summary:
-1. **S1 / D7 contract**: ``argv: list[str]`` + ``width: int`` (required, 20..500)
+1. **Contract**: ``argv: list[str]`` + ``width: int`` (required, 20..500)
    + ``timeout_s: float`` (optional, default 30s). Result is
    ``{stdout, stderr, exit_code}`` (with optional ``error_code`` only for the
    in-band -32013 cli_command_failed case — the spec keeps -32013 out-of-band-free).
-2. **S2 dispatch-compat**: ``_is_dispatch_compatible`` reflects
+2. **Dispatch compatibility**: ``_is_dispatch_compatible`` reflects
    ``raven.cli.commands.app`` (Typer 0.20+) — any registered command
    that is NOT in ``_DISPATCH_BLACKLIST`` and NOT ``agent``-without-``-m``
-   is accepted. The v0.0.2 hardcoded ``_DISPATCH_WHITELIST`` was removed by
-   ``harness-command-catalog-dynamic`` so CLI rename / new-command churn
-   does not require TUI tuple updates. Interactive Rich widgets remain
+   is accepted, so a CLI rename or a new command needs no TUI-side list.
+   Interactive Rich widgets remain
    blocked by the blacklist (``provider login`` / ``channels login`` /
    ``sandbox shell``) + recursive ``tui`` / ``onboard`` wizard.
-3. **S3 ``standalone_mode=False``**: Click library mode — suppresses
+3. **``standalone_mode=False``**: Click library mode — suppresses
    ``sys.exit()``, surfaces errors as exceptions. We still defensively catch
    ``SystemExit`` (Typer's ``typer.Exit`` inherits from it).
-4. **S4 ANSI filter**: applied to ``stdout`` / ``stderr`` post-render so the
+4. **ANSI filter**: applied to ``stdout`` / ``stderr`` post-render so the
    TUI Ink reconciler is never corrupted by cursor movement / clear-screen.
-5. **S5 truecolor**: ``Console(color_system="truecolor")`` prevents 256-color
+5. **Truecolor**: ``Console(color_system="truecolor")`` prevents 256-color
    downgrade in non-TTY ``force_terminal`` mode.
 
 Concurrency: a module-level ``asyncio.Lock`` serializes calls — without it,
 overlapping dispatches would race on the monkey-patched module-level
-``console`` references. v0.2 may revisit with per-call Console pools.
+``console`` references.
 
-Spec disambiguation (specs §4 wins over design.md §3 D7 skeleton):
+Error-code decisions:
 - ``-32013 cli_command_failed`` → NOT raised; signaled via ``exit_code != 0``
   inside ``CliResult``.
 - ``-32014 cli_command_timeout`` and ``-32015 not_dispatch_compatible`` are
@@ -45,7 +44,7 @@ from loguru import logger
 from pydantic import ValidationError
 from rich.console import Console
 
-import raven.cli.commands as ec_cli
+from raven.rpc import cli_socket
 from raven.rpc._ansi_filter import filter_ansi
 from raven.rpc._confirm_injection import confirm_injection
 from raven.rpc._console_injection import inject_consoles
@@ -75,11 +74,6 @@ if TYPE_CHECKING:
 # ``methods/commands.py`` so the catalog handler filters the same prefixes
 # (preventing user-facing slash entries that would only get rejected by
 # dispatch later).
-#
-# Source: CLI-team locked P3 5 commands @
-# ``docs/sendbox/toTuiIpcBridge/from-orche-eve15-cli-team-36-commands-locked.md``
-# + harness-command-catalog-dynamic extension (``tui`` + ``onboard``) per
-# ``docs/openspec/changes/harness-command-catalog-dynamic/design.md §D4``.
 #
 # NOTE on ``agent``: ``raven agent`` (no ``-m``) is REPL mode and MUST
 # be rejected. ``raven agent -m "msg"`` is one-shot mode and IS allowed.
@@ -176,7 +170,8 @@ def _is_dispatch_compatible(argv: list[str]) -> bool:
     registered_commands / registered_groups walks are dict-iteration on
     small lists (<50 entries), microsecond cost; caching would create
     invalidation surface that fights the slash_routing tests that
-    monkeypatch ``ec_cli.app``.
+    monkeypatch ``raven.cli.commands.app`` (the socket hands out the module,
+    and every reader resolves ``.app`` at call time).
 
     Examples:
         >>> _is_dispatch_compatible(["channels", "status"])
@@ -211,6 +206,12 @@ def _is_dispatch_compatible(argv: list[str]) -> bool:
     # _DISPATCH_WHITELIST 19-tuple set). The helper module also serves
     # ``methods/commands.py`` so the two reflection sites can't drift.
     head = argv[0]
+    ec_cli = cli_socket.cli_commands()
+    if ec_cli is None:
+        # No CLI registered on this host (an acp server, a bare test stack):
+        # nothing is dispatch-compatible, and the caller falls through to its
+        # not-a-cli-command path.
+        return False
     app = ec_cli.app
     if head in _collect_command_names(app):
         return True
@@ -248,6 +249,9 @@ def _invoke_ec_cli(argv: list[str]) -> int:
     We resolve ``ec_cli.app`` at call time (not import time) so monkey-patches
     in tests take effect.
     """
+    ec_cli = cli_socket.cli_commands()
+    if ec_cli is None:
+        return 1  # unreachable behind the compatibility check; defensive
     try:
         result = ec_cli.app(argv, standalone_mode=False)
     except SystemExit as exc:

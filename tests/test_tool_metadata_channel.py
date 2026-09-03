@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from raven.agent.tools.base import Tool
+from raven.contracts.tool import Tool
 from raven.spine.events import ToolEvent, ToolPhase
 
 

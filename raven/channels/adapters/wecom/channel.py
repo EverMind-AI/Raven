@@ -13,7 +13,6 @@ from wecom_aibot_sdk import WSClient, generate_req_id
 from raven.channels.base import ChannelBase
 from raven.channels.errors import transient_network
 from raven.channels.media import safe_name, save_media_bytes
-from raven.config.schema import WecomConfig
 
 _MSG_TYPE_LABEL = {"image": "[image]", "voice": "[voice]", "file": "[file]", "mixed": "[mixed content]"}
 _DEDUP_CAP = 1000
@@ -23,11 +22,11 @@ _FRAMES_CAP = 1000
 class WecomChannel(ChannelBase):
     """WeCom AI bot over a WebSocket long connection — no public IP / webhook."""
 
-    config: WecomConfig
+    config: Any
     name = "wecom"
     display_name = "WeCom"
 
-    def __init__(self, config: WecomConfig):
+    def __init__(self, config: Any):
         super().__init__(config)
         self._client: Any = None
         self._seen: OrderedDict[str, None] = OrderedDict()

@@ -1,9 +1,5 @@
 # TUI
 
-> **Status: review baseline (2026-06-28).** Under team review via this PR (owner @sheng.zhao).
-> Pending: candidate additions (Turn Cycle, Streaming Segment, Subagent Tree, RPC Client,
-> ChatStream, Composer, Slash Command System, …) — owner @sheng.zhao to select.
-
 The terminal front-end (`ui-tui/`, React/Ink). Renders the chat transcript and overlays;
 talks to the Runtime only via the RPC protocol. Single-session per client in v0.1.
 

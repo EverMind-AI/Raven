@@ -29,7 +29,7 @@ import threading
 import time
 import urllib.request
 
-from raven.evolver.activation.ledger import (
+from evolver.activation.ledger import (
     WORKSPACE_ENV,
     beacon_workspace,
     mark_beacons_enabled,

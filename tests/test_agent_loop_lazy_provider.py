@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 
 from raven.agent.loop import AgentLoop
+from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.providers.base import GenerationSettings, LLMProvider
 from raven.providers.lazy import LazyProvider
 
@@ -51,8 +52,8 @@ def _make_loop(tmp_path: Path, provider) -> AgentLoop:
         provider=provider,
         workspace=tmp_path,
         model="stub",
-        max_iterations=2,
-        restrict_to_workspace=True,
+        policy=TurnPolicy(max_iterations=2),
+        tools=ToolWiring(restrict_to_workspace=True),
     )
 
 
@@ -109,6 +110,7 @@ import tempfile
 from pathlib import Path
 
 from raven.agent.loop import AgentLoop
+from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.providers import model_catalog_cache
 from raven.providers.base import GenerationSettings, LLMProvider
 from raven.providers.lazy import LazyProvider
@@ -132,8 +134,8 @@ with tempfile.TemporaryDirectory() as td:
         provider=lazy,
         workspace=Path(td),
         model="openrouter/deepseek/deepseek-v4-pro",
-        max_iterations=2,
-        restrict_to_workspace=True,
+        policy=TurnPolicy(max_iterations=2),
+        tools=ToolWiring(restrict_to_workspace=True),
     )
 
 ok = "litellm" not in sys.modules
@@ -175,6 +177,7 @@ import tempfile
 from pathlib import Path
 
 from raven.agent.loop import AgentLoop
+from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.providers import model_catalog_cache
 from raven.providers.base import GenerationSettings, LLMProvider
 from raven.providers.lazy import LazyProvider
@@ -198,8 +201,8 @@ with tempfile.TemporaryDirectory() as td:
         provider=lazy,
         workspace=Path(td),
         model="openrouter/deepseek/deepseek-v4-pro",
-        max_iterations=2,
-        restrict_to_workspace=True,
+        policy=TurnPolicy(max_iterations=2),
+        tools=ToolWiring(restrict_to_workspace=True),
     )
     budget = agent._make_token_budget()
     assert budget.reserved_output > 0, "a budget still has to come out of it"

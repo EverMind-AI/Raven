@@ -214,12 +214,13 @@ def test_rich_theme_defines_all_onboard_tokens():
     import re
     from pathlib import Path
 
-    src = Path(__file__).resolve().parents[1] / "raven" / "cli" / "onboard_commands.py"
-    tree = ast.parse(src.read_text(encoding="utf-8"))
+    cli = Path(__file__).resolve().parents[1] / "raven" / "cli"
     literals: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            literals.append(node.value)
+    for name in ("onboard_commands.py", "_onboard_shared.py"):
+        tree = ast.parse((cli / name).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                literals.append(node.value)
     blob = "\n".join(literals)
     # negative lookbehind skips rich-escaped brackets like ``\[sandbox]``
     tags = set(re.findall(r"(?<!\\)\[/?([a-z]+(?: [a-z]+)?)\]", blob))
@@ -265,9 +266,13 @@ def test_no_compound_markup_mixes_theme_key():
     import re
     from pathlib import Path
 
-    src = Path(__file__).resolve().parents[1] / "raven" / "cli" / "onboard_commands.py"
-    tree = ast.parse(src.read_text(encoding="utf-8"))
-    literals = [n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+    cli = Path(__file__).resolve().parents[1] / "raven" / "cli"
+    literals = [
+        n.value
+        for name in ("onboard_commands.py", "_onboard_shared.py")
+        for n in ast.walk(ast.parse((cli / name).read_text(encoding="utf-8")))
+        if isinstance(n, ast.Constant) and isinstance(n.value, str)
+    ]
     blob = "\n".join(literals)
     bad = set()
     for tag in re.findall(r"(?<!\\)\[/?([a-z][a-z ]*)\]", blob):
@@ -297,7 +302,7 @@ def test_themed_console_self_themes_on_first_print():
     """
     from rich.panel import Panel
 
-    from raven.cli.onboard_commands import _ThemedConsole
+    from raven.cli._onboard_shared import _ThemedConsole
 
     con = _ThemedConsole(file=io.StringIO(), force_terminal=True)
     assert con._themed is False

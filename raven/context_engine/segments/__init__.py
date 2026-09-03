@@ -3,7 +3,7 @@
 Each module here defines one :class:`SegmentBuilder` (seg1–5 plus the
 Curator). They all share the same interface and are assembled uniformly
 by :class:`ContextAssembler`. ``render.py`` holds the shared low-level
-rendering helpers (formerly ``ContextBuilder`` methods).
+rendering helpers.
 """
 
 from raven.context_engine.segments.active_skills import ActiveSkillsSegmentBuilder

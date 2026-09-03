@@ -1190,7 +1190,7 @@ EOF
 ### Task 7: The ACP backend quarantines a session that would not stop
 
 **Files:**
-- Modify: `raven/agent/subagent/backends/acp_agent.py:22-27` (imports), `:370-384`
+- Modify: `raven/acp_client/acp_agent.py:22-27` (imports), `:370-384`
 - Test: `tests/test_subagent_acp.py`
 
 **Interfaces:**
@@ -1242,7 +1242,7 @@ Expected: FAIL on the final assertion - the binding is still there, because noth
 
 - [ ] **Step 3: Import asyncio**
 
-`raven/agent/subagent/backends/acp_agent.py` does not import it today. Add it in alphabetical order at the top of the stdlib block (before `json`):
+`raven/acp_client/acp_agent.py` does not import it today. Add it in alphabetical order at the top of the stdlib block (before `json`):
 
 ```python
 import asyncio
@@ -1286,7 +1286,7 @@ Expected: PASS, no failures.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add raven/agent/subagent/backends/acp_agent.py tests/test_subagent_acp.py
+git add raven/acp_client/acp_agent.py tests/test_subagent_acp.py
 git commit -m "$(cat <<'EOF'
 fix(agent): drop an acp session whose turn outlived its cancel budget
 

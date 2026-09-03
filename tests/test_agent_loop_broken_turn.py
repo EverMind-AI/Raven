@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 
 from raven.agent.loop import AgentLoop
+from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
@@ -69,8 +70,8 @@ def _agent(workspace: Path, provider: LLMProvider) -> AgentLoop:
         provider=provider,
         workspace=workspace,
         model="stub",
-        max_iterations=3,
-        restrict_to_workspace=True,
+        policy=TurnPolicy(max_iterations=3),
+        tools=ToolWiring(restrict_to_workspace=True),
     )
 
 

@@ -18,7 +18,7 @@ from raven.proactive_engine.sentinel.attention_producers._base import (
 
 if TYPE_CHECKING:
     from raven.config.raven import SentinelObservationsConfig
-    from raven.memory_engine.consolidate.consolidator import MemoryStore
+    from raven.memory_engine import MemoryStore
     from raven.proactive_engine.sentinel.feedback.tracker import (
         NudgeFeedbackTracker,
     )

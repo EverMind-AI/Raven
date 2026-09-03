@@ -1,6 +1,6 @@
 """Custom RPC exception classes mapped to JSON-RPC 2.0 error codes.
 
-Code table — frozen in `specs/tui-ipc.md` §4 (server-defined range -32000..-32099):
+Code table (server-defined range -32000..-32099):
 
 | code   | message                       | meaning                          |
 |--------|-------------------------------|----------------------------------|
@@ -111,7 +111,13 @@ class ConfigValidationError(RpcError):
     MESSAGE = "config_validation_error"
 
 
-class NotSupportedInV01Error(RpcError):
+class NotSupportedError(RpcError):
+    """A method the TUI knows but Raven does not back.
+
+    The wire message keeps the ``_in_v01`` spelling: the client matches on it,
+    so it changes together with the TUI, not before.
+    """
+
     CODE = -32012
     MESSAGE = "not_supported_in_v01"
 
@@ -158,7 +164,7 @@ class InternalError(RpcError):
     MESSAGE = "internal_error"
 
 
-# JSON-RPC pre-defined error codes (specs §2.3 / RFC).
+# JSON-RPC 2.0 pre-defined error codes.
 PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
 METHOD_NOT_FOUND = -32601
@@ -181,7 +187,7 @@ JSONRPC_ERROR_REGISTRY: dict[int, type[RpcError]] = {
         ModelNotAvailableError,
         ConfigFieldReadonlyError,
         ConfigValidationError,
-        NotSupportedInV01Error,
+        NotSupportedError,
         CliCommandFailedError,
         CliCommandTimeoutError,
         NotDispatchCompatibleError,
@@ -204,7 +210,7 @@ __all__ = [
     "ModelNotAvailableError",
     "ConfigFieldReadonlyError",
     "ConfigValidationError",
-    "NotSupportedInV01Error",
+    "NotSupportedError",
     "CliCommandFailedError",
     "CliCommandTimeoutError",
     "NotDispatchCompatibleError",

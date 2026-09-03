@@ -7,12 +7,9 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from raven.sandbox.interfaces import ExecResult, SandboxExecutor, SandboxInitError
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -31,10 +28,10 @@ class BoxliteExecutor(SandboxExecutor):
     surface before the agent loop begins.
 
     BoxOptions.volumes expects List[Tuple[str, str, str]]; lists are coerced to
-    tuples at construction time. BoxOptions.env expects List[Tuple[str, str]];
-    exec-level env dicts are converted to tuples before being passed to Box.exec().
-    Box.exec() does not accept cwd or timeout parameters (SimpleBox-only kwargs);
-    cwd is injected via the shell command and timeout via asyncio.wait_for().
+    tuples at construction time; exec-level env dicts are converted to tuples
+    before ``Box.exec()`` sees them. ``Box.exec()`` takes neither cwd nor
+    timeout: the cwd is injected through the shell command and the timeout is
+    enforced with ``asyncio.wait_for()``.
     """
 
     WORKSPACE_MOUNT = "/workspace"
@@ -237,8 +234,7 @@ class BoxliteExecutor(SandboxExecutor):
                 {"host": str(self._workspace), "guest": self.WORKSPACE_MOUNT, "readonly": False},
                 *[{"host": e[0], "guest": e[1], "readonly": e[2] == "ro"} for e in self._extra_volumes],
             ]
-            # boxlite 0.8.2: network is a string field; allow_net is a separate list field
-            # (NetworkSpec does not exist in this version)
+            # network is a string field and allow_net a separate list field.
             extra_kwargs: dict = {}
             if self._allow_net is False:
                 extra_kwargs["network"] = "none"

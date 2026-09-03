@@ -1,8 +1,7 @@
 """Query rewriter — judges whether skill retrieval is needed and rewrites
 verbose queries into concise skill-routing queries.
 
-Ported from the pre-integrate-everos branch
-(``raven/memory_engine/skill/rewriter.py``). One LLM call does two
+One LLM call does two
 things: (1) decide whether the user query needs external skill retrieval
 at all (chat / greetings / general knowledge → skip the router fan-out
 entirely); (2) when retrieval IS needed, strip noise (paths, IDs,
@@ -21,11 +20,12 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from raven.observability import semconv
 from raven.providers.binding import active_binding
-from raven.tracing import semconv, trace
+from raven.tracing import trace
 
 if TYPE_CHECKING:
-    from raven.providers.base import LLMProvider
+    from raven.contracts.llm_provider import LLMProvider
 
 log = logging.getLogger(__name__)
 

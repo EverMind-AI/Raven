@@ -1,0 +1,55 @@
+# code-flow: Raven-Code's coding conduct as a plugin over the kernel's general seams.
+#
+# Config slice (plugins.config["code-flow"]): enabled (the product gate --
+# absent or false means no surface is cast, the D6 shape) plus the launcher-
+# rendered workspaceGate block, whose spellings the scaffold owns
+# (agents/raven-code/run.py render_config):
+#
+#   workspaceGate.allocBase    per-session allocation records live under
+#                              <allocBase>/allocations/ (the ACP hosting)
+#   workspaceGate.allocDir     one-conversation allocation record at
+#                              <allocDir>/allocation.json (the CLI hosting)
+#   workspaceGate.instance     the CLI conversation's instance identity,
+#                              rendered beside allocDir
+#   workspaceGate.reposRoot    repo-level records: locks, owners, worktrees
+#                              (required by both layouts)
+#   workspaceGate.stateBucket  the session-state partition name; accepted and
+#                              carried, consumed by the state-partition wave
+#
+# config_schema stays empty on purpose: admission with an empty declaration is
+# verbatim pass-through, and the slice is validated by the plugin's own
+# FlowConfig (code_flow/config.py), which owns the slice shape.
+
+[plugin]
+id = "code-flow"
+version = "0.1.0"
+display_name = "Code Flow"
+enabled_by_default = true
+
+# The first-write workspace gate (paper: raven/contracts/tool_gate.py): the
+# fork's WorkspaceGate cast over the tool registry at assembly. The factory
+# declines (returns None) when the slice leaves the flow off or leaves the
+# gate unarmed -- the fork's build_workspace_gate-returns-None contract, said
+# as plugin admission (D6).
+
+[[plugin.contributes.tool_gates]]
+name = "write_gate"
+factory = "code_flow.gate:make_write_gate"
+
+# Release-on-retirement (paper: raven/contracts/session_events.py): the
+# conversation being gone is what frees the workspace. The observer fires on
+# every delete request the store handles, whatever the removal outcome -- the
+# fork released on the delete request too (fork acp/methods.py:469-480).
+
+[[plugin.contributes.session_observers]]
+name = "workspace_release"
+factory = "code_flow.gate:make_release_observer"
+
+# The turn-frame hook: captures the turn's session key into the plugin's own
+# ContextVar so the gate can key allocations per session (the fork's cid hook,
+# fork loop/main.py:1684-1689). The later product waves grow this hook's other
+# axes (completion gates, time budget, todo re-render) on the same row.
+
+[[plugin.contributes.hooks]]
+name = "code_flow"
+factory = "code_flow.flow:make_flow_hook"

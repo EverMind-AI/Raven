@@ -47,9 +47,9 @@ from raven.playbook.types import PlaybookSpec, slugify
 from raven.playbook.validate import check_assets, unusable_mcp_servers, validate_structure
 
 if TYPE_CHECKING:
-    from raven.memory_engine.skill_forge import SkillForgeRouter
+    from raven.contracts.llm_provider import LLMProvider
+    from raven.memory_engine import SkillForgeRouter
     from raven.playbook.agent_profiles import PlaybookAgentProfile
-    from raven.providers.base import LLMProvider
 
 _MAX_REPAIR_ROUNDS = 3
 _SKILL_CANDIDATES_K = 12
@@ -90,11 +90,9 @@ class CapabilityInventory(Protocol):
 class StaticInventory:
     """Inventory from plain lists — tests, and callers that hold the lists already.
 
-    Constructed with no arguments it reports *nothing* available, which is what
-    every production call site used to do: ``check_assets`` then judged every
-    skill and every mcp server the generator proposed to be unknown, so a
-    perfectly good draft came back annotated as missing every capability it
-    named. Use :func:`inventory_from_config` for a real one.
+    Constructed with no arguments it reports *nothing* available, and
+    ``check_assets`` then judges every skill and mcp server the generator
+    proposed to be unknown. Use :func:`live_inventory` for a real one.
     """
 
     mcp: list[str] = field(default_factory=list)

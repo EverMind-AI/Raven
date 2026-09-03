@@ -1,14 +1,13 @@
 """``terminal.resize`` RPC handler — record cols, return ok.
 
-ui-tui's ``useMainApp.ts:426`` calls ``terminal.resize`` with the new
+ui-tui's ``useMainApp.ts`` calls ``terminal.resize`` with the new
 ``{cols, rows}`` payload whenever Ink observes a SIGWINCH; the call is
 fire-and-forget. We need a handler that:
 
   1. Never raises (so the SIGWINCH burst doesn't spam errors), and
-  2. Optionally records the latest ``cols`` so ``cli.dispatch`` can use it
-     as the Rich console width on its next invocation (a future-proofing
-     hook — ``cli_dispatch.py`` does not yet read this value, but the wire
-     is in place for v0.2).
+  2. Records the latest ``cols`` / ``rows``, which no raven code reads back
+     today -- a console that wants the width still calls
+     ``shutil.get_terminal_size()``.
 
 The recorded state is module-level (a single TUI subprocess has exactly one
 terminal, so a singleton is correct).
@@ -27,20 +26,6 @@ if TYPE_CHECKING:
 # or a sensible default (80 cols) in that case.
 _LATEST_COLS: int | None = None
 _LATEST_ROWS: int | None = None
-
-
-def get_latest_cols() -> int | None:
-    """Return the most recently reported terminal column count, or ``None``.
-
-    Future consumer: ``cli_dispatch.py`` may read this to size the Rich
-    Console it injects into in-process CLI calls.
-    """
-    return _LATEST_COLS
-
-
-def get_latest_rows() -> int | None:
-    """Return the most recently reported terminal row count, or ``None``."""
-    return _LATEST_ROWS
 
 
 def _coerce_dim(value: Any) -> int | None:
@@ -79,6 +64,4 @@ def register_terminal_methods(dispatcher: "Dispatcher") -> None:
 __all__ = [
     "terminal_resize",
     "register_terminal_methods",
-    "get_latest_cols",
-    "get_latest_rows",
 ]

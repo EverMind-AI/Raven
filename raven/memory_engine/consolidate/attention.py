@@ -17,7 +17,11 @@ from __future__ import annotations
 
 import re
 
+from raven.i18n import zh_lexicon
+
 # Canonical H2 sections (English titles).
+DAILY_FIRE_PLAN_HEADER = "## Today's fire plan"
+
 ATTENTION_SECTIONS: tuple[str, ...] = (
     "## User overrides",
     "## Recent stance log (30d)",
@@ -32,7 +36,7 @@ ATTENTION_SECTIONS: tuple[str, ...] = (
     # today. Re-generated once per day at the first tick after 06:00.
     # Planner reads this to bias its tick decisions toward the planned
     # cadence (avoiding cross-topic conflicts + DND windows globally).
-    "## 今日 fire 计划",
+    DAILY_FIRE_PLAN_HEADER,
     "## Project rhythm (last 7 days)",
     "## Recently abandoned, worth resuming",
     "## Archived patterns",
@@ -42,23 +46,9 @@ ATTENTION_SECTIONS: tuple[str, ...] = (
     "## Sentinel Observations (auto)",
 )
 
-# Maps Chinese H2 aliases to canonical English.
+# Maps the legacy Chinese H2 spellings to the canonical English headers.
 ATTENTION_ALIASES: dict[str, str] = {
-    "## 用户指令": "## User overrides",
-    "## 活跃话题": "## Active threads",
-    "## 下一步预测": "## Predicted next 3 days",
-    "## 最近放弃": "## Recently abandoned, worth resuming",
-    "## 项目节奏": "## Project rhythm (last 7 days)",
-    "## 当前聚焦": "## Currently focused on",
-    "## 跨项目活跃话题(14天)": "## Cross-project behavior patterns (14d)",
-    "## 值得续作的已放弃": "## Recently abandoned, worth resuming",
-    "## 最近主动决策(14天)": "## Recent proactive decisions (14d)",
-    "## 未来3日预测": "## Predicted next 3 days",
-    "## 项目节奏(7天)": "## Project rhythm (last 7 days)",
-    "## 近期立场日志(30天)": "## Recent stance log (30d)",
-    "## 待处理提议": "## Pending proposals",
-    "## 已拒绝提议(冷却中)": "## Rejected proposals (cooldown)",
-    "## 已归档模式": "## Archived patterns",
+    **zh_lexicon.LEGACY_ATTENTION_HEADERS,
 }
 
 

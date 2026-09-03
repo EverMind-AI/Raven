@@ -16,4 +16,12 @@ SPEC = ChannelSpec(
     display_name="DingTalk",
     factory=_make,
     capabilities=Capabilities(file_attachments=True),
+    # Cargo declaration (config-with-cargo): the fields only this adapter
+    # consumes, with their defaults, secrecy and nesting -- the declaration
+    # is the only truth. Socket fields (enabled / allow_from / workspace)
+    # stay with the host.
+    config_schema={
+        "client_id": {"type": "string", "default": "", "required": True},
+        "client_secret": {"type": "string", "default": "", "required": True, "secret": True},
+    },
 )

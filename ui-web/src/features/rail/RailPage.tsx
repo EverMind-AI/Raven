@@ -120,10 +120,29 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
       <div className={s.naming && !editing ? 't skel' : 't'}>
         {live && !tail ? <span className={'dot ' + live} /> : null}
         {editing ? (
+          /* The box is the name's width, not the rail's: a two-character title in
+             a box eight times its length reads as a form field waiting to be
+             filled in rather than a name being corrected.
+
+             Measured by rendering the name, not by counting it. Counting cannot
+             work here -- the field wears the proportional UI face, so `WWWW` and
+             `iiii` are four characters and 49px against 12px, and a `ch` count
+             cropped the wide one. The wrapper's `::after` draws `data-value` in
+             the same grid cell with the same font, so the column is as wide as
+             the text actually is, and the browser is the one doing the measuring:
+             combining marks, emoji sequences and CJK come out right without this
+             file knowing anything about them. The stylesheet bounds it at the
+             row. */
+          <span className="rensize" data-value={draftTitle}>
           <input
             ref={inputRef}
             className="ren"
             aria-label={t('gui.sess.rename')}
+            /* An input's intrinsic width comes from `size`, which defaults to 20
+               characters -- and that, not the mirror, is what a grid column sizes
+               itself to. One character makes the field contribute nothing and
+               leaves the width to the text being drawn beside it. */
+            size={1}
             value={draftTitle}
             onChange={e => setDraftTitle(e.target.value)}
             onClick={e => e.stopPropagation()}
@@ -140,6 +159,7 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
               }
             }}
           />
+          </span>
         ) : s.naming ? (
           /* The title is being generated. The bar's width lives in the
              stylesheet next to the row's own geometry, which is what keeps it

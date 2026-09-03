@@ -130,8 +130,10 @@ def test_resolved_allows_public_ip_literal() -> None:
     assert ok, f"unexpectedly blocked: {err}"
 
 
-def test_resolved_tolerates_dns_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    """validate_resolved_url is more lenient on DNS failure than validate_url_target."""
+def test_resolved_refuses_an_unresolvable_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A hop whose host does not resolve cannot be vetted, so it is refused: the
+    client would use the same resolver, and the one case where the two differ is
+    the attack the check exists for."""
     import socket
 
     def fake_getaddrinfo(*_args, **_kwargs):
@@ -139,8 +141,9 @@ def test_resolved_tolerates_dns_failure(monkeypatch: pytest.MonkeyPatch) -> None
 
     monkeypatch.setattr("socket.getaddrinfo", fake_getaddrinfo)
 
-    ok, _ = net.validate_resolved_url("https://nx.example.invalid/")
-    assert ok
+    ok, err = net.validate_resolved_url("https://nx.example.invalid/")
+    assert not ok
+    assert "did not resolve" in err
 
 
 # ---------------------------------------------------------------------------
@@ -302,10 +305,12 @@ class _Recorder:
         self.script = script
         self.requested: list[str] = []
         self.follow_flags: list[object] = []
+        self.kwargs: list[dict] = []
 
     async def get(self, url: str, follow_redirects: object = "unset", **_kw):
         self.requested.append(url)
         self.follow_flags.append(follow_redirects)
+        self.kwargs.append(dict(_kw))
         status, location = self.script.pop(0)
         return httpx.Response(
             status_code=status,
@@ -338,7 +343,7 @@ async def test_a_redirect_pointing_inward_is_refused_at_that_hop(public_dns) -> 
     out = await guarded_fetch(rec, "https://cdn.example.test/a.png", what="test")
 
     assert out is None
-    assert rec.requested == ["https://cdn.example.test/a.png"]
+    assert rec.requested == ["https://93.184.216.34/a.png"], "the hop connects to the judged address"
     assert rec.follow_flags == [False], "the client must not follow the chain itself"
 
 
@@ -354,9 +359,9 @@ async def test_a_relative_redirect_is_resolved_against_the_url_it_came_from(publ
 
     assert out is not None and out.status_code == 200
     assert rec.requested == [
-        "https://cdn.example.test/dir/a.png",
-        "https://cdn.example.test/moved/a.png",
-    ]
+        "https://93.184.216.34/dir/a.png",
+        "https://93.184.216.34/moved/a.png",
+    ], "every hop connects pinned; the Location was still resolved against the hostname URL"
 
 
 async def test_a_redirect_to_a_non_http_scheme_is_refused(public_dns) -> None:
@@ -394,3 +399,78 @@ async def test_an_ordinary_public_fetch_still_goes_through(public_dns) -> None:
     out = await guarded_fetch(rec, "https://cdn.example.test/a.png", what="test")
 
     assert out is not None and out.status_code == 200
+
+
+async def test_the_connection_goes_where_the_judge_looked(public_dns) -> None:
+    """The pin: the TCP target is the judged address, while Host and SNI keep
+    the site's name so the certificate check still names the site."""
+    from raven.security.network import guarded_fetch
+
+    rec = _Recorder([(200, "")])
+
+    out = await guarded_fetch(rec, "https://cdn.example.test/a.png", what="test")
+
+    assert out is not None
+    assert rec.requested == ["https://93.184.216.34/a.png"]
+    assert rec.kwargs[0]["headers"]["Host"] == "cdn.example.test"
+    assert rec.kwargs[0]["extensions"]["sni_hostname"] == "cdn.example.test"
+
+
+async def test_one_resolution_serves_verdict_and_connection(monkeypatch) -> None:
+    """The rebinding regression: a resolver that answers public first and
+    private afterwards never gets its second answer used, because the hop
+    resolves exactly once."""
+    from raven.security.network import guarded_fetch
+
+    answers = [("93.184.216.34", 0), ("127.0.0.1", 0)]
+    calls = {"n": 0}
+
+    def rebinding_resolver(*_a, **_k):
+        answer = answers[min(calls["n"], len(answers) - 1)]
+        calls["n"] += 1
+        return [(0, 0, 0, "", answer)]
+
+    monkeypatch.setattr("socket.getaddrinfo", rebinding_resolver)
+    rec = _Recorder([(200, "")])
+
+    out = await guarded_fetch(rec, "https://cdn.example.test/a.png", what="test")
+
+    assert out is not None and out.status_code == 200
+    assert calls["n"] == 1, "one resolution per hop; the rebound answer was never consulted"
+    assert rec.requested == ["https://93.184.216.34/a.png"]
+
+
+async def test_a_port_survives_the_pin(public_dns) -> None:
+    from raven.security.network import guarded_fetch
+
+    rec = _Recorder([(200, "")])
+
+    await guarded_fetch(rec, "https://cdn.example.test:8443/a.png", what="test")
+
+    assert rec.requested == ["https://93.184.216.34:8443/a.png"]
+    assert rec.kwargs[0]["headers"]["Host"] == "cdn.example.test:8443"
+
+
+async def test_a_literal_ip_url_is_not_rewritten(public_dns) -> None:
+    """A literal public IP has nothing to pin: no resolution happened, so
+    there is no answer to hold the connection to."""
+    from raven.security.network import guarded_fetch
+
+    rec = _Recorder([(200, "")])
+
+    await guarded_fetch(rec, "http://93.184.216.34/a.png", what="test")
+
+    assert rec.requested == ["http://93.184.216.34/a.png"]
+    assert rec.kwargs[0] == {}
+
+
+async def test_a_plain_http_pin_carries_host_but_no_sni(public_dns) -> None:
+    from raven.security.network import guarded_fetch
+
+    rec = _Recorder([(200, "")])
+
+    await guarded_fetch(rec, "http://cdn.example.test/a.png", what="test")
+
+    assert rec.requested == ["http://93.184.216.34/a.png"]
+    assert rec.kwargs[0]["headers"]["Host"] == "cdn.example.test"
+    assert "extensions" not in rec.kwargs[0]

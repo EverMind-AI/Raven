@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import pytest
 
-from raven.memory_engine.backend import Memory, MemoryBackend
+from raven.contracts.memory import Memory, MemoryBackend
 
 
 class MemoryBackendContractTests:

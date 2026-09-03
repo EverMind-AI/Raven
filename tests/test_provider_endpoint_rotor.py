@@ -20,7 +20,7 @@ from typing import Any
 import pytest
 
 from raven.providers import endpoint_rotor
-from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, StreamDelta
+from raven.providers.base import ChatDelta, ErrorClassification, LLMProvider, LLMResponse
 from raven.providers.endpoint_rotor import EndpointRotorProvider, RotorState
 from raven.providers.endpoints import ResolvedEndpoint
 
@@ -50,7 +50,7 @@ class _StubInner(LLMProvider):
 
     async def chat_stream(self, messages, tools=None, model=None, **kwargs):
         self.stream_calls += 1
-        script = self._stream_script.pop(0) if self._stream_script else [StreamDelta(content=f"ok:{self.name}")]
+        script = self._stream_script.pop(0) if self._stream_script else [ChatDelta(content=f"ok:{self.name}")]
         for item in script:
             if isinstance(item, BaseException):
                 raise item
@@ -244,7 +244,7 @@ async def test_all_endpoints_cooling_still_dispatches_in_order(clock):
 
 async def test_stream_transfers_on_open_exception_before_any_delta(clock):
     e0 = _StubInner("e0", stream_script=[[RuntimeError("503 service unavailable")]])
-    e1 = _StubInner("e1", stream_script=[[StreamDelta(content="hi"), StreamDelta(content=" world")]])
+    e1 = _StubInner("e1", stream_script=[[ChatDelta(content="hi"), ChatDelta(content=" world")]])
     rotor = _make_rotor([e0, e1], strategy="sticky")
 
     seen = [d.content async for d in rotor.chat_stream(messages=[])]
@@ -255,9 +255,9 @@ async def test_stream_transfers_on_open_exception_before_any_delta(clock):
 
 
 async def test_stream_transfers_on_error_terminal_first_delta(clock):
-    error_delta = StreamDelta(content=None, finish_reason="error", error_classification=_FALLBACK_FATAL)
+    error_delta = ChatDelta(content=None, finish_reason="error", error_classification=_FALLBACK_FATAL)
     e0 = _StubInner("e0", stream_script=[[error_delta]])
-    e1 = _StubInner("e1", stream_script=[[StreamDelta(content="ok")]])
+    e1 = _StubInner("e1", stream_script=[[ChatDelta(content="ok")]])
     rotor = _make_rotor([e0, e1], strategy="sticky")
 
     seen = [d.content async for d in rotor.chat_stream(messages=[])]
@@ -268,8 +268,8 @@ async def test_stream_transfers_on_error_terminal_first_delta(clock):
 
 
 async def test_stream_does_not_transfer_after_a_normal_first_delta(clock):
-    e0 = _StubInner("e0", stream_script=[[StreamDelta(content="a"), RuntimeError("mid-stream boom")]])
-    e1 = _StubInner("e1", stream_script=[[StreamDelta(content="should-not-be-used")]])
+    e0 = _StubInner("e0", stream_script=[[ChatDelta(content="a"), RuntimeError("mid-stream boom")]])
+    e1 = _StubInner("e1", stream_script=[[ChatDelta(content="should-not-be-used")]])
     rotor = _make_rotor([e0, e1], strategy="sticky")
 
     seen = []
@@ -344,7 +344,7 @@ async def test_all_endpoints_exhausted_logs_a_warning_naming_each_attempt(clock,
 
 async def test_generation_assigned_after_construction_propagates_to_every_inner(clock):
     """``make_provider`` builds the rotor, then assigns ``provider.generation =
-    GenerationSettings(...)`` from config -- see ``raven/cli/_helpers.py``.
+    GenerationSettings(...)`` from config -- see ``raven/providers/factory.py``.
     Without push-down each inner keeps the base class's untouched default
     (600s timeout, temperature 0.7, ...), so a configured timeout is silently
     ignored on every actual request."""

@@ -3,16 +3,11 @@
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import Any, Callable
 
-from raven.memory_engine.consolidate.consolidator import MemoryStore
-from raven.memory_engine.skill_forge import LocalSkillCatalog
-from raven.memory_engine.skill_local.types import SkillMeta
+from raven.memory_engine import LocalSkillCatalog, MemoryStore, SkillMeta
 from raven.security.trust import wrap_untrusted, wrap_untrusted_blocks
-from raven.utils.helpers import build_assistant_message
-
-if TYPE_CHECKING:
-    from raven.providers.base import LLMProvider
+from raven.utils.messages import build_assistant_message
 
 
 class ContextBuilder:
@@ -32,7 +27,6 @@ class ContextBuilder:
         self,
         workspace: Path,
         skill_forge_config: Any = None,
-        llm_provider: "LLMProvider | None" = None,
         now_fn: Callable[[], datetime] | None = None,
         *,
         start_watcher: bool = True,
@@ -42,7 +36,6 @@ class ContextBuilder:
         self.skills = LocalSkillCatalog(
             workspace,
             config=skill_forge_config,
-            llm_provider=llm_provider,
             start_watcher=start_watcher,
         )
         # Optional fake-clock injection for benchmark harnesses (longrun).

@@ -11,6 +11,7 @@ import asyncio
 import json
 import shutil
 from collections import OrderedDict
+from typing import Any
 
 from loguru import logger
 
@@ -20,7 +21,6 @@ from raven.channels.base import ChannelBase
 from raven.channels.contract import Capabilities
 from raven.channels.errors import transient_network
 from raven.channels.media import safe_name
-from raven.config.schema import WhatsAppConfig
 
 _MAX_PROCESSED_IDS = 1000
 
@@ -28,12 +28,12 @@ _MAX_PROCESSED_IDS = 1000
 class WhatsAppChannel(ChannelBase):
     """WhatsApp channel backed by a local Node.js bridge over WebSocket."""
 
-    config: WhatsAppConfig
+    config: Any
     name = "whatsapp"
     display_name = "WhatsApp"
     capabilities = Capabilities(interactive_login=True)  # QR pairing via the bridge
 
-    def __init__(self, config: WhatsAppConfig):
+    def __init__(self, config: Any):
         super().__init__(config)
         self._ws = None
         self._connected = False
@@ -129,7 +129,7 @@ class WhatsAppChannel(ChannelBase):
             await self._ws.send(json.dumps({"type": "send", "to": chat_id, "text": text}, ensure_ascii=False))
         except Exception as e:
             if transient_network(e):
-                raise  # ws drop: let manager._send_with_retry back off and retry
+                raise  # ws drop: let the delivery hub back off and retry
             logger.error("Error sending WhatsApp message: {}", e)
 
     # ── inbound ───────────────────────────────────────────────────────

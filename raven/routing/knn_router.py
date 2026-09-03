@@ -55,7 +55,6 @@ class KNNModelRouter:
         self._min_memory_size = max(1, int(getattr(routing_cfg, "min_memory_size", 10)))
         self._min_margin = float(getattr(routing_cfg, "min_margin", 0.0))
 
-        self._task_names: list[str] = []
         self._embeddings = np.empty((0, 0))
         self._rewards: list[dict[str, float]] = []
         self._costs: list[dict[str, float]] = []
@@ -75,7 +74,6 @@ class KNNModelRouter:
             logger.warning("KNNModelRouter: empty memory at {}", path)
             return
 
-        self._task_names = [e.get("task_name", "") for e in entries]
         self._rewards = [e.get("rewards", {}) for e in entries]
         self._costs = [e.get("costs", {}) for e in entries]
 

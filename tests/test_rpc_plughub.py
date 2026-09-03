@@ -8,9 +8,9 @@ import json
 
 import pytest
 
-from raven.plughub import install as install_mod
-from raven.plughub import ledger as ledger_mod
-from raven.plughub.ledger import read_ledger
+from raven.market import install as install_mod
+from raven.market import ledger as ledger_mod
+from raven.market.ledger import read_ledger
 from raven.rpc.errors import ConfigValidationError, InternalError
 from raven.rpc.methods import plughub as rpc_plughub
 
@@ -27,9 +27,8 @@ def _isolated(tmp_path, monkeypatch):
     # The handlers read the loader's own config path (language, configured
     # servers), which is a module global -- point it at the fixture and put it
     # back, or a later test in this process reads a directory that has gone.
-    import raven.config.loader as loader
 
-    monkeypatch.setattr(loader, "_current_config_path", cfg_path)
+    monkeypatch.setattr("raven.home._current_config_path", cfg_path)
     yield {"cfg_path": cfg_path}
 
 
@@ -87,7 +86,7 @@ class _FakeLoop:
     async def apply_mcp_config(self, servers) -> None:
         pass
 
-    async def _mcp_executor(self):
+    async def mcp_executor_provider(self):
         return None
 
 
@@ -98,7 +97,7 @@ def _factory(loop):
 def _own_attrs(obj) -> list[str]:
     """Everything the fake itself defines: instance attributes *and* the methods
     on its class. The original bug shipped as fake *methods* (`apply_mcp_config`,
-    `_mcp_executor`), so an instance-only check would have missed it."""
+    `mcp_executor_provider`), so an instance-only check would have missed it."""
     from_class = [k for k, v in vars(type(obj)).items() if not k.startswith("__")]
     return sorted(set(vars(obj)) | set(from_class))
 
@@ -110,7 +109,7 @@ def test_the_fake_loop_does_not_invent_a_contract() -> None:
     for attr in _own_attrs(fake):
         assert hasattr(AgentLoop, attr), f"_FakeLoop.{attr} does not exist on AgentLoop"
 
-    for attr in ("apply_mcp_config", "_mcp_executor", "mcp_manager"):
+    for attr in ("apply_mcp_config", "mcp_executor_provider", "mcp_manager"):
         assert hasattr(AgentLoop, attr), f"AgentLoop is missing {attr}"
 
 
@@ -134,7 +133,7 @@ def _patch_catalog(monkeypatch, entry):
     async def detail(entry_id: str):
         return entry if entry_id == entry["id"] else None
 
-    monkeypatch.setattr("raven.plughub.catalog_detail", detail)
+    monkeypatch.setattr("raven.market.catalog_detail", detail)
 
 
 def _server_in_cfg(fixture, name: str) -> bool:
@@ -377,10 +376,10 @@ async def test_a_config_that_cannot_be_written_is_a_refusal(_isolated, monkeypat
     """A read-only home is a condition of the machine, not a raven fault: the
     transaction rolls back and the caller hears why."""
 
-    def _boom(payload):
+    def _boom(path, update):
         raise OSError(30, "Read-only file system")
 
-    monkeypatch.setattr(install_mod, "_write_config_raw", _boom)
+    monkeypatch.setattr(install_mod, "atomic_update", _boom)
     _patch_catalog(monkeypatch, _entry("none", "svc"))
 
     with pytest.raises(ConfigValidationError, match="could not be written"):
@@ -407,7 +406,7 @@ async def test_toggle_and_remove_accept_a_hand_written_server_name(_isolated, mo
     server name is never used as one. The user was told their own server name
     was "not a usable catalog id", with no way to act on it.
     """
-    import raven.plughub as plughub_pkg
+    import raven.market as plughub_pkg
 
     toggled: list = []
     removed: list = []
@@ -456,7 +455,7 @@ def test_a_ledger_read_answers_for_an_unnameable_id() -> None:
     """An id that cannot name a file provably has no ledger, so the read is a
     None rather than a raise -- which is what lets the handlers above ask the
     question at all."""
-    from raven.plughub.ledger import read_ledger
+    from raven.market.ledger import read_ledger
 
     assert read_ledger("_dev") is None
     assert read_ledger("my server") is None

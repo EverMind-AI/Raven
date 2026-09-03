@@ -17,9 +17,10 @@ from pathlib import Path
 
 import pytest
 
-from raven.agent.loop import AgentLoop, TurnOutcome
+from raven.agent.loop import AgentLoop, LoopOutcome
+from raven.agent.loop.bundles import TurnPolicy
 from raven.agent.tools.message import MessageTool
-from raven.providers.base import StreamDelta
+from raven.contracts.llm_provider import ChatDelta
 from raven.spine import ChatType, Origin, Source, TurnRequest
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
@@ -56,7 +57,7 @@ class _MessageToolProvider:
     async def chat_stream(self, **kwargs):
         self._i += 1
         if self._i == 1:
-            yield StreamDelta(
+            yield ChatDelta(
                 content=None,
                 tool_call_delta={
                     "tool_calls": [
@@ -79,7 +80,7 @@ def _make_agent(workspace: Path, provider=None) -> AgentLoop:
         provider=provider or _MessageToolProvider(),
         workspace=workspace,
         model="fake/model",
-        max_iterations=3,
+        policy=TurnPolicy(max_iterations=3),
     )
 
     async def _noop(**_kw) -> None:
@@ -190,7 +191,7 @@ async def test_ac4_synthetic_tool_complete_before_message_complete(workspace) ->
 async def test_ac4_no_synthetic_tool_complete_when_message_tool_unused(workspace) -> None:
     class _PlainProvider:
         async def chat_stream(self, **kwargs):
-            yield StreamDelta(content="just text")
+            yield ChatDelta(content="just text")
 
         def get_default_model(self) -> str:
             return "fake/model"
@@ -232,7 +233,7 @@ async def test_ac3_silent_return_logs_final_content_when_message_tool_used(works
 
     async def fake_run_agent_loop(*args, **kwargs):
         message_tool._turn.set(replace(message_tool._cur(), sent=True))
-        return ("hello world via message tool", [], [], TurnOutcome())
+        return ("hello world via message tool", [], [], LoopOutcome())
 
     monkeypatch.setattr(agent, "_run_agent_loop", fake_run_agent_loop)
 
@@ -264,7 +265,7 @@ async def test_ac3_no_log_when_final_content_empty(workspace, monkeypatch) -> No
 
     async def fake_run_agent_loop(*args, **kwargs):
         message_tool._turn.set(replace(message_tool._cur(), sent=True))
-        return ("", [], [], TurnOutcome())  # empty final_content
+        return ("", [], [], LoopOutcome())  # empty final_content
 
     monkeypatch.setattr(agent, "_run_agent_loop", fake_run_agent_loop)
 

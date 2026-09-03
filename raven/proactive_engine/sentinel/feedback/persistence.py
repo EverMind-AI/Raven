@@ -1,6 +1,6 @@
 """Cross-process persistence primitives for Sentinel components.
 
-Each running Raven process (REPL + gateway) maintains its own in-memory
+Each running Raven process (TUI + gateway) maintains its own in-memory
 copy of NudgePolicy quotas, NudgeInjector queues, and DeferManager pending
 heaps. Without coordination, two concurrent processes can double-nudge the
 user and violate the hour/day quotas.

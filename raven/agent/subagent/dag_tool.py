@@ -22,7 +22,7 @@ finishes and returning the summary as the tool result.
 Live progress (``dag_run_started`` / ``dag_node_updated`` / ``dag_run_completed``)
 rides a late-bound sink — NOT the spine. The turn's conversation is delivered
 per-turn via ``set_context`` (the loop calls it, like spawn/message); the sink
-(wired by the gateway to the web channel's emitter) fans the event to that
+(wired by the host to the page's emitter) fans the event to that
 conversation's subscribers, where the service translates it to an AgentScope
 CustomEvent the web UI's DAG graph already renders.
 """
@@ -59,15 +59,15 @@ from raven.agent.subagent.instances import mint_handle
 from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.subagent_memory import EverosIdentity
-from raven.agent.tools.base import Tool, ToolResult
 from raven.config.raven import SubagentDagConfig
 from raven.config.schema import MCPServerConfig
+from raven.contracts.tool import Tool, ToolResult
 
 if TYPE_CHECKING:
     from raven.agent.subagent.registry import AgentRegistry
 
 # Sink: (conversation_id, event_name, payload) -> awaitable. Late-bound by the
-# host (gateway wires it to the web channel's emitter).
+# host (the page mount wires it to the page's emitter).
 ProgressSink = Callable[[str, str, dict], Awaitable[None]]
 
 # (run_id, summary_text, origin) -> awaitable. How a backgrounded run's result
@@ -256,6 +256,8 @@ _NODE_SCHEMA: dict[str, Any] = {
         },
         "instance": {
             "type": "string",
+            "minLength": 1,
+            "pattern": r"^\S(?:.*\S)?$",
             "description": (
                 "Optional stable handle; nodes sharing it run sequentially and reuse one sub-agent "
                 "session, including across separate runs in this conversation. Only give the same "
@@ -277,7 +279,8 @@ class SubAgentDagTool(Tool):
     """Orchestrate a graph of sub-agent tasks in one call (file-based passing)."""
 
     timeout_seconds = 1800.0
-    # Manual stop (request_cancel / the cancel RPCs) replaces the timer
+    # Manual stop (request_cancel / ``subagent.interrupt`` on the run id /
+    # ``subagent.cancel_session``) replaces the timer
     # ceiling: the registry skips asyncio.wait_for for blocking_interaction
     # tools, so a long-running DAG is ended by hand, not by a clock. Declared
     # for every call, background or not, the same way ``spawn`` declares it
@@ -948,16 +951,24 @@ class SubAgentDagTool(Tool):
             self._run_and_announce(spec, run_id, cancel, origin, dirs, call_id, auto_instances, dispatch_backends)
         )
         self._runs[run_id] = task
-        task.add_done_callback(lambda _t: self._runs.pop(run_id, None))
+
+        def _retire(_t: "asyncio.Task") -> None:
+            # A task cancelled before its first tick never enters _run, whose
+            # finally is what normally retires the run's cancel/desk entries --
+            # and that window is real: _adopt indexes the task immediately, so
+            # a same-tick /stop or the shutdown sweep cancels it un-started.
+            # Left behind, active_run_ids() lists the dead run forever and its
+            # node rows stay pinned running. The pops are idempotent with the
+            # finally's own.
+            self._runs.pop(run_id, None)
+            self._cancels.pop(run_id, None)
+            self._desks.pop(run_id, None)
+
+        task.add_done_callback(_retire)
         if self._adopt is not None:
             self._adopt(run_id, task, origin.conversation)
-        controls = ""
         if self._control_reachable is None:
-            controls = (
-                f'Check its progress with dag_status("{run_id}") and stop it with cancel_dag("{run_id}"). '
-                "If a node reports it could not accomplish its task, you will be told, and you answer "
-                "with resolve_dag_node. "
-            )
+            reachable = True
         else:
             # Fail closed: the predicate runs after the background task is
             # already created, so a failure here must mute the hint rather
@@ -966,12 +977,18 @@ class SubAgentDagTool(Tool):
                 reachable = self._control_reachable()
             except Exception:  # noqa: BLE001
                 reachable = False
-            if reachable:
-                controls = (
-                    f'Check its progress with dag_status("{run_id}") and stop it with cancel_dag("{run_id}"). '
-                    "If a node reports it could not accomplish its task, you will be told, and you answer "
-                    "with resolve_dag_node. "
-                )
+        # None of the three are in your tool schema, so the hint names the route
+        # as well as the name -- a model that looks one up and does not find it
+        # reads the whole advertisement as stale.
+        controls = (
+            f'Check its progress with tool_call name "dag_status" arguments {{"run_id": "{run_id}"}}, '
+            f'and stop it with tool_call name "cancel_dag" arguments {{"run_id": "{run_id}"}}. '
+            "If a node reports it could not accomplish its task, you will be told, and you answer the "
+            'same way with "resolve_dag_node". These three are not in your tool list; tool_call is how '
+            "you reach them. "
+            if reachable
+            else ""
+        )
         return _with_notices(
             ToolResult(
                 model_text=(
@@ -1188,6 +1205,7 @@ class SubAgentDagTool(Tool):
                 max_continuations=self._verdict_config.max_continuations,
                 adjudication_timeout_s=self._verdict_config.adjudication_timeout_seconds,
                 adjudicate=self._adjudicate if foreground else None,
+                control_reachable=self._control_reachable,
             )
         except DagValidationError as exc:
             return self._validation_error(exc)
@@ -1200,7 +1218,8 @@ class SubAgentDagTool(Tool):
             await self._close_graph(emit, run_id, len(spec.nodes), {"error": str(exc)})
             return f"Error running DAG {run_id}: {exc}"
         except asyncio.CancelledError:
-            # The other way a run is stopped. ``dag.cancel`` sets the event and
+            # The other way a run is stopped. The model's ``cancel_dag`` tool
+            # (via ``cancel_dag_run``) sets the event and
             # lets ``run_dag`` return, so the graph settles on its own manifest;
             # ``/stop`` and the shutdown sweep instead cancel the task, a route
             # this branch opened by adopting the run into the manager's index.

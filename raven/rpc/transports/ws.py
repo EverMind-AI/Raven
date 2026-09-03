@@ -371,7 +371,7 @@ async def handle_oauth_callback(request: web.Request) -> web.Response:
 
 
 def build_app(gateway: WsGateway, static_dir: Path | None, *, deliverables: Any = None) -> web.Application:
-    from raven.web_rpc.files import add_files_routes
+    from raven.rpc.transports.deliverables import add_files_routes
 
     app = web.Application()
     app.router.add_get("/health", gateway.handle_health)

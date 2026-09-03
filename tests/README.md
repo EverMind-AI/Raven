@@ -105,10 +105,8 @@ inputs. Provider cases that require live credentials remain skipped.
 
 All production Python under `raven/` is measured except:
 
-- `raven/__main__.py` and `raven/evolver/__main__.py`, which only forward their
-  module entry points;
-- `raven/utils/win_fcntl_shim.py`, which is executable only on Windows while the
-  canonical coverage job runs on Ubuntu.
+- `raven/__main__.py` and `evolver/__main__.py`, which only forward their
+  module entry points.
 
 Type-checking-only blocks and `if __name__ == "__main__"` launcher blocks are
 excluded as non-runtime paths. No low-coverage feature module is omitted.

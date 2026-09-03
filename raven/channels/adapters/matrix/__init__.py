@@ -1,4 +1,4 @@
-"""Matrix channel adapter (migrated to the capability contract).
+"""Matrix channel adapter.
 
 Intentionally does NOT re-export ``MatrixChannel`` — that would import
 matrix-nio at package import and defeat cheap spec discovery

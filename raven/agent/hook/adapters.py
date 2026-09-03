@@ -1,22 +1,17 @@
-"""Adapter hooks that wrap the legacy AgentLoop callback parameters.
+"""Adapter hooks that carry AgentLoop's callback parameters into the hook chain.
 
-These let AgentLoop keep accepting the existing
-``response_modifier`` / ``on_user_inbound`` / ``decision_consumer``
-constructor parameters (preserving the test surface and Sentinel
-wire-up) while the internal call sites switch to a single
-``CompositeHook`` chain. Each adapter is a thin shim — its only job
-is to translate the legacy callable signature into a hook method.
+AgentLoop takes ``response_modifier`` / ``on_user_inbound`` /
+``decision_consumer`` as plain callables -- the shape the Sentinel stack and
+the entrances hand it -- and runs everything through one ``CompositeHook``
+chain. Each adapter translates one callable into one hook phase; that is its
+whole job.
 
-Each adapter is intentionally restricted to a single phase. The
-``name`` property tags them with ``Legacy`` so logs / debug output
-distinguish them from purpose-built hooks (Sentinel, eval_engine, …).
+Each adapter is restricted to a single phase. The ``name`` property tags them
+``callback(...)`` so logs and debug output tell them apart from purpose-built
+hooks (Sentinel, eval_engine, ...).
 
-When the legacy callback parameter is ``None`` the adapter is simply
-not constructed — AgentLoop only adds adapters for non-None callbacks.
-
-Future work (post-Phase-6): once external callers stop passing
-the legacy parameters and adopt the AgentHook contract directly, these
-adapters can be deleted.
+When a callback parameter is ``None`` the adapter is not constructed --
+AgentLoop only adds adapters for non-None callbacks.
 """
 
 from __future__ import annotations
@@ -25,7 +20,7 @@ import inspect
 import logging
 from typing import Any, Awaitable, Callable, Union
 
-from raven.agent.hook.base import AgentHook, AgentHookContext, HookDecision
+from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +49,7 @@ class OnUserInboundAdapter(AgentHook):
 
     @property
     def name(self) -> str:
-        return "Legacy(on_user_inbound)"
+        return "callback(on_user_inbound)"
 
     async def before_user_inbound(self, ctx: AgentHookContext) -> HookDecision:
         req = ctx.turn_request
@@ -93,7 +88,7 @@ class DecisionConsumerAdapter(AgentHook):
 
     @property
     def name(self) -> str:
-        return "Legacy(decision_consumer)"
+        return "callback(decision_consumer)"
 
     async def before_user_inbound(self, ctx: AgentHookContext) -> HookDecision:
         req = ctx.turn_request
@@ -139,7 +134,7 @@ class ResponseModifierAdapter(AgentHook):
 
     @property
     def name(self) -> str:
-        return "Legacy(response_modifier)"
+        return "callback(response_modifier)"
 
     async def after_send(self, ctx: AgentHookContext) -> HookDecision:
         original = ctx.outbound_content or ""

@@ -11,10 +11,10 @@ import httpx
 import pytest
 
 from raven.config.update_providers import (
-    _copilot_token_dir,
     _oauth_token_path,
     add_provider_endpoint,
     add_provider_model,
+    copilot_token_dir,
     get_provider_config,
     list_provider_endpoints,
     list_providers,
@@ -398,7 +398,7 @@ def test_a_file_that_is_not_a_credential_is_not_reported_as_one(
 def test_reset_clears_copilots_api_key_too(cfg_path: Path, oauth_home: Path) -> None:
     """The API key outlives the access token it came from, and LiteLLM keeps
     using it -- a disconnect that leaves it behind does not disconnect."""
-    token_dir = _copilot_token_dir()
+    token_dir = copilot_token_dir()
     token_dir.mkdir(parents=True, exist_ok=True)
     (token_dir / "access-token").write_text("ghu_abc")
     (token_dir / "api-key.json").write_text('{"token":"k","expires_at":9999999999}')
@@ -908,7 +908,7 @@ def test_add_provider_endpoint_refuses_an_empty_key_for_a_key_based_provider(cfg
 
 
 def test_add_provider_endpoint_allows_an_empty_key_for_a_local_deployment(cfg_path: Path) -> None:
-    """Derived from the registry's credential shape (``credential_kind``), not
+    """Derived from the registry's credential shape (``auth_shape``), not
     a hardcoded vendor list: a local deployment has no key to give."""
     endpoints = add_provider_endpoint(
         "hosted_vllm", label="a", api_base="http://10.0.0.5:8000/v1", config_path=cfg_path
@@ -1184,9 +1184,9 @@ def test_probing_copilot_reads_its_own_credential_not_another_providers(
 def _seed_copilot_credential(monkeypatch: pytest.MonkeyPatch, *, api_base: str | None) -> None:
     """A signed-in seat: a device token on disk, plus what the driver reads from
     the API key it exchanges it for."""
-    from raven.config.update_providers import _copilot_token_dir
+    from raven.config.update_providers import copilot_token_dir
 
-    token_dir = _copilot_token_dir()
+    token_dir = copilot_token_dir()
     token_dir.mkdir(parents=True, exist_ok=True)
     (token_dir / "access-token").write_text("gho_device_token", encoding="utf-8")
     monkeypatch.setattr(

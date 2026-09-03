@@ -4,8 +4,8 @@ The turn hands a slice over and returns; everything after that -- ordering,
 retries, bounds, and what shutdown does with whatever is left -- lives here.
 Indexing latency belongs to this module, not to the user's input box.
 
-Deliberately not called a queue in prose or in public names: ``Lane`` owns that
-word in this codebase (see CONTEXT.md), and the two are different things.
+The per-session deques here are not Lanes (CONTEXT.md reserves that word for
+the spine's scheduling domains): nothing in this module schedules a turn.
 """
 
 from __future__ import annotations
@@ -17,7 +17,8 @@ from typing import Any, NamedTuple
 
 from loguru import logger
 
-from raven.tracing import semconv, trace
+from raven.observability import semconv
+from raven.tracing import trace
 
 # How many turns' worth of unindexed writes one session may hold before the
 # oldest is dropped. Bounded because a slow memory service must not be able to

@@ -22,7 +22,7 @@ from typing import Any
 
 from loguru import logger
 
-from raven.token_wise.base import TokenStrategy, UsageSnapshot
+from raven.contracts.token_strategy import TokenStrategy, UsageSnapshot
 
 
 def _default_telemetry_dir() -> Path:
@@ -49,7 +49,8 @@ class UsageTracker(TokenStrategy):
 
         Args:
             telemetry_dir: Where to write ``usage-YYYY-MM-DD.jsonl``. Defaults
-                to ``~/.raven/telemetry``.
+                to ``<raven home>/telemetry`` (``raven_home()``, so RAVEN_HOME
+                moves it).
             flush_every: Buffer N calls before writing to disk. 1 = write every
                 call (safest, default). Larger values amortize IO.
             persist: If False, accumulate in memory only (useful for tests).

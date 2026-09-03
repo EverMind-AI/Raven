@@ -5,8 +5,8 @@ This module bundles all ``raven channels ...`` subcommands:
 Lifecycle commands:
 
 - ``channels status``              — show enabled/disabled state for every channel
-- ``channels login``               — link device via QR code (WhatsApp bridge today;
-                                     generalized in a follow-up commit)
+- ``channels login``               — link a device for the channels whose spec
+                                     declares a login capability (QR today)
 
 Config subcommands:
 
@@ -33,6 +33,7 @@ from rich.console import Console
 from rich.table import Table
 
 from raven import __logo__
+from raven.cli._field_spec_table import help_requested, render_field_spec_table
 from raven.cli._tty_guard import die_if_not_tty, is_tty
 
 console = Console()
@@ -41,11 +42,6 @@ console = Console()
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _help_requested(extra_args: list[str]) -> bool:
-    """Detect ``--help`` / ``-h`` inside a free-form ``ctx.args`` list."""
-    return any(t in ("--help", "-h") or t.startswith("--help=") for t in extra_args)
 
 
 def _print_schema_table(name: str) -> None:
@@ -62,26 +58,7 @@ def _print_schema_table(name: str) -> None:
         console.print(f"[red]✗[/red] {exc}")
         raise typer.Exit(1)
 
-    table = Table(title=f"Channel: {name}")
-    table.add_column("Flag", style="cyan", no_wrap=True)
-    table.add_column("Type", overflow="fold")
-    table.add_column("Default", no_wrap=True)
-    table.add_column("Required?", no_wrap=True, justify="center")
-    table.add_column("Secret?", no_wrap=True, justify="center")
-    table.add_column("Description", overflow="fold")
-    for path, spec in specs.items():
-        flag = "--" + path.replace("_", "-")
-        default = spec["default"]
-        default_str = "" if default in (None, "") else str(default)
-        table.add_row(
-            flag,
-            spec["type"],
-            default_str,
-            "✓" if spec.get("required") else "",
-            "✓" if spec["is_secret"] else "",
-            spec.get("description", "") or "",
-        )
-    console.print(table)
+    render_field_spec_table(console, title=f"Channel: {name}", specs=specs, required_column=True)
 
 
 def _warn_empty_credentials(name: str) -> None:
@@ -267,12 +244,13 @@ def _register_config_commands(channels_app: typer.Typer) -> None:
             raven channels enable feishu --app-id X --app-secret Y
             raven channels enable slack --bot-token X --app-token Y --dm.policy open
         """
-        if _help_requested(ctx.args):
+        if help_requested(ctx.args):
             _print_schema_table(name)
             raise typer.Exit(0)
 
         from pydantic import ValidationError
 
+        from raven.config.admission import PluginConfigError
         from raven.config.update_channels import enable_channel
 
         fields = _parse_channel_flags(ctx.args, name)
@@ -292,7 +270,7 @@ def _register_config_commands(channels_app: typer.Typer) -> None:
         except KeyError as exc:
             console.print(f"[red]✗[/red] {exc}")
             raise typer.Exit(1)
-        except ValidationError as exc:
+        except (PluginConfigError, ValidationError) as exc:
             console.print(f"[red]✗ Validation failed:[/red]\n{exc}")
             raise typer.Exit(1)
 
@@ -332,12 +310,13 @@ def _register_config_commands(channels_app: typer.Typer) -> None:
             raven channels set telegram --token NEW --proxy http://127.0.0.1:7890
             raven channels set slack --dm.policy open
         """
-        if _help_requested(ctx.args):
+        if help_requested(ctx.args):
             _print_schema_table(name)
             raise typer.Exit(0)
 
         from pydantic import ValidationError
 
+        from raven.config.admission import PluginConfigError
         from raven.config.update_channels import set_channel_fields
 
         fields = _parse_channel_flags(ctx.args, name)
@@ -350,7 +329,7 @@ def _register_config_commands(channels_app: typer.Typer) -> None:
         except KeyError as exc:
             console.print(f"[red]✗[/red] {exc}")
             raise typer.Exit(1)
-        except ValidationError as exc:
+        except (PluginConfigError, ValidationError) as exc:
             console.print(f"[red]✗ Validation failed:[/red]\n{exc}")
             raise typer.Exit(1)
         console.print(f"[green]✓[/green] {name} updated: {', '.join(prev)}")
@@ -482,9 +461,9 @@ def _display_name(name: str) -> str:
 @channels_app.command("status")
 def channels_status():
     """Show channel status."""
-    from raven.channels.manager import _missing_dep_hint, missing_dependency_channels
     from raven.channels.registry import discover_channel_names
     from raven.config.loader import load_config
+    from raven.gateway.manager import missing_dep_hint, missing_dependency_channels
 
     config = load_config()
     missing = set(missing_dependency_channels(config))
@@ -509,7 +488,7 @@ def channels_status():
             f"\n[yellow]⚠ Enabled but cannot start: {names}[/yellow] "
             "[dim](dependency not installed; the gateway disables these at startup)[/dim]"
         )
-        console.print(f"  {_missing_dep_hint()}")
+        console.print(f"  {missing_dep_hint()}")
 
 
 @channels_app.command("login")
@@ -547,7 +526,18 @@ def channels_login(
         return
     die_if_not_tty(f"raven channels login {channel_name} (from an interactive terminal)")
     console.print(f"{__logo__} {spec.display_name} Login\n")
-    channel = spec.factory(channel_cfg)
+    from raven.config.admission import dispense_channel_config
+
+    # Through the same admission door as the gateway and onboarding: the raw
+    # section carries only socket fields, and the factory expects the
+    # dispensed view with the declaration's defaults materialized.
+    channel = spec.factory(dispense_channel_config(spec, channel_cfg, channel=channel_name))
+    if channel_name == "whatsapp":
+        from raven.channels.adapters.whatsapp import bridge
+
+        # The one long-running login: show the bridge build as a spinner here,
+        # where the terminal is, instead of inside the adapter.
+        bridge.progress = lambda label: console.status(f"[cyan]{label}", spinner="dots")
 
     success = asyncio.run(channel.login(force=force))
     if not success:

@@ -1,4 +1,4 @@
-"""``delegation.*`` and ``subagent.interrupt`` RPC handlers.
+"""``delegation.*`` and the ``subagent.*`` cancel-verb RPC handlers.
 
 ui-tui primes its spawn HUD caps from ``delegation.status`` when the agents
 overlay opens (the HUD's rows themselves ride the ``subagent.status`` and
@@ -12,6 +12,12 @@ chat every time the agent spawned anything.
 The caps are read off the live ``SubagentManager`` rather than off config, so a
 runtime override (or a future hot-apply) cannot make the HUD disagree with the
 gate that is actually admitting spawns.
+
+``subagent.cancel_session`` is the session-wide sweep the gateway's IM
+``/stop`` always had and the terminal dialect's clients did not;
+``subagent.cancel_instance`` stops the spawns behind one rendered
+(agent, handle) pair -- the address an instances panel actually holds, where
+a background instance chat has no turn for ``turn.cancel`` to reach.
 """
 
 from __future__ import annotations
@@ -97,12 +103,53 @@ async def subagent_interrupt(
     }
 
 
+async def subagent_cancel_session(
+    params: dict,
+    *,
+    agent_loop_factory: "AgentLoopFactory | None" = None,
+) -> dict:
+    """``subagent.cancel_session`` -- stop every background sub-agent a session left running.
+
+    Adopted background DAG runs sit in the same session index as spawns, so
+    the sweep reaches them too. ``cancelled`` counts the tasks that were
+    live; zero is a valid answer for a quiet session, not an error.
+    """
+    session_key = str(params.get("session_key") or "").strip()
+    if not session_key:
+        return {"cancelled": 0, "session_key": ""}
+    manager = _manager(agent_loop_factory)
+    return {"cancelled": await manager.cancel_by_session(session_key), "session_key": session_key}
+
+
+async def subagent_cancel_instance(
+    params: dict,
+    *,
+    agent_loop_factory: "AgentLoopFactory | None" = None,
+) -> dict:
+    """``subagent.cancel_instance`` -- stop the spawns behind one (agent, handle).
+
+    ``found`` mirrors ``subagent.interrupt``: an instance that finished
+    between the panel rendering the row and the user pressing the key is not
+    an error. An empty ``session_key`` addresses the manager's default lane,
+    the same normalization the manager itself applies.
+    """
+    session_key = str(params.get("session_key") or "").strip()
+    agent = str(params.get("agent") or "").strip()
+    handle = str(params.get("handle") or "").strip()
+    if not agent or not handle:
+        return {"found": False, "session_key": session_key, "agent": agent, "handle": handle}
+    manager = _manager(agent_loop_factory)
+    found = await manager.cancel_by_instance(session_key, agent, handle)
+    return {"found": found, "session_key": session_key, "agent": agent, "handle": handle}
+
+
 def register_delegation_methods(
     dispatcher: "Dispatcher",
     *,
     agent_loop_factory: "AgentLoopFactory | None" = None,
 ) -> None:
-    """Register ``delegation.status`` / ``delegation.pause`` / ``subagent.interrupt``."""
+    """Register ``delegation.status`` / ``delegation.pause`` and the three
+    ``subagent.*`` cancel verbs (interrupt / cancel_session / cancel_instance)."""
 
     async def _status(params: dict) -> dict:
         return await delegation_status(params, agent_loop_factory=agent_loop_factory)
@@ -113,9 +160,17 @@ def register_delegation_methods(
     async def _interrupt(params: dict) -> dict:
         return await subagent_interrupt(params, agent_loop_factory=agent_loop_factory)
 
+    async def _cancel_session(params: dict) -> dict:
+        return await subagent_cancel_session(params, agent_loop_factory=agent_loop_factory)
+
+    async def _cancel_instance(params: dict) -> dict:
+        return await subagent_cancel_instance(params, agent_loop_factory=agent_loop_factory)
+
     dispatcher.register("delegation.status", _status)
     dispatcher.register("delegation.pause", _pause)
     dispatcher.register("subagent.interrupt", _interrupt)
+    dispatcher.register("subagent.cancel_session", _cancel_session)
+    dispatcher.register("subagent.cancel_instance", _cancel_instance)
 
 
 __all__ = [
@@ -123,5 +178,7 @@ __all__ = [
     "delegation_status",
     "delegation_pause",
     "subagent_interrupt",
+    "subagent_cancel_session",
+    "subagent_cancel_instance",
     "register_delegation_methods",
 ]

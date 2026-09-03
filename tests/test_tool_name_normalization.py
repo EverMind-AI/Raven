@@ -30,9 +30,9 @@ from unittest.mock import patch
 
 import pytest
 
-from raven.agent.loop.streaming import _finalize_tool_calls
 from raven.providers.azure_openai_provider import AzureOpenAIProvider
 from raven.providers.litellm_provider import LiteLLMProvider
+from raven.providers.streaming import _finalize_tool_calls
 from raven.providers.tool_names import normalized_tool_name, sanitary_form
 
 
@@ -119,13 +119,15 @@ def test_the_name_written_back_into_the_history_is_the_clean_one() -> None:
     """Why this is fixed at the exit and not at the registry lookup.
 
     A lookup that stripped would resolve the call and still leave the bad name
-    on the request -- which `to_openai_tool_call` writes into the assistant
+    on the request -- which `openai_tool_call` writes into the assistant
     message, so every later turn replays it to the model. The model then reads
     its own bad name as precedent, which is the loop the incident showed.
     """
     call = _parsed("  read_file\n").tool_calls[0]
 
-    assert call.to_openai_tool_call()["function"]["name"] == "read_file"
+    from raven.providers.tool_calls import openai_tool_call
+
+    assert openai_tool_call(call)["function"]["name"] == "read_file"
 
 
 def test_the_azure_exit_hands_on_a_usable_key() -> None:

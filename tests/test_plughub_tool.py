@@ -14,10 +14,11 @@ import json
 
 import pytest
 
+from raven.agent.loop.bundles import TurnPolicy
 from raven.agent.tools.plughub import PluginTool
-from raven.plughub import install as install_mod
-from raven.plughub import ledger as ledger_mod
-from raven.plughub.ledger import read_ledger
+from raven.market import install as install_mod
+from raven.market import ledger as ledger_mod
+from raven.market.ledger import read_ledger
 
 
 @pytest.fixture(autouse=True)
@@ -30,9 +31,8 @@ def _isolated(tmp_path, monkeypatch):
 
     monkeypatch.setattr(oauth, "delete_credentials", lambda server: None)
     monkeypatch.setattr(oauth, "_PENDING", {})
-    import raven.config.loader as loader
 
-    monkeypatch.setattr(loader, "_current_config_path", cfg_path)
+    monkeypatch.setattr("raven.home._current_config_path", cfg_path)
     yield {"cfg_path": cfg_path}
 
 
@@ -59,7 +59,7 @@ def _patch_catalog(monkeypatch, *entries):
     async def detail(entry_id: str):
         return by_id.get(entry_id)
 
-    monkeypatch.setattr("raven.plughub.catalog_detail", detail)
+    monkeypatch.setattr("raven.market.catalog_detail", detail)
     return by_id
 
 
@@ -105,7 +105,7 @@ class _FakeLoop:
     async def apply_mcp_config(self, servers) -> None:
         pass
 
-    async def _mcp_executor(self):
+    async def mcp_executor_provider(self):
         return None
 
 
@@ -445,7 +445,7 @@ def test_a_real_loop_registers_the_tool(tmp_path) -> None:
         def get_default_model(self) -> str:
             return "stub"
 
-    loop = AgentLoop(provider=_Stub(), workspace=tmp_path, model="stub", max_iterations=1)
+    loop = AgentLoop(provider=_Stub(), workspace=tmp_path, model="stub", policy=TurnPolicy(max_iterations=1))
     tool = loop.tools.get("plugin")
     assert isinstance(tool, PluginTool)
     assert tool._loop is loop

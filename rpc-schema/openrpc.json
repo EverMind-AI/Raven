@@ -1505,6 +1505,56 @@
       ]
     },
     {
+      "name": "config.unset",
+      "summary": "Remove a stored override so the default answers again.",
+      "params": [
+        {
+          "name": "key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "ConfigUnsetResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "removed",
+            "previous",
+            "default"
+          ],
+          "properties": {
+            "removed": {
+              "type": "boolean"
+            },
+            "previous": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "default": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
       "name": "subagent.list",
       "summary": "List the background calls one conversation handed off, newest first.",
       "params": [
@@ -4044,6 +4094,62 @@
     },
     {
       "name": "settings.everosSet",
+      "summary": "Merge fields into one EverOS section, or clear it. Deprecated spelling of settings.everos_set, kept for the shipped TUI.",
+      "params": [
+        {
+          "name": "section",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "fields",
+          "required": false,
+          "schema": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "description": "Merged into the section; ignored when clearing."
+          }
+        },
+        {
+          "name": "clear",
+          "required": false,
+          "schema": {
+            "type": "boolean",
+            "description": "Drop the section; refused for llm and embedding."
+          }
+        },
+        {
+          "name": "borrow_from",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "Take api_key and base_url from this connected provider, copied not referenced. Wins over the same keys in `fields`, which cannot carry a real key: the page only ever sees a redacted one."
+          }
+        }
+      ],
+      "result": {
+        "name": "SettingsEverosSetResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "applied": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "applied"
+          ],
+          "type": "object"
+        }
+      },
+      "deprecated": true
+    },
+    {
+      "name": "settings.everos_set",
       "summary": "Merge fields into one EverOS section, or clear it.",
       "params": [
         {
@@ -6384,6 +6490,459 @@
           "type": "object"
         }
       }
+    },
+    {
+      "name": "clipboard.paste",
+      "summary": "Save the clipboard image under the workspace and report where it landed.",
+      "params": [],
+      "result": {
+        "name": "ClipboardPasteResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "attached": {
+              "type": "boolean"
+            },
+            "message": {
+              "type": "string"
+            },
+            "width": {
+              "type": "integer"
+            },
+            "height": {
+              "type": "integer"
+            },
+            "token_estimate": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "attached"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "command.dispatch",
+      "summary": "Run one slash command by name: a shell-style command or a skill.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "arg",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "CommandDispatchResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "description": "`exec` (a shell-style command ran) or `skill` (the name resolved to a skill)."
+            },
+            "output": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "delegation.status",
+      "summary": "The spawn caps and pause flag the delegation HUD renders.",
+      "params": [],
+      "result": {
+        "name": "DelegationStatusResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "max_concurrent_children": {
+              "type": "integer"
+            },
+            "max_spawn_depth": {
+              "type": "integer"
+            },
+            "paused": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "max_concurrent_children",
+            "max_spawn_depth",
+            "paused"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "delegation.pause",
+      "summary": "Pause or resume sub-agent spawning.",
+      "params": [
+        {
+          "name": "paused",
+          "required": true,
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      ],
+      "result": {
+        "name": "DelegationPauseResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "paused": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "paused"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "input.detect_drop",
+      "summary": "Report whether dropped text names a file on disk, resolved to its absolute path.",
+      "params": [
+        {
+          "name": "text",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "InputDetectDropResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "matched": {
+              "type": "boolean"
+            },
+            "name": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string",
+              "description": "The resolved absolute path when matched."
+            },
+            "is_image": {
+              "type": "boolean"
+            },
+            "width": {
+              "type": "integer"
+            },
+            "height": {
+              "type": "integer"
+            },
+            "token_estimate": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "matched"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "session.interrupt",
+      "summary": "Cancel the turn in flight on one session.",
+      "params": [
+        {
+          "name": "session_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "SessionInterruptResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "shell.exec",
+      "summary": "Run one command through the agent's executor and return its streams and exit code.",
+      "params": [
+        {
+          "name": "command",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "ShellExecResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "type": "integer"
+            },
+            "stdout": {
+              "type": "string"
+            },
+            "stderr": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "stdout",
+            "stderr"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "skills.manage",
+      "summary": "List, inspect, search, browse or install skills; the result carries the fields of the action taken.",
+      "params": [
+        {
+          "name": "action",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "One of list, inspect, search, browse, install."
+          }
+        },
+        {
+          "name": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "page",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "result": {
+        "name": "SkillsManageResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "skills": {
+              "additionalProperties": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "description": "`list`: names grouped by source.",
+              "type": "object"
+            },
+            "info": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "description": "`inspect`: one skill's metadata, {} when unknown.",
+              "type": "object"
+            },
+            "results": {
+              "description": "`search`: matches.",
+              "items": {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "items": {
+              "description": "`browse`: one page of the hub.",
+              "items": {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "page": {
+              "type": "integer"
+            },
+            "total": {
+              "type": "integer"
+            },
+            "total_pages": {
+              "type": "integer"
+            },
+            "installed": {
+              "type": "boolean",
+              "description": "`install`."
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "subagent.interrupt",
+      "summary": "Cancel one running sub-agent by id.",
+      "params": [
+        {
+          "name": "subagent_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "SubagentInterruptResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "found": {
+              "type": "boolean"
+            },
+            "subagent_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "found",
+            "subagent_id"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "subagent.cancel_session",
+      "summary": "Cancel every background sub-agent a session left running.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "SubagentCancelSessionResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "cancelled": {
+              "type": "integer"
+            },
+            "session_key": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "cancelled",
+            "session_key"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "subagent.cancel_instance",
+      "summary": "Cancel the spawns behind one rendered (agent, handle) pair.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "agent",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "handle",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "SubagentCancelInstanceResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "found": {
+              "type": "boolean"
+            },
+            "session_key": {
+              "type": "string"
+            },
+            "agent": {
+              "type": "string"
+            },
+            "handle": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "found",
+            "session_key",
+            "agent",
+            "handle"
+          ],
+          "type": "object"
+        }
+      }
     }
   ],
   "components": {
@@ -6588,7 +7147,7 @@
       },
       "SessionUsage": {
         "additionalProperties": false,
-        "description": "``info.usage`` — the boot baseline, refreshed by each turn's completion.\n\nDistinct from :class:`UsageSnapshot`, which is the per-turn event payload:\nthis one carries the context-window fill a banner draws, and its counters\nare named for the session rather than for one LLM call.",
+        "description": "``info.usage`` — the boot baseline, refreshed by each turn's completion.\n\nDistinct from :class:`TurnUsage`, which is the per-turn event payload:\nthis one carries the context-window fill a banner draws, and its counters\nare named for the session rather than for one LLM call.",
         "properties": {
           "input": {
             "type": "integer"
@@ -8086,7 +8645,7 @@
           },
           "title": {
             "type": "string",
-            "description": "What this instance was asked, in one line: a graph node's node_summary, or a spawn's task_summary. Absent for an instance nobody dispatched (one the user made by hand) and for work that ran before those fields existed; a reader falls back to the handle."
+            "description": "What this instance was asked, in one line: a spawn's task_summary, or a graph node's node_summary, or -- for an instance nobody dispatched, one the user made by hand -- the first line of the message that opened it, taken once so later messages do not rename it. Absent only for work that ran before any of those existed, or when that first message yielded nothing; a reader falls back to the handle."
           },
           "runTitle": {
             "type": "string",
@@ -8157,7 +8716,7 @@
           }
         }
       },
-      "UsageSnapshot": {
+      "TurnUsage": {
         "type": "object",
         "additionalProperties": false,
         "required": [
@@ -8692,7 +9251,7 @@
                 "type": "string"
               },
               "usage": {
-                "$ref": "#/components/schemas/UsageSnapshot"
+                "$ref": "#/components/schemas/TurnUsage"
               },
               "target": {
                 "$ref": "#/components/schemas/DirectTarget"

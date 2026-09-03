@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from raven.agent.tools.skill_hub import (
     ReadSkillTool,
     UseSkillTool,
-    _split_qualified_id,
+    split_qualified_id,
 )
 
 
@@ -78,12 +78,12 @@ def _meta(tmp: Path, name: str, content: str, *, with_scripts: bool) -> object:
 
 class TestSplitQualifiedId:
     def test_source_prefixed(self) -> None:
-        assert _split_qualified_id("hub/my-skill") == ("hub", "my-skill")
-        assert _split_qualified_id("local/x") == ("local", "x")
-        assert _split_qualified_id("everos/abc123") == ("everos", "abc123")
+        assert split_qualified_id("hub/my-skill") == ("hub", "my-skill")
+        assert split_qualified_id("local/x") == ("local", "x")
+        assert split_qualified_id("everos/abc123") == ("everos", "abc123")
 
     def test_bare_id_assumed_hub(self) -> None:
-        assert _split_qualified_id("abc123") == ("hub", "abc123")
+        assert split_qualified_id("abc123") == ("hub", "abc123")
 
 
 class TestReadSkill:

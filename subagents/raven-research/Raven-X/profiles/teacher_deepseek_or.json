@@ -1,0 +1,20 @@
+{
+  "providers": {
+    "openrouter": {
+      "apiKey": "EMPTY",
+      "apiBase": "https://openrouter.ai/api/v1"
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": "deepseek/deepseek-v4-pro",
+      "provider": "openrouter",
+      "temperature": 1.0,
+      "reasoningEffort": "high",
+      "maxToolIterations": 150,
+      "maxTokens": 16384,
+      "contextWindowTokens": 131072
+    }
+  },
+  "memory": {"backend": null}
+}

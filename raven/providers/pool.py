@@ -30,8 +30,7 @@ class ProviderPool:
 
     def __init__(self, config: "Config | Callable[[], Config]") -> None:
         # A supplier, not a snapshot: a credential fixed after start (an OAuth
-        # re-login, an edited config file) has to be visible without a
-        # restart, which the old per-switch config reload gave for free.
+        # re-login, an edited config file) has to be visible without a restart.
         # Cached bindings are dropped when the config that produced them is no
         # longer the current one.
         self._supplier = config if callable(config) else (lambda: config)
@@ -70,7 +69,7 @@ class ProviderPool:
 
         try:
             material = {
-                "providers": self.config.providers.model_dump(exclude_none=True),
+                "providers": credentials_fingerprint(self.config),
                 "window": self.config.agents.defaults.context_window_tokens,
             }
         except Exception:
@@ -92,7 +91,7 @@ class ProviderPool:
         if cached is not None:
             return cached
 
-        from raven.cli._helpers import make_provider
+        from raven.providers.factory import make_provider
 
         cfg = self.config.model_copy(deep=True)
         cfg.agents.defaults.model = model
@@ -183,7 +182,7 @@ class ProviderPool:
         Every declared provider exists as an empty section, so presence proves
         nothing -- reuse the same check the credential preflight uses.
         """
-        from raven.config.schema import _has_credentials as section_is_usable
+        from raven.config.schema import section_has_credentials as section_is_usable
         from raven.providers.registry import find_by_name
 
         if provider_name == "auto":
@@ -198,3 +197,18 @@ class ProviderPool:
         if section is None:
             return False
         return bool(section_is_usable(section, find_by_name(provider_name)))
+
+
+def credentials_fingerprint(config: "Config") -> str:
+    """A fingerprint of every credential a provider can be built from.
+
+    The one answer to "did the providers section change", shared by the pool's
+    binding cache and ``ResolvingProvider``'s per-vendor adapters, so the two
+    caches cannot age at different rates. Raises whatever the dump raises --
+    each caller owns its own failure posture.
+    """
+    import hashlib
+    import json
+
+    material = config.providers.model_dump(exclude_none=True)
+    return hashlib.sha256(json.dumps(material, sort_keys=True, default=str).encode()).hexdigest()

@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Callable
 
-from raven.context_engine.base import AssemblyContext, Segment
 from raven.context_engine.segments import render
-from raven.memory_engine.skill_local.registry import filter_by_required_tools
-from raven.tracing import semconv, trace
+from raven.contracts.context import AssemblyContext, Segment
+from raven.memory_engine import filter_by_required_tools
+from raven.observability import semconv
+from raven.tracing import trace
 
 if TYPE_CHECKING:
-    from raven.memory_engine.skill_forge import LocalSkillCatalog
-    from raven.memory_engine.skill_local.types import SkillMeta
+    from raven.memory_engine import LocalSkillCatalog, SkillMeta
 
 
 class ActiveSkillsSegmentBuilder:
@@ -49,11 +49,12 @@ class ActiveSkillsSegmentBuilder:
         """Drop always-skills whose ``requires.tools`` are not registered.
 
         An always-skill is resident unconditionally, so without this it can
-        advertise a tool the agent does not hold — ``run_subagent_dag`` only
-        registers when third-party sub-agents are configured, yet the skill
-        that tells the agent when to reach for it ships enabled. Segment 5
-        gets the same protection from the LLM gate's hard-constraint block;
-        segment 5's is advisory, this one is a filter.
+        advertise a tool the agent does not hold: a tool registers only when
+        its subsystem is configured, MCP tools come and go with their servers,
+        and any tool can be withheld for one turn through
+        ``tools.disabled_tools``. Segment 5 gets the same protection from the
+        LLM gate's hard-constraint block; segment 5's is advisory, this one is
+        a filter.
 
         Unlike ``requires.bins`` / ``requires.env`` (process-static, resolved
         in the registry) the tool set is live and hot-appliable, so it is

@@ -43,6 +43,11 @@ class ImportState:
         self._cache: dict[str, Any] | None = None
 
     @property
+    def path(self) -> Path:
+        """Where this state is kept; a caller asks it whether an import exists."""
+        return self._path
+
+    @property
     def cancel_path(self) -> Path:
         return self._path.parent / "import_cancel"
 

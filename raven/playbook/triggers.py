@@ -17,19 +17,17 @@ whole library (`find_collisions`), run at load/compile time by the caller.
 
 from __future__ import annotations
 
-import json
 import unicodedata
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from raven.playbook.llm_result import ProviderResponseError, RequiredToolError, required_tool_arguments
+from raven.i18n import zh_lexicon
 from raven.playbook.types import Triggers
 
 if TYPE_CHECKING:
-    from raven.providers.base import LLMProvider
+    pass
 
-_EXPAND_TOOL_NAME = "emit_triggers"
 
 _MIN_KEYWORD_CHARS = 2
 _DEFAULT_MAX_HIT_RATE = 0.02
@@ -37,23 +35,9 @@ _DEFAULT_MAX_HIT_RATE = 0.02
 # Bare function words that survive the length rule but carry no task signal.
 # Domain-generic words ("article", "report") are NOT listed here on purpose --
 # the negative-sample filter judges those from data, not from anyone's
-# intuition. Chinese entries are written as unicode escapes to keep the
-# source ASCII; each carries its pinyin and meaning.
+# intuition. The Chinese half of the list is language data, so it lives in
+# raven.i18n.zh_lexicon with the rest.
 _STOPWORDS = {
-    "\u5e2e\u6211",  # bang wo: "help me"
-    "\u7ed9\u6211",  # gei wo: "give me"
-    "\u6211\u8981",  # wo yao: "I want"
-    "\u6211\u60f3",  # wo xiang: "I'd like"
-    "\u4e00\u4e2a",  # yi ge: "a/one"
-    "\u4e00\u4e0b",  # yi xia: "briefly"
-    "\u4e00\u4efd",  # yi fen: "a copy of"
-    "\u8fd9\u4e2a",  # zhe ge: "this"
-    "\u90a3\u4e2a",  # na ge: "that"
-    "\u4ec0\u4e48",  # shen me: "what"
-    "\u600e\u4e48",  # zen me: "how"
-    "\u53ef\u4ee5",  # ke yi: "can/may"
-    "\u9700\u8981",  # xu yao: "need"
-    "\u9ebb\u70e6",  # ma fan: "please/trouble you"
     "the",
     "and",
     "for",
@@ -61,59 +45,15 @@ _STOPWORDS = {
     "make",
     "help",
     # Mechanism words: they describe how the system works, not any one task,
-    # so they appear in requests for every playbook and trigger all of them.
+    # so they appear in requests for every playbook and would make all of
+    # them visible at once.
     "playbook",
     "workflow",
     "pipeline",
     "template",
     "framework",
     "process",
-    "\u6a21\u677f",  # mu ban: "template"
-    "\u6d41\u7a0b",  # liu cheng: "process/flow"
-    "\u65b9\u6848",  # fang an: "plan/scheme"
-    "\u81ea\u52a8\u5316",  # zi dong hua: "automation"
-    "\u5de5\u4f5c\u6d41",  # gong zuo liu: "workflow"
-}
-
-_EXPAND_PROMPT = """\
-You are building the trigger vocabulary for a task template (playbook).
-When a user message contains one of these words/phrases, the playbook
-becomes a match candidate.
-
-Playbook intent: {description}
-The user's original wording: {source_input}
-Existing seed entries: {seeds}
-
-Core method: imagine how 20 different users would open their mouth when
-they want THIS task's result -- they name the outcome they want ("post a
-tweet", "see what users are complaining about", "compare A and B"), not
-the task's formal name ("content production pipeline"). Draw the entries
-from those openings.
-
-Expand along five axes into 20-40 keywords (words and phrases share the
-one list):
-1. Action phrases (most important): short verb+object pairs -- two or
-   three character combinations are the most common way users phrase a
-   request. For Chinese action phrases also emit classifier-inserted
-   variants: Chinese often inserts a classifier between verb and object
-   ("\u53d1\u63a8" -> also list "\u53d1\u6761\u63a8" and "\u53d1\u4e2a\u63a8"), and substring matching
-   cannot bridge the insertion, so list every variant explicitly;
-2. Synonyms and near-synonyms (at most one hypernym level up, prefer none);
-3. Colloquial phrasings (including emotional wording -- complaints,
-   praise -- when relevant to the task);
-4. Chinese/English pairs (users mix English terms, e.g. twitter/tweet
-   next to their Chinese equivalents);
-5. Strongly indicative scenario words.
-
-Hard requirements:
-- No mechanism words (playbook, workflow, template, pipeline, automation
-  and their Chinese equivalents): they describe how the system works, can
-  appear in any task's wording, and point at no particular task;
-- Only strongly specific entries; everyday high-frequency words like
-  "article", "report", "data" are never acceptable;
-- Phrases must read like fragments of real user speech, not full
-  sentences;
-- All lowercase."""
+} | zh_lexicon.TRIGGER_STOPWORDS
 
 
 def normalize(text: str) -> str:
@@ -125,23 +65,6 @@ def normalize(text: str) -> str:
     """
     folded = unicodedata.normalize("NFKC", text).lower()
     return " ".join(folded.split())
-
-
-def _expand_tool() -> list[dict[str, Any]]:
-    return [
-        {
-            "type": "function",
-            "function": {
-                "name": _EXPAND_TOOL_NAME,
-                "description": "Submit the expanded trigger vocabulary.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"keywords": {"type": "array", "items": {"type": "string"}}},
-                    "required": ["keywords"],
-                },
-            },
-        }
-    ]
 
 
 def _rule_filter(entries: list[str], min_chars: int) -> list[str]:
@@ -177,71 +100,6 @@ def _generic_filter(
     return kept, dropped
 
 
-async def _expand_once(
-    provider: "LLMProvider",
-    description: str,
-    source_input: str,
-    seeds: list[str],
-    model: str | None,
-) -> list[str] | None:
-    response = await provider.chat_with_retry(
-        messages=[
-            {
-                "role": "user",
-                "content": _EXPAND_PROMPT.format(
-                    description=description,
-                    source_input=source_input or "(none)",
-                    seeds=json.dumps(seeds, ensure_ascii=False),
-                ),
-            }
-        ],
-        tools=_expand_tool(),
-        model=model,
-        tool_choice={"type": "function", "function": {"name": _EXPAND_TOOL_NAME}},
-    )
-    try:
-        args = required_tool_arguments(response, _EXPAND_TOOL_NAME)
-    except (ProviderResponseError, RequiredToolError) as exc:
-        logger.warning("trigger expansion failed: {}", exc)
-        return None
-    return [*(args.get("keywords") or []), *(args.get("phrases") or [])]
-
-
-async def expand_triggers(
-    provider: "LLMProvider",
-    *,
-    description: str,
-    source_input: str = "",
-    seeds: Triggers | None = None,
-    negative_samples: list[str] | None = None,
-    max_hit_rate: float = _DEFAULT_MAX_HIT_RATE,
-    rounds: int = 2,
-    model: str | None = None,
-) -> Triggers:
-    """Expansion calls plus the guard pipeline; returns the vocabulary
-    ready for human review.
-
-    ``rounds`` samples the expansion more than once and unions the results:
-    a single sample is high-variance (a word present in one run vanishes in
-    the next), and recall lost at L1 is unrecoverable downstream, while an
-    extra entry only costs a filtered candidate. Union first, guard after.
-    Seeds are kept unless a guard drops them -- the guards outrank the
-    author, because a generic seed hurts the same as a generic expansion."""
-    seed_words = list(seeds.keywords) if seeds is not None else []
-    raw: list[str] = []
-    for _ in range(max(1, rounds)):
-        expanded = await _expand_once(provider, description, source_input, seed_words, model)
-        if expanded is None:
-            break
-        raw += expanded
-    return guard_triggers(
-        seed_words + raw,
-        negative_samples=negative_samples,
-        max_hit_rate=max_hit_rate,
-        what=description[:60],
-    )
-
-
 class TriggerGuardError(ValueError):
     """Every candidate was dropped, so there is no vocabulary to index."""
 
@@ -259,8 +117,6 @@ def guard_triggers(
     index, not only to expansion: a vocabulary proposed by a model or typed by
     an author reaches the same index and carries the same standing cost, so
     "the guards outrank the author" has to hold for whoever proposes the words.
-    Callers that want expansion as well go through :func:`expand_triggers`,
-    which ends here.
 
     Raises:
         `TriggerGuardError`: nothing survived. Reported rather than silently
@@ -281,7 +137,7 @@ def guard_triggers(
         )
     if not keywords:
         raise TriggerGuardError(
-            f"every trigger candidate was dropped by the guards (from {raw!r}); "
+            f"every keyword candidate was dropped by the guards (from {raw!r}); "
             "propose words that are specific to this task and at least "
             f"{_MIN_KEYWORD_CHARS} characters long"
         )

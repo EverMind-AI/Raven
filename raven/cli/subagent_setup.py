@@ -62,6 +62,7 @@ from raven.agent.subagent.vendored_agents import (
 )
 from raven.config.loader import ConfigReadError, get_config_path, read_raw_or_raise
 from raven.config.update_subagents import remove_agent
+from raven.i18n import t
 
 
 class SubagentFolder(NamedTuple):
@@ -248,39 +249,19 @@ def _prune_shadowing_rows(
         return 0
 
     from raven.cli._styles import RAVEN_STYLE
-    from raven.cli.onboard_commands import _QMARK, _t
+    from raven.cli.onboard_commands import _QMARK
 
-    console.print(
-        _t(
-            "  These config rows shadow a folder's manifest and would be removed:",
-            "  以下配置行遮蔽了对应 folder 的 manifest,将被删除:",
-        )
-    )
+    console.print(t("  These config rows shadow a folder's manifest and would be removed:"))
     for row in colliding:
-        flag = (
-            _t(
-                "  [! enabled=false - removing it would re-enable this agent]",
-                "  [! enabled=false - 删除该行会让这个 agent 重新启用]",
-            )
-            if row.get("enabled") is False
-            else ""
-        )
+        flag = t("  [! enabled=false - removing it would re-enable this agent]") if row.get("enabled") is False else ""
         console.print(f"    {row.get('name')}{flag}")
     if not q.confirm(
-        _t(
-            f"  Remove these {len(colliding)} sub-agent row(s)? The previous list is backed up first.",
-            f"  删除这 {len(colliding)} 条子代理配置行吗?会先备份之前的列表。",
-        ),
+        t("  Remove these {a0} sub-agent row(s)? The previous list is backed up first.", a0=len(colliding)),
         default=True,
         qmark=_QMARK,
         style=RAVEN_STYLE,
     ).ask():
-        console.print(
-            _t(
-                "  [dim]Kept - a stored row still outranks its folder's manifest.[/dim]",
-                "  [dim]已保留 - 存储行仍会盖过对应 folder 的 manifest。[/dim]",
-            )
-        )
+        console.print(t("  [dim]Kept - a stored row still outranks its folder's manifest.[/dim]"))
         return 0
 
     backup = root / f"subagents-backup-{time.strftime('%Y%m%d-%H%M%S')}.json"
@@ -295,9 +276,10 @@ def _prune_shadowing_rows(
     # removal that fails partway leaves the config half-pruned, and the one
     # thing the reader needs then is the path to the backup.
     console.print(
-        _t(
-            f"  Backed up the previous list ({len(rows)} rows) to {backup} (private - it may hold an api key).",
-            f"  已备份之前的列表({len(rows)} 条)到 {backup}(私密文件,可能含 api key)。",
+        t(
+            "  Backed up the previous list ({a0} rows) to {backup} (private - it may hold an api key).",
+            a0=len(rows),
+            backup=backup,
         )
     )
 
@@ -316,9 +298,9 @@ def _prune_shadowing_rows(
             )
             return removed
     console.print(
-        _t(
-            f"  Removed {removed} shadowing sub-agent row(s); the folders' manifests now own the roster - restart raven to pick them up.",
-            f"  已删除 {removed} 条遮蔽子代理的旧配置;现在由各 folder 的 manifest 决定 roster - 重启 raven 后生效。",
+        t(
+            "  Removed {removed} shadowing sub-agent row(s); the folders' manifests now own the roster - restart raven to pick them up.",
+            removed=removed,
         )
     )
     return removed
@@ -341,36 +323,30 @@ def _offer_to_build(folder: SubagentFolder, root: Path, q: Any, warnings: list[s
     venv missing exactly the extra the agent's job depends on.
     """
     from raven.cli._styles import RAVEN_STYLE
-    from raven.cli.onboard_commands import _QMARK, _t, console
+    from raven.cli.onboard_commands import _QMARK, console
 
     installer = root / "install.sh"
     if not installer.is_file():
         console.print(
-            _t(
-                f"  [yellow]⚠[/yellow] Not built yet, and {installer} is missing - cannot build it here.",
-                f"  [yellow]⚠[/yellow] 尚未构建,而且找不到 {installer} - 无法在这里构建。",
+            t(
+                "  [yellow]⚠[/yellow] Not built yet, and {installer} is missing - cannot build it here.",
+                installer=installer,
             )
         )
         return False
 
     if not q.confirm(
-        _t(
-            "  Not built yet. Build it now? (a few minutes of downloads)",
-            "  尚未构建。现在构建吗?(需要几分钟下载依赖)",
-        ),
+        t("  Not built yet. Build it now? (a few minutes of downloads)"),
         default=True,
         qmark=_QMARK,
         style=RAVEN_STYLE,
     ).ask():
         console.print(
-            _t(
-                f"  [dim]Skipped. Run {installer} later, then `raven onboard` again.[/dim]",
-                f"  [dim]已跳过。之后跑 {installer},再重新运行 `raven onboard`。[/dim]",
-            )
+            t("  [dim]Skipped. Run {installer} later, then `raven onboard` again.[/dim]", installer=installer)
         )
         return False
 
-    console.print(_t("  Building...", "  正在构建..."))
+    console.print(t("  Building..."))
     proc = subprocess.run(  # noqa: S603 - argv is built here
         ["bash", str(installer), folder.path.name],  # noqa: S607 - bash off PATH, as `register` does with the interpreter
         cwd=root,
@@ -381,16 +357,11 @@ def _offer_to_build(folder: SubagentFolder, root: Path, q: Any, warnings: list[s
     # scaffolds several things per folder, and "it returned 0" is not the same
     # claim as "this checkout now has a launcher raven can start".
     if venv_ready(folder.checkout):
-        console.print(_t("  [green]Built.[/green]", "  [green]构建完成。[/green]"))
+        console.print(t("  [green]Built.[/green]"))
         return True
     detail = (proc.stderr or proc.stdout or "").strip().splitlines()
     warnings.append(f"{folder.name}: build failed ({detail[-1] if detail else 'install.sh failed'})")
-    console.print(
-        _t(
-            f"  [yellow]⚠[/yellow] Build failed; run {installer} by hand to see why.",
-            f"  [yellow]⚠[/yellow] 构建失败;手动跑 {installer} 看原因。",
-        )
-    )
+    console.print(t("  [yellow]⚠[/yellow] Build failed; run {installer} by hand to see why.", installer=installer))
     return False
 
 
@@ -413,22 +384,21 @@ def configure_subagents(*, non_interactive: bool = False, warnings: Optional[lis
     """
     warnings = warnings if warnings is not None else []
     from raven.cli._styles import RAVEN_STYLE
-    from raven.cli.onboard_commands import _QMARK, _require_questionary, _t, console
+    from raven.cli.onboard_commands import _QMARK, _require_questionary, console
 
     root = subagents_root()
     if root is None:
         console.print(
-            _t(
+            t(
                 "  [dim]No sub-agent tree in this installation. A release wheel carries one; "
-                "reinstall from a release, or run from a source checkout.[/dim]",
-                "  [dim]本次安装没有子代理目录。发布版 wheel 自带子代理;可重装发布版,或改用源码检出运行。[/dim]",
+                "reinstall from a release, or run from a source checkout.[/dim]"
             )
         )
         return 0
 
     folders = discover(root)
     if not folders:
-        console.print(_t("  [dim]No sub-agent folders found.[/dim]", "  [dim]没有找到子代理目录。[/dim]"))
+        console.print(t("  [dim]No sub-agent folders found.[/dim]"))
         return 0
 
     if non_interactive:
@@ -440,10 +410,9 @@ def configure_subagents(*, non_interactive: bool = False, warnings: Optional[lis
     can_inherit = host_can_lend_a_key()
     if not can_inherit:
         console.print(
-            _t(
+            t(
                 "  [dim]This raven has no provider key to lend (an OAuth sign-in is not one),"
-                " so each agent needs a key of its own.[/dim]",
-                "  [dim]本机 raven 没有可借出的 provider key(OAuth 登录不算),所以每个 agent 都需要自己的 key。[/dim]",
+                " so each agent needs a key of its own.[/dim]"
             )
         )
 
@@ -460,31 +429,21 @@ def configure_subagents(*, non_interactive: bool = False, warnings: Optional[lis
         # launcher inherits this raven's model too, not just its credentials.
         reuse = host_openrouter_key() if folder.on_openrouter else ""
         if reuse:
-            recommended = _t(
-                f"Recommended: {folder.recommended_model} via OpenRouter (reusing this raven's OpenRouter key)",
-                f"推荐: {folder.recommended_model},经 OpenRouter(复用本机 raven 的 OpenRouter key)",
+            recommended = t(
+                "Recommended: {a0} via OpenRouter (reusing this raven's OpenRouter key)", a0=folder.recommended_model
             )
         elif folder.on_openrouter:
-            recommended = _t(
-                f"Recommended: {folder.recommended_model} via OpenRouter (needs an OpenRouter key)",
-                f"推荐: {folder.recommended_model},经 OpenRouter(需要一个 OpenRouter key)",
-            )
+            recommended = t("Recommended: {a0} via OpenRouter (needs an OpenRouter key)", a0=folder.recommended_model)
         else:
-            recommended = _t(
-                f"Recommended: {folder.recommended_model} (needs its own key)",
-                f"推荐: {folder.recommended_model}(需要它自己的 key)",
-            )
+            recommended = t("Recommended: {a0} (needs its own key)", a0=folder.recommended_model)
         mine = host_model()
-        inherit = _t(
-            f"This raven's LLM{f' ({mine})' if mine else ''}",
-            f"本机 raven 的 LLM{f'({mine})' if mine else ''}",
-        )
+        inherit = t("This raven's LLM{a0}", a0=f" ({mine})" if mine else "", a1=f"({mine})" if mine else "")
         choices = [q.Choice(recommended, value="own")]
         if can_inherit:
             choices.append(q.Choice(inherit, value="inherit"))
-        choices.append(q.Choice(_t("Skip", "跳过"), value="skip"))
+        choices.append(q.Choice(t("Skip"), value="skip"))
         choice = q.select(
-            _t(f"Set up {folder.name}?", f"设置 {folder.name}?"),
+            t("Set up {a0}?", a0=folder.name),
             choices=choices,
             style=RAVEN_STYLE,
             qmark=_QMARK,
@@ -497,24 +456,14 @@ def configure_subagents(*, non_interactive: bool = False, warnings: Optional[lis
         if choice == "own":
             if reuse:
                 write_key(folder, reuse)
-                console.print(
-                    _t(
-                        "  reused this raven's OpenRouter key",
-                        "  已复用本机 raven 的 OpenRouter key",
-                    )
-                )
+                console.print(t("  reused this raven's OpenRouter key"))
             elif not _take_key(folder, q):
                 continue
         set_up += 1
-        console.print(f"  [green]✓[/green] {_t('ready', '已就绪')}")
+        console.print(f"  [green]✓[/green] {t('ready')}")
 
     if set_up:
-        console.print(
-            _t(
-                f"\n  {set_up} sub-agent(s) ready.",
-                f"\n  {set_up} 个子代理已就绪。",
-            )
-        )
+        console.print(t("\n  {set_up} sub-agent(s) ready.", set_up=set_up))
     return set_up
 
 
@@ -527,30 +476,26 @@ def _take_key(folder: SubagentFolder, q: Any) -> bool:
     """
     from raven.cli._key_probe import probe_models
     from raven.cli._styles import RAVEN_STYLE
-    from raven.cli.onboard_commands import _BACK, _QMARK, _prompt_api_key, _t, console
+    from raven.cli.onboard_commands import _BACK, _QMARK, _prompt_api_key, console
 
     while True:
         key = _prompt_api_key(
             folder.name,
             allow_back=True,
-            back_label=_t("empty enter to skip this one", "留空回车跳过这个"),
+            back_label=t("empty enter to skip this one"),
         )
         if key is _BACK:
             return False
         result = probe_models(key, folder.api_base)
         if result["ok"]:
             break
-        console.print(f"  [yellow]⚠[/yellow] {_t('Key validation failed', 'Key 验证失败')}: {result['status']}")
+        console.print(f"  [yellow]⚠[/yellow] {t('Key validation failed')}: {result['status']}")
         action = q.select(
-            _t("What now?", "怎么办?"),
+            t("What now?"),
             choices=[
-                q.Choice(_t("Re-enter key", "重新输入 key"), value="retry"),
-                q.Choice(_t("Save anyway", "仍然保存"), value="save"),
-                *(
-                    [q.Choice(_t("Use this raven's LLM instead", "改用本机 raven 的 LLM"), value="inherit")]
-                    if host_can_lend_a_key()
-                    else []
-                ),
+                q.Choice(t("Re-enter key"), value="retry"),
+                q.Choice(t("Save anyway"), value="save"),
+                *([q.Choice(t("Use this raven's LLM instead"), value="inherit")] if host_can_lend_a_key() else []),
             ],
             style=RAVEN_STYLE,
             qmark=_QMARK,

@@ -12,13 +12,24 @@ import os
 import secrets
 import shutil
 import subprocess
-from contextlib import suppress
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager, suppress
 from pathlib import Path
 
 from loguru import logger
-from rich.console import Console
 
-_console = Console()
+# How a long step (npm install, tsc) shows progress. The adapter owns no terminal;
+# the CLI login command installs a spinner here, everything else gets log lines.
+ProgressFactory = Callable[[str], AbstractContextManager[None]]
+
+
+@contextmanager
+def _log_progress(label: str) -> Iterator[None]:
+    logger.info("  {}", label)
+    yield
+
+
+progress: ProgressFactory = _log_progress
 
 
 def bridge_token_path() -> Path:
@@ -61,7 +72,6 @@ def ensure_bridge_dir() -> Path:
     # at <package>/bridge in a built wheel (parents[3]) but at the repo root's
     # ./bridge when running from an editable / source checkout (parents[4]).
     candidates = [
-        here.parents[2] / "bridge",  # raven/channels/bridge (legacy)
         here.parents[3] / "bridge",  # raven/bridge (packaged wheel)
         here.parents[4] / "bridge",  # <repo-root>/bridge (editable / source)
     ]
@@ -76,11 +86,11 @@ def ensure_bridge_dir() -> Path:
     shutil.copytree(source, install_dir, ignore=shutil.ignore_patterns("node_modules", "dist"))
 
     logger.info("  Installing dependencies...")
-    with _console.status("[cyan]npm install (first run: 30-120s)...", spinner="dots"):
+    with progress("npm install (first run: 30-120s)..."):
         subprocess.run([npm, "install"], cwd=install_dir, check=True, capture_output=True)
 
     logger.info("  Building...")
-    with _console.status("[cyan]tsc compile...", spinner="dots"):
+    with progress("tsc compile..."):
         subprocess.run([npm, "run", "build"], cwd=install_dir, check=True, capture_output=True)
 
     logger.info("WhatsApp bridge ready")

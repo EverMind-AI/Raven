@@ -35,7 +35,7 @@ places that are not the desk (D3).
 | Delivery record | `transcript/store.ts:92-123` | `recordDelivery` / `deliveriesOf`, a `WeakMap<Lane, Map<turn, DeliveryRow[]>>` |
 | Wire | `raven/agent/tools/deliver.py:168-186` | manifest on `ToolEvent.metadata.raven_delivery` |
 | Replay | `raven/rpc/methods/session.py:289-307` | resume re-sends the manifest and stamps `missing` per file |
-| Download | `raven/web_rpc/files.py` | `/files/download?token=`, `410` when the token is gone |
+| Download | `raven/rpc/transports/deliverables.py` | `/files/download?token=`, `410` when the token is gone |
 | Read-for-render | `raven/rpc/transports/ws.py:208` | `/file?path=`, the agent's own read policy |
 
 Two facts that decide most of the design:
@@ -45,7 +45,7 @@ Two facts that decide most of the design:
   `metadata` intact, and it computes `missing` per file server-side. Nothing has to
   be fetched or invented to list a session's deliverables.
 - **A deliverable is readable by the viewer.** `/file` resolves through the same
-  `_resolve_path` the filesystem tools use, and `deliver_files` resolved the path
+  `resolve_path` the filesystem tools use, and `deliver_files` resolved the path
   through that same function before registering it. So a delivered file renders in
   the pane; the token URL is the download capability, not the read path.
 

@@ -103,7 +103,7 @@ def test_gateway_refuses_second_instance(tmp_config: Path, monkeypatch) -> None:
 
     save_config(Config())
 
-    from raven.cli import _gateway_lock
+    from raven.gateway import lock as _gateway_lock
 
     def _raise(now: float):
         raise _gateway_lock.GatewayAlreadyRunningError(
@@ -404,7 +404,7 @@ def test_gateway_wires_anti_runaway_count_and_reset() -> None:
     src = inspect.getsource(gateway_commands.register)
     assert "cron_service=cron," in src
     assert "chain_cron_activity_reset(cron, inner=sentinel_on_user_inbound)" in src
-    assert "on_user_inbound=on_user_inbound," in src
+    assert "hooks=sentinel_hooks(on_user_inbound, sentinel_response_modifier)," in src
 
 
 def test_gateway_wires_missed_reminder_observer_behind_config() -> None:
@@ -430,9 +430,9 @@ def test_gateway_wires_missed_reminder_observer_behind_config() -> None:
 
 from types import SimpleNamespace
 
-from raven.cli._helpers import build_model_routing
 from raven.config.schema import ModelEndpoint, ProvidersConfig, RoutingConfig
-from raven.providers.base import GenerationSettings
+from raven.contracts.llm_provider import GenerationSettings
+from raven.core.provider_stack import build_model_routing
 from raven.providers.per_model_provider import PerModelProvider
 from raven.routing.knn_router import KNNModelRouter
 from raven.routing.router import ModelRouter
@@ -505,7 +505,7 @@ def test_gateway_provider_resolves_vendors_per_call():
     """The gateway serves many sessions at once, so the provider it ends up
     holding must resolve a vendor per call rather than bake in the default
     model's vendor. Asserted on the actual composed object, not on source text."""
-    from raven.cli._helpers import make_resolving_provider
+    from raven.providers.factory import make_resolving_provider
 
     cfg = _config()
     router, provider = build_model_routing(cfg, make_resolving_provider(cfg))
@@ -519,37 +519,46 @@ def test_gateway_provider_resolves_vendors_per_call():
 
 
 # ---------------------------------------------------------------------------
-# _build_deliverable_store — every gateway channel can deliver files
+# Deliverables — the store now rides the assembly door
 # ---------------------------------------------------------------------------
 #
-# The gateway's build path (agent + channel + cron + heartbeat stack) hangs
-# under unit-level mocking (see the note above test_gateway_refuses_second_instance),
-# so ``_build_deliverable_store`` is extracted as a small, directly-testable
-# helper rather than asserted on through the full ``gateway()`` command.
+# build_runtime defaults deliverables to DeliverableStore(get_deliverables_path())
+# and the gateway takes the handle back via RavenRuntime.deliverables (the web
+# surface serves the same store). This pins the door default, replacing the
+# retired _build_deliverable_store helper.
 
 
-def test_gateway_builds_deliverables_store_when_web_enabled(tmp_config: Path) -> None:
-    from raven.agent.tools._deliverables import DeliverableStore
-    from raven.cli.gateway_commands import _build_deliverable_store
+def test_the_door_defaults_a_deliverables_store(tmp_path, monkeypatch) -> None:
+    import raven.core.runtime as runtime_mod
+    from raven.agent.tools.deliverables import DeliverableStore
+
+    captured = {}
+
+    class _Spy:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            self.tools = {}
+
+        def configure_personalization(self, *_a, **_k):
+            pass
+
+    monkeypatch.setattr("raven.agent.loop.AgentLoop", _Spy)
+    monkeypatch.setattr(runtime_mod.plugin_stack, "build_plugin_registry", lambda *a, **k: None)
+    monkeypatch.setattr(runtime_mod.plugin_stack, "maybe_build_memory_backend", lambda *a, **k: None)
+    monkeypatch.setattr(runtime_mod.plugin_stack, "build_plugin_tools", lambda *a, **k: [])
+    monkeypatch.setattr(runtime_mod.token_wise_stack, "install_from_config", lambda *a, **k: None)
+    monkeypatch.setattr(runtime_mod.token_wise_stack, "caching_probe", lambda *a, **k: False)
+
+    from raven.config.raven import RavenConfig
     from raven.config.schema import Config
 
-    cfg = Config()
-    cfg.gateway.web.enabled = True
+    class _P:
+        def get_default_model(self):
+            return "fake/default"
 
-    store = _build_deliverable_store(cfg)
+    rt = runtime_mod.build_runtime(Config(), RavenConfig(), provider=_P())
 
-    assert isinstance(store, DeliverableStore)
-
-
-def test_gateway_builds_deliverables_store_when_web_disabled(tmp_config: Path) -> None:
-    from raven.agent.tools._deliverables import DeliverableStore
-    from raven.cli.gateway_commands import _build_deliverable_store
-    from raven.config.schema import Config
-
-    cfg = Config()
-    cfg.gateway.web.enabled = False
-
-    assert isinstance(_build_deliverable_store(cfg), DeliverableStore)
+    assert isinstance(rt.deliverables, DeliverableStore)
 
 
 # ---------------------------------------------------------------------------
@@ -590,12 +599,14 @@ def test_the_gateway_shutdown_cancels_subagents_before_it_closes_the_transports(
     error, which records as a failure rather than as the stop it is. And the
     gateway never closed the ACP pool at all, so its servers outlived it."""
     src = (Path(__file__).resolve().parents[1] / "raven" / "cli" / "gateway_commands.py").read_text(encoding="utf-8")
-    drain = src.index("begin_drain()")
-    cancel = src.index("await agent.subagents.cancel_all()")
-    web = src.index("await web_teardown()")
-    pool = src.index("await close_pool()")
+    # Scope to the shutdown path: the generation-swap path above it tears the
+    # same spines down in its own order, pinned by test_generation_swap.py.
+    shutdown = src[src.index("except KeyboardInterrupt:") :]
+    drain = shutdown.index("begin_drain()")
+    cancel = shutdown.index("await agent.subagents.cancel_all()")
+    pool = shutdown.index("await close_pool()")
 
-    assert drain < cancel < web < pool
+    assert drain < cancel < pool
 
 
 def test_question_body_numbers_choices_and_shows_batch_progress() -> None:
@@ -701,30 +712,142 @@ class TestWhereThePageIsServed:
         assert self.target(port=18792, flag=18999) == 18999
 
 
-@pytest.mark.parametrize("enabled", [True, False])
-def test_the_web_rpc_token_is_minted_whether_or_not_the_channel_is_enabled(enabled: bool) -> None:
-    """The line this pins had its branches the wrong way round: enabling the
-    web channel without configuring a token yielded None, and the server only
-    checks a token when one is set -- an unauthenticated port that can drive
-    the agent. The token is read back by local clients from the lock payload,
-    so minting one costs them nothing.
-    """
-    import secrets
-
-    web_cfg = SimpleNamespace(enabled=enabled, host="127.0.0.1", port=8765, auth_token=None)
-
-    token = web_cfg.auth_token or secrets.token_urlsafe(24)
-
-    assert token, "a blank token disables the server's auth check entirely"
-    assert len(token) >= 24
+# The control plane's token gate is exercised behaviourally in
+# tests/test_rpc_control.py (wrong first frame closes the socket, the right
+# one answers); the gateway mints the token per boot and publishes it in the
+# lock, so there is no config-dependent branch left to read here.
 
 
-def test_the_source_line_no_longer_branches_on_enabled() -> None:
-    """Read the line itself: the fix is that ``enabled`` stopped deciding
-    whether there is a credential at all. Asserted on the source because the
-    surrounding command body cannot be built in a unit test."""
-    src = Path("raven/cli/gateway_commands.py").read_text(encoding="utf-8")
-    line = next(ln for ln in src.splitlines() if ln.strip().startswith("web_token ="))
+# ---------------------------------------------------------------------------
+# raven gateway reload | status | stop -- the control plane's CLI clients
+# ---------------------------------------------------------------------------
 
-    assert "if web_cfg.enabled" not in line, line
-    assert "auth_token or secrets.token_urlsafe" in line, line
+
+def _async_value(value):
+    async def _f(*a, **k):
+        return value
+
+    return _f
+
+
+def test_gateway_status_reports_no_gateway_as_exactly_that(monkeypatch) -> None:
+    from raven.gateway import live_probe
+
+    monkeypatch.setattr(live_probe, "status", _async_value(None))
+    r = runner.invoke(app, ["gateway", "status"])
+    assert r.exit_code == 1
+    assert "No running gateway" in r.stdout
+
+
+def test_gateway_status_renders_the_generation(monkeypatch) -> None:
+    from raven.gateway import live_probe
+
+    monkeypatch.setattr(
+        live_probe,
+        "status",
+        _async_value(
+            {
+                "pid": 4242,
+                "started_at": 0.0,
+                "generation": 3,
+                "swap_in_flight": False,
+                "config_path": "/tmp/c.json",
+                "page": {"mounted": False},
+            }
+        ),
+    )
+    r = runner.invoke(app, ["gateway", "status"])
+    assert r.exit_code == 0
+    assert "4242" in r.stdout and "generation 3" in r.stdout
+
+
+def test_gateway_reload_relays_busy_and_force(monkeypatch) -> None:
+    from raven.gateway import live_probe
+
+    seen: list[bool] = []
+
+    async def _reload(*, force: bool = False):
+        seen.append(force)
+        if not force:
+            return {"ok": False, "reason": "busy", "subagents": 2, "questions": 0}
+        return {"ok": True, "generation": 2, "swap": "pending", "grace_s": 5.0}
+
+    monkeypatch.setattr(live_probe, "reload", _reload)
+    refused = runner.invoke(app, ["gateway", "reload"])
+    assert refused.exit_code == 1 and "busy" in refused.stdout and "--force" in refused.stdout
+    forced = runner.invoke(app, ["gateway", "reload", "--force"])
+    assert forced.exit_code == 0 and "generation 2" in forced.stdout
+    assert seen == [False, True]
+
+
+def test_gateway_stop_defers_to_raven_web_when_supervised(monkeypatch) -> None:
+    from raven.cli import serve_commands
+    from raven.gateway import live_probe
+
+    monkeypatch.setattr(serve_commands, "_read_web_state", lambda: 12345)
+    called: list[str] = []
+
+    async def _shutdown():
+        called.append("shutdown")
+        return True
+
+    monkeypatch.setattr(live_probe, "shutdown", _shutdown)
+    r = runner.invoke(app, ["gateway", "stop"])
+    assert r.exit_code == 1
+    # Rich wraps at the runner's width; compare whitespace-normalized.
+    assert "raven web --stop" in " ".join(r.stdout.split())
+    assert called == []
+
+
+def test_the_gateway_group_lists_its_verbs(monkeypatch) -> None:
+    """The group's callback is the daemon; a sub-command must not fall into it
+    and the bare command must not be swallowed by the group."""
+    r = runner.invoke(app, ["gateway", "--help"])
+    assert r.exit_code == 0
+    assert "reload" in r.stdout and "status" in r.stdout and "stop" in r.stdout
+
+
+def test_gateway_stop_asks_the_control_plane_when_unsupervised(monkeypatch) -> None:
+    from raven.cli import serve_commands
+    from raven.gateway import live_probe
+
+    monkeypatch.setattr(serve_commands, "_read_web_state", lambda: None)
+    monkeypatch.setattr(live_probe, "shutdown", _async_value(True))
+    r = runner.invoke(app, ["gateway", "stop"])
+    assert r.exit_code == 0 and "stopping" in r.stdout
+
+
+def test_gateway_reload_renders_build_failed_and_no_gateway(monkeypatch) -> None:
+    from raven.gateway import live_probe
+
+    async def _failed(**_k):
+        return {"ok": False, "reason": "build_failed", "error": "ValueError: boom"}
+
+    monkeypatch.setattr(live_probe, "reload", _failed)
+    r = runner.invoke(app, ["gateway", "reload"])
+    assert r.exit_code == 1 and "build_failed" in r.stdout and "boom" in r.stdout
+
+    async def _nobody(**_k):
+        return None
+
+    monkeypatch.setattr(live_probe, "reload", _nobody)
+    r = runner.invoke(app, ["gateway", "reload"])
+    assert r.exit_code == 1 and "No running gateway" in r.stdout
+
+
+def test_sigterm_cancels_the_main_task_instead_of_raising_ki() -> None:
+    """[N7-F5] The old SIGTERM handler raised KeyboardInterrupt from a signal
+    frame; the stdlib runner converts only SIGINT into a main-task cancel, so
+    that KI escaped run_until_complete WITHOUT cancelling the main task -- the
+    graceful chain never ran and teardown fell to the runner's 2-second sweep.
+    Parity is an in-loop add_signal_handler(SIGTERM, main_task.cancel), and
+    the cancelled branch must own the SIGTERM case."""
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    assert "add_signal_handler(signal.SIGTERM" in src
+    assert "main_task = asyncio.current_task()" in src
+    assert "raise KeyboardInterrupt" not in src, "the signal-frame KI shortcut must stay gone"
+    assert "if term_signalled:" in src, "the cancelled branch owns the SIGTERM case"

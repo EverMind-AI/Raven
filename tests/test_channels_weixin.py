@@ -13,12 +13,12 @@ import pytest
 from raven.channels.adapters.weixin import crypto
 from raven.channels.adapters.weixin import protocol as p
 from raven.channels.adapters.weixin.channel import WeixinChannel
-from raven.config.schema import WeixinConfig
+from tests.conftest import make_channel_config, with_channel_fields
 
 
 def _channel():
-    ch = WeixinChannel(WeixinConfig())
-    ch.config.allow_from = ["*"]
+    ch = WeixinChannel(make_channel_config("weixin"))
+    ch.config = with_channel_fields(ch.config, allow_from=["*"])
     ch.intake.set_submit(AsyncMock())
     return ch
 
@@ -133,7 +133,7 @@ def test_render_text_quoted_text_includes_quote():
         "ref_msg": {"title": "T", "message_item": {"type": p.ITEM_TEXT, "text_item": {"text": "orig"}}},
     }
     out = WeixinChannel._render_text_item(item)[0]
-    assert "引用" in out and "reply" in out and "orig" in out
+    assert "[quoted:" in out and "reply" in out and "orig" in out
 
 
 def test_typed_item():
@@ -243,7 +243,7 @@ def test_process_skips_bot_message():
 
 def test_process_denies_disallowed_sender():
     ch = _channel()
-    ch.config.allow_from = ["only"]
+    ch.config = with_channel_fields(ch.config, allow_from=["only"])
     msg = {
         "message_type": p.MESSAGE_TYPE_USER,
         "from_user_id": "other",
@@ -306,7 +306,7 @@ def test_authenticate_with_config_token_still_loads_state(tmp_path):
     seed._save_state()
 
     ch = _channel()
-    ch.config.token = "cfg-token"
+    ch.config = with_channel_fields(ch.config, token="cfg-token")
     ch._dir = lambda: tmp_path
     assert asyncio.run(ch._authenticate()) is True
     assert ch._token == "cfg-token"  # configured token wins
@@ -316,7 +316,7 @@ def test_authenticate_with_config_token_still_loads_state(tmp_path):
 
 def test_authenticate_falls_back_to_qr(monkeypatch):
     ch = _channel()
-    ch.config.token = ""
+    ch.config = with_channel_fields(ch.config, token="")
     ch._dir = lambda: __import__("pathlib").Path("/nonexistent/raven-test-dir")
     ch._qr_login = AsyncMock(return_value=True)
     assert asyncio.run(ch._authenticate()) is True
@@ -377,7 +377,7 @@ def test_login_clears_a_pending_code_on_the_way_out():
     """login()'s finally is the backstop: whatever _qr_login left behind, the
     channel must not still be advertising a code once the flow is over."""
     ch = _channel()
-    ch.config.token = ""
+    ch.config = with_channel_fields(ch.config, token="")
     ch._load_state = lambda: False
 
     async def _leaves_a_code():
@@ -613,7 +613,7 @@ async def test_rebind_keeps_the_paired_account_until_a_scan_is_confirmed(tmp_pat
 async def test_a_confirmed_scan_swaps_the_account_and_drops_the_old_one_s_state(tmp_path):
     ch = _qr_statuses(
         _live_channel(tmp_path),
-        [{"status": "confirmed", "bot_token": "new-token", "baseurl": "https://new.example"}],
+        [{"status": "confirmed", "bot_token": "new-token", "baseurl": "https://new.weixin.qq.com"}],
     )
     await ch.begin_rebind()
     for _ in range(40):
@@ -623,7 +623,7 @@ async def test_a_confirmed_scan_swaps_the_account_and_drops_the_old_one_s_state(
 
     assert ch.rebind_state()["phase"] == "confirmed"
     assert ch._token == "new-token"
-    assert ch.config.base_url == "https://new.example"
+    assert ch._base_url == "https://new.weixin.qq.com"
     # Everything addressed by the previous account goes with it: a stale cursor
     # replays someone else's history, and a stale context token is rejected.
     assert ch._updates_buf == ""
@@ -763,14 +763,34 @@ async def test_stopping_the_channel_cancels_a_rebind_in_flight(tmp_path):
         ("   ", ""),
         ("http://evil.test", ""),
         ("HTTP://evil.test", ""),
-        ("https://ok.test", "https://ok.test"),
-        ("HTTPS://ok.test", "HTTPS://ok.test"),
-        ("bare.test", "https://bare.test"),
+        ("https://ok.test", ""),
+        ("https://new.weixin.qq.com", "https://new.weixin.qq.com"),
+        ("HTTPS://new.weixin.qq.com", "HTTPS://new.weixin.qq.com"),
+        ("bare.weixin.qq.com", "https://bare.weixin.qq.com"),
+        ("https://weixin.qq.com.evil.test", ""),
     ],
 )
-def test_a_response_cannot_move_polling_to_plaintext(given: str, expected: str) -> None:
-    """The login exchange this poll carries is what a bot token comes out of.
-    An empty answer leaves the caller on the base it already had."""
+def test_a_response_cannot_move_polling_off_the_operator_or_to_plaintext(given: str, expected: str) -> None:
+    """The login exchange this poll carries is what a bot token comes out of: it
+    may move to another host of the configured operator over https and nowhere
+    else. An empty answer leaves the caller on the base it already had."""
     from raven.channels.adapters.weixin.channel import _https_redirect_target
 
-    assert _https_redirect_target(given) == expected
+    assert _https_redirect_target(given, "https://ilinkai.weixin.qq.com") == expected
+
+
+async def test_a_confirmed_scan_does_not_move_polling_to_another_operator(tmp_path):
+    ch = _qr_statuses(
+        _live_channel(tmp_path),
+        [{"status": "confirmed", "bot_token": "new-token", "baseurl": "https://new.example"}],
+    )
+    before = ch._base_url
+    await ch.begin_rebind()
+    for _ in range(40):
+        if ch.rebind_state()["phase"] == "confirmed":
+            break
+        await asyncio.sleep(0.02)
+
+    assert ch.rebind_state()["phase"] == "confirmed"
+    assert ch._token == "new-token"
+    assert ch._base_url == before, "a base outside the configured operator is not adopted"

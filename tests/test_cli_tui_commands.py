@@ -1,8 +1,23 @@
-"""CLI tests for ``raven tui`` commands — ``_build_agent_loop`` wiring.
+"""CLI tests for ``raven tui`` -- the launcher in ``raven/cli/tui_commands.py``.
 
-Verifies the memory backend and plugin tools are wired into the AgentLoop
-constructed by ``_build_agent_loop``, mirroring the agent-path coverage
-in ``test_cli_agent_commands.py``.
+``tui`` builds the agent loop a session runs on, decides whether to host that
+loop in-process behind an RPC server or to attach to a gateway already hosting
+one, and spawns the Node child that draws the Ink UI out of the vendored
+``ui-tui`` tree.
+
+These tests pin what ``_build_agent_loop`` hands the AgentLoop -- the memory
+backend, the plugin tools, the single registry shared between them, and the
+config slices the TUI must forward -- mirroring the agent-path coverage in
+``test_cli_agent_commands.py``; the embedded backend lifecycle inside
+``_run_rpc_server_until_done``, including the handshake it starts behind, the
+teardown order it keeps, and the root stdout handler it strips; and the launch
+surface itself -- ``--check``, ``--dev``, ``--standalone``, ``--workspace`` and
+``--home``, the environment handed to the child, the log-path notice on an
+abnormal exit, and the layout of the vendored ``ui-tui`` tree spawned from.
+
+Nothing here builds the TypeScript bundle: these exercise the Python-side
+launcher, not the Ink runtime, so they pass whether or not ``dist/entry.js`` is
+freshly built.
 """
 
 from __future__ import annotations
@@ -13,8 +28,14 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, sentinel
 
 import pytest
+from typer.testing import CliRunner
 
+from raven.cli.commands import app
+from raven.cli.tui_commands import _UI_TUI_DIR
 from raven.config.raven import TokenWiseConfig
+from tests.conftest import wired_kwarg
+
+runner = CliRunner()
 
 
 @pytest.fixture
@@ -45,8 +66,8 @@ def patched_tui_loop_deps(monkeypatch: pytest.MonkeyPatch, tmp_path):
     config.tools.mcp_servers = []
     config.tools.sandbox = MagicMock()
     config.channels = MagicMock()
-    monkeypatch.setattr("raven.cli._helpers.load_runtime_config", lambda *a, **kw: config)
-    monkeypatch.setattr("raven.cli._helpers.make_provider", lambda _c: MagicMock())
+    monkeypatch.setattr("raven.core.config_stack.load_runtime_config", lambda *a, **kw: config)
+    monkeypatch.setattr("raven.providers.factory.make_provider", lambda _c: MagicMock())
 
     ec_config = MagicMock()
     ec_config.skill_forge = MagicMock()
@@ -78,16 +99,16 @@ def patched_tui_loop_deps(monkeypatch: pytest.MonkeyPatch, tmp_path):
     fake_tools = [sentinel.fake_tool_1]
 
     monkeypatch.setattr(
-        "raven.cli._plugin_stack.build_plugin_registry",
+        "raven.core.plugin_stack.build_plugin_registry",
         lambda cfg: fake_registry,
     )
     monkeypatch.setattr(
-        "raven.cli._plugin_stack.maybe_build_memory_backend",
-        lambda ws, cfg, *, registry=None: fake_backend,
+        "raven.core.plugin_stack.maybe_build_memory_backend",
+        lambda ws, cfg, *, registry=None, notify=None: fake_backend,
     )
     monkeypatch.setattr(
-        "raven.cli._plugin_stack.build_plugin_tools",
-        lambda ws, cfg, *, registry=None: fake_tools,
+        "raven.core.plugin_stack.build_plugin_tools",
+        lambda ws, cfg, *, registry=None, provider=None: fake_tools,
     )
 
     captured["fake_registry"] = fake_registry
@@ -112,8 +133,10 @@ def test_tui_agent_loop_receives_non_none_backend(patched_tui_loop_deps) -> None
     _build_agent_loop()
 
     kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
-    assert kwargs.get("backend") is not None, "AgentLoop must receive backend= from _build_agent_loop; got None"
-    assert kwargs["backend"] is patched_tui_loop_deps["fake_backend"]
+    assert wired_kwarg(kwargs, "backend") is not None, (
+        "AgentLoop must receive backend= from _build_agent_loop; got None"
+    )
+    assert wired_kwarg(kwargs, "backend") is patched_tui_loop_deps["fake_backend"]
 
 
 # ---------------------------------------------------------------------------
@@ -129,8 +152,8 @@ def test_tui_agent_loop_receives_plugin_tools(patched_tui_loop_deps) -> None:
     _build_agent_loop()
 
     kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
-    assert "plugin_tools" in kwargs, "AgentLoop must receive plugin_tools kwarg"
-    assert kwargs["plugin_tools"] is patched_tui_loop_deps["fake_tools"]
+    assert wired_kwarg(kwargs, "plugin_tools") is not None, "AgentLoop must receive plugin_tools"
+    assert wired_kwarg(kwargs, "plugin_tools") is patched_tui_loop_deps["fake_tools"]
 
 
 # ---------------------------------------------------------------------------
@@ -148,8 +171,8 @@ def test_tui_agent_loop_receives_tool_search_config(patched_tui_loop_deps) -> No
     _build_agent_loop()
 
     kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
-    assert "tool_search_config" in kwargs, "AgentLoop must receive tool_search_config kwarg"
-    assert kwargs["tool_search_config"] is patched_tui_loop_deps["config"].tools.tool_search
+    assert wired_kwarg(kwargs, "tool_search_config") is not None, "AgentLoop must receive tool_search_config"
+    assert wired_kwarg(kwargs, "tool_search_config") is patched_tui_loop_deps["config"].tools.tool_search
 
 
 # ---------------------------------------------------------------------------
@@ -202,8 +225,7 @@ def test_tui_agent_loop_forwards_raven_config_slices(patched_tui_loop_deps, kwar
     _build_agent_loop()
 
     kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
-    assert kwarg in kwargs, f"AgentLoop must receive {kwarg} kwarg"
-    assert kwargs[kwarg] is getattr(patched_tui_loop_deps["ec_config"], attr_path)
+    assert wired_kwarg(kwargs, kwarg) is getattr(patched_tui_loop_deps["ec_config"], attr_path)
 
 
 def test_tui_agent_loop_forwards_the_skill_forge_router_slice(patched_tui_loop_deps) -> None:
@@ -214,7 +236,7 @@ def test_tui_agent_loop_forwards_the_skill_forge_router_slice(patched_tui_loop_d
     _build_agent_loop()
 
     kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
-    assert kwargs["skill_forge_router_config"] is patched_tui_loop_deps["ec_config"].skill_forge.router
+    assert wired_kwarg(kwargs, "skill_forge_router_config") is patched_tui_loop_deps["ec_config"].skill_forge.router
 
 
 def test_tui_agent_loop_forwards_the_jina_key(patched_tui_loop_deps) -> None:
@@ -223,7 +245,7 @@ def test_tui_agent_loop_forwards_the_jina_key(patched_tui_loop_deps) -> None:
 
     _build_agent_loop()
 
-    assert "jina_api_key" in patched_tui_loop_deps["agent_loop_kwargs"]
+    assert wired_kwarg(patched_tui_loop_deps["agent_loop_kwargs"], "jina_api_key") is not None
 
 
 def test_tui_agent_loop_receives_a_router_slot(patched_tui_loop_deps) -> None:
@@ -257,8 +279,8 @@ def test_tui_agent_loop_receives_the_agent_config(patched_tui_loop_deps) -> None
     _build_agent_loop()
 
     kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
-    assert "agents" in kwargs, "AgentLoop must receive the agents kwarg"
-    assert kwargs["agents"] is patched_tui_loop_deps["config"].subagents.agents
+    assert wired_kwarg(kwargs, "agents") is not None, "AgentLoop must receive the agents wiring"
+    assert wired_kwarg(kwargs, "agents") is patched_tui_loop_deps["config"].subagents.agents
 
 
 # ---------------------------------------------------------------------------
@@ -286,8 +308,8 @@ def test_tui_build_plugin_registry_called_once(monkeypatch: pytest.MonkeyPatch, 
     config.tools.mcp_servers = []
     config.tools.sandbox = MagicMock()
     config.channels = MagicMock()
-    monkeypatch.setattr("raven.cli._helpers.load_runtime_config", lambda *a, **kw: config)
-    monkeypatch.setattr("raven.cli._helpers.make_provider", lambda _c: MagicMock())
+    monkeypatch.setattr("raven.core.config_stack.load_runtime_config", lambda *a, **kw: config)
+    monkeypatch.setattr("raven.providers.factory.make_provider", lambda _c: MagicMock())
 
     ec_config = MagicMock()
     ec_config.skill_forge = MagicMock()
@@ -315,17 +337,17 @@ def test_tui_build_plugin_registry_called_once(monkeypatch: pytest.MonkeyPatch, 
         call_count["build"] += 1
         return sentinel.shared_registry
 
-    def _spy_backend(ws, cfg, *, registry=None):
+    def _spy_backend(ws, cfg, *, registry=None, notify=None):
         passed_registries.append(("backend", registry))
         return None
 
-    def _spy_tools(ws, cfg, *, registry=None):
+    def _spy_tools(ws, cfg, *, registry=None, provider=None):
         passed_registries.append(("tools", registry))
         return []
 
-    monkeypatch.setattr("raven.cli._plugin_stack.build_plugin_registry", _spy_registry)
-    monkeypatch.setattr("raven.cli._plugin_stack.maybe_build_memory_backend", _spy_backend)
-    monkeypatch.setattr("raven.cli._plugin_stack.build_plugin_tools", _spy_tools)
+    monkeypatch.setattr("raven.core.plugin_stack.build_plugin_registry", _spy_registry)
+    monkeypatch.setattr("raven.core.plugin_stack.maybe_build_memory_backend", _spy_backend)
+    monkeypatch.setattr("raven.core.plugin_stack.build_plugin_tools", _spy_tools)
 
     from raven.cli.tui_commands import _build_agent_loop
 
@@ -451,7 +473,7 @@ def rpc_server_deps(monkeypatch: pytest.MonkeyPatch):
     )
     monkeypatch.setattr("raven.rpc.spine.build_rpc_spine", fake_build_rpc_spine)
 
-    monkeypatch.setattr("raven.cli._cron_handler.make_on_cron_job", MagicMock())
+    monkeypatch.setattr("raven.core.cron_stack.make_on_cron_job", MagicMock())
     monkeypatch.setattr("raven.rpc.methods.turn.clear_active", MagicMock())
 
     # The snapshot backfill walks a real registry; the MagicMock loop has none.
@@ -689,13 +711,13 @@ def test_tui_announces_log_path_only_on_abnormal_exit(
 
 
 def test_tui_agent_loop_receives_deliverables_store(patched_tui_loop_deps) -> None:
-    from raven.agent.tools._deliverables import DeliverableStore
+    from raven.agent.tools.deliverables import DeliverableStore
     from raven.cli.tui_commands import _build_agent_loop
 
     _build_agent_loop()
 
     kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
-    assert isinstance(kwargs.get("deliverables"), DeliverableStore)
+    assert isinstance(wired_kwarg(kwargs, "deliverables"), DeliverableStore)
 
 
 # ---------------------------------------------------------------------------
@@ -774,10 +796,9 @@ def test_every_interactive_spawn_names_the_binary(monkeypatch: pytest.MonkeyPatc
 
     from raven.cli import tui_commands
 
-    for fn in (tui_commands._spawn_with_rpc_pipes, tui_commands._spawn_with_rpc_socket):
-        source = inspect.getsource(fn)
-        assert "child_env()" in source, f"{fn.__name__} builds its own env"
-        assert "os.environ.copy()" not in source, f"{fn.__name__} bypasses child_env()"
+    source = inspect.getsource(tui_commands._spawn_with_rpc_socket)
+    assert "child_env()" in source, "the spawn builds its own env"
+    assert "os.environ.copy()" not in source, "the spawn bypasses child_env()"
 
 
 def test_bare_raven_passes_a_plain_value_for_every_tui_option(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -835,7 +856,7 @@ def tui_launch_spies(monkeypatch: pytest.MonkeyPatch, tmp_path):
     dist = tmp_path / "entry.js"
     dist.write_text("", encoding="utf-8")
     monkeypatch.setattr(tui_commands, "resolve_dist_entry", lambda: dist)
-    monkeypatch.setattr("raven.cli.update_notice.maybe_refresh_async", lambda: None)
+    monkeypatch.setattr("raven.updates.update_notice.maybe_refresh_async", lambda: None)
 
     def embedded(*args: Any, **kwargs: Any) -> int:
         calls["embedded"] = kwargs
@@ -925,3 +946,207 @@ def test_the_tui_shutdown_stops_subagents_before_it_drains_memory() -> None:
     stop = src.index("await agent_loop.backend.stop()")
 
     assert cancel < pool < drain < stop
+
+
+# ---------------------------------------------------------------------------
+# the vendored ui-tui tree the launcher spawns from
+# ---------------------------------------------------------------------------
+
+
+def test_ui_tui_dir_resolves_under_repo_root():
+    """Sanity: the launcher's _UI_TUI_DIR points to the vendored ui-tui tree."""
+    assert _UI_TUI_DIR.name == "ui-tui"
+    assert (_UI_TUI_DIR / "package.json").exists(), f"After fork, ui-tui/package.json should exist at {_UI_TUI_DIR}"
+    # Post-fork sanity — vendored hermes-ink package present.
+    assert (_UI_TUI_DIR / "packages" / "hermes-ink" / "package.json").exists(), (
+        "Vendored @hermes/ink package must be present after fork."
+    )
+    # GatewayClientStub source present.
+    assert (_UI_TUI_DIR / "src" / "gatewayClientStub.ts").exists(), "GatewayClientStub source must exist post-fork."
+
+
+def test_packages_hermes_ink_dist_gitignored_but_buildable(tmp_path: Path):
+    """The vendored @hermes/ink ships an esbuild-built dist/ that is NOT in git
+    history (gitignored). Sanity: source entry exists and is buildable.
+
+    We do NOT actually build it here (slow + needs npm); we just confirm the
+    source layout expected by `npm run build --prefix packages/hermes-ink`.
+    """
+    pkg = _UI_TUI_DIR / "packages" / "hermes-ink"
+    assert (pkg / "src" / "entry-exports.ts").exists(), "hermes-ink src/entry-exports.ts (esbuild entry) must exist."
+    assert (pkg / "package.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# --check / --dev: which spawn path the launcher takes
+# ---------------------------------------------------------------------------
+
+
+def test_check_exits_zero_when_node_ok_and_run_succeeds(monkeypatch):
+    """--check returns 0 when node found, version OK, and child spawned."""
+    monkeypatch.setattr(
+        "raven.cli.tui_commands.find_node",
+        lambda: ("/usr/bin/node", (22, 5, 0)),
+    )
+    monkeypatch.setattr(
+        "raven.cli.tui_commands.run_subprocess",
+        lambda *_a, **_kw: 0,
+    )
+    result = runner.invoke(app, ["tui", "--check"])
+    assert result.exit_code == 0, result.output
+
+
+def test_check_exits_two_when_dist_missing_and_no_dev(monkeypatch, tmp_path):
+    """--check without --dev requires dist/entry.js (i.e. `npm run build` must
+    have run). When missing, exit code is 2 with a helpful 'npm run build' hint.
+    """
+    # Point _UI_TUI_DIR at an empty tmp dir so dist/entry.js is missing.
+    monkeypatch.setattr(
+        "raven.cli.tui_commands._UI_TUI_DIR",
+        tmp_path / "ui-tui-fake",
+    )
+    monkeypatch.setattr(
+        "raven.cli.tui_commands.find_node",
+        lambda: ("/usr/bin/node", (22, 5, 0)),
+    )
+    # The fake dir doesn't exist either, but we want to hit the dist-missing
+    # branch specifically — so create the parent dir but NOT dist/entry.js.
+    fake_dir = tmp_path / "ui-tui-fake"
+    fake_dir.mkdir()
+    result = runner.invoke(app, ["tui"])
+    assert result.exit_code == 2, result.output
+
+
+def test_dev_mode_uses_rpc_socket_post_fork(monkeypatch, tmp_path):
+    """Interactive `--dev` must spawn via run_subprocess_with_rpc, not the
+    plain run_subprocess. entry.tsx requires RAVEN_RPC_SOCKET,
+    so a plain spawn exits 2 ("spawn via parent"). This guards the regression
+    where `--dev` was left on the pre-RPC plain-spawn branch. `--watch` is
+    dropped because watch restarts are incompatible with the one-shot RPC
+    handshake (a restart drops the accepted socket connection).
+    """
+    fake_bin = tmp_path / "fake-node" / "bin"
+    fake_bin.mkdir(parents=True)
+    (fake_bin / "node").write_text("#!/bin/sh\necho ok\n")
+    (fake_bin / "npx").write_text("#!/bin/sh\necho ok\n")
+
+    monkeypatch.setattr(
+        "raven.cli.tui_commands.find_node",
+        lambda: (str(fake_bin / "node"), (22, 5, 0)),
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_run_subprocess_with_rpc(binary, args, cwd, **_kw):
+        captured["args"] = args
+        return 0
+
+    def fail_plain(*_a, **_kw):
+        raise AssertionError("interactive --dev must not use plain run_subprocess")
+
+    monkeypatch.setattr(
+        "raven.cli.tui_commands.run_subprocess_with_rpc",
+        fake_run_subprocess_with_rpc,
+    )
+    monkeypatch.setattr(
+        "raven.cli.tui_commands.run_subprocess",
+        fail_plain,
+    )
+
+    result = runner.invoke(app, ["tui", "--dev"])
+    assert result.exit_code == 0, result.output
+    args = captured["args"]
+    assert "tsx" in args, f"--dev should invoke tsx, got args={args!r}"
+    assert "src/entry.tsx" in args, f"--dev should run src/entry.tsx, got args={args!r}"
+    assert "--watch" not in args, f"--dev must drop --watch (RPC is one-shot), got args={args!r}"
+
+
+def test_dev_check_mode_keeps_plain_spawn(monkeypatch, tmp_path):
+    """`--dev --check` stays on the plain run_subprocess: entry.tsx short-
+    circuits on RAVEN_TUI_CHECK before the socket guard, so the smoke path
+    needs no RPC server. Opening one would be wasted setup."""
+    fake_bin = tmp_path / "fake-node" / "bin"
+    fake_bin.mkdir(parents=True)
+    (fake_bin / "node").write_text("#!/bin/sh\necho ok\n")
+    (fake_bin / "npx").write_text("#!/bin/sh\necho ok\n")
+
+    monkeypatch.setattr(
+        "raven.cli.tui_commands.find_node",
+        lambda: (str(fake_bin / "node"), (22, 5, 0)),
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_run_subprocess(binary, args, cwd, **_kw):
+        captured["args"] = args
+        return 0
+
+    def fail_rpc(*_a, **_kw):
+        raise AssertionError("--dev --check must not open an RPC socket")
+
+    monkeypatch.setattr(
+        "raven.cli.tui_commands.run_subprocess",
+        fake_run_subprocess,
+    )
+    monkeypatch.setattr(
+        "raven.cli.tui_commands.run_subprocess_with_rpc",
+        fail_rpc,
+    )
+
+    result = runner.invoke(app, ["tui", "--dev", "--check"])
+    assert result.exit_code == 0, result.output
+    args = captured["args"]
+    assert "tsx" in args, f"--dev --check should invoke tsx, got args={args!r}"
+    assert "src/entry.tsx" in args, f"--dev --check should run src/entry.tsx, got args={args!r}"
+
+
+def test_check_sets_raven_tui_check_env_var(monkeypatch):
+    """`--check` must propagate RAVEN_TUI_CHECK=1 into the environment so
+    the Node child (ui-tui/src/entry.tsx) takes the early-exit smoke path
+    instead of starting the Ink UI. Without this, `--check` would block the
+    terminal until the user hit Ctrl+C — a real bug reported during
+    manual smoke that this test guards against regression."""
+    monkeypatch.delenv("RAVEN_TUI_CHECK", raising=False)
+    monkeypatch.setattr(
+        "raven.cli.tui_commands.find_node",
+        lambda: ("/usr/bin/node", (22, 5, 0)),
+    )
+
+    captured_env: dict[str, str] = {}
+
+    def fake_run_subprocess(*_a, **_kw):
+        # Snapshot env at call time.
+        import os as _os
+
+        captured_env.update(_os.environ)
+        return 0
+
+    monkeypatch.setattr(
+        "raven.cli.tui_commands.run_subprocess",
+        fake_run_subprocess,
+    )
+
+    result = runner.invoke(app, ["tui", "--check"])
+    assert result.exit_code == 0, result.output
+    assert captured_env.get("RAVEN_TUI_CHECK") == "1", (
+        "--check must export RAVEN_TUI_CHECK=1 so the node child can take "
+        "the early-exit smoke path; missing means the smoke test hangs."
+    )
+
+
+def test_backend_start_task_is_held_and_settled_before_the_drain() -> None:
+    """[N7-F6] The memory-backend start used to be a bare create_task: the
+    loop holds only a weak reference (the documented GC hazard), and nothing
+    joined it -- quitting during the up-to-30s EverOS spawn let the finally's
+    drain/stop race a still-running start(). The task must be held, and the
+    teardown must cancel-and-await it before the backend is drained and
+    stopped."""
+    import inspect
+
+    from raven.cli import tui_commands
+
+    src = inspect.getsource(tui_commands._run_rpc_server_until_done)
+    assert "backend_start_task = asyncio.create_task(_start_backend())" in src
+    cancel_at = src.index("backend_start_task.cancel()")
+    drain_at = src.index("drain_backend_stores()")
+    assert cancel_at < drain_at, "the start must be settled before the backend is drained and stopped"

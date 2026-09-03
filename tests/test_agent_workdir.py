@@ -198,6 +198,21 @@ def test_binding_is_scoped(tmp_path: Path) -> None:
     assert current() is None
 
 
+def test_repoint_moves_the_running_turns_binding_and_only_that(tmp_path: Path) -> None:
+    """``repoint`` serves the ``rebind_workdir`` grant: the very next read in
+    the same task sees the new root, and the enclosing ``bind``'s finally
+    still resets at turn end -- nothing leaks past the turn."""
+    from raven.agent.workdir import repoint
+
+    first = tmp_path / "first"
+    moved = tmp_path / "moved"
+    assert current() is None
+    with bind(first):
+        repoint(moved)
+        assert current() == moved
+    assert current() is None
+
+
 def test_mount_root_covers_every_per_session_directory(tmp_path: Path) -> None:
     """One sandbox mount has to contain every directory the process can produce."""
     resolver = WorkdirResolver(

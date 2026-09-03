@@ -1,17 +1,18 @@
-"""Cross-entrypoint parity for the ``AgentLoop(...)`` keyword arguments.
+"""Cross-entrypoint parity for the assembly-door call.
 
-Three entrypoints each hand-write their own ``AgentLoop(...)`` call: ``raven
-agent`` (REPL), ``raven gateway`` (long-running service behind the web UI), and
-``raven tui``. Nothing makes them agree, and a kwarg added to one and forgotten
-in the others fails *silently* -- the omitted feature simply does not exist in
-that surface. Two real instances of exactly that:
+Three entrypoints used to hand-write their own ``AgentLoop(...)`` call, and a
+kwarg added to one and forgotten in the others failed *silently* -- the omitted
+feature simply did not exist in that surface (``third_party_subagents`` missing
+from two surfaces and ``plugin_tools`` missing from the gateway both shipped
+that way). ``build_runtime`` dissolved the three copies: the cargo mapping now
+exists once, in ``raven/core/runtime.py``, and parity of everything derived
+from config holds by construction.
 
-* ``third_party_subagents`` was passed only by the gateway, so ``run_subagent_dag``
-  was never registered in the TUI or the REPL and the model had no way to call it.
-* ``plugin_tools`` was passed by ``agent`` and ``tui`` but not the gateway, so
-  plugin-contributed tools were absent from the web UI.
-
-Both are fixed; this file is what keeps them fixed.
+What can still drift is what the entrances still own -- the transport-side
+``TurnPolicy`` / ``HostWiring`` fields and the identity handles they pass to
+the door. This file keeps that remainder honest, and keeps the door singular:
+an ``AgentLoop(...)`` call reappearing in an entrance is the regression this
+guard exists to catch now.
 
 So every difference has to be *declared* here, with the reason. An undeclared
 one turns this red. Shrinking :data:`LEDGER` (i.e. fixing a gap) is also a
@@ -39,7 +40,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 ENTRYPOINTS: dict[str, str] = {
     "agent": "raven/cli/agent_commands.py",
     "gateway": "raven/cli/gateway_commands.py",
-    "tui": "raven/cli/tui_commands.py",
+    "tui": "raven/core/engine_stack.py",
 }
 
 
@@ -55,21 +56,13 @@ class Difference(NamedTuple):
 # tests below make either shape visible -- an undeclared difference fails, and so
 # does an entry that no longer matches the code.
 LEDGER: dict[str, Difference] = {
-    "response_modifier": Difference(
-        absent_from=frozenset({"tui"}),
-        reason=(
-            "Sentinel hook. The gateway process owns Sentinel proactivity in "
-            "v0.1 and the REPL builds its own stack; the TUI deliberately wires "
-            "neither (see the _build_agent_loop docstring)."
-        ),
-    ),
     "cron_service": Difference(
         absent_from=frozenset({"agent"}),
         reason=(
             "Upstream removed the REPL from `agent`, so that process is never a "
             "cron runner and wiring a CronService would create jobs nothing "
-            "fires (see the comment at the AgentLoop call in "
-            "raven/cli/agent_commands.py). Scripted reminder creation is "
+            "fires (the agent entrance passes no cron_service to "
+            "build_runtime). Scripted reminder creation is "
             "`raven cron add` with an explicit --channel."
         ),
     ),
@@ -83,20 +76,46 @@ LEDGER: dict[str, Difference] = {
 }
 
 
-def _agent_loop_kwargs(relative_path: str) -> set[str]:
-    """Keyword names passed to the ``AgentLoop(...)`` call in one entrypoint."""
+def _call_kwargs(relative_path: str, callee: str) -> set[str]:
+    """Flattened keyword names passed to the ``callee(...)`` call in one file.
+
+    The wiring bundles are transparent: what a site really passes is the
+    flattened field set, so descend into each bundle constructor and collect
+    its keyword names.
+    """
     source = (_REPO_ROOT / relative_path).read_text(encoding="utf-8")
     for node in ast.walk(ast.parse(source)):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
         name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
-        if name == "AgentLoop":
+        if name == callee:
             # ``**kwargs`` forwarding would make the set unreadable statically;
-            # no entrypoint does that today, and this asserts it stays that way.
-            assert all(kw.arg for kw in node.keywords), f"{relative_path}: AgentLoop called with **kwargs"
-            return {kw.arg for kw in node.keywords if kw.arg}
-    raise AssertionError(f"no AgentLoop(...) call found in {relative_path}")
+            # no site does that today, and this asserts it stays that way.
+            assert all(kw.arg for kw in node.keywords), f"{relative_path}: {callee} called with **kwargs"
+            flat: set[str] = set()
+            for kw in node.keywords:
+                inner = kw.value
+                if isinstance(inner, ast.Call) and getattr(inner.func, "id", "").endswith(("Wiring", "Policy")):
+                    assert all(k.arg for k in inner.keywords), f"{relative_path}: bundle with **kwargs"
+                    flat |= {k.arg for k in inner.keywords if k.arg}
+                else:
+                    flat.add(kw.arg)
+            return flat
+    raise AssertionError(f"no {callee}(...) call found in {relative_path}")
+
+
+def _agent_loop_kwargs(relative_path: str) -> set[str]:
+    """What one entrance passes through the assembly door."""
+    source = (_REPO_ROOT / relative_path).read_text(encoding="utf-8")
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Call):
+            name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", None)
+            assert name != "AgentLoop", (
+                f"{relative_path} constructs AgentLoop directly again; entrances "
+                "must assemble through raven.core.runtime.build_runtime."
+            )
+    return _call_kwargs(relative_path, "build_runtime")
 
 
 @pytest.fixture(scope="module")
@@ -111,7 +130,13 @@ def _all_kwargs(kwargs_by_entrypoint: dict[str, set[str]]) -> set[str]:
 @pytest.mark.parametrize("entrypoint", sorted(ENTRYPOINTS))
 def test_every_entrypoint_has_a_readable_call_site(entrypoint: str) -> None:
     """The parity check is only as good as its ability to find the call."""
-    assert len(_agent_loop_kwargs(ENTRYPOINTS[entrypoint])) > 10
+    assert len(_agent_loop_kwargs(ENTRYPOINTS[entrypoint])) >= 10
+
+
+def test_the_door_itself_stays_rich() -> None:
+    """The single ``AgentLoop(...)`` site in the door still wires the full
+    cargo surface; the old per-entrance floor moves here."""
+    assert len(_call_kwargs("raven/core/runtime.py", "AgentLoop")) >= 25
 
 
 def test_no_undeclared_asymmetry(kwargs_by_entrypoint: dict[str, set[str]]) -> None:
@@ -169,7 +194,10 @@ def test_the_shared_core_is_not_eroding(kwargs_by_entrypoint: dict[str, set[str]
     """
     shared = set.intersection(*kwargs_by_entrypoint.values())
 
-    assert len(shared) >= 25, f"only {len(shared)} kwargs are passed by all three entrypoints: {sorted(shared)}"
+    # 9 = the identity five (provider, session_manager, router,
+    # workdir_resolver, channels_config/on_user_inbound via host) plus the
+    # three policy fields; provider_pool and deliverables fold into the door.
+    assert len(shared) >= 9, f"only {len(shared)} kwargs are passed by all three entrypoints: {sorted(shared)}"
 
 
 class _StubProvider:

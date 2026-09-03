@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
-from raven.providers.base import LLMProvider, LLMResponse, StreamDelta
+from raven.providers.base import ChatDelta, LLMProvider, LLMResponse
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.providers.minimax_oauth import get_token, oauth_config
 
@@ -60,7 +60,7 @@ class MiniMaxOAuthProvider(LiteLLMProvider):
         temperature: object = LLMProvider._SENTINEL,
         reasoning_effort: object = LLMProvider._SENTINEL,
         tool_choice: str | dict[str, Any] | None = None,
-    ) -> AsyncIterator[StreamDelta]:
+    ) -> AsyncIterator[ChatDelta]:
         await self._prepare_token()
         async for delta in super().chat_stream(
             messages, tools, model, max_tokens, temperature, reasoning_effort, tool_choice

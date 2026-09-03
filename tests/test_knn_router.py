@@ -241,3 +241,14 @@ async def test_routing_error_falls_back_to_default(tmp_path, monkeypatch):
     r = KNNModelRouter(_cfg(_write_memory(tmp_path)))  # memory vectors are 2-d
     monkeypatch.setattr(r, "_embed", _const_embed([1.0, 0.0, 0.0]))  # 3-d query
     assert await r.select_model_chain("x") == (None, [])
+
+
+def test_both_routers_satisfy_the_routes_models_shape() -> None:
+    """``RoutesModels`` pins the one method the loop calls on a router; both
+    in-repo routers must keep satisfying it structurally."""
+    from raven.routing.knn_router import KNNModelRouter
+    from raven.routing.router import ModelRouter
+    from raven.routing.types import RoutesModels
+
+    assert issubclass(KNNModelRouter, RoutesModels)
+    assert issubclass(ModelRouter, RoutesModels)

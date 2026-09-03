@@ -28,11 +28,12 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
+from raven.i18n import t, zh_lexicon
 from raven.proactive_engine.sentinel.types import PendingDecision, RouteResult
 
 if TYPE_CHECKING:
+    from raven.contracts.llm_provider import LLMProvider
     from raven.proactive_engine.sentinel.executor.pending_decision import PendingDecisionStore
-    from raven.providers.base import LLMProvider
 
 
 # Deterministic regex — recognized as command-grade input. Matches:
@@ -46,11 +47,11 @@ _PICK_RE = re.compile(r"^/pick\s+(\d+)\s*$", re.IGNORECASE)
 # Anchored to whole-message so "yes please" matches but "yes I'd like to..."
 # falls through to LLM (or treated as ambiguous).
 _CONFIRM_YES_RE = re.compile(
-    r"^\s*(yes|y|是|确认|好|ok|嗯|对|/confirm)\s*[!.！。]?\s*$",
+    r"^\s*(yes|y|ok|/confirm|" + "|".join(zh_lexicon.YES_WORDS) + r")\s*[!." + zh_lexicon.SENTENCE_ENDS + r"]?\s*$",
     re.IGNORECASE,
 )
 _CONFIRM_NO_RE = re.compile(
-    r"^\s*(no|n|否|取消|不|算了|cancel|/cancel)\s*[!.！。]?\s*$",
+    r"^\s*(no|n|cancel|/cancel|" + "|".join(zh_lexicon.NO_WORDS) + r")\s*[!." + zh_lexicon.SENTENCE_ENDS + r"]?\s*$",
     re.IGNORECASE,
 )
 
@@ -127,6 +128,19 @@ _CLASSIFIER_TOOL: dict[str, Any] = {
         },
     },
 }
+
+
+def _confirm_ask(title: str) -> str:
+    """The question the user was actually asked, in the language they saw.
+
+    The classifier below judges a reply against it, so a hand-written paraphrase
+    here is a second copy of a message the catalog owns -- and the two had
+    already drifted apart.
+    """
+    return t(
+        "Run: {title}?\n  \u00b7 reply yes / confirm \u2192 run\n  \u00b7 reply no / cancel \u2192 skip",
+        title=title,
+    )
 
 
 class DecisionRouter:
@@ -324,7 +338,7 @@ class DecisionRouter:
             {
                 "role": "user",
                 "content": (
-                    f"User was asked: '要执行：{opt_title}? 回复 yes / no'\n\n"
+                    f"User was asked: {_confirm_ask(opt_title)!r}\n\n"
                     f"User replied: {content!r}\n\n"
                     "Did they confirm or cancel?"
                 ),

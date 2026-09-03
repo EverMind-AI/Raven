@@ -16,17 +16,18 @@ from pathlib import Path
 
 import pytest
 
-from raven.agent.loop.main import _strip_inline_images
+from raven.agent.loop._shared import _strip_inline_images
 from raven.agent.tools import media
-from raven.agent.tools.base import ToolOutput, ToolResult
 from raven.agent.tools.filesystem import ReadFileTool
 from raven.agent.tools.registry import ToolRegistry
+from raven.contracts.tool import ToolOutput, ToolResult
 from raven.providers import rates as _pricing
 from raven.providers.base import LLMProvider
 
 # Captured before the autouse _no_openrouter_network fixture swaps it out.
 _REAL_FETCH = _pricing._fetch_openrouter_models
 
+from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.providers.capabilities import (  # noqa: E402
     IMAGE_TOOL_RESULT_TARGETS,
     image_placeholder_text,
@@ -160,7 +161,7 @@ def test_registry_boundary_stays_a_str_with_blocks_riding_along(tmp_path: Path) 
 
 
 def test_registry_drops_blocks_when_the_tool_reports_an_error() -> None:
-    from raven.agent.tools.base import Tool
+    from raven.contracts.tool import Tool
 
     class _Failing(Tool):
         @property
@@ -462,7 +463,7 @@ def test_image_block_is_the_only_place_the_shape_is_written() -> None:
     drop the picture. Construction goes through one function instead."""
     import subprocess
 
-    from raven.utils.helpers import image_block
+    from raven.utils.images import image_block
 
     assert image_block("data:image/png;base64,AA") == {
         "type": "image_url",
@@ -475,12 +476,12 @@ def test_image_block_is_the_only_place_the_shape_is_written() -> None:
         capture_output=True,
         text=True,
     ).stdout.splitlines()
-    offenders = [h for h in hits if "raven/utils/helpers.py" not in h]
+    offenders = [h for h in hits if "raven/utils/images.py" not in h]
     assert offenders == [], f"hand-written image block outside helpers.py: {offenders}"
 
 
 def test_is_inline_image_separates_payloads_from_references() -> None:
-    from raven.utils.helpers import is_image_part, is_inline_image
+    from raven.utils.images import is_image_part, is_inline_image
 
     inline = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA"}}
     remote = {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}
@@ -548,7 +549,8 @@ def test_mcp_audio_content_is_labelled_never_stringified() -> None:
 def test_content_part_types_describe_what_raven_produces() -> None:
     """The TypedDicts are documentation-grade: CI runs no type checker, so they
     are asserted at runtime here to keep them from drifting from reality."""
-    from raven.utils.helpers import ImagePart, TextPart, image_block, text_block
+    from raven.contracts.tool import ImagePart, TextPart
+    from raven.utils.images import image_block, text_block
 
     img = image_block("data:image/png;base64,AA")
     txt = text_block("hello")
@@ -562,8 +564,8 @@ def test_content_part_types_describe_what_raven_produces() -> None:
 def test_read_side_helpers_stay_permissive_about_unknown_parts() -> None:
     """Inbound content carries parts the union does not model (Anthropic
     cache_control, MCP audio, provider extensions). Pass-through must not break."""
-    from raven.agent.loop.main import _strip_inline_images
-    from raven.utils.helpers import estimate_content_part_tokens, is_inline_image
+    from raven.agent.loop._shared import _strip_inline_images
+    from raven.utils.images import estimate_content_part_tokens, is_inline_image
 
     exotic = {"type": "text", "text": "cached", "cache_control": {"type": "ephemeral"}}
     unknown = {"type": "some_future_part", "payload": {"a": 1}}
@@ -851,8 +853,8 @@ async def test_a_refused_tool_image_is_demoted_and_the_turn_recovers(tmp_path: P
         provider=provider,
         workspace=tmp_path,
         model="stub",
-        max_iterations=8,
-        restrict_to_workspace=True,
+        policy=TurnPolicy(max_iterations=8),
+        tools=ToolWiring(restrict_to_workspace=True),
     )
     # Stand in for a static table that said yes, so the image rides in the tool
     # result and gets refused -- the case the recovery exists for.
@@ -1000,8 +1002,8 @@ async def test_attached_images_land_after_every_tool_result_in_the_batch(tmp_pat
         provider=provider,
         workspace=tmp_path,
         model="stub",
-        max_iterations=6,
-        restrict_to_workspace=True,
+        policy=TurnPolicy(max_iterations=6),
+        tools=ToolWiring(restrict_to_workspace=True),
     )
     # Force the fallback path -- the one this ordering bug lives on.
     agent._image_tool_result_ok = {"stub": False}
@@ -1041,8 +1043,8 @@ async def test_the_attachment_message_is_never_persisted(tmp_path: Path) -> None
         provider=provider,
         workspace=tmp_path,
         model="stub",
-        max_iterations=6,
-        restrict_to_workspace=True,
+        policy=TurnPolicy(max_iterations=6),
+        tools=ToolWiring(restrict_to_workspace=True),
     )
     agent._image_tool_result_ok = {"stub": False}
 
@@ -1107,8 +1109,8 @@ async def test_the_attachment_message_never_reaches_extraction(tmp_path: Path) -
         provider=provider,
         workspace=tmp_path,
         model="stub",
-        max_iterations=6,
-        restrict_to_workspace=True,
+        policy=TurnPolicy(max_iterations=6),
+        tools=ToolWiring(restrict_to_workspace=True),
     )
     agent._image_tool_result_ok = {"stub": False}
 
@@ -1540,7 +1542,7 @@ def test_the_verdict_is_asked_of_the_routed_model_not_the_configured_one(monkeyp
 
 def test_the_assembler_forwards_the_verdict_to_the_renderer(monkeypatch) -> None:
     from raven.context_engine.assembler import ContextAssembler
-    from raven.context_engine.base import AssemblyContext
+    from raven.contracts.context import AssemblyContext
 
     seen = {}
 

@@ -4,7 +4,7 @@ Nothing in raven had this. ``Dispatcher`` is inbound-only and ``send_frame`` is
 fire-and-forget, so a method that needs the client to *decide* something -- which
 is what a permission prompt is -- had no mechanism at all. The only working
 example in the repo is on the other side of the wire, in
-``raven/agent/acp/client.py``, and this is its mirror.
+``raven/acp_client/client.py``, and this is its mirror.
 
 Three things make it more than a dict:
 

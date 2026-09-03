@@ -15,11 +15,7 @@ from typing import Any
 from loguru import logger
 
 from raven.agent.subagent import activity
-from raven.agent.subagent.backends.base import (
-    IN_SUBAGENT_RUN,
-    SubagentActionAbortedError,
-    SubagentNoAnswerError,
-)
+from raven.agent.subagent.backends.base import IN_SUBAGENT_RUN
 from raven.agent.subagent.mcp_grant import (
     McpGrant,
     McpSource,
@@ -27,16 +23,32 @@ from raven.agent.subagent.mcp_grant import (
     raven_loop_target,
     resolve_grant,
 )
-from raven.agent.tools.base import SKIPPED_AFTER_BLOCKED_CALL, Continuation
 from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.shell import ExecTool
 from raven.agent.tools.web import WebFetchTool, WebSearchTool
+from raven.config.live import LiveConfig, exec_extra_deny_patterns
 from raven.config.schema import ExecToolConfig
-from raven.memory_engine.skill_local.registry import filter_by_required_tools
-from raven.providers.base import LLMProvider
+from raven.contracts.llm_provider import LLMProvider
+from raven.contracts.subagent_backend import SubagentActionAbortedError, SubagentNoAnswerError
+from raven.contracts.tool import SKIPPED_AFTER_BLOCKED_CALL, Continuation
+from raven.memory_engine import filter_by_required_tools
+from raven.providers.streaming import generation_kwargs, stream_llm_call
+from raven.providers.tool_calls import openai_tool_call
 from raven.security.trust import wrap_untrusted
-from raven.utils.helpers import build_assistant_message
+from raven.utils.messages import build_assistant_message
+
+_LIVE_CONFIG = LiveConfig()
+
+
+def _live_exec_extra_deny() -> list[str] | None:
+    """The operator's live exec deny extras, shared by every sub-agent run.
+
+    Module-level so the byte-compare cache is warm across runs; the answer is
+    identical to the main loop's reader, which is the point -- a tightened
+    permission gates a delegated shell the same call it gates a direct one.
+    """
+    return exec_extra_deny_patterns(_LIVE_CONFIG)
 
 
 def build_subagent_prompt(
@@ -73,7 +85,7 @@ def build_subagent_prompt(
     tools this sub-agent lacks is still withheld.
     """
     from raven.agent.context import ContextBuilder
-    from raven.memory_engine.skill_forge import LocalSkillCatalog
+    from raven.memory_engine import LocalSkillCatalog
 
     # Transient ContextBuilder just for the runtime-context builder; the
     # subagent has no ContextBuilder of its own (and must not start a watcher).
@@ -216,10 +228,6 @@ class RavenLoopBackend:
         on_messages: Callable[[list[dict[str, Any]]], None] | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> str:
-        # Deferred: importing raven.agent.loop runs its package init, which pulls
-        # in AgentLoop, which imports this package at module scope.
-        from raven.agent.loop.streaming import generation_kwargs, stream_llm_call
-
         # The spawn's snapshot wins over the pair this backend was built with;
         # see ``SubagentBackend.run``. The constructor pair remains the fallback
         # for callers that drive a backend directly.
@@ -260,6 +268,10 @@ class RavenLoopBackend:
                     path_append=self.exec_config.path_append,
                     executor=executor,
                     extra_deny_patterns=self.exec_config.extra_deny_patterns,
+                    # The same live deny source the main loop's ExecTool reads:
+                    # a tightened permission must gate a delegated shell the
+                    # same call it gates a direct one.
+                    extra_deny_source=_live_exec_extra_deny,
                     extra_allowed_dirs=allowed_dirs,
                     follow_binding=False,
                 )
@@ -326,7 +338,7 @@ class RavenLoopBackend:
             # land here -- a streamed reply costs the same as a waited-for one.
             activity.note_usage(response.usage)
             if response.has_tool_calls:
-                tool_call_dicts = [tc.to_openai_tool_call() for tc in response.tool_calls]
+                tool_call_dicts = [openai_tool_call(tc) for tc in response.tool_calls]
                 messages.append(
                     build_assistant_message(
                         response.content or "",

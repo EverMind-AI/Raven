@@ -13,9 +13,9 @@ from datetime import datetime
 import pytest
 
 from raven.context_engine.assembler import ContextAssembler
-from raven.context_engine.base import AssemblyContext, TokenBudget
-from raven.context_engine.curator import TurnContext
 from raven.context_engine.segments import render
+from raven.contracts.assembled import TokenBudget
+from raven.contracts.context import AssemblyContext, TurnContext
 
 NOW = lambda: datetime(2026, 8, 21, 15, 0)  # noqa: E731
 

@@ -119,7 +119,6 @@ async def test_the_owning_stack_drains_queued_writes_before_stopping_the_backend
     lands. Stopping the backend without draining closes the HTTP client the
     queued writes still need, so this path lost its last turns silently while
     the agent, TUI and gateway hosts did not."""
-    from raven.cli import tui_commands
 
     order: list[str] = []
     loop = _FakeLoop(_FakeCron())
@@ -129,7 +128,7 @@ async def test_the_owning_stack_drains_queued_writes_before_stopping_the_backend
         order.append("drain")
 
     loop.drain_backend_stores = _drain
-    monkeypatch.setattr(tui_commands, "_build_agent_loop", lambda: loop)
+    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda: loop)
 
     stack = await bootstrap.build_rpc_stack(_sink, agent_loop=None)
     assert stack.agent_loop is loop
@@ -139,12 +138,11 @@ async def test_the_owning_stack_drains_queued_writes_before_stopping_the_backend
 
 
 async def test_a_shared_loop_is_used_not_rebuilt(monkeypatch) -> None:
-    from raven.cli import tui_commands
 
     def _boom():
         raise AssertionError("a mounted stack must not build a second engine")
 
-    monkeypatch.setattr(tui_commands, "_build_agent_loop", _boom)
+    monkeypatch.setattr(bootstrap, "build_agent_loop", _boom)
     cron = _FakeCron()
     loop = _FakeLoop(cron)
 
@@ -206,7 +204,6 @@ async def test_the_snapshot_backfill_is_scheduled_except_on_the_acp_channel(monk
 
 async def test_the_default_path_still_owns_the_whole_lifecycle(monkeypatch) -> None:
     from raven import browser as browser_module
-    from raven.cli import tui_commands
 
     class _NoBrowser:
         async def close(self) -> None:
@@ -215,7 +212,7 @@ async def test_the_default_path_still_owns_the_whole_lifecycle(monkeypatch) -> N
     monkeypatch.setattr(browser_module, "get_browser", lambda: _NoBrowser())
     cron = _FakeCron()
     loop = _FakeLoop(cron)
-    monkeypatch.setattr(tui_commands, "_build_agent_loop", lambda: loop)
+    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda: loop)
 
     stack = await bootstrap.build_rpc_stack(_sink)
 
@@ -236,7 +233,6 @@ async def test_the_owning_path_prewarms_mcp_instead_of_charging_the_first_turn(m
     minted with nobody to publish it to.
     """
     from raven import browser as browser_module
-    from raven.cli import tui_commands
 
     class _NoBrowser:
         async def close(self) -> None:
@@ -244,7 +240,7 @@ async def test_the_owning_path_prewarms_mcp_instead_of_charging_the_first_turn(m
 
     monkeypatch.setattr(browser_module, "get_browser", lambda: _NoBrowser())
     loop = _FakeLoop(_FakeCron())
-    monkeypatch.setattr(tui_commands, "_build_agent_loop", lambda: loop)
+    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda: loop)
 
     stack = await bootstrap.build_rpc_stack(_sink)
     try:
@@ -262,7 +258,6 @@ async def test_the_served_page_hears_reminders_dropped_at_startup(monkeypatch) -
     gap and reaches the first subscription, not merely that a call was made.
     """
     from raven import browser as browser_module
-    from raven.cli import tui_commands
     from raven.proactive_engine.schedulers.cron.types import CronStartupDrop
 
     class _NoBrowser:
@@ -277,7 +272,7 @@ async def test_the_served_page_hears_reminders_dropped_at_startup(monkeypatch) -
     monkeypatch.setattr(browser_module, "get_browser", lambda: _NoBrowser())
     cron = _DroppingCron()
     loop = _FakeLoop(cron)
-    monkeypatch.setattr(tui_commands, "_build_agent_loop", lambda: loop)
+    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda: loop)
 
     frames: list[dict] = []
 
@@ -343,7 +338,6 @@ async def test_the_channel_reaches_both_collaborators_or_nothing_is_delivered(mo
     worse than none: the turn runs, produces output, and delivers it to a channel
     with no outlet, with nothing anywhere reporting a problem.
     """
-    from raven.cli import tui_commands
     from raven.rpc import methods as methods_module
     from raven.rpc import spine as spine_module
 
@@ -366,7 +360,7 @@ async def test_the_channel_reaches_both_collaborators_or_nothing_is_delivered(mo
 
     monkeypatch.setattr(spine_module, "build_rpc_spine", _spy_spine)
     monkeypatch.setattr(methods_module, "register_turn_methods", _spy_register)
-    monkeypatch.setattr(tui_commands, "_build_agent_loop", lambda: _FakeLoop())
+    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda: _FakeLoop())
 
     stack = await bootstrap.build_rpc_stack(_sink, agent_loop=_FakeLoop(), channel="acp")
     try:
@@ -403,7 +397,6 @@ async def test_owning_teardown_closes_the_mcp_it_opened_at_assembly(monkeypatch)
     turn has resources to release that it never used to have.
     """
     from raven import browser as browser_module
-    from raven.cli import tui_commands
 
     class _NoBrowser:
         async def close(self) -> None:
@@ -419,7 +412,7 @@ async def test_owning_teardown_closes_the_mcp_it_opened_at_assembly(monkeypatch)
         loop.order.append("drain")
 
     loop.drain_backend_stores = _drain
-    monkeypatch.setattr(tui_commands, "_build_agent_loop", lambda: loop)
+    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda: loop)
 
     stack = await bootstrap.build_rpc_stack(_sink)
     assert loop.prewarms == 1

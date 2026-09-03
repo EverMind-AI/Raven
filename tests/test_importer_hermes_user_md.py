@@ -6,13 +6,13 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
+from raven.contracts.llm_provider import LLMResponse
 from raven.importer.hermes_user_md import (
     _HEADING_MAX_TOKENS,
     FALLBACK_HEADING,
     import_user_md_sections,
 )
 from raven.memory_engine.consolidate.consolidator import MemoryStore
-from raven.providers.base import LLMResponse
 
 
 class _Provider:

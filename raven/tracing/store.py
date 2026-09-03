@@ -66,6 +66,9 @@ def preview_text(value: Any, max_len: int = 400) -> str:
 
 
 def safe_segment(value: Any, fallback: str = "unknown") -> str:
+    # Deliberately its own scheme, not utils.paths.mint_slug: the kernel may
+    # not import raven.utils ("the kernel stands alone"), and trace labels
+    # keep case and dots for readability.
     normalized = re.sub(r"[^a-zA-Z0-9._-]+", "-", str("" if value is None else value).strip())
     normalized = normalized.strip("-")
     return (normalized or fallback)[:80]

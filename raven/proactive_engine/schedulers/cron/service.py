@@ -3,18 +3,11 @@
 import asyncio
 import json
 import os
-import sys
 import time
-
-try:
-    import fcntl
-except ImportError:
-    fcntl = None
 import uuid
-from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Coroutine, Iterator
+from typing import Any, Callable, Coroutine
 
 from loguru import logger
 
@@ -26,6 +19,8 @@ from raven.proactive_engine.schedulers.cron.types import (
     CronStartupDrop,
     CronStore,
 )
+from raven.utils.atomic_io import atomic_replace
+from raven.utils.portable_lock import file_lock
 
 # Stale-claim TTL — if a claim is older than this, another process may steal
 # it (the original process likely crashed mid-job).
@@ -126,7 +121,7 @@ class CronService:
         they predate the channel attribution field.
         """
         self.store_path = store_path
-        # Sibling file for fcntl advisory locking (survives atomic rename of
+        # Sibling file for advisory locking (survives atomic rename of
         # the data file, lets concurrent processes coordinate claim ticks).
         self.lock_path = store_path.with_suffix(store_path.suffix + ".lock")
         self.on_job = on_job
@@ -145,8 +140,6 @@ class CronService:
         # not one per tick). Cleared per job on successful claim.
         self._skip_logged: set[str] = set()
         self._running = False
-        # Remember whether fcntl is usable — degrade to lock-less on Windows.
-        self._can_lock = sys.platform != "win32"
         # Optional fake-clock injection for benchmark harnesses (longrun).
         # When provided, all internal time reads route through this callable
         # so newly created jobs' next_run_at_ms aligns with simulated time
@@ -163,19 +156,9 @@ class CronService:
             return int(self._now_fn().timestamp() * 1000)
         return int(time.time() * 1000)
 
-    @contextmanager
-    def _locked(self) -> Iterator[None]:
-        """Exclusive advisory lock on the jobs-file sibling. No-op on Windows."""
-        if not self._can_lock:
-            yield
-            return
-        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.lock_path.open("a") as lock_fd:
-            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+    def _locked(self):
+        """Exclusive cross-platform advisory lock on the jobs-file sibling."""
+        return file_lock(self.lock_path)
 
     def _load_store(self) -> CronStore:
         """Load jobs from disk. Reloads automatically if file was modified externally."""
@@ -218,6 +201,7 @@ class CronService:
                                 topic_tag=j["payload"].get("topicTag"),
                                 direct_agent=j["payload"].get("directAgent"),
                                 direct_handle=j["payload"].get("directHandle"),
+                                fire_missed=j["payload"].get("fireMissed", False),
                             ),
                             state=CronJobState(
                                 next_run_at_ms=j.get("state", {}).get("nextRunAtMs"),
@@ -248,8 +232,6 @@ class CronService:
         if not self._store:
             return
 
-        self.store_path.parent.mkdir(parents=True, exist_ok=True)
-
         data = {
             "version": self._store.version,
             "jobs": [
@@ -271,6 +253,7 @@ class CronService:
                         "topicTag": j.payload.topic_tag,
                         "directAgent": j.payload.direct_agent,
                         "directHandle": j.payload.direct_handle,
+                        "fireMissed": j.payload.fire_missed,
                     },
                     "state": {
                         "nextRunAtMs": j.state.next_run_at_ms,
@@ -290,14 +273,7 @@ class CronService:
             ],
         }
 
-        # Atomic write (temp + rename) so concurrent readers never see a
-        # partially-flushed file. The temp name is pid-unique: a shared name
-        # lets two processes steal each other's temp between write and rename
-        # (unlocked start() saves, and every save on Windows where the flock
-        # degrades to a no-op) — the loser crashes on FileNotFoundError.
-        tmp = self.store_path.with_name(f"{self.store_path.name}.{os.getpid()}.tmp")
-        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, self.store_path)
+        atomic_replace(self.store_path, json.dumps(data, indent=2, ensure_ascii=False))
         self._last_mtime = self.store_path.stat().st_mtime_ns
 
     async def start(self) -> None:
@@ -337,7 +313,9 @@ class CronService:
         Slack / Google Calendar behavior). A warning log records each
         drop so users can audit via gateway logs, and the drops are kept
         on ``last_startup_drops`` so the embedding process can surface a
-        missed-reminders notice to the user.
+        missed-reminders notice to the user. The one exception is a keyed
+        wake marked ``fire_missed``: a watcher's missed look must fire
+        late, not vanish, so it is re-anchored to now and fires once.
 
         Recurring ('every', 'cron') jobs just advance to the next future
         run — missed intervals are skipped, not backfilled.
@@ -357,6 +335,10 @@ class CronService:
                 kept.append(job)
                 continue
             next_run = _compute_next_run(job.schedule, now)
+            if job.schedule.kind == "at" and next_run is None and job.payload.fire_missed:
+                job.state.next_run_at_ms = now
+                kept.append(job)
+                continue
             if job.schedule.kind == "at" and next_run is None:
                 dropped.append(
                     CronStartupDrop(
@@ -559,9 +541,11 @@ class CronService:
         job.state.last_run_at_ms = start_ms
         job.updated_at_ms = self._now_ms()
 
-        # Handle one-shot jobs
+        # Handle one-shot jobs. A one-shot that failed stays on the table,
+        # disabled, with its error: deleting it would erase the only record
+        # that the reminder never reached anyone.
         if job.schedule.kind == "at":
-            if job.delete_after_run:
+            if job.delete_after_run and job.state.last_status == "ok":
                 self._store.jobs = [j for j in self._store.jobs if j.id != job.id]
             else:
                 job.enabled = False
@@ -700,6 +684,7 @@ class CronService:
         job_id: str | None = None,
         direct_agent: str | None = None,
         direct_handle: str | None = None,
+        fire_missed: bool = False,
     ) -> CronJob:
         """Add a new job, or update an existing job with the same
         (schedule, channel, to) triple — agents often re-register the
@@ -753,6 +738,7 @@ class CronService:
                     j.payload.channel = channel
                     j.payload.to = to
                     j.payload.topic_tag = topic_tag
+                    j.payload.fire_missed = fire_missed
                     j.delete_after_run = delete_after_run
                     j.state.next_run_at_ms = _compute_next_run(schedule, now)
                     j.updated_at_ms = now
@@ -888,6 +874,7 @@ class CronService:
                     topic_tag=topic_tag,
                     direct_agent=direct_agent,
                     direct_handle=direct_handle,
+                    fire_missed=fire_missed,
                 ),
                 state=CronJobState(next_run_at_ms=_compute_next_run(schedule, now)),
                 created_at_ms=now,
@@ -940,6 +927,103 @@ class CronService:
             self._signal_wake()
             logger.info("Cron: removed job {}", job_id)
         return removed
+
+    # ── Keyed wakes ────────────────────────────────────────────────
+    # A partition of one-shot 'at' jobs whose id is ``wake:<key>``: the four
+    # verbs below own it and never touch a job outside it, and scheduling an
+    # existing key replaces its pending wake rather than coexisting with it.
+    # This is the organ half of the wake-scheduling seam; the grant that
+    # namespaces keys per plugin lives on the papers, not here.
+
+    _WAKE_PREFIX = "wake:"
+
+    def schedule_wake(
+        self,
+        key: str,
+        at_ms: int,
+        message: str,
+        *,
+        channel: str | None = None,
+        to: str | None = None,
+        direct_agent: str | None = None,
+        direct_handle: str | None = None,
+        fire_missed: bool = True,
+    ) -> CronJob:
+        """Schedule, or replace, the one pending wake for ``key``.
+
+        The floor of one second keeps a zero or negative eta from failing
+        validation -- the pace is the caller's to choose, the floor only
+        keeps the job schedulable. ``fire_missed`` defaults True: a missed
+        look should fire late, not vanish; pass False when the moment
+        matters more than the delivery.
+        """
+        if not key:
+            raise ValueError("a keyed wake needs a non-empty key")
+        now = self._now_ms()
+        at_ms = max(int(at_ms), now + 1_000)
+        schedule = CronSchedule(kind="at", at_ms=at_ms)
+        payload = CronPayload(
+            message=message,
+            channel=channel,
+            to=to,
+            direct_agent=direct_agent,
+            direct_handle=direct_handle,
+            fire_missed=fire_missed,
+        )
+        job_id = self._WAKE_PREFIX + key
+        with self._locked():
+            self._store = None
+            store = self._load_store()
+            job = next((j for j in store.jobs if j.id == job_id), None)
+            if job is not None:
+                job.name = f"wake {key}"
+                job.enabled = True
+                job.schedule = schedule
+                job.payload = payload
+                job.delete_after_run = True
+                job.state.next_run_at_ms = at_ms
+                job.updated_at_ms = now
+            else:
+                job = CronJob(
+                    id=job_id,
+                    name=f"wake {key}",
+                    schedule=schedule,
+                    payload=payload,
+                    created_at_ms=now,
+                    updated_at_ms=now,
+                    delete_after_run=True,
+                )
+                job.state.next_run_at_ms = at_ms
+                store.jobs.append(job)
+            self._save_store()
+        self._signal_wake()
+        return job
+
+    def advance_wake_to_now(self, key: str) -> bool:
+        """Pull the pending wake for ``key`` to now; False when none is pending."""
+        job_id = self._WAKE_PREFIX + key
+        now = self._now_ms()
+        with self._locked():
+            self._store = None
+            store = self._load_store()
+            job = next((j for j in store.jobs if j.id == job_id and j.enabled), None)
+            if job is None:
+                return False
+            job.schedule.at_ms = now
+            job.state.next_run_at_ms = now
+            job.updated_at_ms = now
+            self._save_store()
+        self._signal_wake()
+        return True
+
+    def pending_wakes(self, prefix: str = "") -> list[CronJob]:
+        """Every pending keyed wake, optionally narrowed to a key prefix."""
+        want = self._WAKE_PREFIX + prefix
+        return [j for j in self.list_jobs() if j.id.startswith(want)]
+
+    def cancel_wake(self, key: str) -> bool:
+        """Remove the pending wake for ``key``; False when none existed."""
+        return self.remove_job(self._WAKE_PREFIX + key)
 
     def enable_job(self, job_id: str, enabled: bool = True) -> CronJob | None:
         """Enable or disable a job."""

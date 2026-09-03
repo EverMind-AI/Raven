@@ -1,5 +1,5 @@
 diff --git a/raven/cli/agent_commands.py b/raven/cli/agent_commands.py
-index a0e2f90..d6adb47 100644
+index 369f190..fcabe7e 100644
 --- a/raven/cli/agent_commands.py
 +++ b/raven/cli/agent_commands.py
 @@ -28,6 +28,14 @@ from rich.markdown import Markdown
@@ -17,7 +17,7 @@ index a0e2f90..d6adb47 100644
  from raven.cli._helpers import (
      exit_memory_service_unavailable,
      load_runtime_config,
-@@ -389,7 +397,7 @@ def register(app: typer.Typer) -> None:
+@@ -406,7 +414,7 @@ def register(app: typer.Typer) -> None:
          strategies = install_from_config(
              ec_config.token_wise,
              telemetry_dir=config.workspace_path / ".token_wise",
@@ -26,7 +26,7 @@ index a0e2f90..d6adb47 100644
          )
          if strategies.get("cache_optimizer") is not None and hasattr(
              provider, "disable_auto_cache_control"
-@@ -418,8 +426,12 @@ def register(app: typer.Typer) -> None:
+@@ -435,8 +443,12 @@ def register(app: typer.Typer) -> None:
              context_window_authoritative=config.agents.defaults.context_window_authoritative,
              max_concurrent_subagents=config.agents.defaults.max_concurrent_subagents,
              max_subagent_spawns_per_hour=config.agents.defaults.max_subagent_spawns_per_hour,
@@ -85,10 +85,58 @@ index be48c6a..b3ba525 100644
              web_corpus_endpoint=config.tools.web.corpus_endpoint or None,
              web_benchmark_containment=config.tools.web.benchmark_containment,
 diff --git a/raven/providers/base.py b/raven/providers/base.py
-index 6e77f4a..fe11c5a 100644
+index ff4a24b..fe11c5a 100644
 --- a/raven/providers/base.py
 +++ b/raven/providers/base.py
-@@ -844,6 +844,21 @@ class LLMProvider(ABC):
+@@ -443,6 +443,7 @@ class LLMProvider(ABC):
+         temperature: float = 0.7,
+         reasoning_effort: str | None = None,
+         tool_choice: str | dict[str, Any] | None = None,
++        timeout: float | None = None,
+     ) -> LLMResponse:
+         """
+         Send a chat completion request.
+@@ -454,6 +455,9 @@ class LLMProvider(ABC):
+             max_tokens: Maximum tokens in response.
+             temperature: Sampling temperature.
+             tool_choice: Tool selection strategy ("auto", "required", or specific tool dict).
++            timeout: Per-call deadline in seconds; ``None`` uses the provider's
++                generation default. Part of the abstract signature so a sliced
++                caller (verify/sufficiency) works against every in-tree provider.
+ 
+         Returns:
+             LLMResponse with content and/or tool calls.
+@@ -727,6 +731,7 @@ class LLMProvider(ABC):
+         temperature: object,
+         reasoning_effort: object,
+         tool_choice: str | dict[str, Any] | None,
++        timeout: float | None = None,
+     ) -> LLMResponse:
+         """Run a single model through the retry ladder, classifying each failure.
+ 
+@@ -744,6 +749,13 @@ class LLMProvider(ABC):
+         for attempt in range(1, total_attempts + 1):
+             exc: Exception | None = None
+             try:
++                # Forwarded only when set, so an unset deadline stays
++                # byte-identical to the calls every arm was measured under.
++                # Every in-tree ``chat`` accepts the parameter (it is in the
++                # abstract signature); a third-party subclass that predates it
++                # only breaks for sliced callers, and then as a classified
++                # error naming the unexpected keyword (the ladder converts the
++                # TypeError) rather than a silently dropped deadline.
+                 response = await self.chat(
+                     messages=messages,
+                     tools=tools,
+@@ -752,6 +764,7 @@ class LLMProvider(ABC):
+                     temperature=temperature,
+                     reasoning_effort=reasoning_effort,
+                     tool_choice=tool_choice,
++                    **({"timeout": timeout} if timeout is not None else {}),
+                 )
+             except asyncio.CancelledError:
+                 raise
+@@ -831,6 +844,21 @@ class LLMProvider(ABC):
          """
          return False
  
@@ -110,11 +158,54 @@ index 6e77f4a..fe11c5a 100644
      @trace.instrument("llm.call", extract=semconv.llm_call)
      async def chat_with_retry(
          self,
+@@ -842,6 +870,7 @@ class LLMProvider(ABC):
+         reasoning_effort: object = _SENTINEL,
+         tool_choice: str | dict[str, Any] | None = None,
+         fallback_models: list[str] | None = None,
++        timeout: float | None = None,
+     ) -> LLMResponse:
+         """Call chat() with retry on transient failures, then fall back models.
+ 
+@@ -854,7 +883,9 @@ class LLMProvider(ABC):
+ 
+         Parameters default to ``self.generation`` when not explicitly passed,
+         so callers no longer need to thread temperature / max_tokens /
+-        reasoning_effort through every layer.
++        reasoning_effort through every layer. ``timeout`` is per-call: forwarded
++        to ``chat`` only when set, so an unset value keeps the provider's
++        configured deadline byte-for-byte.
+         """
+         if max_tokens is self._SENTINEL:
+             max_tokens = self.generation.max_tokens
+@@ -904,6 +935,7 @@ class LLMProvider(ABC):
+                 temperature=temperature,
+                 reasoning_effort=reasoning_effort,
+                 tool_choice=tool_choice,
++                timeout=timeout,
+             )
+             if response.finish_reason != "error":
+                 # Judged here, not by the caller: this runs inside the
 diff --git a/raven/providers/endpoint_rotor.py b/raven/providers/endpoint_rotor.py
-index c0a265e..30e1020 100644
+index 219d7d1..30e1020 100644
 --- a/raven/providers/endpoint_rotor.py
 +++ b/raven/providers/endpoint_rotor.py
-@@ -356,6 +356,30 @@ class EndpointRotorProvider(LLMProvider):
+@@ -215,6 +215,7 @@ class EndpointRotorProvider(LLMProvider):
+         temperature: object,
+         reasoning_effort: object,
+         tool_choice: str | dict[str, Any] | None,
++        timeout: float | None = None,
+     ) -> LLMResponse:
+         """Run the retry ladder against each healthy endpoint in turn.
+ 
+@@ -241,6 +242,7 @@ class EndpointRotorProvider(LLMProvider):
+                 temperature=temperature,
+                 reasoning_effort=reasoning_effort,
+                 tool_choice=tool_choice,
++                timeout=timeout,
+             )
+             if response.finish_reason != "error":
+                 self._mark_success(i)
+@@ -354,6 +356,30 @@ class EndpointRotorProvider(LLMProvider):
          endpoint under one rotor shares it."""
          return self._inners[0].wire_model_id(model)
  
@@ -146,7 +237,7 @@ index c0a265e..30e1020 100644
      def model_overrides(self) -> dict[str, dict[str, Any]]:
          """Delegates to the first endpoint's inner, same reasoning as ``can_serve``:
 diff --git a/raven/providers/litellm_provider.py b/raven/providers/litellm_provider.py
-index 527509a..41745dc 100644
+index 7ffd4ce..41745dc 100644
 --- a/raven/providers/litellm_provider.py
 +++ b/raven/providers/litellm_provider.py
 @@ -278,6 +278,10 @@ class LiteLLMProvider(LLMProvider):
@@ -160,6 +251,44 @@ index 527509a..41745dc 100644
      def _supports_cache_control(self, model: str) -> bool:
          """Return True when this request may carry cache_control blocks.
  
+@@ -408,6 +412,7 @@ class LiteLLMProvider(LLMProvider):
+         temperature: float = 0.7,
+         reasoning_effort: str | None = None,
+         tool_choice: str | dict[str, Any] | None = None,
++        timeout: float | None = None,
+     ) -> LLMResponse:
+         """
+         Send a chat completion request via LiteLLM.
+@@ -418,6 +423,11 @@ class LiteLLMProvider(LLMProvider):
+             model: Model identifier (e.g., 'anthropic/claude-sonnet-4-5').
+             max_tokens: Maximum tokens in response.
+             temperature: Sampling temperature.
++            timeout: Per-call deadline overriding ``generation.timeout``. A gate
++                that slices its budget into short attempts passes one so the
++                transport raises a classifiable exception (connect vs read)
++                instead of hanging until the caller's cancellation, which names
++                nothing.
+ 
+         Returns:
+             LLMResponse with content and/or tool calls.
+@@ -447,7 +457,7 @@ class LiteLLMProvider(LLMProvider):
+             # cannot bound a backend that trickles bytes forever (the read timer
+             # resets on every chunk), so the awaited call is also wrapped in an
+             # asyncio.wait_for wall-clock cap below.
+-            "timeout": self.generation.timeout,
++            "timeout": timeout or self.generation.timeout,
+         }
+         if max_tokens is not None:
+             kwargs["max_tokens"] = max_tokens
+@@ -487,7 +497,7 @@ class LiteLLMProvider(LLMProvider):
+             kwargs["tool_choice"] = tool_choice or "auto"
+ 
+         try:
+-            response = await asyncio.wait_for(acompletion(**kwargs), self.generation.timeout)
++            response = await asyncio.wait_for(acompletion(**kwargs), timeout or self.generation.timeout)
+             return self._parse_response(response)
+         except Exception as e:
+             # Return error as content for graceful handling, but classify the
 diff --git a/raven/providers/rates.py b/raven/providers/rates.py
 index 6c52786..5b0ea27 100644
 --- a/raven/providers/rates.py

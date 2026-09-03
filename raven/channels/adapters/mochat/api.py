@@ -12,13 +12,11 @@ from typing import Any
 
 import httpx
 
-from raven.config.schema import MochatConfig
-
 
 class MochatAPI:
     """Thin async wrapper over the Mochat `/api/claw/*` endpoints."""
 
-    def __init__(self, config: MochatConfig):
+    def __init__(self, config: Any):
         self.config = config
         self._http: httpx.AsyncClient | None = None
 

@@ -52,6 +52,7 @@ PHASES = [
     "before_iteration",
     "before_execute_tools",
     "after_iteration",
+    "terminal_answerless",
     "after_send",
 ]
 
@@ -97,6 +98,10 @@ class TestHookDecision:
         assert d.pass_through is True
         assert d.short_circuit_result is None
         assert d.modified_content is None
+        assert d.rollback is False
+        assert d.rollback_overrides is None
+        assert d.rollback_inject is None
+        assert d.modified_tools is None
         assert d.notes == []
 
     def test_short_circuit_carries_arbitrary_value(self):
@@ -136,6 +141,10 @@ class TestAgentHookContext:
         assert c.response is None
         assert c.outbound_content is None
         assert c.metadata == {}
+        assert c.turn_question == ""
+        assert c.turn_base == 0
+        assert c.max_iterations is None
+        assert c.context_window_tokens is None
 
     def test_fields_can_be_set(self):
         c = AgentHookContext(
@@ -541,3 +550,199 @@ class TestCompositeHookEndToEndScenario:
         d3 = await composite.after_send(ctx)
         assert d3.modified_content == "hi user [nudge]"
         assert log == ["nudge_injector.after_send"]
+
+
+class TestCompositeHaltingAndGrants:
+    async def test_rollback_halts_the_chain_like_a_short_circuit(self, ctx):
+        seen: list[str] = []
+
+        class Bouncer(AgentHook):
+            async def after_iteration(self, ctx):
+                seen.append("bouncer")
+                return HookDecision(rollback=True, rollback_inject=[{"role": "user", "content": "again"}])
+
+        class Later(AgentHook):
+            async def after_iteration(self, ctx):
+                seen.append("later")
+                return HookDecision()
+
+        decision = await CompositeHook([Bouncer(), Later()]).after_iteration(ctx)
+        assert decision.rollback is True
+        assert decision.rollback_inject == [{"role": "user", "content": "again"}]
+        assert seen == ["bouncer"]
+
+    async def test_modified_tools_chain_through_before_iteration(self, ctx):
+        class DropB(AgentHook):
+            async def before_iteration(self, ctx):
+                return HookDecision(modified_tools=[t for t in (ctx.tools or []) if t["name"] != "b"])
+
+        class DropC(AgentHook):
+            async def before_iteration(self, ctx):
+                return HookDecision(modified_tools=[t for t in (ctx.tools or []) if t["name"] != "c"])
+
+        ctx.tools = [{"name": "a"}, {"name": "b"}, {"name": "c"}]
+        decision = await CompositeHook([DropB(), DropC()]).before_iteration(ctx)
+        assert decision.modified_tools == [{"name": "a"}]
+
+    async def test_terminal_answerless_dispatches(self, ctx):
+        class Salvage(AgentHook):
+            async def terminal_answerless(self, ctx):
+                return HookDecision(short_circuit_result="best-supported answer")
+
+        decision = await CompositeHook([Salvage()]).terminal_answerless(ctx)
+        assert decision.short_circuit_result == "best-supported answer"
+
+
+class TestNoteAndInboundGrants:
+    async def test_notes_chain_in_order_through_the_iteration_phases(self, ctx):
+        class Budget(AgentHook):
+            async def after_iteration(self, ctx):
+                return HookDecision(append_note="[budget: half spent]")
+
+        class Gate(AgentHook):
+            async def after_iteration(self, ctx):
+                return HookDecision(append_note="[gate: open a page before searching again]")
+
+        decision = await CompositeHook([Budget(), Gate()]).after_iteration(ctx)
+        assert decision.append_note == "[budget: half spent]\n\n[gate: open a page before searching again]"
+        assert (await CompositeHook([Budget()]).after_send(ctx)).append_note is None, "not an iteration phase"
+
+    async def test_decision_notes_chain_through_the_composite_and_survive_a_halt(self, ctx):
+        class Quiet(AgentHook):
+            async def after_iteration(self, ctx):
+                return HookDecision(notes=["quiet: looked, passed"])
+
+        class Halter(AgentHook):
+            async def after_iteration(self, ctx):
+                return HookDecision(short_circuit_result="done", notes=["halter: replaced the draft"])
+
+        class Never(AgentHook):
+            async def after_iteration(self, ctx):
+                return HookDecision(notes=["never runs"])
+
+        halted = await CompositeHook([Quiet(), Halter(), Never()]).after_iteration(ctx)
+        assert halted.short_circuit_result == "done"
+        assert halted.notes == ["quiet: looked, passed", "halter: replaced the draft"]
+
+        chained = await CompositeHook([Quiet(), Quiet()]).after_iteration(ctx)
+        assert chained.notes == ["quiet: looked, passed", "quiet: looked, passed"]
+
+    async def test_inbound_text_chains_through_inbound_content(self, ctx):
+        class Memo(AgentHook):
+            async def before_user_inbound(self, ctx):
+                return HookDecision(modified_content=f"[memo]\n\n{ctx.inbound_content}")
+
+        class Reminder(AgentHook):
+            async def before_user_inbound(self, ctx):
+                return HookDecision(modified_content=f"{ctx.inbound_content}\n\n[reminder]")
+
+        ctx.inbound_content = "what changed?"
+        decision = await CompositeHook([Memo(), Reminder()]).before_user_inbound(ctx)
+        assert decision.modified_content == "[memo]\n\nwhat changed?\n\n[reminder]"
+        assert ctx.outbound_content is None
+
+
+def test_the_factory_loop_surface_is_versioned() -> None:
+    """The tier's word is "versioned with the factory loop" -- but the hook
+    vocabulary grew five context fields and a phase with no number moving, so
+    versioned was prose rather than a mechanism. The roster below pins the
+    surface to the declared version: growing one without the other is red,
+    and the bump is what a reviewer (and a product hook author) sees.
+    """
+    import dataclasses
+
+    import raven.contracts.loop_hooks as lh
+
+    surface = {
+        "context": sorted(f.name for f in dataclasses.fields(lh.AgentHookContext)),
+        "decision": sorted(f.name for f in dataclasses.fields(lh.HookDecision)),
+        "phases": sorted(
+            name for name, member in vars(lh.AgentHook).items() if callable(member) and not name.startswith("_")
+        ),
+    }
+    pinned = {
+        # 1 was the pre-metadata surface (no shared turn dict, no session
+        # history, no inbound rewrite); it shipped unnumbered and is not
+        # reconstructed here.
+        2: {
+            "context": [
+                "inbound_content",
+                "iteration",
+                "messages",
+                "metadata",
+                "outbound_content",
+                "response",
+                "session_history",
+                "session_key",
+                "tools",
+                "turn_base",
+                "turn_question",
+                "turn_request",
+            ],
+            "decision": [
+                "append_note",
+                "modified_content",
+                "modified_tools",
+                "notes",
+                "pass_through",
+                "rollback",
+                "rollback_inject",
+                "rollback_overrides",
+                "short_circuit_result",
+            ],
+            "phases": [
+                "after_iteration",
+                "after_send",
+                "before_execute_tools",
+                "before_iteration",
+                "before_user_inbound",
+                "terminal_answerless",
+            ],
+        },
+        3: {
+            "context": [
+                "context_window_tokens",
+                "inbound_content",
+                "iteration",
+                "max_iterations",
+                "messages",
+                "metadata",
+                "outbound_content",
+                "response",
+                "session_history",
+                "session_key",
+                "tools",
+                "turn_base",
+                "turn_question",
+                "turn_request",
+            ],
+            "decision": [
+                "append_note",
+                "modified_content",
+                "modified_tools",
+                "notes",
+                "pass_through",
+                "rollback",
+                "rollback_inject",
+                "rollback_overrides",
+                "short_circuit_result",
+            ],
+            "phases": [
+                "after_iteration",
+                "after_send",
+                "before_execute_tools",
+                "before_iteration",
+                "before_user_inbound",
+                "terminal_answerless",
+            ],
+        },
+    }
+
+    assert lh.FACTORY_LOOP_SURFACE_VERSION in pinned, (
+        "a new surface version needs its roster pinned here in the same change"
+    )
+    assert surface == pinned[lh.FACTORY_LOOP_SURFACE_VERSION], (
+        "the hook surface changed: bump FACTORY_LOOP_SURFACE_VERSION in "
+        "raven/contracts/loop_hooks.py and pin the new roster here -- growing "
+        "one without the other is the drift this test exists to stop"
+    )

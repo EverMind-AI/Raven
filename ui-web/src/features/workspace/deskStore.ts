@@ -33,7 +33,7 @@ import type { WsChange } from './types'
 export type DeskIntent =
   | { k: 'file'; path: string }
   | { k: 'agent'; agent: string; handle: string; run?: string; node?: string }
-  | { k: 'record'; id?: string; run?: string; node?: string }
+  | { k: 'record'; id?: string; run?: string; node?: string; label?: string }
 
 export interface DeskSaved {
   tab: DeskTab
@@ -74,7 +74,13 @@ const intentOf = (pane: DeskPane): DeskIntent | null => {
   if (pane.kind === 'agent-record') {
     const row = pane.row
     if (row.kind === 'dag') {
-      return row.run_id && row.node ? { k: 'record', run: row.run_id, node: row.node } : null
+      if (!row.run_id || !row.node) return null
+      /* The heading too, because the pair alone cannot rebuild it. A record pane
+         is headed by what the node was for, and the summary that says so lives on
+         the run -- which a replay may not have read yet, and may never read if
+         the run's directory has since been cleaned. What the reader was looking
+         at is a thing the reader's own note can hold. */
+      return { k: 'record', run: row.run_id, node: row.node, ...(row.label ? { label: row.label } : {}) }
     }
     return row.id ? { k: 'record', id: row.id } : null
   }
