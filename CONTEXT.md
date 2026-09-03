@@ -581,6 +581,10 @@ At read time an attempt id equals the trace id unless an Attempt Definition in
 addressable as an attempt. Legacy logs may carry a span-level `attempt.id`
 attribute, which read paths keep resolving; new spans never carry it
 (`attempt.id` is a reserved attribute key stripped by `raven/tracing/spans.py`).
+`latest_attempt` (`raven/trajectory/store.py`) answers "the attempt that just
+happened": the most recent attempt containing at least one `session.turn` span —
+background/startup traces (plugin loads, memory consolidation) never qualify,
+and a group whose turns carry several distinct session keys is skipped entirely.
 _Avoid_: "run id" / "task id" — neither is bound to span records.
 
 **Attempt Definition** (`raven/trajectory/store.py`):

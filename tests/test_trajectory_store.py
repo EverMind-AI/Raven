@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import multiprocessing
+from datetime import datetime, timezone
 
 import pytest
 
@@ -54,6 +55,39 @@ def _span(trace_id, attempt_id=None, session_key=None, name="session.turn"):
         "name": name,
         "attributes": attributes,
     }
+
+
+def _timed_span(
+    trace_id, span_id, *, name="session.turn", start=None, end=None, session_key=None, preview=None, attempt_id=None
+):
+    """Span with explicit id and time fields, for latest_attempt aggregation tests."""
+    attributes = {}
+    if session_key is not None:
+        attributes["session.key"] = session_key
+    if preview is not None:
+        attributes["turn.input_preview"] = preview
+    if attempt_id is not None:
+        attributes["attempt.id"] = attempt_id
+    span = {
+        "schemaVersion": "audit.span.v1",
+        "traceId": trace_id,
+        "spanId": span_id,
+        "name": name,
+        "attributes": attributes,
+    }
+    if start is not None:
+        span["startTime"] = start
+    if end is not None:
+        span["endTime"] = end
+    return span
+
+
+def _iso(hour, minute=0):
+    return f"2026-09-03T{hour:02d}:{minute:02d}:00+00:00"
+
+
+def _utc(hour, minute=0):
+    return datetime(2026, 9, 3, hour, minute, tzinfo=timezone.utc)
 
 
 class TestVerdicts:
@@ -913,6 +947,188 @@ class TestAttemptDefinitions:
         defs = tstore.definitions(tmp_path)
         assert defs[x]["traces"] == ["trace-a", "trace-b"]
         assert defs["att-fresh-1"]["traces"] == ["trace-c", "trace-d"]
+
+
+class TestLatestAttempt:
+    def _log(self, tmp_path, spans):
+        _write_log(tmp_path / "logs" / "audit-spans.log", spans)
+
+    def test_picks_latest_across_traces_and_sessions(self, tmp_path):
+        self._log(
+            tmp_path,
+            [
+                _timed_span("t1", "s1", session_key="cli:a", start=_iso(9), end=_iso(9, 5), preview="first"),
+                _timed_span("t2", "s2", session_key="cli:b", start=_iso(10), end=_iso(10, 5), preview="second"),
+                _timed_span("t3", "s3", session_key="cli:a", start=_iso(9, 30), end=_iso(9, 35), preview="third"),
+            ],
+        )
+        info = tstore.latest_attempt(tmp_path)
+        assert info == tstore.AttemptInfo("t2", "cli:b", _utc(10), _utc(10, 5), 1, "second")
+
+    def test_merged_attempt_ranks_by_group_last_time(self, tmp_path):
+        self._log(
+            tmp_path,
+            [
+                _timed_span("ta", "sa", session_key="cli:a", start=_iso(9), end=_iso(9, 5), preview="pa"),
+                _timed_span("tc", "sc", session_key="cli:c", start=_iso(10), end=_iso(10, 5), preview="pc"),
+                _timed_span("tb", "sb", session_key="cli:a", start=_iso(11), end=_iso(11, 5), preview="pb"),
+            ],
+        )
+        aid = tstore.merge_attempts(["ta", "tb"], state_dir=tmp_path)
+
+        info = tstore.latest_attempt(tmp_path)
+        assert info.attempt_id == aid
+        assert info.turn_count == 2
+        assert (info.started_at, info.ended_at) == (_utc(9), _utc(11, 5))
+        assert info.last_input_preview == "pb"
+
+    def test_session_filter_limits_candidates(self, tmp_path):
+        self._log(
+            tmp_path,
+            [
+                _timed_span("t1", "s1", session_key="cli:a", end=_iso(9), preview="pa"),
+                _timed_span("t2", "s2", session_key="cli:b", end=_iso(10), preview="pb"),
+            ],
+        )
+        assert tstore.latest_attempt(tmp_path).attempt_id == "t2"
+        assert tstore.latest_attempt(tmp_path, session_key="cli:a").attempt_id == "t1"
+        assert tstore.latest_attempt(tmp_path, session_key="cli:zzz") is None
+
+    def test_empty_log_returns_none(self, tmp_path):
+        assert tstore.latest_attempt(tmp_path) is None
+
+    def test_checkpoint_and_final_collapse_to_one_turn(self, tmp_path):
+        self._log(
+            tmp_path,
+            [
+                _timed_span("t1", "s1", session_key="cli:a", start=_iso(10), end=_iso(10), preview="in-progress"),
+                _timed_span("t1", "s1", session_key="cli:a", start=_iso(10), end=_iso(10, 7), preview="final"),
+            ],
+        )
+        info = tstore.latest_attempt(tmp_path)
+        assert info.turn_count == 1
+        assert info.ended_at == _utc(10, 7)
+        assert info.last_input_preview == "final"
+
+    def test_last_turn_chosen_by_time_not_write_order(self, tmp_path):
+        self._log(
+            tmp_path,
+            [
+                _timed_span("t1", "s-late", session_key="cli:a", end=_iso(12), preview="late"),
+                _timed_span("t1", "s-early", session_key="cli:a", end=_iso(11), preview="early"),
+            ],
+        )
+        info = tstore.latest_attempt(tmp_path)
+        assert info.turn_count == 2
+        assert info.last_input_preview == "late"
+
+    def test_last_turn_without_preview_stays_none(self, tmp_path):
+        self._log(
+            tmp_path,
+            [
+                _timed_span("t1", "s1", session_key="cli:a", end=_iso(11), preview="early"),
+                _timed_span("t1", "s2", session_key="cli:a", end=_iso(12)),
+            ],
+        )
+        assert tstore.latest_attempt(tmp_path).last_input_preview is None
+
+    def test_malformed_fields_degrade_without_crashing(self, tmp_path):
+        junk_ids = {
+            "traceId": ["l"],
+            "spanId": {"d": 1},
+            "name": "session.turn",
+            "endTime": _iso(13),
+            "attributes": {"session.key": ["x"], "turn.input_preview": {"p": 1}, "attempt.id": ["a"]},
+        }
+        junk_ids_too = {"traceId": None, "spanId": "s-x", "name": "session.turn", "endTime": _iso(13), "attributes": {}}
+        odd_attrs = {
+            "traceId": "t2",
+            "spanId": "s2",
+            "name": "session.turn",
+            "endTime": _iso(12),
+            "attributes": {"session.key": {"a": 1}, "turn.input_preview": ["x"]},
+        }
+        good = _timed_span("t1", "s1", session_key="cli:a", end=_iso(10), preview="ok")
+        self._log(tmp_path, [junk_ids, good, junk_ids_too, odd_attrs])
+
+        info = tstore.latest_attempt(tmp_path)
+        assert info.attempt_id == "t2"
+        assert info.session_key is None
+        assert info.last_input_preview is None
+        assert tstore.latest_attempt(tmp_path, session_key="cli:a").attempt_id == "t1"
+
+    def test_non_turn_trace_never_wins(self, tmp_path):
+        turn = _timed_span("t1", "s1", session_key="cli:a", end=_iso(10), preview="p")
+        background = _timed_span("t9", "s9", name="plugin.load", end=_iso(11))
+        self._log(tmp_path, [turn, background])
+        assert tstore.latest_attempt(tmp_path).attempt_id == "t1"
+
+        self._log(tmp_path, [background])
+        assert tstore.latest_attempt(tmp_path) is None
+
+    def test_session_filter_returns_full_merged_stats(self, tmp_path):
+        self._log(
+            tmp_path,
+            [
+                _timed_span("ta", "sa", session_key="cli:a", start=_iso(10), end=_iso(10, 5), preview="pa"),
+                _timed_span("ta", "sa2", name="tool.call", start=_iso(9, 59), end=_iso(10, 10)),
+                _timed_span("tb", "sb", start=_iso(10, 20), end=_iso(10, 30), preview="pb"),
+            ],
+        )
+        aid = tstore.merge_attempts(["ta", "tb"], state_dir=tmp_path)
+
+        info = tstore.latest_attempt(tmp_path, session_key="cli:a")
+        assert info.attempt_id == aid
+        assert info.turn_count == 2
+        assert (info.started_at, info.ended_at) == (_utc(9, 59), _utc(10, 30))
+        assert info.last_input_preview == "pb"
+
+    def test_multi_session_group_never_a_candidate(self, tmp_path):
+        normal = _timed_span("t1", "s1", session_key="cli:a", end=_iso(10), preview="ok")
+        legacy_x = _timed_span("t2", "s2", session_key="cli:x", end=_iso(11), attempt_id="legacy-1", preview="x")
+        legacy_y = _timed_span("t3", "s3", session_key="cli:y", end=_iso(12), attempt_id="legacy-1", preview="y")
+        self._log(tmp_path, [normal, legacy_x, legacy_y])
+
+        assert tstore.latest_attempt(tmp_path).attempt_id == "t1"
+        assert tstore.latest_attempt(tmp_path, session_key="cli:x") is None
+        assert tstore.latest_attempt(tmp_path, session_key="cli:y") is None
+
+        self._log(tmp_path, [legacy_x, legacy_y])
+        assert tstore.latest_attempt(tmp_path) is None
+
+    def test_dirty_times_never_beat_valid_ones(self, tmp_path):
+        self._log(
+            tmp_path,
+            [
+                _timed_span("t1", "s1", session_key="cli:a", end=_iso(10), preview="v"),
+                _timed_span("t2", "s2", session_key="cli:b", start=_iso(9), end="zzz"),
+                _timed_span("t3", "s3", session_key="cli:c", start=_iso(9, 30)),
+                _timed_span("t4", "s4", session_key="cli:d"),
+            ],
+        )
+        assert tstore.latest_attempt(tmp_path).attempt_id == "t1"
+
+        self._log(tmp_path, [_timed_span("t5", "s5"), _timed_span("t6", "s6")])
+        info = tstore.latest_attempt(tmp_path)
+        assert info.attempt_id == "t6"
+        assert (info.started_at, info.ended_at) == (None, None)
+
+    def test_mixed_timezones_normalize_to_utc(self, tmp_path):
+        self._log(
+            tmp_path,
+            [
+                _timed_span("tx", "sx", session_key="cli:x", end="2026-09-03T10:00:00+00:00", preview="px"),
+                _timed_span("ty", "sy", session_key="cli:y", end="2026-09-03T17:00:00+08:00", preview="py"),
+                _timed_span("tz", "sz", session_key="cli:z", end="2026-09-03T09:30:00", preview="pz"),
+                _timed_span("tw", "sw", session_key="cli:w", end="not-a-time", preview="pw"),
+            ],
+        )
+        info = tstore.latest_attempt(tmp_path)
+        assert info.attempt_id == "tx"
+        assert info.ended_at == _utc(10)
+        assert info.ended_at.tzinfo == timezone.utc
+        assert tstore.latest_attempt(tmp_path, session_key="cli:y").ended_at == _utc(9)
+        assert tstore.latest_attempt(tmp_path, session_key="cli:z").ended_at == _utc(9, 30)
 
 
 def test_end_to_end_with_real_tracer(tmp_path, monkeypatch):

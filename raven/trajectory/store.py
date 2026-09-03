@@ -36,6 +36,8 @@ Reading
 so callers address trajectories without knowing where rotation put them.
 Filter ids match a definition's member set when one exists, else ``attempt.id``
 OR ``traceId`` — the names a trajectory is known by without a definition.
+:func:`latest_attempt` aggregates those spans into per-attempt summaries and
+answers "the attempt that just happened" for bug reporting.
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ from __future__ import annotations
 import json
 import secrets
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Sequence, TypeVar
@@ -84,6 +87,25 @@ def _str_value(value: Any) -> str | None:
     hashing, sorting, or rendering downstream, so readers treat any non-string
     field as absent."""
     return value if isinstance(value, str) and value else None
+
+
+def _parse_time(value: Any) -> datetime | None:
+    """``value`` as a UTC-aware datetime, or None when missing/unparseable.
+
+    Every accepted stamp is normalized to UTC: naive strings are interpreted
+    as UTC (the tracer has only ever written UTC-aware ISO, so naive values
+    are legacy dirt) — a naive datetime leaking into min/max/sort against an
+    aware one raises TypeError."""
+    text = _str_value(value)
+    if text is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def pins(state_dir: Path | None = None) -> dict[str, dict[str, Any]]:
@@ -685,3 +707,105 @@ def iter_spans(
             if session_key is not None and attrs.get("session.key") != session_key:
                 continue
             yield span
+
+
+_EPOCH = datetime.min.replace(tzinfo=timezone.utc)
+
+
+@dataclass(frozen=True)
+class AttemptInfo:
+    """One attempt's aggregate summary as :func:`latest_attempt` returns it.
+
+    Times are UTC-aware when present, None when no member span carries a valid
+    stamp. ``last_input_preview`` is strictly the newest turn's
+    ``turn.input_preview`` — an older turn's preview must never impersonate
+    the "last input" a confirmation prompt shows, so a missing attribute on
+    the newest turn yields None instead of falling back."""
+
+    attempt_id: str
+    session_key: str | None
+    started_at: datetime | None
+    ended_at: datetime | None
+    turn_count: int
+    last_input_preview: str | None
+
+
+def latest_attempt(state_dir: Path | None = None, *, session_key: str | None = None) -> AttemptInfo | None:
+    """The most recent attempt containing at least one turn, or None.
+
+    Answers "the run that just happened" for bug reporting, so eligibility is
+    strict: an attempt qualifies only when it contains a ``session.turn`` span
+    (background/startup traces such as plugin loads never win), and a group
+    whose turns carry several distinct session keys is skipped entirely —
+    the write path already rejects cross-session merges, and a confirmation
+    prompt could not name such a group's session. ``session_key`` restricts
+    candidates after full aggregation, so the returned counts and time range
+    always cover the whole attempt. Candidates are ordered by last valid span
+    time (attempts with no valid time never beat timed ones); log write order
+    breaks ties. Read-only: no pin, no definition change.
+    """
+    defs = definitions(state_dir)
+    owner_by_trace = {t: def_id for def_id, entry in defs.items() for t in entry["traces"]}
+
+    # Physical records collapse to logical spans by (traceId, spanId), last
+    # write wins (a turn checkpoints an in-progress record before its final
+    # one); records without both ids stay isolated rather than merging.
+    logical: dict[Any, tuple[int, dict[str, Any]]] = {}
+    bogus = 0
+    for index, span in enumerate(iter_spans(state_dir)):
+        trace_id, span_id = _str_value(span.get("traceId")), _str_value(span.get("spanId"))
+        if trace_id and span_id:
+            key: Any = (trace_id, span_id)
+        else:
+            key = ("?", bogus)
+            bogus += 1
+        logical[key] = (index, span)
+
+    groups: dict[str, dict[str, Any]] = {}
+    for index, span in logical.values():
+        attrs = _span_attrs(span)
+        trace_id = _str_value(span.get("traceId"))
+        owner = owner_by_trace.get(trace_id) if trace_id else None
+        aid = owner or _str_value(attrs.get("attempt.id")) or trace_id
+        if not aid:
+            continue
+        g = groups.setdefault(
+            aid,
+            {"started": None, "ended": None, "turns": 0, "sessions": set(), "last_index": index, "last_turn": None},
+        )
+        g["last_index"] = max(g["last_index"], index)
+        start, end = _parse_time(span.get("startTime")), _parse_time(span.get("endTime"))
+        eff_start, eff_end = start or end, end or start
+        if eff_start and (g["started"] is None or eff_start < g["started"]):
+            g["started"] = eff_start
+        if eff_end and (g["ended"] is None or eff_end > g["ended"]):
+            g["ended"] = eff_end
+        if span.get("name") == "session.turn":
+            g["turns"] += 1
+            turn_session = _str_value(attrs.get("session.key"))
+            if turn_session:
+                g["sessions"].add(turn_session)
+            rank = (eff_end is not None, eff_end or _EPOCH, index)
+            if g["last_turn"] is None or rank > g["last_turn"][0]:
+                g["last_turn"] = (rank, _str_value(attrs.get("turn.input_preview")))
+
+    best: tuple[tuple[bool, datetime, int], str, dict[str, Any]] | None = None
+    for aid, g in groups.items():
+        if not g["turns"] or len(g["sessions"]) > 1:
+            continue
+        if session_key is not None and next(iter(g["sessions"]), None) != session_key:
+            continue
+        rank = (g["ended"] is not None, g["ended"] or _EPOCH, g["last_index"])
+        if best is None or rank > best[0]:
+            best = (rank, aid, g)
+    if best is None:
+        return None
+    _, aid, g = best
+    return AttemptInfo(
+        attempt_id=aid,
+        session_key=next(iter(g["sessions"]), None),
+        started_at=g["started"],
+        ended_at=g["ended"],
+        turn_count=g["turns"],
+        last_input_preview=g["last_turn"][1] if g["last_turn"] else None,
+    )

@@ -73,11 +73,13 @@ from raven.trajectory.replay import (
 )
 from raven.trajectory.report import LocalTarballUploader, Uploader, get_uploader, pack_report
 from raven.trajectory.store import (
+    AttemptInfo,
     attempt_alias_ids,
     attempt_members,
     definitions,
     is_pinned,
     iter_spans,
+    latest_attempt,
     merge_attempts,
     new_attempt_id,
     owning_attempt,
@@ -101,6 +103,7 @@ from raven.trajectory.verdict import (
 __all__ = [
     "BUNDLE_FORMAT_VERSION",
     "VERDICT_STATUSES",
+    "AttemptInfo",
     "CassetteReport",
     "Check",
     "Divergence",
@@ -127,6 +130,7 @@ __all__ = [
     "get_uploader",
     "is_pinned",
     "iter_spans",
+    "latest_attempt",
     "latest_verdict",
     "load_expectation",
     "load_recording",
