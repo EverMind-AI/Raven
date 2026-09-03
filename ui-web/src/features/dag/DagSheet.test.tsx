@@ -2,9 +2,15 @@
 import { act } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { _resetForTests as rackReset, sync as rackSync } from '../composer/sheets'
+import {
+  add as rackAdd,
+  remove as rackRemove,
+  _resetForTests as rackReset,
+  sync as rackSync,
+} from '../composer/sheets'
 import { back as subBack, openDagNode, _resetForTests as subReset } from '../subagents/store'
 import { advance, forget, resume, run, settle, start, sync, touch, _resetForTests } from './mount'
+import { fold as storeFold } from './store'
 import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
 
 import type { Shell } from '../../shell/bridge'
@@ -520,5 +526,112 @@ describe('the two live reports the sheet takes', () => {
     })
 
     expect(run('a')?.folded).toBe(true)
+  })
+  it('folds itself while the reader is being asked something, and opens after', () => {
+    /* An approval docks in the same rack, and a graph is tall: under a running
+       one the question goes below the fold, so the reader is asked for a
+       decision they cannot see. */
+    act(() => { start('a', graph('r1')) })
+    expect(run('a')?.folded).toBe(false)
+
+    const ask = document.createElement('div')
+    ask.dataset.asks = '1'
+    act(() => { rackAdd(ask, 'a') })
+    expect(run('a')?.folded).toBe(true)
+
+    act(() => { rackRemove(ask) })
+    expect(run('a')?.folded).toBe(false)
+  })
+
+  it('leaves a graph the reader had already folded folded', () => {
+    /* Back where they were, not where the code would prefer. */
+    act(() => { start('a', graph('r1')) })
+    run('a')!.folded = true
+
+    const ask = document.createElement('div')
+    ask.dataset.asks = '1'
+    act(() => { rackAdd(ask, 'a') })
+    act(() => { rackRemove(ask) })
+
+    expect(run('a')?.folded).toBe(true)
+  })
+
+  it('leaves the fold alone once the reader has taken it back', () => {
+    /* Unfolded by hand while the question stood: the fold is theirs again, and
+       answering must not take it a second time. Through `fold`, which is the
+       reader's only path to it -- writing the flag directly would be a state the
+       product cannot reach. */
+    act(() => { start('a', graph('r1')) })
+    const ask = document.createElement('div')
+    ask.dataset.asks = '1'
+    act(() => { rackAdd(ask, 'a') })
+    expect(run('a')?.folded).toBe(true)
+
+    act(() => { storeFold('a', false) })
+    act(() => { rackRemove(ask) })
+
+    expect(run('a')?.folded).toBe(false)
+  })
+
+  it('keeps the fold the reader ended on, however many times they changed it', () => {
+    /* The one the ownership record exists for: unfold, then fold again, all
+       while the question stands. Their second decision looks exactly like the
+       one taken on their behalf -- `folded` is true either way -- so restoring
+       on the flag alone threw it away. */
+    act(() => { start('a', graph('r1')) })
+    const ask = document.createElement('div')
+    ask.dataset.asks = '1'
+    act(() => { rackAdd(ask, 'a') })
+    expect(run('a')?.folded).toBe(true)
+
+    act(() => { storeFold('a', false) })
+    act(() => { storeFold('a', true) })
+    act(() => { rackRemove(ask) })
+
+    expect(run('a')?.folded).toBe(true)
+  })
+
+  it('steps aside for a clarification as it does for an approval', () => {
+    /* Both are questions the turn is waiting on, and the contract in `sheets.ts`
+       names both. The graph must not care which one docked. */
+    act(() => { start('a', graph('r1')) })
+    const ask = document.createElement('div')
+    ask.className = 'csheet'
+    ask.dataset.asks = '1'
+
+    act(() => { rackAdd(ask, 'a') })
+    expect(run('a')?.folded).toBe(true)
+
+    act(() => { rackRemove(ask) })
+    expect(run('a')?.folded).toBe(false)
+  })
+
+  it('steps aside when it replaces a graph a question was already standing over', () => {
+    /* A replacement changes nothing in the rack, so the asking watcher never
+       fires for it: the new run has to be handed the state the rack is already
+       in, or the question it lands over goes back below the fold. Driven
+       through `start`, the way `dag.run_started` reaches this island, rather
+       than by calling the fold itself. */
+    act(() => { start('a', graph('r1')) })
+    const ask = document.createElement('div')
+    ask.dataset.asks = '1'
+    act(() => { rackAdd(ask, 'a') })
+    expect(run('a')?.folded).toBe(true)
+
+    act(() => { start('a', graph('r2')) })
+    expect(run('a')!.run_id).toBe('r2')
+    expect(run('a')?.folded).toBe(true)
+
+    /* And the claim is the new run's, so answering still gives it back. */
+    act(() => { rackRemove(ask) })
+    expect(run('a')?.folded).toBe(false)
+  })
+
+  it('ignores a sheet that only shows something', () => {
+    act(() => { start('a', graph('r1')) })
+    const shown = document.createElement('div')
+    act(() => { rackAdd(shown, 'a') })
+
+    expect(run('a')?.folded).toBe(false)
   })
 })
