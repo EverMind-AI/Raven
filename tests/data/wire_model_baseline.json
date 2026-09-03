@@ -128,6 +128,15 @@
       "vendorx/zz-probe-1": "vendorx/zz-probe-1",
       "zz-probe-1": "zz-probe-1"
     },
+    "minimaxi": {
+      "minimax/zz-probe-1": "minimax/zz-probe-1",
+      "minimaxi-probe": "minimax/minimaxi-probe",
+      "minimaxi/vendorx/zz-probe-1": "minimax/vendorx/zz-probe-1",
+      "minimaxi/zz-probe-1": "minimax/zz-probe-1",
+      "openrouter/zz-probe-1": "openrouter/zz-probe-1",
+      "vendorx/zz-probe-1": "vendorx/zz-probe-1",
+      "zz-probe-1": "zz-probe-1"
+    },
     "moonshot": {
       "moonshot-probe": "moonshot/moonshot-probe",
       "moonshot/vendorx/zz-probe-1": "moonshot/vendorx/zz-probe-1",

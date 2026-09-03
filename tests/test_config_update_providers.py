@@ -570,6 +570,31 @@ def test_test_provider_200_returns_ok_with_models_count(cfg_path: Path) -> None:
     assert result["http_status"] == 200
 
 
+def test_test_provider_reports_the_address_it_probed(cfg_path: Path) -> None:
+    """MiniMax stores no api_base of its own -- the registry default is what the
+    probe resolves and contacts, so a caller that wants to name the endpoint has
+    no other way to learn which one that was."""
+    from raven.providers.registry import find_by_name
+
+    _seed_key(cfg_path, name="minimax", key="sk-minimax")
+    expected = find_by_name("minimax").default_api_base
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200, json={"data": [{"id": "MiniMax-M2"}]})
+
+    result = probe_provider("minimax", config_path=cfg_path, transport=_mock_transport(handler))
+    assert result["api_base"] == expected
+    assert seen == [expected.rstrip("/") + "/models"]
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={})
+
+    refused = probe_provider("minimax", config_path=cfg_path, transport=_mock_transport(refuse))
+    assert refused["api_base"] == expected, "a failed probe must still name the address it tried"
+
+
 def test_test_provider_200_extracts_model_ids(cfg_path: Path) -> None:
     _seed_key(cfg_path)
 

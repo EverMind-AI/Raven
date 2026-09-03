@@ -201,6 +201,7 @@ def test_onboard_help_lists_all_flags() -> None:
         "--non-interactive",
         "--yes",
         "--reset",
+        "--debug-http",
     ):
         assert flag in out, f"missing flag in help: {flag}"
 
@@ -3288,22 +3289,28 @@ def test_the_vendor_step_offers_litellm_names_the_picker_does_not_already_list()
     assert result["count"] > 50
 
 
-def test_minimax_precedes_deepseek_and_carries_the_open_source_partner_marker() -> None:
+def test_the_minimax_rows_precede_deepseek_and_carry_the_open_source_partner_marker() -> None:
     """A deliberate placement, so a later reordering cannot drop it silently.
 
     "open-source partner" rather than a bare "partner": in a list of vendors the
-    short form reads as paid placement. Only the API-key entry is marked -- the
-    OAuth ones are the same vendor and already carry "(OAuth)".
+    short form reads as paid placement. Only the international API-key entry is
+    marked -- the CN row is the same vendor one host over, and the OAuth ones
+    already carry "(OAuth)".
     """
     from raven.cli.onboard_commands import _CURATED_GROUPS
 
     api_key_group = next(g for g in _CURATED_GROUPS if g["kind"] == "api_key")
     names = [entry["name"] for entry in api_key_group["providers"]]
-    assert names.index("minimax") == names.index("deepseek") - 1
+    assert names.index("minimaxi") == names.index("minimax") + 1, "the CN row left its vendor's side"
+    assert names.index("minimaxi") == names.index("deepseek") - 1
 
     minimax = api_key_group["providers"][names.index("minimax")]
     assert minimax["label"] == "MiniMax (open-source partner)"
     assert minimax["label_zh"] == "MiniMax(开源合作伙伴)"
+
+    minimaxi = api_key_group["providers"][names.index("minimaxi")]
+    assert minimaxi["label"] == "MiniMax CN"
+    assert "partner" not in minimaxi["label"]
 
     oauth_group = next(g for g in _CURATED_GROUPS if g["kind"] == "oauth")
     for entry in oauth_group["providers"]:
@@ -4473,6 +4480,38 @@ def test_a_mistyped_local_address_can_be_retyped_without_losing_the_setup(
             warnings=[],
             skip_test=True,
         )
+
+
+def test_the_probed_endpoint_is_named_whenever_one_was_resolved(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A vendor like MiniMax ships an address and stores none, so the wizard
+    probes a URL the user never typed. Failing silently against it left the one
+    field worth checking invisible in exactly the case that needs it."""
+    base = "https://api.minimax.io/v1"
+
+    monkeypatch.setattr(
+        "raven.config.update_providers.test_provider",
+        lambda *a, **kw: {"ok": True, "status": "valid", "models_count": 2, "api_base": base},
+    )
+    ok, status, _models = onboard_commands._verify_provider("minimax")
+    assert (ok, status) == (True, "valid")
+    assert base in " ".join(capsys.readouterr().out.split())
+
+    monkeypatch.setattr(
+        "raven.config.update_providers.test_provider",
+        lambda *a, **kw: {"ok": False, "status": "invalid_key", "api_base": base, "error": "401"},
+    )
+    ok, status, _models = onboard_commands._verify_provider("minimax")
+    assert (ok, status) == (False, "invalid_key")
+    assert base in " ".join(capsys.readouterr().out.split()), "a failed probe hid the address it tried"
+
+    monkeypatch.setattr(
+        "raven.config.update_providers.test_provider",
+        lambda *a, **kw: {"ok": True, "status": "valid", "models_count": 1},
+    )
+    onboard_commands._verify_provider("minimax")
+    assert "Endpoint" not in capsys.readouterr().out, "no address resolved must print no field"
 
 
 @pytest.mark.parametrize(
