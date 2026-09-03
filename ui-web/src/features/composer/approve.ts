@@ -64,6 +64,9 @@ export function open(
   dropClass('csheet', key)
 
   const sheet = el('div', 'csheet perm')
+  /* This one asks: the reader cannot get on until they answer it. The rack
+     passes that on to whatever else is docked -- see `watchAsking`. */
+  sheet.dataset.asks = '1'
   sheet.setAttribute('role', 'dialog')
   sheet.setAttribute('aria-modal', 'true')
   sheet.setAttribute('aria-label', t('gui.confirm.title'))

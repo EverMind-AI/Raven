@@ -47,6 +47,48 @@ const SHEETS = new Map<string, Set<HTMLElement>>()
    collectable. */
 const TEARDOWN = new WeakMap<HTMLElement, () => void>()
 
+/* Who is waiting on the reader, per conversation, and who wants to know.
+ *
+ * A sheet that ASKS something -- an approval, a clarification -- interrupts:
+ * the reader cannot get on until they answer it. A sheet that only SHOWS
+ * something -- a graph running its nodes -- does not, and when the two dock
+ * together the rack runs out of room and the question ends up below the fold.
+ *
+ * The rack is the one place every tenant passes through, so it is the only one
+ * that can say "something is being asked here" without a tenant having to know
+ * about the others. It says exactly that and no more: what to do about it
+ * belongs to whoever is in the way, which is why this hands out a count rather
+ * than an instruction.
+ *
+ * A tenant marks itself by setting `dataset.asks` before it docks. */
+const WATCHERS = new Set<(key: string, asking: number) => void>()
+
+/* The count as it stands, for a tenant that arrives after the fact: a watcher
+   only hears about changes, and one docking under a question that is already up
+   was never told about it. */
+export const askingIn = (key: string): number =>
+  [...(SHEETS.get(key) || [])].filter((el) => el.dataset.asks === '1').length
+
+function told(key: string): void {
+  if (!key || !WATCHERS.size) return
+  const n = askingIn(key)
+  WATCHERS.forEach((fn) => {
+    try {
+      fn(key, n)
+    } catch {
+      /* A watcher is a courtesy; one that throws must not take the rack down. */
+    }
+  })
+}
+
+/* Hear when a conversation starts or stops being asked something. Returns the
+   unsubscribe -- nothing needs it yet, the one watcher lives as long as the
+   page does, and it is what keeps this testable. */
+export function watchAsking(fn: (key: string, asking: number) => void): () => void {
+  WATCHERS.add(fn)
+  return () => WATCHERS.delete(fn)
+}
+
 /* A draft is not a session yet -- the session pointer is null until the first
    message lands -- but a question can be asked during its first turn, so it
    needs a key of its own rather than sharing one with every other draft-less
@@ -64,6 +106,7 @@ export function add(el: HTMLElement, key?: string, teardown?: () => void): void 
   let bucket = SHEETS.get(k)
   if (!bucket) SHEETS.set(k, (bucket = new Set()))
   bucket.add(el)
+  told(k)
   /* First child, not last: sheets are flow content, and the newest belongs on
      top of the stack, above the field it interrupts. */
   if (k === session()) {
@@ -88,6 +131,7 @@ export function remove(el: HTMLElement): void {
     TEARDOWN.delete(el)
     down()
   }
+  told(el.dataset.sess as string)
   dockLift()
 }
 
@@ -124,4 +168,8 @@ export function forget(key: string): void {
 /* Test seam only: the Map outlives a test file's DOM. */
 export function _resetForTests(): void {
   SHEETS.clear()
+  /* Not the watchers. One is registered when its island's module loads, which
+     happens once for a whole test file, so clearing them here would unwire the
+     first reset and leave every test after it watching nothing. A test that adds
+     its own drops it through the unsubscribe. */
 }

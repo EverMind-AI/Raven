@@ -3,7 +3,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { fold, forget, run, saved, set, touch, _resetForTests } from './store'
+import { fold, forget, releaseFold, run, saved, set, takeFold, touch, _resetForTests } from './store'
 
 import type { DagRun } from './types'
 
@@ -94,5 +94,48 @@ describe('what a reload finds', () => {
 
   it('has nothing to say about a conversation that never had a sheet', () => {
     expect(saved('nobody')).toBeNull()
+  })
+})
+
+describe('a fold taken on the reader behalf', () => {
+  it('is not still claimed against the run that replaces it', () => {
+    /* The claim is about one run under one key. Replace the run while the
+       question still stands and the claim outlives what it described: the new
+       graph is never folded for the question, because `takeFold` sees the key
+       as already taken. */
+    set('a', graph('r1'))
+    takeFold('a')
+    expect(run('a')!.folded).toBe(true)
+
+    set('a', graph('r2'))
+    takeFold('a')
+
+    expect(run('a')!.folded).toBe(true)
+  })
+
+  it('is not still claimed after the sheet is dismissed', () => {
+    /* `forget` means the run this claim was about is gone. Left behind, the key
+       stays claimed and the next run to appear under it never steps aside. */
+    set('a', graph('r1'))
+    takeFold('a')
+    forget('a')
+
+    set('a', graph('r2'))
+    takeFold('a')
+
+    expect(run('a')!.folded).toBe(true)
+  })
+
+  it('does not unfold a run it never folded', () => {
+    /* The other half: with the claim dropped, the release must not reach into a
+       run it has no claim on. */
+    set('a', graph('r1'))
+    takeFold('a')
+    set('a', graph('r2'))
+    fold('a', true)
+
+    releaseFold('a')
+
+    expect(run('a')!.folded).toBe(true)
   })
 })
