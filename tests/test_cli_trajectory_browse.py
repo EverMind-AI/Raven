@@ -46,7 +46,8 @@ class _FakeQuestionary:
     - ``("pickall", [substr, ...])`` — checkbox: the values of all matching choices;
     - ``("hit", key, substr)`` — an injected extra key fired on the matching
       choice: returns ``_KeyHit(key, value)``;
-    - ``_CANCEL``           — ``ask()`` returns None (Ctrl+C / EOF);
+    - ``_CANCEL``           — Ctrl+C: ``unsafe_ask()`` raises KeyboardInterrupt
+      (the production path; the fallback ``ask()`` would return None);
     - ``_BACK``             — the injected Esc binding fired (returned verbatim);
     - a zero-arg callable   — invoked at answer time (side effects), its return used;
     - anything else         — returned verbatim.
@@ -97,7 +98,13 @@ class _FakeQuestionary:
             value = tbrowse._KeyHit(answer[1], picked)
         else:
             value = answer
-        return type("_Ask", (), {"ask": staticmethod(lambda: value)})()
+
+        def unsafe_ask():
+            if value is None:
+                raise KeyboardInterrupt
+            return value
+
+        return type("_Ask", (), {"ask": staticmethod(lambda: value), "unsafe_ask": staticmethod(unsafe_ask)})()
 
     def select(self, message, choices=None, **kw):
         return self._resolve("select", message, choices, kw)
@@ -425,7 +432,7 @@ def test_save_flow_bundles_by_member(state, workspace, monkeypatch, capsys):
 
     _browse(
         monkeypatch,
-        [("pick", "session"), ("pick", "#1"), ("pick", "Save"), _BACK, _BACK],
+        [("pick", "session"), ("pick", "#1"), ("pick", "Save"), _BACK, _CANCEL],
         workspace,
     )
 
@@ -436,7 +443,7 @@ def test_save_flow_bundles_by_member(state, workspace, monkeypatch, capsys):
 
 def test_minimize_flow_and_repeat(state, workspace, monkeypatch):
     _two_turn_log(state)
-    script = [("pick", "session"), ("pick", "#1"), ("pick", "Minimize"), _BACK, _BACK]
+    script = [("pick", "session"), ("pick", "#1"), ("pick", "Minimize"), _BACK, _CANCEL]
     monkeypatch.setattr(tbrowse, "minimize_bundle", _fake_minimize)
 
     _browse(monkeypatch, script, workspace)
@@ -466,7 +473,7 @@ def test_verdict_flow_records(state, workspace, monkeypatch):
             "wrong answer",
             "",
             _BACK,
-            _BACK,
+            _CANCEL,
         ],
         workspace,
     )
@@ -497,7 +504,7 @@ def test_full_cycle_merge_verdict_save_split(state, workspace, monkeypatch, caps
             ("pick", "Split"),
             True,
             _BACK,
-            _BACK,
+            _CANCEL,
         ],
         workspace,
     )
@@ -537,7 +544,7 @@ def test_report_declined_still_refreshes(state, workspace, monkeypatch, capsys):
             ("pick", "#1"),
             _BACK,
             _BACK,
-            _BACK,
+            _CANCEL,
         ],
         workspace,
     )
@@ -563,7 +570,7 @@ def test_minimize_failure_after_pack_refreshes(state, workspace, monkeypatch, ca
             ("pick", "#1"),
             _BACK,
             _BACK,
-            _BACK,
+            _CANCEL,
         ],
         workspace,
     )
@@ -600,7 +607,7 @@ def test_action_outputs_carry_no_ids(state, workspace, monkeypatch, capsys):
             ("pick", "Split"),
             True,
             _BACK,
-            _BACK,
+            _CANCEL,
         ],
         workspace,
     )
@@ -611,13 +618,13 @@ def test_action_outputs_carry_no_ids(state, workspace, monkeypatch, capsys):
 @pytest.mark.parametrize(
     "script, patch_target",
     [
-        ([("pick", "session"), ("pick", "#1"), ("pick", "Save"), _BACK, _BACK], "collect_bundle"),
+        ([("pick", "session"), ("pick", "#1"), ("pick", "Save"), _BACK, _CANCEL], "collect_bundle"),
         (
-            [("pick", "session"), ("pick", "#1"), ("pick", "Report"), _BACK, _BACK],
+            [("pick", "session"), ("pick", "#1"), ("pick", "Report"), _BACK, _CANCEL],
             "collect_bundle",
         ),
         (
-            [("pick", "session"), ("pick", "#1"), ("pick", "Minimize"), _BACK, _BACK],
+            [("pick", "session"), ("pick", "#1"), ("pick", "Minimize"), _BACK, _CANCEL],
             "collect_bundle",
         ),
         (
@@ -626,12 +633,12 @@ def test_action_outputs_carry_no_ids(state, workspace, monkeypatch, capsys):
                 ("hit", "m", "#1"),
                 ("pickall", ["#1", "#2"]),
                 _BACK,
-                _BACK,
+                _CANCEL,
             ],
             "merge_attempts",
         ),
         (
-            [("pick", "session"), ("pick", "#1"), ("pick", "Pin"), "keep", _BACK, _BACK],
+            [("pick", "session"), ("pick", "#1"), ("pick", "Pin"), "keep", _BACK, _CANCEL],
             "pin_attempt",
         ),
     ],
@@ -671,7 +678,7 @@ def test_failed_split_shows_safe_message(state, workspace, monkeypatch, capsys):
 
     fake = _browse(
         monkeypatch,
-        [("pick", "session"), ("pick", "#1"), ("pick", "Split"), True, _BACK, _BACK],
+        [("pick", "session"), ("pick", "#1"), ("pick", "Split"), True, _BACK, _CANCEL],
         workspace,
     )
 
@@ -709,7 +716,7 @@ def test_artifact_action_outputs_confine_ids_to_paths(state, workspace, monkeypa
             ("pick", "Report"),
             True,
             _BACK,
-            _BACK,
+            _CANCEL,
         ],
         workspace,
     )
@@ -737,7 +744,7 @@ def test_split_none_shows_stale_not_success(state, workspace, monkeypatch, capsy
             ("pick", "Split"),
             _confirm_then_drop,
             _BACK,
-            _BACK,
+            _CANCEL,
         ],
         workspace,
     )
@@ -764,7 +771,7 @@ def test_unpin_false_shows_stale_not_success(state, workspace, monkeypatch, caps
             ("pick", "Unpin"),
             _confirm_then_unpin,
             _BACK,
-            _BACK,
+            _CANCEL,
         ],
         workspace,
     )
@@ -858,23 +865,40 @@ def test_cancel_exits_cleanly_without_further_prompts(state, workspace, monkeypa
     assert len(fake.prompts) == len(script)
 
 
+def test_ask_prefers_unsafe_ask_and_maps_ctrl_c():
+    """_ask must take the unsafe_ask path and convert KeyboardInterrupt into
+    the browser-wide cancel: the safe ask() fallback would print questionary's
+    own "Cancelled by user" line next to the browser's exit notice."""
+
+    class _Prompt:
+        def unsafe_ask(self):
+            raise KeyboardInterrupt
+
+        def ask(self):
+            raise AssertionError("safe ask() must not be used when unsafe_ask exists")
+
+    with pytest.raises(tbrowse._CancelledError):
+        tbrowse._ask(_Prompt())
+
+
 def test_escape_walks_up_one_level_at_a_time(state, workspace, monkeypatch, capsys):
-    """Esc: action -> attempt list -> session list -> exit (a normal quit,
-    not the Ctrl+C 'Cancelled' path)."""
+    """Esc: action -> attempt list -> session list, then Ctrl+C quits."""
     _two_turn_log(state)
 
-    fake = _browse(monkeypatch, [("pick", "session"), ("pick", "#1"), _BACK, _BACK, _BACK], workspace)
+    fake = _browse(monkeypatch, [("pick", "session"), ("pick", "#1"), _BACK, _BACK, _CANCEL], workspace)
 
     messages = [m for kind, m, _ in fake.prompts if kind == "select"]
     assert messages == ["Session:", "Attempt:", "Action:", "Attempt:", "Session:"]
-    assert "Cancelled" not in capsys.readouterr().out
+    assert capsys.readouterr().out.count("Cancelled") == 1  # only the final Ctrl+C
 
 
-def test_escape_on_top_level_exits(state, workspace, monkeypatch, capsys):
+def test_escape_on_top_level_stays_until_ctrl_c(state, workspace, monkeypatch, capsys):
+    """Esc on the session screen is a guarded no-op (reflexive Esc must not
+    drop the browser); Ctrl+C is the only quit."""
     _two_turn_log(state)
-    fake = _browse(monkeypatch, [_BACK], workspace)
-    assert [m for _, m, _ in fake.prompts] == ["Session:"]
-    assert "Cancelled" not in capsys.readouterr().out
+    fake = _browse(monkeypatch, [_BACK, _BACK, _CANCEL], workspace)
+    assert [m for _, m, _ in fake.prompts] == ["Session:", "Session:", "Session:"]
+    assert "Cancelled" in capsys.readouterr().out
 
 
 def test_menu_screens_hide_back_exit_and_show_help(state, workspace, monkeypatch):
@@ -882,7 +906,7 @@ def test_menu_screens_hide_back_exit_and_show_help(state, workspace, monkeypatch
     separators directly under the title."""
     _two_turn_log(state)
 
-    fake = _browse(monkeypatch, [("pick", "session"), ("pick", "#1"), _BACK, _BACK, _BACK], workspace)
+    fake = _browse(monkeypatch, [("pick", "session"), ("pick", "#1"), _BACK, _BACK, _CANCEL], workspace)
 
     screens = {m: titles for kind, m, titles in fake.prompts if kind == "select"}
     for message, help_lines in [
@@ -933,9 +957,9 @@ def test_escape_cancels_action_without_side_effects(
     defs_before = dict(tstore.definitions(state))
 
     if action_pick == "Merge attempts":
-        script = [("pick", "session"), ("hit", "m", "#1"), *extra_answers, _BACK, _BACK, _BACK]
+        script = [("pick", "session"), ("hit", "m", "#1"), *extra_answers, _BACK, _BACK, _CANCEL]
     else:
-        script = [("pick", "session"), ("pick", "#1"), ("pick", action_pick), *extra_answers, _BACK, _BACK, _BACK]
+        script = [("pick", "session"), ("pick", "#1"), ("pick", action_pick), *extra_answers, _BACK, _BACK, _CANCEL]
 
     fake = _browse(monkeypatch, script, workspace)
 
@@ -944,7 +968,7 @@ def test_escape_cancels_action_without_side_effects(
     assert len(fake.prompts) == len(script)  # no extra prompt after the Esc
     assert absent not in out
     assert tbrowse._STALE_MESSAGE not in out
-    assert "Cancelled" not in out
+    assert out.count("Cancelled") == 1  # only the final Ctrl+C quit, not the Esc
     assert set(tstore.pins(state)) == pins_before
     assert dict(tstore.definitions(state)) == defs_before
     assert tverdict.read_verdicts(state) == []
@@ -958,7 +982,7 @@ def test_escape_on_report_confirm_keeps_bundle_and_pin(state, workspace, monkeyp
 
     fake = _browse(
         monkeypatch,
-        [("pick", "session"), ("pick", "#1"), ("pick", "Report"), _BACK, ("pick", "#1"), _BACK, _BACK, _BACK],
+        [("pick", "session"), ("pick", "#1"), ("pick", "Report"), _BACK, ("pick", "#1"), _BACK, _BACK, _CANCEL],
         workspace,
     )
 
@@ -1014,7 +1038,7 @@ def test_breadcrumbs_echo_navigation(state, workspace, monkeypatch, capsys):
 
     _browse(
         monkeypatch,
-        [("pick", "x[red]y"), ("pick", "#1"), ("pick", "Verdict"), "pass", "", "", _BACK, _BACK],
+        [("pick", "x[red]y"), ("pick", "#1"), ("pick", "Verdict"), "pass", "", "", _BACK, _CANCEL],
         workspace,
     )
 
@@ -1355,6 +1379,7 @@ def test_preview_wait_key_paths(key, done):
 
     with create_pipe_input() as pipe:
         q = tbrowse._wait_question(questionary, None, input=pipe, output=DummyOutput())
+        assert q.application.ttimeoutlen == tbrowse._ESC_FLUSH_TIMEOUT
         pipe.send_text(key)
         result = q.application.run()
 
@@ -1410,14 +1435,14 @@ def test_space_key_binding_returns_pointed_attempt():
 
 def test_space_previews_and_keeps_cursor(state, workspace, monkeypatch, capsys):
     _two_turn_log(state)
-    assert "Space preview" in tbrowse._HELP_ATTEMPT[1]
+    assert "[Space] preview" in tbrowse._HELP_ATTEMPT[1]
     scans = []
     real_scan = tbrowse.scan_sessions
     monkeypatch.setattr(tbrowse, "scan_sessions", lambda ws: scans.append(1) or real_scan(ws))
 
     fake = _browse(
         monkeypatch,
-        [("pick", "session"), ("hit", " ", "#1"), tbrowse._DONE, _BACK, _BACK],
+        [("pick", "session"), ("hit", " ", "#1"), tbrowse._DONE, _BACK, _CANCEL],
         workspace,
     )
 
@@ -1439,7 +1464,7 @@ def test_non_space_keyhit_on_attempt_row_is_noop(state, workspace, monkeypatch, 
 
     fake = _browse(
         monkeypatch,
-        [("pick", "session"), ("hit", "z", "#1"), _BACK, _BACK],
+        [("pick", "session"), ("hit", "z", "#1"), _BACK, _CANCEL],
         workspace,
     )
 
@@ -1458,7 +1483,7 @@ def test_m_key_opens_merge_and_merges(state, workspace, monkeypatch, capsys, key
 
     fake = _browse(
         monkeypatch,
-        [("pick", "session"), ("hit", key, "#2"), ("pickall", ["#1", "#2"]), _BACK, _BACK],
+        [("pick", "session"), ("hit", key, "#2"), ("pickall", ["#1", "#2"]), _BACK, _CANCEL],
         workspace,
     )
 
@@ -1472,7 +1497,7 @@ def test_merge_checkbox_shows_help_and_suppresses_instruction(state, workspace, 
 
     fake = _browse(
         monkeypatch,
-        [("pick", "session"), ("hit", "m", "#1"), _BACK, _BACK, _BACK],
+        [("pick", "session"), ("hit", "m", "#1"), _BACK, _BACK, _CANCEL],
         workspace,
     )
 
@@ -1494,10 +1519,10 @@ def test_merge_key_only_bound_with_multiple_attempts(state, workspace, monkeypat
         return real(questionary, style, message, help_lines, choices, **kw)
 
     monkeypatch.setattr(tbrowse, "_select_screen", spy)
-    _browse(monkeypatch, [("pick", "session"), _BACK, _BACK], workspace)
+    _browse(monkeypatch, [("pick", "session"), _BACK, _CANCEL], workspace)
 
     message, help_lines, extra_keys = next(r for r in recorded if r[0] == "Attempt:")
-    assert "M merge" in help_lines[1]
+    assert "[M] merge" in help_lines[1]
     assert {"m", "M"} <= set(extra_keys)
 
 
@@ -1511,10 +1536,10 @@ def test_merge_key_absent_with_single_attempt(state, workspace, monkeypatch):
         return real(questionary, style, message, help_lines, choices, **kw)
 
     monkeypatch.setattr(tbrowse, "_select_screen", spy)
-    fake = _browse(monkeypatch, [("pick", "session"), _BACK, _BACK], workspace)
+    fake = _browse(monkeypatch, [("pick", "session"), _BACK, _CANCEL], workspace)
 
     message, help_lines, extra_keys, _titles = next(r for r in recorded if r[0] == "Attempt:")
-    assert "M merge" not in help_lines[1]
+    assert "[M] merge" not in help_lines[1]
     assert "m" not in extra_keys and "M" not in extra_keys
     assert not any("Merge attempts" in t for _k, _m, titles in fake.prompts for t in titles)
 
@@ -1548,6 +1573,7 @@ def test_escape_binding_installs_on_every_prompt_kind(kind):
             q = questionary.confirm("m", **kwargs)
         tbrowse._inject_bindings(q)
         assert q.application.erase_when_done is True
+        assert q.application.ttimeoutlen == tbrowse._ESC_FLUSH_TIMEOUT
         pipe.send_text("\x1b")
         assert q.application.run() is tbrowse._BACK
 
@@ -1602,6 +1628,29 @@ def test_pointed_row_restyle_keeps_semantic_color():
     assert plain.color == success and not plain.bold
 
 
+def test_separator_lines_restyle_to_help_color():
+    """Help lines and table headers render with the readable ``help`` class,
+    not questionary's near-invisible ``separator`` — asserted on final attrs."""
+    questionary = pytest.importorskip("questionary")
+    create_pipe_input, DummyOutput = _pipe_io()
+    from raven.cli._theme import PALETTE, build_questionary_style
+
+    with create_pipe_input() as pipe:
+        q = questionary.select(
+            "m",
+            choices=[questionary.Separator("help line"), questionary.Choice("row", value="v")],
+            input=pipe,
+            output=DummyOutput(),
+        )
+        tbrowse._inject_bindings(q)
+        control = tbrowse._find_inquirer_control(q.application)
+        (sep_style,) = [tok[0] for tok in control.text() if tok[1] == "help line"]
+
+    assert "class:separator" not in sep_style
+    style = build_questionary_style("dark")
+    assert style.get_attrs_for_style_str(sep_style).color == PALETTE["dark"]["help"].lstrip("#")
+
+
 def test_selects_share_prompt_chrome(state, workspace, monkeypatch):
     """Every select/checkbox passes the shared QMARK and POINTER so the
     browser's prompt chrome matches the rest of the CLI."""
@@ -1621,7 +1670,7 @@ def test_selects_share_prompt_chrome(state, workspace, monkeypatch):
             "",
             "",
             _BACK,
-            _BACK,
+            _CANCEL,
         ],
         workspace,
     )
@@ -1647,7 +1696,7 @@ def test_merge_checkbox_validates_minimum(state, workspace, monkeypatch):
             ("hit", "m", "#1"),
             ("pickall", ["#1", "#2"]),
             _BACK,
-            _BACK,
+            _CANCEL,
         ],
         workspace,
     )
@@ -1673,7 +1722,7 @@ def test_pin_flow_uses_locked_pin_attempt(state, workspace, monkeypatch):
 
     _browse(
         monkeypatch,
-        [("pick", "session"), ("pick", "#1"), ("pick", "Pin"), "keep", _BACK, _BACK],
+        [("pick", "session"), ("pick", "#1"), ("pick", "Pin"), "keep", _BACK, _CANCEL],
         workspace,
     )
 
@@ -1755,7 +1804,7 @@ def test_nondefault_workspace_flows_into_save_and_minimize(state, tmp_path, monk
             ("pick", "#1"),
             ("pick", "Minimize"),
             _BACK,
-            _BACK,
+            _CANCEL,
         ],
         other,
     )

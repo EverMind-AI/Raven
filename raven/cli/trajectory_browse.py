@@ -15,8 +15,10 @@ Control flow contracts:
 - Every prompt gets an Escape binding injected after construction by merging a
   fresh key-binding registry (text/confirm expose a read-only
   ``_MergedKeyBindings``, so ``.add`` on the existing one is not an option).
-  Esc on a list screen returns ``_BACK`` and navigates one level up (the
-  session screen exits); Esc inside a running action goes through
+  Esc on a list screen returns ``_BACK`` and navigates one level up; at the
+  top-level session screen it stays put — quitting is Ctrl+C only, so a
+  reflexive Esc cannot drop the browser. Esc inside a running action goes
+  through
   :func:`_ask_action`, which raises :class:`_ActionCancelledError`, caught only at
   the action boundary — the sentinel never reaches a conversion or the data
   layer. A cancelled report keeps its pre-confirm side effects (bundle + pin),
@@ -91,22 +93,28 @@ _STALE_MESSAGE = "The action was rejected or the selected attempt is no longer a
 
 _HELP_SESSION = (
     "Sessions with recorded trajectories, most recent first.",
-    "↑↓ move · Enter open · Esc quit",
+    "[↑↓] move · [Enter] open · [Ctrl+C] quit",
 )
 _HELP_ATTEMPT = (
     "Attempts in the selected session, oldest first.",
-    "↑↓ move · Enter actions · Space preview · Esc back",
+    "[↑↓] move · [Enter] actions · [Space] preview · [Esc] back",
 )
 _HELP_ATTEMPT_MERGE = (
     "Attempts in the selected session, oldest first.",
-    "↑↓ move · Enter actions · Space preview · M merge · Esc back",
+    "[↑↓] move · [Enter] actions · [Space] preview · [M] merge · [Esc] back",
 )
-_MERGE_HINT = "Space toggle · Enter confirm · Esc cancel"
+_MERGE_HINT = "[Space] toggle · [Enter] confirm · [Esc] cancel"
 _HELP_ACTION = (
     "Run one action on the selected attempt.",
-    "↑↓ move · Enter run · Esc back",
+    "[↑↓] move · [Enter] run · [Esc] back",
 )
-_VERDICT_HINT = "↑↓ move · Enter record · Esc cancel"
+_VERDICT_HINT = "[↑↓] move · [Enter] record · [Esc] cancel"
+
+# Flush a lone ESC after 50ms instead of prompt_toolkit's 0.5s: the default
+# disambiguation wait (ESC prefixes every escape sequence) reads as lag on a
+# human keypress. Local terminals deliver sequences atomically; the worst
+# case on a slow remote is a split arrow-key sequence read as ESC.
+_ESC_FLUSH_TIMEOUT = 0.05
 
 _QUESTIONARY_INSTALL_HINT = (
     "[red]The interactive browser needs the questionary package.[/red]"
@@ -144,7 +152,14 @@ def _require_questionary() -> Any:
 
 
 def _ask(prompt: Any) -> Any:
-    value = prompt.ask()
+    # unsafe_ask + our own except: questionary's safe ask() prints its own
+    # "Cancelled by user" line, which would double the browser's exit notice
+    # now that Ctrl+C is the standard way out.
+    ask = getattr(prompt, "unsafe_ask", None) or prompt.ask
+    try:
+        value = ask()
+    except KeyboardInterrupt:
+        value = None
     if value is None:
         raise _CancelledError()
     return value
@@ -159,17 +174,18 @@ def _find_inquirer_control(app: Any) -> Any:
     return None
 
 
-def _restyle_pointed_row(control: Any) -> None:
-    """Restore row highlighting for formatted-text titles.
+def _restyle_list_rows(control: Any) -> None:
+    """Two render-time fixes questionary cannot express on its own.
 
-    questionary highlights the pointed row only for plain-string titles; token
-    lists render verbatim. The appended fragment deliberately carries no
-    foreground color so a cell's own semantic color (e.g. a green check)
-    survives — ``class:highlighted`` would override it with the body color.
+    The pointed row gains a bold fragment without a foreground color, so a
+    cell's own semantic color (e.g. a green check) survives — questionary only
+    highlights plain-string titles, and ``class:highlighted`` would override
+    the color. Separator lines (help text, table headers) move from the
+    near-invisible ``separator`` class to the readable ``help`` class.
     """
     original = control.text
 
-    def _with_bold_pointed_row() -> list:
+    def _restyled() -> list:
         tokens = []
         pointed = False
         for token in original():
@@ -179,10 +195,12 @@ def _restyle_pointed_row(control: Any) -> None:
                 token = (f"{token[0]} bold noreverse", *token[1:])
                 if "\n" in token[1]:
                     pointed = False
+            elif "class:separator" in token[0]:
+                token = (token[0].replace("class:separator", "class:help"), *token[1:])
             tokens.append(token)
         return tokens
 
-    control.text = _with_bold_pointed_row
+    control.text = _restyled
 
 
 def _inject_bindings(question: Any, extra_keys: tuple[str, ...] = ()) -> None:
@@ -200,7 +218,7 @@ def _inject_bindings(question: Any, extra_keys: tuple[str, ...] = ()) -> None:
 
     control = _find_inquirer_control(app)
     if control is not None:
-        _restyle_pointed_row(control)
+        _restyle_list_rows(control)
 
     injected = KeyBindings()
 
@@ -218,6 +236,7 @@ def _inject_bindings(question: Any, extra_keys: tuple[str, ...] = ()) -> None:
 
     app.key_bindings = merge_key_bindings([app.key_bindings, injected]) if app.key_bindings else injected
     app.erase_when_done = True
+    app.ttimeoutlen = _ESC_FLUSH_TIMEOUT
 
 
 def _ask_action(prompt: Any) -> Any:
@@ -315,6 +334,7 @@ def _wait_question(questionary: Any, style: Any, **kwargs: Any) -> Any:
 
     app.key_bindings = kb
     app.erase_when_done = True
+    app.ttimeoutlen = _ESC_FLUSH_TIMEOUT
     return question
 
 
@@ -899,9 +919,11 @@ def browse_trajectories(workspace: Path | None = None) -> None:
                 width = shutil.get_terminal_size((80, 24)).columns
                 header, row_tokens = _session_table(sessions, width)
                 choices = [questionary.Choice(tokens, value=s) for tokens, s in zip(row_tokens, sessions)]
-                picked = _select_screen(questionary, RAVEN_STYLE, "Session:", _HELP_SESSION, choices, header=header)
-                if picked is _BACK:
-                    return
+                picked = _BACK
+                while picked is _BACK:
+                    # Esc at the top level stays put: quitting is Ctrl+C
+                    # only, so a reflexive Esc cannot drop the browser.
+                    picked = _select_screen(questionary, RAVEN_STYLE, "Session:", _HELP_SESSION, choices, header=header)
                 selected = picked
                 current_key = selected.key
                 _crumb("Session", selected.title)

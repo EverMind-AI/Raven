@@ -164,6 +164,7 @@ def test_dark_questionary_style_byte_identical():
         "validation-toolbar": "fg:#ff5f5f bold",
         "text": "fg:#FFF5EA",
         "success": "fg:#3fb950",
+        "help": "fg:#9e9e9e",
     }
     got = dict(_theme.build_questionary_style("dark").style_rules)
     assert got == expected
@@ -180,21 +181,24 @@ def test_light_text_is_not_a_light_color():
     assert rules["highlighted"] == "fg:#24201a bold noreverse"
 
 
-@pytest.mark.parametrize("token", ["accent", "text", "selected", "border", "muted", "error", "disabled", "success"])
+@pytest.mark.parametrize(
+    "token", ["accent", "text", "selected", "border", "muted", "error", "disabled", "success", "help"]
+)
 def test_light_body_tokens_pass_wcag_on_white(token):
     assert _wcag_contrast(_theme.PALETTE["light"][token], "#ffffff") >= 4.5
 
 
-@pytest.mark.parametrize("token", ["accent", "text", "selected", "error", "success"])
+@pytest.mark.parametrize("token", ["accent", "text", "selected", "error", "success", "help"])
 def test_dark_body_tokens_pass_wcag_on_black(token):
     assert _wcag_contrast(_theme.PALETTE["dark"][token], "#1e1e1e") >= 4.5
 
 
 @pytest.mark.parametrize("scheme", ["light", "dark"])
-def test_success_token_mapped_in_both_faces(scheme):
-    hex_val = _theme.PALETTE[scheme]["success"]
-    assert dict(_theme.build_questionary_style(scheme).style_rules)["success"] == f"fg:{hex_val}"
-    assert str(_theme.build_rich_theme(scheme).styles["success"]) == hex_val
+@pytest.mark.parametrize("token", ["success", "help"])
+def test_added_tokens_mapped_in_both_faces(scheme, token):
+    hex_val = _theme.PALETTE[scheme][token]
+    assert dict(_theme.build_questionary_style(scheme).style_rules)[token] == f"fg:{hex_val}"
+    assert str(_theme.build_rich_theme(scheme).styles[token]) == hex_val
 
 
 # --- reduced color depth readability (D1 sentinel) ----------------------------
@@ -256,7 +260,19 @@ def test_onboard_panels_render_without_missing_style(scheme):
     console.print(table)  # would raise MissingStyle if 'accent' unresolved
 
 
-_THEME_KEYS = {"accent", "text", "heading", "selected", "border", "muted", "separator", "disabled", "error", "success"}
+_THEME_KEYS = {
+    "accent",
+    "text",
+    "heading",
+    "selected",
+    "border",
+    "muted",
+    "separator",
+    "disabled",
+    "error",
+    "success",
+    "help",
+}
 
 
 def test_no_compound_markup_mixes_theme_key():
