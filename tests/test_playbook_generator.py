@@ -253,6 +253,58 @@ async def test_repair_loop_feeds_errors_back():
     assert "ghost-agent" in repair_msg and "emit_playbook" in repair_msg
 
 
+async def test_project_path_param_is_repaired_without_a_duplicate_node_input():
+    """Regression for the production request that exposed the two validators drifting."""
+    base = {
+        "name": "detect-project-changes",
+        "description": "detect code changes in a project directory",
+        "taskSummary": "detect project changes",
+        "mode": "dag",
+        "confirm": False,
+        "triggers": {"keywords": ["detect changes", "project changes"]},
+        "params": {
+            "project_path": {
+                "type": "string",
+                "required": False,
+                "default": ".",
+                "description": "which project directory should be inspected?",
+            }
+        },
+        "nodes": [
+            {
+                "id": "detect-changes",
+                "subagent": "code-raven",
+                "nodeSummary": "detect project changes",
+                "promptTemplate": "在项目目录 ${params.project_path} 下检测代码变更",
+                "inputs": {"project_path": "${params.project_path}"},
+            }
+        ],
+    }
+    wrong_repair = json.loads(json.dumps(base))
+    wrong_repair["nodes"][0]["promptTemplate"] = "在项目目录 {{ inputs.project_path }} 下检测代码变更"
+    correct = json.loads(json.dumps(base))
+    correct["nodes"][0].pop("inputs")
+
+    gen, _ = _generator([base, wrong_repair, correct])
+    result = await gen.generate("在项目目录中检测自上次发布以来的代码变更；project_path 可选，默认当前目录。")
+
+    assert len(gen._provider.calls) == 3
+    messages = gen._provider.calls[-1]
+    assert "declared but never referenced" in messages[-2]["content"]
+    assert "must not be copied into node inputs" in messages[-1]["content"]
+    assert result.spec.nodes[0].inputs == {}
+    assert result.spec.nodes[0].prompt_template == "在项目目录 ${params.project_path} 下检测代码变更"
+
+
+def test_generation_prompt_prevents_duplicate_param_inputs_before_repair() -> None:
+    from raven.playbook.prompt import SYSTEM_PROMPT
+
+    assert "never\ncopy a param into a node's `inputs`" in SYSTEM_PROMPT
+    assert "Every declared input must be referenced" in SYSTEM_PROMPT
+    assert "continuation nodes must omit `skills`" in SYSTEM_PROMPT
+    assert "continuation nodes may replace or clear `mcps`" in SYSTEM_PROMPT
+
+
 async def test_gives_up_after_budget_with_error_detail():
     bad = {"name": "x!", "mode": "dag"}
     gen, _ = _generator([bad, bad, bad, bad])

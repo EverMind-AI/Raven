@@ -17,7 +17,7 @@ from raven.agent.subagent.dag_store import SessionNodes, memory_path_in, output_
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.subagent.prompt_placeholders import Placeholder, iter_placeholders
 from raven.agent.subagent.prompt_render import (
-    check_inputs_referenced,
+    check_input_contract,
     read_text,
     require_exists,
     resolve_file_placeholder,
@@ -77,7 +77,7 @@ async def render_prompt(
             ``ref``/file-input path escapes its root, or a ``_path`` form
             names a file that does not exist.
     """
-    check_inputs_referenced(node.prompt_template, node.inputs, prefix=f"node '{node.id}' ")
+    check_input_contract(node.prompt_template, node.inputs, prefix=f"node '{node.id}' ")
     template = node.prompt_template
     parts: list[str] = []
     last = 0

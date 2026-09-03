@@ -10,6 +10,8 @@ the party that can act on them.
 import json
 from pathlib import Path
 
+import pytest
+
 from raven.config.schema import MCPServerConfig
 from raven.contracts.llm_provider import ErrorClassification, LLMResponse
 from raven.playbook import (
@@ -232,6 +234,57 @@ async def test_fills_naming_an_unknown_node_is_refused_by_name():
     assert "pull" in plan.reply  # the ids it could have meant
 
 
+@pytest.mark.parametrize("instance", ["", " ", " worker", "worker ", 7])
+async def test_fills_cannot_bypass_instance_field_validation(instance):
+    tool = FakeDagTool()
+    ex = PlaybookExecutor(dag_tool=tool)
+    spec = _dag_spec(
+        nodes=[NodeSpec(id="pull", subagent="data-raven", node_summary="pull feedback", prompt_template="go")]
+    )
+
+    plan = await ex.execute(spec, params={"week_of": "w"}, fills={"pull": {"instance": instance}})
+
+    assert plan.kind == "questions"
+    assert "instance" in plan.reply
+    assert tool.calls == []
+
+
+async def test_a_valid_filled_instance_reaches_dispatch():
+    tool = FakeDagTool()
+    ex = PlaybookExecutor(dag_tool=tool)
+    spec = _dag_spec(
+        nodes=[NodeSpec(id="pull", subagent="data-raven", node_summary="pull feedback", prompt_template="go")]
+    )
+
+    plan = await ex.execute(spec, params={"week_of": "w"}, fills={"pull": {"instance": "worker"}})
+
+    assert plan.kind == "dag"
+    assert tool.calls[0]["nodes"][0]["instance"].endswith("-worker")
+
+
+async def test_default_project_path_is_filled_directly_without_node_inputs():
+    tool = FakeDagTool()
+    ex = PlaybookExecutor(dag_tool=tool)
+    spec = _dag_spec(
+        params={"project_path": ParamSpec(default=".", description="which project directory?")},
+        nodes=[
+            NodeSpec(
+                id="detect",
+                subagent="data-raven",
+                node_summary="detect project changes",
+                prompt_template="inspect ${params.project_path}",
+            )
+        ],
+    )
+
+    plan = await ex.execute(spec, params={})
+
+    assert plan.kind == "dag"
+    dispatched = tool.calls[0]["nodes"][0]
+    assert dispatched["prompt_template"] == "inspect ."
+    assert "inputs" not in dispatched
+
+
 async def test_an_empty_skills_list_is_written_not_blank():
     """``skills: []`` means "no skills at all" -- a written instruction.
 
@@ -286,6 +339,34 @@ async def test_executor_dag_hands_nodes_to_the_graph_tool_with_params_filled():
     # unlike skills the receiving side now has something to do with it.
     assert nodes["report"]["mcps"] == ["slack"]
     assert "mcps" not in nodes["pull"]
+
+
+async def test_executor_does_not_promote_multiline_text_to_a_node_reference():
+    tool = FakeDagTool()
+    ex = PlaybookExecutor(dag_tool=tool)
+    literal = "use {{ source.output\n}} as ordinary text"
+    spec = _dag_spec(
+        nodes=[
+            NodeSpec(
+                id="source",
+                subagent="data-raven",
+                node_summary="produce source material",
+                prompt_template="produce source material",
+            ),
+            NodeSpec(
+                id="consume",
+                subagent="content-raven",
+                node_summary="keep multiline template text literal",
+                prompt_template=literal,
+            ),
+        ]
+    )
+
+    plan = await ex.execute(spec, params={"week_of": "w"})
+
+    assert plan.kind == "dag"
+    nodes = {node["id"].rsplit("-", 1)[-1]: node for node in tool.calls[0]["nodes"]}
+    assert nodes["consume"]["prompt_template"] == literal
 
 
 async def test_executor_forwards_inputs_and_namespaces_node_input_references():
@@ -576,6 +657,32 @@ async def test_prompt_mode_repairs_injection_on_a_shared_instance_continuation()
     repair = provider.calls[1][-1]["content"]
     assert "continuing instance 'writer'" in repair
     assert "opened by node 'scan'" in repair
+
+
+async def test_prompt_mode_allows_a_continuation_to_clear_its_mcp_grant():
+    graph = json.loads(json.dumps(GOOD_GRAPH))
+    graph["nodes"][0].update(instance="writer", mcps=["browser"])
+    graph["nodes"][1].update(subagent="research-raven", instance="writer", mcps=[])
+    profiles = dict(COMPOSE_PROFILES)
+    profiles["research-raven"] = PlaybookAgentProfile(
+        description="research",
+        stateful=True,
+        reads_local_files=True,
+        injectable_skills=True,
+        injectable_mcps=True,
+    )
+    tool = FakeDagTool()
+    provider = ComposeProvider([json.dumps(graph)])
+    ex = PlaybookExecutor(dag_tool=tool, provider=provider, compose_prompt_mode=True)
+    ex.set_agent_profiles(lambda: profiles)
+
+    plan = await ex.execute(_prompt_spec(), params={"target": "AcmeAI"})
+
+    assert plan.kind == "dag"
+    assert len(provider.calls) == 1
+    nodes = {node["id"].rsplit("-", 1)[-1]: node for node in tool.calls[0]["nodes"]}
+    assert nodes["scan"]["mcps"] == ["browser"]
+    assert nodes["sum"]["mcps"] == []
 
 
 async def test_prompt_mode_bad_graph_gets_one_repair_then_degrades():

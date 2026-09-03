@@ -76,8 +76,17 @@ def test_the_prose_names_only_fields_the_node_model_accepts() -> None:
     assert '"injectableSkills": true' in text
     assert '"injectableMcps": false' in text
 
-    assert "only the node opening that session may set skills or mcps" in text
-    assert "continuation nodes must omit both fields" in text
+    assert "only the node opening that session may set skills" in text
+    assert "continuation nodes must omit skills" in text
+    assert "mcps is resolved per dispatch" in text
+    assert "replaced or cleared by a continuation node" in text
+
+
+def test_compose_prompt_forbids_params_anywhere_and_requires_input_use() -> None:
+    text = build_compose_prompt("do a thing", PROFILES, ["project_path"])
+
+    assert "no ${params.*} may appear anywhere in the graph" in text
+    assert "Every declared input must be referenced" in text
 
 
 @pytest.mark.parametrize("field", ["agent"])

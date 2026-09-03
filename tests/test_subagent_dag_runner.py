@@ -1258,9 +1258,11 @@ class TestBackgroundRun:
 
         assert "started in the background" in out.model_text
         assert "2 nodes" in out.model_text
-        # The acceptance text is the only advertisement the control tools get.
-        assert 'dag_status("' in out.model_text
-        assert 'cancel_dag("' in out.model_text
+        # This text is the only advertisement dag_status and cancel_dag get, so it
+        # carries the route as well as the names.
+        assert "dag_status" in out.model_text
+        assert "cancel_dag" in out.model_text
+        assert "tool_call" in out.model_text, "the controls are unnameable without the route"
         # The outcome cannot be in the result -- nothing has run yet.
         assert "completed" not in out.model_text
 
@@ -1285,8 +1287,9 @@ class TestBackgroundRun:
 
         reachable.set_context("web", "default", "web:sess1")
         out = await reachable.execute(task_summary="run the graph under test", nodes=[node])
-        assert 'dag_status("' in out.model_text
-        assert 'cancel_dag("' in out.model_text
+        assert "dag_status" in out.model_text
+        assert "cancel_dag" in out.model_text
+        assert "tool_call" in out.model_text, "the controls are unnameable without the route"
 
         muted.set_context("web", "default", "web:sess2")
         out = await muted.execute(task_summary="run the graph under test", nodes=[node])
@@ -2316,7 +2319,7 @@ class TestValidationErrorGuidesRetry:
             ],
         )
 
-        assert "node ids must be unique. No sub-agent was run." in out
+        assert "duplicate node ids: ['a']. No sub-agent was run." in out
 
 
 # --- references across runs in one conversation ---------------------------
@@ -4883,6 +4886,7 @@ async def _run_two_node_dag(
     adjudication_timeout_s=5,
     adjudicate=None,
     semaphore=None,
+    control_reachable=None,
 ):
     """A two-node chain a->b, run through one shared fake backend.
 
@@ -4928,6 +4932,7 @@ async def _run_two_node_dag(
         adjudication_timeout_s=adjudication_timeout_s,
         adjudicate=adjudicate,
         semaphore=semaphore,
+        control_reachable=control_reachable,
     )
 
 
@@ -4939,7 +4944,7 @@ async def test_a_node_judged_not_accomplished_suspends_and_reports(tmp_path):
     desk = AdjudicationDesk()
     reports = []
 
-    async def _announce(run_id, node_id, report, origin):
+    async def _announce(run_id, node_id, report, origin, **_):
         reports.append((node_id, report))
         desk.resolve(node_id, "abandon", None)
 
@@ -4960,7 +4965,7 @@ async def test_a_continued_node_runs_again_and_can_then_pass(tmp_path):
     desk = AdjudicationDesk()
     seen = []
 
-    async def _announce(run_id, node_id, report, origin):
+    async def _announce(run_id, node_id, report, origin, **_):
         desk.resolve(node_id, "continue", "use the staging token")
 
     async def _judge(**kwargs):
@@ -4979,7 +4984,7 @@ async def test_the_continuation_limit_fails_the_node(tmp_path):
     desk = AdjudicationDesk()
     reports = []
 
-    async def _announce(run_id, node_id, report, origin):
+    async def _announce(run_id, node_id, report, origin, **_):
         reports.append(report)
         desk.resolve(node_id, "continue", "try again")
 
@@ -5013,7 +5018,7 @@ async def test_a_bad_verdict_with_no_origin_does_not_crash_and_still_fails(tmp_p
     desk = AdjudicationDesk()
     announced = []
 
-    async def _announce(run_id, node_id, report, origin):
+    async def _announce(run_id, node_id, report, origin, **_):
         announced.append((node_id, report, origin))
 
     async def _judge(**kwargs):
@@ -5043,7 +5048,7 @@ async def test_a_bad_verdict_blocks_the_dependent_and_clears_the_manifest_output
     desk = AdjudicationDesk()
     fake = _FakeExec()
 
-    async def _announce(run_id, node_id, report, origin):
+    async def _announce(run_id, node_id, report, origin, **_):
         desk.resolve(node_id, "abandon", None)
 
     async def _judge(**kwargs):
@@ -5086,7 +5091,7 @@ async def test_a_continued_instance_node_is_sent_only_the_follow_up_and_keeps_it
     fake = _FakeExec()
     seen = []
 
-    async def _announce(run_id, node_id, report, origin):
+    async def _announce(run_id, node_id, report, origin, **_):
         desk.resolve(node_id, "continue", "use the staging token")
 
     async def _judge(**kwargs):
@@ -5128,7 +5133,7 @@ async def test_a_continued_stateless_node_sends_task_plus_previous_output_plus_m
     fake = _FakeExec()
     seen = []
 
-    async def _announce(run_id, node_id, report, origin):
+    async def _announce(run_id, node_id, report, origin, **_):
         desk.resolve(node_id, "continue", "use the staging token")
 
     async def _judge(**kwargs):
@@ -5162,7 +5167,7 @@ async def test_a_crashed_node_judge_call_is_told_it_crashed(tmp_path):
     fake = _FakeExec(fail_ids={"a"})
     seen = []
 
-    async def _announce(run_id, node_id, report, origin):
+    async def _announce(run_id, node_id, report, origin, **_):
         desk.resolve(node_id, "abandon", None)
 
     async def _judge(**kwargs):
@@ -5186,7 +5191,7 @@ async def test_every_attempt_is_archived_including_the_first(tmp_path):
     desk = AdjudicationDesk()
     seen = []
 
-    async def _announce(run_id, node_id, report, origin):
+    async def _announce(run_id, node_id, report, origin, **_):
         desk.resolve(node_id, "continue", "use the staging token")
 
     async def _judge(**kwargs):
@@ -5229,7 +5234,7 @@ async def test_a_raising_announce_fails_the_node_instead_of_stranding_it(tmp_pat
 
     desk = AdjudicationDesk()
 
-    async def _announce(run_id, node_id, report, origin):
+    async def _announce(run_id, node_id, report, origin, **_):
         raise RuntimeError("delivery channel is down")
 
     async def _judge(**kwargs):
@@ -5256,7 +5261,7 @@ async def test_a_node_does_not_suspend_on_a_report_it_cannot_deliver(tmp_path) -
 
     desk = AdjudicationDesk()
 
-    async def _announce(run_id, node_id, report, origin):
+    async def _announce(run_id, node_id, report, origin, **_):
         raise AssertionError("the announce must not be attempted without an origin")
 
     async def _judge(**kwargs):
@@ -5308,7 +5313,7 @@ async def test_the_judge_sees_the_current_attempts_transcript(tmp_path):
     desk = AdjudicationDesk()
     seen: list[dict] = []
 
-    async def _announce(run_id, node_id, report, origin):
+    async def _announce(run_id, node_id, report, origin, **_):
         desk.resolve(node_id, "continue", "use the staging token")
 
     async def _judge(*, node, store, output, error, crashed):
@@ -5355,7 +5360,7 @@ async def test_each_attempts_transcript_survives_the_next_attempt(tmp_path):
     desk = AdjudicationDesk()
     seen = []
 
-    async def _announce(run_id, node_id, report, origin):
+    async def _announce(run_id, node_id, report, origin, **_):
         desk.resolve(node_id, "continue", "use the staging token")
 
     async def _judge(**kwargs):
@@ -5395,7 +5400,7 @@ async def test_a_successful_continuation_clears_the_earlier_attempts_error(tmp_p
     desk = AdjudicationDesk()
     seen = []
 
-    async def _announce(run_id, node_id, report, origin):
+    async def _announce(run_id, node_id, report, origin, **_):
         desk.resolve(node_id, "continue", "use the staging token")
 
     async def _judge(**kwargs):
@@ -5452,7 +5457,7 @@ async def test_a_foreground_run_asks_a_person_and_continues_the_node(tmp_path):
     asked = []
     seen = []
 
-    async def _announce(run_id, node_id, report, origin):
+    async def _announce(run_id, node_id, report, origin, **_):
         announced.append(node_id)
 
     async def _adjudicate(conversation_id, report, timeout_s):
@@ -5578,7 +5583,7 @@ async def test_a_foreground_node_without_a_continuation_fails(tmp_path, answer):
     asked = []
     announced = []
 
-    async def _announce(run_id, node_id, report, origin):
+    async def _announce(run_id, node_id, report, origin, **_):
         announced.append(node_id)
 
     async def _adjudicate(conversation_id, report, timeout_s):
@@ -5793,7 +5798,7 @@ async def test_an_empty_attempt_does_not_inherit_the_previous_transcript(tmp_pat
     desk = AdjudicationDesk()
     seen = []
 
-    async def _announce(run_id, node_id, report, origin):
+    async def _announce(run_id, node_id, report, origin, **_):
         desk.resolve(node_id, "continue", "answer it directly this time")
 
     async def _judge(**kwargs):
@@ -5921,3 +5926,280 @@ async def test_an_unstarted_background_run_retires_every_per_run_entry(tmp_path:
     assert run_id not in tool._runs
     assert run_id not in tool._cancels, "an unstarted run must not pin liveness forever"
     assert run_id not in tool._desks
+
+
+def test_the_agent_report_names_the_route_not_just_the_call():
+    """`resolve_dag_node` is schema-hidden, so naming it alone is not an instruction.
+
+    The model looks for the name in its own tool list, does not find it, and reports
+    that it has no way to answer -- the node then waits out its whole timeout. The
+    report has to spell the invocation the model can actually issue.
+    """
+    from raven.agent.subagent.dag_runner import _exception_report
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    spec = parse_dag_spec(
+        {
+            "task_summary": "one node",
+            "nodes": [{"id": "a", "subagent": "x", "node_summary": "first", "prompt_template": "do a"}],
+        }
+    )
+    report = _exception_report(
+        run_id="r1",
+        node=spec.nodes[0],
+        verdict=Verdict(accomplished=False, category="missing_credential", what_is_missing="a token"),
+        attempt=1,
+        remaining=2,
+        blocked=["b"],
+        timeout_s=600.0,
+    )
+
+    assert "tool_call" in report, "the only route to a schema-hidden tool has to be named"
+    assert "resolve_dag_node" in report, "and the name tool_call is to forward to"
+    assert "not in your tool list" in report, (
+        "a model that just failed to find the name needs to be told why, or it reads "
+        "the instruction as stale rather than as one it can act on"
+    )
+    # The arguments still have to be answerable without guessing the schema.
+    for field in ("run_id", "node_id", "decision", "continue", "abandon", "r1"):
+        assert field in report
+
+
+async def _run_with_reachability(tmp_path, reachable, *, timeout_s=30):
+    """One suspending node, run with the given reachability predicate.
+
+    The timeout is long on purpose: the bug this guards is that the node waits
+    it out, so a short one would let the broken path pass on elapsed time.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    announced: list[tuple] = []
+
+    async def _announce(run_id, node_id, report, origin, **_):
+        announced.append((run_id, node_id, report, origin))
+
+    async def _judge(**kwargs):
+        return Verdict(accomplished=False, category="tool_failure", what_is_missing="a token")
+
+    started = time.monotonic()
+    result = await _run_two_node_dag(
+        tmp_path,
+        desk=desk,
+        judge_node=_judge,
+        announce_exception=_announce,
+        adjudication_timeout_s=timeout_s,
+        control_reachable=reachable,
+    )
+    return result, desk, announced, time.monotonic() - started
+
+
+async def test_a_node_does_not_suspend_when_no_route_can_answer_it(tmp_path) -> None:
+    """`tool_call` gone means `resolve_dag_node` is unnameable, so no answer can arrive.
+
+    Suspending anyway parks the node for the whole adjudication timeout and then
+    records that nobody answered -- blaming the agent for a question it had no way
+    to answer. The same reasoning the undeliverable-report guard already applies to
+    the outbound leg, applied to the return leg.
+    """
+    result, desk, _announced, elapsed = await _run_with_reachability(tmp_path, lambda: False)
+
+    assert result.summary["failed"] == 1
+    by_node = {f["node"]: f for f in result.files}
+    error = by_node["a"]["error"] or ""
+    assert "no route" in error.lower(), f"the error must name the real cause, got: {error!r}"
+    assert "tool_call" in error, "and point at the switch that causes it"
+    assert "timed out" not in error, "the agent must not be blamed for the host's missing route"
+    assert desk.open_nodes() == set()
+    assert elapsed < 10, f"the node must fail at once, not wait out the timeout (took {elapsed:.1f}s)"
+
+
+async def test_a_raising_reachability_predicate_fails_the_node_closed(tmp_path) -> None:
+    """Fail closed, matching how the acceptance text already treats a raising predicate."""
+    result, desk, _announced, elapsed = await _run_with_reachability(
+        tmp_path, lambda: (_ for _ in ()).throw(AttributeError("no controller"))
+    )
+
+    assert result.summary["failed"] == 1
+    by_node = {f["node"]: f for f in result.files}
+    assert "no route" in (by_node["a"]["error"] or "").lower()
+    assert desk.open_nodes() == set()
+    assert elapsed < 10
+
+
+async def test_an_unwired_reachability_predicate_still_suspends(tmp_path) -> None:
+    """`None` means the host never wired it, which must keep meaning "assume reachable".
+
+    Every pre-existing runner fixture omits the predicate; reading absent as
+    unreachable would silently turn all of them into immediate failures.
+    """
+    result, desk, announced, _elapsed = await _run_with_reachability(tmp_path, None, timeout_s=2)
+
+    assert len(announced) == 1, "the report still goes out when reachability is unknown"
+    assert "no route" not in ({f["node"]: f for f in result.files}["a"]["error"] or "").lower(), (
+        "an unwired predicate must not be read as a missing route"
+    )
+    assert desk.open_nodes() == set()
+
+
+async def test_the_tool_hands_its_reachability_predicate_to_the_runner(tmp_path, monkeypatch):
+    """The runner cannot ask whether an answer can come back unless it is given the predicate.
+
+    The tool has held it since the acceptance text needed it; without this the
+    runner defaults to "assume reachable" and the fail-fast path is dead code in
+    production however well it is covered by unit tests.
+    """
+    from raven.agent.subagent import dag_tool as tool_mod
+
+    seen = []
+
+    async def _fake_run_dag(spec, **kwargs):
+        seen.append(kwargs.get("control_reachable"))
+        raise RuntimeError("far enough")
+
+    monkeypatch.setattr(tool_mod, "run_dag", _fake_run_dag)
+
+    def _predicate() -> bool:
+        return False
+
+    tool = SubAgentDagTool(
+        workspace=tmp_path,
+        agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")],
+        control_reachable=_predicate,
+    )
+    tool.set_context("web", "default", "web:sess1")
+    node = {"id": "a", "subagent": "echo", "node_summary": "say hello", "prompt_template": "hi"}
+
+    await tool.execute(task_summary="backgrounded", nodes=[node])
+    await asyncio.gather(*list(tool._runs.values()), return_exceptions=True)
+
+    assert seen == [_predicate], "the runner must get the tool's own predicate, not a copy of the fold condition"
+
+
+async def test_the_acceptance_text_names_the_route_to_the_hidden_controls(tmp_path) -> None:
+    """Advertising `dag_status(...)` names a tool absent from the model's schema.
+
+    The acceptance text is the only advertisement these get, so it has to say how
+    they are reached, the same way the exception report does.
+    """
+    tool = SubAgentDagTool(
+        workspace=tmp_path,
+        agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")],
+        control_reachable=lambda: True,
+    )
+    tool.set_context("web", "default", "web:sess1")
+
+    out = await tool.execute(
+        task_summary="run the graph under test",
+        nodes=[{"id": "a", "subagent": "echo", "node_summary": "say hello", "prompt_template": "hi"}],
+    )
+
+    assert "tool_call" in out.model_text, "the controls are unnameable without the route"
+    assert "dag_status" in out.model_text
+    assert "cancel_dag" in out.model_text
+    assert "resolve_dag_node" in out.model_text
+
+
+def test_the_report_names_no_route_when_there_is_none() -> None:
+    """A node with no answer route is failed, not suspended -- the report must say so.
+
+    The announce is not gated on suspension, so this report reaches the model
+    anyway. Naming an invocation in it asks the model to answer a node that no
+    longer accepts an answer, through a route the host does not have: the same
+    dishonest advertisement this branch exists to remove, in the state the branch
+    itself introduced.
+    """
+    from raven.agent.subagent.dag_runner import _exception_report
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    spec = parse_dag_spec(
+        {
+            "task_summary": "one node",
+            "nodes": [{"id": "a", "subagent": "x", "node_summary": "first", "prompt_template": "do a"}],
+        }
+    )
+    shared = {
+        "run_id": "r1",
+        "node": spec.nodes[0],
+        "verdict": Verdict(accomplished=False, category="tool_failure", what_is_missing="a token"),
+        "attempt": 1,
+        "remaining": 2,
+        "blocked": ["b"],
+        "timeout_s": 600.0,
+    }
+
+    routed = _exception_report(**shared)
+    unrouted = _exception_report(**shared, route_available=False)
+
+    assert "tool_call" in routed, "the control: with a route, the invocation is named"
+
+    assert "resolve_dag_node" not in unrouted, "no route means no call to name"
+    assert "Answer" not in unrouted, "and no instruction to answer something that accepts no answer"
+    # Naming tool_call as the *reason* is diagnostic, not an instruction: it points
+    # whoever reads this at the switch that caused it.
+    assert "tool_call is not available" in unrouted
+    assert "deciding within" not in unrouted, "there is no deadline: the node is not waiting"
+    assert "no route" in unrouted.lower(), "it has to say why this line of the graph is dead"
+    # What the decision would have turned on is still reported, because the agent
+    # may still re-plan around the dead node.
+    for kept in ("tool_failure", "a token", "blocked while this waits: b"):
+        assert kept in unrouted
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected", "why"),
+    [
+        ({}, True, "a node that suspends really is waiting for a decision"),
+        ({"max_continuations": 0}, False, "the continuation limit is spent, so the desk never opens"),
+        ({"control_reachable": lambda: False}, False, "no route means the desk never opens either"),
+    ],
+)
+async def test_the_announcer_is_told_whether_a_decision_is_pending(tmp_path, kwargs, expected, why) -> None:
+    """The flag has to track suspension, not the fact that a report exists.
+
+    The announce is not gated on suspension -- a terminal node's report still goes
+    out, because the agent replans from it -- so the announcer is the only place
+    that can tell the two apart, and it can only do that if the runner says which
+    this is.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    seen: list[bool] = []
+
+    async def _announce(run_id, node_id, report, origin, *, awaiting_decision):
+        seen.append(awaiting_decision)
+
+    async def _judge(**_kw):
+        return Verdict(accomplished=False, category="tool_failure", what_is_missing="a token")
+
+    await _run_two_node_dag(
+        tmp_path,
+        desk=AdjudicationDesk(),
+        judge_node=_judge,
+        announce_exception=_announce,
+        adjudication_timeout_s=1,
+        **kwargs,
+    )
+
+    assert seen, "the report goes out in every one of these states"
+    assert seen[0] is expected, why
+
+
+async def test_the_no_route_failure_keeps_the_judge_s_reason(tmp_path) -> None:
+    """Two different facts, and the run record is the only place both reach a node's reader.
+
+    `errors` becomes the run record's `error` field, which the manifest carries and
+    `dag_status` renders, so replacing the judge's finding with the routing
+    explanation keeps "why nobody could be asked" and loses "why the node failed"
+    for anyone asking about the node. The injected report carries both and is durable
+    in its own right, as the turn it was injected as -- but it is found by reading the
+    conversation rather than the run.
+    """
+    result, _desk, _announced, _elapsed = await _run_with_reachability(tmp_path, lambda: False)
+
+    error = {f["node"]: f for f in result.files}["a"]["error"] or ""
+    assert "a token" in error, "the judge said what was missing; the record has to keep it"
+    assert "no route" in error.lower(), "and why it could not be adjudicated"
+    assert "timed out" not in error
