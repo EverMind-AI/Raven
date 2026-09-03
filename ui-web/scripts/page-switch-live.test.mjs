@@ -44,6 +44,7 @@ const NAMES = [
   'ta', 'stop_', 'turn', 'queueClear', 'resetTurnState', 'wsReset', 'setWs', 'drawMeter',
   'goState', 'drawBanner', 'sess', 'markNewCurrent', 'plainTitle', 'parkedTurns',
   'restoreTurn', 'wsSetRoot', 'setCtx', 'renderHistory', 'wsOnHistory', 'RavenIslands',
+  'loadProviders',
 ]
 
 function harness({ rows, deferSubscribe } = {}) {
@@ -97,6 +98,7 @@ function harness({ rows, deferSubscribe } = {}) {
     drawBanner: () => {},
     sess: (id) => (rows || []).find((r) => r.id === id),
     markNewCurrent: () => {},
+    loadProviders: (sid, gen) => calls.push(['loadProviders', sid, gen]),
     plainTitle: (s) => String(s),
     parkedTurns: new Map(),
     restoreTurn: () => calls.push(['restoreTurn']),
@@ -311,5 +313,37 @@ describe('the assembled live session switch', () => {
 
     expect(h.env.live.subId).toBe('sub:a')
     expect(h.calls.filter((c) => c[1] === 'turn.subscribe')).toHaveLength(1)
+  })
+
+  it('reads the default back when a conversation is left for a new task', async () => {
+    /* The other half of the pair: a draft runs the configured default, so
+       startDraft has to re-read it or the chip keeps the model of the
+       conversation just left. A null session omits the field, which is how the
+       default answers. */
+    const h = harness({ rows: [{ id: 'a' }] })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a')
+    h.startDraft()
+
+    const refreshed = h.calls.filter((c) => c[0] === 'loadProviders')
+    expect(refreshed.map((c) => c[1])).toEqual(['a', null])
+    expect(refreshed.at(-1)[2]).toBeTypeOf('number')
+  })
+
+  it('refreshes the model for the conversation being opened, not the one left behind', async () => {
+    /* The model is per conversation now. Opening B after A must re-read B's
+       binding, or the chip keeps claiming A's model over a conversation that
+       runs its own. Keyed to the opened id, so it holds even before the session
+       pointer moves over. */
+    const h = harness({ rows: [{ id: 'a' }, { id: 'b' }] })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a')
+    h.openLiveSession({ id: 'b', title: 'Beta' })
+    await h.settle('b')
+
+    const refreshed = h.calls.filter((c) => c[0] === 'loadProviders').map((c) => c[1])
+    expect(refreshed).toEqual(['a', 'b'])
   })
 })

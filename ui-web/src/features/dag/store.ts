@@ -59,29 +59,7 @@ export function touch(): void {
   for (const l of listeners) l()
 }
 
-/* A fold taken on the reader's behalf, and given back.
- *
- * Something docked over the sheet needs the room -- a question the reader has to
- * answer, and cannot answer if a tall graph pushes it below the fold. The graph
- * steps aside for as long as that stands, and steps back afterwards.
- *
- * "Afterwards" has to mean "if it is still ours". A reader who unfolds and then
- * folds again while the question stands has taken the decision back, and their
- * fold reads exactly like the one we took: `folded` is true either way, and
- * restoring on that alone threw their choice away. So the taking is recorded,
- * and `fold` -- the reader's only path -- drops the record.
- *
- * And "still ours" has to mean "about this run". Every path that ends a run
- * drops the record too, or a claim outlives what it described and the next
- * graph under the same key is never stepped aside. */
-const TAKEN = new Set<string>()
-
 export function set(key: string, r: DagRun): void {
-  /* The claim below is about one run, not about the key it sits under. A run
-     replaced while a question still stands leaves the old claim describing
-     something that is gone, and `takeFold` then refuses to step the new graph
-     aside because the key reads as already taken. */
-  TAKEN.delete(key)
   RUNS.set(key, r)
   touch()
 }
@@ -91,8 +69,6 @@ export function set(key: string, r: DagRun): void {
    not return on refresh, which is the whole difference between this and the
    rack detaching one on a session switch. */
 export function forget(key: string): void {
-  /* Same reason as `set`: the run this claim was about is gone. */
-  TAKEN.delete(key)
   RUNS.delete(key)
   KEPT.forget(key)
   touch()
@@ -101,34 +77,12 @@ export function forget(key: string): void {
 export function fold(key: string, on: boolean): void {
   const r = RUNS.get(key)
   if (!r || r.folded === on) return
-  /* The reader has just decided the fold, so it is theirs again -- whatever was
-     folded on their behalf is no longer ours to put back. Dropped here rather
-     than by the caller that took it, because this is the one line every reader
-     path goes through and the taker cannot see them. */
-  TAKEN.delete(key)
   r.folded = on
-  touch()
-}
-
-export function takeFold(key: string): void {
-  const r = RUNS.get(key)
-  if (!r || r.folded || TAKEN.has(key)) return
-  TAKEN.add(key)
-  r.folded = true
-  touch()
-}
-
-export function releaseFold(key: string): void {
-  if (!TAKEN.delete(key)) return
-  const r = RUNS.get(key)
-  if (!r || !r.folded) return
-  r.folded = false
   touch()
 }
 
 /* Test seam: the map and the slot both outlive a test file's DOM. */
 export function _resetForTests(): void {
-  TAKEN.clear()
   RUNS.clear()
   KEPT.clear()
   epoch = 0

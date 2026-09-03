@@ -253,6 +253,33 @@ describe('settings island', () => {
     expect(screen.getByText('claude-sonnet-5')).toBeTruthy()
   })
 
+  it('moves the default badge with a cross-provider pick, without reopening the page', async () => {
+    /* The default is a (model, provider) pair. Re-reading only the model after
+       a pick left the badge on the old provider until a reload -- so a pick
+       that crosses providers must move both halves through the callback. */
+    let picked = false
+    install(snap(), {
+      model: () => (picked ? 'openai/gpt-5.2' : 'claude-opus-4-5'),
+      defaultProvider: () => (picked ? 'openai' : 'anthropic'),
+      pickModel: (_anchor, after) => {
+        picked = true
+        after()
+      },
+    })
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.set.pg.model').click()
+    })
+    const badged = () =>
+      [...document.querySelectorAll('.pcard')].find((c) => c.querySelector('.tagm'))?.querySelector('.nm span:nth-child(2)')
+        ?.textContent
+    expect(badged()).toBe('Anthropic')
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('.pickm')!.click()
+    })
+    expect(badged()).toBe('OpenAI')
+  })
+
   /* Both halves of the manage button, because neither was pinned: closeSet
      could be cut and every test stayed green, and the page it lands on only
      became a direct import when the round-trip verbs were retired. */

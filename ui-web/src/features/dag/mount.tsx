@@ -12,7 +12,7 @@
 import { createRoot } from 'react-dom/client'
 
 import { t } from '../../shell/bridge'
-import { add as sheetAdd, askingIn, remove as sheetRemove, watchAsking } from '../composer/sheets'
+import { add as sheetAdd, remove as sheetRemove } from '../composer/sheets'
 import { Sheet } from './DagSheet'
 import { fromSnapshot } from './nodes'
 import * as store from './store'
@@ -21,32 +21,6 @@ import type { DagRun, DagSummary } from './types'
 import type { Root } from 'react-dom/client'
 
 const HOSTS = new Map<string, { el: HTMLElement; root: Root }>()
-
-/* The graph steps aside while the reader is being asked something.
- *
- * The two dock in the same rack and a graph is tall, so an approval landing
- * under a running one goes below the fold -- the reader is being asked for a
- * decision they cannot see. The graph folds itself for as long as the question
- * stands and opens again when it is answered.
- *
- * Only if the fold was ours to take, and only if it still is. The store keeps
- * that record, because it owns the flag and sees every reader path to it -- see
- * `takeFold`. A graph the reader had already folded stays folded afterwards,
- * and one whose fold they touched at all while the question stood is left where
- * they left it, however many times they changed their mind.
- */
-const onAsking = (key: string, asking: number): void => {
-  if (asking > 0) store.takeFold(key)
-  else store.releaseFold(key)
-}
-
-/* Registered at module scope because that is this island's whole lifecycle --
-   one island, page lifetime, no mount to hang it off. The unsubscribe is kept
-   anyway so the test seam can drop and re-arm it: `sheets.ts` deliberately
-   keeps watchers across its own reset, so without this the isolation between
-   test files would rest on vitest handing each one a fresh module registry --
-   true today, and not something this file should depend on. */
-let unwatch = watchAsking(onAsking)
 
 function drop(key: string): void {
   const h = HOSTS.get(key)
@@ -88,15 +62,6 @@ function host(key: string): void {
    card in the trail. */
 export function start(key: string, run: DagRun): void {
   store.set(key, run)
-  /* A replacement is not a change in the rack: this conversation already has a
-     host, so nothing docks and nothing leaves, and the asking watcher never
-     fires for the new run. Left at that, a graph that replaces one standing
-     under a question arrives unfolded and pushes that question below the fold
-     again -- the failure this island steps aside to prevent. So the run is
-     handed the state the rack is already in, rather than only the changes to
-     it. Harmless for a first graph, where `sheetAdd` reports the same state a
-     line later: `takeFold` refuses a second claim on the same key. */
-  onAsking(key, askingIn(key))
   host(key)
 }
 
@@ -256,6 +221,4 @@ export function _resetForTests(): void {
   HOSTS.forEach(({ root }) => root.unmount())
   HOSTS.clear()
   store._resetForTests()
-  unwatch()
-  unwatch = watchAsking(onAsking)
 }

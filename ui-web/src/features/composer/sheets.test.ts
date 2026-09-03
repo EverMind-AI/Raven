@@ -1,9 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-// @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
-import { readdirSync, readFileSync } from 'node:fs'
-
 import { _resetForTests, add, dropClass, forget, remove, session, sync } from './sheets'
 import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
 
@@ -261,57 +258,5 @@ describe('the sheet rack', () => {
       add(s)
       expect(() => remove(s)).not.toThrow()
     })
-  })
-})
-
-describe('who counts as asking', () => {
-  /* `askingIn` decides who blocks the reader from `dataset.asks`, which each
-     tenant sets on itself. That is a convention, and a convention is exactly
-     what a test has to hold: a future sheet that blocks the reader and forgets
-     the mark loses the behaviour with every other test still green, because
-     every one of them sets the mark by hand.
-
-     So the roster is pinned at its source. The tree is walked rather than the
-     list read, or the check could only ever confirm what someone already wrote
-     down -- a new module that docks would be invisible to it. Every docking
-     module found must be declared here as asking or not, and a new one fails
-     this until somebody says which it is. */
-  const DOCKS: Record<string, boolean> = {
-    'features/composer/approve.ts': true,
-    'features/composer/clarify.ts': true,
-    // The graph sheet is what steps aside for the two above; it asks nothing.
-    'features/dag/mount.tsx': false,
-    // Not a tenant: the export binding the shell hands to the demo layer.
-    'main.tsx': false,
-  }
-
-  const sources = (): Array<[string, string]> => {
-    const out: Array<[string, string]> = []
-    const walk = (dir: string): void => {
-      for (const entry of readdirSync(`src/${dir}`, { withFileTypes: true })) {
-        const rel = dir ? `${dir}/${entry.name}` : entry.name
-        if (entry.isDirectory()) walk(rel)
-        else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) {
-          out.push([rel, readFileSync(`src/${rel}`, 'utf8')])
-        }
-      }
-    }
-    walk('')
-    return out
-  }
-
-  it('is every module that docks into the rack, and no other', () => {
-    const docking = sources()
-      .filter(([, text]) => /\bsheetAdd\(|\bsheets\.add\b/.test(text))
-      .map(([rel]) => rel)
-    expect(docking.sort()).toEqual(Object.keys(DOCKS).sort())
-  })
-
-  it('is exactly the docking modules that set the mark', () => {
-    const marked = sources()
-      .filter(([rel, text]) => rel in DOCKS && /dataset\.asks\s*=\s*'1'/.test(text))
-      .map(([rel]) => rel)
-    const declared = Object.keys(DOCKS).filter((rel) => DOCKS[rel])
-    expect(marked.sort()).toEqual(declared.sort())
   })
 })

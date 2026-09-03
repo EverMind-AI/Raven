@@ -27,7 +27,9 @@ function Pick(): JSX.Element {
   const at = store.openAt()
   const host = at.host as HTMLElement
   const providers = store.authed()
-  const current = store.current()
+  /* What the picker marks: the chip's model, unless the opener named a different
+     one to highlight (the settings control marks the default it edits). */
+  const current = at.marked ?? store.current()
   const box = useRef<HTMLDivElement>(null)
   const field = useRef<HTMLInputElement>(null)
   const [query, setQuery] = useState('')
@@ -119,7 +121,7 @@ function Pick(): JSX.Element {
             }
             if (e.key === 'Enter') {
               const first = list[0]
-              if (first) void store.choose(first)
+              if (first) void store.choose(first, providers[prov]!.id)
             }
           }}
         />
@@ -146,7 +148,7 @@ function Pick(): JSX.Element {
             <div className="empty">{t(q ? 'gui.picker.no_match' : 'gui.picker.empty_provider')}</div>
           ) : (
             list.map((m) => (
-              <button key={m} className="row" onClick={() => void store.choose(m)}>
+              <button key={m} className="row" onClick={() => void store.choose(m, providers[prov]!.id)}>
                 <span className="nm">{store.short(m)}</span>
                 {m === current ? <span className="tick">✓</span> : null}
               </button>
