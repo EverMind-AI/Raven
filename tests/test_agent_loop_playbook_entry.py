@@ -394,3 +394,37 @@ def test_a_runtime_that_cannot_build_leaves_the_feature_off(tmp_path, monkeypatc
     assert loop._playbooks is None
     assert not loop.tools.has("load_playbook") and not loop.tools.has("create_playbook")
     assert loop.dag_tools() == [loop.tools.get("run_subagent_dag")], "only the registered one is left"
+
+
+def test_both_graph_tools_are_handed_the_answer_route_predicate(tmp_path):
+    """The playbook lane builds its own SubAgentDagTool, and it can suspend too.
+
+    Its comment claims the same manager hooks as the registered tool, and the
+    hooks that let a node suspend are among them: a verdict provider, an
+    exception announcer, and a background executor. What it lacked was the
+    predicate saying whether an answer can come back, so `_route_available(None)`
+    read the host's known-unreachable route as open and the node waited out its
+    whole adjudication window -- the failure this branch exists to remove, alive
+    on the second of the two construction sites.
+
+    Asserted over `dag_tools()` rather than the registered instance alone,
+    because naming one site is what let the other drift.
+    """
+    from raven.config.schema import PlaybookConfig
+
+    loop = AgentLoop(
+        provider=_Provider(),
+        workspace=tmp_path,
+        model="fake/default",
+        policy=TurnPolicy(max_iterations=2),
+        engine=EngineWiring(playbook_config=PlaybookConfig(enabled=True)),
+    )
+
+    assert loop._playbooks is not None, "the second construction site has to exist for this to test anything"
+    tools = loop.dag_tools()
+    assert len(tools) == 2, f"one registered, one private to the playbook engine; got {len(tools)}"
+
+    unwired = [t for t in tools if getattr(t, "_control_reachable", None) is None]
+    assert unwired == [], "every graph tool that can suspend a node needs the predicate, not just the registered one"
+    for t in tools:
+        assert t._control_reachable() == loop.dag_control_reachable(), "and it must be the host's own answer"
