@@ -1384,3 +1384,152 @@ async def test_a_rejected_language_changes_nothing(tmp_path, monkeypatch) -> Non
         await console_module.settings_set({"key": "language", "value": "de"})
 
     assert i18n.current_language() == "en"
+
+
+# ---------------------------------------------------------------------------
+# ext.list reports availability, not membership
+# ---------------------------------------------------------------------------
+
+
+def _console_loop(workspace: Path, monkeypatch: pytest.MonkeyPatch, raw: dict):
+    """A real on-disk config, and a loop assembled from it the production way.
+
+    Both halves matter. A hand-built stand-in is what let this defect hide: an
+    object carrying ``tool_names`` and nothing else answers every availability
+    question by omission, which is the one thing under test. And the surface
+    explains an unavailable tool by reading the config file, so the file has to
+    be the same one the loop was built from or the two answer about different
+    deployments.
+    """
+    import json
+
+    from raven.agent.loop import AgentLoop
+    from raven.config.loader import load_config
+    from tests._wiring import wire
+    from tests.test_tool_capabilities import _StubProvider
+
+    for var in ("SERPER_API_KEY", "OPENROUTER_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    cfg_path = workspace / "config.json"
+    cfg_path.write_text(json.dumps(raw), encoding="utf-8")
+    monkeypatch.setattr("raven.home._current_config_path", cfg_path)
+
+    config = load_config(cfg_path)
+    kw = {}
+    if config.tools.web.search.api_key:
+        kw["brave_api_key"] = config.tools.web.search.api_key
+    loop = AgentLoop(
+        provider=_StubProvider(),
+        workspace=workspace,
+        model="stub",
+        **wire(media_config=config.effective_media_config(), **kw),
+    )
+    # No withheld source installed here on purpose: AgentLoop installs its own,
+    # which reads the live config -- the file above -- and unions the off switch
+    # with the unconfigured names. Overriding it with a disabled-only lambda was
+    # enough to make the credential-gate cases pass for the wrong reason.
+    return loop
+
+
+async def _ext_rows(loop, monkeypatch: pytest.MonkeyPatch) -> dict[str, dict]:
+    from raven.config import raven as raven_config
+
+    monkeypatch.setattr(
+        raven_config,
+        "load_raven_config",
+        lambda: SimpleNamespace(skill_forge=None, plugins=SimpleNamespace(disabled=[])),
+    )
+    monkeypatch.setattr(console_module, "_hub_marker_name", lambda: None)
+    result = await console_module.ext_list({}, agent_loop_factory=lambda: loop)
+    return {t["name"]: t for t in result["tools"]}
+
+
+_CRED_TOOLS = (
+    ("web_search", "tools.web.search.apiKey", "SERPER_API_KEY"),
+    ("image_generate", "tools.media.image.apiKey", "OPENROUTER_API_KEY"),
+    ("text_to_speech", "tools.media.speech.apiKey", "OPENROUTER_API_KEY"),
+    ("video_generate", "tools.media.video.apiKey", "OPENROUTER_API_KEY"),
+)
+
+
+@pytest.mark.parametrize(("tool", "setting", "env"), _CRED_TOOLS)
+async def test_an_unconfigured_tool_is_reported_unavailable_with_what_it_needs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tool: str, setting: str, env: str
+) -> None:
+    """A credential-less tool is registered and withheld rather than left out,
+    so membership stopped meaning the model can call it. Reporting ``enabled``
+    off membership told a deployer the capability was on while the model was
+    never offered it -- and said nothing about what to set.
+
+    The setting names the *key* field: for the media family the config path is
+    the model, and pointing there sends the reader to a line holding no key.
+    """
+    loop = _console_loop(tmp_path, monkeypatch, {})
+
+    assert loop.tools.has(tool), "this case is about a REGISTERED tool the model is not offered"
+    assert not loop.tools.offers_by_name(tool)
+
+    row = (await _ext_rows(loop, monkeypatch))[tool]
+    assert row["enabled"] is False
+    assert row["needs"] == {"setting": setting, "env": env}
+
+
+async def test_a_configured_tool_is_reported_available_with_nothing_owed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other direction, so the fix cannot pass by reporting everything off."""
+    loop = _console_loop(
+        tmp_path,
+        monkeypatch,
+        # The media tool's own section, not a chat OpenRouter key: a key
+        # configured for chat deliberately does not enable a billed media tool.
+        {"tools": {"web": {"search": {"apiKey": "sk-serper"}}, "media": {"image": {"apiKey": "sk-img"}}}},
+    )
+
+    rows = await _ext_rows(loop, monkeypatch)
+    for tool in ("web_search", "image_generate"):
+        assert loop.tools.offers_by_name(tool), tool
+        assert rows[tool]["enabled"] is True, tool
+        assert rows[tool]["needs"] is None, tool
+
+
+@pytest.mark.parametrize("tool", ["web_search", "text_to_speech"])
+async def test_a_switched_off_tool_is_not_reported_as_missing_a_credential(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tool: str
+) -> None:
+    """Unavailable has two unrelated causes and the surface must not merge them.
+
+    A switched-off tool usually has its key set, so answering the operator's
+    own off switch with "set this credential" points at a line already filled
+    in. Only the credential gate earns a ``needs``; the switch is reported by
+    ``enabled`` alone, which is what keeps the row switchable.
+    """
+    loop = _console_loop(
+        tmp_path,
+        monkeypatch,
+        {
+            "tools": {
+                "web": {"search": {"apiKey": "sk-serper"}},
+                "media": {"speech": {"apiKey": "sk-tts"}},
+                "disabledTools": ["web_search", "text_to_speech"],
+            }
+        },
+    )
+
+    assert loop.tools.has(tool)
+    assert not loop.tools.offers_by_name(tool), "the off switch has to bite for this case to mean anything"
+
+    row = (await _ext_rows(loop, monkeypatch))[tool]
+    assert row["enabled"] is False
+    assert row["needs"] is None, "a configured tool the operator switched off owes no credential"
+
+
+async def test_a_tool_needing_no_credential_stays_reported_available(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A plain tool owes nothing, so it must not grow a needs row from the roster."""
+    loop = _console_loop(tmp_path, monkeypatch, {})
+
+    row = (await _ext_rows(loop, monkeypatch))["read_file"]
+    assert row["enabled"] is True
+    assert row["needs"] is None

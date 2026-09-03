@@ -551,6 +551,61 @@ class TestExecToolWithMockExecutor:
         assert "blocked" not in result
         assert len(executor.calls) == 1
 
+    async def test_a_live_deny_edit_binds_the_very_next_call(self, tmp_path):
+        """Tightening a permission must not wait for the next turn, let alone the
+        next process: the pattern list is re-read before each classification.
+        Loosening rides the same read -- the list is the operator's own choice in
+        both directions."""
+        from raven.agent.tools.shell import ExecTool
+
+        extras: dict[str, list[str] | None] = {"value": []}
+        executor = DirectMockExecutor()
+        tool = ExecTool(
+            executor=executor,
+            working_dir=str(tmp_path),
+            extra_deny_source=lambda: extras["value"],
+        )
+        assert "blocked" not in await tool.execute("osascript -e x")
+
+        extras["value"] = [r"\bosascript\b"]
+        assert "blocked" in (await tool.execute("osascript -e x")).model_text
+
+        extras["value"] = []
+        assert "blocked" not in await tool.execute("osascript -e x")
+
+    async def test_a_bad_live_pattern_rejects_the_edit_not_the_policy(self, tmp_path):
+        from raven.agent.tools.shell import ExecTool
+
+        extras: dict[str, list[str] | None] = {"value": [r"\bosascript\b"]}
+        tool = ExecTool(
+            executor=DirectMockExecutor(),
+            working_dir=str(tmp_path),
+            extra_deny_source=lambda: extras["value"],
+        )
+        assert "blocked" in (await tool.execute("osascript -e x")).model_text
+
+        extras["value"] = [r"\bosascript\b", r"([unclosed"]
+        assert "blocked" in (await tool.execute("osascript -e x")).model_text, (
+            "a pattern that does not compile must keep the current set, not disarm it"
+        )
+
+    async def test_a_live_deny_edit_reaches_a_registered_approval_matcher_policy(self, tmp_path):
+        """The deny list is swapped on the policy in place, so the approval
+        families a surface registered survive the edit."""
+        from raven.agent.tools.shell import ExecTool
+
+        extras: dict[str, list[str] | None] = {"value": []}
+        tool = ExecTool(
+            executor=DirectMockExecutor(),
+            working_dir=str(tmp_path),
+            extra_deny_source=lambda: extras["value"],
+        )
+        tool.register_approval_matcher("push_command", lambda cmd: cmd.startswith("git push"))
+
+        extras["value"] = [r"\bosascript\b"]
+        assert "blocked" in (await tool.execute("osascript -e x")).model_text
+        assert tool._policy.approval_reason("git push origin main") == "push_command"
+
     async def test_path_append_sandboxed_injects_export(self, tmp_path):
         """path_append with sandboxed executor: wraps command with export PATH."""
         from raven.agent.tools.shell import ExecTool

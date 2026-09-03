@@ -69,7 +69,7 @@ class ProviderPool:
 
         try:
             material = {
-                "providers": self.config.providers.model_dump(exclude_none=True),
+                "providers": credentials_fingerprint(self.config),
                 "window": self.config.agents.defaults.context_window_tokens,
             }
         except Exception:
@@ -197,3 +197,18 @@ class ProviderPool:
         if section is None:
             return False
         return bool(section_is_usable(section, find_by_name(provider_name)))
+
+
+def credentials_fingerprint(config: "Config") -> str:
+    """A fingerprint of every credential a provider can be built from.
+
+    The one answer to "did the providers section change", shared by the pool's
+    binding cache and ``ResolvingProvider``'s per-vendor adapters, so the two
+    caches cannot age at different rates. Raises whatever the dump raises --
+    each caller owns its own failure posture.
+    """
+    import hashlib
+    import json
+
+    material = config.providers.model_dump(exclude_none=True)
+    return hashlib.sha256(json.dumps(material, sort_keys=True, default=str).encode()).hexdigest()

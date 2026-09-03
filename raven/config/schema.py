@@ -1706,8 +1706,8 @@ class Config(BaseSettings):
         each configured tool we default a missing key to
         ``providers.openrouter.apiKey`` so the chat key can be reused without
         re-declaring it. Tools the user did not configure are left untouched
-        (no key, no model) — ``AgentLoop`` registers a media tool only when it
-        has a key or model, so an OpenRouter key set for chat alone never
+        (no key, no model) — ``AgentLoop`` withholds a media tool until it has
+        a key or model, so an OpenRouter key set for chat alone never
         surfaces image/speech/video to the agent. Returns a copy so this
         resolution never mutates the raw config.
         """
@@ -1715,9 +1715,7 @@ class Config(BaseSettings):
         openrouter = self.providers.get("openrouter")
         or_key = openrouter.api_key if openrouter else ""
         for tool in (media.image, media.speech, media.video):
-            configured = bool(tool.api_key or tool.model)
-            if configured and or_key and not tool.api_key:
-                tool.api_key = or_key
+            borrow_openrouter_key(tool, or_key)
         return media
 
     def _match_provider(self, model: str | None = None) -> tuple["ProviderConfig | None", str | None]:
@@ -1932,3 +1930,71 @@ class Config(BaseSettings):
         env_nested_delimiter="__",
         extra="forbid",
     )
+
+
+def borrows_openrouter_key(tool: MediaToolConfig) -> bool:
+    """Whether this section is in the one state that borrows: configured (it
+    names a model or a key) yet keyless. Unconfigured sections borrow nothing,
+    which is what keeps a chat credential from quietly enabling tools that
+    bill per call."""
+    return bool((tool.api_key or tool.model) and not tool.api_key)
+
+
+def borrow_openrouter_key(tool: MediaToolConfig, openrouter_key: str) -> None:
+    """The media key-borrow rule, stated once, applied in place."""
+    if borrows_openrouter_key(tool) and openrouter_key:
+        tool.api_key = openrouter_key
+
+
+def live_web_search_key(section: Any) -> str | None:
+    """The Serper key from a raw ``tools.web.search`` subtree, or ``None``.
+
+    Validation and the credential read live here for the reason
+    :func:`live_media_tool_config`'s do: the caller (``config.live``) holds raw
+    file subtrees and must not handle credential fields itself. ``None`` is
+    "no usable answer" -- no section, or one the schema rejects -- and the
+    caller keeps what it had; an empty key in a valid section is a real
+    answer, which is how a key gets revoked without a restart.
+    """
+    if not isinstance(section, dict):
+        return None
+    try:
+        return WebSearchConfig.model_validate(section).api_key
+    except Exception:  # noqa: BLE001 - an invalid candidate dispenses no new answer
+        return None
+
+
+def live_media_tool_config(section: Any, openrouter_section: Any) -> "MediaToolConfig | None":
+    """One media tool's section as a live file has it, resolved by the same
+    rule as :meth:`Config.effective_media_config`.
+
+    Takes raw file subtrees because the caller (``config.live``) holds no
+    validated ``Config``; validation happens here so the credential handling
+    stays in this module, next to the rule it applies. ``None`` is "no usable
+    answer" and the caller keeps what it had: the tool's own section failing
+    validation, and equally the borrow's input -- a configured-but-keyless
+    tool whose ``providers.openrouter`` slice is present but invalid gets no
+    new answer, never a valid-looking config with the borrowed key dropped.
+    """
+    if section is not None and not isinstance(section, dict):
+        return None
+    try:
+        cfg = MediaToolConfig.model_validate(section or {})
+    except Exception:  # noqa: BLE001 - a torn read is not worth a turn
+        return None
+    if borrows_openrouter_key(cfg):
+        # The borrow is a second input to the combined answer, so its slice is
+        # admitted on the same terms as the tool's own: absent means "nothing
+        # to lend" (a real, keyless answer), while present-but-invalid rejects
+        # the WHOLE answer -- degrading it to an empty borrow would hand the
+        # caller a valid-looking config that silently dropped the credential
+        # the last valid file lent.
+        if openrouter_section is not None:
+            if not isinstance(openrouter_section, dict):
+                return None
+            try:
+                openrouter_key = ProviderConfig.model_validate(openrouter_section).api_key
+            except Exception:  # noqa: BLE001 - an invalid candidate dispenses no new answer
+                return None
+            borrow_openrouter_key(cfg, openrouter_key)
+    return cfg

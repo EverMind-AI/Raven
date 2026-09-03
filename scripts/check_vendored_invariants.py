@@ -96,10 +96,16 @@ INVARIANTS: tuple[GuardedRegistration, ...] = (
         # sub-agent's tool set in `subagent/backends/raven_loop.py`, every fork still
         # in `subagent/manager.py`. Both have to be listed -- gating only the main
         # loop leaves the tool advertised to every nested sub-agent.
-        trunk=(
-            "raven/agent/loop/wiring.py",
-            "raven/agent/subagent/backends/raven_loop.py",
-        ),
+        #
+        # The trunk's MAIN loop is no longer here: it registers the tool
+        # unconditionally and keeps it out of the advertised array through
+        # `_withheld_tool_names` (wiring.py, `_unconfigured_tool_names`), so a key
+        # added while the process runs can surface it without a restart. The
+        # guarantee this invariant states is pinned there by behaviour tests
+        # (tests/test_agent_loop_web_tools.py), which see the assembled array
+        # itself -- a stronger check than this registration-shape proxy. The
+        # forks keep the registration gate and stay listed.
+        trunk=("raven/agent/subagent/backends/raven_loop.py",),
         forks={
             "raven-code": (
                 "subagents/raven-code/Raven-main/raven/agent/loop/main.py",

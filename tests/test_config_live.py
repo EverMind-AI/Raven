@@ -197,3 +197,147 @@ class TestThePlaybookSwitch:
 
         _write(path, {"playbooks": {"disabled": ["ok", 7, None]}})
         assert disabled_playbook_names(LiveConfig(path)) == frozenset({"ok"})
+
+
+class TestExecExtraDenySlice:
+    """The live exec deny list is a safety gate: an invalid candidate must
+    dispense no new answer, never a coerced replacement of the last valid one."""
+
+    def _live(self, tmp_path, payload):
+        import json
+
+        from raven.config.live import LiveConfig
+
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return LiveConfig(path)
+
+    def test_a_valid_list_is_the_answer(self, tmp_path):
+        from raven.config.live import exec_extra_deny_patterns
+
+        live = self._live(tmp_path, {"tools": {"exec": {"extraDenyPatterns": ["\\bosascript\\b"]}}})
+        assert exec_extra_deny_patterns(live) == ["\\bosascript\\b"]
+
+    def test_a_schema_invalid_list_dispenses_no_answer(self, tmp_path):
+        # ExecToolConfig rejects [123]; coercing it to ["123"] here replaced
+        # the last valid deny rule with junk -- the command the valid config
+        # blocked then executed.
+        from raven.config.live import exec_extra_deny_patterns
+
+        live = self._live(tmp_path, {"tools": {"exec": {"extraDenyPatterns": [123]}}})
+        assert exec_extra_deny_patterns(live) is None
+
+    def test_no_key_on_disk_is_no_answer(self, tmp_path):
+        from raven.config.live import exec_extra_deny_patterns
+
+        live = self._live(tmp_path, {"tools": {"exec": {"timeout": 30}}})
+        assert exec_extra_deny_patterns(live) is None
+
+    def test_an_invalid_web_search_section_dispenses_no_answer(self, tmp_path):
+        from raven.config.live import web_search_key
+
+        live = self._live(tmp_path, {"tools": {"web": {"search": {"apiKey": 123}}}})
+        assert web_search_key(live) is None
+
+
+class TestRejectedCandidatesKeepTheLastAdmittedSlice:
+    """A schema-rejected edit must not roll a credential back to the boot
+    value: the last admitted live answer keeps serving until a valid candidate
+    or the section's removal replaces it."""
+
+    def _live(self, tmp_path):
+        from raven.config.live import LiveConfig
+
+        return LiveConfig(tmp_path / "config.json"), tmp_path / "config.json"
+
+    def _write(self, path, payload):
+        import json
+
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+    def test_a_rejected_web_key_keeps_the_last_admitted_one(self, tmp_path):
+        from raven.config.live import web_search_key
+
+        live, path = self._live(tmp_path)
+        self._write(path, {"tools": {"web": {"search": {"apiKey": "sk-live"}}}})
+        assert web_search_key(live) == "sk-live"
+
+        self._write(path, {"tools": {"web": {"search": {"apiKey": 123}}}})
+        assert web_search_key(live) == "sk-live", "a rejected candidate must not reach the boot fallback"
+
+    def test_a_removed_section_forgets_the_memory(self, tmp_path):
+        from raven.config.live import web_search_key
+
+        live, path = self._live(tmp_path)
+        self._write(path, {"tools": {"web": {"search": {"apiKey": "sk-live"}}}})
+        assert web_search_key(live) == "sk-live"
+
+        self._write(path, {"tools": {}})
+        assert web_search_key(live) is None, "no section is the constructor lane, not the last live answer"
+
+    def test_a_rejected_media_candidate_keeps_the_last_admitted_slice(self, tmp_path):
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        self._write(path, {"tools": {"media": {"image": {"apiKey": "sk-live"}}}})
+        assert media_tool_config(live, "image").api_key == "sk-live"
+
+        self._write(path, {"tools": {"media": {"image": {"apiKey": 123}}}})
+        kept = media_tool_config(live, "image")
+        assert kept is not None and kept.api_key == "sk-live"
+
+
+class TestTheBorrowInputIsAdmittedOnTheSameTerms:
+    """The media answer has two credential inputs; rejecting only the tool's
+    own slice left the borrow's: an invalid ``providers.openrouter`` edit was
+    degraded to an empty borrow and recorded as a new valid answer, dropping
+    the previously borrowed key."""
+
+    def _live(self, tmp_path):
+        from raven.config.live import LiveConfig
+
+        return LiveConfig(tmp_path / "config.json"), tmp_path / "config.json"
+
+    def _write(self, path, payload):
+        import json
+
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+    def test_an_invalid_openrouter_edit_keeps_the_borrowed_key(self, tmp_path):
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        self._write(
+            path,
+            {
+                "tools": {"media": {"image": {"model": "some/model"}}},
+                "providers": {"openrouter": {"apiKey": "sk-live"}},
+            },
+        )
+        assert media_tool_config(live, "image").api_key == "sk-live"
+
+        self._write(
+            path, {"tools": {"media": {"image": {"model": "some/model"}}}, "providers": {"openrouter": {"apiKey": 123}}}
+        )
+        kept = media_tool_config(live, "image")
+        assert kept is not None and kept.api_key == "sk-live", (
+            "an invalid borrow input must reject the combined answer, not degrade it to keyless"
+        )
+
+    def test_no_openrouter_section_is_a_real_keyless_answer(self, tmp_path):
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        self._write(path, {"tools": {"media": {"image": {"model": "some/model"}}}})
+        cfg = media_tool_config(live, "image")
+        assert cfg is not None and cfg.model == "some/model" and cfg.api_key == ""
+
+    def test_a_tool_with_its_own_key_ignores_an_invalid_borrow_input(self, tmp_path):
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        self._write(
+            path, {"tools": {"media": {"image": {"apiKey": "sk-own"}}}, "providers": {"openrouter": {"apiKey": 123}}}
+        )
+        cfg = media_tool_config(live, "image")
+        assert cfg is not None and cfg.api_key == "sk-own", "the borrow is not consulted, so it cannot veto"

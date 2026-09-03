@@ -218,13 +218,15 @@ def make_lazy_provider(config: Config):
     return provider
 
 
-def make_resolving_provider(config: Config):
+def make_resolving_provider(config: Config, config_supplier=None):
     """Provider that resolves each call's vendor from its model name. Used by the
-    gateway, where different sessions can be on different vendors at once."""
+    gateway, where different sessions can be on different vendors at once.
+    ``config_supplier`` makes its per-vendor credentials live -- see
+    ``ResolvingProvider._refresh_credentials``."""
     from raven.providers.resolving_provider import ResolvingProvider
 
     check_provider_credentials(config)
-    return ResolvingProvider(config)
+    return ResolvingProvider(config, config_supplier=config_supplier)
 
 
 __all__ = ["check_provider_credentials", "make_lazy_provider", "make_provider", "make_resolving_provider"]

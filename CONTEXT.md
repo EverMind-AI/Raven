@@ -990,8 +990,28 @@ loop runs, and accepted swaps are rate-limited). Honest timing: the serving loop
 within ~1s of the request; in-flight turns get `gateway.shutdown_grace` and are then
 cancelled. Triggers: `gateway.reload` on the Control Plane (cross-platform) and SIGHUP
 (POSIX alias of `reload --force`; a signal has no reply channel).
-_Avoid_: "hot reload" (that is `reload.mcp`, a tool-set reconcile inside one generation);
+_Avoid_: "hot reload" (`reload.mcp` is a tool-set reconcile inside one generation, and a
+preference edit taking effect is the Live preference lane below -- neither swaps a generation);
 "restart" (the `/restart` control command, a whole-process execv).
+
+**Live preference** (`config/live.py`):
+The pull lane for config that may change its answer while a generation serves: one file,
+re-parsed only when its bytes change, keeping the last good answer through a torn write.
+The module is the roster -- every key this lane serves has a named reader there (both file
+spellings), and machinery on this lane asks the reader, never the file by key: `disabled_tool_names`,
+`disabled_playbook_names`, `exec_extra_deny_patterns`, `web_search_key`,
+`media_tool_config`, `mcp_server_configs` (feeding the turn-boundary reconcile),
+`routing_profile`, `default_model`. The boundary is the module docstring's rule: anything
+whose change implies WORK rather than a different answer (constructing a provider,
+an MCP handshake, moving a workspace) keeps its apply path -- a door, the pool's
+fingerprint cache, or the generation swap. Timing is asymmetric by design: a revocation
+binds the next read (a tightened deny pattern gates the very next tool call), while an
+addition to the model's tool array lands on the next turn -- `ToolRegistry.turn_scope`
+freezes both registry membership and the withheld set at turn entry, because the array
+is the prompt-cache prefix and must not move between two model calls of one turn.
+_Avoid_: reading `config.json` keys ad hoc outside this module; treating a live
+preference as a door (doors reconcile members after a durable write; this lane never
+touches member identity).
 
 **Wire Schema** (`rpc-schema/openrpc.json` at repo root):
 The hand-maintained OpenRPC contract for the terminal dialect every interactive client

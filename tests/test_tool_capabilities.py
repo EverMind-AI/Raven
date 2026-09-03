@@ -1,13 +1,17 @@
 """The capability table must describe what AgentLoop actually does.
 
 A second description of an existing rule is only worth having while it stays
-true. These drive a real ``AgentLoop`` and compare what it registered against
-what the table predicts, for every combination that changes an answer -- so the
-table cannot quietly become a third opinion about which tools are available.
+true. These drive a real ``AgentLoop`` and compare what it offers the model
+against what the table predicts, for every combination that changes an answer --
+so the table cannot quietly become a third opinion about which tools are
+available. Registration stopped being the gate: every gated tool is registered
+now and *withheld* while unconfigured, so the predicate a deployer feels is
+``offers_by_name``, never ``has``.
 """
 
 from __future__ import annotations
 
+import json
 import tempfile
 from pathlib import Path
 
@@ -117,7 +121,10 @@ def test_the_table_names_exactly_the_credential_gated_tools(workspace, tmp_path:
     full.providers.openrouter.api_key = "sk-or-test"
     loop_full = _loop(workspace, full, brave_api_key="sk-serper")
 
-    gated = set(loop_full.tools.tool_names) - set(loop_bare.tools.tool_names)
+    def offered(loop) -> set[str]:
+        return {n for n in loop.tools.tool_names if loop.tools.offers_by_name(n)}
+
+    gated = offered(loop_full) - offered(loop_bare)
     declared = {c.tool for c in CAPABILITIES if c.need is not Need.NOTHING}
 
     assert gated == declared, (
@@ -130,8 +137,9 @@ def test_the_table_agrees_with_the_loop_when_unconfigured(cap, workspace, tmp_pa
     config = _config(tmp_path)
     loop = _loop(workspace, config)
 
-    assert is_configured(cap, config) is loop.tools.has(cap.tool), (
-        f"{cap.tool}: table says configured={is_configured(cap, config)}, loop registered={loop.tools.has(cap.tool)}"
+    assert is_configured(cap, config) is loop.tools.offers_by_name(cap.tool), (
+        f"{cap.tool}: table says configured={is_configured(cap, config)}, "
+        f"loop offers={loop.tools.offers_by_name(cap.tool)}"
     )
 
 
@@ -141,7 +149,7 @@ def test_a_configured_search_key_agrees_on_both_sides(workspace, tmp_path: Path)
     loop = _loop(workspace, config, brave_api_key="sk-serper")
 
     cap = next(c for c in CAPABILITIES if c.tool == "web_search")
-    assert is_configured(cap, config) and loop.tools.has("web_search")
+    assert is_configured(cap, config) and loop.tools.offers_by_name("web_search")
     assert configured_from(cap, config) == "tools.web.search.apiKey"
 
 
@@ -152,7 +160,7 @@ def test_the_env_var_alone_agrees_on_both_sides(workspace, tmp_path: Path, monke
     loop = _loop(workspace, config)
 
     cap = next(c for c in CAPABILITIES if c.tool == "web_search")
-    assert is_configured(cap, config) and loop.tools.has("web_search")
+    assert is_configured(cap, config) and loop.tools.offers_by_name("web_search")
     assert configured_from(cap, config) == "SERPER_API_KEY"
 
 
@@ -168,7 +176,7 @@ def test_a_media_model_alone_agrees_on_both_sides(attr, tool, workspace, tmp_pat
     loop = _loop(workspace, config)
 
     cap = next(c for c in CAPABILITIES if c.tool == tool)
-    assert is_configured(cap, config) and loop.tools.has(tool)
+    assert is_configured(cap, config) and loop.tools.offers_by_name(tool)
     assert configured_from(cap, config) == "borrowed: providers.openrouter.apiKey"
 
 
@@ -181,7 +189,7 @@ def test_an_openrouter_key_alone_switches_nothing_on(workspace, tmp_path: Path) 
 
     for cap in (c for c in CAPABILITIES if c.media_attr):
         assert not is_configured(cap, config), cap.tool
-        assert not loop.tools.has(cap.tool), cap.tool
+        assert not loop.tools.offers_by_name(cap.tool), cap.tool
 
 
 def test_the_free_capability_needs_no_credential(workspace, tmp_path: Path) -> None:
@@ -189,7 +197,7 @@ def test_the_free_capability_needs_no_credential(workspace, tmp_path: Path) -> N
     loop = _loop(workspace, config)
 
     cap = next(c for c in CAPABILITIES if c.need is Need.NOTHING)
-    assert is_configured(cap, config) and loop.tools.has(cap.tool)
+    assert is_configured(cap, config) and loop.tools.offers_by_name(cap.tool)
     assert configured_from(cap, config) == "", "nothing was required, so nothing supplied it"
 
 
@@ -230,8 +238,8 @@ def test_a_media_model_with_no_key_to_borrow_still_counts(attr, tool, workspace,
 
     cap = next(c for c in CAPABILITIES if c.tool == tool)
     assert not _resolved(config, attr).api_key, "nothing should have been borrowed"
-    assert is_configured(cap, config) and loop.tools.has(tool)
-    # Registered, and unusable: no key resolves from the section, the borrow, or
+    assert is_configured(cap, config) and loop.tools.offers_by_name(tool)
+    # Offered, and unusable: no key resolves from the section, the borrow, or
     # the environment, so every call returns the tool's missing-key error. There
     # is no source to name, and naming the model path -- the only path this
     # capability has -- would tell the deployer a key sits somewhere it does not.
@@ -250,7 +258,7 @@ def test_a_media_key_is_reported_at_its_own_path_not_the_model_path(attr, tool, 
     loop = _loop(workspace, config)
 
     cap = next(c for c in CAPABILITIES if c.tool == tool)
-    assert is_configured(cap, config) and loop.tools.has(tool)
+    assert is_configured(cap, config) and loop.tools.offers_by_name(tool)
     assert configured_from(cap, config) == f"tools.media.{attr}.apiKey"
     assert configured_from(cap, config) != cap.config_path
 
@@ -270,7 +278,7 @@ def test_a_media_key_from_the_environment_is_a_source_like_any_other(
     loop = _loop(workspace, config)
 
     cap = next(c for c in CAPABILITIES if c.tool == tool)
-    assert is_configured(cap, config) and loop.tools.has(tool)
+    assert is_configured(cap, config) and loop.tools.offers_by_name(tool)
     assert configured_from(cap, config) == "OPENROUTER_API_KEY"
     # The half that decides whether the row carries a warning. This install
     # works, so calling it keyless would send a deployer to fix what is not
@@ -328,7 +336,7 @@ def _on_offer(loop, tool: str) -> bool:
     Registry membership alone is not the answer here -- a disabled tool stays
     registered and is dropped when the tool array is built.
     """
-    return loop.tools.has(tool) and tool not in loop._withheld_tool_names()
+    return loop.tools.offers_by_name(tool) and tool not in loop._withheld_tool_names()
 
 
 def test_a_switched_off_tool_is_configured_and_still_not_offered(workspace, tmp_path: Path) -> None:
@@ -380,3 +388,65 @@ def test_being_offered_matches_the_registry_for_every_capability(cap, workspace,
     off = _loop(workspace, config, brave_api_key="sk-serper", disabled_tools=config.tools.disabled_tools)
     assert is_offered(cap, config) is _on_offer(off, cap.tool)
     assert _on_offer(off, cap.tool) is False
+
+
+def test_a_media_key_added_after_start_surfaces_the_tool(workspace, tmp_path: Path, monkeypatch) -> None:
+    """The whole point of moving the gate to the withheld axis: the user edits
+    the config file, nothing re-registers, and the next assembly offers the tool
+    with the very key the call will use."""
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(json.dumps({}), encoding="utf-8")
+    monkeypatch.setattr("raven.home._current_config_path", cfg_file)
+    loop = _loop(workspace, _config(tmp_path))
+    assert not loop.tools.offers_by_name("image_generate")
+
+    cfg_file.write_text(json.dumps({"tools": {"media": {"image": {"apiKey": "sk-added"}}}}), encoding="utf-8")
+
+    assert loop.tools.offers_by_name("image_generate")
+    assert loop.tools.get("image_generate").api_key == "sk-added"
+
+
+def test_a_media_key_removed_after_start_withdraws_the_tool(workspace, tmp_path: Path, monkeypatch) -> None:
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(json.dumps({"tools": {"media": {"image": {"apiKey": "sk-was-here"}}}}), encoding="utf-8")
+    monkeypatch.setattr("raven.home._current_config_path", cfg_file)
+    config = load_config(cfg_file)
+    loop = _loop(workspace, config)
+    assert loop.tools.offers_by_name("image_generate")
+
+    cfg_file.write_text(json.dumps({"tools": {"media": {"image": {}}}}), encoding="utf-8")
+
+    assert not loop.tools.offers_by_name("image_generate")
+
+
+def test_a_plugin_shadowing_a_media_tool_is_not_gated_by_the_builtin_config(workspace, tmp_path: Path) -> None:
+    from raven.contracts.tool import Tool
+
+    class _PluginImage(Tool):
+        name = "image_generate"
+        description = "plugin image tool with its own credential story"
+        parameters = {"type": "object", "properties": {}}
+
+        async def execute(self, **kwargs):
+            return "plugin ran"
+
+    plugin = _PluginImage()
+    loop = _loop(workspace, _config(tmp_path), plugin_tools=[plugin])
+
+    assert loop.tools.get("image_generate") is plugin
+    assert loop.tools.offers_by_name("image_generate"), "the built-in's empty section must not gate the plugin"
+
+
+def test_a_plugin_subclass_of_a_media_tool_is_not_gated_either(workspace, tmp_path: Path) -> None:
+    from raven.agent.tools.media_gen import ImageGenerateTool
+    from raven.config.schema import MediaToolConfig
+
+    class _PluginSubclassImage(ImageGenerateTool):
+        def __init__(self) -> None:
+            super().__init__(MediaToolConfig(api_key="sk-plugin-own", model="plugin/model"))
+
+    plugin = _PluginSubclassImage()
+    loop = _loop(workspace, _config(tmp_path), plugin_tools=[plugin])
+
+    assert loop.tools.get("image_generate") is plugin
+    assert loop.tools.offers_by_name("image_generate"), "identity, not type: a subclass is not the built-in"
