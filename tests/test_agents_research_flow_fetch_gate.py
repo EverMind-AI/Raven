@@ -182,6 +182,86 @@ async def test_hook_reads_fetch_success_from_the_tool_envelope():
     assert (await hook2.before_iteration(_ctx(msgs2))).modified_tools is None
 
 
+# ── the release valve, through the bytes production actually hands it ──
+#
+# Everything above feeds the hook a BARE JSON envelope, and that is how the
+# release condition can stay broken while its tests are green. What reaches
+# ``before_iteration`` in production is the envelope after two layers the
+# tests never applied: ``wrap_untrusted`` fences it on the way into
+# ``messages``, and ``BudgetNoteObserver`` - first in the chain, against this
+# gate's later slot - appends a budget line to the newest tool result before
+# this gate reads it. The tests below feed those bytes.
+
+
+def _fenced_ok_fetch_with_budget_note() -> str:
+    """The literal content of a newest-tool-result web_fetch message on a research turn."""
+    from raven.security.trust import wrap_untrusted
+
+    return wrap_untrusted(_ok_fetch(), source="web_fetch") + "\n\n[budget: iteration 12/150 | context ~41%]"
+
+
+@pytest.mark.asyncio
+async def test_a_budget_annotated_fenced_fetch_still_releases_the_gate():
+    """Both directions, on the production byte shape.
+
+    A successful fetch must reopen ``web_search`` even though the fence and a
+    budget note sit around it; a failed one must not. With ``json.loads`` on the
+    whole body both read as "not a page", so the gate closed permanently on the
+    fetches that carried a note - and its own ``gate_reopened`` counter is
+    identically zero under that bug, so nothing downstream could tell a dead
+    valve from a valve nothing needed.
+    """
+    from raven.security.trust import wrap_untrusted
+
+    hook = FetchGateObserver(FetchGate(k=2, release_after_failed_fetches=99))
+    msgs = [_search_msg(), _search_msg(), _fetch_msg(_fenced_ok_fetch_with_budget_note())]
+    assert (await hook.before_iteration(_ctx(msgs))).modified_tools is None, (
+        "a successful fetch wrapped in the fence and carrying a budget note did not release the gate"
+    )
+
+    # The opposite direction on the identical byte shape, so this test cannot
+    # pass by the gate having stopped firing altogether.
+    hook2 = FetchGateObserver(FetchGate(k=2, release_after_failed_fetches=99))
+    bad = wrap_untrusted(_bad_fetch(), source="web_fetch") + "\n\n[budget: iteration 12/150 | context ~41%]"
+    msgs2 = [_search_msg(), _search_msg(), _fetch_msg(bad)]
+    assert (await hook2.before_iteration(_ctx(msgs2))).modified_tools is not None
+
+
+def test_the_predicate_survives_every_note_an_observer_may_append():
+    """The three appenders, alone and stacked.
+
+    ``FetchFloorObserver`` and this gate append to the same message slot
+    ``BudgetNoteObserver`` does, so a repair that only knew about the budget
+    line would be the same fix one appender wide.
+    """
+    from research_flow.tools.web import fetch_result_ok
+
+    from raven.security.trust import unwrap_untrusted, wrap_untrusted
+
+    floor_note = "\n\n[note: 7 searches since the last page was opened - ...]"
+    budget_note = "\n\n[budget: iteration 12/150 | context ~41%]"
+    gate_note = "\n\n" + fetch_gate_notice()
+
+    fenced = wrap_untrusted(_ok_fetch(), source="web_fetch")
+    for label, tail in (
+        ("nothing appended", ""),
+        ("budget note", budget_note),
+        ("fetch-floor note", floor_note),
+        ("gate notice", gate_note),
+        ("all three stacked", floor_note + gate_note + budget_note),
+    ):
+        assert fetch_result_ok(unwrap_untrusted(fenced + tail)), label
+
+    # Still False without the unwrap: the fence itself is not a page, and a
+    # caller that forgets to unwrap must not be silently rescued. And a failed
+    # fetch stays failed under the same note.
+    assert not fetch_result_ok(fenced)
+    assert not fetch_result_ok(unwrap_untrusted(wrap_untrusted(_bad_fetch(), source="web_fetch") + budget_note))
+    # A non-string never parses as a page.
+    assert not fetch_result_ok(None)
+    assert not fetch_result_ok(b"{}")
+
+
 @pytest.mark.asyncio
 async def test_notice_is_appended_once_per_firing_not_once_per_iteration():
     hook = FetchGateObserver(FetchGate(k=2))

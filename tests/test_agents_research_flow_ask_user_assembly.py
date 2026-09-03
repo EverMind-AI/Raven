@@ -500,9 +500,10 @@ def test_the_reviewer_and_the_bar_are_wrapped_only_when_ask_user_is_on(tmp_path)
     never wrapped, because it SETS the flag every wrap reads.
     """
     shape = {"report_structure": True, "report_bounce": True}
+    off_gates = {"spin_breaker": {"enabled": False}, "fetch_floor": {"enabled": False}}
     provider = _StubProvider()
     on = _chain(
-        _cfg(final_shape=shape, force_finalize={"enabled": True}),
+        _cfg(final_shape=shape, force_finalize={"enabled": True}, **off_gates),
         tmp_path,
         provider=provider,
     )
@@ -520,6 +521,7 @@ def test_the_reviewer_and_the_bar_are_wrapped_only_when_ask_user_is_on(tmp_path)
             conversation={"enabled": True},
             final_shape=shape,
             force_finalize={"enabled": True},
+            **off_gates,
         ),
         tmp_path,
         provider=provider,
