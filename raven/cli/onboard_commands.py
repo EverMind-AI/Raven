@@ -1250,12 +1250,6 @@ def _run_test_probe(
                 "  [dim]可运行 'raven provider test' 复查,或确认该模型确由此服务商提供。[/dim]",
             )
         )
-        console.print(
-            _t(
-                "  [dim]For the redacted wire request: RAVEN_DEBUG_HTTP=1 raven doctor --probe[/dim]",
-                "  [dim]查看已脱敏的实际请求: RAVEN_DEBUG_HTTP=1 raven doctor --probe[/dim]",
-            )
-        )
         print_probe_troubleshooting(provider)
         options = [(_t("Retry", "重试"), "retry")]
         if allow_repick:
@@ -2797,7 +2791,6 @@ def run_wizard(
     yes: bool = False,
     reset: bool = False,
     skip_test: bool = False,
-    debug_http: bool = False,
     show_next_steps: bool = True,
 ) -> None:
     """Run the 6-step onboarding wizard end-to-end.
@@ -2813,9 +2806,6 @@ def run_wizard(
     from loguru import logger as _logger
 
     _logger.disable("raven")
-    previous_debug = os.environ.get("RAVEN_DEBUG_HTTP")
-    if debug_http:
-        os.environ["RAVEN_DEBUG_HTTP"] = "1"
     try:
         _run_wizard_body(
             provider=provider,
@@ -2835,11 +2825,6 @@ def run_wizard(
             show_next_steps=show_next_steps,
         )
     finally:
-        if debug_http:
-            if previous_debug is None:
-                os.environ.pop("RAVEN_DEBUG_HTTP", None)
-            else:
-                os.environ["RAVEN_DEBUG_HTTP"] = previous_debug
         _logger.enable("raven")
 
 
@@ -3060,12 +3045,7 @@ def register(app: typer.Typer) -> None:
             False,
             "--skip-test",
             help="Skip the one-shot test message (avoids a billed call; connectivity is still checked)",
-        ),
-        debug_http: bool = typer.Option(
-            False,
-            "--debug-http",
-            help="Print the redacted HTTP request for the one-shot test message",
-        ),
+        )
     ) -> None:
         """Six-step setup wizard: LLM provider → sandbox → channel → memory → deep research → import."""
         run_wizard(
@@ -3082,8 +3062,7 @@ def register(app: typer.Typer) -> None:
             non_interactive=non_interactive,
             yes=yes,
             reset=reset,
-            skip_test=skip_test,
-            debug_http=debug_http,
+            skip_test=skip_test
         )
 
 

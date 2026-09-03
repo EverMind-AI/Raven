@@ -488,11 +488,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         # /v1/models before any LiteLLM call resolves an endpoint.
         default_api_base="https://api.minimax.io/v1",
     ),
-    # MiniMax's mainland-China deployment: same OpenAI-compatible API and the
-    # same LiteLLM driver, a different host, and a key issued against a separate
-    # account -- so it is its own section rather than an api_base the user has
-    # to know to override. LiteLLM defaults the driver to the international
-    # host, so the address travels as MINIMAX_API_BASE.
     ProviderSpec(
         name="minimaxi",
         keywords=("minimaxi",),
@@ -517,7 +512,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         display_name="MiniMax Global (OAuth)",
         via_driver="anthropic",
         skip_prefixes=("anthropic/",),
-        default_api_base="https://api.minimaxi.com/anthropic/v1",
+        default_api_base="https://api.minimax.io/anthropic/v1",
         metadata_prefix="minimax",
         billing="plan",
         is_oauth=True,
