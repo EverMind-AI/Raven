@@ -1807,6 +1807,28 @@ _Avoid_: it is not a synonym for a Python exception. A raised exception is only 
 of the two routes into this status, and `status[node.id] = "exception"` sits next to
 `except Exception as exc` in `_run_node` for that reason.
 
+**outbox** (`raven/agent/subagent/dag_adjudication.py`) -- a foreground DAG run's tray of
+events: its nodes' exception reports and its final result, waiting for the tool call
+that is awaiting the run. One per foreground run, in memory beside the run's
+adjudication desk. The desk carries decisions from the main agent to the run; the
+outbox carries reports from the run to the main agent. While the run is bound the
+outbox hands or buffers and never announces; once released it re-sends the buffer and
+announces later events as turns.
+_Avoid_: "mailbox" -- the lane's inject mailbox is a different object with a different
+reader.
+
+**bound / released** (foreground DAG run; `raven/agent/subagent/dag_tool.py`,
+`raven/agent/loop/main.py`) -- a `background: false` run is *bound* while the turn that
+started it is still running, and *released* once that turn has ended, however it ended
+(`AgentLoop.run_turn` releases every run the conversation's turn still binds). A bound
+run's suspended nodes wait without a deadline and its outbox buffers; a released run
+behaves as a backgrounded one: the adjudication window is clocked from the release, the
+unanswered reports are re-sent as turns, a report the turn took but never decided
+counting as unanswered (they are dropped instead when the turn was cancelled), and later
+events announce -- notifications as well as questions, since no blocking call remains for
+a run's summary to reach. `resolve_dag_node` blocks only on a bound run.
+_Avoid_: "orphaned" -- a released run is not lost, it has changed lane.
+
 **Working directory** (`raven/agent/workdir.py`):
 The directory a turn reads and writes files in — shared by the session's leader `AgentLoop`
 and every Subagent it spawns, and resolved per turn by `WorkdirResolver.resolve()`.

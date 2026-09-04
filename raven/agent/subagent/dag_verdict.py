@@ -208,7 +208,7 @@ async def judge(
     evidence: str,
     evidence_complete: bool,
     model: str | None = None,
-    timeout_s: float = 30.0,
+    timeout_s: float = 180.0,
 ) -> Verdict:
     """Whether a node that returned actually accomplished its task."""
     messages = _messages(
@@ -248,7 +248,7 @@ async def describe_failure(
     evidence: str,
     evidence_complete: bool,
     model: str | None = None,
-    timeout_s: float = 30.0,
+    timeout_s: float = 180.0,
 ) -> Verdict:
     """A crashed node's traceback as the same structured report."""
     raw = Verdict(
