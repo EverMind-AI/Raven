@@ -228,23 +228,116 @@ def test_classify_clean_ignores_ordinary_pattern_hits():
 # ── record schema ──────────────────────────────────────────────────────
 
 
-def test_record_version_and_schema_gate(tmp_path):
-    record_dir = tmp_path / "br-20260904-aaaaaa"
+def _valid_payload(report_id="br-20260904-abcdef", status="failed"):
+    return {
+        "schema": breport.RECORD_SCHEMA,
+        "schema_version": 1,
+        "report_id": report_id,
+        "created_at": "2026-09-04T07:03:12Z",
+        "raven_version": "0.0.0",
+        "reporter": "",
+        "attempt": {
+            "attempt_id": "att-x",
+            "session_key": None,
+            "member_traces": ["trace-1"],
+            "merged_definition": False,
+        },
+        "problem": {"description": "it broke", "expected": "", "actual": "", "severity": "", "steps": ""},
+        "status": status,
+        "failure": {"reason": "boom", "retryable": True, "retry_count": 0},
+        "snapshot": {"source_digest": "sha256:" + "0" * 64, "export_digest": "sha256:" + "0" * 64, "kept": True},
+        "package": {"path": "", "sha256": "", "size_bytes": 0},
+        "completeness": {"status": "unknown", "reasons": []},
+        "redaction": {"classification": "clean", "reasons": [], "reviewed_by_user": True},
+        "upload": {},
+        "links": {},
+    }
+
+
+def test_record_roundtrip_is_atomic(tmp_path):
+    record_dir = tmp_path / "br-20260904-abcdef"
     record_dir.mkdir()
-    payload = {"schema": breport.RECORD_SCHEMA, "schema_version": 1, "report_id": "br-20260904-aaaaaa"}
-    breport.save_record(record_dir, payload)
-    assert breport.load_record(record_dir)["report_id"] == "br-20260904-aaaaaa"
+    breport.save_record(record_dir, _valid_payload())
+    assert breport.load_record(record_dir)["report_id"] == "br-20260904-abcdef"
     assert not [p for p in record_dir.iterdir() if p.name != breport.RECORD_FILE]
 
-    breport.save_record(record_dir, {**payload, "schema_version": 2})
+
+def _damage(payload, spec):
+    if spec == "unknown-major":
+        payload["schema_version"] = 2
+    elif spec == "version-zero":
+        payload["schema_version"] = 0
+    elif spec == "version-bool":
+        payload["schema_version"] = True
+    elif spec == "foreign-schema":
+        payload["schema"] = "something_else"
+    elif spec == "missing-attempt":
+        del payload["attempt"]
+    elif spec == "bool-retry-count":
+        payload["failure"]["retry_count"] = True
+    elif spec == "bad-severity":
+        payload["problem"]["severity"] = "urgent"
+    elif spec == "bad-status":
+        payload["status"] = "queued"
+    elif spec == "bad-digest":
+        payload["snapshot"]["export_digest"] = "sha256:xyz"
+    elif spec == "traversal-id":
+        payload["report_id"] = "../../outside"
+    elif spec == "mismatched-id":
+        payload["report_id"] = "br-20260904-ffffff"
+    return payload
+
+
+_DAMAGE_SPECS = [
+    "unknown-major",
+    "version-zero",
+    "version-bool",
+    "foreign-schema",
+    "missing-attempt",
+    "bool-retry-count",
+    "bad-severity",
+    "bad-status",
+    "bad-digest",
+    "traversal-id",
+    "mismatched-id",
+]
+
+
+@pytest.mark.parametrize("spec", _DAMAGE_SPECS)
+def test_record_validation_rejects_damage(tmp_path, spec):
+    record_dir = tmp_path / "br-20260904-abcdef"
+    record_dir.mkdir()
+    breport.save_record(record_dir, _damage(_valid_payload(), spec))
     with pytest.raises(ValueError):
         breport.load_record(record_dir)
-    breport.save_record(record_dir, {**payload, "schema": "something_else"})
+
+
+def test_damaged_records_are_skipped_not_fatal(state, workspace):
+    _record_dir, _record = _full_flow(state, workspace)
+    root = breport.bugreports_root(state)
+    for i, spec in enumerate(_DAMAGE_SPECS):
+        broken = root / f"br-20260903-{i:06d}"
+        broken.mkdir()
+        breport.save_record(broken, _damage(_valid_payload(report_id=broken.name), spec))
+    (root / "br-20260902-aaaaaa").mkdir()
+    (root / "br-20260902-aaaaaa" / breport.RECORD_FILE).write_text("{broken", encoding="utf-8")
+
+    reports = breport.list_reports(state)
+
+    assert len(reports) == 1
+
+
+def test_traversal_report_id_cannot_escape_on_retry(state):
+    root = breport.bugreports_root(state)
+    record_dir = root / "br-20260904-abcdef"
+    record_dir.mkdir(parents=True)
+    breport.save_record(record_dir, _damage(_valid_payload(), "traversal-id"))
+
     with pytest.raises(ValueError):
-        breport.load_record(record_dir)
-    (record_dir / breport.RECORD_FILE).write_text("{broken", encoding="utf-8")
-    with pytest.raises(ValueError):
-        breport.load_record(record_dir)
+        breport.retry_packaging(record_dir)
+
+    outside = [p for p in root.parent.rglob("outside*")] + [p for p in root.parent.parent.glob("outside*")]
+    assert outside == []
 
 
 def test_report_id_shape_and_uniqueness(tmp_path):
@@ -381,6 +474,94 @@ def test_known_secret_redacted_in_problem_and_trajectory(state, workspace, monke
     )
     assert "supersecretvalue" not in json.dumps(record)
     assert record["redaction"]["classification"] == "clean"
+
+
+def test_archive_headers_carry_no_local_identity(state, workspace, tmp_path):
+    """Both tar layers must not leak this machine's uid/gid/user/group names."""
+    _record_dir, record = _full_flow(state, workspace)
+    rid = record["report_id"]
+    with tarfile.open(record["package"]["path"]) as tar:
+        for member in tar.getmembers():
+            assert (member.uid, member.gid, member.uname, member.gname) == (0, 0, "", "")
+        inner = tar.extractfile(f"{rid}/trajectory/trace-1.tar.gz").read()
+    inner_path = tmp_path / "inner.tar.gz"
+    inner_path.write_bytes(inner)
+    with tarfile.open(inner_path) as tar:
+        members = tar.getmembers()
+        assert members
+        for member in members:
+            assert (member.uid, member.gid, member.uname, member.gname) == (0, 0, "", "")
+
+
+@pytest.mark.parametrize("damage", ["modify", "add", "symlink"], ids=["modified", "added-file", "symlink-injected"])
+def test_first_packaging_verifies_frozen_export(state, workspace, damage):
+    """A tree changed between freeze and confirm must never reach local_ready."""
+    prep = _prepared(state, workspace)
+    prep = breport.freeze_export(prep, description="it broke")
+    export_dir = prep.export_dir
+    if damage == "modify":
+        target = export_dir / "bugreport.json"
+        target.write_text(target.read_text(encoding="utf-8") + " ", encoding="utf-8")
+    elif damage == "add":
+        (export_dir / "extra.txt").write_text("x", encoding="utf-8")
+    else:
+        (export_dir / "link").symlink_to(export_dir / "bugreport.json")
+
+    with pytest.raises(breport.PackagingError) as exc_info:
+        breport.confirm_and_package(prep, state_dir=state)
+
+    assert exc_info.value.retryable is False
+    record_dir = breport.bugreports_root(state) / prep.report_id
+    record = breport.load_record(record_dir)
+    assert record["status"] == "failed"
+    assert record["failure"]["retryable"] is False
+    assert record["failure"]["reason"] == breport.REASON_SNAPSHOT_CORRUPTED
+    assert not (record_dir / f"{prep.report_id}.tar.gz").exists()
+
+
+# ── expected I/O failures are normalized ───────────────────────────────
+
+
+def test_prepare_wraps_io_failure_and_cleans_staging(state, workspace, monkeypatch):
+    _log_simple(state)
+
+    def _boom(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(breport, "collect_bundle", _boom)
+    with pytest.raises(breport.PreparationError):
+        breport.prepare_trajectory("trace-1", workspace=workspace, state_dir=state)
+    staging = breport.bugreports_root(state) / breport.STAGING_DIR
+    assert not any(staging.iterdir())
+
+
+def test_freeze_wraps_tar_failure(state, workspace, monkeypatch):
+    prep = _prepared(state, workspace)
+
+    def _boom(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(breport.tarfile, "open", _boom)
+    with pytest.raises(breport.PreparationError):
+        breport.freeze_export(prep, description="it broke")
+    prep.cleanup()
+
+
+def test_confirm_wraps_record_landing_failure(state, workspace, monkeypatch):
+    prep = _prepared(state, workspace)
+    prep = breport.freeze_export(prep, description="it broke")
+
+    def _boom(*_a, **_k):
+        raise OSError("read-only filesystem")
+
+    monkeypatch.setattr(breport.os, "replace", _boom)
+    with pytest.raises(breport.PreparationError):
+        breport.confirm_and_package(prep, state_dir=state)
+    monkeypatch.undo()
+
+    assert not (breport.bugreports_root(state) / prep.report_id).exists()
+    prep.cleanup()
+    assert not prep.staging_dir.exists()
 
 
 # ── freezing, retry, and crash recovery ────────────────────────────────

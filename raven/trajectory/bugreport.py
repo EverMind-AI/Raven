@@ -53,7 +53,6 @@ from raven import __version__
 from raven.tracing import config as tracing_config
 from raven.trajectory.bundle import BUNDLE_FORMAT_VERSION, collect_bundle
 from raven.trajectory.redact import KnownSecret, RedactionReport, collect_known_secrets, redact_bundle
-from raven.trajectory.report import pack_report
 from raven.trajectory.sanitize import sanitize_export_tree, sanitize_text, scan_absolute_paths, tree_digest
 from raven.trajectory.store import member_traces
 
@@ -95,16 +94,65 @@ class StaleAttemptError(BugReportError):
     """The attempt's member set changed while the report was being prepared."""
 
 
-class ExportLeakError(BugReportError):
+class PreparationError(BugReportError):
+    """Preparation failed before the record landed (nothing was created).
+
+    Expected filesystem/archive failures (disk full, permissions, tar errors)
+    are normalized into this so the UI can show the fixed pre-record failure
+    block instead of crashing the browser.
+    """
+
+
+class ExportLeakError(PreparationError):
     """The export tree still carries content that must not leave the machine."""
 
 
 class PackagingError(BugReportError):
-    """Packaging failed after the record was created (record is now failed)."""
+    """Packaging failed after the record was created (record is now failed).
+
+    ``retryable`` mirrors the record's failure state: True for a transient
+    tar/write failure, False when the frozen snapshot no longer verifies.
+    """
+
+    def __init__(self, reason: str, *, retryable: bool) -> None:
+        super().__init__(reason)
+        self.retryable = retryable
+
+
+class _SnapshotCorruptedError(Exception):
+    """Internal: the frozen export tree no longer matches its digest."""
 
 
 def bugreports_root(state_dir: Path | None = None) -> Path:
     return (state_dir or tracing_config.state_dir()) / BUGREPORTS_DIR
+
+
+def _clean_member(info: tarfile.TarInfo) -> tarfile.TarInfo:
+    """Normalize an archive member header for export.
+
+    ``tarfile.add`` copies the source file's uid/gid/uname/gname into every
+    member header, which would hand the recipient this machine's username even
+    when all file *content* is sanitized. Bug-report archives (both layers)
+    carry fixed anonymous ownership instead.
+    """
+    info.uid = 0
+    info.gid = 0
+    info.uname = ""
+    info.gname = ""
+    return info
+
+
+def _pack_clean_tar(source_dir: Path, out_file: Path, arcname: str) -> Path:
+    """A ``.tar.gz`` of ``source_dir`` rooted at ``arcname``, headers normalized.
+
+    Same archive layout as ``pack_report`` — only the member ownership headers
+    differ (see :func:`_clean_member`); ``raven trajectory report`` keeps its
+    existing behavior untouched.
+    """
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(out_file, "w:gz") as tar:
+        tar.add(source_dir, arcname=arcname, filter=_clean_member)
+    return out_file
 
 
 def new_report_id(root: Path) -> str:
@@ -221,11 +269,85 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
         raise
 
 
+_SHA_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+
+def _is_int(value: Any) -> bool:
+    return type(value) is int
+
+
+def _is_str_list(value: Any) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def _validate_record(payload: dict[str, Any], dir_name: str) -> None:
+    """Full v1 structure validation of a record payload.
+
+    The record is a machine-local file, but a damaged or hand-edited one is
+    untrusted input all the same: a reader must never crash on it, and above
+    all must never turn its fields into path operations — ``report_id`` names
+    the package file, so it is held to its exact grammar and to the directory
+    it lives in.
+    """
+
+    def _check(condition: Any, what: str) -> None:
+        if not condition:
+            raise ValueError(f"invalid bug report record ({what}): {dir_name}")
+
+    report_id = payload.get("report_id")
+    _check(isinstance(report_id, str) and _REPORT_ID.fullmatch(report_id), "report id")
+    _check(report_id == dir_name, "report id does not match its directory")
+    for key in ("created_at", "raven_version", "reporter"):
+        _check(isinstance(payload.get(key), str), key)
+    attempt = payload.get("attempt")
+    _check(isinstance(attempt, dict), "attempt")
+    _check(isinstance(attempt.get("attempt_id"), str) and attempt["attempt_id"], "attempt id")
+    _check(attempt.get("session_key") is None or isinstance(attempt["session_key"], str), "session key")
+    _check(_is_str_list(attempt.get("member_traces")) and attempt["member_traces"], "member traces")
+    _check(isinstance(attempt.get("merged_definition"), bool), "merged flag")
+    problem = payload.get("problem")
+    _check(isinstance(problem, dict), "problem")
+    _check(isinstance(problem.get("description"), str) and problem["description"], "description")
+    for key in ("expected", "actual", "steps"):
+        _check(isinstance(problem.get(key), str), key)
+    _check(problem.get("severity") in ("", *SEVERITIES), "severity")
+    _check(payload.get("status") in (STATUS_DRAFT, STATUS_LOCAL_READY, STATUS_FAILED), "status")
+    failure = payload.get("failure")
+    _check(isinstance(failure, dict), "failure")
+    _check(isinstance(failure.get("reason"), str), "failure reason")
+    _check(isinstance(failure.get("retryable"), bool), "failure retryable")
+    _check(_is_int(failure.get("retry_count")) and failure["retry_count"] >= 0, "retry count")
+    snapshot = payload.get("snapshot")
+    _check(isinstance(snapshot, dict) and isinstance(snapshot.get("kept"), bool), "snapshot")
+    for key in ("source_digest", "export_digest"):
+        _check(isinstance(snapshot.get(key), str) and _SHA_DIGEST.fullmatch(snapshot[key]), key)
+    package = payload.get("package")
+    _check(isinstance(package, dict), "package")
+    _check(isinstance(package.get("path"), str) and isinstance(package.get("sha256"), str), "package fields")
+    _check(_is_int(package.get("size_bytes")) and package["size_bytes"] >= 0, "package size")
+    completeness = payload.get("completeness")
+    _check(isinstance(completeness, dict), "completeness")
+    _check(
+        isinstance(completeness.get("status"), str) and _is_str_list(completeness.get("reasons")), "completeness fields"
+    )
+    redaction = payload.get("redaction")
+    _check(isinstance(redaction, dict), "redaction")
+    _check(
+        redaction.get("classification") in (CLASSIFICATION_CLEAN, CLASSIFICATION_NEEDS_REVIEW, CLASSIFICATION_BLOCKED),
+        "classification",
+    )
+    _check(_is_str_list(redaction.get("reasons")), "redaction reasons")
+    _check(isinstance(redaction.get("reviewed_by_user"), bool), "reviewed flag")
+    for key in ("upload", "links"):
+        _check(isinstance(payload.get(key), dict), key)
+
+
 def load_record(record_dir: Path) -> dict[str, Any]:
     """The validated record payload of one report directory.
 
-    Raises ``ValueError`` for a missing/corrupt file, a foreign schema, or an
-    unknown major version (never guess at fields a future writer meant).
+    Raises ``ValueError`` for a missing/corrupt file, a foreign schema, an
+    unknown version, or any structural damage (never guess at fields a future
+    or corrupted writer meant, and never let them become path operations).
     """
     path = record_dir / RECORD_FILE
     try:
@@ -235,8 +357,9 @@ def load_record(record_dir: Path) -> dict[str, Any]:
     if not isinstance(payload, dict) or payload.get("schema") != RECORD_SCHEMA:
         raise ValueError(f"not a bug report record: {path}")
     version = payload.get("schema_version")
-    if not isinstance(version, int) or version > SCHEMA_VERSION:
+    if not _is_int(version) or not 1 <= version <= SCHEMA_VERSION:
         raise ValueError(f"unsupported bug report record version {version!r}: {path}")
+    _validate_record(payload, record_dir.name)
     return payload
 
 
@@ -339,8 +462,10 @@ def prepare_trajectory(
             classification=classification,
             reasons=reasons,
         )
-    except BaseException:
+    except BaseException as exc:
         shutil.rmtree(staging_dir, ignore_errors=True)
+        if isinstance(exc, (OSError, tarfile.TarError)):
+            raise PreparationError(str(exc) or exc.__class__.__name__) from exc
         raise
 
 
@@ -394,48 +519,52 @@ def freeze_export(
         "reporter": reporter,
     }
 
-    problem_dir = prep.snapshot_dir / "problem"
-    problem_dir.mkdir(exist_ok=True)
-    for name, value in raw_fields.items():
-        if value:
-            (problem_dir / f"problem.{name}").write_text(value, encoding="utf-8")
-    problem_report = redact_bundle(problem_dir, prep.snapshot_dir / "problem_redacted", secrets=prep.secrets)
-    problem_report.config_loaded = prep.config_loaded
-    prep.problem_report = problem_report
+    try:
+        problem_dir = prep.snapshot_dir / "problem"
+        problem_dir.mkdir(exist_ok=True)
+        for name, value in raw_fields.items():
+            if value:
+                (problem_dir / f"problem.{name}").write_text(value, encoding="utf-8")
+        problem_report = redact_bundle(problem_dir, prep.snapshot_dir / "problem_redacted", secrets=prep.secrets)
+        problem_report.config_loaded = prep.config_loaded
+        prep.problem_report = problem_report
 
-    redacted_fields: dict[str, str] = {}
-    for name, value in raw_fields.items():
-        source = prep.snapshot_dir / "problem_redacted" / f"problem.{name}"
-        text = source.read_text(encoding="utf-8") if value and source.is_file() else ""
-        redacted_fields[name] = sanitize_text(text, prep.roots)
+        redacted_fields: dict[str, str] = {}
+        for name, value in raw_fields.items():
+            source = prep.snapshot_dir / "problem_redacted" / f"problem.{name}"
+            text = source.read_text(encoding="utf-8") if value and source.is_file() else ""
+            redacted_fields[name] = sanitize_text(text, prep.roots)
 
-    classification, reasons = classify_redaction(prep.trajectory_report, problem_report)
-    prep.classification = classification
-    prep.reasons = reasons
-    prep.reporter = redacted_fields.pop("reporter")
-    prep.problem = redacted_fields
-    if classification == CLASSIFICATION_BLOCKED:
+        classification, reasons = classify_redaction(prep.trajectory_report, problem_report)
+        prep.classification = classification
+        prep.reasons = reasons
+        prep.reporter = redacted_fields.pop("reporter")
+        prep.problem = redacted_fields
+        if classification == CLASSIFICATION_BLOCKED:
+            return prep
+
+        redacted_dir = prep.snapshot_dir / "redacted" / prep.attempt_id
+        sanitize_export_tree(redacted_dir, prep.roots)
+        leaks = scan_absolute_paths(redacted_dir, prep.roots)
+        if leaks:
+            raise ExportLeakError(f"absolute path leaked into the export: {leaks[0][0]}")
+
+        prep.source_digest = tree_digest(prep.snapshot_dir / "bundle" / prep.attempt_id)
+
+        export_dir = prep.export_dir
+        tarball = _pack_clean_tar(
+            redacted_dir, export_dir / "trajectory" / f"{prep.attempt_id}.tar.gz", prep.attempt_id
+        )
+
+        metadata = _build_package_metadata(prep, tarball)
+        _atomic_write_json(export_dir / PACKAGE_METADATA_FILE, metadata)
+        prep.package_metadata = metadata
+
+        _assert_export_ready(prep, metadata)
+        prep.export_digest = tree_digest(export_dir)
         return prep
-
-    redacted_dir = prep.snapshot_dir / "redacted" / prep.attempt_id
-    sanitize_export_tree(redacted_dir, prep.roots)
-    leaks = scan_absolute_paths(redacted_dir, prep.roots)
-    if leaks:
-        raise ExportLeakError(f"absolute path leaked into the export: {leaks[0][0]}")
-
-    prep.source_digest = tree_digest(prep.snapshot_dir / "bundle" / prep.attempt_id)
-
-    export_dir = prep.export_dir
-    (export_dir / "trajectory").mkdir(parents=True)
-    tarball = pack_report(redacted_dir, export_dir / "trajectory" / f"{prep.attempt_id}.tar.gz")
-
-    metadata = _build_package_metadata(prep, tarball)
-    _atomic_write_json(export_dir / PACKAGE_METADATA_FILE, metadata)
-    prep.package_metadata = metadata
-
-    _assert_export_ready(prep, metadata)
-    prep.export_digest = tree_digest(export_dir)
-    return prep
+    except (OSError, tarfile.TarError) as exc:
+        raise PreparationError(str(exc) or exc.__class__.__name__) from exc
 
 
 def _build_package_metadata(prep: ExportPreparation, tarball: Path) -> dict[str, Any]:
@@ -571,24 +700,47 @@ def confirm_and_package(prep: ExportPreparation, *, state_dir: Path | None = Non
     if current is None or set(current) != set(prep.member_traces):
         raise StaleAttemptError("the attempt changed while the report was being prepared")
 
-    save_record(prep.staging_dir, _new_record_payload(prep))
     record_dir = bugreports_root(resolved_state) / prep.report_id
-    os.replace(prep.staging_dir, record_dir)
+    try:
+        save_record(prep.staging_dir, _new_record_payload(prep))
+        os.replace(prep.staging_dir, record_dir)
+    except OSError as exc:
+        # The record did not land (staging is still in place) — the caller
+        # shows the pre-record failure block and cleans the staging directory.
+        raise PreparationError(str(exc) or exc.__class__.__name__) from exc
     record = load_record(record_dir)
     return record_dir, _package(record_dir, record)
 
 
+def _verify_export(record: dict[str, Any], export_dir: Path) -> None:
+    """Raise :class:`_SnapshotCorruptedError` unless ``export/`` matches its digest."""
+    try:
+        digest = tree_digest(export_dir)
+    except ValueError as exc:
+        raise _SnapshotCorruptedError() from exc
+    if digest != record["snapshot"].get("export_digest"):
+        raise _SnapshotCorruptedError()
+
+
 def _package(record_dir: Path, record: dict[str, Any]) -> dict[str, Any]:
-    """``tar(export/)`` into the record directory; the only step a retry redoes."""
+    """``tar(export/)`` into the record directory; the only step a retry redoes.
+
+    The frozen ``export_digest`` is verified immediately before the tar run
+    **and again after it** — the second pass shrinks the confirm-to-pack race
+    window to the tar run itself and catches a tree modified mid-archive, so
+    bytes the user never approved cannot land in a ``local_ready`` package.
+    """
     report_id = record["report_id"]
     export_dir = record_dir / "snapshot" / "export"
     final = record_dir / f"{report_id}.tar.gz"
     try:
+        _verify_export(record, export_dir)
         fd, tmp = tempfile.mkstemp(prefix=f".{report_id}-", suffix=".tar.gz", dir=record_dir)
         os.close(fd)
         try:
             with tarfile.open(tmp, "w:gz") as tar:
-                tar.add(export_dir, arcname=report_id)
+                tar.add(export_dir, arcname=report_id, filter=_clean_member)
+            _verify_export(record, export_dir)
             os.replace(tmp, final)
         except BaseException:
             Path(tmp).unlink(missing_ok=True)
@@ -605,37 +757,34 @@ def _package(record_dir: Path, record: dict[str, Any]) -> dict[str, Any]:
         save_record(record_dir, record)
         shutil.rmtree(record_dir / "snapshot", ignore_errors=True)
         return record
+    except _SnapshotCorruptedError as exc:
+        record["status"] = STATUS_FAILED
+        record["failure"]["reason"] = REASON_SNAPSHOT_CORRUPTED
+        record["failure"]["retryable"] = False
+        record["snapshot"]["kept"] = True
+        save_record(record_dir, record)
+        raise PackagingError(REASON_SNAPSHOT_CORRUPTED, retryable=False) from exc
     except BaseException as exc:
         record["status"] = STATUS_FAILED
         record["failure"]["reason"] = str(exc) or exc.__class__.__name__
         record["failure"]["retryable"] = True
         record["snapshot"]["kept"] = True
         save_record(record_dir, record)
-        raise PackagingError(record["failure"]["reason"]) from exc
+        raise PackagingError(record["failure"]["reason"], retryable=True) from exc
 
 
 def retry_packaging(record_dir: Path) -> dict[str, Any]:
     """Re-run packaging from the frozen snapshot; never re-collect.
 
-    Verifies ``export_digest`` first: a modified, added/removed, or
-    link-injected entry means the frozen deliverable is gone — the report
-    becomes permanently non-retryable rather than shipping unapproved bytes.
+    :func:`_package` verifies ``export_digest`` around the tar run — a
+    modified, added/removed, or link-injected entry means the frozen
+    deliverable is gone, and the report becomes permanently non-retryable
+    rather than shipping unapproved bytes.
     """
     record = load_record(record_dir)
     if record["status"] != STATUS_FAILED or not record["failure"].get("retryable"):
         raise BugReportError(f"report {record['report_id']} is not retryable")
     record["failure"]["retry_count"] = int(record["failure"].get("retry_count", 0)) + 1
-    export_dir = record_dir / "snapshot" / "export"
-    try:
-        digest = tree_digest(export_dir)
-    except ValueError:
-        digest = None
-    if digest is None or digest != record["snapshot"].get("export_digest"):
-        record["status"] = STATUS_FAILED
-        record["failure"]["reason"] = REASON_SNAPSHOT_CORRUPTED
-        record["failure"]["retryable"] = False
-        save_record(record_dir, record)
-        raise PackagingError(REASON_SNAPSHOT_CORRUPTED)
     record["status"] = STATUS_DRAFT
     save_record(record_dir, record)
     return _package(record_dir, record)
@@ -735,6 +884,7 @@ __all__ = [
     "PACKAGE_SCHEMA",
     "PROBLEM_FIELDS",
     "PackagingError",
+    "PreparationError",
     "RECORD_FILE",
     "RECORD_SCHEMA",
     "SCHEMA_VERSION",

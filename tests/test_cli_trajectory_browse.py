@@ -2073,3 +2073,21 @@ def test_bug_report_outputs_confine_ids_to_paths(state, workspace, monkeypatch, 
         if state.name in line or "Package:" in line:
             continue
         _assert_no_ids(line)
+
+
+def test_bug_report_io_failure_shows_prepare_block(state, workspace, monkeypatch, capsys, _no_machine_secrets):
+    from raven.trajectory import bugreport as breport
+
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+
+    def _boom(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(breport, "collect_bundle", _boom)
+
+    fake = _bug_flow(monkeypatch, workspace, [_CANCEL])
+
+    out = capsys.readouterr().out
+    assert "Could not prepare the trajectory snapshot: disk full" in out
+    assert breport.list_reports(state) == []
+    assert fake.answers == []

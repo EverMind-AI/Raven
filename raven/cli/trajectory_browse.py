@@ -1014,7 +1014,7 @@ def _bug_report_action(
     except breport.StaleAttemptError:
         _print_stale_refresh()
         return
-    except (ValueError, LookupError) as exc:
+    except (ValueError, LookupError, breport.PreparationError) as exc:
         console.print(f"[red]✗ Could not prepare the trajectory snapshot: {escape(str(exc))}[/red]", highlight=False)
         return
 
@@ -1025,7 +1025,7 @@ def _bug_report_action(
         fields = _ask_problem_fields(questionary, style)
         try:
             prep = breport.freeze_export(prep, **fields)
-        except breport.ExportLeakError as exc:
+        except breport.PreparationError as exc:
             console.print(
                 f"[red]✗ Could not prepare the trajectory snapshot: {escape(str(exc))}[/red]", highlight=False
             )
@@ -1042,8 +1042,13 @@ def _bug_report_action(
         except breport.StaleAttemptError:
             _print_stale_refresh()
             return
+        except breport.PreparationError as exc:
+            console.print(
+                f"[red]✗ Could not prepare the trajectory snapshot: {escape(str(exc))}[/red]", highlight=False
+            )
+            return
         except breport.PackagingError as exc:
-            _print_packaging_failure(prep.report_id, str(exc), retryable=True)
+            _print_packaging_failure(prep.report_id, str(exc), retryable=exc.retryable)
             return
         _print_report_ready(record)
     except _ActionCancelledError:
@@ -1094,10 +1099,7 @@ def _bug_reports_screen(row: AttemptRow, questionary: Any, style: Any) -> None:
                 with console.status("Packing the report...", spinner="dots"):
                     retried = breport.retry_packaging(record_dir)
             except breport.PackagingError as exc:
-                current = breport.load_record(record_dir)
-                _print_packaging_failure(
-                    record["report_id"], str(exc), retryable=bool(current["failure"].get("retryable"))
-                )
+                _print_packaging_failure(record["report_id"], str(exc), retryable=exc.retryable)
             else:
                 _print_report_ready(retried)
         reports = breport.reports_for_attempt(row.key, row.traces)
