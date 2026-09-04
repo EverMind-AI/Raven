@@ -56,7 +56,7 @@ from raven.agent.tools.media_gen import (
 from raven.agent.tools.message import MessageTool
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.shell import ExecTool
-from raven.agent.tools.web import WebFetchTool, WebSearchTool
+from raven.agent.tools.web import WebFetchTool, WebSearchTool, resolve_vendor_key
 from raven.contracts.assembled import TokenBudget
 from raven.contracts.llm_provider import LLMProvider, LLMResponse
 from raven.contracts.tool import SKIPPED_AFTER_BLOCKED_CALL, Continuation, ToolOutput

@@ -9,10 +9,13 @@ for `uv sync`.
 - [`uv`](https://docs.astral.sh/uv/) — the only supported package manager. `pip` is not.
 - An LLM endpoint. Anything OpenAI-compatible works: OpenRouter, a vLLM/SGLang server, OpenAI.
 - For live-web research, a search key: [Serper](https://serper.dev) by default, or
-  [SerpApi](https://serpapi.com) / [AnySearch](https://anysearch.com) via
-  `tools.web.search.provider`. Page fetching defaults to
+  [SerpApi](https://serpapi.com) / [AnySearch](https://anysearch.com) / [Tavily](https://tavily.com)
+  / [Exa](https://exa.ai) / [Brave Search](https://brave.com/search/api) /
+  [Firecrawl](https://firecrawl.dev) via `tools.web.search.provider`. Page fetching defaults to
   [Jina Reader](https://jina.ai/reader), which works unauthenticated at a lower rate
-  limit; `JINA_API_KEY` raises it.
+  limit; `JINA_API_KEY` raises it. AnySearch, Tavily, Exa, and
+  [Firecrawl](https://firecrawl.dev) can also serve `web_fetch` via `tools.web.fetch.provider`,
+  each off the same vendor key as its search side.
 
 ## 1. Install
 

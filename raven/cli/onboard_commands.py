@@ -11,8 +11,8 @@ Steps:
   3. Chat channel (optional, stackable)
   4. EverOS long-term memory (optional; llm/embedding required once enabled,
      rerank/multimodal optional)
-  5. Web tool keys (optional; Serper enables web_search, Jina raises web_fetch's
-     rate limit; mirrored to ~/.raven/env so sub-agents inherit them)
+  5. Web access (optional; pick a search vendor and a page reader and give
+     each its key; keys are mirrored to ~/.raven/env so sub-agents inherit them)
   6. Sub-agents shipped in this checkout (optional; per folder, own key or
      this raven's LLM)
   7. Cold-start import from other AI tools (optional)
@@ -2353,6 +2353,10 @@ def run_wizard(
     skip_import: bool = False,
     serper_api_key: Optional[str] = None,
     jina_api_key: Optional[str] = None,
+    search_provider: Optional[str] = None,
+    fetch_provider: Optional[str] = None,
+    search_api_key: Optional[str] = None,
+    fetch_api_key: Optional[str] = None,
     non_interactive: bool = False,
     yes: bool = False,
     reset: bool = False,
@@ -2387,6 +2391,10 @@ def run_wizard(
             skip_import=skip_import,
             serper_api_key=serper_api_key,
             jina_api_key=jina_api_key,
+            search_provider=search_provider,
+            fetch_provider=fetch_provider,
+            search_api_key=search_api_key,
+            fetch_api_key=fetch_api_key,
             non_interactive=non_interactive,
             yes=yes,
             reset=reset,
@@ -2432,6 +2440,10 @@ def _run_wizard_body(
     skip_import: bool = False,
     serper_api_key: Optional[str] = None,
     jina_api_key: Optional[str] = None,
+    search_provider: Optional[str] = None,
+    fetch_provider: Optional[str] = None,
+    search_api_key: Optional[str] = None,
+    fetch_api_key: Optional[str] = None,
     non_interactive: bool = False,
     yes: bool = False,
     reset: bool = False,
@@ -2491,7 +2503,7 @@ def _run_wizard_body(
             skip_test=skip_test,
         ),
         # Ahead of the sub-agents screen on purpose: the folders it sets up fall
-        # back to the host's config for exactly these two keys, so writing them
+        # back to the host's config for these vendors and keys, so writing them
         # first is what lets a folder inherit rather than be asked again.
         lambda: onboard_web._step5_web(
             skip=skip_web,
@@ -2499,6 +2511,10 @@ def _run_wizard_body(
             yes=yes,
             serper_api_key=serper_api_key,
             jina_api_key=jina_api_key,
+            search_provider=search_provider,
+            fetch_provider=fetch_provider,
+            search_api_key=search_api_key,
+            fetch_api_key=fetch_api_key,
         ),
         lambda: _step6_subagents(
             skip=skip_subagents,
@@ -2600,6 +2616,26 @@ def register(app: typer.Typer) -> None:
             "--jina-api-key",
             help="Jina key for web_fetch (honoured even under --non-interactive, which skips Step 5)",
         ),
+        search_provider: Optional[str] = typer.Option(
+            None,
+            "--search-provider",
+            help="web_search vendor: serper, anysearch, serpapi, tavily, exa, brave or firecrawl",
+        ),
+        fetch_provider: Optional[str] = typer.Option(
+            None,
+            "--fetch-provider",
+            help="web_fetch vendor: jina, anysearch, tavily, exa or firecrawl",
+        ),
+        search_api_key: Optional[str] = typer.Option(
+            None,
+            "--search-api-key",
+            help="Key for the web_search vendor (the one --search-provider names, or the configured one)",
+        ),
+        fetch_api_key: Optional[str] = typer.Option(
+            None,
+            "--fetch-api-key",
+            help="Key for the web_fetch vendor (the one --fetch-provider names, or the configured one)",
+        ),
         skip_sandbox: bool = typer.Option(False, "--skip-sandbox", help="Skip Step 2 (run location)"),
         skip_channel: bool = typer.Option(False, "--skip-channel", help="Skip Step 3 (channel setup)"),
         skip_memory: bool = typer.Option(False, "--skip-memory", help="Skip Step 4 (long-term memory)"),
@@ -2638,6 +2674,10 @@ def register(app: typer.Typer) -> None:
             skip_import=skip_import,
             serper_api_key=serper_api_key,
             jina_api_key=jina_api_key,
+            search_provider=search_provider,
+            fetch_provider=fetch_provider,
+            search_api_key=search_api_key,
+            fetch_api_key=fetch_api_key,
             non_interactive=non_interactive,
             yes=yes,
             reset=reset,

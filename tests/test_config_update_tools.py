@@ -115,7 +115,7 @@ def test_reset_clears_key(cfg: Path):
 
 def test_web_search_set_writes_camelcase_under_search(cfg: Path):
     ut.set_web_search({"api_key": "serper-abc"}, config_path=cfg)
-    assert _raw(cfg)["tools"]["web"]["search"] == {"apiKey": "serper-abc", "maxResults": 5}
+    assert _raw(cfg)["tools"]["web"]["search"] == {"provider": "serper", "apiKey": "serper-abc", "maxResults": 5}
 
 
 def test_web_search_set_preserves_the_rest_of_tools_web(cfg: Path):
@@ -137,7 +137,7 @@ def test_web_search_set_merges_and_returns_prev(cfg: Path):
     ut.set_web_search({"api_key": "serper-1"}, config_path=cfg)
     prev = ut.set_web_search({"max_results": 8}, config_path=cfg)
     section = _raw(cfg)["tools"]["web"]["search"]
-    assert section == {"apiKey": "serper-1", "maxResults": 8}
+    assert section == {"provider": "serper", "apiKey": "serper-1", "maxResults": 8}
     assert prev == {"max_results": 5}
 
 
@@ -147,7 +147,7 @@ def test_web_search_set_rejects_unknown_field(cfg: Path):
 
 
 def test_web_search_get_redacts_key(cfg: Path):
-    assert ut.get_web_search(config_path=cfg) == {"api_key": "(empty)", "max_results": 5}
+    assert ut.get_web_search(config_path=cfg) == {"provider": "serper", "api_key": "(empty)", "max_results": 5}
     ut.set_web_search({"api_key": "serper-abc"}, config_path=cfg)
     assert ut.get_web_search(config_path=cfg)["api_key"] == "****set****"
     assert ut.get_web_search(redact=False, config_path=cfg)["api_key"] == "serper-abc"
