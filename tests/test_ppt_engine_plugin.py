@@ -386,3 +386,51 @@ def test_the_sentinel_never_seeds(tmp_path: Path) -> None:
     sentinel = plugin_module.make_hook(_ctx({"enabled": "false"}, home))
     asyncio.run(sentinel.before_user_inbound(AgentHookContext(session_key="s", inbound_content="hi")))
     assert not home.exists()
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_turn_keeps_the_users_words_not_the_staging_block(tmp_path: Path) -> None:
+    """The H1 broken-turn repair, pinned for this product too: the materials
+    hook rewrites the model's view of the inbound, and a turn the user
+    cancels must not persist that rewrite as the user's own words."""
+    import asyncio
+
+    from raven.agent import workdir
+    from raven.agent.loop import AgentLoop
+    from raven.agent.loop.bundles import HostWiring, ToolWiring, TurnPolicy
+    from raven.spine import ChatType, Origin, Source, TurnRequest
+    from raven_ppt.plugin.hook import PptEngineHook
+
+    class _CancellingProvider:
+        async def chat_with_retry(self, **kwargs):
+            raise asyncio.CancelledError()
+
+        def get_default_model(self):
+            return "fake/model"
+
+    loop = AgentLoop(
+        provider=_CancellingProvider(),
+        workspace=tmp_path,
+        model="fake/model",
+        policy=TurnPolicy(max_iterations=2),
+        host=HostWiring(hooks=[PptEngineHook(home=None)]),
+        tools=ToolWiring(restrict_to_workspace=True),
+    )
+
+    async def _noop(**_kw) -> None:
+        return None
+
+    loop._start_executor = _noop
+    loop._connect_mcp = _noop
+
+    request = TurnRequest(
+        origin=Origin.USER,
+        source=Source(channel="cli", chat_id="c", sender_id="u", chat_type=ChatType.DM),
+        text="build a deck about penguins",
+    )
+    with workdir.bind(tmp_path), pytest.raises(asyncio.CancelledError):
+        await loop._process_message(request)
+
+    session = loop.sessions.get_or_create("cli:c")
+    users = [m for m in session.messages if m.get("role") == "user"]
+    assert users and users[-1]["content"] == "build a deck about penguins"
