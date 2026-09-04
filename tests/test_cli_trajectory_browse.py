@@ -539,7 +539,7 @@ def test_report_declined_still_refreshes(state, workspace, monkeypatch, capsys):
         [
             ("pick", "session"),
             ("pick", "#1"),
-            ("pick", "Report"),
+            ("pick", "Report (redact"),
             False,
             ("pick", "#1"),
             _BACK,
@@ -620,7 +620,7 @@ def test_action_outputs_carry_no_ids(state, workspace, monkeypatch, capsys):
     [
         ([("pick", "session"), ("pick", "#1"), ("pick", "Save"), _BACK, _CANCEL], "collect_bundle"),
         (
-            [("pick", "session"), ("pick", "#1"), ("pick", "Report"), _BACK, _CANCEL],
+            [("pick", "session"), ("pick", "#1"), ("pick", "Report (redact"), _BACK, _CANCEL],
             "collect_bundle",
         ),
         (
@@ -713,7 +713,7 @@ def test_artifact_action_outputs_confine_ids_to_paths(state, workspace, monkeypa
             ("pick", "#1"),
             ("pick", "Minimize"),
             ("pick", "#1"),
-            ("pick", "Report"),
+            ("pick", "Report (redact"),
             True,
             _BACK,
             _CANCEL,
@@ -840,7 +840,7 @@ def test_data_wiped_after_action_ends_controlled(state, workspace, monkeypatch, 
 @pytest.mark.parametrize(
     "script",
     [
-        [("pick", "session"), ("pick", "#1"), ("pick", "Report"), _CANCEL],
+        [("pick", "session"), ("pick", "#1"), ("pick", "Report (redact"), _CANCEL],
         [("pick", "session"), ("hit", "m", "#1"), _CANCEL],
         [("pick", "session"), ("pick", "#1"), ("pick", "Verdict"), "fail", _CANCEL],
         [("pick", "session"), ("pick", "#1"), ("pick", "Split"), _CANCEL],
@@ -982,7 +982,7 @@ def test_escape_on_report_confirm_keeps_bundle_and_pin(state, workspace, monkeyp
 
     fake = _browse(
         monkeypatch,
-        [("pick", "session"), ("pick", "#1"), ("pick", "Report"), _BACK, ("pick", "#1"), _BACK, _BACK, _CANCEL],
+        [("pick", "session"), ("pick", "#1"), ("pick", "Report (redact"), _BACK, ("pick", "#1"), _BACK, _BACK, _CANCEL],
         workspace,
     )
 
@@ -1813,3 +1813,263 @@ def test_nondefault_workspace_flows_into_save_and_minimize(state, tmp_path, monk
     assert manifest["session_included"] is True
     assert (state / "bundles" / aid / "session.jsonl").exists()
     assert (state / "cassettes" / aid / "manifest.json").exists()
+
+
+# ── report-a-bug flow ──────────────────────────────────────────────────
+
+_PEM = "-----BEGIN PRIVATE KEY-----\nMIIabcdef\n-----END PRIVATE KEY-----"
+_ENTROPY_TOKEN = "aB3xK9mQ7pL2vR8sT4wZ6yN1"
+
+
+@pytest.fixture
+def _no_machine_secrets(monkeypatch):
+    """Keep the test machine's real config/env out of bug report classification."""
+    monkeypatch.setattr(tbrowse.breport, "collect_known_secrets", lambda _p: ([], True))
+
+
+def _bug_flow(monkeypatch, workspace, answers):
+    return _browse(monkeypatch, [("pick", "session"), ("pick", "#1"), ("pick", "Report a bug"), *answers], workspace)
+
+
+def _single_report(state):
+    from raven.trajectory import bugreport as breport
+
+    ((record_dir, record),) = breport.list_reports(state)
+    return record_dir, record
+
+
+def test_bug_report_happy_path(state, workspace, monkeypatch, capsys, _no_machine_secrets):
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+
+    fake = _bug_flow(
+        monkeypatch,
+        workspace,
+        ["the agent replied in the wrong language", False, True, _CANCEL],
+    )
+
+    out = capsys.readouterr().out
+    _record_dir, record = _single_report(state)
+    assert record["status"] == "local_ready"
+    assert record["problem"]["description"] == "the agent replied in the wrong language"
+    assert f"Bug report {record['report_id']} ready (local_ready)" in out
+    assert out.count("Package:") == 1
+    assert "Not uploaded — hand the package file to a developer yourself." in out
+    assert "the attempt was pinned" in out
+    assert "Nothing will be uploaded — the package stays on this machine." in out
+    assert "residual scan: clean" in out
+    assert "NOT anonymized" in out
+    assert "not yet evaluated in this version" in out
+    first_action_menu = next(titles for kind, msg, titles in fake.prompts if msg == "Action:")
+    assert not any("Bug reports" in t for t in first_action_menu)
+
+
+def test_bug_report_menu_counts_existing_reports(state, workspace, monkeypatch, capsys, _no_machine_secrets):
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+    _bug_flow(monkeypatch, workspace, ["first problem", False, True, _CANCEL])
+    capsys.readouterr()
+
+    fake = _browse(monkeypatch, [("pick", "session"), ("pick", "#1"), _BACK, _BACK, _CANCEL], workspace)
+
+    action_menu = next(titles for kind, msg, titles in fake.prompts if msg == "Action:")
+    assert any("Bug reports (1)" in t for t in action_menu)
+    assert any("Report a bug" in t for t in action_menu)
+
+
+def test_bug_report_empty_description_reprompts(state, workspace, monkeypatch, capsys, _no_machine_secrets):
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+
+    _bug_flow(monkeypatch, workspace, ["", "real description", False, True, _CANCEL])
+
+    out = capsys.readouterr().out
+    assert "A problem description is required to file a bug report." in out
+    _record_dir, record = _single_report(state)
+    assert record["problem"]["description"] == "real description"
+
+
+def test_bug_report_optional_details_reach_summary_and_record(
+    state, workspace, monkeypatch, capsys, _no_machine_secrets
+):
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+
+    _bug_flow(
+        monkeypatch,
+        workspace,
+        [
+            "wrong language",
+            True,
+            "a reply in Chinese",
+            "the reply was in English",
+            ("pick", "medium"),
+            "ask anything in Chinese",
+            "forrest",
+            True,
+            _CANCEL,
+        ],
+    )
+
+    out = capsys.readouterr().out
+    assert "forrest (included in the package)" in out
+    _record_dir, record = _single_report(state)
+    assert record["problem"]["severity"] == "medium"
+    assert record["reporter"] == "forrest"
+
+
+def test_bug_report_cancel_keeps_nothing(state, workspace, monkeypatch, capsys, _no_machine_secrets):
+    from raven.trajectory import bugreport as breport
+
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+
+    _bug_flow(monkeypatch, workspace, [_BACK, _CANCEL])
+
+    out = capsys.readouterr().out
+    assert "Cancelled — no bug report was created." in out
+    assert breport.list_reports(state) == []
+    staging = breport.bugreports_root(state) / breport.STAGING_DIR
+    assert not any(staging.iterdir())
+
+
+def test_bug_report_declined_confirmation_keeps_nothing(state, workspace, monkeypatch, capsys, _no_machine_secrets):
+    from raven.trajectory import bugreport as breport
+
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+
+    _bug_flow(monkeypatch, workspace, ["it broke", False, False, _CANCEL])
+
+    assert "Cancelled — no bug report was created." in capsys.readouterr().out
+    assert breport.list_reports(state) == []
+
+
+def test_bug_report_needs_review_requires_second_confirm(state, workspace, monkeypatch, capsys, _no_machine_secrets):
+    from raven.trajectory import bugreport as breport
+
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1", session_key="cli:a", attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})],
+    )
+
+    fake = _bug_flow(monkeypatch, workspace, ["it broke", False, True, False, _CANCEL])
+
+    out = capsys.readouterr().out
+    assert "NEEDS REVIEW" in out
+    assert "residual scan flagged" in out
+    assert "Cancelled — no bug report was created." in out
+    assert breport.list_reports(state) == []
+    ship_prompt = next(msg for kind, msg, _t in fake.prompts if "Ship the package anyway?" in msg)
+    assert "flagged content may include real secrets" in ship_prompt
+
+
+def test_bug_report_needs_review_accepted_ships(state, workspace, monkeypatch, capsys, _no_machine_secrets):
+    import tarfile as _tarfile
+
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1", session_key="cli:a", attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})],
+    )
+
+    _bug_flow(monkeypatch, workspace, ["it broke", False, True, True, _CANCEL])
+
+    _record_dir, record = _single_report(state)
+    assert record["status"] == "local_ready"
+    assert record["redaction"]["classification"] == "needs_review"
+    with _tarfile.open(record["package"]["path"]) as tar:
+        meta = json.loads(tar.extractfile(f"{record['report_id']}/bugreport.json").read().decode("utf-8"))
+    assert meta["redaction"]["risk_accepted"] is True
+
+
+def test_bug_report_blocked_trajectory_stops_before_input(state, workspace, monkeypatch, capsys, _no_machine_secrets):
+    from raven.trajectory import bugreport as breport
+
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1", session_key="cli:a", attrs={"llm.output": _PEM})],
+    )
+
+    fake = _bug_flow(monkeypatch, workspace, [_CANCEL])
+
+    out = capsys.readouterr().out
+    assert "Cannot create a bug report from this attempt." in out
+    assert "private key block" in out
+    assert "raven trajectory report" in out
+    assert breport.list_reports(state) == []
+    assert not any(kind == "text" for kind, _m, _t in fake.prompts)
+
+
+def test_bug_report_blocked_description_stops_before_confirm(
+    state, workspace, monkeypatch, capsys, _no_machine_secrets
+):
+    from raven.trajectory import bugreport as breport
+
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+
+    fake = _bug_flow(monkeypatch, workspace, [f"look: {_PEM}", False, _CANCEL])
+
+    out = capsys.readouterr().out
+    assert "Cannot create a bug report with these details." in out
+    assert "without pasting the key itself" in out
+    assert breport.list_reports(state) == []
+    assert not any("Create the bug report?" in msg for _k, msg, _t in fake.prompts)
+
+
+def test_bug_report_concurrent_member_change_rejected(state, workspace, monkeypatch, capsys, _no_machine_secrets):
+    from raven.trajectory import bugreport as breport
+
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1", session_key="cli:a"), _span("trace-2", session_key="cli:a")],
+    )
+
+    def _merge_then_confirm():
+        tstore.merge_attempts(["trace-1", "trace-2"], state_dir=state)
+        return True
+
+    _bug_flow(monkeypatch, workspace, ["it broke", False, _merge_then_confirm, _BACK, _CANCEL])
+
+    out = capsys.readouterr().out
+    assert "The attempt changed while the report was being prepared — nothing was created." in out
+    assert breport.list_reports(state) == []
+
+
+def test_bug_report_retry_from_reports_menu(state, workspace, monkeypatch, capsys, _no_machine_secrets):
+    import os as _os
+
+    from raven.trajectory import bugreport as breport
+
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+    prep = breport.prepare_trajectory("trace-1", workspace=workspace, state_dir=state)
+    prep = breport.freeze_export(prep, description="tool call crashed the session")
+    breport.save_record(prep.staging_dir, breport._new_record_payload(prep))
+    record_dir = breport.bugreports_root(state) / prep.report_id
+    _os.replace(prep.staging_dir, record_dir)
+
+    _browse(
+        monkeypatch,
+        [
+            ("pick", "session"),
+            ("pick", "#1"),
+            ("pick", "Bug reports (1)"),
+            ("pick", "br-"),
+            ("pick", "Retry packaging"),
+            _BACK,
+            _BACK,
+            _CANCEL,
+        ],
+        workspace,
+    )
+
+    out = capsys.readouterr().out
+    record = breport.load_record(record_dir)
+    assert record["status"] == "local_ready"
+    assert f"Bug report {record['report_id']} ready (local_ready)" in out
+    assert "interrupted before the package was written" in out
+
+
+def test_bug_report_outputs_confine_ids_to_paths(state, workspace, monkeypatch, capsys, _no_machine_secrets):
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+
+    _bug_flow(monkeypatch, workspace, ["it broke", False, True, _CANCEL])
+
+    out = capsys.readouterr().out
+    for line in out.splitlines():
+        if state.name in line or "Package:" in line:
+            continue
+        _assert_no_ids(line)
