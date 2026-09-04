@@ -1,6 +1,6 @@
 """Per-provider request and response contracts of ``WebFetchTool``.
 
-Two backends read pages behind one tool. What differs is the request, how a
+Several backends read pages behind one tool. What differs is the request, how a
 failure is reported, and what the response carries; everything downstream --
 the SSRF gate, containment, the digest path, truncation and the ledger -- is one
 code path below them.
@@ -58,7 +58,7 @@ def _anysearch_ok(content: str = PAGE, title: str = "A Title") -> dict:
 class _Recorder:
     """Client that records what it was asked for and answers per method.
 
-    Keyed by method rather than by call order because the two backends do not
+    Keyed by method rather than by call order because the backends do not
     take the same number of calls: the Jina branch re-reads a garbled page, and
     a retryable failure is sent up to three times before it gives up. A queue
     would hand the fallback's response to the selected provider's retry.
@@ -175,6 +175,89 @@ async def test_the_anysearch_request_is_a_post_to_extract() -> None:
     assert call["headers"]["Authorization"] == "Bearer k-any"
 
 
+@pytest.mark.asyncio
+async def test_the_tavily_request_is_a_post_to_extract() -> None:
+    client = _Recorder(post=_Resp(payload={"results": [{"url": "https://x.example/", "raw_content": PAGE}]}))
+    with _Patched(client):
+        await WebFetchTool(provider="tavily", api_key="k-tav").execute(url="https://x.example/")
+
+    call = client.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"] == "https://api.tavily.com/extract"
+    assert call["json"] == {"urls": ["https://x.example/"]}
+    assert call["headers"]["Authorization"] == "Bearer k-tav"
+
+
+@pytest.mark.asyncio
+async def test_tavily_extracts_the_matching_urls_raw_content() -> None:
+    client = _Recorder(post=_Resp(payload={"results": [{"url": "https://x.example/", "raw_content": PAGE}]}))
+    with _Patched(client):
+        out = json.loads(
+            await WebFetchTool(provider="tavily", api_key="k").execute(url="https://x.example/")
+        )
+
+    assert out["text"] == PAGE
+    assert out["extractor"] == "tavily-extract"
+
+
+@pytest.mark.asyncio
+async def test_a_failing_tavily_extract_is_not_a_page() -> None:
+    client = _Recorder(
+        post=_Resp(payload={"results": [], "failed_results": [{"url": "https://x.example/", "error": "unsupported"}]})
+    )
+    with _Patched(client):
+        out = await WebFetchTool(provider="tavily", api_key="k").execute(url="https://x.example/")
+
+    assert fetch_result_ok(out) is False
+    assert "unsupported" in json.loads(out)["error"]
+
+
+@pytest.mark.asyncio
+async def test_the_exa_request_is_a_post_to_contents() -> None:
+    client = _Recorder(post=_Resp(payload={"results": [{"url": "https://x.example/", "text": PAGE, "title": "T"}]}))
+    with _Patched(client):
+        await WebFetchTool(provider="exa", api_key="k-exa").execute(url="https://x.example/")
+
+    call = client.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"] == "https://api.exa.ai/contents"
+    assert call["json"] == {"urls": ["https://x.example/"], "text": True}
+    assert call["headers"]["x-api-key"] == "k-exa"
+
+
+@pytest.mark.asyncio
+async def test_exa_carries_its_title_as_its_own_field() -> None:
+    client = _Recorder(post=_Resp(payload={"results": [{"url": "https://x.example/", "text": PAGE, "title": "Real Title"}]}))
+    with _Patched(client):
+        out = json.loads(await WebFetchTool(provider="exa", api_key="k").execute(url="https://x.example/"))
+
+    assert out["title"] == "Real Title"
+    assert out["text"] == PAGE
+    assert out["extractor"] == "exa-contents"
+
+
+@pytest.mark.asyncio
+async def test_an_empty_exa_result_set_is_not_a_page() -> None:
+    client = _Recorder(post=_Resp(payload={"results": []}))
+    with _Patched(client):
+        out = await WebFetchTool(provider="exa", api_key="k").execute(url="https://x.example/")
+
+    assert fetch_result_ok(out) is False
+
+
+@pytest.mark.asyncio
+async def test_the_firecrawl_request_is_a_post_to_scrape() -> None:
+    client = _Recorder(post=_Resp(payload={"success": True, "data": {"markdown": PAGE}}))
+    with _Patched(client):
+        await WebFetchTool(provider="firecrawl", api_key="k-fc").execute(url="https://x.example/")
+
+    call = client.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"] == "https://api.firecrawl.dev/v1/scrape"
+    assert call["json"] == {"url": "https://x.example/", "formats": ["markdown"]}
+    assert call["headers"]["Authorization"] == "Bearer k-fc"
+
+
 # --------------------------------------------------------------------------- #
 # response handling                                                             #
 # --------------------------------------------------------------------------- #
@@ -200,6 +283,31 @@ async def test_an_empty_body_in_a_healthy_envelope_is_not_a_page() -> None:
         out = await WebFetchTool(provider="anysearch", api_key="k").execute(url="https://x.example/")
 
     assert fetch_result_ok(out) is False
+
+
+@pytest.mark.asyncio
+async def test_a_failing_firecrawl_envelope_is_not_a_page() -> None:
+    client = _Recorder(post=_Resp(payload={"success": False, "error": "This website is no longer supported"}))
+    with _Patched(client):
+        out = await WebFetchTool(provider="firecrawl", api_key="k").execute(url="https://x.example/")
+
+    assert fetch_result_ok(out) is False
+    assert "This website is no longer supported" in json.loads(out)["error"]
+
+
+@pytest.mark.asyncio
+async def test_firecrawl_carries_its_title_as_its_own_field() -> None:
+    client = _Recorder(
+        post=_Resp(payload={"success": True, "data": {"markdown": PAGE, "metadata": {"title": "Real Title"}}})
+    )
+    with _Patched(client):
+        out = json.loads(
+            await WebFetchTool(provider="firecrawl", api_key="k").execute(url="https://x.example/")
+        )
+
+    assert out["title"] == "Real Title"
+    assert out["text"] == PAGE
+    assert out["extractor"] == "firecrawl-scrape"
 
 
 @pytest.mark.asyncio
@@ -390,6 +498,9 @@ def test_only_a_backend_that_needs_a_key_can_be_withheld(monkeypatch) -> None:
     # and the sub-agent registry both ask it and must agree.
     monkeypatch.delenv("JINA_API_KEY", raising=False)
     monkeypatch.delenv("ANYSEARCH_API_KEY", raising=False)
+    monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
     assert FETCH_PROVIDERS[DEFAULT_FETCH_PROVIDER].needs_key is False
     assert FETCH_PROVIDERS["anysearch"].needs_key is True
 
@@ -397,6 +508,12 @@ def test_only_a_backend_that_needs_a_key_can_be_withheld(monkeypatch) -> None:
     assert WebFetchTool(provider="anysearch").registrable is False
     assert WebFetchTool(provider="anysearch", api_key="k").registrable is True
     assert WebFetchTool(provider="anysearch", corpus_endpoint="http://x").registrable is True
+    assert WebFetchTool(provider="firecrawl").registrable is False
+    assert WebFetchTool(provider="firecrawl", api_key="k").registrable is True
+    assert WebFetchTool(provider="tavily").registrable is False
+    assert WebFetchTool(provider="tavily", api_key="k").registrable is True
+    assert WebFetchTool(provider="exa").registrable is False
+    assert WebFetchTool(provider="exa", api_key="k").registrable is True
 
 
 def test_the_dict_key_and_the_specs_vendor_agree() -> None:
@@ -417,7 +534,7 @@ def test_each_provider_resolves_only_its_own_variable(monkeypatch: pytest.Monkey
 
 
 def test_an_unknown_provider_degrades_to_the_default() -> None:
-    assert WebFetchTool(provider="firecrawl").provider == DEFAULT_FETCH_PROVIDER
+    assert WebFetchTool(provider="diffbot").provider == DEFAULT_FETCH_PROVIDER
     assert selected_fetch_provider(object()) == DEFAULT_FETCH_PROVIDER
 
 

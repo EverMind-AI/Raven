@@ -160,9 +160,12 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         tools, subagents, engine, policy, host = resolve_wiring(tools, subagents, engine, policy, host)
         exec_config = tools.exec_config
         ask_user_config = tools.ask_user_config
-        brave_api_key = tools.brave_api_key
+        search_api_key = tools.search_api_key
         jina_api_key = tools.jina_api_key
         web_proxy = tools.web_proxy
+        web_search_provider = tools.web_search_provider
+        web_fetch_provider = tools.web_fetch_provider
+        web_provider_keys = tools.web_provider_keys
         restrict_to_workspace = tools.restrict_to_workspace
         disabled_tools = tools.disabled_tools
         tool_search_config = tools.tool_search_config
@@ -234,9 +237,12 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         self.max_iterations = max_iterations
         # Empty-response recovery budgets. None → enabled defaults.
         self._recovery_limits = empty_recovery if empty_recovery is not None else RecoveryLimits()
-        self.brave_api_key = brave_api_key
+        self.search_api_key = search_api_key
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
+        self.web_search_provider = web_search_provider
+        self.web_fetch_provider = web_fetch_provider
+        self.web_provider_keys = web_provider_keys
         from raven.config.raven import MemoryConfig, SubagentDagConfig, SubagentQuestionsConfig
         from raven.config.schema import DeepResearchToolConfig, MediaGenConfig
 
@@ -420,9 +426,12 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             provider=provider,
             workspace=workspace,
             model=self._default_binding.model,
-            brave_api_key=brave_api_key,
+            search_api_key=search_api_key,
             jina_api_key=jina_api_key,
             web_proxy=web_proxy,
+            web_search_provider=web_search_provider,
+            web_fetch_provider=web_fetch_provider,
+            web_provider_keys=web_provider_keys,
             exec_config=self.exec_config,
             restrict_to_workspace=restrict_to_workspace,
             sandbox_config=sandbox_config,

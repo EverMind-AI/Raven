@@ -819,25 +819,30 @@ class WebProvidersConfig(Base):
     anysearch: WebProviderKey = Field(default_factory=WebProviderKey)
     serpapi: WebProviderKey = Field(default_factory=WebProviderKey)
     jina: WebProviderKey = Field(default_factory=WebProviderKey)
+    tavily: WebProviderKey = Field(default_factory=WebProviderKey)
+    exa: WebProviderKey = Field(default_factory=WebProviderKey)
+    brave: WebProviderKey = Field(default_factory=WebProviderKey)
+    firecrawl: WebProviderKey = Field(default_factory=WebProviderKey)
 
 
 class WebSearchConfig(Base):
     """Web search tool configuration."""
 
-    provider: Literal["serper", "anysearch", "serpapi"] = "serper"
+    provider: Literal["serper", "anysearch", "serpapi", "tavily", "exa", "brave", "firecrawl"] = "serper"
     """Which backend ``web_search`` calls. Default keeps the measured wire traffic.
 
     The key itself lives under ``tools.web.providers.<name>``, so switching does
-    not require re-pasting one and switching back restores the previous. AnySearch
-    serves no page beyond the first, which the tool declares to the saturation
-    rule up front (``paginates``) rather than issuing a request it cannot serve."""
+    not require re-pasting one and switching back restores the previous. AnySearch,
+    Tavily, Exa and Firecrawl serve no result offset, which the tool declares to
+    the saturation rule up front (``paginates``) rather than issuing a request it
+    cannot serve."""
     max_results: int = 5
 
 
 class WebFetchConfig(Base):
     """Web fetch tool configuration."""
 
-    provider: Literal["jina", "anysearch"] = "jina"
+    provider: Literal["jina", "anysearch", "tavily", "exa", "firecrawl"] = "jina"
     """Which backend ``web_fetch`` reads pages through. Default keeps the
     measured wire traffic (``r.jina.ai``, unauthenticated when no key is set).
 
@@ -846,7 +851,7 @@ class WebFetchConfig(Base):
     27,786 for the same page, because it keeps the navigation chrome Jina strips,
     and it carries no publication date. An arm reading pages through it is a
     different arm, not the same arm on another vendor."""
-    fallback: list[Literal["jina", "anysearch"]] = Field(default_factory=list)
+    fallback: list[Literal["jina", "anysearch", "tavily", "exa", "firecrawl"]] = Field(default_factory=list)
     """Backends to try, in order, when the selected one fails to return a page.
 
     Empty by default, which is the behaviour every measured run so far had. It

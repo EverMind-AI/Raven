@@ -4,7 +4,6 @@ workdir and sinks.
 
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING
 
 from raven.agent.loop._shared import (
@@ -33,6 +32,7 @@ from raven.agent.loop._shared import (
     active_binding,
     deep_research_mode,
     logger,
+    resolve_vendor_key,
     workdir,
 )
 
@@ -150,9 +150,13 @@ class WiringMixin:
             cfg = self._live_media_config(kind, fallback)
             if not (cfg.api_key or cfg.model):
                 names.add(cls.name)
-        if self.tools.get(WebSearchTool.name) is gated.get(WebSearchTool.name) and not (
-            self._live_web_search_key() or os.environ.get("SERPER_API_KEY")
-        ):
+        search = self.tools.get(WebSearchTool.name)
+        # Asked of the tool, not restated here: it resolves the selected
+        # vendor's key from the live reader below or from that vendor's own
+        # environment variable. A predicate spelled out again here was reading
+        # SERPER_API_KEY whatever the deployment had chosen, which withheld a
+        # keyed Tavily search.
+        if search is not None and search is gated.get(WebSearchTool.name) and not search.api_key:
             names.add(WebSearchTool.name)
         return names
 
@@ -163,18 +167,35 @@ class WiringMixin:
         return exec_extra_deny_patterns(self._live_config)
 
     def _live_web_search_key(self) -> str:
-        """The Serper key the file names now, else the boot value.
+        """The selected vendor's search key the file names now, else the boot value.
 
         The boot value is the lane eval harnesses pass a key through with no
         file behind it; a file with a section governs entirely, including an
         empty value, which is how a key gets revoked without a restart.
-        """
-        from raven.config.live import web_search_key
 
-        answer = web_search_key(self._live_config)
-        if answer is None:
-            return self.brave_api_key or ""
-        return answer
+        Both key layouts are read live, canonical slot first, in the same order
+        ``WebToolsConfig.vendor_key`` resolves them: reading only the
+        pre-vendor leaf made the restart-free behaviour reachable exclusively
+        by the layout this schema retired, so a key pasted into the slot the
+        settings page writes -- Serper's included -- left the tool withheld
+        until the next process. The leaf is Serper's alone, hence consulted
+        only when Serper is the selection.
+        """
+        from raven.config.live import web_provider_key, web_search_key
+
+        vendor = self.web_search_provider
+        slot = web_provider_key(self._live_config, vendor)
+        if slot:
+            return slot
+        if vendor == "serper":
+            leaf = web_search_key(self._live_config)
+            if leaf is not None:
+                return leaf
+        # An empty-but-present slot is a revocation, not a miss: fall through to
+        # the boot value only when the file answered nothing at all.
+        if slot == "":
+            return ""
+        return self._web_key(vendor) or ""
 
     def _media_config_reader(self, kind: str, fallback) -> "Callable[[], Any]":
         def read():
@@ -476,6 +497,9 @@ class WiringMixin:
         self.enable_personalization = enable
         logger.info("Personalization flow: {}", "enabled" if enable else "disabled")
 
+    def _web_key(self, vendor: str) -> str | None:
+        return resolve_vendor_key(vendor, self.web_provider_keys, self.search_api_key, self.jina_api_key)
+
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
         allowed_dirs = (self.workspace,) if self.restrict_to_workspace else ()
@@ -511,12 +535,24 @@ class WiringMixin:
         # subclass -- replaces the entry, and the built-in's config section
         # says nothing about the replacement's credential story.
         self._config_gated_tools: dict[str, Any] = {}
-        web_search = WebSearchTool(api_key=self._live_web_search_key, proxy=self.web_proxy)
+        web_search = WebSearchTool(
+            api_key=self._live_web_search_key, proxy=self.web_proxy, provider=self.web_search_provider
+        )
         self.tools.register(web_search)
         self._config_gated_tools[web_search.name] = web_search
-        # web_fetch is unconditional by contrast: it works without a key, and the
-        # Jina one only upgrades the extraction.
-        self.tools.register(WebFetchTool(api_key=self.jina_api_key, proxy=self.web_proxy))
+        # web_fetch registers the same way and is never withheld: Jina needs no
+        # key, so a keyed backend selected without one is replaced by Jina
+        # rather than left to fail.
+        fetch_provider = WebFetchTool.effective_provider(
+            self.web_fetch_provider, self._web_key(self.web_fetch_provider)
+        )
+        self.tools.register(
+            WebFetchTool(api_key=self._web_key(fetch_provider), proxy=self.web_proxy, provider=fetch_provider)
+        )
+        # Media tools (image/speech/video) are opt-in: a tool is registered only
+        # when the user configured it (a model or apiKey under tools.media.<tool>),
+        # which Config.effective_media_config() surfaces as a resolved key/model.
+        # An OpenRouter key set for chat alone never enables them.
         media = self.media_config
         media_tools = (
             (ImageGenerateTool, "image", media.image),

@@ -62,7 +62,7 @@ def _make_loop(workspace: Path, cfg, strategies=None) -> AgentLoop:
         # loop only registers it when a search key resolves. Supplying one keeps
         # the subject of the test present for the right reason.
         policy=TurnPolicy(max_iterations=2),
-        tools=ToolWiring(restrict_to_workspace=True, tool_search_config=cfg, brave_api_key="test-serper-key"),
+        tools=ToolWiring(restrict_to_workspace=True, tool_search_config=cfg, search_api_key="test-serper-key"),
         engine=EngineWiring(strategies=strategies),
     )
 
