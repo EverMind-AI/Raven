@@ -575,11 +575,12 @@ class SubagentManager:
     def adopt_background_run(self, run_id: str, task: asyncio.Task, session_key: str | None) -> None:
         """Put a task this manager did not start under the same reach as a spawn.
 
-        A backgrounded DAG dispatches the same detached CLI children a spawn
-        does, so ``/stop`` and the shutdown sweep have to find it too -- see
-        :meth:`cancel_all` for what an unreachable one leaves behind. Indexed
-        here rather than only on the DAG tool so every entry point's existing
-        teardown covers it with no extra wiring.
+        Every ``run_subagent_dag`` run -- backgrounded or blocking, the latter
+        runs as a task too now -- dispatches the same detached CLI children a
+        spawn does, so ``/stop`` and the shutdown sweep have to find it too --
+        see :meth:`cancel_all` for what an unreachable one leaves behind.
+        Indexed here rather than only on the DAG tool so every entry point's
+        existing teardown covers it with no extra wiring.
         """
         self._track(run_id, task, session_key)
 
@@ -1515,6 +1516,12 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
         Fenced like a result, and more pointedly: the report quotes the node's own
         output and transcript, which is exactly the text an attacker who reached
         the sub-agent would have written.
+
+        ``awaiting_decision`` is unused here on purpose: unlike the foreground lane's
+        route back, an injected message can carry a notification as easily as a
+        question, so the background lane announces both kinds. It is still required --
+        a default on a fact two announcers route on is a defect waiting for the next
+        caller, and this lane not needing it does not make it safe to guess.
         """
         if self._submit is None:
             logger.warning("DAG run {} node {} suspended with no submit wired; not announced", run_id, node_id)
