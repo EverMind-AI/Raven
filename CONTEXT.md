@@ -629,9 +629,29 @@ The shippable form of a trajectory produced by `raven trajectory report`: the
 redacted copy of its Bundle plus `redaction.json` (per-layer replacement counts,
 residual findings, binary policy) packed into a `.tar.gz`, delivered through the
 pluggable `Uploader` protocol (v1 backend: `local` — the tarball itself, nothing
-is sent anywhere).
+is sent anywhere). A Bug Report Package embeds a copy of one in this same format.
 _Avoid_: calling the unredacted Bundle a "report" — only the redacted tarball leaves
 the machine.
+
+**Bug Report Record** (`raven/trajectory/bugreport.py`):
+The machine-local lifecycle record of one filed problem (`record.json` under
+`<trace-state>/bugreports/<report-id>/`): the frozen attempt/member-trace
+association, problem fields, status (`draft`/`local_ready`/`failed`), snapshot
+digests, and the local package path. Never exported, so absolute paths are
+allowed inside it.
+_Avoid_: "bug report" for the shippable artifact — that is the Bug Report
+Package; the Record never leaves the machine.
+
+**Bug Report Package** (`raven/trajectory/bugreport.py`):
+The only bug-report artifact allowed to leave the machine:
+`<report-id>.tar.gz`, holding a canonical `bugreport.json` (redacted +
+path-sanitized problem metadata, merged redaction summary with
+`risk_accepted`, environment, content manifest) plus an embedded Trajectory
+Report. Its entire content is frozen under the report's `snapshot/export/`
+before the user confirms, so a packaging retry reuses the approved bytes and
+never re-collects.
+_Avoid_: confusing it with the Trajectory Report it embeds — the Package wraps
+one and adds the problem metadata envelope.
 
 **Trajectory Replay** (`raven/trajectory/replay.py`):
 Mock re-run of the harness against a Trajectory Bundle (`raven trajectory replay`):
