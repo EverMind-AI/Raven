@@ -10,6 +10,7 @@ resolution-markers = [
 
 [manifest]
 members = [
+    "design-engine",
     "everos-memory",
     "ppt-engine",
     "raven",
@@ -740,6 +741,32 @@ sdist = { url = "https://files.pythonhosted.org/packages/5a/d3/8ae2869247df154b6
 wheels = [
     { url = "https://files.pythonhosted.org/packages/02/c3/253a89ee03fc9b9682f1541728eb66db7db22148cd94f89ab22528cd1e1b/deprecation-2.1.0-py2.py3-none-any.whl", hash = "sha256:a10811591210e1fb0e768a8c25517cabeabcba6f0bf96564f8ff45189f90b14a", size = 11178, upload-time = "2020-04-20T14:23:36.581Z" },
 ]
+
+[[package]]
+name = "design-engine"
+version = "0.2.0"
+source = { editable = "plugins-dist/design-engine" }
+dependencies = [
+    { name = "pillow" },
+    { name = "raven" },
+]
+
+[package.optional-dependencies]
+render = [
+    { name = "playwright" },
+    { name = "pymupdf" },
+    { name = "pypdfium2" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pillow", specifier = ">=10.0.0" },
+    { name = "playwright", marker = "extra == 'render'", specifier = ">=1.58,<2" },
+    { name = "pymupdf", marker = "extra == 'render'", specifier = ">=1.27.2.3,<2" },
+    { name = "pypdfium2", marker = "extra == 'render'", specifier = ">=4.30,<5" },
+    { name = "raven", editable = "." },
+]
+provides-extras = ["render"]
 
 [[package]]
 name = "dingtalk-stream"
@@ -3369,6 +3396,7 @@ channels = [
     { name = "wecom-aibot-sdk-python" },
 ]
 dev = [
+    { name = "design-engine" },
     { name = "everos-memory" },
     { name = "ppt-engine" },
     { name = "pytest" },
@@ -3409,6 +3437,7 @@ requires-dist = [
     { name = "anyio", marker = "extra == 'sandbox'", specifier = ">=4.0" },
     { name = "boxlite", marker = "sys_platform != 'win32' and extra == 'sandbox'", specifier = "==0.9.5" },
     { name = "croniter", specifier = ">=6.0.0,<7.0.0" },
+    { name = "design-engine", marker = "extra == 'dev'", editable = "plugins-dist/design-engine" },
     { name = "dingtalk-stream", marker = "extra == 'channel-dingtalk'", specifier = ">=0.24.0,<1.0.0" },
     { name = "everos", extras = ["multimodal"], specifier = "==1.2.3" },
     { name = "everos-memory", marker = "extra == 'dev'", editable = "plugins-dist/everos-memory" },

@@ -1826,7 +1826,13 @@ class TurnPathMixin:
             # streamed is work the reader saw, so it lands in the session with a
             # note saying a person ended the turn. Then the cancel proceeds.
             self._save_broken_turn(
-                session, initial_messages, turn_start_idx, turn_received_at, streamed, status="cancelled"
+                session,
+                initial_messages,
+                turn_start_idx,
+                turn_received_at,
+                streamed,
+                status="cancelled",
+                inbound_original=inbound_original,
             )
             raise
         except Exception as exc:
@@ -1838,6 +1844,7 @@ class TurnPathMixin:
                 streamed,
                 status="failed",
                 reason=str(exc),
+                inbound_original=inbound_original,
             )
             raise
         self._stash_recovery(key, outcome)
@@ -1942,6 +1949,7 @@ class TurnPathMixin:
         *,
         status: str,
         reason: str | None = None,
+        inbound_original: str | None = None,
     ) -> None:
         """Persist what a cancelled or failed turn got as far as producing.
 
@@ -1956,6 +1964,16 @@ class TurnPathMixin:
           loop only commits a message once the provider call returns;
         - the marker entry carries ``turn_ended`` so a client can say WHY the
           transcript stops there, and readable text so the model sees the same.
+
+        ``inbound_original`` rides through to :meth:`_save_turn` exactly as it
+        does on the healthy path: a hook's ``modified_content`` rewrite shapes
+        only what the model saw this turn, and a turn the user cancelled (or
+        one that died) must not be the one door through which the rewritten
+        envelope enters the persisted history -- replayed as the user's own
+        words every later turn and eligible for consolidation into memory.
+        Broken turns used to drop it, which is how a product hook's injected
+        block (the design selector cards, ppt's staged-material block) leaked
+        into the record on exactly the outcomes users hit mid-task.
 
         Never raises: this runs on the way out of a dying turn, and a rescue
         that throws replaces one loss with another.
@@ -2000,7 +2018,7 @@ class TurnPathMixin:
                 "turn_ended": {"status": status, **({"reason": reason} if reason else {})},
             }
             tail.append(marker)
-            self._save_turn(session, tail, 0, received_at=received_at)
+            self._save_turn(session, tail, 0, received_at=received_at, inbound_original=inbound_original)
             self.sessions.save(session)
         except Exception:  # noqa: BLE001 - see docstring
             logger.opt(exception=True).warning("could not persist the broken turn for {}", session.key)

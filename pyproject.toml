@@ -133,6 +133,7 @@ dev = [
     # through the `raven.plugins` entry-point group, not through the package.
     "everos-memory",
     "ppt-engine",
+    "design-engine",
 ]
 eval = [
     # benchmarks/proactivity_eval PROBE adapter (deprioritized stretch test) needs
@@ -202,6 +203,7 @@ include = [
 # Resolve the dev dependency above to the workspace member, not to an index.
 everos-memory = { workspace = true }
 ppt-engine = { workspace = true }
+design-engine = { workspace = true }
 
 [tool.uv]
 constraint-dependencies = [
@@ -240,7 +242,7 @@ target-version = "py312"
 # The distributables beside the host wheel are first-party to this repo's
 # lint: without their root here, ruff reads `raven_everos` as a third-party
 # package and wants its imports in another block than `raven`'s.
-src = [".", "plugins-dist/everos-memory", "plugins-dist/ppt-engine"]
+src = [".", "plugins-dist/everos-memory", "plugins-dist/ppt-engine", "plugins-dist/design-engine"]
 extend-exclude = [
     "benchmarks/**/data",
     "benchmarks/**/results",

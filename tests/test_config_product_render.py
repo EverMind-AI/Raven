@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+from pathlib import Path
 
 import pytest
 
@@ -73,6 +74,53 @@ def test_inherit_llm_takes_the_hosts_brains_not_its_limits():
 
 def test_inherit_llm_declines_without_a_host_key():
     assert render.inherit_llm({}, {"providers": {"open": {"baseUrl": "u"}}}) == ""
+
+
+def test_inherit_llm_honours_the_parent_riders_on_the_inheritance_branch(monkeypatch):
+    """The fork launchers' riders, kept at the shared seat (G1): the cli
+    dispatcher injects RAVEN_PARENT_MODEL / RAVEN_PARENT_REASONING_EFFORT per
+    spawn; on the inheritance branch the model rider wins, the provider is
+    re-inferred by models-list membership (the fork's back-query), and the
+    effort rider overrides the host's copied reasoningEffort. Launch-time
+    semantics -- weaker than the fork's per-turn form, ledgered in D3."""
+    monkeypatch.setenv("RAVEN_PARENT_MODEL", "open/parent-model")
+    monkeypatch.setenv("RAVEN_PARENT_REASONING_EFFORT", "low")
+    host = {
+        "providers": {
+            "open": {"apiKey": "k", "models": ["open/parent-model"]},
+            "other": {"apiKey": "k2", "models": ["other/m"]},
+        },
+        "agents": {"defaults": {"provider": "other", "model": "other/m", "reasoningEffort": "high"}},
+    }
+    config = {}
+    taken = render.inherit_llm(config, host)
+    defaults = config["agents"]["defaults"]
+    assert defaults["model"] == "open/parent-model"
+    assert defaults["provider"] == "open", "provider re-inferred from the models list, not the host default"
+    assert defaults["reasoningEffort"] == "low"
+    assert "reasoning_effort=low" in taken
+
+
+def test_the_own_key_branch_never_reads_the_parent_riders(monkeypatch, tmp_path):
+    """The riders belong to inheritance alone: a product paying with its own
+    key keeps its own tuned model whatever the spawning parent runs -- the
+    fork's own division, pinned at the launcher that exercises it."""
+    import importlib.util
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("DESIGN_STATE_ROOT", str(tmp_path / "state"))
+    monkeypatch.setenv("DESIGN_API_KEY", "sk-own")
+    monkeypatch.setenv("RAVEN_PARENT_MODEL", "vendor/parent-model")
+    monkeypatch.setenv("RAVEN_PARENT_REASONING_EFFORT", "low")
+    for name in ("DESIGN_ACP_HOME", "DESIGN_IMAGE_API_KEY", "DESIGN_SERPER_API_KEY", "DESIGN_JINA_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    launcher_path = Path(render.__file__).resolve().parents[2] / "agents" / "raven-design" / "run.py"
+    spec = importlib.util.spec_from_file_location("design_run_riders", launcher_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    data = json.loads(mod.render_config(launcher_path.parent / "config.json").read_text())
+    assert data["agents"]["defaults"]["model"] == "openai/gpt-5.6-sol"
+    assert data["agents"]["defaults"]["reasoningEffort"] == "high"
 
 
 def test_state_root_prefers_the_override(tmp_path, monkeypatch):

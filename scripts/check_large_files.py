@@ -63,13 +63,25 @@ APP_SOURCE_PREFIXES = (
     "ui-tui/",
 )
 ALLOWED_SKILL_REFERENCE_IMAGE_EXTENSIONS = frozenset({".jpg"})
-RAVEN_DESIGN_SKILL_PREFIX = (
-    "subagents",
-    "raven-design",
-    "Raven-Design",
-    "raven",
-    "memory_engine",
-    "skills",
+# The two homes of the raven-design skill plates: the frozen fork checkout
+# (kept until the retirement wave) and the design-engine wheel the plates
+# migrated to (verdict C4). Same rule at both seats: .jpg only, only under a
+# skill's references/, and the 1 MiB ceiling still applies.
+RAVEN_DESIGN_SKILL_PREFIXES = (
+    (
+        "subagents",
+        "raven-design",
+        "Raven-Design",
+        "raven",
+        "memory_engine",
+        "skills",
+    ),
+    (
+        "plugins-dist",
+        "design-engine",
+        "raven_design",
+        "skills",
+    ),
 )
 
 
@@ -156,15 +168,20 @@ def find_blocked_asset_files(paths: list[str], *, root: Path) -> list[BlockedAss
 
 
 def _is_allowed_skill_reference_image(path: str, extension: str) -> bool:
+    if extension not in ALLOWED_SKILL_REFERENCE_IMAGE_EXTENSIONS:
+        return False
     parts = PurePosixPath(path).parts
-    prefix_length = len(RAVEN_DESIGN_SKILL_PREFIX)
-    return (
-        extension in ALLOWED_SKILL_REFERENCE_IMAGE_EXTENSIONS
-        and ".." not in parts
-        and len(parts) >= prefix_length + 3
-        and parts[:prefix_length] == RAVEN_DESIGN_SKILL_PREFIX
-        and parts[prefix_length + 1] == "references"
-    )
+    if ".." in parts:
+        return False
+    for prefix in RAVEN_DESIGN_SKILL_PREFIXES:
+        prefix_length = len(prefix)
+        if (
+            len(parts) >= prefix_length + 3
+            and parts[:prefix_length] == prefix
+            and parts[prefix_length + 1] == "references"
+        ):
+            return True
+    return False
 
 
 def changed_paths(revision_range: str) -> list[str]:

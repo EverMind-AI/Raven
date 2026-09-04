@@ -77,7 +77,7 @@ def test_web_search_is_withheld_without_a_key(workspace) -> None:
 
 
 def test_a_configured_key_offers_web_search(workspace) -> None:
-    loop = _loop(workspace, brave_api_key="sk-serper")
+    loop = _loop(workspace, search_api_key="sk-serper")
 
     assert loop.tools.offers_by_name("web_search")
 
@@ -93,20 +93,67 @@ def test_the_env_var_alone_offers_web_search(workspace, monkeypatch: pytest.Monk
     assert loop.tools.offers_by_name("web_search")
 
 
-def test_a_key_added_after_start_surfaces_web_search(workspace, tmp_path: Path, monkeypatch) -> None:
+#: Every layout a key can be added in, and the vendor selected while it is.
+#: The canonical slot is what the settings page and the wizard write; the
+#: pre-vendor leaf is what an unmigrated config still holds. A reader wired for
+#: the leaf alone left the canonical case -- the common one -- withheld until
+#: the next process, which no caller could tell from the tool being unkeyed.
+_LIVE_KEY_LAYOUTS = [
+    ("pre-vendor leaf", "serper", {"tools": {"web": {"search": {"apiKey": "sk-added-later"}}}}),
+    (
+        "canonical serper slot",
+        "serper",
+        {"tools": {"web": {"providers": {"serper": {"apiKey": "sk-added-later"}}}}},
+    ),
+    (
+        "canonical slot of another vendor",
+        "tavily",
+        {
+            "tools": {
+                "web": {
+                    "search": {"provider": "tavily"},
+                    "providers": {"tavily": {"apiKey": "sk-added-later"}},
+                }
+            }
+        },
+    ),
+]
+
+
+@pytest.mark.parametrize(("layout", "vendor", "written"), _LIVE_KEY_LAYOUTS, ids=[c[0] for c in _LIVE_KEY_LAYOUTS])
+def test_a_key_added_after_start_surfaces_web_search(
+    workspace, tmp_path: Path, monkeypatch, layout: str, vendor: str, written: dict
+) -> None:
     # The reversibility the registration gate could not give: the user edits the
     # config file, nothing re-registers, and the next assembly reads a different
     # answer -- both the veil and the credential the call then uses.
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({}), encoding="utf-8")
     monkeypatch.setattr("raven.home._current_config_path", cfg)
-    loop = _loop(workspace)
+    loop = _loop(workspace, web_search_provider=vendor)
     assert not loop.tools.offers_by_name("web_search")
 
-    cfg.write_text(json.dumps({"tools": {"web": {"search": {"apiKey": "sk-added-later"}}}}), encoding="utf-8")
+    cfg.write_text(json.dumps(written), encoding="utf-8")
 
-    assert loop.tools.offers_by_name("web_search")
+    assert loop.tools.offers_by_name("web_search"), f"{layout}: the added key never reached the tool"
     assert loop.tools.get("web_search").api_key == "sk-added-later"
+
+
+def test_a_key_cleared_after_start_withdraws_web_search(workspace, tmp_path: Path, monkeypatch) -> None:
+    """The other direction, and the reason an empty slot is an answer rather
+    than a miss: a revoked key must not fall through to the boot value the
+    process started with."""
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"tools": {"web": {"providers": {"serper": {"apiKey": "sk-boot"}}}}}), encoding="utf-8")
+    monkeypatch.setattr("raven.home._current_config_path", cfg)
+    loop = _loop(workspace, web_provider_keys={"serper": "sk-boot"})
+    assert loop.tools.offers_by_name("web_search")
+
+    cfg.write_text(json.dumps({"tools": {"web": {"providers": {"serper": {"apiKey": ""}}}}}), encoding="utf-8")
+
+    assert not loop.tools.offers_by_name("web_search")
+    assert loop.tools.has("web_search"), "withheld, not unregistered"
 
 
 def test_the_subagent_loop_applies_the_same_rule(workspace, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -138,7 +185,7 @@ def test_the_subagent_loop_applies_the_same_rule(workspace, monkeypatch: pytest.
     import asyncio
 
     without = asyncio.run(_names())
-    with_key = asyncio.run(_names(brave_api_key="sk-serper"))
+    with_key = asyncio.run(_names(search_api_key="sk-serper"))
 
     # Baselines first: an empty list would satisfy the "not in" assertion below
     # without proving anything about the gate.
@@ -146,6 +193,40 @@ def test_the_subagent_loop_applies_the_same_rule(workspace, monkeypatch: pytest.
     assert "read_file" in with_key and "web_fetch" in with_key, with_key
     assert "web_search" not in without
     assert "web_search" in with_key
+
+
+def test_the_selected_vendors_key_is_what_offers_web_search(workspace, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The gate asks the tool built for the selected vendor. A Serper key does
+    not offer a Tavily search, and Tavily's own env var does.
+
+    Offered rather than registered: the tool is always registered and withheld
+    from the advertised array while no key resolves, so the assertions here are
+    about the offer. A gate that named ``SERPER_API_KEY`` itself instead of
+    asking the tool passed every case but the first.
+    """
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    serper_keyed = _loop(workspace, web_search_provider="tavily", search_api_key="sk-serper")
+    assert not serper_keyed.tools.offers_by_name("web_search")
+    assert serper_keyed.tools.has("web_search"), "withheld, not unregistered"
+
+    with_key = _loop(workspace, web_search_provider="tavily", web_provider_keys={"tavily": "tv"})
+    assert with_key.tools.offers_by_name("web_search")
+    assert with_key.tools.get("web_search").provider == "tavily"
+
+    monkeypatch.setenv("TAVILY_API_KEY", "tv-env")
+    assert _loop(workspace, web_search_provider="tavily").tools.offers_by_name("web_search")
+
+
+def test_a_keyed_reader_without_a_key_registers_jina_instead(workspace, monkeypatch: pytest.MonkeyPatch) -> None:
+    """web_fetch stays unconditional: the reader that cannot run is replaced by
+    the one that needs no key, out loud, rather than offered to fail."""
+    monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
+    loop = _loop(workspace, web_fetch_provider="firecrawl")
+    assert loop.tools.get("web_fetch").provider == "jina"
+
+    keyed = _loop(workspace, web_fetch_provider="firecrawl", web_provider_keys={"firecrawl": "fc"})
+    assert keyed.tools.get("web_fetch").provider == "firecrawl"
+    assert keyed.tools.get("web_fetch").api_key == "fc"
 
 
 @pytest.mark.asyncio
