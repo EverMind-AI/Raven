@@ -1,0 +1,44 @@
+[project]
+name = "design-engine"
+version = "0.2.0"
+description = "Raven-Design visual engine as a standalone raven plugin: the domain-Skill selector hook, the render and preview tools, the resident task state, and the packaged corpus"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+authors = [
+    {name = "EverMind"}
+]
+keywords = ["raven", "raven-plugin", "design", "visual"]
+
+dependencies = [
+    "raven",
+    # Image inspection, margin cropping, motion keyframes and preview
+    # composition across the rendering package (fork pin kept).
+    "pillow>=10.0.0",
+]
+
+[project.optional-dependencies]
+# The visual preview lane's heavy half, the fork's own `render` extra and
+# pins: browser capture, PDF reading (PyMuPDF -- AGPL-3.0, see NOTICES.md;
+# the obligation stays on this wheel, the host keeps zero fitz), and
+# pdfium-based rasterisation.
+render = [
+    "playwright>=1.58,<2",
+    "pymupdf>=1.27.2.3,<2",
+    "pypdfium2>=4.30,<5",
+]
+
+# The one line that makes this package findable: PluginDiscovery reads this
+# group, takes the value as a bare package name, and loads raven-plugin.toml
+# out of that package with importlib.resources.
+[project.entry-points."raven.plugins"]
+design-engine = "raven_design"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["raven_design"]
+
+[tool.uv.sources]
+raven = { workspace = true }
