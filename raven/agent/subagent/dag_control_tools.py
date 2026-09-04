@@ -14,6 +14,7 @@ the registry resolves either way, as its dispatch never consults the schema.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from contextvars import ContextVar
 from typing import Any
@@ -22,7 +23,7 @@ from raven.agent.subagent.dag_adjudication import ABANDON, CONTINUE, DECISIONS
 from raven.agent.subagent.dag_live import cancel_run, live_run_ids, resolve_node
 from raven.agent.subagent.dag_reader import DagReadError
 from raven.agent.subagent.dag_resume import read_run_reconciled
-from raven.contracts.tool import Tool
+from raven.contracts.tool import Tool, ToolResult
 
 _PROMPT_LINE_LIMIT = 10
 
@@ -146,7 +147,8 @@ class CancelDagTool(_ControlTool):
 
 
 class ResolveDagNodeTool(_ControlTool):
-    """Answer a suspended node: continue it with a message, or abandon it."""
+    """Answer a suspended node: continue it with a message, or abandon it. On a
+    bound foreground run, then wait for the next report or the final result."""
 
     @property
     def name(self) -> str:
@@ -156,7 +158,9 @@ class ResolveDagNodeTool(_ControlTool):
     def description(self) -> str:
         return (
             "Decide what happens to a DAG node that reported it could not accomplish its "
-            "task: continue it with a message, or abandon it and skip its dependents."
+            "task: continue it with a message, or abandon it and skip its dependents. On a "
+            "run started with background=false this call also waits, and returns the next "
+            "report or the run's final result."
         )
 
     @property
@@ -186,7 +190,20 @@ class ResolveDagNodeTool(_ControlTool):
             "required": ["run_id", "node_id", "decision"],
         }
 
-    async def execute(self, run_id: str, node_id: str, decision: str, message: str | None = None) -> str:
+    def blocking_for(self, params: dict[str, Any]) -> bool:
+        """Blocking only when the named run is a bound foreground run.
+
+        The registry consults this to decide whether to put a ceiling on the
+        call, and the turn stream reports it as the call's blocking flag; both
+        must say "may go silent" for exactly the calls that will wait on the
+        graph and for no others.
+        """
+        tool = _registered_tool(self._loop)
+        is_foreground = getattr(tool, "is_foreground", None)
+        run_id = params.get("run_id")
+        return bool(is_foreground is not None and isinstance(run_id, str) and is_foreground(run_id))
+
+    async def execute(self, run_id: str, node_id: str, decision: str, message: str | None = None) -> "str | ToolResult":
         if decision not in DECISIONS:
             return f"Error: decision must be '{CONTINUE}' or '{ABANDON}', not {decision!r}."
         if decision == CONTINUE and not (message or "").strip():
@@ -221,6 +238,24 @@ class ResolveDagNodeTool(_ControlTool):
                 'out, the run was cancelled, or the id is wrong. tool_call name "dag_status" '
                 f'arguments {{"run_id": "{run_id}"}} shows where every node stands.'
             )
+        # A bound foreground run: the turn that started it is this one, blocked
+        # on the graph by choice, so the decision is followed by the next thing
+        # the graph has to say -- another node's report, or the final result.
+        # Registered before the runner wakes: resolve_node above set the node's
+        # event, which only schedules the wake, and await_run parks its taker
+        # before yielding.
+        await_run = getattr(tool, "await_run", None)
+        event = None
+        if await_run is not None:
+            try:
+                event = await await_run(run_id)
+            except asyncio.CancelledError:
+                abort = getattr(tool, "abort_run", None)
+                if abort is not None:
+                    abort(run_id)
+                raise
+        if event is not None:
+            return tool.render_event(run_id, event)
         if decision == CONTINUE:
             return f"Node '{node_id}' of run {run_id} will run again with your message."
         return (

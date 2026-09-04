@@ -12,6 +12,7 @@ them out of every discovery path except those texts.
 
 from __future__ import annotations
 
+import asyncio
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -258,23 +259,47 @@ async def test_dag_status_reports_an_unknown_run() -> None:
 
 
 class _ResolvableDagTool(_DagTool):
-    """A run_subagent_dag double whose read_run succeeds and records resolve_node calls."""
+    """A run_subagent_dag double: read_run succeeds, resolve_node is recorded, and a
+    foreground run hands scripted events to await_run."""
 
-    def __init__(self, resolves: bool = True) -> None:
+    def __init__(self, resolves: bool = True, *, foreground: bool = False, events: list[Any] | None = None) -> None:
         super().__init__(_finished_run())
         self._resolves = resolves
+        self._foreground = foreground
+        self.events: list[Any] = list(events or [])
         self.resolved: tuple[str, str, str, str | None] | None = None
+        self.awaited: list[str] = []
+        self.aborted: list[str] = []
+        self.release_taker = asyncio.Event()
 
     def resolve_node(self, run_id: str, node_id: str, decision: str, message: str | None) -> bool:
         self.resolved = (run_id, node_id, decision, message)
         return self._resolves
 
+    def is_foreground(self, run_id: str) -> bool:
+        return self._foreground and run_id == "r1"
+
+    async def await_run(self, run_id: str) -> Any:
+        self.awaited.append(run_id)
+        if not self.is_foreground(run_id):
+            return None
+        if self.events:
+            return self.events.pop(0)
+        await self.release_taker.wait()
+        return None
+
+    def abort_run(self, run_id: str) -> None:
+        self.aborted.append(run_id)
+
+    def render_event(self, run_id: str, event: Any) -> str:
+        return f"RENDERED {run_id} {event}"
+
 
 class _LoopWithRun(_Loop):
     """A loop whose registered graph tool owns run r1 and answers resolve_node."""
 
-    def __init__(self, resolves: bool = True) -> None:
-        self._dag_tool = _ResolvableDagTool(resolves=resolves)
+    def __init__(self, resolves: bool = True, **kwargs: Any) -> None:
+        self._dag_tool = _ResolvableDagTool(resolves=resolves, **kwargs)
         super().__init__(tool=self._dag_tool)
 
     @property
@@ -335,6 +360,63 @@ async def test_resolve_confirms_a_continue():
     out = await tool.execute(run_id="r1", node_id="a", decision="continue", message="use staging")
     assert out == "Node 'a' of run r1 will run again with your message."
     assert loop.resolved == ("r1", "a", "continue", "use staging")
+
+
+async def test_resolve_blocks_only_for_a_bound_foreground_run():
+    background = ResolveDagNodeTool(loop=_LoopWithRun())
+    foreground = ResolveDagNodeTool(loop=_LoopWithRun(foreground=True))
+
+    assert background.blocking_for({"run_id": "r1"}) is False
+    assert foreground.blocking_for({"run_id": "r1"}) is True
+    assert foreground.blocking_for({"run_id": "other"}) is False
+    assert ResolveDagNodeTool(loop=_Loop()).blocking_for({"run_id": "r1"}) is False, (
+        "no graph tool, nothing to block on"
+    )
+
+
+async def test_a_foreground_resolve_returns_the_next_event_rendered():
+    loop = _LoopWithRun(foreground=True, events=["next report"])
+    tool = ResolveDagNodeTool(loop=loop)
+
+    out = await tool.execute(run_id="r1", node_id="a", decision="continue", message="use staging")
+
+    assert loop.resolved == ("r1", "a", "continue", "use staging")
+    assert loop._dag_tool.awaited == ["r1"]
+    assert out == "RENDERED r1 next report"
+
+
+async def test_a_background_resolve_does_not_wait():
+    loop = _LoopWithRun()
+    tool = ResolveDagNodeTool(loop=loop)
+
+    out = await tool.execute(run_id="r1", node_id="a", decision="continue", message="use staging")
+
+    assert out == "Node 'a' of run r1 will run again with your message."
+    assert loop._dag_tool.awaited == ["r1"], "asked, and told there is nothing to wait on"
+
+
+async def test_a_refused_resolve_never_waits():
+    loop = _LoopWithRun(resolves=False, foreground=True, events=["would be wrong"])
+    tool = ResolveDagNodeTool(loop=loop)
+
+    out = await tool.execute(run_id="r1", node_id="a", decision="abandon")
+
+    assert "no longer waiting" in out.lower()
+    assert loop._dag_tool.awaited == []
+
+
+async def test_cancelling_a_waiting_resolve_aborts_the_run():
+    loop = _LoopWithRun(foreground=True)
+    tool = ResolveDagNodeTool(loop=loop)
+    call = asyncio.create_task(tool.execute(run_id="r1", node_id="a", decision="abandon"))
+    await asyncio.sleep(0)
+    assert loop._dag_tool.awaited == ["r1"]
+
+    call.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await call
+
+    assert loop._dag_tool.aborted == ["r1"]
 
 
 class _Hidden(Tool):
@@ -592,3 +674,53 @@ async def test_no_cross_reference_spells_a_bare_call_syntax(tmp_path) -> None:
             # The offending line, not the whole text: one of these is a file.
             offending = [ln.strip() for ln in text.splitlines() if f'{name}("' in ln]
             assert not offending, f"{label} spells a call syntax the model cannot use: {offending[:3]}"
+
+
+def test_the_resolve_tool_parks_its_taker_before_it_yields() -> None:
+    """A structural claim, read structurally, because behaviour cannot pin it.
+
+    `_retire` drops a finished run's outbox from the index `release_turn` reaches
+    runs through, so a run that completes before a taker exists has nowhere left to
+    deliver its result. Nothing opens that window because this tool signals the desk
+    and enters `await_run` with no yield between the two.
+
+    `test_a_resolve_through_the_control_tool_is_handed_the_run_it_completes` drives
+    that call site and catches a yield that lasts long enough to lose the race. It
+    cannot catch every yield, and the claim is about every yield: `await
+    asyncio.sleep(0)` inserted here passes a single tick, the run has not finished,
+    the outbox is still indexed, and the delivery test stays green while the
+    invariant it stands for is gone. So this one reads the source instead -- the
+    first await after the resolve must be the take itself.
+    """
+    import ast
+    from pathlib import Path
+
+    import raven
+
+    module = Path(raven.__file__).parent / "agent" / "subagent" / "dag_control_tools.py"
+    tree = ast.parse(module.read_text(encoding="utf-8"))
+    execute = next(
+        node
+        for cls in tree.body
+        if isinstance(cls, ast.ClassDef) and cls.name == "ResolveDagNodeTool"
+        for node in cls.body
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "execute"
+    )
+
+    def _calls(node: ast.AST, name: str) -> list[ast.Call]:
+        return [
+            n for n in ast.walk(node) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == name
+        ]
+
+    (resolve,) = _calls(execute, "resolve_node")
+    (take,) = _calls(execute, "await_run")
+    awaits = sorted((n for n in ast.walk(execute) if isinstance(n, ast.Await)), key=lambda n: (n.lineno, n.col_offset))
+    after_resolve = [n for n in awaits if n.lineno > resolve.lineno]
+
+    assert after_resolve, "the taker's own await is missing, so this test is reading the wrong function"
+    first = after_resolve[0]
+    assert first.value is take, (
+        f"a yield was added between the resolve and the take, at line {first.lineno}: "
+        "the run can finish there with no taker registered, and `_retire` then drops the outbox "
+        "it would have delivered into. Either keep them adjacent or stop claiming they are."
+    )

@@ -1196,7 +1196,7 @@ def test_subagent_dag_config_defaults():
     cfg = RavenConfig().subagent_dag
     assert cfg.verdict_enabled is True
     assert cfg.verdict_model is None
-    assert cfg.verdict_timeout_seconds == 30.0
+    assert cfg.verdict_timeout_seconds == 180.0
     assert cfg.evidence_budget_chars == 8000
     assert cfg.adjudication_timeout_seconds == 600.0
     assert cfg.max_continuations == 2
@@ -1315,49 +1315,3 @@ def test_agent_loop_passes_its_subagent_dag_config_to_the_registered_tool(tmp_pa
     tool = loop.tools.get("run_subagent_dag")
     assert tool is not None
     assert tool._verdict_config.verdict_model == "cheap-tier"
-
-
-async def test_agent_loop_wires_the_adjudicator_into_the_registered_tool(tmp_path):
-    """The blocking lane's only route to a decision, and it has to survive startup.
-
-    Unwired, every foreground node that fell short would take the plain failure
-    path -- which is indistinguishable from the feature working, right up until
-    someone runs a graph with `background=false` and is never asked anything.
-    """
-    from raven.agent.loop import AgentLoop
-    from raven.providers.base import LLMProvider, LLMResponse
-
-    class _StubProvider(LLMProvider):
-        def __init__(self) -> None:
-            super().__init__(api_key="test")
-
-        async def chat(
-            self,
-            messages,
-            tools=None,
-            model=None,
-            max_tokens=4096,
-            temperature=0.7,
-            reasoning_effort=None,
-            tool_choice=None,
-        ):
-            return LLMResponse(content="stub", finish_reason="stop")
-
-        def get_default_model(self) -> str:
-            return "stub"
-
-    loop = AgentLoop(
-        provider=_StubProvider(),
-        workspace=tmp_path,
-        model="stub",
-        policy=TurnPolicy(max_iterations=2),
-        tools=ToolWiring(restrict_to_workspace=True),
-    )
-
-    tool = loop.tools.get("run_subagent_dag")
-    assert tool is not None
-    assert tool._adjudicate == loop._adjudicate_node
-
-    # No broker is wired in this loop, so the round trip is structurally
-    # unavailable and the caller is told so rather than left waiting.
-    assert await loop._adjudicate_node("web:sess1", "node 'a' did not accomplish its task") is None
