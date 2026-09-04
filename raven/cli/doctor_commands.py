@@ -387,6 +387,7 @@ def _gather_tools(config: "Config") -> ToolsInfo:
         has_credential,
         is_configured,
         is_disabled,
+        resolve,
     )
 
     return ToolsInfo(
@@ -406,7 +407,7 @@ def _gather_tools(config: "Config") -> ToolsInfo:
                 obtain_from=cap.obtain_from,
                 cost_note=cap.cost_note,
             )
-            for cap in CAPABILITIES
+            for cap in (resolve(c, config) for c in CAPABILITIES)
         ]
     )
 

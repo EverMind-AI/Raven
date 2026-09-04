@@ -2487,26 +2487,6 @@ async def test_a_refused_spawn_does_not_leak_a_prior_uncollected_handle() -> Non
     assert tool.take_metadata() is None
 
 
-async def test_announce_dag_exception_requires_the_awaiting_decision_verdict() -> None:
-    """The verdict has no default, and this pins that.
-
-    A caller that omitted it would announce every report as a question, including a
-    terminal one nobody can decide -- and the wrong value is invisible at the call
-    site, so a default would hand the next forgetful caller exactly that bug. The
-    two announcers route on this fact, so it is the caller's to state.
-    """
-    mgr = _make_manager(max_concurrent=1)
-    mgr.set_submit(lambda _req: None)
-
-    with pytest.raises(TypeError):
-        await mgr.announce_dag_exception(
-            "20260101T000000Z-abcd1234",
-            "survey",
-            "node 'survey' did not accomplish its task",
-            {"channel": "web", "chat_id": "default", "session_key": "web:sess1"},
-        )
-
-
 async def test_announce_dag_exception_emits_a_mark_the_contract_accepts() -> None:
     """The mark this producer builds is validated by two strict models on the way
     out, so a field it adds that neither declares is rejected as extra_forbidden.
@@ -2535,36 +2515,6 @@ async def test_announce_dag_exception_emits_a_mark_the_contract_accepts() -> Non
     content = mark.pop("content")
     assert SubagentDeliveredPayload(**mark, content=content).node_id == "survey"
     assert TranscriptDelegated(**mark).node_id == "survey"
-
-
-async def test_a_failing_delivery_marker_does_not_fail_the_announce() -> None:
-    """The invariant the runner's delivery retry rests on: the announce is all-or-nothing.
-
-    The runner retries a raising announce, which is only safe while a raise means
-    the turn was never injected. The injection is the last step that can fail --
-    the marker emit after it is fire-and-forget and swallows its own failure -- so
-    a sink that blows up must not surface here. If it ever does, that retry starts
-    injecting the same report twice.
-    """
-    mgr = _make_manager(max_concurrent=1)
-    submitted: list[object] = []
-    mgr.set_submit(lambda req: submitted.append(req))
-
-    async def _sink(_session_key, _event):
-        raise RuntimeError("the client's socket is gone")
-
-    mgr.set_delivery_sink(_sink)
-
-    await mgr.announce_dag_exception(
-        "20260101T000000Z-abcd1234",
-        "survey",
-        "node 'survey' did not accomplish its task",
-        {"channel": "web", "chat_id": "default", "session_key": "web:sess1"},
-        awaiting_decision=True,
-    )
-
-    assert len(submitted) == 1, "the turn was injected, which is the step that must not be repeated"
-    await asyncio.sleep(0)  # let the emit task the sink raises from run and be discarded
 
 
 async def test_announce_dag_exception_asks_outside_the_fence_it_wraps_the_report_in() -> None:

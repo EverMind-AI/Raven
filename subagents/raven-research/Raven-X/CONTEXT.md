@@ -224,7 +224,10 @@ its `execute` under a timeout, returning the string result or a structured error
 
 **Search Provider** (`agent/tools/web.py`, `SEARCH_PROVIDERS`):
 One of the interchangeable live-web backends behind the single `web_search` tool —
-`serper` (default), `anysearch`, or `serpapi` — selected by `tools.web.search.provider`.
+`serper` (default), `anysearch`, `serpapi`, `tavily`, `exa`, `brave`, or `firecrawl` —
+selected by `tools.web.search.provider`. AnySearch, Tavily, Exa and Firecrawl also
+appear in `FETCH_PROVIDERS`, sharing one Web Vendor credential across both tools;
+Serper, SerpApi and Brave are search-only.
 Each owns an env var and a Web Vendor credential, and every response is normalised to
 the Serper shape before containment, dedup, shaping and rendering read it, so the
 ledger columns mean the same thing on every backend. A provider that serves no result offset declares
@@ -236,8 +239,9 @@ a per-provider tool name — the model is always offered `web_search`. The corpu
 endpoint is a separate retrieval source, not a search provider.
 
 **Fetch Provider** (`agent/tools/web.py`, `FETCH_PROVIDERS`):
-One of the live-web page readers behind the single `web_fetch` tool — `jina` (default)
-or `anysearch` — selected by `tools.web.fetch.provider`, with `tools.web.fetch.fallback`
+One of the live-web page readers behind the single `web_fetch` tool — `jina` (default),
+`anysearch`, `tavily`, `exa`, or `firecrawl` — selected by `tools.web.fetch.provider`, with
+`tools.web.fetch.fallback`
 naming further backends to try when the selected one fails to return a page. Which one
 served a page is recorded as `extractor`, in the payload and in the fetch ledger.
 Unlike Search Providers these are **not interchangeable**: measured on one Wikipedia

@@ -200,6 +200,27 @@ def web_search_key(live: LiveConfig) -> str | None:
     return _admit(live, "web_search_key", present=True, value=live_web_search_key(raw))
 
 
+def web_provider_key(live: LiveConfig, vendor: str) -> str | None:
+    """One web vendor's key as the file has it, or None for "no answer".
+
+    The canonical half of :func:`web_search_key`: keys live at
+    ``tools.web.providers.<vendor>.apiKey`` now, and the pre-vendor leaf that
+    function reads is Serper's alone. Same contract otherwise -- a present and
+    valid subtree governs entirely, including an empty key, and one the schema
+    rejects dispenses no new answer.
+
+    Memoised per vendor, so two vendors' last-good answers cannot overwrite
+    each other in the one slot.
+    """
+    from raven.config.schema import live_web_provider_key
+
+    raw = live.get("tools.web.providers")
+    slot = f"web_provider_key:{vendor}"
+    if raw is None:
+        return _admit(live, slot, present=False, value=None)
+    return _admit(live, slot, present=True, value=live_web_provider_key(raw, vendor))
+
+
 def media_tool_config(live: LiveConfig, kind: str):
     """``tools.media.<kind>`` as the file has it, resolved the way
     ``Config.effective_media_config`` resolves it, or None for "no answer".

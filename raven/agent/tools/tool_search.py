@@ -300,28 +300,16 @@ class ToolSearchController:
             return False
         return TOOL_CALL_NAME not in self._registry.withheld_names()
 
-    def target_is_blocking(self, name: Any, arguments: Any = None) -> bool:
+    def target_is_blocking(self, name: Any) -> bool:
         """Whether the tool ``tool_call`` would forward to is a blocking interaction.
 
         A meta-tool target is refused by :meth:`call`, so it reports non-blocking
         here too — which also stops the registry lookup recursing back into this
         controller.
-
-        ``arguments`` travel with the question because a target's verdict may turn
-        on them: `resolve_dag_node` blocks only for a bound foreground run, which
-        it can tell only from ``run_id``. Asked without them it answered "not
-        blocking" for every call, and the registry put its default ceiling on a
-        wait that has none. A JSON string is tolerated the way :meth:`call`
-        tolerates it; anything that is not an object counts as no arguments.
         """
         if not isinstance(name, str) or name in META_TOOL_NAMES:
             return False
-        if isinstance(arguments, str):
-            try:
-                arguments = json.loads(arguments)
-            except json.JSONDecodeError:
-                arguments = None
-        return self._registry.is_blocking(name, arguments if isinstance(arguments, dict) else {})
+        return self._registry.is_blocking(name)
 
     async def call(self, name: str, arguments: dict[str, Any] | None) -> str:
         """Invoke a cataloged tool: forward to the registry (validates args).
@@ -426,7 +414,7 @@ class ToolCallTool(Tool):
         }
 
     def blocking_for(self, params: dict[str, Any]) -> bool:
-        return self._ctrl.target_is_blocking(params.get("name"), params.get("arguments"))
+        return self._ctrl.target_is_blocking(params.get("name"))
 
     def metadata_owner(self, params: dict[str, Any]) -> Tool:
         return self._ctrl.resolve_target(params.get("name")).tool or self

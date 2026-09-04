@@ -4,6 +4,24 @@ All notable changes to Raven are documented here.
 
 ## Unreleased
 
+### Added
+
+- `web_search` and `web_fetch` route through a vendor the deployment picks:
+  Serper, AnySearch, SerpApi, Tavily, Exa, Brave Search or Firecrawl for
+  search, Jina Reader, AnySearch, Tavily, Exa or Firecrawl for pages. Keys are
+  held once per vendor under `tools.web.providers.<vendor>.apiKey`, so a
+  vendor that serves both tools is pasted once; the pre-vendor
+  `tools.web.search.apiKey` and `tools.web.jinaApiKey` still count. The
+  onboarding wizard's web step asks for the vendor before the key (also
+  `--search-provider` / `--fetch-provider` / `--search-api-key` /
+  `--fetch-api-key`), the settings page and `settings.set` accept the new
+  keys, `raven doctor` names the selected vendor's slot, and `~/.raven/env`
+  mirrors every vendor key. A page reader selected without its key falls back
+  to Jina, and the log says so. The vendored research checkout's launcher
+  inherits the host's vendor choice and keys when its own config names none and
+  the key resolves for it; the in-repo research plugin keeps its own separate
+  search key.
+
 ### Changed
 
 - `setup.status` now reads the config file `RAVEN_HOME` points at, like every

@@ -166,13 +166,16 @@ class SubagentManager:
         provider: LLMProvider,
         workspace: Path,
         model: str | None = None,
-        brave_api_key: str | None = None,
+        search_api_key: str | None = None,
         web_proxy: str | None = None,
         exec_config: "ExecToolConfig | None" = None,
         restrict_to_workspace: bool = False,
         sandbox_config: "SandboxConfig | None" = None,
         owned_ids: set[str] | None = None,
         jina_api_key: str | None = None,
+        web_search_provider: str = "serper",
+        web_fetch_provider: str = "jina",
+        web_provider_keys: dict[str, str] | None = None,
         max_concurrent: int = 8,
         max_spawns_per_hour: int = 30,
         agents: list | None = None,
@@ -201,9 +204,12 @@ class SubagentManager:
         # own event; without a sink the announce is merely unmarked, not broken.
         self._delivery_sink = None
         self._fallback = ModelBinding(provider, model or provider.get_default_model())
-        self.brave_api_key = brave_api_key
+        self.search_api_key = search_api_key
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
+        self.web_search_provider = web_search_provider
+        self.web_fetch_provider = web_fetch_provider
+        self.web_provider_keys = web_provider_keys
         self.exec_config = exec_config or ExecToolConfig()
         self.restrict_to_workspace = restrict_to_workspace
         self._sandbox_config = sandbox_config
@@ -281,9 +287,12 @@ class SubagentManager:
             agent_home=self.workspace,
             restrict_to_workspace=self.restrict_to_workspace if confine is None else confine,
             exec_config=self.exec_config,
-            brave_api_key=self.brave_api_key,
+            search_api_key=self.search_api_key,
             jina_api_key=self.jina_api_key,
             web_proxy=self.web_proxy,
+            web_search_provider=self.web_search_provider,
+            web_fetch_provider=self.web_fetch_provider,
+            web_provider_keys=self.web_provider_keys,
             tools_allow=getattr(build, "tools_allow", None),
             skills_allow=getattr(build, "skills_allow", None),
             mcp_allow=getattr(row.config, "mcps", None),
@@ -303,9 +312,12 @@ class SubagentManager:
             agent_home=self.workspace,
             restrict_to_workspace=self.restrict_to_workspace,
             exec_config=self.exec_config,
-            brave_api_key=self.brave_api_key,
+            search_api_key=self.search_api_key,
             jina_api_key=self.jina_api_key,
             web_proxy=self.web_proxy,
+            web_search_provider=self.web_search_provider,
+            web_fetch_provider=self.web_fetch_provider,
+            web_provider_keys=self.web_provider_keys,
             tools_allow=getattr(build, "tools_allow", None),
             skills_allow=getattr(build, "skills_allow", None),
         )
@@ -575,12 +587,11 @@ class SubagentManager:
     def adopt_background_run(self, run_id: str, task: asyncio.Task, session_key: str | None) -> None:
         """Put a task this manager did not start under the same reach as a spawn.
 
-        Every ``run_subagent_dag`` run -- backgrounded or blocking, the latter
-        runs as a task too now -- dispatches the same detached CLI children a
-        spawn does, so ``/stop`` and the shutdown sweep have to find it too --
-        see :meth:`cancel_all` for what an unreachable one leaves behind.
-        Indexed here rather than only on the DAG tool so every entry point's
-        existing teardown covers it with no extra wiring.
+        A backgrounded DAG dispatches the same detached CLI children a spawn
+        does, so ``/stop`` and the shutdown sweep have to find it too -- see
+        :meth:`cancel_all` for what an unreachable one leaves behind. Indexed
+        here rather than only on the DAG tool so every entry point's existing
+        teardown covers it with no extra wiring.
         """
         self._track(run_id, task, session_key)
 
@@ -1516,12 +1527,6 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
         Fenced like a result, and more pointedly: the report quotes the node's own
         output and transcript, which is exactly the text an attacker who reached
         the sub-agent would have written.
-
-        ``awaiting_decision`` is unused here on purpose: unlike the foreground lane's
-        route back, an injected message can carry a notification as easily as a
-        question, so the background lane announces both kinds. It is still required --
-        a default on a fact two announcers route on is a defect waiting for the next
-        caller, and this lane not needing it does not make it safe to guess.
         """
         if self._submit is None:
             logger.warning("DAG run {} node {} suspended with no submit wired; not announced", run_id, node_id)

@@ -324,11 +324,11 @@ def test_the_search_env_var_is_the_tools_own(launcher):
     the bare export require_search accepted must still reach the tool that
     actually runs. The healthy-path pin is the sibling test below.
     """
-    import inspect
+    from raven.agent.tools.web import SEARCH_PROVIDERS
 
-    import raven.agent.tools.web as web
-
-    assert launcher.SEARCH_ENV_VAR in inspect.getsource(web)
+    # The tool reads its env var off the vendor spec table, so the pin is the
+    # table row, not a literal in the source.
+    assert launcher.SEARCH_ENV_VAR == SEARCH_PROVIDERS["serper"].env_var
 
 
 def test_the_search_env_var_is_the_plugin_tools_own(launcher):

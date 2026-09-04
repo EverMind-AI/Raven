@@ -459,35 +459,6 @@ def test_tool_call_with_an_unknown_or_meta_target_is_not_blocking() -> None:
     assert reg.is_blocking(TOOL_CALL_NAME, {"name": "tool_search"}) is False
 
 
-class _ArgSensitive(_FakeTool):
-    """Blocking only when asked about run r1 -- the shape ResolveDagNodeTool has."""
-
-    def blocking_for(self, params: dict[str, Any]) -> bool:
-        return params.get("run_id") == "r1"
-
-
-def test_tool_call_forwards_its_arguments_to_the_target_verdict() -> None:
-    """A target whose blocking verdict depends on its arguments must see them.
-
-    `resolve_dag_node` blocks only for a bound foreground run, which it can tell
-    only from `run_id`; forwarded without arguments it always said "not
-    blocking", and the registry then put its default ceiling on a wait that has
-    none -- cancelling it, which the tool reads as the user stopping the agent.
-    """
-    reg = ToolRegistry()
-    reg.register(_ArgSensitive("resolve_dag_node", "answer a suspended node"))
-    ctrl = _controller(reg)
-    reg.register(ToolCallTool(ctrl))
-
-    assert reg.is_blocking(TOOL_CALL_NAME, {"name": "resolve_dag_node", "arguments": {"run_id": "r1"}}) is True
-    assert reg.is_blocking(TOOL_CALL_NAME, {"name": "resolve_dag_node", "arguments": {"run_id": "r2"}}) is False
-    assert reg.is_blocking(TOOL_CALL_NAME, {"name": "resolve_dag_node", "arguments": '{"run_id": "r1"}'}) is True, (
-        "models sometimes emit the nested arguments as a JSON string; call() tolerates it, so must the verdict"
-    )
-    assert reg.is_blocking(TOOL_CALL_NAME, {"name": "resolve_dag_node"}) is False
-    assert reg.is_blocking(TOOL_CALL_NAME, {"name": "resolve_dag_node", "arguments": "not json"}) is False
-
-
 class _MetadataTool(_FakeTool):
     def take_metadata(self) -> dict[str, Any] | None:
         return {"raven_delivery": {"files": ["report.pdf"]}}

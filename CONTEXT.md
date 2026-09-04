@@ -272,6 +272,40 @@ message, ask_user, spawn (Subagent), MCP, media generation, skill read/use, and 
 plugin market (`plugin`).
 _Avoid_: "function" — a Tool is the agent-facing capability, not a Python function.
 
+**Web Vendor** (`config/schema.py`, `WebProvidersConfig`):
+Who issues a web credential, as opposed to which tool spends it. Keys live at
+`tools.web.providers.<vendor>.apiKey` because one AnySearch, Tavily, Exa or Firecrawl
+account serves both `web_search` and `web_fetch`; a key held per tool would have to be
+pasted twice and could drift into two values for one credential. The pre-vendor leaves
+(`tools.web.search.apiKey`, `tools.web.jinaApiKey`) are still read, after the vendor
+slot, and only for Serper and Jina. `~/.raven/env` mirrors every vendor key out under
+its bare env var.
+_Avoid_: "provider" unqualified — that is the LLM Provider in this vocabulary; and
+"the web key" — there is one per vendor.
+
+**Web Search Provider** / **Web Fetch Provider** (`agent/tools/web.py`, `SEARCH_PROVIDERS` / `FETCH_PROVIDERS`):
+Which interchangeable backend each web tool calls: `tools.web.search.provider` selects
+`serper` (default), `anysearch`, `serpapi`, `tavily`, `exa`, `brave` or `firecrawl`, and
+`tools.web.fetch.provider` selects `jina` (default), `anysearch`, `tavily`, `exa` or
+`firecrawl`. Every endpoint is a literal in the tool, so a selection names a vendor and
+never a URL. `web_search` is registered whatever the config holds and *withheld* from the
+offered set while the selected vendor's key does not resolve, so a key pasted mid-run
+surfaces it without a restart -- read live from the vendor slot and, for Serper, from the
+pre-vendor leaf, in the order `WebToolsConfig.vendor_key` resolves them, and an empty slot
+is a revocation rather than a miss; `web_fetch` is always offered, falling back to Jina,
+which reads pages without a key. The two sub-agent launchers inherit the host's selection
+differently: the in-process backend (`agent/subagent/backends/raven_loop.py`) takes it and
+then declines to *register* `web_search` when no key resolves -- the older gate, which the
+vendored-invariant guard still requires there -- while the vendored checkout's launcher
+(`subagents/raven-research/run.py`) declines to copy a selection it cannot key and keeps
+its own default, because its gate exits rather than degrading. Most vendors take the key
+in a header; SerpApi takes it as a query parameter, so for that one the key travels inside
+every request URL and two surfaces have to keep it out -- the error path renders vendor plus
+status rather than the exception text, and the persisted log sink redacts a URL-borne
+credential (`cli/_log_file.py`), since httpx logs each request at INFO on the success path.
+_Avoid_: a per-vendor tool name — the model is always offered `web_search` and
+`web_fetch`, whichever vendor answers.
+
 **Tool Registry** (`agent/tools/registry.py`):
 The name→`Tool` table the Agent Loop dispatches into: resolves a tool by name and runs
 its `execute` under a timeout, returning the string result or a structured error.
@@ -1807,28 +1841,6 @@ _Avoid_: it is not a synonym for a Python exception. A raised exception is only 
 of the two routes into this status, and `status[node.id] = "exception"` sits next to
 `except Exception as exc` in `_run_node` for that reason.
 
-**outbox** (`raven/agent/subagent/dag_adjudication.py`) -- a foreground DAG run's tray of
-events: its nodes' exception reports and its final result, waiting for the tool call
-that is awaiting the run. One per foreground run, in memory beside the run's
-adjudication desk. The desk carries decisions from the main agent to the run; the
-outbox carries reports from the run to the main agent. While the run is bound the
-outbox hands or buffers and never announces; once released it re-sends the buffer and
-announces later events as turns.
-_Avoid_: "mailbox" -- the lane's inject mailbox is a different object with a different
-reader.
-
-**bound / released** (foreground DAG run; `raven/agent/subagent/dag_tool.py`,
-`raven/agent/loop/main.py`) -- a `background: false` run is *bound* while the turn that
-started it is still running, and *released* once that turn has ended, however it ended
-(`AgentLoop.run_turn` releases every run the conversation's turn still binds). A bound
-run's suspended nodes wait without a deadline and its outbox buffers; a released run
-behaves as a backgrounded one: the adjudication window is clocked from the release, the
-unanswered reports are re-sent as turns, a report the turn took but never decided
-counting as unanswered (they are dropped instead when the turn was cancelled), and later
-events announce -- notifications as well as questions, since no blocking call remains for
-a run's summary to reach. `resolve_dag_node` blocks only on a bound run.
-_Avoid_: "orphaned" -- a released run is not lost, it has changed lane.
-
 **Working directory** (`raven/agent/workdir.py`):
 The directory a turn reads and writes files in — shared by the session's leader `AgentLoop`
 and every Subagent it spawns, and resolved per turn by `WorkdirResolver.resolve()`.
@@ -1872,7 +1884,7 @@ under `agent_memory/profile/` (soul.md, agent.md) and `user_memory/profile/` (us
 `HEARTBEAT.md` / `TOOLS.md` stay at the Agent home root.
 
 **Onboarding** (`raven onboard` → `run_wizard`):
-The first-run wizard (LLM provider → sandbox → channel → EverOS memory → web tool keys → sub-agents → cold-start import) that also seeds
+The first-run wizard (LLM provider → sandbox → channel → EverOS memory → web access → sub-agents → cold-start import) that also seeds
 Agent home via `sync_workspace_templates()`; gated at startup by `ensure_configured_or_onboard()`.
 
 **Bootstrap Files**:
