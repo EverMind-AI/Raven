@@ -1,13 +1,15 @@
 """Web tool credentials cluster of the onboard wizard (Step 5).
 
-Two keys, and they are not the same kind of thing. Serper is what makes
-``web_search`` exist at all -- the agent loop withholds the tool entirely
-without one -- while Jina only raises the ceiling on ``web_fetch``, which reads
-pages unauthenticated at a lower rate limit either way. The screen says so,
-because presenting them as two equal blanks invites skipping the one that
-actually costs a capability.
+Two tools, each behind a vendor the user picks here, and the keys are not the
+same kind of thing. A search key is what makes ``web_search`` exist at all --
+the agent loop withholds the tool entirely without one -- while the page
+reader defaults to Jina, which works unauthenticated at a lower rate limit, so
+its key only raises the ceiling; the other readers refuse without one. The
+screen says so, because presenting the keys as equal blanks invites skipping
+the one that actually costs a capability.
 
-Both land in ``config.json`` through ``update_tools``, and are then mirrored
+Providers and keys land in ``config.json`` through ``update_tools``, keyed by
+vendor (``tools.web.providers.<vendor>.apiKey``), and the keys are then mirrored
 into ``~/.raven/env`` as ``export`` lines. The mirror is what reaches consumers
 that never read raven's config: the user's own shell, and -- the reason it is
 here rather than in a docs page -- every ``cli`` and ``acp`` sub-agent, whose
@@ -53,15 +55,19 @@ SOURCE_LINE = f'[ -f "$HOME/.raven/env" ] && . "$HOME/.raven/env"  {RC_MARKER}'
 #: none exist, ``~/.profile`` is the one a login shell reads by convention.
 _BASH_LOGIN_CANDIDATES = (".bash_profile", ".bash_login", ".profile")
 
-_SERPER_SIGNUP = "https://serper.dev"
-_JINA_SIGNUP = "https://jina.ai/reader"
+
+def _stored_provider(kind: str) -> str:
+    """The vendor config currently selects for ``search`` or ``fetch``."""
+    from raven.config.update_tools import get_web_fetch, get_web_search
+
+    return get_web_search()["provider"] if kind == "search" else get_web_fetch()["provider"]
 
 
-def _stored_keys() -> tuple[str, str]:
-    """The Serper and Jina keys as config holds them, unredacted."""
-    from raven.config.update_tools import get_jina_api_key, get_serper_api_key
+def _stored_key(vendor: str) -> str:
+    """One vendor's key as config holds it, unredacted."""
+    from raven.config.update_tools import get_web_provider_key
 
-    return get_serper_api_key(redact=False), get_jina_api_key(redact=False)
+    return get_web_provider_key(vendor, redact=False)
 
 
 def rc_targets_for(shell_name: str) -> list[Path]:
@@ -137,14 +143,52 @@ def _confirm_rc(targets: list[Path]) -> bool:
     )
 
 
-def _write_keys(serper: str, jina: str) -> Optional[Path]:
-    """Persist whichever key is non-empty; return the refreshed mirror's path."""
-    from raven.config.update_tools import set_jina_api_key, set_web_search
+def _pick_provider(kind: str, current: str) -> Optional[str]:
+    """One vendor pick. Enter keeps ``current``; ``None`` means abort."""
+    from raven.agent.tools.web import FETCH_PROVIDERS, SEARCH_PROVIDERS
+    from raven.cli._styles import RAVEN_STYLE
 
-    if serper:
-        set_web_search({"api_key": serper})
-    if jina:
-        set_jina_api_key(jina)
+    questionary = oc._require_questionary()
+    specs = SEARCH_PROVIDERS if kind == "search" else FETCH_PROVIDERS
+    choices = []
+    for vendor, spec in specs.items():
+        note = ""
+        if kind == "fetch" and not spec.needs_key:
+            note = t(" (no key needed)")
+        elif kind == "fetch":
+            note = t(" (key required)")
+        choices.append(questionary.Choice(f"{spec.label}{note}", value=vendor))
+    title = t("Search provider (web_search)") if kind == "search" else t("Page reader (web_fetch)")
+    return questionary.select(
+        f"{title}:",
+        choices=choices,
+        default=next((c for c in choices if c.value == current), None),
+        style=RAVEN_STYLE,
+        qmark=oc._QMARK,
+    ).ask()
+
+
+def _write(
+    *,
+    search_provider: Optional[str] = None,
+    fetch_provider: Optional[str] = None,
+    keys: Optional[dict[str, str]] = None,
+) -> Optional[Path]:
+    """Persist what was chosen; return the refreshed mirror's path.
+
+    A provider is written only when one was picked, a key only when one was
+    typed: an empty answer keeps whatever config already holds, so re-running
+    the wizard never blanks a credential.
+    """
+    from raven.config.update_tools import set_web_fetch, set_web_provider_key, set_web_search
+
+    if search_provider:
+        set_web_search({"provider": search_provider})
+    if fetch_provider:
+        set_web_fetch({"provider": fetch_provider})
+    for vendor, key in (keys or {}).items():
+        if key:
+            set_web_provider_key(vendor, key)
     return write_env_file()
 
 
@@ -166,17 +210,41 @@ def _step5_web(
     yes: bool = False,
     serper_api_key: Optional[str] = None,
     jina_api_key: Optional[str] = None,
+    search_provider: Optional[str] = None,
+    fetch_provider: Optional[str] = None,
+    search_api_key: Optional[str] = None,
+    fetch_api_key: Optional[str] = None,
 ) -> object:
-    """Step 5 -- Serper / Jina keys, optional, forward-only.
+    """Step 5 -- pick a search vendor and a page reader, and give each its key.
 
     The flags are honoured even when the screen itself is skipped: a
-    non-interactive run auto-skips, and dropping a key the caller passed
-    explicitly would be the wrong reading of ``--non-interactive``.
+    non-interactive run auto-skips, and dropping a value the caller passed
+    explicitly would be the wrong reading of ``--non-interactive``. The two
+    legacy flags name their vendor; the four newer ones name a role, and a key
+    given for a role lands under whichever vendor that role selects.
     """
+    from raven.agent.tools.web import FETCH_PROVIDERS, SEARCH_PROVIDERS
+
     oc._step_header(5, t("Web access"))
 
-    if serper_api_key or jina_api_key:
-        _report(_write_keys(serper_api_key or "", jina_api_key or ""))
+    for flag, value, table in (
+        ("--search-provider", search_provider, SEARCH_PROVIDERS),
+        ("--fetch-provider", fetch_provider, FETCH_PROVIDERS),
+    ):
+        if value and value not in table:
+            raise typer.BadParameter(f"{value!r} is not a web vendor; one of: {', '.join(table)}", param_hint=flag)
+
+    if any((serper_api_key, jina_api_key, search_provider, fetch_provider, search_api_key, fetch_api_key)):
+        keys: dict[str, str] = {}
+        if serper_api_key:
+            keys["serper"] = serper_api_key
+        if jina_api_key:
+            keys["jina"] = jina_api_key
+        if search_api_key:
+            keys[search_provider or _stored_provider("search")] = search_api_key
+        if fetch_api_key:
+            keys[fetch_provider or _stored_provider("fetch")] = fetch_api_key
+        _report(_write(search_provider=search_provider, fetch_provider=fetch_provider, keys=keys))
         return None
 
     if skip or non_interactive:
@@ -185,34 +253,48 @@ def _step5_web(
 
     oc.console.print(
         t(
-            "  [dim]web_search[/dim]  Search the web — needs a Serper key; without one the\n"
-            "              tool is not offered to the model at all.\n"
-            "  [dim]web_fetch [/dim]  Read a page — works with no key at a lower rate limit;\n"
-            "              a Jina key raises it."
+            "  [dim]web_search[/dim]  Search the web — needs the chosen vendor's key; without\n"
+            "              one the tool is not offered to the model at all.\n"
+            "  [dim]web_fetch [/dim]  Read a page — Jina works with no key at a lower rate limit;\n"
+            "              every other reader needs its key."
         ),
         highlight=False,
     )
     oc.console.print()
 
-    stored_serper, stored_jina = _stored_keys()
-    serper = _prompt_key(
-        label=t("Serper API key"),
-        obtain_from=_SERPER_SIGNUP,
-        current=stored_serper,
+    search = _pick_provider("search", _stored_provider("search"))
+    if search is None:
+        raise typer.Exit(1)
+    spec = SEARCH_PROVIDERS[search]
+    keys = {}
+    search_key = _prompt_key(
+        label=t("{label} API key", label=spec.label),
+        obtain_from=spec.signup,
+        current=_stored_key(search),
         optional_note=t(" enables web_search"),
     )
-    if serper is None:
+    if search_key is None:
         raise typer.Exit(1)
-    jina = _prompt_key(
-        label=t("Jina API key"),
-        obtain_from=_JINA_SIGNUP,
-        current=stored_jina,
-        optional_note=t(" optional"),
-    )
-    if jina is None:
-        raise typer.Exit(1)
+    keys[search] = search_key.strip()
 
-    path = _write_keys(serper.strip(), jina.strip())
+    fetch = _pick_provider("fetch", _stored_provider("fetch"))
+    if fetch is None:
+        raise typer.Exit(1)
+    fetch_spec = FETCH_PROVIDERS[fetch]
+    # One account serves both tools for the dual-use vendors, so a key just
+    # typed (or already stored) for the search side is not asked for twice.
+    if not (fetch == search and (keys[search] or _stored_key(search))):
+        fetch_key = _prompt_key(
+            label=t("{label} API key", label=fetch_spec.label),
+            obtain_from=fetch_spec.signup,
+            current=_stored_key(fetch),
+            optional_note=t(" required for web_fetch") if fetch_spec.needs_key else t(" optional"),
+        )
+        if fetch_key is None:
+            raise typer.Exit(1)
+        keys[fetch] = fetch_key.strip()
+
+    path = _write(search_provider=search, fetch_provider=fetch, keys=keys)
     _report(path)
 
     if path is None:

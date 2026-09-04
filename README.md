@@ -83,11 +83,11 @@ The bilingual onboarding wizard configures seven areas without requiring manual 
 2. Sandbox or execution location
 3. Chat channels
 4. EverOS long-term memory
-5. Web tool keys (Serper for `web_search`, Jina for `web_fetch`)
+5. Web access (pick a search vendor and a page reader, give each its key)
 6. Sub-agents shipped in this checkout
 7. Cold-start import from other AI tools
 
-Step 5 also mirrors the two keys into `~/.raven/env` (owner-only) and offers to add one
+Step 5 also mirrors every web vendor key into `~/.raven/env` (owner-only) and offers to add one
 guarded `source` line to your shell rc, so new shells and the `cli` / `acp` sub-agents --
 whose environment is captured from a login shell -- inherit them.
 

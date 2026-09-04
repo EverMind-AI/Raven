@@ -15,6 +15,8 @@ import pytest
 
 import raven.home as raven_home_module
 from raven.config import update_tools
+from raven.config.env_file import MIRRORED_KEYS
+from raven.config.schema import WEB_VENDOR_ENV_VARS
 from raven.contracts.tool import Tool
 from raven.rpc.methods import console as console_module
 from raven.rpc.methods.console import _SETTINGS_SIMPLE_KEYS, _hub_marker_name
@@ -42,6 +44,12 @@ def test_the_settings_whitelist_is_exactly_this_set() -> None:
         "tools.exec.timeout",
         "tools.web.search.apiKey",
         "tools.web.jinaApiKey",
+        "tools.web.search.provider",
+        "tools.web.fetch.provider",
+        *(
+            f"tools.web.providers.{vendor}.apiKey"
+            for vendor in ("serper", "anysearch", "serpapi", "jina", "tavily", "exa", "brave", "firecrawl")
+        ),
         "tools.media.image.apiKey",
         "tools.deepResearch.apiKey",
         "channels.sendProgress",
@@ -1218,8 +1226,8 @@ async def test_deliverables_list_is_empty_without_a_key_or_a_store() -> None:
 def settings_cfg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A config this suite may write, with ``~`` pointed somewhere disposable.
 
-    ``settings.set`` now refreshes ``~/.raven/env`` for the two web keys, so an
-    unisolated home would have this rewrite the developer's real one.
+    ``settings.set`` now refreshes ``~/.raven/env`` for every mirrored web
+    key, so an unisolated home would have this rewrite the developer's real one.
     """
     path = tmp_path / "config.json"
     path.write_text("{}", encoding="utf-8")
@@ -1232,18 +1240,34 @@ def settings_cfg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return path
 
 
-@pytest.mark.parametrize(
-    ("key", "env_var"),
-    [("tools.web.search.apiKey", "SERPER_API_KEY"), ("tools.web.jinaApiKey", "JINA_API_KEY")],
-)
+#: Every key whose write must refresh the mirror, paired with the variable it
+#: is expected to land as. The vendor half is derived from the same mapping the
+#: mirror is, so a new vendor arrives here with a case already; the pin below
+#: catches a key that reaches ``MIRRORED_KEYS`` by any other route.
+_MIRRORED_KEY_ENV_VARS = [
+    ("tools.web.search.apiKey", "SERPER_API_KEY"),
+    ("tools.web.jinaApiKey", "JINA_API_KEY"),
+    *((f"tools.web.providers.{vendor}.apiKey", var) for vendor, var in WEB_VENDOR_ENV_VARS.items()),
+]
+
+
+def test_the_mirror_cases_cover_every_mirrored_key() -> None:
+    """The parametrisation below is only as good as its coverage of the tuple
+    ``settings.set`` actually gates on, and the two pre-vendor leaves in it are
+    listed by hand at both ends."""
+    assert [key for key, _ in _MIRRORED_KEY_ENV_VARS] == list(MIRRORED_KEYS)
+
+
+@pytest.mark.parametrize(("key", "env_var"), _MIRRORED_KEY_ENV_VARS)
 async def test_settings_set_refreshes_the_shell_env_mirror(
     settings_cfg: Path, tmp_path: Path, key: str, env_var: str
 ) -> None:
-    """Both keys, because the settings page can write either one.
+    """Every mirrored key, because the settings page can write any of them.
 
     Parametrised rather than asserted on one: the jina half has no other write
-    path at all outside the wizard, so a mirror wired for Serper alone would
-    look right and leave that key permanently stale.
+    path at all outside the wizard, and a per-vendor slot has none either, so a
+    mirror wired for Serper alone would look right and leave those keys
+    permanently stale.
     """
     await console_module.settings_set({"key": key, "value": "rotated-1"})
 
@@ -1417,7 +1441,7 @@ def _console_loop(workspace: Path, monkeypatch: pytest.MonkeyPatch, raw: dict):
     config = load_config(cfg_path)
     kw = {}
     if config.tools.web.search.api_key:
-        kw["brave_api_key"] = config.tools.web.search.api_key
+        kw["search_api_key"] = config.tools.web.search.api_key
     loop = AgentLoop(
         provider=_StubProvider(),
         workspace=workspace,
@@ -1445,7 +1469,9 @@ async def _ext_rows(loop, monkeypatch: pytest.MonkeyPatch) -> dict[str, dict]:
 
 
 _CRED_TOOLS = (
-    ("web_search", "tools.web.search.apiKey", "SERPER_API_KEY"),
+    # The vendor slot, not the pre-vendor leaf: a key is held per vendor now,
+    # and the row has to send the deployer to the slot the default reads.
+    ("web_search", "tools.web.providers.serper.apiKey", "SERPER_API_KEY"),
     ("image_generate", "tools.media.image.apiKey", "OPENROUTER_API_KEY"),
     ("text_to_speech", "tools.media.speech.apiKey", "OPENROUTER_API_KEY"),
     ("video_generate", "tools.media.video.apiKey", "OPENROUTER_API_KEY"),

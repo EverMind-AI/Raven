@@ -122,10 +122,20 @@ def inherit_llm(config: dict, host: dict) -> str:
     Only reached when the product has no key of its own. The provider block
     is copied wholesale rather than matched by name -- two providers spelled
     the same can be two different endpoints. What is inherited is which
-    brains are reachable, which one is chosen, and how a model name routes;
-    deliberately not the rest of ``agents.defaults``, which are the
-    product's own operating limits. ``""`` when the host has no provider key
-    to lend, which the caller treats as a refusal to launch.
+    brains are reachable, which one is chosen, how a model name routes, and
+    the host's reasoning effort; deliberately not the rest of
+    ``agents.defaults``, which are the product's own operating limits. ``""``
+    when the host has no provider key to lend, which the caller treats as a
+    refusal to launch.
+
+    ``RAVEN_PARENT_MODEL`` / ``RAVEN_PARENT_REASONING_EFFORT`` are honoured
+    on this branch, the fork launchers' own riders: the trunk cli dispatcher
+    injects them per spawn so a cli-hosted child follows the parent session's
+    model. For a pooled acp product this is a LAUNCH-TIME capture -- the env
+    is read once, when the server starts, so a parent ``/model`` switch made
+    mid-session does not follow into an already-running child (the fork's
+    per-turn form was a cli-lane property; ledgered, D3). On the own-key
+    branch the riders are deliberately ignored, as they always were.
     """
     providers = host.get("providers") or {}
     if not any(isinstance(p, dict) and p.get("apiKey") for p in providers.values()):
@@ -135,10 +145,24 @@ def inherit_llm(config: dict, host: dict) -> str:
             config[key] = host[key]
     defaults = config.setdefault("agents", {}).setdefault("defaults", {})
     host_defaults = (host.get("agents") or {}).get("defaults") or {}
-    for key in ("provider", "model"):
+    for key in ("provider", "model", "reasoningEffort"):
         if key in host_defaults:
             defaults[key] = host_defaults[key]
-    return f"provider={defaults.get('provider')} model={defaults.get('model')}"
+    if parent_model := os.environ.get("RAVEN_PARENT_MODEL", "").strip():
+        defaults["model"] = parent_model
+        defaults["provider"] = ""
+    if parent_effort := os.environ.get("RAVEN_PARENT_REASONING_EFFORT", "").strip():
+        defaults["reasoningEffort"] = parent_effort
+    if not defaults.get("provider"):
+        model = defaults.get("model") or ""
+        for name, block in providers.items():
+            if isinstance(block, dict) and model in (block.get("models") or []):
+                defaults["provider"] = name
+                break
+    return (
+        f"provider={defaults.get('provider')} model={defaults.get('model')} "
+        f"reasoning_effort={defaults.get('reasoningEffort')}"
+    )
 
 
 def product_state_root(product: str, *, override: str | None = None) -> Path:

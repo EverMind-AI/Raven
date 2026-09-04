@@ -160,9 +160,12 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         tools, subagents, engine, policy, host = resolve_wiring(tools, subagents, engine, policy, host)
         exec_config = tools.exec_config
         ask_user_config = tools.ask_user_config
-        brave_api_key = tools.brave_api_key
+        search_api_key = tools.search_api_key
         jina_api_key = tools.jina_api_key
         web_proxy = tools.web_proxy
+        web_search_provider = tools.web_search_provider
+        web_fetch_provider = tools.web_fetch_provider
+        web_provider_keys = tools.web_provider_keys
         restrict_to_workspace = tools.restrict_to_workspace
         disabled_tools = tools.disabled_tools
         tool_search_config = tools.tool_search_config
@@ -234,9 +237,12 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         self.max_iterations = max_iterations
         # Empty-response recovery budgets. None → enabled defaults.
         self._recovery_limits = empty_recovery if empty_recovery is not None else RecoveryLimits()
-        self.brave_api_key = brave_api_key
+        self.search_api_key = search_api_key
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
+        self.web_search_provider = web_search_provider
+        self.web_fetch_provider = web_fetch_provider
+        self.web_provider_keys = web_provider_keys
         from raven.config.raven import MemoryConfig, SubagentDagConfig, SubagentQuestionsConfig
         from raven.config.schema import DeepResearchToolConfig, MediaGenConfig
 
@@ -420,9 +426,12 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             provider=provider,
             workspace=workspace,
             model=self._default_binding.model,
-            brave_api_key=brave_api_key,
+            search_api_key=search_api_key,
             jina_api_key=jina_api_key,
             web_proxy=web_proxy,
+            web_search_provider=web_search_provider,
+            web_fetch_provider=web_fetch_provider,
+            web_provider_keys=web_provider_keys,
             exec_config=self.exec_config,
             restrict_to_workspace=restrict_to_workspace,
             sandbox_config=sandbox_config,
@@ -780,30 +789,60 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         concurrently, which is the point.
         """
         session_key = req.conversation or f"{req.source.channel}:{req.source.chat_id}"
-        # Pick up a mid-session `deep-research enable` BEFORE the freeze below
-        # captures the turn's pairs. The promotion re-registers the offer
-        # stand-in's name with the working tool; inside the scope that reads as
-        # a mid-turn replacement and waits a turn, but here no model call has
-        # happened yet -- it is a turn-boundary action, and the working tool
-        # becomes this turn's entry instance (the stream-callback wiring in
-        # turn_path then finds it in place).
-        self._maybe_promote_deep_research()
-        # The tools a session brought with it become visible here, for the same
-        # reason the model binding does: this is where the turn's task begins.
-        # The request handler that accepted them cannot open the scope itself --
-        # it submits the turn onto the spine and the turn runs on a task that
-        # inherits nothing from it.
-        with (
-            use_binding(self.binding_for_session(session_key)),
-            self.tools.session_scope_for(session_key),
-            self.tools.turn_scope(),
-        ):
-            return await self._run_turn(
-                req,
-                emit,
-                drain,
-                stream=stream,
-                inline_tool_stream=inline_tool_stream,
-                usage_sink=usage_sink,
-                text_sink=text_sink,
-            )
+        flush = True
+        try:
+            # Pick up a mid-session `deep-research enable` BEFORE the freeze below
+            # captures the turn's pairs. The promotion re-registers the offer
+            # stand-in's name with the working tool; inside the scope that reads as
+            # a mid-turn replacement and waits a turn, but here no model call has
+            # happened yet -- it is a turn-boundary action, and the working tool
+            # becomes this turn's entry instance (the stream-callback wiring in
+            # turn_path then finds it in place).
+            self._maybe_promote_deep_research()
+            # The tools a session brought with it become visible here, for the same
+            # reason the model binding does: this is where the turn's task begins.
+            # The request handler that accepted them cannot open the scope itself --
+            # it submits the turn onto the spine and the turn runs on a task that
+            # inherits nothing from it.
+            with (
+                use_binding(self.binding_for_session(session_key)),
+                self.tools.session_scope_for(session_key),
+                self.tools.turn_scope(),
+            ):
+                return await self._run_turn(
+                    req,
+                    emit,
+                    drain,
+                    stream=stream,
+                    inline_tool_stream=inline_tool_stream,
+                    usage_sink=usage_sink,
+                    text_sink=text_sink,
+                )
+        except asyncio.CancelledError:
+            flush = False
+            raise
+        finally:
+            # Every way a turn ends passes here, which is what makes this the
+            # place a foreground DAG run learns its turn is over. A direct chat
+            # runs on an instance's own lane, concurrently with the main agent's
+            # turn, and can own no graph, so its end must not release the main
+            # turn's runs.
+            if req.direct_target is None:
+                await self._release_dag_runs(session_key, flush=flush)
+
+    async def _release_dag_runs(self, session_key: str, *, flush: bool) -> None:
+        """Release the foreground DAG runs the turn on ``session_key`` still binds.
+
+        ``flush=False`` performs no awaits inside the tool, so this is safe to
+        run while a CancelledError is propagating. A failure here is logged
+        rather than raised: the turn has already ended, and its outcome must not
+        be replaced by bookkeeping on its graphs.
+        """
+        tool = self.tools.get("run_subagent_dag")
+        release = getattr(tool, "release_turn", None)
+        if release is None:
+            return
+        try:
+            await release(session_key, flush=flush)
+        except Exception:  # noqa: BLE001 - see docstring
+            logger.opt(exception=True).warning("DAG runs of {} could not be released", session_key)

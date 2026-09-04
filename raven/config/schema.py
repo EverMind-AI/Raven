@@ -683,19 +683,109 @@ class GatewayConfig(Base):
     page: GatewayPageConfig = Field(default_factory=GatewayPageConfig)
 
 
+WebSearchProvider = Literal["serper", "anysearch", "serpapi", "tavily", "exa", "brave", "firecrawl"]
+WebFetchProvider = Literal["jina", "anysearch", "tavily", "exa", "firecrawl"]
+
+#: The bare environment variable each web vendor's tool falls back to when the
+#: config slot is empty, and the name ``~/.raven/env`` mirrors the slot out as.
+WEB_VENDOR_ENV_VARS: dict[str, str] = {
+    "serper": "SERPER_API_KEY",
+    "anysearch": "ANYSEARCH_API_KEY",
+    "serpapi": "SERPAPI_API_KEY",
+    "jina": "JINA_API_KEY",
+    "tavily": "TAVILY_API_KEY",
+    "exa": "EXA_API_KEY",
+    "brave": "BRAVE_API_KEY",
+    "firecrawl": "FIRECRAWL_API_KEY",
+}
+
+
+class WebProviderKey(Base):
+    """One web vendor's credential."""
+
+    api_key: str = ""
+
+
+class WebProvidersConfig(Base):
+    """Credentials keyed by vendor, not by the tool that happens to use them.
+
+    AnySearch, Tavily, Exa and Firecrawl each serve both ``web_search`` and
+    ``web_fetch`` off one account, so a key held per tool would have to be
+    pasted twice and could drift into two values for the same credential. Named
+    fields rather than a free dict so a misspelled vendor fails validation
+    instead of being kept silently -- which needs ``extra="forbid"``, since the
+    tree's default policy is to drop an unknown member. A typo here is exactly
+    the "feature X did nothing" case the loader refuses to mask with defaults.
+    """
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
+
+    serper: WebProviderKey = Field(default_factory=WebProviderKey)
+    anysearch: WebProviderKey = Field(default_factory=WebProviderKey)
+    serpapi: WebProviderKey = Field(default_factory=WebProviderKey)
+    jina: WebProviderKey = Field(default_factory=WebProviderKey)
+    tavily: WebProviderKey = Field(default_factory=WebProviderKey)
+    exa: WebProviderKey = Field(default_factory=WebProviderKey)
+    brave: WebProviderKey = Field(default_factory=WebProviderKey)
+    firecrawl: WebProviderKey = Field(default_factory=WebProviderKey)
+
+    def key_for(self, vendor: str) -> str:
+        """One vendor's configured key, or an empty string for an unknown vendor."""
+        if vendor not in type(self).model_fields:
+            return ""
+        return str(getattr(self, vendor).api_key or "")
+
+
 class WebSearchConfig(Base):
     """Web search tool configuration."""
 
-    api_key: str = ""  # Serper API key
+    provider: WebSearchProvider = "serper"
+    """Which backend ``web_search`` calls. The key lives under
+    ``tools.web.providers.<name>``, so switching does not mean re-pasting one."""
+    api_key: str = ""
+    """The Serper key on the pre-vendor layout. Still honoured, read after
+    ``tools.web.providers.serper.apiKey``; new writes go to the vendor slot."""
     max_results: int = 5
+
+
+class WebFetchConfig(Base):
+    """Web fetch tool configuration."""
+
+    provider: WebFetchProvider = "jina"
+    """Which backend ``web_fetch`` reads pages through. Jina is the only one that
+    works without a key; a keyed backend whose key does not resolve is replaced
+    by Jina at registration, and the log says so, because ``web_fetch`` is
+    always offered."""
 
 
 class WebToolsConfig(Base):
     """Web tools configuration."""
 
     proxy: str | None = None  # HTTP/SOCKS5 proxy URL, e.g. "http://127.0.0.1:7890" or "socks5://127.0.0.1:1080"
-    jina_api_key: str = ""  # Jina Reader API key
+    jina_api_key: str = ""
+    """The Jina key on the pre-vendor layout. Still honoured, read after
+    ``tools.web.providers.jina.apiKey``; new writes go to the vendor slot."""
+    providers: WebProvidersConfig = Field(default_factory=WebProvidersConfig)
     search: WebSearchConfig = Field(default_factory=WebSearchConfig)
+    fetch: WebFetchConfig = Field(default_factory=WebFetchConfig)
+
+    def vendor_key(self, vendor: str) -> str:
+        """The configured credential for one vendor, the legacy leaf included."""
+        if key := self.providers.key_for(vendor):
+            return key
+        if vendor == "serper":
+            return self.search.api_key
+        if vendor == "jina":
+            return self.jina_api_key
+        return ""
+
+    def vendor_keys(self) -> dict[str, str]:
+        """Every vendor with a resolved credential, ``{vendor: key}``."""
+        out = {}
+        for vendor in type(self.providers).model_fields:
+            if key := self.vendor_key(vendor):
+                out[vendor] = key
+        return out
 
 
 class ExecToolConfig(Base):
@@ -1960,6 +2050,24 @@ def live_web_search_key(section: Any) -> str | None:
         return None
     try:
         return WebSearchConfig.model_validate(section).api_key
+    except Exception:  # noqa: BLE001 - an invalid candidate dispenses no new answer
+        return None
+
+
+def live_web_provider_key(section: Any, vendor: str) -> str | None:
+    """One vendor's key from a raw ``tools.web.providers`` subtree, or ``None``.
+
+    The vendor-slot half of :func:`live_web_search_key`, and ``None`` means the
+    same thing: no usable answer, so the caller keeps what it had. An empty key
+    in a valid subtree is a real answer, which is how a key gets revoked
+    without a restart. An unknown vendor reads as empty rather than raising --
+    the selection is validated where it is set, and this reader must not turn a
+    stale spelling into a startup failure.
+    """
+    if not isinstance(section, dict):
+        return None
+    try:
+        return WebProvidersConfig.model_validate(section).key_for(vendor)
     except Exception:  # noqa: BLE001 - an invalid candidate dispenses no new answer
         return None
 
