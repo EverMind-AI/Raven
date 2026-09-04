@@ -578,7 +578,6 @@ class WiringMixin:
                 ask=self._confirm_graph,
                 control_reachable=self.dag_control_reachable,
                 provider_for=self._verdict_provider,
-                adjudicate=self._adjudicate_node,
                 verdict_config=self.subagent_dag_config,
             )
         )
@@ -947,7 +946,6 @@ class WiringMixin:
             # a playbook step is an ordinary DAG node, so it is judged on the same
             # terms once judgement is wired in.
             provider_for=self._verdict_provider,
-            adjudicate=self._adjudicate_node,
             control_reachable=self.dag_control_reachable,
             verdict_config=self.subagent_dag_config,
         )
@@ -1047,35 +1045,6 @@ class WiringMixin:
         if answer is None:
             return True
         return answer.strip().lower() in {"run it", "run", "yes", "y", "ok", "go", "sure"}
-
-    async def _adjudicate_node(self, conversation_id: str, report: str, timeout_s: float | None = None) -> str | None:
-        """A foreground graph's route to a decision about a node that fell short.
-
-        A backgrounded run reports to the model and waits for `resolve_dag_node`,
-        which works because the turn that submitted it has already returned. A
-        foreground run has not: its own tool call is still on the stack, the
-        scheduler serialises the conversation's lane, and the turn that would
-        answer cannot start until this one ends. Every foreground suspension
-        would therefore wait out its whole timeout and then blame the agent.
-
-        So in foreground the question goes to the person watching the blocking
-        call instead, over the same round trip the confirm gate uses. Free text,
-        not a yes/no: a continuation with nothing to say is already treated as a
-        failure, so a bool could only ever abandon.
-
-        ``timeout_s`` is the runner's remaining budget for the whole round, not
-        this question's own: the broker allows one pending question per
-        conversation, so a graph with several suspended nodes asks them in
-        series, and without a shared budget N nodes would cost N timeouts.
-
-        ``None`` means the round trip is structurally unavailable -- no broker,
-        no conversation -- and the caller falls back to failing the node, which
-        is what happened before any of this existed.
-        """
-        tool = self.tools.get("ask_user")
-        if not isinstance(tool, AskUserTool):
-            return None
-        return await tool.ask_direct(report, ["Continue", "Abandon"], conversation_id, timeout_s)
 
     def _dag_guide_skill_id(self) -> str | None:
         """The orchestration guide's id for the DAG tool description, or None.

@@ -297,7 +297,7 @@ class TestSubagentDagSection:
 
         assert sd.verdict_enabled is True
         assert sd.verdict_model is None
-        assert sd.verdict_timeout_seconds == 30.0
+        assert sd.verdict_timeout_seconds == 180.0
         assert sd.evidence_budget_chars == 8000
         assert sd.adjudication_timeout_seconds == 600.0
         assert sd.max_continuations == 2

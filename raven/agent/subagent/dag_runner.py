@@ -15,13 +15,19 @@ import json
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Any, Protocol
 
 from loguru import logger
 
 from raven.agent.subagent import activity
-from raven.agent.subagent.dag_adjudication import ABANDON, CONTINUE, AdjudicationDesk
+from raven.agent.subagent.dag_adjudication import (
+    CONTINUE,
+    REPORT_DELIVERY_ATTEMPTS,
+    AdjudicationDesk,
+    deliver_report,
+)
 from raven.agent.subagent.dag_capabilities import AgentCapabilities
 from raven.agent.subagent.dag_graph import DagNodeSpec, SubAgentDagSpec, graph_deps, validate_and_order
 from raven.agent.subagent.dag_render import render_prompt
@@ -168,8 +174,8 @@ async def run_dag(
     announce_exception: ExceptionAnnouncer | None = None,
     max_continuations: int = 2,
     origin: dict | None = None,
-    adjudicate: "Callable[[str, str, float | None], Awaitable[str | None]] | None" = None,
     control_reachable: "Callable[[], bool] | None" = None,
+    released: asyncio.Event | None = None,
 ) -> DagRunResult:
     """Run a validated DAG, passing messages through files.
 
@@ -255,6 +261,11 @@ async def run_dag(
     delivers the report to the main agent through the same ``origin`` the host
     used to reach this run, the moment the node is suspended rather than only
     at the end of the run.
+
+    ``released``, when given, is the event the host sets when the turn that owns
+    this run has ended. Until it is set the adjudication wait has no deadline;
+    ``adjudication_timeout_s`` is measured from the release. ``None`` clocks the
+    wait from entry, which is what a backgrounded run wants.
     """
     if semaphore is None and max_concurrency < 1:
         raise DagValidationError("max_concurrency must be >= 1")
@@ -364,30 +375,17 @@ async def run_dag(
                 suspended = [nid for nid, st in status.items() if st == "exception"]
                 if not suspended or desk is None:
                     break
-                # Both do the same job from the same place -- nothing else can
-                # run, every suspended node has already given its slot back --
-                # and differ only in who answers: the model through the desk, or
-                # the person watching a blocking call.
-                if adjudicate is not None:
-                    await _adjudicate_open_nodes(
-                        desk,
-                        status,
-                        errors,
-                        continuations,
-                        adjudicate=adjudicate,
-                        origin=origin,
-                        timeout_s=adjudication_timeout_s,
-                        cancel=cancel,
-                    )
-                else:
-                    await _await_adjudications(
-                        desk,
-                        status,
-                        errors,
-                        continuations,
-                        timeout_s=adjudication_timeout_s,
-                        cancel=cancel,
-                    )
+                # Nothing else can run and every suspended node has already given
+                # its slot back, so waiting here costs the graph nothing.
+                await _await_adjudications(
+                    desk,
+                    status,
+                    errors,
+                    continuations,
+                    timeout_s=adjudication_timeout_s,
+                    cancel=cancel,
+                    released=released,
+                )
                 continue
             # Nodes sharing a stateful instance run sequentially (id order); independent
             # nodes each form a singleton group and run concurrently under the semaphore.
@@ -433,7 +431,6 @@ async def run_dag(
                         origin=origin,
                         dependents=dependents,
                         adjudication_timeout_s=adjudication_timeout_s,
-                        answered_in_turn=adjudicate is not None,
                         control_reachable=control_reachable,
                     )
                     for nids in groups.values()
@@ -555,18 +552,12 @@ def _exception_report(
     remaining: int,
     blocked: list[str],
     timeout_s: float,
-    answered_in_turn: bool = False,
     route_available: bool = True,
 ) -> str:
     """The text the main agent is woken with. Everything it needs to decide, once.
 
     The blocked list is not decoration: without it the agent is choosing between
     continuing and abandoning with no idea what abandoning costs.
-
-    ``answered_in_turn`` is the foreground shape, where the reader is the person
-    watching a blocking call rather than the main agent. Both closing lines are
-    wrong for them: there is no deadline, because they are being asked
-    synchronously, and they have no way to call `resolve_dag_node`.
     """
     lines = [
         f"DAG run {run_id}: node '{node.id}' ({node.subagent}) did not accomplish its task.",
@@ -585,7 +576,7 @@ def _exception_report(
             "no adjudication is being awaited. Its dependents are skipped. Re-plan if this line matters."
         )
         return "\n".join(lines)
-    if not route_available and not answered_in_turn:
+    if not route_available:
         # The announce is not gated on suspension, so this text still reaches the
         # model for a node that has already failed. Naming a call would ask it to
         # answer something that accepts no answer, through a route it does not have.
@@ -595,13 +586,10 @@ def _exception_report(
             "skipped. Re-plan if this line matters."
         )
         return "\n".join(lines)
-    if answered_in_turn:
-        lines.append(f"attempt {attempt}; {remaining} continuation(s) left")
-        lines.append(
-            "Reply with what the node should try next, or 'abandon' to give up on it and everything waiting on it."
-        )
-        return "\n".join(lines)
-    lines.append(f"attempt {attempt}; {remaining} continuation(s) left; deciding within {timeout_s:g}s")
+    lines.append(
+        f"attempt {attempt}; {remaining} continuation(s) left; "
+        f"deciding within {timeout_s:g}s, restarted by each decision"
+    )
     # The invocation rather than the bare call: `resolve_dag_node` is hidden from the
     # provider schema, so a model that reads its own tool list finds no such tool and
     # reports it cannot answer -- which spends the whole timeout and then reads as the
@@ -615,81 +603,6 @@ def _exception_report(
         "Ask the user first if only they can supply what is missing."
     )
     return "\n".join(lines)
-
-
-async def _adjudicate_open_nodes(
-    desk: AdjudicationDesk,
-    status: dict[str, str],
-    errors: dict[str, str],
-    continuations: dict[str, str],
-    *,
-    adjudicate: "Callable[[str, str, float | None], Awaitable[str | None]]",
-    origin: dict | None,
-    timeout_s: float,
-    cancel: asyncio.Event | None,
-) -> None:
-    """Ask a person about every suspended node, one at a time. Foreground only.
-
-    The counterpart of `_await_adjudications`, and reached from the same place in
-    the wave loop for the same reason: the node that suspended has already
-    returned and given its dispatch slot back, so nothing is held while the answer
-    is outstanding.
-
-    **One at a time is a hard constraint, not a preference.** `QuestionBroker` is
-    keyed by conversation and allows one pending question per conversation; a
-    second one displaces the first and resolves it to its default, which reads
-    here as an abandon nobody asked for. Asking in series is what keeps that from
-    happening, and it is why the whole round shares one deadline the way
-    `_await_adjudications` does -- N nodes asked in series against a per-question
-    timeout would cost N timeouts.
-
-    ``None`` from the adjudicator is every outcome that is not a continuation --
-    an abandon, an empty answer, a round trip that could not be made -- because
-    all three end the node the same way, and a continuation with nothing to say is
-    already a failure everywhere else.
-    """
-    for nid, st in status.items():
-        if st == "exception" and not desk.is_open(nid):
-            status[nid] = "failed"
-            errors[nid] = "No adjudication was ever opened for this node, so it could not be resolved."
-    open_nodes = sorted(desk.open_nodes())
-    if not open_nodes:
-        return
-    conversation = str((origin or {}).get("session_key") or "")
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout_s
-    for nid in open_nodes:
-        if cancel is not None and cancel.is_set():
-            return
-        report = desk.report(nid)
-        budget = deadline - loop.time()
-        answer = None
-        if conversation and budget > 0:
-            try:
-                answer = await adjudicate(conversation, report, budget)
-            except Exception as exc:  # noqa: BLE001 - a node nobody could be asked about takes the old failure path
-                logger.opt(exception=True).warning("DAG node {} could not be adjudicated: {}", nid, exc)
-                answer = None
-        desk.close(nid)
-        text = (answer or "").strip()
-        if text and text.lower() != ABANDON:
-            continuations[nid] = text
-            status[nid] = "pending"
-            continue
-        status[nid] = "failed"
-        if text:
-            errors[nid] = "This node was abandoned."
-        elif not conversation:
-            errors[nid] = "There was nobody to ask about this node, so it could not continue."
-        elif loop.time() >= deadline:
-            # Read after the await, never the value taken before it: the broker
-            # answers with its default -- an empty string, indistinguishable here
-            # from a person saying nothing -- when the budget it was handed runs
-            # out, so a pre-wait budget is still positive at this point and would
-            # report every timeout as a decision the user never made.
-            errors[nid] = f"No decision arrived within {timeout_s:g}s, so the node timed out."
-        else:
-            errors[nid] = "No decision was given for this node, so it could not continue."
 
 
 async def _apply_verdict(
@@ -708,7 +621,6 @@ async def _apply_verdict(
     origin: dict | None,
     dependents: dict[str, list[str]],
     adjudication_timeout_s: float,
-    answered_in_turn: bool = False,
     control_reachable: "Callable[[], bool] | None" = None,
 ) -> None:
     """Turn a finished node's verdict into a status, and report a bad one.
@@ -748,19 +660,15 @@ async def _apply_verdict(
         remaining=remaining,
         blocked=sorted(dependents.get(node.id, [])),
         timeout_s=adjudication_timeout_s,
-        answered_in_turn=answered_in_turn,
         route_available=answerable,
     )
     # `origin` is part of this predicate because whoever is going to be asked is
     # reached through it: a node suspended on a report that cannot be delivered
     # waits out its whole timeout and then blames the answerer for not answering a
-    # question they never received. Which channel counts depends on the lane -- the
-    # model is woken by `announce_exception`, the person is asked from the wave
-    # loop -- so a foreground run suspends on the adjudicator being wired instead.
-    # The same reasoning applied to the return leg: the model answers by naming a
-    # schema-hidden tool through `tool_call`, so without that route the report is
-    # delivered to someone who cannot reply.
-    deliverable = (announce_exception is not None and answerable) if not answered_in_turn else True
+    # question they never received. The same reasoning applies to the return leg:
+    # the model answers by naming a schema-hidden tool through `tool_call`, so
+    # without that route the report is delivered to someone who cannot reply.
+    deliverable = announce_exception is not None and answerable
     suspending = remaining > 0 and desk is not None and deliverable and origin is not None
     # Opened before the announce, not after: the announce can be answered
     # synchronously (a host that dispatches the turn inline, every test that
@@ -768,10 +676,7 @@ async def _apply_verdict(
     # that answer and leave the node waiting out its whole timeout.
     if suspending:
         status[node.id] = "exception"
-        # The report is parked on the desk because the foreground lane does not
-        # ask here: this node returns first, releasing the dispatch slot it holds,
-        # and the question is put from the wave loop once nothing else can run.
-        desk.open(node.id, report)
+        desk.open(node.id)
     else:
         status[node.id] = "failed"
         if not answerable and remaining > 0:
@@ -786,19 +691,23 @@ async def _apply_verdict(
                 f"{reason} There is no route to answer this node (tool_call is not "
                 "available to the agent), so it could not be adjudicated."
             )
-    if announce_exception is not None and origin is not None and not answered_in_turn:
-        try:
-            await announce_exception(store.run_id, node.id, report, origin, awaiting_decision=suspending)
-        except Exception as exc:  # noqa: BLE001 - the node's fate must not depend on delivery
-            logger.opt(exception=True).warning("DAG node {} exception report could not be delivered: {}", node.id, exc)
-            if suspending:
-                # The desk is open and the node is waiting on a decision the agent
-                # was never told to make. Left alone this stalls for the full
-                # adjudication timeout and then blames the agent for not answering
-                # a question it never received, instead of the real cause.
-                desk.close(node.id)
-                status[node.id] = "failed"
-                errors[node.id] = f"The exception report could not be delivered: {exc}"
+    if announce_exception is not None and origin is not None:
+        # The node's fate must not depend on delivery, so the retries are inside and
+        # what comes back is the failure that outlived them.
+        failure = await deliver_report(
+            partial(announce_exception, store.run_id, node.id, report, origin, awaiting_decision=suspending),
+            what=f"node {node.id}",
+        )
+        if failure is not None and suspending:
+            # The desk is open and the node is waiting on a decision the agent
+            # was never told to make. Left alone this stalls for the full
+            # adjudication timeout and then blames the agent for not answering
+            # a question it never received, instead of the real cause.
+            desk.close(node.id)
+            status[node.id] = "failed"
+            errors[node.id] = (
+                f"The exception report could not be delivered in {REPORT_DELIVERY_ATTEMPTS} attempts: {failure}"
+            )
 
 
 async def _record_outcome(store: DagRunStore, status: dict[str, str], *, cancelled: bool = False) -> None:
@@ -864,6 +773,7 @@ async def _await_adjudications(
     *,
     timeout_s: float,
     cancel: asyncio.Event | None,
+    released: asyncio.Event | None = None,
 ) -> None:
     """Block until every suspended node has an answer, or the wait runs out.
 
@@ -871,11 +781,24 @@ async def _await_adjudications(
     main agent the moment the node was suspended, so this wait costs the graph
     nothing it could otherwise be doing.
 
-    Every open node waits against one shared deadline, `timeout_s` from when
-    this call started, all at once rather than one after another -- N nodes
-    awaited in series would cost N times `timeout_s`, contradicting both the
-    per-node deadline `_exception_report` already promised the main agent and
-    the one-hour cap `adjudication_timeout_s` is configured against.
+    Every open node waits against one deadline, all at once rather than one
+    after another -- N nodes awaited in series would cost N times `timeout_s`,
+    contradicting the cap `adjudication_timeout_s` is configured against.
+
+    That deadline measures silence, not the whole round: each decision that
+    lands restarts it for the nodes still waiting. Reports reach the agent one
+    turn at a time, because a conversation lane is serial, so a fixed deadline
+    for the round charged a node for the time its report spent queued behind
+    another node's -- far enough down the queue and a node timed out having
+    never been asked at all. Silence is the thing worth failing on: it is what
+    says nobody is coming, which one deadline for the round cannot distinguish
+    from an agent steadily working through the queue.
+
+    There is no deadline at all while ``released`` is given and unset: the run
+    is bound to a turn that is still running, and that turn is the liveness
+    signal -- the agent is in a tool loop that has the report in hand, and may
+    be asking the user something only they know. The clock starts when the
+    event fires, which is the moment the turn ended without deciding.
 
     A continued node goes back to `pending` with its message parked in
     ``continuations`` -- its dependencies are still `completed`, so the next pass
@@ -899,20 +822,31 @@ async def _await_adjudications(
     waiters = {nid: desk.waiter(nid) for nid in open_nodes}
     node_tasks = {nid: asyncio.create_task(event.wait()) for nid, event in waiters.items()}
     stop = asyncio.create_task(cancel.wait()) if cancel is not None else None
+    unbind = asyncio.create_task(released.wait()) if released is not None and not released.is_set() else None
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout_s
+    deadline: float | None = None if unbind is not None else loop.time() + timeout_s
     cancelled = False
     try:
         node_pending = set(node_tasks.values())
         while node_pending:
-            budget = max(0.0, deadline - loop.time())
-            waiting_on = {*node_pending, stop} if stop is not None else set(node_pending)
+            budget = None if deadline is None else max(0.0, deadline - loop.time())
+            waiting_on: set[asyncio.Future] = set(node_pending)
+            if stop is not None:
+                waiting_on.add(stop)
+            if unbind is not None and not unbind.done():
+                waiting_on.add(unbind)
             done, _ = await asyncio.wait(waiting_on, timeout=budget, return_when=asyncio.FIRST_COMPLETED)
             if stop is not None and stop in done:
                 cancelled = True
                 break
-            node_pending -= done
-            if loop.time() >= deadline:
+            if unbind is not None and unbind in done:
+                deadline = loop.time() + timeout_s
+            decided = done & node_pending
+            node_pending -= decided
+            still_bound = unbind is not None and not unbind.done()
+            if decided:
+                deadline = None if still_bound else loop.time() + timeout_s
+            elif deadline is not None and loop.time() >= deadline:
                 break
         if cancelled:
             return
@@ -922,7 +856,7 @@ async def _await_adjudications(
             if answer is None:
                 desk.close(nid)
                 status[nid] = "failed"
-                errors[nid] = f"No decision arrived within {timeout_s:g}s, so the node timed out."
+                errors[nid] = f"Nothing was decided for {timeout_s:g}s, so the node timed out."
                 continue
             if answer.decision == CONTINUE and answer.message:
                 continuations[nid] = answer.message
@@ -938,6 +872,8 @@ async def _await_adjudications(
     finally:
         if stop is not None and not stop.done():
             stop.cancel()
+        if unbind is not None and not unbind.done():
+            unbind.cancel()
         # Reached on every exit, including a hard Task.cancel() on the run
         # itself (as opposed to setting the soft `cancel` Event) raising
         # CancelledError right out of asyncio.wait above: that route skips
@@ -948,7 +884,12 @@ async def _await_adjudications(
         for task in node_tasks.values():
             if not task.done():
                 task.cancel()
-        await asyncio.gather(*node_tasks.values(), *([stop] if stop is not None else []), return_exceptions=True)
+        await asyncio.gather(
+            *node_tasks.values(),
+            *([stop] if stop is not None else []),
+            *([unbind] if unbind is not None else []),
+            return_exceptions=True,
+        )
         for nid in open_nodes:
             desk.close(nid)
 
@@ -989,7 +930,6 @@ async def _run_group(
     origin: dict | None = None,
     dependents: dict[str, list[str]] | None = None,
     adjudication_timeout_s: float = 600.0,
-    answered_in_turn: bool = False,
     control_reachable: "Callable[[], bool] | None" = None,
 ) -> None:
     """Run one instance-group's nodes sequentially, in id order."""
@@ -1029,7 +969,6 @@ async def _run_group(
             origin=origin,
             dependents=dependents,
             adjudication_timeout_s=adjudication_timeout_s,
-            answered_in_turn=answered_in_turn,
             control_reachable=control_reachable,
         )
 
@@ -1162,7 +1101,6 @@ async def _run_node(
     origin: dict | None = None,
     dependents: dict[str, list[str]] | None = None,
     adjudication_timeout_s: float = 600.0,
-    answered_in_turn: bool = False,
     control_reachable: "Callable[[], bool] | None" = None,
 ) -> None:
     """Render, dispatch to the node's backend, and record one node."""
@@ -1323,7 +1261,6 @@ async def _run_node(
                 origin=origin,
                 dependents=dependents or {},
                 adjudication_timeout_s=adjudication_timeout_s,
-                answered_in_turn=answered_in_turn,
                 control_reachable=control_reachable,
             )
         turn = await _add_node_to_instance_log(subagents_root, node, did, session_key, errors.get(node.id), node_output)
