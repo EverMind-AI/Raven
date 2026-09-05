@@ -7,6 +7,7 @@ import json
 import os
 import re
 import tarfile
+from pathlib import Path
 
 import pytest
 
@@ -1058,3 +1059,32 @@ def test_freeze_export_makes_no_network_calls(state, workspace, monkeypatch):
 
     assert record["status"] == "local_ready"
     assert calls == []
+
+
+def test_merged_definition_attempt_full_flow(state, workspace):
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1", session_key="cli:a"), _span("trace-2", session_key="cli:a")],
+    )
+    aid = tstore.merge_attempts(["trace-1", "trace-2"], state_dir=state)
+
+    prep = breport.prepare_trajectory(aid, workspace=workspace, state_dir=state)
+    prep = breport.freeze_export(prep, description="merged pair broke")
+    _record_dir, record = breport.confirm_and_package(prep, state_dir=state)
+
+    assert record["attempt"]["attempt_id"] == aid
+    assert record["attempt"]["member_traces"] == ["trace-1", "trace-2"]
+    assert record["attempt"]["merged_definition"] is True
+
+    import tempfile as _tempfile
+
+    with tarfile.open(record["package"]["path"]) as tar:
+        inner = tar.extractfile(f"{record['report_id']}/trajectory/{aid}.tar.gz").read()
+    scratch = Path(_tempfile.mkdtemp())
+    inner_path = scratch / "inner.tar.gz"
+    inner_path.write_bytes(inner)
+    with tarfile.open(inner_path) as tar:
+        tar.extractall(scratch, filter="data")
+    spans_text = (scratch / aid / "spans.jsonl").read_text(encoding="utf-8")
+    traces = {json.loads(line)["traceId"] for line in spans_text.splitlines() if line.strip()}
+    assert traces == {"trace-1", "trace-2"}
