@@ -139,7 +139,9 @@ def test_sanitize_tree_rewrites_structured_paths(tmp_path):
     manifest = json.loads((tree / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["missing_artifacts"] == ["[REDACTED:path]/report.png"]
     rewritten = json.loads((tree / "spans.jsonl").read_text(encoding="utf-8"))
-    assert rewritten["attributes"]["tool.artifact_path"] == "[REDACTED:path]/report.png"
+    # null, not a placeholder path: replay treats a non-string reference as
+    # "missing at pack time", while a relative placeholder would make it raise.
+    assert rewritten["attributes"]["tool.artifact_path"] is None
     assert tsan.scan_absolute_paths(tree) == []
 
 
@@ -816,3 +818,227 @@ def test_unreadable_record_is_skipped(state, workspace):
     (broken / breport.RECORD_FILE).write_text("{broken", encoding="utf-8")
 
     assert len(breport.list_reports(state)) == 1
+
+
+# ── environment summary, policy hook, deliverable probe ────────────────
+
+
+def _config_file(tmp_path, payload):
+    path = tmp_path / "raven-config.json"
+    path.write_text(payload if isinstance(payload, str) else json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_environment_summary_lands_in_package(state, workspace, tmp_path):
+    config = _config_file(tmp_path, {"providers": {"alpha": {"apiKey": "x"}, "beta": {}}, "channels": {"cli": {}}})
+    _log_simple(state)
+    prep = breport.prepare_trajectory("trace-1", workspace=workspace, config_path=config, state_dir=state)
+    prep = breport.freeze_export(prep, description="it broke")
+    _record_dir, record = breport.confirm_and_package(prep, state_dir=state)
+
+    with tarfile.open(record["package"]["path"]) as tar:
+        meta = json.loads(tar.extractfile(f"{record['report_id']}/bugreport.json").read().decode("utf-8"))
+    env = meta["environment"]
+    assert env["providers"] == "alpha, beta"
+    assert env["channels"] == "cli"
+    for key in ("python", "os", "arch"):
+        assert env[key] and "unknown" not in env[key]
+    assert env["bundle_format_version"] == 1
+    assert env["record_schema_version"] == 1 and env["package_schema_version"] == 1
+    assert record["completeness"]["status"] in ("complete", "degraded", "unreplayable")
+
+
+def test_unreadable_config_degrades_environment_and_classification(state, workspace, tmp_path):
+    config = _config_file(tmp_path, "{broken")
+    _log_simple(state)
+    prep = breport.prepare_trajectory("trace-1", workspace=workspace, config_path=config, state_dir=state)
+    prep = breport.freeze_export(prep, description="it broke")
+
+    assert prep.environment["providers"] == "unknown (config unreadable)"
+    assert prep.classification == "needs_review"
+    assert any(reason.startswith("config could not be fully read") for reason in prep.reasons)
+    prep.cleanup()
+
+
+def test_environment_values_go_through_redaction_pipeline(state, workspace, monkeypatch):
+    monkeypatch.setattr(
+        breport, "collect_known_secrets", lambda _p: ([KnownSecret("config.k", "supersecretvalue")], True)
+    )
+    monkeypatch.setattr(
+        breport,
+        "_collect_environment",
+        lambda _p: (
+            {
+                "python": "3.12.0",
+                "os": "Linux 5.4",
+                "arch": "x86_64",
+                "providers": "token supersecretvalue at /tmp/leak/env.log",
+                "channels": "",
+            },
+            True,
+        ),
+    )
+    _record_dir, record = _full_flow(state, workspace)
+
+    with tarfile.open(record["package"]["path"]) as tar:
+        meta = json.loads(tar.extractfile(f"{record['report_id']}/bugreport.json").read().decode("utf-8"))
+    providers = meta["environment"]["providers"]
+    assert "supersecretvalue" not in providers and "/tmp/leak" not in providers
+    assert "[REDACTED:config.k]" in providers and "[REDACTED:path]" in providers
+
+
+def test_policy_hook_upgrades_clean_to_needs_review(state, workspace, monkeypatch):
+    monkeypatch.setenv("RAVEN_BUGREPORT_REQUIRE_REVIEW", "1")
+    prep = _prepared(state, workspace)
+    prep = breport.freeze_export(prep, description="it broke")
+    assert prep.classification == "needs_review"
+    assert prep.reasons == ["organization policy requires manual review"]
+    record_dir, record = breport.confirm_and_package(prep, state_dir=state)
+    assert record["redaction"]["reasons"] == ["organization policy requires manual review"]
+    with tarfile.open(record["package"]["path"]) as tar:
+        meta = json.loads(tar.extractfile(f"{record['report_id']}/bugreport.json").read().decode("utf-8"))
+    assert meta["redaction"]["risk_accepted"] is True
+
+
+def test_policy_hook_reason_coexists_with_other_review_reasons(state, workspace, monkeypatch):
+    monkeypatch.setenv("RAVEN_BUGREPORT_REQUIRE_REVIEW", "true")
+    prep = _prepared(state, workspace, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
+    prep = breport.freeze_export(prep, description="it broke")
+    assert prep.classification == "needs_review"
+    assert any(r.startswith("residual scan flagged") for r in prep.reasons)
+    assert "organization policy requires manual review" in prep.reasons
+    prep.cleanup()
+
+
+def test_policy_hook_never_outranks_blocked(state, workspace, monkeypatch):
+    monkeypatch.setenv("RAVEN_BUGREPORT_REQUIRE_REVIEW", "1")
+    prep = _prepared(state, workspace, attrs={"llm.output": _PEM})
+    assert prep.classification == "blocked"
+    prep.cleanup()
+
+
+def test_policy_hook_off_keeps_clean(state, workspace, monkeypatch):
+    monkeypatch.delenv("RAVEN_BUGREPORT_REQUIRE_REVIEW", raising=False)
+    prep = _prepared(state, workspace)
+    prep = breport.freeze_export(prep, description="it broke")
+    assert prep.classification == "clean"
+    prep.cleanup()
+
+
+def test_completeness_evaluation_failure_degrades_to_unknown(state, workspace, monkeypatch):
+    def _boom(*_a, **_k):
+        raise OSError("probe environment failure")
+
+    monkeypatch.setattr("raven.trajectory.completeness.evaluate_completeness", _boom)
+    _record_dir, record = _full_flow(state, workspace)
+    assert record["completeness"]["status"] == "unknown"
+    assert record["completeness"]["reasons"] == ["completeness evaluation failed (OSError)"]
+    assert record["status"] == "local_ready"
+
+
+def _artifact_file(tmp_path, name, payload):
+    path = tmp_path / name
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_deliverable_probe_missing_llm_input_end_to_end(state, workspace, tmp_path):
+    import asyncio
+
+    from raven.trajectory.replay import load_recording, run_replay
+
+    turn_art = _artifact_file(tmp_path, "turn.json", {"content": "hi", "channel": "cli", "chat_id": "a"})
+    out_art = _artifact_file(tmp_path, "llm-out.json", {"content": "ok", "tool_calls": [], "usage": {}})
+    gone = tmp_path / "artifacts" / "llm-in-gone.json"
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [
+            _span("trace-1", session_key="cli:a", attrs={"turn.input.artifact_path": str(turn_art)}),
+            _span(
+                "trace-1",
+                session_key="cli:a",
+                name="llm.call",
+                span_id="llm-1",
+                attrs={"llm.input.artifact_path": str(gone), "llm.output.artifact_path": str(out_art)},
+            ),
+        ],
+    )
+    prep = breport.prepare_trajectory("trace-1", workspace=workspace, state_dir=state)
+    prep = breport.freeze_export(prep, description="it broke")
+    record_dir, record = breport.confirm_and_package(prep, state_dir=state)
+
+    assert record["completeness"]["status"] == "degraded"
+    assert any("model call input" in r for r in record["completeness"]["reasons"])
+
+    with tarfile.open(record["package"]["path"]) as tar:
+        inner = tar.extractfile(f"{record['report_id']}/trajectory/trace-1.tar.gz").read()
+    inner_tar = tmp_path / "inner.tar.gz"
+    inner_tar.write_bytes(inner)
+    extract_dir = tmp_path / "inner"
+    with tarfile.open(inner_tar) as tar:
+        tar.extractall(extract_dir, filter="data")
+    delivered = extract_dir / "trace-1"
+    recording = load_recording(delivered)
+    assert recording.llm_calls[0].input is None
+    report = asyncio.run(run_replay(delivered, mode="warn"))
+    assert not [d for d in report.divergences if d.fatal]
+
+
+def test_deliverable_probe_missing_tool_input_end_to_end(state, workspace, tmp_path):
+    import asyncio
+
+    from raven.trajectory.replay import load_recording, run_replay
+
+    turn_art = _artifact_file(tmp_path, "turn.json", {"content": "hi", "channel": "cli", "chat_id": "a"})
+    out1 = _artifact_file(
+        tmp_path, "llm-out-1.json", {"content": None, "tool_calls": [{"id": "t", "name": "x", "arguments": {}}]}
+    )
+    out2 = _artifact_file(tmp_path, "llm-out-2.json", {"content": "done", "tool_calls": []})
+    tool_out = _artifact_file(tmp_path, "tool-out.json", {"result": "done"})
+    gone = tmp_path / "artifacts" / "tool-in-gone.json"
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [
+            _span("trace-1", session_key="cli:a", attrs={"turn.input.artifact_path": str(turn_art)}),
+            _span(
+                "trace-1",
+                session_key="cli:a",
+                name="llm.call",
+                span_id="llm-1",
+                attrs={"llm.output.artifact_path": str(out1)},
+            ),
+            _span(
+                "trace-1",
+                session_key="cli:a",
+                name="tool.call",
+                span_id="tool-1",
+                attrs={"tool.input.artifact_path": str(gone), "tool.output.artifact_path": str(tool_out)},
+            ),
+            _span(
+                "trace-1",
+                session_key="cli:a",
+                name="llm.call",
+                span_id="llm-2",
+                attrs={"llm.output.artifact_path": str(out2)},
+            ),
+        ],
+    )
+    prep = breport.prepare_trajectory("trace-1", workspace=workspace, state_dir=state)
+    prep = breport.freeze_export(prep, description="it broke")
+    _record_dir, record = breport.confirm_and_package(prep, state_dir=state)
+
+    assert record["completeness"]["status"] == "degraded"
+    assert any("tool call input" in r for r in record["completeness"]["reasons"])
+
+    with tarfile.open(record["package"]["path"]) as tar:
+        inner = tar.extractfile(f"{record['report_id']}/trajectory/trace-1.tar.gz").read()
+    inner_tar = tmp_path / "inner2.tar.gz"
+    inner_tar.write_bytes(inner)
+    extract_dir = tmp_path / "inner2"
+    with tarfile.open(inner_tar) as tar:
+        tar.extractall(extract_dir, filter="data")
+    delivered = extract_dir / "trace-1"
+    recording = load_recording(delivered)
+    assert recording.tool_calls[0].name is None
+    report = asyncio.run(run_replay(delivered, mode="warn"))
+    assert not [d for d in report.divergences if d.fatal]

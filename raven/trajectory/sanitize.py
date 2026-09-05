@@ -229,7 +229,11 @@ def sanitize_export_tree(root: Path, roots: Iterable[str] = ()) -> None:
             if isinstance(attrs, dict):
                 for key, value in attrs.items():
                     if key.endswith(".artifact_path") and isinstance(value, str) and _is_abs_path_value(value):
-                        attrs[key] = _redacted_ref(value)
+                        # null, not a placeholder path: replay's _artifact_path
+                        # treats a non-string as "missing at pack time", while a
+                        # relative placeholder outside artifacts/ would raise.
+                        # The sanitized basename survives in missing_artifacts.
+                        attrs[key] = None
                         changed = True
             lines.append(json.dumps(span, ensure_ascii=False))
         if changed:

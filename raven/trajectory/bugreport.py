@@ -47,7 +47,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from raven import __version__
 from raven.tracing import config as tracing_config
@@ -165,12 +165,16 @@ def new_report_id(root: Path) -> str:
     raise BugReportError("could not allocate a unique report id")
 
 
-def classify_redaction(*reports: RedactionReport) -> tuple[str, list[str]]:
+def classify_redaction(*reports: RedactionReport, require_review: bool = False) -> tuple[str, list[str]]:
     """The single classification rule, over the merged signals of ``reports``.
 
     ``blocked`` keys off the **original-content** private-key hit
     (``patterns``), not the residual scan — a trajectory that ever held a full
     private key is not fit to leave the machine even after replacement.
+    ``require_review`` is the organization-policy signal (read by the caller,
+    keeping this function pure): it adds its reason unconditionally — even
+    alongside other review reasons, the reviewer must see the policy applied —
+    but never outranks ``blocked``.
     """
     key_hits = sum(r.patterns.get("private-key-block", 0) for r in reports)
     if key_hits:
@@ -184,9 +188,80 @@ def classify_redaction(*reports: RedactionReport) -> tuple[str, list[str]]:
     skipped = sum(len(r.skipped_binaries) for r in reports)
     if skipped:
         reasons.append(f"{skipped} non-UTF-8 file(s) excluded from the copy and not scanned")
+    if require_review:
+        reasons.append("organization policy requires manual review")
     if reasons:
         return CLASSIFICATION_NEEDS_REVIEW, reasons
     return CLASSIFICATION_CLEAN, []
+
+
+def _policy_review_enabled(environ: Mapping[str, str] | None = None) -> bool:
+    env = os.environ if environ is None else environ
+    return env.get("RAVEN_BUGREPORT_REQUIRE_REVIEW", "").strip().lower() in ("1", "true")
+
+
+def _config_section_names(config_path: Path | None) -> tuple[str, str]:
+    """Comma-joined top-level key names of the providers/channels sections.
+
+    Raw JSON only — never ``load_config()`` or a provider registry, so no
+    third-party component code runs and no leaf value (type fields included)
+    is read. Key names are user input; the caller routes them through the
+    same redaction pipeline as every other untrusted string.
+    """
+    from raven.config.loader import get_config_path
+
+    path = Path(config_path).expanduser() if config_path is not None else get_config_path()
+    if path is None or not Path(path).is_file():
+        # No config file is a valid state (defaults everywhere), not a read
+        # failure — there are simply no provider/channel sections to name.
+        return "", ""
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+
+    def _names(section: Any) -> str:
+        if isinstance(section, dict):
+            return ", ".join(sorted(str(key) for key in section))
+        return "" if section is None else "unknown (not a mapping)"
+
+    if not isinstance(raw, dict):
+        raise ValueError("config is not a JSON object")
+    return _names(raw.get("providers")), _names(raw.get("channels"))
+
+
+def _collect_environment(config_path: Path | None) -> tuple[dict[str, str], bool]:
+    """The untrusted environment values, plus whether the config was readable.
+
+    Only values that may carry machine or user content are returned (they go
+    through the problem-tree redaction); constant version fields are added
+    straight into the metadata by the caller. A failing item degrades to
+    ``unknown (<exception class>)`` — the class name only, never the message,
+    which could carry paths or secrets.
+    """
+    import platform
+
+    env: dict[str, str] = {}
+
+    def _grab(key: str, producer: Callable[[], str]) -> None:
+        try:
+            env[key] = str(producer())
+        except Exception as exc:
+            env[key] = f"unknown ({type(exc).__name__})"
+
+    _grab("python", platform.python_version)
+    # Major.minor of the kernel release only: the full release string is a
+    # long high-entropy token that the residual scan would flag on every
+    # machine, and the diagnostic value beyond the major version is marginal.
+    _grab("os", lambda: f"{platform.system()} {'.'.join(platform.release().split('.')[:2])}".strip())
+    _grab("arch", platform.machine)
+    config_ok = True
+    try:
+        providers, channels = _config_section_names(config_path)
+        env["providers"] = providers
+        env["channels"] = channels
+    except Exception:
+        env["providers"] = "unknown (config unreadable)"
+        env["channels"] = "unknown (config unreadable)"
+        config_ok = False
+    return env, config_ok
 
 
 def _merged_redaction_metadata(reports: list[RedactionReport], roots: list[str]) -> dict[str, Any]:
@@ -413,10 +488,13 @@ class ExportPreparation:
     roots: list[str]
     trajectory_report: RedactionReport
     classification: str
+    config_path: Path | None = None
     reasons: list[str] = field(default_factory=list)
     problem: dict[str, str] = field(default_factory=dict)
     reporter: str = ""
     problem_report: RedactionReport | None = None
+    environment: dict[str, str] = field(default_factory=dict)
+    completeness: tuple[str, list[str]] = ("unknown", [])
     package_metadata: dict[str, Any] | None = None
     source_digest: str = ""
     export_digest: str = ""
@@ -489,6 +567,7 @@ def prepare_trajectory(
             roots=_local_roots(workspace, config_path, resolved_state),
             trajectory_report=report,
             classification=classification,
+            config_path=config_path,
             reasons=reasons,
         )
     except BaseException as exc:
@@ -549,22 +628,36 @@ def freeze_export(
     }
 
     try:
+        environment, env_config_ok = _collect_environment(prep.config_path)
+        prep.config_loaded = prep.config_loaded and env_config_ok
+        prep.trajectory_report.config_loaded = prep.config_loaded
+
         problem_dir = prep.snapshot_dir / "problem"
         problem_dir.mkdir(exist_ok=True)
         for name, value in raw_fields.items():
             if value:
                 (problem_dir / f"problem.{name}").write_text(value, encoding="utf-8")
+        for key, value in environment.items():
+            (problem_dir / f"environment.{key}").write_text(value, encoding="utf-8")
         problem_report = redact_bundle(problem_dir, prep.snapshot_dir / "problem_redacted", secrets=prep.secrets)
         problem_report.config_loaded = prep.config_loaded
         prep.problem_report = problem_report
 
-        redacted_fields: dict[str, str] = {}
-        for name, value in raw_fields.items():
-            source = prep.snapshot_dir / "problem_redacted" / f"problem.{name}"
-            text = source.read_text(encoding="utf-8") if value and source.is_file() else ""
-            redacted_fields[name] = sanitize_text(text, prep.roots)
+        def _redacted_value(name: str, written: bool) -> str:
+            source = prep.snapshot_dir / "problem_redacted" / name
+            text = source.read_text(encoding="utf-8") if written and source.is_file() else ""
+            return sanitize_text(text, prep.roots)
 
-        classification, reasons = classify_redaction(prep.trajectory_report, problem_report)
+        redacted_fields = {name: _redacted_value(f"problem.{name}", bool(value)) for name, value in raw_fields.items()}
+        prep.environment = {key: _redacted_value(f"environment.{key}", True) for key in environment}
+
+        # Pre-classification gates the blocked flows before any export work;
+        # the authoritative classification is recomputed below once the
+        # completeness reasons have been through the same pipeline.
+        require_review = _policy_review_enabled()
+        classification, reasons = classify_redaction(
+            prep.trajectory_report, problem_report, require_review=require_review
+        )
         prep.classification = classification
         prep.reasons = reasons
         prep.reporter = redacted_fields.pop("reporter")
@@ -578,6 +671,16 @@ def freeze_export(
         if leaks:
             raise ExportLeakError(f"absolute path leaked into the export: {leaks[0][0]}")
 
+        prep.completeness = _evaluate_completeness_safely(prep, redacted_dir)
+        meta_report = _redact_completeness_reasons(prep)
+
+        reports = [prep.trajectory_report, problem_report] + ([meta_report] if meta_report else [])
+        classification, reasons = classify_redaction(*reports, require_review=require_review)
+        prep.classification = classification
+        prep.reasons = reasons
+        if classification == CLASSIFICATION_BLOCKED:
+            return prep
+
         prep.source_digest = tree_digest(prep.snapshot_dir / "bundle" / prep.attempt_id)
 
         export_dir = prep.export_dir
@@ -585,7 +688,7 @@ def freeze_export(
             redacted_dir, export_dir / "trajectory" / f"{prep.attempt_id}.tar.gz", prep.attempt_id
         )
 
-        metadata = _build_package_metadata(prep, tarball)
+        metadata = _build_package_metadata(prep, tarball, meta_report)
         _atomic_write_json(export_dir / PACKAGE_METADATA_FILE, metadata)
         prep.package_metadata = metadata
 
@@ -596,11 +699,54 @@ def freeze_export(
         raise PreparationError(str(exc) or exc.__class__.__name__) from exc
 
 
-def _build_package_metadata(prep: ExportPreparation, tarball: Path) -> dict[str, Any]:
-    merged = _merged_redaction_metadata(
-        [prep.trajectory_report, prep.problem_report] if prep.problem_report else [prep.trajectory_report],
-        prep.roots,
-    )
+def _evaluate_completeness_safely(prep: ExportPreparation, redacted_dir: Path) -> tuple[str, list[str]]:
+    """Completeness of the sanitized tree; evaluation failures degrade to unknown.
+
+    Deterministic recording defects come back as unreplayable/degraded reasons
+    from the evaluator; only an evaluation-environment failure (probe OSError,
+    event-loop conflict, harness regression) lands here — it must not
+    masquerade as evidence damage.
+    """
+    from raven.trajectory.completeness import evaluate_completeness
+
+    try:
+        return evaluate_completeness(redacted_dir, prep.trajectory_report)
+    except Exception as exc:
+        _log.debug("completeness evaluation failed", exc_info=True)
+        return "unknown", [f"completeness evaluation failed ({type(exc).__name__})"]
+
+
+def _redact_completeness_reasons(prep: ExportPreparation) -> RedactionReport | None:
+    """Route the completeness reasons through the same redaction pipeline.
+
+    The reason texts are controlled templates (categories, counts, exception
+    class names), but the contract is that every string entering the package
+    passes known-value + pattern + residual scanning; their findings join the
+    final classification like any other side.
+    """
+    status, reasons = prep.completeness
+    if not reasons:
+        return None
+    meta_dir = prep.snapshot_dir / "meta"
+    meta_dir.mkdir(exist_ok=True)
+    (meta_dir / "completeness.reasons").write_text("\n".join(reasons), encoding="utf-8")
+    meta_report = redact_bundle(meta_dir, prep.snapshot_dir / "meta_redacted", secrets=prep.secrets)
+    meta_report.config_loaded = prep.config_loaded
+    redacted = (prep.snapshot_dir / "meta_redacted" / "completeness.reasons").read_text(encoding="utf-8")
+    prep.completeness = (status, [sanitize_text(line, prep.roots) for line in redacted.splitlines() if line])
+    return meta_report
+
+
+def _build_package_metadata(
+    prep: ExportPreparation, tarball: Path, meta_report: RedactionReport | None = None
+) -> dict[str, Any]:
+    reports = [prep.trajectory_report]
+    if prep.problem_report is not None:
+        reports.append(prep.problem_report)
+    if meta_report is not None:
+        reports.append(meta_report)
+    merged = _merged_redaction_metadata(reports, prep.roots)
+    completeness_status, completeness_reasons = prep.completeness
     metadata: dict[str, Any] = {
         "schema": PACKAGE_SCHEMA,
         "schema_version": SCHEMA_VERSION,
@@ -614,7 +760,7 @@ def _build_package_metadata(prep: ExportPreparation, tarball: Path) -> dict[str,
             "merged_definition": prep.merged_definition,
         },
         "problem": dict(prep.problem),
-        "completeness": {"status": "unknown", "reasons": ["not evaluated in this version"]},
+        "completeness": {"status": completeness_status, "reasons": list(completeness_reasons)},
         "redaction": {
             "classification": prep.classification,
             "reasons": list(prep.reasons),
@@ -622,8 +768,11 @@ def _build_package_metadata(prep: ExportPreparation, tarball: Path) -> dict[str,
             **merged,
         },
         "environment": {
+            **dict(prep.environment),
             "raven_version": __version__,
             "bundle_format_version": BUNDLE_FORMAT_VERSION,
+            "record_schema_version": SCHEMA_VERSION,
+            "package_schema_version": SCHEMA_VERSION,
         },
         "contents": [
             {"path": PACKAGE_METADATA_FILE, "sha256": "", "size_bytes": 0},
@@ -703,7 +852,7 @@ def _new_record_payload(prep: ExportPreparation) -> dict[str, Any]:
         "failure": {"reason": "", "retryable": False, "retry_count": 0},
         "snapshot": {"source_digest": prep.source_digest, "export_digest": prep.export_digest, "kept": True},
         "package": {"path": "", "sha256": "", "size_bytes": 0},
-        "completeness": {"status": "unknown", "reasons": ["not evaluated in this version"]},
+        "completeness": {"status": prep.completeness[0], "reasons": list(prep.completeness[1])},
         "redaction": {
             "classification": prep.classification,
             "reasons": list(prep.reasons),

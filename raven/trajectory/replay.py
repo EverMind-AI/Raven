@@ -778,6 +778,87 @@ def _session_records(session_path: Path) -> list[dict[str, Any]]:
     return records
 
 
+def diagnose_history_cut(recording: Recording) -> str:
+    """Whether the attempt's starting point in the session history is locatable.
+
+    ``"no-history"`` — no session file or no turns (file-level checks own that
+    case); ``"located"`` — :func:`_history_cut` found the cut (0 included: a
+    session with no pre-attempt history is fine); ``"unlocatable"`` — the cut
+    is ambiguous, so a replay will seed empty history and a mid-session
+    attempt's first request will diverge. Diagnostic only; the cut semantics
+    live solely in :func:`_history_cut`.
+    """
+    session_path = recording.bundle_dir / "session.jsonl"
+    if not session_path.is_file() or not recording.turns:
+        return "no-history"
+    records = _session_records(session_path)
+    return "located" if _history_cut(recording, records) is not None else "unlocatable"
+
+
+def validate_recording(recording: Recording) -> list[str]:
+    """Stable categories for every payload shape replay would crash on.
+
+    ``load_recording`` verifies turn and tool payloads by consuming them, but
+    LLM input/output and manifest fields flow through unshaped and only crash
+    at their consumption points (``_to_response``, ``compare_llm_request``,
+    ``_history_cut``, ``run_replay``). This validator states the consumption
+    contract explicitly — new dereferences belong here too — so completeness
+    checks can classify a bad recording deterministically instead of blaming
+    a probe crash. Returns deduplicated human-readable categories; empty means
+    the shapes are consumable.
+    """
+    problems: list[str] = []
+
+    def _add(category: str) -> None:
+        if category not in problems:
+            problems.append(category)
+
+    manifest = recording.manifest
+    if not isinstance(manifest, dict):
+        _add("the manifest is not an object")
+    else:
+        time_range = manifest.get("time_range")
+        if time_range is not None and not isinstance(time_range, dict):
+            _add("the manifest time_range is not an object")
+    for turn in recording.turns:
+        if turn.session_key is not None and not isinstance(turn.session_key, str):
+            _add("a turn session key is not a string")
+    for call in recording.llm_calls:
+        output = call.output
+        if output is not None and not isinstance(output, dict):
+            _add("a model call output payload is not an object")
+        elif isinstance(output, dict):
+            tool_calls = output.get("tool_calls")
+            if tool_calls is not None and (
+                not isinstance(tool_calls, list) or any(not isinstance(tc, dict) for tc in tool_calls)
+            ):
+                _add("a model call output tool_calls entry is not an object")
+            for key in ("content", "reasoning_content", "finish_reason"):
+                value = output.get(key)
+                if value is not None and not isinstance(value, str):
+                    _add(f"a model call output {key} is not a string")
+            usage = output.get("usage")
+            if usage is not None and not isinstance(usage, dict):
+                _add("a model call output usage is not an object")
+            thinking = output.get("thinking_blocks")
+            if thinking is not None and not isinstance(thinking, list):
+                _add("a model call output thinking_blocks is not a list")
+        payload = call.input
+        if payload is not None and not isinstance(payload, dict):
+            _add("a model call input payload is not an object")
+        elif isinstance(payload, dict):
+            for key in ("messages", "tools"):
+                value = payload.get(key)
+                if value is not None and (
+                    not isinstance(value, list) or any(not isinstance(item, dict) for item in value)
+                ):
+                    _add(f"a model call input {key} entry is not an object")
+            model = payload.get("model")
+            if model is not None and not isinstance(model, str):
+                _add("a model call input model is not a string")
+    return problems
+
+
 def _history_cut(recording: Recording, records: list[dict[str, Any]]) -> int | None:
     """The index of the attempt's own opening record; ``None`` = unlocatable.
 
