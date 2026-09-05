@@ -31,6 +31,7 @@ EXPECTED_PROVIDER_NAMES = {
     "dashscope",
     "moonshot",
     "minimax",
+    "minimaxi",
     "minimax_global",
     "minimax_cn",
     "hosted_vllm",
@@ -39,9 +40,9 @@ EXPECTED_PROVIDER_NAMES = {
 }
 
 
-def test_registry_has_exactly_21_providers() -> None:
-    assert len(PROVIDERS) == 21
-    assert len(EXPECTED_PROVIDER_NAMES) == 21
+def test_registry_has_exactly_22_providers() -> None:
+    assert len(PROVIDERS) == 22
+    assert len(EXPECTED_PROVIDER_NAMES) == 22
 
 
 def test_registry_provider_name_set_is_pinned() -> None:
@@ -106,6 +107,34 @@ def test_registry_and_schema_declare_the_same_providers() -> None:
     from raven.config.schema import ProvidersConfig
 
     assert {spec.name for spec in PROVIDERS} == set(ProvidersConfig.model_fields)
+
+
+def test_the_two_minimax_api_key_sections_reach_different_hosts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One vendor, two deployments, and a key issued for one that the other
+    refuses -- so which section a user picks has to decide where the request
+    lands. LiteLLM's minimax driver defaults to the international host, which is
+    why the CN section carries its own address into the environment instead of
+    leaving the driver to guess.
+    """
+    import os
+
+    from raven.providers.litellm_provider import LiteLLMProvider
+
+    intl = find_by_name("minimax")
+    cn = find_by_name("minimaxi")
+    assert intl.default_api_base == "https://api.minimax.io/v1"
+    assert cn.default_api_base == "https://api.minimaxi.com/v1"
+    assert cn.model_prefix == "minimax", "LiteLLM has no minimaxi driver to route to"
+
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.delenv("MINIMAX_API_BASE", raising=False)
+    LiteLLMProvider(api_key="sk-cn", default_model="minimaxi/MiniMax-M2.1", provider_name="minimaxi")
+    assert os.environ["MINIMAX_API_BASE"] == "https://api.minimaxi.com/v1"
+
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.delenv("MINIMAX_API_BASE", raising=False)
+    LiteLLMProvider(api_key="sk-intl", default_model="minimax/MiniMax-M2.1", provider_name="minimax")
+    assert "MINIMAX_API_BASE" not in os.environ, "the international section must leave the driver's default alone"
 
 
 # Direct providers seeded in the model picker (issue #100). Each must expose a

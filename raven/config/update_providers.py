@@ -1089,8 +1089,10 @@ def test_provider(
     3. Map status code → keyword (see ``_HTTP_STATUS_MAP``). Unknown codes
        render as ``http_{code}``. Network errors → ``network_error``.
 
-    Returns a dict, never raises. ``transport`` is injectable so unit tests
-    can mount an ``httpx.MockTransport`` without touching real network.
+    Returns a dict, never raises. It carries ``api_base`` -- the address the
+    probe actually contacted -- whenever one was resolved. ``transport`` is
+    injectable so unit tests can mount an ``httpx.MockTransport`` without
+    touching real network.
     """
     name = canonical_provider_name(name)
 
@@ -1235,7 +1237,13 @@ def test_provider(
     if spec and spec.name in {"minimax_global", "minimax_cn"} and api_key:
         headers["x-api-key"] = api_key
 
-    result = _probe_models_endpoint(url, headers, timeout_s=timeout_s, transport=transport)
+    # Carried back so a caller can name the address it just probed: the
+    # resolution above (endpoint -> spec default -> LiteLLM) is not visible from
+    # the config alone, so a wrong endpoint is otherwise invisible on failure.
+    result = {
+        **_probe_models_endpoint(url, headers, timeout_s=timeout_s, transport=transport),
+        "api_base": api_base,
+    }
     if derived_api_base and result.get("status") == "http_404":
         # The address LiteLLM sends completions to is not always where the
         # catalogue lives -- DeepSeek's is `/beta`, which has no `/models`. A 404
