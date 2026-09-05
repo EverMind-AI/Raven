@@ -1858,7 +1858,9 @@ def test_bug_report_happy_path(state, workspace, monkeypatch, capsys, _no_machin
     assert "Nothing will be uploaded — the package stays on this machine." in out
     assert "residual scan: clean" in out
     assert "NOT anonymized" in out
-    assert "not yet evaluated in this version" in out
+    # The bare sample has no turn artifacts, so the real evaluation says so.
+    assert "Completeness: unreplayable" in out
+    assert "no recorded turn inputs" in out
     first_action_menu = next(titles for kind, msg, titles in fake.prompts if msg == "Action:")
     assert not any("Bug reports" in t for t in first_action_menu)
 
@@ -2091,3 +2093,44 @@ def test_bug_report_io_failure_shows_prepare_block(state, workspace, monkeypatch
     assert "Could not prepare the trajectory snapshot: disk full" in out
     assert breport.list_reports(state) == []
     assert fake.answers == []
+
+
+def test_bug_report_policy_review_flow(state, workspace, monkeypatch, capsys, _no_machine_secrets):
+    from raven.trajectory import bugreport as breport
+
+    monkeypatch.setenv("RAVEN_BUGREPORT_REQUIRE_REVIEW", "1")
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+
+    _bug_flow(monkeypatch, workspace, ["it broke", False, True, False, _CANCEL])
+    out = capsys.readouterr().out
+    assert "organization policy requires manual review" in out
+    assert "Cancelled — no bug report was created." in out
+    assert breport.list_reports(state) == []
+
+    _bug_flow(monkeypatch, workspace, ["it broke", False, True, True, _CANCEL])
+    ((_record_dir, record),) = breport.list_reports(state)
+    assert record["status"] == "local_ready"
+    assert "organization policy requires manual review" in record["redaction"]["reasons"]
+
+
+def test_bug_report_details_show_completeness(state, workspace, monkeypatch, capsys, _no_machine_secrets):
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+    _bug_flow(monkeypatch, workspace, ["first problem", False, True, _CANCEL])
+    capsys.readouterr()
+
+    _browse(
+        monkeypatch,
+        [
+            ("pick", "session"),
+            ("pick", "#1"),
+            ("pick", "Bug reports (1)"),
+            ("pick", "br-"),
+            _BACK,
+            _BACK,
+            _CANCEL,
+        ],
+        workspace,
+    )
+
+    out = capsys.readouterr().out
+    assert "Completeness: unreplayable (" in out

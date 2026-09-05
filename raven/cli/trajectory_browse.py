@@ -951,7 +951,10 @@ def _print_bug_summary(session_row: SessionRow, index: int, row: AttemptRow, pre
         f"{manifest.get('span_count')} span(s) · session record {session_note}"
         f" · {manifest.get('artifact_count')} artifact(s), {missing} missing",
     )
-    _summary_line("Completeness", "not yet evaluated in this version")
+    completeness = meta["completeness"]
+    _summary_line("Completeness", escape(completeness["status"]))
+    for reason in completeness["reasons"]:
+        console.print(f"    - {escape(reason)}", highlight=False)
     redaction = meta["redaction"]
     exact = sum(redaction["exact_replacements"].values())
     patterns = sum(redaction["pattern_replacements"].values())
@@ -1064,6 +1067,12 @@ def _print_report_details(record: dict[str, Any]) -> None:
     console.print(f"  Created:  {_fmt_ts_full(record.get('created_at'))}", highlight=False)
     description = _collapse_text((record.get("problem") or {}).get("description")) or ""
     console.print(f"  Problem:  {escape(description)}", highlight=False)
+    completeness = record.get("completeness") or {}
+    status_text = str(completeness.get("status") or "unknown")
+    reasons = completeness.get("reasons") or []
+    if reasons:
+        status_text += f" ({len(reasons)} reason(s))"
+    console.print(f"  Completeness: {escape(status_text)}", highlight=False)
     if record["status"] == breport.STATUS_LOCAL_READY:
         console.print(f"  Package:  [cyan]{escape(record['package']['path'])}[/cyan]", highlight=False)
         console.print("  Not uploaded — hand the package file to a developer yourself.")
