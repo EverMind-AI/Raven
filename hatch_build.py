@@ -33,6 +33,7 @@ applies to the frozen fork tree for the same reason.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path, PurePosixPath
@@ -40,6 +41,19 @@ from pathlib import Path, PurePosixPath
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
 PRODUCTS_ROOT = "agents"
+
+# RAVEN_WHEEL_SLIM=1 builds the headless cloud wheel: no vendored sub-agent
+# tree and no prebuilt UI bundles. The full wheel is ~106 MiB compressed and
+# ~94% of it is the sub-agent snapshots (raven-ppt alone carries 74 MiB of
+# .pptx templates); a provisioner that only runs `raven acp` inside a sandbox
+# pays that on every upload for assets nothing there ever opens. The slim
+# wheel is ~5 MiB. Sub-agents on such installs come from their own
+# distribution channel (or not at all); `raven tui` / `raven serve` fall back
+# to their source-checkout resolvers, which headless installs never call.
+
+
+def _slim_build() -> bool:
+    return os.environ.get("RAVEN_WHEEL_SLIM", "") not in ("", "0")
 
 
 def _is_secret(relative_path: str) -> bool:
@@ -75,6 +89,11 @@ class CustomBuildHook(BuildHookInterface):
         and the npm command, ``raven web`` names ``ui-web/build.py``.
         """
         if version == "editable":
+            return
+        if _slim_build():
+            self.app.display_info(
+                "RAVEN_WHEEL_SLIM: building without the TUI and web bundles."
+            )
             return
 
         dist = Path(self.root) / "ui-tui" / "dist"
@@ -135,6 +154,11 @@ class CustomBuildHook(BuildHookInterface):
         directory that nothing ever reads.
         """
         if version == "editable":
+            return
+        if _slim_build():
+            self.app.display_info(
+                "RAVEN_WHEEL_SLIM: building without the vendored sub-agents."
+            )
             return
 
         root = Path(self.root)
