@@ -393,7 +393,13 @@ describe('the collapsed launcher', () => {
 
   it('says nothing at all when there is nothing to say', async () => {
     render(<DeskFollowToggle />)
-    await act(async () => { desk.update({ paletteOpen: false }) })
+    await act(async () => {
+      /* Down because the reader put it down. An unstated down with content
+         on the desk is what the open fallback lifts, and the launcher only
+         exists while the desk is down. */
+      desk.update({ paletteOpen: true })
+      desk.toggleDesk()
+    })
 
     expect(count()).toBeNull()
     expect(btn().hasAttribute('data-working')).toBe(false)
@@ -405,7 +411,13 @@ describe('the collapsed launcher', () => {
      one that was exempt from being counted. */
   it('counts what lands while the desk is down, including on the tab it was left on', async () => {
     render(<DeskFollowToggle />)
-    await act(async () => { desk.update({ paletteOpen: false, tab: 'deliverables' }) })
+    await act(async () => {
+      /* Down because the reader put it down. An unstated down with content
+         on the desk is what the open fallback lifts, and the launcher only
+         exists while the desk is down. */
+      desk.update({ paletteOpen: true, tab: 'deliverables' })
+      desk.toggleDesk()
+    })
 
     await deliver('/w/a.md', '/w/b.md')
 
@@ -418,7 +430,13 @@ describe('the collapsed launcher', () => {
      the same flourish as an arrival is the page reporting news they made. */
   it('pops when the number grows and holds still when it shrinks', async () => {
     render(<DeskFollowToggle />)
-    await act(async () => { desk.update({ paletteOpen: false, tab: 'diff' }) })
+    await act(async () => {
+      /* Down because the reader put it down. An unstated down with content
+         on the desk is what the open fallback lifts, and the launcher only
+         exists while the desk is down. */
+      desk.update({ paletteOpen: true, tab: 'diff' })
+      desk.toggleDesk()
+    })
 
     await deliver('/w/a.md', '/w/b.md')
     expect(count()).toBe('2')
@@ -433,7 +451,13 @@ describe('the collapsed launcher', () => {
      same thing of the reader, so this channel carries no number. */
   it('breathes while a delegated run is going, and stops when it ends', async () => {
     render(<DeskFollowToggle />)
-    await act(async () => { desk.update({ paletteOpen: false, tab: 'agents' }) })
+    await act(async () => {
+      /* Down because the reader put it down. An unstated down with content
+         on the desk is what the open fallback lifts, and the launcher only
+         exists while the desk is down. */
+      desk.update({ paletteOpen: true, tab: 'agents' })
+      desk.toggleDesk()
+    })
 
     agentRows = [{ sessionKey: 's1', agent: 'hermes', handle: 'h1', kind: 'cli', status: 'running' }]
     await act(async () => { await agents.refreshInstances(true) })
@@ -451,7 +475,13 @@ describe('the collapsed launcher', () => {
   /* Both at once, which is the point of them being separate channels. */
   it('carries both signals without either displacing the other', async () => {
     render(<DeskFollowToggle />)
-    await act(async () => { desk.update({ paletteOpen: false, tab: 'diff' }) })
+    await act(async () => {
+      /* Down because the reader put it down. An unstated down with content
+         on the desk is what the open fallback lifts, and the launcher only
+         exists while the desk is down. */
+      desk.update({ paletteOpen: true, tab: 'diff' })
+      desk.toggleDesk()
+    })
 
     agentRows = [{ sessionKey: 's1', agent: 'hermes', handle: 'h1', kind: 'cli', status: 'running' }]
     await act(async () => { await agents.refreshInstances(true) })
@@ -478,7 +508,13 @@ describe('the collapsed launcher', () => {
     /* Nothing in the strip reports a run still going, so this one stays. */
     expect(btn().hasAttribute('data-working')).toBe(true)
 
-    await act(async () => { desk.update({ paletteOpen: false }) })
+    await act(async () => {
+      /* Down because the reader put it down. An unstated down with content
+         on the desk is what the open fallback lifts, and the launcher only
+         exists while the desk is down. */
+      desk.update({ paletteOpen: true })
+      desk.toggleDesk()
+    })
     expect(count()).toBe('2')
   })
 
