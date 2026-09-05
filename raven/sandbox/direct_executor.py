@@ -100,7 +100,7 @@ class DirectExecutor(SandboxExecutor):
         if not hasattr(os, "killpg"):
             # Windows has neither killpg nor SIGKILL, and ignores
             # ``start_new_session``, so the single-process kill is the whole of
-            # what the platform offers -- the same reach this had before.
+            # what the platform offers.
             #
             # Guarded for the same reason as the POSIX branch below, against a
             # narrower window: on win32 ``Process.kill()`` reaches

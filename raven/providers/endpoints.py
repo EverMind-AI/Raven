@@ -4,10 +4,10 @@ A provider config has carried the same three things -- key, address, headers --
 under three different shapes: the flat ``api_key``/``api_base`` every section
 has; Gemini's ``api_key_list`` (several keys, one section, sharing the flat
 address); and now ``endpoints`` (several full label/key/base/headers groups,
-the material S2's rotation and failover will read). Reading any one of them
-independently is how the Gemini list came to be declared and never used --
-``GeminiProviderConfig.effective_api_key`` reads only the first key, so listing
-several kept exactly one of them alive.
+the material :class:`~raven.providers.endpoint_rotor.EndpointRotorProvider`
+rotates and fails over across). Reading any one of them independently is how a
+declared list comes to be unused: ``GeminiProviderConfig.effective_api_key``
+reads only the first key, so listing several keeps exactly one alive.
 
 ``provider_endpoints`` is the one place that resolves the three shapes into a
 uniform list, so "every endpoint this section offers" is asked once rather

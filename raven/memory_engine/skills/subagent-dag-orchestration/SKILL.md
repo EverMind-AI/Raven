@@ -82,8 +82,10 @@ reach you before that one: a node that could not do its job asking you what to d
 - Tell the user the work is under way, without promising the outcome you have not seen yet.
 
 Pass `background: false` only when you genuinely cannot continue without the outputs — for
-instance when the very next thing you must do is read them. That blocks your turn until every
-node is done and returns the summary below as the call's result.
+instance when the very next thing you must do is read them. That blocks your turn until the
+graph finishes, or until a node reports it could not do its job, whichever comes first. In the
+second case the call returns that node's report instead of the summary; see below for what to
+do with it.
 
 A malformed graph is rejected in your own turn either way, before anything is dispatched, so
 a call that returns "started" has already passed every check.
@@ -101,12 +103,16 @@ message naming the node, what is missing, and which downstream nodes are blocked
 That message arrives mid-run, not at the end. The rest of the graph keeps going: only the
 blocked branch waits.
 
-Answer it with `resolve_dag_node`:
+Answer it by calling `resolve_dag_node` through `tool_call`: it is not in your tool list,
+and `tool_call` is the only way to name it. The report you receive spells the exact
+arguments; the two shapes are
 
-- `resolve_dag_node("<run_id>", "<node_id>", "continue", "<message>")` sends your message to
-  the node and lets it try again, keeping the graph and everything it has already done.
-- `resolve_dag_node("<run_id>", "<node_id>", "abandon")` gives up on that node. Its
-  dependents are skipped; the other branches finish normally.
+- `tool_call` with name `resolve_dag_node` and arguments
+  `{"run_id": ..., "node_id": ..., "decision": "continue", "message": "<what to try next>"}`
+  sends your message to the node and lets it try again, keeping the graph and everything
+  it has already done.
+- the same with `"decision": "abandon"` gives up on that node. Its dependents are skipped;
+  the other branches finish normally.
 
 Pick `continue` whenever you can supply what the report says is missing. **If only the user
 can supply it -- a credential, a decision, a fact about what they want -- ask them first,
@@ -117,13 +123,16 @@ Two limits worth knowing. A node gets a small number of continuations before it 
 good, so a message that does not actually change anything wastes one. And the run does not
 wait forever -- if nobody answers, the node fails on its own and its dependents are skipped.
 
-All of this is about a backgrounded run. In a `background: false` call there is no
-message to you and no `resolve_dag_node` to call: the question goes straight to the user
-and the answer is applied before your call returns, so what you get back already reflects
-whatever they decided.
+In a `background: false` call the report does not arrive as a message: it is the call's own
+return value, and the graph keeps running while you read it. Answer it the same way, with
+`resolve_dag_node` -- which, for a blocking run, waits and returns the next report or the
+final summary, so keep calling it until you have the summary. While your turn is running the
+graph waits for you without a deadline; ask the user first if only they can supply what is
+missing. If you end your turn with a report unanswered, the run carries on as a background
+run: the report is re-sent to you as a message and the usual deadline starts.
 
-To stop the whole run rather than one node, use `cancel_dag`. Re-planning means `cancel_dag`
-followed by a fresh graph.
+To stop the whole run rather than one node, call `cancel_dag` the same way, through
+`tool_call`. Re-planning means `cancel_dag` followed by a fresh graph.
 
 Each run costs one unit of the same per-hour budget `spawn` draws on
 (`max_subagent_spawns_per_hour`), whatever its node count. Submitting graphs in a loop

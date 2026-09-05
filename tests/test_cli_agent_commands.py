@@ -42,7 +42,7 @@ def test_agent_help_works() -> None:
 
 
 def test_home_flag_moves_agent_home(tmp_config: Path, tmp_path: Path):
-    from raven.cli._helpers import load_runtime_config
+    from raven.core.config_stack import load_runtime_config
 
     config = load_runtime_config(None, home=str(tmp_path / "elsewhere"))
     assert config.agents.defaults.workspace == str(tmp_path / "elsewhere")
@@ -167,11 +167,11 @@ def _invoke_agent_capturing_session(
     # (bundled) everos backend / plugin tools inside the CliRunner (the
     # embedded everos runtime is heavy and not under test here).
     monkeypatch.setattr(
-        "raven.cli.agent_commands.maybe_build_memory_backend",
+        "raven.core.plugin_stack.maybe_build_memory_backend",
         lambda *a, **k: None,
     )
     monkeypatch.setattr(
-        "raven.cli.agent_commands.build_plugin_tools",
+        "raven.core.plugin_stack.build_plugin_tools",
         lambda *a, **k: [],
     )
     r = runner.invoke(app, ["agent", "-m", "hi", "--home", str(home), *extra_args])
@@ -464,8 +464,8 @@ def test_agent_auth_error_exit_nonzero_with_guidance(
     monkeypatch.setattr(_os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
     monkeypatch.setattr("raven.cli.agent_commands.make_provider", lambda _: object())
     monkeypatch.setattr("raven.agent.loop.AgentLoop", _AuthFailAgentLoop)
-    monkeypatch.setattr("raven.cli.agent_commands.maybe_build_memory_backend", lambda *a, **k: None)
-    monkeypatch.setattr("raven.cli.agent_commands.build_plugin_tools", lambda *a, **k: [])
+    monkeypatch.setattr("raven.core.plugin_stack.maybe_build_memory_backend", lambda *a, **k: None)
+    monkeypatch.setattr("raven.core.plugin_stack.build_plugin_tools", lambda *a, **k: [])
 
     ws = tmp_path / "ws"
     ws.mkdir()
@@ -585,7 +585,7 @@ def test_print_llm_error_non_auth_categories_get_apt_hint_not_key_guidance(
 
 
 def test_workspace_sync_prints_single_summary(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
-    from raven.utils.helpers import sync_workspace_templates
+    from raven.utils.workspace import sync_workspace_templates
 
     ws = tmp_path / "workspace"
     added = sync_workspace_templates(ws)
@@ -614,7 +614,7 @@ def test_workspace_sync_debug_detail_lifts_with_raven_logging(tmp_path: Path) ->
     per-file detail. Freezes the behavior the helpers comment relies on."""
     from loguru import logger
 
-    from raven.utils.helpers import sync_workspace_templates
+    from raven.utils.workspace import sync_workspace_templates
 
     records: list[str] = []
     sink_id = logger.add(lambda m: records.append(str(m)), level="DEBUG")
@@ -633,8 +633,8 @@ def _invoke_agent_with_usage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *,
 
     from raven.config.loader import save_config
     from raven.config.schema import Config
+    from raven.contracts.token_strategy import UsageSnapshot
     from raven.spine import Text, TurnOutcome, Usage
-    from raven.token_wise.base import UsageSnapshot
     from raven.token_wise.registry import StrategyRegistry
 
     cfg = Config()
@@ -679,8 +679,8 @@ def _invoke_agent_with_usage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *,
     monkeypatch.setattr(_os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
     monkeypatch.setattr("raven.cli.agent_commands.make_provider", lambda _: object())
     monkeypatch.setattr("raven.agent.loop.AgentLoop", _StubAgentLoop)
-    monkeypatch.setattr("raven.cli.agent_commands.maybe_build_memory_backend", lambda *a, **k: None)
-    monkeypatch.setattr("raven.cli.agent_commands.build_plugin_tools", lambda *a, **k: [])
+    monkeypatch.setattr("raven.core.plugin_stack.maybe_build_memory_backend", lambda *a, **k: None)
+    monkeypatch.setattr("raven.core.plugin_stack.build_plugin_tools", lambda *a, **k: [])
     return runner.invoke(app, ["agent", "-m", "hi", "-w", str(tmp_path / "ws")])
 
 

@@ -1,0 +1,36 @@
+[plugin]
+id                 = "everos-memory"
+version            = "1.2.0"
+display_name       = "EverOS memory"
+raven              = ">=0.1"
+bundled            = false
+enabled_by_default = true
+
+[[plugin.contributes.memory_backends]]
+name    = "everos"
+factory = "raven_everos.backend:make_backend"
+
+# Multimodal understanding exposed as an agent tool: the LLM calls
+# ``understand_media(paths=[...])`` to read attachments it can't consume
+# natively (PDF / audio / Office / scanned images), reusing EverOS's
+# memory-ingest multimodal parser. Requires the ``everos[multimodal]``
+# extra + ``EVEROS_MULTIMODAL__*`` config at call time.
+[[plugin.contributes.tools]]
+name    = "understand_media"
+factory = "raven_everos.tools:make_understand_media_tool"
+
+# The registry admits the user's ``plugins.config["everos-memory"]`` slice
+# against this declaration before ``make_backend(ctx)`` sees it: declared
+# keys are type-checked at the door, unknown keys pass through with a
+# warning. No key declares a default -- the factory keeps owning its defaults
+# in code, so a valid config behaves exactly as before; only an invalid type
+# fails loudly at activation instead of misbehaving later. ``root`` and
+# ``owned`` are what the onboarding wizard records about the data root it
+# found or created; ``agent_id`` / ``user_id`` are the identity the wizard
+# writes when it does not come from the host via ``ServiceLocator``.
+[plugin.config_schema]
+base_url = { type = "string" }
+root     = { type = "string" }
+owned    = { type = "boolean" }
+agent_id = { type = "string" }
+user_id  = { type = "string" }

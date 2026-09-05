@@ -1,4 +1,6 @@
-from raven.channels.outlet import ChannelOutletAdapter
+"""ChannelOutletAdapter as a spine Outlet: text, media fallback, and eaten events."""
+
+from raven.gateway.outlet import ChannelOutletAdapter
 from raven.spine import (
     ChatType,
     MediaOut,
@@ -48,7 +50,7 @@ async def test_deliver_text_calls_channel_send():
 
 
 async def test_deliver_media_out_sends_local_paths():
-    ch = _FakeChannel()
+    ch = _FakeChannel(file_attachments=True)
     adapter = ChannelOutletAdapter(ch)
     media = (
         Media(path="/tmp/a.png", mime="image/png", kind="image"),
@@ -58,6 +60,19 @@ async def test_deliver_media_out_sends_local_paths():
     assert len(ch.sent) == 1
     # media carries the local file paths (channels handle them, the hub does not).
     assert ch.sent[0][2] == ["/tmp/a.png", "/tmp/b.png"]
+
+
+async def test_deliver_media_out_falls_back_without_attachments():
+    ch = _FakeChannel(file_attachments=False)
+    adapter = ChannelOutletAdapter(ch)
+    media = (Media(path="/tmp/a.png", mime="image/png", kind="image"),)
+    await adapter.deliver(MediaOut(media=media, source=_src()))
+    assert len(ch.sent) == 1
+    chat_id, content, sent_media = ch.sent[0]
+    # A channel that ignores ``media`` in send must not get an empty body --
+    # the message would silently evaporate. It gets the file list note instead.
+    assert sent_media is None
+    assert "a.png" in content and content.strip()
 
 
 async def test_deliver_eats_streaming_and_in_turn_events():
@@ -117,3 +132,24 @@ async def test_deliver_files_falls_back_to_a_compact_list_without_attachments():
             None,
         )
     ]
+
+
+async def test_organ_degraded_notice_reaches_the_channel_as_its_own_line():
+    ch = _FakeChannel()
+    adapter = ChannelOutletAdapter(ch)
+    await adapter.deliver(
+        Notice(
+            kind=NoticeKind.ORGAN_DEGRADED,
+            source=_src("telegram", "c9"),
+            detail="Some capabilities were unavailable this turn (memory).",
+        )
+    )
+    assert ch.sent == [("c9", "Some capabilities were unavailable this turn (memory).", None)]
+
+
+async def test_other_notices_stay_eaten_on_a_channel():
+    ch = _FakeChannel()
+    adapter = ChannelOutletAdapter(ch)
+    await adapter.deliver(Notice(kind=NoticeKind.PROGRESS, source=_src(), detail="thinking"))
+    await adapter.deliver(Notice(kind=NoticeKind.ORGAN_DEGRADED, source=_src()))
+    assert ch.sent == []

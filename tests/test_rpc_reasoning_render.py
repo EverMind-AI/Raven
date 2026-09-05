@@ -16,14 +16,14 @@ from types import SimpleNamespace
 from typing import Any
 
 from raven.agent.loop import AgentLoop
-from raven.providers.base import StreamDelta
+from raven.contracts.llm_provider import ChatDelta
 from raven.providers.litellm_provider import LiteLLMProvider
 
 
 class _FakeProvider:
     """Provider stand-in exposing ``chat_stream`` only."""
 
-    def __init__(self, chunks: list[StreamDelta]) -> None:
+    def __init__(self, chunks: list[ChatDelta]) -> None:
         self._chunks = chunks
         self.chat_stream_calls: list[dict[str, Any]] = []
 
@@ -49,11 +49,11 @@ def _bind_helper(provider: _FakeProvider):
 
 async def test_reasoning_delta_fires_callback_and_accumulates() -> None:
     chunks = [
-        StreamDelta(content=None, reasoning_content="The user "),
-        StreamDelta(content=None, reasoning_content="wants me to "),
-        StreamDelta(content=None, reasoning_content="check cron."),
-        StreamDelta(content="Sure, "),
-        StreamDelta(content="checking."),
+        ChatDelta(content=None, reasoning_content="The user "),
+        ChatDelta(content=None, reasoning_content="wants me to "),
+        ChatDelta(content=None, reasoning_content="check cron."),
+        ChatDelta(content="Sure, "),
+        ChatDelta(content="checking."),
     ]
     provider = _FakeProvider(chunks)
     call = _bind_helper(provider)
@@ -86,8 +86,8 @@ async def test_reasoning_callback_optional() -> None:
     """No on_reasoning_delta wired → reasoning still accumulates on response,
     no crash (CLI / cron / sentinel callers pass nothing)."""
     chunks = [
-        StreamDelta(content=None, reasoning_content="hmm"),
-        StreamDelta(content="answer"),
+        ChatDelta(content=None, reasoning_content="hmm"),
+        ChatDelta(content="answer"),
     ]
     provider = _FakeProvider(chunks)
     call = _bind_helper(provider)
@@ -105,7 +105,7 @@ async def test_reasoning_callback_optional() -> None:
 async def test_no_reasoning_leaves_response_reasoning_none() -> None:
     """Plain models that never stream reasoning_content → reasoning_content
     stays None (not empty string)."""
-    chunks = [StreamDelta(content="hi")]
+    chunks = [ChatDelta(content="hi")]
     provider = _FakeProvider(chunks)
     call = _bind_helper(provider)
     response = await call(

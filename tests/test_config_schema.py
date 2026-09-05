@@ -1,5 +1,5 @@
-"""Tests for ``raven.config.schema.AgentDefaults.context_window_tokens`` and
-``ProviderConfig.endpoints``.
+"""Tests for ``raven.config.schema.AgentDefaults.context_window_tokens``,
+``AgentDefaults.compaction`` and ``ProviderConfig.endpoints``.
 
 The context-window tests: None (or 0) means "figure it out" against the
 model's real window; a positive value pins it. See
@@ -17,7 +17,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from raven.config.schema import AgentDefaults, ProviderConfig, ProviderEndpoint
+from raven.config.schema import AgentDefaults, CompactionConfig, ProviderConfig, ProviderEndpoint
 
 
 def test_context_window_tokens_defaults_to_none() -> None:
@@ -119,3 +119,37 @@ def test_ask_user_timeout_must_be_positive() -> None:
 
     with pytest.raises(ValidationError):
         AskUserToolConfig(timeout=0)
+
+
+def test_compaction_defaults_to_factory_off() -> None:
+    cfg = AgentDefaults().compaction
+    assert cfg.enabled is False
+    assert cfg.prune is True
+    assert cfg.reserved_tokens is None
+    assert cfg.trigger_ratio is None
+    assert cfg.preserve_recent_tokens is None
+
+
+def test_compaction_knobs_round_trip_with_camel_aliases() -> None:
+    cfg = CompactionConfig.model_validate(
+        {"enabled": True, "reservedTokens": 12_000, "triggerRatio": 0.8, "preserveRecentTokens": 4_000, "prune": False}
+    )
+    assert cfg.enabled is True
+    assert cfg.prune is False
+    assert cfg.reserved_tokens == 12_000
+    assert cfg.trigger_ratio == 0.8
+    assert cfg.preserve_recent_tokens == 4_000
+
+
+def test_compaction_tolerates_foreign_and_legacy_keys() -> None:
+    """A saved config from the capability's origin carries ``auto`` as its
+    main knob and may carry a retired ``model`` key; both are extras here --
+    accepted and ignored, and neither flips the factory-off default."""
+    cfg = CompactionConfig.model_validate({"auto": True, "model": "some/model"})
+    assert cfg.enabled is False
+    assert not hasattr(cfg, "auto")
+
+
+def test_compaction_slice_reaches_agent_defaults() -> None:
+    defaults = AgentDefaults.model_validate({"compaction": {"enabled": True}})
+    assert defaults.compaction.enabled is True

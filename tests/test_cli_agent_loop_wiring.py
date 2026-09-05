@@ -42,6 +42,18 @@ _EXEMPT: dict[tuple[str, str], str] = {
 _REQUIRED = ("strategies",)
 
 
+def _flat_kwargs(call: ast.Call) -> set[str]:
+    """Keyword names a site passes, descending into the wiring bundles."""
+    flat: set[str] = set()
+    for kw in call.keywords:
+        inner = kw.value
+        if isinstance(inner, ast.Call) and getattr(inner.func, "id", "").endswith(("Wiring", "Policy")):
+            flat |= {k.arg for k in inner.keywords if k.arg}
+        elif kw.arg:
+            flat.add(kw.arg)
+    return flat
+
+
 def _sites() -> list[tuple[str, ast.Call]]:
     found: list[tuple[str, ast.Call]] = []
     for path in sorted(RAVEN.rglob("*.py")):
@@ -49,7 +61,11 @@ def _sites() -> list[tuple[str, ast.Call]]:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "AgentLoop":
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
+            if name == "AgentLoop":
                 found.append((path.relative_to(RAVEN).as_posix(), node))
     return found
 
@@ -57,19 +73,13 @@ def _sites() -> list[tuple[str, ast.Call]]:
 def test_the_enumeration_still_finds_the_construction_sites():
     """The negative assertions below all pass over an empty list."""
     names = {rel for rel, _ in _sites()}
-    assert {
-        "cli/agent_commands.py",
-        "cli/gateway_commands.py",
-        "cli/tui_commands.py",
-    } <= names, f"a production surface stopped building an AgentLoop by name: {sorted(names)}"
+    assert "core/runtime.py" in names, f"the assembly door stopped building an AgentLoop by name: {sorted(names)}"
 
 
 @pytest.mark.parametrize("capability", _REQUIRED)
 def test_every_construction_site_wires_every_capability(capability: str):
     missing = [
-        rel
-        for rel, call in _sites()
-        if capability not in {kw.arg for kw in call.keywords} and (rel, capability) not in _EXEMPT
+        rel for rel, call in _sites() if capability not in _flat_kwargs(call) and (rel, capability) not in _EXEMPT
     ]
     assert not missing, (
         f"these AgentLoop sites do not pass {capability!r}: {missing}\n"
@@ -86,7 +96,7 @@ def test_the_probe_each_site_passes_reads_the_running_turns_binding():
     there -- otherwise a session switched onto a caching model is told it cannot
     cache, and one switched off it marks a request that cannot carry the field.
     """
-    from raven.cli._token_wise_stack import caching_probe
+    from raven.core.token_wise_stack import caching_probe
     from raven.providers.binding import ModelBinding, use_binding
     from raven.providers.litellm_provider import LiteLLMProvider
 

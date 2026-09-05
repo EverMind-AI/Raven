@@ -18,6 +18,7 @@ from raven.agent.subagent.history import (
     session_history_root,
     spawn_root,
 )
+from raven.agent.subagent.instance_log import instance_title
 from raven.session.manager import SessionManager
 
 
@@ -56,7 +57,7 @@ def test_history_follows_a_pre_grouping_transcript_to_its_old_group(tmp_path: Pa
     )
 
     manager = SessionManager(tmp_path, project_slug="-srv-project-a")
-    transcript = manager._get_session_path("cli:abc")
+    transcript = manager.session_path("cli:abc")
     root = session_history_root(manager.session_dir("cli:abc"))
 
     assert transcript.parent.name == "cli"
@@ -109,6 +110,156 @@ def test_spawn_record_finish_records_the_output(tmp_path: Path) -> None:
     assert meta["status"] == "completed"
     assert meta["agent"] == "Coder"
     assert meta["ended_at_ms"] >= meta["started_at_ms"]
+
+
+def test_spawn_record_finish_is_idempotent(tmp_path: Path) -> None:
+    """A cancel racing a completion runs finish twice; the first outcome wins --
+    no duplicate instance-log turn, no clobbered status."""
+    d = _session_dir(tmp_path, "web:abc")
+    record = SpawnRecord.open(d, task_id="t1", task="do x", meta={"agent": "coder", "handle": "h1"})
+    record.finish(status="completed", output="done")
+    log = d / "subagents" / "instances" / "coder" / "h1.jsonl"
+    lines_after_first = len(log.read_text(encoding="utf-8").splitlines())
+
+    record.finish(status="cancelled")
+
+    meta = json.loads((record.dir / "meta.json").read_text(encoding="utf-8"))
+    assert meta["status"] == "completed"
+    assert len(log.read_text(encoding="utf-8").splitlines()) == lines_after_first
+
+
+def test_a_running_spawn_already_says_what_it_is_for(tmp_path: Path) -> None:
+    """The title has to be there while the run is still going, not after it.
+
+    A reader opens an instance panel *because* the run is in flight, and the
+    title used to be written by the first instance-log turn -- which lands at
+    finish. Until then every surface fell back to the handle, an id.
+    """
+    d = _session_dir(tmp_path, "web:abc")
+    meta = {
+        "agent": "coder",
+        "handle": "h1",
+        "session_key": "web:abc",
+        "task_summary": "Build the deck from the research",
+    }
+
+    SpawnRecord.open(d, task_id="t1", task="ask", meta=meta)
+
+    assert instance_title(d, "coder", "h1") == "Build the deck from the research"
+
+
+def test_an_instance_with_no_dispatch_is_named_by_its_opening_message(tmp_path: Path) -> None:
+    """An instance the reader started themselves has nothing to be named after
+    but the message that opened it, and every panel of one used to be headed by
+    its handle -- an id. Named by the same rule a conversation with no title is
+    named by: the first line, collapsed, capped."""
+    from raven.agent.subagent.direct_chat import DirectChatRecord
+
+    d = _session_dir(tmp_path, "web:abc")
+
+    DirectChatRecord.open(
+        d, agent="coder", handle="h1", task_id="t1", task="Help me configure serper\nsecond line must not count"
+    )
+
+    assert instance_title(d, "coder", "h1") == "Help me configure serper"
+
+
+def test_the_instance_log_is_named_even_when_the_record_cannot_be_written(tmp_path: Path) -> None:
+    """The two subtrees fail independently, so one must not take the other down.
+
+    A file where `subagents/direct` wants a directory kills the record while the
+    sibling instance log stays perfectly writable. Reading the identity back out
+    of the meta the failed write was supposed to leave made the log's fate depend
+    on the record's, and the instance stayed nameless for a reason that had
+    nothing to do with it.
+    """
+    from raven.agent.subagent.direct_chat import DirectChatRecord
+
+    d = _session_dir(tmp_path, "web:abc")
+    (d / "subagents").mkdir(parents=True, exist_ok=True)
+    (d / "subagents" / "direct").write_text("not a directory", encoding="utf-8")
+
+    record = DirectChatRecord.open(d, agent="coder", handle="h1", task_id="t1", task="Check the weather for me")
+
+    assert not record.dir.exists()
+    assert instance_title(d, "coder", "h1") == "Check the weather for me"
+
+
+def test_a_derivation_that_fails_says_so(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The one failure in this path that nothing else can report.
+
+    `_derived` runs before the try blocks in `open_instance_log_for` and
+    `add_turn_to_instance_log`, so neither of their warnings observes a failure
+    inside it -- the instance simply comes out headed by its handle, which is
+    also exactly what an instance nobody named looks like. Swallowing is still
+    right (a missing name may not fail a run); being silent about it was not.
+    """
+    import raven.session.manager as manager
+    from raven.agent.subagent.direct_chat import DirectChatRecord
+
+    def _fail(_value: str) -> str:
+        raise RuntimeError("no rule to derive by")
+
+    monkeypatch.setattr(manager, "derive_title", _fail)
+    d = _session_dir(tmp_path, "web:abc")
+
+    from loguru import logger
+
+    said: list[str] = []
+    sink_id = logger.add(lambda msg: said.append(str(msg)), level="WARNING", format="{message}")
+    try:
+        DirectChatRecord.open(d, agent="coder", handle="h1", task_id="t1", task="Help me configure serper")
+    finally:
+        logger.remove(sink_id)
+
+    assert instance_title(d, "coder", "h1") == ""
+    assert any("no rule to derive by" in line for line in said)
+
+
+def test_a_later_message_does_not_rename_the_instance(tmp_path: Path) -> None:
+    """The header is written once, so the first message names the instance --
+    the rule `save` follows for a session, and the reason a name derived this
+    way is stable enough to head a panel."""
+    from raven.agent.subagent.direct_chat import DirectChatRecord
+
+    d = _session_dir(tmp_path, "web:abc")
+    first = DirectChatRecord.open(d, agent="coder", handle="h1", task_id="t1", task="the first ask")
+    first.finish(status="completed", output="done")
+
+    DirectChatRecord.open(d, agent="coder", handle="h1", task_id="t2", task="the second ask")
+
+    assert instance_title(d, "coder", "h1") == "the first ask"
+
+
+def test_a_dispatched_summary_still_wins_over_the_message(tmp_path: Path) -> None:
+    """Deriving is the fallback, not the rule: a dispatch that said what the
+    instance is for is a better name than the prompt's first line."""
+    d = _session_dir(tmp_path, "web:abc")
+    meta = {"agent": "coder", "handle": "h1", "session_key": "web:abc", "task_summary": "Draft a deck"}
+
+    SpawnRecord.open(
+        d, task_id="t1", task="Read these materials, research first, then hand me a deck I can present as-is", meta=meta
+    )
+
+    assert instance_title(d, "coder", "h1") == "Draft a deck"
+
+
+def test_a_finished_spawn_is_still_named_once(tmp_path: Path) -> None:
+    """Opening now names the instance, so finishing must not name it again."""
+    d = _session_dir(tmp_path, "web:abc")
+    meta = {"agent": "coder", "handle": "h1", "session_key": "web:abc", "task_summary": "Draft a deck"}
+    record = SpawnRecord.open(d, task_id="t1", task="ask", meta=meta)
+
+    record.finish(status="completed", output="done")
+
+    written = [
+        json.loads(line)
+        for line in (d / "subagents" / "instances" / "coder" / "h1.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert [row.get("_type") for row in written].count("metadata") == 1
+    assert instance_title(d, "coder", "h1") == "Draft a deck"
+    assert [row["role"] for row in written if row.get("_type") != "metadata"] == ["user", "assistant"]
 
 
 def test_spawn_record_keeps_failures(tmp_path: Path) -> None:

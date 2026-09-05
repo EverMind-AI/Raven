@@ -1,7 +1,7 @@
 """Pydantic v2 models for the client JSON-RPC contract.
 
 These models are the Python-side mirror of ``rpc-schema/openrpc.json``.
-Each public type defined in ``specs/tui-ipc.md`` §3.12 has a corresponding
+Each public type of the contract has a corresponding
 :class:`pydantic.BaseModel`, and each RPC method has a ``<Method>Params`` and
 ``<Method>Result`` model.
 
@@ -30,7 +30,7 @@ class _Strict(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Public types (specs/tui-ipc.md §3.12)
+# Public types
 # ---------------------------------------------------------------------------
 
 
@@ -181,10 +181,10 @@ class InstanceRow(_Strict):
     """One sub-agent instance this session has used.
 
     camelCase field names, unlike every other model here, because a row is a
-    registry record verbatim (``raven/agent/subagent/instances.py``) and the web
-    RPC already serves it unchanged. Renaming the fields for this surface would
-    make the TUI and the web UI disagree about what an instance is, which is the
-    hardest class of bug to find later.
+    registry record verbatim (``raven/agent/subagent/instances.py``) and the
+    camelCase spelling is the registry's own. Renaming the fields here would
+    make this surface and the record disagree about what an instance is, which
+    is the hardest class of bug to find later.
 
     ``runId`` / ``nodeId`` name the DAG node an instance belongs to. They are on
     a ``dag-node`` row and also on the ordinary row of a stateful node, which is
@@ -213,9 +213,11 @@ class InstanceRow(_Strict):
     title: str | None = Field(
         default=None,
         description=(
-            "What this instance was asked, in one line: a graph node's node_summary, or a spawn's "
-            "task_summary. Null for an instance nobody dispatched (one the user created by hand) and "
-            "for work that ran before those fields existed; a reader falls back to the handle."
+            "What this instance was asked, in one line: a spawn's task_summary, or a graph node's "
+            "node_summary, or -- for an instance nobody dispatched, one the user created by hand -- "
+            "the first line of the message that opened it, taken once so later messages do not "
+            "rename it. Null only for work that ran before any of those existed, or when that first "
+            "message yielded nothing; a reader falls back to the handle."
         ),
     )
     run_title: str | None = Field(
@@ -286,7 +288,7 @@ class DirectTurn(_Strict):
     )
 
 
-class UsageSnapshot(_Strict):
+class TurnUsage(_Strict):
     """Token / cost usage reported at the end of a turn."""
 
     prompt_tokens: int
@@ -532,7 +534,7 @@ class ToolCompleteEvent(_Strict):
 
 class MessageCompletePayload(_Strict):
     turn_id: str
-    usage: UsageSnapshot
+    usage: TurnUsage
     target: DirectTarget | None = None
     duration_ms: int | None = Field(
         default=None,
@@ -997,7 +999,7 @@ TurnEvent = Annotated[
 
 
 class SessionListItem(_Strict):
-    """One row in the session picker (gatewayTypes.ts:130 SessionListItem)."""
+    """One row in the session picker (gatewayTypes.ts SessionListItem)."""
 
     id: str = Field(..., description="Full session_key: <channel>:<chat_id>.")
     message_count: int
@@ -1078,7 +1080,7 @@ class SessionMostRecentParams(_Strict):
 
 
 class SessionMostRecentResult(_Strict):
-    """Response shape per gatewayTypes.ts:147 SessionMostRecentResponse."""
+    """Response shape per gatewayTypes.ts SessionMostRecentResponse."""
 
     session_id: str | None = Field(
         default=None,
@@ -1090,14 +1092,14 @@ class SessionMostRecentResult(_Strict):
 
 
 class SessionTitleParams(_Strict):
-    """Params per slash/commands/core.ts:201,218 — session_id + optional title."""
+    """Params per slash/commands/core.ts,218 — session_id + optional title."""
 
     session_id: str = Field(..., description="Full session_key.")
     title: str | None = None
 
 
 class SessionTitleResult(_Strict):
-    """Response per gatewayTypes.ts:154 SessionTitleResponse.
+    """Response per gatewayTypes.ts SessionTitleResponse.
 
     pending=True means the title is held in memory for a lazy (never-saved)
     session and lands with the session's first save.
@@ -1480,6 +1482,18 @@ class ConfigSetParams(_Strict):
     scope: Literal["session", "default"] | None = None
 
 
+class ConfigUnsetParams(_Strict):
+    key: str
+
+
+class ConfigUnsetResult(_Strict):
+    # ``removed`` is False when nothing was stored -- not an error: the state
+    # the caller asked for is the state they have.
+    removed: bool
+    previous: JsonValue = Field(...)
+    default: JsonValue = Field(...)
+
+
 class ConfigSetResult(_Strict):
     applied: bool
     # ``previous`` is a *required* field whose value may legitimately be
@@ -1634,9 +1648,9 @@ class CommandsCatalogParams(_Strict):
 class CommandsCatalogResponse(_Strict):
     """Slash-command catalog reflected from raven.cli.commands.app.
 
-    Shape consumed by ui-tui createSlashHandler.ts:53-79 (alias / prefix-1 /
-    multi-match) and createGatewayEventHandler.ts:198 (gating on non-empty
-    pairs). v0.1 emits alias=canonical 1:1; TS-side prefix-1-match handles
+    Shape consumed by ui-tui createSlashHandler.ts (alias / prefix-1 /
+    multi-match) and createGatewayEventHandler.ts (gating on non-empty
+    pairs). The server emits alias=canonical 1:1; TS-side prefix-1-match handles
     partials.
     """
 
@@ -2284,7 +2298,7 @@ class SkillhubRemoveResult(_Strict):
 class SessionUsage(_Strict):
     """``info.usage`` — the boot baseline, refreshed by each turn's completion.
 
-    Distinct from :class:`UsageSnapshot`, which is the per-turn event payload:
+    Distinct from :class:`TurnUsage`, which is the per-turn event payload:
     this one carries the context-window fill a banner draws, and its counters
     are named for the session rather than for one LLM call.
     """
@@ -3588,6 +3602,136 @@ class PlaybooksGetResult(_Strict):
     playbook: PlaybookDetail
 
 
+# ---------------------------------------------------------------------------
+# Terminal dialect: the methods the TUI drives that arrived with handlers only
+# ---------------------------------------------------------------------------
+
+
+class ClipboardPasteParams(_Strict):
+    pass
+
+
+class ClipboardPasteResult(_Strict):
+    attached: bool
+    message: str | None = None
+    width: int | None = None
+    height: int | None = None
+    token_estimate: int | None = None
+
+
+class CommandDispatchParams(_Strict):
+    name: str
+    arg: str | None = None
+
+
+class CommandDispatchResult(_Strict):
+    type: str = Field(..., description="`exec` (a shell-style command ran) or `skill` (the name resolved to a skill).")
+    output: str | None = None
+    name: str | None = None
+    message: str | None = None
+
+
+class DelegationStatusParams(_Strict):
+    pass
+
+
+class DelegationStatusResult(_Strict):
+    max_concurrent_children: int
+    max_spawn_depth: int
+    paused: bool
+
+
+class DelegationPauseParams(_Strict):
+    paused: bool
+
+
+class DelegationPauseResult(_Strict):
+    paused: bool
+
+
+class InputDetectDropParams(_Strict):
+    text: str
+
+
+class InputDetectDropResult(_Strict):
+    matched: bool
+    name: str | None = None
+    text: str | None = Field(default=None, description="The resolved absolute path when matched.")
+    is_image: bool | None = None
+    width: int | None = None
+    height: int | None = None
+    token_estimate: int | None = None
+
+
+class SessionInterruptParams(_Strict):
+    session_id: str
+
+
+class SessionInterruptResult(_Strict):
+    ok: bool
+
+
+class ShellExecParams(_Strict):
+    command: str
+
+
+class ShellExecResult(_Strict):
+    code: int
+    stdout: str
+    stderr: str
+
+
+class SkillsManageParams(_Strict):
+    action: str = Field(..., description="One of list, inspect, search, browse, install.")
+    query: str | None = None
+    page: int | None = None
+
+
+class SkillsManageResult(_Strict):
+    skills: dict[str, list[str]] | None = Field(default=None, description="`list`: names grouped by source.")
+    info: dict[str, JsonValue] | None = Field(
+        default=None, description="`inspect`: one skill's metadata, {} when unknown."
+    )
+    results: list[dict[str, JsonValue]] | None = Field(default=None, description="`search`: matches.")
+    items: list[dict[str, JsonValue]] | None = Field(default=None, description="`browse`: one page of the hub.")
+    page: int | None = None
+    total: int | None = None
+    total_pages: int | None = None
+    installed: bool | None = Field(default=None, description="`install`.")
+    name: str | None = None
+
+
+class SubagentInterruptParams(_Strict):
+    subagent_id: str
+
+
+class SubagentInterruptResult(_Strict):
+    found: bool
+    subagent_id: str
+
+
+class SubagentCancelSessionParams(_Strict):
+    session_key: str
+
+
+class SubagentCancelSessionResult(_Strict):
+    cancelled: int
+    session_key: str
+
+
+class SubagentCancelInstanceParams(_Strict):
+    session_key: str | None = Field(default=None, description="Session lane; omitted addresses the default lane.")
+    agent: str
+    handle: str
+
+
+class SubagentCancelInstanceResult(_Strict):
+    found: bool
+    session_key: str
+    agent: str
+    handle: str
+
+
 METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     # knowledge.* -- bases and their documents, served by the in-process engine
     "knowledge.status": (KnowledgeStatusParams, KnowledgeStatusResult),
@@ -3645,6 +3789,18 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "settings.usage": (SettingsUsageParams, SettingsUsageResult),
     "settings.everos": (SettingsEverosParams, SettingsEverosResult),
     "settings.everosSet": (SettingsEverosSetParams, SettingsEverosSetResult),
+    "settings.everos_set": (SettingsEverosSetParams, SettingsEverosSetResult),
+    "clipboard.paste": (ClipboardPasteParams, ClipboardPasteResult),
+    "command.dispatch": (CommandDispatchParams, CommandDispatchResult),
+    "delegation.status": (DelegationStatusParams, DelegationStatusResult),
+    "delegation.pause": (DelegationPauseParams, DelegationPauseResult),
+    "input.detect_drop": (InputDetectDropParams, InputDetectDropResult),
+    "session.interrupt": (SessionInterruptParams, SessionInterruptResult),
+    "shell.exec": (ShellExecParams, ShellExecResult),
+    "skills.manage": (SkillsManageParams, SkillsManageResult),
+    "subagent.interrupt": (SubagentInterruptParams, SubagentInterruptResult),
+    "subagent.cancel_session": (SubagentCancelSessionParams, SubagentCancelSessionResult),
+    "subagent.cancel_instance": (SubagentCancelInstanceParams, SubagentCancelInstanceResult),
     "channels.status": (ChannelsStatusParams, ChannelsStatusResult),
     "channels.configure": (ChannelsConfigureParams, ChannelsConfigureResult),
     "channels.qr": (ChannelsQrParams, ChannelsQrResult),
@@ -3692,6 +3848,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     # config.*
     "config.get": (ConfigGetParams, ConfigGetResult),
     "config.set": (ConfigSetParams, ConfigSetResult),
+    "config.unset": (ConfigUnsetParams, ConfigUnsetResult),
     # subagent.* -- handed-off calls (singular; not the plural below)
     "subagent.list": (SubagentListParams, SubagentListResult),
     "subagent.context": (SubagentContextParams, SubagentContextResult),
@@ -3773,10 +3930,12 @@ __all__ = [
     "DirectTurn",
     "ModelOptionProvider",
     "ProviderEndpointInfo",
-    "UsageSnapshot",
+    "TurnUsage",
     "CliResult",
     "StubResult",
     "CommandsCatalogResponse",
+    "ConfigUnsetParams",
+    "ConfigUnsetResult",
     "TurnEvent",
     "SessionMostRecentParams",
     "SessionMostRecentResult",

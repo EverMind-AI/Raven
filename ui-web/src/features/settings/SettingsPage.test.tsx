@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { SettingsApp } from './SettingsPage'
@@ -251,6 +251,33 @@ describe('settings island', () => {
       document.querySelector<HTMLButtonElement>('.pickm')!.click()
     })
     expect(screen.getByText('claude-sonnet-5')).toBeTruthy()
+  })
+
+  it('moves the default badge with a cross-provider pick, without reopening the page', async () => {
+    /* The default is a (model, provider) pair. Re-reading only the model after
+       a pick left the badge on the old provider until a reload -- so a pick
+       that crosses providers must move both halves through the callback. */
+    let picked = false
+    install(snap(), {
+      model: () => (picked ? 'openai/gpt-5.2' : 'claude-opus-4-5'),
+      defaultProvider: () => (picked ? 'openai' : 'anthropic'),
+      pickModel: (_anchor, after) => {
+        picked = true
+        after()
+      },
+    })
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.set.pg.model').click()
+    })
+    const badged = () =>
+      [...document.querySelectorAll('.pcard')].find((c) => c.querySelector('.tagm'))?.querySelector('.nm span:nth-child(2)')
+        ?.textContent
+    expect(badged()).toBe('Anthropic')
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('.pickm')!.click()
+    })
+    expect(badged()).toBe('OpenAI')
   })
 
   /* Both halves of the manage button, because neither was pinned: closeSet
@@ -601,7 +628,103 @@ describe('settings island', () => {
     await act(async () => {
       row.querySelector<HTMLElement>('.mini')!.click()
     })
-    expect(calls).toContainEqual(['set', { key: 'tools.web.jinaApiKey', value: 'jina-key' }])
+    expect(calls).toContainEqual(['set', { key: 'tools.web.providers.jina.apiKey', value: 'jina-key' }])
+  })
+
+  it('files a web key under the vendor the row selects, and the vendor pick is its own write', async () => {
+    const { calls } = install(
+      snap({
+        raw: { tools: { web: { fetch: { provider: 'tavily' }, providers: { tavily: { apiKey: 'tv' } } } } },
+      }),
+    )
+    await mount()
+    await toolset()
+    const net = document.querySelectorAll('#spanels .scard')[1]!
+    /* Set: the chip follows the selected vendor's slot, not Jina's. */
+    expect(net.querySelector('.trow .nm .kchip')!.className).toBe('kchip')
+    await act(async () => {
+      net.querySelector<HTMLElement>('.trow .ctl .mini.ghost')!.click()
+    })
+    const row = document.querySelector<HTMLElement>('#spanels .tkrow.tkey')!
+    const pick = row.querySelector<HTMLSelectElement>('select')!
+    expect(pick.value).toBe('tavily')
+    expect([...pick.options].map((o) => o.value)).toEqual(['jina', 'anysearch', 'tavily', 'exa', 'firecrawl'])
+    /* The pick is its own write, to the provider key, never to a key slot. */
+    await act(async () => {
+      fireEvent.change(pick, { target: { value: 'exa' } })
+    })
+    expect(calls).toContainEqual(['set', { key: 'tools.web.fetch.provider', value: 'exa' }])
+    /* A write re-reads the snapshot, so the editor is queried afresh. */
+    const again = document.querySelector<HTMLElement>('#spanels .tkrow.tkey')!
+    const field = again.querySelector<HTMLInputElement>('input[type="password"]')!
+    field.value = 'tv-2'
+    await act(async () => {
+      again.querySelector<HTMLElement>('.mini')!.click()
+    })
+    expect(calls).toContainEqual(['set', { key: 'tools.web.providers.tavily.apiKey', value: 'tv-2' }])
+  })
+
+  /* An upgraded config keeps its key in the pre-vendor leaf, which the tools
+     read after the slot. The row counted that as configured while Clear wrote
+     only the slot, so the credential survived being cleared -- and a pasted
+     replacement, once cleared, fell back to the older secret. */
+  it('clears the pre-vendor leaf an upgraded config still keeps the key in', async () => {
+    const { calls } = install(snap({ raw: { tools: { web: { jinaApiKey: 'legacy-jina' } } } }))
+    await mount()
+    await toolset()
+    const net = document.querySelectorAll('#spanels .scard')[1]!
+    /* Set, on the strength of the leaf alone: the slot holds nothing. */
+    expect(net.querySelector('.trow .nm .kchip')!.className).toBe('kchip')
+    await act(async () => {
+      net.querySelector<HTMLElement>('.trow .ctl .mini.ghost')!.click()
+    })
+    const row = document.querySelector<HTMLElement>('#spanels .tkrow.tkey')!
+    await act(async () => {
+      row.querySelector<HTMLElement>('.mini.ghost')!.click()
+    })
+    expect(calls).toEqual([
+      ['set', { key: 'tools.web.providers.jina.apiKey', value: '' }],
+      ['set', { key: 'tools.web.jinaApiKey', value: '' }],
+    ])
+  })
+
+  it('clears both paths when a replacement was pasted over a legacy key', async () => {
+    const { calls } = install(
+      snap({ raw: { tools: { web: { jinaApiKey: 'legacy-jina', providers: { jina: { apiKey: 'new-jina' } } } } } }),
+    )
+    await mount()
+    await toolset()
+    const net = document.querySelectorAll('#spanels .scard')[1]!
+    await act(async () => {
+      net.querySelector<HTMLElement>('.trow .ctl .mini.ghost')!.click()
+    })
+    const row = document.querySelector<HTMLElement>('#spanels .tkrow.tkey')!
+    await act(async () => {
+      row.querySelector<HTMLElement>('.mini.ghost')!.click()
+    })
+    expect(calls).toEqual([
+      ['set', { key: 'tools.web.providers.jina.apiKey', value: '' }],
+      ['set', { key: 'tools.web.jinaApiKey', value: '' }],
+    ])
+  })
+
+  it('leaves a vendor with no pre-vendor leaf a single write', async () => {
+    const { calls } = install(
+      snap({
+        raw: { tools: { web: { fetch: { provider: 'tavily' }, providers: { tavily: { apiKey: 'tv' } } } } },
+      }),
+    )
+    await mount()
+    await toolset()
+    const net = document.querySelectorAll('#spanels .scard')[1]!
+    await act(async () => {
+      net.querySelector<HTMLElement>('.trow .ctl .mini.ghost')!.click()
+    })
+    const row = document.querySelector<HTMLElement>('#spanels .tkrow.tkey')!
+    await act(async () => {
+      row.querySelector<HTMLElement>('.mini.ghost')!.click()
+    })
+    expect(calls).toEqual([['set', { key: 'tools.web.providers.tavily.apiKey', value: '' }]])
   })
 
   /* Where the refusal lands, which is not where the click did. A tool row has

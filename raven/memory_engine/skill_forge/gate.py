@@ -1,9 +1,5 @@
 """LLM gate — relevance filter over RRF-fused router candidates.
 
-Ported from the pre-integrate-everos
-``SkillService._llm_gate_filter`` and adapted to operate on
-:class:`RouterHit` instead of the legacy ``SkillMeta``.
-
 The gate runs after :class:`SkillForgeRouter` fan-out + RRF: it sees
 the candidate name + description + a short body excerpt and asks an LLM
 to plan, filter against the agent's available tools and against the
@@ -26,11 +22,12 @@ import time
 from typing import TYPE_CHECKING
 
 from raven.memory_engine.skill_forge.types import RouterHit
+from raven.observability import semconv
 from raven.providers.binding import ModelBinding, active_binding
-from raven.tracing import semconv, trace
+from raven.tracing import trace
 
 if TYPE_CHECKING:
-    from raven.providers.base import LLMProvider
+    from raven.contracts.llm_provider import LLMProvider
 
 log = logging.getLogger(__name__)
 

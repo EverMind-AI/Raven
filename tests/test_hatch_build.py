@@ -1,12 +1,11 @@
 """Unit tests for the wheel build hook in ``hatch_build.py``.
 
-The sub-agent tree is the part of the hook with teeth. Hatchling applies no
+The product tree is the part of the hook with teeth. Hatchling applies no
 ``include`` / ``exclude`` config to a force-included path -- ``recurse_forced_files``
 drops only a hardcoded set of directories -- so whatever the hook maps is exactly
-what ships. A developer's working copy of ``subagents/`` holds live ``.env`` keys
-and hundreds of MiB of rollback tarballs and benchmark data next to the source,
-which is why the hook enumerates the tree from git instead of walking it. These
-tests pin that distinction in both directions.
+what ships. A working copy of ``agents/`` holds live ``.env`` keys next to the
+source, which is why the hook enumerates the tree from git instead of walking
+it. These tests pin that distinction in both directions.
 """
 
 from __future__ import annotations
@@ -18,7 +17,7 @@ import pytest
 
 import hatch_build
 
-VENDOR = hatch_build.VENDOR_ROOT
+PRODUCTS = hatch_build.PRODUCTS_ROOT
 
 
 class _App:
@@ -46,17 +45,17 @@ def _write(path: Path, text: str = "x") -> None:
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
-    """A project root whose ``subagents/`` mixes committed source with the
-    untracked things a built working copy accumulates."""
+    """A project root whose ``agents/`` mixes committed source with the
+    untracked things a configured working copy accumulates."""
     root = tmp_path / "proj"
-    tree = root / "subagents"
+    tree = root / "agents"
     _write(tree / "README.md")
-    _write(tree / "install.sh")
-    _write(tree / "TREE_HASHES")
+    _write(tree / "__init__.py")
     _write(tree / "demo-agent" / "subagent.json", '{"name": "Demo"}')
+    _write(tree / "demo-agent" / "run.py")
     _write(tree / "demo-agent" / "install.py")
     _write(tree / "demo-agent" / ".env.example", "DEMO_API_KEY=")
-    _write(tree / "demo-agent" / "Fork" / "pkg" / "mod.py")
+    _write(tree / "demo-agent" / "plugins" / "demo" / "hooks.py")
 
     subprocess.run(["git", "init", "-q"], cwd=root, check=True)
     subprocess.run(["git", "add", "-A"], cwd=root, check=True)
@@ -66,41 +65,44 @@ def repo(tmp_path: Path) -> Path:
         check=True,
     )
 
-    # Everything below lands in a working copy after `subagents/install.sh` runs,
-    # and none of it is committed. The .env is the one that matters: it is
+    # Everything below lands in a working copy once the onboarding wizard has
+    # run, and none of it is committed. The .env is the one that matters: it is
     # scaffolded from .env.example and filled with a real provider key.
     _write(tree / "demo-agent" / ".env", "DEMO_API_KEY=sk-or-v1-live-secret")
-    _write(tree / "demo-agent" / "Fork-rollback.tar.gz")
-    _write(tree / "demo-agent" / "Fork" / ".venv" / "lib" / "site.py")
-    _write(tree / "demo-agent" / "Fork" / "benchmarks" / "big.json")
+    _write(tree / "demo-agent" / "__pycache__" / "run.cpython-312.pyc")
     return root
 
 
 def test_packages_every_committed_file_of_the_tree(repo: Path) -> None:
     force_include, _ = _run_hook(repo)
 
-    assert force_include[str(repo / "subagents" / "demo-agent" / "subagent.json")] == (
-        "raven/subagents/demo-agent/subagent.json"
+    assert force_include[str(repo / "agents" / "demo-agent" / "subagent.json")] == (
+        "raven/agents/demo-agent/subagent.json"
     )
-    assert force_include[str(repo / "subagents" / "demo-agent" / "Fork" / "pkg" / "mod.py")] == (
-        "raven/subagents/demo-agent/Fork/pkg/mod.py"
+    assert force_include[str(repo / "agents" / "demo-agent" / "run.py")] == "raven/agents/demo-agent/run.py"
+    assert force_include[str(repo / "agents" / "demo-agent" / "plugins" / "demo" / "hooks.py")] == (
+        "raven/agents/demo-agent/plugins/demo/hooks.py"
     )
-    # install.sh sits at the tree root rather than inside a folder, and
-    # _install_packaged_tree copies it out separately -- a tree without it lists
-    # agents it cannot build.
-    assert force_include[str(repo / "subagents" / "install.sh")] == "raven/subagents/install.sh"
+    # The tree's own README rides along like any tracked file...
+    assert force_include[str(repo / "agents" / "README.md")] == "raven/agents/README.md"
+
+
+def test_the_trees_init_py_stays_out_of_the_wheel(repo: Path) -> None:
+    """It exists so the repo can address ``agents/`` as a package; shipped, it
+    would mint an importable ``raven.agents`` subpackage nothing imports."""
+    force_include, _ = _run_hook(repo)
+
+    assert str(repo / "agents" / "__init__.py") not in force_include
 
 
 def test_leaves_the_untracked_working_copy_out(repo: Path) -> None:
     force_include, _ = _run_hook(repo)
     packaged = set(force_include)
 
-    assert str(repo / "subagents" / "demo-agent" / ".env") not in packaged
-    assert str(repo / "subagents" / "demo-agent" / "Fork-rollback.tar.gz") not in packaged
-    assert str(repo / "subagents" / "demo-agent" / "Fork" / ".venv" / "lib" / "site.py") not in packaged
-    assert str(repo / "subagents" / "demo-agent" / "Fork" / "benchmarks" / "big.json") not in packaged
+    assert str(repo / "agents" / "demo-agent" / ".env") not in packaged
+    assert str(repo / "agents" / "demo-agent" / "__pycache__" / "run.cpython-312.pyc") not in packaged
     # The template is committed and carries no value, so it does ship.
-    assert str(repo / "subagents" / "demo-agent" / ".env.example") in packaged
+    assert str(repo / "agents" / "demo-agent" / ".env.example") in packaged
 
 
 def test_no_secret_reaches_the_wheel_whatever_git_reports(repo: Path) -> None:
@@ -110,7 +112,7 @@ def test_no_secret_reaches_the_wheel_whatever_git_reports(repo: Path) -> None:
     in every fork. It is asserted anyway because the cost of the rule being wrong
     once is a provider key published in every wheel.
     """
-    env = repo / "subagents" / "demo-agent" / ".env"
+    env = repo / "agents" / "demo-agent" / ".env"
     subprocess.run(["git", "add", "-f", str(env)], cwd=repo, check=True)
 
     with pytest.raises(ValueError, match="refusing to package"):
@@ -130,8 +132,8 @@ def test_a_project_without_the_tree_warns_and_still_builds(tmp_path: Path) -> No
 
     force_include, app = _run_hook(root)
 
-    assert not any(target.startswith("raven/subagents") for target in force_include.values())
-    assert any("subagents" in w for w in app.warnings)
+    assert not any(target.startswith("raven/agents") for target in force_include.values())
+    assert any("agents" in w for w in app.warnings)
 
 
 def test_a_tree_git_cannot_read_is_skipped_with_a_warning(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -144,8 +146,8 @@ def test_a_tree_git_cannot_read_is_skipped_with_a_warning(repo: Path, monkeypatc
 
     force_include, app = _run_hook(repo)
 
-    assert not any(target.startswith("raven/subagents") for target in force_include.values())
-    assert any("subagents" in w for w in app.warnings)
+    assert not any(target.startswith("raven/agents") for target in force_include.values())
+    assert any("agents" in w for w in app.warnings)
 
 
 def test_an_untracked_tree_is_reported_as_untracked(tmp_path: Path) -> None:
@@ -156,19 +158,19 @@ def test_an_untracked_tree_is_reported_as_untracked(tmp_path: Path) -> None:
     the directory was ever committed.
     """
     root = tmp_path / "proj"
-    (root / VENDOR).mkdir(parents=True)
-    _write(root / VENDOR / "demo-agent" / "subagent.json", "{}")
+    (root / PRODUCTS).mkdir(parents=True)
+    _write(root / PRODUCTS / "demo-agent" / "subagent.json", "{}")
     subprocess.run(["git", "init", "-q"], cwd=root, check=True)
 
     force_include, app = _run_hook(root)
 
-    assert not any(target.startswith("raven/subagents") for target in force_include.values())
+    assert not any(target.startswith("raven/agents") for target in force_include.values())
     assert any("tracks no files" in w for w in app.warnings)
     assert not any("cannot list" in w for w in app.warnings)
 
 
 def test_an_editable_install_gets_no_copy_of_the_tree(repo: Path) -> None:
-    """An editable install is a source checkout, and ``subagents_root`` reads the
+    """An editable install is a source checkout, and ``agents_root`` reads the
     tree beside the package there.
 
     Hatchling honours the force-include map for editable builds as well
@@ -179,10 +181,10 @@ def test_an_editable_install_gets_no_copy_of_the_tree(repo: Path) -> None:
     # Shown first, then withheld, in one case: an assertion that the tree is
     # absent is satisfied just as well by a hook that maps nothing at all.
     standard, _ = _run_hook(repo, version="standard")
-    assert any(target.startswith("raven/subagents") for target in standard.values())
+    assert any(target.startswith("raven/agents") for target in standard.values())
 
     editable, _ = _run_hook(repo, version="editable")
-    assert not any(target.startswith("raven/subagents") for target in editable.values())
+    assert not any(target.startswith("raven/agents") for target in editable.values())
 
 
 def test_an_editable_install_gets_no_copy_of_the_web_assets(repo: Path) -> None:

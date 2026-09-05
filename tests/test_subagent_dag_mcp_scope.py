@@ -23,6 +23,7 @@ from typing import Any
 
 import pytest
 
+from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.agent.subagent.dag_mcp_scope import run_mcp_scope, run_mcp_servers
 from raven.agent.subagent.dag_store import SessionNodes
 from raven.agent.subagent.dag_tool import SubAgentDagTool
@@ -335,9 +336,10 @@ async def test_a_run_that_raises_still_drops_its_scope(tmp_path: Path) -> None:
     backend = _Backend(mcp_source=_loop_source(host, ToolRegistry()))
     tool = _tool(_Exploding, backend, tmp_path)
 
-    with pytest.raises(RuntimeError):
-        await tool.execute(_nodes(), task_summary="audit", background=False, mcp_servers={"local-pg": _pg("run")})
+    result = await tool.execute(_nodes(), task_summary="audit", background=False, mcp_servers={"local-pg": _pg("run")})
 
+    assert str(getattr(result, "model_text", result)).startswith("Error running DAG "), result
+    assert "the graph fell over" in str(getattr(result, "model_text", result))
     assert backend.seen == ["run"]
     assert run_mcp_servers() == {}
     assert backend.mcp_source.server("local-pg") is None
@@ -371,7 +373,7 @@ async def test_a_backgrounded_run_keeps_its_scope_while_the_turn_moves_on(tmp_pa
     resolved: asyncio.Queue[str] = asyncio.Queue()
 
     class _Late(_NoDispatch):
-        async def _run_and_announce(self, *args: Any, **kwargs: Any) -> None:
+        async def _run_detached(self, *args: Any, **kwargs: Any) -> None:
             servers = run_mcp_servers()
             await resolved.put(",".join(sorted(servers)))
 
@@ -409,9 +411,9 @@ def test_the_source_the_agent_loop_installs_reads_the_run_scope(tmp_path: Path) 
         provider=_StubProvider(),
         workspace=tmp_path,
         model="stub",
-        max_iterations=2,
-        restrict_to_workspace=True,
         mcp_servers=host,
+        policy=TurnPolicy(max_iterations=2),
+        tools=ToolWiring(restrict_to_workspace=True),
     )
     try:
         # The source the loop handed its sub-agent table, reached where the

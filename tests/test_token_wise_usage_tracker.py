@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.token_wise.base import UsageSnapshot
+from raven.contracts.token_strategy import UsageSnapshot
 from raven.token_wise.usage_tracker import UsageTracker
 
 

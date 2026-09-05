@@ -2,7 +2,7 @@
 
 Naming a session is a side errand, not part of the turn: the caller fires this
 concurrently with the turn it names and takes the mechanical title already in
-place (``manager._derive_title``) whenever anything here declines to answer.
+place (``manager.derive_title``) whenever anything here declines to answer.
 Every failure mode therefore returns ``None`` rather than raising -- a session
 that could not be named is not a session that failed.
 
@@ -22,6 +22,8 @@ from typing import Any
 
 from loguru import logger
 
+from raven.i18n import zh_lexicon
+
 TITLE_BUDGET = 24
 """Codepoints a generated title is asked (and clamped) to fit."""
 
@@ -40,7 +42,10 @@ _TOOL_NAME = "emit_session_title"
 # A model told to answer with a title still sometimes answers with a labelled,
 # quoted title. Both are recoverable formatting noise, so they are stripped
 # rather than counted as a failure to follow the instruction.
-_LABEL = re.compile(r"^\s*(?:title|session title|标题|会话标题)\s*[:：]\s*", re.IGNORECASE)
+_LABEL = re.compile(
+    r"^\s*(?:title|session title|" + "|".join(zh_lexicon.TITLE_LABELS) + r")\s*" + zh_lexicon.COLON_CLASS + r"\s*",
+    re.IGNORECASE,
+)
 _WRAPPING_PAIRS = (
     ('"', '"'),
     ("'", "'"),
@@ -122,7 +127,8 @@ def title_tool_schema(budget: int = TITLE_BUDGET) -> list[dict[str, Any]]:
                                 f"The conversation's title, at most {budget} characters "
                                 f"(about {budget // 2} Chinese characters). Name what the user "
                                 "wants done, in the user's own language: 'Fix the login redirect' / "
-                                "'修复登录跳转'. No quotes, no trailing punctuation, no 'Title:' prefix."
+                                f"'{zh_lexicon.TITLE_EXAMPLE}'. No quotes, no trailing punctuation, "
+                                "no 'Title:' prefix."
                             ),
                         },
                     },

@@ -1,6 +1,6 @@
 """Per-provider request and response contracts of ``WebSearchTool``.
 
-Three backends share one tool. What differs is the request each expects and the
+Several backends share one tool. What differs is the request each expects and the
 payload it answers with; everything downstream -- containment, cross-query
 dedup, the shaping row, the rendering -- is one code path, so each provider is
 normalised to the Serper shape before anything reads it.
@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import httpx
 import pytest
 
 from raven.agent.search_saturation import SearchSaturation
@@ -142,6 +143,77 @@ async def test_anysearch_sends_a_bearer_token_and_never_a_page() -> None:
     assert kwargs["headers"]["Authorization"] == "Bearer sk-any"
 
 
+@pytest.mark.asyncio
+async def test_tavily_sends_a_bearer_token_and_never_a_page() -> None:
+    client, patcher = _patched({"results": []})
+    tool = WebSearchTool(api_key="sk-tav", provider="tavily")
+    with patcher:
+        await tool._search("q1", 4)
+
+    method, url, kwargs = client.calls[0]
+    assert (method, url) == ("POST", "https://api.tavily.com/search")
+    assert kwargs["json"] == {"query": "q1", "max_results": 4}
+    assert kwargs["headers"]["Authorization"] == "Bearer sk-tav"
+
+
+@pytest.mark.asyncio
+async def test_exa_sends_an_api_key_header_and_asks_for_highlights() -> None:
+    # Highlights, not ``text``: text is the whole page and the render path
+    # would show it whole as the snippet.
+    client, patcher = _patched({"results": []})
+    tool = WebSearchTool(api_key="sk-exa", provider="exa")
+    with patcher:
+        await tool._search("q1", 4)
+
+    method, url, kwargs = client.calls[0]
+    assert (method, url) == ("POST", "https://api.exa.ai/search")
+    # ``maxCharacters`` is the bound that holds on the live endpoint;
+    # ``numSentences`` does not.
+    assert kwargs["json"] == {"query": "q1", "numResults": 4, "contents": {"highlights": {"maxCharacters": 300}}}
+    assert kwargs["headers"]["x-api-key"] == "sk-exa"
+
+
+@pytest.mark.asyncio
+async def test_exa_does_not_buy_contents_when_snippets_are_off() -> None:
+    # Exa bills contents separately; with snippets off the text would have no
+    # reader, so the request must not ask for it.
+    client, patcher = _patched({"results": []})
+    tool = WebSearchTool(api_key="sk-exa", provider="exa", include_snippets=False)
+    with patcher:
+        await tool._search("q1", 4)
+
+    assert client.calls[0][2]["json"] == {"query": "q1", "numResults": 4}
+
+
+@pytest.mark.asyncio
+async def test_brave_sends_a_subscription_token_and_pages_by_offset() -> None:
+    client, patcher = _patched({"web": {"results": []}})
+    tool = WebSearchTool(api_key="sk-brave", provider="brave")
+    with patcher:
+        await tool._search("q1", 5)
+        await tool._search("q1", 5, page=3)
+
+    method, url, first = client.calls[0]
+    assert (method, url) == ("GET", "https://api.search.brave.com/res/v1/web/search")
+    assert first["params"] == {"q": "q1", "count": 5}
+    assert first["headers"]["X-Subscription-Token"] == "sk-brave"
+    # page 3 is offset 2: Brave's offset counts pages, not results.
+    assert client.calls[1][2]["params"]["offset"] == 2
+
+
+@pytest.mark.asyncio
+async def test_firecrawl_search_sends_a_bearer_token_and_never_a_page() -> None:
+    client, patcher = _patched({"success": True, "data": []})
+    tool = WebSearchTool(api_key="sk-fc", provider="firecrawl")
+    with patcher:
+        await tool._search("q1", 4)
+
+    method, url, kwargs = client.calls[0]
+    assert (method, url) == ("POST", "https://api.firecrawl.dev/v1/search")
+    assert kwargs["json"] == {"query": "q1", "limit": 4}
+    assert kwargs["headers"]["Authorization"] == "Bearer sk-fc"
+
+
 # ---------------------------------------------------------------------------
 # Pagination capability, declared rather than discovered
 # ---------------------------------------------------------------------------
@@ -151,11 +223,12 @@ def test_a_provider_without_an_offset_tells_the_saturation_rule_up_front() -> No
     """Otherwise the rung is reachable and unanswerable: the rule escalates to
     page 2, the request comes back identical, dedup eats it, and the ledger
     records a dry search the endpoint never had a chance to serve."""
-    sat = SearchSaturation()
-    WebSearchTool(api_key="k", provider="anysearch", saturation=sat)
-    assert sat.paginates is False
+    for provider in ("anysearch", "tavily", "exa", "firecrawl"):
+        sat = SearchSaturation()
+        WebSearchTool(api_key="k", provider=provider, saturation=sat)
+        assert sat.paginates is False, provider
 
-    for provider in ("serper", "serpapi"):
+    for provider in ("serper", "serpapi", "brave"):
         paging = SearchSaturation()
         WebSearchTool(api_key="k", provider=provider, saturation=paging)
         assert paging.paginates is True, provider
@@ -231,6 +304,94 @@ async def test_anysearch_accepts_both_shapes_and_alternate_spellings() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tavily_results_reach_the_shared_rendering() -> None:
+    _, patcher = _patched(
+        {
+            "results": [{"title": "T1", "url": "https://a.example", "content": "S1"}],
+            "answer": "42",
+        }
+    )
+    with patcher:
+        rendered, urls, shaping = await WebSearchTool(api_key="k", provider="tavily")._search("q1", 5)
+
+    assert urls == ["https://a.example"]
+    assert "1. T1\n   https://a.example" in rendered
+    assert "Answer: 42" in rendered
+    assert shaping["n_served"] == 1
+
+
+@pytest.mark.asyncio
+async def test_exa_results_reach_the_shared_rendering() -> None:
+    _, patcher = _patched(
+        {"results": [{"title": "T1", "url": "https://a.example", "highlights": ["S1\n\nline two"]}]}
+    )
+    with patcher:
+        rendered, urls, shaping = await WebSearchTool(api_key="k", provider="exa")._search("q1", 5)
+
+    assert urls == ["https://a.example"]
+    # Newlines inside a highlight are collapsed: the snippet stays one indented line.
+    assert "1. T1\n   https://a.example\n   S1 line two\n" in rendered + "\n"
+    assert shaping["n_served"] == 1
+
+
+@pytest.mark.asyncio
+async def test_exa_page_text_is_never_rendered_as_a_snippet() -> None:
+    # Positive and negative on one payload: the highlight is the snippet, and a
+    # ``text`` body riding alongside it never reaches the rendering.
+    body = "whole page body " * 50
+    _, patcher = _patched(
+        {"results": [{"title": "T1", "url": "https://a.example", "highlights": ["H1"], "text": body}]}
+    )
+    with patcher:
+        rendered, _, shaping = await WebSearchTool(api_key="k", provider="exa")._search("q1", 5)
+
+    assert "   H1" in rendered
+    assert "whole page body" not in rendered
+    assert shaping["snippet_chars"] < 20
+
+
+@pytest.mark.asyncio
+async def test_brave_results_reach_the_shared_rendering() -> None:
+    _, patcher = _patched(
+        {"web": {"results": [{"title": "T1", "url": "https://a.example", "description": "S1"}]}}
+    )
+    with patcher:
+        rendered, urls, shaping = await WebSearchTool(api_key="k", provider="brave")._search("q1", 5)
+
+    assert urls == ["https://a.example"]
+    assert "1. T1\n   https://a.example" in rendered
+    assert shaping["n_served"] == 1
+
+
+@pytest.mark.asyncio
+async def test_firecrawl_results_reach_the_shared_rendering() -> None:
+    _, patcher = _patched(
+        {"success": True, "data": [{"title": "T1", "url": "https://a.example", "description": "S1"}]}
+    )
+    with patcher:
+        rendered, urls, shaping = await WebSearchTool(api_key="k", provider="firecrawl")._search("q1", 5)
+
+    assert urls == ["https://a.example"]
+    assert "1. T1\n   https://a.example" in rendered
+    assert shaping["n_served"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_firecrawl_refusal_inside_a_200_is_an_error_not_a_dry_search() -> None:
+    # Probed live: errors normally arrive status-coupled (400/500). If a refusal
+    # ever lands inside a 200, it must classify as an error - a zero-hit
+    # advances the saturation streak, and "the endpoint refused" must not.
+    _, patcher = _patched({"success": False, "error": "Invalid request body"})
+    with patcher:
+        rendered, urls, shaping = await WebSearchTool(api_key="k", provider="firecrawl")._search("q1", 5)
+
+    assert rendered.startswith("Error:")
+    assert "Invalid request body" in rendered
+    assert urls == []
+    assert shaping["n_served"] is None
+
+
+@pytest.mark.asyncio
 async def test_a_malformed_anysearch_payload_is_a_zero_hit_not_a_crash() -> None:
     _, patcher = _patched({"results": "not-a-list"})
     with patcher:
@@ -283,11 +444,68 @@ def test_an_unknown_provider_degrades_to_the_default() -> None:
     assert selected_search_provider(object()) == DEFAULT_SEARCH_PROVIDER
 
 
+class _StatusClient(_RecordingClient):
+    """Answers every call with a real httpx status error, URL and query included,
+    the way the live client would."""
+
+    def __init__(self, status: int) -> None:
+        super().__init__(None)
+        self._status = status
+
+    def _answer(self, method, url, kwargs):
+        self.calls.append((method, url, kwargs))
+        request = httpx.Request(method, url, params=kwargs.get("params"))
+        return httpx.Response(self._status, request=request, json={})
+
+    async def post(self, url, **kwargs):
+        return self._answer("POST", url, kwargs)
+
+    async def get(self, url, **kwargs):
+        return self._answer("GET", url, kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", sorted(SEARCH_PROVIDERS))
+async def test_a_status_error_never_echoes_the_key(provider: str) -> None:
+    """httpx puts the whole request URL in a status error, and SerpApi carries
+    its key as a query parameter, so the default text would hand the credential
+    to the model and write it into the ledger. Every vendor renders as vendor
+    plus status, and the shaping row records the status alone."""
+    client = _StatusClient(401)
+    with patch("raven.agent.tools.web.httpx.AsyncClient", lambda **kw: client):
+        rendered, urls, shaping = await WebSearchTool(api_key="SECRET-KEY-123", provider=provider)._search("q1", 3)
+
+    assert "SECRET-KEY-123" not in rendered
+    assert rendered == f"Error: {SEARCH_PROVIDERS[provider].label} answered HTTP 401"
+    assert urls == []
+    assert "SECRET-KEY-123" not in shaping["error"]
+    assert shaping["status"] == 401 and shaping["quota_err"] is True
+
+
 @pytest.mark.asyncio
 async def test_the_unconfigured_error_names_the_selected_provider() -> None:
-    rendered, urls, _ = await WebSearchTool(provider="serpapi")._search("q", 5)
+    """Named to the OPERATOR, on stderr - not to the model.
 
-    assert "SerpApi API key not configured" in rendered
-    assert "tools.web.providers.serpapi.apiKey" in rendered
-    assert "SERPAPI_API_KEY" in rendered
+    The message is split on purpose (main's product-surface audit): the tool
+    return value tells the model the capability is gone and not to retry, and
+    must not carry our config path, which a return value gets narrated back to
+    whoever is watching. The provider's name, config path and env var go to the
+    log instead - still per-spec, so a selected provider's missing key is never
+    reported as another provider's.
+    """
+    from loguru import logger
+
+    lines: list[str] = []
+    sink_id = logger.add(lines.append, level="ERROR")
+    try:
+        rendered, urls, _ = await WebSearchTool(provider="serpapi")._search("q", 5)
+    finally:
+        logger.remove(sink_id)
+
+    assert rendered.startswith("Error: web search is unavailable")
+    assert "apiKey" not in rendered
+    log = "".join(lines)
+    assert "SerpApi" in log
+    assert "tools.web.providers.serpapi.apiKey" in log
+    assert "SERPAPI_API_KEY" in log
     assert urls == []

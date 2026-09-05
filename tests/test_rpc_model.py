@@ -15,7 +15,7 @@ import pytest
 
 from raven.providers.common_models import common_models_for
 from raven.providers.registry import PROVIDERS
-from raven.rpc.errors import ConfigValidationError, NotSupportedInV01Error
+from raven.rpc.errors import ConfigValidationError, NotSupportedError
 from raven.rpc.methods import model as model_module
 from raven.rpc.methods.model import (
     model_add_endpoint,
@@ -34,7 +34,7 @@ def fake_home(monkeypatch, tmp_path) -> Path:
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     # Clear any process-wide config-path override a prior test left set, so
     # get_config_path() falls back to the patched Path.home (monkeypatch restores it).
-    monkeypatch.setattr("raven.config.loader._current_config_path", None)
+    monkeypatch.setattr("raven.home._current_config_path", None)
     # OAuth credentials live under ``~/.raven`` too, so the patched home covers
     # them -- but each family prefers an environment override when one is set, and
     # the suite-wide fixture sets all of them.
@@ -191,7 +191,7 @@ async def test_save_key_custom_accepts_api_base(fake_home: Path) -> None:
 
 
 async def test_save_key_oauth_rejected(fake_home: Path) -> None:
-    with pytest.raises(NotSupportedInV01Error):
+    with pytest.raises(NotSupportedError):
         await model_save_key({"slug": "openai_codex", "api_key": "x"})
 
 

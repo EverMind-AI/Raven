@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from raven.agent.loop import AgentLoop
+from raven.agent.loop.bundles import TurnPolicy
 from raven.providers.base import LLMProvider, LLMResponse
 
 
@@ -42,12 +43,7 @@ class _StubProvider(LLMProvider):
 @pytest.fixture
 def loop():
     with tempfile.TemporaryDirectory() as td:
-        yield AgentLoop(
-            provider=_StubProvider(),
-            workspace=Path(td),
-            model="stub",
-            max_iterations=2,
-        )
+        yield AgentLoop(provider=_StubProvider(), workspace=Path(td), model="stub", policy=TurnPolicy(max_iterations=2))
 
 
 def test_both_skill_tools_register_without_a_hub(loop) -> None:

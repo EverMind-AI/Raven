@@ -5,10 +5,10 @@ from __future__ import annotations
 import textwrap
 from pathlib import Path
 
-from raven.plugin import (
+from raven.plugins import (
     DiscoveredPlugin,
+    ManifestOrigin,
     PluginDiscovery,
-    Source,
 )
 
 
@@ -47,7 +47,7 @@ class TestSingleSource:
         out = d.discover()
         assert len(out) == 1
         assert out[0].manifest.id == "foo"
-        assert out[0].source == Source.BUNDLED
+        assert out[0].source == ManifestOrigin.BUNDLED
         assert out[0].location is not None
         assert out[0].location.name == "raven-plugin.toml"
 
@@ -97,7 +97,7 @@ class TestConflictResolution:
         out = d.discover()
         assert len(out) == 1
         # Bundled wins per the "builtin shadow rule".
-        assert out[0].source == Source.BUNDLED
+        assert out[0].source == ManifestOrigin.BUNDLED
 
     def test_user_shadows_project(self, tmp_path: Path) -> None:
         user = tmp_path / "user"
@@ -107,7 +107,7 @@ class TestConflictResolution:
         d = PluginDiscovery(user_dir=user, project_dir=project)
         out = d.discover()
         assert len(out) == 1
-        assert out[0].source == Source.USER
+        assert out[0].source == ManifestOrigin.USER
 
     def test_priority_order_full_chain(self, tmp_path: Path) -> None:
         bundled = tmp_path / "bundled"
@@ -130,10 +130,10 @@ class TestConflictResolution:
         out = d.discover()
         by_id = {p.manifest.id: p.source for p in out}
         assert by_id == {
-            "b-only": Source.BUNDLED,
-            "u-only": Source.USER,
-            "p-only": Source.PROJECT,
-            "x": Source.BUNDLED,
+            "b-only": ManifestOrigin.BUNDLED,
+            "u-only": ManifestOrigin.USER,
+            "p-only": ManifestOrigin.PROJECT,
+            "x": ManifestOrigin.BUNDLED,
         }
 
 
@@ -175,4 +175,28 @@ class TestDiscoveredPluginRecord:
         out = PluginDiscovery(bundled_dir=tmp_path).discover()
         rec: DiscoveredPlugin = out[0]
         with pytest.raises(FrozenInstanceError):
-            rec.source = Source.USER  # type: ignore[misc]
+            rec.source = ManifestOrigin.USER  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Roots a product names itself (plugins.dirs)
+# ---------------------------------------------------------------------------
+
+
+class TestExtraDirs:
+    def test_named_roots_scan_with_project_priority(self, tmp_path: Path) -> None:
+        user = tmp_path / "user"
+        shelf = tmp_path / "product" / "plugins"
+        _write_manifest(user, "x")
+        _write_manifest(shelf, "x")
+        located = _write_manifest(shelf, "e-only")
+        out = PluginDiscovery(user_dir=user, extra_dirs=[shelf]).discover()
+        by_id = {p.manifest.id: p for p in out}
+        assert {k: v.source for k, v in by_id.items()} == {
+            "e-only": ManifestOrigin.PROJECT,
+            "x": ManifestOrigin.USER,
+        }
+        assert by_id["e-only"].location == located
+
+    def test_absent_named_root_is_silent(self, tmp_path: Path) -> None:
+        assert PluginDiscovery(extra_dirs=[tmp_path / "absent"]).discover() == []

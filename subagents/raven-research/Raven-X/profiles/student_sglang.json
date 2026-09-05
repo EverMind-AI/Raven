@@ -1,0 +1,54 @@
+{
+  "providers": {
+    "custom": {
+      "apiKey": "EMPTY",
+      "apiBase": "http://WORKER3_IP:30000/v1"
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": "student",
+      "provider": "custom",
+      "temperature": 0.7,
+      "reasoningEffort": "high",
+      "maxToolIterations": 150,
+      "maxTokens": 16384,
+      "contextWindowTokens": 65536,
+      "requestTimeoutSeconds": 1800,
+      "contextWindowAuthoritative": true
+    }
+  },
+  "memory": {
+    "backend": null
+  },
+  "drFlow": {
+    "enabled": true,
+    "forceFinalize": {
+      "enabled": true
+    },
+    "spinBreaker": {
+      "enabled": true
+    },
+    "fetchFloor": {
+      "enabled": true
+    },
+    "verify": {
+      "constraintRubric": true,
+      "strictRejectOnly": true,
+      "reviewFinalDraft": true
+    },
+    "digest": {
+      "verbatimHeadChars": 800
+    },
+    "search": {
+      "includeSnippets": true,
+      "snippetDedupByDocid": true
+    },
+    "finalShape": {
+      "record": true,
+      "requireMarker": true,
+      "reportStructure": true,
+      "processAppendix": true
+    }
+  }
+}

@@ -7,6 +7,12 @@ import httpx
 from loguru import logger
 
 
+def transcription_api_key(config) -> str:
+    """The key channels transcribe voice with: the configured groq provider's."""
+    groq = config.providers.get("groq")
+    return getattr(groq, "api_key", "") or ""
+
+
 class GroqTranscriptionProvider:
     """
     Voice transcription provider using Groq's Whisper API.

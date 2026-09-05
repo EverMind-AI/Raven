@@ -14,14 +14,34 @@ Env vars:
 
 from __future__ import annotations
 
-import contextlib
 import logging as _stdlib_logging
 import os
+import re
 import sys
-from collections.abc import Callable, Generator
+from collections.abc import Callable
 from pathlib import Path
 
 from raven.config.paths import get_logs_dir
+
+_SECRET_QUERY = re.compile(
+    r"([?&](?:api[_-]?key|key|token|secret|password|access[_-]?token|auth)=)[^&\s\"']+",
+    re.IGNORECASE,
+)
+
+
+def _no_secrets(message: str) -> str:
+    """Blank out a credential carried in a URL query string.
+
+    A vendor that takes its key as a query parameter puts it in every URL, and
+    httpx logs each request at INFO on the success path, so the key reaches the
+    retained file without any exception being raised. Redacting rather than
+    dropping the record keeps the host, path, query and status readable.
+    """
+    return _SECRET_QUERY.sub(r"\1<redacted>", message)
+
+
+def _redact_record(record: dict) -> None:
+    record["message"] = _no_secrets(record["message"])
 
 
 def redirect_loguru_to_file(
@@ -46,6 +66,10 @@ def redirect_loguru_to_file(
     log_path = get_logs_dir() / filename
 
     logger.remove()
+    # On the patcher rather than at each call site or in the stdlib bridge: it
+    # is the one hook both lanes cross, so a loguru call that formats a URL is
+    # covered alongside every intercepted third-party record.
+    logger.configure(patcher=_redact_record)
     logger.add(
         str(log_path),
         level=file_level,
@@ -59,13 +83,11 @@ def redirect_loguru_to_file(
         diagnose=False,
     )
     if terminal_level is not None:
-        # Same two flags as the file sink, for the same reason plus one. loguru
-        # defaults both to True, so this sink was rendering every frame of every
-        # traceback annotated with the value of every local -- the leak the file
-        # sink above is explicitly configured to avoid, on a stream that is more
-        # exposed rather than less: ``raven acp`` runs as an editor's subprocess
-        # and the editor displays its stderr. The interpreter's own excepthook
-        # still prints the plain traceback, so nothing diagnosable is lost.
+        # backtrace/diagnose off on the stderr sink too, and for one more
+        # reason than on the file sink: an ACP client displays this stream (a
+        # ``raven acp`` runs as the editor's subprocess), and annotated frames
+        # carry the value of every local, config and payload included. The
+        # interpreter's own excepthook still prints the plain traceback.
         logger.add(sys.stderr, level=terminal_level, backtrace=False, diagnose=False)
     if os.environ.get("RAVEN_CLI_DEBUG"):
         logger.add(sys.stderr, level="DEBUG")
@@ -124,35 +146,4 @@ def _strip_tty_stream_handlers() -> None:
         _strip_from(obj)
 
 
-@contextlib.contextmanager
-def redirect_terminal_fds_to_file(path: Path) -> Generator[None, None, None]:
-    """Redirect fd 1 (stdout) and fd 2 (stderr) to ``path`` for the duration of
-    the block, then restore the originals.
-
-    everos embedded structlog prints directly to stdout via PrintLogger, bypassing
-    the stdlib logging module entirely; redirecting fds at the OS level is the only
-    layer that catches those writes before they corrupt the full-screen TUI.
-    The file is opened in append mode so it coexists with loguru's rotating sink
-    targeting the same path.  Restore is guaranteed via a finally block.
-    """
-    saved_out = os.dup(1)
-    saved_err = os.dup(2)
-    file_fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
-    try:
-        os.dup2(file_fd, 1)
-        os.dup2(file_fd, 2)
-        os.close(file_fd)
-        file_fd = -1
-        try:
-            yield
-        finally:
-            os.dup2(saved_out, 1)
-            os.dup2(saved_err, 2)
-    finally:
-        if file_fd >= 0:
-            os.close(file_fd)
-        os.close(saved_out)
-        os.close(saved_err)
-
-
-__all__ = ["redirect_loguru_to_file", "redirect_terminal_fds_to_file"]
+__all__ = ["redirect_loguru_to_file"]

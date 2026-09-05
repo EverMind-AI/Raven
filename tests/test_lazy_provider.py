@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from raven.providers.base import GenerationSettings
+from raven.contracts.llm_provider import GenerationSettings
 from raven.providers.lazy import LazyProvider
 
 

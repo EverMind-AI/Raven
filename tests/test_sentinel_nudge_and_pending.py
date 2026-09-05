@@ -20,6 +20,7 @@ from raven.config.raven import NudgePolicyConfig
 from raven.memory_engine.consolidate.consolidator import MemoryStore
 from raven.proactive_engine.sentinel.executor.dispatcher import NudgeDispatcher
 from raven.proactive_engine.sentinel.executor.pending_decision import PendingDecisionStore
+from raven.proactive_engine.sentinel.executor.runner import SentinelAssembly
 from raven.proactive_engine.sentinel.predictor.task_discoverer import TaskDiscoverer
 from raven.proactive_engine.sentinel.trigger_policy.policy import NudgePolicy
 from raven.proactive_engine.sentinel.types import PendingDecision, TaskOption
@@ -305,7 +306,7 @@ async def test_discoverer_notifies_user_when_superseding_awaiting_confirm(memory
 
     assert len(submitted) == 1
     assert submitted[0].origin is Origin.SENTINEL
-    assert "替换" in submitted[0].text
+    assert "replaced" in submitted[0].text
 
     # The new menu still goes through the dispatcher to the hub.
     menu_msgs = [m for m in posted if m.source.extras.get("_sentinel_action") == "discovery_menu"]
@@ -404,8 +405,8 @@ def test_attach_decision_consumer_warns_on_no_llm_provider(tmp_path, caplog):
     """Health check: require_confirm=True without an LLM provider
     works for clear yes/no but ambiguous replies fall through. Operator
     should be warned at startup."""
-    from raven.cli._proactive_stack import attach_sentinel_decision_consumer
     from raven.config.raven import SentinelConfig
+    from raven.core.proactive_stack import attach_sentinel_decision_consumer
 
     # Build a minimal runner stub with phase4 stash but provider=None
     class _StubRunner:
@@ -413,11 +414,13 @@ def test_attach_decision_consumer_warns_on_no_llm_provider(tmp_path, caplog):
 
     runner = _StubRunner()
     pending_store = PendingDecisionStore(tmp_path / "pending.json")
-    runner._phase4_pending_store = pending_store
-    runner._phase4_routine_store = None
-    runner._phase4_planner_provider = None
-    runner._phase4_planner_model = None
-    runner._phase4_now_fn = None
+    runner.assembly = SentinelAssembly(
+        pending_store=pending_store,
+        routine_store=None,
+        planner_provider=None,
+        planner_model=None,
+        now_fn=None,
+    )
 
     # Build a minimal agent stub
     from raven.agent.hook.composite import CompositeHook
@@ -426,7 +429,6 @@ def test_attach_decision_consumer_warns_on_no_llm_provider(tmp_path, caplog):
         cron_service = None
         tools = MagicMock()
         subagents = MagicMock()
-        decision_consumer = None
         hooks = CompositeHook()
 
     agent = _StubAgent()
@@ -444,7 +446,7 @@ def test_attach_decision_consumer_warns_on_no_llm_provider(tmp_path, caplog):
     captured = io.StringIO()
     sink_id = _logger.add(captured, level="WARNING")
     try:
-        attach_sentinel_decision_consumer(runner, agent, sentinel_cfg=sentinel_cfg)
+        consumer = attach_sentinel_decision_consumer(runner, agent, sentinel_cfg=sentinel_cfg)
     finally:
         _logger.remove(sink_id)
 
@@ -452,13 +454,13 @@ def test_attach_decision_consumer_warns_on_no_llm_provider(tmp_path, caplog):
     assert "task_discovery_require_confirm=True but no LLM" in log_text
     # Consumer was still attached (degraded mode is functional for
     # clear yes/no via regex)
-    assert agent.decision_consumer is not None
+    assert consumer is not None
 
 
 def test_attach_decision_consumer_no_warn_when_provider_set(tmp_path):
     """Same setup but with provider configured — no warning."""
-    from raven.cli._proactive_stack import attach_sentinel_decision_consumer
     from raven.config.raven import SentinelConfig
+    from raven.core.proactive_stack import attach_sentinel_decision_consumer
 
     class _StubProvider:
         async def chat_with_retry(self, **kw):
@@ -468,11 +470,13 @@ def test_attach_decision_consumer_no_warn_when_provider_set(tmp_path):
         feedback = MagicMock()
 
     runner = _StubRunner()
-    runner._phase4_pending_store = PendingDecisionStore(tmp_path / "pending.json")
-    runner._phase4_routine_store = None
-    runner._phase4_planner_provider = _StubProvider()
-    runner._phase4_planner_model = "qwen3.5-27B"
-    runner._phase4_now_fn = None
+    runner.assembly = SentinelAssembly(
+        pending_store=PendingDecisionStore(tmp_path / "pending.json"),
+        routine_store=None,
+        planner_provider=_StubProvider(),
+        planner_model="qwen3.5-27B",
+        now_fn=None,
+    )
 
     from raven.agent.hook.composite import CompositeHook
 
@@ -480,7 +484,6 @@ def test_attach_decision_consumer_no_warn_when_provider_set(tmp_path):
         cron_service = None
         tools = MagicMock()
         subagents = MagicMock()
-        decision_consumer = None
         hooks = CompositeHook()
 
     agent = _StubAgent()
@@ -511,24 +514,25 @@ def test_attach_decision_consumer_registers_hook(tmp_path):
     PendingDecisionStore is never updated."""
     from raven.agent.hook.adapters import DecisionConsumerAdapter
     from raven.agent.hook.composite import CompositeHook
-    from raven.cli._proactive_stack import attach_sentinel_decision_consumer
     from raven.config.raven import SentinelConfig
+    from raven.core.proactive_stack import attach_sentinel_decision_consumer
 
     class _StubRunner:
         feedback = MagicMock()
 
     runner = _StubRunner()
-    runner._phase4_pending_store = PendingDecisionStore(tmp_path / "pending.json")
-    runner._phase4_routine_store = None
-    runner._phase4_planner_provider = None
-    runner._phase4_planner_model = None
-    runner._phase4_now_fn = None
+    runner.assembly = SentinelAssembly(
+        pending_store=PendingDecisionStore(tmp_path / "pending.json"),
+        routine_store=None,
+        planner_provider=None,
+        planner_model=None,
+        now_fn=None,
+    )
 
     class _StubAgent:
         cron_service = None
         tools = MagicMock()
         subagents = MagicMock()
-        decision_consumer = None
         hooks = CompositeHook()
 
     agent = _StubAgent()
@@ -551,24 +555,25 @@ def test_attach_decision_consumer_is_idempotent(tmp_path):
     re-runs the helper."""
     from raven.agent.hook.adapters import DecisionConsumerAdapter
     from raven.agent.hook.composite import CompositeHook
-    from raven.cli._proactive_stack import attach_sentinel_decision_consumer
     from raven.config.raven import SentinelConfig
+    from raven.core.proactive_stack import attach_sentinel_decision_consumer
 
     class _StubRunner:
         feedback = MagicMock()
 
     runner = _StubRunner()
-    runner._phase4_pending_store = PendingDecisionStore(tmp_path / "pending.json")
-    runner._phase4_routine_store = None
-    runner._phase4_planner_provider = None
-    runner._phase4_planner_model = None
-    runner._phase4_now_fn = None
+    runner.assembly = SentinelAssembly(
+        pending_store=PendingDecisionStore(tmp_path / "pending.json"),
+        routine_store=None,
+        planner_provider=None,
+        planner_model=None,
+        now_fn=None,
+    )
 
     class _StubAgent:
         cron_service = None
         tools = MagicMock()
         subagents = MagicMock()
-        decision_consumer = None
         hooks = CompositeHook()
 
     agent = _StubAgent()
@@ -588,18 +593,20 @@ def test_attach_decision_consumer_no_warn_when_require_confirm_false(
     tmp_path,
 ):
     """If require_confirm=False, the warning is irrelevant."""
-    from raven.cli._proactive_stack import attach_sentinel_decision_consumer
     from raven.config.raven import SentinelConfig
+    from raven.core.proactive_stack import attach_sentinel_decision_consumer
 
     class _StubRunner:
         feedback = MagicMock()
 
     runner = _StubRunner()
-    runner._phase4_pending_store = PendingDecisionStore(tmp_path / "pending.json")
-    runner._phase4_routine_store = None
-    runner._phase4_planner_provider = None
-    runner._phase4_planner_model = None
-    runner._phase4_now_fn = None
+    runner.assembly = SentinelAssembly(
+        pending_store=PendingDecisionStore(tmp_path / "pending.json"),
+        routine_store=None,
+        planner_provider=None,
+        planner_model=None,
+        now_fn=None,
+    )
 
     from raven.agent.hook.composite import CompositeHook
 
@@ -607,7 +614,6 @@ def test_attach_decision_consumer_no_warn_when_require_confirm_false(
         cron_service = None
         tools = MagicMock()
         subagents = MagicMock()
-        decision_consumer = None
         hooks = CompositeHook()
 
     agent = _StubAgent()

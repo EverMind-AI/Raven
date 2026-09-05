@@ -13,6 +13,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from raven.config.raven import TokenWiseConfig
+from tests.conftest import wired_kwarg
 
 
 @pytest.fixture
@@ -41,11 +42,11 @@ def patched_tui_build_deps(monkeypatch: pytest.MonkeyPatch, tmp_path):
     config.tools.sandbox = MagicMock()
     config.channels = MagicMock()
     monkeypatch.setattr(
-        "raven.cli._helpers.load_runtime_config",
+        "raven.core.config_stack.load_runtime_config",
         lambda *a, **kw: config,
     )
     monkeypatch.setattr(
-        "raven.cli._helpers.make_provider",
+        "raven.providers.factory.make_provider",
         lambda _c: MagicMock(),
     )
 
@@ -122,10 +123,12 @@ def test_tui_agent_loop_receives_cron_service(patched_tui_build_deps) -> None:
     _build_agent_loop()
 
     kwargs = patched_tui_build_deps["agent_loop_kwargs"]
-    assert "cron_service" in kwargs, "AgentLoop ctor must receive cron_service kwarg for CronTool auto-register"
-    assert kwargs["cron_service"] is not None
+    assert wired_kwarg(kwargs, "cron_service") is not None, (
+        "AgentLoop must receive cron_service for CronTool auto-register"
+    )
+    assert wired_kwarg(kwargs, "cron_service") is not None
     cls = patched_tui_build_deps["cron_service_class"]
-    assert isinstance(kwargs["cron_service"], cls)
+    assert isinstance(wired_kwarg(kwargs, "cron_service"), cls)
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +171,7 @@ def test_tui_cron_on_job_wired_in_run_not_build(patched_tui_build_deps) -> None:
 
 # The message-tool-swap wrapper and the bus outbound handler are gone
 # cron now runs as a spine CRON turn and the reply is fanned out as
-# cron.delivered by ``_build_cron_callback_spine`` (covered in
+# cron.delivered by ``build_cron_callback_spine`` (covered in
 # test_tui_cron_delivered_event.py), so no bus publish / callback swap remains.
 
 
@@ -187,8 +190,11 @@ def test_tui_on_user_inbound_resets_cron_counters(patched_tui_build_deps) -> Non
     _build_agent_loop()
 
     kwargs = patched_tui_build_deps["agent_loop_kwargs"]
-    hook = kwargs.get("on_user_inbound")
-    assert hook is not None, "TUI AgentLoop must wire the silent-fire reset hook"
+    from raven.agent.hook.adapters import OnUserInboundAdapter
+
+    wired = [h for h in (wired_kwarg(kwargs, "hooks") or []) if isinstance(h, OnUserInboundAdapter)]
+    assert wired, "TUI AgentLoop must wire the silent-fire reset hook"
+    hook = wired[0]._callback
 
     cron = patched_tui_build_deps["cron_service_class"].instances[0]
     hook(

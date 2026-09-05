@@ -1,10 +1,12 @@
+"""ShellCommandPolicy: safe, hard-denied, and approval-required command decisions."""
+
 from __future__ import annotations
 
 import pytest
 
-from raven.agent.tools.base import Continuation, ToolResult
 from raven.agent.tools.shell import ExecTool
 from raven.agent.tools.shell_policy import CommandDecision, ShellCommandPolicy
+from raven.contracts.tool import Continuation, ToolResult
 from raven.sandbox import ExecResult, SandboxExecutor
 
 

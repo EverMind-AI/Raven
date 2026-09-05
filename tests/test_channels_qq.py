@@ -230,7 +230,9 @@ def test_download_attachment_adds_the_missing_scheme(resolves_public, monkeypatc
 
     out = asyncio.run(ch._download_attachment(_att(url="//gchat.qpic.cn/x.png")))
 
-    assert ch._http.urls == ["https://gchat.qpic.cn/x.png"]
+    # The https:// prefix proves the scheme completion; the host is the
+    # judged address because guarded_fetch pins the connection.
+    assert ch._http.urls == ["https://93.184.216.34/x.png"]
     assert out.path == "/media/a.png"
 
 

@@ -15,7 +15,7 @@ from pathlib import Path
 
 from raven.agent.context.builder import ContextBuilder
 from raven.context_engine.segments import render
-from raven.memory_engine.backend import Memory
+from raven.contracts.memory import Memory
 
 
 def test_tool_result_is_fenced_as_untrusted(tmp_path: Path) -> None:

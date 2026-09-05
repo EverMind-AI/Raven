@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from raven.agent.tools._deliverables import DeliverableStore
+from raven.agent.tools.deliverables import DeliverableStore
 
 
 def _make_file(tmp_path, name="report.pdf", body=b"hello"):

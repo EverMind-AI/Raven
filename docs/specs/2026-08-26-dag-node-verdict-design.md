@@ -113,7 +113,7 @@ the raw error text in place of the structured fields.
 |---|---|---|
 | master switch | on | Off restores today's behaviour exactly |
 | verdict model | `None` | Follows the main provider |
-| judge timeout | 30s | Bounds one judge call |
+| judge timeout | 180s | Bounds one judge call, and has to contain the provider's own retry ladder (four attempts, ~7s of backoff) rather than truncate it into the fail-open |
 | evidence budget | 8000 chars | Transcript tail fed to the judge |
 | adjudication timeout | 600s | Matches `QuestionBroker`; capped at 3600s so Raven can `ask_user` first |
 | continuation limit | 2 | Three attempts per node in all |
@@ -197,6 +197,12 @@ from the provider schema alongside `cancel_dag` and `dag_status`
 which `run_subagent_dag`'s acceptance text is the only thing that tells the model the
 other two exist (`tool.py:806`). Parameters: `run_id`, `node_id`, `decision`
 (`continue` / `abandon`), and `message`, required when continuing.
+
+> **Superseded 2026-09-02.** The five paragraphs that follow, up to "A host with no ask
+> broker gets the plain failure path", describe a foreground lane that asked the person
+> watching the call. That lane is gone: a foreground call now returns the report to the
+> main agent and `resolve_dag_node` resumes the wait. See
+> `docs/specs/2026-09-02-dag-foreground-report-handoff-design.md`.
 
 **A foreground graph is adjudicated inside its own turn.** All of the above
 describes `background: true`, the default, and it works because the turn that
@@ -284,6 +290,7 @@ unaware that this line is dead until the closing announce -- too late to act on.
 | Adjudication times out | `failed` plus cascade; today's failure path |
 | Verdict disabled, or no provider wired | No judgement at all; today's behaviour exactly |
 | No announce channel wired on the host | No suspension -- there is nobody to adjudicate -- but the verdict still stands, so the node fails rather than passing an answer it never produced to its dependents. This is the one place the design does *not* fall back to today's behaviour, and deliberately: a judged failure is known, and handing it downstream anyway would be the original bug |
+| Report delivery raises | Retried, `REPORT_DELIVERY_ATTEMPTS` times with a growing backoff. The announcer is a transport: an injected turn can lose a race with a gateway restart or a busy submit queue, which is no reason to discard a node that could still be adjudicated. Safe to retry only because the announce is all-or-nothing -- the injection is the last step that can fail, and the marker emit after it swallows its own failure -- and bounded because a bound run has no adjudication deadline, so an unbounded loop would spin for the life of the turn. The last failure still fails the node, naming the transport and the attempt count. The same helper carries `release(flush=True)`'s drain, which owes the re-send the returned report promised and starts the adjudication deadline as it goes -- an event dropped there could only expire unseen -- and a post-release `put_final`, which is awaited from the run's detached task with nothing around it, so a raise there loses the result and leaves an unretrieved-exception warning where the backgrounded lane logs it |
 | `cancel_dag` or `/stop` arrives during a suspension | `_mark_stopped` turns it `cancelled` |
 | Gateway restart during a suspension | Reads back `interrupted`; no recovery |
 | `continue` with an empty message | Rejected at the tool boundary |

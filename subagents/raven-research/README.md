@@ -15,10 +15,10 @@ Owner: ZuyiZhou. This folder is our caller-side record, not the agent itself.
 
 | | |
 |---|---|
-| Source | https://github.com/ZuyiZhou/Raven-X, branch `feat/dr_sufficiency_gate`, commit `0a09f07` |
+| Source | https://github.com/ZuyiZhou/Raven-X, branch `main`, commit `a903a424` |
 | Local checkout | `./Raven-X` - the agent itself lives inside this folder |
-| Local patches | **four**, recorded as `git apply`-able diffs under `./patches/` - see the `Local patches` section below |
-| Package / version | `raven` 0.1.5, flow `dr@3.5` (updated 2026-08-27 from upstream `0a09f07`, the tip of `feat/dr_sufficiency_gate` rather than `main`, which added the first-round sufficiency gate, verify stall observability, appendix grounding accuracy and a per-call provider timeout. The gate is off by default and takes no version bump - it removes no tools - so `config.json` still loads as `dr@3.5-filetools-askuser` and needed no new key. The step before it took `4447f4d4` on 2026-08-26, which added the `ask_user` broker round trip and the deep report template - see the section below; the same day's earlier step took `6b5ec31`, a bugfix-only re-vendor on the same flow: ACP cancel/prompt race, AgentLoop kwarg wiring, memory backend lifecycle, shell null-device guard. `dr@3.5` itself arrived 2026-08-25 from `7b603aa`, which also brought the ACP serve entry - see the `dr@3.5` section below. `dr@3.4` came from `71abb5a6` on 2026-08-21, when upstream folded `dr@3.5`-`dr@3.7` back into `dr@3.4`; the new `dr@3.5` is a fresh rung under upstream's launch convention, not the folded one back. `dr@3.3` from `e3edf28` on 2026-08-18, `dr@3.2` from `Raven-X-main.zip` on 2026-08-16, and the `dr@2.8` / `dr@2.9` steps from `b68085d` and `b1c12e4` on 2026-08-11) |
+| Local patches | **six**, recorded as `git apply`-able diffs under `./patches/` - see the `Local patches` section below |
+| Package / version | `raven` 0.1.5, flow `dr@3.5` (updated 2026-09-02 from upstream `a903a424`, the tip of `main`; the base moved back onto `main` and the sufficiency-gate branch content now rides as `patches/dr_sufficiency_gate.patch`, because upstream has not merged that branch - see the `What the main port changed for us` section below. The step before took `0a09f07` on 2026-08-27, the tip of `feat/dr_sufficiency_gate` rather than `main`, which added the first-round sufficiency gate, verify stall observability, appendix grounding accuracy and a per-call provider timeout. The gate is off by default and takes no version bump - it removes no tools - so `config.json` still loads as `dr@3.5-filetools-askuser` and needed no new key. The step before it took `4447f4d4` on 2026-08-26, which added the `ask_user` broker round trip and the deep report template - see the section below; the same day's earlier step took `6b5ec31`, a bugfix-only re-vendor on the same flow: ACP cancel/prompt race, AgentLoop kwarg wiring, memory backend lifecycle, shell null-device guard. `dr@3.5` itself arrived 2026-08-25 from `7b603aa`, which also brought the ACP serve entry - see the `dr@3.5` section below. `dr@3.4` came from `71abb5a6` on 2026-08-21, when upstream folded `dr@3.5`-`dr@3.7` back into `dr@3.4`; the new `dr@3.5` is a fresh rung under upstream's launch convention, not the folded one back. `dr@3.3` from `e3edf28` on 2026-08-18, `dr@3.2` from `Raven-X-main.zip` on 2026-08-16, and the `dr@2.8` / `dr@2.9` steps from `b68085d` and `b1c12e4` on 2026-08-11) |
 | Upstream ancestry | forked from EverMind-AI/Raven at `dbb1b0c` (2026-07-17), diverged since |
 | Docs to read | `README.md`, `QUICKSTART.md`, `examples/README.md` in that checkout |
 
@@ -168,6 +168,21 @@ They are one entry again now that the host can name a mode per call:
 | `finalShape.reportBounce` | off | on | on |
 | `askUser` | on, `when_needed` | inherited | inherited |
 
+Every `drFlow` cell of that table is held against the measured arm by
+`tests/test_agents_research_flow_parity.py` in the trunk's own suite (the one
+CI runs): it builds the catalogue the launcher writes, composes each mode
+through the fork's `build_session_modes`, and compares effective values with
+`profiles/student_sglang_web_dr.json` field by field, with a written reason for
+every difference - the 20 and 30 caps are named as the exhaustion window they
+open, not excused as bounds. The fork's own `tests/test_shipped_flow_parity.py`
+covers the fork's profiles and examples, not this folder's `config.json`, which
+is the config the launcher actually serves. The same file pins the trunk twin's
+**class defaults** and its retired-label tables to the fork's, field for field:
+the slice comparison in `tests/test_agents_research_launcher.py` cannot see a
+default (a written value hides it), and a profile that leaves a knob unpinned
+would otherwise get the fork's behaviour on one launcher and the pre-`cdb9c1e`
+behaviour on the other.
+
 `agents.defaults.requestTimeoutSeconds` is deliberately **not** on that list.
 It is the only knob the three profiles used to differ on that a session cannot
 own: it is consumed once, at provider construction (`cli/_helpers.py`), and the
@@ -264,24 +279,36 @@ which closes that particular hole but not the one in the process.
 
 ## Local patches
 
-Four, each `-p1` from the `Raven-X/` root. Their file sets are **disjoint**, so
-the order below is documentation rather than a constraint - applying all four to
-a pristine `0a09f07` reproduces this checkout byte for byte, in any order:
+Six, each `-p1` from the `Raven-X/` root, and since the 2026-09-02 re-partition
+they are mutually **disjoint at the file level** - every changed file is carried
+whole by exactly one patch - so their relative order is documentation rather
+than a constraint (the old rule that `product_surface_audit` must apply after
+`acp_per_session_loops` died with the re-partition: the `ACP_INTEGRATION_PLAN.md`
+deletion is now the audit patch's alone, and nothing else touches that file).
+Each patch is the **whole** base-to-checkout diff of its files, so a lone patch
+still applies to the pristine base and the set reproduces the tree in any order:
 
 | Patch | Files | What it is |
 |---|---|---|
-| `patches/acp_per_session_loops.patch` | 2 source, 5 test, 1 doc | Serves each ACP session from its own `AgentLoop` (`raven/acp/loops.py`), so two sessions against one agent process stop sharing an engine |
-| `patches/web_search_providers.patch` | 6 source, 13 test, 4 doc | The pluggable web search and fetch providers, and with them the gate that withholds `web_search` unless a provider key or a corpus endpoint resolves. That gate is the trunk invariant `web-search-gated-on-its-key`, which `scripts/check_vendored_invariants.py` asserts on this fork every CI run - so this one is not optional, and a swap that drops it fails the build rather than reaching a user |
+| `patches/acp_per_session_loops.patch` | 6 source, 8 test | Serves each ACP session from its own `AgentLoop` (`raven/acp/loops.py`), so two sessions against one agent process stop sharing an engine. Since 2026-09-01 also carries the per-session MCP surface that grew on the same seam: a session's `mcpServers` stanzas connect into a registry overlay that session owns (`SESSION_MCP_CAPABILITY` in `raven/acp/protocol.py`, the `ContextVar` overlay in `raven/agent/tools/registry.py`), and the replay/live update frames carry the tool's own name as `_meta` `raven.toolName`. Since 2026-09-02 also carries `DRFlowConfig._SUPERSEDED_PROFILES` in `raven/config/raven.py` (the file was already this patch's) and its test in `tests/test_config_raven_loader.py`: the whole-label refusal of a retired profile label, see the label row below |
+| `patches/web_search_providers.patch` | 6 source, 13 test, 4 doc | The pluggable web search and fetch providers, and with them the gate that withholds `web_search` unless a provider key or a corpus endpoint resolves. That gate is the trunk invariant `web-search-gated-on-its-key`, which `scripts/check_vendored_invariants.py` asserts on this fork every CI run - so this one is not optional, and a swap that drops it fails the build rather than reaching a user. (The `fetch_result_ok` `raw_decode` fix this patch used to carry landed upstream in `ba06912` and is no longer ours) |
 | `patches/prompt_cache_provider_probe.patch` | 6 source, 3 test | Gives the provider objects the `supports_prompt_caching` method the three `AgentLoop` construction sites already read off them. Without it every site resolved to `None` and `CacheOptimizer` fell back to the id-only lookup, silently, because the fallback answers |
 | `patches/acp_session_modes.patch` | 6 source, 4 test | Reads `acp.modes` from the config, advertises them on every session response, and answers `session/set_mode`, with `AcpLoops` rebuilding a session's engine at the next turn boundary when its mode moves. What makes fast, deep and ultra one agent process rather than three roster rows |
+| `patches/dr_sufficiency_gate.patch` | 10 source, 8 test, 1 doc | Upstream's own `feat/dr_sufficiency_gate` branch (its PR #14, tip `0a09f07`), carried as a patch because `main` has not merged it: the first-round sufficiency gate (`raven/agent/flow/sufficiency.py`), verify stall observability, the appendix citation recovery (`_match_form` for truncated and comma-tail citations), a per-call provider timeout, the `examples/dr_shallow.json` product profile, and the gate branch's pause-defer test in `tests/test_agent_fetch_gate.py` (dropped unrecorded in the 2026-09-02 revendor, restored on review). Our `config.json` and the deep mode set the gate's floors, so this one cannot be dropped until the branch merges. Drop it the moment it does |
+| `patches/product_surface_audit.patch` | 2 source, 2 test, 1 deletion | What is left of the 2026-08-31 audit fixes after upstream took the bulk back in `ba06912`: `cited_never_surfaced` is computed through `_match_form` rather than bare set membership, so a truncated citation of a listed link reads as unopened, not fabricated (`raven/agent/process_appendix.py`); `looks_failed` treats the registry-wide bare `Error` prefix as failed, which `WebSearchTool._failed` (colon-only) does not (`raven/cli/_progress_line.py`). Also deletes `ACP_INTEGRATION_PLAN.md` - internal-only planning doc, not shipped here on purpose. (`unwrap_untrusted`'s scan-from-the-end and the base `cited_never_surfaced` split are upstream's own now and left this patch.) Since 2026-09-02 also carries two appendix fixes from the product-feedback review of the 31m24s run: `cited_fence_tags`, a disclosure counter for answers that cite the security fence's `web_fetch #...` nonce instead of a URL (the observed run wrote 75 of its 87 citation handles that way and the grounding check said "nothing to check" - a false green; the nonce never reaches the ledger, so this is disclosure on the `cited_schemeless` model, not resolution), and an unreviewed banner that leads the trail block whenever the shipped answer carries no reviewer verdict (`budget_spent`, `unavailable`, or a salvage) instead of hiding as one word in the head line. Since 2026-09-03 the trunk twin (`agents/raven-research/plugins/research-flow/research_flow/support/process_appendix.py`) carries this module's whole body - these two fixes and upstream's 08-28/09-01 appendix work - with the fork's regression tests, and `tests/test_agents_research_process_appendix.py` pins the two module bodies equal with docstrings and comments stripped |
 
-The last is ours; the first three are the trunk's, carried here because this
-checkout is downstream of them. `prompt_cache_provider_probe` is in flight on the
-trunk side and should be dropped from here the moment upstream carries it. None
-has been offered upstream yet, though session modes are stable ACP and so are
-offerable.
+Three are ours (`acp_session_modes`, `product_surface_audit`, and the
+`dr_shallow.json` `PER_CONFIG` reconciliation riding inside
+`dr_sufficiency_gate`'s copy of `test_shipped_flow_parity.py`; the appendix
+files themselves are carried whole by `product_surface_audit` per the table
+below, wherever a given refinement in them originated);
+`dr_sufficiency_gate` itself is upstream's unmerged branch, and the other three
+are the trunk's, carried here because this checkout is downstream of them.
+`prompt_cache_provider_probe` is in flight on the trunk side and should be
+dropped from here the moment upstream carries it. None has been offered
+upstream yet, though session modes are stable ACP and so are offerable.
 
-**Six files are touched by more than one of the four**, and each is carried whole
+**Thirteen files mix more than one of those concerns**, and each is carried whole
 by exactly one patch rather than split across them - a split cannot be re-applied
 independently, and pretending otherwise is how a patch set silently stops
 reproducing its tree:
@@ -290,13 +317,18 @@ reproducing its tree:
 |---|---|---|
 | `raven/agent/loop/main.py` | `web_search_providers` | per-session loops |
 | `CONTEXT.md` | `web_search_providers` | per-session loops |
+| `examples/README.md` | `web_search_providers` | sufficiency gate |
 | `raven/cli/agent_commands.py` | `prompt_cache_provider_probe` | web search providers |
 | `raven/cli/gateway_commands.py` | `prompt_cache_provider_probe` | web search providers |
-| `raven/cli/acp_commands.py` | `acp_session_modes` | the other three |
+| `raven/providers/base.py`, `endpoint_rotor.py`, `litellm_provider.py` | `prompt_cache_provider_probe` | sufficiency gate (the per-call timeout) |
+| `raven/cli/acp_commands.py` | `acp_session_modes` | the other acp patches |
 | `raven/config/schema.py` | `acp_session_modes` | per-session loops, web search providers |
+| `raven/config/raven.py` | `acp_per_session_loops` | sufficiency gate |
+| `raven/agent/process_appendix.py` | `product_surface_audit` | sufficiency gate |
+| `tests/test_agent_process_appendix.py` | `product_surface_audit` | sufficiency gate |
 
 So dropping a patch because upstream took its feature does not remove that
-feature from these six files. Check them by hand when a patch is retired.
+feature from these files. Check them by hand when a patch is retired.
 
 Re-applying after a swap, and proving the result:
 
@@ -311,20 +343,34 @@ git apply -p1 ../patches/acp_per_session_loops.patch
 git apply -p1 ../patches/web_search_providers.patch
 git apply -p1 ../patches/prompt_cache_provider_probe.patch
 git apply -p1 ../patches/acp_session_modes.patch
+git apply -p1 ../patches/dr_sufficiency_gate.patch
+git apply -p1 ../patches/product_surface_audit.patch
 uv sync          # the replacement took .venv/ with it; seconds to rebuild
 ```
+
+The order above is alphabetical-by-story, not a constraint: the six are disjoint
+at the file level, and the 2026-09-02 verification applied them in two different
+orders to prove it. One caution from this machine: run `git apply` on an
+**out-of-repo copy** when verifying - from inside this repository it resolves
+paths against the enclosing worktree, skips every vendored path with exit 0,
+and a broken patch verifies green.
 
 Then run the `diff -rq` above: it must name **nothing at all**. The patches carry
 every file this fork changes, so a path it names is drift no patch records - the
 state this folder was in when the patch set claimed three patches and the tree
-carried four concerns.
+carried four concerns, and again on 2026-09-02 when it claimed five and the tree
+carried six (the per-session MCP surface had grown into `spine.py`, `methods.py`,
+`server.py` and four siblings with no patch recording it; the re-partition from
+the true base diff is what caught it).
 
 Prove it both ways, because a forward-only check passes on a patch set that has
 quietly grown a second copy of a hunk:
 
 ```bash
-# forward: pristine + all four == this checkout
-# reverse: this checkout - all four (reverse order) == pristine
+# forward: pristine + all six == this checkout
+# reverse: this checkout - all six == pristine
+git apply --reverse -p1 ../patches/product_surface_audit.patch
+git apply --reverse -p1 ../patches/dr_sufficiency_gate.patch
 git apply --reverse -p1 ../patches/acp_session_modes.patch
 git apply --reverse -p1 ../patches/prompt_cache_provider_probe.patch
 git apply --reverse -p1 ../patches/web_search_providers.patch
@@ -394,6 +440,49 @@ previous value is in our own history. Both halves of the pair are gitignored and
 neither was made for the `dr@3.7` swap; keep the old ones as long as the zips
 they came from are the only copy of those builds.
 
+### What the port to `main` changed for us
+
+The 2026-09-02 swap (`0a09f07` -> `a903a424`) is unlike every earlier one: the
+two commits sit on **diverged lines**. `feat/dr_sufficiency_gate` forked from
+`main` at `4447f4d4` and upstream has not merged it (their PR #14 is open), while
+`main` took ten commits of its own past the fork point. So this step was a real
+three-way merge (merge base `4447f4d4`), not a fast-forward: the base recorded
+above moved back onto `main`, and the gate branch's five commits now ride as
+`patches/dr_sufficiency_gate.patch` until upstream merges them. Six files
+conflicted, all of them the same story - upstream's product-surface audit
+(`ba06912`) had taken our `product_surface_audit` fixes back in its own wording
+while the gate branch refined the same functions - and the resolutions kept the
+finer implementation wherever the two disagreed (the `_match_form` citation
+matching over `main`'s bare set membership) and took `main`'s side wherever only
+the prose differed.
+
+| Change | Effect here |
+|---|---|
+| **`ba06912` took the audit fixes upstream** | `trust.py`'s scan-from-the-end, the base `cited_never_surfaced` split, `looks_failed` borrowing `WebSearchTool._failed`, and `fetch_result_ok`'s `raw_decode` are all upstream's own now. `patches/product_surface_audit.patch` shrank to the two refinements upstream does not have (see the patch table) plus the plan-doc deletion, and `web_search_providers.patch` dropped its `raw_decode` rider |
+| **The no-key search message split in two** (`ba06912`) | The model-facing return is now a generic "web search is unavailable on this run - do not retry" with **no config path in it** (a tool return value gets narrated back to whoever is watching); the provider's name, config path and env var go to the operator on stderr. Kept, with the log line parameterised over our provider `spec` rather than hardcoding Serper, and `test_the_unconfigured_error_names_the_selected_provider` now asserts the split rather than the old single string |
+| **`cdb9c1e` flipped eight class defaults on** | Six of the eight pins `config.json` adds land at values this profile already ran under; two do not. The old base predates `cdb9c1e`, so `search.includeSnippets` and `search.snippetDedupByDocid` were effectively **off** before this swap and are **on** after it - a model-visible change to every search result, and one of the two reasons the flow label moves (see the label row below; the first published revision of this row claimed zero effect, which an MR review corrected). What the pins themselves change is the meaning of *unpinning* one: that now keeps it on |
+| **`profiles/` and the flow-parity gate arrived** (`14a02f2`, `2773e35`, `92971ac`) | The measured-arm configs now ship in the tree, and `tests/test_shipped_flow_parity.py` compares every shipped config with `drFlow.enabled` field-by-field against the arm that produced the published numbers. The gate branch's `examples/dr_shallow.json` had never met that test; it needed a `PER_CONFIG` allowlist entry whose reasons come from its own five-delta table in `examples/README.md` - recorded inside `dr_sufficiency_gate.patch` |
+| **The appendix gained `span_seconds` and `cited_schemeless`** (`49411cb`, `eb7b8e1`) | Both merged in beside the gate branch's finer citation matching: the research wall-clock (first ledger row to last, deliberately *not* the turn's clock) and the disclosure list of scheme-less references `_URL_RE` structurally cannot see. The fetch ledger rows also carry `info_to_extract` now, write-only |
+| **The untrusted fence tag is named** (`7e74677`) | So a model that mentions the fence stops being able to cite it as a source. Upstream's change, taken as-is |
+| **No dependency delta** | `pyproject.toml` and `uv.lock` are byte-identical from `0a09f07` through the merge, so an existing venv carries across; this worktree's checkout had none and needed one `uv sync` |
+| **The flow label moves by suffix, and the old one is refused** | `main`'s validator default is still `dr@3.5` and `_SUPERSEDED_VERSIONS` matches base labels only (adding `dr@3.5` would reject upstream's own measured profiles), so the bump lives in the suffix: `dr@3.5-filetools-askuser` is superseded by `dr@3.5-filetools-askuser-derive` (AGENTS.md 0.2 - the identity gained the derive and recommend reply rules, and search snippets turned on, so the old label names a different generated distribution). A README row is not the refusal 0.2 asks for, so `DRFlowConfig._SUPERSEDED_PROFILES` (`raven/config/raven.py`, in `acp_per_session_loops.patch`) matches the whole label and refuses the old one on an enabled flow, naming the successor; the trunk launcher's `FlowConfig` carries the same table. Retiring the next profile label is one entry in each |
+
+The swap also caught **unrecorded drift**: the vendored tree carried a
+per-session MCP surface (session-scoped `mcpServers`, the registry overlay,
+`raven.toolName` on replay frames) across seven files that no patch recorded -
+the state the reverse-apply check exists to catch, and it did. The whole local
+delta was re-derived from the true base diff and re-partitioned into the six
+patches above; forward and reverse application were verified file-identical
+against a pristine `main` archive, in an out-of-repo copy (see the caution in
+the re-apply section).
+
+Verified on this build 2026-09-02: the vendored tree is byte-identical to
+pristine `a903a424` plus the six patches (both directions), `config.json` loads
+as `dr@3.5-filetools-askuser-derive` with `askUser.delivery: "tool"` and the
+sufficiency gate on, `scripts/check_vendored_invariants.py` passes on the
+swapped tree, and the checkout's own suite is **5902 passed, 84 skipped** in its
+own venv under an isolated `HOME`.
+
 ### What the `ask_user` round trip and the deep report changed for us
 
 The 2026-08-26 swap (`6b5ec31` -> `4447f4d4`) is 6 upstream commits over 31
@@ -424,8 +513,10 @@ The 2026-08-25 swap (`71abb5a6` -> `7b603aa`) brought two coupled things: the
 flow label moved to `dr@3.5` (upstream's launch convention supersedes `dr@3.4`
 the moment its batch finished, so the old label is now *rejected* on this
 build), and the checkout grew `raven acp` - a serve entry that speaks the Agent
-Client Protocol on stdio (`raven/acp/`, upstream's plan and pitfalls in its
-`ACP_INTEGRATION_PLAN.md`). This folder switched its registration to it in the
+Client Protocol on stdio (`raven/acp/`, upstream's plan and pitfalls recorded at
+the time in its `ACP_INTEGRATION_PLAN.md`, removed 2026-08-31 by
+`patches/product_surface_audit.patch` - internal-only planning doc, not carried
+here). This folder switched its registration to it in the
 same change: `subagent.json` is now `kind: "acp"`, and `run.py` shrank from a
 686-line per-turn wrapper to a launcher that renders the config and execs the
 server.
@@ -751,6 +842,7 @@ old CLI backend's `combined = stdout + stderr` trap died with the transport.
 | LLM provider key | `RESEARCH_API_KEY` in `.env`. Required - absent, the run exits 1 |
 | Model | `openai/gpt-5.6-sol-pro` (1.05M context, accepts image input, $5/$30 per Mtok - five times terra's $1/$6). `temperature` was removed from the config: sol-pro does not list it among its supported parameters, and OpenRouter accepts the field then ignores it, so keeping it would assert a knob that does nothing. `reasoningEffort: high` is supported and stays |
 | `RESEARCH_SERPER_API_KEY` | The search key, verified live against `google.serper.dev` |
+| `RESEARCH_TAVILY_API_KEY`, `RESEARCH_EXA_API_KEY`, `RESEARCH_BRAVE_API_KEY`, `RESEARCH_FIRECRAWL_API_KEY` | Unset. Slots for the alternative search backends the checkout offers (Brave is search-only; the other three also serve `web_fetch` off the same key). Only needed when `config.json` selects one of them under `tools.web.search.provider` / `tools.web.fetch.provider` |
 | `RESEARCH_JINA_API_KEY` | **Deliberately empty** since 2026-08-16. It is optional rather than required: `web.py` adds the auth header only when a key exists, otherwise `r.jina.ai` is called unauthenticated at a lower rate limit. The key that used to sit here ran out of credit, and an exhausted key is worse than none, because the two paths do not fail alike - the same URL answers `402 Payment Required` with it and `200` without. The symptom was total rather than partial: `pages_ok: 0` against `pages_opened: 33` on the first `dr@3.2` verification run, every citation ungrounded, and an answer assembled entirely from search snippets. Deleting the field alone fixed it, same build and same launcher: `pages_ok: 6` of 9, `citation_grounding_rate: 1.0`, `cited_not_opened: 0`. Restoring a key means topping the account up first; adding a dead one silently disables page reading |
 
 Search and fetch are separate vendors with separate quotas: a working search

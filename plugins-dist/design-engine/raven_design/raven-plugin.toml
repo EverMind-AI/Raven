@@ -1,0 +1,49 @@
+# design-engine: the Raven-Design visual engine as a standalone plugin distribution.
+#
+# Config slice (plugins.config["design-engine"]): enabled (the product gate --
+# absent or false means no surface is cast, the D6 shape) plus three sections
+# in the product config's camelCase: visualDomainSelector (the fork's
+# skillForge.visualDomainSelector knobs), render (the fork's tools.render
+# schema, every field accepted at its fork default; the shipped slice spells
+# five), and taskState (enabled + stateRoot; without a stateRoot the resident
+# Task State surface declines).
+#
+# config_schema stays empty on purpose: admission with an empty declaration is
+# verbatim pass-through, and the slice is validated by the plugin's own
+# EngineConfig (raven_design/plugin/config.py), which owns the slice shape.
+
+[plugin]
+id = "design-engine"
+version = "0.2.0"
+display_name = "Design Engine"
+enabled_by_default = true
+
+# The design turn frame: on the way in (before_user_inbound) one Visual Domain
+# Selector call classifies the task against the fifteen packaged domain Skills
+# and appends the two-tier card block below a separator -- the session record
+# keeps the user's own words; before every model call (before_iteration) the
+# resident Task State is projected as an append_note; on the way out
+# (after_send) the fork's completion notice rides the reply while unfinished
+# items remain. One row because the phases share one slice and one manager.
+
+[[plugin.contributes.hooks]]
+name = "design_engine"
+factory = "raven_design.plugin:make_hook"
+
+# The visual preview lane. Both factories decline when the slice leaves the
+# engine or the render section off, and when the render extra (playwright /
+# pymupdf / pypdfium2) is not importable -- the fork assembly's returns-[]
+# contract, said as plugin admission. No row shadows a built-in: trunk has
+# never carried render_file / preview_file / update_task_state.
+
+[[plugin.contributes.tools]]
+name = "render_file"
+factory = "raven_design.plugin:make_render_file"
+
+[[plugin.contributes.tools]]
+name = "preview_file"
+factory = "raven_design.plugin:make_preview_file"
+
+[[plugin.contributes.tools]]
+name = "update_task_state"
+factory = "raven_design.plugin:make_update_task_state"

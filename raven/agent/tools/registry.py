@@ -1,24 +1,127 @@
 """Tool registry for dynamic tool management."""
 
 import asyncio
-from collections.abc import Callable, Iterator, Mapping
+import copy
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from raven.agent.tools.base import Continuation, Tool, ToolOutput, ToolResult
-from raven.providers.base import RunMeta
-from raven.tracing import semconv, trace
+from raven.agent import workdir
+from raven.agent.tools.params import cast_params, validate_params
+from raven.contracts.llm_provider import RunMeta, TruncationInfo
+from raven.contracts.tool import RAW_ARGUMENTS_KEY, Continuation, Tool, ToolOutput, ToolResult
+from raven.observability import semconv
+from raven.tracing import trace
 
 if TYPE_CHECKING:
     from raven.mcp.naming import MCPToolRef
 
-# Where the agent loop parks a tool call's arguments when they do not parse as
-# JSON. Named here, next to the only code that must recognise it, so the two
-# ends cannot drift into reporting a parse failure as a missing field.
-RAW_ARGUMENTS_KEY = "_raw_arguments"
+
+class ToolAdmissionError(TypeError):
+    """A tool refused at the registry's door: an authored member is missing or
+    mis-shaped. Raised at registration, where the author sees it — not deep
+    inside the turn that first calls the tool."""
+
+
+@dataclass(frozen=True)
+class ToolSpec:
+    """The admitted, frozen shape of one registered tool.
+
+    Dispensed once at the door (:func:`admit_tool`) and the only thing the
+    registry's own machinery reads afterwards — a consumer that kept reading
+    members off the live object let the de-facto contract widen silently
+    (measured: 4 authored members on the paper, 13 consumed). Behaviour
+    (``execute`` / ``blocking_for`` / ``metadata_owner`` / ``cast_params``)
+    stays on ``tool``, the body; data rides here, frozen at admission. Same
+    declare→check→dispense pattern as manifest and config-slice admission.
+    """
+
+    name: str
+    schema: dict[str, Any]
+    # An AUTHORED ``to_schema`` override is a signed declaration of a dynamic
+    # shape (load_playbook regenerates its enum per render); the registry then
+    # serves the live call instead of the snapshot. Undeclared mutation of
+    # ``parameters`` still cannot leak — that path stays frozen.
+    schema_dynamic: bool
+    channels: frozenset[str] | None
+    timeout_seconds: float | None
+    truncation_hint: str | None
+    incomplete_hint: str | None
+    tool: Tool
+
+
+def admit_tool(tool: Tool) -> ToolSpec:
+    """Check the four authored members, normalize the optional ones, dispense
+    the frozen spec.
+
+    The advertised schema is derived HERE, from the authored members, and
+    deep-copied: the base class's ``to_schema`` is sugar, not the ticket (a
+    duck with the four members boards without it), and a shallow snapshot
+    would alias the tool's live ``parameters`` dict — a later mutation of the
+    object must not leak into what the model is shown. The one sanctioned
+    escape is an authored ``to_schema`` override: writing one declares the
+    schema dynamic, and the registry serves it live."""
+    name = getattr(tool, "name", None)
+    if not isinstance(name, str) or not name:
+        raise ToolAdmissionError(f"tool {tool!r} declares no usable name")
+    description = getattr(tool, "description", None)
+    if not isinstance(description, str):
+        raise ToolAdmissionError(f"tool {name!r}: description must be a string")
+    parameters = getattr(tool, "parameters", None)
+    if not isinstance(parameters, dict):
+        raise ToolAdmissionError(f"tool {name!r}: parameters must be a JSON-schema mapping")
+    if not callable(getattr(tool, "execute", None)):
+        raise ToolAdmissionError(f"tool {name!r}: execute is not callable")
+    channels = getattr(tool, "channels", None)
+    timeout = getattr(tool, "timeout_seconds", None)
+    if timeout is not None and not isinstance(timeout, (int, float)):
+        raise ToolAdmissionError(f"tool {name!r}: timeout_seconds must be a number or None")
+    truncation = getattr(tool, "truncation_hint", None)
+    incomplete = getattr(tool, "incomplete_hint", None)
+    schema = {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": copy.deepcopy(parameters),
+        },
+    }
+    own_to_schema = getattr(type(tool), "to_schema", None)
+    dynamic = own_to_schema is not None and own_to_schema is not Tool.to_schema
+    return ToolSpec(
+        name=name,
+        schema=schema,
+        schema_dynamic=dynamic,
+        channels=frozenset(channels) if channels is not None else None,
+        timeout_seconds=float(timeout) if timeout is not None else None,
+        truncation_hint=truncation if isinstance(truncation, str) else None,
+        incomplete_hint=incomplete if isinstance(incomplete, str) else None,
+        tool=tool,
+    )
+
+
+def _truncation_error(truncation: TruncationInfo) -> str:
+    """What is known, and what is only inferred, kept apart.
+
+    Known: the turn stopped at the output limit, because the upstream said so.
+    Inferred: that this call was the cut one, which follows from generation
+    being sequential but not from anything the upstream said -- a turn can
+    finish a call and then hit the limit in the prose after it. Saying "this
+    call was cut" as a fact sends a model to split up a call that was whole.
+
+    The refusal is not conditional on that inference. A call that may be
+    incomplete is not dispatched either way; being wrong costs one retry. What
+    to do about it is the tool's, via ``Tool.truncation_hint``.
+    """
+    at = f" at the {truncation.at_tokens}-token output limit" if truncation.at_tokens else " at the output limit"
+    return (
+        f"Error: [truncated] This turn stopped{at}, and this call was the last thing "
+        f"being written, so it may have been cut short. It was not run. Send it again."
+    )
 
 
 def absent_tool_error(name: str, *, tail: str = "") -> str:
@@ -67,8 +170,19 @@ class ToolRegistry:
     # internal timeout that never returns), not to enforce a tight per-tool SLA.
     DEFAULT_TOOL_TIMEOUT_S = 300.0
 
-    def __init__(self):
+    def __init__(self, *, tool_gates: "Sequence[Any]" = ()):
         self._tools: dict[str, Tool] = {}
+        # Cast at assembly, fixed for the generation (paper:
+        # contracts/tool_gate.py): no setter, no latch -- changing gates is a
+        # generation swap. Ordered by (name, contributed_by) so adjudication
+        # is deterministic whatever order the builder yielded them in.
+        self._tool_gates: tuple[Any, ...] = tuple(
+            sorted(tool_gates, key=lambda g: (str(getattr(g, "name", "")), str(getattr(g, "contributed_by", ""))))
+        )
+        # The admitted, frozen specs, keyed like ``_tools``. The registry's own
+        # machinery reads data from here and calls behaviour on the body; the
+        # pair is written together in register() and nowhere else.
+        self._specs: dict[str, ToolSpec] = {}
         # The one record of where a namespaced tool came from, keyed by the name
         # it is registered under. Every question about an MCP tool -- which
         # server owns it, what it is called there, which registered names a
@@ -85,10 +199,14 @@ class ToolRegistry:
         # Asked, not stored: the operator's off switches are a *preference*, and
         # a preference read once at startup is one the operator cannot change.
         # See ``set_withheld_source``.
-        # ``_withheld`` and ``_schema_hidden`` are distinct axes: the first is an
-        # operator off switch (a withheld tool is unreachable everywhere), the
-        # second a design property (a hidden tool stays callable -- ``tool_call``
-        # resolves by registry, never by schema -- it is just not advertised).
+        # ``_withheld``, ``_schema_hidden`` and the turn freeze below are
+        # distinct axes: the first is an operator off switch (a withheld tool is
+        # unreachable everywhere), the second a design property (a hidden tool
+        # stays callable -- ``tool_call`` resolves by registry, never by schema
+        # -- it is just not advertised), and the freeze is per turn (a mid-turn
+        # arrival is unreachable through every surface until the next turn --
+        # ``offers`` consults it for schema and tool-search, and ``execute``
+        # consults it for dispatch, so the three cannot disagree).
         self._withheld: Callable[[], frozenset[str]] | None = None
         self._schema_hidden: set[str] = set()
         # The tools a session brought with it, keyed by session, plus the
@@ -101,6 +219,27 @@ class ToolRegistry:
         # let whichever turn entered last decide what the other one can see.
         self._session_tools: dict[str, dict[str, Tool]] = {}
         self._overlay: ContextVar[dict[str, Tool] | None] = ContextVar("tool_registry_overlay", default=None)
+        # The tools this turn may be shown, captured at turn entry as the
+        # (name, instance) pairs themselves. Instances and not names: a
+        # same-name re-registration is a different tool wearing a familiar
+        # label, and admitting it by name would swap the served schema between
+        # two model calls of one turn. A ContextVar for the reason ``_channel``
+        # gives; ``None`` (no turn scope) advertises everything, which is what
+        # registries that never enter one -- a sub-agent's, the curator's -- get.
+        self._turn_names: ContextVar[dict[str, Tool] | None] = ContextVar("tool_registry_turn_names", default=None)
+        # The off switches as they stood at turn entry. Unioned into
+        # ``withheld_names`` so a switch that turns a tool ON mid-turn lands on
+        # the next turn -- the tool array is the prompt-cache prefix, and a
+        # live un-withholding would move it between two model calls exactly the
+        # way a late registration would. Turning a tool OFF stays live: the
+        # union can only add entries, never mask one the current read carries.
+        self._turn_withheld: ContextVar[frozenset[str] | None] = ContextVar("tool_registry_turn_withheld", default=None)
+
+    @property
+    def tool_gates(self) -> tuple[Any, ...]:
+        """The gates cast over this registry at construction, in adjudication
+        order. Read-only on purpose: the paper's first discipline."""
+        return self._tool_gates
 
     def set_withheld_source(self, source: "Callable[[], frozenset[str]] | None") -> None:
         """Install the answer to "which tools has the operator switched off".
@@ -119,14 +258,20 @@ class ToolRegistry:
         self._withheld = source
 
     def withheld_names(self) -> frozenset[str]:
-        """The current off switches, or an empty set when nobody installed a source."""
+        """The current off switches, or an empty set when nobody installed a source.
+
+        Inside a turn scope, whatever was withheld at the turn's entry stays
+        withheld for the whole turn (see ``_turn_withheld``); switches that
+        tighten mid-turn still land on this very read.
+        """
+        frozen = self._turn_withheld.get() or frozenset()
         if self._withheld is None:
-            return frozenset()
+            return frozen
         try:
-            return self._withheld()
+            return self._withheld() | frozen
         except Exception:  # noqa: BLE001 - a bad read must not cost the turn its tools
             logger.warning("tools: could not read the disabled-tool list; offering everything")
-            return frozenset()
+            return frozen
 
     def hide_from_schema(self, *names: str) -> None:
         """Keep tools registered and callable, but out of the provider's tool schema.
@@ -186,15 +331,46 @@ class ToolRegistry:
         The one predicate behind both surfaces a tool can be reached through --
         the schema and tool-search -- so a tool cannot be hidden from one and
         found through the other. That invariant is why the off switch belongs
-        here and not at either call site.
+        here and not at either call site -- and why the turn freeze does too: a
+        mid-turn arrival kept out of the schema but findable through tool-search
+        would be the same disagreement.
 
         ``withheld`` is passed in when a caller is testing many tools at once, so
         the source is asked once per assembly rather than once per tool.
         """
         if not self.offers_on_this_channel(tool):
             return False
+        if not self._visible_to_this_turn(tool.name):
+            return False
         names = self.withheld_names() if withheld is None else withheld
         return tool.name not in names
+
+    def _visible_to_this_turn(self, name: str) -> bool:
+        """Whether the turn freeze admits this name; always true outside a scope.
+
+        Admission is by identity, not by name: the entry pair must still be the
+        registered pair. A same-name re-registration therefore reads as the
+        removal it starts with -- the name drops out for the rest of the turn,
+        which the asymmetry allows -- and the replacement is an addition that
+        lands on the next turn like any other, instead of changing an admitted
+        entry's schema between two model calls.
+
+        Consulted by ``offers`` (schema, tool-search) and by ``execute``
+        (dispatch): a name the turn cannot see is one the turn cannot run,
+        or a call composed against the entry instance's schema would be
+        dispatched to whatever now wears the name.
+
+        Session-overlay tools are admitted by name: they enter with the turn
+        that carries them, after the freeze captured the base registry.
+        """
+        frozen = self._turn_names.get()
+        if frozen is None:
+            return True
+        entry = frozen.get(name)
+        if entry is not None and self._tools.get(name) is entry:
+            return True
+        overlay = self._overlay.get()
+        return bool(overlay and name in overlay)
 
     def register(self, tool: Tool, *, origin: "MCPToolRef | None" = None) -> None:
         """Register a tool, recording where it came from if it has an origin.
@@ -203,9 +379,11 @@ class ToolRegistry:
         registration rather than read back off the tool afterwards, so the
         record cannot disagree with the registration that created it.
         """
-        self._tools[tool.name] = tool
+        spec = admit_tool(tool)
+        self._tools[spec.name] = tool
+        self._specs[spec.name] = spec
         if origin is not None:
-            self._origins[tool.name] = origin
+            self._origins[spec.name] = origin
 
     def unregister(self, name: str) -> None:
         """Unregister a tool by name -- the only way a tool leaves.
@@ -214,6 +392,7 @@ class ToolRegistry:
         flight, and why the miss is worded the way it is, is in :meth:`execute`.
         """
         self._tools.pop(name, None)
+        self._specs.pop(name, None)
         self._origins.pop(name, None)
 
     def origin_of(self, name: str) -> "MCPToolRef | None":
@@ -272,6 +451,44 @@ class ToolRegistry:
         """:meth:`session_scope` over whatever this session bound, if anything."""
         with self.session_scope(self._session_tools.get(session_key)):
             yield
+
+    @contextmanager
+    def turn_scope(self) -> Iterator[None]:
+        """Freeze which registered tools this turn's schema may carry.
+
+        A tool that registers while the turn runs -- an MCP handshake finishing
+        in the background is the ordinary case since ``prewarm_mcp`` -- joins the
+        next turn instead of appearing in this one's tool array between two model
+        calls. The array is the first segment of the prompt-cache prefix, so a
+        mid-turn arrival rebuilds the whole cached prompt; the arrival loses
+        nothing by waiting, because ``_mcp_tool_notices`` already tells the model
+        the server is still connecting.
+
+        The freeze is against ADDITIONS to the array, whatever their mechanism:
+        a registration that lands mid-turn, and equally an off switch that turns
+        a tool back ON mid-turn (the withheld set as of entry is unioned into
+        every ``withheld_names`` read for the turn). Removals pass through both
+        axes -- a tool that left the registry has no schema to serve, and a
+        switch that tightens mid-turn must bind the very next call.
+        A same-name re-registration is both at once -- a removal followed by an
+        addition wearing the old label -- and each half keeps its own timing:
+        the entry drops out of this turn (captured pairs are checked by
+        identity, see ``_visible_to_this_turn``), and the replacement joins the
+        next one. Anything else would swap an admitted entry's schema in place,
+        moving the array as surely as a new name would. The one lane that may
+        still re-render mid-turn is a tool that DECLARED a dynamic schema
+        (``schema_dynamic``): its instance is stable and its variability is its
+        contract, so the freeze pins the pair and leaves the rendering to it.
+        Session-overlay tools are exempt: they enter with the turn that carries
+        them.
+        """
+        token = self._turn_names.set(dict(self._tools))
+        wtoken = self._turn_withheld.set(self.withheld_names())
+        try:
+            yield
+        finally:
+            self._turn_withheld.reset(wtoken)
+            self._turn_names.reset(token)
 
     def session_tools_in_scope(self) -> dict[str, Tool]:
         """The session tools this turn can see; empty outside any scope.
@@ -378,11 +595,22 @@ class ToolRegistry:
         runs.
         """
         withheld = self.withheld_names()
-        return [
-            tool.to_schema()
-            for tool in self._visible_tools().values()
-            if self.offers(tool, withheld) and tool.name not in self._schema_hidden
-        ]
+        # Served from the admitted snapshot, not the live object: what the
+        # model is shown is what the door checked, whatever the object has
+        # grown or mutated since. A tool that AUTHORED its own to_schema has
+        # declared a dynamic shape (load_playbook's per-render enum) and is
+        # served live -- declared dynamism, not silent widening. A session
+        # overlay tool never passed the door and keeps its live schema.
+        out: list[dict[str, Any]] = []
+        for name, tool in self._visible_tools().items():
+            if not self.offers(tool, withheld) or name in self._schema_hidden:
+                continue
+            spec = self._specs.get(name)
+            if spec is None or spec.schema_dynamic:
+                out.append(tool.to_schema())
+            else:
+                out.append(spec.schema)
+        return out
 
     @trace.instrument("tool.call", extract=semconv.tool_call)
     async def execute(
@@ -415,8 +643,17 @@ class ToolRegistry:
         #
         # The channel half of ``offers`` cannot move in here: its ContextVar is
         # unset on internally-initiated calls, so testing it would refuse them all.
+        # The turn freeze CAN and must: a call composed against the entry
+        # instance's schema would otherwise dispatch to a same-name replacement
+        # that landed mid-turn, running arguments shaped for a tool that is no
+        # longer registered. The freeze admits on an unset scope (a registry
+        # that never enters one, an internally-initiated call), so unlike the
+        # channel gate it refuses nothing it should not.
         tool = self._visible(name)
-        if not tool or name in self.withheld_names():
+        # A registered tool answers data questions from its admitted spec; a
+        # session overlay tool never passed the door and answers live.
+        spec = self._specs.get(name) if tool is not None and self._tools.get(name) is tool else None
+        if not tool or name in self.withheld_names() or not self._visible_to_this_turn(name):
             # No catalog listing on the end of it. Unfolded, every schema is
             # already in this request and a list only repeats it; folded, a
             # cataloged tool is reached through ``tool_call``, which appends the
@@ -442,8 +679,8 @@ class ToolRegistry:
             # and adds ``truncation`` to that same run_meta, so a streamed reply cut
             # mid-arguments arrives carrying all three -- the flag, the verdict, and
             # the parked text.
-            hint = tool.truncation_hint
-            return truncation.as_error(name) + (f" {hint}" if hint else "") + _received_tail(params)
+            hint = (spec or tool).truncation_hint
+            return _truncation_error(truncation) + (f" {hint}" if hint else "") + _received_tail(params)
         if run_meta and run_meta.arguments_repaired and run_meta.last_of_turn:
             # Two facts, two readings, and nothing here to choose between them.
             # The arguments did not parse and nothing arrived after this call,
@@ -452,7 +689,7 @@ class ToolRegistry:
             # branch rather than one being asserted: a model told to split up a
             # call it merely misspelled goes looking for a size problem it does
             # not have. Longer than a verdict, and the length is the point.
-            hint = tool.incomplete_hint
+            hint = (spec or tool).incomplete_hint
             limit_branch = (
                 f"\n\nIf it was the output limit: {hint}"
                 if hint
@@ -476,15 +713,20 @@ class ToolRegistry:
             )
 
         try:
-            # Attempt to cast parameters to match schema types
-            params = tool.cast_params(params)
+            params = cast_params(tool.parameters, tool.cast_params(params))
 
-            # Validate parameters
-            errors = tool.validate_params(params)
+            errors = validate_params(tool.parameters, params) + tool.validate_params(params)
             if errors:
                 return f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors) + _hint
 
-            ceiling = tool.timeout_seconds or self.DEFAULT_TOOL_TIMEOUT_S
+            # Post-validation, pre-dispatch: the point the paper names. Guarded
+            # so a registry with no gates runs today's path byte for byte.
+            if self._tool_gates:
+                verdict = await self._adjudicate(name, params)
+                if verdict is not None:
+                    return verdict
+
+            ceiling = (spec or tool).timeout_seconds or self.DEFAULT_TOOL_TIMEOUT_S
             if tool.blocking_for(params):
                 # Intentionally waits on a human — must not be timer-killed.
                 result = await tool.execute(**params)
@@ -543,6 +785,29 @@ class ToolRegistry:
             return f"Error: Tool '{name}' timed out after {ceiling:.0f}s." + _hint
         except Exception as e:
             return f"Error executing {name}: {str(e)}" + _hint
+
+    async def _adjudicate(self, name: str, params: dict[str, Any]) -> str | None:
+        """Run the cast gates over one validated call; the first non-None
+        verdict replaces it.
+
+        A verdict is returned verbatim -- no retry hint appended: the
+        adjudication text is the complete result. A gate that raises refuses
+        the call it was adjudicating (fail-closed, naming the gate), because
+        failing open would make a gate's bugs silent permission grants. The
+        turn's working directory is passed explicitly so a gate never fishes
+        it out of params; None outside a bound turn (a subagent backend, an
+        internally-initiated call), and the gate decides for itself.
+        """
+        session_workdir = workdir.current()
+        for gate in self._tool_gates:
+            gate_name = getattr(gate, "name", None) or type(gate).__name__
+            try:
+                verdict = await gate.adjudicate(name, params, session_workdir=session_workdir)
+            except Exception as e:
+                return f"Error: tool call '{name}' was refused by gate {gate_name}: {e}"
+            if verdict is not None:
+                return verdict
+        return None
 
     @property
     def tool_names(self) -> list[str]:

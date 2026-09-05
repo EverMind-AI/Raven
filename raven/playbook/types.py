@@ -29,6 +29,7 @@ from pydantic.alias_generators import to_camel
 
 from raven.agent.subagent.dag_graph import DagNodeSpec
 from raven.config.schema import MCPServerConfig
+from raven.utils.paths import mint_slug
 
 SPEC_VERSION = 1
 
@@ -39,18 +40,12 @@ the schema alone cannot (``model_copy`` skips validators, and the tool
 argument validator has no ``pattern`` support)."""
 _NAME_RE = NAME_RE
 _NODE_ID_RE = r"^[A-Za-z0-9_-]+$"
-_SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 NodeSpec = DagNodeSpec
 """One step of the graph -- the DAG's own node model, not a second definition.
 
-A playbook's ``nodes[]`` used to be declared here, and the two drifted: neither
-was a superset (this one had ``skills`` / ``mcps`` / ``confirm``, the DAG's had
-``inputs``), the step's target field was spelled ``agent`` here and ``subagent``
-there,
-and a field a playbook could write but no graph could carry was silently dropped
-at dispatch. The subset discipline the two are supposed to have -- a playbook's
-fields are a subset of a graph's -- is now structural rather than a rule someone
+``NodeSpec`` is ``DagNodeSpec``, so a playbook's node fields are a subset of a
+graph's by construction rather than a rule someone
 has to remember.
 
 The camelCase wire spelling is unchanged: ``DagNodeSpec`` carries the camel alias
@@ -65,7 +60,7 @@ as ``SubAgentDagSpec.confirm``), where "approve this" means the whole graph.
 
 
 def slugify(name: str) -> str:
-    slug = _SLUG_RE.sub("-", name.lower()).strip("-")
+    slug = mint_slug(name)
     return slug or "playbook"
 
 

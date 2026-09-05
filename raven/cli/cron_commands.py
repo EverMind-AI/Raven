@@ -1,7 +1,7 @@
 """``raven cron`` subapp — operator-facing CLI for the CronService
 state at ``~/.raven/cron/jobs.json``.
 
-7 commands (per plan ``sorted-brewing-crayon.md``):
+Commands:
 
 - ``cron list [--all]``         — overview + service banner
 - ``cron get <id>``             — full detail of one job
@@ -26,20 +26,16 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
 from raven.cli._log_silence import mute_subsystem_logs_unless_debug
-from raven.config.paths import get_cron_dir
+from raven.core.cron_stack import build_cron_service
 from raven.proactive_engine.schedulers.cron.service import CronService
 from raven.proactive_engine.schedulers.cron.types import CronJob, CronSchedule
-
-if TYPE_CHECKING:
-    pass
-
 
 cron_app = typer.Typer(
     help="Inspect and manage scheduled cron jobs (~/.raven/cron/jobs.json)",
@@ -64,7 +60,7 @@ def _open_service() -> CronService:
     jobs across all channels — survives a future default change in
     CronService that might tighten to a restrictive default. Gateway
     keeps the actual delivery routing."""
-    return CronService(get_cron_dir() / "jobs.json", allowed_channels=None)
+    return build_cron_service(allowed_channels=None)
 
 
 _INTERACTIVE_CHANNELS = ("tui",)
@@ -104,8 +100,8 @@ def _print_runner_status(service: CronService) -> None:
     the banner can honestly say "next wake due" while nothing ever fires."""
     import time
 
-    from raven.cli._gateway_lock import read_status as read_gateway_status
     from raven.config.loader import load_config
+    from raven.gateway.lock import read_status as read_gateway_status
 
     gateway = read_gateway_status(now=time.time())
     console.print(

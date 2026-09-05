@@ -1,0 +1,20 @@
+[plugin]
+id                 = "playbook"
+version            = "0.2.0"
+display_name       = "Playbooks"
+raven              = ">=0.2"
+bundled            = true
+enabled_by_default = true
+
+# Both tools are built unbound: the funnel they serve is assembled by the
+# loop after every factory has run, and arrives through bind_runtime
+# (RuntimeHandles.playbook_runtime). A loop that builds no funnel leaves the
+# handle None and the tools decline, which unregisters them quietly -- so
+# `playbooks.enabled: false` still turns the feature all the way off.
+[[plugin.contributes.tools]]
+name    = "load_playbook"
+factory = "raven.plugins.bundled.playbook.plugin:make_load_playbook_tool"
+
+[[plugin.contributes.tools]]
+name    = "create_playbook"
+factory = "raven.plugins.bundled.playbook.plugin:make_create_playbook_tool"

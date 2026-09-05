@@ -62,8 +62,8 @@ def flag_truncation(
     it and none is derived when it is absent -- which is why this function no
     longer needs the generation settings or the model id at all. A comparison
     would have to agree with the request on both a number and a model id, and
-    that coupling is what broke five times on this branch. No surveyed agent
-    (LiteLLM, OpenClaw, opencode, hermes-agent) carries such a comparison.
+    that coupling is what no surveyed agent (LiteLLM, OpenClaw, opencode,
+    hermes-agent) carries either.
     """
     truncated = finish_reason == "length"
 

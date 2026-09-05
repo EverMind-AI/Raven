@@ -16,13 +16,15 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, get_args
 
 from loguru import logger
 
 from raven.config.env_file import MIRRORED_KEYS, refresh_env_file
+from raven.config.schema import WEB_VENDOR_ENV_VARS, WebFetchProvider, WebSearchProvider
 from raven.rpc import LOCAL_CHANNEL
 from raven.rpc.errors import ConfigValidationError
+from raven.utils.atomic_io import atomic_update
 
 if TYPE_CHECKING:
     from raven.rpc.methods import AgentLoopFactory
@@ -48,7 +50,7 @@ def _hub_marker_name() -> str | None:
     skill correctly reports ``hub=false``.
     """
     try:
-        from raven.rpc.methods.skillhub import MARKER
+        from raven.skill_hub.hub import MARKER
     except ImportError:
         logger.debug("ext.list: skill market not installed; reporting every skill as hub=false")
         return None
@@ -61,10 +63,9 @@ def _hub_marker_name() -> str | None:
 
 
 async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
-    from raven.cli._plugin_stack import plugin_discovery_sources
     from raven.config.loader import load_config
     from raven.config.raven import load_raven_config
-    from raven.plugin.discover import PluginDiscovery
+    from raven.core.plugin_stack import discover_plugins
 
     loop = _safe_loop(agent_loop_factory)
     ec = load_raven_config()
@@ -73,7 +74,7 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
     catalog = getattr(getattr(loop, "context", None), "skills", None)
     if catalog is None:
         try:
-            from raven.memory_engine.skill_forge.catalog import LocalSkillCatalog
+            from raven.memory_engine import LocalSkillCatalog
 
             config = load_config()
             catalog = LocalSkillCatalog(
@@ -117,7 +118,7 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
     plugins: list[dict] = []
     try:
         disabled = set(ec.plugins.disabled)
-        for dp in PluginDiscovery(**plugin_discovery_sources()).discover():
+        for dp in discover_plugins(ec):
             mf = dp.manifest
             plugins.append(
                 {
@@ -168,7 +169,7 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
             from raven.mcp.client import resolve_transport
             from raven.mcp.oauth import pending_url
 
-            mgr = getattr(loop, "_mcp_manager", None)
+            mgr = getattr(loop, "mcp_manager_if_started", None)
             live = {snap["name"]: snap for snap in mgr.status()} if mgr is not None else {}
             for name, sc in servers.items():
                 count = owned.get(name, 0)
@@ -196,16 +197,23 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
             logger.exception("ext.list: config mcp merge failed")
         for name in loop.tools.tool_names:
             tool = loop.tools.get(name)
+            # Asked, not inferred from membership: a tool the operator switched
+            # off -- or one registered without the credential it needs -- stays
+            # in the registry by construction, so "registered" stopped meaning
+            # "the model can call it". ``offers_by_name`` is the one predicate
+            # that answers the latter, and reporting anything else here tells a
+            # deployer a capability is on while the model is never offered it.
+            offered = loop.tools.offers_by_name(name)
             tools.append(
                 {
                     "name": name,
                     "description": (getattr(tool, "description", "") or "")[:200],
-                    "enabled": True,
+                    "enabled": offered,
                     "mcp_server": tool_owner.get(name),
-                    "needs": None,
+                    "needs": None if offered else _needs_of(name),
                 }
             )
-        tools.extend(_gated_tools({t["name"] for t in tools}))
+        tools.extend(_gated_tools({t["name"] for t in tools}, getattr(loop, "web_search_provider", "serper")))
 
     return {"skills": skills, "plugins": plugins, "tools": tools, "mcp": mcp}
 
@@ -215,14 +223,57 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
 # model reaches for it and relays a failure naming a config path to whoever is
 # on the other end of a channel -- but the same decision also erased them from
 # the user's view, so the feature looked deleted rather than unconfigured.
-_KEY_GATED_TOOLS: tuple[tuple[str, str, str], ...] = (("web_search", "tools.web.search.apiKey", "SERPER_API_KEY"),)
+def _key_gated_tools(search_provider: str) -> tuple[tuple[str, str, str], ...]:
+    """``(tool, setting, env)`` for each key-gated tool, keyed to the vendor the
+    loop actually selected: a Tavily deployment is told to fill the Tavily slot,
+    not Serper's."""
+    from raven.config.schema import WEB_VENDOR_ENV_VARS
+
+    vendor = search_provider if search_provider in WEB_VENDOR_ENV_VARS else "serper"
+    return (("web_search", f"tools.web.providers.{vendor}.apiKey", WEB_VENDOR_ENV_VARS[vendor]),)
 
 
-def _gated_tools(registered: set[str]) -> list[dict]:
+def _needs_of(name: str) -> dict | None:
+    """The credential an unavailable tool is missing, or None if it lacks none.
+
+    ``agent/tools/capabilities.py`` is the single description of which tool
+    wants which credential, pinned against what the loop actually offers. Asked
+    here rather than restated, because a second table is how the three media
+    tools ended up with no setup affordance while web_search had one.
+
+    Only the credential gate answers. A tool can be unavailable for two
+    unrelated reasons, and ``is_disabled``'s own docstring names the cost of
+    collapsing them: a switched-off tool usually has its key set, so reporting
+    it as needing one sends the deployer to set a credential already there. An
+    off switch is the operator's own doing and needs no instructions.
+
+    ``key_path``, never ``config_path``: for the media family the latter is the
+    *model* field, and naming it as the missing credential sends the reader to
+    edit a line that holds no key.
+    """
+    from raven.agent.tools.capabilities import CAPABILITIES, Need, is_configured
+    from raven.config.loader import load_config
+
+    for cap in CAPABILITIES:
+        if cap.tool != name or cap.need is Need.NOTHING:
+            continue
+        if not (cap.key_path or cap.env_var):
+            return None
+        try:
+            if is_configured(cap, load_config()):
+                return None
+        except Exception:  # noqa: BLE001 - an unreadable config is not a credential verdict
+            logger.warning("ext.list: could not read the config to explain why {} is unavailable", name)
+            return None
+        return {"setting": cap.key_path, "env": cap.env_var}
+    return None
+
+
+def _gated_tools(registered: set[str], search_provider: str = "serper") -> list[dict]:
     """Rows for key-gated tools that are not registered, so the page can offer
     the field instead of showing nothing at all."""
     rows: list[dict] = []
-    for name, setting, env in _KEY_GATED_TOOLS:
+    for name, setting, env in _key_gated_tools(search_provider):
         if name in registered:
             continue
         rows.append(
@@ -248,10 +299,9 @@ def _cron_service(loop):
     svc = getattr(loop, "cron_service", None) if loop is not None else None
     if svc is not None:
         return svc
-    from raven.config.paths import get_cron_dir
-    from raven.proactive_engine.schedulers.cron.service import CronService
+    from raven.core.cron_stack import build_cron_service
 
-    return CronService(get_cron_dir() / "jobs.json", allowed_channels=None)
+    return build_cron_service(allowed_channels=None)
 
 
 def _job_info(j) -> dict:
@@ -377,7 +427,8 @@ async def cron_runs(params: dict, *, agent_loop_factory=None) -> dict:
     from datetime import datetime
 
     from raven.config.loader import load_config
-    from raven.rpc.methods.session import _manager_for, _safe_invoke_factory
+    from raven.rpc.methods.session import _safe_invoke_factory
+    from raven.session.resolve import manager_for
 
     job_id = str(params.get("id", ""))
     svc = _cron_service(_safe_loop(agent_loop_factory))
@@ -387,7 +438,7 @@ async def cron_runs(params: dict, *, agent_loop_factory=None) -> dict:
 
     session_key = f"cron:{job_id}"
     try:
-        mgr = _manager_for(_safe_invoke_factory(agent_loop_factory), load_config())
+        mgr = manager_for(_safe_invoke_factory(agent_loop_factory), load_config())
         raw = mgr.peek(session_key)
         messages = raw.messages if raw is not None else []
     except Exception:
@@ -458,13 +509,6 @@ async def settings_get(params: dict, *, agent_loop_factory=None) -> dict:
     return {"settings": _mask_secrets(raw), "config_path": str(path), "raven_version": ver}
 
 
-def _write_config_atomic(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, path)
-
-
 async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
     """Whitelisted dotted-path config writes for a settings surface.
 
@@ -480,9 +524,15 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
     if key == "language":
         if value not in ("en", "zh"):
             raise ConfigValidationError("language must be en | zh")
+        from raven import i18n
         from raven.config.update import set_language
 
         prev = set_language(value)
+        # The file is where the next process reads it; this is where the one
+        # answering right now does. The CLI seeds it at startup
+        # (``cli/commands.py``), and nothing else would until a restart, so a
+        # user who switched language here went on being answered in the old one.
+        i18n.set_language(value)
         return {"applied": True, "previous": prev}
 
     if key in ("cron.defaultTimezone", "cron.forwardChannels"):
@@ -504,10 +554,10 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
         return {"applied": True, "previous": prev}
 
     if key.startswith("channels.") and key.endswith(".enabled"):
-        from raven.config.update_channels import _channel_names, disable_channel, enable_channel
+        from raven.config.update_channels import channel_names, disable_channel, enable_channel
 
         name = key.split(".")[1]
-        if name not in _channel_names():
+        if name not in channel_names():
             raise ConfigValidationError(f"unknown channel: {name}")
         if not isinstance(value, bool):
             raise ConfigValidationError("enabled must be a boolean")
@@ -526,9 +576,10 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
     if checker is not None:
         written = _write_raw_key(key, checker(value))
         if key in MIRRORED_KEYS:
-            # cli/acp sub-agents read these two from the environment, not from
-            # the config, so the ~/.raven/env mirror has to follow the write or
-            # they keep running on the key this call just replaced.
+            # cli/acp sub-agents read every web credential from the
+            # environment, not from the config, so the ~/.raven/env mirror has
+            # to follow the write or they keep running on the key this call
+            # just replaced.
             refresh_env_file()
         return written
 
@@ -536,23 +587,32 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
 
 
 def _write_raw_key(key: str, value: Any) -> dict:
-    """Dotted-path read-modify-write into config.json, atomic replace."""
+    """Dotted-path read-modify-write into config.json, under the config lock.
+
+    The same ``atomic_update`` transaction the ``update.py`` writers run, so a
+    console save cannot interleave with a CLI save on the same file, and a
+    config held at 0600 keeps its mode across the replace.
+    """
     from raven.config.loader import get_config_path, read_raw_or_raise
 
     path = get_config_path()
-    try:
-        raw = read_raw_or_raise(path)
-    except Exception as e:
-        raise ConfigValidationError(f"config unreadable: {e}") from None
-    node = raw
-    parts = key.split(".")
-    for p in parts[:-1]:
-        node = node.setdefault(p, {})
-        if not isinstance(node, dict):
-            raise ConfigValidationError(f"config path {key} blocked by non-object")
-    prev = node.get(parts[-1])
-    node[parts[-1]] = value
-    _write_config_atomic(path, raw)
+
+    def _apply(_text: str | None) -> tuple[str, Any]:
+        try:
+            raw = read_raw_or_raise(path)
+        except Exception as e:
+            raise ConfigValidationError(f"config unreadable: {e}") from None
+        node = raw
+        parts = key.split(".")
+        for p in parts[:-1]:
+            node = node.setdefault(p, {})
+            if not isinstance(node, dict):
+                raise ConfigValidationError(f"config path {key} blocked by non-object")
+        prev = node.get(parts[-1])
+        node[parts[-1]] = value
+        return json.dumps(raw, indent=2, ensure_ascii=False), prev
+
+    prev = atomic_update(path, _apply)
     return {"applied": True, "previous": prev}
 
 
@@ -613,6 +673,14 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "tools.exec.timeout": _chk_int("tools.exec.timeout", 5, 3600),
     "tools.web.search.apiKey": _chk_str("tools.web.search.apiKey", 200),
     "tools.web.jinaApiKey": _chk_str("tools.web.jinaApiKey", 200),
+    "tools.web.search.provider": _chk_enum("tools.web.search.provider", *get_args(WebSearchProvider)),
+    "tools.web.fetch.provider": _chk_enum("tools.web.fetch.provider", *get_args(WebFetchProvider)),
+    # One slot per vendor: the same low-risk shape as the two legacy keys above,
+    # a credential the deployment already chose to hold, not a containment control.
+    **{
+        f"tools.web.providers.{vendor}.apiKey": _chk_str(f"tools.web.providers.{vendor}.apiKey", 200)
+        for vendor in WEB_VENDOR_ENV_VARS
+    },
     "tools.media.image.apiKey": _chk_str("tools.media.image.apiKey", 200),
     "tools.deepResearch.apiKey": _chk_str("tools.deepResearch.apiKey", 200),
     "channels.sendProgress": _chk_bool("channels.sendProgress"),
@@ -833,11 +901,11 @@ async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
 
 async def channels_status(params: dict, *, agent_loop_factory=None) -> dict:
     from raven.config.loader import load_config
-    from raven.config.update_channels import _channel_names, channel_field_specs
+    from raven.config.update_channels import channel_field_specs, channel_names
 
     config = load_config()
     items = []
-    for name in _channel_names():
+    for name in channel_names():
         model = getattr(config.channels, name, None)
         enabled = bool(getattr(model, "enabled", False))
         missing: list[str] = []
@@ -887,7 +955,7 @@ async def channels_status(params: dict, *, agent_loop_factory=None) -> dict:
     try:
         import time
 
-        from raven.cli._gateway_lock import read_status
+        from raven.gateway.lock import read_status
 
         gateway_running = read_status(time.time()) is not None
     except Exception:
@@ -899,7 +967,7 @@ async def channels_status(params: dict, *, agent_loop_factory=None) -> dict:
     # into the first is how a working channel came to read as broken.
     live = None
     try:
-        from raven.channels.live_probe import channel_liveness
+        from raven.gateway.live_probe import channel_liveness
 
         live = await channel_liveness()
     except Exception:
@@ -927,15 +995,15 @@ async def channels_configure(params: dict, *, agent_loop_factory=None) -> dict:
     box it showed, and a blank one means "left as is", not "erase".
     """
     from raven.config.update_channels import (
-        _channel_names,
         channel_field_specs,
+        channel_names,
         disable_channel,
         enable_channel,
         set_channel_fields,
     )
 
     name = str(params.get("name") or "")
-    if name not in _channel_names():
+    if name not in channel_names():
         raise ConfigValidationError(f"unknown channel: {name}")
     raw = params.get("fields")
     if raw is None:
@@ -977,7 +1045,7 @@ async def channels_configure(params: dict, *, agent_loop_factory=None) -> dict:
     # could ever appear, and the page said "reopen Raven App" instead of
     # signing anyone in. Ask the gateway to start (or stop) it now.
     if enabled is not None:
-        from raven.channels.live_probe import channel_start, reset_cache
+        from raven.gateway.live_probe import channel_start, reset_cache
 
         try:
             await channel_start(name, enabled=enabled)
@@ -1003,7 +1071,7 @@ async def channels_qr(params: dict) -> dict:
     """
     name = str(params.get("name") or "")
     try:
-        from raven.channels.live_probe import channel_qr
+        from raven.gateway.live_probe import channel_qr
 
         answer = await channel_qr(name)
     except Exception:
@@ -1398,6 +1466,9 @@ def register_console_methods(dispatcher, *, agent_loop_factory=None) -> None:
     dispatcher.register("settings.usage", bind(settings_usage))
     dispatcher.register("settings.everos", bind(settings_everos))
     dispatcher.register("settings.everosSet", bind(settings_everos_set))
+    # The camelCase spelling is what the shipped TUI calls; the snake_case name is
+    # the method's, double-registered until the TUI reads it.
+    dispatcher.register("settings.everos_set", bind(settings_everos_set))
     dispatcher.register("channels.status", bind(channels_status))
     dispatcher.register("channels.configure", bind(channels_configure))
     dispatcher.register("channels.qr", channels_qr)

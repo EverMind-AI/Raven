@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from raven.config.schema import ModelEndpoint
-from raven.providers.base import ErrorClassification, GenerationSettings, LLMResponse
+from raven.contracts.llm_provider import ErrorClassification, GenerationSettings, LLMResponse
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.providers.per_model_provider import PerModelProvider
 from raven.providers.prompt_cache import CACHE_CONTROL

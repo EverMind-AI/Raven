@@ -12,15 +12,15 @@ def isolated_config(tmp_path: Path):
     """A config path of our own, so this reads no developer's real channels."""
     import json
 
-    import raven.config.loader as loader
+    import raven.home as raven_home_module
     from raven.config.loader import set_config_path
 
-    previous = loader._current_config_path
+    previous = raven_home_module._current_config_path
     cfg_path = tmp_path / "config.json"
     cfg_path.write_text(json.dumps({"agents": {"defaults": {"workspace": str(tmp_path / "ws")}}}))
     set_config_path(cfg_path)
     yield
-    loader._current_config_path = previous
+    raven_home_module._current_config_path = previous
 
 
 from raven.rpc.methods import console as console_module
@@ -50,12 +50,12 @@ class _Mgr:
 
 
 async def _live(mapping):
+    from raven.rpc.control import register_control_methods
     from raven.rpc.dispatcher import Dispatcher
-    from raven.web_rpc.methods_config import register_config_methods
 
     d = Dispatcher()
-    register_config_methods(d, agent=None, cron=None, config=None, channel_manager=_Mgr(mapping), raven_config=None)
-    return await d.dispatch({"jsonrpc": "2.0", "id": 1, "method": "raven.channels.live", "params": {}})
+    register_control_methods(d, channel_manager=_Mgr(mapping))
+    return await d.dispatch({"jsonrpc": "2.0", "id": 1, "method": "gateway.channels.live", "params": {}})
 
 
 async def test_a_channel_that_reports_no_pairing_is_null_not_false() -> None:
@@ -78,7 +78,7 @@ async def test_status_leaves_the_live_fields_off_when_no_gateway_answers(
 ) -> None:
     """Absent, not false. A probe that cannot reach the gateway knows nothing
     about the channels, and 'not connected' would be a claim it cannot make."""
-    from raven.channels import live_probe
+    from raven.gateway import live_probe
 
     live_probe.reset_cache()
     monkeypatch.setattr(live_probe, "_endpoint", lambda: None)
@@ -93,7 +93,7 @@ async def test_status_leaves_the_live_fields_off_when_no_gateway_answers(
 async def test_status_carries_the_live_state_when_the_gateway_answers(
     isolated_config: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from raven.channels import live_probe
+    from raven.gateway import live_probe
 
     live_probe.reset_cache()
 
@@ -113,7 +113,7 @@ async def test_qr_is_empty_rather_than_an_error_when_no_gateway_answers(monkeypa
     """To this surface "nothing pending" and "nobody could say" are the same:
     there is no code to show either way, and a distinction here would only add a
     state the dialog has to explain."""
-    from raven.channels import live_probe
+    from raven.gateway import live_probe
 
     monkeypatch.setattr(live_probe, "_endpoint", lambda: None)
 
@@ -123,7 +123,7 @@ async def test_qr_is_empty_rather_than_an_error_when_no_gateway_answers(monkeypa
 
 
 async def test_qr_passes_the_gateways_answer_through(monkeypatch: pytest.MonkeyPatch) -> None:
-    from raven.channels import live_probe
+    from raven.gateway import live_probe
 
     async def _fake(name):
         assert name == "weixin"

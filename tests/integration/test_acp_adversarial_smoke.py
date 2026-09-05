@@ -127,16 +127,26 @@ class TestSessionRefusals:
 
             assert response["error"]["code"] == -32602
 
-    async def test_per_session_mcp_servers_are_refused_not_ignored(self, home, project):
+    async def test_no_mcp_server_shape_may_fail_the_dispatch(self, home, project):
+        """Per-session MCP servers are an optional capability on top of the
+        task: a well-formed stdio entry is adopted, and one this build cannot
+        honour is dropped and logged -- it costs the session those tools, never
+        the session. Refusing would turn one bad attachment into a sub-agent
+        that cannot answer at all."""
         async with stub_client(env=home) as client:
             await client.handshake()
-            response = await client.request(
-                "session/new",
-                {"cwd": str(project), "mcpServers": [{"name": "s", "command": "true", "args": []}]},
-            )
+            for entry in (
+                {"name": "s", "command": "true", "args": []},
+                {"name": "s", "args": []},
+                {"name": "s", "url": "https://x.test/mcp"},
+            ):
+                response = await client.request(
+                    "session/new",
+                    {"cwd": str(project), "mcpServers": [entry]},
+                )
 
-            assert response["error"]["code"] == -32602
-            assert response["error"]["data"]["field"] == "mcpServers"
+                assert "error" not in response, (entry, response)
+                assert response["result"]["sessionId"], entry
 
     async def test_the_connection_survives_every_refusal(self, home, project):
         async with stub_client(env=home) as client:
@@ -348,7 +358,11 @@ class TestSessionLoad:
                 for f in client.frames
                 if f.get("method") == "session/update" and f["params"]["sessionId"] == "acp:planted"
             ]
-            assert [u["sessionUpdate"] for u in updates] == [
+            # The commands advert is session-scoped (one per session, on its
+            # own stream), not part of the replayed history; the replay
+            # assertion reads the history alone.
+            replayed = [u["sessionUpdate"] for u in updates if u["sessionUpdate"] != "available_commands_update"]
+            assert replayed == [
                 "user_message_chunk",
                 "agent_thought_chunk",
                 "agent_message_chunk",
@@ -356,6 +370,7 @@ class TestSessionLoad:
                 "tool_call_update",
                 "agent_message_chunk",
             ]
+            assert [u["sessionUpdate"] for u in updates].count("available_commands_update") == 1
             assert updates[3]["title"] == "read_file: a.py"
             assert updates[3]["status"] == "pending", "a finished call must not replay as a spinner"
             for frame in client.frames:

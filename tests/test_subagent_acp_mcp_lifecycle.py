@@ -13,11 +13,11 @@ from typing import Any
 
 import pytest
 
-from raven.agent.acp.capabilities import CapabilitySnapshot
-from raven.agent.acp.pool import close_pool
-from raven.agent.acp.protocol import SESSION_MCP_CAPABILITY, AcpRemoteError
+from raven.acp_client.acp_agent import AcpAgentBackend
+from raven.acp_client.capabilities import CapabilitySnapshot
+from raven.acp_client.pool import close_pool
+from raven.acp_client.protocol import SESSION_MCP_CAPABILITY, AcpRemoteError
 from raven.agent.subagent.backends import build_third_party_backend
-from raven.agent.subagent.backends.acp_agent import AcpAgentBackend
 from raven.agent.subagent.mcp_grant import McpServerView
 from raven.config.schema import MCPServerConfig, ThirdPartyAcpSubagentConfig
 from raven.mcp.endpoint import McpEndpoints, bridge_command, socket_dir
@@ -451,7 +451,7 @@ async def _capture_under_a_beating_loop(monkeypatch):
     """Patch the capture, with a coroutine ticking for as long as it blocks."""
     beat = threading.Event()
     capture = _Capture(beat)
-    monkeypatch.setattr("raven.agent.subagent.backends.acp_agent.login_shell_env", capture)
+    monkeypatch.setattr("raven.acp_client.acp_agent.login_shell_env", capture)
 
     async def heartbeat() -> None:
         while True:

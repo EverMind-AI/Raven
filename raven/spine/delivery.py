@@ -39,14 +39,14 @@ class Capabilities:
     """
 
     interactive_login: bool = False  # QR / scan login (weixin, whatsapp); read by CLI `channel login`
-    streaming: bool = False  # SupportsStreaming slot; activated in B
+    streaming: bool = False  # SupportsStreaming slot; gates stream-chunk routing in the delivery hub
     file_attachments: bool = False  # Native outbound file upload; consumed by ChannelOutletAdapter
 
 
 @runtime_checkable
 class SupportsStreaming(Protocol):
-    """Opt-in incremental delivery (edit-in-place). Inert until the agent loop
-    is wired to produce stream chunks (scope B)."""
+    """Opt-in incremental delivery (edit-in-place). Chunks reach only an outlet
+    that also declares ``Capabilities.streaming``."""
 
     async def send_stream_chunk(self, chat_id: str, stream_id: str, delta: str, *, done: bool = False) -> None: ...
 
@@ -119,6 +119,10 @@ class DeliveryHub:
     rides is recorded synchronously on enqueue so close_stream can route to it."""
 
     def __init__(self, send_max_retries: int = _SEND_MAX_RETRIES) -> None:
+        #: Deliverables dropped after exhausting retries. A caller that needs
+        #: to know the user never saw a reply reads this; the log line alone
+        #: is invisible to code.
+        self.dropped: int = 0
         self._send_max_retries = send_max_retries
         self._outlets: dict[str, Outlet] = {}
         self._queues: dict[str, asyncio.Queue[Deliverable | _StreamClose]] = {}
@@ -259,6 +263,7 @@ class DeliveryHub:
                 return
             except Exception as exc:
                 if attempt == self._send_max_retries:
+                    self.dropped += 1
                     logger.error(
                         "delivery failed after {} retries: channel={!r} event={} reason={}",
                         self._send_max_retries,

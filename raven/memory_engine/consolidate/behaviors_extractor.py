@@ -42,8 +42,8 @@ from raven.session.manager import SessionManager
 
 if TYPE_CHECKING:
     from raven.config.raven import BehaviorsExtractConfig
+    from raven.contracts.llm_provider import LLMProvider
     from raven.memory_engine.consolidate.consolidator import MemoryStore
-    from raven.providers.base import LLMProvider
 
 
 _EXTRACT_TOOL_NAME = "emit_behavior_events"
@@ -331,7 +331,7 @@ class BehaviorsExtractor:
         total_new = 0
         for session_path in sorted(sessions_dir.rglob("*.jsonl")):
             try:
-                added = await self._extract_one_session(
+                added = await self.extract_session(
                     session_path,
                     offsets,
                 )
@@ -347,11 +347,12 @@ class BehaviorsExtractor:
         offsets.save()
         return total_new
 
-    async def _extract_one_session(
+    async def extract_session(
         self,
         session_path: Path,
         offsets: BehaviorsOffsets,
     ) -> int:
+        """Extract one session's behaviours; ``run_all`` is this over every session."""
         session_key = _session_key_from_path(session_path)
         messages = _load_session_messages(session_path)
         offset = offsets.get(session_key)

@@ -4,9 +4,9 @@ A different noun from ``methods/subagents.py``, which configures *which*
 sub-agents exist. This group is about the instances a session has actually
 talked to -- the things the direct-chat surface addresses.
 
-Every read here goes through something already shared with the web RPC (the
-instance registry, ``reconcile_instance_rows``, the record directories the
-runtime writes) rather than deriving a second answer, so the two surfaces cannot
+Every read here goes through ``raven.agent.subagent.instances`` (the registry
+and ``reconcile_instance_rows``) and the record directories the runtime writes,
+rather than deriving a second answer here, so the TUI and the served page cannot
 come to disagree about what an instance is or which ones are still alive.
 
 The one write here is ``subagents.instance.create``: the user's own way to
@@ -19,9 +19,9 @@ the decision, not an oversight -- a sub-agent that is answering is left to finis
 and its record is the evidence either way (see the concurrent-direct-chats
 design, D3). ``SubagentManager.chat`` still unwinds cleanly if the lane is torn
 down for another reason (shutdown, session delete): the record is finished
-``cancelled`` and the registry row follows. The web surface keeps its own
-(``raven.subagents.instances.cancel``) because a spawn there is a background task
-with no turn to cancel.
+``cancelled`` and the registry row follows. A host where a spawn is a
+background task with no turn to cancel reaches it over the wire through
+``subagent.cancel_instance``.
 """
 
 from __future__ import annotations
@@ -245,6 +245,40 @@ def _mark_resumable(rows: list[dict[str, Any]], manager: Any) -> list[dict[str, 
     return [{**row, "resumable": resumable(row)} for row in rows]
 
 
+def _drop_nodes_that_never_ran(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Leave out the graph nodes that were declared and never dispatched.
+
+    A graph declares every node up front, and the runner writes a registry row
+    for one the moment it reaches a terminal status -- including the nodes it
+    never reached at all. ``skipped`` is exactly that state and says so in the
+    runner's own words: ``_mark_stopped`` turns a ``pending`` node into a
+    ``skipped`` one because "a `pending` one was never dispatched, which is what
+    `skipped` means everywhere else", and ``_cascade_failures`` skips whatever
+    depended on a node that failed.
+
+    Such a node has no conversation, no transcript and no handle of its own, so
+    a list of the instances a conversation has used is the wrong place for it:
+    one failure at the top of a graph filled the panel with rows that never did
+    anything. The graph sheet still draws them, out of the graph, where a node
+    that did not run is worth seeing next to the one that stopped it.
+
+    ``cancelled`` is deliberately kept. The runner distinguishes the two -- a
+    cancelled node "already has a real start time from its dispatch" -- so it
+    ran, however briefly, and what it managed to do before the stop is a real
+    part of the conversation's history.
+
+    Applied BEFORE ``_collapse_dag_rows``, not after. That helper pairs a legacy
+    handle row -- one written before nodes carried a ``nodeId`` -- by name, and
+    refuses to guess when two nodes answer to it. A skipped node makes that
+    second answer: with one completed ``synthesize`` and one skipped
+    ``synthesize``, the completed run's handle row paired with neither, so the
+    one invocation came back twice -- once un-attributed and once as the node --
+    and the skipped row was dropped only afterwards, too late to stop having
+    caused it. Filtered first, it never takes part in the pairing.
+    """
+    return [r for r in rows if not (r.get("kind") == "dag-node" and r.get("status") == "skipped")]
+
+
 async def instances_list(
     params: dict[str, Any],
     *,
@@ -265,7 +299,7 @@ async def instances_list(
     )
     return {
         "instances": _mark_titles(
-            _mark_resumable(_collapse_dag_rows(reconciled), manager),
+            _mark_resumable(_collapse_dag_rows(_drop_nodes_that_never_ran(reconciled)), manager),
             _session_dir(agent_loop_factory, session_key),
         ),
         "pending_handoff_count": handoff.pending_count(session_key) if handoff is not None else 0,
@@ -569,7 +603,7 @@ async def _delete_acp_session(agent: str, session_id: str) -> None:
     Imported here rather than at module level, so the acp pool -- and the
     subprocess layer it drags in -- stays out of the rpc import graph.
     """
-    from raven.agent.acp.pool import get_pool
+    from raven.acp_client.pool import get_pool
 
     await get_pool().delete_session(agent, session_id)
 

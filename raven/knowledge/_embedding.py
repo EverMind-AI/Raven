@@ -3,8 +3,7 @@
 The endpoint is the one the operator already configured for EverOS memory
 (``~/.everos/raven/everos.toml``, ``[embedding]``): an OpenAI-compatible base
 URL, a key and a model. Reusing it means a knowledge base needs no second
-credential and no picker fed from a provider catalogue -- the earlier attempt
-walked one and found it empty, so no base could be created at all.
+credential and no picker fed from a provider catalogue.
 
 Reading that file is *not* the same as depending on the EverOS service. Only
 the three strings are taken; the request goes straight to the embedding

@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from raven.config.loader import EXTENSION_KEYS
 from raven.config.raven import (
+    EvalEngineConfig,
     HubSourceConfig,
     MemoryConfig,
     PluginsConfig,
@@ -73,7 +74,6 @@ class TestDefaults:
         assert c.reranker_model == "default"
         assert c.reranker_url == "http://localhost:1357"
         assert c.reranker_api_key is None
-        assert c.mass_library_db is None
 
         exported = c.model_dump_json()
         assert not re.search(
@@ -86,6 +86,8 @@ class TestDefaults:
         assert isinstance(c.plugins, PluginsConfig)
         assert isinstance(c.memory, MemoryConfig)
         assert isinstance(c.skill_forge.router, SkillForgeRouterConfig)
+        assert isinstance(c.eval_engine, EvalEngineConfig)
+        assert c.eval_engine.enabled is False
 
 
 # ---------------------------------------------------------------------------
@@ -295,7 +297,7 @@ class TestSubagentDagSection:
 
         assert sd.verdict_enabled is True
         assert sd.verdict_model is None
-        assert sd.verdict_timeout_seconds == 30.0
+        assert sd.verdict_timeout_seconds == 180.0
         assert sd.evidence_budget_chars == 8000
         assert sd.adjudication_timeout_seconds == 600.0
         assert sd.max_continuations == 2
@@ -369,49 +371,38 @@ class TestLoaderIntegration:
 
 
 # ---------------------------------------------------------------------------
-# Deprecation surface — skill_forge.mass_library_db
+# Version floor 4 -- the legacy leaves leave the file, not the schema
 # ---------------------------------------------------------------------------
 
 
-class TestMassLibraryDbDeprecation:
-    def test_legacy_only_emits_deprecation_warning(
-        self,
-        tmp_path: Path,
-    ) -> None:
-        path = _write_config(
-            tmp_path,
-            {
-                "skill_forge": {"mass_library_db": "/tmp/old.db"},
-            },
-        )
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            load_raven_config(path)
-        deps = [w for w in caught if issubclass(w.category, DeprecationWarning)]
-        assert deps, "expected at least one DeprecationWarning"
-        assert "mass_library_db" in str(deps[0].message)
-        assert "skillForge.router.hub.endpoint" in str(deps[0].message)
+class TestLegacyLeavesMigration:
+    def test_legacy_leaves_load_and_are_told_once(self, tmp_path: Path) -> None:
+        from raven.config.loader import drain_migration_notices
 
-    def test_both_old_and_new_no_deprecation_warning(
-        self,
-        tmp_path: Path,
-    ) -> None:
-        """When the user has set the new Hub endpoint, the legacy field
-        becomes a no-op — info log only, no warning."""
         path = _write_config(
             tmp_path,
             {
-                "skill_forge": {
-                    "mass_library_db": "/tmp/old.db",
-                    "router": {"hub": {"endpoint": "http://hub.test"}},
-                },
+                "skillForge": {"skillsDir": "/srv/skills", "massLibraryDb": "/tmp/old.db"},
+                "context": {"engine": "curator"},
             },
         )
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            load_raven_config(path)
-        deps = [w for w in caught if issubclass(w.category, DeprecationWarning)]
-        assert deps == []
+        drain_migration_notices()
+        cfg = load_raven_config(path)
+        assert [d.path for d in cfg.skill_forge.local_dirs] == ["/srv/skills"]
+        assert not hasattr(cfg.skill_forge, "mass_library_db")
+        assert not hasattr(cfg.context, "engine")
+        notices = drain_migration_notices()
+        assert any("skillForge.skillsDir" in n for n in notices)
+        assert any("skillForge.massLibraryDb" in n for n in notices)
+        assert any("context.engine" in n for n in notices)
+
+    def test_an_explicit_local_dirs_list_wins_over_the_legacy_dir(self, tmp_path: Path) -> None:
+        path = _write_config(
+            tmp_path,
+            {"skill_forge": {"skills_dir": "/srv/old", "local_dirs": [{"path": "/srv/new"}]}},
+        )
+        cfg = load_raven_config(path)
+        assert [d.path for d in cfg.skill_forge.local_dirs] == ["/srv/new"]
 
     def test_no_legacy_field_no_warning(self, tmp_path: Path) -> None:
         path = _write_config(

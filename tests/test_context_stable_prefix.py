@@ -106,8 +106,8 @@ class TestWhenPhaseBIsTheOnlyThingThatFollows:
 
     async def test_the_assembler_declares_it_for_an_all_stable_phase_a(self):
         from raven.context_engine import ContextAssembler, TurnContext
-        from raven.context_engine.base import AssemblyContext, Segment
-        from raven.memory_engine.base import TokenBudget
+        from raven.contracts.assembled import TokenBudget
+        from raven.contracts.context import AssemblyContext, Segment
 
         class _PhaseA:
             def __init__(self, name, order, text):
@@ -140,8 +140,8 @@ class TestWhenPhaseBIsTheOnlyThingThatFollows:
 
     async def test_an_all_stable_message_with_no_tail_declares_nothing(self):
         from raven.context_engine import ContextAssembler, TurnContext
-        from raven.context_engine.base import AssemblyContext, Segment
-        from raven.memory_engine.base import TokenBudget
+        from raven.contracts.assembled import TokenBudget
+        from raven.contracts.context import AssemblyContext, Segment
 
         class _PhaseA:
             def __init__(self, name, order, text):
@@ -187,8 +187,8 @@ class TestTheShippedSegmentsDeclareThemselves:
 class TestTheAssemblerDeclaresIt:
     async def test_the_offset_points_at_the_message_it_was_measured_over(self):
         from raven.context_engine import ContextAssembler, TurnContext
-        from raven.context_engine.base import AssemblyContext, Segment
-        from raven.memory_engine.base import TokenBudget
+        from raven.contracts.assembled import TokenBudget
+        from raven.contracts.context import AssemblyContext, Segment
 
         class _Seg:
             def __init__(self, name, order, text, stable):
@@ -214,8 +214,8 @@ class TestTheAssemblerDeclaresIt:
 
     async def test_an_all_volatile_prefix_declares_nothing(self):
         from raven.context_engine import ContextAssembler, TurnContext
-        from raven.context_engine.base import AssemblyContext, Segment
-        from raven.memory_engine.base import TokenBudget
+        from raven.contracts.assembled import TokenBudget
+        from raven.contracts.context import AssemblyContext, Segment
 
         class _Seg:
             name, order, needs_prefix, stable = "recall", 1, False, False

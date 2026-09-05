@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from benchmarks.appworld.evolve import adapter as aw_adapter
-from raven.evolver.tree import git_ops
+from evolver.tree import git_ops
 
 
 @dataclass

@@ -43,9 +43,9 @@ from typing import Any
 
 import pytest
 
-from raven.agent.acp import protocol
-from raven.agent.acp.client import AcpClient
-from raven.agent.acp.permissions import auto_approver
+from raven.acp_client import protocol
+from raven.acp_client.client import AcpClient
+from raven.acp_client.permissions import auto_approver
 from raven.agent.subagent.mcp_grant import GrantedTool, McpServerView, acp_target, resolve_grant
 from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
 from raven.config.schema import MCPServerConfig

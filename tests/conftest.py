@@ -28,10 +28,8 @@ def pytest_unconfigure(config: pytest.Config) -> None:
 
     A fully green run still exited 139 on Linux: the suite finalizes with
     native state live (asyncio subprocess transports collected during GC),
-    and Py_FinalizeEx segfaults on it, masking the recorded status. The CLI
-    routes its exit through the same helper, but on a different trigger --
-    see raven.cli._exit for the lancedb-specific gate it uses, which is not
-    what fires here.
+    and Py_FinalizeEx segfaults on it, masking the recorded status. The
+    helper lives in ``tests/_hard_exit.py``; nothing under ``raven/`` needs it.
 
     Local runs keep normal semantics so nothing masks an exit-time error, and
     the recorded status is preserved either way -- a failing run still exits
@@ -42,7 +40,7 @@ def pytest_unconfigure(config: pytest.Config) -> None:
     if not os.environ.get("CI"):
         return
 
-    from raven.cli._exit import flush_and_hard_exit
+    from tests._hard_exit import flush_and_hard_exit
 
     flush_and_hard_exit(int(getattr(config, "_raven_exitstatus", 0)))
 
@@ -100,17 +98,51 @@ def _no_leaked_skill_watchers() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
-def no_vendored_subagents(monkeypatch):
+def no_discovered_products(monkeypatch):
     """Pin agent-table discovery off, so the suite sees the same table everywhere.
 
-    ``AgentRegistry.apply`` discovers rows from the ``subagents/`` tree, and the
-    suite runs inside a checkout that has one. Left alone, every table assertion
-    would depend on machine state a test never set: four extra rows, each enabled
-    or not according to whether that developer had built the folder's venv and
-    supplied its key. A test that wants the discovered rows patches
-    ``subagents_root`` itself to a tree it built.
+    ``AgentRegistry.apply`` discovers rows from the ``agents/`` product tree, and
+    the suite runs inside a checkout that has one. Left alone, every table
+    assertion would depend on machine state a test never set: five extra rows,
+    each enabled or not according to which engine wheels that developer has
+    installed. A test that wants the discovered rows patches ``agents_root``
+    itself to a tree it built.
     """
-    monkeypatch.setattr("raven.agent.subagent.vendored_agents.subagents_root", lambda: None)
+    monkeypatch.setattr("raven.agent.subagent.vendored_agents.agents_root", lambda: None)
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _console_socket_registered():
+    """Register the real CLI into the rpc console socket, once per worker.
+
+    Production hosts register at assembly (the surfaces law forbids rpc from
+    importing the cli, so the table arrives by registration); the suite
+    registers the same way so method-level tests keep driving dispatch and
+    the catalog as a hosted console. Tests that pin the UNregistered
+    behaviour call ``cli_socket.reset()`` and re-register in their own
+    cleanup.
+    """
+    from raven.cli._console_feature import register_console_feature
+
+    register_console_feature()
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _restore_i18n_language():
+    """Undo any ``raven.i18n.set_language`` left over from a prior test.
+
+    The reply language is a module-level global only the CLI seeds at startup
+    and the console's live switch now mutates in-process. Once one test flips
+    it -- directly or through any path that applies a config -- every later
+    test on that xdist worker renders the other language's templates, and
+    which tests share a worker moves whenever the suite grows.
+    """
+    from raven import i18n
+
+    before = i18n.current_language()
+    yield
+    i18n.set_language(before)
 
 
 @pytest.fixture(autouse=True)
@@ -156,7 +188,6 @@ def _no_real_raven_home(tmp_path_factory, monkeypatch):
     ``setenv`` camp (measured: 3), and setting ``HOME`` beats neither: an attribute
     patch shadows it, and a later ``setenv`` replaces it.
     """
-    from raven.config import loader
 
     # Outside ``tmp_path`` rather than under it, and fresh per test. Tests use
     # ``tmp_path`` as a workspace root and enumerate it, so a directory this
@@ -170,7 +201,7 @@ def _no_real_raven_home(tmp_path_factory, monkeypatch):
     # that without overriding anybody -- a test that wants the variable sets it
     # itself, which lands after this.
     monkeypatch.delenv("RAVEN_HOME", raising=False)
-    monkeypatch.setattr(loader, "_current_config_path", None)
+    monkeypatch.setattr("raven.home._current_config_path", None)
     yield
 
 
@@ -185,7 +216,7 @@ def _no_update_check(tmp_path, monkeypatch):
     which is exactly the state that spawns the fetch -- so opt out by env for
     the whole suite. Tests that exercise the notice clear the variable.
     """
-    from raven.cli import update_notice
+    from raven.updates import update_notice
 
     monkeypatch.setenv(update_notice._OPT_OUT_ENV, "1")
     monkeypatch.setattr(update_notice, "_cache_path", lambda: tmp_path / "update_check.json")
@@ -236,20 +267,19 @@ def _no_openrouter_network(tmp_path):
     finally:
         rates._fetch_openrouter_models = original_fetch
         model_catalog_cache._CACHE_PATH = original_path
-        rates._OPENROUTER_CACHE.clear()
-        rates._OPENROUTER_CACHE_TIME = 0.0
+        rates.reset_openrouter_cache()
 
 
 @pytest.fixture(autouse=True)
 def _no_real_acp_journal(tmp_path, monkeypatch):
     """Keep ACP wire journals out of the real home.
 
-    Every pooled connection opens one (``raven/agent/acp/journal.py``), so any
+    Every pooled connection opens one (``raven/acp_client/journal.py``), so any
     test that launches a stub server would otherwise write the whole exchange --
     the prompt, every tool result, every stderr line -- under the developer's
     ``~/.raven/traces``, and leave it there after the run.
     """
-    from raven.agent.acp import journal
+    from raven.acp_client import journal
 
     monkeypatch.setattr(journal, "journal_root", lambda: tmp_path / "acp-frames")
     yield
@@ -290,7 +320,7 @@ def _unbind_the_acp_turn() -> Iterator[None]:
     token also carries "this var was never set", which no assignment can
     express.
     """
-    from raven.agent.acp import asker
+    from raven.acp_client import asker
 
     turn_token = asker._TURN.set(asker._TURN.get())
     autofill_token = asker._AUTOFILL.set(asker._AUTOFILL.get())
@@ -299,3 +329,56 @@ def _unbind_the_acp_turn() -> Iterator[None]:
     finally:
         asker._TURN.reset(turn_token)
         asker._AUTOFILL.reset(autofill_token)
+
+
+def wired_kwarg(kwargs: dict, name: str):
+    """Resolve a wiring value from captured AgentLoop kwargs, bundle-aware.
+
+    Entrances pass grouped bundles now; a test that asserts one wire reads it
+    through the bundle the field lives in, or straight off the dict for the
+    top-level keywords.
+    """
+    if name in kwargs:
+        return kwargs[name]
+    from raven.agent.loop.bundles import FIELD_OWNER
+
+    owner = FIELD_OWNER.get(name)
+    bundle = kwargs.get(owner) if owner else None
+    return getattr(bundle, name, None) if bundle is not None else None
+
+
+def make_channel_config(channel: str, **overrides):
+    """A dispensed channel config for adapter tests: declared defaults, with
+    ``overrides`` split between socket fields and cargo (cargo overrides run
+    through the admission door, so an invalid test value bites here too)."""
+    from raven.channels.registry import discover_specs
+    from raven.config.admission import DispensedSlice, admit_slice
+    from raven.config.schema import ChannelSocket
+
+    schema = discover_specs()[channel].config_schema or {}
+    socket_keys = {"enabled", "allow_from", "workspace"}
+    socket = ChannelSocket(**{k: v for k, v in overrides.items() if k in socket_keys})
+    cargo = admit_slice(
+        schema,
+        {k: v for k, v in overrides.items() if k not in socket_keys},
+        plugin_id=f"test:{channel}",
+    )
+    for key, decl in schema.items():
+        if key not in cargo and isinstance(decl.get("fields"), dict):
+            cargo[key] = admit_slice(decl["fields"], {}, plugin_id=f"test:{channel}.{key}")
+    return DispensedSlice(socket, cargo)
+
+
+def with_channel_fields(view, **overrides):
+    """A copy of a dispensed channel config with fields overridden -- the
+    test-side mutation path now that the production view is frozen."""
+    from raven.config.admission import DispensedSlice
+
+    cargo = dict(object.__getattribute__(view, "_cargo"))
+    section = object.__getattribute__(view, "_section")
+    socket_keys = {"enabled", "allow_from", "workspace"}
+    socket_over = {k: v for k, v in overrides.items() if k in socket_keys}
+    if socket_over:
+        section = section.model_copy(update=socket_over)
+    cargo.update({k: v for k, v in overrides.items() if k not in socket_keys})
+    return DispensedSlice(section, cargo)

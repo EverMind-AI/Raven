@@ -30,8 +30,9 @@ from rich.table import Table
 
 console = Console()
 
-from raven.cli._helpers import make_provider, parse_fake_now
+from raven.cli._helpers import parse_fake_now
 from raven.config.paths import get_sentinel_dir, get_workspace_path
+from raven.providers.factory import make_provider
 
 sentinel_app = typer.Typer(help="Inspect and drive the proactivity subsystem")
 
@@ -39,8 +40,8 @@ sentinel_app = typer.Typer(help="Inspect and drive the proactivity subsystem")
 async def _headless_nudge_sink(_out: object) -> None:
     """Accept a Sentinel nudge when no channel outlet is wired.
 
-    The spine DeliveryHub + outlets are built only inside the gateway/REPL run
-    loops (where ``dispatcher.set_post(hub.post)`` is called). The headless
+    The spine DeliveryHub + outlets are built only inside the gateway run loop
+    (where ``dispatcher.set_post(hub.post)`` is called). The headless
     ``sentinel tick``/``ticks`` CLI has no channel to deliver to, so this sink
     lets the executor finish dispatch and report ``delivered=True``. Without it
     every policy-approved nudge dies as ``no_post`` — which silently zeroed
@@ -137,6 +138,56 @@ def sentinel_disable():
     )
 
 
+def _build_tick_runner(ec_config, *, workspace: str | None, now_fn, live: bool):
+    """The runner ``sentinel tick`` and ``sentinel ticks`` drive: the same stack
+    the gateway assembles (shared state store, pending decisions, routines,
+    attention path), so a CLI tick reads and writes the quotas a live gateway
+    would. ``live`` wires a headless nudge sink; otherwise the executors are
+    neutralised so the Planner runs but nothing dispatches."""
+    from raven.core.proactive_stack import build_sentinel_stack
+    from raven.session.manager import SessionManager
+
+    base_config = ec_config.base
+    if workspace:
+        # ``workspace_path`` is a derived property on Config; override the
+        # backing field so build_sentinel_stack (which feeds it into
+        # MemoryStore) and SessionManager both pick up the -w value.
+        base_config.agents.defaults.workspace = str(Path(workspace).expanduser())
+    provider = make_provider(base_config)
+    if isinstance(provider, tuple):
+        provider = provider[0]
+
+    session_manager = SessionManager(base_config.workspace_path)
+    runner, _resp_modifier, _on_inbound = build_sentinel_stack(
+        base_config,
+        ec_config.sentinel,
+        session_manager,
+        provider,
+        now_fn=now_fn,
+    )
+    if runner is None:
+        raise typer.BadParameter(
+            "sentinel.enabled=False in config -- nothing to tick. Set sentinel.enabled=true to use this command."
+        )
+
+    # --dry-run: keep the Planner LLM path active (so a decision can be read
+    # and scored) but neutralize executors so no spine dispatch / inject
+    # queue / defer-state side effects leak. task_discoverer goes too: it
+    # owns its own dispatcher reference and would otherwise still write
+    # PendingDecision and fire the LLM.
+    if not live:
+        runner.dispatcher = None
+        runner.injector = None
+        runner.defer_manager = None
+        runner.task_discoverer = None
+    elif runner.dispatcher is not None:
+        # build_sentinel_stack leaves the dispatcher's hub post unbound (the hub
+        # lives in the gateway loop, not here); wire a headless sink so
+        # live nudges actually report delivered.
+        runner.dispatcher.set_post(_headless_nudge_sink)
+    return runner
+
+
 @sentinel_app.command("tick")
 def sentinel_tick(
     workspace: str = typer.Option(None, "--workspace", "-w", help="Agent home directory"),
@@ -163,111 +214,8 @@ def sentinel_tick(
     """
     import asyncio as _asyncio
 
-    from raven.memory_engine.consolidate.consolidator import MemoryStore
-    from raven.proactive_engine.sentinel import (
-        DeferManager,
-        NudgeDispatcher,
-        NudgeInjector,
-        NudgePolicy,
-        ProactivePlanner,
-    )
-    from raven.proactive_engine.sentinel.executor.runner import SentinelRunner
-    from raven.proactive_engine.sentinel.predictor.context_assembler import ContextAssembler
-    from raven.proactive_engine.sentinel.predictor.routine_learner import RoutineLearner
-
     ec_config = _load_sentinel_config()
-    base_config = ec_config.base
-    ws = Path(workspace) if workspace else get_workspace_path()
-    provider = make_provider(base_config)
-    model = provider.get_default_model()
-
-    # Frozen clock for eval. ``_kwargs`` is unpacked into every constructor
-    # that accepts ``now_fn``; empty dict is a no-op for normal operation.
-    now_fn = parse_fake_now(fake_now)
-    _kwargs = {"now_fn": now_fn} if now_fn is not None else {}
-
-    memory_store = MemoryStore(ws, **_kwargs)
-    policy = NudgePolicy(ec_config.sentinel.nudge_policy, **_kwargs)
-    learner = RoutineLearner(**_kwargs)
-
-    assembler = ContextAssembler(
-        memory_store=memory_store,
-        routine_learner=learner,
-        nudge_policy=policy,
-        **_kwargs,
-    )
-    planner = ProactivePlanner(provider, model)
-
-    # Wire the attention.md + behaviors.md path so tick_once() refreshes
-    # user_memory/attention.md and (optionally) writes
-    # user_memory/behaviors.md — without it both files stay at 0 bytes
-    # even after a successful Planner cycle.
-    from raven.cli._proactive_stack import build_attention_path
-    from raven.proactive_engine.sentinel.executor.pending_decision import (
-        PendingDecisionStore,
-    )
-    from raven.proactive_engine.sentinel.feedback.tracker import (
-        NudgeFeedbackTracker,
-    )
-    from raven.proactive_engine.sentinel.predictor.routine_store import (
-        RoutineStore,
-    )
-    from raven.session.manager import SessionManager
-
-    sentinel_dir = get_sentinel_dir()
-    session_manager = SessionManager(ws)
-    feedback = NudgeFeedbackTracker(sentinel_dir / "feedback.jsonl")
-    feedback.load()
-    pending_store = PendingDecisionStore(sentinel_dir / "pending_decisions.json")
-    routine_store = RoutineStore(sentinel_dir / "routines.json")
-    attention_updater, behaviors_extractor = build_attention_path(
-        memory_store=memory_store,
-        session_manager=session_manager,
-        sentinel_cfg=ec_config.sentinel,
-        provider=provider,
-        model=model,
-        feedback=feedback,
-        pending_store=pending_store,
-        routine_store=routine_store,
-        policy=policy,
-        now_fn=now_fn,
-    )
-
-    if dry_run:
-        runner = SentinelRunner(
-            planner=planner,
-            assembler=assembler,
-            policy=policy,
-            dispatcher=None,
-            injector=None,
-            defer_manager=None,
-            spawn=None,
-            feedback=feedback,
-            attention_updater=attention_updater,
-            behaviors_extractor=behaviors_extractor,
-            **_kwargs,
-        )
-    else:
-        dispatcher = NudgeDispatcher(**_kwargs)
-        dispatcher.set_post(_headless_nudge_sink)
-        injector = NudgeInjector(**_kwargs)
-        # For a one-shot tick we don't need DeferManager's background loop;
-        # but provide it so defer decisions register correctly.
-        # Sessions not tracked here — defer fires on "no_session" path.
-        defer_mgr = DeferManager(dispatcher, session_lookup=lambda _k: None, **_kwargs)
-        runner = SentinelRunner(
-            planner=planner,
-            assembler=assembler,
-            policy=policy,
-            dispatcher=dispatcher,
-            injector=injector,
-            defer_manager=defer_mgr,
-            spawn=None,
-            feedback=feedback,
-            attention_updater=attention_updater,
-            behaviors_extractor=behaviors_extractor,
-            **_kwargs,
-        )
+    runner = _build_tick_runner(ec_config, workspace=workspace, now_fn=parse_fake_now(fake_now), live=not dry_run)
 
     async def _run():
         outcome = await runner.tick_once()
@@ -334,9 +282,6 @@ def sentinel_ticks(
     from datetime import datetime as _dt
     from datetime import timedelta as _td
 
-    from raven.cli._proactive_stack import build_sentinel_stack
-    from raven.session.manager import SessionManager
-
     # ── Honor --config redirect (per-persona isolation for parallel eval) ──
     if config:
         from raven.config.loader import set_config_path
@@ -381,44 +326,7 @@ def sentinel_ticks(
     # all come along automatically, so the daily 08:00 menu fires inside
     # the batch the same way it would on a live gateway.
     ec_config = _load_sentinel_config()
-    base_config = ec_config.base
-    if workspace:
-        # ``workspace_path`` is a derived property on Config; override the
-        # backing field so build_sentinel_stack (which feeds it into
-        # MemoryStore) and SessionManager both pick up the -w value.
-        base_config.agents.defaults.workspace = str(Path(workspace).expanduser())
-    provider = make_provider(base_config)
-    if isinstance(provider, tuple):
-        provider = provider[0]
-
-    session_manager = SessionManager(base_config.workspace_path)
-    runner, _resp_modifier, _on_inbound = build_sentinel_stack(
-        base_config,
-        ec_config.sentinel,
-        session_manager,
-        provider,
-        now_fn=clock.get,
-    )
-    if runner is None:
-        raise typer.BadParameter(
-            "sentinel.enabled=False in config — nothing to tick. Set sentinel.enabled=true to use ``sentinel ticks``."
-        )
-
-    # --dry-run: keep the Planner LLM path active (so the eval can score
-    # decisions) but neutralize executors so no spine dispatch / inject
-    # queue / defer-state side effects leak from a benchmark run.
-    # task_discoverer also goes here: it owns its own dispatcher reference
-    # and would otherwise still write PendingDecision + fire the LLM.
-    if not live:
-        runner.dispatcher = None
-        runner.injector = None
-        runner.defer_manager = None
-        runner.task_discoverer = None
-    elif runner.dispatcher is not None:
-        # build_sentinel_stack leaves the dispatcher's hub post unbound (the hub
-        # lives in the gateway/REPL loop, not here); wire a headless sink so
-        # --live nudges actually report delivered.
-        runner.dispatcher.set_post(_headless_nudge_sink)
+    runner = _build_tick_runner(ec_config, workspace=workspace, now_fn=clock.get, live=live)
 
     # ── Loop ──
     async def _run_all():
@@ -474,11 +382,11 @@ def sentinel_nudges(
     from collections import Counter
     from datetime import timedelta
 
-    from raven.config.paths import get_sentinel_dir
+    from raven.proactive_engine.sentinel.state_files import FEEDBACK_FILENAME, LEGACY_FEEDBACK_FILENAME
 
-    feedback_path = get_sentinel_dir() / "feedback.jsonl"
+    feedback_path = get_sentinel_dir() / FEEDBACK_FILENAME
     if not feedback_path.exists():
-        legacy_path = get_workspace_path() / "sentinel_feedback.jsonl"
+        legacy_path = get_workspace_path() / LEGACY_FEEDBACK_FILENAME
         if legacy_path.exists():
             feedback_path = legacy_path
 
@@ -556,7 +464,9 @@ def sentinel_nudges(
 
     # --- NudgePolicy persisted state ----------------------------------
     if show_state:
-        state_path = get_sentinel_dir() / "state.json"
+        from raven.proactive_engine.sentinel.state_files import STATE_FILENAME
+
+        state_path = get_sentinel_dir() / STATE_FILENAME
         if not state_path.exists():
             console.print(f"\n[dim]No NudgePolicy state at {state_path}[/dim]")
             return
@@ -625,10 +535,10 @@ def sentinel_decisions(
     """
     from datetime import datetime as _dt
 
-    from raven.config.paths import get_sentinel_dir
     from raven.proactive_engine.sentinel.executor.pending_decision import PendingDecisionStore
+    from raven.proactive_engine.sentinel.state_files import PENDING_DECISIONS_FILENAME
 
-    store = PendingDecisionStore(get_sentinel_dir() / "pending_decisions.json")
+    store = PendingDecisionStore(get_sentinel_dir() / PENDING_DECISIONS_FILENAME)
     now_ms = int(_dt.now().timestamp() * 1000)
 
     if all_:
@@ -804,12 +714,12 @@ def sentinel_discover_now(
     # Running the LLM call here (CLI subprocess) and then dispatching
     # to the gateway's outlets doesn't work — they're separate processes
     # (separate in-memory state). The trigger-file pattern mirrors cron's jobs.json IPC.
-    from raven.config.paths import get_sentinel_dir
     from raven.proactive_engine.sentinel.discover_triggers import (
         DiscoverTriggerStore,
     )
+    from raven.proactive_engine.sentinel.state_files import DISCOVER_TRIGGERS_FILENAME
 
-    store = DiscoverTriggerStore(get_sentinel_dir() / "discover_triggers.json")
+    store = DiscoverTriggerStore(get_sentinel_dir() / DISCOVER_TRIGGERS_FILENAME)
     trigger = store.add(channel=channel, to=to)
     if channel == "*":
         target_desc = "channel='*' (broadcast to all enabled at fire time)"
@@ -851,7 +761,7 @@ def _sentinel_discover_now_inproc(
 
     from loguru import logger
 
-    from raven.cli._proactive_stack import build_sentinel_stack
+    from raven.core.proactive_stack import build_sentinel_stack
     from raven.session.manager import SessionManager
 
     config = ec_config.base
@@ -917,14 +827,15 @@ def sentinel_routines(
     """
     from datetime import datetime as _dt
 
-    from raven.config.paths import get_sentinel_dir
     from raven.proactive_engine.sentinel.predictor.routine_store import RoutineStore
 
     if status not in (None, "candidate", "active", "retired"):
         console.print(f"[red]Unknown --status {status!r} (use candidate / active / retired)[/red]")
         raise typer.Exit(code=2)
 
-    store = RoutineStore(get_sentinel_dir() / "routines.json")
+    from raven.proactive_engine.sentinel.state_files import ROUTINES_FILENAME
+
+    store = RoutineStore(get_sentinel_dir() / ROUTINES_FILENAME)
     routines = store.all_routines()
     if status:
         routines = [r for r in routines if r.status == status]
@@ -994,7 +905,7 @@ def sentinel_attention(
     Read-only. Useful for verifying which producers have written and
     eyeballing the diagnostic Sentinel Observations block.
     """
-    from raven.memory_engine.consolidate.attention import parse_attention
+    from raven.memory_engine import parse_attention
 
     ws = Path(workspace) if workspace else get_workspace_path()
     path = ws / "user_memory" / "attention.md"
@@ -1046,7 +957,7 @@ def sentinel_behaviors(
     Without filters, prints the full markdown file. With ``--folded``,
     renders one line per event in the same compact format Planner sees.
     """
-    from raven.memory_engine.consolidate.behaviors import (
+    from raven.memory_engine import (
         parse_behaviors,
         render_folded_block,
     )
@@ -1123,10 +1034,10 @@ def sentinel_behaviors_rebuild(
     import asyncio
 
     from raven.config.raven import load_raven_config
-    from raven.memory_engine.consolidate.behaviors_extractor import (
+    from raven.memory_engine import (
         BehaviorsExtractor,
+        MemoryStore,
     )
-    from raven.memory_engine.consolidate.consolidator import MemoryStore
     from raven.session.manager import SessionManager
 
     ws = Path(workspace) if workspace else get_workspace_path()
@@ -1151,7 +1062,7 @@ def sentinel_behaviors_rebuild(
         # Narrow to a single session by patching SessionManager's
         # sessions_dir lookup — cheaper than threading a filter through
         # run_all. We just iterate the matching file directly.
-        from raven.memory_engine.consolidate.behaviors_extractor import (
+        from raven.memory_engine import (
             BehaviorsOffsets,
         )
 
@@ -1165,7 +1076,7 @@ def sentinel_behaviors_rebuild(
                     f"[red]No session file at {path}[/red]",
                 )
                 return 0
-            return await extractor._extract_one_session(path, offsets)  # noqa: SLF001
+            return await extractor.extract_session(path, offsets)
 
         added = asyncio.run(_run_one())
     else:

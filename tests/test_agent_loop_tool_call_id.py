@@ -1,10 +1,12 @@
+"""The loop passes tool_call_id only to tools whose signature accepts it."""
+
 from __future__ import annotations
 
 from typing import Any
 
 from raven.agent.loop import AgentLoop
-from raven.agent.tools.base import Tool
-from raven.providers.base import LLMResponse, ToolCallRequest
+from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
+from raven.contracts.tool import Tool
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
 

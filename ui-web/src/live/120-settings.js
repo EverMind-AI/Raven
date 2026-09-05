@@ -36,28 +36,53 @@ async function loadSettings() {
   configPathLive = r.config_path || configPathLive;
   drawBanner();
   const defaults = (RAW.agents && RAW.agents.defaults) || {};
+  // The configured default, kept apart from the visible session's model: the
+  // settings default-model control shows and edits THIS pair (model AND
+  // provider), while the composer chip shows whatever the open conversation
+  // runs. Sharing one value made the settings control display the session's
+  // model -- and badge the session's provider -- as the default.
+  defaultModelLive = defaults.model || '';
+  defaultProviderLive = defaults.provider || '';
   if (defaults.model) { modelSet(defaults.model); setModelLabel(); }
   try { await loadProviders(); } catch { /* model options unavailable — keep the rows already shown */ }
 }
 
-let curProvider = '';
 let providersLive = [];
+let defaultModelLive = '';
+let defaultProviderLive = '';
 
-async function loadProviders() {
-  const mo = await rpc.call('model.options', {});
+async function loadProviders(sid, gen) {
+  // The model is per conversation, so ask for the visible one's -- model.options
+  // stars the row that conversation actually runs, not agents.defaults. Omit the
+  // field when there is no session (boot, a draft): the Wire Schema types it as
+  // an optional string, and a serialized null is outside that contract.
+  const target = sid !== undefined ? sid : sessionCurrent();
+  // Captured here when the caller did not bring one, so every refresh carries a
+  // ticket by construction rather than by each call site remembering. A caller
+  // whose session was resolved BEFORE its own await must still pass the
+  // generation it captured then -- the answer is about that older view, and a
+  // ticket taken here would read as current.
+  const ticket = gen !== undefined ? gen : viewGen;
+  const mo = await rpc.call('model.options', target ? { session_id: target } : {});
+  // model.options does its catalogue work off-thread, so responses can land out
+  // of click order. A refresh keyed to a superseded view must not repaint the
+  // page the reader has since moved to.
+  if (ticket !== viewGen) return;
   providersLive = (mo.providers || []).map((p) => ({
     id: p.slug, name: p.name, models: p.models || [], on: p.authenticated,
     kind: p.auth_type || 'api_key', needsBase: !!p.needs_api_base,
     env: p.key_env || '', warn: p.warning || '',
     key: p.authenticated ? '已配置' : '',
   }));
-  curProvider = mo.provider || '';
   if (mo.model) { modelSet(mo.model); setModelLabel(); }
 }
 
 const settingsSnapshot = () => ({
   raw: RAW, configPath: configPathLive, everos: everosLive,
-  providers: providersLive, curProvider, model: modelCurrent(),
+  // Both default-scoped on purpose: the settings page describes what new
+  // conversations start on, so pairing the default model with the visible
+  // session's provider badged the wrong row whenever the two scopes differ.
+  providers: providersLive, curProvider: defaultProviderLive, model: defaultModelLive,
   toolGroups: TOOL_GROUPS, tools: toolsLive,
 });
 
@@ -108,7 +133,8 @@ DS.settings = {
     await loadProviders();
     return settingsSnapshot();
   },
-  model: () => modelCurrent(),
+  model: () => defaultModelLive,
+  defaultProvider: () => defaultProviderLive,
   version: () => APP_VERSION,
   /* The version check the rail-foot notice already does, on demand. No new
      backend: system.version carries the answer. */
@@ -142,7 +168,7 @@ DS.settings = {
   },
   /* The composer's picker popover, offered to the island's default-model
      button so both places pick a model the same way. */
-  pickModel: (anchor, after) => openModelPicker(anchor, after),
+  pickModel: (anchor, after) => openModelPicker(anchor, after, defaultModelLive),
   /* Declared here rather than beside langPickLive so the whole contract reads
      in one place. Not awaited: the pick repaints synchronously and the persist
      speaks for itself if it fails. */
@@ -257,9 +283,58 @@ const setModelLabel = () => {
    the provider list this transport fetched and the rpc call that can reject.
    The island owns the current pick, so its optimistic update and rollback do
    not cross the page-layer boundary. */
+/* provider is required -- a bare model id does not name whose credential serves
+   it. scope comes from the opener, matching the TUI's `/model` with or without
+   --default:
+   - 'default' changes agents.defaults (the settings control). The visible
+     session rides along so the server can say whether that conversation follows
+     the default; when it does (`applies_to_session`), its chip is re-read, or
+     the conversation would run the new default under a chip showing the old.
+   - 'session' changes the open conversation; while it is still a draft there is
+     no session to scope to, so the pick is staged (writing it would move the
+     global default) and applied to the session the first message mints. Staging
+     is said back to the caller: it is not an applied switch yet. */
+async function persistModel(m, provider, scope) {
+  const sid = sessionCurrent();
+  // Captured with sid, before the write: the repaint below must prove the page
+  // it would paint is still the page the reader is on. config.set and the
+  // catalogue read behind model.options are both slow enough for the reader to
+  // have left; the generation ticket is what lets loadProviders drop the late
+  // answer instead of overwriting the conversation they moved to.
+  const gen = viewGen;
+  if (scope === 'default') {
+    const p = { key: 'model', value: m, provider, scope: 'default' };
+    if (sid) p.session_id = sid;
+    const r = await rpc.call('config.set', p);
+    // Reflect the new default only once it lands, so a refusal leaves the
+    // settings row on the pair the config still holds.
+    defaultModelLive = m;
+    defaultProviderLive = provider;
+    if (r && r.applies_to_session && sid) void loadProviders(sid, gen);
+    // A visible draft follows the default the way an unswitched session does:
+    // its first message creates the session on the new default, so the chip
+    // must move with it -- unless the draft staged a pick of its own, which
+    // outranks the default exactly as an own binding does.
+    //
+    // Under the same generation ticket as the session repaint above, and for
+    // the same reason: the picker has closed, nothing locks the write, and
+    // leaving the draft for a conversation of its own advances the generation
+    // (every view switch does) -- so without this the resolved draft write
+    // repaints a chip that has since been loaded correctly for someone else.
+    if (!sid && !pendingModel && gen === viewGen) { modelSet(m); setModelLabel(); }
+    return;
+  }
+  if (sid) {
+    await rpc.call('config.set', { key: 'model', value: m, provider, session_id: sid });
+    return;
+  }
+  pendingModel = { model: m, provider };
+  return 'staged';
+}
+
 DS.model = {
   providers: () => providersLive,
-  persist: (m) => rpc.call('config.set', { key: 'model', value: m }),
+  persist: persistModel,
   openSettings: () => RavenIslands.settings.open(),
 };
 

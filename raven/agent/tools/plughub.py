@@ -7,7 +7,7 @@ server that was never configured. The engine was already there and already
 good; it was only reachable from the RPC surface the panel talks to.
 
 So this is deliberately a thin, honest shell over
-:mod:`raven.plughub.connect`: the same install transaction, the same rollback
+:mod:`raven.market.connect`: the same install transaction, the same rollback
 rule, the same bounded connect kick the panel runs. What it adds is the
 conversation's half of the job -- fuzzy lookup, prose the model can act on, and
 the authorization link, because a turn cannot wait for a person to click.
@@ -27,11 +27,14 @@ Three boundaries this tool does not cross:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from raven.agent.tools.base import Tool
+from raven.contracts.tool import Tool
+
+if TYPE_CHECKING:
+    from raven.contracts.mcp_host import McpHost
 
 _ACTIONS = ("find", "connect", "authorize", "list", "remove")
 
@@ -87,9 +90,10 @@ class PluginTool(Tool):
 
     timeout_seconds = _TOOL_TIMEOUT
 
-    def __init__(self, loop: Any = None) -> None:
-        # The agent loop itself: it owns the connection manager, the sandbox
-        # executor an stdio server needs, and ``apply_mcp_config``. Held rather than
+    def __init__(self, loop: "McpHost | None" = None) -> None:
+        # The loop through its MCP control face (paper: contracts/mcp_host.py):
+        # the connection organ, ``apply_mcp_config`` and the executor provider a
+        # sandboxed stdio server needs -- and nothing else of it. Held rather than
         # resolved per call because there is exactly one for the life of a loop,
         # and the tool is registered by that loop's own constructor.
         self._loop = loop
@@ -195,7 +199,7 @@ class PluginTool(Tool):
     # ── actions ────────────────────────────────────────────────────
 
     async def _find(self, query: str) -> str:
-        from raven.plughub.trust import HubTrustError
+        from raven.market.vetting import HubTrustError
 
         query = (query or "").strip()
         try:
@@ -215,7 +219,7 @@ class PluginTool(Tool):
         return f"{head}:\n" + "\n".join(lines) + "\nConnect one with plugin(action='connect', name='<id>')."
 
     def _list(self) -> str:
-        from raven.plughub.connect import installed_overview
+        from raven.market.connect import installed_overview
 
         rows = installed_overview(self._loop)
         if not rows:
@@ -231,14 +235,14 @@ class PluginTool(Tool):
         return "\n".join(out)
 
     async def _connect(self, name: str) -> str:
-        from raven.plughub import catalog_detail
-        from raven.plughub.connect import (
+        from raven.market import catalog_detail
+        from raven.market.connect import (
             PlugConnectError,
             entry_required_fields,
             install_and_connect,
             installed_names,
         )
-        from raven.plughub.trust import HubTrustError
+        from raven.market.vetting import HubTrustError
 
         name = (name or "").strip()
         if not name:
@@ -350,8 +354,8 @@ class PluginTool(Tool):
         )
 
     async def _authorize(self, name: str) -> str:
+        from raven.market.connect import PlugConnectError, authorize
         from raven.mcp.oauth import OAUTH_FLOW_TIMEOUT, pending_url
-        from raven.plughub.connect import PlugConnectError, authorize
 
         name = (name or "").strip()
         if not name:
@@ -394,7 +398,7 @@ class PluginTool(Tool):
         )
 
     async def _remove(self, name: str, confirm: bool) -> str:
-        from raven.plughub.connect import PlugConnectError, remove
+        from raven.market.connect import PlugConnectError, remove
 
         name = (name or "").strip()
         if not name:
@@ -424,8 +428,8 @@ class PluginTool(Tool):
         product named after its vendor. A path that keeps the suggest half alone
         tells the user a plugin is absent while it sits one search away.
         """
-        from raven.plughub import catalog_search, catalog_suggest
-        from raven.plughub.connect import installed_names
+        from raven.market import catalog_search, catalog_suggest
+        from raven.market.connect import installed_names
 
         lang = _lang()
         items = await catalog_search(query, "", lang)

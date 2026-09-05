@@ -54,8 +54,8 @@ The generic defect, plus the fixtures every later task uses. A `tool_call_update
 
 **Files:**
 - Create: `tests/acp_frames.py`
-- Modify: `raven/agent/subagent/acp_dialects/base.py`
-- Modify: `raven/agent/subagent/backends/acp_agent.py` (in `_revise_call`)
+- Modify: `raven/acp_client/acp_dialects/base.py`
+- Modify: `raven/acp_client/acp_agent.py` (in `_revise_call`)
 - Test: `tests/test_acp_dialects.py`, `tests/test_subagent_acp.py`
 
 **Interfaces:**
@@ -253,8 +253,8 @@ Append to `tests/test_subagent_acp.py`:
 ```python
 import pytest
 
-from raven.agent.subagent.acp_dialects import CodexDialect
-from raven.agent.subagent.backends.acp_agent import _TurnCollector
+from raven.acp_client.acp_dialects import CodexDialect
+from raven.acp_client.acp_agent import _TurnCollector
 from tests import acp_frames
 
 
@@ -280,7 +280,7 @@ Expected: FAIL -- `AttributeError: 'AcpDialect' object has no attribute 'names_c
 
 - [ ] **Step 4: Add the three hooks to the base dialect**
 
-In `raven/agent/subagent/acp_dialects/base.py`, add to `AcpDialect` after `result`:
+In `raven/acp_client/acp_dialects/base.py`, add to `AcpDialect` after `result`:
 
 ```python
     def names_call(self, update: dict[str, Any]) -> bool:
@@ -311,7 +311,7 @@ In `raven/agent/subagent/acp_dialects/base.py`, add to `AcpDialect` after `resul
 
 - [ ] **Step 5: Guard the name in `_revise_call`**
 
-In `raven/agent/subagent/backends/acp_agent.py`, inside `_revise_call`, change the `ToolCall(...)` construction:
+In `raven/acp_client/acp_agent.py`, inside `_revise_call`, change the `ToolCall(...)` construction:
 
 ```python
                 event["call"] = ToolCall(
@@ -340,7 +340,7 @@ Expected: PASS, including every pre-existing test.
 
 ```bash
 git add tests/acp_frames.py tests/test_acp_dialects.py tests/test_subagent_acp.py \
-        raven/agent/subagent/acp_dialects/base.py raven/agent/subagent/backends/acp_agent.py
+        raven/acp_client/acp_dialects/base.py raven/acp_client/acp_agent.py
 git commit -m "fix(agent): stop a kind-less acp update from renaming the call" \
   -m "Co-authored-by: Claude (claude-opus-5[1m]) <noreply@anthropic.com>"
 ```
@@ -350,7 +350,7 @@ git commit -m "fix(agent): stop a kind-less acp update from renaming the call" \
 ### Task 2: Name every codex tool the way codex does
 
 **Files:**
-- Modify: `raven/agent/subagent/acp_dialects/codex.py`
+- Modify: `raven/acp_client/acp_dialects/codex.py`
 - Modify: `CONTEXT.md`
 - Test: `tests/test_acp_dialects.py`
 
@@ -417,7 +417,7 @@ Expected: FAIL -- `assert 'execute' == 'apply_patch'`.
 
 - [ ] **Step 3: Implement the ladder**
 
-Replace the body of `raven/agent/subagent/acp_dialects/codex.py`'s class with the version below, keeping the existing `result` and `argument` methods in place for now (Task 3 rewrites `argument`).
+Replace the body of `raven/acp_client/acp_dialects/codex.py`'s class with the version below, keeping the existing `result` and `argument` methods in place for now (Task 3 rewrites `argument`).
 
 Add at module level:
 
@@ -551,7 +551,7 @@ and `_meta.contextCompaction`. Read by `acp_dialects/codex.py`.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add raven/agent/subagent/acp_dialects/codex.py tests/test_acp_dialects.py CONTEXT.md
+git add raven/acp_client/acp_dialects/codex.py tests/test_acp_dialects.py CONTEXT.md
 git commit -m "feat(agent): name each codex tool the way codex names it" \
   -m "Co-authored-by: Claude (claude-opus-5[1m]) <noreply@anthropic.com>"
 ```
@@ -561,7 +561,7 @@ git commit -m "feat(agent): name each codex tool the way codex names it" \
 ### Task 3: The subject each codex row shows, and the key it is stored under
 
 **Files:**
-- Modify: `raven/agent/subagent/acp_dialects/codex.py`
+- Modify: `raven/acp_client/acp_dialects/codex.py`
 - Test: `tests/test_acp_dialects.py`, `tests/test_subagent_tool_vocabulary.py`
 
 **Interfaces:**
@@ -639,7 +639,7 @@ Expected: FAIL -- `AttributeError: 'CodexDialect' object has no attribute 'subje
 
 - [ ] **Step 3: Implement the subject rules**
 
-Add to `raven/agent/subagent/acp_dialects/codex.py`:
+Add to `raven/acp_client/acp_dialects/codex.py`:
 
 ```python
 def _web_search_subject(raw: dict[str, Any]) -> str:
@@ -750,7 +750,7 @@ and the methods:
         )
 ```
 
-Import `ToolCall` at the top of the module (`from raven.agent.subagent.acp_dialects.base import AcpDialect, ToolCall, ToolResult, _dict`).
+Import `ToolCall` at the top of the module (`from raven.acp_client.acp_dialects.base import AcpDialect, ToolCall, ToolResult, _dict`).
 
 Delete the old `argument` docstring about the title's truncation -- `commandExecution` now reaches `rawInput.command` through `subject_field`, which is the same behaviour with the reason moved.
 
@@ -762,7 +762,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add raven/agent/subagent/acp_dialects/codex.py tests/test_acp_dialects.py tests/test_subagent_tool_vocabulary.py
+git add raven/acp_client/acp_dialects/codex.py tests/test_acp_dialects.py tests/test_subagent_tool_vocabulary.py
 git commit -m "feat(agent): give each codex row a subject and a key that names it" \
   -m "Co-authored-by: Claude (claude-opus-5[1m]) <noreply@anthropic.com>"
 ```
@@ -774,8 +774,8 @@ git commit -m "feat(agent): give each codex row a subject and a key that names i
 `apply_patch`'s subject exists only in the result: codex sends the tool's own name as the command and the envelope names the files.
 
 **Files:**
-- Modify: `raven/agent/subagent/acp_dialects/codex.py`
-- Modify: `raven/agent/subagent/backends/acp_agent.py`
+- Modify: `raven/acp_client/acp_dialects/codex.py`
+- Modify: `raven/acp_client/acp_agent.py`
 - Modify: `CONTEXT.md`
 - Test: `tests/test_acp_dialects.py`, `tests/test_subagent_acp.py`
 
@@ -849,7 +849,7 @@ Expected: FAIL -- `subject_from_result` returns None and `call.subject` is `''`.
 
 - [ ] **Step 3: Implement the envelope reader and CRLF normalisation**
 
-Add to `raven/agent/subagent/acp_dialects/codex.py`:
+Add to `raven/acp_client/acp_dialects/codex.py`:
 
 ```python
 import re
@@ -905,7 +905,7 @@ In the existing `result` method, wrap both return paths so the text is cleaned:
 
 - [ ] **Step 4: Call the hook from the collector**
 
-In `raven/agent/subagent/backends/acp_agent.py`, inside `__call__`'s `else:` branch (the `tool_call_update` path), after the result event is appended:
+In `raven/acp_client/acp_agent.py`, inside `__call__`'s `else:` branch (the `tool_call_update` path), after the result event is appended:
 
 ```python
                     subject = self._dialect.subject_from_result(update)
@@ -959,7 +959,7 @@ its output (`_backfill_subject`, used by codex's `apply_patch`), and a
 - [ ] **Step 7: Commit**
 
 ```bash
-git add raven/agent/subagent/acp_dialects/codex.py raven/agent/subagent/backends/acp_agent.py \
+git add raven/acp_client/acp_dialects/codex.py raven/acp_client/acp_agent.py \
         tests/test_acp_dialects.py tests/test_subagent_acp.py CONTEXT.md
 git commit -m "feat(agent): name the file an apply_patch changed, and drop terminal crlf" \
   -m "Co-authored-by: Claude (claude-opus-5[1m]) <noreply@anthropic.com>"
@@ -974,8 +974,8 @@ Three of codex's four command shapes drop the command from the session update. I
 **Files:**
 - Modify: `raven/agent/acp/permissions.py`
 - Modify: `raven/agent/acp/pool.py:221`
-- Modify: `raven/agent/subagent/acp_dialects/codex.py`
-- Modify: `raven/agent/subagent/backends/acp_agent.py`
+- Modify: `raven/acp_client/acp_dialects/codex.py`
+- Modify: `raven/acp_client/acp_agent.py`
 - Modify: `docs/specs/2026-08-23-codex-acp-tool-parsing-design.md` (section 4)
 - Test: `tests/test_acp_dialects.py`, `tests/test_subagent_acp.py`
 
@@ -1033,7 +1033,7 @@ Expected: FAIL -- `permission_command` returns the quoted form; `auto_approver` 
 
 - [ ] **Step 3: Read the parsed command in the codex dialect**
 
-Add to `raven/agent/subagent/acp_dialects/codex.py`:
+Add to `raven/acp_client/acp_dialects/codex.py`:
 
 ```python
     def permission_command(self, params: dict[str, Any]) -> str | None:
@@ -1102,7 +1102,7 @@ In `raven/agent/acp/pool.py`, at the `on_request` default (line 221):
 
 - [ ] **Step 6: Handle the frame in the collector**
 
-In `raven/agent/subagent/backends/acp_agent.py`, add the import and constant:
+In `raven/acp_client/acp_agent.py`, add the import and constant:
 
 ```python
 from raven.agent.acp.permissions import PERMISSION_METHOD
@@ -1127,10 +1127,10 @@ and at the very top of `__call__`, **before** the `update` guard (the frame has 
 Add a module-level `_dict` helper import from the dialect package if one is not already in scope:
 
 ```python
-from raven.agent.subagent.acp_dialects import AcpDialect, ToolCall, _dict, content_texts, dialect_for
+from raven.acp_client.acp_dialects import AcpDialect, ToolCall, _dict, content_texts, dialect_for
 ```
 
-and export `_dict` from `raven/agent/subagent/acp_dialects/__init__.py`'s import line and `__all__`.
+and export `_dict` from `raven/acp_client/acp_dialects/__init__.py`'s import line and `__all__`.
 
 `_backfill_subject` already refuses to overwrite a known subject, which is what keeps this from replacing a `commandExecution`'s real command with the same string.
 
@@ -1157,8 +1157,8 @@ In `docs/specs/2026-08-23-codex-acp-tool-parsing-design.md`, section 4, replace 
 
 ```bash
 git add raven/agent/acp/permissions.py raven/agent/acp/pool.py \
-        raven/agent/subagent/acp_dialects/codex.py raven/agent/subagent/acp_dialects/__init__.py \
-        raven/agent/subagent/backends/acp_agent.py \
+        raven/acp_client/acp_dialects/codex.py raven/acp_client/acp_dialects/__init__.py \
+        raven/acp_client/acp_agent.py \
         tests/test_acp_dialects.py tests/test_subagent_acp.py \
         docs/specs/2026-08-23-codex-acp-tool-parsing-design.md
 git commit -m "feat(agent): recover the command a codex permission request carries" \
@@ -1172,9 +1172,9 @@ git commit -m "feat(agent): recover the command a codex permission request carri
 Five snapshot frames for one four-entry plan, all dropped today.
 
 **Files:**
-- Modify: `raven/agent/subagent/acp_dialects/base.py`
-- Modify: `raven/agent/subagent/acp_dialects/codex.py`
-- Modify: `raven/agent/subagent/backends/acp_agent.py`
+- Modify: `raven/acp_client/acp_dialects/base.py`
+- Modify: `raven/acp_client/acp_dialects/codex.py`
+- Modify: `raven/acp_client/acp_agent.py`
 - Test: `tests/test_subagent_acp.py`
 
 **Interfaces:**
@@ -1227,7 +1227,7 @@ Expected: FAIL -- `collector.calls` is empty.
 
 - [ ] **Step 3: Add the plan reader to the dialects**
 
-In `raven/agent/subagent/acp_dialects/base.py`, add to `AcpDialect`:
+In `raven/acp_client/acp_dialects/base.py`, add to `AcpDialect`:
 
 ```python
     plan_tool_name = "plan"
@@ -1256,7 +1256,7 @@ In `raven/agent/subagent/acp_dialects/base.py`, add to `AcpDialect`:
         return current or (f"{len(rows)} steps" if rows else ""), "\n".join(rows)
 ```
 
-In `raven/agent/subagent/acp_dialects/codex.py`, add to `CodexDialect`:
+In `raven/acp_client/acp_dialects/codex.py`, add to `CodexDialect`:
 
 ```python
     plan_tool_name = "update_plan"
@@ -1265,7 +1265,7 @@ In `raven/agent/subagent/acp_dialects/codex.py`, add to `CodexDialect`:
 
 - [ ] **Step 4: Handle the frame in the collector**
 
-In `raven/agent/subagent/backends/acp_agent.py`, add the constant beside `_MESSAGE_BREAK`:
+In `raven/acp_client/acp_agent.py`, add the constant beside `_MESSAGE_BREAK`:
 
 ```python
 # One synthetic id for the turn's plan. The frame carries no call id of its own,
@@ -1332,8 +1332,8 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add raven/agent/subagent/acp_dialects/base.py raven/agent/subagent/acp_dialects/codex.py \
-        raven/agent/subagent/backends/acp_agent.py tests/test_subagent_acp.py
+git add raven/acp_client/acp_dialects/base.py raven/acp_client/acp_dialects/codex.py \
+        raven/acp_client/acp_agent.py tests/test_subagent_acp.py
 git commit -m "feat(agent): render a codex plan as one update_plan row that moves" \
   -m "Co-authored-by: Claude (claude-opus-5[1m]) <noreply@anthropic.com>"
 ```

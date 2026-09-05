@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.providers.base import GenerationSettings
+from raven.contracts.llm_provider import GenerationSettings
 from raven.providers.litellm_provider import LiteLLMProvider
 
 pytestmark = pytest.mark.asyncio

@@ -32,6 +32,7 @@ from raven.importer.skills.installer import SkillImportSummary
 from raven.importer.state import ImportState
 from raven.importer.types import Platform, Scanner, ScanResult, SourceKind, Tier
 from raven.memory_engine.consolidate.consolidator import MemoryStore
+from tests._everos_presence import everos_plugin_absent
 
 runner = CliRunner()
 
@@ -610,7 +611,7 @@ class TestMakeHermesProvider:
         assert _make_hermes_provider(Config()) is None
 
     def test_returns_provider_with_credentials(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from raven.cli import _helpers
+        from raven.providers import factory as _helpers
 
         stub = SimpleNamespace(name="stub")
         monkeypatch.setattr(_helpers, "make_provider", lambda _c: stub)
@@ -622,7 +623,8 @@ class TestMakeHermesProvider:
     def test_strips_tty_handlers_after_building(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """litellm reattaches its stderr handler when it is imported, which happens
         inside make_provider -- after redirect_loguru_to_file already stripped."""
-        from raven.cli import _helpers, _log_file
+        from raven.cli import _log_file
+        from raven.providers import factory as _helpers
 
         calls: list[str] = []
         monkeypatch.setattr(_helpers, "make_provider", lambda _c: SimpleNamespace(name="stub"))
@@ -990,10 +992,10 @@ class TestImportRefusesToRunWithoutMemory:
         import typer
 
         from raven.cli.import_commands import _require_memory_service_ready
-        from raven.plugin.memory.everos.backend import ServiceState
+        from raven_everos.backend import ServiceState
 
         class _NotReady:
-            _state = ServiceState.FAILED
+            state = ServiceState.FAILED
 
         with pytest.raises(typer.Exit):
             _require_memory_service_ready(_NotReady())
@@ -1004,10 +1006,10 @@ class TestImportRefusesToRunWithoutMemory:
         import typer
 
         from raven.cli.import_commands import _require_memory_service_ready
-        from raven.plugin.memory.everos.backend import ServiceState
+        from raven_everos.backend import ServiceState
 
         class _BadIdentity:
-            _state = ServiceState.BAD_IDENTITY
+            state = ServiceState.BAD_IDENTITY
 
         with pytest.raises(typer.Exit):
             _require_memory_service_ready(_BadIdentity())
@@ -1018,10 +1020,10 @@ class TestImportRefusesToRunWithoutMemory:
 
     def test_a_ready_backend_passes(self) -> None:
         from raven.cli.import_commands import _require_memory_service_ready
-        from raven.plugin.memory.everos.backend import ServiceState
+        from raven_everos.backend import ServiceState
 
         class _Ready:
-            _state = ServiceState.READY
+            state = ServiceState.READY
 
         _require_memory_service_ready(_Ready())
 
@@ -1031,6 +1033,26 @@ class TestImportRefusesToRunWithoutMemory:
         from raven.cli.import_commands import _require_memory_service_ready
 
         _require_memory_service_ready(object())
+
+    async def test_a_missing_plugin_is_not_an_unconfigured_backend(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        """Both cases arrive as ``backend is None`` and need different words.
+
+        `raven onboard` is the fix for "nobody configured one" and no fix at all
+        for "the configured one ships separately and is not installed here" --
+        sending the second case to the wizard is a loop with no exit.
+        """
+        import typer
+
+        state = ImportState(path=tmp_path / "state.json")
+
+        with everos_plugin_absent(), pytest.raises(typer.Exit):
+            await _build_and_run([], state)
+
+        out = " ".join(capsys.readouterr().out.split())
+        assert "everos-memory" in out
+        assert "raven onboard" not in out
 
     def test_the_run_path_consults_the_guard(self) -> None:
         """Pins the wiring: the guard is worthless if _build_and_run never

@@ -174,7 +174,7 @@ def _readable(raw: str) -> Path:
     The page holds what ``fs.upload`` gave it -- a workspace path such as
     ``uploads/handbook.md`` -- and that is the spelling every file tool takes.
 
-    Through ``resolve_readable`` rather than ``_resolve_path`` alone, because
+    Through ``resolve_readable`` rather than ``resolve_path`` alone, because
     the workspace fence is off by default: with no allowed roots the path
     policy returns any absolute path unchanged, so a client could name
     ``config.json`` or ``serve.json`` here and read the provider keys or the

@@ -97,3 +97,8 @@ benchmarks/proactivity_eval/data/discovery/*/weekly_status_*.md
 /sentinel/
 /media/
 /sandbox/
+
+# profiles/ 是产生已发表数字的那些配置(20260829 从 pipeline/configs 搬来)。
+# cache/ 是运行时抓下来的模型价目缓存,不是配置 —— 正式快照是
+# raven/providers/data/models_dev.json,由 scripts/refresh_models_dev_snapshot.py 维护。
+profiles/cache/

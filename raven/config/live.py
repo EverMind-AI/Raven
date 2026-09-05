@@ -36,7 +36,17 @@ from typing import Any
 
 from loguru import logger
 
-__all__ = ["LiveConfig", "disabled_tool_names"]
+__all__ = [
+    "LiveConfig",
+    "default_model",
+    "disabled_playbook_names",
+    "disabled_tool_names",
+    "exec_extra_deny_patterns",
+    "mcp_server_configs",
+    "media_tool_config",
+    "routing_profile",
+    "web_search_key",
+]
 
 
 class LiveConfig:
@@ -45,13 +55,12 @@ class LiveConfig:
     Not a cache with a timeout: a timeout answers staleness with a delay, and the
     question here has an exact answer available for the price of one small read.
 
-    The comparison is the file's bytes and not a ``stat`` fingerprint, which is
-    what this started as. ``(mtime_ns, size)`` is not a fingerprint of the
-    content: two writes of equal length land on the same pair wherever the clock
-    granularity is coarser than the gap between them, and the second one is then
-    invisible for good. That is not hypothetical -- one CI filesystem could not
-    separate "exec" from "grep". Reading a config-sized file is cheap next to the
-    LLM call it precedes; being wrong about it is not.
+    The comparison is the file's bytes, not a ``stat`` fingerprint:
+    ``(mtime_ns, size)`` is not a fingerprint of the content, because two writes
+    of equal length land on the same pair wherever the clock granularity is
+    coarser than the gap between them, and the second one is then invisible for
+    good. Reading a config-sized file is cheap next to the LLM call it precedes;
+    being wrong about it is not.
     """
 
     def __init__(self, path: Path | None = None):
@@ -59,6 +68,11 @@ class LiveConfig:
         self._bytes: bytes | None = None
         self._raw: dict[str, Any] = {}
         self._loaded = False
+        # The last slice each reader successfully admitted, keyed by reader
+        # slot. The slice-level form of the torn-read rule above: a candidate
+        # the schema rejects keeps the last admitted answer serving, and a
+        # section that leaves the file forgets it (see ``_admit``).
+        self._admitted: dict[str, Any] = {}
 
     def path(self) -> Path:
         """Resolved per read, not captured: the tests and ``raven --config`` move
@@ -124,6 +138,146 @@ def disabled_playbook_names(live: LiveConfig) -> frozenset[str]:
     if not isinstance(value, list):
         return frozenset()
     return frozenset(str(x) for x in value if isinstance(x, str))
+
+
+def _admit(live: LiveConfig, slot: str, *, present: bool, value: Any) -> Any:
+    """Dispense one reader's answer with last-good memory.
+
+    ``present`` False -- the section left the file -- forgets the memory and
+    answers None, which is the callers' constructor-fallback lane. A present
+    candidate that failed validation (``value`` None) keeps the last admitted
+    answer serving: a rejected edit must not roll a credential back to the
+    boot value, and must not revoke what the last valid file granted.
+    """
+    if not present:
+        live._admitted.pop(slot, None)
+        return None
+    if value is None:
+        return live._admitted.get(slot)
+    live._admitted[slot] = value
+    return value
+
+
+def exec_extra_deny_patterns(live: LiveConfig) -> list[str] | None:
+    """``tools.exec.extra_deny_patterns`` as the file has it, or None for "no answer".
+
+    None lets the caller keep what it has: no key on disk under either
+    spelling (the lane eval harnesses pass patterns through with no file
+    behind them), and equally a value the schema rejects -- validated through
+    ``ExecToolConfig``, the same door the loader applies, because this list is
+    a safety gate and a coerced answer here would *replace* the last valid
+    deny rule rather than tighten it.
+    """
+    for key in ("tools.exec.extraDenyPatterns", "tools.exec.extra_deny_patterns"):
+        value = live.get(key)
+        if value is None:
+            continue
+        from raven.config.schema import ExecToolConfig
+
+        try:
+            return list(ExecToolConfig.model_validate({"extra_deny_patterns": value}).extra_deny_patterns)
+        except Exception:  # noqa: BLE001 - an invalid candidate dispenses no new answer
+            return None
+    return None
+
+
+def web_search_key(live: LiveConfig) -> str | None:
+    """The Serper key as the file has it, or None for "no answer".
+
+    The file's own section, when present and valid, governs entirely --
+    including an empty value, which is how a key gets revoked without a
+    restart. None means the file has no ``tools.web.search`` section at all,
+    which is the constructor-fallback lane. A section the schema rejects
+    (validated through ``WebSearchConfig``) dispenses no new answer: the last
+    admitted key keeps serving, so a bad edit can neither roll the credential
+    back to the boot value nor revoke what the last valid file granted.
+    """
+    from raven.config.schema import live_web_search_key
+
+    raw = live.get("tools.web.search")
+    if raw is None:
+        return _admit(live, "web_search_key", present=False, value=None)
+    return _admit(live, "web_search_key", present=True, value=live_web_search_key(raw))
+
+
+def web_provider_key(live: LiveConfig, vendor: str) -> str | None:
+    """One web vendor's key as the file has it, or None for "no answer".
+
+    The canonical half of :func:`web_search_key`: keys live at
+    ``tools.web.providers.<vendor>.apiKey`` now, and the pre-vendor leaf that
+    function reads is Serper's alone. Same contract otherwise -- a present and
+    valid subtree governs entirely, including an empty key, and one the schema
+    rejects dispenses no new answer.
+
+    Memoised per vendor, so two vendors' last-good answers cannot overwrite
+    each other in the one slot.
+    """
+    from raven.config.schema import live_web_provider_key
+
+    raw = live.get("tools.web.providers")
+    slot = f"web_provider_key:{vendor}"
+    if raw is None:
+        return _admit(live, slot, present=False, value=None)
+    return _admit(live, slot, present=True, value=live_web_provider_key(raw, vendor))
+
+
+def media_tool_config(live: LiveConfig, kind: str):
+    """``tools.media.<kind>`` as the file has it, resolved the way
+    ``Config.effective_media_config`` resolves it, or None for "no answer".
+
+    The resolution itself -- validation and the key-borrow rule -- lives in
+    ``config.schema`` next to ``effective_media_config``, so the rule is stated
+    once and this module never handles a credential field. Only the per-tool
+    section (key / base / model) is a live preference; the surrounding wiring
+    (proxy, output directory, workspace restriction) is generation state and
+    changes with a swap. None means the file has no ``tools.media`` section at
+    all -- the constructor-fallback lane. A candidate that fails validation
+    mid-rewrite dispenses no new answer and the last admitted slice keeps
+    serving, the slice-level form of the rule ``raw`` applies to the file.
+    """
+    from raven.config.schema import live_media_tool_config
+
+    slot = f"media_tool_config:{kind}"
+    media = live.get("tools.media")
+    if media is None:
+        return _admit(live, slot, present=False, value=None)
+    if not isinstance(media, dict):
+        return _admit(live, slot, present=True, value=None)
+    value = live_media_tool_config(media.get(kind), live.get("providers.openrouter"))
+    return _admit(live, slot, present=True, value=value)
+
+
+def mcp_server_configs(live: LiveConfig) -> dict | None:
+    """``tools.mcpServers`` as the file has it, validated, or None for "no answer".
+
+    None -- no section under either spelling, or one that fails validation
+    mid-rewrite -- keeps the servers the process already has. An *empty*
+    section is a real answer and detaches everything; removing the whole key
+    is indistinguishable from never having managed it here, so it
+    deliberately changes nothing.
+    """
+    for key in ("tools.mcpServers", "tools.mcp_servers"):
+        raw = live.get(key)
+        if isinstance(raw, dict):
+            from raven.config.schema import MCPServerConfig
+
+            try:
+                return {str(name): MCPServerConfig.model_validate(cfg) for name, cfg in raw.items()}
+            except Exception:  # noqa: BLE001 - a torn read is not worth a reconnect storm
+                return None
+    return None
+
+
+def routing_profile(live: LiveConfig) -> str | None:
+    """``routing.profile`` as the file has it, or None for "no answer"."""
+    value = live.get("routing.profile")
+    return value if isinstance(value, str) and value else None
+
+
+def default_model(live: LiveConfig) -> str | None:
+    """``agents.defaults.model`` as the file has it, or None for "no answer"."""
+    value = live.get("agents.defaults.model")
+    return value if isinstance(value, str) and value else None
 
 
 def disabled_tool_names(live: LiveConfig) -> frozenset[str]:

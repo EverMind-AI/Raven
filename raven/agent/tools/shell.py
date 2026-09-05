@@ -8,26 +8,15 @@ from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
+
+from loguru import logger
 
 from raven.agent import workdir
-from raven.agent.tools.base import Continuation, Tool, ToolOutput, ToolResult
 from raven.agent.tools.shell_policy import CommandDecision, ShellCommandPolicy, executable_text
+from raven.contracts.asking import ApprovalResponder
+from raven.contracts.tool import Continuation, Tool, ToolOutput, ToolResult
 from raven.sandbox import DirectExecutor, SandboxExecutor
-
-
-class ApprovalResponder(Protocol):
-    """Turn-scoped capability that can approve one exact shell command."""
-
-    async def await_approval(
-        self,
-        *,
-        conversation_id: str,
-        turn_id: str,
-        tool_call_id: str,
-        command: str,
-        description: str,
-    ) -> bool: ...
 
 
 @dataclass(frozen=True)
@@ -96,6 +85,7 @@ class ExecTool(Tool):
         extra_deny_patterns: list[str] | None = None,
         extra_allowed_dirs: tuple[Path, ...] = (),
         *,
+        extra_deny_source: Callable[[], list[str] | None] | None = None,
         follow_binding: bool = True,
     ):
         self.timeout = timeout
@@ -120,6 +110,13 @@ class ExecTool(Tool):
         # unchanged. The proactivity-eval harness sets these to block host GUI
         # automation (osascript / `open -a|-b`) because it runs the agent
         # un-sandboxed on the operator's machine — not a product default.
+        # ``extra_deny_source`` is the live form of the same list: read before
+        # each classification (see ``_refresh_deny_patterns``), so a pattern
+        # added to the file blocks the very next call -- tightening must not
+        # wait for the next turn, let alone the next process.
+        self._base_deny_patterns = list(self.deny_patterns)
+        self._extra_deny_current = list(extra_deny_patterns or [])
+        self._extra_deny_source = extra_deny_source
         if extra_deny_patterns:
             self.deny_patterns = self.deny_patterns + list(extra_deny_patterns)
         self._policy = ShellCommandPolicy(deny_patterns=self.deny_patterns)
@@ -140,6 +137,39 @@ class ExecTool(Tool):
             "exec_tool_approval_turn",
             default=_ApprovalTurn(),
         )
+
+    def _refresh_deny_patterns(self) -> None:
+        """Track the operator's extra deny list as it stands on disk.
+
+        Runs at the top of every :meth:`execute`, not once per turn: tightening
+        a permission must bind the tool call that is about to run, and the
+        classification below is the only gate it crosses. Loosening works the
+        same way -- the list is the operator's own choice in both directions.
+
+        A reader answering ``None`` means "no live answer" (no config section,
+        or no source at all) and keeps the constructor's extras. A pattern that
+        does not compile rejects the whole edit and keeps the current policy:
+        half-armed is the one state this must never leave behind.
+        """
+        if self._extra_deny_source is None:
+            return
+        try:
+            extras = self._extra_deny_source()
+        except Exception:
+            return
+        if extras is None:
+            return
+        extras = [str(p) for p in extras]
+        if extras == self._extra_deny_current:
+            return
+        patterns = self._base_deny_patterns + extras
+        try:
+            self._policy.set_deny_patterns(patterns)
+        except re.error as exc:
+            logger.warning("tools.exec extra deny patterns rejected ({}); keeping the current set", exc)
+            return
+        self._extra_deny_current = extras
+        self.deny_patterns = patterns
 
     def register_approval_matcher(self, name: str, matcher: Callable[[str], bool]) -> None:
         """Add a command family this tool must ask about before running.
@@ -242,6 +272,7 @@ class ExecTool(Tool):
         timeout: int | None = None,
         **kwargs: Any,
     ) -> str | ToolResult:
+        self._refresh_deny_patterns()
         bound = str(workdir.current() or "") if self.follow_binding else ""
         cwd = working_dir or bound or self.working_dir or os.getcwd()
 
@@ -431,7 +462,11 @@ class ExecTool(Tool):
 
     @staticmethod
     def _extract_absolute_paths(command: str) -> list[str]:
+        # The boundary class must cover every character a path can be glued
+        # to, not just whitespace: --file=/etc/passwd, </etc/passwd,
+        # cmd;/bin/x, $(/usr/bin/id) and `/bin/x` all name a path with no
+        # space before it, and a boundary the class misses is a fence bypass.
         win_paths = re.findall(r"[A-Za-z]:\\[^\s\"'|><;]+", command)
-        posix_paths = re.findall(r"(?:^|[\s|>'\"])(/[^\s\"'>;|<]+)", command)
-        home_paths = re.findall(r"(?:^|[\s|>'\"])(~[^\s\"'>;|<]*)", command)
+        posix_paths = re.findall(r"(?:^|[\s|>'\"=<;(`])(/[^\s\"'>;|<]+)", command)
+        home_paths = re.findall(r"(?:^|[\s|>'\"=<;(`])(~[^\s\"'>;|<]*)", command)
         return win_paths + posix_paths + home_paths

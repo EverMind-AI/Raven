@@ -26,7 +26,7 @@ missing for as long as they were.
 
 The session manager comes from the running loop when there is one, exactly as
 ``session.resume`` takes it. That is load-bearing rather than tidy: the group a
-session's directory falls under is resolved through ``_get_session_path``, which
+session's directory falls under is resolved through ``session_path``, which
 adopts a transcript written before project grouping existed, so a manager built
 fresh here could resolve the same key to a different directory and answer with an
 empty panel for a run that is on disk.
@@ -48,7 +48,8 @@ from raven.agent.subagent.instances import get_registry
 from raven.agent.subagent.tool_vocabulary import normalize_row
 from raven.config.loader import load_config
 from raven.rpc.errors import ConfigValidationError
-from raven.rpc.methods.session import _manager_for, _map_to_wire, _safe_invoke_factory
+from raven.rpc.methods.session import _map_to_wire, _safe_invoke_factory
+from raven.session.resolve import manager_for
 
 if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
@@ -182,7 +183,7 @@ def _call_dir(root: Path, call_id: str) -> Path | None:
 
 def _session_dir(session_id: str, agent_loop_factory: "AgentLoopFactory | None") -> Path:
     config = load_config()
-    mgr = _manager_for(_safe_invoke_factory(agent_loop_factory), config)
+    mgr = manager_for(_safe_invoke_factory(agent_loop_factory), config)
     return mgr.session_dir(session_id)
 
 

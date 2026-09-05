@@ -21,12 +21,9 @@ into the sink.
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from raven.agent.acp.asker import AskViaTool, start_ask_turn
-from raven.agent.acp.resolver import Autofill
 from raven.agent.spine_runner import AgentTurnRunner
-from raven.agent.tools.ask_user import AskUserTool
 from raven.agent.tools.message import MessageTool
-from raven.agent.tools.shell import ApprovalResponder, ExecTool
+from raven.contracts.asking import ApprovalResponder, SupportsApprovalTurn, SupportsDirectAsk
 from raven.rpc.subscriptions import SubscriptionEmitter
 from raven.spine import (
     Deliverable,
@@ -55,7 +52,7 @@ from raven.spine.turn import session_of
 _TURN_FAILED_CODE = -32099
 
 # ``run_subagent_dag`` progress event -> wire event. A name missing from this map
-# is dropped rather than forwarded: the same sink shape serves the web channel,
+# is dropped rather than forwarded: the same sink shape serves the page,
 # which is free to grow events this protocol has no variant for.
 _DAG_WIRE_EVENT = {
     "dag_run_started": "dag.run_started",
@@ -165,7 +162,7 @@ class RpcTurnRunner(AgentTurnRunner):
         cid = _conversation_id(req)
         tools = getattr(self._loop, "tools", None)
         exec_tool = tools.get("exec") if tools is not None else None
-        if isinstance(exec_tool, ExecTool):
+        if isinstance(exec_tool, SupportsApprovalTurn):
             # Approval capability is rebound for every turn. Only USER origin
             # receives the TUI responder; CRON and other background origins can
             # share this process but must still fail closed as non-interactive.
@@ -175,11 +172,24 @@ class RpcTurnRunner(AgentTurnRunner):
                 conversation_id=cid,
                 turn_id=req.turn_id or "",
             )
-        # Same rebinding and the same origin gate as the shell approval above: a
-        # CRON or otherwise background turn has no reader, and an ACP sub-agent's
-        # question there must decline rather than wait on nobody.
+        # Same rebinding as the shell approval above but a wider gate: a USER
+        # turn binds always, and a SUBAGENT relay binds when its conversation
+        # has a live watcher. A CRON or otherwise background turn has no
+        # reader, and an ACP sub-agent's question there must decline rather
+        # than wait on nobody.
+        # Function-level on purpose: the acp client family is future shelf
+        # cargo and must not be named at this module's import time
+        # (binding-time debt).
+        from raven.acp_client.asker import AskViaTool, start_ask_turn
+        from raven.acp_client.resolver import Autofill
+
         ask_tool = tools.get("ask_user") if tools is not None else None
-        interactive = req.origin is Origin.USER and isinstance(ask_tool, AskUserTool)
+        # A SUBAGENT relay re-enters the user's own conversation, so whether a
+        # human can answer its sub-agents' questions is not about the turn's
+        # origin but about whether a surface is watching that conversation.
+        interactive = isinstance(ask_tool, SupportsDirectAsk) and (
+            req.origin is Origin.USER or (req.origin is Origin.SUBAGENT and self._emitter.has_subscribers(cid))
+        )
         start_ask_turn(
             AskViaTool(ask_tool) if interactive else None,
             Autofill(
@@ -582,6 +592,7 @@ def build_rpc_spine(
     user_pool: int = 1,
     system_pool: int = 1,
     direct_pool: int = 8,
+    shutdown_grace: float = 0.0,
 ) -> tuple[Scheduler, DeliveryHub, dict[str, str], Callable[[], Awaitable[None]]]:
     """Wire the spine pieces a client turn flows through: a hub with the channel's
     RpcOutlet, and a Scheduler whose runner streams the agent loop and whose sink
@@ -628,7 +639,7 @@ def build_rpc_spine(
     )
 
     async def teardown() -> None:
-        await scheduler.shutdown(grace=0.0)
+        await scheduler.shutdown(grace=shutdown_grace)
         await hub.aclose()
 
     return scheduler, hub, turn_ids, teardown

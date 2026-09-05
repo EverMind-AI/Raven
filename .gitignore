@@ -4,6 +4,7 @@
 node_modules/
 bridge/node_modules
 ui-tui/node_modules
+ui-web/node_modules
 bridge/dist/
 # Generated architecture/diagram SVGs at repo root (not source)
 /*.svg
@@ -46,7 +47,7 @@ logs/
 .vscode/
 tmp.sh
 .work_context/
-# Runtime-discipline shadow checkpoint repo (Bug2) — never commit snapshots
+# Runtime-discipline shadow checkpoint repo — never commit snapshots
 .raven/
 .hermes/
 
@@ -171,3 +172,6 @@ subagents/**/*.wmv
 # Playwright MCP session artifacts (console logs, page snapshots, screenshots)
 .playwright-mcp/
 demos/oncall_heat2d/.raven-demo-home/
+
+# Generated benchmark reports (written by the real_llm integration tests).
+/reports/

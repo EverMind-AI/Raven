@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from raven.providers.base import LLMProvider, LLMResponse, StreamDelta
+from raven.providers.base import ChatDelta, LLMProvider, LLMResponse
 from raven.providers.litellm_provider import LiteLLMProvider, session_affinity_headers
 
 if TYPE_CHECKING:
@@ -175,6 +175,6 @@ class PerModelProvider(LLMProvider):
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
         **kwargs: Any,
-    ) -> AsyncIterator[StreamDelta]:
+    ) -> AsyncIterator[ChatDelta]:
         async for delta in self._pick(model).chat_stream(messages, tools, model=model, **kwargs):
             yield delta

@@ -6,9 +6,9 @@ from __future__ import annotations
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
-from raven.agent.tools._deliverables import DeliverableStore
 from raven.agent.tools.deliver import DeliverFilesTool
-from raven.web_rpc.files import add_files_routes
+from raven.agent.tools.deliverables import DeliverableStore
+from raven.rpc.transports.deliverables import add_files_routes
 
 
 async def test_deliver_then_download_round_trip(tmp_path) -> None:

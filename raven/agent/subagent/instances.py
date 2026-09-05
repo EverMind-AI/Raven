@@ -12,8 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-import re
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
@@ -24,16 +22,18 @@ from typing import Any
 
 from loguru import logger
 
+from raven.utils.atomic_io import atomic_replace, write_transaction
+from raven.utils.paths import mint_slug
+
 _FILENAME = "subagent_instances.json"
 
 _Key = tuple[str, str, str]
 
-_SLUG_SEPARATORS_RE = re.compile(r"[^a-z0-9]+")
 _MAX_SLUG_CHARS = 32
 
 
 def _slug(seed: str) -> str:
-    return _SLUG_SEPARATORS_RE.sub("-", seed.lower()).strip("-")[:_MAX_SLUG_CHARS].strip("-")
+    return mint_slug(seed, max_chars=_MAX_SLUG_CHARS)
 
 
 def mint_handle(seed: str, *, fallback: str = "agent") -> str:
@@ -130,10 +130,7 @@ class InstanceRegistry:
     def _flush(self) -> None:
         assert self._records is not None  # noqa: S101
         data = {"version": 1, "instances": list(self._records.values())}
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._path.with_suffix(self._path.suffix + ".tmp")
-        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, self._path)
+        atomic_replace(self._path, json.dumps(data, indent=2, ensure_ascii=False))
         # Our own write is not a reason to re-read on the next call.
         self._stamp = self._file_stamp()
 
@@ -153,26 +150,28 @@ class InstanceRegistry:
 
     async def commit(self, session_key: str, agent: str, handle: str, agent_id: str, *, kind: str = "cli") -> None:
         async with self._lock:
-            records = self._load()
-            key = (session_key, agent, handle)
-            now = int(time.time() * 1000)
-            existing = records.get(key) or {}
-            records[key] = {
-                "kind": kind,
-                "sessionKey": session_key,
-                "agent": agent,
-                "handle": handle,
-                "agentId": agent_id,
-                "createdAtMs": existing.get("createdAtMs", now),
-                "updatedAtMs": now,
-                **_dag_origin(existing),
-            }
-            try:
-                self._flush()
-            except OSError as e:  # noqa: BLE001 - persistence is best-effort
-                logger.warning(
-                    "subagent instance registry write failed (mapping live in-process, will not survive restart): {}", e
-                )
+            with write_transaction(self._path):
+                records = self._load()
+                key = (session_key, agent, handle)
+                now = int(time.time() * 1000)
+                existing = records.get(key) or {}
+                records[key] = {
+                    "kind": kind,
+                    "sessionKey": session_key,
+                    "agent": agent,
+                    "handle": handle,
+                    "agentId": agent_id,
+                    "createdAtMs": existing.get("createdAtMs", now),
+                    "updatedAtMs": now,
+                    **_dag_origin(existing),
+                }
+                try:
+                    self._flush()
+                except OSError as e:  # noqa: BLE001 - persistence is best-effort
+                    logger.warning(
+                        "subagent instance registry write failed (mapping live in-process, will not survive restart): {}",
+                        e,
+                    )
 
     async def upsert_spawn(
         self, session_key: str, agent: str, handle: str, status: str, agent_id: str | None = None
@@ -188,32 +187,33 @@ class InstanceRegistry:
         erase the session id ``commit`` already stored for that handle.
         """
         async with self._lock:
-            records = self._load()
-            key = (session_key, agent, handle)
-            now = int(time.time() * 1000)
-            existing = records.get(key) or {}
-            records[key] = {
-                # Carried forward, not hardcoded: a status write shares this key
-                # with the binding `commit` made, so stamping "cli" here would
-                # retype an acp binding and `lookup` would then refuse to find it.
-                "kind": existing.get("kind") or "cli",
-                "sessionKey": session_key,
-                "agent": agent,
-                "handle": handle,
-                "status": status,
-                "agentId": agent_id or existing.get("agentId"),
-                "createdAtMs": existing.get("createdAtMs", now),
-                "updatedAtMs": now,
-                **_dag_origin(existing),
-            }
-            try:
-                self._flush()
-            except OSError as e:  # noqa: BLE001 - persistence is best-effort
-                logger.warning(
-                    "subagent instance registry write failed (spawn status live in-process, "
-                    "will not survive restart): {}",
-                    e,
-                )
+            with write_transaction(self._path):
+                records = self._load()
+                key = (session_key, agent, handle)
+                now = int(time.time() * 1000)
+                existing = records.get(key) or {}
+                records[key] = {
+                    # Carried forward, not hardcoded: a status write shares this key
+                    # with the binding `commit` made, so stamping "cli" here would
+                    # retype an acp binding and `lookup` would then refuse to find it.
+                    "kind": existing.get("kind") or "cli",
+                    "sessionKey": session_key,
+                    "agent": agent,
+                    "handle": handle,
+                    "status": status,
+                    "agentId": agent_id or existing.get("agentId"),
+                    "createdAtMs": existing.get("createdAtMs", now),
+                    "updatedAtMs": now,
+                    **_dag_origin(existing),
+                }
+                try:
+                    self._flush()
+                except OSError as e:  # noqa: BLE001 - persistence is best-effort
+                    logger.warning(
+                        "subagent instance registry write failed (spawn status live in-process, "
+                        "will not survive restart): {}",
+                        e,
+                    )
 
     async def upsert_dag_node(self, session_key: str, run_id: str, node_id: str, agent: str, status: str) -> None:
         """Record or update one DAG node's status.
@@ -223,29 +223,30 @@ class InstanceRegistry:
         """
         handle = f"{run_id}/{node_id}"
         async with self._lock:
-            records = self._load()
-            key = (session_key, agent, handle)
-            now = int(time.time() * 1000)
-            existing = records.get(key) or {}
-            records[key] = {
-                "kind": "dag-node",
-                "sessionKey": session_key,
-                "agent": agent,
-                "handle": handle,
-                "runId": run_id,
-                "nodeId": node_id,
-                "status": status,
-                "createdAtMs": existing.get("createdAtMs", now),
-                "updatedAtMs": now,
-            }
-            try:
-                self._flush()
-            except OSError as e:  # noqa: BLE001 - persistence is best-effort
-                logger.warning(
-                    "subagent instance registry write failed (dag node state live in-process, "
-                    "will not survive restart): {}",
-                    e,
-                )
+            with write_transaction(self._path):
+                records = self._load()
+                key = (session_key, agent, handle)
+                now = int(time.time() * 1000)
+                existing = records.get(key) or {}
+                records[key] = {
+                    "kind": "dag-node",
+                    "sessionKey": session_key,
+                    "agent": agent,
+                    "handle": handle,
+                    "runId": run_id,
+                    "nodeId": node_id,
+                    "status": status,
+                    "createdAtMs": existing.get("createdAtMs", now),
+                    "updatedAtMs": now,
+                }
+                try:
+                    self._flush()
+                except OSError as e:  # noqa: BLE001 - persistence is best-effort
+                    logger.warning(
+                        "subagent instance registry write failed (dag node state live in-process, "
+                        "will not survive restart): {}",
+                        e,
+                    )
 
     async def link_dag_node(self, session_key: str, agent: str, handle: str, run_id: str, node_id: str) -> None:
         """Mark the instance a DAG node is running on as belonging to that node.
@@ -264,34 +265,35 @@ class InstanceRegistry:
         report the graph twice.
         """
         async with self._lock:
-            records = self._load()
-            key = (session_key, agent, handle)
-            now = int(time.time() * 1000)
-            existing = records.get(key) or {}
-            if existing.get("runId") == run_id and existing.get("nodeId") == node_id:
-                return
-            records[key] = {
-                # `kind` is carried, never stamped: this may run before the
-                # backend has committed its binding, and typing the row here
-                # would make `lookup` refuse the acp id that arrives later.
-                **existing,
-                "kind": existing.get("kind") or "cli",
-                "sessionKey": session_key,
-                "agent": agent,
-                "handle": handle,
-                "runId": run_id,
-                "nodeId": node_id,
-                "createdAtMs": existing.get("createdAtMs", now),
-                "updatedAtMs": now,
-            }
-            try:
-                self._flush()
-            except OSError as e:  # noqa: BLE001 - persistence is best-effort
-                logger.warning(
-                    "subagent instance registry write failed (dag node link live in-process, "
-                    "will not survive restart): {}",
-                    e,
-                )
+            with write_transaction(self._path):
+                records = self._load()
+                key = (session_key, agent, handle)
+                now = int(time.time() * 1000)
+                existing = records.get(key) or {}
+                if existing.get("runId") == run_id and existing.get("nodeId") == node_id:
+                    return
+                records[key] = {
+                    # `kind` is carried, never stamped: this may run before the
+                    # backend has committed its binding, and typing the row here
+                    # would make `lookup` refuse the acp id that arrives later.
+                    **existing,
+                    "kind": existing.get("kind") or "cli",
+                    "sessionKey": session_key,
+                    "agent": agent,
+                    "handle": handle,
+                    "runId": run_id,
+                    "nodeId": node_id,
+                    "createdAtMs": existing.get("createdAtMs", now),
+                    "updatedAtMs": now,
+                }
+                try:
+                    self._flush()
+                except OSError as e:  # noqa: BLE001 - persistence is best-effort
+                    logger.warning(
+                        "subagent instance registry write failed (dag node link live in-process, "
+                        "will not survive restart): {}",
+                        e,
+                    )
 
     async def unbind(self, session_key: str, agent: str, handle: str) -> bool:
         """Drop only the transport session id, keeping the instance itself.
@@ -304,52 +306,56 @@ class InstanceRegistry:
         *successful* turn commits the replacement id.
         """
         async with self._lock:
-            records = self._load()
-            key = (session_key, agent, handle)
-            rec = records.get(key)
-            if rec is None or rec.get("agentId") is None:
-                return False
-            records[key] = {**rec, "agentId": None, "updatedAtMs": int(time.time() * 1000)}
-            try:
-                self._flush()
-            except OSError as e:  # noqa: BLE001 - persistence is best-effort
-                logger.warning(
-                    "subagent instance registry write failed (binding dropped in-process, remains on disk): {}", e
-                )
-            return True
+            with write_transaction(self._path):
+                records = self._load()
+                key = (session_key, agent, handle)
+                rec = records.get(key)
+                if rec is None or rec.get("agentId") is None:
+                    return False
+                records[key] = {**rec, "agentId": None, "updatedAtMs": int(time.time() * 1000)}
+                try:
+                    self._flush()
+                except OSError as e:  # noqa: BLE001 - persistence is best-effort
+                    logger.warning(
+                        "subagent instance registry write failed (binding dropped in-process, remains on disk): {}", e
+                    )
+                return True
 
     async def forget(self, session_key: str, agent: str, handle: str) -> bool:
         """Drop one record (e.g. after its CLI-side session was pruned). Returns
         whether a record was actually removed."""
         async with self._lock:
-            records = self._load()
-            key = (session_key, agent, handle)
-            if key not in records:
-                return False
-            del records[key]
-            try:
-                self._flush()
-            except OSError as e:  # noqa: BLE001 - persistence is best-effort
-                logger.warning(
-                    "subagent instance registry write failed (record dropped in-process, remains on disk): {}", e
-                )
-            return True
-
-    async def delete_session(self, session_key: str) -> int:
-        """Drop every record for a deleted chat session. Returns the count removed."""
-        async with self._lock:
-            records = self._load()
-            doomed = [k for k in records if k[0] == session_key]
-            for key in doomed:
+            with write_transaction(self._path):
+                records = self._load()
+                key = (session_key, agent, handle)
+                if key not in records:
+                    return False
                 del records[key]
-            if doomed:
                 try:
                     self._flush()
                 except OSError as e:  # noqa: BLE001 - persistence is best-effort
                     logger.warning(
-                        "subagent instance registry write failed (records dropped in-process, remain on disk): {}", e
+                        "subagent instance registry write failed (record dropped in-process, remains on disk): {}", e
                     )
-            return len(doomed)
+                return True
+
+    async def delete_session(self, session_key: str) -> int:
+        """Drop every record for a deleted chat session. Returns the count removed."""
+        async with self._lock:
+            with write_transaction(self._path):
+                records = self._load()
+                doomed = [k for k in records if k[0] == session_key]
+                for key in doomed:
+                    del records[key]
+                if doomed:
+                    try:
+                        self._flush()
+                    except OSError as e:  # noqa: BLE001 - persistence is best-effort
+                        logger.warning(
+                            "subagent instance registry write failed (records dropped in-process, remain on disk): {}",
+                            e,
+                        )
+                return len(doomed)
 
     def list_instances(self, session_key: str | None = None) -> list[dict[str, Any]]:
         """Most-recently-used first, optionally scoped to one session."""
@@ -394,7 +400,10 @@ def reconcile_instance_rows(
             if row.get("runId") not in runs:
                 out.append({**row, "status": "interrupted"})
                 continue
-        elif kind == "cli" and row.get("status") in ("pending", "running"):
+        elif kind in ("cli", "acp") and row.get("status") in ("pending", "running"):
+            # An acp row answers to the same in-flight index as a cli spawn:
+            # a bound server whose process died leaves no live handle, and
+            # without this branch such a row read "running" forever.
             session_key = row.get("sessionKey", "")
             if session_key not in live_by_session:
                 live_by_session[session_key] = live_handles(session_key)

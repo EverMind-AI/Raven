@@ -1,11 +1,6 @@
 """``commands.catalog`` RPC handler — dynamic Typer-reflected slash catalog.
 
-Contract source: ``docs/openspec/changes/harness-command-catalog-dynamic/`` —
-proposal.md §2.1 ① + design.md §D1-D2 + specs/tui-ipc.md CAP-CAT-1.
-
-Replaces the v0.0.2 ``_stubs.py`` ``-32012`` placeholder.
-
-Algorithm summary (design.md §D1):
+Algorithm summary:
 
 1. Reflect ``raven.cli.commands.app`` (Typer 0.20+):
    - ``app.registered_commands`` → top-level commands (``CommandInfo``; name
@@ -16,12 +11,11 @@ Algorithm summary (design.md §D1):
      have no subcommands (e.g. ``tui``) are treated as a single group-level
      command tuple ``(group_name,)``.
 2. Filter: drop entries matching ``_DISPATCH_BLACKLIST`` (shared with
-   ``cli_dispatch.py`` — single source of truth, per design.md §D4.4) plus
+   ``cli_dispatch.py`` — single source of truth) plus
    the special-case ``argv == ("agent",)`` (REPL mode).
-3. Build response (design.md §D2):
+3. Build response:
    - ``canon`` dict — ``"/<canonical>" → "/<canonical>"`` (alias = canonical
-     1:1 in v0.1; TS-side prefix-1-match in ``createSlashHandler.ts`` handles
-     short aliases).
+     1:1; the TUI's prefix-1 match handles short aliases).
    - ``pairs`` list — same data as ``[(alias, canonical)]`` tuples; TS gates
      on non-empty pairs.
    - ``sub`` dict — ``{group: [subcommand]}``.
@@ -44,9 +38,9 @@ from raven.rpc.methods._typer_reflect import (
 )
 
 # Single source of truth for blacklist + agent-REPL filter — see
-# ``cli_dispatch.py`` header for rationale (design.md §D4.4 — one set
+# ``cli_dispatch.py`` header for rationale: one set
 # read by both ``cli.dispatch`` rejection and ``commands.catalog`` exclusion
-# so the two can never drift).
+# so the two can never drift.
 from raven.rpc.methods.cli_dispatch import (
     _DISPATCH_BLACKLIST,
     _is_agent_repl,
@@ -166,7 +160,7 @@ def _compute_skill_count() -> tuple[int, str | None]:
     """
     try:
         from raven.config.loader import load_config
-        from raven.memory_engine.skill_local.registry import SkillRegistry
+        from raven.memory_engine import SkillRegistry
 
         config = load_config()
         workspace = config.workspace_path
@@ -219,9 +213,9 @@ def _build_response(entries: list[_CatalogEntry], skill_count: int = 0, warning:
       derived from observed argv prefixes (so a fully-filtered group disappears)
     """
     # hermes catalog contract — ``canon`` keys MUST be single-token slashes.
-    # The TS-side ``parseSlashCommand`` (ui-tui/src/domain/slash.ts:6-10)
+    # The TS-side ``parseSlashCommand`` (ui-tui/src/domain/slash.ts)
     # extracts ``name`` as the first whitespace-delimited token and
-    # ``createSlashHandler.ts:53-79`` matches ``"/${name}"`` against canon.
+    # ``createSlashHandler.ts`` matches ``"/${name}"`` against canon.
     # Multi-token canon keys would never exact-match (parsed.name is one
     # token), and they'd false-trigger prefix-1-match against every
     # ``/group <sub>`` entry, breaking previously-working slashes (smoke
@@ -287,11 +281,14 @@ async def commands_catalog(params: dict[str, Any]) -> dict[str, Any]:
 
     Lazy-imports the CLI module so an import failure (rare) degrades to an
     empty catalog with a ``warning`` rather than raising — this matches the
-    TS-side ``createGatewayEventHandler.ts:198`` graceful-degrade contract.
+    TS-side ``createGatewayEventHandler.ts`` graceful-degrade contract.
     """
     try:
-        import raven.cli.commands as ec_commands
+        from raven.rpc import cli_socket
 
+        ec_commands = cli_socket.cli_commands()
+        if ec_commands is None:
+            raise LookupError("no CLI host registered a console on this process")
         app = ec_commands.app
     except Exception as exc:  # noqa: BLE001 — defensive
         logger.warning("commands.catalog: failed to import ec.cli.commands: {!r}", exc)

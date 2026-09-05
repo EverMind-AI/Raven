@@ -76,6 +76,14 @@ describe('the clarify sheet', () => {
     expect(sheets()[0]!.dataset.sess).toBe('b')
   })
 
+  it('marks itself as asking, so whatever else is docked can step aside', () => {
+    /* The turn is waiting on this answer, and the rack is shared -- a running
+       graph is tall enough to push the question below the fold. */
+    open({ question: 'q' }, () => {})
+
+    expect(sheets()[0]!.dataset.asks).toBe('1')
+  })
+
   it('takes the sheet down when the server says the question died', () => {
     /* A question the reader never answers is failed safe to its default on the
        server, and until it said so the sheet stayed up offering an answer

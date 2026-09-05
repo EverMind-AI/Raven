@@ -31,7 +31,6 @@ from raven.agent.subagent.backends.base import clamp_output
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent.manager import SubagentManager
 from raven.agent.subagent.registry import AgentRegistry
-from raven.agent.tools.base import Continuation
 from raven.agent.tools.shell import ExecTool
 from raven.config.schema import (
     AgentDefaults,
@@ -40,9 +39,11 @@ from raven.config.schema import (
     ThirdPartyCliSubagentConfig,
     ThirdPartyOpenAISubagentConfig,
 )
+from raven.contracts.tool import Continuation
 from raven.providers.base import LLMResponse, ToolCallRequest
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.sandbox import ExecResult, SandboxExecutor
+from tests._everos_presence import everos_plugin_absent
 
 
 class _StubProvider:
@@ -724,7 +725,7 @@ async def test_dag_tool_refuses_to_run_inside_a_subagent(tmp_path):
     tool on a sub-agent, the call fails loudly instead of fanning out."""
     from raven.agent.subagent.backends.base import IN_SUBAGENT_RUN
     from raven.agent.subagent.dag_tool import SubAgentDagTool
-    from raven.agent.tools.base import ToolResult
+    from raven.contracts.tool import ToolResult
 
     tool = SubAgentDagTool(workspace=tmp_path)
 
@@ -1152,8 +1153,8 @@ async def test_the_hand_over_reaches_the_recorder_a_real_acp_backend_builds(tmp_
     declines to write when it holds no resolver and emits nothing when it holds
     no sink. Both hand-overs are checked, because neither had ever run -- the
     dispatch died on the first, two lines above the second."""
-    from raven.agent.acp.pool import _SessionRouter
-    from raven.agent.subagent.backends.acp_agent import AcpAgentBackend
+    from raven.acp_client.acp_agent import AcpAgentBackend
+    from raven.acp_client.pool import _SessionRouter
     from raven.agent.subagent.instances import InstanceRegistry
 
     seen: list[tuple[str, dict[str, Any]]] = []
@@ -1658,8 +1659,8 @@ async def test_a_run_out_of_rounds_answers_from_what_it_gathered(tmp_path) -> No
 async def test_a_run_with_nothing_to_say_fails_instead_of_reading_as_done(tmp_path) -> None:
     """Raised, not returned. A node that produced nothing must not wear a tick
     while the step downstream merges its placeholder as data."""
-    from raven.agent.subagent.backends.base import SubagentNoAnswerError
     from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.contracts.subagent_backend import SubagentNoAnswerError
 
     backend = RavenLoopBackend(
         provider=_AlwaysToolsProvider(answer_when_toolless=None), model="stub", agent_home=tmp_path
@@ -1825,6 +1826,39 @@ async def _unavailable_everos(*args: Any, **kwargs: Any) -> list:
     listening on.
     """
     raise RuntimeError("no live everos in tests")
+
+
+class TestHostEverosAddressWithoutThePlugin:
+    """No plugin means no host-run everos, so there is no host address either.
+
+    The constant that used to be returned here is the plugin's own, and reading
+    it was an unguarded import in the middle of a background writer -- one that
+    turned every spawn of an everos-declaring agent into a traceback.
+    """
+
+    def test_the_host_address_is_empty_rather_than_a_traceback(self) -> None:
+        with everos_plugin_absent():
+            assert manager_mod._host_everos_base_url() == ""
+
+    def test_an_agent_that_named_its_own_address_keeps_it(self, tmp_path: Path, monkeypatch) -> None:
+        """Only the default comes from the plugin; a declared address does not."""
+        manager = _third_party_manager(
+            tmp_path,
+            monkeypatch,
+            agents=[
+                ThirdPartyCliSubagentConfig(
+                    name="Raven-Code",
+                    command="raven --prompt {prompt}",
+                    everos={"agentId": "raven-code", "baseUrl": "http://box:9000"},
+                )
+            ],
+        )
+
+        with everos_plugin_absent():
+            identity = manager.everos_identity("Raven-Code")
+
+        assert identity is not None
+        assert identity.base_url == "http://box:9000"
 
 
 class TestTraceSourceWiring:
@@ -2453,6 +2487,26 @@ async def test_a_refused_spawn_does_not_leak_a_prior_uncollected_handle() -> Non
     assert tool.take_metadata() is None
 
 
+async def test_announce_dag_exception_requires_the_awaiting_decision_verdict() -> None:
+    """The verdict has no default, and this pins that.
+
+    A caller that omitted it would announce every report as a question, including a
+    terminal one nobody can decide -- and the wrong value is invisible at the call
+    site, so a default would hand the next forgetful caller exactly that bug. The
+    two announcers route on this fact, so it is the caller's to state.
+    """
+    mgr = _make_manager(max_concurrent=1)
+    mgr.set_submit(lambda _req: None)
+
+    with pytest.raises(TypeError):
+        await mgr.announce_dag_exception(
+            "20260101T000000Z-abcd1234",
+            "survey",
+            "node 'survey' did not accomplish its task",
+            {"channel": "web", "chat_id": "default", "session_key": "web:sess1"},
+        )
+
+
 async def test_announce_dag_exception_emits_a_mark_the_contract_accepts() -> None:
     """The mark this producer builds is validated by two strict models on the way
     out, so a field it adds that neither declares is rejected as extra_forbidden.
@@ -2472,6 +2526,7 @@ async def test_announce_dag_exception_emits_a_mark_the_contract_accepts() -> Non
         "survey",
         "node 'survey' did not accomplish its task",
         {"channel": "web", "chat_id": "default", "session_key": "web:sess1"},
+        awaiting_decision=True,
     )
 
     assert len(delivered) == 1
@@ -2480,6 +2535,73 @@ async def test_announce_dag_exception_emits_a_mark_the_contract_accepts() -> Non
     content = mark.pop("content")
     assert SubagentDeliveredPayload(**mark, content=content).node_id == "survey"
     assert TranscriptDelegated(**mark).node_id == "survey"
+
+
+async def test_a_failing_delivery_marker_does_not_fail_the_announce() -> None:
+    """The invariant the runner's delivery retry rests on: the announce is all-or-nothing.
+
+    The runner retries a raising announce, which is only safe while a raise means
+    the turn was never injected. The injection is the last step that can fail --
+    the marker emit after it is fire-and-forget and swallows its own failure -- so
+    a sink that blows up must not surface here. If it ever does, that retry starts
+    injecting the same report twice.
+    """
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list[object] = []
+    mgr.set_submit(lambda req: submitted.append(req))
+
+    async def _sink(_session_key, _event):
+        raise RuntimeError("the client's socket is gone")
+
+    mgr.set_delivery_sink(_sink)
+
+    await mgr.announce_dag_exception(
+        "20260101T000000Z-abcd1234",
+        "survey",
+        "node 'survey' did not accomplish its task",
+        {"channel": "web", "chat_id": "default", "session_key": "web:sess1"},
+        awaiting_decision=True,
+    )
+
+    assert len(submitted) == 1, "the turn was injected, which is the step that must not be repeated"
+    await asyncio.sleep(0)  # let the emit task the sink raises from run and be discarded
+
+
+async def test_announce_dag_exception_asks_outside_the_fence_it_wraps_the_report_in() -> None:
+    """The fence says "data, NOT instructions"; the one line to act on cannot sit inside it.
+
+    The report quotes the node's own output and transcript, so the fence stays
+    exactly where it is. What moves is the ask: a short trusted line ahead of the
+    fence, so the model is not being told to ignore the only instruction it was
+    woken up to carry out.
+    """
+    from raven.security.trust import unwrap_untrusted
+
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list = []
+    mgr.set_submit(lambda req: submitted.append(req))
+    mgr._emit_delivered = lambda _origin, _mark: None
+
+    await mgr.announce_dag_exception(
+        "20260101T000000Z-abcd1234",
+        "survey",
+        "node 'survey' did not accomplish its task",
+        {"channel": "web", "chat_id": "default", "session_key": "web:sess1"},
+        awaiting_decision=True,
+    )
+
+    assert len(submitted) == 1
+    text = submitted[0].text
+    head, fence = text.split("[BEGIN UNTRUSTED", 1)
+
+    assert "resolve_dag_node" in head, "the ask has to reach the model as an instruction"
+    assert "tool_call" in head, "and name the route, since resolve_dag_node is schema-hidden"
+    assert "survey" in head and "20260101T000000Z-abcd1234" in head, "naming which node it is about"
+    # The report itself keeps the fence it had: nothing the sub-agent wrote escapes.
+    assert "node 'survey' did not accomplish its task" not in head
+    assert unwrap_untrusted("[BEGIN UNTRUSTED" + fence) == "node 'survey' did not accomplish its task", (
+        "the report has to stay inside a fence the standard unwrapper still recognises"
+    )
 
 
 @pytest.mark.asyncio
@@ -2516,3 +2638,38 @@ async def test_cancel_all_gives_up_on_a_run_that_ignores_its_cancellation() -> N
     assert not stubborn.done()
     release.set()
     await stubborn
+
+
+@pytest.mark.parametrize("shape", ["continuation limit reached", "no route to answer"])
+async def test_announce_dag_exception_does_not_ask_about_a_terminal_node(shape: str) -> None:
+    """A node that is already failed has no decision to make, so the ask must not appear.
+
+    The trusted prefix is the half the model is meant to act on -- that is why it
+    sits outside the fence -- so on a terminal report it steers the model into an
+    impossible call against a closed desk while the truth sits inside the fence
+    marked as evidence. Both terminal shapes are covered because they reach this
+    method by different routes: the continuation limit, and a missing answer route.
+    """
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list = []
+    mgr.set_submit(lambda req: submitted.append(req))
+    mgr._emit_delivered = lambda _origin, _mark: None
+
+    await mgr.announce_dag_exception(
+        "20260101T000000Z-abcd1234",
+        "deck",
+        f"DAG run 20260101T000000Z-abcd1234: node 'deck' did not accomplish its task.\n{shape}",
+        {"channel": "web", "chat_id": "default", "session_key": "web:sess1"},
+        awaiting_decision=False,
+    )
+
+    assert len(submitted) == 1
+    text = submitted[0].text
+    head = text.split("[BEGIN UNTRUSTED", 1)[0]
+
+    assert "resolve_dag_node" not in head, "a terminal node cannot be resolved"
+    assert "tool_call" not in head, "and naming the route invites the impossible call"
+    assert "needs your decision" not in head, "it does not need one; it has failed"
+    # The report itself still reaches the model -- it is what the agent replans from.
+    assert shape in text
+    assert "[BEGIN UNTRUSTED" in text, "and it is still fenced"

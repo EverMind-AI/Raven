@@ -292,7 +292,7 @@ def test_a_model_family_quirk_is_declared_not_branched_on_in_the_factory() -> No
     """
     from pathlib import Path
 
-    from raven.cli import _helpers
+    from raven.providers import factory as _helpers
     from raven.providers.capabilities import wire_overrides
 
     assert wire_overrides("openrouter", "openrouter/qwen/qwen3.7-max") == {"reasoning": {"enabled": False}}

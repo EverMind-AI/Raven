@@ -12,7 +12,7 @@ from __future__ import annotations
 import mimetypes
 from pathlib import Path
 
-from raven.agent.tools.filesystem import _resolve_path
+from raven.agent.tools.filesystem import resolve_path
 from raven.agent.workdir import default_channel_root
 from raven.config import load_config
 
@@ -69,23 +69,19 @@ _TEXT_SUFFIXES = {
 def _raven_state_roots() -> tuple[Path, ...]:
     """Every directory raven keeps its own state in -- never viewable.
 
-    Two, not one, because two are in use and they do not always agree.
-    ``RAVEN_HOME`` moves ``serve.json`` (serve_commands) and the tui runtime
-    dir; the credential store does not consult it at all --
-    ``mcp_oauth._credentials_dir()`` is ``get_runtime_subdir("credentials")``,
-    which hangs off ``get_config_path().parent``. Unset, they are the same
-    directory and the difference never shows. Set ``RAVEN_HOME`` and they
-    diverge, and a fence anchored on either one leaves the other's contents --
-    the OAuth access and refresh tokens, or the token that mints session nonces
-    -- as ordinary paths a viewer will serve.
+    Two, not one, by design: home-level state (serve.json, the tui runtime
+    dir) anchors on ``raven_home()``, while the credential store hangs off
+    ``get_config_path().parent`` -- ``mcp_oauth._credentials_dir()`` is
+    ``get_runtime_subdir("credentials")``. With no ``--config`` override they
+    are the same directory and the difference never shows; a second instance
+    diverges them on purpose, and a fence anchored on either one alone leaves
+    the other's contents -- the OAuth access and refresh tokens, or the token
+    that mints session nonces -- as ordinary paths a viewer will serve.
     """
-    import os
-
     from raven.config.paths import get_data_dir
+    from raven.home import raven_home
 
-    roots = []
-    home = os.environ.get("RAVEN_HOME")
-    roots.append((Path(home) if home else Path.home() / ".raven").expanduser().resolve())
+    roots = [raven_home().resolve()]
     try:
         roots.append(get_data_dir().resolve())
     except OSError:
@@ -160,8 +156,8 @@ def resolve_readable(raw: str) -> Path:
     # TypeError *inside* the check, so the viewer answered 500 where it meant 403
     # -- refusing either way, but by crashing rather than by deciding.
     allowed = (workspace,) if cfg.tools.restrict_to_workspace else ()
-    resolved = _resolve_path(raw.strip(), workspace, allowed)
-    # After _resolve_path, so a symlink pointing into the state dir is caught by
+    resolved = resolve_path(raw.strip(), workspace, allowed)
+    # After resolve_path, so a symlink pointing into the state dir is caught by
     # where it lands rather than by how it was spelled.
     if in_state_dir(resolved, workspace):
         raise PermissionError(f"{resolved} is inside raven's state directory")

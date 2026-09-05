@@ -25,6 +25,8 @@ const PROVIDERS: Provider[] = [
 interface Harness {
   toasts: string[]
   persisted: string[]
+  persistedProviders: string[]
+  persistedScopes: string[]
   local: string[]
   settings: number
   after: number
@@ -32,7 +34,10 @@ interface Harness {
 }
 
 function install(over: Partial<ModelSource> = {}, providers = PROVIDERS): Harness {
-  const h: Harness = { toasts: [], persisted: [], local: [], settings: 0, after: 0, model: store.current }
+  const h: Harness = {
+    toasts: [], persisted: [], persistedProviders: [], persistedScopes: [],
+    local: [], settings: 0, after: 0, model: store.current,
+  }
   toastWriter.items = h.toasts
   let last = store.current()
   store.subscribe(() => {
@@ -41,8 +46,10 @@ function install(over: Partial<ModelSource> = {}, providers = PROVIDERS): Harnes
   })
   const source: ModelSource = {
     providers: () => providers,
-    persist: async (m) => {
+    persist: async (m, provider, scope) => {
       h.persisted.push(m)
+      h.persistedProviders.push(provider)
+      h.persistedScopes.push(scope)
     },
     openSettings: () => {
       h.settings += 1
@@ -223,7 +230,24 @@ describe('the model picker, choosing', () => {
     expect(h.local).toEqual(['minimax-m2'])
     expect(store.current()).toBe('minimax-m2')
     expect(h.persisted).toEqual(['minimax-m2'])
+    expect(h.persistedProviders).toEqual(['minimax'])
+    expect(h.persistedScopes).toEqual(['session'])
     expect(h.toasts).toEqual(['已切换到 minimax-m2'])
+  })
+
+  it('a switch from the settings default control is scoped to the default, not the session', async () => {
+    const h = install()
+    mount()
+    /* An anchor is how the settings default-model control opens the picker; the
+       composer chip opens with none. The scope rides that difference so the
+       default control changes agents.defaults even while a conversation is open. */
+    openIt(document.getElementById('modelChip')!)
+    await act(async () => {
+      rows('models')[1]!.click()
+    })
+    expect(h.persisted).toEqual(['minimax-m2'])
+    expect(h.persistedProviders).toEqual(['minimax'])
+    expect(h.persistedScopes).toEqual(['default'])
   })
 
   it('rolls the pick back when the write is refused, and says that too', async () => {
@@ -241,16 +265,46 @@ describe('the model picker, choosing', () => {
   })
 
   it('tells the caller after every local change, forward and back', async () => {
+    // A session switch (the composer chip, no anchor) is the optimistic one:
+    // the caller is told on the forward change and again on the rollback.
     const h = install({ persist: async () => Promise.reject(new Error('boom')) })
     mount()
-    const anchor = document.getElementById('modelChip')!
-    openIt(anchor, () => {
+    openIt(null, () => {
       h.after += 1
     })
     await act(async () => {
       rows('models')[1]!.click()
     })
     expect(h.after).toBe(2)
+    expect(h.toasts).toEqual(['切换失败：boom'])
+  })
+
+  it('says a staged pick is staged, not switched', async () => {
+    // A draft has no session yet; the source stages the pick and says so, and
+    // the toast must not claim an applied switch that a later write can refuse.
+    const h = install({ persist: async () => 'staged' as const })
+    mount()
+    openIt()
+    await act(async () => {
+      rows('models')[1]!.click()
+    })
+    expect(store.current()).toBe('minimax-m2')
+    expect(h.toasts).toEqual(['已选择 minimax-m2，发送首条消息后生效'])
+  })
+
+  it('a refused default switch commits nothing locally and does not roll back', async () => {
+    // The default control (an anchor) is not optimistic: it reflects the new
+    // default only once the write lands, so a refusal leaves the settings row
+    // untouched and the caller is not pinged with a forward/back pair.
+    const h = install({ persist: async () => Promise.reject(new Error('boom')) })
+    mount()
+    openIt(document.getElementById('modelChip')!, () => {
+      h.after += 1
+    })
+    await act(async () => {
+      rows('models')[1]!.click()
+    })
+    expect(h.after).toBe(0)
     expect(h.toasts).toEqual(['切换失败：boom'])
   })
 
@@ -263,6 +317,8 @@ describe('the model picker, choosing', () => {
       field().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     })
     expect(h.persisted).toEqual(['claude-sonnet-5'])
+    expect(h.persistedProviders).toEqual(['anthropic'])
+    expect(h.persistedScopes).toEqual(['session'])
   })
 })
 

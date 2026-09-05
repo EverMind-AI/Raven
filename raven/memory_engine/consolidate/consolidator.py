@@ -1,4 +1,12 @@
-"""Memory system for persistent agent memory."""
+"""The store and the consolidator behind long-term memory.
+
+``MemoryStore`` owns the files: ``user.md`` (profile), ``episodes.md`` (episode
+log) and their ``attention.md`` / ``behaviors.md`` siblings, each read and
+written under a portable file lock so a second raven cannot interleave.
+``MemoryConsolidator`` is the token-pressure path: conversation evicted from
+the window is annotated into episodes, and the episodes are folded back into
+the profile section by section.
+"""
 
 from __future__ import annotations
 
@@ -13,109 +21,15 @@ from typing import TYPE_CHECKING, Any, Callable, Iterator
 
 from loguru import logger
 
+from raven.observability import semconv
 from raven.providers.binding import ModelBinding, active_window, resolve
-from raven.tracing import semconv, trace
-from raven.utils.helpers import ensure_dir, estimate_message_tokens, estimate_prompt_tokens_chain
+from raven.tracing import trace
+from raven.utils.paths import ensure_dir
+from raven.utils.tokens import estimate_message_tokens, estimate_prompt_tokens_chain
 
 if TYPE_CHECKING:
-    from raven.providers.base import LLMProvider
+    from raven.contracts.llm_provider import LLMProvider
     from raven.session.manager import Session, SessionManager
-
-
-_SAVE_MEMORY_TOOL = [
-    {
-        "type": "function",
-        "function": {
-            "name": "save_memory",
-            "description": (
-                "Persist this conversation's consolidation across 3 memory pillars: "
-                "profile_update (stable facts → user.md), episode_summary (timestamped "
-                "events → episodes.md), foresight_hint (predicted future intents → "
-                "behaviors.md). All 3 slots must be present; episode_summary and "
-                "foresight_hint may be empty arrays."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "profile_update": {
-                        "type": "string",
-                        "description": (
-                            "Full updated user.md as markdown. Include all existing "
-                            "facts plus new ones. EVERY bullet MUST end with "
-                            "'[src: episodes.md @ YYYY-MM-DD HH:MM]' linking to the "
-                            "source episode timestamp. For pre-existing bullets that "
-                            "lack a source, write '[src: episodes.md @ unknown]' "
-                            "rather than fabricate a timestamp. Return the input "
-                            "unchanged if no new facts emerged."
-                        ),
-                    },
-                    "episode_summary": {
-                        "type": "array",
-                        "description": (
-                            "One entry per distinct event in this conversation. "
-                            "Each entry is a SINGLE LINE (no newlines), formatted "
-                            "exactly as: '[YYYY-MM-DD HH:MM] <one-line summary, "
-                            "<=100 chars> #tag1 #tag2'. Tags: 1-4 short kebab-case "
-                            "nouns drawn from {#project-<slug>, #perf, #bug, #habit, "
-                            "#task, #decision, #blocker, #deferred, #question, "
-                            "#answer, #pivot, #infra, #sql, #ml}. Order entries by "
-                            "their conversation timestamp. Empty array only if the "
-                            "conversation produced no substantive event."
-                        ),
-                        "items": {"type": "string"},
-                    },
-                    "foresight_hint": {
-                        "type": "array",
-                        "description": (
-                            "Predictions / deferred intents inferred from this "
-                            "conversation. Fill ONLY when the user (a) explicitly "
-                            "defers a task, (b) expresses a recurring habit with a "
-                            "clear time anchor, or (c) commits to a specific future "
-                            "action. Empty array if no such signal."
-                        ),
-                        "items": {
-                            "type": "object",
-                            "required": [
-                                "prediction",
-                                "window",
-                                "confidence",
-                                "src_ts",
-                            ],
-                            "properties": {
-                                "prediction": {
-                                    "type": "string",
-                                    "description": "One-line natural-language prediction, <=120 chars.",
-                                },
-                                "window": {
-                                    "type": "string",
-                                    "description": (
-                                        "When the prediction applies — e.g. '1-2 days', "
-                                        "'next Monday 09:00', 'recurring weekly'."
-                                    ),
-                                },
-                                "confidence": {
-                                    "type": "string",
-                                    "enum": ["low", "medium", "high"],
-                                },
-                                "src_ts": {
-                                    "type": "string",
-                                    "description": (
-                                        "Timestamp 'YYYY-MM-DD HH:MM' of the episode that triggered this prediction."
-                                    ),
-                                },
-                            },
-                        },
-                    },
-                },
-                "required": [
-                    "profile_update",
-                    "episode_summary",
-                    "foresight_hint",
-                ],
-            },
-        },
-    }
-]
 
 
 def _ensure_text(value: Any) -> str:
@@ -330,7 +244,7 @@ _EPISODE_LINE_RE = re.compile(r"^\s*\[(\d{4}-\d{2}-\d{2}[T ]\d{1,2}:\d{2})\]\s+(
 _TAG_RE = re.compile(r"#([a-z][a-z0-9-]*)")
 
 
-def _parse_episode_line(line: str) -> tuple[str, str, list[str]] | None:
+def parse_episode_line(line: str) -> tuple[str, str, list[str]] | None:
     """Split an episodes.md line into (timestamp, summary, tags).
 
     Returns None for lines that don't match the
@@ -387,7 +301,7 @@ _FORESIGHT_DEDUP_STOPWORDS: frozenset[str] = frozenset(
         "habit",
     }
 )
-_FORESIGHT_TOKEN_RE = re.compile(r"[a-zA-Z]{4,}|[一-鿿]{2,}")
+_FORESIGHT_TOKEN_RE = re.compile(r"[a-zA-Z]{4,}|[\u4e00-\u9fff]{2,}")
 # Jaccard threshold for "same claim, reworded". 0.6 chosen empirically:
 # catches recurring-habit clusters like "Saturday run x4" or "daily
 # medication reminders x6" while leaving obviously-distinct predictions
@@ -423,7 +337,7 @@ def _is_process_only_episode(line: str) -> bool:
     Unparseable / untagged lines fall through (return False) so we don't
     accidentally suppress unrelated freeform notes.
     """
-    parsed = _parse_episode_line(line)
+    parsed = parse_episode_line(line)
     if not parsed:
         return False
     _, _, tags = parsed
@@ -699,20 +613,16 @@ class MemoryStore:
         workspace: Path,
         now_fn: Callable[[], datetime] | None = None,
     ):
-        # User profile + episodic log live under the ``user_memory``
-        # pillar. ``memory_dir`` is an alias of ``memory_file.parent``
-        # for callsites that derive sibling paths (lock file below).
+        # The profile and the episode log live under the ``user_memory`` pillar.
         self.memory_file = ensure_dir(workspace / "user_memory" / "profile") / "user.md"
         self.history_file = ensure_dir(workspace / "user_memory" / "episodic") / "episodes.md"
-        self.memory_dir = self.memory_file.parent
-        # Sibling lock file (`MEMORY.md.lock`). Shared across all processes
-        # that write MEMORY.md so Personalizer + MemoryConsolidator +
-        # SentinelMemoryWriter serialize on the same fcntl. POSIX-only —
-        # falls through to no-op on win32.
+        # Sibling lock file. Shared across every process that writes the
+        # profile, so Personalizer, MemoryConsolidator and SentinelMemoryWriter
+        # serialize on one portable file lock.
         self.memory_lock_path = self.memory_file.with_suffix(self.memory_file.suffix + ".lock")
 
         # attention.md + behaviors.md siblings at user_memory root.
-        # Independent fcntl locks: sentinel writes attention.md frequently
+        # Independent locks: sentinel writes attention.md frequently
         # and shouldn't contend with Personalizer/Consolidator on user.md.
         user_memory_root = ensure_dir(workspace / "user_memory")
         self.attention_file = user_memory_root / "attention.md"
@@ -736,29 +646,29 @@ class MemoryStore:
 
     @contextmanager
     def locked(self) -> Iterator[None]:
-        """Hold an exclusive fcntl lock on MEMORY.md so concurrent writers
-        across REPL + gateway processes don't clobber each other.
+        """Hold an exclusive file lock on the profile so concurrent writers
+        across processes don't clobber each other.
 
         Usage:
             with memory.locked():
                 cur = memory.read_long_term()
                 memory.write_long_term(cur + "...")
         """
-        yield from self._fcntl_locked(self.memory_lock_path)
+        yield from self._file_locked(self.memory_lock_path)
 
     @contextmanager
     def locked_attention(self) -> Iterator[None]:
         """Exclusive lock on ``attention.md.lock`` — independent of the
         user.md lock pool so sentinel writers don't block on Personalizer
         or MemoryConsolidator."""
-        yield from self._fcntl_locked(self.attention_lock_path)
+        yield from self._file_locked(self.attention_lock_path)
 
     @contextmanager
     def locked_behaviors(self) -> Iterator[None]:
         """Exclusive lock on ``behaviors.md.lock`` — separate from user.md
         and attention.md so the idle-triggered extractor's slow LLM call
         doesn't block hot-path writers on either of the other files."""
-        yield from self._fcntl_locked(self.behaviors_lock_path)
+        yield from self._file_locked(self.behaviors_lock_path)
 
     @contextmanager
     def locked_stance_log(self) -> Iterator[None]:
@@ -766,12 +676,11 @@ class MemoryStore:
         read-merge-write in StanceLogProducer so concurrent ticks
         (eval harness + gateway, REPL + gateway) don't resurrect
         FIFO-trimmed entries via lost-update races."""
-        yield from self._fcntl_locked(self.stance_log_lock_path)
+        yield from self._file_locked(self.stance_log_lock_path)
 
-    def _fcntl_locked(self, lock_path: Path) -> Iterator[None]:
-        # Cross-platform advisory lock (portalocker): real serialization on
-        # Windows too, instead of the previous win32 no-op that lost concurrent
-        # writes to MEMORY.md / attention.md / behaviors.md / stance_log.json.
+    def _file_locked(self, lock_path: Path) -> Iterator[None]:
+        # Cross-platform advisory lock (portalocker), so the serialization is
+        # real on Windows as well as POSIX.
         from raven.utils.portable_lock import file_lock
 
         with file_lock(lock_path):
@@ -785,23 +694,26 @@ class MemoryStore:
     def write_long_term(self, content: str) -> None:
         self.memory_file.write_text(content, encoding="utf-8")
 
-    def _safe_write_long_term(self, new_content: str, expected_prev: str) -> bool:
-        """Compare-and-set write under the lock. Used by consolidate() to avoid
-        clobbering a concurrent writer's update during the LLM call.
+    def _safe_write_long_term(self, expected_prev: str, build: Callable[[str], str]) -> bool:
+        """Compare-and-set write under the lock: ``build`` receives what is on
+        disk and returns the new user.md, which is written only if the file
+        still matches ``expected_prev``.
 
-        Returns True if the write happened; False if MEMORY.md changed under
-        us (we lose the race; caller should log + move on).
+        The build runs inside the lock because every caller derives the new
+        file from the old one, and a build over a stale read is the write this
+        guard exists to refuse.
+
+        Returns True if the read-modify-write went through; False if another
+        writer moved the file under us -- the caller lost the race, and says so
+        in its own words.
         """
         with self.locked():
             current = self.read_long_term()
             if current != expected_prev:
-                logger.info(
-                    "MemoryStore: consolidate skipped write — concurrent "
-                    "modification detected (lost race with another writer); "
-                    "next consolidation will fold our turn back in"
-                )
                 return False
-            self.write_long_term(new_content)
+            new_content = build(current)
+            if new_content != current:
+                self.write_long_term(new_content)
             return True
 
     def append_history(self, entry: str) -> None:
@@ -1304,7 +1216,7 @@ episode_summary:
             return {}
         counts: dict[str, int] = {}
         for line in self.history_file.read_text(encoding="utf-8").splitlines():
-            parsed = _parse_episode_line(line)
+            parsed = parse_episode_line(line)
             if not parsed:
                 continue
             _, _, tags = parsed
@@ -1333,7 +1245,7 @@ episode_summary:
         cutoff = self._now_fn() - timedelta(days=days)
         counts: dict[str, int] = {}
         for line in self.history_file.read_text(encoding="utf-8").splitlines():
-            parsed = _parse_episode_line(line)
+            parsed = parse_episode_line(line)
             if not parsed:
                 continue
             ts, _, tags = parsed
@@ -1379,7 +1291,7 @@ episode_summary:
             stripped = line.strip()
             if not stripped:
                 continue
-            parsed = _parse_episode_line(stripped)
+            parsed = parse_episode_line(stripped)
             if not parsed:
                 continue
             _, _, tags = parsed
@@ -1449,7 +1361,7 @@ prefix for required slots; bullets without prefix are ad-hoc additions.
   - **Role**: ...
   - **Stack**: ...
   - **Location**: ...
-  - **Key relations**: <name + role, e.g. "周晓棠 (girlfriend)">
+  - **Key relations**: <name + role, e.g. "Alex Chen (partner)">
 
 ## Preferences (≤ 5 bullets — working style / tools / quiet hours)
   - **Communication**: terse | verbose | mixed; emoji-friendly Y/N
@@ -1637,23 +1549,20 @@ section_body: full new content for that H2, every bullet ending with
         new_body: str,
         expected_prev: str,
     ) -> bool:
-        """CAS write: splice ``new_body`` under ``heading`` in user.md only
-        if file still matches ``expected_prev`` (no concurrent writer).
+        """Splice ``new_body`` under ``heading`` in user.md, unless another
+        writer moved the file between our read and our write.
         Returns True on write."""
-        with self.locked():
-            current = self.read_long_term()
-            if current != expected_prev:
-                logger.info("refresh_section: concurrent modification detected; skipping write (will retry next round)")
-                return False
-            new_content = _splice_h2_section(current, heading, new_body)
+
+        def _build(current: str) -> str:
             # Keep auto-managed ## Foresight at the bottom of user.md
-            # regardless of where refresh_section's splice landed the new
-            # section. Idempotent — no-op when Foresight is absent or
-            # already last.
-            new_content = _ensure_foresight_at_end(new_content)
-            if new_content != current:
-                self.write_long_term(new_content)
-            return True
+            # regardless of where the splice landed the new section.
+            # Idempotent -- no-op when Foresight is absent or already last.
+            return _ensure_foresight_at_end(_splice_h2_section(current, heading, new_body))
+
+        wrote = self._safe_write_long_term(expected_prev, _build)
+        if not wrote:
+            logger.info("refresh_section: concurrent modification detected; skipping write (will retry next round)")
+        return wrote
 
     @trace.instrument("memory.profile_refresh", extract=semconv.memory_profile_refresh)
     async def maybe_refresh_hot_tags(
@@ -1727,7 +1636,7 @@ class MemoryConsolidator:
     def context_window_tokens(self) -> int:
         """The running turn's window; the one built with, outside a turn.
 
-        The consolidator archives down to half this number, so a session on a
+        The consolidator consolidates down to half this number, so a session on a
         1M model must not be measured against the window of whichever session
         built the loop.
         """
@@ -1817,8 +1726,8 @@ class MemoryConsolidator:
             self._get_tool_definitions(),
         )
 
-    async def archive_unconsolidated(self, session: Session) -> bool:
-        """Archive the full unconsolidated tail for /new-style session rollover.
+    async def consolidate_unconsolidated(self, session: Session) -> bool:
+        """Consolidate the full unconsolidated tail for /new-style session rollover.
 
         Annotates the tail into episodes.md, then runs one round of hot-tag
         section refresh so the profile reflects the just-closed session.
@@ -1835,15 +1744,18 @@ class MemoryConsolidator:
 
     @trace.instrument("memory.consolidate", extract=semconv.memory_consolidate)
     async def maybe_consolidate_by_tokens(self, session: Session, *, force: bool = False) -> dict[str, int]:
-        """Loop: archive old messages until prompt fits within half the context window.
+        """Loop: move old messages behind the consolidation boundary until the
+        prompt fits within half the context window.
 
         ``force`` skips the "prompt still fits" early return, which is what a
-        user-triggered compaction wants: archive down to the target now rather
-        than waiting to hit the window. Returns before/after token estimates
-        and how many messages moved behind the consolidation boundary — callers
-        that only want the side effect can ignore it.
+        user-triggered consolidation wants: consolidate down to the target now
+        rather than waiting to hit the window. Returns before/after token
+        estimates and ``compacted``, how many messages moved behind the
+        consolidation boundary -- callers that only want the side effect can
+        ignore it. Nothing here archives anything: a session is archived by
+        ``session.archive``, which hides it from the list and moves no message.
         """
-        stats = {"before_tokens": 0, "after_tokens": 0, "archived": 0}
+        stats = {"before_tokens": 0, "after_tokens": 0, "compacted": 0}
         if not session.messages or self.context_window_tokens <= 0:
             return stats
 
@@ -1911,5 +1823,5 @@ class MemoryConsolidator:
                 await self.maybe_refresh_hot_tags()
 
             stats["after_tokens"] = max(estimated, 0)
-            stats["archived"] = max(session.last_consolidated - boundary_before, 0)
+            stats["compacted"] = max(session.last_consolidated - boundary_before, 0)
             return stats

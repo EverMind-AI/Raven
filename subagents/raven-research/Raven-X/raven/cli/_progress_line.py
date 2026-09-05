@@ -98,11 +98,51 @@ def describe_start(name: str, arguments: dict[str, Any] | None, lang: str = "en"
 
 
 def looks_failed(preview: str) -> bool:
-    # Prefix check, not JSON parsing: every web.py error branch serializes
-    # with "error" as the first key, and shell-style failures start with
-    # "Error". A miss only renders a failed call as succeeded.
+    """Whether this tool result should be shown to the viewer as a failure.
+
+    ★ 20260828 (Framework, product-surface audit). This used to re-spell the
+    predicate instead of borrowing it, and dropped two of the three prefixes
+    ``WebSearchTool._failed`` enumerates one file over: a zero-hit search
+    (``No results for: ...``) and a proxy fault (``Proxy error: ...``) both
+    rendered as a normal, successful ``🔍 搜索 "..."`` line. During a live run
+    that is the difference between "the agent is making progress" and "the
+    agent has been getting nothing back for two minutes" — and the viewer had
+    no way to tell. The saturation refusal (``[search closed ...]``) was a
+    third miss: the harness had switched search off and the screen said the
+    search succeeded.
+
+    So the search verdict is now *borrowed*, not restated. Lazy import with a
+    fallback, the same shape ``turn_language`` above uses and for the same
+    reason: this module must keep rendering if the agent package cannot be
+    imported. The fallback is the union of the three prefixes rather than the
+    old two, so even the degraded path no longer under-reports.
+
+    ``_failed`` is documented as behaviour-bearing (it decides what enters the
+    replay cache). Borrowing it here couples display to that decision on
+    purpose: "the model got nothing usable back" and "there is nothing worth
+    replaying" are the same question, and this repo's most-repeated failure is
+    two spellings of one predicate drifting apart with no runtime symptom.
+
+    The registry-wide convention stays in front of it: every failed tool's
+    model-facing text starts with ``Error`` (``registry.py``'s ``Error
+    executing <tool>: ...``, the file and shell tools' ``Error running ...``),
+    and ``_failed`` is a search-result classifier that only knows ``Error:``
+    with a colon. Borrowing it alone rendered those as successful calls.
+    """
     p = preview.lstrip()
-    return p.startswith('{"error"') or p.startswith("Error")
+    if p.startswith(('{"error"', "Error")):
+        # web_fetch's envelope, and the registry-wide failure prefix; neither
+        # is a search string, so the search predicate below never sees them.
+        return True
+    try:
+        from raven.agent.harness_text import SEARCH_CLOSED_PREFIX
+        from raven.agent.tools.web import WebSearchTool
+
+        return p.startswith(SEARCH_CLOSED_PREFIX) or bool(WebSearchTool._failed(p))
+    except Exception:
+        # Hardcoded, not the imported name: this branch runs precisely when that
+        # import failed, so the name may not be bound here.
+        return p.startswith(("Proxy error:", "No results for:", "Search is closed for this task:"))
 
 
 def resolve_mode(style: str, *, is_terminal: bool, logs: bool) -> str:
@@ -205,25 +245,48 @@ class ProgressRenderer:
         self._spinner = spinner
         self.progress = TurnProgress(max_iterations=max_iterations)
         self._status: Any = None
-        # The active spinner regardless of mode, tracked for suspended() only.
-        # Kept apart from ``_status``: on_tool branches on ``_status is None``
-        # to decide between updating the live line and printing plain lines,
-        # and the plain-lines mode must keep printing.
+        # The active spinner, for suspended() only. It used to be tracked apart
+        # from ``_status`` because ``on_tool`` branched on ``_status is None`` to
+        # choose between updating the live line and printing plain lines, so the
+        # plain-lines mode could not hold a handle without switching styles. That
+        # coupling is gone (20260828): the print style is keyed on the MODE, and
+        # both modes now store the handle, so these two are set and cleared
+        # together by ``_status_ctx``. Kept as a separate name because suspend is
+        # a different question from "is there a line to refresh" - a future mode
+        # may hold one without the other - and because the two entry points below
+        # read them for different reasons.
         self._active: Any = None
 
     def thinking_ctx(self, question: str = ""):
         """Per-turn context manager. Entering is the turn-boundary signal that
         resets the counters (outlets get no lifecycle events) and fixes the
-        turn's display language; in live mode it also owns the status line."""
+        turn's display language, and it owns the status line.
+
+        ★ 20260828 (Framework, product-surface audit). Both modes now keep the
+        handle. They always both CREATED a ``console.status`` — the Live was
+        never the difference between them — but only the live branch stored it,
+        so ``self._status`` was ``None`` under the default ``lines`` mode and
+        every ``.update()`` below was dead code. The consequence was that
+        ``status_line()`` got evaluated exactly once, at entry, with every
+        counter still at zero: the round/search/page tally built in
+        ``TurnProgress.status_line`` was never rendered at all, and the spinner
+        read a frozen "Raven is thinking..." for the whole run, including the
+        final generation + review stretch where no tool event fires and the
+        line is the only thing moving.
+
+        What stays keyed on the MODE, not on the handle, is the *print* style:
+        ``lines`` announces a call when it starts, ``live`` announces it when it
+        finishes so it can mark failure on the same line. Those were entangled
+        with handle-presence, which is why storing the handle used to be
+        impossible without silently switching modes.
+        """
         self.progress.reset(turn_language(question))
         if not self._spinner:
             return nullcontext()
-        if self.mode == "live":
-            return self._live_status()
-        return self._plain_status()
+        return self._status_ctx()
 
     @contextmanager
-    def _live_status(self):
+    def _status_ctx(self):
         status = self._console.status(Text(self.progress.status_line(), style="dim"), spinner="dots")
         with status:
             self._status = status
@@ -234,15 +297,6 @@ class ProgressRenderer:
                 self._status = None
                 self._active = None
 
-    @contextmanager
-    def _plain_status(self):
-        status = self._console.status(Text(self.progress.status_line(), style="dim"), spinner="dots")
-        with status:
-            self._active = status
-            try:
-                yield
-            finally:
-                self._active = None
 
     @contextmanager
     def suspended(self):
@@ -268,6 +322,12 @@ class ProgressRenderer:
                 except Exception:
                     pass
 
+    def _update_status(self, text: str) -> None:
+        """Refresh the spinner line. No-op when no status is live (``--no-spinner``,
+        or a caller that never entered ``thinking_ctx``)."""
+        if self._status is not None:
+            self._status.update(Text(text, style="dim"))
+
     def on_notice(self, text: str) -> None:
         """Model narration / tool hints. DR models write paragraphs between
         tool calls; clip to the first line so they don't drown the progress."""
@@ -283,12 +343,21 @@ class ProgressRenderer:
         if self.mode == "off":
             return
         try:
+            # Both conditions, and the second is not redundant. ToolEvents can
+            # trail the thinking context (the render barrier is ``wait_idle``),
+            # and outside it there is no status line to print onto - live mode
+            # must then degrade to the lines behaviour or the call is never
+            # shown at all. The pre-20260828 code got this for free by keying
+            # the print style on ``_status`` alone; splitting the two jobs
+            # apart means saying so.
+            live = self.mode == "live" and self._status is not None
             if ev.phase is ToolPhase.START:
                 started = self.progress.start(ev)
-                if self._status is not None:
-                    self._status.update(Text(f"{started} · {self.progress.status_line()}", style="dim"))
+                if live:
+                    self._update_status(f"{started} · {self.progress.status_line()}")
                 else:
                     self._print(f"↳ {started}")
+                    self._update_status(self.progress.status_line())
             else:
                 # A successful call prints nothing beyond its START line;
                 # only failure gets a completion echo.
@@ -297,11 +366,11 @@ class ProgressRenderer:
                     return
                 started, ok = pair
                 lang = self.progress.lang
-                if self._status is not None:
+                if live:
                     self._print(f"↳ {started}" if ok else f"↳ {started} {_label(lang, 'failed_inline')}")
-                    self._status.update(Text(self.progress.status_line(), style="dim"))
                 elif not ok:
                     self._print(f"    {_label(lang, 'failed_block')}")
+                self._update_status(self.progress.status_line())
         except Exception:
             pass
 

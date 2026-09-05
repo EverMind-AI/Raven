@@ -33,7 +33,7 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from raven.agent.tools.base import Tool
+from raven.contracts.tool import Tool
 from raven.skill_hub.audit import record_install, write_install_meta
 from raven.skill_hub.policy import SkillPolicy, is_blocked, refuses_low_safety
 
@@ -43,13 +43,13 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
     from pathlib import Path
 
-    from raven.memory_engine.skill_local.registry import SkillRegistry
+    from raven.memory_engine import SkillRegistry
     from raven.skill_hub import SkillHubClient
 
 logger = logging.getLogger(__name__)
 
 
-def _split_qualified_id(skill_id: str) -> tuple[str, str]:
+def split_qualified_id(skill_id: str) -> tuple[str, str]:
     """Split ``<source>/<native_id>``. A bare id (no slash) is assumed Hub —
     that's the only source whose body/bundle is fetched remotely."""
     source, sep, native = skill_id.partition("/")
@@ -58,7 +58,7 @@ def _split_qualified_id(skill_id: str) -> tuple[str, str]:
     return source, native
 
 
-def _lookup_on_disk(registry: "SkillRegistry | None", source: str, native: str):
+def lookup_on_disk(registry: "SkillRegistry | None", source: str, native: str):
     """Resolve a router-namespaced id against the physical-layer registry.
 
     The two carry different vocabularies and must be translated, not passed
@@ -134,13 +134,13 @@ class ReadSkillTool(Tool):
     async def execute(self, skill_id: Any = None, **_: Any) -> str:
         if not skill_id or not isinstance(skill_id, str):
             return "Error: 'skill_id' is required — a skill's qualified id like 'local/<name>' or 'hub/<slug>'."
-        source, native = _split_qualified_id(skill_id)
+        source, native = split_qualified_id(skill_id)
 
         if is_blocked(self._policy.blocklist, native):
             return f"Error: skill {native!r} is on the operator blocklist (skillForge.blocklist) and cannot be read."
 
         if source in ("local", "everos"):
-            meta = _lookup_on_disk(self._registry, source, native)
+            meta = lookup_on_disk(self._registry, source, native)
             if meta is None:
                 return (
                     f"Error: no {source} skill {native!r} found. Its body may "
@@ -232,7 +232,7 @@ class UseSkillTool(Tool):
     async def execute(self, skill_id: Any = None, **_: Any) -> str:
         if not skill_id or not isinstance(skill_id, str):
             return "Error: 'skill_id' is required — a skill's qualified id like 'hub/<slug>'."
-        source, native = _split_qualified_id(skill_id)
+        source, native = split_qualified_id(skill_id)
 
         if is_blocked(self._policy.blocklist, native):
             return f"Error: skill {native!r} is on the operator blocklist (skillForge.blocklist) and cannot be used."
@@ -245,7 +245,7 @@ class UseSkillTool(Tool):
 
     def _use_on_disk(self, source: str, native: str) -> str:
         """Resolve an already-materialized local/everos skill dir."""
-        meta = _lookup_on_disk(self._registry, source, native)
+        meta = lookup_on_disk(self._registry, source, native)
         if meta is None:
             return (
                 f"Error: no {source} skill {native!r} found on disk. If it is a "

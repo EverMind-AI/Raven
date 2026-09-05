@@ -13,8 +13,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from raven.agent.tools.base import Tool
 from raven.agent.tools.registry import ToolRegistry
+from raven.contracts.tool import Tool
 from raven.memory_engine.consolidate.consolidator import MemoryStore
 from raven.proactive_engine.sentinel.executor.action_executor import ActionExecutor
 from raven.proactive_engine.sentinel.executor.dispatcher import NudgeDispatcher

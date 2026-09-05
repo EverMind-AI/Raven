@@ -1,6 +1,6 @@
 """The ACP wire layer as the agent direction needs it.
 
-Framing is not re-implemented: :mod:`raven.agent.acp.protocol` already encodes
+Framing is not re-implemented: :mod:`raven.acp_client.protocol` already encodes
 and decodes newline-delimited JSON-RPC, byte for byte the same as
 ``raven/rpc/server.py`` does, and has been run against real agents. It is
 imported rather than copied, and rather than moved -- moving it would touch 78
@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from raven.agent.acp.protocol import (
+from raven.acp_client.protocol import (
     SESSION_MCP_CAPABILITY,
     AcpProtocolError,
     decode,

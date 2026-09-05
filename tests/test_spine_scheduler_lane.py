@@ -1,3 +1,5 @@
+"""A scheduler lane's FIFO execution and its emit-guard and stamping rules."""
+
 import asyncio
 
 from loguru import logger
@@ -420,7 +422,7 @@ async def test_cancel_before_turnstarted_still_reports_the_turns_end():
     ran: list[str] = []
     events, sink = _collector()
     pools = OriginPools(user=1, system=1)
-    await pools.for_origin(Origin.USER).acquire()  # exhaust the user pool
+    await pools._for_origin(Origin.USER).acquire()  # exhaust the user pool
 
     class R:
         async def run(self, req, emit, drain) -> TurnOutcome:

@@ -16,12 +16,12 @@ from loguru import logger
 
 from raven.providers import prompt_cache
 from raven.providers.base import (
+    ChatDelta,
     ErrorClassification,
     GenerationSettings,
     LLMProvider,
     LLMResponse,
     RunMeta,
-    StreamDelta,
     ToolCallRequest,
     format_llm_error,
 )
@@ -122,14 +122,11 @@ def _cache_tokens(usage: Any) -> tuple[int, int]:
       - OpenRouter:        usage.prompt_tokens_details.cached_tokens
                            usage.prompt_tokens_details.cache_write_tokens
 
-    Shared by both response paths because only one of them used to do it. A
-    streamed response carries the OpenRouter shape, and the accounting above it
-    -- ``AgentLoop._build_usage_snapshot``, ``tracing.usage.normalize``, the
-    telemetry the UsageTracker writes -- reads only the Anthropic names. So a
-    streamed turn reported no cache activity at all and priced every cached
-    token as fresh: a warm turn measured at 7,383 read and 1,079 written came
-    out as 8,479 fresh, $0.008499 against an actual $0.002124. Wrong by 4x, on
-    the path the TUI, the served page and the streaming channels all take.
+    Shared by both response paths so a streamed turn and a non-streamed one
+    report cache activity the same way: a streamed response carries the
+    OpenRouter shape, while the accounting above it
+    (``AgentLoop._build_usage_snapshot``, ``tracing.usage.normalize``, the
+    telemetry the UsageTracker writes) reads the Anthropic names.
     """
     details = getattr(usage, "prompt_tokens_details", None)
     read = (
@@ -201,7 +198,6 @@ class LiteLLMProvider(LLMProvider):
         if self._gateway and self._gateway.name == "openrouter":
             self.extra_headers = {**_OPENROUTER_ATTRIBUTION, **self.extra_headers}
 
-        # Configure environment variables
         if api_key:
             self._setup_env(api_key, api_base, default_model)
 
@@ -358,7 +354,7 @@ class LiteLLMProvider(LLMProvider):
         cache on every block up to and including itself, and the tail of this
         message -- the memory recall, the skill router's hits, the Curator's
         working state -- is rebuilt from whatever the user just said. So the
-        end-of-message breakpoint, the only one there used to be, changes key on
+        end-of-message breakpoint changes key on
         every new turn and re-bills the identity and bootstrap text in front of
         it that never changed at all. Splitting at the boundary gives that head
         a key of its own.
@@ -575,10 +571,10 @@ class LiteLLMProvider(LLMProvider):
         temperature: object = LLMProvider._SENTINEL,
         reasoning_effort: object = LLMProvider._SENTINEL,
         tool_choice: str | dict[str, Any] | None = None,
-    ) -> AsyncIterator[StreamDelta]:
+    ) -> AsyncIterator[ChatDelta]:
         """Streaming counterpart to chat().
 
-        Yields one StreamDelta per non-empty chunk. Signature matches chat()
+        Yields one ChatDelta per non-empty chunk. Signature matches chat()
         so callers can swap providers transparently. The existing chat() is
         NOT modified — non-TUI paths (channels / cron / sentinel / ...)
         continue to use chat() with no behavioral change.
@@ -718,18 +714,17 @@ class LiteLLMProvider(LLMProvider):
         finally:
             await _close(stream)
 
-    def _normalize_stream_chunk(self, chunk: Any) -> StreamDelta | None:
-        """Normalize a raw provider chunk into a StreamDelta.
+    def _normalize_stream_chunk(self, chunk: Any) -> ChatDelta | None:
+        """Normalize a raw provider chunk into a ChatDelta.
 
         Default: OpenAI shape — `chunk.choices[0].delta.content` (str | None),
         `delta.tool_calls` (list | None), and a final `chunk.usage` snapshot
         on the trailing chunk for some providers. Returns None when the chunk
         carries no content / tool_call / usage payload so callers can skip.
 
-        Provider-specific shapes (e.g. Qwen dashscope) are decided at
-        implementation time after a real-provider smoke test (per design.md
-        §D4 + tasks.md T3.4). Add a hardcoded branch here keyed on
-        `self._gateway` / `find_by_model(...).name` if/when needed.
+        A provider-specific shape (Qwen dashscope, say) is decided against a
+        real-provider smoke test: add a branch here keyed on ``self._gateway`` or
+        ``find_by_model(...).name`` when one is needed.
         """
         try:
             choices = getattr(chunk, "choices", None)
@@ -743,11 +738,10 @@ class LiteLLMProvider(LLMProvider):
             usage = getattr(chunk, "usage", None)
             reasoning_content = getattr(delta_obj, "reasoning_content", None) or None
             # Upstream states why it stopped only on the terminal chunk, which
-            # otherwise carries no payload at all. Dropping that chunk (as the
-            # emptiness check below used to) discards the one signal that says
-            # the response was cut off at the output ceiling rather than
-            # finished -- the difference between "the model is done" and "the
-            # model was interrupted mid-token".
+            # otherwise carries no payload at all. Dropping that chunk would
+            # discard the one signal that says the response was cut off at the
+            # output ceiling rather than finished -- the difference between "the
+            # model is done" and "the model was interrupted mid-token".
             finish_reason = getattr(choices[0], "finish_reason", None) or None
 
             tool_call_delta: dict[str, Any] | None = None
@@ -797,7 +791,7 @@ class LiteLLMProvider(LLMProvider):
             ):
                 return None
 
-            return StreamDelta(
+            return ChatDelta(
                 content=content,
                 tool_call_delta=tool_call_delta,
                 usage=usage_dict,

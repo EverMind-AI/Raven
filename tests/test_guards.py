@@ -52,7 +52,7 @@ def test_episode_without_tags_kept():
 
 
 def test_unparseable_line_kept():
-    # No timestamp prefix — _parse_episode_line returns None.
+    # No timestamp prefix — parse_episode_line returns None.
     # Guard returns False so we don't drop unrelated freeform input.
     assert _is_process_only_episode("just a stray string with #habit") is False
 

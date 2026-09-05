@@ -21,7 +21,7 @@ from raven.providers import model_catalog_cache, rates
 from raven.providers.base import send_max_tokens
 from raven.providers.litellm_setup import import_litellm
 from raven.providers.rates import (
-    _FALLBACK_PRICING,
+    _FALLBACK_RATES,
     resolve_context_window,
     token_rates,
 )
@@ -39,9 +39,9 @@ _REAL_FETCH = rates._fetch_openrouter_models
 
 @pytest.fixture(autouse=True)
 def _reset_catalog_state():
-    rates._OPENROUTER_CACHE.clear()
+    rates.reset_openrouter_cache()
     yield
-    rates._OPENROUTER_CACHE.clear()
+    rates.reset_openrouter_cache()
 
 
 @pytest.fixture
@@ -317,8 +317,8 @@ def test_the_hijacked_model_reports_neither_a_price_nor_a_window(monkeypatch):
 
 
 def test_the_manual_table_answers_a_model_too_new_for_the_others():
-    model = next(iter(_FALLBACK_PRICING))
-    p_rate, c_rate = _FALLBACK_PRICING[model]
+    model = next(iter(_FALLBACK_RATES))
+    p_rate, c_rate = _FALLBACK_RATES[model]
 
     assert _rate_cost(model, 1000, 500) == pytest.approx(1000 * p_rate + 500 * c_rate, rel=0.01)
 
@@ -551,14 +551,14 @@ def test_one_place_decides_whether_a_model_can_be_handed_to_litellm():
 
     source = (pathlib.Path(__file__).resolve().parents[1] / "raven" / "providers" / "rates.py").read_text()
     tree = ast.parse(source)
-    owner = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "_may_prompt")
+    owner = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "may_prompt")
     allowed = range(owner.lineno, (owner.end_lineno or owner.lineno) + 1)
     offenders = [
         f"line {i}: {line.strip()}"
         for i, line in enumerate(source.splitlines(), 1)
         if "authenticator.py" in line and i not in allowed
     ]
-    assert not offenders, "ask _may_prompt instead:\n" + "\n".join(offenders)
+    assert not offenders, "ask may_prompt instead:\n" + "\n".join(offenders)
 
 
 # --- Field reading and id candidates ---
@@ -582,14 +582,14 @@ def test_which_drivers_can_prompt_is_read_from_the_installed_litellm():
     the hang back for the vendor it missed. The driver ships ``authenticator.py``
     or it does not.
     """
-    from raven.providers.rates import _may_prompt
+    from raven.providers.rates import may_prompt
 
-    assert _may_prompt("github_copilot/gpt-4.1")
-    assert _may_prompt("openrouter/github_copilot/gpt-4.1"), "any segment counts"
-    assert _may_prompt("chatgpt/gpt-5.1")
-    assert _may_prompt("gigachat/GigaChat-2-Max")
+    assert may_prompt("github_copilot/gpt-4.1")
+    assert may_prompt("openrouter/github_copilot/gpt-4.1"), "any segment counts"
+    assert may_prompt("chatgpt/gpt-5.1")
+    assert may_prompt("gigachat/GigaChat-2-Max")
     for safe in ("openai/gpt-4o", "anthropic/claude-sonnet-4-5", "deepseek/deepseek-v4-pro", "gpt-4o"):
-        assert not _may_prompt(safe), safe
+        assert not may_prompt(safe), safe
 
 
 def test_a_model_reached_by_region_or_subscription_is_looked_up_as_the_vendor_files_it():
@@ -758,7 +758,7 @@ def disk_cache(tmp_path, monkeypatch):
     """Point the OpenRouter disk cache at a temp file; never touch real ~/.raven."""
     path = tmp_path / "model-catalog.json"
     monkeypatch.setattr(model_catalog_cache, "_CACHE_PATH", path, raising=False)
-    rates._OPENROUTER_CACHE.clear()
+    rates.reset_openrouter_cache()
     monkeypatch.setattr(rates, "_OPENROUTER_CACHE_TIME", 0.0)
     return path
 

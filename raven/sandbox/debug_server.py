@@ -9,7 +9,7 @@ import logging
 import os
 from pathlib import Path
 
-from raven.sandbox._async_utils import cancel_and_collect as _cancel_and_collect
+from raven.sandbox.async_utils import cancel_and_collect as _cancel_and_collect
 
 logger = logging.getLogger(__name__)
 
@@ -362,7 +362,7 @@ class SandboxDebugServer:
                 pass
 
         async def _watch_disconnect():
-            # P1.3: client disconnect detector. The exec protocol does not expect
+            # Client disconnect detector. The exec protocol does not expect
             # any client→server traffic after the initial command, so a successful
             # readline() (stray data) is ignored, and an empty result means the
             # client closed its half of the socket — at which point we must stop
@@ -462,7 +462,7 @@ class SandboxDebugServer:
         async def _wait_task():
             try:
                 result = await execution.wait()
-                # P1.4: drain remaining stdout before announcing exit. Without this,
+                # Drain remaining stdout before announcing exit. Without this,
                 # the client breaks on `exit` and loses the last few stdout chunks
                 # that are still queued in stdout_task. Bound the wait so a stuck
                 # stdout iterator can't deadlock the session forever.
@@ -496,7 +496,7 @@ class SandboxDebugServer:
                 except Exception:
                     pass
 
-            # P1.2: any path out of this loop — clean EOF, exception, cancellation —
+            # Any path out of this loop — clean EOF, exception, cancellation —
             # must fire done_event so an idle shell whose client just walked away
             # is torn down instead of becoming an orphan inside the VM.
             #

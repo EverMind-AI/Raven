@@ -1,46 +1,53 @@
-"""Agent rows discovered from the ``subagents/`` tree.
+"""Agent rows discovered from the ``agents/`` product tree.
 
-Several raven builds ship beside this one under ``subagents/`` -- separate forks at
-separate versions, each with its own checkout, venv and credential -- and each
-carries a ``subagent.json`` describing how to invoke it. This module turns that
-tree into table rows so a raven that *has* the tree offers them without anyone
-registering them by hand.
+Raven ships agent products under ``agents/`` -- one folder per product, each a
+launcher (``run.py``) that renders the product's config and serves it on the
+installed raven, plus a ``subagent.json`` manifest describing how to invoke
+it. This module turns that tree into table rows so a raven that *has* the tree
+offers them without anyone registering them by hand.
 
-Discovery, deliberately, rather than a hard-coded list: adding a folder is then
-adding a folder, which is the same reason :func:`raven.cli.subagent_setup.discover`
-scans instead of naming them. And discovery only -- nothing here writes config.
-A row is materialized from the manifest on every start, so a folder whose
-manifest changes (a new command template after an upgrade) is picked up without a
-stored copy of the old one to contradict it.
+Discovery, deliberately, rather than a hard-coded list: adding a product is
+then adding a folder, which is the same reason the onboarding wizard's
+discovery scans instead of naming them. And discovery only -- nothing here
+writes config. A row is materialized from the manifest on every start, so a
+folder whose manifest changes (a new command template after an upgrade) is
+picked up without a stored copy of the old one to contradict it.
 
-Every ordinary install has the tree: a wheel carries it at ``raven/subagents``, and
-:func:`_install_packaged_tree` copies it out to the raven home on first use, which is
-why the packaged branch of :func:`subagents_root` is live rather than vestigial.
-Where it is absent -- a wheel built from an sdist, which has neither the tree nor a
-``.git`` to enumerate it from -- there is nothing to discover and the table is exactly
-what it was before this module existed. That is the intended degradation, not a gap.
+Every ordinary install has the tree: a wheel carries it at ``raven/agents``,
+and :func:`_install_packaged_tree` copies it out to the raven home on first
+use, which is why the packaged branch of :func:`agents_root` is live rather
+than vestigial. Where it is absent -- a wheel built from an sdist, which has
+neither the tree nor a ``.git`` to enumerate it from -- there is nothing to
+discover and the table is exactly what it was before this module existed. That
+is the intended degradation, not a gap.
 
-**Readiness decides ``enabled``, not whether the row exists.** A folder whose venv
-is unbuilt or whose credential is missing cannot start, and
-:attr:`SubagentFolder.venv_ready` already records why that must not reach the
-roster: "Registering an agent that cannot start puts a name in the roster the
-dispatching model will pick and then fail on." Dropping the row entirely would
-hide the folder from the operations view too, where "present but not set up" is
-exactly what a user needs to see. So it is listed and disabled.
+**Readiness decides ``enabled``, not whether the row exists.** A folder whose
+launcher file is gone, or whose declared engine wheel is not importable,
+cannot start: "Registering an agent that cannot start puts a name in the
+roster the dispatching model will pick and then fail on." Dropping the row
+entirely would hide the folder from the operations view too, where "present
+but not set up" is exactly what a user needs to see. So it is listed and
+disabled, with the reason on the row. A missing credential is deliberately
+*not* a readiness reason any more: the launchers inherit the host's provider
+block when the folder holds no key of its own, and a launcher that finds
+nothing anywhere refuses loudly at dispatch -- a discovery-time credential
+verdict would be a second reader of that fact, free to disagree with the one
+that rules.
 
-This module owns the three facts about where the tree is and what state a folder
-is in; :mod:`raven.cli.subagent_setup` imports them for the onboarding flow
-rather than keeping its own answers. Two readers that disagree about whether a
-folder is ready would offer to install one this refuses to advertise.
+This module owns the two facts about where the tree is and what state a
+folder is in; the onboarding wizard imports them rather than keeping its own
+answers. Two readers that disagree about whether a folder is ready would offer
+to set up one this refuses to advertise.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import sys
 from collections.abc import Iterator
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from loguru import logger
@@ -49,59 +56,65 @@ if TYPE_CHECKING:
     from raven.config.schema import ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
 
 __all__ = [
-    "api_key_present",
+    "agents_root",
     "api_key_var",
-    "checkout_of",
-    "credential_ready",
-    "discover_vendored_rows",
-    "installer_for",
-    "Readiness",
-    "vendored_folder",
-    "vendored_state",
-    "merge_vendored_seeds",
+    "discover_product_rows",
     "host_can_lend_a_key",
-    "subagents_root",
-    "venv_ready",
+    "merge_product_seeds",
+    "product_folder",
+    "product_state",
+    "Readiness",
 ]
 
 _PLACEHOLDER_FIELDS = ("command", "resumeCommand", "cwd")
 """The manifest fields carrying ``{SUBAGENT_DIR}`` / ``{PYTHON}``. Exactly the
-set each folder's own ``install.py`` substitutes in its ``resolve()``, and a
-field resolved here but not there would mean a hand-registered row and a
-discovered one disagreeing. ``cwd`` is on the list for the acp manifests: an
-acp entry with no ``cwd`` falls back to the calling task's workspace, which is
-part of the pool's launch key -- so every new workspace would relaunch the
-server and kill the sessions the old one was serving."""
+set each product's own ``install.py`` substitutes, and a field resolved here
+but not there would mean a hand-registered row and a discovered one
+disagreeing. ``resumeCommand`` is on the list because discovery still accepts
+``kind: "cli"`` manifests, and the cli backend executes that field as a
+command line exactly the way it executes ``command`` -- left as a template, a
+stateful cli product would resume on a literal ``{PYTHON}``. ``cwd`` is on
+the list for the acp manifests: an acp entry with no ``cwd`` falls back to
+the calling task's workspace, which is part of the pool's launch key -- so
+every new workspace would relaunch the server and kill the sessions the old
+one was serving."""
+
+_ENGINE_FIELD = "engine"
+"""The manifest key declaring the product's engine wheel, as
+``{"package": "<import name>", "wheel": "<distribution name>"}``. Declared in
+the manifest rather than derived here: the launcher already names its engine
+(``ENGINE_PACKAGE`` in its ``run.py``), and a mapping kept in this module
+would be a hard-coded product list -- the thing discovery exists to avoid.
+The config schema ignores the key, so a stored row never carries a stale copy
+of it; the manifest is read fresh on every scan."""
 
 
-def subagents_root() -> Path | None:
-    """Where the ``subagents/`` tree is, or ``None`` when this install has none.
+def agents_root() -> Path | None:
+    """Where the ``agents/`` product tree is, or ``None`` when this install has none.
 
     Three places, checked in that order:
 
-    - **under the raven home** (``$RAVEN_HOME`` or ``~/.raven/subagents``) -- an
-      installed tree. First because it is the only writable one that survives an
-      upgrade: each folder's venv lives inside its own checkout, so a tree under
-      site-packages loses every venv when the wheel is replaced, and every
-      agent would silently drop out of the roster after each update until
-      something rebuilt them;
+    - **under the raven home** (``$RAVEN_HOME`` or ``~/.raven/agents``) -- an
+      installed tree. First because it is the only writable one that survives
+      an upgrade: a product's ``.env`` credential lives inside its folder, so a
+      tree under site-packages loses every key when the wheel is replaced;
     - **beside the package** -- an editable install or a plain checkout leaves
       ``raven/__init__.py`` inside the clone, so the tree is two levels up;
-    - **inside the package** -- a wheel built with the tree force-included lands
-      it at ``raven/subagents``, the same way ``bridge`` is packaged.
+    - **inside the package** -- a wheel carries the tree at ``raven/agents``,
+      the same way ``bridge`` is packaged.
 
     An install with none of the three has nothing to discover, and that is the
     whole gate: no flag, no setting, and a table byte-identical to what it was
     before discovery existed.
     """
     import raven
+    from raven.home import raven_home
 
-    home = os.environ.get("RAVEN_HOME", "").strip() or str(Path.home() / ".raven")
     package = Path(raven.__file__).resolve().parent
-    installed, packaged = Path(home) / "subagents", package / "subagents"
+    installed, packaged = raven_home() / "agents", package / "agents"
     if packaged.is_dir():
         _install_packaged_tree(packaged, installed)
-    for candidate in (installed, package.parent / "subagents", packaged):
+    for candidate in (installed, package.parent / "agents", packaged):
         if candidate.is_dir():
             return candidate
     return None
@@ -110,21 +123,24 @@ def subagents_root() -> Path | None:
 def _install_packaged_tree(packaged: Path, installed: Path) -> None:
     """Copy a wheel's own tree out to the raven home, once per raven version.
 
-    The reason this exists at all: each folder's venv is built *inside* its own
-    checkout, and a wheel install is replaced wholesale on every upgrade -- so a
-    tree left under site-packages loses every venv each time, and the agents
-    drop out of the roster until something spends minutes rebuilding them.
-    Copied out once, the venvs sit in a directory no upgrade touches.
+    The reason this exists at all: a product's ``.env`` credential is written
+    into its own folder, and a wheel install is replaced wholesale on every
+    upgrade -- so a tree left under site-packages loses every key each time,
+    and the agents fall back to inheriting the host's LLM until someone types
+    the keys again. Copied out once, the folders sit in a directory no upgrade
+    touches.
 
     Version-stamped rather than content-compared, and the stamp is what makes
-    deleting a folder work: within one raven version this is a no-op, so a folder
-    the user removed stays removed. An upgrade restores what the new release
-    ships, which is the one case where "the release decides" is the right answer.
+    deleting a folder work: within one raven version this is a no-op, so a
+    folder the user removed stays removed. An upgrade restores what the new
+    release ships, which is the one case where "the release decides" is the
+    right answer.
 
-    An existing folder is refreshed in place with its ``.venv`` left alone -- the
-    venv is the expensive part and a new release of the same fork does not
-    invalidate it. Failure is logged, never raised: not having the vendored agents
-    is a smaller problem than not starting.
+    An existing folder is refreshed in place with its ``.env`` left alone --
+    the packaged tree never carries one (the build enumerates git-tracked
+    files and refuses secrets), so the copy has nothing to overwrite it with.
+    Failure is logged, never raised: not having the products is a smaller
+    problem than not starting.
     """
     import shutil
 
@@ -140,114 +156,52 @@ def _install_packaged_tree(packaged: Path, installed: Path) -> None:
             shutil.copytree(
                 folder,
                 installed / folder.name,
-                ignore=shutil.ignore_patterns(".venv", "__pycache__", "*.pyc"),
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
                 dirs_exist_ok=True,
             )
-        # The tree's own files, `install.sh` above all: it builds a folder's venv,
-        # it knows each folder's optional-dependency extra, and it lives at the root
-        # rather than inside any folder. Copying only the folders produced a tree
-        # that listed every agent and could build none -- the page offered Install
-        # and the call answered "no install.sh", which reached the reader as a bare
-        # "subagent not found".
-        #
-        # After the folders, not before: nothing here may create `installed` ahead
-        # of a copy that might fail. An existing directory is what makes
-        # `subagents_root` choose it, so creating it first turns a failed copy from
-        # "degrade to the packaged tree" into "an empty tree and no agents at all".
+        # After the folders, not before: nothing here may create `installed`
+        # ahead of a copy that might fail. An existing directory is what makes
+        # `agents_root` choose it, so creating it first turns a failed copy
+        # from "degrade to the packaged tree" into "an empty tree and no
+        # agents at all".
         installed.mkdir(parents=True, exist_ok=True)
-        for entry in sorted(packaged.iterdir()):
-            if entry.is_file() and not entry.name.startswith("."):
-                shutil.copy2(entry, installed / entry.name)
         stamp.write_text(__version__, encoding="utf-8")
-        logger.info("Installed the packaged sub-agent tree into {}", installed)
-    except Exception as exc:  # noqa: BLE001 - the agents are optional, starting is not
-        logger.warning("Could not install the packaged sub-agent tree into {}: {}", installed, exc)
-
-
-def checkout_of(folder: Path) -> Path | None:
-    """The folder's raven checkout: its one subdirectory that is a python project.
-
-    Discovered rather than named - the folders that ship spell it a different way
-    each (``Raven-main``, ``Raven-Design``, ``Raven-Oncall``, ``Raven-X``,
-    ``Raven-PPT``) and the next one is free to spell it its own.
-    ``subagents/install.sh`` finds it the same way, and disagreeing with it would
-    mean two answers to one question.
-    """
-    found = [project.parent for project in folder.glob("*/pyproject.toml")]
-    return found[0] if len(found) == 1 else None
-
-
-def venv_ready(checkout: Path | None) -> bool:
-    """Whether the checkout's venv is built.
-
-    Executability, not existence: ``subagents/install.sh`` classifies the same
-    folder with ``[ -x ]``, and two readers of one fact that disagree on a
-    present-but-unexecutable file would have the installer call a folder unbuilt
-    while this advertised it.
-    """
-    if checkout is None:
-        return False
-    return os.access(checkout / ".venv" / "bin" / "raven", os.X_OK)
+        logger.info("Installed the packaged agent products into {}", installed)
+    except Exception as exc:  # noqa: BLE001 - the products are optional, starting is not
+        logger.warning("Could not install the packaged agent products into {}: {}", installed, exc)
 
 
 def api_key_var(folder_name: str) -> str:
-    """``CODE_API_KEY`` for ``raven-code``: the folder name without its
-    ``raven-`` prefix, upper-cased. Mirrors ``prefix_of`` in
-    ``subagents/install.sh`` and the ``REQUIRED_SECRETS`` each launcher reads."""
+    """``DESIGN_API_KEY`` for ``raven-design``: the folder name without its
+    ``raven-`` prefix, upper-cased. Mirrors the ``REQUIRED_SECRETS`` name each
+    product's launcher reads from its ``.env``."""
     stem = folder_name[len("raven-") :] if folder_name.startswith("raven-") else folder_name
     return stem.upper().replace("-", "_") + "_API_KEY"
-
-
-def api_key_present(folder: Path, var: str) -> bool:
-    """Whether the folder holds a credential of its own.
-
-    Read the way the launcher reads it (``run.py``'s ``env_value``): the process
-    environment first, then a non-empty assignment in the folder's ``.env``. An
-    assignment with an empty value counts as absent, because that is what
-    ``write_key`` scaffolds from ``.env.example`` before a key is supplied -- a
-    file full of bare ``NAME=`` lines is an uninstalled folder, not a configured
-    one.
-    """
-    if os.environ.get(var, "").strip():
-        return True
-    env_file = folder / ".env"
-    if not env_file.is_file():
-        return False
-    try:
-        lines = env_file.read_text(encoding="utf-8").splitlines()
-    except (OSError, ValueError):
-        # ValueError covers UnicodeDecodeError, which OSError does not: one
-        # non-UTF-8 byte in one folder's .env used to propagate out of
-        # AgentRegistry.apply, and from there out of AgentLoop's constructor.
-        return False
-    for line in lines:
-        key, _, value = line.strip().partition("=")
-        if key.strip() == var and value.strip():
-            return True
-    return False
 
 
 def host_can_lend_a_key() -> bool:
     """Whether ``inherit_llm`` in the launchers would find anything to inherit.
 
-    A folder with no key of its own is not stranded: each launcher reads the host
-    raven's ``config.json`` itself and copies its whole provider block, so the
-    common case needs no credential anywhere near this tree.
+    A folder with no key of its own is not stranded: each launcher reads the
+    host raven's ``config.json`` (through ``raven.config.product_render``) and
+    copies its whole provider block, so the common case needs no credential
+    anywhere near the tree.
 
-    Mirrors that function's own test rather than asking ``providers.auth``, and
-    the difference is the whole point. The launchers are standard-library-only
-    scripts outside this package: they cannot import auth, and they accept exactly
-    one shape -- a literal ``apiKey`` on some provider section. A host signed in
+    Mirrors ``inherit_llm``'s own test rather than asking ``providers.auth``,
+    and the difference is the whole point. ``inherit_llm`` accepts exactly one
+    shape -- a literal ``apiKey`` on some provider section. A host signed in
     through OAuth is configured by auth's rule and has nothing to lend by the
-    launcher's, because those credentials live under ``~/.raven/oauth/``. Asking
-    auth here would advertise an agent that dies at the first dispatch.
+    launcher's, because those credentials live under ``~/.raven/oauth/``.
+    Asking auth here would advertise an agent that dies at the first dispatch.
 
-    The same file the launcher reads (``$RAVEN_HOME`` or ``~/.raven``), for the
-    same reason: two readers of one credential that disagree would have the
-    roster offer what the launcher then refuses.
+    The same file the launcher reads (``$RAVEN_HOME`` or ``~/.raven``), for
+    the same reason: two readers of one credential that disagree would have
+    the roster offer what the launcher then refuses.
     """
-    home = os.environ.get("RAVEN_HOME", "").strip() or str(Path.home() / ".raven")
-    config = Path(home) / "config.json"
+    from raven.contracts.path_policy import CONFIG_FILENAME
+    from raven.home import raven_home
+
+    config = raven_home() / CONFIG_FILENAME
     try:
         raw = json.loads(config.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -258,24 +212,15 @@ def host_can_lend_a_key() -> bool:
     return any(isinstance(p, dict) and str(p.get("apiKey") or "").strip() for p in providers.values())
 
 
-def credential_ready(folder: Path, var: str) -> bool:
-    """Whether this folder's launcher will find an LLM credential at all.
-
-    Its own key, or the host's to inherit. Both are checked because the launcher
-    checks both, in that order -- gating on the folder's own key alone would
-    disable every row on a perfectly configured machine, which is the normal
-    case: no folder ships a key and none needs one.
-    """
-    return api_key_present(folder, var) or host_can_lend_a_key()
-
-
 def _resolved_python() -> str:
     """The interpreter the discovered command invokes.
 
     ``SUBAGENT_PYTHON`` then this interpreter, which is ``install.py``'s own
     default order minus its ``--python`` flag (there is no flag to pass here).
-    Any python3 satisfies it: each launcher is standard-library only and shells
-    out to its checkout's venv for the real work.
+    The launchers import raven (``raven.config.product_render``) and exec
+    ``python -m raven acp``, so the interpreter must be one with raven
+    installed -- which this process's own is by definition, and an override
+    must be too.
     """
     return os.environ.get("SUBAGENT_PYTHON", "").strip() or sys.executable
 
@@ -283,58 +228,114 @@ def _resolved_python() -> str:
 class Readiness(NamedTuple):
     """Why a folder cannot run, as a kind the caller can branch on plus the text.
 
-    The text alone was not enough. Every reason reached the page as one status,
-    so the page offered "Install" for all of them -- including the folder whose
-    venv is already built and whose problem is a missing credential, which
-    ``install.sh`` cannot produce (it scaffolds ``.env`` from ``.env.example``,
-    whose bare ``NAME=`` lines are correctly read as absent). The alternative was
-    matching the text in the client, which couples a button to a sentence.
+    The text alone was not enough for the fork-era tree, where every reason
+    reached the page as one status and the page offered the wrong action for
+    half of them. The kind survives that lesson: a client branches on it
+    without matching a sentence.
     """
 
     kind: str
-    """"" when the folder is ready; otherwise ``checkout`` / ``venv`` / ``credential``."""
+    """"" when the folder is ready; otherwise ``launcher`` / ``engine``."""
     detail: str
 
     @property
     def ready(self) -> bool:
         return not self.kind
 
-    @property
-    def buildable(self) -> bool:
-        """Whether running the tree's installer would fix this.
-
-        Only the unbuilt venv. An ambiguous checkout defeats the installer the
-        same way it defeats us, and a credential is not something it can mint.
-        """
-        return self.kind == "venv"
-
 
 _READY = Readiness("", "")
 
 
-def _scan(root: Path | None) -> Iterator[tuple[Path, dict, Readiness]]:
-    """Each folder that ships both a manifest and an installer, with its manifest
-    read and its placeholders resolved, plus why it is not ready ("" when it is).
+def _is_absolute_path(token: str) -> bool:
+    """Whether a command token is an absolute path, in either OS's spelling.
 
-    One scan behind both public readers, so "is this folder ready" cannot get two
-    answers -- the roster's ``enabled`` and the operations view's status line are
-    the same verdict rendered twice, and they were briefly not: the probe checks
-    the command's first token, which is the interpreter and always exists, so the
-    page called an unbuilt folder "installed, ready" while the roster correctly
-    refused to advertise it.
+    Both pure flavors rather than ``token.startswith("/")``: the prefix test
+    called every drive-letter token relative, so on native Windows the
+    launcher probes below matched no token, checked no file, and reported
+    every folder ready -- a product whose launcher was gone still reached the
+    roster as exactly the name "the dispatching model will pick and then fail
+    on". The pure classes judge the token's shape on any platform, which is
+    also what makes the Windows arm testable from POSIX.
 
-    A folder that fails to parse is skipped with a warning: one malformed manifest
-    must not take the other three down.
+    Cross-shape matches are deliberately fail-closed: a Windows-shaped token
+    on a POSIX host still goes through the existence check and reads as
+    missing, disabling the row rather than advertising a command this host
+    cannot run (and symmetrically for ``/``-rooted tokens on Windows).
+
+    Tokens come from ``str.split()``, so a path containing spaces arrives here
+    as fragments. The command templates the manifests and each ``install.py``
+    emit keep their paths space-free, and that constraint is cheaper than
+    re-tokenizing every stored row's command line.
     """
-    root = subagents_root() if root is None else root
+    return PureWindowsPath(token).is_absolute() or PurePosixPath(token).is_absolute()
+
+
+def _launcher_missing(entry: dict) -> str:
+    """The first file the resolved command names that is not on disk, or ``""``.
+
+    Read off the command's own tokens rather than a hard-coded filename: a row
+    is a command line, and whether the files it names exist is the only
+    question that decides whether it can start. A token that is not an
+    absolute path (a flag, something on ``PATH``) is not checked -- the
+    interpreter and the launcher are the two absolute paths every product
+    command carries.
+    """
+    command = str(entry.get("command") or "")
+    for token in command.split():
+        if _is_absolute_path(token) and not Path(token).exists():
+            return token
+    return ""
+
+
+def _declared_engine(entry: dict) -> tuple[str, str]:
+    """The engine the manifest declares, as ``(import package, wheel name)``.
+
+    ``("", "")`` for a product whose whole capability is raven's own -- most
+    are. A malformed declaration reads as none: the launcher still refuses at
+    dispatch, so a manifest typo degrades to a late loud failure rather than a
+    scan crash.
+    """
+    declared = entry.get(_ENGINE_FIELD)
+    if not isinstance(declared, dict):
+        return "", ""
+    package = str(declared.get("package") or "").strip()
+    wheel = str(declared.get("wheel") or "").strip() or package
+    return package, wheel
+
+
+def _engine_ready(package: str) -> bool:
+    """Whether the declared engine package is importable where raven runs.
+
+    ``find_spec`` rather than an import: the question is presence, and
+    importing a whole engine to answer it would pay its import cost on every
+    scan. The same probe the launcher's own refusal uses (``run.py`` checks
+    ``importlib.util.find_spec(ENGINE_PACKAGE)``), so the roster and the
+    launcher cannot disagree about whether the engine is there.
+    """
+    try:
+        return importlib.util.find_spec(package) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _scan(root: Path | None) -> Iterator[tuple[Path, dict, Readiness]]:
+    """Each folder that ships a manifest, with the manifest read and its
+    placeholders resolved, plus why it is not ready ("" when it is).
+
+    One scan behind every public reader, so "is this folder ready" cannot get
+    two answers -- the roster's ``enabled`` and the operations view's status
+    line are the same verdict rendered twice.
+
+    A folder that fails to parse is skipped with a warning: one malformed
+    manifest must not take the other products down.
+    """
+    root = agents_root() if root is None else root
     if root is None:
         return
 
     python = _resolved_python()
     for manifest in sorted(root.glob("*/subagent.json")):
         folder = manifest.parent
-        if not (folder / "install.py").is_file():
-            continue
         try:
             entry = json.loads(manifest.read_text(encoding="utf-8"))
             if not isinstance(entry, dict):
@@ -343,43 +344,41 @@ def _scan(root: Path | None) -> Iterator[tuple[Path, dict, Readiness]]:
                 if template := entry.get(field):
                     entry[field] = str(template).replace("{SUBAGENT_DIR}", str(folder)).replace("{PYTHON}", python)
         except Exception as exc:  # noqa: BLE001 - one bad folder must not sink the rest
-            logger.warning("Skipping vendored sub-agent in {}: {}", folder.name, exc)
+            logger.warning("Skipping the agent product in {}: {}", folder.name, exc)
             continue
 
-        checkout = checkout_of(folder)
-        if checkout is None:
-            reason = Readiness("checkout", "cannot tell which subdirectory is the checkout")
-        elif not venv_ready(checkout):
-            reason = Readiness(
-                "venv", f"venv not built in {checkout.name} -- run {folder.parent / 'install.sh'} {folder.name}"
-            )
-        elif not credential_ready(folder, api_key_var(folder.name)):
-            reason = Readiness(
-                "credential",
-                f"no LLM credential: neither {api_key_var(folder.name)} nor a host provider key to inherit",
-            )
+        if missing := _launcher_missing(entry):
+            reason = Readiness("launcher", f"launcher file missing: {missing}")
         else:
-            reason = _READY
+            package, wheel = _declared_engine(entry)
+            if package and not _engine_ready(package):
+                reason = Readiness(
+                    "engine",
+                    f"the {wheel} engine wheel is not installed in this raven's environment"
+                    " -- install it where raven is installed, then restart",
+                )
+            else:
+                reason = _READY
         yield folder, entry, reason
 
 
-def discover_vendored_rows(
+def discover_product_rows(
     root: Path | None = None,
 ) -> list["ThirdPartyCliSubagentConfig | ThirdPartyAcpSubagentConfig"]:
     """Every discovered folder as a config row, name-sorted for a stable roster.
 
-    The name is the manifest's own (``Raven-Code``, not ``raven-code``) so a row
-    written by that folder's ``install.py`` collides with the discovered one and
-    overrides it instead of appearing twice.
+    The name is the manifest's own (``Raven-Code``, not ``raven-code``) so a
+    row written by that folder's ``install.py`` collides with the discovered
+    one and overrides it instead of appearing twice.
 
     The manifest's own ``kind`` picks the schema: ``acp`` for a folder that
-    serves its agent over ACP (raven-research), ``cli`` for the rest. Validating
-    an acp manifest as cli would reject it on the ``kind`` literal, and the
-    folder would silently vanish from the roster.
+    serves its agent over ACP (all five shipped products), ``cli`` for one
+    spawned per task. Validating an acp manifest as cli would reject it on the
+    ``kind`` literal, and the folder would silently vanish from the roster.
 
-    ``enabled`` is the readiness verdict: a folder that cannot start is listed and
-    disabled rather than dropped, so it stays visible to the operations view while
-    staying out of the roster the dispatching model reads.
+    ``enabled`` is the readiness verdict: a folder that cannot start is listed
+    and disabled rather than dropped, so it stays visible to the operations
+    view while staying out of the roster the dispatching model reads.
     """
     from raven.config.schema import ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
 
@@ -395,28 +394,28 @@ def discover_vendored_rows(
             model = ThirdPartyAcpSubagentConfig if entry.get("kind") == "acp" else ThirdPartyCliSubagentConfig
             rows.append(model.model_validate({**entry, "enabled": declared and reason.ready}))
         except Exception as exc:  # noqa: BLE001 - one bad folder must not sink the rest
-            logger.warning("Skipping vendored sub-agent in {}: {}", folder.name, exc)
+            logger.warning("Skipping the agent product in {}: {}", folder.name, exc)
     return rows
 
 
-def vendored_state(root: Path | None = None) -> dict[str, Readiness]:
+def product_state(root: Path | None = None) -> dict[str, Readiness]:
     """Row name -> its readiness verdict, from one scan.
 
-    The whole verdict rather than one rendering of it. The operations view needs
-    three different things from it -- whether the folder can run, what to say when
-    it cannot, and whether its own install button would help -- and answering each
-    from its own function meant a scan of the tree per question, with the answers
-    free to disagree about a folder written to between them.
+    The whole verdict rather than one rendering of it: the operations view
+    needs both whether the folder can run and what to say when it cannot, and
+    answering each from its own function meant a scan of the tree per
+    question, with the answers free to disagree about a folder written to
+    between them.
     """
     return {str(entry.get("name") or folder.name): reason for folder, entry, reason in _scan(root)}
 
 
-def vendored_folder(name: str, root: Path | None = None) -> Path | None:
+def product_folder(name: str, root: Path | None = None) -> Path | None:
     """The folder behind one discovered row's name, or ``None``.
 
     Looked up rather than derived from the name: the manifest names itself
-    (``Raven-Code``) and the folder is spelled differently (``raven-code``), and
-    a fifth folder is free to break any mapping between the two.
+    (``Raven-Code``) and the folder is spelled differently (``raven-code``),
+    and a sixth folder is free to break any mapping between the two.
     """
     for folder, entry, _reason in _scan(root):
         if str(entry.get("name") or folder.name) == name:
@@ -424,20 +423,7 @@ def vendored_folder(name: str, root: Path | None = None) -> Path | None:
     return None
 
 
-def installer_for(folder: Path) -> Path | None:
-    """The tree's own ``install.sh``, which builds one folder's venv.
-
-    Through that script rather than calling ``uv sync`` here: it knows which
-    optional-dependency extra each folder needs (``ppt`` for ``raven-ppt``), and a
-    second implementation of that mapping would build a venv missing exactly the
-    extra the agent's job depends on. ``None`` when the tree has no installer,
-    which is a tree nothing here can build.
-    """
-    installer = folder.parent / "install.sh"
-    return installer if installer.is_file() else None
-
-
-def merge_vendored_seeds(configs: list[Any] | None, vendored: list[Any] | None) -> list[Any]:
+def merge_product_seeds(configs: list[Any] | None, discovered: list[Any] | None) -> list[Any]:
     """Config rows over the discovered rows, in discovery order then config order.
 
     The same shape as :func:`raven.agent.subagent.builtin_agents.merge_builtin_seeds`
@@ -453,7 +439,7 @@ def merge_vendored_seeds(configs: list[Any] | None, vendored: list[Any] | None) 
     """
     by_name: dict[str, Any] = {}
     order: list[str] = []
-    for row in vendored or []:
+    for row in discovered or []:
         name = getattr(row, "name", None)
         if name:
             by_name[name] = row
@@ -468,13 +454,13 @@ def merge_vendored_seeds(configs: list[Any] | None, vendored: list[Any] | None) 
         # and reading one as empty made every one of them look like a switch for
         # a folder -- which dropped it from the roster.
         no_launcher = hasattr(cfg, "command") and not str(getattr(cfg, "command", "") or "").strip()
-        discovered = by_name.get(name)
+        found = by_name.get(name)
         # An empty command means "switch" only for a name the scan just produced.
         # On its own it means nothing: an acp row is allowed to carry one, and
         # reading that as a switch dropped a configured agent that no folder had
         # anything to do with. The marker still stands alone, because only this
         # switch writes it.
-        if no_launcher and discovered is None and not marked:
+        if no_launcher and found is None and not marked:
             # A row that names no launcher and no folder. It cannot start
             # anything, whoever wrote it and whatever its flag says, so it is
             # carried through disabled rather than dropped: deleting a row nobody
@@ -488,7 +474,7 @@ def merge_vendored_seeds(configs: list[Any] | None, vendored: list[Any] | None) 
                 order.append(name)
             by_name[name] = _with_enabled(cfg, False)
             continue
-        if marked or (discovered is not None and (no_launcher or _same_but_enabled(cfg, discovered))):
+        if marked or (found is not None and (no_launcher or _same_but_enabled(cfg, found))):
             # A row that carries nothing but the switch. Three ways of telling,
             # because a row has to survive being rewritten by a raven that does
             # not know every field in it: the marker says so outright; an empty
@@ -506,25 +492,37 @@ def merge_vendored_seeds(configs: list[Any] | None, vendored: list[Any] | None) 
             # Only the flag is read, and only to take the row out: readiness and
             # the manifest still have to agree, which is what ``and`` says below.
             # A marked switch for a folder that is gone is a switch for nothing.
-            if discovered is None:
+            if found is None:
                 logger.info("Dropping the stored switch for {!r}: nothing discovered under that name", name)
                 continue
             if not getattr(cfg, "enabled", True):
-                by_name[name] = _with_enabled(discovered, False)
+                by_name[name] = _with_enabled(found, False)
             continue
+        stale = None
         if name in by_name and _launcher_is_gone(cfg):
-            logger.info(
-                "Stored sub-agent {!r} points at a launcher that no longer exists; using the discovered one",
-                name,
+            stale = "points at a launcher that no longer exists"
+        elif name in by_name and _kind_changed(cfg, by_name[name]):
+            stale = "is kind {!r} but its folder now declares {!r}".format(
+                getattr(cfg, "kind", None), getattr(by_name[name], "kind", None)
             )
-            continue
-        if name in by_name and _kind_changed(cfg, by_name[name]):
+        if stale is not None:
+            # A stale row decomposes the way the switch branch above splits a
+            # stub: a definition the folder has outgrown, dropped, and the
+            # operator's switch, kept. Every fork-era ``install.py`` wrote the
+            # off flag onto the full definition row, so discarding the row whole
+            # turned each of those stored "no"s into a silent re-enable. Only a
+            # "no" carries over -- a stored true must not put a row the folder's
+            # readiness refused back on the roster, the same asymmetry the
+            # toggle writes ("on removes the row").
+            keep_off = not getattr(cfg, "enabled", True)
             logger.info(
-                "Stored sub-agent {!r} is kind {!r} but its folder now declares {!r}; using the discovered one",
+                "Stored sub-agent {!r} {}; using the discovered one{}",
                 name,
-                getattr(cfg, "kind", None),
-                getattr(by_name[name], "kind", None),
+                stale,
+                ", kept switched off as the stored row said" if keep_off else "",
             )
+            if keep_off:
+                by_name[name] = _with_enabled(by_name[name], False)
             continue
         if name not in by_name:
             order.append(name)
@@ -593,9 +591,9 @@ def _kind_changed(cfg: Any, discovered: Any) -> bool:
     Without this, a folder that moves to acp is invisible to every install that
     had already registered it: ``install.py`` wrote a complete cli row, that row
     wins on name, and the manifest an upgrade updated never reaches the roster.
-    The alternative was asking each user to re-run the tree's installer with
-    ``--prune-stale``, which is a migration note nobody reads and no way to tell
-    who is still on the old transport.
+    The alternative was asking each user to re-register by hand, which is a
+    migration note nobody reads and no way to tell who is still on the old
+    transport.
 
     A wholesale swap rather than a field merge, for the reason the caller's
     docstring gives: the two kinds carry different fields -- ``resumeCommand`` and
@@ -633,5 +631,5 @@ def _launcher_is_gone(cfg: Any) -> bool:
     manifests can produce, which is exactly the shape this exists to catch.
     """
     command = str(getattr(cfg, "command", "") or "")
-    absolute = [token for token in command.split() if token.startswith("/")]
+    absolute = [token for token in command.split() if _is_absolute_path(token)]
     return bool(absolute) and not all(Path(token).exists() for token in absolute)

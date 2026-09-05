@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.evolver.tree import git_ops
+from evolver.tree import git_ops
 
 _ENV = {
     "GIT_AUTHOR_NAME": "t",

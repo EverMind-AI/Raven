@@ -23,6 +23,8 @@ from uuid import uuid4
 
 from loguru import logger
 
+from raven.rpc import connection
+
 COALESCE_WINDOW_S = 0.016
 QUEUE_CAPACITY = 512
 
@@ -48,6 +50,7 @@ class Subscription:
     queue: asyncio.Queue
     coalesce_task: asyncio.Task | None = None
     closed: bool = False
+    conn_state: dict | None = None
 
 
 SendFrame = Callable[[dict[str, Any]], Awaitable[None]]
@@ -95,6 +98,7 @@ class SubscriptionEmitter:
             sub_id=uuid4().hex,
             session_key=session_key,
             queue=asyncio.Queue(maxsize=QUEUE_CAPACITY),
+            conn_state=connection.current_state(),
         )
         for event in self._replay.get(session_key, ()):
             try:
@@ -110,6 +114,20 @@ class SubscriptionEmitter:
             for event in pending:
                 await self.emit(session_key, event)
         return sub.sub_id
+
+    def has_subscribers(self, session_key: str) -> bool:
+        """True while a live watcher's subscription watches this session.
+
+        An abrupt disconnect never unregisters the subscription, because
+        nothing runs the unsubscribe on the far side of a closed socket; the
+        connection registry is what tells a stale entry from a live watcher.
+        A subscription with no recorded connection (registered outside any
+        socket, as in tests) counts as live.
+        """
+        bucket = self._by_session.get(session_key)
+        if not bucket:
+            return False
+        return any(sub.conn_state is None or connection.is_bound(sub.conn_state) for sub in bucket)
 
     async def unregister(self, sub_id: str) -> bool:
         """Close the subscription if it exists and is open. Idempotent."""

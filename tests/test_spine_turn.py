@@ -1,3 +1,5 @@
+"""The spine turn contracts: Origin, BusyPolicy, and TurnRequest."""
+
 import dataclasses
 
 import pytest
@@ -28,21 +30,9 @@ def test_enum_str_renders_as_value():
     assert str(BusyPolicy.APPEND) == "append"
 
 
-def test_message_id_and_conversation_are_independent_axes():
-    # Two orthogonal axes: conversation = coarse session/lane ownership (stable
-    # across a conversation), message_id = this single inbound message's id
-    # (varies per message). Same source + different message_id must not couple.
-    base = dict(origin=Origin.USER, source=_src(), text="x")
-    a = TurnRequest(**base, message_id="557")
-    b = TurnRequest(**base, message_id="558")
-    assert a.message_id != b.message_id
-    assert a.conversation is None and b.conversation is None
-
-
 def test_turn_request_defaults():
     r = TurnRequest(origin=Origin.USER, source=_src(), text="hi")
     assert r.media == ()
-    assert r.message_id is None
     assert r.conversation is None
     assert r.busy is BusyPolicy.APPEND
 
@@ -54,21 +44,13 @@ def test_turn_id_defaults_to_none():
     assert r.turn_id is None
 
 
-def test_turn_id_and_message_id_are_separate_fields():
-    # message_id is the inbound channel message's id (one inbound message is one
-    # turn today, but a turn the runtime submits has no inbound message at all);
-    # turn_id is the turn's own. Consolidating them would make two turns from one
-    # inbound message share an id.
+def test_turn_request_carries_no_dead_reply_threading_fields():
+    # message_id / reply_to were a designed-but-never-built reply-threading
+    # pipe (no setter, no reader anywhere). Removed 2026-08-29; the live design
+    # for outbound reply anchoring rides Source, not sibling fields here.
     fields = {f.name for f in dataclasses.fields(TurnRequest)}
-    assert {"message_id", "turn_id"} <= fields
-    r = TurnRequest(origin=Origin.USER, source=_src(), text="hi", message_id="557", turn_id="t-1")
-    assert r.message_id == "557" and r.turn_id == "t-1"
-
-
-def test_turn_request_carries_message_id_not_reply_to():
-    fields = {f.name for f in dataclasses.fields(TurnRequest)}
-    assert "message_id" in fields
-    assert "reply_to" not in fields  # reply_to is the outbound Text field, not here
+    assert "message_id" not in fields
+    assert "reply_to" not in fields
 
 
 def test_turn_request_is_frozen():

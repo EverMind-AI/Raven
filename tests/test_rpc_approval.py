@@ -1,3 +1,5 @@
+"""The approval.respond RPC method: resolution, validation, and registration."""
+
 from __future__ import annotations
 
 import asyncio

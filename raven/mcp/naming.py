@@ -89,10 +89,8 @@ class MCPToolRef:
     The single record behind every question anyone asks about an MCP tool:
     which server owns it, what it is called on that server, and what the model
     sees. Kept as one value rather than three parallel lookups because they are
-    one fact -- the previous shape (the manager holding a ``set[str]`` of names,
-    the wrapper separately holding its own pair) let two places answer the same
-    question differently, and three consumers each grew their own way of
-    guessing the parts back out of the name.
+    one fact: separate holdings let two places answer the same question
+    differently, and a consumer then guesses the parts back out of the name.
 
     Guessing is not possible, which is the point: sanitising rewrites
     characters, the length cap truncates, and a collision appends a hash, so

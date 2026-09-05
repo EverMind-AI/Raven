@@ -1,15 +1,18 @@
 """Model-facing controls for an in-flight DAG run (control_tools.py).
 
-cancel_dag / dag_status / resolve_dag_node are schema-hidden tools: the
-provider never sees them, the DAG tool's acceptance text is their only
-advertisement -- and only when a call path exists (tool_call above the fold).
-The tools are exercised directly, their conversation scoping is asserted, and
-the hiding surface (registry definitions + the tool_search catalog) is pinned
-to keep them out of every discovery path except that text.
+cancel_dag / dag_status / resolve_dag_node are schema-hidden tools: the provider
+never sees them, so two texts are their whole advertisement -- the DAG tool's
+acceptance text, and a suspended node's exception report for resolve_dag_node --
+and each names tool_call, the only route by which a model can invoke a tool that
+is not in its list. The tools are exercised directly, their conversation scoping
+is asserted, their own cross-references are held to naming that route, and the
+hiding surface (registry definitions + the tool_search catalog) is pinned to keep
+them out of every discovery path except those texts.
 """
 
 from __future__ import annotations
 
+import asyncio
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -17,12 +20,18 @@ from typing import Any
 import pytest
 
 from raven.agent.loop import AgentLoop
+from raven.agent.loop.bundles import ToolWiring, TurnPolicy
+from raven.agent.subagent import dag_tool as raven_agent_subagent
 from raven.agent.subagent.dag_control_tools import CancelDagTool, DagStatusTool, ResolveDagNodeTool
+from raven.agent.subagent.dag_graph import parse_dag_spec
 from raven.agent.subagent.dag_reader import DagReadError
-from raven.agent.tools.base import Tool
+from raven.agent.subagent.dag_runner import _exception_report
+from raven.agent.subagent.dag_tool import SubAgentDagTool
+from raven.agent.subagent.dag_verdict import Verdict
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.tool_search import TOOL_CALL_NAME, ToolCallTool, ToolSearchController
-from raven.config.schema import ToolSearchConfig
+from raven.config.schema import ThirdPartyCliSubagentConfig, ToolSearchConfig
+from raven.contracts.tool import Tool
 from raven.providers.base import LLMProvider, LLMResponse
 
 
@@ -143,7 +152,7 @@ async def test_cancel_dag_reports_when_nothing_matches() -> None:
     out = await CancelDagTool(loop=_Loop(tool=_DagTool(_finished_run()))).execute("r1")
 
     assert "No in-flight DAG run r1 to cancel" in out
-    assert "dag_status without a run_id" in out
+    assert 'tool_call name "dag_status" with no run_id' in out
 
 
 async def test_cancel_dag_refuses_when_ownership_cannot_be_resolved() -> None:
@@ -169,7 +178,10 @@ async def test_dag_status_lists_the_runs_in_flight_and_points_at_one() -> None:
     host = _Loop(live={"b-run", "a-run"}, tool=_DagTool(session_runs={"a-run", "b-run"}))
     out = await DagStatusTool(loop=host).execute()
 
-    assert out == 'In-flight DAG runs: a-run, b-run. Call dag_status("<run_id>") for one run\'s per-node status.'
+    assert out == (
+        'In-flight DAG runs: a-run, b-run. Call tool_call name "dag_status" '
+        'arguments {"run_id": "<run_id>"} for one run\'s per-node status.'
+    )
 
 
 async def test_dag_status_listing_is_scoped_to_the_conversation() -> None:
@@ -243,27 +255,51 @@ async def test_dag_status_reports_an_unknown_run() -> None:
     out = await tool.execute("r9")
 
     assert "No DAG run r9 found" in out
-    assert "dag_status without a run_id" in out
+    assert 'tool_call name "dag_status" with no run_id' in out
 
 
 class _ResolvableDagTool(_DagTool):
-    """A run_subagent_dag double whose read_run succeeds and records resolve_node calls."""
+    """A run_subagent_dag double: read_run succeeds, resolve_node is recorded, and a
+    foreground run hands scripted events to await_run."""
 
-    def __init__(self, resolves: bool = True) -> None:
+    def __init__(self, resolves: bool = True, *, foreground: bool = False, events: list[Any] | None = None) -> None:
         super().__init__(_finished_run())
         self._resolves = resolves
+        self._foreground = foreground
+        self.events: list[Any] = list(events or [])
         self.resolved: tuple[str, str, str, str | None] | None = None
+        self.awaited: list[str] = []
+        self.aborted: list[str] = []
+        self.release_taker = asyncio.Event()
 
     def resolve_node(self, run_id: str, node_id: str, decision: str, message: str | None) -> bool:
         self.resolved = (run_id, node_id, decision, message)
         return self._resolves
 
+    def is_foreground(self, run_id: str) -> bool:
+        return self._foreground and run_id == "r1"
+
+    async def await_run(self, run_id: str) -> Any:
+        self.awaited.append(run_id)
+        if not self.is_foreground(run_id):
+            return None
+        if self.events:
+            return self.events.pop(0)
+        await self.release_taker.wait()
+        return None
+
+    def abort_run(self, run_id: str) -> None:
+        self.aborted.append(run_id)
+
+    def render_event(self, run_id: str, event: Any) -> str:
+        return f"RENDERED {run_id} {event}"
+
 
 class _LoopWithRun(_Loop):
     """A loop whose registered graph tool owns run r1 and answers resolve_node."""
 
-    def __init__(self, resolves: bool = True) -> None:
-        self._dag_tool = _ResolvableDagTool(resolves=resolves)
+    def __init__(self, resolves: bool = True, **kwargs: Any) -> None:
+        self._dag_tool = _ResolvableDagTool(resolves=resolves, **kwargs)
         super().__init__(tool=self._dag_tool)
 
     @property
@@ -324,6 +360,63 @@ async def test_resolve_confirms_a_continue():
     out = await tool.execute(run_id="r1", node_id="a", decision="continue", message="use staging")
     assert out == "Node 'a' of run r1 will run again with your message."
     assert loop.resolved == ("r1", "a", "continue", "use staging")
+
+
+async def test_resolve_blocks_only_for_a_bound_foreground_run():
+    background = ResolveDagNodeTool(loop=_LoopWithRun())
+    foreground = ResolveDagNodeTool(loop=_LoopWithRun(foreground=True))
+
+    assert background.blocking_for({"run_id": "r1"}) is False
+    assert foreground.blocking_for({"run_id": "r1"}) is True
+    assert foreground.blocking_for({"run_id": "other"}) is False
+    assert ResolveDagNodeTool(loop=_Loop()).blocking_for({"run_id": "r1"}) is False, (
+        "no graph tool, nothing to block on"
+    )
+
+
+async def test_a_foreground_resolve_returns_the_next_event_rendered():
+    loop = _LoopWithRun(foreground=True, events=["next report"])
+    tool = ResolveDagNodeTool(loop=loop)
+
+    out = await tool.execute(run_id="r1", node_id="a", decision="continue", message="use staging")
+
+    assert loop.resolved == ("r1", "a", "continue", "use staging")
+    assert loop._dag_tool.awaited == ["r1"]
+    assert out == "RENDERED r1 next report"
+
+
+async def test_a_background_resolve_does_not_wait():
+    loop = _LoopWithRun()
+    tool = ResolveDagNodeTool(loop=loop)
+
+    out = await tool.execute(run_id="r1", node_id="a", decision="continue", message="use staging")
+
+    assert out == "Node 'a' of run r1 will run again with your message."
+    assert loop._dag_tool.awaited == ["r1"], "asked, and told there is nothing to wait on"
+
+
+async def test_a_refused_resolve_never_waits():
+    loop = _LoopWithRun(resolves=False, foreground=True, events=["would be wrong"])
+    tool = ResolveDagNodeTool(loop=loop)
+
+    out = await tool.execute(run_id="r1", node_id="a", decision="abandon")
+
+    assert "no longer waiting" in out.lower()
+    assert loop._dag_tool.awaited == []
+
+
+async def test_cancelling_a_waiting_resolve_aborts_the_run():
+    loop = _LoopWithRun(foreground=True)
+    tool = ResolveDagNodeTool(loop=loop)
+    call = asyncio.create_task(tool.execute(run_id="r1", node_id="a", decision="abandon"))
+    await asyncio.sleep(0)
+    assert loop._dag_tool.awaited == ["r1"]
+
+    call.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await call
+
+    assert loop._dag_tool.aborted == ["r1"]
 
 
 class _Hidden(Tool):
@@ -435,9 +528,8 @@ async def test_the_loop_registers_all_three_tools_outside_the_schema(workspace: 
         provider=_StubProvider(),
         workspace=workspace,
         model="stub",
-        max_iterations=2,
-        restrict_to_workspace=True,
-        tool_search_config=ToolSearchConfig(enabled=True),
+        policy=TurnPolicy(max_iterations=2),
+        tools=ToolWiring(restrict_to_workspace=True, tool_search_config=ToolSearchConfig(enabled=True)),
     )
 
     assert loop.tools.has("cancel_dag")
@@ -470,11 +562,165 @@ async def test_a_default_loop_can_still_reach_the_hidden_tools(workspace: Path) 
         provider=_StubProvider(),
         workspace=workspace,
         model="stub",
-        max_iterations=2,
-        restrict_to_workspace=True,
         # no tool_search_config: the default deploy
+        policy=TurnPolicy(max_iterations=2),
+        tools=ToolWiring(restrict_to_workspace=True),
     )
 
     assert loop.tools.has("tool_call")
     assert loop.strategies.get("tool_search") is None, "the fold itself stays off"
     assert loop.dag_control_reachable() is True
+
+
+_HIDDEN = ("cancel_dag", "dag_status", "resolve_dag_node")
+
+
+async def _cross_referencing_texts(tmp_path) -> list[tuple[str, str]]:
+    """Every model-facing string that points a model at one of the hidden controls.
+
+    The graph tool's acceptance text belongs here as much as the control tools' own
+    replies: this file's docstring calls those two texts the whole advertisement the
+    controls get, and a guard that reaches only one of them lets the defect this
+    branch removes come back in the other with the suite green.
+    """
+    graph = SubAgentDagTool(
+        workspace=tmp_path,
+        agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")],
+        control_reachable=lambda: True,
+    )
+    graph.set_context("web", "default", "web:xref")
+    accepted = await graph.execute(
+        task_summary="run the graph under test",
+        nodes=[{"id": "a", "subagent": "echo", "node_summary": "say hello", "prompt_template": "hi"}],
+    )
+    guide = (
+        Path(raven_agent_subagent.__file__).parents[2]
+        / "memory_engine"
+        / "skills"
+        / "subagent-dag-orchestration"
+        / "SKILL.md"
+    )
+    texts = [
+        ("graph tool: background acceptance text", accepted.model_text),
+        # run_subagent_dag makes reading this a required first step, so it is the
+        # first place a model learns how to answer a suspended node -- earlier than
+        # the report, and wrong for longer if it disagrees with it.
+        ("orchestration guide: the required first read", guide.read_text(encoding="utf-8")),
+        # The text a suspended node hands the model, and the one this branch is
+        # named after. It renders without a tool instance, so it joins the roster
+        # the same way the guide does.
+        (
+            "exception report: what a suspended node hands the model",
+            _exception_report(
+                run_id="r1",
+                node=parse_dag_spec(
+                    {
+                        "task_summary": "one node",
+                        "nodes": [{"id": "a", "subagent": "echo", "node_summary": "first", "prompt_template": "do a"}],
+                    }
+                ).nodes[0],
+                verdict=Verdict(accomplished=False, category="tool_failure", what_is_missing="a token"),
+                attempt=1,
+                remaining=2,
+                blocked=["b"],
+                timeout_s=600.0,
+            ),
+        ),
+        ("cancel: unresolvable ownership", await CancelDagTool(loop=_Loop(live={"r1"})).execute("r1")),
+        ("cancel: nothing matches", await CancelDagTool(loop=_Loop(tool=_DagTool(_finished_run()))).execute("r9")),
+        (
+            "status: listing",
+            await DagStatusTool(loop=_Loop(live={"a-run"}, tool=_DagTool(session_runs={"a-run"}))).execute(),
+        ),
+        ("status: unknown run", await DagStatusTool(loop=_Loop(tool=_DagTool(error="gone"))).execute("r1")),
+        (
+            "resolve: node no longer waiting",
+            await ResolveDagNodeTool(loop=_LoopWithRun(resolves=False)).execute(
+                run_id="r1", node_id="a", decision="abandon"
+            ),
+        ),
+        (
+            "resolve: abandoned",
+            await ResolveDagNodeTool(loop=_LoopWithRun()).execute(run_id="r1", node_id="a", decision="abandon"),
+        ),
+        (
+            "resolve: decision parameter",
+            ResolveDagNodeTool(loop=_LoopWithRun()).parameters["properties"]["decision"]["description"],
+        ),
+    ]
+    return [(label, text) for label, text in texts if any(name in text for name in _HIDDEN)]
+
+
+async def test_every_cross_reference_between_the_controls_names_the_route(tmp_path) -> None:
+    """These tools point the model at each other, and none of them is in its schema.
+
+    Naming a sibling as a bare call spells an invocation the model cannot issue --
+    the same defect that made a suspended node wait out its adjudication timeout,
+    one layer in. A reader here has necessarily reached this tool through
+    ``tool_call`` already, so the fix is consistency of spelling rather than a
+    repeated explanation.
+    """
+    referencing = await _cross_referencing_texts(tmp_path)
+    assert len(referencing) >= 9, "the sites under test must actually still cross-reference"
+
+    offenders = [label for label, text in referencing if "tool_call" not in text]
+    assert offenders == [], f"these name a schema-hidden tool without naming the route: {offenders}"
+
+
+async def test_no_cross_reference_spells_a_bare_call_syntax(tmp_path) -> None:
+    """`dag_status("r1")` reads as a callable form. There is no such call to make."""
+    for label, text in await _cross_referencing_texts(tmp_path):
+        for name in _HIDDEN:
+            # The offending line, not the whole text: one of these is a file.
+            offending = [ln.strip() for ln in text.splitlines() if f'{name}("' in ln]
+            assert not offending, f"{label} spells a call syntax the model cannot use: {offending[:3]}"
+
+
+def test_the_resolve_tool_parks_its_taker_before_it_yields() -> None:
+    """A structural claim, read structurally, because behaviour cannot pin it.
+
+    `_retire` drops a finished run's outbox from the index `release_turn` reaches
+    runs through, so a run that completes before a taker exists has nowhere left to
+    deliver its result. Nothing opens that window because this tool signals the desk
+    and enters `await_run` with no yield between the two.
+
+    `test_a_resolve_through_the_control_tool_is_handed_the_run_it_completes` drives
+    that call site and catches a yield that lasts long enough to lose the race. It
+    cannot catch every yield, and the claim is about every yield: `await
+    asyncio.sleep(0)` inserted here passes a single tick, the run has not finished,
+    the outbox is still indexed, and the delivery test stays green while the
+    invariant it stands for is gone. So this one reads the source instead -- the
+    first await after the resolve must be the take itself.
+    """
+    import ast
+    from pathlib import Path
+
+    import raven
+
+    module = Path(raven.__file__).parent / "agent" / "subagent" / "dag_control_tools.py"
+    tree = ast.parse(module.read_text(encoding="utf-8"))
+    execute = next(
+        node
+        for cls in tree.body
+        if isinstance(cls, ast.ClassDef) and cls.name == "ResolveDagNodeTool"
+        for node in cls.body
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "execute"
+    )
+
+    def _calls(node: ast.AST, name: str) -> list[ast.Call]:
+        return [
+            n for n in ast.walk(node) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == name
+        ]
+
+    (resolve,) = _calls(execute, "resolve_node")
+    (take,) = _calls(execute, "await_run")
+    awaits = sorted((n for n in ast.walk(execute) if isinstance(n, ast.Await)), key=lambda n: (n.lineno, n.col_offset))
+    after_resolve = [n for n in awaits if n.lineno > resolve.lineno]
+
+    assert after_resolve, "the taker's own await is missing, so this test is reading the wrong function"
+    first = after_resolve[0]
+    assert first.value is take, (
+        f"a yield was added between the resolve and the take, at line {first.lineno}: "
+        "the run can finish there with no taker registered, and `_retire` then drops the outbox "
+        "it would have delivered into. Either keep them adjacent or stop claiming they are."
+    )

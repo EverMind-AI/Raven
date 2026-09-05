@@ -1,9 +1,5 @@
 # TUI
 
-> **Status: review baseline (2026-06-28).** Under team review via this PR (owner @sheng.zhao).
-> Pending: candidate additions (Turn Cycle, Streaming Segment, Subagent Tree, RPC Client,
-> ChatStream, Composer, Slash Command System, …) — owner @sheng.zhao to select.
-
 The terminal front-end (`ui-tui/`, React/Ink). Renders the chat transcript and overlays;
 talks to the Runtime only via the RPC protocol. Single-session per client in v0.1.
 
@@ -24,7 +20,7 @@ _Avoid_: "global model switch" -- that was the pre-session behaviour.
 **Overlay**:
 A modal layer over the chat view, tracked in `overlayStore` and driven by keyboard. Kinds
 split into RPC-driven (Confirm, Approval, Clarify, Sudo, Secret) and user-toggled (Agents,
-Model Picker, Picker, Pager, New Instance Picker) overlays; the FPS counter is a separate
+Model Picker, Picker, Pager, New Instance Picker, Skills Hub, Subagents Hub) overlays; the FPS counter is a separate
 component, not an overlay-store kind.
 
 **MessageLine**:

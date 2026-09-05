@@ -11,7 +11,6 @@ from pathlib import Path
 
 from raven.agent.context import ContextBuilder
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
-from raven.context_engine.base import AssemblyContext
 from raven.context_engine.segments import (
     ActiveSkillsSegmentBuilder,
     BootstrapSegmentBuilder,
@@ -20,7 +19,9 @@ from raven.context_engine.segments import (
     SkillsSegmentBuilder,
     render,
 )
-from raven.memory_engine import Memory, TokenBudget
+from raven.contracts.assembled import TokenBudget
+from raven.contracts.context import AssemblyContext
+from raven.contracts.memory import Memory
 from raven.memory_engine.skill_forge import RouterHit, SkillForgeRouter
 
 
@@ -286,7 +287,7 @@ class TestRecallHasATurnBudget:
         plugin's own timeout handling, which is what demotes the service and
         makes every later turn cost nothing."""
         from raven.context_engine.segments import memory as memory_segment
-        from raven.plugin.memory.everos import backend as everos_backend
+        from raven_everos import backend as everos_backend
 
         assert everos_backend._RECALL_TIMEOUT_S < memory_segment._RECALL_BUDGET_S
 

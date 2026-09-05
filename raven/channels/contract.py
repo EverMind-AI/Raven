@@ -1,61 +1,13 @@
-"""The channel contract — what a chat-channel adapter must satisfy and declare.
+"""The channel paper on the shelf: the adapter surface re-exported, plus the capability proof.
 
-A channel implements the :class:`Channel` protocol (``start``/``stop``/``send``)
-and declares its :class:`Capabilities`; optional behaviours are separate
-``Supports*`` protocols a channel opts into. Each channel package exports a
-:class:`ChannelSpec` — a lightweight descriptor whose ``factory`` defers the
-heavy SDK import — consumed by the registry.
-
-Composition over inheritance: there is no base class to subclass. Adapters
-satisfy the protocols structurally and inject the framework services
-(:mod:`.intake`, transcription) they need.
+The shapes live in :mod:`raven.contracts.channel` (the papers own them) and
+are re-exported so adapters keep one import path. :func:`capability_violations`
+is the shelf's own check that a declared capability and its ``Supports*``
+protocol agree -- a proof the per-channel tests run, not a shape.
 """
 
-from __future__ import annotations
-
-from collections.abc import Callable
-from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
-
-# Capabilities and SupportsStreaming live in spine.delivery (their consumer is
-# the delivery hub); re-exported here so channels keep importing from one place.
-from raven.spine.delivery import Capabilities, SupportsStreaming
-
-
-@runtime_checkable
-class Channel(Protocol):
-    """Minimal required contract every channel satisfies."""
-
-    name: str
-    capabilities: Capabilities
-
-    async def start(self) -> None: ...
-    async def stop(self) -> None: ...
-    async def send(self, chat_id: str, content: str, media: list[str] | None = None) -> None: ...
-
-
-@runtime_checkable
-class SupportsLogin(Protocol):
-    """Opt-in interactive (QR/scan) login, run once via CLI before ``start``."""
-
-    async def login(self, force: bool = False) -> bool: ...
-
-
-@dataclass(frozen=True)
-class ChannelSpec:
-    """Declarative descriptor a channel package exports as ``SPEC``.
-
-    ``factory`` defers the channel's heavy SDK import, so collecting specs
-    (listing / onboarding / login routing) stays cheap. Carries only what can't
-    be located elsewhere: the channel's name is its package name (the registry
-    key); dependency/setup guidance is derived by the CLI from capabilities +
-    the config schema.
-    """
-
-    display_name: str
-    factory: Callable[[Any], Channel]  # (config) -> Channel
-    capabilities: Capabilities = field(default_factory=Capabilities)
-
+from raven.contracts.channel import Channel, ChannelSpec, SupportsLogin  # noqa: F401
+from raven.spine.delivery import Capabilities, SupportsStreaming  # noqa: F401
 
 # Each capability flag must agree with its matching opt-in protocol. Adding a
 # capability = add one row; the check below covers both directions for it.
@@ -82,3 +34,6 @@ def capability_violations(channel: object, caps: Capabilities | None = None) -> 
         if implemented and not declared:
             out.append(f"implements {proto.__name__} but does not declare {flag}")
     return out
+
+
+__all__ = ["Capabilities", "SupportsStreaming", "Channel", "ChannelSpec", "SupportsLogin", "capability_violations"]

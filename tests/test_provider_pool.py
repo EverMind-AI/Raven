@@ -258,7 +258,7 @@ def test_an_unbuildable_pin_is_reported_not_raised(monkeypatch) -> None:
     provider cannot be built must leave the subsystem following the
     conversation, not stop the agent from starting.
     """
-    import raven.cli._helpers as helpers
+    import raven.providers.factory as helpers
 
     pool = _pool(anthropic="sk-ant", gemini="AIza")
 
@@ -339,7 +339,7 @@ def test_a_gateway_pin_that_cannot_be_built_is_reported_not_raised(monkeypatch) 
     it needs the same guard as the direct-vendor branch -- otherwise a missing
     gateway key stops the agent from starting.
     """
-    import raven.cli._helpers as helpers
+    import raven.providers.factory as helpers
 
     cfg = _config("anthropic/claude-opus-4-5", openrouter="sk-or")
     cfg.agents.defaults.provider = "openrouter"
@@ -422,7 +422,7 @@ def test_a_pin_that_cannot_be_built_at_all_does_not_stop_the_agent(monkeypatch) 
     building a provider imports a vendor module -- so the failures are not only
     the credential ones the narrower guard covered.
     """
-    import raven.cli._helpers as helpers
+    import raven.providers.factory as helpers
 
     cfg = _config("claude-opus-4-5", anthropic="sk-ant")
 

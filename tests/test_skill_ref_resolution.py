@@ -136,14 +136,6 @@ def test_dir_header_present_for_pathset(svc, skill_dir):
     assert "resolve under this directory" in out
 
 
-def test_dir_header_absent_for_db_only(svc, skill_dir):
-    meta = SkillMeta(
-        id=0, name="d", description="", path=Path("sqlite://t/d"), content="see references/GUIDE.md", source="t"
-    )
-    out = svc.load_skills_for_context([meta], max_inject=1)
-    assert "Skill directory" not in out
-
-
 def test_dir_header_absent_when_dir_missing(svc, tmp_path):
     gone = tmp_path / "gone" / "SKILL.md"
     meta = SkillMeta(

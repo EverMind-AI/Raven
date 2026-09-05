@@ -31,22 +31,20 @@ from collections import Counter
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
-from raven.context_engine.base import AssemblyContext, Segment
 from raven.context_engine.segments import render
-from raven.memory_engine.skill_forge.refs import resolve_refs
+from raven.contracts.context import AssemblyContext, Segment
+from raven.memory_engine import resolve_refs
+from raven.observability import semconv
 from raven.skill_hub.audit import record_install, write_install_meta
 from raven.skill_hub.policy import SkillPolicy, is_blocked
-from raven.tracing import semconv, trace
+from raven.tracing import trace
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
     from pathlib import Path
 
-    from raven.memory_engine.skill_forge import SkillForgeRouter
-    from raven.memory_engine.skill_forge.gate import LLMGateFilter
-    from raven.memory_engine.skill_forge.rewriter import QueryRewriter
-    from raven.memory_engine.skill_forge.types import RouterHit
-    from raven.providers.base import LLMProvider
+    from raven.contracts.llm_provider import LLMProvider
+    from raven.memory_engine import LLMGateFilter, QueryRewriter, RouterHit, SkillForgeRouter
     from raven.skill_hub import SkillHubClient
 
 log = logging.getLogger(__name__)

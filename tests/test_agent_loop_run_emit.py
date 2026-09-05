@@ -14,11 +14,13 @@ from dataclasses import dataclass, field
 
 import pytest
 
+from raven.agent.hook.adapters import DecisionConsumerAdapter
 from raven.agent.loop import AgentLoop
-from raven.agent.tools.base import Tool, ToolResult
+from raven.agent.loop.bundles import HostWiring, ToolWiring
 from raven.agent.tools.deep_research import DeepResearchOfferTool
 from raven.config.schema import DeepResearchToolConfig
-from raven.providers.base import LLMResponse, StreamDelta, ToolCallRequest
+from raven.contracts.llm_provider import ChatDelta, LLMResponse, ToolCallRequest
+from raven.contracts.tool import Tool, ToolResult
 from raven.sandbox import SandboxInitError
 from raven.spine.events import EpisodeStart as EvEpisodeStart
 from raven.spine.events import MediaOut as EvMediaOut
@@ -132,9 +134,9 @@ class _FakeChatProvider:
 
 class _FakeStreamProvider:
     """Yields scripted stream chunks via ``chat_stream`` (the streaming path that
-    ``run(req, emit)`` takes when emitting StreamDelta tokens)."""
+    ``run(req, emit)`` takes when emitting ChatDelta tokens)."""
 
-    def __init__(self, chunks: list[StreamDelta]) -> None:
+    def __init__(self, chunks: list[ChatDelta]) -> None:
         self._chunks = chunks
 
     async def chat_stream(self, **kwargs):
@@ -150,7 +152,7 @@ class _FakeStreamToolProvider:
     tool-call iteration works under run() (call 1 -> tool_call_delta, call 2 ->
     final content). run() always wires on_token_delta, so every turn streams."""
 
-    def __init__(self, scripts: list[list[StreamDelta]]) -> None:
+    def __init__(self, scripts: list[list[ChatDelta]]) -> None:
         self._scripts = scripts
         self._i = 0
 
@@ -224,9 +226,7 @@ async def test_hook_short_circuit_preserves_media_at_outbound_layer(tmp_path):
         )
 
     loop = AgentLoop(
-        provider=_FakeChatProvider([]),
-        workspace=tmp_path,
-        decision_consumer=_decision,
+        provider=_FakeChatProvider([]), workspace=tmp_path, host=HostWiring(hooks=[DecisionConsumerAdapter(_decision)])
     )
     _stub_edges(loop)
 
@@ -242,11 +242,11 @@ async def test_hook_short_circuit_preserves_media_at_outbound_layer(tmp_path):
 
 
 async def test_run_streams_then_dissolves_main_response(tmp_path):
-    # Streaming main response: each non-empty chunk -> emit(StreamDelta); the
+    # Streaming main response: each non-empty chunk -> emit(ChatDelta); the
     # return dissolves (b2) -> no trailing Text. Usage rides TurnOutcome.
     chunks = [
-        StreamDelta(content="Hel"),
-        StreamDelta(content="lo", usage={"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}),
+        ChatDelta(content="Hel"),
+        ChatDelta(content="lo", usage={"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}),
     ]
     loop = AgentLoop(provider=_FakeStreamProvider(chunks), workspace=tmp_path)
     _stub_edges(loop)
@@ -265,8 +265,8 @@ async def test_run_streams_then_dissolves_main_response(tmp_path):
 
 async def test_run_emits_reasoning_then_stream(tmp_path):
     chunks = [
-        StreamDelta(content=None, reasoning_content="think"),
-        StreamDelta(content="answer"),
+        ChatDelta(content=None, reasoning_content="think"),
+        ChatDelta(content="answer"),
     ]
     loop = AgentLoop(provider=_FakeStreamProvider(chunks), workspace=tmp_path)
     _stub_edges(loop)
@@ -289,14 +289,14 @@ async def test_run_tool_call_emits_tool_events_and_notice(tmp_path):
     provider = _FakeStreamToolProvider(
         [
             [
-                StreamDelta(
+                ChatDelta(
                     content=None,
                     tool_call_delta={
                         "tool_calls": [{"index": 0, "id": "t1", "function": {"name": "faketool", "arguments": "{}"}}]
                     },
                 )
             ],
-            [StreamDelta(content="done")],
+            [ChatDelta(content="done")],
         ]
     )
     loop = AgentLoop(provider=provider, workspace=tmp_path)
@@ -331,14 +331,14 @@ async def test_tool_start_event_carries_the_registry_blocking_verdict(tmp_path, 
     provider = _FakeStreamToolProvider(
         [
             [
-                StreamDelta(
+                ChatDelta(
                     content=None,
                     tool_call_delta={
                         "tool_calls": [{"index": 0, "id": "t1", "function": {"name": "faketool", "arguments": "{}"}}]
                     },
                 )
             ],
-            [StreamDelta(content="done")],
+            [ChatDelta(content="done")],
         ]
     )
     loop = AgentLoop(provider=provider, workspace=tmp_path)
@@ -361,14 +361,14 @@ async def test_tool_result_splits_model_text_from_display_preview(tmp_path):
     provider = _FakeStreamToolProvider(
         [
             [
-                StreamDelta(
+                ChatDelta(
                     content=None,
                     tool_call_delta={
                         "tool_calls": [{"index": 0, "id": "t9", "function": {"name": "splittool", "arguments": "{}"}}]
                     },
                 )
             ],
-            [StreamDelta(content="done")],
+            [ChatDelta(content="done")],
         ]
     )
     loop = AgentLoop(provider=provider, workspace=tmp_path)
@@ -407,14 +407,14 @@ async def test_run_emits_one_episode_start_per_model_call(tmp_path):
     provider = _FakeStreamToolProvider(
         [
             [
-                StreamDelta(
+                ChatDelta(
                     content=None,
                     tool_call_delta={
                         "tool_calls": [{"index": 0, "id": "t1", "function": {"name": "faketool", "arguments": "{}"}}]
                     },
                 )
             ],
-            [StreamDelta(content="done")],
+            [ChatDelta(content="done")],
         ]
     )
     loop = AgentLoop(provider=provider, workspace=tmp_path)
@@ -438,7 +438,7 @@ def _dr_stream_provider():
     return _FakeStreamToolProvider(
         [
             [
-                StreamDelta(
+                ChatDelta(
                     content=None,
                     tool_call_delta={
                         "tool_calls": [
@@ -451,7 +451,7 @@ def _dr_stream_provider():
                     },
                 )
             ],
-            [StreamDelta(content="ok done")],
+            [ChatDelta(content="ok done")],
         ]
     )
 
@@ -471,7 +471,7 @@ def _dr_chat_provider():
 
 async def test_inline_tool_stream_routes_progress_to_reasoning_and_answer_to_stream(tmp_path):
     # TUI path (stream=True): deep_research progress -> Reasoning (thinking.delta),
-    # the finished answer -> StreamDelta (token.delta). Pins _route_deep_research.
+    # the finished answer -> ChatDelta (token.delta). Pins _route_deep_research.
     loop = AgentLoop(provider=_dr_stream_provider(), workspace=tmp_path)
     _stub_edges(loop)
     loop.tools.register(_FakeDeepResearch())
@@ -520,7 +520,11 @@ async def test_mid_session_promotion_streams_on_the_promoting_turn(tmp_path, mon
     # receipt), not just next turn. If promotion moved after the wiring, the
     # promoted tool would miss the callback and this progress event would vanish.
     monkeypatch.delenv("MIROTHINKER_API_KEY", raising=False)
-    loop = AgentLoop(provider=_dr_stream_provider(), workspace=tmp_path, deep_research_config=DeepResearchToolConfig())
+    loop = AgentLoop(
+        provider=_dr_stream_provider(),
+        workspace=tmp_path,
+        tools=ToolWiring(deep_research_config=DeepResearchToolConfig()),
+    )
     _stub_edges(loop)
     assert isinstance(loop.tools.get("deep_research"), DeepResearchOfferTool)  # starts unconfigured
 
@@ -562,14 +566,14 @@ async def test_inject_message_merged_before_next_iteration(tmp_path):
     provider = _RecordingStreamToolProvider(
         [
             [
-                StreamDelta(
+                ChatDelta(
                     content=None,
                     tool_call_delta={
                         "tool_calls": [{"index": 0, "id": "t1", "function": {"name": "faketool", "arguments": "{}"}}]
                     },
                 )
             ],
-            [StreamDelta(content="done")],
+            [ChatDelta(content="done")],
         ]
     )
     loop = AgentLoop(provider=provider, workspace=tmp_path)
@@ -653,7 +657,7 @@ async def test_a_row_recorded_during_a_tool_call_reaches_the_next_llm_call(tmp_p
     # The seam: a sub-agent's question is answered while its spawn tool is still
     # running, which is why the row can only be written at the next iteration's
     # top -- splicing it in mid-batch would orphan the running tool_call.
-    from raven.agent.acp.asker import start_ask_turn
+    from raven.acp_client.asker import start_ask_turn
 
     auto = _RecordingAutofill()
 
@@ -689,14 +693,14 @@ async def test_a_row_recorded_during_a_tool_call_reaches_the_next_llm_call(tmp_p
     provider = _RecordingStreamToolProvider(
         [
             [
-                StreamDelta(
+                ChatDelta(
                     content=None,
                     tool_call_delta={
                         "tool_calls": [{"index": 0, "id": "t1", "function": {"name": "faketool", "arguments": "{}"}}]
                     },
                 )
             ],
-            [StreamDelta(content="done")],
+            [ChatDelta(content="done")],
         ]
     )
     loop = AgentLoop(provider=provider, workspace=tmp_path)
@@ -736,7 +740,7 @@ async def test_run_slash_emits_text_not_streamed(tmp_path):
 
 async def test_run_short_circuit_emits_media_before_text(tmp_path):
     # MediaOut category: a hook short-circuit returns media + content. MediaOut is
-    # independent of the stream and precedes Text (G-MEDIA-2(a) order).
+    # independent of the stream and precedes Text.
     async def _decision(req: TurnRequest):
         return _Reply(
             channel=req.source.channel,
@@ -746,9 +750,7 @@ async def test_run_short_circuit_emits_media_before_text(tmp_path):
         )
 
     loop = AgentLoop(
-        provider=_FakeChatProvider([]),
-        workspace=tmp_path,
-        decision_consumer=_decision,
+        provider=_FakeChatProvider([]), workspace=tmp_path, host=HostWiring(hooks=[DecisionConsumerAdapter(_decision)])
     )
     _stub_edges(loop)
     sink = _EmitCollector()
@@ -800,8 +802,8 @@ async def test_run_propagates_mid_turn_error_not_sorry_text(tmp_path):
     assert not any(isinstance(e, EvText) for e in sink.events)
 
 
-def _message_tool_call(arguments: str) -> StreamDelta:
-    return StreamDelta(
+def _message_tool_call(arguments: str) -> ChatDelta:
+    return ChatDelta(
         content=None,
         tool_call_delta={
             "tool_calls": [{"index": 0, "id": "m1", "function": {"name": "message", "arguments": arguments}}]
@@ -810,13 +812,13 @@ def _message_tool_call(arguments: str) -> StreamDelta:
 
 
 async def test_run_message_tool_text_streams_and_dissolves(tmp_path):
-    # The message tool's reply routes through on_token -> StreamDelta (b2), then
+    # The message tool's reply routes through on_token -> ChatDelta (b2), then
     # _process_message returns None -> no trailing Text. explicit_reply is still
     # True (the agent did reply via the tool).
     provider = _FakeStreamToolProvider(
         [
             [_message_tool_call('{"content": "hi via tool"}')],
-            [StreamDelta(content="")],  # second iteration: nothing more, finish
+            [ChatDelta(content="")],  # second iteration: nothing more, finish
         ]
     )
     loop = AgentLoop(provider=provider, workspace=tmp_path)
@@ -838,7 +840,7 @@ async def test_run_message_tool_media_is_not_dropped(tmp_path):
     provider = _FakeStreamToolProvider(
         [
             [_message_tool_call('{"content": "see this", "media": ["/tmp/pic.png"]}')],
-            [StreamDelta(content="")],
+            [ChatDelta(content="")],
         ]
     )
     loop = AgentLoop(provider=provider, workspace=tmp_path)
@@ -853,12 +855,12 @@ async def test_run_message_tool_media_is_not_dropped(tmp_path):
     assert outcome.explicit_reply is True
 
 
-# ── stream=False (REPL assembly, canon Q2-D): reply is one Text, no StreamDelta ──
+# ── stream=False (REPL assembly): reply is one Text, no ChatDelta ──
 
 
 async def test_run_stream_false_main_reply_is_one_text(tmp_path):
-    # build_repl wires stream=False -> non-streaming chat_with_retry -> the reply
-    # is one Text (CliOutlet renders it), never a StreamDelta.
+    # build_one_shot_spine wires stream=False -> non-streaming chat_with_retry -> the reply
+    # is one Text (CliOutlet renders it), never a ChatDelta.
     provider = _FakeChatProvider([LLMResponse(content="full reply", finish_reason="stop")])
     loop = AgentLoop(provider=provider, workspace=tmp_path)
     _stub_edges(loop)
@@ -873,7 +875,7 @@ async def test_run_stream_false_main_reply_is_one_text(tmp_path):
 
 
 async def test_run_stream_false_message_tool_emits_text(tmp_path):
-    # The message-tool reply under stream=False must emit Text, not StreamDelta —
+    # The message-tool reply under stream=False must emit Text, not ChatDelta —
     # else a non-streaming outlet (CliOutlet) would eat the delta and the REPL
     # would go silent for tool replies.
     provider = _FakeChatProvider(
@@ -913,9 +915,9 @@ def _hook_loop(tmp_path):
         )
 
     loop = AgentLoop(
-        provider=_FakeStreamProvider([StreamDelta(content="llm")]),
+        provider=_FakeStreamProvider([ChatDelta(content="llm")]),
         workspace=tmp_path,
-        decision_consumer=_decision,
+        host=HostWiring(hooks=[DecisionConsumerAdapter(_decision)]),
     )
     _stub_edges(loop)
     return loop
@@ -969,7 +971,7 @@ async def test_process_message_origin_none_plain_fires_hook(tmp_path):
     loop = AgentLoop(
         provider=_FakeChatProvider([LLMResponse(content="llm", finish_reason="stop")]),
         workspace=tmp_path,
-        decision_consumer=_decision,
+        host=HostWiring(hooks=[DecisionConsumerAdapter(_decision)]),
     )
     _stub_edges(loop)
     out = await _process_via_chat(loop, _req("hi"))
@@ -1179,14 +1181,14 @@ async def test_a_failing_display_call_costs_the_label_not_the_turn(tmp_path):
     provider = _FakeStreamToolProvider(
         [
             [
-                StreamDelta(
+                ChatDelta(
                     content=None,
                     tool_call_delta={
                         "tool_calls": [{"index": 0, "id": "t1", "function": {"name": "exploding", "arguments": "{}"}}]
                     },
                 )
             ],
-            [StreamDelta(content="done")],
+            [ChatDelta(content="done")],
         ]
     )
     loop = AgentLoop(provider=provider, workspace=tmp_path)
@@ -1226,14 +1228,14 @@ async def test_a_working_display_call_still_labels_the_row(tmp_path):
     provider = _FakeStreamToolProvider(
         [
             [
-                StreamDelta(
+                ChatDelta(
                     content=None,
                     tool_call_delta={
                         "tool_calls": [{"index": 0, "id": "t1", "function": {"name": "labelled", "arguments": "{}"}}]
                     },
                 )
             ],
-            [StreamDelta(content="done")],
+            [ChatDelta(content="done")],
         ]
     )
     loop = AgentLoop(provider=provider, workspace=tmp_path)
@@ -1258,7 +1260,7 @@ async def test_run_turn_hands_the_mcp_connect_off_instead_of_awaiting_it(tmp_pat
     prewarms = 0
     awaited = 0
 
-    loop = AgentLoop(provider=_FakeStreamProvider([StreamDelta(content="hi")]), workspace=tmp_path)
+    loop = AgentLoop(provider=_FakeStreamProvider([ChatDelta(content="hi")]), workspace=tmp_path)
     _stub_edges(loop)
 
     def _prewarm() -> None:
@@ -1276,3 +1278,108 @@ async def test_run_turn_hands_the_mcp_connect_off_instead_of_awaiting_it(tmp_pat
 
     assert prewarms == 1
     assert awaited == 0
+
+
+# ── run_turn releases the conversation's foreground DAG runs when it ends ────────
+
+
+class _ReleaseRecorder(Tool):
+    """Stands in for run_subagent_dag: records release_turn calls."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, bool]] = []
+
+    @property
+    def name(self) -> str:
+        return "run_subagent_dag"
+
+    @property
+    def description(self) -> str:
+        return "records releases"
+
+    @property
+    def parameters(self) -> dict:
+        return {"type": "object", "properties": {}, "required": []}
+
+    async def execute(self, **kwargs) -> str:
+        return "unused"
+
+    async def release_turn(self, conversation: str, *, flush: bool) -> None:
+        self.calls.append((conversation, flush))
+
+
+def _loop_with_recorder(tmp_path):
+    from raven.agent.loop._shared import LoopOutcome
+
+    loop = AgentLoop(provider=_FakeChatProvider([]), workspace=tmp_path)
+    _stub_edges(loop)
+    recorder = _ReleaseRecorder()
+    loop.tools.register(recorder)
+
+    async def _ends_normally(req, emit, drain, **kwargs):
+        return LoopOutcome()
+
+    loop._run_turn = _ends_normally
+    return loop, recorder
+
+
+async def test_run_turn_releases_the_conversations_dag_runs_when_it_ends(tmp_path):
+    loop, recorder = _loop_with_recorder(tmp_path)
+
+    await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
+
+    assert recorder.calls == [("cli:c", True)]
+
+
+async def test_a_cancelled_turn_releases_without_flushing(tmp_path):
+    import asyncio
+
+    loop, recorder = _loop_with_recorder(tmp_path)
+
+    async def _cancelled(req, emit, drain, **kwargs):
+        raise asyncio.CancelledError()
+
+    loop._run_turn = _cancelled
+
+    with pytest.raises(asyncio.CancelledError):
+        await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
+
+    assert recorder.calls == [("cli:c", False)]
+
+
+async def test_a_turn_that_raises_still_releases_and_still_flushes(tmp_path):
+    """The exit the other three left out, and the one the design doc names.
+
+    An ordinary error is not the user stopping the agent: the turn is over and its
+    graph's open questions are still worth re-sending, so this exit flushes exactly
+    as the normal one does. Only cancellation drops them.
+
+    Without it, an `except BaseException` that sets `flush = False` -- the plausible
+    way someone widens the cancellation arm -- turns every failed turn into a silent
+    drop with nothing red.
+    """
+    loop, recorder = _loop_with_recorder(tmp_path)
+
+    async def _raises(req, emit, drain, **kwargs):
+        raise RuntimeError("the turn blew up")
+
+    loop._run_turn = _raises
+
+    with pytest.raises(RuntimeError, match="the turn blew up"):
+        await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
+
+    assert recorder.calls == [("cli:c", True)], "an error end releases, and flushes: only a cancel drops"
+
+
+async def test_a_direct_chat_turn_releases_nothing(tmp_path):
+    loop, recorder = _loop_with_recorder(tmp_path)
+    req = TurnRequest(
+        origin=Origin.USER,
+        source=Source(channel="cli", chat_id="c", sender_id="u", chat_type=ChatType.DM),
+        text="hi",
+        direct_target=("echo", "h1"),
+    )
+
+    await loop.run_turn(req, _EmitCollector(), _drain)
+
+    assert recorder.calls == []

@@ -41,7 +41,8 @@ from typing import Any
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.agent.tools.base import Tool
+from raven.agent.loop.bundles import EngineWiring, HostWiring, TurnPolicy
+from raven.contracts.tool import Tool
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.token_wise.cache_optimizer import CacheOptimizer
 from raven.token_wise.registry import StrategyRegistry
@@ -50,7 +51,9 @@ from raven.token_wise.usage_tracker import UsageTracker
 pytestmark = pytest.mark.real_llm
 
 KEY_FILE = Path(__file__).resolve().parent.parent.parent / "raven" / "key.env"
-REPORT_PATH = Path(__file__).resolve().parent.parent.parent / "raven" / "token_wise" / "EXPERIMENT_REPORT_WORKLOADS.md"
+REPORT_PATH = (
+    Path(__file__).resolve().parent.parent.parent / "reports" / "token_wise" / "EXPERIMENT_REPORT_WORKLOADS.md"
+)
 MODEL = "anthropic/claude-sonnet-4-5"
 COST_GUARD_USD = 1.50
 _OPENROUTER_PIN = {"provider": {"order": ["Anthropic"], "allow_fallbacks": False}}
@@ -289,11 +292,10 @@ async def _run_long_conversation(
         provider=provider,
         workspace=workspace,
         model=MODEL,
-        max_iterations=4,
-        context_window_tokens=200_000,
         mcp_servers={},
-        channels_config=None,
-        strategies=registry,
+        policy=TurnPolicy(max_iterations=4),
+        engine=EngineWiring(context_window_tokens=200_000, strategies=registry),
+        host=HostWiring(channels_config=None),
     )
     loop.tools._tools.clear()  # no tools in this scenario
 
@@ -402,11 +404,10 @@ async def _run_tool_accumulation(
         provider=provider,
         workspace=workspace,
         model=MODEL,
-        max_iterations=4,
-        context_window_tokens=200_000,
         mcp_servers={},
-        channels_config=None,
-        strategies=registry,
+        policy=TurnPolicy(max_iterations=4),
+        engine=EngineWiring(context_window_tokens=200_000, strategies=registry),
+        host=HostWiring(channels_config=None),
     )
     # Strip default tools; install ONLY our deterministic data_lookup.
     loop.tools._tools.clear()
