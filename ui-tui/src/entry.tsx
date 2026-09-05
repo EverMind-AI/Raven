@@ -21,18 +21,11 @@ import type { GatewayClient } from './gatewayClientStub.js'
 
 import { GatewayClientCompat } from './gatewayClientCompat.js'
 import { setupGracefulExit } from './lib/gracefulExit.js'
-import { startLoopLagMonitor } from './lib/loopLag.js'
 import { formatBytes, type HeapDumpResult, performHeapDump } from './lib/memory.js'
 import { type MemorySnapshot, startMemoryMonitor } from './lib/memoryMonitor.js'
 import { renderColorPreview, renderColorSwatches } from './lib/printColors.js'
-import { resetTerminalModes, resetTerminalModesOnStart } from './lib/terminalModes.js'
-import { installWriteLog } from './lib/writeLog.js'
+import { resetTerminalModes } from './lib/terminalModes.js'
 import { DEFAULT_THEME } from './theme.js'
-
-// Ahead of every other write, including the mode reset below: a recording that
-// starts mid-session cannot be replayed, because the terminal state it began
-// from is not in it.
-installWriteLog()
 
 // `raven tui --print-colors` is a no-IPC diagnostic: dump the resolved
 // palette as swatches and exit. Runs before the TTY guard so it works when
@@ -56,10 +49,8 @@ if (!process.stdin.isTTY) {
 }
 
 // Start from a clean slate. If a previous TUI crashed or was kill -9'd, the
-// terminal tab can still have mouse/focus/paste modes enabled. The startup
-// variant, because the shell's screen is still the one on display here -- see
-// TERMINAL_MODE_RESET_ON_START.
-resetTerminalModesOnStart()
+// terminal tab can still have mouse/focus/paste modes enabled.
+resetTerminalModes()
 
 // `raven tui --check` is a no-IPC smoke path: import chain + terminal
 // reset succeeding is the signal we want. The socket transport made
@@ -86,15 +77,15 @@ if (!socketPath) {
 // same public surface (`request` / `start` / `kill` / `getLogTail` /
 // `drain` / EventEmitter `.on('event'|'exit', ...)`) but is not a subclass.
 // The cast is the adapter contract boundary — see gatewayClientCompat.ts
-// header comment for the retirement plan.
+// header comment for retirement plan once Phase 4 turn-streaming lands.
 //
-// `gwCompat` keeps the typed `rpcClient` reachable for the typed chat path
+// `gwCompat` keeps the typed `rpcClient` reachable for Phase 6's chat path
 // (typed `turn.subscribe` bypasses the EventEmitter adapter) while the
 // legacy 169 .tsx consumers keep using the EventEmitter surface via `gw`.
 const gwCompat = new GatewayClientCompat({ socketPath })
 const gw = gwCompat as unknown as GatewayClient
 
-// Handshake `system.hello` resolves within the RpcServer's 5s timeout;
+// Handshake `system.hello` resolves within Phase 2 RpcServer's 5s timeout;
 // any failure here will reject and bubble to setupGracefulExit's error path.
 await gw.start()
 
@@ -134,15 +125,7 @@ if (process.env.RAVEN_HEAPDUMP_ON_START === '1') {
   void performHeapDump('manual')
 }
 
-// Records main-thread stalls out of band. A stall long enough to matter is a
-// stall that eats Ctrl+C too -- the key reaches the app as a keystroke, not a
-// signal -- so the session it explains is usually one that got killed.
-const stopLoopLagMonitor = startLoopLagMonitor()
-
-process.on('beforeExit', () => {
-  stopMemoryMonitor()
-  stopLoopLagMonitor()
-})
+process.on('beforeExit', () => stopMemoryMonitor())
 
 const [ink, { App }, { logFrameEvent }, { trackFrame }] = await Promise.all([
   import('@hermes/ink'),

@@ -66,8 +66,7 @@ Read-only: `s.trace_id`, `s.span_id`, `s.name`.
 | call | returns |
 |---|---|
 | `trace.enabled()` | whether recording is on (config/env) |
-| `trace.current()` | the active `TraceCtx` or `None` |
-| `trace.use_context(ctx)` | context manager: re-enter a context captured with `current()`, for a span opened outside the turn that scheduled the work (a queue drained by a long-lived worker) |
+| `trace.current()` | the active `Span` or `None` |
 
 ### Hard guarantees (why an adopter is safe)
 

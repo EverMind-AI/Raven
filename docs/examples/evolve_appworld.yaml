@@ -1,15 +1,15 @@
 # Example: AppWorld self-evolution run spec (built-in scorer line).
 #
-#   uv run python -m evolver check --config <this file>            # validate setup
-#   uv run python -m evolver run   --config <this file> --smoke   # tiny wiring run
-#   uv run python -m evolver run   --config <this file>           # the real run
-#   uv run python -m evolver status --config <this file>          # progress (sealed-safe)
+#   uv run python -m raven.evolver check --config <this file>            # validate setup
+#   uv run python -m raven.evolver run   --config <this file> --smoke   # tiny wiring run
+#   uv run python -m raven.evolver run   --config <this file>           # the real run
+#   uv run python -m raven.evolver status --config <this file>          # progress (sealed-safe)
 #
 # One command does everything: cold-start baseline (if missing) -> evolution
 # rounds -> terminate -> unseal + retention. Interrupt freely; the same
 # command resumes. `finalize` ends a run early and unseals (one-way).
 #
-# Prerequisites (see evolver/README.md, "Bootstrap: AppWorld"):
+# Prerequisites (see raven/evolver/README.md, "Bootstrap: AppWorld"):
 # an AppWorld install with data/, a subject runtime config JSON, and task
 # id lists. Replace every /path/to/... below.
 

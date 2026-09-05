@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from raven.config.schema import MochatConfig
+
 
 @dataclass
 class MochatBufferedEntry:
@@ -146,7 +148,7 @@ def resolve_was_mentioned(payload: dict[str, Any], agent_user_id: str) -> bool:
     return f"<@{agent_user_id}>" in content or f"@{agent_user_id}" in content
 
 
-def resolve_require_mention(config: Any, session_id: str, group_id: str) -> bool:
+def resolve_require_mention(config: MochatConfig, session_id: str, group_id: str) -> bool:
     """Per-group/session mention requirement, falling back to the global flag."""
     groups = config.groups or {}
     for key in (group_id, session_id, "*"):
@@ -188,7 +190,7 @@ def build_entry(payload: dict[str, Any], timestamp: Any) -> MochatBufferedEntry:
     )
 
 
-def mention_gate(config: Any, target_kind: str, target_id: str, group_id: str) -> tuple[bool, bool]:
+def mention_gate(config: MochatConfig, target_kind: str, target_id: str, group_id: str) -> tuple[bool, bool]:
     """Return ``(require_mention, use_delay)`` for a panel message. The caller
     drops the message when ``require_mention and not mentioned and not use_delay``."""
     require_mention = target_kind == "panel" and bool(group_id) and resolve_require_mention(config, target_id, group_id)

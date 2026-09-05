@@ -9,7 +9,6 @@ import asyncio
 import mimetypes
 import os
 from pathlib import Path
-from typing import Any
 from urllib.parse import unquote, urlparse
 
 from dingtalk_stream import (
@@ -25,8 +24,8 @@ from loguru import logger
 from raven.channels.adapters.dingtalk import parsing
 from raven.channels.adapters.dingtalk.api import DingTalkAPI
 from raven.channels.base import ChannelBase
-from raven.channels.contract import Capabilities
 from raven.channels.media import save_media_bytes
+from raven.config.schema import DingTalkConfig
 
 _RECONNECT_DELAY_S = 5
 _REPLY_TITLE = "Raven Reply"
@@ -82,12 +81,11 @@ class DingTalkCallbackHandler(CallbackHandler):
 
 
 class DingTalkChannel(ChannelBase):
-    capabilities = Capabilities(file_attachments=True)
-    config: Any
+    config: DingTalkConfig
     name = "dingtalk"
     display_name = "DingTalk"
 
-    def __init__(self, config: Any):
+    def __init__(self, config: DingTalkConfig):
         super().__init__(config)
         self._stream: DingTalkStreamClient | None = None
         self._api = DingTalkAPI(config.client_id, config.client_secret)

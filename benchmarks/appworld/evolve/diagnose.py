@@ -5,7 +5,7 @@ Two taxonomy sources, toggled by the caller (default = hardcoded):
 - **hardcoded** (default): the hand-derived 7 AppWorld WHY classes (W1-W7), derived once by
   hand from real vanilla trajectories. Frozen constant :data:`DEFAULT_APPWORLD_TAXONOMY`.
 - **induce**: the bench-neutral open-ended map-reduce in
-  :mod:`evolver.orchestrator.nodes.taxonomy` discovers a taxonomy from
+  :mod:`raven.evolver.orchestrator.nodes.taxonomy` discovers a taxonomy from
   vanilla failures; :func:`ensure_taxonomy` here is the AppWorld-bound wrapper
   (AppWorld bench description, W1-W7 as the hardcoded default). Induction
   failure raises — it never silently substitutes the hardcoded table.
@@ -27,17 +27,17 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable, Optional
 
-from evolver.orchestrator.nodes.taxonomy import (
+from raven.evolver.orchestrator.nodes.taxonomy import (
     TaxonomySpec,
     classify_failures,
 )
-from evolver.orchestrator.nodes.taxonomy import (
+from raven.evolver.orchestrator.nodes.taxonomy import (
     ensure_taxonomy as _generic_ensure_taxonomy,
 )
-from evolver.orchestrator.nodes.taxonomy import (
+from raven.evolver.orchestrator.nodes.taxonomy import (
     induce_taxonomy as _generic_induce_taxonomy,
 )
-from evolver.tree.node import HarnessNode
+from raven.evolver.tree.node import HarnessNode
 
 # The hand-derived 7 AppWorld WHY classes (verbatim) + one escape hatch.
 WHY_CLASSES = {

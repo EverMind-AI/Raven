@@ -33,8 +33,9 @@ logger = logging.getLogger(__name__)
 class JudgeVerdict(str, Enum):
     """Three-state verdict returned by ``EvalJudge.judge``.
 
-    Encoded as a string enum so the value can be written verbatim into
-    the HISTORY.md entry the adapter appends.
+    Encoded as a string enum so the values serialize cleanly into
+    ``case.md`` frontmatter and ``behaviors.md`` entries via the
+    adapter.
     """
 
     completed = "completed"  # User goal addressed; turn ended cleanly.

@@ -1,4 +1,4 @@
-"""The one place a Model Ref becomes a Wire Model.
+"""Storage form to wire form: the one place a stored model id becomes a sent one.
 
 A model id is written down in one shape and sent in another. `openrouter/x` is
 stored with its gateway named so the picker and the router agree on who serves
@@ -6,10 +6,12 @@ it, but MiniMax's own client wants the prefix gone, LiteLLM wants the vendor it
 routes on in front, and Azure wants the bare deployment name because the id
 lands in a URL path.
 
-One module builds the prefixes, so a canonicalizer for a former or hyphenated
-spelling cannot exist on one path and not the other (which is how a local
-deployment addressed as "hosted-vllm/..." comes out double-prefixed);
-`tests/data/wire_model_baseline.json` pins the result.
+That conversion used to be spelled at each client. The spellings drifted: the
+standard path grew a canonicalizer for prefixes written in a former or
+hyphenated spelling and the gateway path never got one, so a local deployment
+addressed as "hosted-vllm/..." came out double-prefixed. Collapsing the two
+here is what made that one fix rather than two, and it is fixed --
+`tests/data/wire_model_baseline.json` records the single-prefix result.
 
 So callers ask here rather than building the prefix themselves -- an invariant
 test keeps `model_prefix` / `skip_prefixes` readable only by this module and the
@@ -33,20 +35,13 @@ from __future__ import annotations
 from raven.providers.registry import (
     ProviderSpec,
     find_by_model,
-    find_by_name,
     normalize_provider_name,
     public_model_prefix,
     split_model_id,
 )
 
 
-def wire_model(
-    model: str,
-    *,
-    spec: ProviderSpec | None = None,
-    gateway: ProviderSpec | None = None,
-    client_provider: str | None = None,
-) -> str:
+def wire_model(model: str, *, spec: ProviderSpec | None = None, gateway: ProviderSpec | None = None) -> str:
     """The id this model is sent under, given who is about to send it.
 
     ``gateway`` is the gateway or local deployment the request goes through,
@@ -54,21 +49,13 @@ def wire_model(
     set it decides alone, because the prefix that matters is the one naming the
     gateway rather than the vendor behind it.
 
-    ``client_provider`` names a configurable provider reached by a dedicated
-    client rather than LiteLLM. Its storage prefix comes off before the request
-    is sent. ``spec`` selects the same convention for fixed dedicated clients;
-    the LiteLLM path deliberately ignores it and asks the model id instead,
-    since an id may name a provider other than the configured one and routing
-    follows the id.
+    ``spec`` is the provider whose client is calling. It selects a non-LiteLLM
+    client's own convention; the LiteLLM path deliberately ignores it and asks
+    the model id instead, since an id may name a provider other than the
+    configured one and routing follows the id.
     """
     if gateway is not None:
         return _through_gateway(model, gateway)
-    if client_provider is not None:
-        client_spec = find_by_name(client_provider)
-        if client_spec is not None:
-            return _without_own_prefix(model, client_spec)
-        prefix, remainder = split_model_id(model)
-        return remainder if prefix == normalize_provider_name(client_provider) else model
     if spec is not None:
         if spec.client == "codex":
             return _without_own_prefix(model, spec)

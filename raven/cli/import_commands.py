@@ -1,4 +1,4 @@
-"""Cold-start import CLI commands: scan, run, status, cancel."""
+"""Cold-start import CLI commands: scan, run, status."""
 
 from __future__ import annotations
 
@@ -16,16 +16,11 @@ from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskID, TaskProgressColumn, TextColumn
 from rich.table import Table
 
+from raven.cli._plugin_stack import build_plugin_registry, maybe_build_memory_backend
 from raven.cli._theme import POINTER, QMARK
 from raven.cli._tty_guard import die_if_not_tty
 from raven.config.loader import load_config
 from raven.config.schema import Config
-from raven.core.plugin_stack import (
-    build_plugin_registry,
-    everos_plugin_installed,
-    everos_plugin_missing_note,
-    maybe_build_memory_backend,
-)
 from raven.importer.orchestrator import ImportSummary, ProgressEvent, run_import
 from raven.importer.skills import SkillOrigin
 from raven.importer.skills.hermes import HermesSkillSource
@@ -34,8 +29,8 @@ from raven.importer.state import ImportState
 from raven.importer.types import Platform, Scanner, ScanResult, SourceKind, Tier, filter_by_tier
 
 if TYPE_CHECKING:
-    from raven.contracts.llm_provider import LLMProvider
     from raven.importer.hermes_user_md import ImportedSections
+    from raven.providers.base import LLMProvider
 
 console = Console()
 
@@ -105,19 +100,18 @@ class ImportRunResult:
 def _require_memory_service_ready(backend: object) -> None:
     """Refuse to import when the memory service is not actually there.
 
-    ``backend.start()`` reports through its state rather than raising: a
-    session that cannot reach EverOS degrades and keeps probing, which is right
-    for a session and wrong here, so the state is checked after the start. An
-    import is one deliberate batch, and running it against nothing writes
+    ``backend.start()`` no longer raises: a session that cannot reach EverOS
+    degrades and keeps probing, which is right for a session and wrong here.
+    An import is one deliberate batch, and running it against nothing writes
     nothing while consuming the source list.
 
     Backends that do not report a state -- anything other than the everos one
     -- are left alone rather than locked out.
     """
-    state = getattr(backend, "state", None)
+    state = getattr(backend, "_state", None)
     if state is None:
         return
-    from raven_everos.backend import ServiceState
+    from raven.plugin.memory.everos.backend import ServiceState
 
     if state is ServiceState.READY:
         return
@@ -127,7 +121,7 @@ def _require_memory_service_ready(backend: object) -> None:
         console.print("[red]Memory identity is invalid; nothing would be imported.[/red]")
         console.print("[dim]Fix memory.userId / memory.agentId in your config.json, then: raven import run[/dim]")
         raise typer.Exit(1)
-    from raven_everos.server import server_log_path
+    from raven.plugin.memory.everos._server import server_log_path
 
     console.print(f"[red]Memory service is not available ({state.value}); nothing would be imported.[/red]")
     console.print(f"[dim]Check the server log: {server_log_path()}[/dim]")
@@ -151,15 +145,9 @@ async def _build_and_run(
     registry = build_plugin_registry(ec_config)
     backend = maybe_build_memory_backend(workspace, ec_config, registry=registry)
     if backend is None:
-        # Two ways to get no backend, and they need different instructions:
-        # nobody configured one, or the configured one ships separately and is
-        # not installed here. `raven onboard` only fixes the first.
-        if ec_config.memory.backend == "everos" and not everos_plugin_installed():
-            console.print(f"[red]Nothing was imported: {everos_plugin_missing_note()}[/red]")
-        else:
-            console.print(
-                "[red]No memory backend configured. Run `raven onboard` first.[/red]",
-            )
+        console.print(
+            "[red]No memory backend configured. Run `raven onboard` first.[/red]",
+        )
         raise typer.Exit(1)
 
     await backend.start()
@@ -283,7 +271,7 @@ async def _land_hermes_user_md(
     """
     from raven.importer.hermes_user_md import import_user_md_sections
     from raven.importer.scanners.hermes import split_memory_entries
-    from raven.memory_engine import MemoryStore
+    from raven.memory_engine.consolidate.consolidator import MemoryStore
 
     for _scanner, result in items:
         if result.platform is not Platform.HERMES or result.source_key != "user-md":
@@ -323,8 +311,8 @@ def _make_hermes_provider(config: Config) -> "LLMProvider | None":
     only the progress bar. Stripping again right after the import closes that
     window. There is nothing to gain from laziness in a one-shot command.
     """
+    from raven.cli._helpers import make_provider
     from raven.cli._log_file import _strip_tty_stream_handlers
-    from raven.providers.factory import make_provider
 
     try:
         provider = make_provider(config)
@@ -546,7 +534,7 @@ def status_cmd(
 def stop_cmd() -> None:
     """Cancel a running background import."""
     state = _default_state()
-    if not state.path.exists():
+    if not state._path.exists():
         console.print("No import in progress.")
         return
     cancel = state.cancel_path

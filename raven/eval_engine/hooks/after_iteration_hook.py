@@ -3,21 +3,25 @@
 Fires once per AgentLoop turn (not once per LLM iteration). Calls the
 LLM judge to classify the turn as completed / failed / unknown, then
 forwards the verdict to ``EvalAdapter.record_task_completion`` which
-writes it to HISTORY.md through the MemoryStore.
+writes it to HISTORY.md through the MemoryEngine.
 
 The hook stays pass-through (never short-circuits): an evaluator
 should never interrupt the user's reply chain, only annotate it.
 
-``after_iteration`` fires on every ReAct iteration; the hook judges once
-per turn by tracking the last-seen ``ctx.iteration``: a reset (a new turn)
-judges, anything else stays quiet.
+A note on phase mapping: AgentLoop currently fires ``after_iteration``
+inside the ReAct inner loop, which would invoke this hook on every
+iteration. To stay on the "once per turn" semantic the hook tracks
+the last-seen ``ctx.iteration``; if a turn's iteration count resets
+(new turn) it judges; otherwise it stays quiet. This is a stopgap
+until AgentLoop grows a dedicated ``after_turn`` phase distinct from
+``after_iteration``.
 """
 
 from __future__ import annotations
 
 import logging
 
-from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
+from raven.agent.hook.base import AgentHook, AgentHookContext, HookDecision
 from raven.eval_engine.adapter.adapter import EvalAdapter
 from raven.eval_engine.config import EvalEngineConfig
 from raven.eval_engine.judge.judge import EvalJudge, JudgeVerdict

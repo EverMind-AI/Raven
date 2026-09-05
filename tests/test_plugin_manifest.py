@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from raven.plugins import (
+from raven.plugin import (
     Contributes,
     MemoryBackendContribution,
     PluginManifest,
@@ -77,13 +77,13 @@ class TestMemoryBackends:
 
             [[plugin.contributes.memory_backends]]
             name = "everos"
-            factory = "raven_everos.backend:make_backend"
+            factory = "raven.plugin.memory.everos.backend:make_backend"
         """)
         mf = PluginManifest.from_toml_str(toml)
         assert len(mf.contributes.memory_backends) == 1
         c = mf.contributes.memory_backends[0]
         assert c.name == "everos"
-        assert c.factory == "raven_everos.backend:make_backend"
+        assert c.factory == "raven.plugin.memory.everos.backend:make_backend"
 
     def test_factory_format_rejected_without_colon(self) -> None:
         toml = textwrap.dedent("""
@@ -92,7 +92,7 @@ class TestMemoryBackends:
             version = "0.1"
             [[plugin.contributes.memory_backends]]
             name = "x"
-            factory = "raven_everos.backend.make_backend"
+            factory = "raven.plugin.memory.everos.backend.make_backend"
         """)
         with pytest.raises(ValidationError, match="module.path:callable"):
             PluginManifest.from_toml_str(toml)
@@ -104,7 +104,7 @@ class TestMemoryBackends:
             version = "0.1"
             [[plugin.contributes.memory_backends]]
             name = "x"
-            factory = "raven_everos.backend:"
+            factory = "raven.plugin.memory.everos.backend:"
         """)
         with pytest.raises(ValidationError):
             PluginManifest.from_toml_str(toml)
@@ -122,51 +122,6 @@ class TestMemoryBackends:
             factory = "a.b:d"
         """)
         with pytest.raises(ValidationError, match="duplicate memory_backend"):
-            PluginManifest.from_toml_str(toml)
-
-    def test_duplicate_service_name_rejected(self) -> None:
-        toml = textwrap.dedent("""
-            [plugin]
-            id = "x"
-            version = "0.1"
-            [[plugin.contributes.services]]
-            name = "watcher"
-            factory = "a.b:c"
-            [[plugin.contributes.services]]
-            name = "watcher"
-            factory = "a.b:d"
-        """)
-        with pytest.raises(ValidationError, match="duplicate service"):
-            PluginManifest.from_toml_str(toml)
-
-    def test_duplicate_tool_gate_name_rejected(self) -> None:
-        toml = textwrap.dedent("""
-            [plugin]
-            id = "x"
-            version = "0.1"
-            [[plugin.contributes.tool_gates]]
-            name = "gate"
-            factory = "a.b:c"
-            [[plugin.contributes.tool_gates]]
-            name = "gate"
-            factory = "a.b:d"
-        """)
-        with pytest.raises(ValidationError, match="duplicate tool_gate"):
-            PluginManifest.from_toml_str(toml)
-
-    def test_duplicate_session_observer_name_rejected(self) -> None:
-        toml = textwrap.dedent("""
-            [plugin]
-            id = "x"
-            version = "0.1"
-            [[plugin.contributes.session_observers]]
-            name = "release"
-            factory = "a.b:c"
-            [[plugin.contributes.session_observers]]
-            name = "release"
-            factory = "a.b:d"
-        """)
-        with pytest.raises(ValidationError, match="duplicate session_observer"):
             PluginManifest.from_toml_str(toml)
 
     def test_multiple_contributions_different_names(self) -> None:

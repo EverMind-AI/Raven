@@ -1,4 +1,4 @@
-"""Core data types for the Sentinel pipeline."""
+"""Core data types for the Sentinel proactivity subsystem."""
 
 from __future__ import annotations
 
@@ -74,7 +74,7 @@ class Routine:
 class ActiveSession:
     """A minimal view of an active channel session."""
 
-    key: str  # e.g. "tui:direct", "telegram:home"
+    key: str  # e.g. "cli:direct", "telegram:home"
     last_active_at: datetime
     last_user_message: str | None = None
     last_assistant_message: str | None = None
@@ -113,8 +113,8 @@ class PlannerContext:
     nudge_policy_state: NudgePolicyState = field(default_factory=NudgePolicyState)
     last_decision: "PlannerDecision | None" = None
     user_profile: str = ""
-    # Recent fire history: lets the Planner see what topics it has already
-    # pushed and whether the user dismissed them. Format:
+    # Recent fire history (v10+): lets Planner see what topics it has
+    # already pushed and whether the user dismissed them. Format:
     #   {"recent_fires": [{ts, topic_tag, message_preview}, ...],
     #    "topic_counts_24h": {tag: n, ...},
     #    "topic_counts_7d":  {tag: n, ...},
@@ -138,7 +138,7 @@ class PlannerDecision:
     action: Action
     reason: str = ""
     priority: Priority = "low"
-    proactivity_score: float = 0.0  # 0-1: confidence that acting proactively now benefits the user
+    proactivity_score: float = 0.0  # 0-1, per §1.2 finding 3 / ContextAgent
     target_session: str | None = None
     nudge_message: str | None = None  # required when action in {nudge, nudge_inject, nudge_defer}
     spawn_task: str | None = None  # required when action=spawn_agent

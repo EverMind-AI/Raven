@@ -1,7 +1,5 @@
 # EverOS memory — extraction & retrieval E2E test plan
 
-> Dated test plan (2026-06). API claims predate the current recall contract (`raven/contracts/memory.py`: explicit `user_id` / `agent_id`, no `owner_id` prefixes) and the plugin's move to `plugins-dist/everos-memory/`.
-
 End-to-end test plan for the `raven_everos` memory backend over a real
 `everos` runtime. Validates dual-track recall (user-side memory +
 agent-side skills) and that memory extraction produces skills matching
@@ -104,7 +102,6 @@ uv run pytest tests/integration -m real_llm
 
 ## Naming compliance note (AGENTS.md §5.2)
 
-The production-path smoke was renamed to drop its ticket/version scope and
-then again for the client it no longer belongs to:
-`tests/integration/test_tui_rpc_production_smoke.py`. The demo smoke that stood
-beside it is gone -- it drove a demo that was never in this repository.
+The production-path / demo smokes were renamed to drop their
+ticket/version scope: `tests/integration/test_tui_rpc_production_smoke.py`
+and `tests/integration/test_tui_rpc_demo_smoke.py`.

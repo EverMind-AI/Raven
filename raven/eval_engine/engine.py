@@ -2,11 +2,11 @@
 
 Holds a config and constructs the three AgentHook instances plus the
 judge + adapter dependencies. Exposes a single :meth:`hooks` accessor
-that returns the three hooks in a stable order, so the assembly root
-(``core/eval_stack.py``, ``core/hooks_stack.py``) can
-``CompositeHook.extend(engine.hooks())`` without re-implementing the wiring.
+that returns the three hooks in a stable order, so an Eval-aware
+CLI stack can ``CompositeHook.extend(engine.hooks())`` without
+re-implementing the wiring.
 
-Designed so a caller without an LLM provider or MemoryStore can
+Designed so a caller without an LLM provider or MemoryEngine can
 construct a degraded EvalEngine — useful for tests that only want
 to exercise the deterministic deny-list path.
 """
@@ -24,15 +24,16 @@ from raven.eval_engine.judge.judge import EvalJudge
 
 if TYPE_CHECKING:
     from raven.agent.hook import AgentHook
-    from raven.contracts.llm_provider import LLMProvider
-    from raven.memory_engine import MemoryStore
+    from raven.memory_engine.consolidate.consolidator import MemoryStore
+    from raven.providers.base import LLMProvider
 
 
 class EvalEngine:
     """Aggregates the three Eval Engine hooks behind a single factory.
 
-    ``memory`` is a :class:`MemoryStore`; the adapter needs only its
-    ``append_history``.
+    Phase B-3: the ``memory`` arg was re-typed from the (deleted)
+    ``MemoryEngine`` facade to :class:`MemoryStore` since the only
+    method the adapter uses is ``append_history``.
     """
 
     def __init__(
@@ -84,7 +85,7 @@ class EvalEngine:
 # ---------------------------------------------------------------------------
 
 
-from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
+from raven.agent.hook.base import AgentHook, AgentHookContext, HookDecision
 from raven.eval_engine.judge.judge import JudgeVerdict
 
 

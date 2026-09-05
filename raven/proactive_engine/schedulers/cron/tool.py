@@ -9,7 +9,7 @@ and the runner that owns that channel delivers the fire directly
 from contextvars import ContextVar
 from typing import Any
 
-from raven.contracts.tool import Tool
+from raven.agent.tools.base import Tool
 from raven.proactive_engine.schedulers.cron.service import CronService
 from raven.proactive_engine.schedulers.cron.types import CronSchedule
 
@@ -19,25 +19,14 @@ class CronTool(Tool):
 
     def __init__(self, cron_service: CronService):
         self._cron = cron_service
-        # Turn-local, like every other routed tool: a ContextVar, not plain
-        # attributes. With the gateway's user pool at 4, concurrent turns share
-        # this one instance -- plain attributes let turn B's set_context
-        # redirect turn A's reminder to B's conversation (reproduced before
-        # this fix; pinned by test_cron_tool_context_isolation).
-        self._route: ContextVar[tuple[str, str]] = ContextVar("cron_route", default=("", ""))
+        self._channel = ""
+        self._chat_id = ""
         self._in_cron_context: ContextVar[bool] = ContextVar("cron_in_context", default=False)
 
-    @property
-    def _channel(self) -> str:
-        return self._route.get()[0]
-
-    @property
-    def _chat_id(self) -> str:
-        return self._route.get()[1]
-
     def set_context(self, channel: str, chat_id: str) -> None:
-        """Set the current session context for delivery (turn-local)."""
-        self._route.set((channel, chat_id))
+        """Set the current session context for delivery."""
+        self._channel = channel
+        self._chat_id = chat_id
 
     def set_cron_context(self, active: bool):
         """Mark whether the tool is executing inside a cron job callback."""
@@ -219,6 +208,7 @@ class CronTool(Tool):
             except Exception:
                 return f"Error: unknown timezone '{tz}'"
 
+        # Build schedule
         delete_after = False
         if every_seconds:
             schedule = CronSchedule(kind="every", every_ms=every_seconds * 1000)

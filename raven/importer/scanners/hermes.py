@@ -25,7 +25,6 @@ from typing import Any
 
 from loguru import logger
 
-from raven.i18n import t_in
 from raven.importer.types import ImportMessage, ImportSession, Platform, ScanResult, SourceKind
 from raven.utils.text import is_cjk
 
@@ -46,11 +45,17 @@ _NON_TEXT_TYPES = frozenset({"image", "image_url", "input_image", "audio", "inpu
 # that an entry whose own text contains a bare "§" is not torn in half.
 _ENTRY_DELIMITER = "\n§\n"
 
-# Rendered in the language the content is written in. The preamble is itself extracted, so it is phrased as a
+# ``(zh, en)`` pairs. The preamble is itself extracted, so it is phrased as a
 # fact that is true on its own ("the user worked in Hermes") rather than as an
 # instruction, which would surface later as a stray directive.
-_USER_MD_PREAMBLE = "These are the personal profile facts I accumulated in the Hermes AI assistant, {count} in total."
-_MEMORY_MD_PREAMBLE = "I worked with the Hermes AI assistant before; below are the facts it recorded, {count} in total."
+_USER_MD_PREAMBLE = (
+    "以下是我在 Hermes AI 助手中积累的个人档案，共 {count} 条。",
+    "These are the personal profile facts I accumulated in the Hermes AI assistant, {count} in total.",
+)
+_MEMORY_MD_PREAMBLE = (
+    "我之前用 Hermes AI 助手工作，下面是它当时记录下来的事实，共 {count} 条。",
+    "I worked with the Hermes AI assistant before; below are the facts it recorded, {count} in total.",
+)
 # MEMORY.md is the assistant's own notes, written in its first person, so the
 # entries are assistant turns. The user preamble is not decoration: EverOS'
 # user-track extraction skips any memcell whose role is not "user" outright.
@@ -196,7 +201,7 @@ class HermesScanner:
         # does not represent the rest. ClaudeCodeScanner keeps the default
         # because it reads much larger aggregated bodies.
         cjk = is_cjk(raw, sample=len(raw))
-        preamble = t_in("zh" if cjk else "en", _PREAMBLE[result.source_key]).format(count=len(entries))
+        preamble = _PREAMBLE[result.source_key][0 if cjk else 1].format(count=len(entries))
         entry_role = _ENTRY_ROLE[result.source_key]
 
         messages = [

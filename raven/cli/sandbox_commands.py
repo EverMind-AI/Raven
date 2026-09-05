@@ -14,7 +14,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from raven.sandbox.async_utils import cancel_and_collect as _cancel_and_collect
+from raven.sandbox._async_utils import cancel_and_collect as _cancel_and_collect
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -141,6 +141,7 @@ def _run_list() -> None:
         table = Table(title="Sandbox VMs")
         table.add_column("", style="bold", no_wrap=True)  # owned marker
         table.add_column("ID", style="cyan", no_wrap=True)
+        # table.add_column("Name")  # VMs are not named today; restore when naming is supported
         table.add_column("State")
         table.add_column("Image")
         table.add_column("CPUs", justify="right")

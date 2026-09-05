@@ -16,9 +16,18 @@ wrappers over the trajectory layer:
 - ``minimize`` — shrink a bundle to a redacted Trajectory Cassette fit for
   the regression suite (:func:`raven.trajectory.cassette.minimize_bundle`).
 - ``verdict`` — record a task-outcome label (source fixed to ``user``).
-- ``pin`` / ``unpin`` — grant / revoke the never-purge retention promise.
+- ``pin`` / ``unpin`` — grant / revoke the never-purge retention promise
+  (``unpin`` also clears absorbed aliases and member-level pins).
+- ``merge``   — combine attempts into one definition in ``attempts.json``
+  (:func:`raven.trajectory.store.merge_attempts`; pins migrate up).
+- ``split``   — delete a merged attempt's definition; pins migrate down to
+  the member traces (:func:`raven.trajectory.store.split_attempt`).
 - ``list``    — aggregate addressable attempts from the trace logs so users
-  can find the id they want to bundle.
+  can find the id they want to bundle; definition members fold into one row.
+
+Ids echoed in output may come from user input, spans, or bundle manifests —
+none are trusted: every dynamic value rendered through Rich is escaped first
+(an id like ``x[/red]y`` is legal and would otherwise crash markup parsing).
 """
 
 from __future__ import annotations
@@ -29,12 +38,14 @@ import shutil
 import tempfile
 from collections import Counter
 from pathlib import Path
+from typing import Callable
 
 import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
+from raven.cli._tty_guard import die_if_not_tty
 from raven.tracing import config as tracing_config
 from raven.trajectory import store as tstore
 from raven.trajectory.bundle import collect_bundle
@@ -44,10 +55,44 @@ from raven.trajectory.verdict import VERDICT_STATUSES, read_verdicts, record_ver
 
 console = Console()
 
-trajectory_app = typer.Typer(
-    help="Package, label, and protect agent trajectories.",
-    no_args_is_help=True,
-)
+trajectory_app = typer.Typer(help="Package, label, and protect agent trajectories.")
+
+
+@trajectory_app.callback(invoke_without_command=True)
+def trajectory_main(
+    ctx: typer.Context,
+    workspace: Path | None = typer.Option(
+        None,
+        "--workspace",
+        "-w",
+        help="Workspace holding the session records (default: the configured workspace)",
+    ),
+) -> None:
+    """Package, label, and protect agent trajectories (bare invocation opens
+    the interactive browser)."""
+    # Subcommands must pass through before the TTY gate, or non-interactive
+    # scripts running `trajectory save/list/...` would die on the check.
+    if ctx.invoked_subcommand is not None:
+        return
+    die_if_not_tty("raven trajectory list")
+    # Local import: the browser (and its questionary dependency) loads only
+    # when actually entered, and the module cycle commands <-> browse breaks.
+    from raven.cli.trajectory_browse import browse_trajectories
+
+    browse_trajectories(workspace=workspace)
+
+
+def _default_cassette_dir(attempt_id: str) -> Path:
+    """Default cassette directory for ``attempt_id`` under the cassettes root.
+
+    The id is recorded data; one that would name a path outside the cassettes
+    directory raises ``ValueError`` (shared by the CLI and the browser so the
+    escape check cannot drift)."""
+    out_root = (tracing_config.state_dir() / "cassettes").resolve()
+    out_dir = (out_root / attempt_id).resolve()
+    if out_dir.parent != out_root:
+        raise ValueError(f"id {attempt_id!r} cannot be used as a cassette directory name")
+    return out_dir
 
 
 def _bundle_dir_or_exit(target: str) -> Path:
@@ -59,7 +104,10 @@ def _bundle_dir_or_exit(target: str) -> Path:
     bundle_dir = tracing_config.state_dir() / "bundles" / target
     if (bundle_dir / "manifest.json").is_file():
         return bundle_dir
-    console.print(f"[red]no bundle found for {target!r}[/red] — run [cyan]raven trajectory save {target}[/cyan] first")
+    console.print(
+        f"[red]no bundle found for {escape(repr(target))}[/red]"
+        f" — run [cyan]raven trajectory save {escape(target)}[/cyan] first"
+    )
     raise typer.Exit(code=1)
 
 
@@ -72,10 +120,10 @@ def _resolve_or_exit(id_: str) -> str:
     """
     resolved = tstore.resolve_attempt_id(id_)
     if resolved is None:
-        console.print(f"[red]no spans found for id {id_!r}[/red]")
+        console.print(f"[red]no spans found for id {escape(repr(id_))}[/red]")
         raise typer.Exit(code=1)
     if resolved != id_:
-        console.print(f"[dim]{id_} is one turn of attempt {resolved}[/dim]")
+        console.print(f"[dim]{escape(id_)} is one turn of attempt {escape(resolved)}[/dim]")
     return resolved
 
 
@@ -94,13 +142,14 @@ def trajectory_save(
     try:
         bundle_dir = collect_bundle(id_, out_dir=out, workspace=workspace)
     except (LookupError, ValueError) as exc:
-        console.print(f"[red]{exc}[/red]")
+        console.print(f"[red]{escape(str(exc))}[/red]")
         raise typer.Exit(code=1)
     manifest = json.loads((bundle_dir / "manifest.json").read_text(encoding="utf-8"))
-    console.print(f"[green]✓[/green] Bundled to [cyan]{bundle_dir}[/cyan]")
+    console.print(f"[green]✓[/green] Bundled to [cyan]{escape(str(bundle_dir))}[/cyan]")
     if manifest.get("attempt_id") != id_:
         console.print(
-            f"  [dim]{id_} is one turn of attempt {manifest.get('attempt_id')}; bundled the whole attempt[/dim]"
+            f"  [dim]{escape(id_)} is one turn of attempt {escape(str(manifest.get('attempt_id')))};"
+            f" bundled the whole attempt[/dim]"
         )
     session_note = "included" if manifest.get("session_included") else "not found (omitted)"
     console.print(
@@ -136,6 +185,35 @@ def trajectory_report(
     ),
 ) -> None:
     """Redact a trajectory and pack it into a shareable .tar.gz (the original bundle is untouched)."""
+    try:
+        _report_attempt(id_, out=out, yes=yes, workspace=workspace, config=config, confirm=typer.confirm)
+    except (LookupError, ValueError) as exc:
+        console.print(f"[red]{escape(str(exc))}[/red]")
+        raise typer.Exit(code=1)
+
+
+def _cli_bundled_note(attempt_id: str) -> None:
+    console.print(f"Bundled [cyan]{escape(attempt_id)}[/cyan] (re-packed to pick up the latest data)")
+
+
+def _report_attempt(
+    id_: str,
+    *,
+    out: Path | None,
+    yes: bool,
+    workspace: Path | None,
+    config: Path | None,
+    confirm: Callable[[str], bool],
+    on_bundled: Callable[[str], None] = _cli_bundled_note,
+) -> None:
+    """The report workflow with injectable presentation seams.
+
+    ``confirm`` carries only yes/no (a cancelled prompt must be raised by the
+    injector, not folded into False); ``on_bundled`` renders the re-pack
+    progress note (the browser injects an id-free variant). Collection errors
+    (``LookupError`` / ``ValueError``) propagate to the caller — each frontend
+    presents them within its own output boundary.
+    """
     if workspace is None and config is not None:
         # The traced agent's session records live in that config's workspace;
         # without this the bundle silently omits session.jsonl. An unloadable
@@ -147,13 +225,9 @@ def trajectory_report(
             workspace = load_config(config).workspace_path
         except Exception:
             pass
-    try:
-        bundle_dir = collect_bundle(id_, workspace=workspace)
-    except (LookupError, ValueError) as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(code=1)
+    bundle_dir = collect_bundle(id_, workspace=workspace)
     attempt_id = bundle_dir.name
-    console.print(f"Bundled [cyan]{attempt_id}[/cyan] (re-packed to pick up the latest data)")
+    on_bundled(attempt_id)
 
     staging = Path(tempfile.mkdtemp(prefix=f"raven-report-{attempt_id}-"))
     try:
@@ -190,14 +264,14 @@ def trajectory_report(
         else:
             console.print("[green]Residual scan: clean[/green]")
 
-        if not yes and not typer.confirm("Produce the report tarball?"):
+        if not yes and not confirm("Produce the report tarball?"):
             console.print("Aborted — no tarball was produced.")
             raise typer.Exit(code=1)
 
         out_file = out or tracing_config.state_dir() / "reports" / f"{attempt_id}.tar.gz"
         tarball = pack_report(staging / attempt_id, out_file)
         destination = get_uploader("local").upload(tarball, metadata=report.metadata())
-        console.print(f"[green]✓[/green] Report ready at [cyan]{destination}[/cyan]")
+        console.print(f"[green]✓[/green] Report ready at [cyan]{escape(str(destination))}[/cyan]")
         console.print("  [dim]local backend: nothing was uploaded — hand the file over yourself[/dim]")
     finally:
         shutil.rmtree(staging, ignore_errors=True)
@@ -225,11 +299,11 @@ def trajectory_replay(
     try:
         report = asyncio.run(run_replay(bundle_dir, mode=mode))
     except ValueError as exc:
-        console.print(f"[red]{exc}[/red]")
+        console.print(f"[red]{escape(str(exc))}[/red]")
         raise typer.Exit(code=1)
 
     streamed = f" ({report.llm_calls_streamed} streamed)" if report.llm_calls_streamed else ""
-    console.print(f"Replayed [cyan]{bundle_dir.name}[/cyan] ({mode} mode)")
+    console.print(f"Replayed [cyan]{escape(bundle_dir.name)}[/cyan] ({mode} mode)")
     console.print(
         f"  turns: {report.turns_replayed}/{report.turns_recorded}"
         f"  model calls: {report.llm_calls_replayed}/{report.llm_calls_recorded}{streamed}"
@@ -274,25 +348,32 @@ def trajectory_minimize(
     from raven.trajectory.cassette import minimize_bundle
 
     bundle_dir = _bundle_dir_or_exit(target)
-    attempt_id = (
-        json.loads((bundle_dir / "manifest.json").read_text(encoding="utf-8")).get("attempt_id") or bundle_dir.name
-    )
+    # The manifest is recorded data: broken JSON, a non-object top level, or a
+    # non-string attempt_id must fail controlled (or fall back to the
+    # directory name), never leak a parse/path-join traceback.
+    try:
+        manifest = json.loads((bundle_dir / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        manifest = None
+    if not isinstance(manifest, dict):
+        console.print(f"[red]{escape(str(bundle_dir / 'manifest.json'))} is not a valid bundle manifest[/red]")
+        raise typer.Exit(code=1)
+    manifest_id = manifest.get("attempt_id")
+    attempt_id = manifest_id if isinstance(manifest_id, str) and manifest_id else bundle_dir.name
     out_dir = out
     if out_dir is None:
-        # The manifest's attempt id is recorded data; refuse one that would
-        # name a default path outside the cassettes directory.
-        out_root = (tracing_config.state_dir() / "cassettes").resolve()
-        out_dir = (out_root / attempt_id).resolve()
-        if out_dir.parent != out_root:
-            console.print(f"[red]id {attempt_id!r} cannot be used as a cassette directory name[/red]")
+        try:
+            out_dir = _default_cassette_dir(attempt_id)
+        except ValueError as exc:
+            console.print(f"[red]{escape(str(exc))}[/red]")
             raise typer.Exit(code=1)
     try:
         report = minimize_bundle(bundle_dir, out_dir, config_path=config)
     except ValueError as exc:
-        console.print(f"[red]{exc}[/red]")
+        console.print(f"[red]{escape(str(exc))}[/red]")
         raise typer.Exit(code=1)
 
-    console.print(f"[green]✓[/green] Cassette written to [cyan]{report.cassette_dir}[/cyan]")
+    console.print(f"[green]✓[/green] Cassette written to [cyan]{escape(str(report.cassette_dir))}[/cyan]")
     console.print(f"  size: {_fmt_bytes(report.original_bytes)} -> {_fmt_bytes(report.cassette_bytes)}")
     console.print(
         f"  spans: {report.span_count}/{report.source_span_count} kept"
@@ -333,7 +414,7 @@ def trajectory_verdict(
         raise typer.BadParameter(f"status must be one of {', '.join(VERDICT_STATUSES)}; got {status!r}")
     attempt_id = _resolve_or_exit(id_)
     record_verdict(attempt_id, status, source="user", why=why, notes=notes)
-    console.print(f"[green]✓[/green] Recorded verdict [cyan]{status}[/cyan] for {attempt_id}")
+    console.print(f"[green]✓[/green] Recorded verdict [cyan]{status}[/cyan] for {escape(attempt_id)}")
 
 
 @trajectory_app.command("pin")
@@ -342,56 +423,129 @@ def trajectory_pin(
     reason: str = typer.Option("", "--reason", "-r", help="Why this trajectory is kept"),
 ) -> None:
     """Protect a trajectory from any future purge."""
-    attempt_id = _resolve_or_exit(id_)
-    tstore.pin(attempt_id, reason=reason)
-    console.print(f"[green]✓[/green] Pinned {attempt_id}")
+    # pin_attempt resolves and pins under the attempts lock, so a concurrent
+    # merge/split cannot leave this pin on an id that no longer owns anything.
+    try:
+        attempt_id = tstore.pin_attempt(id_, reason=reason)
+    except LookupError as exc:
+        console.print(f"[red]{escape(str(exc))}[/red]")
+        raise typer.Exit(code=1)
+    if attempt_id != id_:
+        console.print(f"[dim]{escape(id_)} is one turn of attempt {escape(attempt_id)}[/dim]")
+    console.print(f"[green]✓[/green] Pinned {escape(attempt_id)}")
 
 
 @trajectory_app.command("unpin")
 def trajectory_unpin(
     id_: str = typer.Argument(..., metavar="ID", help="Attempt id or trace id"),
 ) -> None:
-    """Remove a trajectory's purge protection."""
-    # Best-effort resolution (a stale pin may outlive its spans), and drop the
-    # literal id too so pins written before canonical resolution still clear.
-    resolved = tstore.resolve_attempt_id(id_) or id_
-    removed = [x for x in dict.fromkeys((resolved, id_)) if tstore.unpin(x)]
-    if removed:
-        console.print(f"[green]✓[/green] Unpinned {' and '.join(removed)}")
+    """Remove a trajectory's purge protection (clears the definition id,
+    absorbed aliases, and all member-level pins)."""
+    if tstore.unpin_attempt(id_):
+        console.print(f"[green]✓[/green] Unpinned {escape(id_)}")
     else:
-        console.print(f"{id_} was not pinned.")
+        console.print(f"{escape(id_)} was not pinned.")
+
+
+@trajectory_app.command("merge")
+def trajectory_merge(
+    ids: list[str] = typer.Argument(
+        ...,
+        metavar="IDS...",
+        help="Two or more attempt/trace ids to combine (any mix of definition, alias, legacy, or trace ids)",
+    ),
+) -> None:
+    """Merge attempts into one definition; pins migrate up, verdicts and pins
+    recorded under the absorbed ids stay visible through it.
+
+    Attempts made of adjacent turns replay best; gaps between merged turns
+    surface as replay divergences.
+    """
+    try:
+        new_id = tstore.merge_attempts(ids)
+    except ValueError as exc:
+        console.print(f"[red]{escape(str(exc))}[/red]")
+        raise typer.Exit(code=1)
+    console.print(f"[green]✓[/green] Merged into {escape(new_id)}")
+
+
+@trajectory_app.command("split")
+def trajectory_split(
+    id_: str = typer.Argument(..., metavar="ID", help="Definition id, alias, or member trace id"),
+) -> None:
+    """Split a merged attempt back into its member traces.
+
+    Deletes the definition: pins migrate down to the members, merged-attempt
+    verdicts do not transfer, and members carrying a legacy span-level
+    grouping revert to that original legacy attempt.
+    """
+    members = tstore.split_attempt(id_)
+    if members is None:
+        console.print(
+            f"[red]no attempt definition owns {escape(repr(id_))}[/red] — only merged attempts can be split"
+            " (a legacy attempt's grouping is recorded in its spans and cannot be removed)"
+        )
+        raise typer.Exit(code=1)
+    console.print(
+        f"[green]✓[/green] Split the merged attempt addressed by {escape(id_)}; restored {len(members)} member trace(s)"
+    )
+    for member in members:
+        console.print(f"  [dim]{escape(member)}[/dim]")
 
 
 @trajectory_app.command("list")
 def trajectory_list(
     session: str | None = typer.Option(None, "--session", help="Only attempts of this session key"),
 ) -> None:
-    """List addressable attempts aggregated from the trace logs."""
+    """List addressable attempts aggregated from the trace logs (traces merged
+    into one definition fold into a single row under the definition id)."""
     state = tracing_config.state_dir()
+    # One definitions read up front (owning_attempt would re-read the file per
+    # span). Definition ownership must win over a member's legacy attempt.id,
+    # or merged legacy members would surface as a second row.
+    defs = tstore.definitions(state)
+    owner_by_trace = {t: def_id for def_id, entry in defs.items() for t in entry["traces"]}
+
+    def _str(value) -> str | None:
+        return value if isinstance(value, str) and value else None
+
     attempts: dict[str, dict] = {}
     for span in tstore.iter_spans(state, session_key=session):
-        attrs = span.get("attributes") or {}
-        aid = attrs.get("attempt.id") or span.get("traceId")
+        # Span attributes are unvalidated history: a JSON-legal record with a
+        # non-object attributes value or a non-string id/key/timestamp must
+        # degrade per-field, never kill list.
+        raw_attrs = span.get("attributes")
+        attrs = raw_attrs if isinstance(raw_attrs, dict) else {}
+        trace_id = _str(span.get("traceId"))
+        aid = owner_by_trace.get(trace_id) or _str(attrs.get("attempt.id")) or trace_id
         if not aid:
             continue
         entry = attempts.setdefault(aid, {"session": None, "spans": 0, "start": None, "end": None})
         entry["spans"] += 1
-        if entry["session"] is None and attrs.get("session.key"):
+        if entry["session"] is None and _str(attrs.get("session.key")):
             entry["session"] = attrs["session.key"]
-        span_start, span_end = span.get("startTime"), span.get("endTime")
+        span_start, span_end = _str(span.get("startTime")), _str(span.get("endTime"))
         if span_start and (entry["start"] is None or span_start < entry["start"]):
             entry["start"] = span_start
         if span_end and (entry["end"] is None or span_end > entry["end"]):
             entry["end"] = span_end
 
     if not attempts:
-        scope = f"session {session!r}" if session else "the trace logs"
+        scope = f"session {escape(repr(session))}" if session else "the trace logs"
         console.print(f"[dim]No attempts found in {scope}.[/dim]")
         return
 
-    latest: dict[str, str] = {}
-    for v in read_verdicts(state):
-        latest[v.attempt_id] = v.status
+    # verdicts.jsonl is append-only, so file order is time order: the highest
+    # index per id is that id's latest word.
+    latest: dict[str, tuple[int, str]] = {}
+    for idx, v in enumerate(read_verdicts(state)):
+        latest[v.attempt_id] = (idx, v.status)
+
+    def _latest_status(aid: str) -> str:
+        entry = defs.get(aid)
+        ids = (aid, *(entry.get("aliases") or []), *entry["traces"]) if entry else (aid,)
+        hits = [latest[x] for x in ids if x in latest]
+        return max(hits)[1] if hits else "-"
 
     table = Table()
     # Fold, never truncate: the id must stay copy-pastable into `save`.
@@ -407,12 +561,12 @@ def trajectory_list(
 
     for aid, entry in sorted(attempts.items(), key=lambda kv: kv[1]["end"] or "", reverse=True):
         table.add_row(
-            aid,
-            entry["session"] or "-",
+            escape(str(aid)),
+            escape(str(entry["session"] or "-")),
             str(entry["spans"]),
             _fmt(entry["start"]),
             _fmt(entry["end"]),
-            latest.get(aid, "-"),
+            escape(str(_latest_status(aid))),
         )
     console.print(table)
 

@@ -62,25 +62,6 @@ def test_import_litellm_keeps_an_explicit_copilot_dir(tmp_path, monkeypatch) -> 
     assert os.environ["GITHUB_COPILOT_TOKEN_DIR"] == str(tmp_path / "mine")
 
 
-def test_import_litellm_pins_the_model_cost_map_to_the_installed_wheel(monkeypatch) -> None:
-    """litellm reads this while fetching the catalogue in ``__init__``, so it
-    has to be published before litellm is imported at all -- and left unset it
-    puts an HTTP round trip on every raven startup path."""
-    monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
-
-    import_litellm()
-
-    assert os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] == "True"
-
-
-def test_import_litellm_keeps_an_explicit_model_cost_map_setting(monkeypatch) -> None:
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "False")
-
-    import_litellm()
-
-    assert os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] == "False"
-
-
 def test_import_litellm_detaches_terminal_handlers() -> None:
     """Every litellm import in raven is deferred, so the handler litellm installs
     lands after the CLI has already stripped terminal handlers. Left attached, it

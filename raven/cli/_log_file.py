@@ -1,9 +1,8 @@
 """Shared loguru→file redirection for long-lived / screen-owning CLI commands.
 
-``gateway`` (foreground long-running), ``tui`` (Ink owns the terminal) and
-``acp`` (fd 1 carries the protocol) all need loguru routed to a rotating file
-instead of stderr. They differ only in filename, whether a live stderr sink is
-kept, and retention — all parameters.
+Both ``gateway`` (foreground long-running) and ``tui`` (Ink owns the terminal)
+need loguru routed to a rotating file instead of stderr. They differ only in
+filename, whether a live stderr sink is kept, and retention — all parameters.
 
 The log directory follows :func:`get_logs_dir`, so a ``--config`` instance
 writes its logs next to its own config rather than always to ``~/.raven``.
@@ -14,34 +13,14 @@ Env vars:
 
 from __future__ import annotations
 
+import contextlib
 import logging as _stdlib_logging
 import os
-import re
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from pathlib import Path
 
 from raven.config.paths import get_logs_dir
-
-_SECRET_QUERY = re.compile(
-    r"([?&](?:api[_-]?key|key|token|secret|password|access[_-]?token|auth)=)[^&\s\"']+",
-    re.IGNORECASE,
-)
-
-
-def _no_secrets(message: str) -> str:
-    """Blank out a credential carried in a URL query string.
-
-    A vendor that takes its key as a query parameter puts it in every URL, and
-    httpx logs each request at INFO on the success path, so the key reaches the
-    retained file without any exception being raised. Redacting rather than
-    dropping the record keeps the host, path, query and status readable.
-    """
-    return _SECRET_QUERY.sub(r"\1<redacted>", message)
-
-
-def _redact_record(record: dict) -> None:
-    record["message"] = _no_secrets(record["message"])
 
 
 def redirect_loguru_to_file(
@@ -66,10 +45,6 @@ def redirect_loguru_to_file(
     log_path = get_logs_dir() / filename
 
     logger.remove()
-    # On the patcher rather than at each call site or in the stdlib bridge: it
-    # is the one hook both lanes cross, so a loguru call that formats a URL is
-    # covered alongside every intercepted third-party record.
-    logger.configure(patcher=_redact_record)
     logger.add(
         str(log_path),
         level=file_level,
@@ -83,12 +58,7 @@ def redirect_loguru_to_file(
         diagnose=False,
     )
     if terminal_level is not None:
-        # backtrace/diagnose off on the stderr sink too, and for one more
-        # reason than on the file sink: an ACP client displays this stream (a
-        # ``raven acp`` runs as the editor's subprocess), and annotated frames
-        # carry the value of every local, config and payload included. The
-        # interpreter's own excepthook still prints the plain traceback.
-        logger.add(sys.stderr, level=terminal_level, backtrace=False, diagnose=False)
+        logger.add(sys.stderr, level=terminal_level)
     if os.environ.get("RAVEN_CLI_DEBUG"):
         logger.add(sys.stderr, level="DEBUG")
 
@@ -146,4 +116,35 @@ def _strip_tty_stream_handlers() -> None:
         _strip_from(obj)
 
 
-__all__ = ["redirect_loguru_to_file"]
+@contextlib.contextmanager
+def redirect_terminal_fds_to_file(path: Path) -> Generator[None, None, None]:
+    """Redirect fd 1 (stdout) and fd 2 (stderr) to ``path`` for the duration of
+    the block, then restore the originals.
+
+    everos embedded structlog prints directly to stdout via PrintLogger, bypassing
+    the stdlib logging module entirely; redirecting fds at the OS level is the only
+    layer that catches those writes before they corrupt the full-screen TUI.
+    The file is opened in append mode so it coexists with loguru's rotating sink
+    targeting the same path.  Restore is guaranteed via a finally block.
+    """
+    saved_out = os.dup(1)
+    saved_err = os.dup(2)
+    file_fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    try:
+        os.dup2(file_fd, 1)
+        os.dup2(file_fd, 2)
+        os.close(file_fd)
+        file_fd = -1
+        try:
+            yield
+        finally:
+            os.dup2(saved_out, 1)
+            os.dup2(saved_err, 2)
+    finally:
+        if file_fd >= 0:
+            os.close(file_fd)
+        os.close(saved_out)
+        os.close(saved_err)
+
+
+__all__ = ["redirect_loguru_to_file", "redirect_terminal_fds_to_file"]

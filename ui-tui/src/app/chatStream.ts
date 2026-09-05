@@ -2,7 +2,7 @@
 // Copyright (c) 2026 EverMind.
 // See NOTICES.md.
 //
-// chatStream — typed chat path scaffold.
+// chatStream — typed chat path scaffold (Phase 6, per design.md §D7).
 //
 // Bridges `RpcClient.subscribe<TurnEvent>('turn.subscribe', ...)` notifications
 // onto the existing `turnController` so UI state updates without going through
@@ -13,7 +13,8 @@
 //
 // This file does NOT replace the legacy event handler in
 // `createGatewayEventHandler.ts` — that path stays alive for the 169 existing
-// .tsx consumers per the adapter-retirement plan.
+// .tsx consumers per the adapter-retirement plan
+// (`docs/RepoMem/persist/memory/cross-language-rpc-adapter-pattern.md` §三).
 // Once the Python `turn.*` handlers land and `prompt.submit` is removed, the
 // legacy chat-event branch in createGatewayEventHandler becomes dead code
 // and is deleted alongside the gateway-compat shim.
@@ -25,39 +26,17 @@ import type {
   TokenDeltaEvent,
   ToolCompleteEvent,
   ToolStartEvent,
-  TurnCancelParams,
-  TurnCancelResult,
   TurnEvent,
   TurnSendParams,
   TurnSendResult,
   TurnSubscribeParams
 } from '../rpc/index.js'
-import type { Msg, TurnArtifacts } from '../types.js'
-import type { DirectTargetRef } from './directChatStore.js'
+import type { Msg } from '../types.js'
 
-import { TOOL_PREVIEW_TRUNCATED_SUFFIX } from '../domain/episodeFold.js'
-import { deliveredMessageKey, noticeLine } from '../domain/messages.js'
-import { addUnique, artifactMessage, changedFile, deliveryFiles } from '../domain/turnArtifacts.js'
-import { t } from '../i18n/index.js'
-import { argPreview, dagPromptTemplates } from '../lib/toolArgs.js'
-import {
-  appendDirectDelta,
-  appendDirectMessage,
-  clearRunning,
-  clearRunningKey,
-  directKey,
-  disarmEscape,
-  getDirectChat,
-  MAIN_VIEW_KEY,
-  markRunning,
-  viewKeyOf
-} from './directChatStore.js'
-import { scheduleInstanceRefresh, settleDirectHistory } from './directChatSync.js'
-import { applyDagEvent, applySubagentStatus } from './liveAgentsStore.js'
-import { scheduleLiveAgentsRefresh } from './liveAgentsSync.js'
+import { argPreview } from '../lib/toolArgs.js'
 import { turnController } from './turnController.js'
 import { patchTurnState } from './turnStore.js'
-import { getUiState, patchUiState } from './uiStore.js'
+import { patchUiState } from './uiStore.js'
 
 /**
  * Minimal RpcClient surface the chat path needs. Defining this locally lets
@@ -101,15 +80,10 @@ export interface ChatStreamOptions {
 /** Default server-ack watchdog window — see {@link ChatStreamOptions.watchdogMs}. */
 export const DEFAULT_WATCHDOG_MS = 10_000
 
-/** How long an interrupt's `interrupted` hint stands before the prompt settles back to `ready`. */
-const STATUS_COOLDOWN_MS = 800
-
 export interface ChatStreamHandle {
   attach: () => Promise<void>
   detach: () => Promise<void>
   send: (content: string) => Promise<TurnSendResult>
-  /** `send` addressed explicitly, for a caller that is not looking at the target's view. */
-  sendTo: (target: DirectTargetRef | null, content: string) => Promise<TurnSendResult>
   cancel: () => Promise<void>
   isTurnActive: () => boolean
   /**
@@ -122,111 +96,9 @@ export interface ChatStreamHandle {
 
 interface InternalState {
   attached: boolean
-  artifacts: TurnArtifacts
   unsubscribe: (() => Promise<void>) | null
-  /**
-   * The live turn id per view key (`viewKeyOf`).
-   *
-   * Not one slot: each instance runs on its own lane server-side, so several
-   * turns are in flight at once. One slot made `send` refuse the moment any
-   * turn was running -- switching to a second instance and typing threw
-   * "turn already in progress" locally and never reached the server, which
-   * reads as the instance never answering.
-   */
-  turns: Map<string, string>
+  turnId: string | null
 }
-
-/**
- * The instance a turn event belongs to, or null for the main conversation.
- *
- * Read off the event, never off `$directChat.active`: Esc returns to the main
- * agent while a direct turn is still streaming, so "what is on screen" and
- * "what this text belongs to" routinely disagree. Only four variants can carry
- * a tag -- a direct turn emits one reply and no tool or reasoning output.
- */
-const targetOf = (event: TurnEvent): null | { agent: string; handle: string } => {
-  switch (event.type) {
-    case 'message.start':
-    case 'token.delta':
-    case 'message.complete':
-    case 'error':
-      return event.payload.target ?? null
-    default:
-      return null
-  }
-}
-
-/**
- * A direct-chat turn's events, which never touch the main transcript.
- *
- * The whole point of a direct chat is that these exchanges stay out of the main
- * agent's context, so they accumulate in the instance's own transcript and the
- * main agent learns of them only through the runtime's handoff block.
- */
-const dispatchDirect = (
-  state: InternalState,
-  event: TurnEvent,
-  target: { agent: string; handle: string },
-  sys?: (msg: string) => void
-): void => {
-  const key = directKey(target.agent, target.handle)
-
-  switch (event.type) {
-    case 'message.start':
-      state.turns.set(viewKeyOf(target), event.payload.turn_id)
-      markRunning(target)
-      patchUiState({ status: `${target.agent}/${target.handle}…` })
-      // So the chip picks up its running dot now rather than at turn end. The
-      // status this reads is only correct because the turn indexes itself under
-      // the instance (SubagentManager._hold_instance_slot); without that it
-      // would come back reconciled to 'interrupted'.
-      scheduleInstanceRefresh()
-      return
-    case 'token.delta':
-      appendDirectDelta(key, 'assistant', event.payload.text)
-      return
-    case 'message.complete':
-      // No recordMessageComplete: that commits turnController's buffer into the
-      // main transcript, and this turn never filled it.
-      state.turns.delete(viewKeyOf(target))
-      // The record now holds this turn, steps and all. Until it is read back,
-      // the view shows the last live snapshot of those steps and a reply that
-      // streamed in beside them; this is what replaces both with the settled
-      // account.
-      settleDirectHistory(target)
-      // Not `patchUiState({busy: false})`: this turn is one of several that may
-      // be in flight, and the user may be watching a different one. `markRunning`
-      // / `clearRunning` own that projection.
-      clearRunning(target)
-      // This lane's arm only. Left standing past a direct turn, the next Ctrl+C
-      // in that view would skip to the local force-reset and never ask the
-      // server to stop the sub-agent; cleared globally, it would instead drop an
-      // arm the main agent's own cancel had just placed.
-      disarmEscape(target)
-      patchUiState({ status: 'ready' })
-      // A direct turn moves its own instance's status too.
-      scheduleInstanceRefresh()
-      return
-    case 'error': {
-      state.turns.delete(viewKeyOf(target))
-      clearRunning(target)
-      const { code, message, reason } = event.payload
-      appendDirectMessage(key, {
-        role: 'system',
-        text: reason === 'cancelled_by_client' ? 'interrupted' : `error: ${message} (code=${code})`
-      })
-      disarmEscape(target)
-      patchUiState({ status: 'ready' })
-      sys?.(`${target.agent}/${target.handle}: ${message}`)
-      return
-    }
-    default:
-      return
-  }
-}
-
-/** Tools whose whole purpose is to put a new sub-agent instance in the session. */
-const DISPATCH_TOOLS = new Set(['spawn', 'run_subagent_dag'])
 
 // Render an ISO timestamp for the cron.missed summary block: local HH:MM
 // when the reminder was scheduled today, MM-DD HH:MM otherwise - a missed
@@ -254,13 +126,6 @@ const dispatch = (
   sys?: (msg: string) => void,
   appendMessage?: (msg: Msg) => void
 ): void => {
-  const target = targetOf(event)
-
-  if (target !== null) {
-    dispatchDirect(state, event, target, sys)
-    return
-  }
-
   switch (event.type) {
     case 'message.start':
       onMessageStart(state, event)
@@ -278,29 +143,17 @@ const dispatch = (
       turnController.recordReasoningDelta(event.payload.text)
       return
     case 'tool.start':
-      onToolStart(state, event)
-
-      // `subagent.status` covers a spawn's own lifecycle, but the instance
-      // strip reads the registry, so a dispatch tool starting is still the
-      // earliest signal that the session is about to have a new instance in it.
-      if (DISPATCH_TOOLS.has(event.payload.name)) {
-        scheduleInstanceRefresh()
-      }
-
+      onToolStart(event)
       return
     case 'tool.progress':
       // No-op for v0.1 chat path; createGatewayEventHandler handles previews
       // for the legacy bus and we don't want a parallel preview channel.
       return
     case 'tool.complete':
-      onToolComplete(state, event)
+      onToolComplete(event)
       return
     case 'message.complete':
       onMessageComplete(state, event, appendMessage)
-      // The backstop: a turn can register an instance without any tool this
-      // knows about, and a status only reaches its terminal value at the end.
-      scheduleInstanceRefresh()
-      scheduleLiveAgentsRefresh()
       return
     case 'error':
       onError(state, event, sys, appendMessage)
@@ -313,115 +166,15 @@ const dispatch = (
       }
       return
     }
-    case 'permission.review': {
-      // The smart-mode reviewer runs inside the tool dispatch; without this the
-      // running tool row reads as an unexplained pause.
-      const phase = (event.payload as { phase?: string } | undefined)?.phase
-      patchUiState({ status: phase === 'started' ? t('gui.perm.reviewing', 'AI is reviewing this action...') : 'running…' })
-      return
-    }
-    case 'notice': {
-      // Runtime prose, not the model's: never merged into the streamed answer.
-      // Handed to the turn rather than appended here, because it arrives mid-turn
-      // and this turn's steps reach the transcript only at `message.complete` --
-      // a row appended now sits above every step it reports on. The turn commits
-      // it as its last row (`turnController.recordNotice`).
-      turnController.recordNotice(noticeLine(event.payload))
-      return
-    }
-    case 'subagent.delivered': {
-      // A finished spawn moved the registry, so the strip has to re-read: its
-      // row is the only thing that says whether that instance is still working,
-      // and a row left reading `running` keeps its chip pulsing and its
-      // conversation view polling for a turn that ended.
-      scheduleInstanceRefresh()
-      // The seam where a delegated run's result re-entered the turn; without
-      // it the retelling that follows reads as the model speaking unprompted.
-      if (sys) {
-        const key = deliveredMessageKey(event.payload.status)
-        sys(`↩ ${event.payload.label} — ${t(key, key)}`)
-      }
-      // Settle the live rows against disk: the terminal `subagent.status`
-      // frame and this marker race, and a run that died with its gateway
-      // emits neither.
-      scheduleLiveAgentsRefresh()
-      return
-    }
-    case 'subagent.status':
-      // Twice on purpose: `$liveAgents` drives the strip for every run of the
-      // session, and the controller pins the frame onto the tool row that
-      // dispatched it (only frames carrying a tool_call_id land there).
-      turnController.recordSpawnStatus(event.payload)
-      applySubagentStatus(event.payload)
-      return
-    case 'dag.run_started':
-    case 'dag.node_updated':
-    case 'dag.run_completed':
-      // run_subagent_dag's fan-out progress. One controller call per frame keeps
-      // the fold in one place (see turnController.recordDagEvent).
-      turnController.recordDagEvent(event)
-      applyDagEvent(event)
-      // A DAG dispatch registers instances without emitting a single
-      // per-node registry notification, so these are the only signal the strip
-      // gets that a fan-out put new instances in the session.
-      scheduleInstanceRefresh()
-      return
-    case 'dag.run_replanned':
-      // Links a settled run to the one that replaced it, for the panel alone.
-      // The live-agents strip (applyDagEvent / $dagRuns) has nothing to update:
-      // this event carries no node, and the successor's own `dag.run_started`
-      // is what registers its instances into the session.
-      turnController.recordDagEvent(event)
-      return
-    case 'dag.node_stalled':
-      // A running node has shown no sign of life for quiet_ms. Information
-      // only: the node's status is unchanged and no `dag.node_updated` comes
-      // with it, so neither the fold nor the strip has anything to move. Named
-      // rather than left to `default` for the same reason `turn.started` is;
-      // a surface that wants to badge the row is a change of its own.
-      return
-
     case 'cron.missed': {
       if (sys) {
         const { count, items } = event.payload
-        const lines = items.map(
-          item => `${item.name} — scheduled ${formatScheduledAt(item.scheduled_at)}: ${item.message}`
-        )
+        const lines = items.map(item => `${item.name} — scheduled ${formatScheduledAt(item.scheduled_at)}: ${item.message}`)
         const noun = count === 1 ? 'reminder' : 'reminders'
         sys(`─── ⏰ missed ${count} ${noun} ───\n${lines.join('\n')}\n${'─'.repeat(40)}`)
       }
       return
     }
-    case 'session.titled':
-    case 'session.naming_ended':
-      // Deliberate no-op on this surface, both of them. The terminal shows a
-      // session's name in the panel it draws on resume, and there is nowhere for
-      // a name arriving mid-turn to land -- the panel for THIS session is
-      // already scrolled off above the turn that generated it. The stored title
-      // is what the next resume reads (`session.resume` carries it on `info`),
-      // so nothing is lost by not painting it now; and this surface parks no
-      // placeholder, so it has nothing to stop waiting on either.
-      return
-    case 'media':
-      // Deliberate no-op, and the reason is not that the event is unimportant:
-      // the terminal has no viewer to open a file in, and the reply text that
-      // follows names what the turn produced. The event exists for a client that
-      // can act on a path -- an editor over ACP turns each item into a
-      // resource_link the reader can click. Rendering the paths here as well is
-      // a product call for this surface, not a consequence of the wire event.
-      return
-    case 'turn.started':
-      // The live boundary of a turn the runtime opened. This surface does not
-      // read it: it draws the delegated row from `subagent.delivered` above,
-      // which the page deliberately ignores in favour of this event. The two
-      // mark different moments -- `subagent.delivered` fires when the result is
-      // SUBMITTED, this one when the turn it opened actually starts -- and
-      // moving this surface onto the later, truer one is a change of its own.
-      //
-      // Named rather than left to `default` so the check below keeps meaning
-      // "every variant was considered", not "every variant the union happened
-      // to list when this was written".
-      return
     default: {
       // Exhaustiveness — if a new TurnEvent variant lands the type-checker
       // will complain here, forcing this file to be updated.
@@ -432,10 +185,7 @@ const dispatch = (
 }
 
 const onMessageStart = (state: InternalState, ev: MessageStartEvent): void => {
-  clearStatusCooldown()
-  state.artifacts = { changes: [], deliveries: [] }
-  state.turns.set(MAIN_VIEW_KEY, ev.payload.turn_id)
-  markRunning(null)
+  state.turnId = ev.payload.turn_id
   turnController.startMessage()
   patchUiState({ status: 'running…' })
 }
@@ -444,30 +194,17 @@ const onTokenDelta = (ev: TokenDeltaEvent): void => {
   turnController.recordMessageDelta({ text: ev.payload.text })
 }
 
-const onToolStart = (state: InternalState, ev: ToolStartEvent): void => {
+const onToolStart = (ev: ToolStartEvent): void => {
   const { tool_call_id, name, arguments: args, display } = ev.payload
-
-  // The graph's own prompts, kept before the args are discarded: no dag.* event
-  // carries them, so this is the only source the panel has before a node runs.
-  if (name === 'run_subagent_dag') {
-    turnController.recordDagPrompts(tool_call_id, dagPromptTemplates(args))
-  }
-
   // Prefer the tool-authored call label; else preview the "what" of the call
   // (query/question/command), skipping numeric flags and raw JSON. See lib/toolArgs.
   turnController.recordToolStart(tool_call_id, name, display ?? argPreview(args))
-  const change = changedFile(name, args)
-  if (change) {addUnique(state.artifacts.changes, change)}
 }
 
-const onToolComplete = (state: InternalState, ev: ToolCompleteEvent): void => {
-  const { tool_call_id, result_preview, truncated, ok } = ev.payload
-  const summary = truncated ? `${result_preview}${TOOL_PREVIEW_TRUNCATED_SUFFIX}` : result_preview
-  // The emit site's verdict is authoritative; absent (an old server) the row
-  // stays successful, which is the historical behaviour.
-  const error = typeof ok === 'boolean' && !ok ? 'tool failed' : undefined
-  turnController.recordToolComplete(tool_call_id, undefined, error, summary)
-  deliveryFiles(ev.payload.metadata).forEach(file => addUnique(state.artifacts.deliveries, file))
+const onToolComplete = (ev: ToolCompleteEvent): void => {
+  const { tool_call_id, result_preview, truncated } = ev.payload
+  const summary = truncated ? `${result_preview} (truncated)` : result_preview
+  turnController.recordToolComplete(tool_call_id, undefined, undefined, summary)
 }
 
 const onMessageComplete = (
@@ -475,9 +212,9 @@ const onMessageComplete = (
   ev: MessageCompleteEvent,
   appendMessage?: (msg: Msg) => void
 ): void => {
-  state.turns.delete(MAIN_VIEW_KEY)
-  // The typed message.complete carries `{turn_id, usage}` on the wire; the
-  // assistant content is reconstructed from the
+  state.turnId = null
+  // The typed message.complete carries `{turn_id, usage}` per CAP-CHAT-1
+  // wire shape (B1 fix); the assistant content is reconstructed from the
   // `bufRef` accumulated via token.delta. recordMessageComplete reads bufRef
   // when payload.text is omitted and returns the final message list that
   // the caller must commit into history — without this the streamed tokens
@@ -485,26 +222,12 @@ const onMessageComplete = (
   if (ev.payload.usage) {
     patchUiState(s => ({ ...s, usage: { ...s.usage, ...ev.payload.usage } }))
   }
-  clearRunning(null)
   const { finalMessages, finalText, wasInterrupted } = turnController.recordMessageComplete({})
   if (!wasInterrupted && appendMessage) {
     const msgs: Msg[] = finalMessages.length > 0 ? finalMessages : [{ role: 'assistant', text: finalText }]
     msgs.forEach(appendMessage)
-    appendArtifacts(state, appendMessage)
   }
-  state.artifacts = { changes: [], deliveries: [] }
   patchUiState({ status: 'ready' })
-}
-
-const appendArtifacts = (state: InternalState, appendMessage?: (msg: Msg) => void): void => {
-  if (!appendMessage) {
-    return
-  }
-  const artifact = artifactMessage({
-    changes: [...state.artifacts.changes],
-    deliveries: [...state.artifacts.deliveries]
-  })
-  if (artifact) {appendMessage(artifact)}
 }
 
 const onError = (
@@ -514,16 +237,11 @@ const onError = (
   appendMessage?: (msg: Msg) => void
 ): void => {
   const { reason, message, code, detail } = ev.payload
-  state.turns.delete(MAIN_VIEW_KEY)
-  clearRunning(null)
+  state.turnId = null
   if (reason === 'cancelled_by_client') {
     restoreInputPrompt(appendMessage, sys)
-    appendArtifacts(state, appendMessage)
-    state.artifacts = { changes: [], deliveries: [] }
     return
   }
-  appendArtifacts(state, appendMessage)
-  state.artifacts = { changes: [], deliveries: [] }
   // Non-cancellation error: surface a sys note, idle the turn, and reset
   // the live anchor so the user can submit again. Append the real failure
   // detail (e.g. the underlying exception) when present, so a generic
@@ -532,23 +250,9 @@ const onError = (
     const extra = detail ? `: ${detail.split('\n')[0].slice(0, 200)}` : ''
     sys(`error: ${message} (code=${code})${extra}`)
   }
-  turnController.recordError({ appendMessage })
-  patchUiState({ status: `error: ${message.slice(0, 80)}` })
+  turnController.recordError()
+  patchUiState({ busy: false, status: `error: ${message.slice(0, 80)}` })
   patchTurnState({ activity: [], outcome: '' })
-}
-
-// The cooldown below, held so a turn that starts inside its window can cancel
-// it. Unguarded, it patched `ready` over a turn that was already running: Ctrl+C
-// then a new prompt inside 800ms left the status line claiming the session was
-// idle. Kept the way the ack watchdog keeps its own -- a handle plus a re-check
-// at fire time -- rather than trusting the window to be short enough.
-let cooldownTimer: null | ReturnType<typeof setTimeout> = null
-
-const clearStatusCooldown = (): void => {
-  if (cooldownTimer !== null) {
-    clearTimeout(cooldownTimer)
-    cooldownTimer = null
-  }
 }
 
 const restoreInputPrompt = (appendMessage?: (msg: Msg) => void, sys?: (msg: string) => void): void => {
@@ -560,46 +264,33 @@ const restoreInputPrompt = (appendMessage?: (msg: Msg) => void, sys?: (msg: stri
   // affordance regardless of which chat path is live.
   turnController.finalizeInterruptedTurn({ appendMessage, sys })
   turnController.clearStatusTimer()
-  patchUiState({ status: 'interrupted' })
+  patchUiState({ busy: false, status: 'interrupted' })
   // Reset to 'ready' after the brief cooldown window so the prompt looks
-  // settled if the user is just watching -- but only if the session is still
-  // idle when it fires.
-  clearStatusCooldown()
-  cooldownTimer = setTimeout(() => {
-    cooldownTimer = null
-
-    if (getUiState().busy) {
-      return
-    }
-
+  // settled if the user is just watching.
+  setTimeout(() => {
     patchUiState({ status: 'ready' })
-  }, STATUS_COOLDOWN_MS)
+  }, 800)
 }
 
 export const createChatStream = (opts: ChatStreamOptions): ChatStreamHandle => {
   const state: InternalState = {
     attached: false,
-    artifacts: { changes: [], deliveries: [] },
     unsubscribe: null,
-    turns: new Map()
+    turnId: null
   }
 
   const watchdogMs = opts.watchdogMs ?? DEFAULT_WATCHDOG_MS
-  // Both keyed by view key, for the same reason `state.turns` is: two views can
-  // be waiting on an ack at once, and one view's first event must not disarm
-  // another view's watchdog.
-  const watchdogs = new Map<string, ReturnType<typeof setTimeout>>()
-  // Holds a view between the start of `send` and either the turn.send accept
-  // resolving OR the first inbound event — i.e. while we are still waiting for
-  // the server's acknowledgement. Lets the ack watchdog recover a hung
-  // turn.send (RPC never returns), when no turn id has been set yet.
-  const sending = new Set<string>()
+  let watchdog: ReturnType<typeof setTimeout> | null = null
+  // True between the start of `send` and either the turn.send accept resolving
+  // OR the first inbound event — i.e. while we are still waiting for the
+  // server's acknowledgement. Lets the ack watchdog recover a hung turn.send
+  // (RPC never returns), when `turnId` has not been set yet.
+  let sendInFlight = false
 
-  const clearWatchdog = (key: string): void => {
-    const timer = watchdogs.get(key)
-    if (timer !== undefined) {
-      clearTimeout(timer)
-      watchdogs.delete(key)
+  const clearWatchdog = (): void => {
+    if (watchdog !== null) {
+      clearTimeout(watchdog)
+      watchdog = null
     }
   }
 
@@ -607,33 +298,14 @@ export const createChatStream = (opts: ChatStreamOptions): ChatStreamHandle => {
     // Local hard escape: drop the turn and restore the prompt WITHOUT waiting
     // for any server event. Backs the watchdog and the Ctrl+C escape hatch so
     // a turn that produces no terminal event can never wedge the UI.
-    //
-    // Acts on the view on screen, the same turn `cancel` addressed: this is the
-    // second Ctrl+C of the same escape, and resetting a different view than the
-    // first press aimed at would leave the wedged one wedged.
-    const active = getDirectChat().active
-    const view = viewKeyOf(active)
-    clearWatchdog(view)
-    clearRunning(active)
-    sending.delete(view)
-    state.turns.delete(view)
-    if (active !== null) {
-      // The instance's own transcript, where dispatchDirect writes a cancelled
-      // turn's marker. Not restoreInputPrompt: that commits turnController's
-      // buffer into the main transcript, and a direct turn never filled it.
-      appendDirectMessage(directKey(active.agent, active.handle), { role: 'system', text: 'interrupted' })
-      disarmEscape(active)
-      patchUiState({ status: 'ready' })
-
-      return
-    }
+    clearWatchdog()
+    sendInFlight = false
+    state.turnId = null
     restoreInputPrompt(opts.appendMessage, opts.sys)
-    appendArtifacts(state, opts.appendMessage)
-    state.artifacts = { changes: [], deliveries: [] }
   }
 
-  const armAckWatchdog = (key: string): void => {
-    clearWatchdog(key)
+  const armAckWatchdog = (): void => {
+    clearWatchdog()
     // CONTRACT — server-ack liveness ONLY. This watchdog measures the window
     // [send → first inbound event], where the server emits a pre-LLM
     // `message.start` (an "accepted, working" ack) before any model work. The
@@ -643,28 +315,15 @@ export const createChatStream = (opts: ChatStreamOptions): ChatStreamHandle => {
     // same-packet accept/message.start race cannot leave it armed on an already
     // started stream (the false positive). If it ever fires, the
     // subscription is delivering nothing or turn.send hung — recover the input.
-    watchdogs.set(
-      key,
-      setTimeout(() => {
-        watchdogs.delete(key)
-        if (!sending.has(key) && !state.turns.has(key)) {
-          return
-        }
-        if (opts.sys) {
-          opts.sys('turn produced no response — input restored (press Enter to retry)')
-        }
-        if (key === MAIN_VIEW_KEY) {
-          forceReset()
-          return
-        }
-        // No ack ever arrived, so there may be no turn on the other side to
-        // unwind -- release this client's own bookkeeping and say so. The user
-        // can still cancel from the view if one did start.
-        sending.delete(key)
-        state.turns.delete(key)
-        clearRunningKey(key)
-      }, watchdogMs)
-    )
+    watchdog = setTimeout(() => {
+      if (!sendInFlight && state.turnId === null) {
+        return
+      }
+      if (opts.sys) {
+        opts.sys('turn produced no response — input restored (press Enter to retry)')
+      }
+      forceReset()
+    }, watchdogMs)
   }
 
   const attach = async (): Promise<void> => {
@@ -680,10 +339,9 @@ export const createChatStream = (opts: ChatStreamOptions): ChatStreamHandle => {
       params,
       event => {
         // Any inbound event is the server ack proving the subscription is live
-        // → disarm that view's ack watchdog. Only that view's: another view may
-        // still be waiting for an ack of its own. Terminal events additionally
-        // reset turn state inside dispatch().
-        clearWatchdog(viewKeyOf(targetOf(event)))
+        // → disarm the ack watchdog. Terminal events additionally reset turn
+        // state inside dispatch().
+        clearWatchdog()
         dispatch(state, event, opts.sys, opts.appendMessage)
       },
       { unsubscribeMethod: 'turn.unsubscribe' }
@@ -696,98 +354,66 @@ export const createChatStream = (opts: ChatStreamOptions): ChatStreamHandle => {
     if (!state.attached) {
       return
     }
-    for (const key of [...watchdogs.keys()]) {
-      clearWatchdog(key)
-    }
-    sending.clear()
+    clearWatchdog()
+    sendInFlight = false
     const u = state.unsubscribe
     state.unsubscribe = null
     state.attached = false
-    state.turns.clear()
+    state.turnId = null
     if (u) {
       await u()
     }
   }
 
-  const send = (content: string): Promise<TurnSendResult> => sendTo(getDirectChat().active, content)
-
-  const sendTo = async (active: DirectTargetRef | null, content: string): Promise<TurnSendResult> => {
-    // Per view: several instances answer at once, and refusing on "any turn is
-    // running" is what made switching to a second instance and typing do
-    // nothing at all -- the throw never left this process.
-    const view = viewKeyOf(active)
-    if (state.turns.has(view) || sending.has(view)) {
+  const send = async (content: string): Promise<TurnSendResult> => {
+    if (state.turnId || sendInFlight) {
       throw new Error('turn already in progress — wait for message.complete or cancel first')
     }
-    // Omitted entirely on the main conversation rather than sent as null:
-    // TurnSendParams forbids extras but not nulls, so both validate -- and an
-    // absent key keeps the wire shape identical to every existing client's.
     const params: TurnSendParams = {
       session_key: opts.sessionKey,
-      content,
-      ...(active === null ? {} : { target: active })
+      content
     }
     // Arm BEFORE the await so the ack watchdog covers a hung turn.send and so
     // the same-packet accept/message.start race always finds it armed (the
     // event's disarm lands on a live timer). It is NOT re-armed below.
-    sending.add(view)
-    markRunning(active)
-    // Cleared at submit, not just at message.start: that is where the legacy
-    // path clears its own (`useSubmission`), and it closes the window between a
-    // prompt going out and the server's ack coming back.
-    clearStatusCooldown()
-    armAckWatchdog(view)
+    sendInFlight = true
+    armAckWatchdog()
     let result: TurnSendResult
     try {
       result = await opts.rpcClient.rpc<TurnSendResult, TurnSendParams>('turn.send', params)
     } catch (err) {
-      sending.delete(view)
-      clearRunning(active)
-      clearWatchdog(view)
+      sendInFlight = false
+      clearWatchdog()
       throw err
     }
-    sending.delete(view)
+    sendInFlight = false
     // turn_id is recorded on `message.start` rather than here — the server's
     // accepted turn_id is authoritative, but we cache result.turn_id so
     // `isTurnActive()` returns true between send-accept and message.start. The
     // watchdog stays armed from before the await (no re-arm) until the first
     // inbound event disarms it; a rejected turn disarms it here.
     if (result.accepted) {
-      state.turns.set(view, result.turn_id)
+      state.turnId = result.turn_id
     } else {
-      clearRunning(active)
-      clearWatchdog(view)
+      clearWatchdog()
     }
     return result
   }
 
   const cancel = async (): Promise<void> => {
-    // The turn of the conversation on screen, main agent or sub-agent. Ctrl+C
-    // means "stop what I am watching", and a direct turn is watched from its own
-    // view: cancelling the main lane from there would stop a turn the user
-    // cannot see and leave the one they can see running.
-    const active = getDirectChat().active
-    const view = viewKeyOf(active)
-    if (!state.turns.has(view)) {
+    if (!state.turnId) {
       return
     }
-    // `target` omitted rather than sent as null on the main conversation, the
-    // same way `sendTo` omits it: the server resolves the lane from it, and an
-    // absent key keeps the wire shape identical to every existing client's.
-    await opts.rpcClient.rpc<TurnCancelResult, TurnCancelParams>('turn.cancel', {
-      session_key: opts.sessionKey,
-      ...(active === null ? {} : { target: active })
+    await opts.rpcClient.rpc<{ cancelled: boolean }, { session_key: string }>('turn.cancel', {
+      session_key: opts.sessionKey
     })
-    // We do NOT clear the turn here — the server is expected to emit an
+    // We do NOT clear state.turnId here — the server is expected to emit an
     // `error(reason=cancelled_by_client)` event that drives the actual
     // UI-state reset via dispatch(). Clearing locally would race with the
     // event delivery and leave the turn-active guard inconsistent.
   }
 
-  // Consulted by the Ctrl+C router to decide between cancel and force-reset, so
-  // it answers for the turn Ctrl+C can act on -- the one in the view on screen,
-  // which is the same turn `cancel` above addresses.
-  const isTurnActive = (): boolean => state.turns.has(viewKeyOf(getDirectChat().active))
+  const isTurnActive = (): boolean => state.turnId !== null
 
-  return { attach, detach, send, sendTo, cancel, isTurnActive, forceReset }
+  return { attach, detach, send, cancel, isTurnActive, forceReset }
 }

@@ -9,8 +9,8 @@ from typing import Any
 import httpx
 import pytest
 
-from raven.plugins import PluginContext, ServiceLocator
-from raven_everos.backend import (
+from raven.plugin import PluginContext, ServiceLocator
+from raven.plugin.memory.everos.backend import (
     EverosBackend,
     _HttpEverosAdapter,
     _jsonify,

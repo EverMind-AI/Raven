@@ -1,35 +1,17 @@
-"""The provider base every adapter subclasses: the paper's interface plus the shared machinery.
-
-:mod:`raven.contracts.llm_provider` declares what a provider answers; this
-module is how the answers get produced -- request sanitizing, error
-classification, the retry ladder, the tool-image rejection recovery, tracing
--- and the error-string helpers the harness reads a swallowed failure with.
-The paper's shapes are re-exported so one import path serves both.
-"""
+"""Base LLM provider interface."""
 
 import asyncio
 import json
 import random
 import re
+from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from loguru import logger
 
-from raven.contracts.llm_provider import (  # noqa: F401
-    ChatDelta,
-    ErrorClassification,
-    GenerationSettings,
-    LLMResponse,
-    ProviderHTTPError,
-    RunMeta,
-    ToolCallRequest,
-    TruncationInfo,
-)
-from raven.contracts.llm_provider import LLMProvider as _LLMProviderPaper
-from raven.observability import semconv
-from raven.tracing import trace
+from raven.tracing import semconv, trace
 
 # Wordings providers use to reject list-type content in a tool message. Each is
 # a real 400 body, not a guess: the first group was measured against
@@ -61,12 +43,34 @@ _TOOL_IMAGE_REJECTION_PATTERNS = (
 )
 
 
+@dataclass(frozen=True)
+class ErrorClassification:
+    """Structured verdict on a failed LLM call — replaces substring guessing.
+
+    Drives the recovery strategy:
+      - ``retryable``       → retry the same model after backoff
+      - ``should_fallback`` → a different model/provider might succeed
+      - ``should_compress`` → context-window overflow; shrink then retry
+      - ``should_drop_tool_images`` → the endpoint refuses an image inside a
+        tool result; move it to a user message then retry
+    ``category`` is for logging/telemetry only.
+    """
+
+    category: str
+    retryable: bool = False
+    should_fallback: bool = False
+    should_compress: bool = False
+    should_drop_tool_images: bool = False
+    #: The upstream refused the prompt-cache breakpoints specifically. Decided
+    #: here for the same reason the rest of this verdict is: a provider that
+    #: swallows the exception into a string loses the response body with it, and
+    #: whether ``str()`` carried that body is a property of the client that
+    #: raised it. Deciding while the exception is alive makes it one answer.
+    refuses_prompt_cache: bool = False
+
+
 _EXC_NAME_PREFIX_RE = re.compile(r"^([A-Za-z_][\w.]*(?:Error|Exception))\s*:\s*")
-
-
 _JSON_MESSAGE_RE = re.compile(r'"message"\s*:\s*"([^"]*)"')
-
-
 _LLM_ERROR_CONTENT_RE = re.compile(
     r"^Error calling LLM \((?P<category>[a-z_]+)(?:@(?P<provider>[A-Za-z0-9._-]+))?\):\s*(?P<detail>.*)$",
     re.DOTALL,
@@ -147,12 +151,173 @@ def parse_llm_error(content: str | None) -> tuple[str, str | None, str] | None:
     return m.group("category"), m.group("provider"), m.group("detail").strip()
 
 
+class ProviderHTTPError(RuntimeError):
+    """Carries a real HTTP status past the point where a provider renders its
+    non-200 response into a string.
+
+    ``classify_error`` reads a status code off a live exception; a provider
+    that speaks HTTP directly (azure, codex) has one on the response but loses
+    it the moment the error becomes ``str`` content -- raising or classifying
+    through this keeps the status attached, instead of regex-guessing it back
+    out of the rendered text.
+    """
+
+    def __init__(self, status_code: int, message: str):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+@dataclass(frozen=True)
+class TruncationInfo:
+    """Where the output stopped, on a call that never finished arriving."""
+
+    at_tokens: int | None = None
+
+    def as_error(self, tool_name: str) -> str:
+        """What is known, and what is only inferred, kept apart.
+
+        Known: the turn stopped at the output limit, because the upstream said
+        so. Inferred: that this call was the cut one, which follows from
+        generation being sequential but not from anything the upstream said --
+        a turn can finish a call and then hit the limit in the prose after it.
+        Saying "this call was cut" as a fact sends a model to split up a call
+        that was whole.
+
+        The refusal is not conditional on that inference. A call that may be
+        incomplete is not dispatched either way; being wrong costs one retry.
+
+        What to do about it is the tool's, via ``Tool.truncation_hint``.
+        """
+        at = f" at the {self.at_tokens}-token output limit" if self.at_tokens else " at the output limit"
+        return (
+            f"Error: [truncated] This turn stopped{at}, and this call was the last thing "
+            f"being written, so it may have been cut short. It was not run. Send it again."
+        )
+
+
+@dataclass(frozen=True)
+class RunMeta:
+    """What happened around a call, as opposed to what the call asks for.
+
+    Kept apart from ``arguments`` because the two travel differently: anything
+    inside that dict is serialized into the assistant message by
+    ``to_openai_tool_call``, and the loop does that before the registry sees
+    the call -- so a flag stored there is already fixed into the conversation
+    history by the time anyone strips it, and the model reads back a field it
+    never wrote.
+
+    An empty instance means "nothing worth noting", which is the normal turn.
+
+    The two fields sit at different layers on purpose. ``arguments_repaired``
+    is an observation the provider can make -- this call's JSON had to be
+    repaired to parse. ``truncation`` is the loop's conclusion drawn from it
+    plus the response-level signals. Keeping the observation separate is what
+    lets a single decision point serve both response paths: the streaming one
+    assembles its tool calls in the loop, where a provider has nothing to
+    attach a conclusion to.
+
+    No ``__bool__``: it would have to pick one field to mean "non-empty", and
+    every later field would silently fall outside it.
+    """
+
+    truncation: TruncationInfo | None = None
+    arguments_repaired: bool = False
+    #: This call was the last one of its turn. Only ever set alongside
+    #: ``arguments_repaired``, because that is the only place it means
+    #: anything: generation is sequential, so nothing arrives after a cut, and
+    #: a repair with no calls after it is the shape a cut leaves. Recorded as
+    #: the position it is rather than as a verdict -- whether the turn ran out
+    #: of room is a reading of these two facts, and it belongs in the sentence
+    #: the model reads, not in the record.
+    last_of_turn: bool = False
+
+
+@dataclass
+class ToolCallRequest:
+    """A tool call request from the LLM."""
+
+    id: str
+    name: str
+    arguments: dict[str, Any]
+    provider_specific_fields: dict[str, Any] | None = None
+    function_provider_specific_fields: dict[str, Any] | None = None
+    run_meta: RunMeta | None = None
+
+    def to_openai_tool_call(self) -> dict[str, Any]:
+        """Serialize to an OpenAI-style tool_call payload."""
+        tool_call = {
+            "id": self.id,
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "arguments": json.dumps(self.arguments, ensure_ascii=False),
+            },
+        }
+        if self.provider_specific_fields:
+            tool_call["provider_specific_fields"] = self.provider_specific_fields
+        if self.function_provider_specific_fields:
+            tool_call["function"]["provider_specific_fields"] = self.function_provider_specific_fields
+        return tool_call
+
+
+@dataclass
+class LLMResponse:
+    """Response from an LLM provider."""
+
+    content: str | None
+    tool_calls: list[ToolCallRequest] = field(default_factory=list)
+    finish_reason: str = "stop"
+    usage: dict[str, int] = field(default_factory=dict)
+    reasoning_content: str | None = None  # Kimi, DeepSeek-R1 etc.
+    thinking_blocks: list[dict] | None = None  # Anthropic extended thinking
+    # Set when finish_reason == "error". Providers that have the live exception
+    # attach a precise classification here; otherwise the retry layer fills it
+    # in from the error string.
+    error_classification: "ErrorClassification | None" = None
+    # Generation stopped at the output ceiling rather than because the model
+    # was done. Distinct from finish_reason: upstream does not always say so
+    # (some backends report "stop" on a truncated response), and a tool call
+    # whose arguments were cut mid-JSON is truncated no matter what the
+    # backend claims.
+    truncated: bool = False
+    # The ceiling that produced it, for the message shown to the model.
+    max_tokens: int | None = None
+
+    @property
+    def has_tool_calls(self) -> bool:
+        """Check if response contains tool calls."""
+        return len(self.tool_calls) > 0
+
+
+@dataclass
+class StreamDelta:
+    """Single normalized delta from a streaming LLM response.
+
+    Producers (provider.chat_stream) yield one of these per non-empty chunk.
+    Consumers (AgentLoop on_token_delta path, TUI SubscriptionEmitter) read
+    `.content` for incremental token text; `tool_call_delta` / `usage` are
+    optional carriers for in-stream tool deltas and final usage snapshots.
+
+    `finish_reason` / `error_classification` are only ever set on the
+    terminal delta of a stream (mirroring `LLMResponse`); mid-stream deltas
+    leave both as ``None``.
+    """
+
+    content: str | None
+    tool_call_delta: dict[str, Any] | None = None
+    usage: dict[str, Any] | None = None
+    reasoning_content: str | None = None  # Kimi, DeepSeek-R1, qwen, o-series thinking stream
+    finish_reason: str | None = None
+    error_classification: ErrorClassification | None = None
+
+
 def send_max_tokens(generation: Any, model: str | None, *, pinned: int | None = None, allow_fetch: bool = True) -> int:
     """The output ceiling a request will actually carry.
 
     One function for both the request body and the agent loop's ceiling check.
     Computed separately the two would drift the moment either side grew a
-    bound, and the check would stop firing without ever failing.
+    bound, and the check would stop firing without ever failing -- which is
+    the exact shape of the defect this branch exists to remove.
 
     A pin is a call site asking for a deliberately short answer, so it wins --
     but never above what the model accepts. Every pin in the tree today is far
@@ -185,17 +350,40 @@ def send_max_tokens(generation: Any, model: str | None, *, pinned: int | None = 
     return ceiling
 
 
-class LLMProvider(_LLMProviderPaper):
-    """The base adapters subclass: the paper's interface with the machinery filled in.
+@dataclass(frozen=True)
+class GenerationSettings:
+    """Default generation parameters for LLM calls.
 
-    Subclasses implement ``chat`` and ``get_default_model`` (and a real
-    ``chat_stream`` when the wire streams); everything the harness calls on top
-    of that -- ``chat_with_retry``, ``classify_error`` -- is here once.
+    Stored on the provider so every call site inherits the same defaults
+    without having to pass temperature / max_tokens / reasoning_effort
+    through every layer.  Individual call sites can still override by
+    passing explicit keyword arguments to chat() / chat_with_retry().
     """
 
-    _SENTINEL = _LLMProviderPaper._SENTINEL
+    temperature: float = 0.7
+    #: ``None`` means "no opinion" -- the ceiling is resolved from the model's
+    #: own metadata at request time. A number pins it, which is what an
+    #: explicit ``chat(max_tokens=...)`` at a call site wants.
+    max_tokens: int | None = None
+    reasoning_effort: str | None = None
+    timeout: float = 600.0
+
+
+class LLMProvider(ABC):
+    """
+    Abstract base class for LLM providers.
+
+    Implementations should handle the specifics of each provider's API
+    while maintaining a consistent interface.
+    """
 
     _CHAT_RETRY_DELAYS = (1, 2, 4)
+    _SENTINEL = object()
+
+    def __init__(self, api_key: str | None = None, api_base: str | None = None):
+        self.api_key = api_key
+        self.api_base = api_base
+        self.generation: GenerationSettings = GenerationSettings()
 
     @staticmethod
     def _sanitize_empty_content(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -258,6 +446,33 @@ class LLMProvider(_LLMProviderPaper):
             sanitized.append(clean)
         return sanitized
 
+    @abstractmethod
+    async def chat(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float = 0.7,
+        reasoning_effort: str | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+    ) -> LLMResponse:
+        """
+        Send a chat completion request.
+
+        Args:
+            messages: List of message dicts with 'role' and 'content'.
+            tools: Optional list of tool definitions.
+            model: Model identifier (provider-specific).
+            max_tokens: Maximum tokens in response.
+            temperature: Sampling temperature.
+            tool_choice: Tool selection strategy ("auto", "required", or specific tool dict).
+
+        Returns:
+            LLMResponse with content and/or tool calls.
+        """
+        pass
+
     async def chat_stream(
         self,
         messages: list[dict[str, Any]],
@@ -267,7 +482,7 @@ class LLMProvider(_LLMProviderPaper):
         temperature: object = _SENTINEL,
         reasoning_effort: object = _SENTINEL,
         tool_choice: str | dict[str, Any] | None = None,
-    ) -> AsyncIterator[ChatDelta]:
+    ) -> AsyncIterator[StreamDelta]:
         """Non-streaming fallback: emit the full ``chat()`` response as a single
         terminal delta.
 
@@ -318,7 +533,7 @@ class LLMProvider(_LLMProviderPaper):
                     for i, tc in enumerate(response.tool_calls)
                 ]
             }
-        yield ChatDelta(
+        yield StreamDelta(
             content=response.content,
             tool_call_delta=tool_call_delta,
             usage=response.usage or None,
@@ -405,20 +620,6 @@ class LLMProvider(_LLMProviderPaper):
         ):
             return ErrorClassification("context_overflow", should_compress=True)
 
-        # An image the upstream will not take for its size. Deterministic: neither a
-        # retry nor another placement changes the bytes, so the only recovery is to
-        # take the picture out. Before the rate-limit and server buckets because the
-        # gateway wraps it as a generic APIError that otherwise reads as `unknown`,
-        # which is retryable -- and eight waits over half an hour on a refusal that
-        # will never lift is the failure the retry ladder was built to avoid.
-        if has(
-            "image content cannot exceed",
-            "image exceeds the maximum",
-            "image too large",
-            "image size exceeds",
-        ):
-            return ErrorClassification("image_too_large", strip_images=True)
-
         # Rate limit → wait and retry; a different provider may not be throttled.
         if (
             status == 429
@@ -430,17 +631,6 @@ class LLMProvider(_LLMProviderPaper):
             )
         ):
             return ErrorClassification("rate_limit", retryable=True, should_fallback=True)
-
-        # A call that never reached the endpoint is a network problem, not an
-        # upstream 5xx -- litellm stamps its default 500 on connect failures,
-        # so the unambiguous connect indicators outrank the status check.
-        if {"apiconnectionerror", "connecterror", "clientconnectorerror"} & names or has(
-            "cannot connect",
-            "connection refused",
-            "connection error",
-            "failed to connect",
-        ):
-            return ErrorClassification("network", retryable=True, should_fallback=True)
 
         # Transient server / capacity → retry + fallback.
         if (
@@ -464,7 +654,7 @@ class LLMProvider(_LLMProviderPaper):
         # and empty str() match neither the name set nor the substrings below).
         if (
             isinstance(exc, TimeoutError)
-            or {"timeout", "apitimeouterror"} & names
+            or {"timeout", "apitimeouterror", "apiconnectionerror"} & names
             or has(
                 "timeout",
                 "timed out",
@@ -532,61 +722,21 @@ class LLMProvider(_LLMProviderPaper):
         ) and has(*_TOOL_IMAGE_REJECTION_PATTERNS):
             return ErrorClassification("tool_image_unsupported", should_drop_tool_images=True)
 
-        # A model with no eyes: the request carried a picture and the endpoint takes
-        # none. Deterministic, like image_too_large -- another message does not help
-        # and neither does waiting -- so the pictures come out and the same ask goes
-        # again. Measured on a vLLM endpoint serving a text-only model: "At most 0
-        # image(s) may be provided in one prompt", wrapped as the 400 the bucket
-        # below would have called fatal, and it ended the turn.
-        if has(
-            "image(s) may be provided",
-            "does not support image",
-            "image input is not supported",
-            "images are not supported",
-            "does not support vision",
-        ):
-            return ErrorClassification("images_unsupported", strip_images=True)
-
         # Generic bad request (non-context 400) → fatal; no model swap helps.
         if status == 400 or "badrequesterror" in names or has("invalid request", "invalid_request"):
             return ErrorClassification("invalid_request")
 
-        # A gateway saying only that the host behind it failed, and nothing above
-        # recognising the failure. Last rather than in the server bucket, because
-        # this is the *outer* wrapper OpenRouter puts on anything an upstream host
-        # returns: the same phrase heads a permanent 400 whose real cause is buried
-        # in `metadata.raw` (see the tool-image branch above, which reads that inner
-        # text), so every branch that can name a cause has to be given the message
-        # first. What is left here is a gateway failure with no cause stated, and
-        # `unknown` made that fatal: one measured run died on it at iteration 72
-        # after 82 minutes and 15.5M input tokens, while three earlier upstream
-        # failures in the same run were retried and recovered on the first attempt
-        # because they had arrived worded as "service unavailable".
-        if has("provider returned error"):
-            return ErrorClassification("server", retryable=True, should_fallback=True)
+        return ErrorClassification("unknown")
 
-        # A response body that is not JSON at all. The gateway served an error page,
-        # a truncated stream or a throttle notice where a completion was expected, and
-        # the client's parser is what failed -- so the message names a character offset
-        # rather than a cause. Transient by construction: the same request a moment
-        # later gets a real body. Named as its own category because the ladder that
-        # recovers it should be visible in telemetry rather than hidden under `unknown`.
-        if has(
-            "unable to get json response",
-            "expecting value: line",
-            "jsondecodeerror",
-        ):
-            return ErrorClassification("unparsable_response", retryable=True, should_fallback=True)
+    @classmethod
+    def _is_transient_error(cls, content: str | None) -> bool:
+        """Back-compat shim — retryable verdict from the string classifier."""
+        return cls.classify_error(content=content).retryable
 
-        # Nothing above named it, and `unknown` used to be fatal. Two measured runs
-        # died that way -- one at iteration 72 after 82 minutes and 15.5M input tokens,
-        # one at iteration 104 after 62 minutes and 23.8M -- each on a wording no branch
-        # recognised, and each time the fix was to add the phrase. The third wording was
-        # always going to arrive, so the default is what changed: the ladder costs seven
-        # seconds and three calls when the failure really is permanent, against an hour
-        # of work when a transient one is called fatal. No fallback, because a cause
-        # nobody could name is not evidence that another model would do better.
-        return ErrorClassification("unknown", retryable=True)
+    @classmethod
+    def _should_fallback(cls, content: str | None) -> bool:
+        """Back-compat shim — fallback verdict from the string classifier."""
+        return cls.classify_error(content=content).should_fallback
 
     @staticmethod
     def _jittered(delay: float) -> float:
@@ -678,6 +828,37 @@ class LLMProvider(_LLMProviderPaper):
 
         return last_response  # type: ignore[return-value]  # loop always returns on the last attempt
 
+    def can_serve(self, model: str) -> bool:
+        """Whether this provider instance's credentials and wire can serve this model.
+
+        Default True: the base class knows nothing about routing, and a wrong
+        guess must fail loudly at the wire rather than silently skip a hop.
+        """
+        return True
+
+    def wire_model_id(self, model: str) -> str:
+        """The id this provider will actually send. See ``providers.wire``.
+
+        Anyone sizing a *request* has to ask under this rather than under the
+        stored name. The catalogue files a gateway spelling as its own row with
+        its own numbers -- ``openai/gpt-4o`` answers 16384 where
+        ``openrouter/openai/gpt-4o`` answers 4096 -- so the two are different
+        questions, and only this one is about the request that went out.
+
+        Default identity: a provider that sends the stored id unchanged has
+        nothing to translate.
+        """
+        return model
+
+    def emits_unparsed_reasoning(self) -> bool:
+        """Whether this provider's backend may leak bare think tags into content.
+
+        Only an inference server run without its reasoning parser produces the
+        orphan-closing-tag shape; everyone else's `</think>` in content is just
+        text. Default False: normalization is opt-in per provider shape.
+        """
+        return False
+
     @trace.instrument("llm.call", extract=semconv.llm_call)
     async def chat_with_retry(
         self,
@@ -696,11 +877,12 @@ class LLMProvider(_LLMProviderPaper):
         retry ladder. When a model is exhausted with a fallback-worthy error
         (``error_classification.should_fallback``) and another model remains,
         the next model is tried; otherwise the error surfaces to the caller.
-        With ``fallback_models`` empty a single model runs the ladder.
+        With ``fallback_models`` empty this is exactly the old single-model
+        retry behavior.
 
-        Parameters default to ``self.generation`` when not explicitly passed, so
-        callers need not thread temperature / max_tokens / reasoning_effort
-        through every layer.
+        Parameters default to ``self.generation`` when not explicitly passed,
+        so callers no longer need to thread temperature / max_tokens /
+        reasoning_effort through every layer.
         """
         if max_tokens is self._SENTINEL:
             max_tokens = self.generation.max_tokens
@@ -734,7 +916,7 @@ class LLMProvider(_LLMProviderPaper):
             if idx and not prompt_cache.accepts_cache_control(current_model or ""):
                 messages, tools = prompt_cache.strip(messages, tools)
             # One id for both the bound below and the check further down, and
-            # the Wire Model this request goes out under rather than the Model Ref --
+            # the id this request goes out under rather than the stored one --
             # a gateway spelling is its own catalogue row with its own ceiling.
             wire_id = self.wire_model_id(current_model or "")
             # Bounded here rather than inside each provider: a pin is per call
@@ -783,18 +965,7 @@ class LLMProvider(_LLMProviderPaper):
 
         return response  # type: ignore[return-value]  # chain always non-empty
 
-
-__all__ = [
-    "ErrorClassification",
-    "GenerationSettings",
-    "LLMProvider",
-    "LLMResponse",
-    "ProviderHTTPError",
-    "RunMeta",
-    "ChatDelta",
-    "ToolCallRequest",
-    "TruncationInfo",
-    "format_llm_error",
-    "parse_llm_error",
-    "send_max_tokens",
-]
+    @abstractmethod
+    def get_default_model(self) -> str:
+        """Get the default model for this provider."""
+        pass

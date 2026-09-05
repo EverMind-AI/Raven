@@ -1,4 +1,4 @@
-"""Unit tests for the unified evolution launcher (evolver.launch)."""
+"""Unit tests for the unified evolution launcher (raven.evolver.launch)."""
 
 from __future__ import annotations
 
@@ -10,15 +10,15 @@ from pathlib import Path
 import pytest
 import yaml
 
-from evolver.launch.config import (
+from raven.evolver.launch.config import (
     SMOKE_BUILTIN,
     RunSpecError,
     deep_merge,
     load_run_spec,
 )
-from evolver.launch.contract import validate_whitelist
-from evolver.launch.registry import load_bench
-from evolver.launch.state import RunMeta, atomic_write_json, config_fingerprint
+from raven.evolver.launch.contract import validate_whitelist
+from raven.evolver.launch.registry import load_bench
+from raven.evolver.launch.state import RunMeta, atomic_write_json, config_fingerprint
 
 # The appworld bench plugin lives at the repo root (benchmarks/), outside the
 # installed raven package; load_bench imports it via the subject repo root,
@@ -224,7 +224,7 @@ class TestWhitelistValidation:
 
 class TestAppWorldEntry:
     def _ctx(self, tmp_path, subject_repo, bench_config, smoke=False):
-        from evolver.launch.contract import LaunchContext
+        from raven.evolver.launch.contract import LaunchContext
 
         repo, sha = subject_repo
         path = _write_spec(tmp_path, repo, sha, bench_config=bench_config)
@@ -305,20 +305,20 @@ class TestAppWorldEntry:
 
 class TestScorerImmutability:
     def test_scorer_surface_is_immutable(self):
-        from evolver.applier.path_guard import check_patch_paths
+        from raven.evolver.applier.path_guard import check_patch_paths
 
         offenders = check_patch_paths(
             [
                 "benchmarks/appworld/evolve/grade.py",
                 "benchmarks/appworld/evolve/adapter.py",
                 "benchmarks/appworld/batch.py",
-                "evolver/orchestrator/gates/pipeline.py",
+                "raven/evolver/orchestrator/gates/pipeline.py",
             ]
         )
         assert len(offenders) == 4
 
     def test_agent_surface_is_editable(self):
-        from evolver.applier.path_guard import check_patch_paths
+        from raven.evolver.applier.path_guard import check_patch_paths
 
         assert (
             check_patch_paths(
@@ -421,7 +421,7 @@ class TestBatchTrialResume:
 
         class Args:
             config = "unused"
-            workspace = str(tmp_path / "chanwork")
+            workspace = str(tmp_path / "ws")
             experiment = "e"
             model = None
             env = ""
@@ -443,7 +443,7 @@ class TestBatchTrialResume:
 
         class Args:
             config = "unused"
-            workspace = str(tmp_path / "chanwork")
+            workspace = str(tmp_path / "ws")
             experiment = "e"
             model = None
             env = ""
@@ -456,7 +456,7 @@ class TestBatchTrialResume:
 
 class TestCli:
     def test_parser_subcommands(self):
-        from evolver.cli import build_parser
+        from raven.evolver.cli import build_parser
 
         p = build_parser()
         args = p.parse_args(["run", "--config", "x.yaml", "--smoke", "--force"])
@@ -465,7 +465,7 @@ class TestCli:
         assert args.command == "finalize" and args.yes
 
     def test_status_on_fresh_dir_reports_not_started(self, tmp_path, subject_repo, capsys):
-        from evolver.launch.runner import cmd_status
+        from raven.evolver.launch.runner import cmd_status
 
         repo, sha = subject_repo
         path = _write_spec(tmp_path, repo, sha)
@@ -495,7 +495,7 @@ class TestCli:
         )
 
     def test_run_refuses_after_unseal(self, tmp_path, subject_repo, capsys):
-        from evolver.launch.runner import cmd_run
+        from raven.evolver.launch.runner import cmd_run
 
         repo, sha = subject_repo
         path = self._buildable_spec(tmp_path, repo, sha)
@@ -509,7 +509,7 @@ class TestCli:
         assert "unsealed" in capsys.readouterr().err
 
     def test_run_refuses_on_config_drift(self, tmp_path, subject_repo, capsys):
-        from evolver.launch.runner import cmd_run
+        from raven.evolver.launch.runner import cmd_run
 
         repo, sha = subject_repo
         path = self._buildable_spec(tmp_path, repo, sha)
@@ -522,7 +522,7 @@ class TestCli:
         assert "config drift" in capsys.readouterr().err
 
     def test_first_launch_config_mistake_leaves_no_meta(self, tmp_path, subject_repo):
-        from evolver.launch.runner import cmd_run
+        from raven.evolver.launch.runner import cmd_run
 
         repo, sha = subject_repo
         path = _write_spec(tmp_path, repo, sha)  # no bench_config -> build fails

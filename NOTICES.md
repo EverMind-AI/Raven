@@ -1,7 +1,7 @@
 # Third-Party Notices
 
 Raven is licensed under the Apache License 2.0. It incorporates code from the
-projects below (MIT unless noted). Their copyright notices and license texts are
+following MIT-licensed projects. Their copyright notices and license texts are
 retained in `LICENSES/`.
 
 ## nanobot (base agent runtime)
@@ -34,31 +34,11 @@ retained in `LICENSES/`.
   Triple attribution chain (ink contributors → Nous Research hermes-ink
   → EverMind modifications) is encoded in the 5-line SPDX header of
   every substantial file under `ui-tui/packages/hermes-ink/src/`.
-  The fork policy (hard fork, no upstream sync, fixes land in-tree) lives
-  in `ui-tui/packages/hermes-ink/README.md`.
-
-## agentscope (web-service framework)
-- Upstream source: https://github.com/agentscope-ai/agentscope
-- Copyright (c) 2025 Alibaba Group and AgentScope contributors
-- License: Apache-2.0 - see `LICENSES/Apache-2.0-agentscope.txt`
-- Adopted at commit: `c84fd1a54dcc207257a8d616ff63b65470febc95` (the RavenX fork
-  of agentscope 2.0.4, itself based on upstream `4cb58320`)
-- Scope: the vendored tree it was adopted into (`ui-webui/service/agentscope/`,
-  284 files supplying the retired web service's FastAPI app, Redis storage,
-  RAG/knowledge-base managers and sub-agent DAG machinery) was removed with
-  `ui-webui` itself. What remains in this repository, and what this notice is
-  now about, is the code adopted FROM it and rewritten in place:
-  `raven/knowledge/_types.py`, `raven/knowledge/_chunker.py`,
-  and `raven/knowledge/_parser.py`. Each names its origin in its own module
-  docstring. A fourth module, `dag_projection`, carried derived code until it
-  was removed for having no importer; nothing of it remains.
-- Modifications: the three modules above are rewritten rather than vendored --
-  they take agentscope's chunking, parsing and DAG-projection logic and nothing
-  else, and they carry no agentscope import. The attribution stays because the
-  derivation does; the licence text is kept at
-  `LICENSES/Apache-2.0-agentscope.txt`. The retired tree's own PROVENANCE.md
-  went with it, and its per-subsystem trimming rationale is only of interest to
-  a tree that no longer exists.
+  Re-evaluation triggers (Nous halts maintenance / severe CVE / community
+  ink converges / patch debt > 500 LOC) are recorded in
+  `docs/RepoMem/temp/tui-fork-hermes-import/02-hermes-ink-vendor-vs-community.md`
+  (to be promoted to `docs/RepoMem/persist/architecture/hermes-fork-strategy.md`
+  at L2 archive time).
 
 # External Runtime Tools (not vendored)
 
@@ -77,9 +57,9 @@ Users install them separately through their respective package managers.
   (2026-05-20) — all 5 acceptance gates S1-S5 passed. Raven does NOT
   vendor, redistribute, or modify `tui-use` source.
 - Fallback contingency: if upstream maintenance halts (>90 days no push) or
-  a severe incompatibility surfaces, the vendor-or-pivot decision follows the
-  L0-L3 ladder recorded with the original evaluation.
-  Vendoring (path L1) Vendoring (path L1) would require moving
+  a severe incompatibility surfaces, the L0-L3 ladder in
+  `docs/RepoMem/temp/tui-auto-test/tier1-backend-comparison.md` defines the
+  vendor-or-pivot strategy. Vendoring (path L1) would require moving
   `tui-use` to `vendor/tui-use/` and adding its LICENSE to `LICENSES/` plus
   updating this section's "Scope" line to "vendored" — same pattern as
   `hermes-agent` above.

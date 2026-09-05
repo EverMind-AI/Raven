@@ -3,184 +3,170 @@
 This module is the ONLY write path for channel configuration. All entry
 points (CLI commands, future wizard, future WebUI, future REPL slash)
 must call functions defined here. Direct load_config / save_config on
-the channels section is forbidden: this module is the only write path.
-
-Field truth lives with the cargo: every question this module answers --
-which channels exist, which fields they carry, types, defaults, secrecy,
-requiredness, nesting -- is answered from the adapter specs'
-``config_schema`` plus the host's socket fields, not from central
-pydantic classes. Validation is the same admission door the gateway
-dispenses through, so the writer and the reader cannot disagree.
+the channels section is forbidden -- see plan rule.
 """
 
 from __future__ import annotations
 
-import copy
 import json
-import re
+import os
+import typing
 from pathlib import Path
-from typing import Any
+from typing import Any, Union
 
 from loguru import logger
+from pydantic import BaseModel, ValidationError
+from pydantic_core import PydanticUndefined
 
 from raven.config.loader import get_config_path, read_raw_or_raise
-from raven.utils.atomic_io import atomic_update
-
-# The socket: what the host plugs every channel into, whatever the
-# transport. Uniform across the adapters; declared here and pinned by tests.
-_SOCKET_SCHEMA: dict[str, dict[str, Any]] = {
-    "enabled": {"type": "boolean", "default": False},
-    "allow_from": {"type": "array", "default": ["*"]},
-    "workspace": {"type": "string", "default": ""},
-}
-
-# Display names for the CLI table, mapping schema types onto the pythonic
-# spellings the pydantic-era table used.
-_TYPE_DISPLAY = {
-    "string": "str",
-    "integer": "int",
-    "number": "float",
-    "boolean": "bool",
-    "array": "list",
-    "object": "dict",
-}
-
+from raven.config.schema import ChannelsConfig
 
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
 
 
-def _specs() -> dict[str, Any]:
-    from raven.channels.registry import discover_specs
-
-    return discover_specs()
-
-
-def _channel_schema(name: str) -> dict[str, dict[str, Any]]:
-    """Socket fields plus the adapter's declared cargo schema."""
-    specs = _specs()
-    if name not in specs:
-        raise KeyError(f"Unknown channel '{name}'. Available channels: {sorted(specs)}")
-    return {**_SOCKET_SCHEMA, **(getattr(specs[name], "config_schema", None) or {})}
+def _write_atomic(path: Path, data: dict[str, Any]) -> None:
+    """Atomic write: temp-file then os.replace. Preserves indent=2, UTF-8."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, path)
 
 
-def _snake(key: str) -> str:
-    return re.sub(r"(?<=[a-z0-9])([A-Z])", lambda m: "_" + m.group(1).lower(), key)
+def _unwrap_optional(annotation: Any) -> Any:
+    """Strip ``Optional[X]`` / ``X | None`` down to ``X``."""
+    import types as _types
+
+    origin = typing.get_origin(annotation)
+    if origin is Union or origin is getattr(_types, "UnionType", None):
+        args = [a for a in typing.get_args(annotation) if a is not type(None)]
+        if len(args) == 1:
+            return args[0]
+    return annotation
 
 
-def _camel(key: str) -> str:
-    head, *rest = key.split("_")
-    return head + "".join(part.title() for part in rest)
+def _is_model_class(ann: Any) -> bool:
+    return isinstance(ann, type) and issubclass(ann, BaseModel)
 
 
-def _camelize_keys(declaration: dict[str, Any], table: dict[str, Any]) -> dict[str, Any]:
-    """The write-side inverse of :func:`~raven.config.admission.normalize_slice_keys`.
+def _channel_names() -> list[str]:
+    """Return channel field names defined on ChannelsConfig (BaseModel subfields only)."""
+    out: list[str] = []
+    for fname, finfo in ChannelsConfig.model_fields.items():
+        ann = _unwrap_optional(finfo.annotation)
+        if _is_model_class(ann):
+            out.append(fname)
+    return out
 
-    Sections are serialized with camelCase field keys so this writer stays
-    byte-compatible with ``save_config`` (which still dumps by alias);
-    undeclared keys and map keys pass verbatim.
+
+def _channel_schema_cls(name: str) -> type[BaseModel]:
+    """Look up the Pydantic class for a channel ('telegram' -> TelegramConfig)."""
+    field = ChannelsConfig.model_fields.get(name)
+    if field is None:
+        raise KeyError(f"Unknown channel '{name}'. Available channels: {sorted(_channel_names())}")
+    ann = _unwrap_optional(field.annotation)
+    if not _is_model_class(ann):
+        raise KeyError(f"'{name}' is not a channel section. Available channels: {sorted(_channel_names())}")
+    return ann
+
+
+def _annotation_str(ann: Any) -> str:
+    """Compact human-readable string for a type annotation.
+
+    Literal renders as the bare keyword; concrete choices are surfaced
+    via the description column (see ``_flatten_fields``).
     """
-    out: dict[str, Any] = {}
-    for key, value in table.items():
-        if key not in declaration:
-            out[key] = value
-            continue
-        sub = declaration[key].get("fields")
-        if isinstance(sub, dict) and isinstance(value, dict):
-            out[_camel(key)] = _camelize_keys(sub, value)
-        else:
-            out[_camel(key)] = value
-    return out
+    ann = _unwrap_optional(ann)
+    origin = typing.get_origin(ann)
+    if origin is typing.Literal:
+        return "Literal"
+    if origin is list:
+        args = typing.get_args(ann)
+        return f"list[{_annotation_str(args[0])}]" if args else "list"
+    if origin is dict:
+        args = typing.get_args(ann)
+        if args and len(args) == 2:
+            return f"dict[{_annotation_str(args[0])}, {_annotation_str(args[1])}]"
+        return "dict"
+    if hasattr(ann, "__name__"):
+        return ann.__name__
+    return str(ann)
 
 
-def _materialize(declaration: dict[str, Any], section: dict[str, Any]) -> dict[str, Any]:
-    """The effective values: file section over declared defaults, recursively."""
-    out: dict[str, Any] = {}
-    for key, decl in declaration.items():
-        sub = decl.get("fields")
-        if isinstance(sub, dict):
-            value = section.get(key)
-            out[key] = _materialize(sub, value if isinstance(value, dict) else {})
-        elif key in section:
-            out[key] = copy.deepcopy(section[key])
-        elif "default" in decl:
-            out[key] = copy.deepcopy(decl["default"])
-        else:
-            out[key] = None
-    for key, value in section.items():
-        if key not in declaration:
-            out[key] = copy.deepcopy(value)
-    return out
+_SECRET_EXACT = {"token", "secret", "password", "api_key"}
+_SECRET_SUFFIXES = (
+    "_token",
+    "_secret",
+    "_key",
+    "_password",
+)
 
 
-def _flatten_schema(declaration: dict[str, Any], prefix: str = "") -> dict[str, dict[str, Any]]:
-    """Flat ``dotted-path -> spec`` map for CLI parsers and redaction."""
-    out: dict[str, dict[str, Any]] = {}
-    for key, decl in declaration.items():
-        path = f"{prefix}{key}"
-        sub = decl.get("fields")
-        if isinstance(sub, dict):
-            out.update(_flatten_schema(sub, prefix=f"{path}."))
-            continue
-        description = decl.get("description", "")
-        if not description and decl.get("choices"):
-            description = "Choices: " + ", ".join(str(c) for c in decl["choices"])
-        type_display = _TYPE_DISPLAY.get(decl.get("type"), decl.get("type") or "str")
-        if decl.get("choices"):
-            type_display = "Literal"
-        out[path] = {
-            "type": type_display,
-            "default": copy.deepcopy(decl.get("default")),
-            "is_secret": decl.get("secret") is True,
-            "required": decl.get("required") is True,
-            "description": description,
-        }
-    return out
+def _is_secret_field(field_name: str, field_info: Any) -> bool:
+    """Detect secret fields, in order:
+
+    1. Explicit: ``field_info.json_schema_extra.get('secret') is True``
+    2. Exact name match (``token``, ``secret``, ``password``, ``api_key``)
+    3. Suffix match (``_token``, ``_secret``, ``_key``, ``_password``)
+    """
+    extra = getattr(field_info, "json_schema_extra", None)
+    if isinstance(extra, dict) and extra.get("secret") is True:
+        return True
+    if field_name in _SECRET_EXACT:
+        return True
+    return any(field_name.endswith(suf) for suf in _SECRET_SUFFIXES)
 
 
-def _flatten_values(declaration: dict[str, Any], values: dict[str, Any], prefix: str = "") -> dict[str, Any]:
-    out: dict[str, Any] = {}
-    for key, decl in declaration.items():
-        path = f"{prefix}{key}"
-        sub = decl.get("fields")
-        value = values.get(key)
-        if isinstance(sub, dict):
-            out.update(_flatten_values(sub, value if isinstance(value, dict) else {}, prefix=f"{path}."))
-        else:
-            out[path] = value
-    return out
+def _is_required_field(field_info: Any) -> bool:
+    """A field is required when explicitly marked ``json_schema_extra={'required': True}``.
+
+    Every channel field carries a Pydantic default (so partial/disabled configs load),
+    so pydantic's own required flag is always False; requiredness is an explicit UX marker.
+    """
+    extra = getattr(field_info, "json_schema_extra", None)
+    return isinstance(extra, dict) and extra.get("required") is True
 
 
-def _walk_schema_path(declaration: dict[str, Any], dotted_key: str) -> dict[str, Any]:
-    """Walk ``a.b.c`` through declared sub-tables to the leaf declaration."""
+def _walk_nested_path(model_cls: type[BaseModel], dotted_key: str) -> tuple[type[BaseModel], str]:
+    """Walk ``a.b.c`` into nested ``BaseModel`` classes.
+
+    For ``'dm.policy'`` on ``SlackConfig`` returns ``(SlackDMConfig, 'policy')``.
+
+    Raises:
+        KeyError: when a segment does not exist or is not a nested model.
+    """
     segs = dotted_key.split(".")
-    cursor = declaration
+    cls: type[BaseModel] = model_cls
     for seg in segs[:-1]:
-        decl = cursor.get(seg)
-        sub = decl.get("fields") if isinstance(decl, dict) else None
-        if not isinstance(sub, dict):
-            raise KeyError(f"Field '{seg}' in '{dotted_key}' is not a nested table")
-        cursor = sub
+        finfo = cls.model_fields.get(seg)
+        if finfo is None:
+            raise KeyError(f"Unknown nested field '{seg}' in {cls.__name__}")
+        ann = _unwrap_optional(finfo.annotation)
+        if not _is_model_class(ann):
+            raise KeyError(f"Field '{seg}' in {cls.__name__} is not a nested model")
+        cls = ann
     leaf = segs[-1]
-    if leaf not in cursor:
-        raise KeyError(f"Unknown field '{leaf}' in '{dotted_key}'")
-    return cursor[leaf]
+    if leaf not in cls.model_fields:
+        raise KeyError(f"Unknown field '{leaf}' in {cls.__name__}")
+    return cls, leaf
 
 
-def _coerce_value(value: Any, decl: dict[str, Any]) -> Any:
-    """Pre-admission coercion for CLI string inputs.
+def _coerce_value(value: Any, annotation: Any) -> Any:
+    """Pre-Pydantic coercion for CLI string inputs.
 
     - ``"true"/"false"/"1"/"0"`` -> bool
-    - ``"a,b,c"`` -> ``["a","b","c"]`` (when the field is an array)
-    - ``'["a","b"]'`` / ``'{"k":"v"}'`` -> parsed JSON forms
-    - everything else -> leave as-is and let the admission door report
+    - ``"a,b,c"`` -> ``["a","b","c"]`` (when annotation is ``list[...]``)
+    - ``'["a","b"]'`` -> ``["a","b"]`` (JSON form for lists)
+    - ``'{"k":"v"}'`` -> ``{"k":"v"}`` (JSON form for dicts)
+    - everything else -> leave as-is and let Pydantic coerce / report
     """
     if not isinstance(value, str):
         return value
-    want = decl.get("type")
 
-    if want == "boolean":
+    base = _unwrap_optional(annotation)
+
+    if base is bool:
         v = value.strip().lower()
         if v in ("true", "1", "yes", "on"):
             return True
@@ -188,19 +174,20 @@ def _coerce_value(value: Any, decl: dict[str, Any]) -> Any:
             return False
         return value
 
-    if want == "integer":
+    if base is int:
         try:
             return int(value)
         except ValueError:
             return value
 
-    if want == "number":
+    if base is float:
         try:
             return float(value)
         except ValueError:
             return value
 
-    if want == "array":
+    origin = typing.get_origin(base)
+    if origin is list:
         v = value.strip()
         if v.startswith("[") and v.endswith("]"):
             try:
@@ -209,7 +196,7 @@ def _coerce_value(value: Any, decl: dict[str, Any]) -> Any:
                 pass
         return [item.strip() for item in value.split(",") if item.strip()]
 
-    if want == "object":
+    if origin is dict:
         v = value.strip()
         if v.startswith("{") and v.endswith("}"):
             try:
@@ -219,6 +206,59 @@ def _coerce_value(value: Any, decl: dict[str, Any]) -> Any:
         return value
 
     return value
+
+
+def _field_default(field_info: Any) -> Any:
+    """Resolve a Pydantic FieldInfo's effective default (call factory if any)."""
+    if field_info.default_factory is not None:
+        try:
+            return field_info.default_factory()
+        except Exception:
+            return None
+    if field_info.default is PydanticUndefined:
+        return None
+    return field_info.default
+
+
+def _flatten_fields(cls: type[BaseModel], prefix: str = "") -> dict[str, dict[str, Any]]:
+    """Recurse into nested ``BaseModel`` fields, producing a flat dict of specs.
+
+    For ``Literal[...]`` fields with no user-provided description, the choice
+    list is rendered into ``description`` so CLI consumers can surface it.
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for fname, finfo in cls.model_fields.items():
+        ann = _unwrap_optional(finfo.annotation)
+        path = f"{prefix}{fname}"
+        if _is_model_class(ann):
+            out.update(_flatten_fields(ann, prefix=f"{path}."))
+            continue
+        description = finfo.description or ""
+        origin = typing.get_origin(ann)
+        if origin is typing.Literal and not description:
+            choices = ", ".join(str(a) for a in typing.get_args(ann))
+            description = f"Choices: {choices}"
+        out[path] = {
+            "type": _annotation_str(ann),
+            "default": _field_default(finfo),
+            "is_secret": _is_secret_field(fname, finfo),
+            "required": _is_required_field(finfo),
+            "description": description,
+        }
+    return out
+
+
+def _flatten_instance(instance: BaseModel, prefix: str = "") -> dict[str, Any]:
+    """Flatten a Pydantic instance to dotted-path -> value (skipping nested-model nodes)."""
+    out: dict[str, Any] = {}
+    for fname in type(instance).model_fields:
+        val = getattr(instance, fname)
+        path = f"{prefix}{fname}"
+        if isinstance(val, BaseModel):
+            out.update(_flatten_instance(val, prefix=f"{path}."))
+        else:
+            out[path] = val
+    return out
 
 
 def _set_nested(dotted_key: str, value: Any, target: dict[str, Any]) -> Any:
@@ -241,19 +281,15 @@ def _set_nested(dotted_key: str, value: Any, target: dict[str, Any]) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def channel_names() -> list[str]:
-    """Public: every adapter the spec registry discovers (sorted)."""
-    return sorted(_specs())
-
-
 def channel_field_specs(name: str) -> dict[str, dict[str, Any]]:
-    """Reflect a channel's schema into a flat ``dotted-path -> spec`` map.
+    """Reflect a channel schema into a flat ``dotted-path -> spec`` map.
 
     Each entry has keys: ``type``, ``default``, ``is_secret``, ``required``, ``description``.
     Used by CLI parsers, the ``channels help`` command, and ``get_channel_config``
     to know which fields exist and which to redact.
     """
-    return _flatten_schema(_channel_schema(name))
+    cls = _channel_schema_cls(name)
+    return _flatten_fields(cls)
 
 
 def enable_channel(
@@ -269,7 +305,7 @@ def enable_channel(
 
     Raises:
         KeyError: unknown channel name or unknown field path.
-        PluginConfigError: a field value violates the channel's declared schema.
+        ValidationError: a field value violates the channel's Pydantic schema.
     """
     payload = dict(fields or {})
     payload["enabled"] = True
@@ -315,16 +351,18 @@ def get_channel_config(
     - non-empty value renders as ``'****set****'``
     - empty / None renders as ``'(empty)'``
     """
-    from raven.config.admission import normalize_slice_keys
-
-    declaration = _channel_schema(name)
+    cls = _channel_schema_cls(name)
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)
     raw_section = (data.get("channels") or {}).get(name) or {}
-    values = _materialize(declaration, normalize_slice_keys(declaration, raw_section))
 
-    specs = _flatten_schema(declaration)
-    flat = _flatten_values(declaration, values)
+    try:
+        instance = cls.model_validate(raw_section)
+    except ValidationError:
+        instance = cls()
+
+    specs = channel_field_specs(name)
+    flat = _flatten_instance(instance)
     out: dict[str, Any] = {}
     for path_key, spec in specs.items():
         val = flat.get(path_key)
@@ -343,22 +381,19 @@ def reset_channel(
     *,
     config_path: Path | None = None,
 ) -> None:
-    """Reset ``channels.<name>`` to declared defaults.
+    """Reset ``channels.<name>`` to schema defaults.
 
     The section's key is preserved so that downstream discovery still sees
-    the channel; only field values revert.
+    the channel; only field values revert. Equivalent to instantiating the
+    Pydantic class fresh and writing its ``model_dump(by_alias=True)``.
     """
-    declaration = _channel_schema(name)
+    cls = _channel_schema_cls(name)
     path = config_path or get_config_path()
-
-    def _apply(_text: str | None) -> tuple[str, None]:
-        data = read_raw_or_raise(path)
-        data.setdefault("channels", {})
-        defaults = _materialize(declaration, {})
-        data["channels"][name] = _camelize_keys(declaration, defaults)
-        return json.dumps(data, indent=2, ensure_ascii=False), None
-
-    atomic_update(path, _apply)
+    data = read_raw_or_raise(path)
+    data.setdefault("channels", {})
+    instance = cls()
+    data["channels"][name] = instance.model_dump(by_alias=True)
+    _write_atomic(path, data)
     logger.info("update_channels: {} reset to defaults", name)
 
 
@@ -373,41 +408,40 @@ def _patch_channel(
     config_path: Path | None,
 ) -> dict[str, Any]:
     """Validate-then-write core. Used by enable / disable / set."""
-    declaration = _channel_schema(name)
-    specs = _flatten_schema(declaration)
+    cls = _channel_schema_cls(name)
+    specs = channel_field_specs(name)
 
     unknown = [k for k in fields if k not in specs]
     if unknown:
         raise KeyError(f"Unknown field(s) {unknown} for channel '{name}'. Available fields: {sorted(specs.keys())}")
 
     path = config_path or get_config_path()
+    data = read_raw_or_raise(path)
+    raw_section = (data.get("channels") or {}).get(name) or {}
 
-    def _apply(_text: str | None) -> tuple[str, dict[str, Any]]:
-        from raven.config.admission import admit_slice, normalize_slice_keys
+    try:
+        current = cls.model_validate(raw_section)
+    except ValidationError:
+        current = cls()
 
-        data = read_raw_or_raise(path)
-        raw_section = (data.get("channels") or {}).get(name) or {}
-        working = _materialize(declaration, normalize_slice_keys(declaration, raw_section))
+    working = current.model_dump()
 
-        prev: dict[str, Any] = {}
-        for path_key, raw_val in fields.items():
-            decl = _walk_schema_path(declaration, path_key)
-            coerced = _coerce_value(raw_val, decl)
-            prev[path_key] = _set_nested(path_key, coerced, working)
+    prev: dict[str, Any] = {}
+    for path_key, raw_val in fields.items():
+        leaf_cls, leaf_field = _walk_nested_path(cls, path_key)
+        leaf_info = leaf_cls.model_fields[leaf_field]
+        coerced = _coerce_value(raw_val, leaf_info.annotation)
+        prev[path_key] = _set_nested(path_key, coerced, working)
 
-        # The same door the gateway dispenses through: the writer and the
-        # reader cannot disagree about what boards.
-        validated = admit_slice(declaration, working, plugin_id=f"channel:{name}")
+    validated = cls.model_validate(working)
 
-        data.setdefault("channels", {})
-        data["channels"][name] = _camelize_keys(declaration, validated)
-        return json.dumps(data, indent=2, ensure_ascii=False), prev
-
-    return atomic_update(path, _apply)
+    data.setdefault("channels", {})
+    data["channels"][name] = validated.model_dump(by_alias=True)
+    _write_atomic(path, data)
+    return prev
 
 
 __all__ = [
-    "channel_names",
     "channel_field_specs",
     "enable_channel",
     "disable_channel",

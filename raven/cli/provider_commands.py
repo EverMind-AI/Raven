@@ -45,7 +45,6 @@ from rich.console import Console
 from rich.table import Table
 
 from raven import __logo__
-from raven.cli._field_spec_table import help_requested, render_field_spec_table
 
 console = Console()
 
@@ -234,6 +233,11 @@ def _login_minimax_cn() -> None:
     _login_minimax("cn", "MiniMax CN")
 
 
+def _help_requested(extra_args: list[str]) -> bool:
+    """Detect ``--help`` / ``-h`` inside a free-form ``ctx.args`` list."""
+    return any(t in ("--help", "-h") or t.startswith("--help=") for t in extra_args)
+
+
 def _print_schema_table(name: str) -> None:
     """Render a provider's field-spec table.
 
@@ -248,7 +252,24 @@ def _print_schema_table(name: str) -> None:
         console.print(f"[red]✗[/red] {exc}")
         raise typer.Exit(1)
 
-    render_field_spec_table(console, title=f"Provider: {name}", specs=specs, required_column=False)
+    table = Table(title=f"Provider: {name}")
+    table.add_column("Flag", style="cyan", no_wrap=True)
+    table.add_column("Type", overflow="fold")
+    table.add_column("Default", no_wrap=True)
+    table.add_column("Secret?", no_wrap=True, justify="center")
+    table.add_column("Description", overflow="fold")
+    for path, spec in specs.items():
+        flag = "--" + path.replace("_", "-")
+        default = spec["default"]
+        default_str = "" if default in (None, "", [], {}) else str(default)
+        table.add_row(
+            flag,
+            spec["type"],
+            default_str,
+            "✓" if spec["is_secret"] else "",
+            spec.get("description", "") or "",
+        )
+    console.print(table)
 
 
 def _parse_provider_flags(extra_args: list[str], provider_name: str) -> dict[str, Any]:
@@ -448,7 +469,7 @@ def _register_config_commands(app: typer.Typer) -> None:
             raven provider set azure-openai --api-key X --api-base https://...
             raven provider set gemini --api-key-list k1,k2
         """
-        if help_requested(ctx.args):
+        if _help_requested(ctx.args):
             _print_schema_table(name)
             raise typer.Exit(0)
 
@@ -635,10 +656,10 @@ def _register_config_commands(app: typer.Typer) -> None:
 
         from raven.config.update_providers import serves_default_model
         from raven.providers.registry import (
-            SHAPE_ENDPOINT,
-            SHAPE_LOCAL,
-            SHAPE_OAUTH,
-            auth_shape,
+            CRED_ENDPOINT,
+            CRED_LOCAL,
+            CRED_OAUTH,
+            credential_kind,
         )
 
         # Asked before the confirmation, because it is the part worth confirming:
@@ -668,12 +689,12 @@ def _register_config_commands(app: typer.Typer) -> None:
             # give -- naming the wrong one sends the user to a command that
             # refuses them or a flag that does nothing.
             dashed = name.replace("_", "-")
-            kind = auth_shape(name)
-            if kind == SHAPE_OAUTH:
+            kind = credential_kind(name)
+            if kind == CRED_OAUTH:
                 back = f"raven provider login {dashed}"
-            elif kind == SHAPE_LOCAL:
+            elif kind == CRED_LOCAL:
                 back = f"raven provider set {dashed} --api-base <URL>"
-            elif kind == SHAPE_ENDPOINT:
+            elif kind == CRED_ENDPOINT:
                 back = f"raven provider set {dashed} --api-key <KEY> --api-base <URL>"
             else:
                 back = f"raven provider set {dashed} --api-key <KEY>"

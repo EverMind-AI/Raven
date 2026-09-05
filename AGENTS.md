@@ -8,7 +8,7 @@ Hard constraints only (violations get reverted / rejected). Soft suggestions and
 
 | # | Section | Gist |
 |---|---|---|
-| 1 | [Code comments](#1-code-comments) | Don't comment unless necessary; source in English (named exemption zones) |
+| 1 | [Code comments](#1-code-comments) | Don't comment unless necessary; comments in English |
 | 2 | [Branch naming](#2-branch-naming) | `<type>/<snake_desc>`; confirm base before cutting |
 | 3 | [Commits](#3-commits-conventional-commits) | Conventional Commits, all-English, `Co-authored-by` trailer |
 | 4 | [Dependencies](#4-dependencies-uv-only) | `uv` only — never `pip` / hand-edit lockfile |
@@ -40,38 +40,7 @@ Hard constraints only (violations get reverted / rejected). Soft suggestions and
 
 - Repo source comments **must not be in another language** — keep comment language consistent across the repo.
 
-### §1.3 Source language: English, with named exemption zones
-
-- The English rule covers **all repo source**, not just comments: string constants, prompts,
-  log messages, test fixtures, docs. Non-English content anywhere else gets reverted.
-- **Exemption zones** (owner-signed) -- CJK is admissible only here, and only as capability
-  data the feature itself needs. One zone per bullet; the leading backticked path is the
-  prefix the gate reads, and a contract test holds the two lists equal:
-  - `plugins-dist/ppt-engine/` -- the Chinese-deck engine: caption markers, font names,
-    language words the model must see, the skill corpus;
-  - `tests/test_ppt_engine_*` -- the deck engine's fixtures;
-  - `plugins-dist/design-engine/` -- the visual-design engine (owner-signed 0904): the
-    fifteen-domain zh skill corpus;
-  - `tests/test_design_engine_*` -- the design engine's fixtures;
-  - `raven/i18n/` -- the zh catalog and lexicon;
-  - `raven/templates/prompts/zh/` -- the zh prompt pack;
-  - `tests/test_i18n_*` -- zh-i18n test fixtures: a CJK fixture is admissible **only when
-    the test exercises zh functionality**, and the machine-checkable proxy for that is this
-    file-name prefix plus an import of `raven.i18n` or a zh plugin module (`raven_ppt` /
-    `raven_design`); a file with the prefix but no such import loses the exemption, and a
-    fixture that would pass equally well in English is not exempt.
-- Markdown files self-govern wherever they live (owner rule; covers `README.zh-CN.md` and
-  `docs/` prose): the gate exempts `*.md` by suffix. That suffix is the only blanket rule --
-  a non-markdown file under `docs/` has no fallback exemption.
-- Machine enforcement: `scripts/check_source_language.py` gates every PR's added lines
-  (`make check-source-language`), the way `make check-large-files` enforces section 7. A
-  CJK-adding line passes only through one of: a zone prefix above, the `*.md` suffix, the
-  `tests/test_i18n_*` prefix with its import proof, the relocation pass (the same CJK run
-  was removed elsewhere in the same diff), or the carrier pass (the file already carried
-  CJK at the base revision) -- so relocating existing CJK and editing a file that already
-  carries CJK stay legal.
-
-### §1.4 Examples
+### §1.3 Examples
 
 ❌ Non-English review comment copied straight into source:
 
@@ -195,7 +164,6 @@ No other languages anywhere in the message — not just the subject; body and fo
 1. **Before writing:** translate the points in your head to English first — don't write a non-English body then translate (that leaves full-width residue).
 2. **After writing:** self-check with `git log -1`; any non-English char → rewrite.
 3. **Already committed but violating:** rewrite the message with `git rebase -i` **only after explicit user authorization**; don't rewrite history unprompted (see §3.4).
-4. **Syncing colleague fixes:** each fix lands as **one** commit — no same-subject twin pairs — and its body passes the same all-English / ASCII rules; the sync pipeline is not exempt from this section.
 
 ### §3.2 ✅ Good / ❌ Bad
 
@@ -218,7 +186,7 @@ feat(importer): add EverOS HTTP backend
 **✅ Required:**
 
 - `Co-authored-by: Claude (<model-id>) <noreply@anthropic.com>` — when Claude helped write the code, append it at the end of the commit body (blank line above), or at the end of the PR description.
-  - `<model-id>` = the **actual current-session model ID** (e.g. `claude-fable-5` / `claude-sonnet-5` / `claude-haiku-4-5`), not a placeholder. The model version keeps per-model contribution distinguishable.
+  - `<model-id>` = the **actual current-session model ID** (e.g. `claude-opus-4-8` / `claude-sonnet-4-6` / `claude-haiku-4-5`), not a placeholder. The model version keeps per-model contribution distinguishable.
   - Format follows the aider convention; GitHub renders `Co-authored-by` as a co-author on the commit / PR.
 - Multiple co-authors → one per line, standard git trailer format (`Name <email>`).
 - The repo **squash-merges** PRs (rebase only freshens the branch before push; the merge collapses the branch to one commit on `main`). The squash commit's subject is the PR title and its body is the **PR description** (`squash_merge_commit_message=PR_BODY`) — individual commit bodies are dropped. GitHub still auto-collects each commit's `Co-authored-by` into the squash commit, so keep the trailer in your commit and put `Closes #NNN` + reviewer context in the PR description (that is what lands on `main`).
@@ -292,12 +260,11 @@ Filling rules:
 - internal branch names / commit-hash references (no reviewer context).
 
 **Preview-verification (required):**
-1. After drafting, **scan for any non-ASCII char first** (CI lints the whole message as ASCII-only -- `scripts/check_pr_body.py` is the canonical checker, and the squash commit body is this PR description, so it must be ASCII too):
+1. After drafting, **grep for any non-ASCII char first** (the CI lints the whole message as ASCII-only via `commit_lint._is_ascii`, and the squash commit body is this PR description — so it must be ASCII too):
    ```bash
-   uv run python -c "import sys,pathlib; bad=[(n,l) for n,l in enumerate(pathlib.Path('/tmp/pr_description.md').read_text(encoding='utf-8').splitlines(),1) if any(ord(c)>0x7F for c in l)]; [print(f'{n}: {l}') for n,l in bad]; sys.exit(1 if bad else 0)"
-   # must exit 0 with no output. Same per-character test as scripts/check_pr_body.py.
-   # Catches em-dash/curly-quotes/ellipsis, not just CJK -- and stock macOS grep
-   # has no -P, so a grep -P check silently matches nothing there.
+   grep -nP "[^\x00-\x7F]" /tmp/pr_description.md
+   # must print nothing (0 matches). Catches em-dash/curly-quotes/ellipsis,
+   # not just CJK + full-width — a CJK-only pattern gives a false pass.
    ```
 2. show the full text for preview;
 3. only after the user edits/confirms, run `gh pr create --title "..." --body "$(cat /tmp/pr_description.md)"`;
@@ -305,7 +272,7 @@ Filling rules:
 
 **Not allowed:**
 - pushing and walking away, leaving PR creation to the user;
-- delivering a description without running the ASCII scan above.
+- delivering a description without grepping for non-English residue.
 
 ---
 
@@ -395,8 +362,6 @@ Naming: `test_<scope>_<kind>.py`, where `<kind>` ∈:
 ## 7. Repository assets
 
 - Do not commit report assets or standalone web artifacts, regardless of size. This includes images, GIFs, SVGs, videos, audio files, PDFs, HTML files, web manifests, and WASM bundles.
-- The application source trees (`bridge/`, `ui-web/`, `ui-tui/`) are exempt from that extension list: a product frontend carries its own entry HTML and icon SVGs as source, not as report assets. Everything else in this section, including the 1 MiB limit, still applies to them.
-- Packaged `.jpg` benchmark plates under `plugins-dist/design-engine/raven_design/skills/<skill>/references/` are functional Skill inputs, not report assets, and are allowed: `.jpg` only, only under a skill's `references/`, and the 1 MiB limit still applies.
 - Store public-report assets outside git and link to them when needed.
 - Do not add or modify files over 1 MiB unless the maintainer explicitly approves it before the commit.
 - Run `make check-large-files` when touching docs, demos, reports, assets, or generated outputs; CI enforces the same rule on added and modified PR files.

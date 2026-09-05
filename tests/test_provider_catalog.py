@@ -12,7 +12,8 @@ from raven.providers.base import LLMProvider
 from raven.providers.common_models import common_models_for
 from raven.providers.registry import PROVIDERS, find_by_name
 
-# Pin the current registry so any drift (add/remove a ProviderSpec) is caught here.
+# The Confluence "Providers" page claims 19 providers. This pins the current
+# registry so any drift (add/remove a ProviderSpec) is caught here.
 EXPECTED_PROVIDER_NAMES = {
     "custom",
     "azure_openai",
@@ -29,21 +30,18 @@ EXPECTED_PROVIDER_NAMES = {
     "zai",
     "dashscope",
     "moonshot",
-    "nvidia_nim",
     "minimax",
-    "minimax_cn_api",
     "minimax_global",
     "minimax_cn",
     "hosted_vllm",
-    "lm_studio",
     "ollama_chat",
     "groq",
 }
 
 
-def test_registry_has_exactly_24_providers() -> None:
-    assert len(PROVIDERS) == 24
-    assert len(EXPECTED_PROVIDER_NAMES) == 24
+def test_registry_has_exactly_21_providers() -> None:
+    assert len(PROVIDERS) == 21
+    assert len(EXPECTED_PROVIDER_NAMES) == 21
 
 
 def test_registry_provider_name_set_is_pinned() -> None:
@@ -53,15 +51,6 @@ def test_registry_provider_name_set_is_pinned() -> None:
 def test_provider_names_are_unique() -> None:
     names = [spec.name for spec in PROVIDERS]
     assert len(names) == len(set(names))
-
-
-def test_concrete_providers_have_https_homepages() -> None:
-    missing_or_insecure = {
-        spec.name: spec.homepage
-        for spec in PROVIDERS
-        if spec.name != "custom" and not spec.homepage.startswith("https://")
-    }
-    assert not missing_or_insecure
 
 
 def test_a_specs_route_prefix_is_a_provider_litellm_knows() -> None:
@@ -130,8 +119,6 @@ _SEEDED_DIRECT_PROVIDERS = [
     "zai",
     "dashscope",
     "groq",
-    "nvidia_nim",
-    "minimax_cn_api",
     "minimax_global",
     "minimax_cn",
 ]
@@ -142,23 +129,6 @@ def test_seeded_provider_default_model_in_shortlist(slug: str) -> None:
     default = find_by_name(slug).default_model
     assert default, f"{slug} has no default_model"
     assert default in common_models_for(slug)
-
-
-def test_no_shortlist_omits_its_own_providers_default_model() -> None:
-    """Derived from the registry, so a new provider is covered without editing a list.
-
-    The list above pins which providers must be seeded at all; this pins the
-    consistency of every provider that is. A default_model absent from its own
-    non-empty shortlist means the picker recommends an id it does not offer --
-    which is how OpenRouter kept pointing at claude-sonnet-4-5 after the
-    shortlist moved to claude-sonnet-5.
-    """
-    drifted = {
-        spec.name: spec.default_model
-        for spec in PROVIDERS
-        if spec.default_model and (shortlist := common_models_for(spec.name)) and spec.default_model not in shortlist
-    }
-    assert not drifted
 
 
 def _concrete_provider_subclasses() -> set[type]:
@@ -188,17 +158,14 @@ def _concrete_provider_subclasses() -> set[type]:
     return seen
 
 
-def test_exactly_seven_concrete_backend_classes() -> None:
+def test_exactly_six_concrete_backend_classes() -> None:
     # This asserts class existence only, not the dispatch wiring.
-    from raven.providers.anthropic_messages_provider import AnthropicMessagesProvider
     from raven.providers.azure_openai_provider import AzureOpenAIProvider
     from raven.providers.endpoint_rotor import EndpointRotorProvider
     from raven.providers.litellm_provider import LiteLLMProvider
     from raven.providers.minimax_oauth_provider import MiniMaxOAuthProvider
     from raven.providers.openai_codex_provider import OpenAICodexProvider
-    from raven.providers.openai_responses_provider import OpenAIResponsesProvider
     from raven.providers.per_model_provider import PerModelProvider
-    from raven.providers.resolving_provider import ResolvingProvider
 
     expected = {
         LiteLLMProvider,
@@ -206,15 +173,10 @@ def test_exactly_seven_concrete_backend_classes() -> None:
         OpenAICodexProvider,
         MiniMaxOAuthProvider,
         PerModelProvider,
-        ResolvingProvider,
         # Multi-endpoint rotation/failover wrapper: a real backend in dispatch
         # terms -- make_provider returns it for a section that resolves to
         # more than one endpoint.
         EndpointRotorProvider,
-        # The two native transports a per-model protocol can select instead of
-        # the LiteLLM chat path (providers.<slug>.protocol / modelProtocols).
-        OpenAIResponsesProvider,
-        AnthropicMessagesProvider,
     }
     assert _concrete_provider_subclasses() == expected
     for cls in expected:
@@ -311,7 +273,7 @@ def test_a_model_family_quirk_is_declared_not_branched_on_in_the_factory() -> No
     """
     from pathlib import Path
 
-    from raven.providers import factory as _helpers
+    from raven.cli import _helpers
     from raven.providers.capabilities import wire_overrides
 
     assert wire_overrides("openrouter", "openrouter/qwen/qwen3.7-max") == {"reasoning": {"enabled": False}}
@@ -360,7 +322,6 @@ LABELLED_PROVIDERS = frozenset(
         "groq",
         "minimax",
         "minimax_cn",
-        "minimax_cn_api",
         "minimax_global",
         "moonshot",
         "openai",

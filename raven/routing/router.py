@@ -3,7 +3,7 @@
 Usage:
     router = ModelRouter(api_key="sk-or-...", profile="balanced")
     await router.initialize()
-    primary, fallbacks = await router.select_model_chain(user_message)
+    model_id = await router.select_model(user_message)
 """
 
 from __future__ import annotations
@@ -31,43 +31,13 @@ class ModelRouter:
         api_key: str,
         profile: RoutingProfileName = "balanced",
         fallback_model: str | None = None,
-        *,
-        profile_source=None,
-        fallback_source=None,
     ):
         self._api_key = api_key
         self._profile = profile
         self._fallback_model = fallback_model
-        # Live readers over the config file (``build_model_routing`` passes
-        # them), so an edited profile or default model routes the next turn
-        # without a restart. The constructor values stay the answer for a
-        # router built without readers, and the fallback for a reader whose
-        # answer is unusable.
-        self._profile_source = profile_source
-        self._fallback_source = fallback_source
         self._cache = BenchmarkCache()
         self._classifier = PromptClassifier(api_key=api_key)
         self._data: BenchmarkData | None = None
-
-    def _current_profile(self) -> RoutingProfileName:
-        if self._profile_source is not None:
-            try:
-                live = self._profile_source()
-            except Exception:
-                live = None
-            if live in ("best", "balanced", "eco"):
-                return live
-        return self._profile
-
-    def _current_fallback(self) -> str | None:
-        if self._fallback_source is not None:
-            try:
-                live = self._fallback_source()
-            except Exception:
-                live = None
-            if isinstance(live, str) and live:
-                return live
-        return self._fallback_model
 
     async def initialize(self) -> None:
         """Pre-load benchmark data (call once at startup)."""
@@ -93,7 +63,7 @@ class ModelRouter:
             return None
 
         try:
-            result = select_model(self._data, classification.category, self._current_profile())
+            result = select_model(self._data, classification.category, self._profile)
             logger.info(
                 "Routed to {} (category={}, score={:.3f})",
                 result.primary.model,
@@ -127,8 +97,16 @@ class ModelRouter:
         if result is None:
             return None, []
         fallbacks = [f.model for f in result.fallbacks]
-        fallback_model = self._current_fallback()
-        if fallback_model and fallback_model not in fallbacks:
-            if fallback_model != result.primary.model:
-                fallbacks.append(fallback_model)
+        if self._fallback_model and self._fallback_model not in fallbacks:
+            if self._fallback_model != result.primary.model:
+                fallbacks.append(self._fallback_model)
         return result.primary.model, fallbacks
+
+    @property
+    def profile(self) -> RoutingProfileName:
+        return self._profile
+
+    @profile.setter
+    def profile(self, value: RoutingProfileName) -> None:
+        self._profile = value
+        logger.info("ModelRouter profile changed to '{}'", value)

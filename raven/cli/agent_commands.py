@@ -21,15 +21,17 @@ from rich.text import Text
 from raven import __logo__
 from raven.cli._helpers import (
     load_runtime_config,
+    make_provider,
     parse_fake_now,
     print_config_migration_notices,
-    print_deprecated_allow_destructive_notice,
     print_deprecated_memory_window_notice,
-    report_dropped_memory_writes,
 )
-from raven.core.provider_stack import build_model_routing
-from raven.providers.factory import make_provider
-from raven.utils.workspace import sync_workspace_templates
+from raven.cli._plugin_stack import (
+    build_plugin_registry,
+    build_plugin_tools,
+    maybe_build_memory_backend,
+)
+from raven.utils.helpers import sync_workspace_templates
 
 console = Console()
 
@@ -38,28 +40,6 @@ console = Console()
 # turn. Module-level because the render callback runs inside the delivery
 # hub's worker task, where raising typer.Exit would be swallowed.
 _ONE_SHOT_EXIT = {"code": 0}
-
-
-async def _wait_for_background_work(agent_loop, scheduler, conversation: str) -> None:
-    """Wait for sub-agents and their follow-up turns before one-shot teardown.
-
-    A sub-agent completion submits a ``SUBAGENT`` turn after its running count
-    drops, so the short second check closes that hand-off gap.
-    """
-    subagents = getattr(agent_loop, "subagents", None)
-    if subagents is None:
-        return
-    lanes = {conversation, "cli:direct"}
-
-    def busy() -> bool:
-        return subagents.get_running_count() > 0 or any(scheduler.has_inflight(lane) for lane in lanes)
-
-    while True:
-        if not busy():
-            await asyncio.sleep(2.0)
-            if not busy():
-                return
-        await asyncio.sleep(1.0)
 
 
 def _print_agent_response(response: str, render_markdown: bool) -> None:
@@ -80,7 +60,7 @@ def _print_agent_response(response: str, render_markdown: bool) -> None:
 # the error line alone.
 _NON_AUTH_HINTS = {
     "rate_limit": "Hint: the provider is rate limiting; retry in a moment.",
-    "network": "Hint: network problem; check connectivity and the provider apiBase, then retry.",
+    "network": "Hint: network problem; check connectivity and retry.",
     "context_overflow": "Hint: the input exceeds the model's context window; shorten it.",
     "server": "Hint: provider-side error; retry later or switch models.",
     "model_unavailable": "Hint: model not served; pick another with raven provider use <name>/<model>.",
@@ -142,17 +122,7 @@ def register(app: typer.Typer) -> None:
         ),
         continue_: bool = typer.Option(False, "--continue", "-c", help="Continue the most recent cli session"),
         resume: str | None = typer.Option(None, "--resume", "-r", help="Resume session by bare id or unique prefix"),
-        workspace: str | None = typer.Option(
-            None,
-            "--workspace",
-            "-w",
-            help="Working directory for this run (default: current directory)",
-        ),
-        home: str | None = typer.Option(
-            None,
-            "--home",
-            help="Agent home directory (memory, skills, transcripts)",
-        ),
+        workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
         config: str | None = typer.Option(None, "--config", help="Config file path"),
         markdown: bool = typer.Option(True, "--markdown/--no-markdown", help="Render assistant output as Markdown"),
         logs: bool = typer.Option(False, "--logs/--no-logs", help="Show Raven runtime logs during chat"),
@@ -180,39 +150,30 @@ def register(app: typer.Typer) -> None:
 
         from loguru import logger
 
-        from raven.agent.loop.bundles import HostWiring, TurnPolicy
+        from raven.agent.loop import AgentLoop
         from raven.agent.loop.recovery import limits_from_defaults
-        from raven.config.raven import load_raven_config
-        from raven.core.engine_stack import build_local_sessions
-        from raven.core.proactive_stack import (
+        from raven.cli._proactive_stack import (
             attach_sentinel_decision_consumer,
             attach_sentinel_spawn,
             build_sentinel_stack,
-            sentinel_hooks,
         )
-        from raven.session.manager import new_chat_id
+        from raven.config.raven import load_raven_config
+        from raven.session.manager import SessionManager, new_chat_id
 
         # load_runtime_config must run FIRST: it calls set_config_path() so
         # that subsequent load_raven_config() reads from --config, not the
         # default ~/.raven/config.json. Otherwise skill_forge / sentinel
         # from --config are silently ignored.
-        config = load_runtime_config(config, home=home)
+        config = load_runtime_config(config, workspace)
         ec_config = load_raven_config()
         sentinel_cfg = ec_config.sentinel
+        skill_forge_cfg = ec_config.skill_forge
         print_deprecated_memory_window_notice(config)
-        print_deprecated_allow_destructive_notice(config)
         print_config_migration_notices()
-        sync_workspace_templates(config.workspace_path, notify=lambda m: console.print(f"  [dim]{m}[/dim]"))
+        sync_workspace_templates(config.workspace_path)
 
         provider = make_provider(config)
-        # Model routing (config.routing). Returns the provider unchanged when
-        # routing is disabled, and wraps it for the knn backend so routed model
-        # names reach their own endpoints.
-        router, provider = build_model_routing(config, provider)
-        try:
-            session_manager, workdir_resolver = build_local_sessions(config, workspace=workspace)
-        except ValueError as e:
-            raise typer.BadParameter(str(e)) from e
+        session_manager = SessionManager(config.workspace_path)
 
         # New-session-by-default: independent one-shots don't bleed into each other.
         if resume is not None:
@@ -220,9 +181,7 @@ def register(app: typer.Typer) -> None:
 
             session_id = resolve_session(session_manager, resume)
         elif continue_:
-            # Scoped to this checkout: resuming must not reopen a conversation
-            # started elsewhere just because it is the newer one.
-            recent = session_manager.find_most_recent_chat_id("cli", this_project_only=True)
+            recent = session_manager.find_most_recent_chat_id("cli")
             if recent is None:
                 console.print("[dim]no previous cli session — starting fresh[/dim]")
                 recent = new_chat_id()
@@ -255,36 +214,71 @@ def register(app: typer.Typer) -> None:
 
         # Build the plugin-provided memory backend (the bundled
         # everos backend by default). Returns ``None`` when no plugin
-        # contributes the configured backend name — AgentLoop then runs
-        # without a memory backend. Lifecycle (start /
+        # contributes the configured backend name — AgentLoop falls
+        # back to its legacy ``self.memory`` path. Lifecycle (start /
         # stop) is handled in ``run_once`` so the awaits land in the
         # right event loop context.
         # Build the plugin registry once and reuse it for both the memory
         # backend and the plugin-contributed tools so discovery/activation
         # runs a single time.
-        from raven.core.runtime import build_runtime
-
-        runtime = build_runtime(
-            config,
+        plugin_registry = build_plugin_registry(ec_config)
+        backend = maybe_build_memory_backend(
+            config.workspace_path,
             ec_config,
-            provider=provider,
-            session_manager=session_manager,
-            router=router,
-            workdir_resolver=workdir_resolver,
-            policy=TurnPolicy(
-                now_fn=parse_fake_now(fake_now),
-                max_iterations=config.agents.defaults.max_tool_iterations,
-                empty_recovery=limits_from_defaults(config.agents.defaults),
-                interactive=False,
-            ),
-            host=HostWiring(
-                notify=lambda m: console.print(m, style="yellow", markup=False),
-                channels_config=config.channels,
-                hooks=sentinel_hooks(sentinel_on_user_inbound, sentinel_response_modifier),
-            ),
+            registry=plugin_registry,
         )
-        agent_loop = runtime.loop
-        backend = runtime.backend
+        plugin_tools = build_plugin_tools(
+            config.workspace_path,
+            ec_config,
+            registry=plugin_registry,
+        )
+
+        from raven.providers.pool import ProviderPool
+
+        # No cron_service here: with the REPL gone this process is never a
+        # cron runner, so registering CronTool would create jobs nothing
+        # fires. Scripted reminder creation is `raven cron add` with an
+        # explicit --channel.
+        agent_loop = AgentLoop(
+            provider_pool=ProviderPool(lambda: load_runtime_config(None, None)),
+            provider=provider,
+            now_fn=parse_fake_now(fake_now),
+            workspace=config.workspace_path,
+            model=config.agents.defaults.model,
+            max_iterations=config.agents.defaults.max_tool_iterations,
+            empty_recovery=limits_from_defaults(config.agents.defaults),
+            context_window_tokens=config.agents.defaults.context_window_tokens,
+            max_concurrent_subagents=config.agents.defaults.max_concurrent_subagents,
+            max_subagent_spawns_per_hour=config.agents.defaults.max_subagent_spawns_per_hour,
+            brave_api_key=config.tools.web.search.api_key or None,
+            jina_api_key=config.tools.web.jina_api_key or None,
+            web_proxy=config.tools.web.proxy or None,
+            media_config=config.effective_media_config(),
+            deep_research_config=config.tools.deep_research,
+            exec_config=config.tools.exec,
+            ask_user_config=config.tools.ask_user,
+            restrict_to_workspace=config.tools.restrict_to_workspace,
+            session_manager=session_manager,
+            mcp_servers=config.tools.mcp_servers,
+            disabled_tools=config.tools.disabled_tools,
+            tool_search_config=config.tools.tool_search,
+            sandbox_config=config.tools.sandbox,
+            channels_config=config.channels,
+            skill_forge_config=skill_forge_cfg,
+            context_config=ec_config.context,
+            runtime_config=ec_config.runtime,
+            # ``-m "..."`` is a one-shot — no next turn for recovery
+            # injection, so the ``"interactive"`` policy skips the
+            # checkpoint here.
+            interactive=False,
+            response_modifier=sentinel_response_modifier,
+            on_user_inbound=sentinel_on_user_inbound,
+            backend=backend,
+            memory_config=ec_config.memory,
+            skill_forge_router_config=ec_config.skill_forge.router,
+            plugin_tools=plugin_tools,
+        )
+        agent_loop.configure_personalization(config.agents.defaults.enable_personalization)
         attach_sentinel_spawn(sentinel_runner, agent_loop)
         attach_sentinel_decision_consumer(sentinel_runner, agent_loop, sentinel_cfg=sentinel_cfg)
         # One-shot mode has no real ChannelManager — provide a minimal shim
@@ -306,11 +300,11 @@ def register(app: typer.Typer) -> None:
             return console.status("[dim]Raven is thinking...[/dim]", spinner="dots")
 
         # Single message mode — one USER turn through spine (submit -> lane ->
-        # run_turn -> hub -> CliOutlet), with the cli/direct defaults
+        # run_turn -> hub -> CliOutlet), with the legacy cli/direct defaults
         # (channel="cli", chat_id="direct", session_key=session_id). Progress
-        # renders via the CliOutlet, gated by the same two config flags the
-        # gateway honors (send_progress / send_tool_hints).
-        from raven.cli._one_shot_spine import build_one_shot_spine
+        # renders via the CliOutlet, gated by the same two config flags the bus
+        # path honored (send_progress / send_tool_hints).
+        from raven.cli._repl_spine import build_repl
         from raven.spine import ChatType, Origin, Source, TurnRequest
 
         async def run_once():
@@ -325,9 +319,9 @@ def register(app: typer.Typer) -> None:
                     )
             try:
                 # Build inside the running loop: Scheduler pins its home loop in
-                # __init__, so build_one_shot_spine must not run in the sync prologue.
+                # __init__, so build_repl must not run in the sync prologue.
                 ch = agent_loop.channels_config
-                scheduler, hub, teardown = build_one_shot_spine(
+                scheduler, hub, teardown = build_repl(
                     agent_loop,
                     "cli",
                     lambda t: _print_agent_response(t, render_markdown=markdown),
@@ -335,8 +329,8 @@ def register(app: typer.Typer) -> None:
                     send_progress=bool(ch.send_progress) if ch else False,
                     send_tool_hints=bool(ch.send_tool_hints) if ch else False,
                 )
-                # A one-shot spawn rarely finishes before the hard-exit below,
-                # but wire submit for parity with the TUI.
+                # A one-shot spawn rarely finishes before the hard-exit below (same
+                # as the bus path), but wire submit for parity with the TUI.
                 agent_loop.subagents.set_submit(scheduler.submit)
                 with _thinking_ctx():
                     handle = scheduler.submit(
@@ -353,17 +347,15 @@ def register(app: typer.Typer) -> None:
                         )
                     )
                     await handle.result()
-                    await _wait_for_background_work(agent_loop, scheduler, session_id)
                 await hub.wait_idle("cli")  # render barrier: CliOutlet caught up
                 await teardown()
                 await agent_loop.close_mcp()
             finally:
                 if backend is not None:
                     try:
-                        # Drain queued writes first: stopping the backend
+                        # Detached indexing writes first: stopping the backend
                         # closes the HTTP client they still need.
-                        dropped = await agent_loop.drain_backend_stores()
-                        report_dropped_memory_writes(dropped, console)
+                        await agent_loop.drain_backend_stores()
                         await backend.stop()
                     except Exception:
                         logger.exception(

@@ -19,7 +19,6 @@ from raven.providers.base import (
     ToolCallRequest,
     format_llm_error,
 )
-from raven.providers.tool_names import normalized_tool_name
 
 _AZURE_MSG_KEYS = frozenset({"role", "content", "tool_calls", "tool_call_id", "name"})
 
@@ -40,7 +39,7 @@ class AzureOpenAIProvider(LLMProvider):
         self,
         api_key: str = "",
         api_base: str = "",
-        default_model: str = "gpt-5.2-chat",
+        default_model: str = "gpt-5.6-sol",
         deployment: str = "",
         api_version: str = "2024-10-21",
     ):
@@ -51,11 +50,13 @@ class AzureOpenAIProvider(LLMProvider):
         self.deployment = deployment
         self.api_version = api_version
 
+        # Validate required parameters
         if not api_key:
             raise ValueError("Azure OpenAI api_key is required")
         if not api_base:
             raise ValueError("Azure OpenAI api_base is required")
 
+        # Ensure api_base ends with /
         if not api_base.endswith("/"):
             api_base += "/"
         self.api_base = api_base
@@ -137,6 +138,9 @@ class AzureOpenAIProvider(LLMProvider):
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = tool_choice or "auto"
+            if "gpt-5" in deployment_name.lower():
+                # GPT-5.x Chat Completions reject tools under any reasoning effort but "none".
+                payload["reasoning_effort"] = "none"
 
         return payload
 
@@ -229,7 +233,7 @@ class AzureOpenAIProvider(LLMProvider):
                     tool_calls.append(
                         ToolCallRequest(
                             id=tc["id"],
-                            name=normalized_tool_name(tc["function"]["name"]),
+                            name=tc["function"]["name"],
                             arguments=args,
                             run_meta=RunMeta(arguments_repaired=True) if repaired else None,
                         )

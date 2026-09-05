@@ -7,7 +7,7 @@
 import chalk from 'chalk'
 import cliBoxes, { type Boxes, type BoxStyle } from 'cli-boxes'
 
-import { applyColor, colorize } from './colorize.js'
+import { applyColor } from './colorize.js'
 import type { DOMNode } from './dom.js'
 import type Output from './output.js'
 import { stringWidth } from './stringWidth.js'
@@ -71,24 +71,14 @@ function embedTextInBorder(
   return [before, text, after]
 }
 
-function styleBorderLine(
-  line: string,
-  color: Color | undefined,
-  dim: boolean | undefined,
-  backgroundColor?: Color
-): string {
+function styleBorderLine(line: string, color: Color | undefined, dim: boolean | undefined): string {
   let styled = applyColor(line, color)
 
   if (dim) {
     styled = chalk.dim(styled)
   }
 
-  // A box's own background sits behind its border, not just behind its content.
-  // The interior fill in render-node-to-output deliberately skips the border
-  // cells (innerWidth backs both edges out), so without this a box that has BOTH
-  // a background and a border shows the terminal's ground in the border cells --
-  // a bare sliver between the frame and the fill it is supposed to frame.
-  return backgroundColor ? colorize(styled, backgroundColor, 'background') : styled
+  return styled
 }
 
 const renderBorder = (x: number, y: number, node: DOMNode, output: Output): void => {
@@ -101,8 +91,6 @@ const renderBorder = (x: number, y: number, node: DOMNode, output: Output): void
         ? (CUSTOM_BORDER_STYLES[node.style.borderStyle as keyof typeof CUSTOM_BORDER_STYLES] ??
           cliBoxes[node.style.borderStyle as keyof Boxes])
         : node.style.borderStyle
-
-    const ownBackgroundColor = node.style.backgroundColor
 
     const topBorderColor = node.style.borderTopColor ?? node.style.borderColor
 
@@ -144,11 +132,11 @@ const renderBorder = (x: number, y: number, node: DOMNode, output: Output): void
       )
 
       topBorder =
-        styleBorderLine(before, topBorderColor, dimTopBorderColor, ownBackgroundColor) +
+        styleBorderLine(before, topBorderColor, dimTopBorderColor) +
         text +
-        styleBorderLine(after, topBorderColor, dimTopBorderColor, ownBackgroundColor)
+        styleBorderLine(after, topBorderColor, dimTopBorderColor)
     } else if (showTopBorder) {
-      topBorder = styleBorderLine(topBorderLine, topBorderColor, dimTopBorderColor, ownBackgroundColor)
+      topBorder = styleBorderLine(topBorderLine, topBorderColor, dimTopBorderColor)
     }
 
     let verticalBorderHeight = height
@@ -163,13 +151,17 @@ const renderBorder = (x: number, y: number, node: DOMNode, output: Output): void
 
     verticalBorderHeight = Math.max(0, verticalBorderHeight)
 
-    let leftBorder = (styleBorderLine(box.left, leftBorderColor, dimLeftBorderColor, ownBackgroundColor) + '\n').repeat(
-      verticalBorderHeight
-    )
+    let leftBorder = (applyColor(box.left, leftBorderColor) + '\n').repeat(verticalBorderHeight)
 
-    let rightBorder = (
-      styleBorderLine(box.right, rightBorderColor, dimRightBorderColor, ownBackgroundColor) + '\n'
-    ).repeat(verticalBorderHeight)
+    if (dimLeftBorderColor) {
+      leftBorder = chalk.dim(leftBorder)
+    }
+
+    let rightBorder = (applyColor(box.right, rightBorderColor) + '\n').repeat(verticalBorderHeight)
+
+    if (dimRightBorderColor) {
+      rightBorder = chalk.dim(rightBorder)
+    }
 
     const bottomBorderLine = showBottomBorder
       ? (showLeftBorder ? box.bottomLeft : '') +
@@ -190,11 +182,11 @@ const renderBorder = (x: number, y: number, node: DOMNode, output: Output): void
       )
 
       bottomBorder =
-        styleBorderLine(before, bottomBorderColor, dimBottomBorderColor, ownBackgroundColor) +
+        styleBorderLine(before, bottomBorderColor, dimBottomBorderColor) +
         text +
-        styleBorderLine(after, bottomBorderColor, dimBottomBorderColor, ownBackgroundColor)
+        styleBorderLine(after, bottomBorderColor, dimBottomBorderColor)
     } else if (showBottomBorder) {
-      bottomBorder = styleBorderLine(bottomBorderLine, bottomBorderColor, dimBottomBorderColor, ownBackgroundColor)
+      bottomBorder = styleBorderLine(bottomBorderLine, bottomBorderColor, dimBottomBorderColor)
     }
 
     const offsetY = showTopBorder ? 1 : 0

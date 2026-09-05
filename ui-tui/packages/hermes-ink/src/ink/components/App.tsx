@@ -27,7 +27,7 @@ import {
   parseMultipleKeypresses
 } from '../parse-keypress.js'
 import reconciler from '../reconciler.js'
-import { clearSelection, finishSelection, hasSelection, type SelectionState, startSelection } from '../selection.js'
+import { finishSelection, hasSelection, type SelectionState, startSelection } from '../selection.js'
 import { getTerminalFocused, setTerminalFocused } from '../terminal-focus-state.js'
 import { decrqm, TerminalQuerier, xtversion } from '../terminal-querier.js'
 import {
@@ -131,13 +131,6 @@ type State = {
 // Root component for all Ink apps
 // It renders stdin and stdout contexts, so that children can access them if needed
 // It also handles Ctrl+C exiting and cursor visibility
-// How far a release may land from its press and still be a click. One cell:
-// the slip of a finger, not a drag.
-const CLICK_SLIP_CELLS = 1
-
-const isSlip = (a: { col: number; row: number }, b: { col: number; row: number }): boolean =>
-  a.row === b.row && Math.abs(a.col - b.col) <= CLICK_SLIP_CELLS
-
 export default class App extends PureComponent<Props, State> {
   static displayName = 'InternalApp'
   static getDerivedStateFromError(error: Error) {
@@ -819,21 +812,6 @@ export function handleMouseEvent(app: App, m: ParsedMouse): void {
   }
 
   finishSelection(sel)
-
-  // A press whose release landed a cell over is a click that slipped, not a
-  // selection: a cell is a few pixels wide and a trackpad finger moves that
-  // far between down and up. Measured: chips and buttons needed two clicks,
-  // the first having become a one-cell selection nobody wanted. Only when a
-  // DOM handler takes the click -- over plain text a one-cell drag is still
-  // a one-cell selection.
-  if (hasSelection(sel) && sel.anchor && sel.focus && isSlip(sel.anchor, sel.focus)) {
-    if (app.props.onClickAt(sel.anchor.col, sel.anchor.row)) {
-      clearSelection(sel)
-      app.props.onSelectionChange()
-
-      return
-    }
-  }
 
   // NOTE: unlike the old release-based detection we do NOT reset clickCount
   // on release-after-drag. This aligns with NSEvent.clickCount semantics:

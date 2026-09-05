@@ -37,15 +37,15 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
-from raven.memory_engine import parse_episode_line
+from raven.memory_engine.consolidate.consolidator import _parse_episode_line
 
 if TYPE_CHECKING:
     from raven.config.raven import DailyAnalysisConfig
-    from raven.contracts.llm_provider import LLMProvider
-    from raven.memory_engine import MemoryStore
+    from raven.memory_engine.consolidate.consolidator import MemoryStore
     from raven.proactive_engine.sentinel.predictor.routine_store import (
         RoutineStore,
     )
+    from raven.providers.base import LLMProvider
     from raven.session.manager import SessionManager
 
 
@@ -360,7 +360,7 @@ class DailyAnalysisService:
             return []
         kept: list[str] = []
         for line in text.splitlines():
-            parsed = parse_episode_line(line)
+            parsed = _parse_episode_line(line)
             if not parsed:
                 continue
             ts, _, _ = parsed

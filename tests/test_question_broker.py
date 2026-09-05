@@ -9,11 +9,10 @@ from __future__ import annotations
 
 import asyncio
 
-from raven.rpc.methods.question import question_respond, register_question_methods
-from raven.rpc.question_broker import QuestionBroker, QuestionUndeliverableError, RoutingQuestionBroker
+from raven.tui_rpc.methods.question import question_respond, register_question_methods
+from raven.tui_rpc.question_broker import QuestionBroker, QuestionUndeliverableError
 
 CID = "telegram:123"
-PAGE_CID = "tui:abc123"
 
 
 def _frame_collector() -> tuple[list[dict], object]:
@@ -124,64 +123,6 @@ async def test_timeout_failsafe_to_default() -> None:
     assert broker.pending_req(CID) is None
 
 
-def _of_method(frames: list[dict], method: str) -> list[dict]:
-    return [f for f in frames if f.get("method") == method]
-
-
-async def _wait_for_method(frames: list[dict], method: str, timeout: float = 1.0) -> dict:
-    """The first frame of ``method``. The close notification is sent on its own
-    task, so it lands a tick after ``await_question`` has already returned."""
-    deadline = asyncio.get_running_loop().time() + timeout
-    while not _of_method(frames, method):
-        if asyncio.get_running_loop().time() > deadline:
-            raise AssertionError(f"no {method} frame within {timeout}s: {[f.get('method') for f in frames]}")
-        await asyncio.sleep(0.005)
-    return _of_method(frames, method)[0]
-
-
-async def test_timeout_closes_the_question_on_the_surface() -> None:
-    # Without this the surface keeps a sheet nobody can answer: the frontend
-    # only clears `clarify` when the user answers, so a backend fail-safe has to
-    # say so. Mirrors `approval.closed`.
-    frames, send_frame = _frame_collector()
-    broker = QuestionBroker(send_frame)
-
-    assert await broker.await_question(CID, prompt="?", default="fallback", timeout_s=0.05) == "fallback"
-    request = _of_method(frames, "clarify.request")[0]
-    closed = await _wait_for_method(frames, "clarify.closed")
-    assert closed["params"]["request_id"] == request["params"]["request_id"]
-    assert closed["params"]["conversation_id"] == CID
-
-
-async def test_an_answered_question_is_not_closed() -> None:
-    # The surface already dropped its own sheet when it sent the answer, so a
-    # close here would be noise -- and would race a later question's request.
-    frames, send_frame = _frame_collector()
-    broker = QuestionBroker(send_frame)
-
-    task = asyncio.create_task(broker.await_question(CID, prompt="?", default="d"))
-    await _wait_for_frame(frames)
-    broker.reply(CID, "answer")
-
-    assert await task == "answer"
-    assert _of_method(frames, "clarify.closed") == []
-
-
-async def test_a_cancelled_question_closes_the_surface() -> None:
-    # An interrupted turn is the other way a question dies unanswered, and it is
-    # why `resetFlowOverlays` used to drop the sheet. It no longer does, so the
-    # close has to survive the cancellation that caused it.
-    frames, send_frame = _frame_collector()
-    broker = QuestionBroker(send_frame)
-
-    task = asyncio.create_task(broker.await_question(CID, prompt="?", default="d"))
-    await _wait_for_frame(frames)
-    task.cancel()
-
-    assert await task == "d"
-    await _wait_for_method(frames, "clarify.closed")
-
-
 async def test_cancel_all_failsafe() -> None:
     frames, send_frame = _frame_collector()
     broker = QuestionBroker(send_frame)
@@ -233,7 +174,7 @@ async def test_question_respond_handler_unknown_returns_not_ok() -> None:
 
 
 async def test_register_question_methods_adds_respond() -> None:
-    from raven.rpc.dispatcher import Dispatcher
+    from raven.tui_rpc.dispatcher import Dispatcher
 
     _frames, send_frame = _frame_collector()
     broker = QuestionBroker(send_frame)
@@ -241,196 +182,6 @@ async def test_register_question_methods_adds_respond() -> None:
     register_question_methods(dispatcher, question_broker=broker)
 
     assert "clarify.respond" in dispatcher.methods()
-
-
-# ---------------------------------------------------------------------------
-# RoutingQuestionBroker (the gateway's page + IM channels on one shared loop)
-# ---------------------------------------------------------------------------
-
-
-def _routing_pair() -> tuple[RoutingQuestionBroker, QuestionBroker, list[dict], QuestionBroker, list[dict]]:
-    page_frames, page_send = _frame_collector()
-    channel_frames, channel_send = _frame_collector()
-    page = QuestionBroker(page_send)
-    channel = QuestionBroker(channel_send)
-    return RoutingQuestionBroker(page=page, channel=channel), page, page_frames, channel, channel_frames
-
-
-async def test_routing_tui_conversation_reaches_the_page_broker() -> None:
-    routed, page, page_frames, _channel, channel_frames = _routing_pair()
-
-    task = asyncio.create_task(routed.await_question(PAGE_CID, prompt="?", default="d"))
-    frame = await _wait_for_frame(page_frames)
-
-    assert frame["params"]["conversation_id"] == PAGE_CID
-    assert channel_frames == []
-    assert page.pending_req(PAGE_CID) is not None
-
-    page.reply(PAGE_CID, "from the page")
-    assert await task == "from the page"
-
-
-async def test_routing_im_conversation_reaches_the_channel_broker() -> None:
-    routed, _page, page_frames, channel, channel_frames = _routing_pair()
-
-    task = asyncio.create_task(routed.await_question(CID, prompt="?", default="d"))
-    frame = await _wait_for_frame(channel_frames)
-
-    assert frame["params"]["conversation_id"] == CID
-    assert page_frames == []
-    assert channel.pending_req(CID) is not None
-
-    channel.reply(CID, "from feishu")
-    assert await task == "from feishu"
-
-
-async def test_routing_pending_req_and_reply_consult_both() -> None:
-    routed, _page, page_frames, _channel, channel_frames = _routing_pair()
-
-    page_task = asyncio.create_task(routed.await_question(PAGE_CID, prompt="?", default="pd"))
-    channel_task = asyncio.create_task(routed.await_question(CID, prompt="?", default="cd"))
-    page_frame = await _wait_for_frame(page_frames)
-    channel_frame = await _wait_for_frame(channel_frames)
-
-    assert routed.pending_req(PAGE_CID) == page_frame["params"]["request_id"]
-    assert routed.pending_req(CID) == channel_frame["params"]["request_id"]
-
-    assert routed.reply(PAGE_CID, "page answer") is True
-    assert routed.reply(CID, "channel answer") is True
-    assert await page_task == "page answer"
-    assert await channel_task == "channel answer"
-    assert routed.pending_req(PAGE_CID) is None
-    assert routed.pending_req(CID) is None
-    assert routed.reply(CID, "late") is False
-
-
-async def test_routing_cancel_all_failsafes_both() -> None:
-    routed, _page, page_frames, _channel, channel_frames = _routing_pair()
-
-    page_task = asyncio.create_task(routed.await_question(PAGE_CID, prompt="?", default="pd"))
-    channel_task = asyncio.create_task(routed.await_question(CID, prompt="?", default="cd"))
-    await _wait_for_frame(page_frames)
-    await _wait_for_frame(channel_frames)
-
-    routed.cancel_all()
-    assert await page_task == "pd"
-    assert await channel_task == "cd"
-
-
-async def test_deep_research_clarify_follows_the_same_routing() -> None:
-    """The deep-vs-regular clarify keys by the same conversation, so through
-    the routing shim a page session's clarify reaches the page broker and an
-    IM session's the channel broker."""
-    from raven.agent.tools.deep_research import _MODE_DEEP, _ask_search_mode
-
-    routed, page, page_frames, channel, channel_frames = _routing_pair()
-
-    page_task = asyncio.create_task(_ask_search_mode(routed, PAGE_CID))
-    frame = await _wait_for_frame(page_frames)
-    assert frame["params"]["conversation_id"] == PAGE_CID
-    page.reply(PAGE_CID, _MODE_DEEP)
-    assert await page_task == "deep"
-
-    channel_task = asyncio.create_task(_ask_search_mode(routed, CID))
-    frame = await _wait_for_frame(channel_frames)
-    assert frame["params"]["conversation_id"] == CID
-    channel.reply(CID, _MODE_DEEP)
-    assert await channel_task == "deep"
-
-
-# ---------------------------------------------------------------------------
-# Per-conversation scoping of the notification itself
-# (connection.conversation_scoped, what the gateway's page broker is built on)
-# ---------------------------------------------------------------------------
-
-
-async def _hold_connection(sink, conversation_id: str, ready: asyncio.Event, release: asyncio.Event) -> None:
-    """Stand in for one live socket: its own connection scope, held open in its
-    own task, exactly as a transport holds one while it dispatches frames."""
-    from raven.rpc import connection
-
-    token = connection.bind_connection()
-    connection.set_frame_sink(sink)
-    connection.claim_conversation(conversation_id)
-    ready.set()
-    try:
-        await release.wait()
-    finally:
-        connection.unbind_connection(token)
-
-
-async def test_a_question_reaches_only_the_connection_that_owns_the_conversation() -> None:
-    """One gateway, two live surfaces: a relayed terminal and a browser tab on
-    a session of its own. The question asked inside the terminal's session must
-    not open the sheet in the tab, which is not in that conversation.
-
-    The broker itself runs where the engine does -- no connection bound -- which
-    is why the ownership has to be recorded rather than read off the context.
-    """
-    from raven.rpc import connection
-
-    broadcast_frames, broadcast = _frame_collector()
-    terminal_frames, terminal_send = _frame_collector()
-    tab_frames, tab_send = _frame_collector()
-
-    release = asyncio.Event()
-    tab_ready, term_ready = asyncio.Event(), asyncio.Event()
-    tab = asyncio.create_task(_hold_connection(tab_send, "tui:tab", tab_ready, release))
-    term = asyncio.create_task(_hold_connection(terminal_send, "tui:term", term_ready, release))
-    await asyncio.wait_for(tab_ready.wait(), 1)
-    await asyncio.wait_for(term_ready.wait(), 1)
-
-    try:
-        broker = QuestionBroker(connection.conversation_scoped(broadcast))
-        task = asyncio.create_task(broker.await_question("tui:term", prompt="?", default="d"))
-        frame = await _wait_for_frame(terminal_frames)
-        assert frame["params"]["conversation_id"] == "tui:term"
-        assert tab_frames == []
-        assert broadcast_frames == []
-        broker.reply("tui:term", "typed in the terminal")
-        assert await task == "typed in the terminal"
-    finally:
-        release.set()
-        await asyncio.gather(tab, term)
-
-
-async def test_an_unowned_conversation_still_broadcasts() -> None:
-    """A cron or IM turn runs with no connection bound, so nobody claimed its
-    conversation. Broadcast stays the fallback: a question that reaches nobody
-    stalls the turn until it times out."""
-    from raven.rpc import connection
-
-    broadcast_frames, broadcast = _frame_collector()
-    broker = QuestionBroker(connection.conversation_scoped(broadcast))
-
-    task = asyncio.create_task(broker.await_question(CID, prompt="?", default="d"))
-    frame = await _wait_for_frame(broadcast_frames)
-    assert frame["params"]["conversation_id"] == CID
-    broker.reply(CID, "answered")
-    assert await task == "answered"
-
-
-async def test_a_claim_dies_with_its_connection() -> None:
-    """The owner's socket closing must not strand the question: the claim is
-    dropped on unbind, and a send that fails first falls back too."""
-    from raven.rpc import connection
-
-    broadcast_frames, broadcast = _frame_collector()
-    scoped = connection.conversation_scoped(broadcast)
-
-    async def dead_sink(_frame: dict) -> None:
-        raise ConnectionResetError("socket closed")
-
-    token = connection.bind_connection()
-    connection.set_frame_sink(dead_sink)
-    connection.claim_conversation(PAGE_CID)
-    await scoped({"jsonrpc": "2.0", "method": "clarify.request", "params": {"conversation_id": PAGE_CID}})
-    assert len(broadcast_frames) == 1
-
-    connection.unbind_connection(token)
-    assert connection.frame_sink_for(PAGE_CID) is None
-    await scoped({"jsonrpc": "2.0", "method": "clarify.request", "params": {"conversation_id": PAGE_CID}})
-    assert len(broadcast_frames) == 2
 
 
 async def test_undeliverable_question_fails_fast_to_default() -> None:

@@ -16,7 +16,6 @@ import httpx
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.bundles import ToolWiring
 from raven.agent.tools import deep_research as dr_mod
 from raven.agent.tools.deep_research import (
     DeepResearchManager,
@@ -451,9 +450,7 @@ class _StubProvider:
 
 def _offer_loop(tmp_path: Path) -> AgentLoop:
     """A loop that starts unconfigured, so the offer stand-in is registered."""
-    return AgentLoop(
-        provider=_StubProvider(), workspace=tmp_path, tools=ToolWiring(deep_research_config=DeepResearchToolConfig())
-    )
+    return AgentLoop(provider=_StubProvider(), workspace=tmp_path, deep_research_config=DeepResearchToolConfig())
 
 
 def test_promote_swaps_offer_for_real_when_key_appears(tmp_path: Path, monkeypatch):
@@ -582,98 +579,3 @@ def test_extract_output_text_concatenates_message_output_only():
         ]
     }
     assert _extract_output_text(body) == "AB"
-
-
-# ---- disabling the tool outright (tools.disabled_tools) ----
-
-
-@pytest.mark.parametrize("api_key", ["", "sk-test"])
-def test_disabled_tools_removes_deep_research_in_either_mode(tmp_path: Path, monkeypatch, api_key):
-    """``deep_research`` registers in one of two variants; a disable must take out
-    both, not just the working one.
-
-    Asserted on what is offered rather than on what is registered: a switched-off
-    tool now stays in the registry and is left out of the assembled array, because
-    expressing the preference by unregistering made it irreversible.
-    """
-    monkeypatch.delenv("MIROTHINKER_API_KEY", raising=False)
-    loop = AgentLoop(
-        provider=_StubProvider(),
-        workspace=tmp_path,
-        tools=ToolWiring(
-            deep_research_config=DeepResearchToolConfig(api_key=api_key), disabled_tools=["deep_research"]
-        ),
-    )
-    offered = {d["function"]["name"] for d in loop.tools.get_definitions()}
-    assert "deep_research" not in offered
-
-
-def test_disabled_deep_research_survives_the_promotion_path(tmp_path: Path, monkeypatch):
-    """A disable must be an off switch, not just a startup one.
-
-    Promotion swaps the stand-in for the working tool as soon as a key shows up on
-    disk, and it is about whether a key is available rather than about what the
-    operator wants -- so it now runs for a switched-off tool too, and the swap is
-    harmless because the name is withheld either way. What has to hold is the
-    thing this test was always for: a key appearing later does not make a disabled
-    tool reachable.
-    """
-    import raven.config.update_tools as ut
-
-    monkeypatch.delenv("MIROTHINKER_API_KEY", raising=False)
-    loop = AgentLoop(
-        provider=_StubProvider(),
-        workspace=tmp_path,
-        tools=ToolWiring(deep_research_config=DeepResearchToolConfig(), disabled_tools=["deep_research"]),
-    )
-    offered = lambda: {d["function"]["name"] for d in loop.tools.get_definitions()}  # noqa: E731
-    assert "deep_research" not in offered()
-
-    monkeypatch.setattr(ut, "get_deep_research", lambda **_kw: {"api_key": "sk", "api_base": "", "model": ""})
-    loop._maybe_promote_deep_research()
-
-    assert "deep_research" not in offered()
-
-
-# ── report location: the session working directory, not agent home ──
-
-
-async def test_report_lands_in_the_bound_working_directory(tmp_path: Path, monkeypatch):
-    """A research report is a file the user asked for, so it belongs where the
-    turn works, not in agent home."""
-    from raven.agent.workdir import bind
-
-    home = tmp_path / "home"
-    home.mkdir()
-    session = tmp_path / "session"
-    session.mkdir()
-    tool = DeepResearchTool(DeepResearchToolConfig(api_key="sk-test"), workspace=home)
-    _patch(monkeypatch, lambda req: httpx.Response(200, content=_sse(ANSWER)))
-
-    with bind(session):
-        result = json.loads(await tool.execute(query="q"))
-
-    assert Path(result["report_ref"]).parent == session / "deep_research"
-    assert not (home / "deep_research").exists()
-
-
-async def test_async_report_uses_the_directory_captured_at_start(tmp_path: Path, monkeypatch):
-    """The poll task outlives the turn, so the directory has to be captured
-    while the binding is still live rather than read inside the task."""
-    from raven.agent.workdir import bind
-
-    home = tmp_path / "home"
-    home.mkdir()
-    session = tmp_path / "session"
-    session.mkdir()
-    tool = _async_tool(home, submit=lambda req: None)
-    _patch(monkeypatch, _responses_handler())
-
-    with bind(session):
-        ack = json.loads(await tool.execute(query="q"))
-
-    assert ack["status"] == "started"
-    await tool._mgr._active["weixin:chat1"]
-
-    assert (session / "deep_research").is_dir()
-    assert not (home / "deep_research").exists()

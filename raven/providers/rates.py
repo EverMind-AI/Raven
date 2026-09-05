@@ -1,8 +1,11 @@
 """What a model costs per token and how much context it takes.
 
 Both are facts about a provider's catalogue, so they are decided here and not by
-whoever is about to report a number: a provider decision made outside
-``raven.providers`` grows a second copy, and the copies answer differently.
+whoever is about to report a number. They used to live in ``token_wise.pricing``
+next to the cost formula, which put a provider decision outside
+``raven.providers`` -- and a decision outside its module grows a second copy: the
+benchmark runner carried its own rate table, and the window resolution grew an
+OpenRouter fallback that answered for vendors OpenRouter does not serve.
 
 Two questions, deliberately answered from different places:
 
@@ -42,20 +45,10 @@ DEFAULT_CONTEXT_WINDOW_TOKENS = 65_536
 # which clamp an over-large value rather than rejecting it.
 DEFAULT_MAX_OUTPUT_TOKENS = 16384
 
-# The claude half of that fallback. Anthropic's Messages API requires
-# ``max_tokens`` on every request, so a claude model the catalogue does not
-# know still needs a number the request can carry -- and 16384 is a guess
-# sized for OpenAI-compatible servers that clamp, not for a vendor that cuts
-# the answer at exactly what was asked. 64000 is the smallest ceiling among
-# the current claude models (Haiku 4.5), so none of them refuses it, and it
-# leaves room for a whole file. Here rather than in the Anthropic transport so
-# the request and the loop's reservation keep reading one number.
-CLAUDE_MAX_OUTPUT_TOKENS = 64000
-
 #: Rate pair: (prompt_cost_per_token, completion_cost_per_token) in USD.
 #: Keep this table small -- it is a fallback for brand-new models that LiteLLM
 #: has not indexed yet. Check LiteLLM first before adding here.
-_FALLBACK_RATES: dict[str, tuple[float, float]] = {
+_FALLBACK_PRICING: dict[str, tuple[float, float]] = {
     # OpenRouter model pages (snapshot 2026-03)
     "z-ai/glm-4.5-air": (0.13e-6, 0.85e-6),  # $0.13/$0.85 per 1M
 }
@@ -108,7 +101,7 @@ def _drivers_dir() -> pathlib.Path | None:
         return None
 
 
-def may_prompt(model: str) -> bool:
+def _may_prompt(model: str) -> bool:
     """Would handing this model to LiteLLM start an interactive login?
 
     Three of its drivers ship a device-flow authenticator, and every entry point
@@ -180,7 +173,7 @@ def _try_litellm_rates(model: str, input_tokens: int, output_tokens: int) -> tup
     probe_out = output_tokens if output_tokens else 1
 
     for candidate in _candidates(model):
-        if may_prompt(candidate):
+        if _may_prompt(candidate):
             # Skipped, not read from the table: the rows these families have are
             # priced at zero, which this function already treats as unknown, so
             # reading them would add a branch that cannot fire. The caller falls
@@ -323,7 +316,7 @@ def _fetch_openrouter_models(*, allow_fetch: bool = True) -> dict[str, dict]:
 def warm_catalog_in_background() -> None:
     """Start filling the catalog off the request path, without blocking a turn.
 
-    The rates ladder cannot be relied on to do it. It asks LiteLLM's static
+    The pricing path cannot be relied on to do it. It asks LiteLLM's static
     table first and only reaches this catalog when that table *misses*, so for
     every model LiteLLM does carry -- which is every model Raven ships a default
     for -- the catalog is never fetched and a reader like
@@ -492,7 +485,7 @@ def _try_openrouter_rates(model: str, *, table: dict | None = None) -> tuple[flo
     """Look up live OpenRouter per-token rates. Returns rates or None.
 
     ``table`` supplies an already-resolved catalogue, which is what the ladder's
-    first tier passes: rate resolution runs after every completion, on the event loop, and
+    first tier passes: pricing runs after every completion, on the event loop, and
     must not be the thing that blocks a turn on an HTTP round-trip. Omitted, this
     fetches as before.
     """
@@ -572,7 +565,7 @@ def token_rates(model: str, input_tokens: int = 0, output_tokens: int = 0) -> tu
         or _try_litellm_rates(model, input_tokens, output_tokens)
         or _try_openrouter_rates(model)
         or _try_snapshot_rates(model)
-        or _FALLBACK_RATES.get(model.removeprefix("openrouter/"))
+        or _FALLBACK_PRICING.get(model.removeprefix("openrouter/"))
     )
 
 
@@ -601,24 +594,6 @@ def _trustworthy_ceiling(entry: dict | None) -> int | None:
     return int(ceiling)
 
 
-def _litellm_ready() -> bool:
-    """Whether LiteLLM is imported *and* done initializing.
-
-    ``sys.modules`` gains the key when the import starts, not when it ends, so
-    membership alone is true for the seconds the module body is still running.
-    A caller that reads it that way and then imports does not get the cheap
-    hit it asked for: it blocks on LiteLLM's module import lock until the
-    thread already importing it is finished -- the exact wait ``allow_import``
-    exists to refuse. ``__spec__._initializing`` is the flag CPython's own
-    import machinery reads to tell a live import from a finished one; a module
-    carrying no spec is one no import is still running.
-    """
-    module = sys.modules.get("litellm")
-    if module is None:
-        return False
-    return not getattr(getattr(module, "__spec__", None), "_initializing", False)
-
-
 def _try_litellm_max_output(model: str, *, allow_import: bool = True) -> int | None:
     """The model's own output ceiling, from the same metadata as the window.
 
@@ -630,7 +605,7 @@ def _try_litellm_max_output(model: str, *, allow_import: bool = True) -> int | N
     this wrong answer the table and ``get_model_info`` alike, so guarding one
     would hand back exactly what the other just rejected.
     """
-    if not allow_import and not _litellm_ready():
+    if not allow_import and "litellm" not in sys.modules:
         return None
     try:
         from raven.providers.litellm_setup import import_litellm
@@ -643,7 +618,7 @@ def _try_litellm_max_output(model: str, *, allow_import: bool = True) -> int | N
         ceiling = _trustworthy_ceiling(_table_entry(candidate))
         if ceiling:
             return ceiling
-        if may_prompt(candidate):
+        if _may_prompt(candidate):
             continue
         try:
             info = litellm.get_model_info(candidate)
@@ -668,11 +643,7 @@ def resolve_max_output_tokens(model: str | None, *, allow_fetch: bool = True) ->
     """
     if not model:
         return DEFAULT_MAX_OUTPUT_TOKENS
-    return _try_litellm_max_output(model, allow_import=allow_fetch) or _fallback_max_output(model)
-
-
-def _fallback_max_output(model: str) -> int:
-    return CLAUDE_MAX_OUTPUT_TOKENS if "claude" in model.lower() else DEFAULT_MAX_OUTPUT_TOKENS
+    return _try_litellm_max_output(model, allow_import=allow_fetch) or DEFAULT_MAX_OUTPUT_TOKENS
 
 
 def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int | None:
@@ -685,15 +656,14 @@ def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int
     bound only over-trims, where this module's documented default (65536) would
     over-estimate an 8k model by a factor of eight.
 
-    ``allow_import=False`` answers only from a LiteLLM that has already
-    finished importing (see ``_litellm_ready``): importing it costs ~2-7s, and
-    a caller passing this (``AgentLoop`` construction, racing the lazy
-    provider's prewarm thread over that same import) wants the cheap tiers
-    only, not to wait out the import it is trying to defer. Once LiteLLM is in
-    hand the check is free and the lookup proceeds exactly as with
-    ``allow_import=True``.
+    ``allow_import=False`` answers only from a LiteLLM already sitting in
+    ``sys.modules``: importing it costs ~2-7s, and a caller passing this
+    (``AgentLoop`` construction, before the lazy provider's prewarm thread has
+    had a chance to import it) wants the cheap tiers only, not to trigger the
+    same import it is trying to defer. Once LiteLLM is imported the check is
+    free and the lookup proceeds exactly as with ``allow_import=True``.
     """
-    if not allow_import and not _litellm_ready():
+    if not allow_import and "litellm" not in sys.modules:
         return None
     try:
         from raven.providers.litellm_setup import import_litellm
@@ -708,7 +678,7 @@ def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int
         window = _numeric(_table_entry(candidate), "max_input_tokens", "max_tokens")
         if window:
             return int(window)
-        if may_prompt(candidate):
+        if _may_prompt(candidate):
             continue
         try:
             info = litellm.get_model_info(candidate)
@@ -775,8 +745,8 @@ def effective_context_window(model: str, configured: int | None, *, allow_fetch:
 def reset_openrouter_cache() -> None:
     """Clear the in-process OpenRouter catalog cache.
 
-    The tests' reset: pair it with the ``model_catalog_cache._CACHE_PATH`` seam
-    to exercise the disk tiers without touching the real ~/.raven/cache/.
+    Only useful for tests -- pair it with the ``model_catalog_cache._CACHE_PATH``
+    seam to exercise the disk tiers without touching the real ~/.raven/cache/.
     """
     global _OPENROUTER_CACHE, _OPENROUTER_CACHE_TIME, _WARM_AT
     _OPENROUTER_CACHE = {}

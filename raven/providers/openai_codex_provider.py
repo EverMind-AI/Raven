@@ -31,8 +31,6 @@ from raven.providers.base import (
     ToolCallRequest,
     format_llm_error,
 )
-from raven.providers.tool_names import normalized_tool_name
-from raven.providers.usage import merge_usage
 
 DEFAULT_CODEX_URL = "https://chatgpt.com/backend-api/codex/responses"
 DEFAULT_ORIGINATOR = "raven"
@@ -94,23 +92,17 @@ class OpenAICodexProvider(LLMProvider):
         url = DEFAULT_CODEX_URL
 
         timeout = self.generation.timeout
-        # Two budgets, not one: the whole call may take the full timeout, but a
-        # stream that goes silent between two SSE lines is given up after the
-        # idle budget (reviewed 2026-09-07: this adapter fed the call budget to
-        # its per-line watchdog, so a silent Codex stream still waited 600 s
-        # with streamIdleTimeout set to 180).
-        idle_timeout = getattr(self.generation, "stream_idle_timeout", None) or timeout
         try:
             try:
                 content, tool_calls, finish_reason = await _request_codex(
-                    url, headers, body, verify=True, timeout=timeout, idle_timeout=idle_timeout
+                    url, headers, body, verify=True, timeout=timeout
                 )
             except Exception as e:
                 if "CERTIFICATE_VERIFY_FAILED" not in str(e):
                     raise
                 logger.warning("SSL certificate verification failed for Codex API; retrying with verify=False")
                 content, tool_calls, finish_reason = await _request_codex(
-                    url, headers, body, verify=False, timeout=timeout, idle_timeout=idle_timeout
+                    url, headers, body, verify=False, timeout=timeout
                 )
             return LLMResponse(
                 content=content,
@@ -159,11 +151,7 @@ async def _request_codex(
     body: dict[str, Any],
     verify: bool,
     timeout: float,
-    idle_timeout: float | None = None,
 ) -> tuple[str, list[ToolCallRequest], str]:
-    """One Codex request. ``timeout`` bounds the call; ``idle_timeout`` (the
-    stream-idle budget, defaulting to the call budget) bounds the silence
-    between two SSE lines, which is the watchdog ``_iter_sse`` runs."""
     async with httpx.AsyncClient(timeout=timeout, verify=verify) as client:
         async with client.stream("POST", url, headers=headers, json=body) as response:
             if response.status_code != 200:
@@ -171,7 +159,7 @@ async def _request_codex(
                 raise ProviderHTTPError(
                     response.status_code, _friendly_error(response.status_code, text.decode("utf-8", "ignore"))
                 )
-            return await _consume_sse(response, idle_timeout or timeout)
+            return await _consume_sse(response, timeout)
 
 
 def _convert_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -217,11 +205,7 @@ def _convert_messages(messages: list[dict[str, Any]]) -> tuple[str, list[dict[st
                     {
                         "type": "message",
                         "role": "assistant",
-                        # `annotations` is required on a `ResponseOutputTextParam`
-                        # and is the reply's own field, not a request one: an
-                        # assistant message being replayed has none to carry, so
-                        # the empty list is the shape rather than a placeholder.
-                        "content": [{"type": "output_text", "text": content, "annotations": []}],
+                        "content": [{"type": "output_text", "text": content}],
                         "status": "completed",
                         "id": f"msg_{idx}",
                     }
@@ -267,9 +251,9 @@ def _convert_tool_output(content: Any) -> Any:
     image at all.
 
     The important part is what this does NOT do: ``json.dumps`` a block list.
-    That would serialize an image's whole base64 payload into the output as
-    prose -- nothing would error, and the model would see megabytes of gibberish
-    instead of a picture.
+    That used to serialize an image's whole base64 payload into the output as
+    prose -- the model saw megabytes of gibberish instead of a picture, and
+    nothing errored.
     """
     if isinstance(content, str):
         return content
@@ -373,21 +357,13 @@ async def _iter_sse(response: httpx.Response, timeout: float) -> AsyncGenerator[
         buffer.append(line)
 
 
-async def _consume_sse(
-    response: httpx.Response,
-    timeout: float,
-    *,
-    usage_sink: dict[str, Any] | None = None,
-) -> tuple[str, list[ToolCallRequest], str]:
+async def _consume_sse(response: httpx.Response, timeout: float) -> tuple[str, list[ToolCallRequest], str]:
     content = ""
     tool_calls: list[ToolCallRequest] = []
     tool_call_buffers: dict[str, dict[str, Any]] = {}
     finish_reason = "stop"
 
     async for event in _iter_sse(response, timeout):
-        raw_usage = (event.get("response") or {}).get("usage")
-        if usage_sink is not None and isinstance(raw_usage, dict):
-            usage_sink.update(merge_usage(usage_sink, raw_usage))
         event_type = event.get("type")
         if event_type == "response.output_item.added":
             item = event.get("item") or {}
@@ -434,12 +410,12 @@ async def _consume_sse(
                 tool_calls.append(
                     ToolCallRequest(
                         id=f"{call_id}|{buf.get('id') or item.get('id') or 'fc_0'}",
-                        name=normalized_tool_name(buf.get("name") or item.get("name")),
+                        name=buf.get("name") or item.get("name"),
                         arguments=args,
                         run_meta=RunMeta(arguments_repaired=True) if repaired else None,
                     )
                 )
-        elif event_type in {"response.completed", "response.done"}:
+        elif event_type == "response.completed":
             status = (event.get("response") or {}).get("status")
             finish_reason = _map_finish_reason(status)
         elif event_type in {"error", "response.failed"}:

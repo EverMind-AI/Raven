@@ -1,4 +1,4 @@
-"""Unit tests for PlannerContextAssembler.
+"""Unit tests for ContextAssembler.
 
 Verifies assembly from each source independently + graceful degradation
 when a source is unavailable.
@@ -14,7 +14,7 @@ import pytest
 
 from raven.config.raven import NudgePolicyConfig
 from raven.memory_engine.consolidate.consolidator import MemoryStore
-from raven.proactive_engine.sentinel.predictor.context_assembler import PlannerContextAssembler
+from raven.proactive_engine.sentinel.predictor.context_assembler import ContextAssembler
 from raven.proactive_engine.sentinel.predictor.routine_learner import RoutineLearner
 from raven.proactive_engine.sentinel.trigger_policy.policy import NudgePolicy
 
@@ -44,7 +44,7 @@ def memory_store(workspace) -> MemoryStore:
 
 
 def test_assemble_empty_sources():
-    asm = PlannerContextAssembler(now_fn=_now)
+    asm = ContextAssembler(now_fn=_now)
     ctx = asm.assemble()
     assert ctx.now == _now()
     assert ctx.memory_md == ""
@@ -61,7 +61,7 @@ def test_assemble_empty_sources():
 
 
 def test_assemble_reads_memory_and_history(memory_store):
-    asm = PlannerContextAssembler(memory_store=memory_store, now_fn=_now)
+    asm = ContextAssembler(memory_store=memory_store, now_fn=_now)
     ctx = asm.assemble()
     assert "Duolingo streak 47" in ctx.memory_md
     assert "morning duolingo" in ctx.history_md_recent
@@ -71,7 +71,7 @@ def test_history_tail_limits_lines(workspace, memory_store):
     # Write 200 entries; assembler with tail=10 should keep only 10.
     for i in range(200):
         memory_store.append_history(f"[2026-04-{(i % 28) + 1:02d} 08:00] entry {i}")
-    asm = PlannerContextAssembler(
+    asm = ContextAssembler(
         memory_store=memory_store,
         now_fn=_now,
         history_tail_lines=10,
@@ -93,7 +93,7 @@ def test_assemble_learns_routines_from_history(memory_store):
         learning_window_days=60,
         now_fn=_now,
     )
-    asm = PlannerContextAssembler(
+    asm = ContextAssembler(
         memory_store=memory_store,
         routine_learner=learner,
         now_fn=_now,
@@ -105,7 +105,7 @@ def test_assemble_learns_routines_from_history(memory_store):
 
 
 def test_assemble_no_routines_if_learner_absent(memory_store):
-    asm = PlannerContextAssembler(memory_store=memory_store, now_fn=_now)
+    asm = ContextAssembler(memory_store=memory_store, now_fn=_now)
     ctx = asm.assemble()
     assert ctx.routines == []
 
@@ -126,7 +126,7 @@ def test_assemble_active_sessions_from_manager():
         ],
     )
     session_manager = SimpleNamespace(sessions={"cli:direct": sess})
-    asm = PlannerContextAssembler(session_manager=session_manager, now_fn=_now)
+    asm = ContextAssembler(session_manager=session_manager, now_fn=_now)
     ctx = asm.assemble()
     assert len(ctx.active_sessions) == 1
     assert ctx.active_sessions[0].key == "cli:direct"
@@ -141,7 +141,7 @@ def test_assemble_excludes_stale_sessions():
         messages=[],
     )
     session_manager = SimpleNamespace(sessions={"cli:old": stale})
-    asm = PlannerContextAssembler(
+    asm = ContextAssembler(
         session_manager=session_manager,
         now_fn=_now,
         active_session_window_seconds=3600,  # 1h window
@@ -155,7 +155,7 @@ def test_assemble_sessions_sorted_recent_first():
     old = SimpleNamespace(key="cli:a", updated_at=now - timedelta(minutes=30), messages=[])
     new = SimpleNamespace(key="cli:b", updated_at=now - timedelta(minutes=5), messages=[])
     session_manager = SimpleNamespace(sessions={"cli:a": old, "cli:b": new})
-    asm = PlannerContextAssembler(session_manager=session_manager, now_fn=_now)
+    asm = ContextAssembler(session_manager=session_manager, now_fn=_now)
     ctx = asm.assemble()
     assert [s.key for s in ctx.active_sessions] == ["cli:b", "cli:a"]
 
@@ -182,7 +182,7 @@ def test_assemble_nudge_state():
         now_fn=_now,
     )
     policy.record_fired("nudge", "s1", "test")
-    asm = PlannerContextAssembler(nudge_policy=policy, now_fn=_now)
+    asm = ContextAssembler(nudge_policy=policy, now_fn=_now)
     ctx = asm.assemble()
     assert ctx.nudge_policy_state.nudges_used_this_hour == 1
     assert ctx.nudge_policy_state.remaining_today == 9
@@ -194,7 +194,7 @@ def test_assemble_nudge_state():
 
 
 def test_assemble_calendar_from_callback():
-    asm = PlannerContextAssembler(
+    asm = ContextAssembler(
         now_fn=_now,
         calendar_fn=lambda: ["15:00 standup", "17:00 1:1 with manager"],
     )
@@ -207,7 +207,7 @@ def test_assemble_calendar_callback_error_silent():
     def boom():
         raise RuntimeError("boom")
 
-    asm = PlannerContextAssembler(now_fn=_now, calendar_fn=boom)
+    asm = ContextAssembler(now_fn=_now, calendar_fn=boom)
     ctx = asm.assemble()
     assert ctx.calendar == []
 
@@ -220,7 +220,7 @@ def test_remember_last_decision_populates_ctx():
     from raven.proactive_engine.sentinel.types import PlannerDecision
 
     last = PlannerDecision(action="skip", reason="nothing", proactivity_score=0.1)
-    asm = PlannerContextAssembler(now_fn=_now)
+    asm = ContextAssembler(now_fn=_now)
     asm.remember_last_decision(last)
     ctx = asm.assemble()
     assert ctx.last_decision is last
@@ -231,7 +231,7 @@ def test_remember_last_decision_populates_ctx():
 
 
 def test_user_profile_passthrough():
-    asm = PlannerContextAssembler(
+    asm = ContextAssembler(
         now_fn=_now,
         user_profile="Chinese native speaker, works in fintech",
     )

@@ -33,8 +33,8 @@ import sys
 from pathlib import Path
 
 from benchmarks.appworld.evolve import adapter as aw_adapter
-from evolver.launch.contract import BenchBundle, LaunchContext, validate_whitelist
-from evolver.orchestrator.scoring import eval_with_infra_rerun
+from raven.evolver.launch.contract import BenchBundle, LaunchContext, validate_whitelist
+from raven.evolver.orchestrator.scoring import eval_with_infra_rerun
 
 _KNOWN_KEYS = {
     "config_path",
@@ -111,7 +111,7 @@ def _task_ids(bc: dict, prefix: str, base_dir: Path) -> list[str]:
         raise ValueError(
             f"bench_config {prefix} task ids contain placeholders "
             f"{placeholders[:3]} — replace them with real AppWorld task ids "
-            "(see evolver/README.md, Bootstrap)"
+            "(see raven/evolver/README.md, Bootstrap)"
         )
     return ids
 
@@ -160,7 +160,7 @@ def build(ctx: LaunchContext) -> BenchBundle:
         raise ValueError(
             f"no AppWorld install found at {data_root} (no data/ under it) — "
             "install AppWorld there or point bench_config.appworld_data_root "
-            "at your install (see evolver/README.md, Bootstrap)"
+            "at your install (see raven/evolver/README.md, Bootstrap)"
         )
     if not any((data_root / "data").iterdir()):
         raise ValueError(
@@ -171,7 +171,7 @@ def build(ctx: LaunchContext) -> BenchBundle:
     if not appworld_bin.is_file():
         raise ValueError(
             f"appworld binary not found at {appworld_bin} — create the venv "
-            "per evolver/README.md Bootstrap step 1, or set APPWORLD_BIN"
+            "per raven/evolver/README.md Bootstrap step 1, or set APPWORLD_BIN"
         )
     os.environ["APPWORLD_ROOT"] = str(data_root)
 
@@ -289,7 +289,7 @@ def build(ctx: LaunchContext) -> BenchBundle:
             baseline_mode=bc.get("baseline_mode", "frozen"),
         )
 
-    from evolver.tree.node import HarnessNode
+    from raven.evolver.tree.node import HarnessNode
 
     root_node = HarnessNode(
         node_id="C0",
@@ -307,7 +307,7 @@ def build(ctx: LaunchContext) -> BenchBundle:
             import dataclasses
 
             from benchmarks.appworld.evolve.run import build_appworld_sealed_runner
-            from evolver.orchestrator.sealed.runner import unseal_retention
+            from raven.evolver.orchestrator.sealed.runner import unseal_retention
 
             runner = build_appworld_sealed_runner(
                 aw_cfg=cfg,

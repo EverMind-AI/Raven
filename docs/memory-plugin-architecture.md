@@ -1,7 +1,5 @@
 # Memory Plugin Architecture & EverOS as a Bundled Backend
 
-> Design record (2026-06, pre-v0.2.0). The bundled-in-tree layout described here was superseded: EverOS now ships as its own distribution under `plugins-dist/everos-memory/` -- see the Plugins entries in `CONTEXT.md` for current terms.
-
 Status legend: **[DONE]** implemented on `feature/integrate-everos` · **[PLAN]** proposed.
 
 This document consolidates the memory subsystem design: the refactored
@@ -30,7 +28,7 @@ into the live boot and (b) move EverOS in-tree under
 
 ## 2. The `MemoryBackend` contract **[DONE]**
 
-`raven/contracts/memory.py` defines the single Protocol every
+`raven/memory_engine/backend.py` defines the single Protocol every
 memory plugin implements. The recall surface was refactored from a
 single prefixed opaque `owner_id` to explicit XOR track ids:
 
@@ -84,9 +82,9 @@ those obsolete keys are still present and disagree.
 
 ## 3. Plugin discovery model **[DONE]**
 
-`raven/plugins/discover.py` scans four sources and deduplicates by
+`raven/plugin/discover.py` scans four sources and deduplicates by
 plugin id. Discovery **reads manifests only — it never imports backend
-code.** `build_plugin_registry` (`raven/core/plugin_stack.py`) wires
+code.** `build_plugin_registry` (`raven/cli/_plugin_stack.py`) wires
 all four via the shared `plugin_discovery_sources()` helper, which the
 `raven plugins` CLI command reuses so both see the same set.
 
@@ -98,7 +96,7 @@ all four via the shared `plugin_discovery_sources()` helper, which the
 |---:|---|---|---|
 | 4 | `BUNDLED` | `raven/plugin/memory/<id>/` | first-party, ships with raven |
 | 3 | `USER` | `~/.raven/plugins/<id>/` | local drop-in |
-| 2 | `PROJECT` | `./.raven/plugins/<id>/`, and every root in `plugins.dirs` | per-project |
+| 2 | `PROJECT` | `./.raven/plugins/<id>/` | per-project |
 | 1 | `ENTRY_POINTS` | pip pkg, group `raven.plugins` | third-party distribution |
 
 `bundled > user > project > entry_points` enforces the "builtin shadow
@@ -353,7 +351,7 @@ place (raven's `pyproject.toml`). The upgrade surface is one line.
 5. **Finalize**: bump the manifest `version`. Two tests assert it as a
    literal and must be updated with it —
    `test_everos_plugin_discovery.py::test_bundled_shadows_lower_priority_source`
-   and `test_cli_plugin_commands.py::TestActiveBackend::test_lists_everos_memory`.
+   and `test_plugin_command.py::TestActiveBackend::test_lists_everos_memory`.
    Then commit
    `pyproject.toml` + `uv.lock` + adapter changes. Rollback =
    `git revert` (plus data restore if the schema changed — see step 4).

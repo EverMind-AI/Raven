@@ -20,9 +20,7 @@ from typing import Any, Callable
 
 import pytest
 
-from raven.agent.hook.adapters import OnUserInboundAdapter, ResponseModifierAdapter
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.bundles import HostWiring, ToolWiring, TurnPolicy
 from raven.providers.base import LLMProvider, LLMResponse
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
@@ -66,9 +64,9 @@ def _make_agent(
         provider=provider or StubProvider(),
         workspace=workspace,
         model="stub",
-        policy=TurnPolicy(max_iterations=2),
-        host=HostWiring(hooks=[ResponseModifierAdapter(modifier)]),
-        tools=ToolWiring(restrict_to_workspace=True),
+        max_iterations=2,
+        response_modifier=modifier,
+        restrict_to_workspace=True,
     )
 
 
@@ -225,9 +223,9 @@ async def test_on_user_inbound_called_for_user_message(workspace):
         provider=StubProvider(),
         workspace=workspace,
         model="stub",
-        policy=TurnPolicy(max_iterations=2),
-        host=HostWiring(hooks=[OnUserInboundAdapter(lambda msg: received.append(msg))]),
-        tools=ToolWiring(restrict_to_workspace=True),
+        max_iterations=2,
+        on_user_inbound=lambda msg: received.append(msg),
+        restrict_to_workspace=True,
     )
     await agent._process_message(_make_msg("hello"))
     assert len(received) == 1
@@ -244,9 +242,9 @@ async def test_on_user_inbound_skipped_for_sentinel_origin(workspace):
         provider=StubProvider(),
         workspace=workspace,
         model="stub",
-        policy=TurnPolicy(max_iterations=2),
-        host=HostWiring(hooks=[OnUserInboundAdapter(lambda msg: received.append(msg))]),
-        tools=ToolWiring(restrict_to_workspace=True),
+        max_iterations=2,
+        on_user_inbound=lambda msg: received.append(msg),
+        restrict_to_workspace=True,
     )
     await agent._process_message(_make_msg("sentinel-originated"), origin=Origin.SENTINEL)
     assert received == []
@@ -261,9 +259,9 @@ async def test_on_user_inbound_exception_does_not_crash(workspace):
         provider=StubProvider(),
         workspace=workspace,
         model="stub",
-        policy=TurnPolicy(max_iterations=2),
-        host=HostWiring(hooks=[OnUserInboundAdapter(bad_cb)]),
-        tools=ToolWiring(restrict_to_workspace=True),
+        max_iterations=2,
+        on_user_inbound=bad_cb,
+        restrict_to_workspace=True,
     )
     out = await agent._process_message(_make_msg())
     assert out is not None

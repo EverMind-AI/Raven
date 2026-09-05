@@ -1,28 +1,18 @@
 """Tests for the ``raven sentinel`` CLI subapp — covers all
 user-facing commands plus the ``[Internal]`` ``discover-now`` entry
 used by the proactivity-eval longrun.
-
-The read-only memory inspectors, ``sentinel attention`` and ``sentinel
-behaviors``, run end-to-end through Typer's CliRunner over a seeded
-workspace: they pin the section, session and date filters, the folded
-rendering, and the exit code each failure mode reports.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 from typer.testing import CliRunner
 
 from raven.cli.commands import sentinel_app
-from raven.memory_engine.consolidate.behaviors import (
-    BehaviorEvent,
-    render_append_block,
-)
 from raven.proactive_engine.sentinel.executor.pending_decision import PendingDecisionStore
 from raven.proactive_engine.sentinel.predictor.routine_store import RoutineStore
 from raven.proactive_engine.sentinel.types import PendingDecision, Routine, TaskOption
@@ -46,10 +36,10 @@ def runner() -> CliRunner:
 def fake_sentinel_dir(tmp_path: Path, monkeypatch) -> Path:
     sentinel_dir = tmp_path / "sentinel"
     sentinel_dir.mkdir(parents=True)
-    # Both seams: the CLI module binds the name at import, the stack builders
-    # read it from raven.config.paths at call time.
-    monkeypatch.setattr("raven.config.paths.get_sentinel_dir", lambda: sentinel_dir)
-    monkeypatch.setattr("raven.cli.sentinel_commands.get_sentinel_dir", lambda: sentinel_dir)
+    monkeypatch.setattr(
+        "raven.config.paths.get_sentinel_dir",
+        lambda: sentinel_dir,
+    )
     return sentinel_dir
 
 
@@ -211,237 +201,6 @@ def test_routines_no_match_with_status_filter(runner, fake_sentinel_dir):
     assert "No routines with status=active" in result.stdout
 
 
-# ── attention / behaviors: seeding helpers ───────────────────────────
-# Read-only inspectors: both take an explicit ``-w`` workspace, so these
-# tests seed ``user_memory/`` under ``tmp_path`` and share one runner
-# instead of going through the ``fake_sentinel_dir`` seams above.
-
-
-cli_runner = CliRunner()
-
-
-def _seed_attention(workspace: Path, text: str) -> None:
-    path = workspace / "user_memory" / "attention.md"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
-
-
-def _seed_behaviors(workspace: Path, events: list[BehaviorEvent]) -> None:
-    path = workspace / "user_memory" / "behaviors.md"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_append_block(events), encoding="utf-8")
-
-
-def _ev(**overrides: Any) -> BehaviorEvent:
-    defaults: dict[str, Any] = dict(
-        id="evt_a1b2c3d4",
-        day="2026-05-29",
-        start="14:00",
-        end="14:30",
-        session="cli:default",
-        turns=8,
-        intent="debug",
-        outcome="resolved",
-        topic="memory-engine",
-        project="raven",
-        source="user-asked",
-        owner="user",
-        tools=["Bash", "Edit"],
-        summary="debugged memory_engine session split",
-    )
-    defaults.update(overrides)
-    return BehaviorEvent(**defaults)
-
-
-# ── sentinel attention ───────────────────────────────────────────────
-
-
-class TestAttentionCommand:
-    def test_missing_file_exits_with_code_1(self, tmp_path: Path) -> None:
-        result = cli_runner.invoke(
-            sentinel_app,
-            ["attention", "-w", str(tmp_path)],
-        )
-        assert result.exit_code == 1
-        assert "No attention.md" in result.stdout
-
-    def test_dumps_full_file(self, tmp_path: Path) -> None:
-        _seed_attention(
-            tmp_path,
-            "## Pending proposals\n- prop_42\n\n## Active threads\n- routine_x\n",
-        )
-        result = cli_runner.invoke(
-            sentinel_app,
-            ["attention", "-w", str(tmp_path)],
-        )
-        assert result.exit_code == 0
-        assert "prop_42" in result.stdout
-        assert "routine_x" in result.stdout
-
-    def test_section_filter(self, tmp_path: Path) -> None:
-        _seed_attention(
-            tmp_path,
-            "## Pending proposals\n- prop_42\n\n## Active threads\n- routine_x\n",
-        )
-        result = cli_runner.invoke(
-            sentinel_app,
-            [
-                "attention",
-                "-w",
-                str(tmp_path),
-                "--section",
-                "## Pending proposals",
-            ],
-        )
-        assert result.exit_code == 0
-        assert "prop_42" in result.stdout
-        assert "routine_x" not in result.stdout
-
-    def test_missing_section_exits_with_code_1(self, tmp_path: Path) -> None:
-        _seed_attention(tmp_path, "## Pending proposals\n- p\n")
-        result = cli_runner.invoke(
-            sentinel_app,
-            [
-                "attention",
-                "-w",
-                str(tmp_path),
-                "--section",
-                "## Active threads",
-            ],
-        )
-        assert result.exit_code == 1
-        assert "absent or empty" in result.stdout
-
-
-# ── sentinel behaviors ───────────────────────────────────────────────
-
-
-class TestBehaviorsCommand:
-    def test_missing_file_exits(self, tmp_path: Path) -> None:
-        result = cli_runner.invoke(
-            sentinel_app,
-            ["behaviors", "-w", str(tmp_path)],
-        )
-        assert result.exit_code == 1
-        assert "No behaviors.md" in result.stdout
-
-    def test_dumps_full_file(self, tmp_path: Path) -> None:
-        _seed_behaviors(tmp_path, [_ev()])
-        result = cli_runner.invoke(
-            sentinel_app,
-            ["behaviors", "-w", str(tmp_path)],
-        )
-        assert result.exit_code == 0
-        assert "## 2026-05-29" in result.stdout
-        assert "evt_a1b2c3d4" in result.stdout
-
-    def test_session_filter(self, tmp_path: Path) -> None:
-        _seed_behaviors(
-            tmp_path,
-            [
-                _ev(id="evt_cli", session="cli:default"),
-                _ev(id="evt_tg", session="telegram:user42"),
-            ],
-        )
-        result = cli_runner.invoke(
-            sentinel_app,
-            [
-                "behaviors",
-                "-w",
-                str(tmp_path),
-                "--session",
-                "cli:default",
-            ],
-        )
-        assert result.exit_code == 0
-        assert "evt_cli" in result.stdout
-        assert "evt_tg" not in result.stdout
-
-    def test_since_filter(self, tmp_path: Path) -> None:
-        _seed_behaviors(
-            tmp_path,
-            [
-                _ev(id="evt_old", day="2026-05-25"),
-                _ev(id="evt_new", day="2026-05-29"),
-            ],
-        )
-        result = cli_runner.invoke(
-            sentinel_app,
-            [
-                "behaviors",
-                "-w",
-                str(tmp_path),
-                "--since",
-                "2026-05-28",
-            ],
-        )
-        assert result.exit_code == 0
-        assert "evt_new" in result.stdout
-        assert "evt_old" not in result.stdout
-
-    def test_bad_since_exits_with_code_2(self, tmp_path: Path) -> None:
-        _seed_behaviors(tmp_path, [_ev()])
-        result = cli_runner.invoke(
-            sentinel_app,
-            [
-                "behaviors",
-                "-w",
-                str(tmp_path),
-                "--since",
-                "May 28",
-            ],
-        )
-        assert result.exit_code == 2
-        assert "Bad --since" in result.stdout
-
-    def test_folded_format(self, tmp_path: Path) -> None:
-        _seed_behaviors(
-            tmp_path,
-            [
-                _ev(
-                    id="evt_a",
-                    day="2026-05-29",
-                    start="14:00",
-                    end="14:30",
-                    intent="debug",
-                    outcome="resolved",
-                    topic="memory-engine",
-                    project="raven",
-                    summary="debugged session split",
-                ),
-            ],
-        )
-        result = cli_runner.invoke(
-            sentinel_app,
-            [
-                "behaviors",
-                "-w",
-                str(tmp_path),
-                "--folded",
-            ],
-        )
-        assert result.exit_code == 0
-        assert "[05-29 14:00-14:30 8t]" in result.stdout
-        assert "debug→resolved" in result.stdout
-        # Tools / source / owner suppressed in folded view
-        assert "Bash" not in result.stdout
-
-    def test_no_match_after_filter(self, tmp_path: Path) -> None:
-        _seed_behaviors(tmp_path, [_ev(session="cli:default")])
-        result = cli_runner.invoke(
-            sentinel_app,
-            [
-                "behaviors",
-                "-w",
-                str(tmp_path),
-                "--session",
-                "telegram:nonexistent",
-            ],
-        )
-        assert result.exit_code == 0
-        assert "No events match" in result.stdout
-
-
 # ── discover-now (smoke; uses mock SentinelRunner) ──────────────────
 
 
@@ -559,7 +318,7 @@ def test_discover_now_happy_path(runner, monkeypatch):
             stop_called["called"] = True
 
     monkeypatch.setattr(
-        "raven.core.proactive_stack.build_sentinel_stack",
+        "raven.cli._proactive_stack.build_sentinel_stack",
         lambda *a, **kw: (_StubRunner(), None, None),
     )
 
@@ -610,7 +369,7 @@ def test_discover_now_cleans_up_runner_on_exception(runner, monkeypatch):
             stop_called["called"] = True
 
     monkeypatch.setattr(
-        "raven.core.proactive_stack.build_sentinel_stack",
+        "raven.cli._proactive_stack.build_sentinel_stack",
         lambda *a, **kw: (_CrashRunner(), None, None),
     )
 
@@ -772,7 +531,7 @@ def _patch_ticks_stack(monkeypatch, runner_obj):
         lambda *a, **kw: MagicMock(),
     )
     monkeypatch.setattr(
-        "raven.core.proactive_stack.build_sentinel_stack",
+        "raven.cli._proactive_stack.build_sentinel_stack",
         lambda *a, **kw: (runner_obj, None, None),
     )
 

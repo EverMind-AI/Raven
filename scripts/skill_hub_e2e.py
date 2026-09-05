@@ -102,9 +102,8 @@ async def probe_segment(
     """Stage 3 — SkillsSegmentBuilder body hydrate (no rewriter / gate)."""
     print("\n=== Stage 3: SkillsSegmentBuilder hydrate (no LLM) ===")
     from raven.context_engine.base import AssemblyContext
-    from raven.memory_engine.base import TokenBudget
-
     from raven.context_engine.segments.skills import SkillsSegmentBuilder
+    from raven.memory_engine.base import TokenBudget
 
     client = SkillHubClient(endpoint, api_key=api_key, timeout_s=10.0)
     try:

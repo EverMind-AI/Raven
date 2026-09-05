@@ -8,7 +8,6 @@ import re
 import time
 import unicodedata
 from pathlib import Path
-from typing import Any
 
 from loguru import logger
 from telegram import BotCommand, Update
@@ -22,10 +21,10 @@ from telegram.ext import (
 from telegram.request import HTTPXRequest
 
 from raven.channels.base import ChannelBase
-from raven.channels.contract import Capabilities
 from raven.channels.transcribe import transcribe_audio
 from raven.config.paths import get_media_dir
-from raven.utils.messages import split_message
+from raven.config.schema import TelegramConfig
+from raven.utils.helpers import split_message
 
 MAX_MESSAGE_LEN = 4000
 _ALBUM_WINDOW_S = 0.6
@@ -170,9 +169,7 @@ def _markdown_to_html(text: str) -> str:
 class TelegramChannel(ChannelBase):
     """Telegram bot over long polling — no webhook / public IP needed."""
 
-    capabilities = Capabilities(file_attachments=True)
-
-    config: Any
+    config: TelegramConfig
     name = "telegram"
     display_name = "Telegram"
 
@@ -184,7 +181,7 @@ class TelegramChannel(ChannelBase):
         BotCommand("restart", "Restart the bot"),
     ]
 
-    def __init__(self, config: Any):
+    def __init__(self, config: TelegramConfig):
         super().__init__(config)
         self._stop_event = asyncio.Event()
         self._app: Application | None = None

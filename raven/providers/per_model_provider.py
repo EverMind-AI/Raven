@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from raven.providers.base import ChatDelta, LLMProvider, LLMResponse
+from raven.providers.base import LLMProvider, LLMResponse, StreamDelta
 from raven.providers.litellm_provider import LiteLLMProvider, session_affinity_headers
 
 if TYPE_CHECKING:
@@ -78,35 +78,6 @@ class PerModelProvider(LLMProvider):
         """Asked of whichever endpoint would serve this model, since that is the
         one whose wire decides the id -- the same routing that ``chat`` uses."""
         return self._pick(model).wire_model_id(model)
-
-    def supports_prompt_caching(self, model: str) -> bool:
-        """Asked of the endpoint that would serve this model, for the same reason
-        as ``wire_model_id``: the field rides on that endpoint's wire, and the
-        routed endpoint is not always the fallback's."""
-        return self._pick(model).supports_prompt_caching(model)
-
-    def supports_assistant_prefill(self, model: str | None = None) -> bool:
-        """Asked of the endpoint that would serve this model, like
-        ``supports_prompt_caching``: the vendor rule rides on that endpoint."""
-        return self._pick(model).supports_assistant_prefill(model)
-
-    @property
-    def disable_auto_cache_control(self) -> bool:
-        return getattr(self, "_disable_auto_cache_control", False)
-
-    @disable_auto_cache_control.setter
-    def disable_auto_cache_control(self, value: bool) -> None:
-        """Fan out to every routed endpoint and the fallback, like the
-        ``generation`` and ``model_overrides`` push-down in ``__init__``.
-
-        Assigned after construction by the caller that installed CacheOptimizer.
-        Held here alone it would leave each sub-provider marking its own system
-        block on top of the ones the strategy placed.
-        """
-        self._disable_auto_cache_control = value
-        for sub_provider in self._by_model.values():
-            sub_provider.disable_auto_cache_control = value
-        self._fallback.disable_auto_cache_control = value
 
     async def chat(
         self,
@@ -180,6 +151,6 @@ class PerModelProvider(LLMProvider):
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
         **kwargs: Any,
-    ) -> AsyncIterator[ChatDelta]:
+    ) -> AsyncIterator[StreamDelta]:
         async for delta in self._pick(model).chat_stream(messages, tools, model=model, **kwargs):
             yield delta

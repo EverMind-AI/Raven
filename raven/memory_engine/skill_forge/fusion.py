@@ -10,7 +10,7 @@ weighted form is::
 
 with ``rrf_k`` defaulting to :data:`RRF_K` and overridable per call or
 via ``skillForge.router.rrfK``, and the per-source ``w_i`` coming from
-the source's :attr:`ForgeSkillSource.weight` attribute. Note that ``rrf_k``
+the source's :attr:`SkillSource.weight` attribute. Note that ``rrf_k``
 is the damping constant, distinct from the ``k`` argument of
 :func:`rrf_merge_weighted`, which caps the output length.
 

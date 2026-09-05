@@ -16,18 +16,17 @@ from pathlib import Path
 
 import pytest
 
-from raven.agent.loop._shared import _strip_inline_images
+from raven.agent.loop.main import _strip_inline_images
 from raven.agent.tools import media
+from raven.agent.tools.base import ToolOutput, ToolResult
 from raven.agent.tools.filesystem import ReadFileTool
 from raven.agent.tools.registry import ToolRegistry
-from raven.contracts.tool import ToolOutput, ToolResult
 from raven.providers import rates as _pricing
 from raven.providers.base import LLMProvider
 
 # Captured before the autouse _no_openrouter_network fixture swaps it out.
 _REAL_FETCH = _pricing._fetch_openrouter_models
 
-from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.providers.capabilities import (  # noqa: E402
     IMAGE_TOOL_RESULT_TARGETS,
     image_placeholder_text,
@@ -161,7 +160,7 @@ def test_registry_boundary_stays_a_str_with_blocks_riding_along(tmp_path: Path) 
 
 
 def test_registry_drops_blocks_when_the_tool_reports_an_error() -> None:
-    from raven.contracts.tool import Tool
+    from raven.agent.tools.base import Tool
 
     class _Failing(Tool):
         @property
@@ -410,10 +409,7 @@ def test_emergency_shrink_drops_older_images_and_keeps_the_newest() -> None:
 
     assert elided >= 2
     assert [p["type"] for p in out[1]["content"]] == ["text", "text"]
-    note = out[1]["content"][1]["text"]
-    assert (
-        note.startswith("[image no longer in context: picture 1 of 1.") and "elided to fit the context window" in note
-    )
+    assert out[1]["content"][1]["text"] == "[image elided to fit the context window]"
     # The most recent picture is the one the model is reasoning about.
     assert out[3]["content"][1]["type"] == "image_url"
     # Surrounding text is preserved, so the model still knows what was there.
@@ -427,13 +423,13 @@ def test_emergency_shrink_reaches_images_attached_to_user_messages() -> None:
 
     messages = [
         {"role": "system", "content": "sys"},
-        {**_img_msg("user", "attached-old"), "_attached_image": True},
-        {**_img_msg("user", "attached-new"), "_attached_image": True},
+        _img_msg("user", "attached-old"),
+        _img_msg("user", "attached-new"),
     ]
     out, elided = AgentLoop._emergency_shrink(messages)
 
     assert elided == 1
-    assert "elided to fit the context window" in out[1]["content"][1]["text"]
+    assert out[1]["content"][1]["text"] == "[image elided to fit the context window]"
     assert out[2]["content"][1]["type"] == "image_url"
 
 
@@ -466,7 +462,7 @@ def test_image_block_is_the_only_place_the_shape_is_written() -> None:
     drop the picture. Construction goes through one function instead."""
     import subprocess
 
-    from raven.utils.images import image_block
+    from raven.utils.helpers import image_block
 
     assert image_block("data:image/png;base64,AA") == {
         "type": "image_url",
@@ -479,12 +475,12 @@ def test_image_block_is_the_only_place_the_shape_is_written() -> None:
         capture_output=True,
         text=True,
     ).stdout.splitlines()
-    offenders = [h for h in hits if "raven/utils/images.py" not in h]
+    offenders = [h for h in hits if "raven/utils/helpers.py" not in h]
     assert offenders == [], f"hand-written image block outside helpers.py: {offenders}"
 
 
 def test_is_inline_image_separates_payloads_from_references() -> None:
-    from raven.utils.images import is_image_part, is_inline_image
+    from raven.utils.helpers import is_image_part, is_inline_image
 
     inline = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA"}}
     remote = {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}
@@ -552,8 +548,7 @@ def test_mcp_audio_content_is_labelled_never_stringified() -> None:
 def test_content_part_types_describe_what_raven_produces() -> None:
     """The TypedDicts are documentation-grade: CI runs no type checker, so they
     are asserted at runtime here to keep them from drifting from reality."""
-    from raven.contracts.tool import ImagePart, TextPart
-    from raven.utils.images import image_block, text_block
+    from raven.utils.helpers import ImagePart, TextPart, image_block, text_block
 
     img = image_block("data:image/png;base64,AA")
     txt = text_block("hello")
@@ -567,8 +562,8 @@ def test_content_part_types_describe_what_raven_produces() -> None:
 def test_read_side_helpers_stay_permissive_about_unknown_parts() -> None:
     """Inbound content carries parts the union does not model (Anthropic
     cache_control, MCP audio, provider extensions). Pass-through must not break."""
-    from raven.agent.loop._shared import _strip_inline_images
-    from raven.utils.images import estimate_content_part_tokens, is_inline_image
+    from raven.agent.loop.main import _strip_inline_images
+    from raven.utils.helpers import estimate_content_part_tokens, is_inline_image
 
     exotic = {"type": "text", "text": "cached", "cache_control": {"type": "ephemeral"}}
     unknown = {"type": "some_future_part", "payload": {"a": 1}}
@@ -686,11 +681,10 @@ def test_demote_tool_images_produces_the_placeholder_path_shape() -> None:
         {"type": "text", "text": "Read image /w/shot.png (800x600 PNG)."},
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
     ]
-    provenance = [{"tool": "read_file", "iteration": 3, "caption": "Read image /w/shot.png (800x600 PNG)."}]
     messages = [
         {"role": "system", "content": "sys"},
         {"role": "assistant", "content": None, "tool_calls": [{"id": "c1"}]},
-        {"role": "tool", "tool_call_id": "c1", "name": "read_file", "content": blocks, "_image_sources": provenance},
+        {"role": "tool", "tool_call_id": "c1", "content": blocks},
     ]
 
     out, demoted = AgentLoop._demote_tool_images(messages)
@@ -703,13 +697,7 @@ def test_demote_tool_images_produces_the_placeholder_path_shape() -> None:
     assert "base64" not in out[2]["content"]
     # The path survives, so the model can still re-read the file.
     assert "/w/shot.png" in out[2]["content"]
-    assert "_image_sources" not in out[2], "the provenance moves with the picture"
-    assert out[3] == {"role": "user", "content": [blocks[1]], "_attached_image": True, "_image_sources": provenance}
-
-    # A tool message stamped with nothing still hands over one entry per picture, so
-    # the window's notes stay aligned with the pictures they stand for.
-    bare, _ = AgentLoop._demote_tool_images([dict(messages[2], _image_sources=None)])
-    assert bare[1]["_image_sources"] == [{"tool": "read_file"}]
+    assert out[3] == {"role": "user", "content": [blocks[1]], "_attached_image": True}
 
 
 def test_demote_tool_images_is_a_noop_when_no_tool_result_has_an_image() -> None:
@@ -863,8 +851,8 @@ async def test_a_refused_tool_image_is_demoted_and_the_turn_recovers(tmp_path: P
         provider=provider,
         workspace=tmp_path,
         model="stub",
-        policy=TurnPolicy(max_iterations=8),
-        tools=ToolWiring(restrict_to_workspace=True),
+        max_iterations=8,
+        restrict_to_workspace=True,
     )
     # Stand in for a static table that said yes, so the image rides in the tool
     # result and gets refused -- the case the recovery exists for.
@@ -1012,8 +1000,8 @@ async def test_attached_images_land_after_every_tool_result_in_the_batch(tmp_pat
         provider=provider,
         workspace=tmp_path,
         model="stub",
-        policy=TurnPolicy(max_iterations=6),
-        tools=ToolWiring(restrict_to_workspace=True),
+        max_iterations=6,
+        restrict_to_workspace=True,
     )
     # Force the fallback path -- the one this ordering bug lives on.
     agent._image_tool_result_ok = {"stub": False}
@@ -1053,8 +1041,8 @@ async def test_the_attachment_message_is_never_persisted(tmp_path: Path) -> None
         provider=provider,
         workspace=tmp_path,
         model="stub",
-        policy=TurnPolicy(max_iterations=6),
-        tools=ToolWiring(restrict_to_workspace=True),
+        max_iterations=6,
+        restrict_to_workspace=True,
     )
     agent._image_tool_result_ok = {"stub": False}
 
@@ -1119,8 +1107,8 @@ async def test_the_attachment_message_never_reaches_extraction(tmp_path: Path) -
         provider=provider,
         workspace=tmp_path,
         model="stub",
-        policy=TurnPolicy(max_iterations=6),
-        tools=ToolWiring(restrict_to_workspace=True),
+        max_iterations=6,
+        restrict_to_workspace=True,
     )
     agent._image_tool_result_ok = {"stub": False}
 
@@ -1552,7 +1540,7 @@ def test_the_verdict_is_asked_of_the_routed_model_not_the_configured_one(monkeyp
 
 def test_the_assembler_forwards_the_verdict_to_the_renderer(monkeypatch) -> None:
     from raven.context_engine.assembler import ContextAssembler
-    from raven.contracts.context import AssemblyContext
+    from raven.context_engine.base import AssemblyContext
 
     seen = {}
 
@@ -1987,7 +1975,7 @@ def test_turn_send_refuses_an_unbounded_attachment_list() -> None:
     tokens, so the schema is where an absurd one is refused."""
     import pydantic
 
-    from raven.rpc.models import TurnSendParams
+    from raven.tui_rpc.models import TurnSendParams
 
     ok = TurnSendParams(session_key="cli:local", content="hi", media=["a.png"] * 64)
     assert len(ok.media) == 64

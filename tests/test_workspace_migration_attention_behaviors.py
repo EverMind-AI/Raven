@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from raven.utils.workspace import sync_workspace_templates
+from raven.utils.helpers import sync_workspace_templates
 
 
 def test_legacy_attention_migrated(tmp_path: Path) -> None:

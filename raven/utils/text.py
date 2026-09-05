@@ -1,34 +1,20 @@
-"""Shared text utilities: frontmatter, timestamps, CJK detection, display width."""
+"""Shared text utilities: frontmatter, timestamps, CJK detection."""
 
 from __future__ import annotations
 
 import re
-import unicodedata
 from datetime import datetime, timezone
 from typing import Any
 
 import yaml
 
-CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+CJK_RE = re.compile(r"[一-鿿]")
 _FM_CLOSE_RE = re.compile(r"^---\s*$", re.MULTILINE)
 
 
 def is_cjk(text: str, sample: int = 200) -> bool:
     """Return True if *text* (first *sample* chars) contains CJK ideographs."""
     return bool(CJK_RE.search(text[:sample]))
-
-
-def display_width(text: str) -> int:
-    """Terminal columns *text* occupies: 2 for a wide glyph, 1 for the rest.
-
-    A length in code points is not comparable across scripts, and code that
-    compares one against a single threshold silently means two different things
-    to a Chinese and an English writer: "hello" is five code points and one
-    word, while five CJK code points ("what can you do" in Chinese) are a whole question. Columns
-    are the unit that reads the same in both, since a CJK ideograph occupies the
-    room of about two latin letters on screen and carries about that much more.
-    """
-    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in text)
 
 
 def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
@@ -72,7 +58,6 @@ def parse_iso_ts_ms(raw: Any) -> int | None:
 
 __all__ = [
     "CJK_RE",
-    "display_width",
     "is_cjk",
     "parse_frontmatter",
     "parse_iso_ts_ms",

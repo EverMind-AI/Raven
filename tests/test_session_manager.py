@@ -6,10 +6,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-import pytest
-
 from raven.session.manager import Session, SessionManager, new_chat_id
-from raven.session.title import TITLE_STORAGE_MAX
 
 
 def _turn_worker(workspace_str: str, key: str, writer_id: int) -> None:
@@ -106,21 +103,6 @@ def test_save_reserves_metadata_keys(tmp_path: Path):
     assert "title" in meta
 
 
-def test_metadata_model_survives_a_save_load_round_trip(tmp_path: Path):
-    """metadata["model"] is the per-session model's home; the append-only file's
-    last metadata record must win on reload."""
-    mgr = SessionManager(tmp_path)
-    s = mgr.get_or_create("web:abc")
-    s.metadata["model"] = "deepseek/deepseek-v3"
-    mgr.save(s)
-
-    s.metadata["model"] = "anthropic/claude-opus-4-5"
-    mgr.save(s)
-
-    mgr.invalidate("web:abc")
-    assert mgr.get_or_create("web:abc").metadata["model"] == "anthropic/claude-opus-4-5"
-
-
 def test_load_preserves_on_disk_message_order(tmp_path: Path):
     """Messages keep file order on load even when received_at is out of order."""
     session_dir = tmp_path / "sessions" / "tui"
@@ -185,24 +167,6 @@ def test_find_most_recent_chat_id_nested_by_updated_at(tmp_path: Path):
     assert mgr.find_most_recent_chat_id("tui") == "newer"
     assert mgr.find_most_recent_chat_id("cli") == "distractor"
     assert mgr.find_most_recent_chat_id("feishu") is None
-
-
-def test_find_most_recent_can_exclude_archived_sessions(tmp_path: Path):
-    """Resume skips archived sessions while delivery keeps its existing default."""
-    mgr = SessionManager(tmp_path)
-    active = mgr.get_or_create("tui:active")
-    active.add_message("user", "keep visible")
-    active.updated_at = datetime(2026, 6, 10, 10, 0, 0)
-    mgr.save(active)
-
-    archived = mgr.get_or_create("tui:archived")
-    archived.add_message("user", "hide me")
-    archived.metadata["archived"] = True
-    archived.updated_at = datetime(2026, 6, 10, 11, 0, 0)
-    mgr.save(archived)
-
-    assert mgr.find_most_recent_chat_id("tui") == "archived"
-    assert mgr.find_most_recent_chat_id("tui", include_archived=False) == "active"
 
 
 def test_find_most_recent_ignores_old_flat_files(tmp_path: Path):
@@ -371,8 +335,13 @@ def test_legacy_global_sessions_shim_removed(tmp_path: Path, monkeypatch):
         + "\n",
         encoding="utf-8",
     )
+    monkeypatch.setattr(
+        "raven.session.manager.get_legacy_sessions_dir",
+        lambda: legacy,
+        raising=False,
+    )
 
-    session = SessionManager(tmp_path / "chanwork").get_or_create("tui:x")
+    session = SessionManager(tmp_path / "ws").get_or_create("tui:x")
     assert session.messages == []
     assert legacy_file.exists()
 
@@ -440,124 +409,6 @@ def test_delete_does_not_touch_other_sessions(tmp_path: Path):
     mgr.delete("tui:del03")
     assert (tmp_path / "sessions" / "tui" / "keep01.jsonl").exists()
     assert not (tmp_path / "sessions" / "tui" / "del03.jsonl").exists()
-
-
-class _DeleteProbe:
-    """A paper-shaped observer (contracts/session_events.py) recording calls."""
-
-    def __init__(self, tag: str = "probe", log: list | None = None) -> None:
-        self.tag = tag
-        self.log = log if log is not None else []
-
-    def on_session_deleted(self, session_key: str, removed: bool) -> None:
-        self.log.append((self.tag, session_key, removed))
-
-
-def _saved(mgr: SessionManager, key: str) -> Path:
-    session = mgr.get_or_create(key)
-    session.add_message("user", "x")
-    mgr.save(session)
-    return mgr.session_path(key)
-
-
-def test_a_fresh_manager_notifies_nobody(tmp_path: Path):
-    """The empty roster is the default: a manager nobody attached to (the CLI
-    face builds exactly this shape) deletes as it always did. Cross-process
-    deletion staying out of sight is the paper's third discipline."""
-    mgr = SessionManager(tmp_path)
-    assert mgr._delete_observers == ()
-    _saved(mgr, "tui:obs00")
-    assert mgr.delete("tui:obs00") is True
-
-
-def test_delete_notifies_observers_with_removed_true(tmp_path: Path):
-    """A delete that removed a file reports removed=True, after the store acted."""
-    mgr = SessionManager(tmp_path)
-    probe = _DeleteProbe()
-    mgr.set_delete_observers((probe,))
-    path = _saved(mgr, "tui:obs01")
-
-    assert mgr.delete("tui:obs01") is True
-    assert not path.exists()
-    assert probe.log == [("probe", "tui:obs01", True)]
-
-
-def test_delete_notifies_observers_with_removed_false_when_no_file(tmp_path: Path):
-    """The observer fires for every delete request the store handles -- a
-    cache-only session (minted, never saved) still notifies, with removed=False."""
-    mgr = SessionManager(tmp_path)
-    probe = _DeleteProbe()
-    mgr.set_delete_observers((probe,))
-    mgr.get_or_create("tui:obs02")
-
-    assert mgr.delete("tui:obs02") is False
-    assert probe.log == [("probe", "tui:obs02", False)]
-
-
-def test_delete_notifies_observers_with_removed_false_when_unlink_fails(tmp_path: Path, monkeypatch):
-    mgr = SessionManager(tmp_path)
-    probe = _DeleteProbe()
-    mgr.set_delete_observers((probe,))
-    _saved(mgr, "tui:obs03")
-
-    def _boom_unlink(self, missing_ok=False):
-        raise OSError("permission denied")
-
-    monkeypatch.setattr(Path, "unlink", _boom_unlink)
-    assert mgr.delete("tui:obs03") is False
-    assert probe.log == [("probe", "tui:obs03", False)]
-
-
-def test_delete_observers_hear_in_registration_order_each_once(tmp_path: Path):
-    mgr = SessionManager(tmp_path)
-    log: list = []
-    mgr.set_delete_observers((_DeleteProbe("first", log), _DeleteProbe("second", log)))
-    _saved(mgr, "tui:obs04")
-
-    mgr.delete("tui:obs04")
-    assert log == [("first", "tui:obs04", True), ("second", "tui:obs04", True)]
-
-
-def test_a_raising_observer_is_skipped_and_the_rest_still_hear(tmp_path: Path):
-    """An observer that raises is logged and skipped: the deletion's outcome is
-    already decided, the return value stands, and later observers still hear."""
-
-    class _Broken:
-        def on_session_deleted(self, session_key: str, removed: bool) -> None:
-            raise RuntimeError("ledger unreachable")
-
-    mgr = SessionManager(tmp_path)
-    probe = _DeleteProbe()
-    mgr.set_delete_observers((_Broken(), probe))
-    path = _saved(mgr, "tui:obs05")
-
-    assert mgr.delete("tui:obs05") is True
-    assert not path.exists()
-    assert probe.log == [("probe", "tui:obs05", True)]
-
-
-def test_set_delete_observers_replaces_the_whole_tuple(tmp_path: Path):
-    """The setter is whole-tuple replacement, idempotent: re-attaching the same
-    tuple never doubles a notification, and attaching () detaches."""
-    mgr = SessionManager(tmp_path)
-    log: list = []
-    first, second = _DeleteProbe("first", log), _DeleteProbe("second", log)
-
-    mgr.set_delete_observers((first,))
-    mgr.set_delete_observers((first,))
-    _saved(mgr, "tui:obs06")
-    mgr.delete("tui:obs06")
-    assert log == [("first", "tui:obs06", True)]
-
-    mgr.set_delete_observers((second,))
-    _saved(mgr, "tui:obs07")
-    mgr.delete("tui:obs07")
-    assert log == [("first", "tui:obs06", True), ("second", "tui:obs07", True)]
-
-    mgr.set_delete_observers(())
-    _saved(mgr, "tui:obs08")
-    mgr.delete("tui:obs08")
-    assert len(log) == 2
 
 
 def test_peek_returns_cached_session_without_extra_load(tmp_path: Path):
@@ -673,23 +524,6 @@ def test_list_sessions_channel_filter(tmp_path: Path):
     tui_sessions = mgr.list_sessions(channel="tui")
     keys = {info["key"] for info in tui_sessions}
     assert keys == {"tui:ch01", "tui:ch03"}
-
-
-def test_list_sessions_multi_channel_filter(tmp_path: Path):
-    mgr = SessionManager(tmp_path)
-    for key in ("tui:a", "cron:b", "cli:c"):
-        session = mgr.get_or_create(key)
-        session.add_message("user", key)
-        mgr.save(session)
-
-    assert {info["key"] for info in mgr.list_sessions(channels={"tui", "cron"})} == {"tui:a", "cron:b"}
-
-
-def test_list_sessions_rejects_two_filter_modes(tmp_path: Path):
-    mgr = SessionManager(tmp_path)
-
-    with pytest.raises(ValueError, match="mutually exclusive"):
-        mgr.list_sessions(channel="tui", channels={"tui"})
 
 
 def test_list_sessions_no_channel_returns_all(tmp_path: Path):
@@ -999,37 +833,13 @@ def test_fork_default_title_appends_fork_suffix(tmp_path: Path):
 
 
 def test_fork_untitled_parent_yields_no_title(tmp_path: Path):
-    """A parent with no title at all yields a child with none: no bare '(fork)'.
-
-    A conversation that opened with something other than a user message has
-    nothing for ``save`` to auto-name it from, which is the one way a saved
-    session still holds no title.
-    """
+    """An untitled parent yields a child with no title (no bare '(fork)')."""
     mgr = SessionManager(tmp_path)
-    _seed(mgr, "cli:src11", ("assistant", "x"))
-    assert mgr.peek("cli:src11").metadata.get("title") is None
+    _seed(mgr, "cli:src11", ("user", "x"))
 
     child = mgr.fork("cli:src11")
 
     assert child.metadata.get("title") is None
-
-
-def test_fork_of_a_parent_at_the_storage_ceiling_keeps_a_storable_name(tmp_path: Path):
-    """The derived name obeys the storage ceiling instead of overshooting it.
-
-    A fork name is not typed by anyone, so the parent's tail gives way to the
-    suffix rather than the fork losing its name to a refusal.
-    """
-    mgr = SessionManager(tmp_path)
-    src = mgr.get_or_create("cli:src15")
-    src.set_title("p" * TITLE_STORAGE_MAX)
-    src.add_message("user", "x")
-    mgr.save(src)
-
-    child = mgr.fork("cli:src15")
-
-    assert len(child.metadata["title"]) == TITLE_STORAGE_MAX
-    assert child.metadata["title"].endswith(" (fork)")
 
 
 def test_fork_explicit_title_overrides(tmp_path: Path):
@@ -1056,15 +866,9 @@ def test_fork_inherits_human_title_equal_to_auto_derivation(tmp_path: Path):
     assert child.metadata["title"] == "Plan the trip (fork)"
 
 
-def test_fork_inherits_an_auto_named_title_too(tmp_path: Path):
-    """An auto-named source is still a named source, and its fork carries that
-    name, even after a disk round-trip.
-
-    A fork is never auto-named -- its first user message names the fork point's
-    ancestor -- so when inheritance skipped auto-named titles as well, the fork
-    of an auto-named conversation ended up with no title at all and every one of
-    them read alike under the front end's placeholder.
-    """
+def test_fork_skips_auto_named_title_via_marker(tmp_path: Path):
+    """An auto-named source carries title_auto in its persisted metadata and
+    the child does not inherit the title, even after a disk round-trip."""
     mgr = SessionManager(tmp_path)
     _seed(mgr, "cli:src14", ("user", "Plan the trip"))
 
@@ -1075,9 +879,7 @@ def test_fork_inherits_an_auto_named_title_too(tmp_path: Path):
 
     child = reloaded_mgr.fork("cli:src14")
 
-    assert child.metadata["title"] == "Plan the trip (fork)"
-    # The fork's own name from here: nothing regenerates it behind the reader.
-    assert child.metadata.get("title_auto") is None
+    assert child.metadata.get("title") is None
 
 
 # ── resolve_key (shared cross-channel resolution core) ─────────────────
@@ -1128,80 +930,3 @@ def test_resolve_key_not_found(tmp_path: Path):
     res = mgr.resolve_key("nope000")
     assert res.status == "not_found"
     assert res.key is None
-
-
-def test_set_title_collapses_a_multi_line_name(tmp_path: Path):
-    """A pasted name arrives as one line.
-
-    A metadata record is one JSON line and every surface draws a title on one
-    row, so an embedded newline has nowhere to render.
-    """
-    mgr = SessionManager(tmp_path)
-    session = mgr.get_or_create("cli:title1")
-
-    session.set_title("  Ship\nthe   fix  ")
-
-    assert session.metadata["title"] == "Ship the fix"
-
-
-def test_set_title_refuses_a_name_past_the_storage_ceiling(tmp_path: Path):
-    """Refused, not truncated: a person typed this.
-
-    Quietly storing the first 200 characters hands back a fragment they never
-    wrote, with nothing saying why -- so the write fails and the caller reports.
-    """
-    mgr = SessionManager(tmp_path)
-    session = mgr.get_or_create("cli:title2")
-
-    with pytest.raises(ValueError, match="201 characters"):
-        session.set_title("x" * 201)
-
-    assert session.metadata.get("title") is None
-
-
-def test_generated_title_replaces_an_auto_named_one(tmp_path: Path):
-    mgr = SessionManager(tmp_path)
-    session = _seed(mgr, "cli:title3", ("user", "please cut a release for the desktop build"))
-    assert session.metadata.get("title_auto") is True
-
-    assert session.set_generated_title("Cut a desktop release") is True
-    assert session.metadata["title"] == "Cut a desktop release"
-
-
-def test_generated_title_is_declined_once_a_person_named_the_session(tmp_path: Path):
-    """The naming call ran alongside the turn, so a rename typed while it was in
-    flight is the newer intent and wins."""
-    mgr = SessionManager(tmp_path)
-    session = _seed(mgr, "cli:title4", ("user", "please cut a release"))
-    session.set_title("Release checklist")
-
-    assert session.set_generated_title("Cut a release") is False
-    assert session.metadata["title"] == "Release checklist"
-
-
-def test_generated_title_is_carried_by_a_fork_and_the_marker_is_not(tmp_path: Path):
-    """A generated title names the conversation, so the fork carries it.
-
-    The marker still says the source's title is not human -- that is what keeps
-    a later *generation* able to replace it, where a rename overwrites either
-    kind without consulting it -- but the marker does not travel: the child's
-    name is the fork's own from the moment it is minted.
-    """
-    mgr = SessionManager(tmp_path)
-    source = _seed(mgr, "cli:title5", ("user", "plan the trip in detail"))
-    source.set_generated_title("Plan the trip")
-    mgr.save(source)
-
-    child = mgr.fork("cli:title5")
-
-    assert source.metadata.get("title_auto") is True
-    assert child.metadata["title"] == "Plan the trip (fork)"
-    assert child.metadata.get("title_auto") is None
-
-
-def test_generated_title_is_declined_when_it_is_past_the_storage_ceiling(tmp_path: Path):
-    mgr = SessionManager(tmp_path)
-    session = _seed(mgr, "cli:title6", ("user", "some opening message"))
-
-    assert session.set_generated_title("y" * 201) is False
-    assert session.metadata["title"] == "some opening message"

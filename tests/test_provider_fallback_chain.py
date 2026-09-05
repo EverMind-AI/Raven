@@ -355,13 +355,13 @@ def test_custom_passthrough_identity_does_not_skip_resolvable_fallback():
 async def test_should_fallback_classification():
     # Structured classifier (string path): transient + capacity/availability
     # are fallback-worthy; auth / invalid-request / context-overflow are not.
-    assert LLMProvider.classify_error(content="429 rate limit").should_fallback is True
-    assert LLMProvider.classify_error(content="503 overloaded").should_fallback is True
-    assert LLMProvider.classify_error(content="connection reset").should_fallback is True
-    assert LLMProvider.classify_error(content="insufficient credit / billing").should_fallback is True
-    assert LLMProvider.classify_error(content="model not found").should_fallback is True
-    assert LLMProvider.classify_error(content="invalid request").should_fallback is False
-    assert LLMProvider.classify_error(content="401 unauthorized").should_fallback is False
-    assert LLMProvider.classify_error(content="maximum context length exceeded").should_fallback is False
-    assert LLMProvider.classify_error(content="ok").should_fallback is False
-    assert LLMProvider.classify_error(content=None).should_fallback is False
+    assert LLMProvider._should_fallback("429 rate limit") is True
+    assert LLMProvider._should_fallback("503 overloaded") is True
+    assert LLMProvider._should_fallback("connection reset") is True
+    assert LLMProvider._should_fallback("insufficient credit / billing") is True
+    assert LLMProvider._should_fallback("model not found") is True
+    assert LLMProvider._should_fallback("invalid request") is False
+    assert LLMProvider._should_fallback("401 unauthorized") is False
+    assert LLMProvider._should_fallback("maximum context length exceeded") is False
+    assert LLMProvider._should_fallback("ok") is False
+    assert LLMProvider._should_fallback(None) is False

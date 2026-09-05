@@ -1,8 +1,7 @@
 """``raven tracing`` — open the tracing dashboard.
 
 The dashboard is a dependency-free Node viewer bundled under
-``raven/cli/tracing_viewer/`` -- a surface the CLI launches, kept out of the
-``tracing`` kernel package. Instrumentation itself runs in-process (installed at
+``raven/tracing/viewer/``. Instrumentation itself runs in-process (installed at
 CLI startup, see :mod:`raven.tracing`); this command only launches the viewer
 that reads the captured spans from ``~/.raven/traces``.
 
@@ -18,8 +17,8 @@ pid is never killed.
 
 Registered as a top-level leaf command (not a subcommand group) so the TUI
 command catalog lists it as a plain ``/tracing`` slash under "(top-level)".
-``stop`` and ``compact`` are optional positional actions; foreground mode, port
-and ``--dry-run`` are options, not subcommands.
+``stop`` is an optional positional action; foreground mode and port are
+options, not subcommands.
 """
 
 from __future__ import annotations
@@ -37,7 +36,6 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
-from rich.markup import escape
 
 from raven.tracing import config as tracing_config
 
@@ -45,7 +43,7 @@ console = Console()
 
 
 def _viewer_dir() -> Path:
-    return Path(__file__).resolve().parent / "tracing_viewer"
+    return Path(__file__).resolve().parent.parent / "tracing" / "viewer"
 
 
 # Asset the viewer must still be able to read off disk for the page to work.
@@ -156,10 +154,7 @@ def _pid_is_viewer(pid: int) -> bool:
         return "node" in out.lower()
     try:
         out = subprocess.run(
-            # -ww: `server.js` sits at the end of the argv, and ps truncates to
-            # $COLUMNS (80 when unset), so without it a deep install reads as not
-            # ours and the viewer is never stopped.
-            ["ps", "-ww", "-p", str(pid), "-o", "command="],  # noqa: S607 -- ps location varies across POSIX; PATH lookup intended
+            ["ps", "-p", str(pid), "-o", "command="],  # noqa: S607 -- ps location varies across POSIX; PATH lookup intended
             capture_output=True,
             text=True,
             check=False,
@@ -191,12 +186,10 @@ def _stop_viewer() -> None:
 
 
 def _resolve_node() -> str:
-    from raven.cli.tui_commands import _MIN_NODE_VERSION, find_node
+    from raven.cli.tui_commands import find_node
 
-    node, version = find_node()
-    # find_node returns the best node it saw even below the minimum, so the
-    # version check is the caller's -- the TUI's own launch does the same.
-    if not node or version is None or version < _MIN_NODE_VERSION:
+    node, _version = find_node()
+    if not node:
         console.print(
             "[red]Node (>= 22) not found.[/red] The tracing dashboard needs the "
             "same Node runtime as the TUI.\n"
@@ -285,28 +278,6 @@ def _serve_foreground(port: int) -> None:
         pass
 
 
-def _run_compact(*, dry_run: bool) -> None:
-    from raven.tracing.compact import compact
-    from raven.tracing.store import TraceStore
-
-    artifacts_dir = TraceStore(tracing_config.state_dir()).artifacts_dir
-    if not artifacts_dir.is_dir():
-        console.print(f"[yellow]No artifacts at {escape(str(artifacts_dir))}.[/yellow]")
-        return
-    result = compact(artifacts_dir, dry_run=dry_run)
-    if dry_run:
-        console.print("[dim]dry run - nothing is written[/dim]")
-    console.print(f"scanned {result.scanned}, folded {result.folded}, skipped {result.skipped_fresh} fresh")
-    console.print(
-        f"removed {result.blobs_removed} unreferenced blobs, reclaimed {result.bytes_reclaimed / (1024 * 1024):.1f} MB"
-    )
-    for message in result.errors[:10]:
-        console.print(f"[yellow]skipped:[/yellow] {escape(message)}")
-    hidden = max(len(result.errors) - 10, 0) + result.errors_dropped
-    if hidden:
-        console.print(f"[yellow]... and {hidden} more[/yellow]")
-
-
 def register(app: typer.Typer) -> None:
     """Attach the ``tracing`` command to ``app``.
 
@@ -317,30 +288,18 @@ def register(app: typer.Typer) -> None:
 
     @app.command("tracing")
     def tracing(
-        action: str = typer.Argument(
-            None,
-            help=(
-                "Optional action: 'stop' shuts down the background viewer; "
-                "'compact' folds duplicate artifacts (terminal only, not available from the TUI)."
-            ),
-        ),
+        action: str = typer.Argument(None, help="Optional action: 'stop' shuts down the background viewer."),
         port: int = typer.Option(None, "--port", "-p", help="Port to bind (default: config or 4318)."),
         foreground: bool = typer.Option(
             False, "--foreground", "-f", help="Run the viewer in the foreground (blocks; Ctrl-C to stop)."
         ),
-        dry_run: bool = typer.Option(
-            False, "--dry-run", help="With 'compact': report what would change without writing."
-        ),
     ) -> None:
         """Open the tracing dashboard (captured LLM/tool/memory spans)."""
-        if action == "compact":
-            _run_compact(dry_run=dry_run)
-            return
         if action == "stop":
             _stop_viewer()
             return
         if action is not None:
-            console.print(f"[red]Unknown action '{escape(action)}'.[/red] Supported actions: stop, compact")
+            console.print(f"[red]Unknown action '{action}'.[/red] Supported action: stop")
             raise typer.Exit(2)
         bind_port = port if port is not None else tracing_config.port()
         if foreground:

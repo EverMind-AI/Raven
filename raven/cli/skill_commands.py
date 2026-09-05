@@ -36,7 +36,7 @@ skill_app = typer.Typer(help="Inspect and manage SkillForge skills")
 
 def _build_skill_service():
     from raven.config.loader import load_config
-    from raven.memory_engine import LocalSkillCatalog
+    from raven.memory_engine.skill_forge import LocalSkillCatalog
 
     config = load_config()
     workspace = config.workspace_path

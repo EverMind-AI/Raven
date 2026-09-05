@@ -307,16 +307,12 @@ export function fmtTokens(n: number): string {
  * overlay so the timeline + list + summary all speak the same dialect.
  */
 export function fmtDuration(seconds: number): string {
-  // Round once, on the whole: rounding the remainder alone turned 119.6 s into
-  // "1m 60s".
-  const total = Math.max(0, Math.round(seconds))
-
-  if (total < 60) {
-    return `${total}s`
+  if (seconds < 60) {
+    return `${Math.max(0, Math.round(seconds))}s`
   }
 
-  const m = Math.floor(total / 60)
-  const s = total % 60
+  const m = Math.floor(seconds / 60)
+  const s = Math.round(seconds - m * 60)
 
   return s === 0 ? `${m}m` : `${m}m ${s}s`
 }

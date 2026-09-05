@@ -80,24 +80,6 @@ describe('turnController episodes commit', () => {
     expect(epMsgs[0]!.text).toContain('[interrupted]')
   })
 
-  it('a failed turn commits what it streamed, like an interrupt does', () => {
-    patchUiState({ transcript: 'episodes' })
-    turnController.reset()
-
-    turnController.recordEpisodeStart(0)
-    turnController.recordToolStart('a', 'run_subagent_dag', 'gem site')
-    turnController.recordToolComplete('a', 'run_subagent_dag', 'started', undefined, 0.1)
-
-    const appended: Msg[] = []
-    turnController.recordError({ appendMessage: m => appended.push(m) })
-
-    const epMsgs = appended.filter(m => m.kind === 'episodes')
-    expect(epMsgs).toHaveLength(1)
-    expect(epMsgs[0]!.episodes![0]!.tools[0]!.name).toBe('run_subagent_dag')
-    expect(epMsgs[0]!.text).toContain('[failed]')
-    expect(epMsgs[0]!.text).not.toContain('[interrupted]')
-  })
-
   it('interrupt with no episode.start still keeps the legacy trail', () => {
     // An older gateway never emits episode.start. The completion path already
     // falls back to the segment trail in that case; the interrupt path must

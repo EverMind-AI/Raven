@@ -16,16 +16,16 @@ from loguru import logger
 
 from raven.providers import prompt_cache
 from raven.providers.base import (
-    ChatDelta,
-    ErrorClassification,
     GenerationSettings,
     LLMProvider,
     LLMResponse,
     RunMeta,
+    StreamDelta,
     ToolCallRequest,
     format_llm_error,
 )
 from raven.providers.litellm_setup import import_litellm
+from raven.providers.prompt_cache import CACHE_CONTROL
 from raven.providers.reasoning import split_orphan_think
 from raven.providers.registry import (
     canonical_provider_name,
@@ -34,14 +34,6 @@ from raven.providers.registry import (
     find_by_name,
     find_gateway,
 )
-from raven.providers.tool_names import normalized_tool_name
-from raven.providers.transport_failure import (
-    flag_transport_failure,
-    native_finish_reason,
-    prompt_chars,
-    transport_failure_message,
-)
-from raven.providers.usage import merge_usage, reported_cost, token_count
 from raven.providers.wire import wire_model
 
 litellm = import_litellm()
@@ -83,23 +75,6 @@ def _short_tool_id() -> str:
     return "".join(secrets.choice(_ALNUM) for _ in range(9))
 
 
-def _finish_was_made_up(stream: Any) -> bool:
-    """Whether the stream wrapper never received a finish reason from upstream.
-
-    Read off LiteLLM's ``CustomStreamWrapper``, which keeps two records: the reason
-    of a chunk it judged final (``received_finish_reason``) and the last reason any
-    chunk carried (``intermittent_finish_reason``). Both are read, because gemini and
-    vertex_ai chunks arrive stamped ``_hidden_params["is_finished"] = False`` on every
-    chunk, so their terminal "stop" is never recorded as received, only as
-    intermittent -- and reading the first alone stamped every healthy gemini reply as
-    a cut. A wrapper without the attributes (a test stub, another library) is trusted,
-    so only a reason known to be fabricated is reported as such.
-    """
-    if not hasattr(stream, "received_finish_reason") or getattr(stream, "received_finish_reason") is not None:
-        return False
-    return getattr(stream, "intermittent_finish_reason", None) is None
-
-
 def _merge_extra_body(kwargs: dict[str, Any], wire_extra_body: dict[str, Any]) -> None:
     """Merge the provider's built-in extra_body into kwargs instead of overwriting it.
 
@@ -129,32 +104,6 @@ def session_affinity_headers() -> dict[str, str]:
     return {"x-session-affinity": uuid.uuid4().hex}
 
 
-def _usage_field(value: Any, key: str) -> Any:
-    return value.get(key) if isinstance(value, dict) else getattr(value, key, None)
-
-
-def _cache_tokens(usage: Any) -> tuple[int | None, int | None]:
-    """Read cache counts without converting a missing report into zero."""
-    # LiteLLM synthesizes private cache counters at zero even when none arrived.
-    details = _usage_field(usage, "prompt_tokens_details")
-
-    def first(*values: Any) -> int | None:
-        return next((count for value in values if (count := token_count(value)) is not None), None)
-
-    return (
-        first(
-            _usage_field(usage, "cache_read_input_tokens"),
-            _usage_field(details, "cached_tokens"),
-            _usage_field(usage, "_cache_read_input_tokens") or None,
-        ),
-        first(
-            _usage_field(usage, "cache_creation_input_tokens"),
-            _usage_field(details, "cache_write_tokens"),
-            _usage_field(usage, "_cache_creation_input_tokens") or None,
-        ),
-    )
-
-
 class LiteLLMProvider(LLMProvider):
     """
     LLM provider using LiteLLM for multi-provider support.
@@ -163,8 +112,6 @@ class LiteLLMProvider(LLMProvider):
     a unified interface.  Provider-specific logic is driven by the registry
     (see providers/registry.py) — no if-elif chains needed here.
     """
-
-    api_protocol = "chat"
 
     def __init__(
         self,
@@ -179,9 +126,6 @@ class LiteLLMProvider(LLMProvider):
         *,
         unparsed_reasoning: bool | None = None,
     ):
-        addressed_spec = find_by_name(provider_name) or find_by_model(default_model)
-        if api_base and addressed_spec and addressed_spec.strip_api_base_trailing_slash:
-            api_base = api_base.rstrip("/")
         super().__init__(api_key, api_base)
         # None: derive from the resolved spec, as emits_unparsed_reasoning always
         # did. An explicit bool overrides that derivation outright -- for a
@@ -214,6 +158,7 @@ class LiteLLMProvider(LLMProvider):
         if self._gateway and self._gateway.name == "openrouter":
             self.extra_headers = {**_OPENROUTER_ATTRIBUTION, **self.extra_headers}
 
+        # Configure environment variables
         if api_key:
             self._setup_env(api_key, api_base, default_model)
 
@@ -332,10 +277,6 @@ class LiteLLMProvider(LLMProvider):
         spec = self._gateway or find_by_name(canonical_provider_name(self._provider_name))
         return spec is not None and (spec.is_local or spec.name == "custom")
 
-    def supports_prompt_caching(self, model: str) -> bool:
-        """See ``LLMProvider.supports_prompt_caching``."""
-        return self._supports_cache_control(model)
-
     def _supports_cache_control(self, model: str) -> bool:
         """Return True when this request may carry cache_control blocks.
 
@@ -361,38 +302,16 @@ class LiteLLMProvider(LLMProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]] | None]:
-        """Return copies of messages and tools with cache_control injected.
-
-        Two breakpoints land on the system message when it declares a stable
-        prefix (``prompt_cache.STABLE_PREFIX_KEY``), one when it does not.
-
-        The second one is the one that survives a turn. A breakpoint keys its
-        cache on every block up to and including itself, and the tail of this
-        message -- the memory recall, the skill router's hits, the Curator's
-        working state -- is rebuilt from whatever the user just said. So the
-        end-of-message breakpoint changes key on
-        every new turn and re-bills the identity and bootstrap text in front of
-        it that never changed at all. Splitting at the boundary gives that head
-        a key of its own.
-
-        The end-of-message one is kept beside it rather than moved, because it
-        is what holds the whole message across the iterations *within* a turn:
-        the assembler builds this message once per turn and the tool loop only
-        appends after it.
-        """
+        """Return copies of messages and tools with cache_control injected."""
         new_messages = []
         for msg in messages:
             if msg.get("role") == "system":
                 content = msg["content"]
-                blocks = prompt_cache.split_stable_prefix(content, int(msg.get(prompt_cache.STABLE_PREFIX_KEY) or 0))
-                if blocks is not None:
-                    blocks[0] = {**blocks[0], "cache_control": prompt_cache.cache_control()}
-                    new_content = blocks
-                elif isinstance(content, str):
-                    new_content = [{"type": "text", "text": content}]
+                if isinstance(content, str):
+                    new_content = [{"type": "text", "text": content, "cache_control": CACHE_CONTROL}]
                 else:
                     new_content = list(content)
-                new_content[-1] = {**new_content[-1], "cache_control": prompt_cache.cache_control()}
+                    new_content[-1] = {**new_content[-1], "cache_control": CACHE_CONTROL}
                 new_messages.append({**msg, "content": new_content})
             else:
                 new_messages.append(msg)
@@ -400,7 +319,7 @@ class LiteLLMProvider(LLMProvider):
         new_tools = tools
         if tools:
             new_tools = list(tools)
-            new_tools[-1] = {**new_tools[-1], "cache_control": prompt_cache.cache_control()}
+            new_tools[-1] = {**new_tools[-1], "cache_control": CACHE_CONTROL}
 
         return new_messages, new_tools
 
@@ -427,38 +346,16 @@ class LiteLLMProvider(LLMProvider):
             kwargs.update(max(matches, key=lambda item: len(item[0]))[1])
 
     @staticmethod
-    def _is_anthropic_family(original_model: str, resolved_model: str) -> bool:
-        """Whether this request is bound for an Anthropic model, by any spelling.
-
-        One rule for the two decisions that must agree: whether
-        ``thinking_blocks`` ride on the wire (``_extra_msg_keys``) and whether
-        the request may end on an assistant message
-        (``supports_assistant_prefill``). The request Anthropic rejects is
-        exactly those blocks plus a trailing assistant message, so deciding the
-        two separately would let them drift apart.
-        """
+    def _extra_msg_keys(original_model: str, resolved_model: str) -> frozenset[str]:
+        """Return provider-specific extra keys to preserve in request messages."""
         spec = find_by_model(original_model) or find_by_model(resolved_model)
-        return bool(
+        if (
             (spec and spec.name == "anthropic")
             or "claude" in original_model.lower()
             or resolved_model.startswith("anthropic/")
-        )
-
-    @staticmethod
-    def _extra_msg_keys(original_model: str, resolved_model: str) -> frozenset[str]:
-        """Return provider-specific extra keys to preserve in request messages."""
-        if LiteLLMProvider._is_anthropic_family(original_model, resolved_model):
+        ):
             return _ANTHROPIC_EXTRA_KEYS
         return frozenset()
-
-    def supports_assistant_prefill(self, model: str | None = None) -> bool:
-        """Anthropic rejects a trailing assistant message while thinking is on.
-
-        See ``LLMProvider.supports_assistant_prefill``. The family test is the
-        one ``_extra_msg_keys`` applies, on purpose.
-        """
-        original = model or self.default_model
-        return not self._is_anthropic_family(original, self._resolve_model(original))
 
     @staticmethod
     def _normalize_tool_call_id(tool_call_id: Any) -> Any:
@@ -501,23 +398,6 @@ class LiteLLMProvider(LLMProvider):
                 clean["tool_call_id"] = map_id(clean["tool_call_id"])
         return sanitized
 
-    def _mirror_reasoning_for_gateway(self, kwargs: dict[str, Any], reasoning_effort: str) -> None:
-        """Keep ``reasoning_effort`` alive past litellm's ``drop_params``.
-
-        ``drop_params`` silently discards ``reasoning_effort`` for any model
-        litellm cannot map -- which is every newly released model behind a
-        gateway -- and the agent then runs with reasoning off while the config
-        says otherwise. OpenRouter accepts the reasoning object natively, so
-        the effort is mirrored into ``extra_body``, which ``drop_params`` never
-        touches. A reasoning entry already present (a deployment's own config,
-        the qwen default) keeps priority.
-        """
-        if not (self._gateway and self._gateway.name == "openrouter"):
-            return
-        body = dict(kwargs.get("extra_body") or {})
-        body.setdefault("reasoning", {"effort": reasoning_effort})
-        kwargs["extra_body"] = body
-
     async def chat(
         self,
         messages: list[dict[str, Any]],
@@ -546,11 +426,7 @@ class LiteLLMProvider(LLMProvider):
         extra_msg_keys = self._extra_msg_keys(original_model, model)
 
         if self._supports_cache_control(original_model):
-            # Asked of this request, not of the process. A strategy that placed
-            # marks upstream stamps them; every other caller in this process --
-            # the Curator, a subagent, Sentinel, the session titler -- reaches
-            # here without a strategy in front of it and still wants its own.
-            if not self.disable_auto_cache_control and not prompt_cache.marks_already_placed(messages):
+            if not self.disable_auto_cache_control:
                 messages, tools = self._apply_cache_control(messages, tools)
         else:
             messages, tools = prompt_cache.strip(messages, tools)
@@ -597,7 +473,6 @@ class LiteLLMProvider(LLMProvider):
         if reasoning_effort:
             kwargs["reasoning_effort"] = reasoning_effort
             kwargs["drop_params"] = True
-            self._mirror_reasoning_for_gateway(kwargs, reasoning_effort)
 
         if tools:
             kwargs["tools"] = tools
@@ -605,7 +480,7 @@ class LiteLLMProvider(LLMProvider):
 
         try:
             response = await asyncio.wait_for(acompletion(**kwargs), self.generation.timeout)
-            return self._parse_response(response, sent_chars=prompt_chars(messages))
+            return self._parse_response(response)
         except Exception as e:
             # Return error as content for graceful handling, but classify the
             # live exception here (status_code + type) before it's lost to a
@@ -627,10 +502,10 @@ class LiteLLMProvider(LLMProvider):
         temperature: object = LLMProvider._SENTINEL,
         reasoning_effort: object = LLMProvider._SENTINEL,
         tool_choice: str | dict[str, Any] | None = None,
-    ) -> AsyncIterator[ChatDelta]:
+    ) -> AsyncIterator[StreamDelta]:
         """Streaming counterpart to chat().
 
-        Yields one ChatDelta per non-empty chunk. Signature matches chat()
+        Yields one StreamDelta per non-empty chunk. Signature matches chat()
         so callers can swap providers transparently. The existing chat() is
         NOT modified — non-TUI paths (channels / cron / sentinel / ...)
         continue to use chat() with no behavioral change.
@@ -656,11 +531,7 @@ class LiteLLMProvider(LLMProvider):
         extra_msg_keys = self._extra_msg_keys(original_model, model)
 
         if self._supports_cache_control(original_model):
-            # Asked of this request, not of the process. A strategy that placed
-            # marks upstream stamps them; every other caller in this process --
-            # the Curator, a subagent, Sentinel, the session titler -- reaches
-            # here without a strategy in front of it and still wants its own.
-            if not self.disable_auto_cache_control and not prompt_cache.marks_already_placed(messages):
+            if not self.disable_auto_cache_control:
                 messages, tools = self._apply_cache_control(messages, tools)
         else:
             messages, tools = prompt_cache.strip(messages, tools)
@@ -692,7 +563,6 @@ class LiteLLMProvider(LLMProvider):
         if reasoning_effort:
             kwargs["reasoning_effort"] = reasoning_effort
             kwargs["drop_params"] = True
-            self._mirror_reasoning_for_gateway(kwargs, reasoning_effort)
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
@@ -716,7 +586,7 @@ class LiteLLMProvider(LLMProvider):
             return True
 
         async def _open():
-            return (await asyncio.wait_for(acompletion(**kwargs), self.generation.stream_idle_timeout)).__aiter__()
+            return (await asyncio.wait_for(acompletion(**kwargs), self.generation.timeout)).__aiter__()
 
         async def _close(target: Any) -> None:
             aclose = getattr(target, "aclose", None)
@@ -725,8 +595,7 @@ class LiteLLMProvider(LLMProvider):
 
         # Per-chunk idle cap: the timer resets on every chunk, so a long but
         # steadily-progressing generation is fine while a mid-stream stall (no
-        # bytes for `stream_idle_timeout` seconds) raises TimeoutError instead
-        # of hanging for the whole-call budget.
+        # bytes for `timeout` seconds) raises TimeoutError instead of hanging.
         # Everything from the open onward sits inside the one try/finally, so the
         # underlying HTTP stream is closed deterministically on any exit -- a
         # first-chunk timeout included, which is the most likely one there is
@@ -744,7 +613,7 @@ class LiteLLMProvider(LLMProvider):
             # that defers the request until the first pull raises there instead.
             try:
                 stream = await _open()
-                first = await asyncio.wait_for(stream.__anext__(), self.generation.stream_idle_timeout)
+                first = await asyncio.wait_for(stream.__anext__(), self.generation.timeout)
             except StopAsyncIteration:
                 first = done
             except Exception as exc:
@@ -756,100 +625,53 @@ class LiteLLMProvider(LLMProvider):
                 await _close(stream)
                 stream = await _open()
                 try:
-                    first = await asyncio.wait_for(stream.__anext__(), self.generation.stream_idle_timeout)
+                    first = await asyncio.wait_for(stream.__anext__(), self.generation.timeout)
                 except StopAsyncIteration:
                     first = done
-
-            # LiteLLM rebuilds its final usage and drops API monetary fields.
-            # Its retained chunks precede that rebuild and contain reported usage.
-            sdk_stream = isinstance(stream, litellm.CustomStreamWrapper)
-            usage_cursor = 0
-
-            def reported_usage() -> dict[str, Any] | None:
-                nonlocal usage_cursor
-                usage = None
-                for original in stream.chunks[usage_cursor:]:
-                    raw = _usage_field(original, "usage")
-                    if raw is not None:
-                        usage = merge_usage(usage, self._normalize_usage(raw))
-                usage_cursor = len(stream.chunks)
-                return usage
 
             chunk = first
             while chunk is not done:
                 delta = self._normalize_stream_chunk(chunk)
-                if sdk_stream:
-                    usage = reported_usage()
-                    if delta is not None:
-                        delta.usage = usage
-                    elif usage is not None:
-                        delta = ChatDelta(usage=usage)
                 if delta is not None:
-                    # LiteLLM's stream wrapper answers an upstream that closed the
-                    # connection without a terminal chunk by making up a final
-                    # chunk with finish_reason "stop", and keeps the reason it
-                    # actually received (None, then) beside it. A consumer cannot
-                    # tell that fabricated stop from a real one otherwise, and a
-                    # reply cut mid-thought must not read as a finished one.
-                    if delta.finish_reason and _finish_was_made_up(stream):
-                        delta.finish_synthesized = True
                     yield delta
                 try:
-                    chunk = await asyncio.wait_for(stream.__anext__(), self.generation.stream_idle_timeout)
+                    chunk = await asyncio.wait_for(stream.__anext__(), self.generation.timeout)
                 except StopAsyncIteration:
-                    if sdk_stream and (usage := reported_usage()) is not None:
-                        yield ChatDelta(usage=usage)
                     break
         finally:
             await _close(stream)
 
-    def _normalize_usage(self, usage: Any) -> dict[str, Any]:
-        """Read protocol usage.cost as reported USD, independently of the endpoint."""
-        result = {}
-        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
-            value = token_count(_usage_field(usage, key))
-            if value is not None:
-                result[key] = value
-        read, write = _cache_tokens(usage)
-        if read is not None:
-            result["cache_read_input_tokens"] = read
-        if write is not None:
-            result["cache_creation_input_tokens"] = write
-        result["prompt_tokens_include_cache"] = True
-        cost = reported_cost(_usage_field(usage, "cost"))
-        if cost is not None:
-            result["cost_usd"] = cost
-        return result
-
-    def _normalize_stream_chunk(self, chunk: Any) -> ChatDelta | None:
-        """Normalize a raw provider chunk into a ChatDelta.
+    def _normalize_stream_chunk(self, chunk: Any) -> StreamDelta | None:
+        """Normalize a raw provider chunk into a StreamDelta.
 
         Default: OpenAI shape — `chunk.choices[0].delta.content` (str | None),
         `delta.tool_calls` (list | None), and a final `chunk.usage` snapshot
         on the trailing chunk for some providers. Returns None when the chunk
         carries no content / tool_call / usage payload so callers can skip.
 
-        A provider-specific shape (Qwen dashscope, say) is decided against a
-        real-provider smoke test: add a branch here keyed on ``self._gateway`` or
-        ``find_by_model(...).name`` when one is needed.
+        Provider-specific shapes (e.g. Qwen dashscope) are decided at
+        implementation time after a real-provider smoke test (per design.md
+        §D4 + tasks.md T3.4). Add a hardcoded branch here keyed on
+        `self._gateway` / `find_by_model(...).name` if/when needed.
         """
         try:
             choices = getattr(chunk, "choices", None)
-            usage = getattr(chunk, "usage", None)
-            if not choices and usage is None:
+            if not choices:
                 return None
-            choice = choices[0] if choices else None
-            delta_obj = getattr(choice, "delta", None)
+            delta_obj = getattr(choices[0], "delta", None)
+            if delta_obj is None:
+                return None
             content = getattr(delta_obj, "content", None)
             tool_calls = getattr(delta_obj, "tool_calls", None)
             usage = getattr(chunk, "usage", None)
             reasoning_content = getattr(delta_obj, "reasoning_content", None) or None
             # Upstream states why it stopped only on the terminal chunk, which
-            # otherwise carries no payload at all. Dropping that chunk would
-            # discard the one signal that says the response was cut off at the
-            # output ceiling rather than finished -- the difference between "the
-            # model is done" and "the model was interrupted mid-token".
-            finish_reason = getattr(choice, "finish_reason", None) or None
+            # otherwise carries no payload at all. Dropping that chunk (as the
+            # emptiness check below used to) discards the one signal that says
+            # the response was cut off at the output ceiling rather than
+            # finished -- the difference between "the model is done" and "the
+            # model was interrupted mid-token".
+            finish_reason = getattr(choices[0], "finish_reason", None) or None
 
             tool_call_delta: dict[str, Any] | None = None
             if tool_calls:
@@ -873,7 +695,16 @@ class LiteLLMProvider(LLMProvider):
                         )
                 tool_call_delta = {"tool_calls": serialized}
 
-            usage_dict = self._normalize_usage(usage) if usage is not None else None
+            usage_dict: dict[str, Any] | None = None
+            if usage is not None:
+                try:
+                    usage_dict = usage.model_dump()
+                except AttributeError:
+                    usage_dict = {
+                        "prompt_tokens": getattr(usage, "prompt_tokens", None),
+                        "completion_tokens": getattr(usage, "completion_tokens", None),
+                        "total_tokens": getattr(usage, "total_tokens", None),
+                    }
 
             if (
                 content is None
@@ -884,7 +715,7 @@ class LiteLLMProvider(LLMProvider):
             ):
                 return None
 
-            return ChatDelta(
+            return StreamDelta(
                 content=content,
                 tool_call_delta=tool_call_delta,
                 usage=usage_dict,
@@ -894,13 +725,8 @@ class LiteLLMProvider(LLMProvider):
         except (AttributeError, IndexError):
             return None
 
-    def _parse_response(self, response: Any, *, sent_chars: int | None = None) -> LLMResponse:
-        """Parse LiteLLM response into our standard format.
-
-        ``sent_chars`` is how much prompt went up, passed so the transport
-        verdict below has something to compare the accounting against. Optional
-        because the verdict's decisive evidence does not need it.
-        """
+    def _parse_response(self, response: Any) -> LLMResponse:
+        """Parse LiteLLM response into our standard format."""
         choice = response.choices[0]
         message = choice.message
         content = message.content
@@ -946,7 +772,7 @@ class LiteLLMProvider(LLMProvider):
             tool_calls.append(
                 ToolCallRequest(
                     id=_short_tool_id(),
-                    name=normalized_tool_name(tc.function.name),
+                    name=tc.function.name,
                     arguments=args,
                     provider_specific_fields=provider_specific_fields,
                     function_provider_specific_fields=function_provider_specific_fields,
@@ -954,8 +780,37 @@ class LiteLLMProvider(LLMProvider):
                 )
             )
 
-        raw_usage = getattr(response, "usage", None)
-        usage = self._normalize_usage(raw_usage) if raw_usage is not None else {}
+        usage = {}
+        if hasattr(response, "usage") and response.usage:
+            usage = {
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+                "total_tokens": response.usage.total_tokens,
+            }
+            # Cache token extraction. LiteLLM normalizes these across providers
+            # in different shapes depending on where the response came from:
+            #   - Anthropic native:  usage.cache_read_input_tokens / cache_creation_input_tokens
+            #   - LiteLLM internal:  usage._cache_read_input_tokens / _cache_creation_input_tokens
+            #   - OpenAI-style:      usage.prompt_tokens_details.cached_tokens (read only)
+            #   - OpenRouter:        usage.prompt_tokens_details.cached_tokens
+            #                        usage.prompt_tokens_details.cache_write_tokens
+            details = getattr(response.usage, "prompt_tokens_details", None)
+            cache_read = (
+                getattr(response.usage, "cache_read_input_tokens", None)
+                or getattr(response.usage, "_cache_read_input_tokens", None)
+                or (getattr(details, "cached_tokens", None) if details else None)
+                or 0
+            )
+            cache_write = (
+                getattr(response.usage, "cache_creation_input_tokens", None)
+                or getattr(response.usage, "_cache_creation_input_tokens", None)
+                or (getattr(details, "cache_write_tokens", None) if details else None)
+                or 0
+            )
+            if cache_read:
+                usage["cache_read_input_tokens"] = int(cache_read)
+            if cache_write:
+                usage["cache_creation_input_tokens"] = int(cache_write)
 
         reasoning_content = getattr(message, "reasoning_content", None) or None
         thinking_blocks = getattr(message, "thinking_blocks", None) or None
@@ -963,42 +818,6 @@ class LiteLLMProvider(LLMProvider):
         if not reasoning_content and isinstance(content, str) and self.emits_unparsed_reasoning():
             split_reasoning, content = split_orphan_think(content)
             reasoning_content = split_reasoning or reasoning_content
-
-        # Asked here rather than by the caller: this is the response exit, and
-        # by the time the ladder in `base.py` reads `finish_reason` the only
-        # thing standing between an upstream-reported failure and being
-        # delivered as an answer is this verdict. Both gates there
-        # (`!= "error"`) then work unchanged.
-        evidence = flag_transport_failure(
-            # The upstream's own word, not the `or "stop"` default below: a
-            # provider that sent no finish reason never said this call ended
-            # normally, so there is nothing here to disbelieve.
-            finish_reason=finish_reason,
-            content=content,
-            reasoning=reasoning_content,
-            tool_calls=tool_calls,
-            # Read off the first choice even though the merge above can adopt a
-            # later choice's reason: it only does so for a choice that carried
-            # tool calls, and a delivered call already stops this verdict.
-            native_finish_reason=native_finish_reason(choice),
-            usage=usage,
-            sent_chars=sent_chars,
-        )
-        if evidence:
-            logger.warning("upstream reported a failed call as a normal end: {}", evidence)
-            return LLMResponse(
-                content=transport_failure_message(evidence),
-                finish_reason="error",
-                usage=usage,
-                error_classification=ErrorClassification(
-                    category="upstream_transport_failure",
-                    # Retried before anything else is tried: the control
-                    # experiment healed on a retry that landed on another
-                    # backend, and there is no partial work to repeat.
-                    retryable=True,
-                    should_fallback=True,
-                ),
-            )
 
         return LLMResponse(
             content=content,

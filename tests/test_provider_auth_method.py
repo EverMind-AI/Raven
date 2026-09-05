@@ -3,18 +3,18 @@
 Decided in one place, ``providers.auth``. Three modules used to decide it
 independently and disagreed:
 
-* ``config.schema.section_has_credentials`` gates routing -- a section it rejects is
+* ``config.schema._has_credentials`` gates routing -- a section it rejects is
   skipped when matching a model id to a provider.
 * ``config.update_providers.list_providers`` gates display -- it is what
   ``raven provider list`` and the pickers show.
-* ``providers.factory.check_provider_credentials`` gates startup -- it decides
+* ``cli._helpers.check_provider_credentials`` gates startup -- it decides
   whether ``raven agent`` runs at all.
 
 A provider the second accepted and the first rejected was configured according
 to the CLI and invisible to the router -- Gemini holding only ``api_key_list``
 read as ready in ``provider list`` and refused to start.
 
-(``registry.auth_shape`` is deliberately absent: it answers what shape a
+(``registry.credential_kind`` is deliberately absent: it answers what shape a
 provider's credentials take, not whether they are present. It is a fourth
 implementation of a different question.)
 
@@ -148,8 +148,8 @@ def _display_says(case: dict[str, Any], path: Path) -> bool:
 
 def _startup_says(case: dict[str, Any], path: Path) -> bool:
     """Would `raven agent` start?"""
+    from raven.cli._helpers import check_provider_credentials
     from raven.providers.auth import MissingCredentialsError
-    from raven.providers.factory import check_provider_credentials
 
     config = Config.model_validate(json.loads(path.read_text(encoding="utf-8")))
     try:
@@ -435,26 +435,21 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
     allowed = {
         # Not an LLM provider section: a tool's own key (deep research, media
         # generation, web search), the router's, or EverOS's.
-        "raven/agent/loop/wiring.py",
-        # The sub-agent loop asks the same question the main loop does, about the
-        # same tool: whether web_search resolved a Serper key, so an unusable
+        "raven/agent/loop/main.py",
+        # The sub-agent surface asks the same question the main loop does, about
+        # the same tool: whether web_search resolved a Serper key, so an unusable
         # search is withheld rather than offered and failed. It asks the built
         # tool rather than the config because the tool resolves from either the
         # constructor value or SERPER_API_KEY.
-        "raven/agent/subagent/backends/raven_loop.py",
+        "raven/agent/subagent/manager.py",
         "raven/agent/tools/deep_research.py",
         "raven/agent/tools/media_gen.py",
         "raven/agent/tools/web.py",
+        "raven/cli/agent_commands.py",
         "raven/cli/deep_research_commands.py",
-        # The assembly door carries the tool-key reads the three entrances used
-        # to make (web search, jina): still a tool's own key, no provider
-        # verdict -- the entrances themselves no longer read any key.
-        "raven/core/runtime.py",
+        "raven/cli/gateway_commands.py",
+        "raven/cli/tui_commands.py",
         "raven/config/update_everos.py",
-        # The RPC surface that renders that EverOS section: the same key,
-        # reduced to a set/unset flag for the settings page. No verdict about
-        # a Raven provider is being made from it.
-        "raven/rpc/methods/console.py",
         "raven/config/update_tools.py",
         "raven/providers/transcription.py",
         # Reads a key in order to *use* it -- put it on the request, redact it
@@ -469,33 +464,13 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         # and `has_credential` both ask the tools, which is where each family's
         # rule already lives, so this file cannot become a second opinion.
         "raven/agent/tools/capabilities.py",
-        # The launcher library deciding whether a host config, read as raw
-        # JSON, carries any provider key worth inheriting wholesale
-        # (inherit_llm). No verdict on a specific Raven provider is made: the
-        # block is copied as-is precisely because two providers spelled the
-        # same can be two different endpoints, and the empty answer refuses
-        # the product launch rather than ruling any provider unconfigured.
-        # Asking auth would mean parsing the host's file into a RavenConfig a
-        # launcher deliberately treats as opaque, possibly newer, JSON.
-        "raven/config/product_render.py",
         "raven/config/update_providers.py",
         "raven/providers/litellm_provider.py",
-        "raven/providers/factory.py",
-        # The router reads the OpenRouter key in order to call OpenRouter with it;
-        # the read moved here from the assembly root with the vendor knowledge,
-        # and an empty answer disables routing rather than ruling on a provider.
-        "raven/routing/classifier.py",
+        "raven/cli/_helpers.py",
         "raven/cli/onboard_commands.py",
         # Carries the wizard's EverOS cluster split out of onboard_commands --
         # same reads, same argument, new file name.
         "raven/cli/onboard_everos.py",
-        # The same EverOS section again, read by the knowledge embedder: the
-        # three strings it needs to reach an OpenAI-compatible endpoint, and
-        # their absence read as "no embedding is configured, so there are no
-        # knowledge bases". That is a fact about EverOS's own section, not a
-        # verdict on a Raven provider -- see the module docstring for why the
-        # endpoint is inherited rather than picked from a provider catalogue.
-        "raven/knowledge/_embedding.py",
         # The connection-material reading layer itself: resolves flat fields,
         # api_key_list and endpoints into one list for whoever sends requests.
         # Configuredness still rules through auth, which consults this shape
@@ -503,52 +478,19 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         "raven/providers/endpoints.py",
         "raven/cli/provider_commands.py",
         "raven/cli/status_commands.py",
-        "raven/rpc/methods/model.py",
-        "raven/rpc/methods/setup.py",
+        "raven/tui_rpc/methods/model.py",
+        "raven/tui_rpc/methods/setup.py",
         "raven/providers/azure_openai_provider.py",
-        # The two native transports read their key only to put it on the
-        # Authorization header of the request they send, the way the Azure
-        # provider above does; whether the provider is set up is still auth's.
-        "raven/providers/openai_responses_provider.py",
-        "raven/providers/anthropic_messages_provider.py",
-        "raven/contracts/llm_provider.py",
+        "raven/providers/base.py",
         "raven/providers/minimax_oauth_provider.py",
         "raven/providers/per_model_provider.py",
-        # Other subsystems' credentials entirely: the skill hub, an embedding
-        # script.
+        # Other subsystems' credentials entirely: the skill hub, the evolver's
+        # judge, the EverOS memory backend, an embedding script.
         "raven/config/update.py",
         "raven/context_engine/factory.py",
+        "raven/evolver/judge/llm_client.py",
+        "raven/plugin/memory/everos/backend.py",
         "raven/routing/generate_embeddings.py",
-        # A third-party sub-agent's own credential, not a provider section: the
-        # key goes on that agent's own Authorization header against its own
-        # base_url, so `providers.auth` has no verdict to give about it. The
-        # roster surfaces do gate on presence -- an openai entry with no key
-        # cannot answer a dispatch -- but that is a fact about one sub-agent
-        # entry, not about whether a Raven provider is set up.
-        "raven/agent/subagent/backends/__init__.py",
-        "raven/agent/subagent/backends/openai_api.py",
-        "raven/agent/subagent/probe.py",
-        "raven/rpc/methods/subagents.py",
-        # Two reads, neither an opinion on whether a Raven provider is set up.
-        # One copies this raven's OpenRouter key into a sub-agent's own `.env`, so
-        # a user who configured one in step 1 is not asked for a second copy; the
-        # verdict that the provider is usable comes from `_configured_providers`
-        # (which rules through auth) before that value is touched at all. The
-        # other mirrors `inherit_llm` in the launchers, which are stdlib-only
-        # scripts outside this package: they cannot import auth and accept only a
-        # literal key, so an OAuth host is configured by auth's rule and has
-        # nothing to lend by theirs. That question is "will inherit_llm return
-        # non-empty", and only inherit_llm's own rule answers it.
-        "raven/cli/subagent_setup.py",
-        # Where that same `inherit_llm` question moved to. The agent layer now
-        # asks it too, because it decides whether a discovered vendored agent
-        # reaches the roster at all -- and the roster must not offer one whose
-        # launcher will then find nothing to inherit. Same reasoning as above,
-        # same file the launcher itself reads: two readers of one credential that
-        # disagreed would advertise an agent that dies at its first dispatch.
-        "raven/agent/subagent/vendored_agents.py",
-        # The skill hub's endpoint credential, read to store or forward it.
-        "raven/config/update_skills.py",
     }
 
     names = {"api_key", "api_key_list", "apiKey", "apiKeyList"}

@@ -11,8 +11,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from raven.contracts.memory import Memory, MemoryBackend
-from raven.memory_engine import LifecycleContractTests, MemoryBackendContractTests
+from raven.memory_engine import (
+    LifecycleContractTests,
+    Memory,
+    MemoryBackend,
+    MemoryBackendContractTests,
+)
 
 # ---------------------------------------------------------------------------
 # Tiny in-memory backend — enough surface area to exercise the contract

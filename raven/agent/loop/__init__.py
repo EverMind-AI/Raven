@@ -1,10 +1,16 @@
-"""AgentLoop — the L2 harness shell every entrance runs.
+"""AgentLoop — the Raven L2 ReAct executor.
 
-``main.py`` holds the class; its method groups live in mixins (``turn_path``,
-``wiring``, ``mcp_glue``, ``organ_glue``) and the module-level names they share
-in ``_shared``. Callers import ``AgentLoop`` from here.
+The full ``AgentLoop`` implementation lives in ``main.py``. The package
+shape is in place so the file can later be split into ``main.py`` /
+``dispatch.py`` / ``runner.py`` without further import churn.
+
+External callers should keep using:
+
+    from raven.agent.loop import AgentLoop
+
+which re-exports through here.
 """
 
-from raven.agent.loop.main import AgentLoop, LoopOutcome
+from raven.agent.loop.main import AgentLoop, TurnOutcome
 
-__all__ = ["AgentLoop", "LoopOutcome"]
+__all__ = ["AgentLoop", "TurnOutcome"]

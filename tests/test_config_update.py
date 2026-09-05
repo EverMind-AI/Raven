@@ -13,10 +13,10 @@ from pathlib import Path
 import pytest
 
 from raven.config.update import (
+    init_extension_block_defaults,
     reset_cron_config,
     set_default_model,
     set_memory_backend,
-    set_playbook_disabled,
     set_sandbox_backend,
     set_sentinel_nudge_quota,
     update_cron_config,
@@ -253,25 +253,94 @@ def test_set_memory_backend_preserves_siblings(cfg_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# sparse init: a fresh config carries intent, never defaults
+# init_extension_block_defaults
 # ---------------------------------------------------------------------------
 
 
-def test_a_fresh_config_file_is_sparse(cfg_path: Path) -> None:
-    """Onboard used to seed the extension blocks with their defaults; a value
-    that lands on disk stops following its declaration. A fresh file now
-    records nothing the user did not set, and every extension reader falls
-    back to its declared defaults when the block is absent."""
-    from raven.config.loader import Config, save_config
+def test_init_extension_defaults_seeds_safe_subset(cfg_path: Path) -> None:
+    init_extension_block_defaults(config_path=cfg_path)
+    data = _read(cfg_path)
+
+    assert data["memory"] == {
+        "backend": "everos",
+        "userId": "default",
+        "agentId": "default",
+        "memoryTopK": 5,
+    }
+    assert data["plugins"]["disabled"] == []
+    # plugins.config is never empty — it carries the everos-memory base_url
+    # (snake_case, verbatim pass-through to the plugin factory). Identity is
+    # NOT seeded here: it comes from ServiceLocator at plugin activation.
+    assert data["plugins"]["config"]["everos-memory"] == {
+        "base_url": "http://localhost:18791",
+    }
+    assert data["skillForge"]["enabled"] is True
+    assert data["skillForge"]["everos"] == {"enabled": True}
+    assert data["skillForge"]["router"]["weights"] == {
+        "local": 0.96,
+        "everos": 0.9,
+        "hub": 0.85,
+    }
+    assert data["skillForge"]["router"]["hub"] == {
+        "endpoint": "https://skillhub.evermind.ai",
+        "apiKey": None,
+        "timeoutS": 2.0,
+        "minSafety": 0.7,
+    }
+
+
+def test_init_extension_defaults_plugin_config_has_no_identity(cfg_path: Path) -> None:
+    # Regression guard: identity must not be duplicated into plugins.config
+    # anymore. A user editing memory.userId/agentId without also editing this
+    # copy used to silently split store from recall (see ServiceLocator docs).
+    init_extension_block_defaults(config_path=cfg_path)
+    em = _read(cfg_path)["plugins"]["config"]["everos-memory"]
+    assert "user_id" not in em
+    assert "agent_id" not in em
+
+
+def test_init_extension_defaults_omits_internal_infra_fields(cfg_path: Path) -> None:
+    # Service endpoints and optional tokens must never be materialized into a
+    # user's plaintext config by onboarding; only the safe subset is written.
+    init_extension_block_defaults(config_path=cfg_path)
+    sf = _read(cfg_path)["skillForge"]
+    for leaked in (
+        "embeddingUrl",
+        "embeddingApiKey",
+        "rerankerUrl",
+        "rerankerApiKey",
+        "massLibraryDb",
+        "embedding_url",
+        "embedding_api_key",
+    ):
+        assert leaked not in sf
+
+
+def test_init_extension_defaults_is_idempotent_and_non_clobbering(cfg_path: Path) -> None:
+    # An existing memory.backend (the bootstrap safety pin) and any user-set
+    # value must survive — setdefault only fills what's absent.
+    cfg_path.write_text(json.dumps({"memory": {"backend": None, "memoryTopK": 20}}))
+    init_extension_block_defaults(config_path=cfg_path)
+    first = _read(cfg_path)
+    assert first["memory"]["backend"] is None  # not overwritten
+    assert first["memory"]["memoryTopK"] == 20  # user value kept
+    assert first["memory"]["userId"] == "default"  # filled in
+
+    init_extension_block_defaults(config_path=cfg_path)
+    assert _read(cfg_path) == first  # second run is a no-op
+
+
+def test_init_extension_defaults_round_trips_through_loader(cfg_path: Path) -> None:
     from raven.config.raven import load_raven_config
 
-    save_config(Config(), config_path=cfg_path)
-    data = _read(cfg_path)
-    for block in ("memory", "plugins", "sentinel", "skillForge"):
-        assert block not in data, f"fresh config must not seed {block}"
-
-    rc = load_raven_config(config_path=cfg_path)
-    assert rc is not None
+    init_extension_block_defaults(config_path=cfg_path)
+    rc = load_raven_config(cfg_path)
+    assert rc.memory.memory_top_k == 5
+    assert rc.skill_forge.router.hub.endpoint == "https://skillhub.evermind.ai"
+    # Non-written service fields still resolve to public schema defaults.
+    assert rc.skill_forge.embedding_url == "http://localhost:1357"
+    assert rc.skill_forge.embedding_api_key is None
+    assert rc.skill_forge.mass_library_db is None
 
 
 def test_malformed_config_refuses_write_and_preserves_file(cfg_path: Path) -> None:
@@ -289,37 +358,3 @@ def test_malformed_config_refuses_write_and_preserves_file(cfg_path: Path) -> No
     with pytest.raises(ConfigReadError):
         set_default_model("openrouter/x", config_path=cfg_path)
     assert cfg_path.read_text(encoding="utf-8") == original
-
-
-# ---------------------------------------------------------------------------
-# set_playbook_disabled
-# ---------------------------------------------------------------------------
-
-
-def test_playbook_disable_adds_the_name(cfg_path: Path) -> None:
-    assert set_playbook_disabled("weekly-feedback", True, config_path=cfg_path) is True
-    assert _read(cfg_path)["playbooks"]["disabled"] == ["weekly-feedback"]
-
-
-def test_playbook_disable_is_idempotent(cfg_path: Path) -> None:
-    set_playbook_disabled("weekly-feedback", True, config_path=cfg_path)
-    before = cfg_path.read_text(encoding="utf-8")
-    assert set_playbook_disabled("weekly-feedback", True, config_path=cfg_path) is False
-    assert cfg_path.read_text(encoding="utf-8") == before
-
-
-def test_playbook_enable_removes_only_that_name(cfg_path: Path) -> None:
-    set_playbook_disabled("a", True, config_path=cfg_path)
-    set_playbook_disabled("b", True, config_path=cfg_path)
-    assert set_playbook_disabled("a", False, config_path=cfg_path) is True
-    assert _read(cfg_path)["playbooks"]["disabled"] == ["b"]
-    # enabling a name that is not on the list is a no-op, not an error
-    assert set_playbook_disabled("ghost", False, config_path=cfg_path) is False
-
-
-def test_playbook_disabled_preserves_sibling_fields(cfg_path: Path) -> None:
-    cfg_path.write_text('{"playbooks": {"enabled": true, "dir": "/x"}}', encoding="utf-8")
-    set_playbook_disabled("a", True, config_path=cfg_path)
-    data = _read(cfg_path)["playbooks"]
-    assert data["enabled"] is True and data["dir"] == "/x"
-    assert data["disabled"] == ["a"]

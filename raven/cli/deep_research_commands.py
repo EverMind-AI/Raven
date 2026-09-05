@@ -19,7 +19,6 @@ import typer
 from raven.agent.tools.deep_research import DEFAULT_MODEL
 from raven.cli._tty_guard import die_if_not_tty
 from raven.config.update_tools import ConfigReadError, get_deep_research, reset_deep_research, set_deep_research
-from raven.i18n import t
 
 SIGNUP_URL = "https://platform.miromind.ai/console/api-keys"
 
@@ -29,29 +28,57 @@ deep_research_app = typer.Typer(help="Configure the deep_research tool (MiroThin
 
 
 def _validate_key(api_key: str, api_base: str, *, transport: Any = None) -> dict[str, Any]:
-    """Free ``GET /v1/models`` key check against MiroThinker's base."""
+    """Free ``GET /v1/models`` key check. 200 = key valid; returns model ids.
+
+    Mirrors update_providers' models-test, including its ``/v1`` de-dup: the
+    MiroThinker default base already ends in ``/v1``, so appending ``/v1/models``
+    blindly would 404. ``transport`` is injectable for tests.
+    """
+    import httpx
+
     from raven.agent.tools.deep_research import DEFAULT_BASE_URL
-    from raven.cli._key_probe import probe_models
 
-    return probe_models(api_key, api_base or DEFAULT_BASE_URL, transport=transport)
+    base = (api_base or DEFAULT_BASE_URL).rstrip("/")
+    url = base + "/models"
+    if "/v1" not in base:
+        url = base + "/v1/models"
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    kwargs: dict[str, Any] = {"timeout": 10}
+    if transport is not None:
+        kwargs["transport"] = transport
+    try:
+        with httpx.Client(**kwargs) as client:
+            resp = client.get(url, headers=headers)
+    except httpx.HTTPError as exc:
+        return {"ok": False, "status": "network_error", "model_ids": None, "error": str(exc)}
+    if resp.status_code != 200:
+        return {"ok": False, "status": f"http_{resp.status_code}", "model_ids": None, "error": resp.text[:200]}
+    ids: list[str] = []
+    try:
+        for item in resp.json().get("data") or []:
+            if isinstance(item, dict) and item.get("id"):
+                ids.append(item["id"])
+    except Exception:
+        pass
+    return {"ok": True, "status": "ok", "model_ids": ids, "error": None}
 
 
-def _pick_model(questionary: Any, style: Any, qmark: str) -> str:
+def _pick_model(questionary: Any, style: Any, qmark: str, t: Any) -> str:
     # A short description aligned after each id. The shared 256k/16k window is
     # left out -- it is identical for both, so it is noise here and only bloats
     # the label (which questionary truncates rather than wraps).
     width = max(len(DEFAULT_MODEL), len(_FLAGSHIP_MODEL))
     choices = [
         questionary.Choice(
-            f"{DEFAULT_MODEL.ljust(width)}   {t('faster, lower cost')} ({t('recommended')})",
+            f"{DEFAULT_MODEL.ljust(width)}   {t('faster, lower cost', '更快、更省')} ({t('recommended', '推荐')})",
             value=DEFAULT_MODEL,
         ),
         questionary.Choice(
-            f"{_FLAGSHIP_MODEL.ljust(width)}   {t('deeper reasoning, broader tools')}",
+            f"{_FLAGSHIP_MODEL.ljust(width)}   {t('deeper reasoning, broader tools', '更强推理、更广工具')}",
             value=_FLAGSHIP_MODEL,
         ),
     ]
-    picked = questionary.select(t("Select a model:"), choices=choices, style=style, qmark=qmark).ask()
+    picked = questionary.select(t("Select a model:", "选择 model:"), choices=choices, style=style, qmark=qmark).ask()
     if picked is None:
         raise typer.Exit(1)  # Ctrl+C
     return picked
@@ -66,7 +93,7 @@ def configure_deep_research(*, non_interactive: bool = False, warnings: Optional
     """
     warnings = warnings if warnings is not None else []
     from raven.cli._styles import RAVEN_STYLE
-    from raven.cli.onboard_commands import _BACK, _QMARK, _prompt_api_key, _require_questionary, console
+    from raven.cli.onboard_commands import _BACK, _QMARK, _prompt_api_key, _require_questionary, _t, console
 
     if non_interactive:
         warnings.append("deep_research: skipped (non-interactive; pass --key to configure)")
@@ -81,10 +108,10 @@ def configure_deep_research(*, non_interactive: bool = False, warnings: Optional
 
     if current["api_key"]:
         choice = q.select(
-            t("deep_research is already configured."),
+            _t("deep_research is already configured.", "deep_research 已配置。"),
             choices=[
-                q.Choice(t("Keep current"), value="keep"),
-                q.Choice(t("Reconfigure"), value="reconfigure"),
+                q.Choice(_t("Keep current", "保持现有"), value="keep"),
+                q.Choice(_t("Reconfigure", "重新配置"), value="reconfigure"),
             ],
             style=RAVEN_STYLE,
             qmark=_QMARK,
@@ -95,10 +122,10 @@ def configure_deep_research(*, non_interactive: bool = False, warnings: Optional
             return True
     else:
         choice = q.select(
-            t("Enable deep_research (MiroThinker)?"),
+            _t("Enable deep_research (MiroThinker)?", "启用 deep_research(MiroThinker)?"),
             choices=[
-                q.Choice(t("Yes, configure it"), value="configure"),
-                q.Choice(t("Skip for now"), value="skip"),
+                q.Choice(_t("Yes, configure it", "是,配置"), value="configure"),
+                q.Choice(_t("Skip for now", "暂时跳过"), value="skip"),
             ],
             style=RAVEN_STYLE,
             qmark=_QMARK,
@@ -109,27 +136,30 @@ def configure_deep_research(*, non_interactive: bool = False, warnings: Optional
             return False
 
     console.print(
-        t("Create an API key at [link={SIGNUP_URL}]{SIGNUP_URL}[/link], then paste it below.", SIGNUP_URL=SIGNUP_URL)
+        _t(
+            f"Create an API key at [link={SIGNUP_URL}]{SIGNUP_URL}[/link], then paste it below.",
+            f"到 [link={SIGNUP_URL}]{SIGNUP_URL}[/link] 创建 API key,然后粘贴到下面。",
+        )
     )
 
     while True:
         key = _prompt_api_key(
             "deep_research",
             allow_back=True,
-            back_label=t("empty ↵ to cancel"),
+            back_label=_t("empty ↵ to cancel", "留空回车取消"),
         )
         if key is _BACK:
             return False  # empty submit cancels configuration
         res = _validate_key(key, current["api_base"])
         if res["ok"]:
             break
-        console.print(f"[yellow]⚠[/yellow] {t('Key validation failed')}: {res['status']}")
+        console.print(f"[yellow]⚠[/yellow] {_t('Key validation failed', 'Key 验证失败')}: {res['status']}")
         action = q.select(
-            t("What now?"),
+            _t("What now?", "怎么办?"),
             choices=[
-                q.Choice(t("Re-enter key"), value="retry"),
-                q.Choice(t("Save anyway"), value="save"),
-                q.Choice(t("Cancel"), value="cancel"),
+                q.Choice(_t("Re-enter key", "重新输入 key"), value="retry"),
+                q.Choice(_t("Save anyway", "仍然保存"), value="save"),
+                q.Choice(_t("Cancel", "取消"), value="cancel"),
             ],
             style=RAVEN_STYLE,
             qmark=_QMARK,
@@ -142,9 +172,9 @@ def configure_deep_research(*, non_interactive: bool = False, warnings: Optional
             break
         return False  # explicit cancel
 
-    model = _pick_model(q, RAVEN_STYLE, _QMARK)
+    model = _pick_model(q, RAVEN_STYLE, _QMARK, _t)
     set_deep_research({"api_key": key, "model": model})
-    console.print(f"[green]✓[/green] {t('deep_research configured')}")
+    console.print(f"[green]✓[/green] {_t('deep_research configured', 'deep_research 已配置')}")
     return True
 
 

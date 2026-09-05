@@ -16,8 +16,7 @@ import pytest
 from loguru import logger
 
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.bundles import ToolWiring, TurnPolicy
-from raven.contracts.tool import Tool
+from raven.agent.tools.base import Tool
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 
@@ -78,8 +77,8 @@ def _make_agent(workspace: Path, responses: list[LLMResponse], tool: Tool) -> Ag
         provider=_ScriptedProvider(responses),
         workspace=workspace,
         model="stub",
-        policy=TurnPolicy(max_iterations=5),
-        tools=ToolWiring(restrict_to_workspace=True),
+        max_iterations=5,
+        restrict_to_workspace=True,
     )
     agent.tools.register(tool)
     return agent

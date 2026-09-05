@@ -1,5 +1,3 @@
-"""The spine turn contracts: Origin, BusyPolicy, and TurnRequest."""
-
 import dataclasses
 
 import pytest
@@ -30,27 +28,29 @@ def test_enum_str_renders_as_value():
     assert str(BusyPolicy.APPEND) == "append"
 
 
+def test_message_id_and_conversation_are_independent_axes():
+    # Two orthogonal axes: conversation = coarse session/lane ownership (stable
+    # across a conversation), message_id = this single inbound message's id
+    # (varies per message). Same source + different message_id must not couple.
+    base = dict(origin=Origin.USER, source=_src(), text="x")
+    a = TurnRequest(**base, message_id="557")
+    b = TurnRequest(**base, message_id="558")
+    assert a.message_id != b.message_id
+    assert a.conversation is None and b.conversation is None
+
+
 def test_turn_request_defaults():
     r = TurnRequest(origin=Origin.USER, source=_src(), text="hi")
     assert r.media == ()
+    assert r.message_id is None
     assert r.conversation is None
     assert r.busy is BusyPolicy.APPEND
 
 
-def test_turn_id_defaults_to_none():
-    # None, not "": absent means "the lane mints one", which is what keeps every
-    # submit path other than turn.send unchanged.
-    r = TurnRequest(origin=Origin.USER, source=_src(), text="hi")
-    assert r.turn_id is None
-
-
-def test_turn_request_carries_no_dead_reply_threading_fields():
-    # message_id / reply_to were a designed-but-never-built reply-threading
-    # pipe (no setter, no reader anywhere). Removed 2026-08-29; the live design
-    # for outbound reply anchoring rides Source, not sibling fields here.
+def test_turn_request_carries_message_id_not_reply_to():
     fields = {f.name for f in dataclasses.fields(TurnRequest)}
-    assert "message_id" not in fields
-    assert "reply_to" not in fields
+    assert "message_id" in fields
+    assert "reply_to" not in fields  # reply_to is the outbound Text field, not here
 
 
 def test_turn_request_is_frozen():
@@ -83,22 +83,3 @@ def test_turn_request_deliver_text_defaults_none():
     # (~15 call sites) are unaffected.
     req = TurnRequest(origin=Origin.USER, source=_src(), text="hi")
     assert req.deliver_text is None
-
-
-def test_direct_target_defaults_to_none():
-    req = TurnRequest(
-        origin=Origin.USER,
-        source=Source(channel="tui", chat_id="c", sender_id="u", chat_type=ChatType.DM),
-        text="hi",
-    )
-    assert req.direct_target is None
-
-
-def test_direct_target_carries_agent_and_handle():
-    req = TurnRequest(
-        origin=Origin.USER,
-        source=Source(channel="tui", chat_id="c", sender_id="u", chat_type=ChatType.DM),
-        text="hi",
-        direct_target=("Raven-Code", "refactor-auth"),
-    )
-    assert req.direct_target == ("Raven-Code", "refactor-auth")

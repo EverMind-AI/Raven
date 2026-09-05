@@ -15,45 +15,17 @@ per session and lives in ``test_agent_loop_session_model.py``.
 
 from __future__ import annotations
 
-import asyncio
 from types import SimpleNamespace
 
-import pytest
-
-from raven.agent.loop.bundles import EngineWiring
 from raven.agent.loop.main import AgentLoop
-from raven.agent.subagent.manager import SubagentManager
 from raven.config.raven import ContextConfig, SkillForgeConfig
 from raven.context_engine.assembler import ContextAssembler
 from raven.context_engine.segments.curator import CuratorSegmentBuilder
 from raven.context_engine.segments.skills import SkillsSegmentBuilder
-from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
-from raven.memory_engine.skill_forge.gate import LLMGateFilter
+from raven.providers.base import LLMResponse
 from raven.providers.binding import ModelBinding
 
 NEW_MODEL = "anthropic/claude-opus-4-8"
-
-
-class _StubExecutor:
-    """``_run_subagent_inner`` only passes this to ExecTool; no command runs."""
-
-    @property
-    def is_sandboxed(self) -> bool:
-        return False
-
-    async def exec(self, command: str, **kwargs):  # pragma: no cover - unused
-        raise NotImplementedError
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *exc):
-        return False
-
-
-def _noop_submit(*args, **kwargs) -> None:
-    """``_announce_result`` calls the spine submit without awaiting it."""
-    return None
 
 
 class _Provider:
@@ -97,9 +69,8 @@ def _loop(tmp_path) -> AgentLoop:
         provider=_Provider(),
         workspace=tmp_path,
         model="fake/model",
-        # This test walks the push pipeline's holders (rewriter/gate); the
-        # pull default builds neither.
-        engine=EngineWiring(context_config=ContextConfig(), skill_forge_config=SkillForgeConfig(discovery="push")),
+        context_config=ContextConfig(),
+        skill_forge_config=SkillForgeConfig(),
     )
 
 
@@ -217,9 +188,9 @@ def test_a_pair_free_switch_keeps_a_window_the_user_pinned(tmp_path) -> None:
         provider=_Provider(),
         workspace=tmp_path,
         model="fake/model",
-        engine=EngineWiring(
-            context_window_tokens=32768, context_config=ContextConfig(), skill_forge_config=SkillForgeConfig()
-        ),
+        context_window_tokens=32768,
+        context_config=ContextConfig(),
+        skill_forge_config=SkillForgeConfig(),
     )
 
     loop.set_provider(_Provider("new"), NEW_MODEL)
@@ -244,137 +215,3 @@ def test_assembler_forwards_to_llm_backed_builders_only() -> None:
 
     assert llm_builder.provider is new_provider
     assert llm_builder.model == NEW_MODEL
-
-
-# ---------------------------------------------------------------------------
-# Pins
-# ---------------------------------------------------------------------------
-
-
-def test_pinned_gate_model_survives_the_switch() -> None:
-    gate = LLMGateFilter("old-provider", model="openai/gpt-5-mini")
-    gate.set_provider(SimpleNamespace(name="new-provider"), NEW_MODEL)
-    assert gate._model == "openai/gpt-5-mini"
-
-
-def test_an_empty_curator_model_follows_the_agent_model_both_times(tmp_path) -> None:
-    """The field has no ``min_length``, so ``curator_model: ""`` validates and
-    the constructor's ``or model`` follows the agent model. A switch has to
-    follow it too, or the same config means one thing at build time and
-    another after.
-    """
-    loop = AgentLoop(
-        provider=_Provider(),
-        workspace=tmp_path,
-        model="fake/model",
-        engine=EngineWiring(context_config=ContextConfig(curator_model=""), skill_forge_config=SkillForgeConfig()),
-    )
-    curator = next(b for b in loop.context_engine._builders if isinstance(b, CuratorSegmentBuilder))
-    assert curator.curator_model == "fake/model"
-
-    loop.set_provider(_Provider("new"), NEW_MODEL)
-    assert curator.curator_model == NEW_MODEL
-
-
-# ---------------------------------------------------------------------------
-# In-flight work
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_a_running_subagent_keeps_the_provider_it_started_with(tmp_path) -> None:
-    """A subagent is a detached task that outlives the turn that spawned it,
-    so the loop's park cannot cover it -- ``spawn`` snapshots instead. Without
-    that, iteration k+1 calls the new vendor carrying k iterations of the old
-    vendor's message shapes.
-    """
-    seen: list[tuple[str, str]] = []
-    release = asyncio.Event()
-
-    class _TwoStepProvider(_Provider):
-        async def chat_with_retry(self, **kwargs) -> LLMResponse:
-            seen.append((self.name, kwargs.get("model")))
-            if len(seen) == 1:
-                # Hold the task open across the switch, then ask for one more
-                # iteration so a re-read of self.provider would show up.
-                await release.wait()
-                return LLMResponse(
-                    content="",
-                    tool_calls=[ToolCallRequest(id="c1", name="list_dir", arguments={"path": "."})],
-                    finish_reason="tool_calls",
-                )
-            return LLMResponse(content="done", finish_reason="stop")
-
-    manager = SubagentManager(
-        provider=_TwoStepProvider("started-with"),
-        workspace=tmp_path,
-        model="started/model",
-    )
-    manager._submit = _noop_submit
-
-    task = asyncio.create_task(
-        manager._run_subagent_inner(
-            "t1",
-            "do the thing",
-            "thing",
-            {"channel": "cli", "chat_id": "direct", "session_key": "s"},
-            _StubExecutor(),
-            manager.provider,
-            manager.model,
-        )
-    )
-    await asyncio.sleep(0)
-    manager.set_provider(_TwoStepProvider("switched-to"), NEW_MODEL)
-    release.set()
-    await task
-
-    assert [name for name, _ in seen] == ["started-with", "started-with"]
-    assert [model for _, model in seen] == ["started/model", "started/model"]
-    # The next spawn does get the new one -- the snapshot is per task, not a freeze.
-    assert manager.provider.name == "switched-to"
-    assert manager.model == NEW_MODEL
-
-
-@pytest.mark.asyncio
-async def test_spawn_snapshots_before_the_task_queues(tmp_path) -> None:
-    """The snapshot must be taken in ``spawn``, not where the task starts
-    running: a spawn waits on the concurrency gate and a sandbox boot first,
-    and a switch landing in that window would hand the task an endpoint the
-    user chose after asking for it.
-
-    Driven through the real ``_run_subagent`` so the window is genuinely
-    open -- stubbing it would prove only that ``spawn`` passes *a* pair, which
-    a snapshot taken later would also satisfy.
-    """
-    import raven.agent.subagent.manager as manager_mod
-
-    served: list[str] = []
-
-    class _RecordingProvider(_Provider):
-        async def chat_with_retry(self, **kwargs) -> LLMResponse:
-            served.append(self.name)
-            return LLMResponse(content="done", finish_reason="stop")
-
-    manager = SubagentManager(
-        provider=_RecordingProvider("started-with"),
-        workspace=tmp_path,
-        model="started/model",
-    )
-    manager._submit = _noop_submit
-    # Hold every spawn in exactly the window the snapshot exists for.
-    manager._gate = asyncio.Semaphore(0)
-
-    original_build = manager_mod.build_executor
-    manager_mod.build_executor = lambda *a, **k: _StubExecutor()
-    try:
-        await manager.spawn("do the thing", task_summary="thing", session_key="s")
-        manager.set_provider(_RecordingProvider("switched-to"), NEW_MODEL)
-        manager._gate.release()
-        for _ in range(50):
-            await asyncio.sleep(0)
-            if served:
-                break
-    finally:
-        manager_mod.build_executor = original_build
-
-    assert served == ["started-with"], "the spawn ran on the provider it was asked for"

@@ -4,7 +4,6 @@
 node_modules/
 bridge/node_modules
 ui-tui/node_modules
-ui-web/node_modules
 bridge/dist/
 # Generated architecture/diagram SVGs at repo root (not source)
 /*.svg
@@ -44,12 +43,10 @@ CLAUDE.local.md
 logs/
 .DS_Store
 .claude/
-.vscode/
 tmp.sh
 .work_context/
-# Runtime-discipline shadow checkpoint repo — never commit snapshots
+# Runtime-discipline shadow checkpoint repo (Bug2) — never commit snapshots
 .raven/
-.hermes/
 
 # SkillForge dense retrieval cache (auto-built per-deployment, never tracked)
 .skill_index/
@@ -90,39 +87,3 @@ benchmarks/proactivity_eval/data/discovery/*/auth_*.py
 benchmarks/proactivity_eval/data/discovery/*/cache_*.md
 benchmarks/proactivity_eval/data/discovery/*/rate_limit_*.py
 benchmarks/proactivity_eval/data/discovery/*/weekly_status_*.md
-
-# Skill-retrieval demo: the working directory and agent-home trees a local run writes.
-demos/skill_retrieval/output/
-demos/skill_retrieval/sessions/
-demos/skill_retrieval/user_memory/
-demos/skill_retrieval/agent_memory/
-
-# Scratch workspace for local sub-agent / DAG testing.
-/tmp/
-.omo/*
-.ruff_cache/
-
-# Sub-agents are opt-in, one folder at a time: a folder here can hold a docker
-# image tar or a private checkout, so the default stays "ignored" and each
-# tracked one is named. Everything unsafe *inside* a tracked folder - secrets,
-# rendered configs, run/session/cache/ledger state, the vendored .venv - is
-# covered by that folder's own .gitignore, which git only consults once the
-# parent stops being excluded.
-
-# Report assets AGENTS.md bars from the repo whatever carries them. The
-# vendored upstream trees ship benchmark PDFs, doc diagrams and a demo
-# screenshot; two of them are over the 1 MiB limit that CI enforces, and the
-# exemption for application source trees does not reach in here.
-#
-# Kept in step with BLOCKED_ASSET_EXTENSIONS in scripts/check_large_files.py,
-# which is the list CI actually enforces -- a narrower list here would let the
-# next upstream refresh track a file that then fails CI a long way from its
-# cause. These trees are web-adjacent, so an icon or a webp is a plausible
-# thing for the next release to carry.
-
-# Playwright MCP session artifacts (console logs, page snapshots, screenshots)
-.playwright-mcp/
-demos/oncall_heat2d/.raven-demo-home/
-
-# Generated benchmark reports (written by the real_llm integration tests).
-/reports/

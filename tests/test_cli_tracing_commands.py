@@ -17,15 +17,12 @@ import os
 import signal
 import socket
 import threading
-import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from pathlib import Path
 
 from typer.testing import CliRunner
 
 from raven.cli import tracing_commands as tc
 from raven.cli.commands import app
-from raven.tracing.compact import CompactResult
 
 runner = CliRunner()
 
@@ -262,114 +259,8 @@ def test_pid_is_viewer_posix_keeps_ps_command_check(monkeypatch):
 
     def run(argv, **kwargs):
         calls.append(list(argv))
-        return _FakeCompleted("node /opt/raven/cli/tracing_viewer/server.js\n")
+        return _FakeCompleted("node /opt/raven/tracing/viewer/server.js\n")
 
     monkeypatch.setattr(tc.subprocess, "run", run)
     assert tc._pid_is_viewer(4242) is True
     assert calls and calls[0][0] == "ps"
-
-
-def _aged_artifact(state_dir: Path, name: str, text: str) -> Path:
-    path = state_dir / "logs" / "audit-artifacts" / "llm.input" / "2026-08-01" / name
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
-    stamp = time.time() - 3600
-    os.utime(path, (stamp, stamp))
-    return path
-
-
-def test_tracing_compact_folds_duplicates(tmp_path, monkeypatch):
-    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
-    a = _aged_artifact(tmp_path, "a.json", '{"m":"same"}')
-    b = _aged_artifact(tmp_path, "b.json", '{"m":"same"}')
-
-    r = runner.invoke(app, ["tracing", "compact"])
-
-    assert r.exit_code == 0
-    assert "scanned 2" in r.output
-    assert "folded 1" in r.output
-    assert a.stat().st_ino == b.stat().st_ino
-
-
-def test_tracing_compact_dry_run_writes_nothing(tmp_path, monkeypatch):
-    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
-    a = _aged_artifact(tmp_path, "a.json", '{"m":"same"}')
-    b = _aged_artifact(tmp_path, "b.json", '{"m":"same"}')
-
-    r = runner.invoke(app, ["tracing", "compact", "--dry-run"])
-
-    assert r.exit_code == 0
-    assert "folded 1" in r.output
-    assert a.stat().st_ino != b.stat().st_ino
-    assert not (tmp_path / "logs" / "audit-artifacts" / "_blobs").exists()
-
-
-def test_tracing_compact_without_artifacts_is_not_an_error(tmp_path, monkeypatch):
-    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
-
-    r = runner.invoke(app, ["tracing", "compact"])
-
-    assert r.exit_code == 0
-    assert "no artifacts" in r.output.lower()
-
-
-def test_tracing_compact_error_message_is_not_corrupted_by_rich_markup(tmp_path, monkeypatch):
-    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
-    (tmp_path / "logs" / "audit-artifacts").mkdir(parents=True)
-    message = "[Errno 13] Permission denied: /a/[foo]/b.json"
-    monkeypatch.setattr("raven.tracing.compact.compact", lambda *args, **kwargs: CompactResult(errors=[message]))
-
-    r = runner.invoke(app, ["tracing", "compact"])
-
-    assert r.exit_code == 0
-    assert message in r.output
-
-
-def test_tracing_compact_reports_dropped_error_count(tmp_path, monkeypatch):
-    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
-    (tmp_path / "logs" / "audit-artifacts").mkdir(parents=True)
-    canned = CompactResult(errors=[f"err-{i}" for i in range(15)], errors_dropped=5)
-    monkeypatch.setattr("raven.tracing.compact.compact", lambda *args, **kwargs: canned)
-
-    r = runner.invoke(app, ["tracing", "compact"])
-
-    assert r.exit_code == 0
-    assert "... and 10 more" in r.output
-
-
-def test_tracing_rejects_an_unknown_action(tmp_path, monkeypatch):
-    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
-
-    r = runner.invoke(app, ["tracing", "wat"])
-
-    assert r.exit_code == 2
-    assert "compact" in r.output
-    assert "stop" in r.output
-
-
-def test_tracing_rejects_an_unknown_action_with_bracketed_markup(tmp_path, monkeypatch):
-    """Rich markup in the echoed action must not corrupt the message or the
-    exit-2 contract: unescaped, '[/x]' raises rich.errors.MarkupError instead
-    of printing.
-    """
-    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
-
-    r = runner.invoke(app, ["tracing", "[/x]"])
-
-    assert r.exit_code == 2
-    assert "[/x]" in r.output
-    assert "compact" in r.output
-    assert "stop" in r.output
-
-
-def test_a_below_minimum_node_is_refused(monkeypatch):
-    """find_node deliberately returns the best node it saw even below the
-    minimum; the viewer used to discard the version and run on it anyway."""
-    import pytest
-    import typer
-
-    import raven.cli.tracing_commands as tc
-
-    monkeypatch.setattr("raven.cli.tui_commands.find_node", lambda: ("/usr/bin/node", (20, 0, 0)))
-    with pytest.raises(typer.Exit):
-        tc._resolve_node()

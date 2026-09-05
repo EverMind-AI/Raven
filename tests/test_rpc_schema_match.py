@@ -1,7 +1,7 @@
-"""Schema-match test: Pydantic models (raven.rpc.models) ↔ OpenRPC schema.
+"""Schema-match test: Pydantic models (raven.tui_rpc.models) ↔ OpenRPC schema.
 
 This test is the CI guardrail that catches drift between the single source of
-truth (``rpc-schema/openrpc.json``) and the Python-side Pydantic models.
+truth (``ui-tui/rpc-schema/openrpc.json``) and the Python-side Pydantic models.
 
 Strategy
 --------
@@ -15,11 +15,7 @@ For each method declared in the schema:
     field-level invariants.
 
 We deliberately do NOT compare every nested key (titles, descriptions, Pydantic
-"anyOf [T, null]" wrapper vs schema's bare "T" + required-list).  Nullability is
-therefore NOT checked here: both sides are stripped of their null branch before
-the diff, so a nullable Pydantic field over a non-nullable schema one passes.
-Pin that per method against real handler output instead -- see
-``test_every_set_mode_answer_satisfies_the_published_result_schema``.  Instead we
+"anyOf [T, null]" wrapper vs schema's bare "T" + required-list).  Instead we
 *normalize* both sides to a canonical ``{name → field_descriptor}`` shape and
 diff those.  This gives a readable assertion message on drift while staying
 robust to Pydantic's stylistic choices.
@@ -38,9 +34,9 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from raven.rpc.models import METHOD_MODELS
+from raven.tui_rpc.models import METHOD_MODELS
 
-SCHEMA_PATH = Path(__file__).resolve().parent.parent / "rpc-schema" / "openrpc.json"
+SCHEMA_PATH = Path(__file__).resolve().parent.parent / "ui-tui" / "rpc-schema" / "openrpc.json"
 
 
 # ---------------------------------------------------------------------------
@@ -110,17 +106,9 @@ def _normalize_oas_type(
         return expanded
     out: dict[str, Any] = {}
     if "type" in node:
+        # OpenRPC declares JsonValue as a multi-typed primitive node; collapse.
         if isinstance(node["type"], list):
-            # Two shapes share this spelling. ``[T, "null"]`` is a nullable T --
-            # the schema's way of writing what Pydantic emits as
-            # ``anyOf: [T, null]`` and ``_strip_null_anyof`` reduces to T, so
-            # reduce it the same way or the two sides can never agree. Anything
-            # wider is JsonValue's multi-typed primitive node; collapse that.
-            non_null = [t for t in node["type"] if t != "null"]
-            if len(non_null) == 1:
-                out["type"] = non_null[0]
-            else:
-                out["any"] = True
+            out["any"] = True
         else:
             out["type"] = node["type"]
     if "enum" in node:
@@ -304,6 +292,11 @@ def test_method_set_matches(methods_by_name: dict[str, dict[str, Any]]) -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(scope="module")
+def method_names(methods_by_name: dict[str, dict[str, Any]]) -> list[str]:
+    return sorted(methods_by_name.keys())
+
+
 def _check_params_drift(method_name: str, method: dict[str, Any], schema: dict[str, Any]) -> None:
     params_model, _ = METHOD_MODELS[method_name]
     oas = _oas_params_to_canonical(method, schema)
@@ -364,7 +357,7 @@ def test_schema_match_turn_event_discriminated_union(schema: dict[str, Any]) -> 
     """
     from pydantic import TypeAdapter
 
-    from raven.rpc.models import TurnEvent
+    from raven.tui_rpc.models import TurnEvent
 
     oas = schema["components"]["schemas"]["TurnEvent"]
     assert oas.get("discriminator", {}).get("propertyName") == "type"
@@ -381,125 +374,6 @@ def test_schema_match_turn_event_discriminated_union(schema: dict[str, Any]) -> 
     oas_normal = {k: v.split("/")[-1] for k, v in oas_mapping.items()}
     pyd_normal = {k: v.split("/")[-1] for k, v in pyd_mapping.items()}
     assert oas_normal == pyd_normal, f"TurnEvent discriminator mapping drift: schema={oas_normal} vs pyd={pyd_normal}"
-
-
-def test_schema_match_the_boundary_a_suspended_dag_node_emits(schema: dict[str, Any]) -> None:
-    """The exact `turn.started` payload `announce_dag_exception` puts on the wire
-    must validate against the published contract AND the Pydantic model.
-
-    `turn.started` was declared on both sides and wired into neither union, so
-    the sweep above never reached it. It drifted the moment the judge landed:
-    `raven/agent/subagent/manager.py` began marking a suspended node
-    `status="exception"` with a `node_id`, the schema still said
-    `enum: [ok, error]` with `additionalProperties: false`, and the Pydantic
-    payload had no `delegated` field at all under `extra="forbid"`. Nothing
-    validates an outbound event, so it reached clients anyway -- but any
-    consumer that DOES validate rejects the whole event, not the unknown field,
-    and loses the boundary that advances the turn counter.
-
-    Built from the marker the manager actually writes, so the day a fourth
-    status or a fifth field is added there, this fails here rather than in a
-    client nobody is watching.
-    """
-    import jsonschema
-    from pydantic import TypeAdapter
-
-    from raven.rpc.models import TurnEvent
-
-    # The shape `announce_dag_exception` builds, verbatim.
-    mark = {"kind": "dag", "label": "run-7", "status": "exception", "run_id": "run-7", "node_id": "n2"}
-    event = {"type": "turn.started", "payload": {"turn_id": "t1", "delegated": {**mark, "content": "..."}}}
-
-    inline = {**schema["components"]["schemas"]["TurnStartedEvent"], "components": schema["components"]}
-    jsonschema.validate(event, inline)
-    TypeAdapter(TurnEvent).validate_python(event)
-
-    # And a direct chat's turn, which tags the payload with its addressee. The
-    # shape is the one `raven/rpc/methods/turn.py` puts in `direct_targets`:
-    # `agent` and `handle`. This event declared its own `target` inline instead
-    # of pointing at `DirectTarget` like every other event does, and the copy
-    # said `instance` -- a key the runtime has never sent -- under
-    # `additionalProperties: false`. So every tagged boundary was invalid to a
-    # validating consumer, for a field it does not even control.
-    tagged = {
-        "type": "turn.started",
-        "payload": {"turn_id": "t1", "target": {"agent": "raven-code", "handle": "h1"}},
-    }
-    jsonschema.validate(tagged, inline)
-    TypeAdapter(TurnEvent).validate_python(tagged)
-
-    # The plain boundary, which most turns are: no delegation, no addressee.
-    plain = {"type": "turn.started", "payload": {"turn_id": "t1"}}
-    jsonschema.validate(plain, inline)
-    TypeAdapter(TurnEvent).validate_python(plain)
-
-    # And the fourth status: a stall notice about a node that is still running
-    # (`announce_dag_exception(informational=True)`). Emitted as `notice` so a
-    # client never draws a live node as failed; declared on both sides for the
-    # same reason the third one is.
-    notice = {**mark, "status": "notice"}
-    for shape in (
-        {"type": "turn.started", "payload": {"turn_id": "t1", "delegated": {**notice, "content": "..."}}},
-        {"type": "subagent.delivered", "payload": {**notice, "content": "..."}},
-    ):
-        jsonschema.validate(shape, {**schema["components"]["schemas"]["TurnEvent"], "components": schema["components"]})
-        TypeAdapter(TurnEvent).validate_python(shape)
-
-
-def test_schema_match_the_stall_notice_progress_event(schema: dict[str, Any]) -> None:
-    """`dag.node_stalled` is what the stall watcher's progress event becomes on
-    the wire (`raven.rpc.spine._DAG_WIRE_EVENT`); it is the only frame a bound
-    foreground run's panel hears, so it has to be declared on both sides."""
-    import jsonschema
-    from pydantic import TypeAdapter
-
-    from raven.rpc.models import TurnEvent
-    from raven.rpc.spine import _DAG_WIRE_EVENT, _dag_payload
-
-    payload = _dag_payload("dag_node_stalled", {"run_id": "r1", "node": "n", "quiet_ms": 600000})
-    event = {"type": _DAG_WIRE_EVENT["dag_node_stalled"], "payload": payload}
-    jsonschema.validate(event, {**schema["components"]["schemas"]["TurnEvent"], "components": schema["components"]})
-    TypeAdapter(TurnEvent).validate_python(event)
-
-
-def test_schema_match_turn_event_payload_fields(schema: dict[str, Any]) -> None:
-    """Every variant's payload must declare the same fields on both sides.
-
-    The union test above compares only the *set of variants*, which is why a
-    field added to one side alone survived it: ``tool.complete`` gained
-    ``file_change`` at the emit site and in the Pydantic model with no schema
-    entry, and nothing failed. That is not a cosmetic drift -- both sides declare
-    ``additionalProperties: false`` / ``extra="forbid"``, so a consumer
-    validating against the schema rejects the *whole event*, not just the
-    unknown field, and a client loses the tool result entirely.
-
-    Compares names only. Types are left to the per-method sweep: an event payload
-    reuses the same component schemas, and a name mismatch is the failure this
-    contract actually suffers.
-    """
-    from pydantic import TypeAdapter
-
-    from raven.rpc.models import TurnEvent
-
-    components = schema["components"]["schemas"]
-    oas_mapping = components["TurnEvent"]["discriminator"]["mapping"]
-    pyd = TypeAdapter(TurnEvent).json_schema()
-    pyd_defs = pyd["$defs"]
-
-    def properties(node: dict[str, Any], defs: dict[str, Any]) -> set[str]:
-        payload = node["properties"].get("payload", {})
-        if "$ref" in payload:
-            payload = defs[payload["$ref"].split("/")[-1]]
-        return set(payload.get("properties", {}))
-
-    drift: dict[str, tuple[list[str], list[str]]] = {}
-    for literal, ref in pyd["discriminator"]["mapping"].items():
-        pyd_fields = properties(pyd_defs[ref.split("/")[-1]], pyd_defs)
-        oas_fields = properties(components[oas_mapping[literal].split("/")[-1]], components)
-        if pyd_fields != oas_fields:
-            drift[literal] = (sorted(pyd_fields - oas_fields), sorted(oas_fields - pyd_fields))
-
-    assert not drift, "payload field drift (pydantic-only, schema-only): " + repr(drift)
 
 
 # Parametrized full-suite sweep — one test instance per method.  This is the
@@ -552,9 +426,6 @@ EXPECTED_ERROR_CODES = {
     -32013: "cli_command_failed",
     -32014: "cli_command_timeout",
     -32015: "not_dispatch_compatible",
-    -32017: "subagent_not_found",
-    -32018: "session_title_too_long",
-    -32019: "subagent_not_ready",
 }
 
 

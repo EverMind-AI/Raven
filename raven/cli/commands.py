@@ -23,8 +23,7 @@ group. The actual implementations live in per-feature modules:
     - ``trajectory`` → ``raven/cli/trajectory_commands.py``
 
 Shared helpers used across multiple command modules live in
-``raven/cli/_helpers.py`` (rendering) and ``raven/core/config_stack.py`` /
-``raven/core/provider_stack.py`` (assembly).
+``raven/cli/_helpers.py``.
 """
 
 import os
@@ -60,18 +59,6 @@ def version_callback(value: bool):
         raise typer.Exit()
 
 
-def _saved_language() -> str:
-    """The ``language`` a config on disk carries, ``en`` when there is none yet or it cannot be read."""
-    try:
-        import json
-
-        from raven.config.paths import get_config_path
-
-        return str(json.loads(get_config_path().read_text(encoding="utf-8")).get("language") or "en")
-    except Exception:
-        return "en"
-
-
 @app.callback()
 def main(
     ctx: typer.Context,
@@ -84,16 +71,14 @@ def main(
     session) and then enters the native TUI. Both paths share the identical
     pre-launch check by routing through the ``tui`` callback.
     """
-    i18n.set_language(_saved_language())
     if ctx.invoked_subcommand is not None:
         return
     from raven.cli.tui_commands import tui as _tui_entry
 
     # Delegate to the exact `raven tui` callback so the onboarding gate and
-    # launch behavior are identical for both entry points. Every option of
-    # `tui` must be passed an explicit plain default: its typer.Option
-    # defaults are OptionInfo sentinels that only typer resolves, and an
-    # omitted one arrives here as a sentinel that reads as "flag was set".
+    # launch behavior are identical for both entry points. Pass explicit
+    # plain defaults (the function's typer.Option defaults are OptionInfo
+    # sentinels, only resolved when typer drives the command).
     _tui_entry(
         ctx,
         check=False,
@@ -101,9 +86,6 @@ def main(
         color=None,
         print_colors=False,
         preview_colors=False,
-        workspace=None,
-        home=None,
-        standalone=False,
     )
 
 
@@ -117,7 +99,6 @@ from raven.cli import (
     gateway_commands,
     onboard_commands,
     plugin_commands,
-    serve_commands,
     status_commands,
     tracing_commands,
     upgrade_commands,
@@ -129,7 +110,6 @@ agent_commands.register(app)
 status_commands.register(app)
 doctor_commands.register(app)
 plugin_commands.register(app)
-serve_commands.register(app)
 tracing_commands.register(app)
 upgrade_commands.register(app)
 
@@ -138,26 +118,18 @@ upgrade_commands.register(app)
 # Subcommand registrations
 # ============================================================================
 
-from raven.cli.acp_commands import acp_app
 from raven.cli.channel_commands import channels_app
 from raven.cli.cron_commands import cron_app
 from raven.cli.deep_research_commands import deep_research_app
-from raven.cli.mcp_commands import mcp_app
-from raven.cli.ops_connection_commands import ops_app
-from raven.cli.playbook_commands import playbook_app
 from raven.cli.provider_commands import provider_app
 from raven.cli.sandbox_commands import sandbox_app
 from raven.cli.sentinel_commands import sentinel_app
 from raven.cli.skill_commands import skill_app
 from raven.cli.trajectory_commands import trajectory_app
 
-app.add_typer(acp_app, name="acp")
 app.add_typer(channels_app, name="channels")
 app.add_typer(cron_app, name="cron")
-app.add_typer(ops_app, name="ops")
 app.add_typer(deep_research_app, name="deep-research")
-app.add_typer(mcp_app, name="mcp")
-app.add_typer(playbook_app, name="playbook")
 app.add_typer(provider_app, name="provider")
 app.add_typer(sandbox_app, name="sandbox")
 app.add_typer(sentinel_app, name="sentinel")
@@ -173,14 +145,6 @@ from raven.cli.session_commands import session_app
 
 app.add_typer(session_app, name="sessions")
 
-# Singular `plugin` beside the existing plural `plugins` listing: the group holds
-# per-server actions (`plugin auth <server>`), which is a different verb shape
-# from "show me what is installed".
-from raven.cli.plugin_commands import plugin_app
-
-app.add_typer(plugin_app, name="plugin")
-
-from raven import i18n
 from raven.cli.import_commands import import_app
 
 app.add_typer(import_app, name="import")

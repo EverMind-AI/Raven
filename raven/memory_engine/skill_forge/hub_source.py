@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 class HubSkillSource:
-    """ForgeSkillSource backed by the remote Skill Hub OpenAPI."""
+    """SkillSource backed by the remote Skill Hub OpenAPI."""
 
     name: str = "hub"
     weight: float = 0.85

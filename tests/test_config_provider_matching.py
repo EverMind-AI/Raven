@@ -63,23 +63,6 @@ def test_a_model_id_written_before_the_zai_rename_still_resolves() -> None:
     assert LiteLLMProvider(default_model="zhipu/glm-4.6")._resolve_model("zhipu/glm-4.6") == "zai/glm-4.6"
 
 
-def test_lmstudio_config_spelling_loads_as_lm_studio() -> None:
-    cfg = _config(lmstudio={"apiBase": "http://localhost:1234/v1"})
-
-    assert cfg.providers.get("lm_studio").api_base == "http://localhost:1234/v1"
-
-
-def test_minimax_cn_api_uses_its_regional_endpoint_and_minimax_wire_prefix() -> None:
-    from raven.providers.litellm_provider import LiteLLMProvider
-
-    cfg = _config(minimaxCnApi={"apiKey": "K-CN"})
-    model = "minimax-cn-api/MiniMax-M3"
-
-    assert cfg.get_provider_name(model) == "minimax_cn_api"
-    assert cfg.get_api_base(model) == "https://api.minimaxi.com/v1/"
-    assert LiteLLMProvider(default_model=model)._resolve_model(model) == "minimax/MiniMax-M3"
-
-
 def test_writing_under_the_old_provider_name_lands_on_the_current_key(tmp_path) -> None:
     # `raven provider set zhipu ...` is muscle memory and lives in every guide
     # written before the rename. Taking the name at face value would split the

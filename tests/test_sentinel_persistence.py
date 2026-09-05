@@ -277,7 +277,7 @@ def test_session_manager_find_most_recent_chat_id(tmp_state_dir: Path):
 
     from raven.session.manager import SessionManager
 
-    workspace = tmp_state_dir / "chanwork"
+    workspace = tmp_state_dir / "ws"
     sessions_dir = workspace / "sessions"
     (sessions_dir / "feishu").mkdir(parents=True)
     (sessions_dir / "telegram").mkdir(parents=True)
@@ -494,7 +494,7 @@ def test_adaptive_multiplier_reaches_planner_prompt(tmp_state_dir: Path):
         ),
     )
     prompt = build_context_prompt(ctx)
-    assert "adaptive tightening" not in prompt
+    assert "自适应收紧" not in prompt
 
     # Case 2: multiplier < 1.0 → note appears
     ctx2 = PlannerContext(
@@ -507,8 +507,8 @@ def test_adaptive_multiplier_reaches_planner_prompt(tmp_state_dir: Path):
         ),
     )
     prompt2 = build_context_prompt(ctx2)
-    assert "adaptive tightening" in prompt2
-    assert "x 0.50" in prompt2
+    assert "自适应收紧" in prompt2
+    assert "× 0.50" in prompt2
 
 
 def test_adaptive_multiplier_persists_across_instances(tmp_state_dir: Path):

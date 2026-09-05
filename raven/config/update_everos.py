@@ -4,7 +4,7 @@ This module is the ONLY write path for the EverOS memory-model sections
 (llm / embedding / rerank / multimodal) and for the ``[api]`` address. The
 onboard wizard's memory step writes here; EverOS reads it back through its own
 pydantic-settings loader (user-level toml, ``EVEROS_*`` env). It lives apart
-from raven's ``config.json`` because EverOS owns this channel.
+from raven's ``config.json`` because EverOS owns this channel — see plan rule.
 
 Only those sections are writable; the rest EverOS ships (memory / sqlite /
 lancedb) are preserved untouched on every write.
@@ -53,76 +53,8 @@ _LEGACY_EVEROS_SUFFIX = (".everos", "raven")
 
 WRITABLE_SECTIONS = ("llm", "embedding", "rerank", "multimodal", "api")
 
-
-def borrow_provider_credentials(provider: str) -> dict[str, str]:
-    """The api_key and base_url of a provider raven is already connected to.
-
-    Only a group an everos section can hold whole: see the header check below.
-
-    Read through ``provider_endpoints``, which is the one place that knows the
-    precedence a section can be written in -- ``endpoints`` first, then
-    ``api_key_list``, then the flat pair. Reading ``api_key`` off the section
-    instead answers "" for both of the shapes that precedence exists for, so a
-    provider serving traffic every day would be offered as a lender and then
-    refuse to lend.
-
-    This asks a narrower question than ``credential_status``, which owns "is
-    this Provider usable": a provider can be perfectly usable and have nothing
-    to lend, because an OAuth token file and a keyless local address both
-    satisfy usability without a key that means anything anywhere else.
-
-    Copied, not referenced. The alternative -- storing the provider's name and
-    resolving it on every read -- would follow a later key change on its own,
-    but this file is read by EverOS as well as by raven, and a field only raven
-    resolves is a field EverOS reads as an endpoint it cannot reach. `provider`
-    is also already taken there for EverOS's own meaning (`[rerank]` carries
-    one). The CLI's onboarding already copies (see `_resolve_reuse_llm_creds`),
-    so copying is the meaning the file already has.
-
-    Raises:
-        KeyError: no such provider is configured.
-        ValueError: it is configured but has nothing an everos section can hold
-            whole -- no key to lend, or a group that authenticates with headers.
-    """
-    from raven.config import load_config
-    from raven.providers.endpoints import provider_endpoints
-    from raven.providers.registry import find_by_name
-
-    # `ProvidersConfig.get`, never attribute access: a provider stored under a
-    # hyphenated or camelCase key is invisible to the attribute, and the ones
-    # raven carries no spec for are exactly the ones stored that way. It
-    # canonicalises the name itself. Parsed rather than raw, because the file
-    # spells its fields in camelCase and `provider_endpoints` reads the
-    # schema's names.
-    section = load_config().providers.get(provider)
-    if section is None:
-        raise KeyError(provider)
-
-    # The first endpoint holding a key. A section can offer several, and any one
-    # of them is a key that works against the same address.
-    lent = next((e for e in provider_endpoints(section) if e.api_key), None)
-    if lent is None:
-        raise ValueError(f"{provider} has no api key to lend")
-    # A url/key/header group is reachable only whole. The everos sections hold a
-    # model, an api_key and a base_url and nothing else -- EverOS's own
-    # LLMSettings has no header field to bind -- so a group whose requests only
-    # authenticate with a header cannot be expressed here. Lending the pair
-    # without it hands over a credential that will be refused at the far end and
-    # reports a provider serving traffic every day as unreachable.
-    if lent.extra_headers:
-        raise ValueError(
-            f"{provider} authenticates with headers ({', '.join(sorted(lent.extra_headers))}), "
-            "which an everos section cannot carry"
-        )
-
-    spec = find_by_name(provider)
-    base_url = str(lent.api_base or "") or str(getattr(spec, "default_api_base", "") or "")
-    out = {"api_key": lent.api_key}
-    # A provider with no address of its own leaves the section's own base_url
-    # alone rather than blanking it: the reader may have typed one that works.
-    if base_url:
-        out["base_url"] = base_url
-    return out
+# Sections holding a model + credentials, as opposed to the address.
+MODEL_SECTIONS = ("llm", "embedding", "rerank", "multimodal")
 
 
 def default_everos_root() -> Path:
@@ -271,8 +203,10 @@ class EverosRootNotOwnedError(RuntimeError):
 def _require_owned(action: str) -> None:
     """Refuse a write unless raven owns the active root.
 
-    Enforced at the write primitives so a new caller cannot opt out; the toml is
-    the address of record.
+    The read-only promise used to live only at the call sites that happened to
+    remember it -- the same shape as the drift this whole change is about, where
+    one rule was enforced in several places and one of them was wrong. Enforcing
+    it at the write primitives means a new caller cannot quietly opt out.
     """
     if everos_owned():
         return
@@ -416,29 +350,15 @@ def everos_role_configured(section: str) -> bool:
 def set_everos_section(section: str, fields: dict[str, Any]) -> None:
     """Merge ``fields`` into ``[section]`` of the user-level toml.
 
-    Three states, because two are not enough to express "remove this":
-
-    - absent or ``None`` -- leave whatever is stored alone;
-    - ``""`` -- delete the key from the section;
-    - anything else -- store it.
-
-    Without the middle one, dropping only an api_key meant deleting the whole
-    section and losing its model and base_url with it. Every other section is
-    preserved either way.
+    ``None`` values are dropped (treated as "leave unset"); existing keys in
+    the section and every other section are preserved.
     """
     if section not in WRITABLE_SECTIONS:
         raise KeyError(f"unknown everos section {section!r}; writable: {WRITABLE_SECTIONS}")
     _require_owned(f"write [{section}]")
     data = load_everos_config()
-    merged = dict(data.get(section, {}))
-    for key, value in fields.items():
-        if value is None:
-            continue
-        if value == "":
-            merged.pop(key, None)
-        else:
-            merged[key] = value
-    data[section] = merged
+    clean = {k: v for k, v in fields.items() if v is not None}
+    data[section] = {**data.get(section, {}), **clean}
     _write_atomic(get_everos_config_path(), data)
 
 
@@ -454,6 +374,21 @@ def clear_everos_section(section: str) -> None:
     _write_atomic(get_everos_config_path(), data)
 
 
+def everos_declared_address() -> str | None:
+    """The address ``<root>/everos.toml`` declares, or ``None`` when unset.
+
+    This is the authority on where a server for that root listens: EverOS reads
+    ``[api]`` at startup, and raven no longer overrides it on the command line.
+    Everything else -- raven's ``base_url``, a doctor probe -- is a copy of it.
+    """
+    api = everos_section("api")
+    host = api.get("host")
+    port = api.get("port")
+    if not host or not port:
+        return None
+    return f"http://{host}:{port}"
+
+
 def set_everos_api(*, host: str, port: int) -> None:
     """Record the address a server for this root must listen on.
 
@@ -463,15 +398,3 @@ def set_everos_api(*, host: str, port: int) -> None:
     where its server lives, with no second place to drift out of sync.
     """
     set_everos_section("api", {"host": host, "port": int(port)})
-
-
-def recorded_slice() -> dict:
-    """Public read of the recorded everos slice -- the wizard's input to
-    discovery.
-
-    The cargo-side describer (``roots``) takes its candidate roots as
-    parameters now and imports nothing from the host; the wizard reads the
-    record here and passes it in. Public because a caller outside this module
-    (onboard) legitimately consumes it -- no one imports the private form.
-    """
-    return _recorded_slice()

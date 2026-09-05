@@ -1,4 +1,4 @@
-"""Discord channel adapter.
+"""Discord channel adapter (migrated to the capability contract).
 
 Intentionally does NOT re-export ``DiscordChannel`` — that would import
 httpx/websockets at package import and defeat cheap spec discovery

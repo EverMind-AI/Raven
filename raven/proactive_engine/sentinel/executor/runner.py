@@ -2,7 +2,7 @@
 periodically-ticking service.
 
 Each tick:
-1. PlannerContextAssembler.assemble()       → PlannerContext
+1. ContextAssembler.assemble()       → PlannerContext
 2. ProactivePlanner.decide(ctx)      → PlannerDecision
 3. _route(decision)                  → appropriate executor path:
    - skip         : record tick, no dispatch
@@ -11,7 +11,7 @@ Each tick:
    - nudge_defer  : NudgePolicy.check → DeferManager.register
    - spawn_agent  : ProactiveSpawn.dispatch (its own policy check inside)
 4. Record fired / dispatched to NudgePolicy + FeedbackTracker.
-5. Update PlannerContextAssembler with last decision for next tick's prompt.
+5. Update ContextAssembler with last decision for next tick's prompt.
 
 Two drive modes:
 - ``await runner.tick_once()``         — single synchronous tick; useful
@@ -31,13 +31,14 @@ Degradation:
 from __future__ import annotations
 
 import asyncio
+import contextvars
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
-    from raven.gateway.manager import ChannelManager
-    from raven.memory_engine import (
+    from raven.channels.manager import ChannelManager
+    from raven.memory_engine.consolidate.behaviors_extractor import (
         BehaviorsExtractor,
     )
     from raven.proactive_engine.sentinel.attention_updater import AttentionUpdater
@@ -51,7 +52,6 @@ if TYPE_CHECKING:
 
 from loguru import logger
 
-from raven.i18n import t
 from raven.proactive_engine.sentinel.executor.defer_manager import DeferManager
 from raven.proactive_engine.sentinel.executor.dispatcher import (
     ExecutionResult,
@@ -62,9 +62,19 @@ from raven.proactive_engine.sentinel.executor.injector import NudgeInjector
 from raven.proactive_engine.sentinel.executor.spawn import ProactiveSpawn
 from raven.proactive_engine.sentinel.feedback.tracker import NudgeFeedbackTracker, new_nudge_id
 from raven.proactive_engine.sentinel.planner import ProactivePlanner
-from raven.proactive_engine.sentinel.predictor.context_assembler import PlannerContextAssembler
+from raven.proactive_engine.sentinel.predictor.context_assembler import ContextAssembler
 from raven.proactive_engine.sentinel.trigger_policy.policy import NudgePolicy
 from raven.proactive_engine.sentinel.types import PlannerDecision
+
+# Per-turn session_key published by ``on_user_inbound`` so the
+# ``nudge_feedback`` tool can find the current session without changing
+# the AgentLoop tool-execute signature. asyncio Tasks inherit context, so
+# this propagates correctly from the user-inbound hook through the ReAct
+# loop into tool execution.
+current_session_key: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "sentinel_current_session_key",
+    default=None,
+)
 
 
 def _parse_hhmm(value: str) -> tuple[int, int]:
@@ -95,19 +105,6 @@ class TickOutcome:
     notes: list[str] = field(default_factory=list)
 
 
-@dataclass(frozen=True)
-class SentinelAssembly:
-    """What the assembly root built alongside the runner and hands over for
-    the wiring that can only happen once the AgentLoop exists (the decision
-    consumer): the stores it shares and the planner it routes decisions with."""
-
-    pending_store: Any
-    routine_store: Any
-    planner_provider: Any
-    planner_model: str | None
-    now_fn: Callable[[], datetime] | None
-
-
 class SentinelRunner:
     """Orchestrate the proactivity tick.
 
@@ -130,7 +127,7 @@ class SentinelRunner:
         self,
         *,
         planner: ProactivePlanner,
-        assembler: PlannerContextAssembler,
+        assembler: ContextAssembler,
         policy: NudgePolicy,
         dispatcher: NudgeDispatcher | None = None,
         injector: NudgeInjector | None = None,
@@ -152,8 +149,6 @@ class SentinelRunner:
         deadline_outage_fallback: bool = True,
         store: "JsonStateStore | None" = None,
     ) -> None:
-        # Set by the assembly root (build_sentinel_stack); read by the attach step.
-        self.assembly: SentinelAssembly | None = None
         self.planner = planner
         self.assembler = assembler
         self.policy = policy
@@ -178,6 +173,7 @@ class SentinelRunner:
         # before it finishes (especially the slow LLM-backed behaviors
         # extractor tick).
         self._background_tasks: set[asyncio.Task] = set()
+        self.memory_writer = None
         self.task_discoverer = task_discoverer
         self.task_discovery_time = _parse_hhmm(task_discovery_time)
         # Each entry is ``(channel, chat_id)`` where ``chat_id == ""`` means
@@ -195,8 +191,11 @@ class SentinelRunner:
         self._decision_source = decision_source
         self._engagement_window = engagement_window_seconds
         self._deadline_outage_fallback = deadline_outage_fallback
-        # Day-aligned guard: discovery runs at most once per local day even
-        # if multiple ticks fall in the same day.
+        # Track date-of-last memory writer attempt to ensure we run at most
+        # once per local day even if multiple ticks fall in the same day.
+        self._last_memory_write_date: "datetime | None" = None
+        # Same shape, separate slot — we want discovery to run on a
+        # day-aligned guard independent of memory-writer cooldown.
         self._last_task_discovery_date: "datetime | None" = None
         # Daily-cadence guard for FeedbackTracker cleanup; keeps the
         # JSONL log bounded so apply_adaptive_tuning's 7-day window
@@ -213,18 +212,26 @@ class SentinelRunner:
         # arrives on a tracked session within engagement_window_seconds
         # (default 24h — proactive nudges are notification-style, users
         # often reply hours later after seeing the alert), the most recent
-        # nudge is marked dismissed if the inbound starts with ``/dismiss``
-        # and recorded neutral otherwise: the user engaged, the intent is
-        # not read from prose, and neutral never inflates acceptance.
+        # nudge moves to ``_awaiting_llm_feedback`` for the main LLM to
+        # classify via the ``nudge_feedback`` tool — or is marked dismissed
+        # immediately if the inbound starts with ``/dismiss`` (deterministic
+        # fast path).
         self._pending_engagement: dict[str, list[tuple[str, datetime]]] = {}
+        # Nudges popped from ``_pending_engagement`` but awaiting the
+        # main LLM's intent classification. Drained either by the
+        # ``nudge_feedback`` tool (LLM classified) or by
+        # ``finalize_pending_feedback`` (after_send: turn ended without
+        # a classification → record neutral).
+        self._awaiting_llm_feedback: dict[str, list[tuple[str, datetime]]] = {}
 
         # Optional cross-process persistence. The longrun eval and
         # production gateway both split the Sentinel pipeline across
         # multiple subprocesses (``sentinel ticks --live`` dispatches;
         # ``agent --message`` handles the reply). Without a shared store
-        # ``_pending_engagement`` is an in-memory dict that does not survive
-        # subprocess boundaries — so ``on_user_inbound`` would always see an
-        # empty queue and never correlate a reply. The store fixes that by sharing
+        # ``_pending_engagement`` / ``_awaiting_llm_feedback`` are
+        # in-memory dicts that don't survive subprocess boundaries — so
+        # ``on_user_inbound`` always sees an empty queue and the new
+        # LLM-feedback path is inert. The store fixes that by sharing
         # the engagement state through ``state.json`` (same JsonStateStore
         # NudgePolicy / NudgeInjector use).
         self._store = store
@@ -266,11 +273,11 @@ class SentinelRunner:
         self._running = False
         if self.defer_manager is not None:
             self.defer_manager.stop()
-        for task in (self._tick_task, self._defer_task, self._trigger_task):
-            if task is not None:
-                task.cancel()
+        for t in (self._tick_task, self._defer_task, self._trigger_task):
+            if t is not None:
+                t.cancel()
                 try:
-                    await task
+                    await t
                 except (asyncio.CancelledError, Exception):
                     pass
         self._tick_task = None
@@ -314,13 +321,13 @@ class SentinelRunner:
     async def tick_once(self) -> TickOutcome:
         """One end-to-end tick. Safe to call synchronously by benchmarks.
 
-        Assembles context via PlannerContextAssembler then delegates to
+        Assembles context via ContextAssembler then delegates to
         ``tick_with_context``. Never raises — failures become skip outcomes.
         """
         try:
             ctx = self.assembler.assemble()
         except Exception as exc:
-            logger.exception("PlannerContextAssembler failed: {}", exc)
+            logger.exception("ContextAssembler failed: {}", exc)
             return TickOutcome(
                 decision=PlannerDecision(action="skip", reason=f"assembler_error: {type(exc).__name__}"),
                 result=None,
@@ -469,6 +476,9 @@ class SentinelRunner:
                     type(exc).__name__,
                     exc,
                 )
+        self._last_memory_write_date = self._now_fn()
+
+    _maybe_write_observations = _refresh_memory_state
 
     _SENTINEL_INFINITE_IDLE_SECONDS = 10**9  # ~ 31 years; any idle gate clears
 
@@ -608,7 +618,7 @@ class SentinelRunner:
         where they were last active, so a multi-channel user isn't pinged on
         every channel at once. Sessions on channels outside an attached
         ChannelManager's ``enabled_channels`` are skipped (e.g. a stale feishu
-        session must not capture a TUI nudge whose only real surface is tui).
+        session must not capture a REPL nudge whose only real surface is cli).
         """
         sm = self._delivery_session_manager
         if sm is None:
@@ -635,8 +645,8 @@ class SentinelRunner:
         return []
 
     async def _maybe_run_task_discovery(self) -> None:
-        """Daily TaskDiscoverer pass. Per-process guard: at most one
-        attempt per local day.
+        """Daily TaskDiscoverer pass. Same per-process guard pattern as
+        ``_maybe_write_observations``: only one attempt per local day.
         Cross-process safety lives in PendingDecisionStore (newer write
         supersedes older live decision on the same address) so two
         processes producing menus at 08:00 only result in one menu the
@@ -741,7 +751,7 @@ class SentinelRunner:
 
         Benchmark adapters use this to test the full Sentinel pipeline
         (Planner + NudgePolicy + executors) without depending on the
-        PlannerContextAssembler's session/memory sources.
+        ContextAssembler's session/memory sources.
         """
         # Daily: trim feedback log to retention window. Must run BEFORE
         # _maybe_retune_policy so the adaptive tuner sees the freshly
@@ -762,7 +772,7 @@ class SentinelRunner:
         # that made ``discover-now`` wait up to ``interval_s`` before
         # firing, contradicting its own name.
         await self._maybe_run_task_discovery()
-        # Scheduled-fire fast-path. If the attention.md daily fire plan
+        # New: scheduled-fire fast-path. If attention.md ``## 今日 fire 计划``
         # has an entry due within ±20 min of now AND that topic hasn't fired
         # today, dispatch directly without the planner LLM. Keeps Daily
         # Planning's slot-time + topic_tag commitments instead of letting
@@ -857,7 +867,7 @@ class SentinelRunner:
         )
 
     def _due_plan_slots(self, now: datetime) -> list[tuple[dict, str]]:
-        """Return ``(entry, tag)`` for each daily fire plan slot due within
+        """Return ``(entry, tag)`` for each ``## 今日 fire 计划`` slot due within
         ``_SCHEDULED_FIRE_SLACK_S`` (±20 min) of ``now`` with a non-empty
         topic_tag. Shared by the fast path, the planner-down deadline fallback,
         and the skipped-deadline warning so they never drift on parse / window
@@ -920,7 +930,7 @@ class SentinelRunner:
             # reason keeps the evidence-citing rationale (logs / scoring);
             # nudge_message is the user-facing line the daily plan produced.
             reason=f"daily_plan slot {time_hhmm}: {rationale[:120]}",
-            nudge_message=user_message or rationale or t("Reminder: {tag}", tag=tag),
+            nudge_message=user_message or rationale or f"提醒：{tag}",
             raw_llm_response={"source": source},
         )
 
@@ -929,7 +939,7 @@ class SentinelRunner:
         now: datetime,
         due_slots: "list[tuple[dict, str]] | None" = None,
     ) -> PlannerDecision | None:
-        """Return a synthetic PlannerDecision if a daily fire plan
+        """Return a synthetic PlannerDecision if a ``## 今日 fire 计划``
         entry is due within ``_SCHEDULED_FIRE_SLACK_S`` (±20 min) of
         ``now`` and that topic hasn't already fired today.
 
@@ -1355,14 +1365,20 @@ class SentinelRunner:
         Called by AgentLoop for every user-originated inbound (not
         Sentinel-origin). Behavior:
         - Session key derived from req.conversation (falls back to channel:chat_id).
+        - Publishes session_key into the ``current_session_key``
+          contextvar so the ``nudge_feedback`` tool can find this
+          session when the main LLM calls it later in the turn.
         - If content starts with '/dismiss' (any case) → mark most recent
           pending nudge as dismissed + tell NudgePolicy to cool this
           session down. Deterministic fast path; no LLM required.
-        - Otherwise record the most recent nudge as NEUTRAL: the user engaged
-          but the intent is not read from prose. Recording every non-/dismiss
-          reply as ACCEPTED would wrongly inflate acceptance_rate on
-          natural-language dismissals like "stop reminding me" and tighten the
-          adaptive quota in the wrong direction.
+        - Otherwise, **defer classification to the main LLM** — move the
+          most recent nudge into ``_awaiting_llm_feedback``. The
+          ``nudge_feedback`` tool may consume it during the ReAct loop;
+          if not, ``finalize_pending_feedback`` (after_send) records it
+          as NEUTRAL. Recording every non-/dismiss reply as ACCEPTED
+          would wrongly inflate acceptance_rate on natural-language
+          dismissals like "stop reminding me" and tighten the adaptive quota
+          in the wrong direction.
         - Stale entries (beyond engagement_window_seconds) are dropped
           on access.
         """
@@ -1385,6 +1401,9 @@ class SentinelRunner:
                 session_key = f"{channel}:{chat_id}" if (channel or chat_id) else ""
             if not session_key:
                 return
+
+            # Publish session_key for the nudge_feedback tool.
+            current_session_key.set(session_key)
 
             # Update idle tracker so BehaviorsExtractor.tick() sees
             # accurate idle_seconds_observed on the next tick.
@@ -1423,14 +1442,15 @@ class SentinelRunner:
                 )
                 return
 
+            # Defer: let the main LLM classify via the nudge_feedback
+            # tool. If the LLM doesn't call the tool, finalize_pending_feedback
+            # records this as NEUTRAL at after_send time.
+            self._awaiting_llm_feedback.setdefault(session_key, []).append((nudge_id, dispatched_at))
             self._persist_engagement()
-            if self.feedback is not None:
-                self.feedback.record_neutral(nudge_id, reason="reply_unclassified")
             logger.debug(
-                "nudge_neutral id={} session={} via {!r}",
+                "nudge_awaiting_llm_classification id={} session={}",
                 nudge_id,
                 session_key,
-                content[:40],
             )
         except Exception as exc:
             logger.warning(
@@ -1438,6 +1458,117 @@ class SentinelRunner:
                 type(exc).__name__,
                 exc,
             )
+
+    # ------------------------------------------------------------------
+    # LLM-mediated feedback — NudgeFeedbackTool calls this from inside
+    # the ReAct loop. ``finalize_pending_feedback`` is the after_send
+    # safety net for turns where the LLM didn't call the tool.
+
+    def consume_feedback_via_tool(
+        self,
+        session_key: str,
+        sentiment: str,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        """Record LLM-classified feedback on the most-recently-deferred
+        nudge for ``session_key``.
+
+        sentiment ∈ {"accepted", "dismissed", "snoozed", "irrelevant"}.
+        - accepted   → record_accepted
+        - dismissed  → policy cooldown + record_dismissed
+        - snoozed    → policy cooldown + record_dismissed (reason
+                       prefixed with "snoozed:") — snooze is a soft
+                       dismiss for the current session window
+        - irrelevant → record_neutral (user replied but didn't address
+                       the nudge — e.g. asked an unrelated question)
+
+        Returns ``{"recorded": True, "nudge_id": ..., "signal": ...}``
+        on success, or ``{"recorded": False, "reason": ...}`` if no
+        nudge was awaiting classification.
+        """
+        # Reload from disk first — another subprocess (the sentinel-ticks
+        # dispatcher) may have appended new entries we haven't seen yet.
+        if self._store is not None:
+            self._hydrate_engagement_from_store()
+        queue = self._awaiting_llm_feedback.get(session_key) or []
+        if not queue:
+            return {"recorded": False, "reason": "no_awaiting_nudge"}
+        nudge_id, _ = queue.pop()
+        if not queue:
+            self._awaiting_llm_feedback.pop(session_key, None)
+        else:
+            self._awaiting_llm_feedback[session_key] = queue
+        self._persist_engagement()
+
+        sentiment = (sentiment or "").lower().strip()
+        if sentiment == "accepted":
+            if self.feedback is not None:
+                self.feedback.record_accepted(nudge_id, context=reason)
+            logger.info(
+                "nudge_accepted (llm-classified) id={} session={}",
+                nudge_id,
+                session_key,
+            )
+            return {"recorded": True, "nudge_id": nudge_id, "signal": "accepted"}
+        if sentiment in ("dismissed", "snoozed"):
+            self.policy.record_dismissed(session_key)
+            if self.feedback is not None:
+                tagged = f"snoozed: {reason}" if (sentiment == "snoozed" and reason) else (reason or sentiment)
+                self.feedback.record_dismissed(nudge_id, reason=tagged)
+            logger.info(
+                "nudge_dismissed (llm-classified {}) id={} session={}",
+                sentiment,
+                nudge_id,
+                session_key,
+            )
+            return {"recorded": True, "nudge_id": nudge_id, "signal": sentiment}
+        # Default: irrelevant / unknown sentiment → neutral.
+        if self.feedback is not None:
+            self.feedback.record_neutral(nudge_id, reason=reason or sentiment or None)
+        logger.info(
+            "nudge_neutral (llm-classified irrelevant) id={} session={}",
+            nudge_id,
+            session_key,
+        )
+        return {"recorded": True, "nudge_id": nudge_id, "signal": "neutral"}
+
+    def finalize_pending_feedback(self, session_key: str) -> int:
+        """Flush anything still awaiting classification for ``session_key``
+        as NEUTRAL — the LLM had its chance via ``nudge_feedback`` and
+        didn't take it, so by design we record "user engaged but
+        intent unclear" rather than falling back to "treat as accepted".
+
+        Called from the SentinelFeedbackHook's after_send phase.
+        Returns the number of entries flushed.
+        """
+        # Reload from disk before flushing — entries written by other
+        # subprocesses must also be drained, otherwise neutral wouldn't
+        # land at all in cross-process mode.
+        if self._store is not None:
+            self._hydrate_engagement_from_store()
+        queue = self._awaiting_llm_feedback.pop(session_key, None) or []
+        if not queue:
+            return 0
+        self._persist_engagement()
+        if self.feedback is None:
+            return len(queue)
+        for nudge_id, _ in queue:
+            try:
+                self.feedback.record_neutral(
+                    nudge_id,
+                    reason="no_llm_classification",
+                )
+            except Exception as exc:
+                logger.warning(
+                    "FeedbackTracker.record_neutral failed: {}",
+                    exc,
+                )
+        logger.debug(
+            "nudge_feedback_finalized n={} session={}",
+            len(queue),
+            session_key,
+        )
+        return len(queue)
 
     def _expire_engagement(self, session_key: str) -> list[tuple[str, datetime]]:
         pending = self._pending_engagement.get(session_key)
@@ -1471,6 +1602,7 @@ class SentinelRunner:
             logger.warning("engagement state load failed: {}", exc)
             return
         self._pending_engagement = _decode_engagement(blob.get("pending"))
+        self._awaiting_llm_feedback = _decode_engagement(blob.get("awaiting_llm_feedback"))
 
     def _persist_engagement(self) -> None:
         """Write current engagement state back to the store under an
@@ -1478,7 +1610,10 @@ class SentinelRunner:
         mode for tests / single-process gateway)."""
         if self._store is None:
             return
-        blob = {"pending": _encode_engagement(self._pending_engagement)}
+        blob = {
+            "pending": _encode_engagement(self._pending_engagement),
+            "awaiting_llm_feedback": _encode_engagement(self._awaiting_llm_feedback),
+        }
         state_key = self._STATE_KEY
 
         def _mutate(state: dict[str, Any]) -> dict[str, Any]:
@@ -1528,4 +1663,4 @@ def _decode_engagement(
     return out
 
 
-__all__ = ["SentinelAssembly", "SentinelRunner", "TickOutcome"]
+__all__ = ["SentinelRunner", "TickOutcome", "current_session_key"]

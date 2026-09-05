@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.contracts.token_strategy import UsageSnapshot
+from raven.token_wise.base import UsageSnapshot
 from raven.token_wise.usage_tracker import UsageTracker
 
 
@@ -18,13 +18,13 @@ def _snap(model="anthropic/claude-sonnet-4-5", session_key="sess1", **kwargs) ->
 
 async def test_accumulates_across_multiple_calls(tmp_path: Path):
     tracker = UsageTracker(telemetry_dir=tmp_path, persist=False)
-    await tracker.after_llm_call({}, _snap(input_tokens=100, output_tokens=50, cost_usd=0.001))
-    await tracker.after_llm_call({}, _snap(input_tokens=200, output_tokens=75, cost_usd=0.002))
+    await tracker.after_llm_call({}, _snap(input_tokens=100, output_tokens=50, estimated_cost_usd=0.001))
+    await tracker.after_llm_call({}, _snap(input_tokens=200, output_tokens=75, estimated_cost_usd=0.002))
 
     snap = tracker.snapshot("sess1")
     assert snap.input_tokens == 300
     assert snap.output_tokens == 125
-    assert snap.cost_usd == pytest.approx(0.003, rel=1e-6)
+    assert snap.estimated_cost_usd == pytest.approx(0.003, rel=1e-6)
 
 
 async def test_per_session_separation(tmp_path: Path):
@@ -39,11 +39,11 @@ async def test_per_session_separation(tmp_path: Path):
 
 async def test_total_includes_all_sessions(tmp_path: Path):
     tracker = UsageTracker(telemetry_dir=tmp_path, persist=False)
-    await tracker.after_llm_call({}, _snap(session_key="A", input_tokens=10, cost_usd=0.5))
-    await tracker.after_llm_call({}, _snap(session_key="B", input_tokens=20, cost_usd=1.5))
+    await tracker.after_llm_call({}, _snap(session_key="A", input_tokens=10, estimated_cost_usd=0.5))
+    await tracker.after_llm_call({}, _snap(session_key="B", input_tokens=20, estimated_cost_usd=1.5))
     total = tracker.snapshot()
     assert total.input_tokens == 30
-    assert total.cost_usd == pytest.approx(2.0)
+    assert total.estimated_cost_usd == pytest.approx(2.0)
 
 
 async def test_per_day_bucketing(tmp_path: Path):
@@ -150,17 +150,17 @@ async def test_a_plan_billed_call_adds_tokens_but_no_money(tmp_path: Path):
     """Summing it as zero would read as "these calls were free"."""
     tracker = UsageTracker(telemetry_dir=tmp_path, persist=False)
 
-    await tracker.after_llm_call({}, _snap(input_tokens=100, cost_usd=None))
+    await tracker.after_llm_call({}, _snap(input_tokens=100, estimated_cost_usd=None))
 
     snap = tracker.snapshot("sess1")
     assert snap.input_tokens == 100
-    assert snap.cost_usd is None
+    assert snap.estimated_cost_usd is None
 
-    await tracker.after_llm_call({}, _snap(input_tokens=10, cost_usd=0.25))
+    await tracker.after_llm_call({}, _snap(input_tokens=10, estimated_cost_usd=0.25))
 
     snap = tracker.snapshot("sess1")
     assert snap.input_tokens == 110
-    assert snap.cost_usd == pytest.approx(0.25)
+    assert snap.estimated_cost_usd == pytest.approx(0.25)
 
 
 def test_a_plan_billed_model_gets_no_cost_on_its_snapshot() -> None:
@@ -180,96 +180,5 @@ def test_a_plan_billed_model_gets_no_cost_on_its_snapshot() -> None:
     metered = AgentLoop._build_usage_snapshot(response, "deepseek/deepseek-chat", "sess1")
 
     assert plan.input_tokens == 100
-    assert plan.cost_usd is None
-    assert metered.cost_usd is None
-
-
-async def test_unknown_and_zero_survive_persistence_and_mixed_totals(tmp_path):
-    tracker = UsageTracker(telemetry_dir=tmp_path)
-    await tracker.after_llm_call({}, _snap(input_tokens=10))
-    assert tracker.snapshot().cost_usd is None
-    await tracker.after_llm_call({}, _snap(input_tokens=20, cost_usd=0, cache_read_tokens=0, cache_write_tokens=0))
-    await tracker.after_llm_call({}, _snap(input_tokens=30, cost_usd=0.25, cache_read_tokens=15))
-    total = tracker.snapshot()
-    assert total.cost_usd == 0.25
-    assert total.calls == 3
-    assert total.cost_missing_calls == 1
-    assert total.cache_read_tokens == 15
-    assert total.cache_read_missing_calls == 1
-    assert total.cache_write_tokens == 0
-    assert total.cache_write_missing_calls == 2
-    rows = [
-        json.loads(line) for line in (tmp_path / f"usage-{date.today().isoformat()}.jsonl").read_text().splitlines()
-    ]
-    assert [row["cost_usd"] for row in rows] == [None, 0, 0.25]
-    assert all(row["schema_version"] == 2 and "estimated_cost_usd" not in row for row in rows)
-
-
-@pytest.mark.parametrize("includes_cache,expected", [(False, 100), (True, 70)])
-def test_snapshot_uses_protocol_convention_not_token_inequality(includes_cache, expected):
-    from types import SimpleNamespace
-
-    from raven.agent.loop.main import AgentLoop
-    from raven.observability.usage import normalize
-
-    usage = {
-        "prompt_tokens": 100,
-        "completion_tokens": 2,
-        "cache_read_input_tokens": 20,
-        "cache_creation_input_tokens": 10,
-        "prompt_tokens_include_cache": includes_cache,
-    }
-    snap = AgentLoop._build_usage_snapshot(SimpleNamespace(usage=usage), "model", "session")
-    assert snap.input_tokens == expected
-    assert normalize(usage, "model")["input_tokens"] == expected
-    assert snap.cost_usd is None
-
-
-async def test_concurrent_image_usage_keeps_turn_ownership(tmp_path, monkeypatch):
-    import asyncio
-
-    from raven.token_wise import usage_context
-
-    monkeypatch.delenv("RAVEN_USAGE_ROOT_SESSION", raising=False)
-    tracker = UsageTracker(telemetry_dir=tmp_path)
-
-    async def record(key):
-        with usage_context.bind(key):
-            await asyncio.sleep(0)
-            await tracker.after_llm_call({}, UsageSnapshot(model="image", cost_usd=0.2))
-
-    await asyncio.gather(record("task-a"), record("task-b"))
-    rows = [json.loads(line) for line in next(tmp_path.glob("usage-*.jsonl")).read_text().splitlines()]
-    assert {(row["session_key"], row["root_session_key"]) for row in rows} == {
-        ("task-a", "task-a"),
-        ("task-b", "task-b"),
-    }
-    assert usage_context.session_key() is None
-
-
-async def test_buffered_delegated_usage_keeps_each_sessions_owner_and_destination(tmp_path):
-    import asyncio
-
-    from raven.token_wise import usage_context
-
-    tracker = UsageTracker(telemetry_dir=tmp_path / "local", flush_every=10)
-
-    async def record(name):
-        owner = {"root_session_key": name, "telemetry_dir": str(tmp_path / name)}
-        with usage_context.bind("child-" + name, owner):
-            await asyncio.sleep(0)
-            with usage_context.bind("tool-" + name):
-                assert usage_context.delegation()["root_session_key"] == name
-                await tracker.after_llm_call({}, UsageSnapshot(model="image", cost_usd=0.1))
-
-    await asyncio.gather(record("a"), record("b"))
-    assert usage_context.root_session_key() is None
-    assert usage_context.telemetry_dir() is None
-    tracker.close()
-    for name in ("a", "b"):
-        rows = [json.loads(line) for line in next((tmp_path / name).glob("usage-*.jsonl")).read_text().splitlines()]
-        assert len(rows) == 1
-        assert rows[0]["root_session_key"] == name
-        assert rows[0]["session_key"] == "tool-" + name
-        assert "_telemetry_dir" not in rows[0]
-    assert not (tmp_path / "local").exists()
+    assert plan.estimated_cost_usd is None
+    assert metered.estimated_cost_usd is not None

@@ -1,5 +1,3 @@
-"""CI gate against oversized files and report-asset file types in a revision range."""
-
 from __future__ import annotations
 
 import argparse
@@ -7,7 +5,7 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 ZERO_SHA = "0" * 40
 DEFAULT_MAX_BYTES = 1024 * 1024
@@ -53,30 +51,6 @@ BLOCKED_ASSET_EXTENSIONS = {
     ".wmv",
     ".wav",
 }
-
-# The asset ban targets report assets and standalone web artifacts. A product
-# frontend legitimately carries its own entry HTML and icon SVGs as source, so
-# these trees are exempt from the extension list. The size limit still applies.
-APP_SOURCE_PREFIXES = (
-    "bridge/",
-    # "ui-web/" is not a prefix of "ui-tui/" -- the slash ends it -- so each
-    # entry matches its own tree and nothing else.
-    "ui-web/",
-    "ui-tui/",
-)
-ALLOWED_SKILL_REFERENCE_IMAGE_EXTENSIONS = frozenset({".jpg"})
-# The one home of the raven-design skill plates: the design-engine wheel they
-# migrated to (verdict C4; the frozen fork seat retired with the tree). The
-# rule is unchanged: .jpg only, only under a skill's references/, and the
-# 1 MiB ceiling still applies.
-RAVEN_DESIGN_SKILL_PREFIXES = (
-    (
-        "plugins-dist",
-        "design-engine",
-        "raven_design",
-        "skills",
-    ),
-)
 
 
 @dataclass(frozen=True)
@@ -150,32 +124,13 @@ def find_blocked_asset_files(paths: list[str], *, root: Path) -> list[BlockedAss
         if not path or path in seen:
             continue
         seen.add(path)
-        if path.startswith(APP_SOURCE_PREFIXES):
-            continue
         candidate = root / path
         if not candidate.is_file():
             continue
         extension = candidate.suffix.lower()
-        if extension in BLOCKED_ASSET_EXTENSIONS and not _is_allowed_skill_reference_image(path, extension):
+        if extension in BLOCKED_ASSET_EXTENSIONS:
             violations.append(BlockedAssetViolation(path=path, extension=extension))
     return violations
-
-
-def _is_allowed_skill_reference_image(path: str, extension: str) -> bool:
-    if extension not in ALLOWED_SKILL_REFERENCE_IMAGE_EXTENSIONS:
-        return False
-    parts = PurePosixPath(path).parts
-    if ".." in parts:
-        return False
-    for prefix in RAVEN_DESIGN_SKILL_PREFIXES:
-        prefix_length = len(prefix)
-        if (
-            len(parts) >= prefix_length + 3
-            and parts[:prefix_length] == prefix
-            and parts[prefix_length + 1] == "references"
-        ):
-            return True
-    return False
 
 
 def changed_paths(revision_range: str) -> list[str]:

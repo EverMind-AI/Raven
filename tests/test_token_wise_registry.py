@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from raven.contracts.token_strategy import TokenStrategy, UsageSnapshot
+from raven.token_wise.base import TokenStrategy, UsageSnapshot
 from raven.token_wise.registry import StrategyRegistry
 
 

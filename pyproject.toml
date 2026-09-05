@@ -36,11 +36,6 @@ dependencies = [
     "watchfiles>=0.21,<2.0",
     "everos[multimodal]==1.2.3",
     "tomli-w>=1.2.0",
-    # UTS-46 host mapping for the browser's navigation check. Already present
-    # transitively (httpx), declared here because the check is security-load-
-    # bearing: it has to fold a host the way Chromium does before deciding, and
-    # a dependency that only arrives by accident is one an upgrade can remove.
-    "idna>=3.4,<4.0.0",
     "portalocker>=3.2.0",
     "mcp>=1.27.0",
     "orjson>=3.11.6,<4.0",
@@ -53,19 +48,6 @@ dependencies = [
     # three-hop transitive path — pinning it directly so reading an image keeps
     # working if any link in that chain drops it.
     "pillow>=10.0.0",
-    # Rasterises a QR-login channel's scan URL server-side, so the page shows an
-    # <img> instead of carrying a QR encoder. Not in the channel extras where it
-    # started: signing in to WeChat happens in the UI, and an install that cannot
-    # draw the code is one the reader has no way to diagnose. Pure Python, and
-    # its [pil] backend is pillow, already here.
-    "qrcode[pil]>=8.0",
-    # Embedded vector store behind raven.knowledge -- a knowledge base indexes
-    # and answers from inside the gateway process, so it must not need a server.
-    # Already resolved here as a transitive dep of everos, which keeps its own
-    # memory in it; named directly for the same reason numpy above is, so
-    # retrieval keeps working if that chain ever changes.
-    "lancedb>=0.33,<1.0",
-    "ripgrep-bin>=15.2.0,<16.0.0",
 ]
 
 [project.optional-dependencies]
@@ -96,6 +78,7 @@ channel-qq = ["qq-botpy>=1.2.0,<2.0.0"]
 channel-dingtalk = ["dingtalk-stream>=0.24.0,<1.0.0"]
 channel-email = []
 channel-weixin = [
+    "qrcode[pil]>=8.0",
     "pycryptodome>=3.20.0",
 ]
 channels = [
@@ -119,22 +102,10 @@ sandbox = [
     "anyio>=4.0",
     "boxlite==0.9.5 ; sys_platform != 'win32'",
 ]
-# Driving a real browser is an opt-in extra: playwright pulls a browser binary
-# of its own, which no other capability needs. raven.browser imports it lazily
-# and reports the extra as missing rather than failing to start.
-browser = [
-    "playwright>=1.49,<2.0",
-]
 dev = [
     "pytest>=8.0,<10.0",
     "pytest-asyncio>=0.23.0",
     "ruff>=0.6.0",
-    # The distributables beside the host wheel are installed into the dev
-    # environment so the host discovers them the way a user's install does --
-    # through the `raven.plugins` entry-point group, not through the package.
-    "everos-memory",
-    "ppt-engine",
-    "design-engine",
 ]
 eval = [
     # benchmarks/proactivity_eval PROBE adapter (deprioritized stretch test) needs
@@ -172,23 +143,17 @@ path = "hatch_build.py"
 [tool.hatch.build]
 include = [
     "raven/**/*.py",
+    "raven/plugin/**/raven-plugin.toml",
     "raven/templates/**/*.md",
     "raven/skills/**/*.md",
     "raven/skills/**/*.sh",
-    # The wheel's own plugin shelf: manifests ride beside their factories.
-    "raven/plugins/bundled/**/raven-plugin.toml",
     # Bundled model-label snapshot, so a fresh install labels models offline.
     "raven/providers/data/*.json",
-    "raven/providers/data/*.toml",
-    # Playbook role-pool defaults and the builtin playbook library.
-    "raven/playbook/*.yaml",
-    "raven/playbook/builtin/**/*.md",
-    # Tracing dashboard viewer (dependency-free Node server + static client),
-    # a CLI-launched surface, so it lives beside the CLI and not in the kernel.
-    "raven/cli/tracing_viewer/**/*.js",
-    "raven/cli/tracing_viewer/**/*.css",
-    "raven/cli/tracing_viewer/**/*.html",
-    "raven/cli/tracing_viewer/**/*.json",
+    # Tracing dashboard viewer (dependency-free Node server + static client).
+    "raven/tracing/viewer/**/*.js",
+    "raven/tracing/viewer/**/*.css",
+    "raven/tracing/viewer/**/*.html",
+    "raven/tracing/viewer/**/*.json",
 ]
 
 [tool.hatch.build.targets.sdist]
@@ -200,29 +165,9 @@ include = [
     "LICENSE",
 ]
 
-[tool.uv.sources]
-# Resolve the dev dependency above to the workspace member, not to an index.
-everos-memory = { workspace = true }
-ppt-engine = { workspace = true }
-design-engine = { workspace = true }
-
 [tool.uv]
 constraint-dependencies = [
     "aiohttp>=3.13.4",
-    # everalgo-boundary 0.3.0 added a required third field to the
-    # DetectionResult NamedTuple; everalgo-agent-memory still constructs it with
-    # two, under a range (>=0.2.0,<2.0.0) wide enough to pick the break up. The
-    # result is a TypeError inside everos, surfacing as a 500 from /memory/add,
-    # so a sub-agent whose memory backend is everos fails every turn.
-    # This guards the resolutions that read this table: `uv lock --upgrade`, a
-    # re-lock after the lockfile is deleted, and in-repo `uv pip install` /
-    # `uv run --with`. It does NOT reach `uv tool install`, which ignores
-    # constraint-dependencies and takes ceilings only from `-c` -- install.sh
-    # passes one exported from the lock, so that path is covered separately.
-    # Not removable when everos next moves: agent-memory 0.4.0 still passes two
-    # fields and still declares >=0.2.0, so the ceiling stays correct and
-    # inactive. It goes when a release actually passes the third field.
-    "everalgo-boundary<0.3",
     "pip>=26.1.2",
     "pyjwt>=2.13.0",
     "python-engineio>=4.13.3",
@@ -230,28 +175,10 @@ constraint-dependencies = [
     "starlette>=1.3.1",
 ]
 
-[tool.uv.workspace]
-# Distributables this repo ships beside the host wheel. Each is a plugin the
-# host discovers through the `raven.plugins` entry-point group, never through
-# the raven package, so a member is installed into the dev environment (as a
-# dev dependency) and published on its own.
-members = ["plugins-dist/*"]
-
 [tool.ruff]
 line-length = 120
 target-version = "py312"
-# The distributables beside the host wheel are first-party to this repo's
-# lint: without their root here, ruff reads `raven_everos` as a third-party
-# package and wants its imports in another block than `raven`'s.
-src = [".", "plugins-dist/everos-memory", "plugins-dist/ppt-engine", "plugins-dist/design-engine"]
-extend-exclude = [
-    # Byte snapshots of the retired vendored fork: the records the parity
-    # guards compare against. Reformatting a record destroys its fidelity.
-    "tests/fixtures/vendored_fork/**",
-    "benchmarks/**/data",
-    "benchmarks/**/results",
-    "benchmarks/**/output",
-]
+extend-exclude = ["benchmarks/**/data", "benchmarks/**/results", "benchmarks/**/output"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "S101", "S105", "S106", "S107", "S506", "S605", "S607"]
@@ -265,11 +192,7 @@ ignore = ["E501"]
 
 # Tracing probe factories take the target class as an argument, named after
 # the class (e.g. `def _install_llm(LLMProvider: type)`) for readability.
-
-# The login shell has to be resolved through PATH rather than pinned to an
-# absolute path: a fixed /bin/bash would defeat capturing a login shell that
-# may live elsewhere on a given host.
-"raven/agent/subagent/backends/env.py" = ["S607"]
+"raven/tracing/instrument.py" = ["N803"]
 
 # CLI startup-order / deferred imports, accepted long-term.
 "raven/cli/commands.py" = ["E402"]
@@ -297,24 +220,23 @@ ignore = ["E501"]
 "scripts/check_commit_file.py" = ["S607"]
 "scripts/check_commit_messages.py" = ["S607"]
 "scripts/check_large_files.py" = ["S607"]
-"scripts/check_source_language.py" = ["S607"]
 "scripts/skill_hub_e2e.py" = ["S101"]
 
 # evolver + appworld bench: git/bash subprocess drivers by design (S607);
 # K is SOP domain vocabulary for trials-per-task (N803/N806); *_PASS /
 # *_TOKEN constants are outcome labels and a beacon marker, not credentials
 # (S105); asserts tracked with the convert-vs-keep batch above (S101).
-"evolver/tree/git_ops.py" = ["S607"]
-"evolver/launch/config.py" = ["S607"]
-"evolver/launch/contract.py" = ["S607"]
-"evolver/launch/runner.py" = ["S607"]
-"evolver/orchestrator/nodes/semantic.py" = ["S101"]
-"evolver/scheduler/cold_start_bandit.py" = ["N803", "N806"]
-"evolver/scheduler/tree_aware_bandit.py" = ["N803"]
-"evolver/scheduler/tree_loader.py" = ["S101"]
-"evolver/analysis/stability_bucket.py" = ["S105"]
-"evolver/applier/beacon_guard.py" = ["S105"]
-"evolver/judge/prompts.py" = ["S105"]
+"raven/evolver/tree/git_ops.py" = ["S607"]
+"raven/evolver/launch/config.py" = ["S607"]
+"raven/evolver/launch/contract.py" = ["S607"]
+"raven/evolver/launch/runner.py" = ["S607"]
+"raven/evolver/orchestrator/nodes/semantic.py" = ["S101"]
+"raven/evolver/scheduler/cold_start_bandit.py" = ["N803", "N806"]
+"raven/evolver/scheduler/tree_aware_bandit.py" = ["N803"]
+"raven/evolver/scheduler/tree_loader.py" = ["S101"]
+"raven/evolver/analysis/stability_bucket.py" = ["S105"]
+"raven/evolver/applier/beacon_guard.py" = ["S105"]
+"raven/evolver/judge/prompts.py" = ["S105"]
 "benchmarks/appworld/evolve/adapter.py" = ["N803", "S105"]
 "benchmarks/appworld/evolve/editor.py" = ["N806"]
 "benchmarks/appworld/evolve/sandbox.py" = ["S607"]
@@ -332,30 +254,11 @@ ignore = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# The evolver is a repo-level tool package, not installed with raven; the
-# tests import it from the checkout.
-pythonpath = ["."]
 norecursedirs = ["tests/integration", "*.egg", ".*", "build", "dist"]
 addopts = [
     "-ra",
     "--strict-markers",
     "--strict-config",
-    # Four workers, here rather than in each caller's command line, because the
-    # invocation that matters most -- the `tests` job -- lives on the orphan
-    # `ci` branch, and `addopts` is the one place that reaches every caller at
-    # once. Measured on one tree, same 11936 tests both ways: 10m11s at -n 0
-    # against 2m14s here, and coverage 80.1055% against 80.1022% -- two lines
-    # out of 57670, so the coverage gate reads the same numbers. Those two are
-    # the BrokenPipeError arm in subagent/backends/cli_agent.py, which is a race
-    # with the child's exit rather than anything the workers changed: a second
-    # comparison on an older tree moved the same arm, and moved one in
-    # builtin_agents.py the other way.
-    # A fixed 4 rather than `auto`: inside a container `os.cpu_count()` reports
-    # the host's cores, not the job's, so `auto` is a number nobody chose --
-    # bounded memory and predictable behaviour beat a guess, and on a 2-core
-    # runner four CPU-bound workers cost only context switching.
-    "-n",
-    "4",
     "-m",
     "not integration and not e2e",
 ]
@@ -372,7 +275,8 @@ branch = true
 source = ["raven"]
 omit = [
     "raven/__main__.py",
-    "evolver/__main__.py",
+    "raven/evolver/__main__.py",
+    "raven/utils/win_fcntl_shim.py",
 ]
 
 [tool.coverage.report]
@@ -380,7 +284,8 @@ precision = 2
 show_missing = true
 omit = [
     "raven/__main__.py",
-    "evolver/__main__.py",
+    "raven/evolver/__main__.py",
+    "raven/utils/win_fcntl_shim.py",
 ]
 exclude_also = [
     "if TYPE_CHECKING:",
@@ -398,11 +303,7 @@ output = "coverage.json"
 
 [dependency-groups]
 dev = [
-    "hatchling>=1.32.0",
-    "import-linter>=2.14",
     "json-repair>=0.59.5",
-    "jsonschema>=4.23.0",
-    "packaging>=26.1",
     "pexpect>=4.9",
     "pip-audit>=2.10.0",
     "pre-commit>=4.6.0",
@@ -410,137 +311,5 @@ dev = [
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",
     "pytest-cov>=7.1.0",
-    "pytest-xdist>=3.8.0",
     "ruff==0.15.12",
 ]
-
-[tool.importlinter]
-root_package = "raven"
-exclude_type_checking_imports = true
-include_external_packages = true
-
-[[tool.importlinter.contracts]]
-name = "inner layers know no surface"
-type = "forbidden"
-source_modules = [
-    "raven.spine", "raven.contracts", "raven.tracing", "raven.acp_client", "raven.agent", "raven.memory_engine",
-    "raven.context_engine", "raven.providers", "raven.session", "raven.sandbox",
-    "raven.routing", "raven.token_wise", "raven.plugins", "raven.channels",
-    "raven.gateway", "raven.market", "raven.ops", "raven.security", "raven.auth",
-    # Seated by the 2026-08-29 structural audit: cross-cutting leaves and the
-    # L3 shelf members that had no recorded layer.
-    "raven.config", "raven.utils", "raven.i18n", "raven.mcp", "raven.playbook",
-    "raven.knowledge", "raven.skill_hub", "raven.trajectory", "raven.eval_engine",
-    # The permission gate: an L3 shelf the registry consults before dispatch;
-    # entrances bind its turn context, it imports no surface itself.
-    "raven.permissions",
-    # proactive_engine is an engine (schedulers + sentinel), consumed by the
-    # loop, the assembly root and the entrances, and imports no surface itself;
-    # its earlier surface seat was a misreading of "originates turns" as
-    # "is a transport". Seating it here also seats core, the assembly root.
-    "raven.proactive_engine", "raven.core", "raven.observability", "raven.home",
-    # Feature libraries consumed by surfaces, importing none themselves
-    # (measured: zero cli/rpc/acp imports in either); seated inner so the
-    # machine watches the edge instead of a ruling note.
-    "raven.browser", "raven.importer", "raven.updates",
-]
-forbidden_modules = ["raven.cli", "raven.rpc", "raven.acp"]
-# Debt allowlist: none. The last allowlisted edge (market reaching the skill
-# install engine through its rpc wrapper) closed when the engine moved to
-# skill_hub; an ignore_imports entry here would be new debt, not a carry-over.
-
-[[tool.importlinter.contracts]]
-name = "the kernel stands alone"
-type = "forbidden"
-# The shippable kernel (papers + home + spine + tracing) must not reach the
-# rest of the tree at import time -- this is what makes a raven-core wheel a
-# build artifact rather than a refactor. The set carries no exceptions: the
-# three lazy reads tracing once needed closed when its span vocabulary (the
-# provider registry and pricing table reads) moved out to raven/observability
-# and RAVEN_HOME resolution moved in to raven/home.py, so an ignore_imports
-# entry here would be new debt, not a carry-over.
-source_modules = ["raven.contracts", "raven.home", "raven.spine", "raven.tracing"]
-forbidden_modules = [
-    "raven.acp", "raven.acp_client", "raven.agent", "raven.auth", "raven.browser",
-    "raven.channels", "raven.cli", "raven.config", "raven.context_engine",
-    "raven.core", "raven.eval_engine", "raven.gateway",
-    "raven.i18n", "raven.importer", "raven.knowledge", "raven.market", "raven.mcp",
-    "raven.memory_engine", "raven.ops", "raven.playbook", "raven.plugins",
-    "raven.proactive_engine", "raven.providers", "raven.routing", "raven.rpc",
-    "raven.observability", "raven.sandbox", "raven.security", "raven.session",
-    "raven.skill_hub", "raven.token_wise", "raven.trajectory", "raven.updates", "raven.utils",
-]
-
-[[tool.importlinter.contracts]]
-# raven/agent holds two seats: agent/loop is the L2 harness shell every
-# entrance runs, its siblings are L3 cargo the loop consumes. Cargo that
-# imported the shell would invert the seat (and, in practice, an import cycle
-# papered over with a function-level import). Zero edges today; this keeps it so.
-name = "cargo does not import the loop shell"
-type = "forbidden"
-source_modules = [
-    "raven.agent.tools", "raven.agent.subagent", "raven.acp_client",
-    "raven.agent.context", "raven.agent.hook", "raven.agent.personalizer",
-    "raven.agent.workdir",
-]
-forbidden_modules = ["raven.agent.loop"]
-
-[[tool.importlinter.contracts]]
-name = "channel adapters are independent cargo"
-type = "independence"
-modules = [
-    "raven.channels.adapters.dingtalk", "raven.channels.adapters.discord",
-    "raven.channels.adapters.email", "raven.channels.adapters.feishu",
-    "raven.channels.adapters.matrix", "raven.channels.adapters.mochat",
-    "raven.channels.adapters.qq", "raven.channels.adapters.slack",
-    "raven.channels.adapters.telegram", "raven.channels.adapters.wecom",
-    "raven.channels.adapters.weixin", "raven.channels.adapters.whatsapp",
-]
-
-[[tool.importlinter.contracts]]
-name = "the runtime does not import the evolver"
-type = "forbidden"
-source_modules = ["raven"]
-forbidden_modules = ["evolver"]
-
-[[tool.importlinter.contracts]]
-# The agents/ pilots consume installed raven; the runtime reaching back into
-# a product definition would invert that dependency -- same rule, and the
-# same shape, as the evolver contract above.
-name = "the runtime does not import the agents pilots"
-type = "forbidden"
-source_modules = ["raven"]
-forbidden_modules = ["agents"]
-
-[[tool.importlinter.contracts]]
-# The development trees are consumers too: benchmarks, demos and the suite all
-# import raven, and the runtime reaching back would make a shipped wheel depend
-# on trees that are not in it. raven/README.md has carried this as prose since
-# the package layout was written; zero edges today, and the machine keeps it so.
-name = "the runtime does not import the development trees"
-type = "forbidden"
-source_modules = ["raven"]
-forbidden_modules = ["benchmarks", "demos", "tests"]
-
-[[tool.importlinter.contracts]]
-# The surfaces law, first half (2026-08-31): a served surface never imports
-# the launcher. The reverse direction -- cli assembling the rpc/acp stacks it
-# hosts -- is the sanctioned one: an entrance brings its own transport-side
-# wiring, and the launcher is the entrance that starts the others. What the
-# console feature and the serve-restart handshake need from the cli arrives
-# by registration instead (rpc/cli_socket.py; rpc/serve_control.py is armed
-# by the host).
-name = "the served surfaces do not import the launcher"
-type = "forbidden"
-source_modules = ["raven.rpc", "raven.acp"]
-forbidden_modules = ["raven.cli"]
-
-[[tool.importlinter.contracts]]
-# The surfaces law, second half: the served dialects stay strangers in this
-# direction. The other direction is acp hosting an rpc stack over its own
-# translator -- pinned to the single bootstrap facade module by the facade
-# roster in tests/test_l4_entrances.py, never widened silently.
-name = "rpc does not import acp"
-type = "forbidden"
-source_modules = ["raven.rpc"]
-forbidden_modules = ["raven.acp"]

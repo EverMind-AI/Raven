@@ -3,7 +3,7 @@
 The "local" pool covers everything that lives as a SKILL.md file on disk:
 
   - workspace/skills/ (user-authored)
-  - the packaged builtin pool under ``raven/memory_engine/skills/``
+  - packaged builtin/ (the 9 shipped skills)
   - workspace/skills/everos/ (EverOS-extracted, optional)
 
 These pools are small (tens to a few hundred skills) and frequently edited,

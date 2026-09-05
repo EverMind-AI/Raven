@@ -24,7 +24,6 @@ import asyncio
 
 import pytest
 
-from raven.agent.loop.bundles import EngineWiring, TurnPolicy
 from raven.agent.loop.main import AgentLoop
 from raven.config.raven import ContextConfig, SkillForgeConfig
 from raven.context_engine.segments.curator import CuratorSegmentBuilder
@@ -36,23 +35,11 @@ from raven.spine.turn import Origin, TurnRequest
 
 
 class _Provider:
-    def __init__(self, name: str, provider_name: str = "vendor") -> None:
+    def __init__(self, name: str) -> None:
         self.name = name
-        self.provider_name = provider_name
 
     def get_default_model(self) -> str:
         return f"{self.name}/default"
-
-    async def chat_with_retry(self, **kwargs) -> LLMResponse:
-        return LLMResponse(content="ok", finish_reason="stop")
-
-
-class _Resolver:
-    """A multi-vendor dispatcher the refresh path must never collapse: like the
-    gateway's ResolvingProvider it has no ``provider_name``."""
-
-    def get_default_model(self) -> str:
-        return "resolver/default"
 
     async def chat_with_retry(self, **kwargs) -> LLMResponse:
         return LLMResponse(content="ok", finish_reason="stop")
@@ -63,10 +50,8 @@ def _loop(tmp_path) -> AgentLoop:
         provider=_Provider("boot"),
         workspace=tmp_path,
         model="boot/model",
-        # Push discovery, because that is what builds the skills segment and the
-        # gate these tests reach for. Upstream had no such switch and got the
-        # segment unconditionally; here the default is pull, which drops it.
-        engine=EngineWiring(context_config=ContextConfig(), skill_forge_config=SkillForgeConfig(discovery="push")),
+        context_config=ContextConfig(),
+        skill_forge_config=SkillForgeConfig(),
     )
 
 
@@ -289,7 +274,7 @@ async def test_a_spawned_subagent_keeps_its_conversations_model(tmp_path) -> Non
     loop.subagents._gate = asyncio.Semaphore(0)
 
     async def _body(*args, **kwargs):
-        await loop.subagents.spawn("do it", task_summary="it", session_key="tui:a")
+        await loop.subagents.spawn("do it", label="it", session_key="tui:a")
         return "done"
 
     await _run(loop, "tui:a", _body)
@@ -408,8 +393,9 @@ def test_a_configured_pin_survives_a_real_factory_build(tmp_path) -> None:
         provider=_Provider("boot"),
         workspace=tmp_path,
         model="boot/model",
+        context_config=context_config,
+        skill_forge_config=SkillForgeConfig(),
         provider_pool=ProviderPool(cfg),
-        engine=EngineWiring(context_config=context_config, skill_forge_config=SkillForgeConfig()),
     )
     curator = next(b for b in loop.context_engine._builders if isinstance(b, CuratorSegmentBuilder))
 
@@ -442,8 +428,9 @@ def test_the_factory_hands_the_pool_the_pin_the_user_configured(tmp_path) -> Non
         provider=_Provider("boot"),
         workspace=tmp_path,
         model="boot/model",
+        context_config=context_config,
+        skill_forge_config=SkillForgeConfig(),
         provider_pool=ProviderPool(cfg),
-        engine=EngineWiring(context_config=context_config, skill_forge_config=SkillForgeConfig()),
     )
     curator = next(b for b in loop.context_engine._builders if isinstance(b, CuratorSegmentBuilder))
 
@@ -467,15 +454,12 @@ def test_the_factory_hands_the_pool_the_gate_pin_the_user_configured(tmp_path) -
         provider=_Provider("boot"),
         workspace=tmp_path,
         model="boot/model",
-        provider_pool=ProviderPool(cfg),
-        engine=EngineWiring(
-            context_config=ContextConfig(),
-            skill_forge_config=SkillForgeConfig(
-                discovery="push",
-                llm_gate_model="claude-haiku-4-5",
-                llm_gate_provider="openrouter",
-            ),
+        context_config=ContextConfig(),
+        skill_forge_config=SkillForgeConfig(
+            llm_gate_model="claude-haiku-4-5",
+            llm_gate_provider="openrouter",
         ),
+        provider_pool=ProviderPool(cfg),
     )
     skills = next(b for b in loop.context_engine._builders if isinstance(b, SkillsSegmentBuilder))
 
@@ -500,8 +484,9 @@ def test_a_stored_model_is_restored_onto_a_resumed_session(tmp_path) -> None:
         provider=_Provider("boot"),
         workspace=tmp_path,
         model="boot/model",
+        context_config=ContextConfig(),
+        skill_forge_config=SkillForgeConfig(),
         provider_pool=ProviderPool(cfg),
-        engine=EngineWiring(context_config=ContextConfig(), skill_forge_config=SkillForgeConfig()),
     )
 
     assert loop.session_model("tui:a") == "boot/model", "a fresh process has no override"
@@ -523,8 +508,9 @@ def test_a_stored_model_that_cannot_be_built_leaves_the_default(tmp_path) -> Non
         provider=_Provider("boot"),
         workspace=tmp_path,
         model="boot/model",
+        context_config=ContextConfig(),
+        skill_forge_config=SkillForgeConfig(),
         provider_pool=ProviderPool(cfg),
-        engine=EngineWiring(context_config=ContextConfig(), skill_forge_config=SkillForgeConfig()),
     )
 
     loop.restore_session_model("tui:a", "gemini-2.5-flash")
@@ -545,8 +531,9 @@ def _restorable_loop(tmp_path, stored: dict[str, dict[str, str]]) -> AgentLoop:
         provider=_Provider("boot"),
         workspace=tmp_path,
         model="boot/model",
+        context_config=ContextConfig(),
+        skill_forge_config=SkillForgeConfig(),
         provider_pool=ProviderPool(cfg),
-        engine=EngineWiring(context_config=ContextConfig(), skill_forge_config=SkillForgeConfig()),
     )
     for key, metadata in stored.items():
         record = loop.sessions.get_or_create(key)
@@ -663,11 +650,9 @@ def test_a_configured_gate_pin_survives_a_real_factory_build(tmp_path) -> None:
         provider=_Provider("boot"),
         workspace=tmp_path,
         model="boot/model",
+        context_config=ContextConfig(),
+        skill_forge_config=SkillForgeConfig(llm_gate_model="openai/gpt-5-mini"),
         provider_pool=ProviderPool(cfg),
-        engine=EngineWiring(
-            context_config=ContextConfig(),
-            skill_forge_config=SkillForgeConfig(discovery="push", llm_gate_model="openai/gpt-5-mini"),
-        ),
     )
     skills = next(b for b in loop.context_engine._builders if isinstance(b, SkillsSegmentBuilder))
 
@@ -717,11 +702,11 @@ async def test_a_spawn_holds_its_binding_through_the_gate_and_the_sandbox_boot(t
     loop.subagents._gate = asyncio.Semaphore(0)
 
     original_build = manager_mod.build_executor
-    manager_mod.build_executor = lambda *args, **kwargs: _StubExecutor()
+    manager_mod.build_executor = lambda cfg, workspace, owned_ids=None: _StubExecutor()
     try:
 
         async def _body(*args, **kwargs):
-            await loop.subagents.spawn("do it", task_summary="it", session_key="tui:a")
+            await loop.subagents.spawn("do it", label="it", session_key="tui:a")
             return "done"
 
         await _run(loop, "tui:a", _body)
@@ -735,208 +720,3 @@ async def test_a_spawn_holds_its_binding_through_the_gate_and_the_sandbox_boot(t
         manager_mod.build_executor = original_build
 
     assert served == ["started-with"], "the spawn ran on the model its conversation had when it asked"
-
-
-@pytest.mark.asyncio
-async def test_a_switched_turns_request_says_its_marks_are_already_placed(tmp_path) -> None:
-    """CacheOptimizer's budget must bind the provider of every turn it runs on.
-
-    The construction site can only configure the provider it was handed. A
-    session switched mid-conversation runs on a pool-built provider that site
-    never saw, and if nothing tells that provider the breakpoints are already
-    there, the request carries the strategy's plus the provider's own --
-    reproduced on a live wire as 2 sent under ``maxCacheBreakpoints=1``.
-
-    Asserted on the request rather than on the sender. This used to be a switch
-    set on the provider object, which bound the right turn but never came back
-    off, so every later consumer of that same object -- the Curator, a subagent,
-    Sentinel, the session titler -- kept sending with no breakpoints at all. The
-    stamp travels with the request, so it binds this turn and nothing else.
-    """
-    from raven.providers import prompt_cache
-    from raven.providers.base import LLMProvider
-    from raven.providers.binding import use_binding
-    from raven.token_wise.cache_optimizer import CacheOptimizer
-    from raven.token_wise.registry import StrategyRegistry
-
-    class _SendingProvider(LLMProvider):
-        """Records what the request said on its way out."""
-
-        def __init__(self, model: str) -> None:
-            super().__init__(api_key="test")
-            self._model = model
-            self.saw_marks_placed: bool | None = None
-
-        async def chat(self, messages, tools=None, model=None, **kwargs):
-            self.saw_marks_placed = prompt_cache.marks_already_placed(messages)
-            return LLMResponse(content="ok", finish_reason="stop")
-
-        def get_default_model(self) -> str:
-            return self._model
-
-    def _agent(provider: LLMProvider, registry: StrategyRegistry) -> AgentLoop:
-        return AgentLoop(
-            provider=provider,
-            workspace=tmp_path,
-            model=provider.get_default_model(),
-            policy=TurnPolicy(max_iterations=2),
-            engine=EngineWiring(strategies=registry),
-        )
-
-    with_optimizer = StrategyRegistry([CacheOptimizer(supports_caching=lambda _model: True)])
-
-    built_with = _SendingProvider("boot/model")
-    switched_to = _SendingProvider("switched/model")
-    loop = _agent(built_with, with_optimizer)
-    with use_binding(ModelBinding(switched_to, "switched/model")):
-        await loop._process_message(_req("tui:a"), session_key="tui:a")
-    assert switched_to.saw_marks_placed is True, "the sender this turn ran on was told"
-
-    # Without the optimizer nothing else places breakpoints, so the provider's
-    # own marking is all the caching there is -- the request must not claim
-    # otherwise.
-    plain = _SendingProvider("switched/model")
-    loop2 = _agent(_SendingProvider("boot/model"), StrategyRegistry([]))
-    with use_binding(ModelBinding(plain, "switched/model")):
-        await loop2._process_message(_req("tui:b"), session_key="tui:b")
-    assert plain.saw_marks_placed is False, "no optimizer, no claim, provider still marks"
-
-
-# ---------------------------------------------------------------------------
-# Credentials are re-asked from the pool on every ask
-# ---------------------------------------------------------------------------
-
-
-class _Pool:
-    """Answers ``bind`` from a mapping, the way the real pool answers from its
-    fingerprint-keyed cache."""
-
-    def __init__(self) -> None:
-        self.bindings: dict[str, ModelBinding] = {}
-        self.raise_for: set[str] = set()
-
-    def bind(self, model: str, provider_name: str | None = None) -> ModelBinding:
-        if model in self.raise_for:
-            raise RuntimeError("credential removed")
-        return self.bindings[model]
-
-    def bind_pin(self, model: str | None, provider_name: str | None = None) -> ModelBinding | None:
-        return None
-
-
-def _pooled_loop(tmp_path) -> tuple[AgentLoop, _Pool]:
-    pool = _Pool()
-    loop = AgentLoop(
-        provider=_Provider("boot"),
-        workspace=tmp_path,
-        model="boot/model",
-        provider_pool=pool,
-        engine=EngineWiring(context_config=ContextConfig(), skill_forge_config=SkillForgeConfig(discovery="push")),
-    )
-    pool.bindings["boot/model"] = loop.default_binding
-    return loop, pool
-
-
-def test_an_edited_credential_serves_the_next_ask(tmp_path) -> None:
-    """The pool drops its cache when the credentials fingerprint changes; this
-    is the caller-side half -- without it the session keeps the stale provider
-    until a restart."""
-    loop, pool = _pooled_loop(tmp_path)
-    old = _binding("prov-old", "vendor-a/model")
-    loop.set_session_binding("tui:a", old)
-    pool.bindings["vendor-a/model"] = old
-    assert loop.binding_for_session("tui:a") is old
-
-    fresh = _binding("prov-rotated", "vendor-a/model")
-    pool.bindings["vendor-a/model"] = fresh
-
-    assert loop.binding_for_session("tui:a") is fresh
-    assert loop.binding_for_session("tui:a") is fresh, "the stored override follows the rebind"
-
-
-def test_a_removed_credential_keeps_the_current_binding(tmp_path) -> None:
-    """A pair that can no longer be built keeps the binding it has -- a turn on
-    the provider that answered a second ago beats no turn at all."""
-    loop, pool = _pooled_loop(tmp_path)
-    old = _binding("prov-old", "vendor-a/model")
-    loop.set_session_binding("tui:a", old)
-    pool.raise_for.add("vendor-a/model")
-
-    assert loop.binding_for_session("tui:a") is old
-
-
-def test_the_default_lane_rebinds_too(tmp_path) -> None:
-    loop, pool = _pooled_loop(tmp_path)
-    fresh = _binding("prov-rotated", "boot/model")
-    pool.bindings["boot/model"] = fresh
-
-    assert loop.binding_for_session("tui:new") is fresh
-
-
-def test_a_rebind_that_moves_the_provider_forgets_transport_verdicts(tmp_path) -> None:
-    """The verdict caches are keyed by model but computed from the provider, so
-    a provider rebuilt under the same model id must not keep serving the old
-    transport's answer."""
-    loop, pool = _pooled_loop(tmp_path)
-    old = _binding("prov-old", "vendor-a/model")
-    loop.set_session_binding("tui:a", old)
-    pool.bindings["vendor-a/model"] = old
-    loop._vision_ok["vendor-a/model"] = False
-    assert loop.binding_for_session("tui:a") is old
-    assert loop._vision_ok, "an identity rebind keeps the verdicts"
-
-    pool.bindings["vendor-a/model"] = _binding("prov-rotated", "vendor-a/model")
-    loop.binding_for_session("tui:a")
-
-    assert not loop._vision_ok
-
-
-def test_repeated_default_asks_keep_the_transport_verdicts(tmp_path) -> None:
-    """The default lane adopts the pool's binding object once; compared against
-    a default that never moved, every later ask would read as a provider change
-    and thrash the verdict caches."""
-    loop, pool = _pooled_loop(tmp_path)
-    adopted = _binding("prov-pool", "boot/model")
-    pool.bindings["boot/model"] = adopted
-
-    loop.binding_for_session("tui:x")
-    assert loop.default_binding is adopted, "the pool's object becomes the default, through the setter"
-    loop._vision_ok["boot/model"] = True
-
-    loop.binding_for_session("tui:y")
-
-    assert loop._vision_ok, "an unchanged pool answer must not clear the verdict caches"
-
-
-def test_a_provider_that_cannot_name_its_vendor_is_never_re_paired(tmp_path) -> None:
-    """The gateway default is a ResolvingProvider -- a multi-vendor dispatcher
-    with no provider_name. Re-asking the pool for it would derive a vendor from
-    the model id and replace the resolver with one direct provider, moving the
-    bill to whichever vendor the prefix happens to name."""
-
-    class _DerivingPool(_Pool):
-        """Answers every bind with a direct single-vendor binding, the way the
-        real pool derives a vendor from the model prefix when handed None."""
-
-        def __init__(self) -> None:
-            super().__init__()
-            self.asked: list[str] = []
-
-        def bind(self, model: str, provider_name: str | None = None):
-            self.asked.append(model)
-            return _binding("prov-direct", model)
-
-    pool = _DerivingPool()
-    loop = AgentLoop(
-        provider=_Resolver(),
-        workspace=tmp_path,
-        model="anthropic/some-model",
-        provider_pool=pool,
-        engine=EngineWiring(context_config=ContextConfig(), skill_forge_config=SkillForgeConfig(discovery="push")),
-    )
-
-    binding = loop.binding_for_session("tui:a")
-
-    assert binding is loop.default_binding
-    assert binding.provider.__class__ is _Resolver, "the resolver must not collapse to one vendor"
-    assert pool.asked == [], "an unnamed provider is not the pool's to re-pair"

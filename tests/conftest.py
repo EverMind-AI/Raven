@@ -6,9 +6,7 @@ declaration.
 
 from __future__ import annotations
 
-import contextlib
 import os
-from collections.abc import Iterator
 
 import pytest
 
@@ -28,8 +26,10 @@ def pytest_unconfigure(config: pytest.Config) -> None:
 
     A fully green run still exited 139 on Linux: the suite finalizes with
     native state live (asyncio subprocess transports collected during GC),
-    and Py_FinalizeEx segfaults on it, masking the recorded status. The
-    helper lives in ``tests/_hard_exit.py``; nothing under ``raven/`` needs it.
+    and Py_FinalizeEx segfaults on it, masking the recorded status. The CLI
+    routes its exit through the same helper, but on a different trigger --
+    see raven.cli._exit for the lancedb-specific gate it uses, which is not
+    what fires here.
 
     Local runs keep normal semantics so nothing masks an exit-time error, and
     the recorded status is preserved either way -- a failing run still exits
@@ -40,7 +40,7 @@ def pytest_unconfigure(config: pytest.Config) -> None:
     if not os.environ.get("CI"):
         return
 
-    from tests._hard_exit import flush_and_hard_exit
+    from raven.cli._exit import flush_and_hard_exit
 
     flush_and_hard_exit(int(getattr(config, "_raven_exitstatus", 0)))
 
@@ -48,101 +48,6 @@ def pytest_unconfigure(config: pytest.Config) -> None:
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """Stash the real exit status so pytest_unconfigure can preserve it."""
     session.config._raven_exitstatus = int(exitstatus)  # type: ignore[attr-defined]
-
-
-@contextlib.contextmanager
-def stopping_skill_watchers() -> Iterator[None]:
-    """Stop every SKILL.md watcher started inside the block.
-
-    ``LocalSkillCatalog`` starts one unless the caller passes
-    ``start_watcher=False``, and the daemon thread it starts holds a strong
-    reference back to the catalog through the ``on_change`` bound method -- so
-    nothing collects it when the test that built it returns. The catalog says as
-    much in its own comment, and every short-lived *production* consumer already
-    passes the flag; a test is a short-lived consumer that never did.
-
-    Tracking rather than suppressing: the watcher still starts, so a test that
-    asserts on watcher behaviour keeps working and a production path that
-    regresses into starting one is still visible. Only the cleanup is added.
-    """
-    from raven.memory_engine.skill_local.watcher import SkillFileWatcher
-
-    started: list[SkillFileWatcher] = []
-    real_start = SkillFileWatcher.start
-
-    def _tracking_start(self: SkillFileWatcher) -> bool:
-        ok = real_start(self)
-        if ok:
-            started.append(self)
-        return ok
-
-    SkillFileWatcher.start = _tracking_start  # type: ignore[method-assign]
-    try:
-        yield
-    finally:
-        SkillFileWatcher.start = real_start  # type: ignore[method-assign]
-        for watcher in started:
-            watcher.stop()
-
-
-@pytest.fixture(autouse=True)
-def _no_leaked_skill_watchers() -> Iterator[None]:
-    """Keep watcher threads from accumulating across the session.
-
-    Left alone this is not a slow leak: six of the catalog-building test files
-    finish with 81 live watcher threads between them, and a full xdist worker
-    carried hundreds, each holding its own inotify handles.
-    """
-    with stopping_skill_watchers():
-        yield
-
-
-@pytest.fixture(autouse=True)
-def no_discovered_products(monkeypatch):
-    """Pin agent-table discovery off, so the suite sees the same table everywhere.
-
-    ``AgentRegistry.apply`` discovers rows from the ``agents/`` product tree, and
-    the suite runs inside a checkout that has one. Left alone, every table
-    assertion would depend on machine state a test never set: five extra rows,
-    each enabled or not according to which engine wheels that developer has
-    installed. A test that wants the discovered rows patches ``agents_root``
-    itself to a tree it built.
-    """
-    monkeypatch.setattr("raven.agent.subagent.vendored_agents.agents_root", lambda: None)
-
-
-@pytest.fixture(autouse=True, scope="session")
-def _console_socket_registered():
-    """Register the real CLI into the rpc console socket, once per worker.
-
-    Production hosts register at assembly (the surfaces law forbids rpc from
-    importing the cli, so the table arrives by registration); the suite
-    registers the same way so method-level tests keep driving dispatch and
-    the catalog as a hosted console. Tests that pin the UNregistered
-    behaviour call ``cli_socket.reset()`` and re-register in their own
-    cleanup.
-    """
-    from raven.cli._console_feature import register_console_feature
-
-    register_console_feature()
-    yield
-
-
-@pytest.fixture(autouse=True)
-def _restore_i18n_language():
-    """Undo any ``raven.i18n.set_language`` left over from a prior test.
-
-    The reply language is a module-level global only the CLI seeds at startup
-    and the console's live switch now mutates in-process. Once one test flips
-    it -- directly or through any path that applies a config -- every later
-    test on that xdist worker renders the other language's templates, and
-    which tests share a worker moves whenever the suite grows.
-    """
-    from raven import i18n
-
-    before = i18n.current_language()
-    yield
-    i18n.set_language(before)
 
 
 @pytest.fixture(autouse=True)
@@ -164,57 +69,6 @@ def _restore_loguru_enabled_state():
 
 
 @pytest.fixture(autouse=True)
-def _no_real_raven_home(tmp_path_factory, monkeypatch):
-    """Keep the suite out of the config file of whoever is running it.
-
-    ``get_config_path()`` answers ``RAVEN_HOME/config.json``, and anything reading
-    it at test time therefore reads a real person's preferences. The tool array is
-    assembled through one of those reads (``LiveConfig``, so an off switch takes
-    effect on the next turn rather than the next restart), which makes the
-    developer who has actually used that switch the one whose suite fails: a home
-    config carrying ``tools.disabledTools: ["deep_research"]`` reds three tests in
-    ``test_deep_research_tool.py`` and nothing in the failure points at the cause.
-
-    ``_current_config_path`` is reset alongside it because it wins over both and
-    is module-global: one test calling ``set_config_path`` otherwise aims every
-    later test in the process at that path.
-
-    The knob is ``HOME`` because it is the only one every test that isolates the
-    home itself can still beat, and this fixture must lose to all of them. Tests
-    do it two ways -- ``monkeypatch.setattr(Path, "home", ...)`` and
-    ``monkeypatch.setenv("HOME", ...)`` -- and the precedence runs
-    ``RAVEN_HOME`` > ``Path.home`` > ``HOME``. Setting ``RAVEN_HOME`` here beats
-    both camps (measured: 17 unrelated failures), patching ``Path.home`` beats the
-    ``setenv`` camp (measured: 3), and setting ``HOME`` beats neither: an attribute
-    patch shadows it, and a later ``setenv`` replaces it.
-    """
-
-    # Outside ``tmp_path`` rather than under it, and fresh per test. Tests use
-    # ``tmp_path`` as a workspace root and enumerate it, so a directory this
-    # fixture leaves in there shows up in their assertions; and a session-shared
-    # home would let one test read the config another one wrote.
-    home = tmp_path_factory.mktemp("default_home")
-    monkeypatch.setenv("HOME", str(home))
-    # The suite's baseline permission mode is full access -- the behaviour the
-    # whole suite was written against before the gate existed, and what a test
-    # about streaming or diffs should keep seeing. The product default is ask;
-    # tests about the gate itself write their own permissions node (LiveConfig
-    # re-reads on byte change, so overwriting this file mid-test takes effect
-    # on the next tool call).
-    raven_home = home / ".raven"
-    raven_home.mkdir()
-    (raven_home / "config.json").write_text('{"permissions": {"mode": "full"}}')
-    # Unset rather than set: ``RAVEN_HOME`` outranks everything above, so a
-    # developer who exports it hands their own directory to every test that
-    # isolates the home some other way. Deleting it is the one move that closes
-    # that without overriding anybody -- a test that wants the variable sets it
-    # itself, which lands after this.
-    monkeypatch.delenv("RAVEN_HOME", raising=False)
-    monkeypatch.setattr("raven.home._current_config_path", None)
-    yield
-
-
-@pytest.fixture(autouse=True)
 def _no_update_check(tmp_path, monkeypatch):
     """Keep the startup update check off the network and off the real disk.
 
@@ -225,7 +79,7 @@ def _no_update_check(tmp_path, monkeypatch):
     which is exactly the state that spawns the fetch -- so opt out by env for
     the whole suite. Tests that exercise the notice clear the variable.
     """
-    from raven.updates import update_notice
+    from raven.cli import update_notice
 
     monkeypatch.setenv(update_notice._OPT_OUT_ENV, "1")
     monkeypatch.setattr(update_notice, "_cache_path", lambda: tmp_path / "update_check.json")
@@ -256,6 +110,33 @@ def _no_real_oauth_credentials(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_tracing_state_dir(tmp_path, monkeypatch):
+    """Keep span emission off the real ``~/.raven/traces`` for the whole suite.
+
+    Tracing is on by default and ``trace.span()`` calls are embedded in library
+    code (agent loop, subagents, TUI RPC), so any test exercising those paths
+    emits spans with fabricated session keys (``session-a``, ``weixin:c``, ...)
+    into the real trace store — they then surface as phantom sessions in
+    ``raven trajectory``. Redirect only the directory, not the enabled switch,
+    so the suite keeps exercising the real emission path with zero behavior
+    change; leaks land in tmp instead.
+
+    ``raven.tracing.spans._store`` is a lazy module-level singleton pinned to
+    the directory resolved at first emit, so it must be reset around each test
+    or it keeps pointing at whichever directory was active when some earlier
+    test (or the real environment) first emitted. Tests that need their own
+    directory keep working: their ``monkeypatch.setenv`` runs after this
+    fixture and wins, and they already reset ``_store`` themselves.
+    """
+    from raven.tracing import spans as _spans
+
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path / "traces"))
+    _spans._store = None
+    yield
+    _spans._store = None
+
+
+@pytest.fixture(autouse=True)
 def _no_openrouter_network(tmp_path):
     """Keep the OpenRouter catalog fetch off the network and off the real disk.
 
@@ -276,118 +157,5 @@ def _no_openrouter_network(tmp_path):
     finally:
         rates._fetch_openrouter_models = original_fetch
         model_catalog_cache._CACHE_PATH = original_path
-        rates.reset_openrouter_cache()
-
-
-@pytest.fixture(autouse=True)
-def _no_real_acp_journal(tmp_path, monkeypatch):
-    """Keep ACP wire journals out of the real home.
-
-    Every pooled connection opens one (``raven/acp_client/journal.py``), so any
-    test that launches a stub server would otherwise write the whole exchange --
-    the prompt, every tool result, every stderr line -- under the developer's
-    ``~/.raven/traces``, and leave it there after the run.
-    """
-    from raven.acp_client import journal
-
-    monkeypatch.setattr(journal, "journal_root", lambda: tmp_path / "acp-frames")
-    yield
-
-
-@pytest.fixture(autouse=True)
-def _no_real_browser(monkeypatch):
-    """Keep the browser opener off the desktop of whoever runs the suite.
-
-    ``web`` and ``serve`` finish by opening the page they just brought up, so a
-    test that drives either one without stubbing the opener launches real tabs
-    on the machine running pytest -- pointed at a port nothing is listening on,
-    since the port under test is a fixture's invention. Raising here turns that
-    into a failure of the test that forgot to stub it, instead of a green run
-    that hijacks the screen.
-    """
-    import webbrowser
-
-    def _refuse(url, *_args, **_kwargs):
-        raise AssertionError(f"a test opened a real browser at {url}; stub the opener instead")
-
-    for name in ("open", "open_new", "open_new_tab"):
-        monkeypatch.setattr(webbrowser, name, _refuse)
-
-
-@pytest.fixture(autouse=True)
-def _unbind_the_acp_turn() -> Iterator[None]:
-    """Put the ACP turn's ContextVars back where the test found them.
-
-    ``start_ask_turn`` binds an asker and an autofill for one turn. Called from
-    a *sync* test the write lands in the context every later test in the same
-    xdist worker inherits, so a neighbouring file asserting the unbound default
-    reads the previous file's asker instead. Here rather than in the one file
-    that noticed, because the next file to bind one from a sync test would
-    reintroduce the leak.
-
-    Restored through the tokens rather than by writing the defaults back: a
-    token also carries "this var was never set", which no assignment can
-    express.
-    """
-    from raven.acp_client import asker
-
-    turn_token = asker._TURN.set(asker._TURN.get())
-    autofill_token = asker._AUTOFILL.set(asker._AUTOFILL.get())
-    try:
-        yield
-    finally:
-        asker._TURN.reset(turn_token)
-        asker._AUTOFILL.reset(autofill_token)
-
-
-def wired_kwarg(kwargs: dict, name: str):
-    """Resolve a wiring value from captured AgentLoop kwargs, bundle-aware.
-
-    Entrances pass grouped bundles now; a test that asserts one wire reads it
-    through the bundle the field lives in, or straight off the dict for the
-    top-level keywords.
-    """
-    if name in kwargs:
-        return kwargs[name]
-    from raven.agent.loop.bundles import FIELD_OWNER
-
-    owner = FIELD_OWNER.get(name)
-    bundle = kwargs.get(owner) if owner else None
-    return getattr(bundle, name, None) if bundle is not None else None
-
-
-def make_channel_config(channel: str, **overrides):
-    """A dispensed channel config for adapter tests: declared defaults, with
-    ``overrides`` split between socket fields and cargo (cargo overrides run
-    through the admission door, so an invalid test value bites here too)."""
-    from raven.channels.registry import discover_specs
-    from raven.config.admission import DispensedSlice, admit_slice
-    from raven.config.schema import ChannelSocket
-
-    schema = discover_specs()[channel].config_schema or {}
-    socket_keys = {"enabled", "allow_from", "workspace"}
-    socket = ChannelSocket(**{k: v for k, v in overrides.items() if k in socket_keys})
-    cargo = admit_slice(
-        schema,
-        {k: v for k, v in overrides.items() if k not in socket_keys},
-        plugin_id=f"test:{channel}",
-    )
-    for key, decl in schema.items():
-        if key not in cargo and isinstance(decl.get("fields"), dict):
-            cargo[key] = admit_slice(decl["fields"], {}, plugin_id=f"test:{channel}.{key}")
-    return DispensedSlice(socket, cargo)
-
-
-def with_channel_fields(view, **overrides):
-    """A copy of a dispensed channel config with fields overridden -- the
-    test-side mutation path now that the production view is frozen."""
-    from raven.config.admission import DispensedSlice
-
-    cargo = dict(object.__getattribute__(view, "_cargo"))
-    section = object.__getattribute__(view, "_section")
-    socket_keys = {"enabled", "allow_from", "workspace"}
-    socket_over = {k: v for k, v in overrides.items() if k in socket_keys}
-    if socket_over:
-        section = section.model_copy(update=socket_over)
-    cargo.update({k: v for k, v in overrides.items() if k not in socket_keys})
-    return DispensedSlice(section, cargo)
+        rates._OPENROUTER_CACHE.clear()
+        rates._OPENROUTER_CACHE_TIME = 0.0

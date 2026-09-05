@@ -225,7 +225,7 @@ async def test_auto_disable_survives_process_due_writeback(tmp_path: Path) -> No
     job. The handler flips job.enabled on disable, so the writeback must
     persist the disable rather than clobber it with a recomputed next run.
     """
-    from raven.core.cron_stack import make_on_cron_job
+    from raven.cli._cron_handler import make_on_cron_job
 
     store_path = tmp_path / "jobs.json"
     svc = CronService(store_path, allowed_channels={"tui"})
@@ -236,7 +236,7 @@ async def test_auto_disable_survives_process_due_writeback(tmp_path: Path) -> No
 
     class _Handle:
         async def result(self):
-            return object()  # a completed turn resolves with its outcome; None means it was cut
+            return None
 
     svc.on_job = make_on_cron_job(submit=lambda req: _Handle(), cron_service=svc)
     await svc._process_due()

@@ -6,8 +6,9 @@ Two new concrete methods on :class:`MemoryStore`:
   ``DefaultMemoryEngine`` facade. Returns the last N non-blank lines of
   ``HISTORY.md``.
 - ``update_section(heading, body, *, at_end=True)`` — sectioned splice
-  under the store's file lock, for any writer that rewrites one named
-  section in place.
+  under the existing fcntl lock. Used by Sentinel's ``memory_writer``,
+  the eventual Personalizer write path, and any CLI command that needs
+  to rewrite a named ``## …`` section.
 
 The pre-existing read / write / lock surface (``read_long_term`` /
 ``write_long_term`` / ``locked`` / ``append_history``) is exercised by

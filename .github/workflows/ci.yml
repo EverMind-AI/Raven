@@ -66,10 +66,8 @@ jobs:
       - name: Install dependencies
         run: make install-deps
 
-      - name: Python lint
+      - name: Focused Python lint
         run: make lint-python
-      - name: Import contracts (layer boundaries)
-        run: make lint-imports
 
   unit:
     name: unit (py${{ matrix.python }} / ${{ matrix.os }})
@@ -96,31 +94,8 @@ jobs:
       - name: Set up Python
         run: uv python install ${{ matrix.python }}
 
-      # tests/test_ui_css_token_gate.py shells out to the node gate, and it is
-      # the ONLY thing anywhere that checks what that gate rejects -- the page
-      # job below runs the gate against the current stylesheet, which proves it
-      # runs and that the file passes, and nothing about refusal. Installed
-      # here so this job really runs that suite: without it the runtime skip in
-      # that file quietly drops all 43 cases.
-      - name: Set up Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: 22
-
       - name: Install dependencies
         run: uv sync --locked --all-extras --dev --python ${{ matrix.python }}
-
-      # Stdlib only. The dedicated gate is the `page` job below; this step
-      # keeps the build honest inside the test matrix too, because
-      # `ui-web/build.py` matches exact literal markers in the page sources and
-      # hard-exits on a miss, so an edit that reflows a source or drops a
-      # marker leaves CI green and blocks the release at `git push v1.2.3`.
-      - name: Build served page
-        run: |
-          npm ci --prefix ui-web
-          npm run --prefix ui-web build
-          python3 ui-web/build.py
-          test -f ui-web/dist/index.html
 
       - name: Unit tests with line and branch coverage
         # TERM=dumb: typer's rich_utils force-enables colour when GITHUB_ACTIONS is
@@ -186,38 +161,7 @@ jobs:
         # pytest-asyncio is needed even though this file has no async test: the
         # isolated interpreter still reads the project's pytest config, whose
         # --strict-config turns the then-unknown asyncio_mode into a hard error.
-        # pytest-xdist for the same reason, one step further: addopts now carries
-        # `-n 4`, and an unknown ARGUMENT is fatal whatever --strict-config says
-        # ("unrecognized arguments: -n"). It runs two tests here, so the workers
-        # buy nothing -- the plugin only has to exist.
-        run: uvx --python 3.12 --from "pytest>=8,<10" --with pytest-asyncio --with pytest-xdist pytest --noconftest tests/integration/test_cli_upgrade_real_uv.py -q
-
-  core-wheel:
-    name: kernel wheel smoke
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.2.0
-        with:
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-
-      - name: Set up Python
-        run: uv python install 3.12
-
-      - name: Install dependencies
-        run: make install-deps
-
-      # The closure guard in the unit suite proves the SOURCE kernel imports
-      # nothing else; this proves the ARTIFACT does -- built from the contract
-      # roster, installed into a clean venv with nothing but its own pins.
-      # norecursedirs keeps it out of the default pytest scope, so this job is
-      # what keeps the wheel honest on every push.
-      - name: Build and smoke the raven-core wheel
-        run: make check-core-wheel
+        run: uvx --python 3.12 --from "pytest>=8,<10" --with pytest-asyncio pytest --noconftest tests/integration/test_cli_upgrade_real_uv.py -q
 
   tui:
     name: TUI checks
@@ -241,65 +185,10 @@ jobs:
         run: |
           npm run lint
           npm run lint:rpc
-          npm run lint:i18n
           npm run type-check
           npm test
           npm run build
         working-directory: ui-tui
-
-  ui-rpc:
-    name: ui rpc contract
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Set up Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: ui-web/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-        working-directory: ui-web
-
-      # generated.ts is committed; a schema edit without regeneration is the
-      # drift this catches. Then the transport layer compiles against it and
-      # the fixture transport's behaviour is pinned by vitest.
-      - name: Check contract, types, and tests
-        run: |
-          npm run gen:check
-          npm run type-check
-          npm test
-        working-directory: ui-web
-
-  page:
-    name: page checks
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Set up Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: 22
-
-      # The npm build makes the island bundle build.py inlines; the gate
-      # scripts themselves still run on bare node, straight off the checkout.
-      # build.py validates the part seams (IIFE opener first, closer last);
-      # check-page.mjs validates the assembled artifact (one style, two
-      # inline scripts, no leftover markers, scripts parse).
-      - name: Build and check the served page
-        run: |
-          npm ci --prefix ui-web
-          npm run --prefix ui-web build
-          python3 ui-web/build.py
-          node ui-web/scripts/check-page.mjs
-          node ui-web/scripts/count-shared-globals.mjs
-          node ui-web/scripts/check-css.mjs
 
   bridge:
     name: bridge checks

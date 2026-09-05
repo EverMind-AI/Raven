@@ -488,13 +488,13 @@ def test_raw_to_option_missing_deadline_defaults_empty():
 def test_annotate_overdue_prefixes_and_floats_front():
     # _NOW = 2026-05-14
     out = TaskDiscoverer._annotate_overdue([_opt("on time", ""), _opt("late", "2026-05-01")], _NOW)
-    assert out[0].title == "⚠️ overdue 5/1 late"
+    assert out[0].title == "⚠️ 逾期 5/1 late"
     assert out[1].title == "on time"
 
 
 def test_annotate_overdue_sorts_overdue_earliest_first():
     out = TaskDiscoverer._annotate_overdue([_opt("a", "2026-05-10"), _opt("b", "2026-05-02")], _NOW)
-    assert [o.title for o in out] == ["⚠️ overdue 5/2 b", "⚠️ overdue 5/10 a"]
+    assert [o.title for o in out] == ["⚠️ 逾期 5/2 b", "⚠️ 逾期 5/10 a"]
 
 
 def test_annotate_overdue_leaves_future_and_undated_untouched():

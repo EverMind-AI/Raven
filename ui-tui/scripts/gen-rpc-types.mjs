@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // Raven TUI RPC — codegen entrypoint (Phase 6 Wave 5).
 //
-// Reads `rpc-schema/openrpc.json` (single source of truth — REQ-5)
+// Reads `ui-tui/rpc-schema/openrpc.json` (single source of truth — REQ-5)
 // and emits TypeScript types into `ui-tui/src/rpc/generated.ts`.
 //
 // What gets emitted:
 //   - All `components/schemas/*` (SessionInfo, SessionMessage, McpServerInfo,
-//     McpToolInfo, SkillInfo, ModelInfo, TurnUsage, CliResult, StubResult,
+//     McpToolInfo, SkillInfo, ModelInfo, UsageSnapshot, CliResult, StubResult,
 //     all per-variant *Event types, plus the TurnEvent discriminated union)
 //   - One `<MethodName>Params` + `<MethodName>Result` interface per RPC method
 //     (37 methods × 2 = 74 method-scoped types)
@@ -39,13 +39,12 @@ import { compile } from 'json-schema-to-typescript';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
-// The contract is repo-level, not the TUI's: every client generates from it.
-const SCHEMA_PATH = resolve(ROOT, '..', 'rpc-schema/openrpc.json');
+const SCHEMA_PATH = resolve(ROOT, 'rpc-schema/openrpc.json');
 const OUT_PATH = resolve(ROOT, 'src/rpc/generated.ts');
 
 const HEADER = `// AUTO-GENERATED — DO NOT EDIT — run \`npm run gen:rpc\`
 //
-// Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
+// Source of truth: ui-tui/rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Regenerate via: cd ui-tui && npm run gen:rpc
 // Lint (drift check) via: cd ui-tui && npm run lint:rpc
 //

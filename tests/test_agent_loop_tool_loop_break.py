@@ -13,9 +13,7 @@ from pathlib import Path
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.bundles import ToolWiring, TurnPolicy
-from raven.agent.loop.failure_streak import failure_class, is_hard_tool_failure
-from raven.agent.loop.no_progress import no_progress_key
+from raven.agent.loop.failure_streak import is_hard_tool_failure
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
@@ -35,7 +33,7 @@ def workspace():
 @pytest.mark.parametrize(
     "result,expected",
     [
-        ("Error: Tool 'x' is not available. It may have been unloaded, or the name may be wrong.", True),
+        ("Error: Tool 'x' not found. Available: a, b", True),
         ("Error: file does not exist", True),
         ("No matches found.", False),  # empty search = success, not a failure
         ("No files found", False),  # find empty result
@@ -49,24 +47,6 @@ def workspace():
 )
 def test_is_hard_tool_failure(result, expected):
     assert is_hard_tool_failure(result) is expected
-
-
-@pytest.mark.parametrize(
-    "result,expected",
-    [
-        # The registry's own wording for a name that did not resolve. It says
-        # "is not available" rather than "not found" because it cannot tell a
-        # hallucinated name from a tool unloaded mid-turn -- but it is the same
-        # failure, and the streak must not file it under the catch-all.
-        ("Error: Tool 'x' is not available. It may have been unloaded, or the name may be wrong.", "not_found"),
-        ("Error: tool 'x' is not available. It may have been unloaded, or the name may be wrong.", "not_found"),
-        ("Error: Invalid parameters for tool 'x': missing 'path'", "schema"),
-        ("Error: Tool 'x' timed out after 300s.", "timeout"),
-        ("Error: something else entirely", "other"),
-    ],
-)
-def test_failure_class(result, expected):
-    assert failure_class(result) == expected
 
 
 # --------------------------------------------------------------------------- #
@@ -111,8 +91,8 @@ async def test_repeated_tool_failure_nudges_bounded(workspace):
         provider=provider,
         workspace=workspace,
         model="stub",
-        policy=TurnPolicy(max_iterations=6),
-        tools=ToolWiring(restrict_to_workspace=True),
+        max_iterations=6,
+        restrict_to_workspace=True,
     )
 
     await agent._process_message(
@@ -126,106 +106,6 @@ async def test_repeated_tool_failure_nudges_bounded(workspace):
 
     # A nudge fired (>=1 [loop] marker seen) but never exceeded the per-turn cap.
     assert max(provider.loop_marker_counts) == AgentLoop._LOOP_BREAK_MAX
-
-
-class _NudgeTextProvider(_AlwaysFailsSameToolProvider):
-    """Keeps the nudge text itself, not just a count of markers."""
-
-    def __init__(self):
-        super().__init__()
-        self.tool_results: list[str] = []
-
-    async def chat(self, messages, **kwargs):
-        self.tool_results += [
-            str(m.get("content", ""))
-            for m in messages
-            if m.get("role") == "tool" and "[loop]" in str(m.get("content", ""))
-        ]
-        return await super().chat(messages, **kwargs)
-
-
-def _find_skill_stub():
-    from raven.contracts.tool import Tool
-
-    class _FindSkill(Tool):
-        @property
-        def name(self) -> str:
-            return "find_skill"
-
-        @property
-        def description(self) -> str:
-            return "stub"
-
-        @property
-        def parameters(self) -> dict:
-            return {"type": "object", "properties": {}}
-
-        async def execute(self, **kwargs) -> str:
-            return "ran"
-
-    return _FindSkill()
-
-
-async def _nudges_with_find_skill_switched(workspace, off: bool) -> list[str]:
-    """Drive a real failing streak and hand back the nudges it produced.
-
-    Switched off through the config file rather than through the registry's
-    source directly, so the path under test is the one the settings page uses.
-    """
-    import json
-    from pathlib import Path
-
-    from raven.config.loader import get_config_path
-
-    cfg = get_config_path()
-    cfg.parent.mkdir(parents=True, exist_ok=True)
-    cfg.write_text(json.dumps({"tools": {"disabledTools": ["find_skill"] if off else []}}), encoding="utf-8")
-
-    provider = _NudgeTextProvider()
-    agent = AgentLoop(
-        provider=provider,
-        workspace=workspace,
-        model="stub",
-        policy=TurnPolicy(max_iterations=6),
-        tools=ToolWiring(restrict_to_workspace=True),
-    )
-    agent.tools.register(_find_skill_stub())
-    assert isinstance(cfg, Path)
-
-    await agent._process_message(
-        TurnRequest(
-            origin=Origin.USER,
-            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
-            text="go",
-        ),
-        session_key="s1",
-    )
-    return provider.tool_results
-
-
-@pytest.mark.asyncio
-async def test_the_nudge_does_not_name_a_switched_off_find_skill(workspace):
-    """The nudge is model-visible text, so a registration check advertised a tool
-    the operator had switched off -- and `execute` then refuses it as absent.
-
-    Registration was a fair proxy for availability until the off switch stopped
-    unregistering; a withheld tool stays in the registry, which is what makes the
-    switch reversible.
-    """
-    nudges = await _nudges_with_find_skill_switched(workspace, off=True)
-
-    assert nudges, "no nudge fired, so the assertion below would pass vacuously"
-    assert not any("find_skill" in n for n in nudges)
-
-
-@pytest.mark.asyncio
-async def test_and_does_name_it_when_it_is_on(workspace):
-    """The pairing case, so the assertion above cannot pass by never mentioning
-    the tool at all."""
-    nudges = await _nudges_with_find_skill_switched(workspace, off=False)
-
-    assert nudges
-    assert any("find_skill" in n for n in nudges)
 
 
 class _AlwaysTruncatedWriteProvider(LLMProvider):
@@ -261,8 +141,8 @@ async def test_a_truncation_streak_is_nudged_toward_a_smaller_payload(workspace)
         provider=provider,
         workspace=workspace,
         model="stub",
-        policy=TurnPolicy(max_iterations=6),
-        tools=ToolWiring(restrict_to_workspace=True),
+        max_iterations=6,
+        restrict_to_workspace=True,
     )
 
     await agent._process_message(
@@ -277,147 +157,3 @@ async def test_a_truncation_streak_is_nudged_toward_a_smaller_payload(workspace)
     assert provider.nudges, "two truncations running should have fired the loop break"
     assert all("different tool" not in n for n in provider.nudges)
     assert all("smaller" in n for n in provider.nudges)
-
-
-# --------------------------------------------------------------------------- #
-# no progress: a call that keeps succeeding and keeps answering the same       #
-# --------------------------------------------------------------------------- #
-
-
-def test_no_progress_key_separates_two_spellings_of_one_read():
-    """Why the count is per key rather than per turn: the run that motivated
-    this alternated a read with the same read behind a checksum, so the two
-    spellings key apart and each has to reach the threshold on its own. That
-    costs twice the calls and still fires -- a consecutive streak would have
-    stayed at one forever.
-    """
-    plain = no_progress_key("exec", {"command": "cat t.json"}, "keys: [1]")
-    checksummed = no_progress_key("exec", {"command": "md5sum t.json && cat t.json"}, "keys: [1]")
-    assert plain != checksummed
-    assert plain == no_progress_key("exec", {"command": "cat t.json"}, "keys: [1]")
-    assert plain != no_progress_key("exec", {"command": "cat t.json"}, "keys: [2]"), "a changed answer is progress"
-
-
-class _IdenticalSucceedingCallProvider(LLMProvider):
-    """Calls one tool with one set of arguments, which succeeds the same way every time."""
-
-    def __init__(self):
-        super().__init__(api_key="test")
-        self.loop_marker_counts: list[int] = []
-        self.nudges: list[str] = []
-
-    async def chat(self, messages, tools=None, **kwargs):
-        self.loop_marker_counts.append(sum(1 for m in messages if "[loop]" in str(m.get("content", ""))))
-        self.nudges += [str(m.get("content", "")) for m in messages if "[loop]" in str(m.get("content", ""))]
-        if tools is None:  # max-iter synthesis call
-            return LLMResponse(content="done", finish_reason="stop")
-        return LLMResponse(
-            content="",
-            tool_calls=[
-                ToolCallRequest(id=f"c{len(self.loop_marker_counts)}", name="list_dir", arguments={"path": "."})
-            ],
-            finish_reason="tool_calls",
-        )
-
-    def get_default_model(self) -> str:
-        return "stub"
-
-
-@pytest.mark.asyncio
-async def test_an_unchanging_successful_call_is_nudged_and_bounded(workspace):
-    """The case the failure streak structurally cannot see: every call returns
-    exit 0, and a success resets that counter to zero.
-    """
-    provider = _IdenticalSucceedingCallProvider()
-    agent = AgentLoop(
-        provider=provider,
-        workspace=workspace,
-        model="stub",
-        policy=TurnPolicy(max_iterations=AgentLoop._NO_PROGRESS_THRESHOLD + 4),
-        tools=ToolWiring(restrict_to_workspace=True),
-    )
-
-    await agent._process_message(
-        TurnRequest(
-            origin=Origin.USER,
-            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
-            text="go",
-        ),
-        session_key="s1",
-    )
-
-    assert max(provider.loop_marker_counts) >= 1, "an unchanging successful call was never nudged"
-    assert max(provider.loop_marker_counts) <= AgentLoop._NO_PROGRESS_MAX
-    assert any("same result for the same arguments" in n for n in provider.nudges)
-
-
-class _ImageReadProvider(LLMProvider):
-    """Reads one image over and over, repainting it first when asked to.
-
-    The repaint is the point: the file keeps its size, so `read_file` answers with
-    the same metadata line every time and different pixels every time.
-    """
-
-    def __init__(self, target, repaint: bool):
-        super().__init__(api_key="test")
-        self._target = target
-        self._repaint = repaint
-        self.loop_marker_counts: list[int] = []
-
-    async def chat(self, messages, tools=None, **kwargs):
-        from PIL import Image
-
-        self.loop_marker_counts.append(sum(1 for m in messages if "[loop]" in str(m.get("content", ""))))
-        n = len(self.loop_marker_counts)
-        shade = (n * 23 % 256, 40, 90) if self._repaint else (10, 40, 90)
-        Image.new("RGB", (320, 240), shade).save(self._target)
-        if tools is None:  # max-iter synthesis call
-            return LLMResponse(content="done", finish_reason="stop")
-        return LLMResponse(
-            content="",
-            tool_calls=[ToolCallRequest(id=f"c{n}", name="read_file", arguments={"path": "slide.png"})],
-            finish_reason="tool_calls",
-        )
-
-    def get_default_model(self) -> str:
-        return "stub"
-
-
-async def _read_image_turn(workspace, *, repaint: bool, monkeypatch) -> _ImageReadProvider:
-    pytest.importorskip("PIL")
-    monkeypatch.setattr(AgentLoop, "_supports_vision", lambda self, m=None: True)
-    provider = _ImageReadProvider(workspace / "slide.png", repaint)
-    agent = AgentLoop(
-        provider=provider,
-        workspace=workspace,
-        model="stub",
-        policy=TurnPolicy(max_iterations=AgentLoop._NO_PROGRESS_THRESHOLD + 4),
-        tools=ToolWiring(restrict_to_workspace=True),
-    )
-    await agent._process_message(
-        TurnRequest(
-            origin=Origin.USER,
-            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
-            text="go",
-        ),
-        session_key="s1",
-    )
-    return provider
-
-
-@pytest.mark.asyncio
-async def test_changing_pixels_behind_one_metadata_line_are_progress(workspace, monkeypatch):
-    """`model_text` is not the whole result, so it cannot be the whole key.
-
-    An image read answers with path, dimensions and a token estimate -- stable
-    across a repaint at the same size -- while the pixels ride in the routed
-    blocks. Keyed on the text alone, a render-edit-inspect pass reads "the same
-    result" eight times and is told to stop looking, which is the workflow this
-    guard was written to help. The pair is what makes this discriminating: the
-    same loop over an unchanging image must still fire.
-    """
-    repainted = await _read_image_turn(workspace, repaint=True, monkeypatch=monkeypatch)
-    assert max(repainted.loop_marker_counts) == 0, "a repainted image counted as no progress"
-
-    unchanged = await _read_image_turn(workspace, repaint=False, monkeypatch=monkeypatch)
-    assert max(unchanged.loop_marker_counts) >= 1, "an unchanging image was never nudged"

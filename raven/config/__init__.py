@@ -15,8 +15,10 @@ This package exposes two layers:
 from raven.config.loader import get_config_path, load_config
 from raven.config.paths import (
     get_bridge_install_dir,
+    get_cli_history_path,
     get_cron_dir,
     get_data_dir,
+    get_legacy_sessions_dir,
     get_logs_dir,
     get_media_dir,
     get_runtime_subdir,
@@ -29,6 +31,7 @@ from raven.config.raven import (
     RavenConfig,
     SentinelConfig,
     SkillForgeConfig,
+    SmartRoutingConfig,
     TokenWiseConfig,
     ToolResultLifecycleConfig,
     load_raven_config,
@@ -46,7 +49,9 @@ __all__ = [
     "get_cron_dir",
     "get_logs_dir",
     "get_workspace_path",
+    "get_cli_history_path",
     "get_bridge_install_dir",
+    "get_legacy_sessions_dir",
     # Raven feature layer
     "RavenConfig",
     "load_raven_config",
@@ -56,5 +61,6 @@ __all__ = [
     "SkillForgeConfig",
     "NudgePolicyConfig",
     "BudgetPolicyConfig",
+    "SmartRoutingConfig",
     "ToolResultLifecycleConfig",
 ]

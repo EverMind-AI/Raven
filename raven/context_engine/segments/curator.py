@@ -25,6 +25,7 @@ from loguru import logger
 
 from raven.agent.tools.registry import ToolRegistry
 from raven.config.raven import ContextConfig
+from raven.context_engine.base import AssemblyContext, Segment
 from raven.context_engine.curator import (
     CuratorArchiveMessagesTool,
     CuratorArchiveStore,
@@ -41,13 +42,10 @@ from raven.context_engine.curator import (
     _curator_input_payload,
     _trace_messages,
 )
-from raven.contracts.context import AssemblyContext, Segment
-from raven.contracts.llm_provider import LLMProvider
-from raven.memory_engine import MemoryStore
-from raven.observability import semconv
+from raven.memory_engine.consolidate.consolidator import MemoryStore
+from raven.providers.base import LLMProvider
 from raven.providers.binding import ModelBinding, active_window, resolve
-from raven.providers.tool_calls import openai_tool_call
-from raven.tracing import trace
+from raven.tracing import semconv, trace
 
 
 class CuratorSegmentBuilder:
@@ -56,8 +54,6 @@ class CuratorSegmentBuilder:
     name = "curator"
     order = 6
     needs_prefix = True
-    # Working state the Curator recomputes for the turn it is in.
-    stable = False
 
     def __init__(
         self,
@@ -183,7 +179,6 @@ class CuratorSegmentBuilder:
                 "budget": asdict(ctx.budget),
                 "message_count": len(ctx.session_messages),
                 "max_steps": self.max_steps,
-                "pinned_message_ids": [item.id for item in manifest if item.pinned],
             },
         )
 
@@ -286,7 +281,7 @@ class CuratorSegmentBuilder:
                     "step": step,
                     "content": response.content,
                     "finish_reason": response.finish_reason,
-                    "tool_calls": [openai_tool_call(tc) for tc in response.tool_calls],
+                    "tool_calls": [tc.to_openai_tool_call() for tc in response.tool_calls],
                 },
             )
             if response.finish_reason == "error":
@@ -294,7 +289,7 @@ class CuratorSegmentBuilder:
             if not response.has_tool_calls:
                 return None
 
-            tool_call_dicts = [openai_tool_call(tc) for tc in response.tool_calls]
+            tool_call_dicts = [tc.to_openai_tool_call() for tc in response.tool_calls]
             messages.append({"role": "assistant", "content": response.content, "tool_calls": tool_call_dicts})
             for tool_call in response.tool_calls:
                 result = await registry.execute(tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta)

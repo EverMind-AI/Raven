@@ -8,10 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from raven.plugins import (
+from raven.plugin import (
     Contributes,
     DiscoveredPlugin,
-    ManifestOrigin,
     MemoryBackendContribution,
     PluginConflictError,
     PluginContext,
@@ -20,6 +19,7 @@ from raven.plugins import (
     PluginNotFoundError,
     PluginRegistry,
     ServiceLocator,
+    Source,
 )
 
 # ---------------------------------------------------------------------------
@@ -65,7 +65,7 @@ def _make_discovered(
     )
     return DiscoveredPlugin(
         manifest=mf,
-        source=ManifestOrigin.BUNDLED if bundled else ManifestOrigin.USER,
+        source=Source.BUNDLED if bundled else Source.USER,
         location=None,
     )
 

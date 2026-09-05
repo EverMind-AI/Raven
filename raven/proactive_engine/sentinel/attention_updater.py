@@ -29,10 +29,10 @@ from typing import TYPE_CHECKING, Callable, Iterator, Sequence
 
 from loguru import logger
 
-from raven.memory_engine import upsert_section
+from raven.memory_engine.consolidate.attention import upsert_section
 
 if TYPE_CHECKING:
-    from raven.memory_engine import MemoryStore
+    from raven.memory_engine.consolidate.consolidator import MemoryStore
     from raven.proactive_engine.sentinel.attention_producers import (
         AttentionProducer,
     )

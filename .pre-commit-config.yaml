@@ -22,8 +22,6 @@ repos:
         args: [--maxkb=1024]
       - id: check-merge-conflict
       - id: detect-private-key
-        # The match is a bare header line with no key body, written as a
-        # fixture for the agent's own secret redaction.
         exclude: ^tests/test_runtime_checkpoint_deep\.py$
 
   - repo: local
@@ -33,14 +31,6 @@ repos:
         entry: env PYTHONPATH=. python3 scripts/check_commit_file.py
         language: system
         stages: [commit-msg]
-
-
-      - id: ui-rpc-contract
-        name: ui rpc contract in sync
-        entry: bash -c '[ -d ui-web/node_modules ] || exit 0; npm run gen:check --prefix ui-web'
-        language: system
-        pass_filenames: false
-        files: '^rpc-schema/openrpc\.json$'
 
       - id: eslint-ui-tui
         name: eslint (ui-tui)

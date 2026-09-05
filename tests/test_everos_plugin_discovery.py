@@ -1,15 +1,15 @@
 """everos plugin skeleton + end-to-end plugin discovery.
 
-The EverOS backend is its own distribution, built from
-``plugins-dist/everos-memory/`` and installed into the environment, so
-discovery here points at the entry-point source it registers itself in.
+The EverOS backend ships **bundled** inside raven at
+``raven/plugin/memory/everos/`` (not as an external entry-point
+package), so discovery here points at the bundled source.
 
 Verifies:
 
 1. The package imports cleanly (manifest TOML shipped + factory
    resolvable).
-2. ``PluginDiscovery(entry_points_group=...)`` surfaces the ``everos-memory``
-   manifest from the installed distribution.
+2. ``PluginDiscovery(bundled_dir=...)`` surfaces the ``everos-memory``
+   manifest from the bundled directory.
 3. ``PluginRegistry.activate`` accepts the discovered manifest and
    registers the ``everos`` ``memory_backend`` factory.
 4. ``build_memory_backend("everos", ...)`` constructs an
@@ -25,16 +25,17 @@ from pathlib import Path
 
 import pytest
 
-from raven.contracts.memory import Memory, MemoryBackend
-from raven.plugins import (
-    ManifestOrigin,
+import raven
+from raven.memory_engine import Memory, MemoryBackend
+from raven.plugin import (
     PluginDiscovery,
     ServiceLocator,
+    Source,
     assemble_plugin_registry,
 )
 
-# The group the host scans and the distribution registers itself in.
-_GROUP = "raven.plugins"
+# Real bundled-plugins root inside the installed raven package.
+_BUNDLED = Path(raven.__path__[0]) / "plugin" / "memory"
 
 
 # ---------------------------------------------------------------------------
@@ -44,10 +45,10 @@ _GROUP = "raven.plugins"
 
 class TestPackageSurface:
     def test_imports_clean(self) -> None:
-        import raven_everos
-        from raven_everos.backend import EverosBackend, make_backend
+        import raven.plugin.memory.everos
+        from raven.plugin.memory.everos.backend import EverosBackend, make_backend
 
-        assert raven_everos.__version__ == "1.1.0"
+        assert raven.plugin.memory.everos.__version__ == "1.1.0"
         assert callable(make_backend)
         assert EverosBackend is not None
 
@@ -56,11 +57,11 @@ class TestPackageSurface:
         installed wheel — accessible via importlib.resources."""
         from importlib.resources import files
 
-        manifest = files("raven_everos").joinpath("raven-plugin.toml")
+        manifest = files("raven.plugin.memory.everos").joinpath("raven-plugin.toml")
         assert manifest.is_file()
         text = manifest.read_text(encoding="utf-8")
         assert 'id                 = "everos-memory"' in text
-        assert "bundled            = false" in text
+        assert "bundled            = true" in text
         assert "enabled_by_default = true" in text
 
 
@@ -69,28 +70,25 @@ class TestPackageSurface:
 # ---------------------------------------------------------------------------
 
 
-class TestEntryPointDiscovery:
-    def test_discovered_via_entry_points(self) -> None:
-        d = PluginDiscovery(entry_points_group=_GROUP)
+class TestBundledDiscovery:
+    def test_discovered_via_bundled(self) -> None:
+        d = PluginDiscovery(bundled_dir=_BUNDLED)
         out = d.discover()
         ids = [p.manifest.id for p in out]
         assert "everos-memory" in ids
 
-    def test_discovered_record_marked_as_entry_points(self) -> None:
-        d = PluginDiscovery(entry_points_group=_GROUP)
+    def test_discovered_record_marked_as_bundled(self) -> None:
+        d = PluginDiscovery(bundled_dir=_BUNDLED)
         out = d.discover()
         record = next(p for p in out if p.manifest.id == "everos-memory")
-        assert record.source == ManifestOrigin.ENTRY_POINTS
-        # The manifest lives inside the installed package, so the record
-        # carries no on-disk path for callers to display.
-        assert record.location is None
+        assert record.source == Source.BUNDLED
+        # Bundled discovery has an on-disk manifest path.
+        assert record.location is not None
+        assert record.location.name == "raven-plugin.toml"
 
-    def test_a_user_drop_in_now_shadows_the_installed_copy(self, tmp_path: Path) -> None:
-        """What losing the bundled seat costs: everos is an entry-point
-        plugin like any other, so a same-id manifest in the user dir wins.
-        That is the documented priority, and it is how a developer swaps in a
-        locally edited copy -- but it also means a stale drop-in can shadow
-        the shipped default, which the bundled seat used to forbid."""
+    def test_bundled_shadows_lower_priority_source(self, tmp_path: Path) -> None:
+        """Builtin-shadow rule: a same-id manifest in a lower-priority
+        source (user dir) must be shadowed by the bundled copy."""
         user_dir = tmp_path / "user"
         plugin_dir = user_dir / "everos-memory"
         plugin_dir.mkdir(parents=True)
@@ -103,14 +101,15 @@ class TestEntryPointDiscovery:
             "\n"
             "[[plugin.contributes.memory_backends]]\n"
             'name = "everos"\n'
-            'factory = "raven_everos.backend:make_backend"\n',
+            'factory = "raven.plugin.memory.everos.backend:make_backend"\n',
             encoding="utf-8",
         )
-        d = PluginDiscovery(entry_points_group=_GROUP, user_dir=user_dir)
+        d = PluginDiscovery(bundled_dir=_BUNDLED, user_dir=user_dir)
         out = d.discover()
         record = next(p for p in out if p.manifest.id == "everos-memory")
-        assert record.source == ManifestOrigin.USER
-        assert record.manifest.version == "9.9.9"
+        # Bundled (version 1.2.0) wins; user-dir version (9.9.9) is shadowed.
+        assert record.source == Source.BUNDLED
+        assert record.manifest.version == "1.2.0"
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +119,7 @@ class TestEntryPointDiscovery:
 
 class TestActivationAndFactory:
     def test_activate_registers_everos_backend(self) -> None:
-        reg = assemble_plugin_registry(entry_points_group=_GROUP)
+        reg = assemble_plugin_registry(bundled_dir=_BUNDLED)
         assert "everos-memory" in reg.activated_ids()
         assert "everos" in reg.memory_backend_names()
 
@@ -128,7 +127,7 @@ class TestActivationAndFactory:
         self,
         tmp_path: Path,
     ) -> None:
-        reg = assemble_plugin_registry(entry_points_group=_GROUP)
+        reg = assemble_plugin_registry(bundled_dir=_BUNDLED)
         backend = reg.build_memory_backend(
             "everos",
             config={},
@@ -146,9 +145,9 @@ class TestActivationAndFactory:
 
 @pytest.fixture
 def backend(tmp_path: Path):
-    from raven_everos.backend import ServiceState, _NoOpAdapter
+    from raven.plugin.memory.everos.backend import ServiceState, _NoOpAdapter
 
-    reg = assemble_plugin_registry(entry_points_group=_GROUP)
+    reg = assemble_plugin_registry(bundled_dir=_BUNDLED)
     be = reg.build_memory_backend(
         "everos",
         config={},
@@ -198,9 +197,9 @@ class TestStubBehavior:
 
 class TestConfigPassthrough:
     def test_default_constructs_http_adapter(self, tmp_path: Path) -> None:
-        from raven_everos.backend import _HttpEverosAdapter
+        from raven.plugin.memory.everos.backend import _HttpEverosAdapter
 
-        reg = assemble_plugin_registry(entry_points_group=_GROUP)
+        reg = assemble_plugin_registry(bundled_dir=_BUNDLED)
         backend = reg.build_memory_backend(
             "everos",
             config={},
@@ -209,9 +208,9 @@ class TestConfigPassthrough:
         assert isinstance(backend._adapter, _HttpEverosAdapter)
 
     def test_base_url_passed_through(self, tmp_path: Path) -> None:
-        from raven_everos.backend import _HttpEverosAdapter
+        from raven.plugin.memory.everos.backend import _HttpEverosAdapter
 
-        reg = assemble_plugin_registry(entry_points_group=_GROUP)
+        reg = assemble_plugin_registry(bundled_dir=_BUNDLED)
         backend = reg.build_memory_backend(
             "everos",
             config={"base_url": "http://custom:9000"},

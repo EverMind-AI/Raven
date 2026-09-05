@@ -34,7 +34,7 @@ from loguru import logger
 from raven.proactive_engine.sentinel.types import LLMValidation, Routine
 
 if TYPE_CHECKING:
-    from raven.contracts.llm_provider import LLMProvider
+    from raven.providers.base import LLMProvider
 
 
 # 8000 chars ≈ ~2000 tokens for Chinese text — enough recurrence context

@@ -19,8 +19,8 @@ from typing import Callable, Optional
 
 from benchmarks.appworld.evolve.eval import Candidate
 from benchmarks.appworld.evolve.sandbox import Sandbox
-from evolver.orchestrator.config import Budget
-from evolver.tree.node import HarnessNode
+from raven.evolver.orchestrator.config import Budget
+from raven.evolver.tree.node import HarnessNode
 
 # WHY fixability weight: the taxonomy itself flags W6/W7 as capability-ceiling /
 # noise, yet they're usually the MOST common failures, so a raw-count WHY
@@ -310,7 +310,7 @@ def _fmt_history(history: dict[str, list[dict]], why: str) -> str:
 
 _BEACON_REQUIREMENT = (
     "\nINSTRUMENTATION (required for python edits): the new code path MUST call\n"
-    "    from evolver.activation.ledger import activation_beacon\n"
+    "    from raven.evolver.activation.ledger import activation_beacon\n"
     "    activation_beacon('<your tag>', '<site>')\n"
     "at the exact place your mechanism fires (INSIDE its trigger condition, NOT at "
     "import/module level — a beacon that fires on every task carries no attribution "

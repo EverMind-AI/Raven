@@ -154,7 +154,7 @@ class RavenSession:
             channels_config=self.config.channels,
             everos_config=self.config.agents.defaults.everos,
             context_config=context_config,
-            # Benchmarks are non-interactive batch runs — opt out of the
+            # Benchmarks are non-interactive batch runs — opt out of Bug2's
             # per-turn shadow-git checkpoint (no recovery channel to inject
             # into, and we don't want ``.raven/shadow.git`` in task workspaces).
             interactive=False,

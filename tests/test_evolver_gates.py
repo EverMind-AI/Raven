@@ -1,4 +1,4 @@
-"""Unit tests for the gate arithmetic (evolver.orchestrator.gates).
+"""Unit tests for the gate arithmetic (raven.evolver.orchestrator.gates).
 
 These protect the promotion decision itself: paired z statistics, the Fisher
 exact test, the three-shield pipeline's narrowing rules, and the two concrete
@@ -12,22 +12,22 @@ import math
 
 import pytest
 
-from evolver.orchestrator.gates.fisher import (
+from raven.evolver.orchestrator.gates.fisher import (
     fisher_one_sided,
     focused_counts,
     train_mean,
 )
-from evolver.orchestrator.gates.paired import paired_lift
-from evolver.orchestrator.gates.pipeline import run_gates
-from evolver.orchestrator.gates.policy import Baseline, DecisionContext
-from evolver.orchestrator.gates.strategies import (
+from raven.evolver.orchestrator.gates.paired import paired_lift
+from raven.evolver.orchestrator.gates.pipeline import run_gates
+from raven.evolver.orchestrator.gates.policy import Baseline, DecisionContext
+from raven.evolver.orchestrator.gates.strategies import (
     FocusedFisherGate,
     PairedTwoSigmaGate,
     confirm_job_name,
 )
-from evolver.orchestrator.scoring import TaskEval
-from evolver.scheduler.anchor_selection import AnchorSelection
-from evolver.tree.node import HarnessNode, NodeStatus
+from raven.evolver.orchestrator.scoring import TaskEval
+from raven.evolver.scheduler.anchor_selection import AnchorSelection
+from raven.evolver.tree.node import HarnessNode, NodeStatus
 
 
 def _te(tid: str, passes: int, attempts: int, infra: int = 0) -> TaskEval:

@@ -15,7 +15,7 @@ benchmarks/
 ├── appworld/           AppWorld agent benchmark + evolver plugin
 │   ├── agent_cli.py       One-task subject agent (drives AgentLoop)
 │   ├── batch.py           Batch scorer: N tasks x K trials, resumable
-│   └── evolve/            evolver BenchBundle plugin (entry.py)
+│   └── evolve/            raven.evolver BenchBundle plugin (entry.py)
 │                          + designer/diagnosis/sandbox/precheck glue
 │
 ├── pinchbench/         Context / AgentLoop capability benchmark
@@ -145,7 +145,7 @@ The runtime (`raven/`) **never statically imports from `benchmarks/`** — this
 is the "independent eval track" principle. The reverse is allowed and
 expected: benchmarks import `raven.agent`, `raven.providers`, etc. directly.
 
-One scoped exception: `evolver` loads its bench *plugins* from here by
+One scoped exception: `raven.evolver` loads its bench *plugins* from here by
 registry name at launch (`benchmarks.appworld.evolve.entry:build`), inserting
 the subject repo root on `sys.path` first. It is lazy, opt-in, and only works
 from a repo checkout — evolution needs the git repo as its subject anyway, so

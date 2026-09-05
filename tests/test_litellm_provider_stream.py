@@ -1,7 +1,7 @@
 """Streaming tests for `LiteLLMProvider.chat_stream`.
 
 Covers:
-- happy-path: chat_stream yields ChatDelta sequence matching mock chunks
+- happy-path: chat_stream yields StreamDelta sequence matching mock chunks
 - _normalize_stream_chunk default OpenAI shape extraction
 - None-content chunks (e.g. final stop chunk) are skipped (return None → no yield)
 - signature parity with chat() (messages/tools/model/max_tokens/temperature/
@@ -22,7 +22,7 @@ from typing import Any
 
 import pytest
 
-from raven.providers.base import ChatDelta, GenerationSettings, LLMProvider, LLMResponse
+from raven.providers.base import GenerationSettings, LLMProvider, LLMResponse, StreamDelta
 from raven.providers.litellm_provider import LiteLLMProvider
 
 # ---------- Test doubles modelling OpenAI ChatCompletionChunk shape ----------
@@ -76,7 +76,7 @@ def _make_provider() -> LiteLLMProvider:
 
 @pytest.mark.asyncio
 async def test_chat_stream_yields_stream_deltas_in_order(monkeypatch: pytest.MonkeyPatch) -> None:
-    """chat_stream yields ChatDelta sequence matching mock OpenAI-shape chunks."""
+    """chat_stream yields StreamDelta sequence matching mock OpenAI-shape chunks."""
     chunks = [_chunk("Hel"), _chunk("lo"), _chunk(" world")]
 
     captured_kwargs: dict[str, Any] = {}
@@ -91,7 +91,7 @@ async def test_chat_stream_yields_stream_deltas_in_order(monkeypatch: pytest.Mon
     )
 
     provider = _make_provider()
-    out: list[ChatDelta] = []
+    out: list[StreamDelta] = []
     async for delta in provider.chat_stream(
         messages=[{"role": "user", "content": "hi"}],
         model="openai/gpt-4o",
@@ -99,7 +99,7 @@ async def test_chat_stream_yields_stream_deltas_in_order(monkeypatch: pytest.Mon
         out.append(delta)
 
     assert [d.content for d in out] == ["Hel", "lo", " world"]
-    assert all(isinstance(d, ChatDelta) for d in out)
+    assert all(isinstance(d, StreamDelta) for d in out)
     # stream=True must be forwarded to LiteLLM
     assert captured_kwargs.get("stream") is True
     # Usage must be requested explicitly — OpenAI-compatible providers omit the
@@ -195,7 +195,7 @@ async def test_chat_stream_signature_parity_with_chat(monkeypatch: pytest.Monkey
 
     provider = _make_provider()
     tools = [{"type": "function", "function": {"name": "noop", "parameters": {}}}]
-    out: list[ChatDelta] = []
+    out: list[StreamDelta] = []
     async for delta in provider.chat_stream(
         messages=[{"role": "user", "content": "hi"}],
         tools=tools,
@@ -216,17 +216,6 @@ async def test_chat_stream_signature_parity_with_chat(monkeypatch: pytest.Monkey
     assert captured["tools"] == tools
     # model should be resolved (openai/gpt-4o-mini already has prefix → stays the same)
     assert "gpt-4o-mini" in captured["model"]
-
-
-def test_construction_does_not_set_the_litellm_module_global(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Two adapters must not fight over litellm.api_base (R1): a per-vendor
-    api_base travels per call, never process-wide."""
-    import litellm
-
-    monkeypatch.setattr(litellm, "api_base", None, raising=False)
-    LiteLLMProvider(api_key="KA", api_base="http://a/v1", default_model="a/one")
-    LiteLLMProvider(api_key="KB", api_base="http://b/v1", default_model="b/two")
-    assert litellm.api_base is None
 
 
 @pytest.mark.asyncio
@@ -391,7 +380,7 @@ async def test_chat_stream_surfaces_upstream_finish_reason(
 
     monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
 
-    out: list[ChatDelta] = []
+    out: list[StreamDelta] = []
     async for delta in _make_provider().chat_stream(messages=[{"role": "user", "content": "hi"}]):
         out.append(delta)
 
@@ -504,187 +493,3 @@ async def test_chat_stream_carries_an_explicit_pin_regardless(monkeypatch: pytes
         pass
 
     assert captured["max_tokens"] == 64
-
-
-@pytest.mark.parametrize("cost", [0, 0.012345, None, -1, True, "0.5", float("nan"), float("inf")])
-@pytest.mark.parametrize(
-    "name,base", [("openrouter", "https://openrouter.ai/api/v1"), ("custom", "https://gateway.example/v1")]
-)
-def test_reported_cost_and_cache_survive_both_response_paths(cost, name, base):
-    from litellm import ModelResponse, Usage
-
-    from raven.agent.loop.main import AgentLoop
-    from raven.observability.usage import normalize
-
-    provider = LiteLLMProvider(provider_name=name, api_base=base)
-    usage = Usage(
-        prompt_tokens=100,
-        completion_tokens=20,
-        total_tokens=120,
-        prompt_tokens_details={"cached_tokens": 60, "cache_write_tokens": 10},
-        cost=cost,
-    )
-    response = ModelResponse(
-        choices=[{"message": {"content": "ok", "role": "assistant"}, "finish_reason": "stop"}], usage=usage
-    )
-    parsed = provider._parse_response(response)
-    delta = provider._normalize_stream_chunk(_FakeChunk(choices=[], usage=usage))
-    assert delta is not None
-    assert parsed.usage == delta.usage
-    snapshot = AgentLoop._build_usage_snapshot(parsed, "openrouter/test", "session")
-    expected = cost if type(cost) in (int, float) and cost >= 0 and cost < float("inf") else None
-    assert snapshot.cost_usd == expected
-    assert normalize(parsed.usage, "openrouter/test")["cost_usd"] == expected
-    assert (snapshot.input_tokens, snapshot.cache_read_tokens, snapshot.cache_write_tokens) == (30, 60, 10)
-
-
-@pytest.mark.parametrize(
-    "name,base",
-    [
-        ("custom", "https://gateway.example/v1"),
-        ("openrouter", "https://gateway.example/v1"),
-        ("openrouter", "https://openrouter.ai.example/v1"),
-    ],
-)
-def test_reported_cost_is_independent_of_endpoint(name, base):
-    from types import SimpleNamespace
-
-    provider = LiteLLMProvider(provider_name=name, api_base=base)
-    usage = provider._normalize_usage(SimpleNamespace(prompt_tokens=100, cost=1.23, cost_usd=9.99))
-    assert usage["cost_usd"] == 1.23
-    assert "cost_usd" not in provider._normalize_usage(SimpleNamespace(prompt_tokens=100, cost_usd=9.99))
-
-
-def test_missing_and_zero_cache_are_distinct():
-    from litellm import Usage
-
-    provider = _make_provider()
-    absent = provider._normalize_usage(Usage(prompt_tokens=10))
-    zero = provider._normalize_usage(Usage(prompt_tokens=10, prompt_tokens_details={"cached_tokens": 0}))
-    assert "cache_read_input_tokens" not in absent
-    assert zero["cache_read_input_tokens"] == 0
-    assert "cache_creation_input_tokens" not in zero
-
-
-@pytest.mark.parametrize(
-    "name,base", [("openrouter", "https://openrouter.ai/api/v1"), ("custom", "https://gateway.example/v1")]
-)
-async def test_usage_only_stream_frames_merge_without_double_counting(monkeypatch, name, base):
-    from litellm import Usage
-
-    from raven.providers.streaming import stream_llm_call
-
-    provider = LiteLLMProvider(provider_name=name, api_base=base)
-    chunks = [
-        _chunk("ok"),
-        _FakeChunk(
-            choices=[],
-            usage=Usage(prompt_tokens=10, completion_tokens=2, cost=0.2, prompt_tokens_details={"cached_tokens": 0}),
-        ),
-        _FakeChunk(choices=[], usage=Usage(prompt_tokens=10, completion_tokens=2, cost=0.2)),
-        _FakeChunk(choices=[], usage={"total_tokens": 12, "cost": None}),
-    ]
-
-    async def complete(**kwargs):
-        return _fake_stream(chunks)
-
-    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", complete)
-    response = await stream_llm_call(
-        provider, messages=[{"role": "user", "content": "hi"}], tools=None, model="openrouter/test"
-    )
-    assert response.usage["cost_usd"] == 0.2
-    assert response.usage["prompt_tokens"] == 10
-    assert response.usage["cache_read_input_tokens"] == 0
-
-
-@pytest.mark.parametrize("name", ["openrouter", "custom"])
-def test_raw_response_cost_survives_installed_sdk(name):
-    from unittest.mock import Mock
-
-    import httpx
-    from litellm import ModelResponse
-    from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
-    from litellm.llms.openrouter.chat.transformation import OpenrouterConfig
-
-    raw = httpx.Response(
-        200,
-        request=httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions"),
-        json={
-            "id": "test",
-            "model": "test",
-            "object": "chat.completion",
-            "created": 1,
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
-            "usage": {
-                "prompt_tokens": 100,
-                "completion_tokens": 5,
-                "total_tokens": 105,
-                "prompt_tokens_details": {"cached_tokens": 60, "cache_write_tokens": 10},
-                "cost": 0.1234,
-            },
-        },
-    )
-    config = OpenrouterConfig() if name == "openrouter" else OpenAIGPTConfig()
-    response = config.transform_response(
-        model="test",
-        raw_response=raw,
-        model_response=ModelResponse(),
-        logging_obj=Mock(),
-        request_data={},
-        messages=[],
-        optional_params={},
-        litellm_params={},
-        encoding=None,
-    )
-    provider = LiteLLMProvider(provider_name=name, api_base="https://gateway.example/v1")
-    usage = provider._parse_response(response).usage
-    assert usage["cost_usd"] == 0.1234
-    assert usage["cache_read_input_tokens"] == 60
-    assert usage["cache_creation_input_tokens"] == 10
-
-
-@pytest.mark.parametrize("name", ["openrouter", "custom"])
-@pytest.mark.parametrize("cost", [0.1234, 0, None])
-async def test_api_stream_usage_survives_sdk_reassembly(monkeypatch, name, cost):
-    import json
-
-    import httpx
-
-    from raven.providers.streaming import stream_llm_call
-
-    usage = {
-        "prompt_tokens": 100,
-        "completion_tokens": 2,
-        "total_tokens": 102,
-        "prompt_tokens_details": {"cached_tokens": 60, "cache_write_tokens": 10},
-    }
-    if cost is not None:
-        usage["cost"] = cost
-    common = {"id": "test", "object": "chat.completion.chunk", "created": 1, "model": "openai/gpt-4.1-nano"}
-    frames = [
-        {**common, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "OK"}, "finish_reason": None}]},
-        {**common, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
-        {**common, "choices": [], "usage": usage},
-    ]
-    body = "".join("data: " + json.dumps(frame) + "\n\n" for frame in frames) + "data: [DONE]\n\n"
-
-    async def send(client, request, **kwargs):
-        return httpx.Response(200, request=request, headers={"content-type": "text/event-stream"}, content=body)
-
-    monkeypatch.setattr(httpx.AsyncClient, "send", send)
-    # SDK-calculated stream costs must never replace a missing API amount.
-    monkeypatch.setattr("litellm.include_cost_in_streaming_usage", True)
-    provider = LiteLLMProvider(
-        provider_name=name,
-        api_base="https://openrouter.ai/api/v1" if name == "openrouter" else "https://gateway.example/v1",
-        api_key="test-key",
-        default_model="openai/gpt-4.1-nano",
-    )
-    response = await stream_llm_call(
-        provider, messages=[{"role": "user", "content": "Reply OK."}], tools=None, model="openai/gpt-4.1-nano"
-    )
-    assert response.content == "OK"
-    assert response.usage.get("cost_usd") == cost
-    assert response.usage["prompt_tokens"] == 100
-    assert response.usage["cache_read_input_tokens"] == 60
-    assert response.usage["cache_creation_input_tokens"] == 10

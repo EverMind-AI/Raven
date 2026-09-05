@@ -12,11 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from raven.agent.subagent.backends import AgentMeta
-from raven.agent.subagent.builtin_agents import GENERIC_AGENT
+from raven.context_engine.base import AssemblyContext, TokenBudget
 from raven.context_engine.segments.skills import SkillsSegmentBuilder
-from raven.contracts.assembled import TokenBudget
-from raven.contracts.context import AssemblyContext
 from raven.memory_engine.skill_forge import (
     LLMGateFilter,
     QueryRewriter,
@@ -46,7 +43,7 @@ class _StubProvider:
 
 
 class _StubSource:
-    """ForgeSkillSource that returns a hard-coded hit list."""
+    """SkillSource that returns a hard-coded hit list."""
 
     def __init__(self, name: str, hits: list[RouterHit], weight: float = 1.0) -> None:
         self.name = name
@@ -329,7 +326,7 @@ async def test_get_tool_names_extracts_from_openai_schema() -> None:
     captured: list[list[str] | None] = []
 
     class _CaptureGate(LLMGateFilter):  # type: ignore[misc]
-        async def filter(self, task, candidates, available_tools=None, available_subagents=None):  # type: ignore[override]
+        async def filter(self, task, candidates, available_tools=None):  # type: ignore[override]
             captured.append(available_tools)
             return []
 
@@ -350,80 +347,6 @@ async def test_get_tool_names_extracts_from_openai_schema() -> None:
     )
     await builder.build(_ctx("task"))
     assert captured == [["read_file", "exec", "flat_form"]]
-
-
-# ----------------------------------------------------------------------
-# Subagent-roster collection
-# ----------------------------------------------------------------------
-
-
-def _roster_capture() -> "tuple[list[str | None], type[LLMGateFilter]]":
-    captured: list[str | None] = []
-
-    class _CaptureGate(LLMGateFilter):  # type: ignore[misc]
-        async def filter(self, task, candidates, available_tools=None, available_subagents=None):  # type: ignore[override]
-            captured.append(available_subagents)
-            return []
-
-    return captured, _CaptureGate
-
-
-async def _roster_seen_by_gate(list_subagents: Any) -> str | None:
-    captured, capture_gate = _roster_capture()
-    builder = SkillsSegmentBuilder(
-        SkillForgeRouter([_StubSource("local", [_hit("local/a", "a")])]),
-        gate=capture_gate(_StubProvider(json.dumps({"plan": "", "skills": []}))),
-        list_subagents=list_subagents,
-    )
-    await builder.build(_ctx("task"))
-    assert len(captured) == 1
-    return captured[0]
-
-
-async def test_gate_sees_the_specialist_subagents() -> None:
-    roster = await _roster_seen_by_gate(
-        lambda: [
-            AgentMeta("Raven-Research", "reads live web pages and cites them", False, False, True),
-            AgentMeta("Raven-PPT", "turns a source document into a deck", False, True),
-        ]
-    )
-    assert roster is not None
-    assert "Raven-Research" in roster
-    assert "reads live web pages and cites them" in roster
-    assert "Raven-PPT" in roster
-
-
-async def test_generic_agent_stays_out_of_the_gate_roster() -> None:
-    """It advertises no capability bias, so an overlap check that saw it would
-    read every skill as covered and empty the segment for good."""
-    roster = await _roster_seen_by_gate(
-        lambda: [
-            AgentMeta(GENERIC_AGENT, "the whole tool set and the whole skill catalogue", True, True, True),
-            AgentMeta("Raven-Research", "reads live web pages and cites them", False, False, True),
-        ]
-    )
-    assert roster is not None
-    assert "the whole tool set and the whole skill catalogue" not in roster
-    assert "Raven-Research" in roster
-
-
-async def test_no_roster_when_only_the_generic_agent_is_enabled() -> None:
-    roster = await _roster_seen_by_gate(lambda: [AgentMeta(GENERIC_AGENT, "no capability bias", True, True, True)])
-    assert roster is None
-
-
-async def test_no_roster_without_subagent_awareness() -> None:
-    assert await _roster_seen_by_gate(None) is None
-
-
-async def test_no_roster_when_the_lookup_raises() -> None:
-    """A wiring gap must degrade to "do not gate on overlap" rather than to a
-    failed turn: the roster is a hint, and the segment is still valid without it."""
-
-    def _boom() -> list[AgentMeta]:
-        raise RuntimeError("no manager yet")
-
-    assert await _roster_seen_by_gate(_boom) is None
 
 
 # ----------------------------------------------------------------------
@@ -582,131 +505,3 @@ async def test_hub_auto_install_appends_audit_record(tmp_path: Path) -> None:
     assert rec["trigger"] == "auto_inject"
     assert rec["score_safety"] == 0.9
     assert rec["ts"]
-
-
-# ----------------------------------------------------------------------
-# Delivery note -- the injected body's own ending is what it argues with
-# ----------------------------------------------------------------------
-
-
-def _defs(*names: str) -> Any:
-    return lambda: [{"type": "function", "function": {"name": n}} for n in names]
-
-
-async def test_delivery_note_rides_an_injected_body_when_the_tool_is_offered() -> None:
-    """The observed failure is a hub skill ending in ``print(path)`` winning over
-    the one sentence in deliver_files' description. The counter-line has to travel
-    with the body that carries the foreign convention."""
-    from raven.context_engine.segments import render
-
-    src = _StubSource("hub", [_hit("hub/ppt", "ppt", body="prs.save(f)\nprint(f)")])
-    builder = SkillsSegmentBuilder(
-        SkillForgeRouter([src]),
-        skill_top_k=1,
-        get_tool_definitions=_defs("read_file", "deliver_files"),
-    )
-    seg = await builder.build(_ctx("make me a deck"))
-    assert seg is not None
-    assert seg.text.startswith("# Skills")
-    assert seg.text.endswith(render.SKILL_DELIVERY_NOTE)
-    # Named as a conflict, not as a bare restatement: without the clause about
-    # where the other convention comes from, the model holds two rules and no
-    # reason to prefer this one.
-    assert "another product" in render.SKILL_DELIVERY_NOTE
-
-
-async def test_no_delivery_note_where_the_tool_is_absent() -> None:
-    """Pointing at a tool absent from the definitions cannot be followed."""
-    src = _StubSource("hub", [_hit("hub/ppt", "ppt", body="body")])
-    builder = SkillsSegmentBuilder(
-        SkillForgeRouter([src]),
-        skill_top_k=1,
-        get_tool_definitions=_defs("read_file", "message"),
-    )
-    seg = await builder.build(_ctx("make me a deck"))
-    assert seg is not None
-    assert "# Skills" in seg.text
-    assert "deliver_files" not in seg.text
-
-
-async def test_no_delivery_note_without_tool_awareness() -> None:
-    """``collect_tool_names`` returns None for a builder wired without tool
-    awareness. Content degrades to showing too much; this line degrades to
-    silence, because its whole content is "call this tool"."""
-    src = _StubSource("hub", [_hit("hub/ppt", "ppt", body="body")])
-    builder = SkillsSegmentBuilder(SkillForgeRouter([src]), skill_top_k=1)
-    seg = await builder.build(_ctx("make me a deck"))
-    assert seg is not None
-    assert "# Skills" in seg.text
-    assert "deliver_files" not in seg.text
-
-
-async def test_no_delivery_note_when_nothing_was_injected() -> None:
-    """An empty segment stays empty -- the note is an argument with a skill body,
-    so with no body there is nothing to argue with and nothing to pay for."""
-    builder = SkillsSegmentBuilder(
-        SkillForgeRouter([_StubSource("local", [])]),
-        get_tool_definitions=_defs("deliver_files"),
-    )
-    seg = await builder.build(_ctx("hi"))
-    assert seg is not None
-    assert seg.text == ""
-
-
-async def test_the_note_follows_the_real_tool_on_every_channel(tmp_path: Path) -> None:
-    """The join the stubs cannot make: the real tool in a real registry, driven
-    through the real _set_tool_context, read back through the real definitions.
-    Every surface receives the same delivery instruction."""
-    from raven.agent.loop.main import AgentLoop
-    from raven.agent.tools.deliver import DeliverFilesTool
-    from raven.agent.tools.deliverables import DeliverableStore
-    from raven.agent.tools.registry import ToolRegistry
-    from raven.context_engine.segments import render
-    from raven.contracts.tool import Tool
-
-    class _PlainTool(Tool):
-        """A second tool proves channel filtering preserves the full schema."""
-
-        @property
-        def name(self) -> str:
-            return "read_file"
-
-        @property
-        def description(self) -> str:
-            return "read a file"
-
-        @property
-        def parameters(self) -> dict[str, Any]:
-            return {"type": "object", "properties": {}}
-
-        async def execute(self, **kwargs: Any) -> str:
-            return ""
-
-    workspace = tmp_path / "chanwork"
-    workspace.mkdir()
-    registry = ToolRegistry()
-    registry.register(_PlainTool())
-    registry.register(
-        DeliverFilesTool(
-            DeliverableStore(tmp_path / "deliverables.json"),
-            workspace=workspace,
-            allowed_dirs=(),
-        )
-    )
-
-    class _Loop:
-        tools = registry
-        _playbooks = None
-
-    builder = SkillsSegmentBuilder(
-        SkillForgeRouter([_StubSource("hub", [_hit("hub/ppt", "ppt", body="body")])]),
-        skill_top_k=1,
-        get_tool_definitions=registry.get_definitions,
-    )
-
-    AgentLoop._set_tool_context(_Loop(), "web", "default", None, session_key="web:s1")
-    assert "deliver_files" in (await builder.build(_ctx("deck"))).text
-
-    AgentLoop._set_tool_context(_Loop(), "telegram", "c1", None, session_key="telegram:c1")
-    assert render.collect_tool_names(registry.get_definitions) == ["read_file", "deliver_files"]
-    assert "deliver_files" in (await builder.build(_ctx("deck"))).text

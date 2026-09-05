@@ -8,7 +8,6 @@ import { useStore } from '@nanostores/react'
 
 import type { AppOverlaysProps } from '../app/interfaces.js'
 
-import { enterDirect, rememberInstance } from '../app/directChatStore.js'
 import { useGateway } from '../app/gatewayContext.js'
 import { $overlayState, patchOverlayState } from '../app/overlayStore.js'
 import { $uiSessionId, $uiTheme } from '../app/uiStore.js'
@@ -17,12 +16,10 @@ import { suspendForHandoff } from '../lib/handoff.js'
 import { FloatBox } from './appChrome.js'
 import { MaskedPrompt } from './maskedPrompt.js'
 import { ModelPicker } from './modelPicker.js'
-import { NewInstancePicker } from './newInstancePicker.js'
 import { OverlayHint } from './overlayControls.js'
 import { ApprovalPrompt, ClarifyPrompt, ConfirmPrompt } from './prompts.js'
 import { SessionPicker } from './sessionPicker.js'
 import { SkillsHub } from './skillsHub.js'
-import { SubagentsHub } from './subagentsHub.js'
 
 const COMPLETION_WINDOW = 16
 
@@ -43,7 +40,7 @@ export function PromptZone({
   if (overlay.approval) {
     return (
       <Box flexDirection="column" flexShrink={0} paddingX={1} paddingY={1}>
-        <ApprovalPrompt cols={cols} onChoice={onApprovalChoice} req={overlay.approval} t={theme} />
+        <ApprovalPrompt onChoice={onApprovalChoice} req={overlay.approval} t={theme} />
       </Box>
     )
   }
@@ -137,14 +134,7 @@ export function FloatingOverlays({
   const sid = useStore($uiSessionId)
   const theme = useStore($uiTheme)
 
-  const hasAny =
-    overlay.modelPicker ||
-    overlay.newInstance ||
-    overlay.pager ||
-    overlay.picker ||
-    overlay.skillsHub ||
-    overlay.subagentsHub ||
-    completions.length
+  const hasAny = overlay.modelPicker || overlay.pager || overlay.picker || overlay.skillsHub || completions.length
 
   if (!hasAny) {
     return null
@@ -187,33 +177,9 @@ export function FloatingOverlays({
         </FloatBox>
       )}
 
-      {overlay.newInstance && (
-        <FloatBox color={theme.color.border}>
-          <NewInstancePicker
-            gw={gw}
-            onCancel={() => patchOverlayState({ newInstance: false })}
-            onCreated={row => {
-              // Before the switch: the chip strip is refreshed on a debounce, so
-              // entering first would land on an instance with no chip.
-              rememberInstance(row)
-              enterDirect(row.agent, row.handle)
-              patchOverlayState({ newInstance: false })
-            }}
-            sessionKey={sid}
-            t={theme}
-          />
-        </FloatBox>
-      )}
-
       {overlay.skillsHub && (
         <FloatBox color={theme.color.border}>
           <SkillsHub gw={gw} onClose={() => patchOverlayState({ skillsHub: false })} t={theme} />
-        </FloatBox>
-      )}
-
-      {overlay.subagentsHub && (
-        <FloatBox color={theme.color.border}>
-          <SubagentsHub gw={gw} onClose={() => patchOverlayState({ subagentsHub: false })} t={theme} />
         </FloatBox>
       )}
 

@@ -6,7 +6,7 @@ methodology spec. This document answers: which code
 implements each SOP clause in Raven, which deviations are deliberate, and
 which parts are present but unwired.
 
-**How to use:** before changing `evolver/**` or
+**How to use:** before changing `raven/evolver/**` or
 `benchmarks/appworld/evolve/**`, locate the SOP clause here; if your
 change alters a correspondence, update this document in the same PR.
 
@@ -18,7 +18,7 @@ The SOP's loop (§3 / §8.3) is **Claude-driven**: no driver program — a human
 opens Claude and walks the seven-step funnel by hand, state persists in three
 file layers, and the parts are a set of CLI scripts. Raven implements the same
 methodology as a **program-driven** loop:
-`evolver/orchestrator/loop.py::EvolutionOrchestrator` is a deterministic
+`raven/evolver/orchestrator/loop.py::EvolutionOrchestrator` is a deterministic
 driver for the funnel, and the SOP's CLI parts became functions embedded in
 the loop.
 
@@ -141,14 +141,14 @@ produces real SHAs), tree lineage in `nodes/*.json`, aligned via
 ## 6.5 The unified entry (added 2026-07)
 
 SOP §8.3's "manual orchestration" is superseded by
-`python -m evolver run --config <yaml>`: a single-command state machine
+`python -m raven.evolver run --config <yaml>`: a single-command state machine
 running cold start -> rounds -> termination -> unseal, resumable after any
 interruption (artifacts are the state: trial files / journal / meta stamps,
 three tiers of truth). Config drift and unseal one-wayness are mechanized in
 `run_meta.json` (the codification of SOP §0's same-regime discipline).
 Benches plug in via the contract in
 [`evolve-bench-contract.md`](evolve-bench-contract.md); implementation in
-`evolver/launch/` + `evolver/cli.py`.
+`raven/evolver/launch/` + `raven/evolver/cli.py`.
 
 ## 7. SOP parts <-> Raven parts quick reference
 

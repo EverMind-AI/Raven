@@ -17,7 +17,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from evolver.tree import git_ops
+from raven.evolver.tree import git_ops
 
 # The harness surface the driver may edit; anything else it touches is reverted.
 WHITELIST_PREFIXES = (

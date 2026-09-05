@@ -115,10 +115,10 @@ from loguru import logger
 from raven.agent.tools.registry import ToolRegistry
 from raven.providers import prompt_cache
 from raven.providers.base import (
-    ChatDelta,
     ErrorClassification,
     LLMProvider,
     LLMResponse,
+    StreamDelta,
     ToolCallRequest,
 )
 from raven.tracing import trace
@@ -623,7 +623,7 @@ class ReplayProvider(LLMProvider):
         temperature: object = LLMProvider._SENTINEL,
         reasoning_effort: object = LLMProvider._SENTINEL,
         tool_choice: str | dict[str, Any] | None = None,
-    ) -> AsyncIterator[ChatDelta]:
+    ) -> AsyncIterator[StreamDelta]:
         """Replay one recorded response as a delta stream.
 
         Recorded output is re-chunked at a fixed granularity (reasoning first,
@@ -633,16 +633,16 @@ class ReplayProvider(LLMProvider):
         """
         response = self._next_response(messages, tools, model, stream=True)
         if response.finish_reason == "error":
-            yield ChatDelta(
+            yield StreamDelta(
                 content=response.content,
                 finish_reason="error",
                 error_classification=response.error_classification,
             )
             return
         for chunk in _chunks(response.reasoning_content):
-            yield ChatDelta(content=None, reasoning_content=chunk)
+            yield StreamDelta(content=None, reasoning_content=chunk)
         for chunk in _chunks(response.content):
-            yield ChatDelta(content=chunk)
+            yield StreamDelta(content=chunk)
         tool_call_delta: dict[str, Any] | None = None
         if response.tool_calls:
             tool_call_delta = {
@@ -655,7 +655,7 @@ class ReplayProvider(LLMProvider):
                     for j, tc in enumerate(response.tool_calls)
                 ]
             }
-        yield ChatDelta(
+        yield StreamDelta(
             content=None,
             tool_call_delta=tool_call_delta,
             usage=response.usage or None,
@@ -867,7 +867,6 @@ async def run_replay(bundle_dir: Path, mode: str = "warn") -> ReplayReport:
         raise ValueError(f"{bundle_dir} holds no recorded turn inputs; nothing to drive the replay with")
 
     from raven.agent.loop import AgentLoop
-    from raven.agent.loop.bundles import ToolWiring
     from raven.session.manager import SessionManager
     from raven.spine.message import ChatType, Source
     from raven.spine.turn import Origin, TurnRequest
@@ -898,10 +897,8 @@ async def run_replay(bundle_dir: Path, mode: str = "warn") -> ReplayReport:
                 provider=provider,
                 workspace=workspace,
                 model=recording.model,
+                restrict_to_workspace=True,
                 session_manager=sessions,
-                tools=ToolWiring(
-                    restrict_to_workspace=True,
-                ),
             )
             loop.tools = registry
             for turn in recording.turns:
