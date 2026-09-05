@@ -905,7 +905,11 @@ def _print_blocked(trigger: str) -> None:
 def _ask_problem_fields(questionary: Any, style: Any) -> dict[str, str]:
     """The required description plus the optional detail fields (design 1.2/1.3)."""
     while True:
-        description = _ask_action(questionary.text("Describe the problem (required):", style=style, qmark=QMARK))
+        # Trimmed before the emptiness check: a spaces-only entry must reprompt
+        # rather than land a report whose required description looks blank.
+        description = _ask_action(
+            questionary.text("Describe the problem (required):", style=style, qmark=QMARK)
+        ).strip()
         if description:
             break
         console.print("A problem description is required to file a bug report.")

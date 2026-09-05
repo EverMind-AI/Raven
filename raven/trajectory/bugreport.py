@@ -616,6 +616,7 @@ def freeze_export(
     and digested — the confirmation screen and every later packaging run use
     exactly these bytes.
     """
+    description = description.strip()
     if not description:
         raise ValueError("a problem description is required")
     raw_fields = {
@@ -995,12 +996,17 @@ def recover_interrupted(record_dir: Path, record: dict[str, Any]) -> dict[str, A
 
 
 def list_reports(state_dir: Path | None = None) -> list[tuple[Path, dict[str, Any]]]:
-    """Every readable report, newest first; persisted drafts are recovered."""
+    """Every readable report, newest first; persisted drafts are recovered.
+
+    Ordered by the recorded creation time, not by directory name — the report
+    id carries only the UTC date, so name order is random among same-day
+    reports; the id breaks creation-second ties deterministically.
+    """
     root = bugreports_root(state_dir)
     if not root.is_dir():
         return []
     out: list[tuple[Path, dict[str, Any]]] = []
-    for entry in sorted(root.iterdir(), reverse=True):
+    for entry in sorted(root.iterdir()):
         if not entry.is_dir() or entry.name.startswith("."):
             continue
         try:
@@ -1011,6 +1017,7 @@ def list_reports(state_dir: Path | None = None) -> list[tuple[Path, dict[str, An
         if record["status"] == STATUS_DRAFT:
             record = recover_interrupted(entry, record)
         out.append((entry, record))
+    out.sort(key=lambda item: (item[1]["created_at"], item[1]["report_id"]), reverse=True)
     return out
 
 

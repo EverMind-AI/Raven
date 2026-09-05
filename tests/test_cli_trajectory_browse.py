@@ -1882,7 +1882,7 @@ def test_bug_report_menu_counts_existing_reports(state, workspace, monkeypatch, 
 def test_bug_report_empty_description_reprompts(state, workspace, monkeypatch, capsys, _no_machine_secrets):
     _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
 
-    _bug_flow(monkeypatch, workspace, ["", "real description", False, True, _CANCEL])
+    _bug_flow(monkeypatch, workspace, ["", "   ", "real description", False, True, _CANCEL])
 
     out = capsys.readouterr().out
     assert "A problem description is required to file a bug report." in out

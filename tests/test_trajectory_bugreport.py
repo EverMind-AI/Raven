@@ -1090,3 +1090,28 @@ def test_merged_definition_attempt_full_flow(state, workspace):
     spans_text = (scratch / aid / "spans.jsonl").read_text(encoding="utf-8")
     traces = {json.loads(line)["traceId"] for line in spans_text.splitlines() if line.strip()}
     assert traces == {"trace-1", "trace-2"}
+
+
+def test_freeze_rejects_whitespace_only_description(state, workspace):
+    prep = _prepared(state, workspace)
+    with pytest.raises(ValueError):
+        breport.freeze_export(prep, description="   ")
+    prep.cleanup()
+
+
+def test_reports_order_by_creation_time_not_directory_name(tmp_path):
+    root = tmp_path / "traces" / "bugreports"
+    root.mkdir(parents=True)
+    # Same-day ids whose lexicographic order contradicts creation order.
+    older = _valid_payload("br-20260905-ffffff", status="local_ready")
+    older["created_at"] = "2026-09-05T08:00:00Z"
+    newer = _valid_payload("br-20260905-000000", status="local_ready")
+    newer["created_at"] = "2026-09-05T09:00:00Z"
+    for payload in (older, newer):
+        record_dir = root / payload["report_id"]
+        record_dir.mkdir()
+        breport.save_record(record_dir, payload)
+
+    listed = breport.list_reports(tmp_path / "traces")
+
+    assert [record["report_id"] for _dir, record in listed] == ["br-20260905-000000", "br-20260905-ffffff"]
