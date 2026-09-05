@@ -1929,8 +1929,11 @@ events: its nodes' exception reports and its final result, waiting for the tool 
 that is awaiting the run. One per foreground run, in memory beside the run's
 adjudication desk. The desk carries decisions from the main agent to the run; the
 outbox carries reports from the run to the main agent. While the run is bound the
-outbox hands or buffers and never announces; once released it re-sends the buffer and
-announces later events as turns.
+outbox hands or buffers a question and drops a notification -- the blocking call is
+still there and the run's summary is what it will be handed, so announcing the same
+news again would put an unanswerable question beside it -- and never announces; once
+released it re-sends what is unanswered and announces later events as turns, both
+kinds.
 _Avoid_: "mailbox" -- the lane's inject mailbox is a different object with a different
 reader.
 
