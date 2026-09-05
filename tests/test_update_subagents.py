@@ -1,4 +1,4 @@
-"""Atomic agent-config write path (req5 / P4)."""
+"""Atomic agent-config write path."""
 
 from __future__ import annotations
 

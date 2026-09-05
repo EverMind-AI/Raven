@@ -1,4 +1,4 @@
-"""Third-party subagent backends + manager wiring + spawn tool (req5, P3b)."""
+"""Third-party subagent backends + manager wiring + spawn tool."""
 
 from __future__ import annotations
 

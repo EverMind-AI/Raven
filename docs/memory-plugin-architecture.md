@@ -1,5 +1,7 @@
 # Memory Plugin Architecture & EverOS as a Bundled Backend
 
+> Design record (2026-06, pre-v0.2.0). The bundled-in-tree layout described here was superseded: EverOS now ships as its own distribution under `plugins-dist/everos-memory/` -- see the Plugins entries in `CONTEXT.md` for current terms.
+
 Status legend: **[DONE]** implemented on `feature/integrate-everos` · **[PLAN]** proposed.
 
 This document consolidates the memory subsystem design: the refactored

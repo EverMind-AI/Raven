@@ -179,7 +179,7 @@ describe('shouldUseNativeClipboard', () => {
   it('returns false on allowlisted local terminals (the race-fix case)', () => {
     // Ghostty / kitty / WezTerm / Windows Terminal / VS Code — OSC 52
     // alone is reliable, native fallback racing it can corrupt the
-    // clipboard (the wl-copy on Wayland symptom this PR fixes).
+    // clipboard (seen as wl-copy corrupting it on Wayland).
     expect(shouldUseNativeClipboard({} as NodeJS.ProcessEnv, 'ghostty')).toBe(false)
     expect(shouldUseNativeClipboard({} as NodeJS.ProcessEnv, 'kitty')).toBe(false)
     expect(shouldUseNativeClipboard({} as NodeJS.ProcessEnv, 'WezTerm')).toBe(false)

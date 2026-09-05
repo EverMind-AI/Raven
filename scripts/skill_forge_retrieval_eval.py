@@ -176,7 +176,6 @@ async def _segment_test(
         seg = await builder.build(ctx)
         ids = seg.meta.get("injected_skill_ids", [])
         print(f"  [{q['id']}] injected={ids}")
-        # Print first 2 header lines of the rendered segment
         head_lines = "\n".join(seg.text.splitlines()[:6])
         print(textwrap.indent(head_lines, "    "))
         print()

@@ -1,3 +1,5 @@
+"""ShellCommandPolicy: safe, hard-denied, and approval-required command decisions."""
+
 from __future__ import annotations
 
 import pytest

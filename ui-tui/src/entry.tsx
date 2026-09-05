@@ -86,15 +86,15 @@ if (!socketPath) {
 // same public surface (`request` / `start` / `kill` / `getLogTail` /
 // `drain` / EventEmitter `.on('event'|'exit', ...)`) but is not a subclass.
 // The cast is the adapter contract boundary — see gatewayClientCompat.ts
-// header comment for retirement plan once Phase 4 turn-streaming lands.
+// header comment for the retirement plan.
 //
-// `gwCompat` keeps the typed `rpcClient` reachable for Phase 6's chat path
+// `gwCompat` keeps the typed `rpcClient` reachable for the typed chat path
 // (typed `turn.subscribe` bypasses the EventEmitter adapter) while the
 // legacy 169 .tsx consumers keep using the EventEmitter surface via `gw`.
 const gwCompat = new GatewayClientCompat({ socketPath })
 const gw = gwCompat as unknown as GatewayClient
 
-// Handshake `system.hello` resolves within Phase 2 RpcServer's 5s timeout;
+// Handshake `system.hello` resolves within the RpcServer's 5s timeout;
 // any failure here will reject and bubble to setupGracefulExit's error path.
 await gw.start()
 

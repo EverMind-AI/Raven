@@ -3,7 +3,7 @@
 Ported from the RavenX reference ``_dag/_runner.py`` but decoupled from
 AgentScope: node execution goes through a :class:`SubagentBackend`
 (``run(task, *, task_id, workspace, executor) -> str``) — the same adapter layer
-the native subagent uses (req4/req5) — instead of an AgentScope tool yielding
+the native subagent uses — instead of an AgentScope tool yielding
 ``ToolChunk``s, so ``_run_node`` just awaits a string result. Progress events go
 through a plain ``ProgressPublisher`` callback (no spine, no scheduler).
 """

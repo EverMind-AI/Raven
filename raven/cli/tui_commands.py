@@ -257,9 +257,9 @@ def run_subprocess(
 _RPC_HANDSHAKE_TIMEOUT_S: float = 5.0
 _RPC_HANDSHAKE_EXIT_CODE: int = 3
 
-# Q11 (2026-05-14): production transport was a per-session unix domain socket.
-# CROSS-PLATFORM (2026-06-30): switched to a TCP loopback socket bound to
-# 127.0.0.1:<ephemeral> because Windows has no usable AF_UNIX in CPython and
+# The production transport is a TCP loopback socket bound to
+# 127.0.0.1:<ephemeral> rather than a per-session unix domain socket,
+# because Windows has no usable AF_UNIX in CPython and
 # cannot os.dup a socket fd. The Node child connects to the host:port exported
 # in RAVEN_RPC_SOCKET and authenticates with the RAVEN_RPC_TOKEN shared secret
 # (loopback is reachable by any local process, unlike an AF_UNIX file guarded
@@ -359,7 +359,7 @@ async def _run_rpc_server_until_done(
     # clarify.request and awaits clarify.respond, mirroring ConfirmBroker.
     question_broker = QuestionBroker(send_frame=server.send_frame)
 
-    # Wire AgentLoop for turn.send streaming (CAP-CHAT-1). _build_agent_loop
+    # Wire AgentLoop for turn.send streaming. _build_agent_loop
     # mirrors the minimal subset of `raven agent` boilerplate needed to
     # serve chat turns from a TUI subprocess (no sentinel/cron — those are
     # the gateway's responsibility). Eager build at server bring-up so a

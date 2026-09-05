@@ -1,3 +1,5 @@
+"""The agent loop's approval seam: a denial ends the turn and skips the remaining calls."""
+
 from __future__ import annotations
 
 from raven.agent.loop import AgentLoop

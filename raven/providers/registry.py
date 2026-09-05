@@ -356,7 +356,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         billing="plan",
         strip_model_prefix=False,
         model_overrides=(),
-        is_oauth=True,  # OAuth-based authentication
+        is_oauth=True,
         # No static default: every id we shipped here came back "not supported
         # when using Codex with a ChatGPT account", and the slugs an account does
         # offer are only knowable by asking it (see ``codex_catalog``). Empty
@@ -378,7 +378,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_api_base="",
         strip_model_prefix=False,
         model_overrides=(),
-        is_oauth=True,  # OAuth-based authentication
+        is_oauth=True,
         default_model="github_copilot/gpt-4o",
     ),
     # DeepSeek: needs "deepseek/" prefix for LiteLLM routing.

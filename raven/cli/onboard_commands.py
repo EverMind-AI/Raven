@@ -722,7 +722,7 @@ def _model_routes_to_provider(model: str, spec: Any) -> bool:
 # provider -- which field to prompt for, what a failure offers to change, what
 # "remove" clears, whether a rollback applies -- follows from this one question,
 # and it was being answered independently at thirteen sites off two spec flags.
-# Each of the last two review rounds found a site that disagreed with the others:
+# Sites did disagree in practice:
 # a rollback that wrote credentials to an OAuth provider and killed the wizard, a
 # menu that offered a key prompt to one, a prompt that half-guarded a spec it had
 # already dereferenced. Answer it once.

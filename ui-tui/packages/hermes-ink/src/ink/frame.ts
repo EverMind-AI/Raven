@@ -44,7 +44,7 @@ export type FrameEvent = {
   phases?: {
     /** createRenderer output: DOM → yoga layout → screen buffer */
     renderer: number
-    /** LogUpdate.render(): screen diff → Patch[] (the hot path this PR optimizes) */
+    /** LogUpdate.render(): screen diff → Patch[] (the diff hot path) */
     diff: number
     /** optimize(): patch merge/dedupe */
     optimize: number

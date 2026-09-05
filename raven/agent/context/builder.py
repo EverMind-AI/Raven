@@ -92,8 +92,8 @@ class ContextBuilder:
         # the SkillForgeRouter's hits).
         # If a selector has chosen top-K, render only those; otherwise the
         # full directory (legacy behavior). Empty list is treated as "no
-        # selection", so Phase A's stub selector does not accidentally hide
-        # all skills.
+        # selection", so a selector that returns nothing does not
+        # accidentally hide all skills.
         only = selected_skills if selected_skills else None
 
         # Two injection modes (config: skill_forge.injection_mode):

@@ -1,3 +1,5 @@
+"""The curator context engine under AgentLoop: archiving, traces, truncation, and fallback."""
+
 from __future__ import annotations
 
 import json

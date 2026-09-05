@@ -1,5 +1,10 @@
 # evolver — harness self-evolution
 
+> Status: retirement of this tree is planned alongside the vendored fork
+> trees (the step-8 retirement wave), pending partner sign-off -- the C3
+> confirmation item recorded in the oncall migration closure (2026-09-01).
+> Until that wave lands, this README describes the tool as it stands.
+
 A budget-bounded loop that improves an agent harness against a benchmark:
 diagnose failing trajectories, design candidate patches, screen them cheaply,
 confirm survivors at K=3, and promote only what beats the baseline through
