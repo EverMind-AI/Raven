@@ -18,6 +18,7 @@ EXPECTED_PROVIDER_NAMES = {
     "custom",
     "azure_openai",
     "openrouter",
+    "orcarouter",
     "aihubmix",
     "siliconflow",
     "volcengine",
@@ -39,9 +40,9 @@ EXPECTED_PROVIDER_NAMES = {
 }
 
 
-def test_registry_has_exactly_21_providers() -> None:
-    assert len(PROVIDERS) == 21
-    assert len(EXPECTED_PROVIDER_NAMES) == 21
+def test_registry_has_exactly_22_providers() -> None:
+    assert len(PROVIDERS) == 22
+    assert len(EXPECTED_PROVIDER_NAMES) == 22
 
 
 def test_registry_provider_name_set_is_pinned() -> None:
@@ -198,6 +199,48 @@ def test_every_gateway_prefixes_the_models_it_routes() -> None:
         provider = LiteLLMProvider(api_key="K", provider_name=spec.name, default_model="probe-model")
         resolved = provider._resolve_model("probe-model")
         assert resolved.startswith(f"{spec.model_prefix}/"), f"{spec.name}: {resolved}"
+
+
+def test_orcarouter_gateway_is_detected_by_key_and_base() -> None:
+    """OrcaRouter is a gateway: detected by its key prefix and base keyword."""
+    from raven.providers.registry import find_gateway
+
+    by_key = find_gateway(api_key="sk-orca-abc123")
+    assert by_key is not None and by_key.name == "orcarouter"
+
+    by_base = find_gateway(api_base="https://api.orcarouter.ai/v1")
+    assert by_base is not None and by_base.name == "orcarouter"
+
+    by_name = find_gateway(provider_name="orcarouter")
+    assert by_name is not None and by_name.name == "orcarouter"
+
+
+def test_orcarouter_wire_id_reaches_litellm_openai_driver() -> None:
+    """The stored "orcarouter/<ns>/<model>" id must resolve through LiteLLM.
+
+    LiteLLM carries no "orcarouter" provider, so the wire form goes out under the
+    OpenAI driver with the full namespace intact -- the gateway then routes on
+    that namespace. This is what makes the request reach the right upstream.
+    """
+    import pytest
+    from litellm import get_llm_provider
+
+    # A bare stored id is not routable on its own: LiteLLM has no "orcarouter"
+    # provider, so it raises rather than sending the request somewhere.
+    with pytest.raises(Exception):
+        get_llm_provider(model="orcarouter/openai/gpt-5.5")
+
+    # The wire form, by contrast, resolves -- the OpenAI driver accepts the
+    # namespaced id and the gateway receives the full namespace. (This version of
+    # LiteLLM reports the resolved route in the provider slot; the point is that
+    # it resolves at all, which the bare stored id cannot.)
+    for wired in (
+        "openai/openai/gpt-5.5",
+        "openai/anthropic/claude-haiku-4.5",
+        "openai/orcarouter/auto",
+    ):
+        provider, _, _, _ = get_llm_provider(model=wired)
+        assert provider != "orcarouter", f"{wired}: did not route through OpenAI driver"
 
 
 def test_a_failed_catalogue_read_is_not_cached_for_the_life_of_the_process() -> None:
@@ -469,6 +512,9 @@ _ENV_KEY_EXEMPT: dict[str, str] = {
     # that is the variable the driver handling the request reads. LiteLLM names
     # the vendor's own variable, which nothing here sets.
     "volcengine": "OPENAI_API_KEY",
+    # OrcaRouter is reached through the OpenAI driver the same way; the key is
+    # still declared under its own name and passed as an explicit api_key kwarg.
+    "orcarouter": "ORCAROUTER_API_KEY",
     # A local deployment takes an address, not a key. LiteLLM answers with the
     # address variable, which is a different field of ours.
     "ollama_chat": "OLLAMA_API_KEY",

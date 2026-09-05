@@ -167,7 +167,7 @@ Schema 遵循一个精简、带版本的语义契约。Span 名称、属性、ar
 
 ## Providers 和 Gateways
 
-Raven 支持 API key、OAuth、本地和 OpenAI-compatible providers。Onboarding catalog 包括 OpenRouter、OpenAI、Anthropic、Gemini、MiniMax、DeepSeek、Z.ai、DashScope、Moonshot、VolcEngine、SiliconFlow、Groq、AiHubMix、Azure OpenAI、GitHub Copilot OAuth、OpenAI Codex OAuth、Ollama 和托管 vLLM。
+Raven 支持 API key、OAuth、本地和 OpenAI-compatible providers。Onboarding catalog 包括 OpenRouter、OrcaRouter、OpenAI、Anthropic、Gemini、MiniMax、DeepSeek、Z.ai、DashScope、Moonshot、VolcEngine、SiliconFlow、Groq、AiHubMix、Azure OpenAI、GitHub Copilot OAuth、OpenAI Codex OAuth、Ollama 和托管 vLLM。
 
 十二个 gateway adapters 可以把 Raven 接入 Telegram、Slack、Discord、WhatsApp、Matrix、Feishu、WeCom、Mochat、QQ、DingTalk、Email 和 WeChat。
 

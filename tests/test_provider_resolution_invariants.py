@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -281,11 +282,14 @@ def test_only_the_registry_reads_the_raw_via_driver_field() -> None:
     exactly what a borrowed driver decides.
     """
     exempt = {"benchmarks/pinchbench/direct/raven_executor.py"}
+    # A longer field name ("via_driver_preserves_namespace") carries the driver
+    # word but is a different flag, not the raw driver-name read this guard is
+    # about -- so match the field name exactly rather than the substring.
     offenders = [
         f"{_rel(path)}:{i}"
         for path in _production_files()
         for i, line in enumerate(path.read_text().splitlines(), 1)
-        if "via_driver" in line and not line.lstrip().startswith("#") and _rel(path) not in exempt
+        if re.search(r"\.via_driver(?!_)", line) and not line.lstrip().startswith("#") and _rel(path) not in exempt
     ]
     assert not offenders, "read spec.model_prefix instead of the raw field: " + ", ".join(offenders)
 
@@ -567,6 +571,37 @@ def test_a_prefix_stripping_gateway_drops_one_segment_not_all_but_the_last(confi
     from raven.providers.litellm_provider import LiteLLMProvider
 
     provider = LiteLLMProvider(api_key="K", provider_name="aihubmix", default_model="probe")
+    assert provider._resolve_model(configured) == sent
+
+
+@pytest.mark.parametrize(
+    ("configured", "sent"),
+    [
+        # A namespaced id keeps its full namespace through the OpenAI driver,
+        # so the gateway receives the exact vendor/model it routes on.
+        ("orcarouter/openai/gpt-5.5", "openai/openai/gpt-5.5"),
+        ("orcarouter/anthropic/claude-haiku-4.5", "openai/anthropic/claude-haiku-4.5"),
+        ("orcarouter/google/gemini-3.5-flash", "openai/google/gemini-3.5-flash"),
+        ("orcarouter/deepseek/deepseek-v4-flash", "openai/deepseek/deepseek-v4-flash"),
+        # A router name ("auto") is not a namespace; it keeps the gateway prefix
+        # so the upstream recognises it.
+        ("orcarouter/auto", "openai/orcarouter/auto"),
+        # A bare id with no gateway prefix falls back to the generic rule.
+        ("probe-model", "openai/probe-model"),
+    ],
+)
+def test_a_namespace_preserving_gateway_swaps_only_its_own_prefix(configured: str, sent: str) -> None:
+    """OrcaRouter keeps the full model namespace behind the OpenAI driver.
+
+    Unlike AiHubMix (which strips to a bare vendor id), OrcaRouter routes on the
+    complete ``<vendor>/<model>`` namespace -- so the wire form replaces only the
+    gateway's own prefix with the driver's. ``orcarouter/auto`` is the one
+    exception: ``auto`` is a router name belonging to the gateway, and the
+    upstream does not accept it naked.
+    """
+    from raven.providers.litellm_provider import LiteLLMProvider
+
+    provider = LiteLLMProvider(api_key="K", provider_name="orcarouter", default_model="probe-model")
     assert provider._resolve_model(configured) == sent
 
 

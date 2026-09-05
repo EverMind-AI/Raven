@@ -169,6 +169,15 @@
       "vendorx/zz-probe-1": "openrouter/vendorx/zz-probe-1",
       "zz-probe-1": "openrouter/zz-probe-1"
     },
+    "orcarouter": {
+      "openai/zz-probe-1": "openai/orcarouter/zz-probe-1",
+      "orcarouter-probe": "openai/orcarouter-probe",
+      "orcarouter/openai/gpt-5.5": "openai/openai/gpt-5.5",
+      "orcarouter/vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "orcarouter/zz-probe-1": "openai/orcarouter/zz-probe-1",
+      "vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "zz-probe-1": "openai/zz-probe-1"
+    },
     "siliconflow": {
       "openai/zz-probe-1": "openai/zz-probe-1",
       "siliconflow-probe": "openai/siliconflow-probe",

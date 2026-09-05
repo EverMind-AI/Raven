@@ -124,6 +124,11 @@ _CURATED_GROUPS: list[dict[str, Any]] = [
                 "label": "OpenRouter (recommended - one key, many models)",
                 "label_zh": "OpenRouter(推荐 · 一个 Key 调用多家模型)",
             },
+            {
+                "name": "orcarouter",
+                "label": "OrcaRouter (one key, many models)",
+                "label_zh": "OrcaRouter(一个 Key 调用多家模型)",
+            },
             {"name": "openai", "label": "OpenAI", "label_zh": "OpenAI"},
             {"name": "anthropic", "label": "Anthropic", "label_zh": "Anthropic"},
             {"name": "gemini", "label": "Gemini", "label_zh": "Gemini"},

@@ -91,6 +91,17 @@ def _through_gateway(model: str, gateway: ProviderSpec) -> str:
     # "hosted_vllm/hosted-vllm/x". The two branches answering one question
     # differently is what this module exists to end.
     model = _canonical_prefix(model, gateway, prefix)
+    if gateway.via_driver_preserves_namespace:
+        # The upstream keeps the full model namespace, so only the gateway's own
+        # prefix was swapped for the driver's. A bare rest ("orcarouter/auto")
+        # is a router name that belongs to the gateway, not a namespace, and the
+        # upstream does not accept it naked -- route it through the driver with
+        # the gateway prefix kept on the router name. Everything else (an id
+        # carrying no gateway prefix at all) falls through to the generic
+        # driver-prefix rule below.
+        head, rest = split_model_id(model)
+        if head == normalize_provider_name(prefix) and rest and "/" not in rest:
+            return f"{prefix}/{gateway.name}/{rest}"
     if prefix and not model.startswith(f"{prefix}/"):
         model = f"{prefix}/{model}"
     return model
