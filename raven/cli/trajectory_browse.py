@@ -455,6 +455,7 @@ def _attempt_fixed(count: int) -> list[tuple[str, int]]:
         ("VERDICT", 7),
         ("PIN", 3),
         ("MERGED", 6),
+        ("RPT", 3),
     ]
 
 
@@ -520,6 +521,7 @@ def _attempt_table(rows: list[AttemptRow], width: int) -> tuple[str, list[list[t
             ("class:text", _collapse_text(r.verdict) or ""),
             ("class:success", "✓") if r.pinned else ("class:text", ""),
             ("class:success", "✓") if r.merged else ("class:text", ""),
+            ("class:success", "✓") if r.reported else ("class:text", ""),
         ]
         if len(layout) > len(cells):
             cells.append(("class:text", _collapse_text(r.preview) or ""))
@@ -553,6 +555,7 @@ class AttemptRow:
     pinned: bool
     preview: str | None
     merged: bool
+    reported: bool = False
     turn_previews: tuple[_TurnPreview, ...] = ()
 
 
@@ -612,6 +615,16 @@ def scan_sessions(workspace: Path, state_dir: Path | None = None) -> list[Sessio
     registry = tstore.pins(state)
     verdict_rows = read_verdicts(state)
     owner_by_trace = {t: def_id for def_id, entry in defs.items() for t in entry["traces"]}
+    # Bug report records, read once for the whole snapshot (this read also
+    # performs the persisted-draft crash recovery). Matching is by the frozen
+    # association: the recorded attempt id, or any member-trace overlap.
+    reported_keys: set[str] = set()
+    reported_traces: set[str] = set()
+    for _record_dir, record in breport.list_reports(state):
+        attempt = record.get("attempt") or {}
+        if attempt.get("attempt_id"):
+            reported_keys.add(attempt["attempt_id"])
+        reported_traces.update(attempt.get("member_traces") or [])
 
     logical: dict[Any, dict[str, Any]] = {}
     bogus = 0
@@ -705,6 +718,7 @@ def scan_sessions(workspace: Path, state_dir: Path | None = None) -> list[Sessio
             pinned=_pinned(aid, g["traces"]),
             preview=_label_text(first_input, _PREVIEW_LIMIT),
             merged=aid in defs,
+            reported=aid in reported_keys or bool(reported_traces.intersection(g["traces"])),
             turn_previews=turns,
         )
         by_session.setdefault(row.session_key, []).append(row)

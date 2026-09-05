@@ -1083,11 +1083,11 @@ def test_attempt_table_fits_budget_and_drops_preview():
         _mk_attempt(key="trace-y", preview="another attempt preview text"),
     ]
 
-    h80, rows80 = tbrowse._attempt_table(rows, 80)
-    h60, rows60 = tbrowse._attempt_table(rows, 60)
+    h85, rows85 = tbrowse._attempt_table(rows, 85)
+    h65, rows65 = tbrowse._attempt_table(rows, 65)
 
-    assert "PREVIEW" in h80 and "PREVIEW" not in h60
-    for width, header, row_tokens in [(80, h80, rows80), (60, h60, rows60)]:
+    assert "PREVIEW" in h85 and "PREVIEW" not in h65
+    for width, header, row_tokens in [(85, h85, rows85), (65, h65, rows65)]:
         assert tbrowse._cell_width(header) <= _row_cap(width)
         for tokens in row_tokens:
             line = _flat(tokens)
@@ -2134,3 +2134,53 @@ def test_bug_report_details_show_completeness(state, workspace, monkeypatch, cap
 
     out = capsys.readouterr().out
     assert "Completeness: unreplayable (" in out
+
+
+def _file_report(state, workspace, id_, description="reported problem"):
+    from raven.trajectory import bugreport as breport
+
+    prep = breport.prepare_trajectory(id_, workspace=workspace, state_dir=state)
+    prep = breport.freeze_export(prep, description=description)
+    return breport.confirm_and_package(prep, state_dir=state)
+
+
+def test_rpt_column_marks_reported_rows(state, workspace, monkeypatch, _no_machine_secrets):
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1", session_key="cli:a"), _span("trace-2", session_key="cli:a")],
+    )
+    _file_report(state, workspace, "trace-1")
+    from raven.trajectory import bugreport as breport
+
+    broken = breport.bugreports_root(state) / "br-20260101-abcdef"
+    broken.mkdir(parents=True)
+    (broken / breport.RECORD_FILE).write_text("{broken", encoding="utf-8")
+
+    (srow,) = tbrowse.scan_sessions(workspace)
+    by_key = {row.key: row for row in srow.attempts}
+    assert by_key["trace-1"].reported is True
+    assert by_key["trace-2"].reported is False
+
+    header, row_tokens = tbrowse._attempt_table(srow.attempts, 100)
+    assert "RPT" in header
+    flat = ["".join(seg[1] for seg in tokens) for tokens in row_tokens]
+    reported_line = next(line for line, row in zip(flat, srow.attempts) if row.key == "trace-1")
+    bare_line = next(line for line, row in zip(flat, srow.attempts) if row.key == "trace-2")
+    assert _cell_of([header, *flat], reported_line, "RPT").strip() == "✓"
+    assert _cell_of([header, *flat], bare_line, "RPT").strip() == ""
+
+
+def test_reports_do_not_cross_sessions(state, workspace, _no_machine_secrets):
+    from raven.trajectory import bugreport as breport
+
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1", session_key="cli:a"), _span("trace-2", session_key="cli:b")],
+    )
+    _file_report(state, workspace, "trace-1")
+
+    sessions = tbrowse.scan_sessions(workspace)
+    rows = {row.key: row for srow in sessions for row in srow.attempts}
+    assert rows["trace-1"].reported is True
+    assert rows["trace-2"].reported is False
+    assert breport.reports_for_attempt("trace-2", ("trace-2",), state) == []
