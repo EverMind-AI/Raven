@@ -1282,12 +1282,7 @@ const FoldView = memo(function FoldView({ lane, seg }: { lane: Lane; seg: FoldDa
     <div className={'tfold' + (seg.open ? ' open' : '')}>
       <button ref={headRef} className="tfh" aria-label={t('gui.fold.aria')}
         aria-expanded={String(seg.open) as 'true' | 'false'} onClick={flip}>
-        {/* What the fold HOLDS, not a verdict on the task. `collapse` builds
-            one only once the answer has landed, so the fold's existence already
-            says the turn finished -- "done" added nothing and implied something
-            false: a backgrounded graph outlives the turn that dispatched it, so
-            a reader saw `done` over a task still running below. */}
-        <span className="lb">{t('gui.fold.steps')}</span>
+        <span className="lb">{t('gui.fold.done')}</span>
         <span className="tm">{seg.time || ''}</span>
         <Chev />
       </button>
