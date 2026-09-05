@@ -1207,3 +1207,88 @@ def test_report_bug_stale_at_confirmation_cleans_staging(state, _no_machine_secr
     assert "The attempt changed" in r.output
     assert breport.list_reports(state) == []
     assert _staging_entries(state) == []
+
+
+def test_report_bug_blank_description_fails_before_side_effects(state, _no_machine_secrets):
+    from raven.trajectory import bugreport as breport
+    from raven.trajectory import store as tstore_module
+
+    _simple_log(state)
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "   ", "--yes"])
+
+    assert r.exit_code == 1
+    assert "--description must not be blank" in r.output
+    assert breport.list_reports(state) == []
+    assert not (breport.bugreports_root(state) / breport.STAGING_DIR).exists()
+    assert tstore_module.pins(state) == {}
+
+
+def test_report_bug_blocked_by_description_has_problem_wording(state, _no_machine_secrets):
+    from raven.trajectory import bugreport as breport
+
+    _simple_log(state)
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", f"look: {_PEM}", "--yes"])
+
+    assert r.exit_code == 1
+    assert "Cannot create a bug report with these details." in r.output
+    assert "without pasting the key itself" in r.output
+    assert breport.list_reports(state) == []
+    assert _staging_entries(state) == []
+
+
+def test_report_bug_blocked_by_trajectory_has_source_wording(state, _no_machine_secrets):
+    _simple_log(state, attrs={"llm.output": _PEM})
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes"])
+
+    assert r.exit_code == 1
+    assert "Cannot create a bug report from this attempt." in r.output
+    assert "raven trajectory report" in r.output
+
+
+def test_report_bug_tty_confirmation_shows_canonical_summary(state, _no_machine_secrets, monkeypatch):
+    """The TTY confirmation must display every shipped field; rejecting keeps nothing."""
+    from raven.cli import trajectory_commands as tcmd
+    from raven.trajectory import bugreport as breport
+
+    _simple_log(state)
+    monkeypatch.setattr(tcmd, "_stdin_is_tty", lambda: True)
+    monkeypatch.setattr(tcmd.typer, "confirm", lambda *_a, **_k: False)
+
+    r = runner.invoke(
+        trajectory_app,
+        [
+            "report-bug",
+            "trace-1",
+            "-d",
+            "wrong language",
+            "--expected",
+            "a reply in Chinese",
+            "--actual",
+            "the reply was in English",
+            "--severity",
+            "medium",
+            "--steps",
+            "ask anything in Chinese",
+            "--reporter",
+            "forrest",
+        ],
+    )
+
+    assert r.exit_code == 1
+    for needle in (
+        "Bug report summary",
+        "Attempt:",
+        "member trace(s)",
+        "wrong language",
+        "a reply in Chinese",
+        "the reply was in English",
+        "medium",
+        "ask anything in Chinese",
+        "forrest (included in the package)",
+        "Completeness:",
+        "NOT anonymized",
+    ):
+        assert needle in r.output, needle
+    assert "Cancelled — no bug report was created." in r.output
+    assert breport.list_reports(state) == []
+    assert _staging_entries(state) == []

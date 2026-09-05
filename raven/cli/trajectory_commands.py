@@ -312,15 +312,19 @@ def trajectory_report_bug(
     Without a TTY, --yes is required and needs_review additionally requires
     --accept-risk; blocked reports cannot be produced by any flag.
     """
-    import sys
-
     from raven.trajectory import bugreport as breport
 
+    description = description.strip()
+    if not description:
+        # Typer only enforces presence; a blank value must fail here, before
+        # any collection or pin side effect.
+        console.print("[red]--description must not be blank; nothing was collected or pinned.[/red]")
+        raise typer.Exit(code=1)
     if severity and severity not in breport.SEVERITIES:
         console.print(f"[red]--severity must be one of: {', '.join(breport.SEVERITIES)}[/red]")
         raise typer.Exit(code=1)
 
-    interactive = sys.stdin.isatty()
+    interactive = _stdin_is_tty()
     # Authorization preflight, before any side effect: collection pins the
     # attempt and creates staging state, and a script that cannot confirm has
     # no screen on which that could be disclosed.
@@ -341,7 +345,7 @@ def trajectory_report_bug(
     exit_code = 0
     try:
         if prep.classification == breport.CLASSIFICATION_BLOCKED:
-            _print_blocked_cli()
+            _print_blocked_cli("trajectory")
             exit_code = 1
             return
         try:
@@ -361,7 +365,7 @@ def trajectory_report_bug(
             exit_code = 1
             return
         if prep.classification == breport.CLASSIFICATION_BLOCKED:
-            _print_blocked_cli()
+            _print_blocked_cli("problem")
             exit_code = 1
             return
 
@@ -418,28 +422,64 @@ def trajectory_report_bug(
             raise typer.Exit(code=exit_code)
 
 
-def _print_blocked_cli() -> None:
-    console.print("[red]✗ Cannot create a bug report from this material.[/red]")
-    console.print(
-        "  It contains a private key block; even though the copy was redacted, it is\n"
-        "  not allowed to leave the machine as a bug report package.",
-        highlight=False,
-    )
+def _stdin_is_tty() -> bool:
+    import sys
+
+    return sys.stdin.isatty()
+
+
+def _print_blocked_cli(trigger: str) -> None:
+    """The blocked refusal, trigger-specific: the recovery action differs."""
+    if trigger == "trajectory":
+        console.print("[red]✗ Cannot create a bug report from this attempt.[/red]")
+        console.print(
+            "  The original trajectory contains a private key block. Even though the copy\n"
+            "  was redacted, this material is not allowed to leave the machine as a bug\n"
+            "  report package.\n"
+            "  Remove the key from the source data and retry, or use the expert command\n"
+            "  `raven trajectory report` at your own risk.",
+            highlight=False,
+        )
+    else:
+        console.print("[red]✗ Cannot create a bug report with these details.[/red]")
+        console.print(
+            "  The problem details you entered contain a private key block. This material\n"
+            "  is not allowed to leave the machine as a bug report package.\n"
+            "  Run again and describe the problem without pasting the key itself.",
+            highlight=False,
+        )
 
 
 def _print_bug_cli_summary(prep) -> None:
+    """The final confirmation block, rendered from the frozen canonical metadata.
+
+    Everything the package will carry must be on screen at the confirmation
+    point — the optional problem fields, the externally shipped reporter
+    identity, and the full completeness reasons included.
+    """
     from raven.trajectory import bugreport as breport
 
     meta = prep.package_metadata
+    attempt = meta["attempt"]
     completeness = meta["completeness"]
     redaction = meta["redaction"]
     exact = sum(redaction["exact_replacements"].values())
     patterns = sum(redaction["pattern_replacements"].values())
-    console.print(f"  Problem:      {escape(prep.problem['description'])}", highlight=False)
+    console.print("Bug report summary", highlight=False)
+    traces = attempt.get("member_traces") or []
+    console.print(
+        f"  Attempt:      {escape(str(attempt.get('attempt_id')))} · {len(traces)} member trace(s)", highlight=False
+    )
+    console.print(f"  Problem:      {escape(meta['problem']['description'])}", highlight=False)
+    for label, key in (("Expected", "expected"), ("Actual", "actual"), ("Severity", "severity"), ("Steps", "steps")):
+        if meta["problem"].get(key):
+            console.print(f"  {label + ':':<14}{escape(meta['problem'][key])}", highlight=False)
+    if meta.get("reporter"):
+        console.print(f"  Reporter:     {escape(meta['reporter'])} (included in the package)", highlight=False)
     line = completeness["status"]
-    if completeness["reasons"]:
-        line += f" ({len(completeness['reasons'])} reason(s))"
     console.print(f"  Completeness: {escape(line)}", highlight=False)
+    for reason in completeness["reasons"]:
+        console.print(f"    - {escape(reason)}", highlight=False)
     counts = f"{exact} known-value + {patterns} pattern replacement(s)"
     if prep.classification == breport.CLASSIFICATION_NEEDS_REVIEW:
         console.print(f"  Redaction:    {counts} · NEEDS REVIEW", highlight=False)
