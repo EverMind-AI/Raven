@@ -2,7 +2,7 @@
 // Copyright (c) 2026 EverMind.
 // See NOTICES.md.
 //
-// Tests for the typed chat-subscribe path (Phase 6 T6.1).
+// Tests for the typed chat-subscribe path.
 //
 // These tests exercise `createChatStream` — a thin factory that bridges
 // `RpcClient.subscribe('turn.subscribe', ...)` events onto the existing

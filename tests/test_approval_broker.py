@@ -1,3 +1,5 @@
+"""The ApprovalBroker's request lifecycle: matching, sessions, duplicates, and timeouts."""
+
 from __future__ import annotations
 
 import asyncio

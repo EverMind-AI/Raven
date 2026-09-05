@@ -1,3 +1,5 @@
+"""HistoryTrimmer keeps provider reasoning fields and drops non-provider keys."""
+
 from __future__ import annotations
 
 from raven.context_engine.history_trimmer import HistoryTrimmer

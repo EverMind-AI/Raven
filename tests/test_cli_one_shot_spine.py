@@ -1,3 +1,5 @@
+"""The one-shot CLI spine: protocol conformance, stream forwarding, and rendering."""
+
 import asyncio
 
 from raven.agent.spine_runner import AgentTurnRunner

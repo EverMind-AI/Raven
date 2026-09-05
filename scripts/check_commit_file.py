@@ -1,3 +1,5 @@
+"""Lint one commit-message file: commitlint via npx, then the repo's own message rules."""
+
 from __future__ import annotations
 
 import subprocess

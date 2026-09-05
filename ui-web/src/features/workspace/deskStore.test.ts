@@ -463,7 +463,7 @@ describe('what a reload finds on the desk', () => {
        new-task screen runs the reset and then `sessionSet(null)`, which is a
        no-op -- nothing moves. An answer dropped by the reset would be gone with
        the reader still looking at the screen they gave it on, and the desk
-       would open on their next message. Reported in review. */
+       would open on their next message. */
     it('keeps the answer when New task is pressed on the new-task screen', () => {
       setCurrent(null)
       desk.sync()
@@ -953,8 +953,7 @@ describe('the desk standing down for a window', () => {
    reasoning that a preference which cannot be stored is one the next VISIT
    does without -- but the desk is handed back from that same answer while the
    reader is still in front of it, so a refused write used to turn their
-   collapse into the conversation default the moment they shut a window.
-   Found in review. */
+   collapse into the conversation default the moment they shut a window. */
 describe('when storage refuses the reader answer', () => {
   /* On the instance and restored by redefining: happy-dom's `localStorage`
      resolves neither through `Storage.prototype` (patching it there refuses

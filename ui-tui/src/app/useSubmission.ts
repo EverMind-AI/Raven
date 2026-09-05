@@ -153,7 +153,7 @@ export function useSubmission(opts: UseSubmissionOptions) {
         turnController.bufRef = ''
         turnController.interrupted = false
 
-        // Prefer typed chat path (Phase 4 turn-streaming) when attached.
+        // Prefer the typed chat path when attached.
         // Streaming events arrive via the chatStream subscription wired in
         // useMainApp; here we only need to fire turn.send. Fall through to
         // legacy prompt.submit only when the typed handle is not available
@@ -549,9 +549,9 @@ export interface UseSubmissionOptions {
   sys: (text: string) => void
   /**
    * Typed chat-stream handle. When attached, user submissions route through
-   * `chatStream.send()` → `turn.send` RPC (Phase 4 streaming live). When
+   * `chatStream.send()` → `turn.send` RPC. When
    * absent or detached, falls back to the legacy `prompt.submit` path which
-   * returns -32012 on Phase 4-aware backends — kept only for graceful UX in
+   * returns -32012 on turn-streaming backends — kept only for graceful UX in
    * the transient pre-attach window.
    */
   chatStreamRef?: MutableRefObject<{

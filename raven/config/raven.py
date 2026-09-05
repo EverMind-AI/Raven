@@ -828,7 +828,7 @@ class SkillForgeConfig(_Base):
 
     # --- Master switch + location ---
     enabled: bool = True
-    """Master switch (R8: default True). Activates the SkillForge
+    """Master switch (default True). Activates the SkillForge
     retrieval/injection pipeline."""
 
     discovery: Literal["pull", "push"] = "pull"
@@ -968,7 +968,7 @@ class SkillForgeConfig(_Base):
 
     disable_always: bool = False
     """When True, ``get_always_skills()`` returns [] and select() filters
-    out always:true skills. R8 default: False (always skills inject)."""
+    out always:true skills. Default False (always skills inject)."""
 
     always_max: int = 5
     """Max always skills injected per turn. Exceeding this truncates
@@ -981,8 +981,8 @@ class SkillForgeConfig(_Base):
     ``llm_gate_pool_size`` candidates after RRF merge, then asks an LLM to
     plan + filter down to ``llm_gate_max_select`` skills. Empty result is
     valid ("inject nothing"). Costs one LLM call per ``select()`` invocation
-    but eliminates the ~30% noise-injection rate of pure-RRF top-K (Round D
-    obs.: irrelevant skills polluting the prompt). Disable to skip the
+    but eliminates the ~30% noise-injection rate of pure-RRF top-K
+    (observed: irrelevant skills polluting the prompt). Disable to skip the
     extra LLM call (rare; useful when LLM provider is unavailable)."""
 
     llm_gate_max_select: int = 2

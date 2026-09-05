@@ -82,9 +82,9 @@ def test_an_instance_is_named_before_it_has_said_anything(tmp_path: Path) -> Non
     # written when the dispatch *finishes*. Every surface that heads a panel by
     # what the instance was dispatched for therefore fell back to the handle --
     # an id -- for exactly as long as the run was still going.
-    open_instance_log(tmp_path, agent="Coder", handle="h1", session_key="s1", kind="spawn", title="做一版 PPT")
+    open_instance_log(tmp_path, agent="Coder", handle="h1", session_key="s1", kind="spawn", title="Draft a deck")
 
-    assert instance_title(tmp_path, "Coder", "h1") == "做一版 PPT"
+    assert instance_title(tmp_path, "Coder", "h1") == "Draft a deck"
 
 
 def test_opening_an_instance_twice_writes_one_header(tmp_path: Path) -> None:
