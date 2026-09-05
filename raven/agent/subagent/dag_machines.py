@@ -85,9 +85,9 @@ def runs_on_machines(agent: str) -> bool:
     except Exception as exc:  # noqa: BLE001 -- a roster that cannot be read refuses nothing
         logger.debug("machines: cannot read config roster for {}: {}", agent, exc)
     try:
-        from raven.agent.subagent.vendored_agents import vendored_folder
+        from raven.agent.subagent.vendored_agents import product_folder
 
-        folder = vendored_folder(agent)
+        folder = product_folder(agent)
         if folder is None:
             return False
         entry = json.loads((folder / "subagent.json").read_text(encoding="utf-8"))

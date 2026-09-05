@@ -127,7 +127,7 @@ connection fields; the `kind` set is closed -- a new kind is a new backend modul
 branch in `agent/subagent/backends/__init__.py:build_third_party_backend`, and no plugin
 door for subagent kinds exists (recorded, not promised); `AgentCaps` and `Injectable` are *derived* from it, and are what a
 consumer branches on so that nothing has to switch on the transport.
-Three sources compose it, weakest first: **vendored** rows discovered on the
+Three sources compose it, weakest first: **Product agent** rows discovered on the
 filesystem, then `builtin` package seeds, then config. `builtin` rows are package seeds
 (`agent/subagent/builtin_agents.py`): they exist whether or not config mentions them, and a
 config row of the same name is a field-level override -- of every field but `enabled`,
@@ -141,24 +141,32 @@ _Avoid_: "third-party registry" — the table holds raven's own agents as well, 
 point of it: `spawn` and a DAG node pick from one roster, so an agent reachable from one
 entry point and not the other is no longer a state that exists.
 
-**Vendored agent** (`agent/subagent/vendored_agents.py`):
-An agent row discovered under `subagents/` rather than written anywhere — one of the
-separate raven builds that ship beside this one, each its own checkout with its own venv
-and manifest. Materialized as a `cli` row on every table build, so a folder that is
+**Product agent** (`agent/subagent/vendored_agents.py`):
+An agent row discovered under the `agents/` product tree rather than written anywhere —
+one of the shipped products, each a launcher (`run.py`) over the installed raven plus a
+`subagent.json` manifest. Materialized as a row on every table build, so a folder that is
 deleted stops being an agent and a manifest that changes is picked up without a stored
-copy to contradict it. Readiness (its venv built, and a credential of its own or a host
-provider key to inherit) decides `enabled`, not whether the row exists: an unready folder
-is listed and disabled, because a name the dispatching model can pick and then fail on is
-worse than no name, and hiding it would also hide "present, not set up" from the
-operations view. Not deletable through config — removing one means removing its folder,
-or setting `"enabled": false` in its own `subagent.json`.
-_Avoid_: "third-party agent" — these are raven's own builds, and nobody registered them;
-"builtin" — that is the in-process row, which has no subprocess and no venv.
+copy to contradict it. The tree resolves through `agents_root()` — the raven home
+(`~/.raven/agents`, installed out of the wheel so a product's `.env` survives upgrades),
+then beside the package in a checkout, then the wheel's own `raven/agents`. Readiness
+(the launcher files its command names on disk, and its manifest-declared engine wheel
+importable where raven runs) decides `enabled`, not whether the row exists: an unready
+folder is listed and disabled with the reason on the row, because a name the dispatching
+model can pick and then fail on is worse than no name, and hiding it would also hide
+"present, not set up" from the operations view. A missing credential is deliberately not
+a readiness reason: the launcher inherits the host's provider block and refuses loudly at
+dispatch when there is truly nothing. Not deletable through config — removing one means
+removing its folder, or setting `"enabled": false` in its own `subagent.json`. On the
+RPC wire the row source is still spelled `vendored`; renaming that is a schema change.
+_Avoid_: "vendored agent" — the retired fork-tree (`subagents/`) meaning, whose rows
+carried venv and credential readiness; "third-party agent" — these are raven's own
+products, and nobody registered them; "builtin" — that is the in-process row, which has
+no subprocess and no launcher.
 
 **Machine** (`raven/agent/subagent/dag_machines.py`):
-A compute host the owner registered with a vendored agent's own Raven install
+A compute host the owner registered with a machine-running agent's Raven install
 via `raven ops connection add`, reported by that agent's
-`raven ops connection doctor --json` as a `{name, usable}` row. A vendored
+`raven ops connection doctor --json` as a `{name, usable}` row. An
 on-call-style agent runs outside the dispatching Raven process — on a GPU
 box, a lab workstation, another machine entirely — so the DAG gate consults
 the agent before dispatching a graph that names it and refuses the run with
@@ -168,8 +176,8 @@ lists is refused under the same gate with the missing ones named; once
 settled the chosen machine is injected into every node's prompt so the
 writing and reporting halves of the graph agree on where the numbers came
 from. The check is silent — returning no `Verdict` rather than a blocking
-one — for graphs that name no machine-running vendored agent, for installs
-that have not wired one up, and for agent checkouts where the doctor cannot
+one — for graphs that name no machine-running agent, for installs
+that have not wired one up, and for agent installs where the doctor cannot
 be run at all; in those cases the graph dispatches exactly as it used to.
 _Avoid_: "host" / "server" / "node" (too broad, no link to the
 `ops connection` registry that supplies the rows); "GPU box" (only some are
@@ -1186,7 +1194,9 @@ package for the repo-level `evolver/` tool (outside the wheel) that drives raven
 and a fifth import-linter contract keeps the runtime from importing it back. `agents/` is the
 same kind of non-seat: repo-level product definitions (the A/B pilots against the frozen
 `subagents/`) that consume installed raven over `raven acp`, with a sixth contract keeping
-the runtime out of them; the directory name is provisional by ruling. One ruled edge: `trajectory` (L3)
+the runtime out of them — the wheel carries the tree as data (`raven/agents`, mapped by
+`hatch_build.py`) for the roster's file-level discovery, which imports nothing from it;
+the directory name is provisional by ruling. One ruled edge: `trajectory` (L3)
 reaches `config.admission` for the door vocabulary and builds a loop by hand for replay --
 legal, because it is a harness over recorded runs, not an entrance. One package holds two
 seats: in `agent/`, `agent/loop` is the L2 harness shell every entrance runs, and its

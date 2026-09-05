@@ -72,6 +72,8 @@ Ground rules:
   may import from it or modify it.
 - The runtime never imports this directory -- enforced by the import-linter
   contract "the runtime does not import the agents pilots".
-- Outside the wheel: `packages = ["raven"]` already excludes it.
+- In the wheel as data, never as code: `hatch_build.py` maps the tracked
+  files to `raven/agents` for the roster's file-level discovery, and the
+  import-linter contract still keeps the runtime from importing any of it.
 - Acceptance for a product is transport-face equivalence against its vendored
   twin: transcript shape, timeout semantics, everos records field by field.
