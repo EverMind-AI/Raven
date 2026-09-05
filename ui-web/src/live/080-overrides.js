@@ -74,35 +74,6 @@ rpc.onReconnect = async () => {
    until the first message, so the rail does not fill with empty sessions. */
 let draft = false;
 
-/* A model chosen while still a draft is held here, not written: a draft has no
-   session to scope the switch to, and writing it would change the global
-   default instead. It is applied to the session the first message mints, then
-   forgotten. Cleared on any leave of the draft so a stale pick cannot land on
-   the next conversation. */
-let pendingModel = null;
-
-/* Apply a staged draft pick to the session the first message just minted.
-   Awaited before that turn is sent, so the turn runs on the chosen model rather
-   than racing the write.
-
-   ``gen`` is the view as it stood when the send began, not when this runs: a
-   refusal reconciles the chip to what THAT session actually runs, and the
-   reader may have opened another conversation while the write was in flight.
-   Its own function so the refusal path is reachable from a test without
-   driving the whole send. */
-async function applyStagedModel(sessionId, gen) {
-  if (!pendingModel) return;
-  const pm = pendingModel; pendingModel = null;
-  try {
-    await rpc.call('config.set', { key: 'model', value: pm.model, provider: pm.provider, session_id: sessionId });
-  } catch (e) {
-    // Said out loud, not just reversed: the pick was announced as staged, so a
-    // silent chip flip back would be an unexplained contradiction.
-    toast(`切换失败：${(e && ((e.data && e.data.detail) || e.message)) || e}`);
-    void loadProviders(sessionId, gen);
-  }
-}
-
 /* Which switch the visible page belongs to. `session.resume` is a round trip,
    and a reader who clicks a second session -- or the new-task button -- while
    it is in flight leaves the answer with nowhere to land: the stage it was
@@ -129,19 +100,13 @@ function resetView() {
 
 function startDraft() {
   viewGen += 1;
-  const gen = viewGen;
   parkTurn();
   // The old session's stream must stop routing to the visible stage the
   // moment we leave it -- its events belong to the parked buffer now.
   live.subId = null;
   parkDraft(); loadDraft('new');
   resetView();
-  draft = true; sessionSet(null); pendingModel = null;
-  // The other half of the pair with openLiveSession: a draft runs the
-  // configured default, so leaving a conversation for one has to read that
-  // default back or the chip keeps claiming the model of the conversation just
-  // left. A null session omits the field, which is the default's own answer.
-  void loadProviders(null, gen);
+  draft = true; sessionSet(null);
   $('#title').textContent = T('gui.new_task');
   pitch(); sessionDraw(); ta.focus();
 }
@@ -155,14 +120,7 @@ async function openLiveSession(s) {
   // into the newly opened stage. Route them to the parked buffer instead.
   live.subId = null;
   parkDraft(); loadDraft(s.id);
-  draft = false; pendingModel = null;
-  // The model is per conversation now, so the chip must follow the one being
-  // opened -- otherwise it keeps the model of the session left behind. Keyed to
-  // s.id rather than sessionCurrent(): the current session is not switched over
-  // until below (and not at all on the parked-turn path). The gen lets the
-  // refresh drop itself if a later open overtakes it, since model.options
-  // answers off-thread and can land out of order.
-  void loadProviders(s.id, gen);
+  draft = false;
   // Opening it IS reading it. ``s`` can be a bare {id, title} from the
   // reconnect path, so clear the flag on the row in sessionRows(), not on the arg.
   const row = sess(s.id);
@@ -295,11 +253,6 @@ function liveSend(text) {
   }
   // The draft becomes a real session here, on its first message.
   (async () => {
-    // Taken before the first await: the recovery refresh below reports on THIS
-    // send's session, so it needs the view as it stood when the send began --
-    // a ticket taken later would read as current and repaint whatever the
-    // reader has since opened.
-    const sendGen = viewGen;
     const r = await rpc.call('session.create', {});
     wsSetRoot(r.info && r.info.cwd);
     const s = { id: r.session_id, title: T('gui.new_task'), last: rowPreview(text) || T('gui.sess.not_started'),
@@ -309,7 +262,6 @@ function liveSend(text) {
     // The composer was owned by 'new' until this point; keep later keystrokes
     // filed under the session that just came into being.
     claimDraft(sessionCurrent());
-    await applyStagedModel(s.id, sendGen);
     beginNaming(text);
     sessionDraw();
     await subscribe(s.id);

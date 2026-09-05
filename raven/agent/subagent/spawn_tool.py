@@ -14,7 +14,7 @@ from raven.agent.subagent.prompt_capabilities import check_path_placeholders
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.subagent.prompt_placeholders import parse_placeholders
 from raven.agent.subagent.prompt_render import needs_a_graph, node_form_refusal, render_template
-from raven.contracts.tool import Tool
+from raven.agent.tools.base import Tool
 
 if TYPE_CHECKING:
     from raven.agent.subagent import SubagentManager

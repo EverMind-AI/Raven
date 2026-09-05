@@ -199,15 +199,3 @@ def test_minimax_oauth_is_detected_from_either_spelling_of_the_prefix(monkeypatc
         payload = {"agents": {"defaults": {"model": model}}}
         assert setup._detect_provider_configured(payload) is True
         assert seen == ["global"], model
-
-
-async def test_setup_status_reads_the_config_raven_home_points_at(monkeypatch, tmp_path: Path) -> None:
-    """``RAVEN_HOME`` decides where config.json lives for every other reader;
-    the setup gate used to hand-derive ``~/.raven`` and answer for the wrong
-    file when the variable was set."""
-    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "elsewhere"))
-    (tmp_path / "elsewhere").mkdir()
-    (tmp_path / "elsewhere" / "config.json").write_text(json.dumps({"agents": {"defaults": {"provider": "auto"}}}))
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
-
-    assert (await setup_status({}))["provider_configured"] is False

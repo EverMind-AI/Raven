@@ -278,25 +278,6 @@ def test_an_empty_value_is_not_a_home(tmp_path, monkeypatch) -> None:
     assert get_config_path() == Path.home() / ".raven" / "config.json"
 
 
-def test_home_implements_the_layout_paper(tmp_path, monkeypatch) -> None:
-    """raven.home answers with the paper's vocabulary, not its own copies."""
-    from pathlib import Path
-
-    from raven import home
-    from raven.contracts.path_policy import (
-        CONFIG_FILENAME,
-        DEFAULT_HOME_DIRNAME,
-        HOME_ENV_VAR,
-    )
-
-    monkeypatch.setattr(home, "_current_config_path", None)
-    monkeypatch.setenv(HOME_ENV_VAR, str(tmp_path))
-    assert home.raven_home() == tmp_path
-    assert home.get_config_path() == tmp_path / CONFIG_FILENAME
-    monkeypatch.setenv(HOME_ENV_VAR, "   ")
-    assert home.raven_home() == Path.home() / DEFAULT_HOME_DIRNAME
-
-
 def test_the_workspace_follows_raven_home_too(tmp_path, monkeypatch) -> None:
     """The half that matters most.
 
@@ -455,61 +436,6 @@ def test_a_later_generation_does_not_reopen_a_migration_already_run(tmp_path: Pa
     assert cfg.agents.defaults.context_window_tokens == 65536
     assert _defaults(p)["contextWindowTokens"] == 65536
     assert [n for n in drain_migration_notices() if "contextWindowTokens" in n] == []
-
-
-def test_the_legacy_leaves_migration_rewrites_the_file_once(tmp_path: Path) -> None:
-    """A config stamped 3 carries the three leaves the models stopped accepting;
-    the floor moves them (or drops them) in the file, tells the user once, and
-    stamps 4 so the next load does not look again."""
-    p = tmp_path / "config.json"
-    _write(
-        p,
-        {
-            "skillForge": {"skillsDir": "/srv/skills", "massLibraryDb": "/tmp/old.db"},
-            "context": {"engine": "legacy"},
-        },
-    )
-    _stamp_path(p).write_text(json.dumps({"version": 3}), encoding="utf-8")
-
-    drain_migration_notices()
-    load_config(p)
-
-    on_disk = json.loads(p.read_text(encoding="utf-8"))
-    assert on_disk["skillForge"] == {"localDirs": [{"path": "/srv/skills"}]}
-    assert on_disk["context"] == {}
-    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
-    notices = drain_migration_notices()
-    assert len([n for n in notices if "skillForge." in n or "context.engine" in n]) == 3
-
-    load_config(p)
-    assert drain_migration_notices() == []
-
-
-def test_the_phantom_knobs_migration_strips_both_spellings(tmp_path: Path) -> None:
-    """A config stamped 4 may carry the two knobs nothing ever read; the floor
-    drops them in the file, tells the user once, and stamps 5."""
-    p = tmp_path / "config.json"
-    _write(
-        p,
-        {
-            "agents": {"defaults": {"thinkingBudget": 2048}},
-            "tokenWise": {"smartRouting": {"enabled": True}},
-        },
-    )
-    _stamp_path(p).write_text(json.dumps({"version": 4}), encoding="utf-8")
-
-    drain_migration_notices()
-    load_config(p)
-
-    on_disk = json.loads(p.read_text(encoding="utf-8"))
-    assert "thinkingBudget" not in on_disk["agents"]["defaults"]
-    assert on_disk["tokenWise"] == {}
-    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
-    notices = drain_migration_notices()
-    assert len([n for n in notices if "thinkingBudget" in n or "smartRouting" in n]) == 2
-
-    load_config(p)
-    assert drain_migration_notices() == []
 
 
 def test_the_provider_migration_survives_a_legacy_top_level_block(tmp_path: Path) -> None:
@@ -706,21 +632,29 @@ def test_migration_preserves_the_config_file_mode(tmp_path: Path) -> None:
     assert p.stat().st_mode & 0o777 == 0o600
 
 
-def test_migration_rewrite_is_locked_and_leaves_no_residue(tmp_path: Path) -> None:
-    """The persist pass rides the locked atomic door (``raven.utils.atomic_io``):
-    concurrent migrators serialize on the config's sidecar lock, so the
-    process-scoped ``config.json.migrating.<pid>`` temp name the old hand-rolled
-    replace needed is gone. Only the config, its stamp and the lock anchors may
-    be left behind."""
+def test_migration_temp_file_is_process_scoped(tmp_path: Path) -> None:
+    """Two processes migrating at once must not share one temp path: the
+    second's truncating write would be visible as an empty config.json to
+    anyone loading between it and the replace."""
+    from raven.config import loader
+
     p = tmp_path / "config.json"
     _write(p, {"agents": {"defaults": {"contextWindowTokens": 65536}}})
+    seen: list[str] = []
+    original = Path.write_text
 
-    load_config(p)
+    def _spy(self: Path, *args: object, **kwargs: object) -> int:
+        seen.append(self.name)
 
-    data = json.loads(p.read_text(encoding="utf-8"))
-    assert "contextWindowTokens" not in data.get("agents", {}).get("defaults", {})
-    leftovers = sorted(f.name for f in tmp_path.iterdir())
-    assert leftovers == [".lock", "config.json", "config.migrations.json"]
+        return original(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    loader.Path.write_text = _spy  # type: ignore[method-assign]
+    try:
+        load_config(p)
+    finally:
+        loader.Path.write_text = original  # type: ignore[method-assign]
+
+    assert any(name.startswith("config.json.migrating.") and name.endswith(str(os.getpid())) for name in seen)
 
 
 def test_save_config_writes_only_what_differs_from_the_defaults(tmp_path: Path) -> None:
@@ -817,42 +751,3 @@ def test_a_provider_that_cannot_be_resolved_is_left_blank(tmp_path: Path) -> Non
 
     assert load_config(p).agents.defaults.provider in ("", "auto")
     assert json.loads(p.read_text(encoding="utf-8"))["agents"]["defaults"]["provider"] == "auto"
-
-
-def test_the_retired_gateway_web_table_is_dropped_once_with_a_notice():
-    """The shim is version-gated like its neighbours: a config behind the floor
-    loses the table (in memory and, via _persist_migrations, on disk) and hears
-    about it once; a config already at the floor is left alone."""
-    from raven.config import loader
-
-    loader._migration_notices.clear()
-    data = {"gateway": {"web": {"enabled": True}, "port": 1}}
-    loader._migrate_config(data, from_version=2)
-    assert "web" not in data["gateway"] and data["gateway"]["port"] == 1
-    notices = loader.drain_migration_notices()
-    assert len(notices) == 1 and "gateway.web" in notices[0]
-
-    untouched = {"gateway": {"web": {"enabled": True}}}
-    loader._migrate_config(untouched, from_version=3)
-    assert "web" in untouched["gateway"]
-    assert loader.drain_migration_notices() == []
-
-
-def test_channels_section_settings_are_not_mistaken_for_channels(tmp_path: Path, caplog) -> None:
-    """``channels.sendProgress`` is a setting of the section, not a channel whose
-    table failed to parse; only an unknown scalar under ``channels`` warns."""
-    import logging
-
-    p = tmp_path / "config.json"
-    p.write_text(
-        json.dumps(
-            {"channels": {"sendProgress": False, "sendToolHints": True, "telegram": {"enabled": True}, "oddity": 5}}
-        ),
-        encoding="utf-8",
-    )
-    with caplog.at_level(logging.WARNING, logger="raven.config.loader"):
-        cfg = load_config(p)
-
-    warned = [r.getMessage() for r in caplog.records if "is not a table" in r.getMessage()]
-    assert warned == ["channels.oddity is not a table; its cargo reads as unset"]
-    assert cfg.channels.send_progress is False

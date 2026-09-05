@@ -43,7 +43,7 @@ def _config_section() -> dict:
     try:
         import json
 
-        from raven.home import get_config_path
+        from raven.config.loader import get_config_path
 
         path = get_config_path()
         if not path.exists():
@@ -74,9 +74,9 @@ def state_dir() -> Path:
     override = os.environ.get("RAVEN_TRACING_DIR")
     if override:
         return Path(override).expanduser()
-    from raven.home import raven_home
-
-    return raven_home() / "traces"
+    home = os.environ.get("RAVEN_HOME")
+    base = Path(home).expanduser() if home else Path.home() / ".raven"
+    return base / "traces"
 
 
 def port() -> int:

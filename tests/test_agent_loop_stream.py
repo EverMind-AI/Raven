@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.providers.base import ChatDelta, ErrorClassification, LLMProvider, LLMResponse
+from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, StreamDelta
 from raven.providers.rates import DEFAULT_MAX_OUTPUT_TOKENS
 
 
@@ -28,7 +28,7 @@ class _FakeProvider:
     self-hosted backend opts into the orphan-``</think>`` split.
     """
 
-    def __init__(self, chunks: list[ChatDelta], emits_unparsed_reasoning: bool = False) -> None:
+    def __init__(self, chunks: list[StreamDelta], emits_unparsed_reasoning: bool = False) -> None:
         self._chunks = chunks
         self.chat_stream_calls: list[dict[str, Any]] = []
         self._emits_unparsed_reasoning = emits_unparsed_reasoning
@@ -64,10 +64,10 @@ async def test_llm_call_stream_accumulates_content_and_triggers_callback() -> No
     """Each non-empty content chunk triggers on_token_delta; final response
     has accumulated content."""
     chunks = [
-        ChatDelta(content="Hello"),
-        ChatDelta(content=" "),
-        ChatDelta(content="world"),
-        ChatDelta(content="!"),
+        StreamDelta(content="Hello"),
+        StreamDelta(content=" "),
+        StreamDelta(content="world"),
+        StreamDelta(content="!"),
     ]
     provider = _FakeProvider(chunks)
     call = _bind_helper(provider)
@@ -95,10 +95,10 @@ async def test_llm_call_stream_accumulates_content_and_triggers_callback() -> No
 async def test_llm_call_stream_skips_none_content_chunks() -> None:
     """Chunks with content=None do not fire the callback nor accumulate."""
     chunks = [
-        ChatDelta(content="A"),
-        ChatDelta(content=None, usage={"prompt_tokens": 5}),
-        ChatDelta(content="B"),
-        ChatDelta(content=None),
+        StreamDelta(content="A"),
+        StreamDelta(content=None, usage={"prompt_tokens": 5}),
+        StreamDelta(content="B"),
+        StreamDelta(content=None),
     ]
     provider = _FakeProvider(chunks)
     call = _bind_helper(provider)
@@ -127,8 +127,8 @@ async def test_llm_call_stream_skips_none_content_chunks() -> None:
 async def test_llm_call_stream_captures_final_usage() -> None:
     """The last non-None usage in the stream is preserved on the response."""
     chunks = [
-        ChatDelta(content="x"),
-        ChatDelta(
+        StreamDelta(content="x"),
+        StreamDelta(
             content=None,
             usage={
                 "prompt_tokens": 10,
@@ -166,7 +166,7 @@ async def test_llm_call_stream_collects_tool_call_fragments() -> None:
     on later fragments. Multi-tool / out-of-order index merging is a v0.2 ask.
     """
     chunks = [
-        ChatDelta(
+        StreamDelta(
             content=None,
             tool_call_delta={
                 "tool_calls": [
@@ -177,7 +177,7 @@ async def test_llm_call_stream_collects_tool_call_fragments() -> None:
                 ]
             },
         ),
-        ChatDelta(
+        StreamDelta(
             content=None,
             tool_call_delta={
                 "tool_calls": [
@@ -219,7 +219,7 @@ async def test_llm_call_stream_collects_tool_call_fragments() -> None:
 
 async def test_llm_call_stream_passes_messages_tools_model_to_provider() -> None:
     """on_token_delta path forwards messages / tools / model to provider.chat_stream."""
-    chunks = [ChatDelta(content="ok")]
+    chunks = [StreamDelta(content="ok")]
     provider = _FakeProvider(chunks)
     call = _bind_helper(provider)
 
@@ -251,7 +251,7 @@ async def test_llm_call_stream_timeout_returns_structured_error() -> None:
         classify_error = LLMProvider.classify_error
 
         async def chat_stream(self, **_kwargs: Any):
-            yield ChatDelta(content="partial")
+            yield StreamDelta(content="partial")
             raise TimeoutError
 
     call = _bind_helper(_TimeoutStreamProvider())
@@ -290,7 +290,7 @@ async def test_llm_call_stream_error_delta_is_not_rendered_as_a_token() -> None:
     instead of a fabricated 'stop'/'tool_calls'."""
     classification = ErrorClassification(category="http_4xx", should_fallback=True)
     chunks = [
-        ChatDelta(
+        StreamDelta(
             content="Azure OpenAI API Error 404: deployment not found",
             finish_reason="error",
             error_classification=classification,
@@ -329,7 +329,7 @@ async def test_llm_call_stream_does_not_reconnect_after_emitting_deltas() -> Non
 
         async def chat_stream(self, **_kwargs: Any):
             self.calls += 1
-            yield ChatDelta(content="partial")
+            yield StreamDelta(content="partial")
             raise _ApiError("APIError: OpenrouterException - Server disconnected")
 
     provider = _FailAfterContent()
@@ -361,7 +361,7 @@ async def test_llm_call_stream_reconnects_when_nothing_was_emitted() -> None:
             if self.calls == 1:
                 raise _ApiError("APIError: OpenrouterException - Server disconnected")
                 yield  # pragma: no cover - makes this an async generator
-            yield ChatDelta(content="recovered")
+            yield StreamDelta(content="recovered")
 
     provider = _FailFirstConnect()
     call = _bind_helper(provider)
@@ -494,9 +494,9 @@ async def test_llm_call_stream_empty_stream_yields_empty_content() -> None:
 
 async def test_llm_call_stream_splits_orphan_think_from_content() -> None:
     chunks = [
-        ChatDelta(content="raw reasoning"),
-        ChatDelta(content="</think>\n"),
-        ChatDelta(content="final answer"),
+        StreamDelta(content="raw reasoning"),
+        StreamDelta(content="</think>\n"),
+        StreamDelta(content="final answer"),
     ]
     provider = _FakeProvider(chunks, emits_unparsed_reasoning=True)
     call = _bind_helper(provider)
@@ -514,9 +514,9 @@ async def test_llm_call_stream_leaves_orphan_think_alone_for_non_leaking_provide
     """A provider not shaped like a parser-less self-hosted backend keeps a
     bare closing tag as ordinary content (F12 regression guard)."""
     chunks = [
-        ChatDelta(content="discussing the "),
-        ChatDelta(content="</think>"),
-        ChatDelta(content=" tag in my answer"),
+        StreamDelta(content="discussing the "),
+        StreamDelta(content="</think>"),
+        StreamDelta(content=" tag in my answer"),
     ]
     provider = _FakeProvider(chunks, emits_unparsed_reasoning=False)
     call = _bind_helper(provider)
@@ -534,8 +534,8 @@ async def test_llm_call_stream_leaves_structured_reasoning_alone() -> None:
     """A non-empty structured reasoning_content stream wins outright; an
     orphan tag inside content (if any) is left untouched."""
     chunks = [
-        ChatDelta(content=None, reasoning_content="thinking"),
-        ChatDelta(content="visible</think> more text"),
+        StreamDelta(content=None, reasoning_content="thinking"),
+        StreamDelta(content="visible</think> more text"),
     ]
     provider = _FakeProvider(chunks, emits_unparsed_reasoning=True)
     call = _bind_helper(provider)
@@ -554,7 +554,7 @@ async def test_llm_call_stream_leaves_structured_reasoning_alone() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _provider_with_ceiling(chunks: list[ChatDelta], max_tokens: int = 4096) -> _FakeProvider:
+def _provider_with_ceiling(chunks: list[StreamDelta], max_tokens: int = 4096) -> _FakeProvider:
     """A provider whose configured ceiling the loop can compare usage against."""
     provider = _FakeProvider(chunks)
     provider.generation = SimpleNamespace(max_tokens=max_tokens)
@@ -563,7 +563,7 @@ def _provider_with_ceiling(chunks: list[ChatDelta], max_tokens: int = 4096) -> _
 
 async def test_truncation_detected_from_upstream_finish_reason() -> None:
     """Signal 1: the backend says it stopped at the ceiling."""
-    chunks = [ChatDelta(content="partial"), ChatDelta(content=None, finish_reason="length")]
+    chunks = [StreamDelta(content="partial"), StreamDelta(content=None, finish_reason="length")]
     response = await _bind_helper(_provider_with_ceiling(chunks))(
         messages=[{"role": "user", "content": "hi"}], tools=None, model="m"
     )
@@ -585,7 +585,7 @@ async def test_unparseable_arguments_on_the_last_call_are_read_as_a_cut() -> Non
     needed the request and the check to agree on a number and a model id.
     """
     chunks = [
-        ChatDelta(
+        StreamDelta(
             content=None,
             tool_call_delta={
                 "tool_calls": [
@@ -597,7 +597,7 @@ async def test_unparseable_arguments_on_the_last_call_are_read_as_a_cut() -> Non
                 ]
             },
         ),
-        ChatDelta(content=None, finish_reason="tool_calls"),
+        StreamDelta(content=None, finish_reason="tool_calls"),
     ]
     response = await _bind_helper(_provider_with_ceiling(chunks))(
         messages=[{"role": "user", "content": "hi"}], tools=None, model="m"
@@ -613,8 +613,8 @@ async def test_unparseable_arguments_on_the_last_call_are_read_as_a_cut() -> Non
 async def test_complete_response_is_not_flagged_truncated() -> None:
     """None of the three signals present: a normal turn stays unflagged."""
     chunks = [
-        ChatDelta(content="all done"),
-        ChatDelta(content=None, usage={"completion_tokens": 12}, finish_reason="stop"),
+        StreamDelta(content="all done"),
+        StreamDelta(content=None, usage={"completion_tokens": 12}, finish_reason="stop"),
     ]
     response = await _bind_helper(_provider_with_ceiling(chunks, max_tokens=4096))(
         messages=[{"role": "user", "content": "hi"}], tools=None, model="m"
@@ -627,7 +627,7 @@ async def test_complete_response_is_not_flagged_truncated() -> None:
 async def test_complete_tool_call_is_not_flagged_truncated() -> None:
     """Well-formed tool arguments must not read as truncation."""
     chunks = [
-        ChatDelta(
+        StreamDelta(
             content=None,
             tool_call_delta={
                 "tool_calls": [
@@ -639,7 +639,7 @@ async def test_complete_tool_call_is_not_flagged_truncated() -> None:
                 ]
             },
         ),
-        ChatDelta(content=None, usage={"completion_tokens": 20}, finish_reason="tool_calls"),
+        StreamDelta(content=None, usage={"completion_tokens": 20}, finish_reason="tool_calls"),
     ]
     response = await _bind_helper(_provider_with_ceiling(chunks, max_tokens=4096))(
         messages=[{"role": "user", "content": "hi"}], tools=None, model="m"
@@ -660,8 +660,8 @@ async def test_a_clean_stop_with_no_unparsed_call_is_not_truncation() -> None:
     """
     provider = _FakeProvider(
         [
-            ChatDelta(content="x", usage={"completion_tokens": DEFAULT_MAX_OUTPUT_TOKENS}),
-            ChatDelta(content=None, finish_reason="stop"),
+            StreamDelta(content="x", usage={"completion_tokens": DEFAULT_MAX_OUTPUT_TOKENS}),
+            StreamDelta(content=None, finish_reason="stop"),
         ]
     )  # no .generation at all
     response = await _bind_helper(provider)(
@@ -672,9 +672,9 @@ async def test_a_clean_stop_with_no_unparsed_call_is_not_truncation() -> None:
     assert response.max_tokens is None, "no ceiling is claimed when the loop sent none"
 
 
-def _two_calls_last_one_cut() -> list[ChatDelta]:
+def _two_calls_last_one_cut() -> list[StreamDelta]:
     return [
-        ChatDelta(
+        StreamDelta(
             content=None,
             tool_call_delta={
                 "tool_calls": [
@@ -691,7 +691,7 @@ def _two_calls_last_one_cut() -> list[ChatDelta]:
                 ]
             },
         ),
-        ChatDelta(content=None, finish_reason="length"),
+        StreamDelta(content=None, finish_reason="length"),
     ]
 
 
@@ -715,7 +715,7 @@ async def test_only_the_last_tool_call_is_marked_truncated() -> None:
 async def test_truncation_marker_never_reaches_the_assistant_message() -> None:
     """It is metadata about the call, not an argument the model wrote.
 
-    ``openai_tool_call`` serializes ``arguments`` into the assistant message
+    ``to_openai_tool_call`` serializes ``arguments`` into the assistant message
     that goes back upstream next turn, and the loop does that before the
     registry ever sees the call. A marker living in that dict would therefore
     be echoed to the model as a field it never sent.
@@ -724,9 +724,7 @@ async def test_truncation_marker_never_reaches_the_assistant_message() -> None:
         messages=[{"role": "user", "content": "hi"}], tools=None, model="m"
     )
 
-    from raven.providers.tool_calls import openai_tool_call
-
-    payload = json.dumps([openai_tool_call(tc) for tc in response.tool_calls])
+    payload = json.dumps([tc.to_openai_tool_call() for tc in response.tool_calls])
 
     assert response.tool_calls[1].run_meta is not None
     assert "truncation" not in payload
@@ -737,8 +735,8 @@ async def test_truncation_marker_never_reaches_the_assistant_message() -> None:
 async def test_a_cut_inside_tool_arguments_still_marks_the_call() -> None:
     """The other order: text first, then the call, cut while writing it."""
     chunks = [
-        ChatDelta(content="I will write the file now"),
-        ChatDelta(
+        StreamDelta(content="I will write the file now"),
+        StreamDelta(
             content=None,
             tool_call_delta={
                 "tool_calls": [
@@ -746,7 +744,7 @@ async def test_a_cut_inside_tool_arguments_still_marks_the_call() -> None:
                 ]
             },
         ),
-        ChatDelta(content=None, finish_reason="length"),
+        StreamDelta(content=None, finish_reason="length"),
     ]
     response = await _bind_helper(_provider_with_ceiling(chunks, max_tokens=4096))(
         messages=[{"role": "user", "content": "hi"}], tools=None, model="m"
@@ -769,7 +767,7 @@ _GAP_S = 0.12
 class _PacedProvider:
     """Yields chunks, sleeping ``_GAP_S`` wherever the script says ``None``."""
 
-    def __init__(self, script: list[ChatDelta | None]) -> None:
+    def __init__(self, script: list[StreamDelta | None]) -> None:
         self._script = script
 
     async def chat_stream(self, **kwargs: Any):
@@ -789,12 +787,12 @@ async def test_the_thinking_clock_runs_to_the_first_answer_token() -> None:
     response = await _bind_helper(
         _PacedProvider(
             [
-                ChatDelta(content=None, reasoning_content="let me"),
+                StreamDelta(content=None, reasoning_content="let me"),
                 None,
-                ChatDelta(content="Hello"),
+                StreamDelta(content="Hello"),
                 None,
                 None,
-                ChatDelta(content=" world"),
+                StreamDelta(content=" world"),
             ]
         )
     )(messages=[{"role": "user", "content": "hi"}], tools=None, model="m")
@@ -809,9 +807,9 @@ async def test_the_thinking_clock_stops_at_the_first_tool_call() -> None:
     response = await _bind_helper(
         _PacedProvider(
             [
-                ChatDelta(content=None, reasoning_content="I need the file"),
+                StreamDelta(content=None, reasoning_content="I need the file"),
                 None,
-                ChatDelta(
+                StreamDelta(
                     content=None,
                     tool_call_delta={
                         "tool_calls": [{"index": 0, "id": "c1", "function": {"name": "read_file", "arguments": "{}"}}]
@@ -829,7 +827,7 @@ async def test_the_thinking_clock_stops_at_the_first_tool_call() -> None:
 
 async def test_a_call_that_never_thought_reports_no_thinking_time() -> None:
     """None is "not measured", which a reader must not draw as a zero."""
-    response = await _bind_helper(_FakeProvider([ChatDelta(content="hi")]))(
+    response = await _bind_helper(_FakeProvider([StreamDelta(content="hi")]))(
         messages=[{"role": "user", "content": "hi"}], tools=None, model="m"
     )
 

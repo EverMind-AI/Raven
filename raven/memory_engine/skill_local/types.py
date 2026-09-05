@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 
@@ -38,6 +39,17 @@ class SkillMeta:
 
     requires: dict = field(default_factory=dict)
     """Dependency declarations: ``{"bins": [...], "env": [...]}``."""
+
+    # ---- Later fields (filled by ingest, currently None / empty) ----
+
+    scope: str | None = None
+    """Owning pool: personal / team / official / community / mass."""
+
+    license: str | None = None
+    """SPDX license (e.g. MIT / Apache-2.0)."""
+
+    imported_at: datetime | None = None
+    """Time the skill was pulled in from an external source."""
 
     raw_frontmatter: dict = field(default_factory=dict)
     """Full original frontmatter, kept for downstream consumers."""

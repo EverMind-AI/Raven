@@ -128,9 +128,7 @@ def test_tool_schema_refreshes_after_adoption_in_the_same_turn(runtime):
         "monthly-feedback",
         "weekly-feedback",
     ]
-    from raven.agent.tools.params import validate_params
-
-    assert validate_params(loader.parameters, {"name": "monthly-feedback"}) == []
+    assert loader.validate_params({"name": "monthly-feedback"}) == []
 
 
 async def test_running_by_name_dispatches_the_same_graph(tmp_path):

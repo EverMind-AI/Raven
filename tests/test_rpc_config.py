@@ -1,6 +1,7 @@
-"""Tests for ``config.get`` / ``config.set`` / ``config.unset`` RPC handlers (specs §3.6).
+"""Tests for ``config.get`` / ``config.set`` RPC handlers (specs §3.6).
 
 v0.1 hot-changeable whitelist (per specs §3.6):
+    - ``agent.thinking_budget``
     - ``agent.temperature``
     - ``tui.theme``
     - ``tui.show_token_usage``
@@ -17,7 +18,6 @@ from types import SimpleNamespace
 
 import pytest
 
-import raven.home as raven_home_module
 from raven.rpc.errors import (
     ConfigFieldReadonlyError,
     ConfigValidationError,
@@ -27,7 +27,6 @@ from raven.rpc.methods.config import (
     CONFIG_WRITABLE_KEYS,
     config_get,
     config_set,
-    config_unset,
 )
 
 
@@ -420,8 +419,9 @@ def _pin(home: Path, provider: str, providers: dict | None = None) -> None:
         ),
         encoding="utf-8",
     )
+    import raven.config.loader as loader
 
-    raven_home_module._current_config_path = None
+    loader._current_config_path = None
 
 
 async def test_a_bare_id_the_pinned_provider_does_not_serve_is_refused(fake_home: Path) -> None:
@@ -836,47 +836,3 @@ async def test_the_write_target_follows_raven_home(tmp_path, monkeypatch) -> Non
     await config_set({"key": "language", "value": "zh"})
 
     assert json.loads((elsewhere / "config.json").read_text())["language"] == "zh"
-
-
-# ---------------------------------------------------------------------------
-# config.unset
-# ---------------------------------------------------------------------------
-
-
-async def test_config_unset_removes_a_stored_override(fake_home: Path) -> None:
-    await config_set({"key": "tui.theme", "value": "dark"})
-    out = await config_unset({"key": "tui.theme"})
-    assert out["removed"] is True
-    assert out["previous"] == "dark"
-    assert out["default"] is not None
-    got = await config_get({"keys": ["tui.theme"]})
-    assert got["config"]["tui.theme"] == out["default"]
-
-
-async def test_config_unset_prunes_the_emptied_parent_table(fake_home: Path) -> None:
-    await config_set({"key": "tui.theme", "value": "dark"})
-    await config_unset({"key": "tui.theme"})
-    payload = json.loads((fake_home / ".raven" / "config.json").read_text())
-    assert "theme" not in payload.get("tui", {})
-    assert "tui" not in payload
-
-
-async def test_config_unset_of_nothing_is_not_an_error(fake_home: Path) -> None:
-    out = await config_unset({"key": "tui.theme"})
-    assert out["removed"] is False
-    assert out["previous"] is None
-
-
-async def test_config_unset_non_whitelisted_raises_readonly(fake_home: Path) -> None:
-    with pytest.raises(ConfigFieldReadonlyError):
-        await config_unset({"key": "gateway.host"})
-
-
-async def test_config_unset_model_is_refused(fake_home: Path) -> None:
-    with pytest.raises(ConfigValidationError):
-        await config_unset({"key": "model"})
-
-
-async def test_config_unset_missing_key_raises_validation(fake_home: Path) -> None:
-    with pytest.raises(ConfigValidationError):
-        await config_unset({})

@@ -8,10 +8,9 @@ from typing import Any
 
 import pytest
 
-from raven.agent.loop.bundles import SubagentWiring
 from raven.agent.subagent.direct_chat import DirectChatError, direct_root
 from raven.agent.subagent.instance_state import InstanceState, instance_state_path
-from raven.contracts.llm_provider import LLMResponse
+from raven.providers.base import LLMResponse
 
 
 def _direct_chat_manager(tmp_path, monkeypatch, *, fail: bool = False):
@@ -673,9 +672,7 @@ async def test_a_direct_chat_runs_in_the_session_workdir_not_agent_home(tmp_path
     loop = AgentLoop(
         provider=_agent_loop_for_direct_chat(tmp_path, monkeypatch).provider,
         workspace=home,
-        subagents=SubagentWiring(
-            workdir_resolver=WorkdirResolver(WorkdirPolicy.LAUNCH_DIR, agent_home=home, launch_dir=work)
-        ),
+        workdir_resolver=WorkdirResolver(WorkdirPolicy.LAUNCH_DIR, agent_home=home, launch_dir=work),
     )
 
     async def fake_chat(*, session_key, agent, handle, text, workspace=None, on_delta=None):
@@ -954,11 +951,11 @@ class _StreamingProvider:
         return LLMResponse(content="whole", finish_reason="stop")
 
     async def chat_stream(self, **kwargs):
-        from raven.contracts.llm_provider import ChatDelta
+        from raven.providers.base import StreamDelta
 
         self.stream_kwargs.append(kwargs)
         for piece in self.pieces:
-            yield ChatDelta(content=piece)
+            yield StreamDelta(content=piece)
 
     def get_default_model(self) -> str:
         return "stub"
@@ -1008,7 +1005,7 @@ async def test_raven_loop_streams_under_the_providers_own_generation_budget(tmp_
     spawns -- visible as a reply truncated where a spawn's is not.
     """
     from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
-    from raven.contracts.llm_provider import GenerationSettings
+    from raven.providers.base import GenerationSettings
 
     provider = _StreamingProvider(["ok"])
     provider.generation = GenerationSettings(temperature=0.1, max_tokens=32000)

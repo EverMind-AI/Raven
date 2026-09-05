@@ -1,5 +1,3 @@
-"""The curator context engine under AgentLoop: archiving, traces, truncation, and fallback."""
-
 from __future__ import annotations
 
 import json
@@ -8,11 +6,10 @@ from pathlib import Path
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.bundles import EngineWiring
 from raven.config import ContextConfig
 from raven.context_engine import ContextAssembler, TurnContext
 from raven.context_engine.segments.curator import CuratorSegmentBuilder
-from raven.contracts.assembled import TokenBudget
+from raven.memory_engine.base import TokenBudget
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
@@ -106,7 +103,7 @@ def test_agentloop_uses_curator_and_keeps_internal_tools_private(tmp_path: Path)
     loop = AgentLoop(
         provider=CuratorScriptProvider(),
         workspace=tmp_path,
-        engine=EngineWiring(context_config=ContextConfig(fast_path_threshold=0.0)),
+        context_config=ContextConfig(engine="curator", fast_path_threshold=0.0),
     )
 
     assert loop.context_engine.name == "context_assembler"
@@ -121,7 +118,7 @@ async def test_curator_slow_path_archives_and_writes_trace(tmp_path: Path):
     loop = AgentLoop(
         provider=provider,
         workspace=tmp_path,
-        engine=EngineWiring(context_config=ContextConfig(fast_path_threshold=0.0)),
+        context_config=ContextConfig(engine="curator", fast_path_threshold=0.0),
     )
 
     assembled = await loop.context_engine.assemble(
@@ -159,7 +156,7 @@ async def test_curator_does_not_dispatch_a_truncated_call(tmp_path: Path):
     loop = AgentLoop(
         provider=provider,
         workspace=tmp_path,
-        engine=EngineWiring(context_config=ContextConfig(fast_path_threshold=0.0)),
+        context_config=ContextConfig(engine="curator", fast_path_threshold=0.0),
     )
 
     assembled = await loop.context_engine.assemble(
@@ -183,7 +180,7 @@ async def test_curator_fallback_when_internal_agent_does_not_finish(tmp_path: Pa
     loop = AgentLoop(
         provider=provider,
         workspace=tmp_path,
-        engine=EngineWiring(context_config=ContextConfig(fast_path_threshold=0.0)),
+        context_config=ContextConfig(engine="curator", fast_path_threshold=0.0),
     )
 
     assembled = await loop.context_engine.assemble(
@@ -205,7 +202,7 @@ async def test_process_message_records_main_and_curator_trajectories(tmp_path: P
     loop = AgentLoop(
         provider=provider,
         workspace=tmp_path,
-        engine=EngineWiring(context_config=ContextConfig(fast_path_threshold=0.0)),
+        context_config=ContextConfig(engine="curator", fast_path_threshold=0.0),
     )
     session = loop.sessions.get_or_create("cli:trace-test")
     session.messages.extend(_session_messages())
@@ -413,7 +410,7 @@ async def test_pinned_guide_body_survives_a_plan_that_omitted_it(tmp_path: Path)
     loop = AgentLoop(
         provider=_PlanOmittingPinsProvider(),
         workspace=tmp_path,
-        engine=EngineWiring(context_config=ContextConfig(fast_path_threshold=0.0)),
+        context_config=ContextConfig(engine="curator", fast_path_threshold=0.0),
     )
 
     assembled = await loop.context_engine.assemble(
@@ -430,7 +427,7 @@ async def test_pinned_guide_body_survives_a_plan_that_omitted_it(tmp_path: Path)
     off = AgentLoop(
         provider=_PlanOmittingPinsProvider(),
         workspace=tmp_path / "off",
-        engine=EngineWiring(context_config=ContextConfig(fast_path_threshold=0.0, pinned_skill_ids=[])),
+        context_config=ContextConfig(engine="curator", fast_path_threshold=0.0, pinned_skill_ids=[]),
     )
     assembled_off = await off.context_engine.assemble(
         "cli:pin-test",
@@ -447,7 +444,7 @@ async def test_pinned_ids_are_recorded_in_the_turn_trace(tmp_path: Path):
     loop = AgentLoop(
         provider=_PlanOmittingPinsProvider(),
         workspace=tmp_path,
-        engine=EngineWiring(context_config=ContextConfig(fast_path_threshold=0.0)),
+        context_config=ContextConfig(engine="curator", fast_path_threshold=0.0),
     )
 
     assembled = await loop.context_engine.assemble(
@@ -466,7 +463,7 @@ def test_archiving_a_pinned_id_is_refused(tmp_path: Path) -> None:
     slow path's cue to stop selecting it — a pin has to survive that too."""
     from raven.context_engine.curator import CuratorArchiveStore
 
-    config = ContextConfig()
+    config = ContextConfig(engine="curator")
     store = CuratorArchiveStore(tmp_path, config)
     messages = _session_with_guide_fetch()
     manifest = store.build_manifest("cli:pin-archive", messages)
@@ -483,7 +480,7 @@ def test_pinned_items_carry_a_relevance_floor(tmp_path: Path) -> None:
     """So the slow path's own ranking never argues against the pin."""
     from raven.context_engine.curator import CuratorArchiveStore
 
-    store = CuratorArchiveStore(tmp_path, ContextConfig())
+    store = CuratorArchiveStore(tmp_path, ContextConfig(engine="curator"))
     manifest = store.build_manifest("cli:pin-rel", _session_with_guide_fetch())
 
     assert all(item.relevance >= 0.9 for item in manifest if item.pinned)
@@ -516,7 +513,7 @@ async def test_pinned_ids_are_also_protected_from_budget_trimming(tmp_path: Path
     loop = AgentLoop(
         provider=_PlanOmittingPinsProvider(),
         workspace=tmp_path,
-        engine=EngineWiring(context_config=ContextConfig(fast_path_threshold=0.0)),
+        context_config=ContextConfig(engine="curator", fast_path_threshold=0.0),
     )
     await loop.context_engine.assemble(
         "cli:pin-protect",

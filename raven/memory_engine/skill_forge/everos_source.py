@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any
 from raven.memory_engine.skill_forge.types import RouterHit
 
 if TYPE_CHECKING:
-    from raven.contracts.memory import MemoryBackend
+    from raven.memory_engine.backend import MemoryBackend
 
 logger = logging.getLogger(__name__)
 

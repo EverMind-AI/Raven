@@ -2,7 +2,7 @@
 
 Owns the httpx session and the access-token cache, and exposes one coroutine
 per remote operation (file download, remote fetch with SSRF guard, media
-upload, message send). Pure transport -- no channel concerns. These are
+upload, message send). Pure transport — no channel/bus concerns. These are
 live network flows, exercised by integration/manual testing.
 """
 

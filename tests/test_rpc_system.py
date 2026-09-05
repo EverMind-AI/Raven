@@ -181,10 +181,10 @@ async def test_dispatcher_parse_response_id_echoed():
 
 
 async def test_version_reports_a_pending_upgrade(monkeypatch: pytest.MonkeyPatch):
-    from raven.updates import update_notice as un
+    from raven.cli import update_notice as un
 
     monkeypatch.setattr(un, "update_notice", lambda _cur: (True, "raven upgrade"))
-    monkeypatch.setattr(un, "read_cache", lambda: {"latest_version": "9.9.9"})
+    monkeypatch.setattr(un, "_read_cache", lambda: {"latest_version": "9.9.9"})
 
     result = await system_version({})
 
@@ -193,7 +193,7 @@ async def test_version_reports_a_pending_upgrade(monkeypatch: pytest.MonkeyPatch
 
 
 async def test_version_stays_quiet_without_a_cached_release(monkeypatch: pytest.MonkeyPatch):
-    from raven.updates import update_notice as un
+    from raven.cli import update_notice as un
 
     monkeypatch.setattr(un, "update_notice", lambda _cur: None)
 
@@ -234,9 +234,9 @@ async def test_upgrade_refuses_on_a_gateway_hosted_page():
 async def test_upgrade_refuses_when_the_install_cannot_self_upgrade(monkeypatch: pytest.MonkeyPatch):
     import asyncio
 
+    from raven.cli import upgrade_commands
     from raven.cli.serve_commands import SERVE
     from raven.rpc.methods.system import system_upgrade
-    from raven.updates import upgrade as upgrade_commands
 
     def refuse() -> None:
         raise upgrade_commands.UpgradeError("Editable Raven installations cannot be upgraded automatically")
@@ -259,9 +259,9 @@ async def test_upgrade_names_an_install_already_in_flight(monkeypatch: pytest.Mo
     import asyncio
     import importlib.metadata as md
 
+    from raven.cli import upgrade_commands
     from raven.cli.serve_commands import SERVE
     from raven.rpc.methods.system import system_upgrade
-    from raven.updates import upgrade as upgrade_commands
 
     def mid_replacement() -> None:
         raise md.PackageNotFoundError("raven")
@@ -279,9 +279,9 @@ async def test_upgrade_names_an_install_already_in_flight(monkeypatch: pytest.Mo
 async def test_upgrade_hands_off_then_stops_the_gateway(monkeypatch: pytest.MonkeyPatch, tmp_path):
     import asyncio
 
+    from raven.cli import upgrade_commands
     from raven.cli.serve_commands import SERVE
     from raven.rpc.methods.system import system_upgrade
-    from raven.updates import upgrade as upgrade_commands
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -367,8 +367,8 @@ async def test_version_check_true_fetches_before_answering(monkeypatch) -> None:
     """The button labelled "check for updates" must ask about now, not about the
     last daily poll -- a tester clicks it seconds after being told a build was
     published, and a cached "up to date" there reads as a broken channel."""
+    from raven.cli import update_notice
     from raven.rpc.methods import system as system_mod
-    from raven.updates import update_notice
 
     fetched = {"n": 0}
     monkeypatch.setattr(update_notice, "check_for_update", lambda current: fetched.__setitem__("n", fetched["n"] + 1))
@@ -449,12 +449,12 @@ async def test_two_connections_keep_their_surfaces_apart() -> None:
 
 async def _check_with(monkeypatch, *, latest: str | None, sink=None) -> tuple[dict, list]:
     """Run an explicit check against a cache holding ``latest``, collecting frames."""
+    from raven.cli import update_notice as un
     from raven.rpc.methods import system as system_mod
-    from raven.updates import update_notice as un
 
     monkeypatch.setattr(un, "check_for_update", lambda _cur: latest)
     monkeypatch.setattr(un, "update_notice", lambda _cur: (True, "raven upgrade") if latest else None)
-    monkeypatch.setattr(un, "read_cache", lambda: {"latest_version": latest} if latest else {})
+    monkeypatch.setattr(un, "_read_cache", lambda: {"latest_version": latest} if latest else {})
 
     frames: list = []
     if sink is None:
@@ -487,12 +487,12 @@ async def test_an_explicit_check_announces_nothing_when_up_to_date(monkeypatch) 
 async def test_a_transport_with_no_sink_announces_nothing(monkeypatch) -> None:
     """The TUI's single-socket transport and the web gateway register these
     handlers without a broadcast sink; the check must behave as it did before."""
+    from raven.cli import update_notice as un
     from raven.rpc.methods import system as system_mod
-    from raven.updates import update_notice as un
 
     monkeypatch.setattr(un, "check_for_update", lambda _cur: "9.9.9")
     monkeypatch.setattr(un, "update_notice", lambda _cur: (True, "raven upgrade"))
-    monkeypatch.setattr(un, "read_cache", lambda: {"latest_version": "9.9.9"})
+    monkeypatch.setattr(un, "_read_cache", lambda: {"latest_version": "9.9.9"})
 
     async def _forbidden(*_args, **_kwargs):
         raise AssertionError("announced with no sink wired")
@@ -511,11 +511,11 @@ async def test_a_transport_with_no_sink_announces_nothing(monkeypatch) -> None:
 async def test_a_plain_version_call_never_announces(monkeypatch) -> None:
     """Only an explicit check announces. Every open page asks for its versions at
     boot, and a broadcast per boot would banner every other tab as well."""
+    from raven.cli import update_notice as un
     from raven.rpc.methods import system as system_mod
-    from raven.updates import update_notice as un
 
     monkeypatch.setattr(un, "update_notice", lambda _cur: (True, "raven upgrade"))
-    monkeypatch.setattr(un, "read_cache", lambda: {"latest_version": "9.9.9"})
+    monkeypatch.setattr(un, "_read_cache", lambda: {"latest_version": "9.9.9"})
 
     frames: list = []
 

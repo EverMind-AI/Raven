@@ -1,9 +1,6 @@
 # -*- coding: utf-8 -*-
 """The sub-agent DAG spec models and structural validation."""
 
-from collections.abc import Callable
-from typing import Annotated
-
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pydantic.alias_generators import to_camel
 
@@ -11,7 +8,7 @@ from raven.agent.subagent.dag_store import RUNNING, UNRECORDED, SessionNodes
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.subagent.prompt_paths import check_confined
 from raven.agent.subagent.prompt_placeholders import parse_placeholders
-from raven.agent.subagent.prompt_render import check_input_contract
+from raven.agent.subagent.prompt_render import check_inputs_referenced
 
 # A node id becomes a path component (``<id>.prompt.md``; ``dag_reader.py`` re-checks
 # it with its own copy of this charset before joining a web-supplied id into a
@@ -21,7 +18,7 @@ _ID_PATTERN = r"^[A-Za-z0-9_-]+$"
 # registry, grouped for the capability check, and echoed into status
 # JSON. It reaches no path and no shell, so it accepts any name the config layer
 # accepts. Holding it to the id charset meant a DAG could not name an agent that
-# `spawn` dispatches to happily -- "General Audit" and a Chinese display name are legal agent
+# `spawn` dispatches to happily -- "General Audit" and 研究员 are legal agent
 # names, and the node was rejected for the name alone. Edge whitespace is still
 # refused because it is invisible: " coder" would fail the table lookup against
 # a name that looks identical to the configured one.
@@ -35,7 +32,7 @@ _AGENT_PATTERN = r"^(?:\S(?:.*\S)?)?$"
 # Fields a node cannot run without. A playbook may leave one blank on purpose --
 # ``load_playbook`` reports it as a gap for the model to fill -- so "blank" has to
 # survive parsing and be caught here instead.
-REQUIRED_NON_BLANK = ("subagent", "prompt_template", "node_summary")
+_REQUIRED_NON_BLANK = ("subagent", "prompt_template", "node_summary")
 
 
 class DagNodeSpec(BaseModel):
@@ -119,7 +116,7 @@ class DagNodeSpec(BaseModel):
     skills: list[str] | None = None
     mcps: list[str] | None = None
     inputs: dict[str, object] = Field(default_factory=dict)
-    instance: Annotated[str, Field(min_length=1, pattern=r"^\S(?:.*\S)?$")] | None = None
+    instance: str | None = None
 
 
 class SubAgentDagSpec(BaseModel):
@@ -192,85 +189,6 @@ def graph_deps(node: DagNodeSpec, by_id: dict[str, DagNodeSpec]) -> list[str]:
     return [dep for dep in node.depends_on if dep in by_id]
 
 
-def collect_static_graph_errors(
-    nodes: list[DagNodeSpec],
-    *,
-    roots: tuple[str, ...] | None = None,
-    session_nodes: SessionNodes | None = None,
-    allowed_blank_fields: frozenset[str] = frozenset(),
-    check_paths: bool = True,
-) -> list[str]:
-    """Collect DAG errors that can be found before any node is dispatched.
-
-    This is the shared static contract for both an ordinary DAG call and a
-    Playbook being generated or loaded. Agent-table capability checks remain
-    with their callers because they need live registry data; graph shape,
-    references, input contracts and cycles do not.
-    """
-    errors: list[str] = []
-
-    def capture(check: Callable[[], object]) -> None:
-        try:
-            check()
-        except DagValidationError as exc:
-            errors.append(str(exc))
-
-    ids = [node.id for node in nodes]
-    seen: set[str] = set()
-    duplicate_ids: set[str] = set()
-    for node_id in ids:
-        if node_id in seen:
-            duplicate_ids.add(node_id)
-        seen.add(node_id)
-    unique_ids = not duplicate_ids
-    if duplicate_ids:
-        errors.append(f"duplicate node ids: {sorted(duplicate_ids)}")
-
-    by_id = {node.id: node for node in nodes}
-    known = session_nodes or SessionNodes()
-    for node in nodes:
-        blank = [
-            field
-            for field in REQUIRED_NON_BLANK
-            if field not in allowed_blank_fields and not str(getattr(node, field, "") or "").strip()
-        ]
-        if blank:
-            errors.append(
-                f"node '{node.id}' is missing {sorted(blank)} -- a node cannot run without them. "
-                "If this came from a playbook that left them for you to fill, call load_playbook "
-                "again with `fills` for that node; otherwise put the values in the graph."
-            )
-
-        if (owner := known.owner.get(node.id)) is not None:
-            advice = (
-                f"Rename it, or drop this node and reference '{node.id}' directly (no depends_on needed)"
-                if known.is_readable(node.id)
-                else "Rename it -- that run left it with no output, so there is nothing to reference either"
-            )
-            errors.append(
-                f"node id '{node.id}' is already used by run '{owner}'; ids are unique per conversation. {advice}"
-            )
-
-        for dep in node.depends_on:
-            if dep not in by_id:
-                capture(lambda node_id=node.id, dep=dep: _check_earlier_dep(node_id, dep, known))
-        capture(
-            lambda node=node: _validate_refs(
-                node,
-                roots,
-                known,
-                require_input_references=not (
-                    "prompt_template" in allowed_blank_fields and not node.prompt_template.strip()
-                ),
-                check_paths=check_paths,
-            )
-        )
-
-    if unique_ids:
-        capture(lambda: _topological_order(by_id))
-    return errors
-
-
 def validate_and_order(
     spec: SubAgentDagSpec,
     roots: tuple[str, ...] | None = None,
@@ -311,9 +229,52 @@ def validate_and_order(
         `DagValidationError`:
             When any structural rule is violated.
     """
-    if errors := collect_static_graph_errors(spec.nodes, roots=roots, session_nodes=session_nodes):
-        raise DagValidationError(errors[0])
-    return _topological_order({node.id: node for node in spec.nodes})
+    nodes = spec.nodes
+    ids = [node.id for node in nodes]
+    if len(ids) != len(set(ids)):
+        raise DagValidationError("node ids must be unique")
+
+    # A field a playbook left blank on purpose has to be refused here rather than
+    # at parse time: ``load_playbook`` needs the file to load so it can report the
+    # blank as a gap for the model to fill, and this is the point past which a
+    # blank can no longer be filled by anyone.
+    for node in nodes:
+        blank = [f for f in _REQUIRED_NON_BLANK if not str(getattr(node, f, "") or "").strip()]
+        if blank:
+            raise DagValidationError(
+                f"node '{node.id}' is missing {sorted(blank)} -- a node cannot run without them. "
+                f"If this came from a playbook that left them for you to fill, call load_playbook "
+                f"again with `fills` for that node; otherwise put the values in the graph."
+            )
+    id_set = set(ids)
+    by_id = {node.id: node for node in nodes}
+    known = session_nodes or SessionNodes()
+
+    for node in nodes:
+        # Session-wide, not graph-wide: a node id is how a later graph names
+        # this one's output, so reusing an id would leave two nodes answering
+        # to one name and silently resolve to whichever ran last.
+        if (owner := known.owner.get(node.id)) is not None:
+            # Only offer the reference when there is one to make: for a node
+            # that failed, was skipped or is still being written, reading it is
+            # refused too, and advising both leaves no way forward at all.
+            advice = (
+                f"Rename it, or drop this node and reference '{node.id}' directly (no depends_on needed)"
+                if known.is_readable(node.id)
+                else "Rename it -- that run left it with no output, so there is nothing to reference either"
+            )
+            raise DagValidationError(
+                f"node id '{node.id}' is already used by run '{owner}'; ids are unique per conversation. {advice}",
+            )
+        for dep in node.depends_on:
+            if dep not in id_set:
+                _check_earlier_dep(node.id, dep, known)
+        # Runs after the loop above, which leaves every id in depends_on either
+        # in this graph or completed in an earlier run -- both readable, which
+        # is what the reference checks take a declared dependency to mean.
+        _validate_refs(node, roots, known)
+
+    return _topological_order(by_id)
 
 
 def _check_earlier_dep(node_id: str, dep: str, known: SessionNodes) -> None:
@@ -349,9 +310,6 @@ def _validate_refs(
     node: DagNodeSpec,
     roots: tuple[str, ...] | None = None,
     session_nodes: SessionNodes | None = None,
-    *,
-    require_input_references: bool = True,
-    check_paths: bool = True,
 ) -> None:
     """Enforce default-deny on a node's template references.
 
@@ -369,9 +327,6 @@ def _validate_refs(
             Roots a file reference may resolve into.
         session_nodes (`SessionNodes | None`):
             What this session's earlier runs did with each node id.
-        check_paths (`bool`):
-            Whether to enforce path confinement. A reusable Playbook has no
-            session roots yet, so its caller defers this check to dispatch.
 
     Raises:
         `DagValidationError`:
@@ -381,21 +336,26 @@ def _validate_refs(
     """
     declared_deps = set(node.depends_on)
     known = session_nodes or SessionNodes()
-    check_input_contract(
-        node.prompt_template,
-        node.inputs,
-        prefix=f"node '{node.id}' ",
-        require_references=require_input_references,
-    )
+    check_inputs_referenced(node.prompt_template, node.inputs, prefix=f"node '{node.id}' ")
     for ph in parse_placeholders(node.prompt_template):
         if ph.kind in ("output", "output_path"):
             _check_output_ref(node, ph, declared_deps, known)
-        if ph.kind in ("ref", "ref_path") and check_paths:
+        if ph.kind in ("input", "input_path") and ph.name not in node.inputs:
+            raise DagValidationError(
+                f"node '{node.id}' references unknown input '{ph.name}'",
+            )
+        if ph.kind == "input_path":
+            spec = node.inputs.get(ph.name)
+            if not isinstance(spec, dict) or not ({"file", "node"} & set(spec)):
+                raise DagValidationError(
+                    f"node '{node.id}' input '{ph.name}' is not a file or node input, so '.path' cannot be referenced",
+                )
+        if ph.kind in ("ref", "ref_path"):
             check_confined(ph.name, what="ref", roots=roots)
     for key, value in node.inputs.items():
         if not isinstance(value, dict):
             continue
-        if "file" in value and check_paths:
+        if "file" in value:
             check_confined(str(value["file"]), what=f"input '{key}' file", roots=roots)
         elif "node" in value:
             _check_node_input(node, key, value, declared_deps, known)

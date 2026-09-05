@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from raven.contracts.tool import Tool
+from raven.agent.tools.base import Tool
 
 if TYPE_CHECKING:
     from raven.mcp.manager import MCPConnectionManager

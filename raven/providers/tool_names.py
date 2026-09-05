@@ -79,7 +79,7 @@ def normalized_tool_name(raw: Any) -> Any:
 
     Asked at the parse exits rather than at the registry lookup because the name
     outlives the lookup. It is written back into the history by
-    ``providers.tool_calls.openai_tool_call``, where a bad one is replayed to the
+    ``ToolCallRequest.to_openai_tool_call``, where a bad one is replayed to the
     model every turn afterwards, and it keys the failure streak, the tool events
     and the logs -- each of which would otherwise need an allowance of its own,
     and one of them would be missed.

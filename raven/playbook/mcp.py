@@ -1,5 +1,7 @@
 """The MCP servers one playbook run may reach, and the pre-flight that opens them.
 
+Two holes are closed here, and they are the same hole seen from both ends.
+
 A playbook's ``mcps: [local-pg]`` is a bare local short name resolved against the
 receiving machine's ``tools.mcpServers``, so a distributed playbook delivered
 nothing unless that machine happened to have a server of that name. The spec's
@@ -131,9 +133,6 @@ async def preflight_mcp_source(
     A connect failure degrades rather than aborting: the server is left in its
     failed state, the grant reports it, and the graph runs without it. Aborting
     would make one unreachable server cost the whole run.
-
-    ``workspace`` is Agent home -- the directory the sandbox executor confines a
-    bridged upstream to.
     """
     from raven.agent.subagent.mcp_grant import LiveMcpSource
     from raven.agent.tools.registry import ToolRegistry

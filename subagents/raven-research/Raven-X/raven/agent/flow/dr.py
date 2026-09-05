@@ -20,12 +20,12 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.agent.evidence_round import EvidenceRound
-from raven.agent.fetch_gate import FetchGate
 from raven.agent.flow.answer_text import visible_answer
 from raven.agent.flow.ask_user import AskUserGate, ClarifyExemptHook
 from raven.agent.flow.ask_user_tool import DRAskUserTool
 from raven.agent.flow.budget_note import BudgetNoteObserver
 from raven.agent.flow.conversation import ConversationGate, GatedHook, is_research_turn
+from raven.agent.fetch_gate import FetchGate
 from raven.agent.flow.fetch_floor import FetchFloorObserver
 from raven.agent.flow.fetch_gate import FetchGateObserver
 from raven.agent.flow.finalize import ForcedFinalizeGate
@@ -204,41 +204,13 @@ _DR_ANSWER_MARKER_CLAUSE = """{n}. End your reply with the answer wrapped in `<a
 # other's state - four spellings to keep true instead of two. They compose
 # because the marker clause already says the tags go last and the reasoning stays
 # above them, which is exactly where this clause leaves the body.
-#
-# ★ 20260901 (Framework, product-run audit). Both templates gained one sentence
-# naming the fence tag, and it is a repair rather than a new instruction: they
-# already asked for "the URL of the page you fetched it from", and the model was
-# not disobeying - it was citing the nearest thing in context that looks like a
-# handle. Measured on one product run: 87 citation handles in the body, of which
-# 75 were ``"<claim text>" (web_fetch #cd8187b0)`` with no locator at all, 8 a
-# bare host with no scheme, 1 an arXiv id, and **0** a full URL.
-#
-# The cause is structural, not a wording gap: ``wrap_untrusted`` prints
-# ``[BEGIN UNTRUSTED web_fetch #cd8187b0 ...]`` immediately before the content, so
-# the shortest available token that reads like a citation is the *security fence's*
-# id. Asking harder for a URL cannot compete with a handle that is right there and
-# eight characters long, so the clause now says what that token is instead.
-#
-# Downstream this is the difference between a check that fails and a check that
-# never runs: ``process_appendix``'s grounding rate takes cited URLs as its
-# denominator, and a body full of fence ids gives it a denominator of zero - which
-# it correctly reports as undefined, over an answer that read 49 pages. No
-# appendix-side change can recover a locator the answer never wrote.
-#
-# Product surface only, like everything else in this clause: every bench profile
-# pins ``report_structure`` off, so the segment they measured is byte-identical
-# (the stamped 3,485 / ``593c46c416c3f4cf`` is the clause-off state and does not
-# move). No new switch, because a knob for "mean what the sentence above already
-# says" is config surface that can only ever be set one way.
 _DR_REPORT_STRUCTURE_CLAUSE = """{n}. Write the reply as a research report with exactly these three sections,
    under these exact headings, in this order, each one present every time:
    `## Answer` - the direct answer to the question in one or two sentences; if
    the question was ambiguous, one more line on how you read it.
    `## Findings` - the findings that decide the answer, each with the URL of
-   the page you fetched it from, written out in full and starting with
-   `https://`; the `web_fetch #...` tag that wraps a tool result is a data
-   fence, not a citation - never write it in the reply. A finding no fetched
-   page supports is named as unverified, never given an invented source.
+   the page you fetched it from; a finding no fetched page supports is named
+   as unverified, never given an invented source.
    `## Limitations` - whatever you could not establish, named plainly; when
    nothing material is missing, say so in one line.
 {format_override}   Add no other headings, and do not close with a list of sources: every
@@ -289,12 +261,9 @@ _DR_REPORT_STRUCTURE_CLAUSE_DEEP = """{n}. Write the reply as a research report 
    argument, not a list of signals: why something happened, what it leads to,
    and what would break that reading. `###` subheadings are allowed inside this
    section when the report needs them. Every specific number, date or quoted
-   statement carries the URL of the page you fetched it from - written out in
-   full and starting with `https://` - and its as-of or publication date when
-   the data is time-sensitive; the `web_fetch #...` tag that wraps a tool
-   result is a data fence, not a citation, and never appears in the reply. A
-   finding no fetched page supports is named as unverified, never given an
-   invented source. When
+   statement carries the URL of the page you fetched it from, and its as-of or
+   publication date when the data is time-sensitive; a finding no fetched page
+   supports is named as unverified, never given an invented source. When
    independent sources disagree on a fact that decides the answer, show both
    values with their sources and say which one the report uses and why,
    preferring primary or official sources. State established facts plainly;

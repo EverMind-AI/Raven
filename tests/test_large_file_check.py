@@ -1,5 +1,3 @@
-"""The large-file gate: size ceiling, blocked asset types, and the source-tree exemptions."""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -119,34 +117,6 @@ def test_allows_only_jpg_raven_design_skill_reference_images(tmp_path: Path) -> 
             extension=".jpg",
         ),
         check_large_files.BlockedAssetViolation(path="docs/benchmark.jpg", extension=".jpg"),
-    ]
-
-
-def test_allows_jpg_plates_at_the_design_engine_wheel_seat(tmp_path: Path) -> None:
-    """The C4 re-seat: the plates migrated into the design-engine wheel, and
-    the same rule follows them -- .jpg only, only under a skill's
-    references/, while the frozen fork seat stays allowed until retirement."""
-    wheel = "plugins-dist/design-engine/raven_design/skills/example"
-    paths = [
-        f"{wheel}/references/plate.jpg",
-        f"{wheel}/references/nested/plate.jpg",
-        f"{wheel}/references/plate.png",
-        f"{wheel}/assets/plate.jpg",
-        "plugins-dist/design-engine/raven_design/plate.jpg",
-    ]
-    for path in paths:
-        candidate = tmp_path / path
-        candidate.parent.mkdir(parents=True, exist_ok=True)
-        candidate.write_bytes(b"x")
-
-    violations = check_large_files.find_blocked_asset_files(paths, root=tmp_path)
-
-    assert violations == [
-        check_large_files.BlockedAssetViolation(path=f"{wheel}/references/plate.png", extension=".png"),
-        check_large_files.BlockedAssetViolation(path=f"{wheel}/assets/plate.jpg", extension=".jpg"),
-        check_large_files.BlockedAssetViolation(
-            path="plugins-dist/design-engine/raven_design/plate.jpg", extension=".jpg"
-        ),
     ]
 
 

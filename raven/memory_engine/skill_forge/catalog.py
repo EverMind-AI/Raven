@@ -1,13 +1,15 @@
 """LocalSkillCatalog — the single owner of the local skill pool.
 
-It builds the :class:`SkillRegistry` and :class:`LocalPool`, runs the SKILL.md
-file watcher, and renders skills for the prompt (always-skills, injection, XML
-summary).
+Absorbs what used to be ``SkillService``: it builds the
+:class:`SkillRegistry` + :class:`LocalPool`, runs the SKILL.md file
+watcher, and renders skills for the prompt (always-skills, injection,
+XML summary).
 
-Retrieval is **not** here: it lives in :class:`LocalSkillSource`, which reuses
-this catalog's ``pool`` and ``registry``, and is fused with the remote sources
-by :class:`SkillForgeRouter`, with the LLM gate and query rewriter downstream
-of the fusion.
+Retrieval is **not** here — that lives in :class:`LocalSkillSource`
+(which reuses this catalog's ``pool`` + ``registry``) and is fused
+with the remote sources by :class:`SkillForgeRouter`. The old
+``SkillService.select`` / LLM-gate / query-rewriter retrieval path
+was retired when the router replaced it.
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from raven.memory_engine.skill_local.watcher import SkillFileWatcher
+    from raven.providers.base import LLMProvider
 
 
 class LocalSkillCatalog:
@@ -36,6 +39,7 @@ class LocalSkillCatalog:
         workspace: Path,
         config: Any = None,
         builtin_skills_dir: Path | None = None,
+        llm_provider: "LLMProvider | None" = None,  # accepted for caller compat; unused
         *,
         start_watcher: bool = True,
     ):
@@ -198,11 +202,11 @@ class LocalSkillCatalog:
         self._file_watcher = None
 
     # ------------------------------------------------------------------
-    # Dict-shaped listing API
+    # Legacy ``SkillsLoader`` API (signature-compatible drop-in)
     # ------------------------------------------------------------------
 
     def list_skills(self, filter_unavailable: bool = True) -> list[dict[str, str]]:
-        """All skills as ``{name, path, source}`` dicts."""
+        """All skills as legacy-shape dicts ``{name, path, source}``."""
         metas = self._registry.list_all()
         if filter_unavailable:
             metas = [m for m in metas if self._registry.check_available(m.name, source=m.source)]
@@ -294,87 +298,102 @@ class LocalSkillCatalog:
             if not m.content or self._is_blocked(m.name):
                 continue
             body = m.content
-            path_obj = m.path
-            base_dir = str(path_obj.parent)
-            base_dir = str(path_obj.parent)
-            import re as _re
+            # db-only rows without on-disk assets get a synthetic
+            # ``sqlite://<source>/<name>`` path — that's a placeholder,
+            # not a real directory, so skip the {baseDir} substitution to
+            # avoid emitting a nonsense path like ``sqlite:/scripts/foo.py``.
+            path_obj = getattr(m, "path", None)
+            path_str = str(path_obj) if path_obj is not None else ""
+            has_real_path = path_obj is not None and not path_str.startswith("sqlite:")
+            if has_real_path:
+                base_dir = str(path_obj.parent)
+                import re as _re
 
-            # Markdown links to bundled files are the one unambiguous
-            # "read_file this" form — rewrite them to absolute, but only
-            # when the target exists on disk so we never emit a confident
-            # 404 (same existence guard as the {baseDir} branch). Bare /
-            # ``./`` refs are left untouched (often shell-exec or prose).
-            _md_link_re = _re.compile(
-                r"\[([^\]]+)\]\((?:\.{0,2}/)?"
-                r"((?:references|scripts|assets|examples)/[^)\s]+)\)"
-            )
-
-            def _md_sub(_mo, _bd=base_dir, _par=path_obj.parent):
-                _rel = _mo.group(2).rstrip(".,;:")
-                # split off a trailing #anchor / ?query before the
-                # existence check, re-append it to the absolute path.
-                _cut = min(
-                    (i for i in (_rel.find("#"), _rel.find("?")) if i != -1),
-                    default=-1,
+                # Markdown links to bundled files are the one unambiguous
+                # "read_file this" form — rewrite them to absolute, but only
+                # when the target exists on disk so we never emit a confident
+                # 404 (same existence guard as the {baseDir} branch). Bare /
+                # ``./`` refs are left untouched (often shell-exec or prose).
+                _md_link_re = _re.compile(
+                    r"\[([^\]]+)\]\((?:\.{0,2}/)?"
+                    r"((?:references|scripts|assets|examples)/[^)\s]+)\)"
                 )
-                _frag = _rel[_cut:] if _cut != -1 else ""
-                _file = _rel[:_cut] if _cut != -1 else _rel
-                if _file and (_par / _file).exists():
-                    return f"[{_mo.group(1)}]({_bd}/{_file}{_frag})"
-                return _mo.group(0)
 
-            # Skip fenced code blocks: a link there is example markup,
-            # not a live ref — rewriting it would mutate sample code.
-            _segs = _re.split(r"(```.*?```)", body, flags=_re.S)
-            body = "".join(s if s.startswith("```") else _md_link_re.sub(_md_sub, s) for s in _segs)
-            # Directory header doubles as a resolution hint: relative refs
-            # the agent must turn absolute itself for read_file / exec.
-            # Only promise the directory when it actually exists on disk —
-            # a path may be recorded without the dir being shipped.
-            if path_obj.parent.exists():
-                _dir_header = (
-                    f"### Skill: {m.name}\n"
-                    f"**Skill directory**: `{base_dir}`\n"
-                    "Relative refs (e.g. `references/x.md`, `./scripts/y.sh`) "
-                    "resolve under this directory — use the absolute form for "
-                    "read_file / exec.\n\n"
-                )
-            else:
-                _dir_header = f"### Skill: {m.name}\n\n"
-            # {baseDir}/<ref> substitution is per-ref existence-checked:
-            # producer sometimes records a path without shipping (all of)
-            # the bundled files. Substituting a {baseDir} ref whose file
-            # is absent hands the agent a confident 404. So rewrite to the
-            # absolute dir only for refs that exist; leave the literal
-            # "{baseDir}/<ref>" for the missing ones (inert — the agent
-            # can't resolve a placeholder, vs. wasting a turn on a 404).
-            if "{baseDir}" in body:
-                _bd_ref_re = _re.compile(r"\{baseDir\}/(\S+?)(?=[\s)\'\"`]|$)")
-                _resolved = False
-
-                def _bd_sub(_mo, _bd=base_dir, _par=path_obj.parent):
-                    nonlocal _resolved
-                    _ref = _mo.group(1).rstrip(".,;:")
-                    if _ref and (_par / _ref).exists():
-                        _resolved = True
-                        return f"{_bd}/{_mo.group(1)}"
+                def _md_sub(_mo, _bd=base_dir, _par=path_obj.parent):
+                    _rel = _mo.group(2).rstrip(".,;:")
+                    # split off a trailing #anchor / ?query before the
+                    # existence check, re-append it to the absolute path.
+                    _cut = min(
+                        (i for i in (_rel.find("#"), _rel.find("?")) if i != -1),
+                        default=-1,
+                    )
+                    _frag = _rel[_cut:] if _cut != -1 else ""
+                    _file = _rel[:_cut] if _cut != -1 else _rel
+                    if _file and (_par / _file).exists():
+                        return f"[{_mo.group(1)}]({_bd}/{_file}{_frag})"
                     return _mo.group(0)
 
-                body = _bd_ref_re.sub(_bd_sub, body)
-                # A bare {baseDir} *not* followed by /ref (rare): substitute
-                # to the dir when it exists. The ``(?!/)`` guard is critical
-                # — it must NOT touch the literal "{baseDir}/<missing-ref>"
-                # left in place above, else those re-absolutize into 404s.
+                # Skip fenced code blocks: a link there is example markup,
+                # not a live ref — rewriting it would mutate sample code.
+                _segs = _re.split(r"(```.*?```)", body, flags=_re.S)
+                body = "".join(s if s.startswith("```") else _md_link_re.sub(_md_sub, s) for s in _segs)
+                # Directory header doubles as a resolution hint: relative refs
+                # the agent must turn absolute itself for read_file / exec.
+                # Only promise the directory when it actually exists on disk —
+                # a path may be recorded without the dir being shipped.
                 if path_obj.parent.exists():
-                    # Function replacement, not a string: base_dir may hold
-                    # Windows backslashes that re.subn would treat as escape
-                    # sequences (\U, \a, ...) → re.error "bad escape".
-                    body, _bare = _re.subn(r"\{baseDir\}(?!/)", lambda _m: base_dir, body)
-                    if _bare:
-                        _resolved = True
-                header = _dir_header if _resolved else f"### Skill: {m.name}\n\n"
+                    _dir_header = (
+                        f"### Skill: {m.name}\n"
+                        f"**Skill directory**: `{base_dir}`\n"
+                        "Relative refs (e.g. `references/x.md`, `./scripts/y.sh`) "
+                        "resolve under this directory — use the absolute form for "
+                        "read_file / exec.\n\n"
+                    )
+                else:
+                    _dir_header = f"### Skill: {m.name}\n\n"
+                # {baseDir}/<ref> substitution is per-ref existence-checked:
+                # producer sometimes records a path without shipping (all of)
+                # the bundled files. Substituting a {baseDir} ref whose file
+                # is absent hands the agent a confident 404. So rewrite to the
+                # absolute dir only for refs that exist; leave the literal
+                # "{baseDir}/<ref>" for the missing ones (inert — the agent
+                # can't resolve a placeholder, vs. wasting a turn on a 404).
+                if "{baseDir}" in body:
+                    _bd_ref_re = _re.compile(r"\{baseDir\}/(\S+?)(?=[\s)\'\"`]|$)")
+                    _resolved = False
+
+                    def _bd_sub(_mo, _bd=base_dir, _par=path_obj.parent):
+                        nonlocal _resolved
+                        _ref = _mo.group(1).rstrip(".,;:")
+                        if _ref and (_par / _ref).exists():
+                            _resolved = True
+                            return f"{_bd}/{_mo.group(1)}"
+                        return _mo.group(0)
+
+                    body = _bd_ref_re.sub(_bd_sub, body)
+                    # A bare {baseDir} *not* followed by /ref (rare): substitute
+                    # to the dir when it exists. The ``(?!/)`` guard is critical
+                    # — it must NOT touch the literal "{baseDir}/<missing-ref>"
+                    # left in place above, else those re-absolutize into 404s.
+                    if path_obj.parent.exists():
+                        # Function replacement, not a string: base_dir may hold
+                        # Windows backslashes that re.subn would treat as escape
+                        # sequences (\U, \a, ...) → re.error "bad escape".
+                        body, _bare = _re.subn(r"\{baseDir\}(?!/)", lambda _m: base_dir, body)
+                        if _bare:
+                            _resolved = True
+                    header = _dir_header if _resolved else f"### Skill: {m.name}\n\n"
+                else:
+                    header = _dir_header
             else:
-                header = _dir_header
+                # No real path (db-only row or sqlite:// synthetic).
+                # If body still has literal "{baseDir}/<ref>" text, strip
+                # the "{baseDir}/" prefix so refs read as bare relative
+                # paths — agent gets useful text instead of staring at a
+                # literal placeholder it cannot resolve.
+                if "{baseDir}" in body:
+                    body = body.replace("{baseDir}/", "").replace("{baseDir}", "")
+                header = f"### Skill: {m.name}\n\n"
             parts.append(f"{header}{body}")
             if max_inject and len(parts) >= max_inject:
                 break
@@ -403,8 +422,10 @@ class LocalSkillCatalog:
         for m in skills:
             entry = f"### Skill: {m.name}\n\n{m.description}\n"
             hint = f'\n**Full instructions**: call `read_skill("local/{m.name}")` to load the body'
-            if m.path.exists():
-                hint += f", or read `{m.path}` directly"
+            path_obj = getattr(m, "path", None)
+            path_str = str(path_obj) if path_obj is not None else ""
+            if path_obj is not None and not path_str.startswith("sqlite:") and path_obj.exists():
+                hint += f", or read `{path_str}` directly"
             entry += hint + " before acting on this skill.\n"
             parts.append(entry)
         return "\n\n---\n\n".join(parts) if parts else ""

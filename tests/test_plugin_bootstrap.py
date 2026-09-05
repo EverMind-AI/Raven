@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.plugins import (
+from raven.plugin import (
     PluginConflictError,
     PluginNotFoundError,
     PluginRegistry,

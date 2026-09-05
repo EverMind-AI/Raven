@@ -12,9 +12,6 @@ that has been stable for two decades.
 
 from __future__ import annotations
 
-import os
-import pwd
-
 import pytest
 
 from raven.browser import get_browser
@@ -133,12 +130,3 @@ async def test_chromium_starts_only_on_demand(browser) -> None:
     await browser.goto("example.com")
 
     assert browser.started is True
-
-
-@pytest.fixture(autouse=True)
-def _browsers_from_the_real_home(monkeypatch):
-    """The suite redirects HOME to a temp dir; playwright keeps its browsers
-    under the real one. Point it there unless the caller already did."""
-    if not os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
-        real_home = pwd.getpwuid(os.getuid()).pw_dir
-        monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", os.path.join(real_home, "Library", "Caches", "ms-playwright"))

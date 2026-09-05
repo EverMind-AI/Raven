@@ -1,39 +1,14 @@
 diff --git a/CONTEXT.md b/CONTEXT.md
-index 1f00369..84ba79d 100644
+index 5be1d74..d78b6f8 100644
 --- a/CONTEXT.md
 +++ b/CONTEXT.md
-@@ -114,6 +114,21 @@ artifact from the **process appendix**, which is display-only and must never rea
- _Avoid_: "session memory" — the memo is per conversation and carries retrieval, not findings,
- and it is unrelated to the cross-session Memory Engine.
- 
-+**Sufficiency gate** (`agent/flow/sufficiency.py`, config `drFlow.sufficiency`, default off):
-+The first-round release. Once a research turn has paid the grounding floor — `min_searches`
-+searches and `min_fetches` successful page opens, counted from `turn_base` so an earlier
-+turn's research cannot pay it — an independent-context judge reads the turn's own fenced
-+evidence pack once and answers one boolean: do these pages already decide the task. A
-+sufficient verdict appends `sufficiency_notice()` (`agent/harness_text.py`) to the newest
-+tool result — in-history, the budget-line channel; every other outcome (insufficient,
-+timeout, transport error, unparsed verdict) leaves the turn exactly as it was, so the gate
-+fails open toward research. The note releases rather than restricts: the model may keep
-+researching, and the draft it writes still passes the verify gate.
-+_Avoid_: "triage" — triage classifies the question before any evidence exists, which is the
-+rejected design this gate replaces; the sufficiency judge reads retrieved pages. Also not
-+the **conversation gate** (turn two's classifier deciding whether research runs at all) and
-+not **verify** (which judges a finished draft, not an open round).
-+
- **Clarify turn** (`agent/flow/ask_user.py`, config `drFlow.askUser`):
- A turn that ends in an `ask_user` handoff and deliberately produces no answer: the model's
- questions become the turn's reply and the user's next message carries the answer. Nothing
-@@ -207,9 +222,67 @@ _Avoid_: "function" — a Tool is the agent-facing capability, not a Python func
+@@ -222,9 +222,63 @@ _Avoid_: "function" — a Tool is the agent-facing capability, not a Python func
  The name→`Tool` table the Agent Loop dispatches into: resolves a tool by name and runs
  its `execute` under a timeout, returning the string result or a structured error.
  
 +**Search Provider** (`agent/tools/web.py`, `SEARCH_PROVIDERS`):
 +One of the interchangeable live-web backends behind the single `web_search` tool —
-+`serper` (default), `anysearch`, `serpapi`, `tavily`, `exa`, `brave`, or `firecrawl` —
-+selected by `tools.web.search.provider`. AnySearch, Tavily, Exa and Firecrawl also
-+appear in `FETCH_PROVIDERS`, sharing one Web Vendor credential across both tools;
-+Serper, SerpApi and Brave are search-only.
++`serper` (default), `anysearch`, or `serpapi` — selected by `tools.web.search.provider`.
 +Each owns an env var and a Web Vendor credential, and every response is normalised to
 +the Serper shape before containment, dedup, shaping and rendering read it, so the
 +ledger columns mean the same thing on every backend. A provider that serves no result offset declares
@@ -45,9 +20,8 @@ index 1f00369..84ba79d 100644
 +endpoint is a separate retrieval source, not a search provider.
 +
 +**Fetch Provider** (`agent/tools/web.py`, `FETCH_PROVIDERS`):
-+One of the live-web page readers behind the single `web_fetch` tool — `jina` (default),
-+`anysearch`, `tavily`, `exa`, or `firecrawl` — selected by `tools.web.fetch.provider`, with
-+`tools.web.fetch.fallback`
++One of the live-web page readers behind the single `web_fetch` tool — `jina` (default)
++or `anysearch` — selected by `tools.web.fetch.provider`, with `tools.web.fetch.fallback`
 +naming further backends to try when the selected one fails to return a page. Which one
 +served a page is recorded as `extractor`, in the payload and in the fetch ledger.
 +Unlike Search Providers these are **not interchangeable**: measured on one Wikipedia
@@ -94,7 +68,7 @@ index 1f00369..84ba79d 100644
  _Avoid_: "shadow git" as the term — Checkpoint is the per-turn snapshot it produces.
  
  **Empty-Response Recovery** (`agent/loop/recovery.py`):
-@@ -359,6 +432,34 @@ A TUI client's registration to receive turn events for a session.
+@@ -374,6 +428,34 @@ A TUI client's registration to receive turn events for a session.
  The interaction pattern for destructive operations: one `confirm.request` Notification
  out, the turn pauses, one answering Request back.
  
@@ -130,27 +104,24 @@ index 1f00369..84ba79d 100644
  
  **Context Engine** (`context_engine/`):
 diff --git a/QUICKSTART.md b/QUICKSTART.md
-index ecc731e..4315a1b 100644
+index ecc731e..7f468f1 100644
 --- a/QUICKSTART.md
 +++ b/QUICKSTART.md
-@@ -8,8 +8,14 @@ for `uv sync`.
+@@ -8,8 +8,11 @@ for `uv sync`.
  - Python **3.12+** (`requires-python = ">=3.12"`)
  - [`uv`](https://docs.astral.sh/uv/) — the only supported package manager. `pip` is not.
  - An LLM endpoint. Anything OpenAI-compatible works: OpenRouter, a vLLM/SGLang server, OpenAI.
 -- For live-web research, two keys: [Serper](https://serper.dev) for search and
 -  [Jina Reader](https://jina.ai/reader) for page fetching.
 +- For live-web research, a search key: [Serper](https://serper.dev) by default, or
-+  [SerpApi](https://serpapi.com) / [AnySearch](https://anysearch.com) / [Tavily](https://tavily.com)
-+  / [Exa](https://exa.ai) / [Brave Search](https://brave.com/search/api) /
-+  [Firecrawl](https://firecrawl.dev) via `tools.web.search.provider`. Page fetching defaults to
++  [SerpApi](https://serpapi.com) / [AnySearch](https://anysearch.com) via
++  `tools.web.search.provider`. Page fetching defaults to
 +  [Jina Reader](https://jina.ai/reader), which works unauthenticated at a lower rate
-+  limit; `JINA_API_KEY` raises it. AnySearch, Tavily, Exa, and
-+  [Firecrawl](https://firecrawl.dev) can also serve `web_fetch` via `tools.web.fetch.provider`,
-+  each off the same vendor key as its search side.
++  limit; `JINA_API_KEY` raises it.
  
  ## 1. Install
  
-@@ -40,6 +46,18 @@ export SERPER_API_KEY=...
+@@ -40,6 +43,18 @@ export SERPER_API_KEY=...
  export JINA_API_KEY=...
  ```
  
@@ -169,7 +140,7 @@ index ecc731e..4315a1b 100644
  The `.local.json` suffix is deliberate: it is gitignored, so a config carrying your API key
  cannot be staged by accident. Everything else in this file uses relative paths for
  readability — if a command reports `No such file or directory`, check that you are in the
-@@ -104,7 +122,7 @@ uv run python -c "from raven.config.raven import DRFlowConfig; print(DRFlowConfi
+@@ -104,7 +119,7 @@ uv run python -c "from raven.config.raven import DRFlowConfig; print(DRFlowConfi
  | `Error: No API key configured.` (exit 1) | `providers.<name>.apiKey` missing from the config. Not read from the environment. |
  | `drFlow.version=... predates this build's flow semantics` | You used a retired label. The message names the value to use. Superseded labels are rejected on purpose — the label keys the measurement ledger, so an old label on a new build would mislabel a whole batch. The example configs omit the label for this reason; only pin one if you are publishing a number. |
  | `force-finalize: salvage unavailable` in the log, or `answer_chars: 0` / `finalShape.form: "empty"` on a run that plainly answered | `drFlow.thinkClosingTagRequired` is `true` but your model does not emit `</think>`. The answer still reaches you, but every observer reports the turn as answerless and the salvage path burns extra calls. Set it to `false` for a non-think model; `dr_live_web.json` already does. |
@@ -179,10 +150,10 @@ index ecc731e..4315a1b 100644
  | Tests fail in the full suite but pass alone | Suite-order pollution, not a regression. |
  | `cannot execute: required file not found` after moving the directory | `uv sync --reinstall`. Bare `uv sync` leaves stale absolute-path shebangs in `.venv/bin/`. |
 diff --git a/README.md b/README.md
-index b0e4b3e..db87542 100644
+index b0e4b3e..18cb798 100644
 --- a/README.md
 +++ b/README.md
-@@ -403,13 +403,39 @@ must live, is to move the personalizer's clarify onto this same turn-boundary se
+@@ -403,13 +403,35 @@ must live, is to move the personalizer's clarify onto this same turn-boundary se
  
  ### Environment variables
  
@@ -212,11 +183,7 @@ index b0e4b3e..db87542 100644
 +| `SERPER_API_KEY` | `web_search` | The key for the default search backend. `tools.web.providers.serper.apiKey` overrides it. |
 +| `SERPAPI_API_KEY` | `web_search` | Used when `tools.web.search.provider` is `serpapi`; `tools.web.providers.serpapi.apiKey` overrides it. Pages by result offset, so depth works as it does on Serper. |
 +| `ANYSEARCH_API_KEY` | `web_search`, `web_fetch` | One key, both tools — the credential is keyed by vendor (`tools.web.providers.anysearch.apiKey`), not by the tool that uses it. As a search backend it serves no page beyond the first, so search depth is unavailable on it: the tool tells the saturation rule up front and the ledger records `sat_action=stopped_degraded` rather than a dry search the endpoint never had a chance to serve. As a fetch backend it has no anonymous tier, so selecting it without this key withholds `web_fetch`. |
-+| `TAVILY_API_KEY` | `web_search`, `web_fetch` | One key, both tools (`tools.web.providers.tavily.apiKey`). As search, no documented result offset, same `stopped_degraded` handling as AnySearch. As fetch (`/extract`) it has no anonymous tier, so selecting it without this key withholds `web_fetch`. |
-+| `EXA_API_KEY` | `web_search`, `web_fetch` | One key, both tools (`tools.web.providers.exa.apiKey`). As search, neural search over Exa's own index, also with no result offset. As fetch (`/contents`) it has no anonymous tier. |
-+| `BRAVE_API_KEY` | `web_search` | Used when `tools.web.search.provider` is `brave`; `tools.web.providers.brave.apiKey` overrides it. Pages by page index (`offset`), unlike SerpApi's result-count `start`. Brave has no vendor fetch/extract endpoint, so it is search-only. |
 +| `JINA_API_KEY` | `web_fetch` | The default page reader. **Optional** — `r.jina.ai` answers unauthenticated at a lower rate limit, and a dead key is worse than none (402 where no key answers 200). `tools.web.providers.jina.apiKey` overrides it. |
-+| `FIRECRAWL_API_KEY` | `web_search`, `web_fetch` | One key, both tools (`tools.web.providers.firecrawl.apiKey`). No anonymous tier on either endpoint (`/v1/search`, `/v1/scrape`), so selecting it without this key withholds the tool. |
  | `RAVEN_WEB_LEDGER` | web tools | Name a file and both tools append a per-call JSONL ledger: every search with its **ordered** result URLs and whether the result was replayed from cache, every fetch with url / chars / ok / docid. Unset means off, **except** that `finalShape.processAppendix` opens a turn-scoped one under `<data dir>/ledger/` and deletes it after rendering the trail. Naming the variable always wins and that file is never removed. Write-only — it changes no behaviour and no output byte. |
  | `RAVEN_TRACING`, `RAVEN_TRACING_DIR` | tracing | Tracing is **on by default**; `RAVEN_TRACING=0` makes it a no-op. `RAVEN_TRACING_DIR` moves the span log off `~/.raven/traces`. |
  | `RAVEN_CLI_DEBUG` | CLI | Keeps loguru's default handler. Without it the CLI installs a WARNING-only stderr sink, so an INFO-level explanation of a failure is discarded before you see it. |
@@ -225,27 +192,10 @@ index b0e4b3e..db87542 100644
  | `http_proxy` / `https_proxy` | web tools | Inherited by default, because the fetch path constructs its client with `proxy=None` and leaves `trust_env` on. Set `tools.web.proxy` in the config to override per-arm. |
  
 diff --git a/examples/README.md b/examples/README.md
-index b50141e..4da6219 100644
+index 04a69cc..6dda147 100644
 --- a/examples/README.md
 +++ b/examples/README.md
-@@ -1,6 +1,6 @@
- # Example configs
- 
--Four configs, copied from the ones the evaluation harness actually runs, with endpoints and
-+Seven configs, copied from the ones the evaluation harness actually runs, with endpoints and
- keys replaced by placeholders. Copy one, fill in the placeholders, pass it with `--config`.
- 
- | File | What it is | Needs |
-@@ -10,6 +10,8 @@ keys replaced by placeholders. Copy one, fill in the placeholders, pass it with
- | `dr_pinned_corpus.json` | DR Flow over a fixed corpus instead of the live web. Reproduces our controlled measurements. | LLM endpoint, a corpus service on `:8765` |
- | `anchor_flow_off.json` | The **measurement anchor** (`drFlow.enabled=false`). Not a product configuration — see README "Measurement anchor". | same as above |
- | `everos_memory.json` | **Memory, not DR.** Wiring the EverOS backend so captured turns land. Recall ships off; one key turns it on. | LLM key, an EverOS service on `:8000` |
-+| `dr_ask_user.json` | `dr_multi_turn.json` plus the **ask_user clarify round**: on a conversation's first turn the agent may ask up to 3 questions (tool delivery) before researching. | same as `dr_live_web.json` |
-+| `dr_shallow.json` | **A product profile, not a measured arm.** `dr_multi_turn.json` with the priced convergence gates on and the deep report template off - "simple questions get less research". | same as `dr_live_web.json` |
- 
- ## These are the measured flow, and a test keeps them that way
- 
-@@ -57,7 +59,8 @@ so nothing about the output says anything is wrong.
+@@ -22,7 +22,8 @@ so nothing about the output says anything is wrong.
  
  Placeholders to replace: `PUT_YOUR_LLM_API_KEY_HERE`, `YOUR_LLM_HOST`. Web-tool keys are read
  from the environment (`SERPER_API_KEY` for search, `JINA_API_KEY` for fetch); they can also go
@@ -255,40 +205,6 @@ index b50141e..4da6219 100644
  is preferred so a config file can be shared without carrying a secret.
  
  The LLM key has **no environment fallback** — `providers.<name>.apiKey` must be present in the
-@@ -131,6 +134,33 @@ Four knobs deserve a warning:
-   that `toolsAllowlist` only applies when the flow is **on**, so for `anchor_flow_off.json`
-   the denylist is the only fence there is.
- 
-+### `dr_shallow.json`: five deltas, and which of them are depth
-+
-+This one is not copied from a harness arm. It is the product profile for "simple questions get
-+less research", and it differs from `dr_multi_turn.json` in exactly five values - two of which are
-+depth and three of which are hygiene:
-+
-+| Value | | Why |
-+|---|---|---|
-+| `budgetNote.warnRatio` | 0.8 -> **0.6** | *depth.* Contract rule 2 turns the budget line's warning into an instruction ("stop opening new leads, verify what you have, draft the answer"). It fires at `iteration / maxIterations >= warnRatio`, so at `maxIterations: 20` this moves the converge push from turn 16 to turn 12. It never fires on a question that finishes in five turns - this knob shapes the tail, not the floor. |
-+| `finalShape.reportDepth` | true -> **false** | *depth.* Back to the dr@3.4 template byte for byte. The deep clause asks for a causal narrative, a per-datum as-of date and disagreements adjudicated in the open; on a one-fact question that is the bulk of the reply. |
-+| `search.saturation.k` | 8 -> **5** | *hygiene.* 5 and 10 are the two points that were priced (33% of searches removed at <=0.66pp, and 27% at 0.00pp); 8 is an interpolation with no reading behind it. |
-+| `fetchGate` | off -> **on, k=15** | *hygiene.* Withholds `web_search` from the iteration after 15 searches with no page opened. The action-space channel rather than the advisory one, because a refusal in a return value was re-requested 195 times on one question. |
-+| `forceFinalize` | off -> **on** | *hygiene.* A terminal turn whose visible answer is empty gets re-sampled instead of shipping blank. |
-+
-+**To go deep, flip the two depth values back** (`reportDepth: true`, `warnRatio: 0.8`) and keep the
-+three hygiene ones. They remove pathologies, not depth, so a deep profile should carry them too -
-+which is why this file exists rather than a "shallow" patch against `dr_multi_turn.json`.
-+
-+Depth is fixed when the process starts: `drFlow` is read once per entry point
-+(`agent_commands.py`, `acp_commands.py`, `gateway_commands.py`) and passed into
-+`AgentLoop.__init__`. There is no CLI override, no environment override and no runtime reload, so
-+switching depth means a different `--config` on a different process.
-+
-+What it does **not** buy: a fast answer. The contract's grounding rule is untouched, so a simple
-+question still costs one search, one or two fetches and a reviewer call. This profile makes a
-+short question's reply shorter and a long question's tail shorter; it does not remove the floor.
-+
- ## Wiring the memory backend (`everos_memory.json`)
- 
- The other four configs are DR runs with memory off. This one is the opposite: no flow, a real
 diff --git a/raven/agent/loop/invariants.py b/raven/agent/loop/invariants.py
 index 4ce6e6e..bb37119 100644
 --- a/raven/agent/loop/invariants.py
@@ -307,7 +223,7 @@ index 4ce6e6e..bb37119 100644
      if body.startswith(_EMPTY_HEAD):
          return "empty"
 diff --git a/raven/agent/loop/main.py b/raven/agent/loop/main.py
-index e15ed92..c88c91f 100644
+index d9abfd2..379bc0b 100644
 --- a/raven/agent/loop/main.py
 +++ b/raven/agent/loop/main.py
 @@ -291,6 +291,10 @@ _STORE_TURN_BUDGET_S: float = 5.0
@@ -551,42 +467,6 @@ index e15ed92..c88c91f 100644
              _, still_pending = await asyncio.wait(pending, timeout=timeout)
              if still_pending:
                  # Counted, because ``backend.stop()`` closes the client pool
-@@ -4452,6 +4539,35 @@ class AgentLoop:
-         stream: bool = True,
-         usage_sink: dict[str, Any] | None = None,
-         text_sink: dict[str, Any] | None = None,
-+    ) -> TurnOutcome:
-+        """Make this session's own tools visible, then run the turn.
-+
-+        The scope is opened here because this is where the turn's task begins.
-+        The ACP handler that accepted the servers cannot open it: it submits the
-+        turn onto the spine and the turn runs on a task that inherits nothing
-+        from it. Turns from two sessions run concurrently on this one registry,
-+        which is the point.
-+        """
-+        session_key = req.conversation or f"{req.source.channel}:{req.source.chat_id}"
-+        with self.tools.session_scope_for(session_key):
-+            return await self._run_turn(
-+                req,
-+                emit,
-+                drain,
-+                stream=stream,
-+                usage_sink=usage_sink,
-+                text_sink=text_sink,
-+            )
-+
-+    async def _run_turn(
-+        self,
-+        req: TurnRequest,
-+        emit: Emit,
-+        drain: Drain,
-+        *,
-+        stream: bool = True,
-+        usage_sink: dict[str, Any] | None = None,
-+        text_sink: dict[str, Any] | None = None,
-     ) -> TurnOutcome:
-         """Spine-native turn entry: consume a TurnRequest, fan the agent's output
-         onto the single ``emit``, return a TurnOutcome. Collapses the legacy
 diff --git a/raven/agent/subagent/manager.py b/raven/agent/subagent/manager.py
 index 153fd38..9701c63 100644
 --- a/raven/agent/subagent/manager.py
@@ -667,7 +547,7 @@ index 153fd38..9701c63 100644
          # ★★★ dr@2.3: the subagent surface must be a SUBSET of the parent's.
          #
 diff --git a/raven/agent/tools/web.py b/raven/agent/tools/web.py
-index 8a2a92a..2eebddb 100644
+index eb7e814..371e9d4 100644
 --- a/raven/agent/tools/web.py
 +++ b/raven/agent/tools/web.py
 @@ -5,6 +5,8 @@ import json
@@ -679,20 +559,7 @@ index 8a2a92a..2eebddb 100644
  from typing import Any, Awaitable, Callable
  
  import httpx
-@@ -88,12 +90,232 @@ def _error_shaping(exc: Exception) -> dict:
-     """
-     shaping = dict(_NO_SHAPING)
-     status = getattr(getattr(exc, "response", None), "status_code", None)
--    shaping["error"] = f"{type(exc).__name__}: {exc}"[:500]
-+    # A status error's own text repeats the request URL, and SerpApi carries
-+    # its key as a query parameter: the ledger is written to disk, so the row
-+    # gets the status and nothing of the URL.
-+    if isinstance(exc, httpx.HTTPStatusError):
-+        shaping["error"] = f"HTTPStatusError: HTTP {status}"
-+    else:
-+        shaping["error"] = f"{type(exc).__name__}: {exc}"[:500]
-     shaping["status"] = int(status) if status is not None else None
-     shaping["quota_err"] = status in (401, 402, 403)
+@@ -94,6 +96,167 @@ def _error_shaping(exc: Exception) -> dict:
      return shaping
  
  
@@ -748,37 +615,6 @@ index 8a2a92a..2eebddb 100644
 +        # ``start`` is an offset in results, so page N maps onto start=(N-1)*num.
 +        paginates=True,
 +    ),
-+    "tavily": SearchProviderSpec(
-+        vendor="tavily",
-+        label="Tavily",
-+        env_var="TAVILY_API_KEY",
-+        # No documented result-offset parameter; breadth here comes from wider
-+        # single-shot queries, not paging, so the rung is declared unavailable
-+        # up front like AnySearch.
-+        paginates=False,
-+    ),
-+    "exa": SearchProviderSpec(
-+        vendor="exa",
-+        label="Exa",
-+        env_var="EXA_API_KEY",
-+        # Neural search over Exa's own index has no documented page offset.
-+        paginates=False,
-+    ),
-+    "brave": SearchProviderSpec(
-+        vendor="brave",
-+        label="Brave Search",
-+        env_var="BRAVE_API_KEY",
-+        # ``offset`` is a page index, not a result offset like SerpApi's
-+        # ``start``, documented up to 9 pages past the first.
-+        paginates=True,
-+    ),
-+    "firecrawl": SearchProviderSpec(
-+        vendor="firecrawl",
-+        label="Firecrawl",
-+        env_var="FIRECRAWL_API_KEY",
-+        # ``/v1/search`` documents no result-offset parameter.
-+        paginates=False,
-+    ),
 +}
 +
 +
@@ -793,7 +629,7 @@ index 8a2a92a..2eebddb 100644
 +    on the other end of the channel.
 +
 +    ``extractor`` is an instrument column, not a label: it is what the fetch
-+    ledger records as having served the page, and the backends are not
++    ledger records as having served the page, and the two backends are not
 +    comparable (see ``WebFetchConfig.provider``).
 +    """
 +
@@ -827,28 +663,6 @@ index 8a2a92a..2eebddb 100644
 +        label="AnySearch",
 +        env_var="ANYSEARCH_API_KEY",
 +        extractor="anysearch-extract",
-+        needs_key=True,
-+    ),
-+    "tavily": FetchProviderSpec(
-+        vendor="tavily",
-+        label="Tavily",
-+        env_var="TAVILY_API_KEY",
-+        extractor="tavily-extract",
-+        needs_key=True,
-+    ),
-+    "exa": FetchProviderSpec(
-+        vendor="exa",
-+        label="Exa",
-+        env_var="EXA_API_KEY",
-+        extractor="exa-contents",
-+        needs_key=True,
-+    ),
-+    "firecrawl": FetchProviderSpec(
-+        vendor="firecrawl",
-+        label="Firecrawl",
-+        env_var="FIRECRAWL_API_KEY",
-+        extractor="firecrawl-scrape",
-+        # No anonymous tier.
 +        needs_key=True,
 +    ),
 +}
@@ -913,7 +727,7 @@ index 8a2a92a..2eebddb 100644
  # The corpus retrieval service clamps to this of its own accord
  # (``bcplus_serve.py``), so asking for more would silently return the same rows.
  _MAX_SEARCH_DEPTH = 50
-@@ -221,7 +443,7 @@ _REPEAT_NOTE = (
+@@ -221,7 +384,7 @@ _REPEAT_NOTE = (
  
  
  class WebSearchTool(Tool):
@@ -922,7 +736,7 @@ index 8a2a92a..2eebddb 100644
  
      name = "web_search"
      description = "Search the web. Returns titles, URLs, and snippets."
-@@ -257,7 +479,12 @@ class WebSearchTool(Tool):
+@@ -257,7 +420,12 @@ class WebSearchTool(Tool):
          containment: BenchmarkContainment | None = None,
          evidence_round: "EvidenceRound | None" = None,
          saturation: "SearchSaturation | None" = None,
@@ -935,7 +749,7 @@ index 8a2a92a..2eebddb 100644
          self._init_api_key = api_key
          # Shared with web_fetch so one arm reports one firing rate; a disabled
          # instance is the neutral default, so ordinary use is unchanged.
-@@ -308,13 +535,22 @@ class WebSearchTool(Tool):
+@@ -308,13 +476,22 @@ class WebSearchTool(Tool):
          # so tell the rule up front that paging is unavailable there rather than
          # letting a paginate-configured corpus arm quietly behave like a stopping one.
          self._saturation = saturation
@@ -960,22 +774,20 @@ index 8a2a92a..2eebddb 100644
  
      def start_turn(self, keep_identities: bool = False) -> None:
          """Drop the per-turn repeat memory.
-@@ -688,9 +924,12 @@ class WebSearchTool(Tool):
-             except Exception:
-                 where = "your Raven config file"
-             logger.error(
--                "WebSearch: no Serper API key. Set tools.web.search.apiKey in {} "
--                "or export SERPER_API_KEY, then start the run again.",
-+                "WebSearch: no {} API key. Set {} in {} "
-+                "or export {}, then start the run again.",
-+                self.spec.label,
-+                self.spec.config_path,
-                 where,
-+                self.spec.env_var,
-             )
+@@ -662,9 +839,9 @@ class WebSearchTool(Tool):
+             return await self._search_corpus(query, count, k)
+         if not self.api_key:
              return (
-                 "Error: web search is unavailable on this run - the search "
-@@ -732,22 +971,15 @@ class WebSearchTool(Tool):
+-                "Error: Serper API key not configured. Set it in "
+-                "~/.raven/config.json under tools.web.search.apiKey "
+-                "(or export SERPER_API_KEY), then restart the gateway.",
++                f"Error: {self.spec.label} API key not configured. Set it in "
++                f"~/.raven/config.json under {self.spec.config_path} "
++                f"(or export {self.spec.env_var}), then restart the gateway.",
+                 [],
+                 dict(_NO_SHAPING),
+             )
+@@ -700,22 +877,15 @@ class WebSearchTool(Tool):
              # tax on the arm that searches most.
              async def _send() -> httpx.Response:
                  async with httpx.AsyncClient(proxy=self.proxy) as client:
@@ -1003,20 +815,7 @@ index 8a2a92a..2eebddb 100644
              # Filtered before the slice, not after: dropping a row post-slice
              # would hand back a shorter list than asked for, and how often that
              # happens depends on how dataset-adjacent the arm's queries are -
-@@ -813,6 +1045,12 @@ class WebSearchTool(Tool):
-                 self._saturation.observe(urls)
-             shaping["snippet_repeat_marks"] = self._snippet_repeat_marks
-             return "\n".join(lines), urls, shaping
-+        except httpx.HTTPStatusError as e:
-+            # Vendor and status only, never the exception text: httpx puts the
-+            # full request URL in it, and SerpApi's URL carries the key.
-+            status = e.response.status_code
-+            logger.error("WebSearch error: {} answered HTTP {}", self.spec.label, status)
-+            return f"Error: {self.spec.label} answered HTTP {status}", [], _error_shaping(e)
-         except httpx.ProxyError as e:
-             logger.error("WebSearch proxy error: {}", e)
-             return f"Proxy error: {e}", [], _error_shaping(e)
-@@ -821,6 +1059,217 @@ class WebSearchTool(Tool):
+@@ -789,6 +959,87 @@ class WebSearchTool(Tool):
              return f"Error: {e}", [], _error_shaping(e)
  
  
@@ -1054,71 +853,6 @@ index 8a2a92a..2eebddb 100644
 +                headers={"Accept": "application/json"},
 +                timeout=10.0,
 +            )
-+        if self.provider == "tavily":
-+            # ``page`` cannot appear here: no documented result-offset parameter,
-+            # which is why ``spec.paginates`` is False for this vendor.
-+            return await client.post(
-+                "https://api.tavily.com/search",
-+                json={"query": query, "max_results": n},
-+                headers={
-+                    "Accept": "application/json",
-+                    "Content-Type": "application/json",
-+                    "Authorization": f"Bearer {self.api_key}",
-+                },
-+                timeout=10.0,
-+            )
-+        if self.provider == "exa":
-+            # Same reasoning as Tavily: no page offset, so ``paginates`` is False.
-+            # ``contents.highlights`` asks for a query-scored excerpt, which is
-+            # what the render path reads as the snippet. Not ``text``: that is
-+            # the whole page, and ``_snippet_line`` renders whatever it is
-+            # handed - probed live, five results carried 138k chars of text
-+            # against 1.5k of capped highlights. ``maxCharacters`` is the bound
-+            # that holds; ``numSentences``/``highlightsPerUrl`` did not (one
-+            # "sentence" came back at 1.3k chars). Highlights are a separately
-+            # billed add-on, so they are only requested when snippets are
-+            # rendered - a deep-research profile sets ``include_snippets=False``
-+            # and would discard them unread.
-+            body: dict[str, Any] = {"query": query, "numResults": n}
-+            if self.include_snippets:
-+                body["contents"] = {"highlights": {"maxCharacters": 300}}
-+            return await client.post(
-+                "https://api.exa.ai/search",
-+                json=body,
-+                headers={
-+                    "Accept": "application/json",
-+                    "Content-Type": "application/json",
-+                    "x-api-key": self.api_key,
-+                },
-+                timeout=10.0,
-+            )
-+        if self.provider == "brave":
-+            # ``offset`` is a page index (unlike SerpApi's result-count
-+            # ``start``), so page N maps onto offset=(N-1) directly.
-+            params: dict[str, Any] = {"q": query, "count": n}
-+            if page > 1:
-+                params["offset"] = page - 1
-+            return await client.get(
-+                "https://api.search.brave.com/res/v1/web/search",
-+                params=params,
-+                headers={
-+                    "Accept": "application/json",
-+                    "X-Subscription-Token": self.api_key,
-+                },
-+                timeout=10.0,
-+            )
-+        if self.provider == "firecrawl":
-+            # No page offset here either, same as Tavily and Exa.
-+            return await client.post(
-+                "https://api.firecrawl.dev/v1/search",
-+                json={"query": query, "limit": n},
-+                headers={
-+                    "Accept": "application/json",
-+                    "Content-Type": "application/json",
-+                    "Authorization": f"Bearer {self.api_key}",
-+                },
-+                timeout=10.0,
-+            )
 +        # AnySearch. ``page`` cannot appear here: the provider serves no offset,
 +        # which is why ``spec.paginates`` is False and the saturation rule is told
 +        # so at construction - the rung is unreachable rather than unanswerable.
@@ -1149,71 +883,6 @@ index 8a2a92a..2eebddb 100644
 +            if kg := data.get("knowledge_graph"):
 +                out["knowledgeGraph"] = kg
 +            return out
-+        if self.provider == "tavily":
-+            organic = [
-+                {
-+                    "title": str(item.get("title") or ""),
-+                    "link": str(item.get("url") or ""),
-+                    "snippet": item.get("content") or "",
-+                }
-+                for item in data.get("results") or []
-+                if isinstance(item, dict)
-+            ]
-+            out = {"organic": organic}
-+            # Tavily returns ``answer`` only when the request opts in with
-+            # ``include_answer``, which the request above does not send, so
-+            # this slot is empty today. Kept on the answerBox path so an opt-in
-+            # later renders through the channel a deep-research profile
-+            # already switches off.
-+            if answer := data.get("answer"):
-+                out["answerBox"] = {"answer": answer}
-+            return out
-+        if self.provider == "exa":
-+            organic = [
-+                {
-+                    "title": str(item.get("title") or ""),
-+                    "link": str(item.get("url") or ""),
-+                    # Highlights only, never ``text``: a page body in this slot
-+                    # is rendered whole. Whitespace collapsed because a highlight
-+                    # carries newlines and the snippet line is indented once.
-+                    "snippet": " ".join(
-+                        " ".join(h.split()) for h in (item.get("highlights") or []) if isinstance(h, str) and h
-+                    ),
-+                }
-+                for item in data.get("results") or []
-+                if isinstance(item, dict)
-+            ]
-+            return {"organic": organic}
-+        if self.provider == "brave":
-+            web = data.get("web") if isinstance(data.get("web"), dict) else {}
-+            organic = [
-+                {
-+                    "title": str(item.get("title") or ""),
-+                    "link": str(item.get("url") or ""),
-+                    "snippet": item.get("description") or "",
-+                }
-+                for item in (web.get("results") if isinstance(web, dict) else None) or []
-+                if isinstance(item, dict)
-+            ]
-+            return {"organic": organic}
-+        if self.provider == "firecrawl":
-+            # Errors normally arrive status-coupled (400/500 with ``success:
-+            # false``, probed live) and raise in ``_send_with_retry``. This
-+            # catches an in-envelope refusal inside a 200 so it renders as an
-+            # error rather than a dry search: a zero-hit advances the
-+            # saturation streak, and "the endpoint refused" must not.
-+            if data.get("success") is False:
-+                raise ValueError(f"Firecrawl: {data.get('error') or 'search failed'}")
-+            organic = [
-+                {
-+                    "title": str(item.get("title") or ""),
-+                    "link": str(item.get("url") or ""),
-+                    "snippet": item.get("description") or "",
-+                }
-+                for item in data.get("data") or []
-+                if isinstance(item, dict)
-+            ]
-+            return {"organic": organic}
 +        # AnySearch publishes the request shape but not the response. Parse
 +        # tolerantly: results may sit at the top level or inside the
 +        # ``{code, message, data}`` envelope its auth endpoint uses, and an item
@@ -1234,7 +903,7 @@ index 8a2a92a..2eebddb 100644
      async def _search_corpus(
          self, query: str, count: int | None, k: int | None = None
      ) -> tuple[str, list[str], dict[str, int]]:
-@@ -956,8 +1405,18 @@ def _encoding_lost(text: str) -> bool:
+@@ -895,8 +1146,18 @@ def _encoding_lost(text: str) -> bool:
      return text.count("\ufffd") > max(8, len(text) // 200)
  
  
@@ -1254,7 +923,7 @@ index 8a2a92a..2eebddb 100644
  
      name = "web_fetch"
      description = "Fetch URL and extract readable content via Jina Reader."
-@@ -989,8 +1448,33 @@ class WebFetchTool(Tool):
+@@ -928,8 +1189,33 @@ class WebFetchTool(Tool):
          digest_timeout_s: float = 30.0,
          corpus_endpoint: str | None = None,
          containment: BenchmarkContainment | None = None,
@@ -1288,7 +957,7 @@ index 8a2a92a..2eebddb 100644
          self.containment = containment or BenchmarkContainment()
          self.max_chars = max_chars
          self.proxy = proxy
-@@ -1015,10 +1499,43 @@ class WebFetchTool(Tool):
+@@ -954,10 +1240,43 @@ class WebFetchTool(Tool):
          """
          self._retry_budget = _RetryBudget()
  
@@ -1333,24 +1002,25 @@ index 8a2a92a..2eebddb 100644
  
      async def execute(
          self,
-@@ -1074,10 +1591,16 @@ class WebFetchTool(Tool):
+@@ -1013,10 +1332,16 @@ class WebFetchTool(Tool):
              return record
          if not isinstance(payload, dict):
              return record
 +        # ``extractor`` names the backend that actually served the page. It is a
-+        # measurement column, not a label: the live-web backends are not
++        # measurement column, not a label: the two live-web backends are not
 +        # interchangeable (AnySearch keeps the navigation chrome Jina strips, so
 +        # the same article arrives ~1.8x longer), and a fallback chain means the
 +        # selected provider is not always the one that answered.
          for key, out_key in (("length", "chars"), ("source_chars", "source_chars"),
                               ("digested", "digested"), ("docid", "docid"),
                               ("truncated", "truncated"), ("error", "error"),
-                              ("encoding_lost", "encoding_lost"),
-+                             ("extractor", "extractor"),
-                              # 20260831. The digest keeps what the model asked for and
-                              # discards the rest - a median 29,587 source chars down to
-                              # 1,541, so 94% of the page never reaches it. Any later work
-@@ -1144,71 +1667,258 @@ class WebFetchTool(Tool):
+-                             ("encoding_lost", "encoding_lost")):
++                             ("encoding_lost", "encoding_lost"),
++                             ("extractor", "extractor")):
+             if key in payload:
+                 record[out_key] = payload[key]
+         return record
+@@ -1074,71 +1399,166 @@ class WebFetchTool(Tool):
          if not is_valid:
              return json.dumps({"error": f"URL validation failed: {error_msg}", "url": url}, ensure_ascii=False)
  
@@ -1394,11 +1064,6 @@ index 8a2a92a..2eebddb 100644
 +                    raise _ProviderPageError(f"{candidate} returned no page content")
 +                served = candidate
 +                break
-+            except httpx.HTTPStatusError as e:
-+                # Same rule as the search tool: no request URL in the text.
-+                status = e.response.status_code
-+                logger.error("WebFetch error for {} via {}: HTTP {}", url, candidate, status)
-+                failure = f"{candidate} answered HTTP {status}"
 +            except httpx.ProxyError as e:
 +                logger.error("WebFetch proxy error for {} via {}: {}", url, candidate, e)
 +                failure = f"Proxy error: {e}"
@@ -1517,21 +1182,21 @@ index 8a2a92a..2eebddb 100644
 -                    },
 -                    ensure_ascii=False,
 -                )
-+        if provider == "tavily":
-+            headers = {
-+                "Accept": "application/json",
-+                "Content-Type": "application/json",
-+                "Authorization": f"Bearer {self._key_for('tavily')}",
-+            }
++        # AnySearch. No cache-bust header is published, so the garbled-page
++        # re-read above has no counterpart here; the encoding check still runs on
++        # what comes back.
++        headers = {"Accept": "application/json", "Content-Type": "application/json"}
++        if key := self._key_for(provider):
++            headers["Authorization"] = f"Bearer {key}"
  
 -            truncated = len(text) > max_chars
 -            if truncated:
 -                text = text[:max_chars]
-+            async def _send_tavily() -> httpx.Response:
-+                async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
-+                    return await client.post(
-+                        "https://api.tavily.com/extract", json={"urls": [url]}, headers=headers
-+                    )
++        async def _send() -> httpx.Response:
++            async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
++                return await client.post(
++                    "https://api.anysearch.com/v1/extract", json={"url": url}, headers=headers
++                )
  
 -            payload = {
 -                "url": url,
@@ -1542,27 +1207,7 @@ index 8a2a92a..2eebddb 100644
 -                "truncated": truncated,
 -                "length": len(text),
 -                "text": text,
-+            r = await _send_with_retry(_send_tavily, op="fetch_retry", key=url, budget=self._retry_budget)
-+            data = r.json()
-+            results = data.get("results") if isinstance(data, dict) else None
-+            # A single-URL request has at most one hit; Tavily may normalise the
-+            # URL (trailing slash, scheme) so this does not match on equality.
-+            hit = results[0] if isinstance(results, list) and results and isinstance(results[0], dict) else None
-+            if hit is None:
-+                failed = data.get("failed_results") if isinstance(data, dict) else None
-+                reason = failed[0].get("error") if isinstance(failed, list) and failed and isinstance(failed[0], dict) else None
-+                raise _ProviderPageError(f"Tavily: {reason or 'extract failed'}")
-+            text = str(hit.get("raw_content") or "")
-+            if not text:
-+                raise _ProviderPageError("Tavily returned no page content")
-+            return text, r.status_code, {}
-+
-+        if provider == "exa":
-+            headers = {
-+                "Accept": "application/json",
-+                "Content-Type": "application/json",
-+                "x-api-key": self._key_for("exa"),
-             }
+-            }
 -            if encoding_lost:
 -                payload["encoding_lost"] = True
 -                payload["warning"] = _ENCODING_LOST_WARNING
@@ -1573,72 +1218,6 @@ index 8a2a92a..2eebddb 100644
 -        except Exception as e:
 -            logger.error("WebFetch error for {}: {}", url, e)
 -            return json.dumps({"error": str(e), "url": url}, ensure_ascii=False)
-+
-+            async def _send_exa() -> httpx.Response:
-+                async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
-+                    return await client.post(
-+                        "https://api.exa.ai/contents",
-+                        json={"urls": [url], "text": True},
-+                        headers=headers,
-+                    )
-+
-+            r = await _send_with_retry(_send_exa, op="fetch_retry", key=url, budget=self._retry_budget)
-+            data = r.json()
-+            results = data.get("results") if isinstance(data, dict) else None
-+            hit = results[0] if isinstance(results, list) and results and isinstance(results[0], dict) else None
-+            if hit is None:
-+                raise _ProviderPageError("Exa returned no page content")
-+            text = str(hit.get("text") or "")
-+            if not text:
-+                raise _ProviderPageError("Exa returned no page content")
-+            extras: dict[str, Any] = {}
-+            if title := hit.get("title"):
-+                extras["title"] = str(title)
-+            return text, r.status_code, extras
-+
-+        if provider == "firecrawl":
-+            headers = {
-+                "Accept": "application/json",
-+                "Content-Type": "application/json",
-+                "Authorization": f"Bearer {self._key_for('firecrawl')}",
-+            }
-+
-+            async def _send_fc() -> httpx.Response:
-+                async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
-+                    return await client.post(
-+                        "https://api.firecrawl.dev/v1/scrape",
-+                        json={"url": url, "formats": ["markdown"]},
-+                        headers=headers,
-+                    )
-+
-+            r = await _send_with_retry(_send_fc, op="fetch_retry", key=url, budget=self._retry_budget)
-+            data = r.json()
-+            if not isinstance(data, dict) or not data.get("success"):
-+                message = (data.get("error") or "scrape failed") if isinstance(data, dict) else "malformed response"
-+                raise _ProviderPageError(f"Firecrawl: {message}")
-+            body = data.get("data") if isinstance(data.get("data"), dict) else {}
-+            text = str(body.get("markdown") or "")
-+            if not text:
-+                raise _ProviderPageError("Firecrawl returned no page content")
-+            extras: dict[str, Any] = {}
-+            metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
-+            if title := metadata.get("title"):
-+                extras["title"] = str(title)
-+            return text, r.status_code, extras
-+
-+        # AnySearch. No cache-bust header is published, so the garbled-page
-+        # re-read above has no counterpart here; the encoding check still runs on
-+        # what comes back.
-+        headers = {"Accept": "application/json", "Content-Type": "application/json"}
-+        if key := self._key_for(provider):
-+            headers["Authorization"] = f"Bearer {key}"
-+
-+        async def _send() -> httpx.Response:
-+            async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
-+                return await client.post(
-+                    "https://api.anysearch.com/v1/extract", json={"url": url}, headers=headers
-+                )
-+
 +        r = await _send_with_retry(_send, op="fetch_retry", key=url, budget=self._retry_budget)
 +        data = r.json()
 +        if not isinstance(data, dict):
@@ -1852,10 +1431,10 @@ index e012b39..d085add 100644
  
  # The IM-channel adapters import vendor SDKs that are not in this project's
 diff --git a/tests/test_agent_flow_ask_user.py b/tests/test_agent_flow_ask_user.py
-index 7347b7e..7644e9d 100644
+index 370b258..86cf7d7 100644
 --- a/tests/test_agent_flow_ask_user.py
 +++ b/tests/test_agent_flow_ask_user.py
-@@ -602,6 +602,9 @@ def _loop(workspace, dr_flow, disabled=None):
+@@ -591,6 +591,9 @@ def _loop(workspace, dr_flow, disabled=None):
          restrict_to_workspace=True,
          dr_flow=dr_flow,
          disabled_tools=disabled,
@@ -1866,10 +1445,10 @@ index 7347b7e..7644e9d 100644
  
  
 diff --git a/tests/test_agent_flow_dr.py b/tests/test_agent_flow_dr.py
-index 515475e..16e53a8 100644
+index 4faf047..9b34474 100644
 --- a/tests/test_agent_flow_dr.py
 +++ b/tests/test_agent_flow_dr.py
-@@ -533,6 +533,9 @@ async def test_dr_mode_slims_tools_and_segments(workspace):
+@@ -504,6 +504,9 @@ async def test_dr_mode_slims_tools_and_segments(workspace):
          model="stub",
          restrict_to_workspace=True,
          dr_flow=DRFlowConfig(enabled=True),
@@ -1879,7 +1458,7 @@ index 515475e..16e53a8 100644
      )
      assert sorted(agent.tools.names()) == ["web_fetch", "web_search"]
      # DR mode drops the product identity: eight of its instructions named tools no
-@@ -582,6 +585,9 @@ async def test_repeat_notice_follows_the_flow_switch(workspace, flow_enabled, ex
+@@ -553,6 +556,9 @@ async def test_repeat_notice_follows_the_flow_switch(workspace, flow_enabled, ex
          model="stub",
          restrict_to_workspace=True,
          dr_flow=DRFlowConfig(enabled=flow_enabled),
@@ -1889,7 +1468,7 @@ index 515475e..16e53a8 100644
      )
      assert agent.tools.get("web_search").repeat_notice is expected
  
-@@ -692,6 +698,9 @@ async def test_chat_mode_keeps_full_surface(workspace):
+@@ -663,6 +669,9 @@ async def test_chat_mode_keeps_full_surface(workspace):
          workspace=workspace,
          model="stub",
          restrict_to_workspace=True,
@@ -1974,7 +1553,7 @@ index 4d88e9e..3e28b9f 100644
      config.tools.exec = MagicMock()
      config.tools.restrict_to_workspace = True
 diff --git a/tests/test_config_loader.py b/tests/test_config_loader.py
-index 002e34b..8c87361 100644
+index 002e34b..d2b4faf 100644
 --- a/tests/test_config_loader.py
 +++ b/tests/test_config_loader.py
 @@ -7,6 +7,7 @@ configs, plus the default-config fallback path.
@@ -1985,7 +1564,7 @@ index 002e34b..8c87361 100644
  from pathlib import Path
  
  import pytest
-@@ -219,13 +220,228 @@ def test_warn_unknown_config_keys_accepts_both_naming_styles() -> None:
+@@ -219,13 +220,219 @@ def test_warn_unknown_config_keys_accepts_both_naming_styles() -> None:
  
      data = {
          "agents": {"defaults": {"maxToolIterations": 16, "max_tool_iterations": 16, "requestTimeoutSeconds": 300}},
@@ -2065,16 +1644,7 @@ index 002e34b..8c87361 100644
 +# switch exists to prevent.
 +
 +
-+_SEEDABLE = (
-+    "SERPER_API_KEY",
-+    "ANYSEARCH_API_KEY",
-+    "SERPAPI_API_KEY",
-+    "TAVILY_API_KEY",
-+    "EXA_API_KEY",
-+    "BRAVE_API_KEY",
-+    "FIRECRAWL_API_KEY",
-+    "JINA_API_KEY",
-+)
++_SEEDABLE = ("SERPER_API_KEY", "ANYSEARCH_API_KEY", "SERPAPI_API_KEY", "JINA_API_KEY")
 +
 +
 +@pytest.fixture
@@ -2307,15 +1877,15 @@ index 8d680b1..53c9077 100644
      config.tools.web.proxy = None
      config.tools.exec = MagicMock()
      config.tools.restrict_to_workspace = True
-diff --git a/tests/test_web_fetch_providers.py b/tests/test_web_fetch_providers.py
+diff --git A/tmp/rv/shipped/tests/test_web_fetch_providers.py b/tests/test_web_fetch_providers.py
 new file mode 100644
-index 0000000..0c6a4cd
+index 0000000..7dd5120
 --- /dev/null
 +++ b/tests/test_web_fetch_providers.py
-@@ -0,0 +1,560 @@
+@@ -0,0 +1,443 @@
 +"""Per-provider request and response contracts of ``WebFetchTool``.
 +
-+Several backends read pages behind one tool. What differs is the request, how a
++Two backends read pages behind one tool. What differs is the request, how a
 +failure is reported, and what the response carries; everything downstream --
 +the SSRF gate, containment, the digest path, truncation and the ledger -- is one
 +code path below them.
@@ -2373,7 +1943,7 @@ index 0000000..0c6a4cd
 +class _Recorder:
 +    """Client that records what it was asked for and answers per method.
 +
-+    Keyed by method rather than by call order because the backends do not
++    Keyed by method rather than by call order because the two backends do not
 +    take the same number of calls: the Jina branch re-reads a garbled page, and
 +    a retryable failure is sent up to three times before it gives up. A queue
 +    would hand the fallback's response to the selected provider's retry.
@@ -2490,89 +2060,6 @@ index 0000000..0c6a4cd
 +    assert call["headers"]["Authorization"] == "Bearer k-any"
 +
 +
-+@pytest.mark.asyncio
-+async def test_the_tavily_request_is_a_post_to_extract() -> None:
-+    client = _Recorder(post=_Resp(payload={"results": [{"url": "https://x.example/", "raw_content": PAGE}]}))
-+    with _Patched(client):
-+        await WebFetchTool(provider="tavily", api_key="k-tav").execute(url="https://x.example/")
-+
-+    call = client.calls[0]
-+    assert call["method"] == "POST"
-+    assert call["url"] == "https://api.tavily.com/extract"
-+    assert call["json"] == {"urls": ["https://x.example/"]}
-+    assert call["headers"]["Authorization"] == "Bearer k-tav"
-+
-+
-+@pytest.mark.asyncio
-+async def test_tavily_extracts_the_matching_urls_raw_content() -> None:
-+    client = _Recorder(post=_Resp(payload={"results": [{"url": "https://x.example/", "raw_content": PAGE}]}))
-+    with _Patched(client):
-+        out = json.loads(
-+            await WebFetchTool(provider="tavily", api_key="k").execute(url="https://x.example/")
-+        )
-+
-+    assert out["text"] == PAGE
-+    assert out["extractor"] == "tavily-extract"
-+
-+
-+@pytest.mark.asyncio
-+async def test_a_failing_tavily_extract_is_not_a_page() -> None:
-+    client = _Recorder(
-+        post=_Resp(payload={"results": [], "failed_results": [{"url": "https://x.example/", "error": "unsupported"}]})
-+    )
-+    with _Patched(client):
-+        out = await WebFetchTool(provider="tavily", api_key="k").execute(url="https://x.example/")
-+
-+    assert fetch_result_ok(out) is False
-+    assert "unsupported" in json.loads(out)["error"]
-+
-+
-+@pytest.mark.asyncio
-+async def test_the_exa_request_is_a_post_to_contents() -> None:
-+    client = _Recorder(post=_Resp(payload={"results": [{"url": "https://x.example/", "text": PAGE, "title": "T"}]}))
-+    with _Patched(client):
-+        await WebFetchTool(provider="exa", api_key="k-exa").execute(url="https://x.example/")
-+
-+    call = client.calls[0]
-+    assert call["method"] == "POST"
-+    assert call["url"] == "https://api.exa.ai/contents"
-+    assert call["json"] == {"urls": ["https://x.example/"], "text": True}
-+    assert call["headers"]["x-api-key"] == "k-exa"
-+
-+
-+@pytest.mark.asyncio
-+async def test_exa_carries_its_title_as_its_own_field() -> None:
-+    client = _Recorder(post=_Resp(payload={"results": [{"url": "https://x.example/", "text": PAGE, "title": "Real Title"}]}))
-+    with _Patched(client):
-+        out = json.loads(await WebFetchTool(provider="exa", api_key="k").execute(url="https://x.example/"))
-+
-+    assert out["title"] == "Real Title"
-+    assert out["text"] == PAGE
-+    assert out["extractor"] == "exa-contents"
-+
-+
-+@pytest.mark.asyncio
-+async def test_an_empty_exa_result_set_is_not_a_page() -> None:
-+    client = _Recorder(post=_Resp(payload={"results": []}))
-+    with _Patched(client):
-+        out = await WebFetchTool(provider="exa", api_key="k").execute(url="https://x.example/")
-+
-+    assert fetch_result_ok(out) is False
-+
-+
-+@pytest.mark.asyncio
-+async def test_the_firecrawl_request_is_a_post_to_scrape() -> None:
-+    client = _Recorder(post=_Resp(payload={"success": True, "data": {"markdown": PAGE}}))
-+    with _Patched(client):
-+        await WebFetchTool(provider="firecrawl", api_key="k-fc").execute(url="https://x.example/")
-+
-+    call = client.calls[0]
-+    assert call["method"] == "POST"
-+    assert call["url"] == "https://api.firecrawl.dev/v1/scrape"
-+    assert call["json"] == {"url": "https://x.example/", "formats": ["markdown"]}
-+    assert call["headers"]["Authorization"] == "Bearer k-fc"
-+
-+
 +# --------------------------------------------------------------------------- #
 +# response handling                                                             #
 +# --------------------------------------------------------------------------- #
@@ -2598,31 +2085,6 @@ index 0000000..0c6a4cd
 +        out = await WebFetchTool(provider="anysearch", api_key="k").execute(url="https://x.example/")
 +
 +    assert fetch_result_ok(out) is False
-+
-+
-+@pytest.mark.asyncio
-+async def test_a_failing_firecrawl_envelope_is_not_a_page() -> None:
-+    client = _Recorder(post=_Resp(payload={"success": False, "error": "This website is no longer supported"}))
-+    with _Patched(client):
-+        out = await WebFetchTool(provider="firecrawl", api_key="k").execute(url="https://x.example/")
-+
-+    assert fetch_result_ok(out) is False
-+    assert "This website is no longer supported" in json.loads(out)["error"]
-+
-+
-+@pytest.mark.asyncio
-+async def test_firecrawl_carries_its_title_as_its_own_field() -> None:
-+    client = _Recorder(
-+        post=_Resp(payload={"success": True, "data": {"markdown": PAGE, "metadata": {"title": "Real Title"}}})
-+    )
-+    with _Patched(client):
-+        out = json.loads(
-+            await WebFetchTool(provider="firecrawl", api_key="k").execute(url="https://x.example/")
-+        )
-+
-+    assert out["title"] == "Real Title"
-+    assert out["text"] == PAGE
-+    assert out["extractor"] == "firecrawl-scrape"
 +
 +
 +@pytest.mark.asyncio
@@ -2813,9 +2275,6 @@ index 0000000..0c6a4cd
 +    # and the sub-agent registry both ask it and must agree.
 +    monkeypatch.delenv("JINA_API_KEY", raising=False)
 +    monkeypatch.delenv("ANYSEARCH_API_KEY", raising=False)
-+    monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
-+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-+    monkeypatch.delenv("EXA_API_KEY", raising=False)
 +    assert FETCH_PROVIDERS[DEFAULT_FETCH_PROVIDER].needs_key is False
 +    assert FETCH_PROVIDERS["anysearch"].needs_key is True
 +
@@ -2823,12 +2282,6 @@ index 0000000..0c6a4cd
 +    assert WebFetchTool(provider="anysearch").registrable is False
 +    assert WebFetchTool(provider="anysearch", api_key="k").registrable is True
 +    assert WebFetchTool(provider="anysearch", corpus_endpoint="http://x").registrable is True
-+    assert WebFetchTool(provider="firecrawl").registrable is False
-+    assert WebFetchTool(provider="firecrawl", api_key="k").registrable is True
-+    assert WebFetchTool(provider="tavily").registrable is False
-+    assert WebFetchTool(provider="tavily", api_key="k").registrable is True
-+    assert WebFetchTool(provider="exa").registrable is False
-+    assert WebFetchTool(provider="exa", api_key="k").registrable is True
 +
 +
 +def test_the_dict_key_and_the_specs_vendor_agree() -> None:
@@ -2849,7 +2302,7 @@ index 0000000..0c6a4cd
 +
 +
 +def test_an_unknown_provider_degrades_to_the_default() -> None:
-+    assert WebFetchTool(provider="diffbot").provider == DEFAULT_FETCH_PROVIDER
++    assert WebFetchTool(provider="firecrawl").provider == DEFAULT_FETCH_PROVIDER
 +    assert selected_fetch_provider(object()) == DEFAULT_FETCH_PROVIDER
 +
 +
@@ -2873,15 +2326,15 @@ index 0000000..0c6a4cd
 +    assert selected_fetch_key(web) == ("anysearch", "sk-any")
 +    assert selected_fetch_fallback(web.fetch) == ["jina"]
 +    assert web_provider_keys(web) == {"anysearch": "sk-any", "jina": "sk-jina"}
-diff --git a/tests/test_web_search_providers.py b/tests/test_web_search_providers.py
+diff --git A/tmp/rv/shipped/tests/test_web_search_providers.py b/tests/test_web_search_providers.py
 new file mode 100644
-index 0000000..43c3a91
+index 0000000..6321a27
 --- /dev/null
 +++ b/tests/test_web_search_providers.py
-@@ -0,0 +1,511 @@
+@@ -0,0 +1,293 @@
 +"""Per-provider request and response contracts of ``WebSearchTool``.
 +
-+Several backends share one tool. What differs is the request each expects and the
++Three backends share one tool. What differs is the request each expects and the
 +payload it answers with; everything downstream -- containment, cross-query
 +dedup, the shaping row, the rendering -- is one code path, so each provider is
 +normalised to the Serper shape before anything reads it.
@@ -2900,7 +2353,6 @@ index 0000000..43c3a91
 +
 +from unittest.mock import patch
 +
-+import httpx
 +import pytest
 +
 +from raven.agent.search_saturation import SearchSaturation
@@ -3024,77 +2476,6 @@ index 0000000..43c3a91
 +    assert kwargs["headers"]["Authorization"] == "Bearer sk-any"
 +
 +
-+@pytest.mark.asyncio
-+async def test_tavily_sends_a_bearer_token_and_never_a_page() -> None:
-+    client, patcher = _patched({"results": []})
-+    tool = WebSearchTool(api_key="sk-tav", provider="tavily")
-+    with patcher:
-+        await tool._search("q1", 4)
-+
-+    method, url, kwargs = client.calls[0]
-+    assert (method, url) == ("POST", "https://api.tavily.com/search")
-+    assert kwargs["json"] == {"query": "q1", "max_results": 4}
-+    assert kwargs["headers"]["Authorization"] == "Bearer sk-tav"
-+
-+
-+@pytest.mark.asyncio
-+async def test_exa_sends_an_api_key_header_and_asks_for_highlights() -> None:
-+    # Highlights, not ``text``: text is the whole page and the render path
-+    # would show it whole as the snippet.
-+    client, patcher = _patched({"results": []})
-+    tool = WebSearchTool(api_key="sk-exa", provider="exa")
-+    with patcher:
-+        await tool._search("q1", 4)
-+
-+    method, url, kwargs = client.calls[0]
-+    assert (method, url) == ("POST", "https://api.exa.ai/search")
-+    # ``maxCharacters`` is the bound that holds on the live endpoint;
-+    # ``numSentences`` does not.
-+    assert kwargs["json"] == {"query": "q1", "numResults": 4, "contents": {"highlights": {"maxCharacters": 300}}}
-+    assert kwargs["headers"]["x-api-key"] == "sk-exa"
-+
-+
-+@pytest.mark.asyncio
-+async def test_exa_does_not_buy_contents_when_snippets_are_off() -> None:
-+    # Exa bills contents separately; with snippets off the text would have no
-+    # reader, so the request must not ask for it.
-+    client, patcher = _patched({"results": []})
-+    tool = WebSearchTool(api_key="sk-exa", provider="exa", include_snippets=False)
-+    with patcher:
-+        await tool._search("q1", 4)
-+
-+    assert client.calls[0][2]["json"] == {"query": "q1", "numResults": 4}
-+
-+
-+@pytest.mark.asyncio
-+async def test_brave_sends_a_subscription_token_and_pages_by_offset() -> None:
-+    client, patcher = _patched({"web": {"results": []}})
-+    tool = WebSearchTool(api_key="sk-brave", provider="brave")
-+    with patcher:
-+        await tool._search("q1", 5)
-+        await tool._search("q1", 5, page=3)
-+
-+    method, url, first = client.calls[0]
-+    assert (method, url) == ("GET", "https://api.search.brave.com/res/v1/web/search")
-+    assert first["params"] == {"q": "q1", "count": 5}
-+    assert first["headers"]["X-Subscription-Token"] == "sk-brave"
-+    # page 3 is offset 2: Brave's offset counts pages, not results.
-+    assert client.calls[1][2]["params"]["offset"] == 2
-+
-+
-+@pytest.mark.asyncio
-+async def test_firecrawl_search_sends_a_bearer_token_and_never_a_page() -> None:
-+    client, patcher = _patched({"success": True, "data": []})
-+    tool = WebSearchTool(api_key="sk-fc", provider="firecrawl")
-+    with patcher:
-+        await tool._search("q1", 4)
-+
-+    method, url, kwargs = client.calls[0]
-+    assert (method, url) == ("POST", "https://api.firecrawl.dev/v1/search")
-+    assert kwargs["json"] == {"query": "q1", "limit": 4}
-+    assert kwargs["headers"]["Authorization"] == "Bearer sk-fc"
-+
-+
 +# ---------------------------------------------------------------------------
 +# Pagination capability, declared rather than discovered
 +# ---------------------------------------------------------------------------
@@ -3104,12 +2485,11 @@ index 0000000..43c3a91
 +    """Otherwise the rung is reachable and unanswerable: the rule escalates to
 +    page 2, the request comes back identical, dedup eats it, and the ledger
 +    records a dry search the endpoint never had a chance to serve."""
-+    for provider in ("anysearch", "tavily", "exa", "firecrawl"):
-+        sat = SearchSaturation()
-+        WebSearchTool(api_key="k", provider=provider, saturation=sat)
-+        assert sat.paginates is False, provider
++    sat = SearchSaturation()
++    WebSearchTool(api_key="k", provider="anysearch", saturation=sat)
++    assert sat.paginates is False
 +
-+    for provider in ("serper", "serpapi", "brave"):
++    for provider in ("serper", "serpapi"):
 +        paging = SearchSaturation()
 +        WebSearchTool(api_key="k", provider=provider, saturation=paging)
 +        assert paging.paginates is True, provider
@@ -3185,94 +2565,6 @@ index 0000000..43c3a91
 +
 +
 +@pytest.mark.asyncio
-+async def test_tavily_results_reach_the_shared_rendering() -> None:
-+    _, patcher = _patched(
-+        {
-+            "results": [{"title": "T1", "url": "https://a.example", "content": "S1"}],
-+            "answer": "42",
-+        }
-+    )
-+    with patcher:
-+        rendered, urls, shaping = await WebSearchTool(api_key="k", provider="tavily")._search("q1", 5)
-+
-+    assert urls == ["https://a.example"]
-+    assert "1. T1\n   https://a.example" in rendered
-+    assert "Answer: 42" in rendered
-+    assert shaping["n_served"] == 1
-+
-+
-+@pytest.mark.asyncio
-+async def test_exa_results_reach_the_shared_rendering() -> None:
-+    _, patcher = _patched(
-+        {"results": [{"title": "T1", "url": "https://a.example", "highlights": ["S1\n\nline two"]}]}
-+    )
-+    with patcher:
-+        rendered, urls, shaping = await WebSearchTool(api_key="k", provider="exa")._search("q1", 5)
-+
-+    assert urls == ["https://a.example"]
-+    # Newlines inside a highlight are collapsed: the snippet stays one indented line.
-+    assert "1. T1\n   https://a.example\n   S1 line two\n" in rendered + "\n"
-+    assert shaping["n_served"] == 1
-+
-+
-+@pytest.mark.asyncio
-+async def test_exa_page_text_is_never_rendered_as_a_snippet() -> None:
-+    # Positive and negative on one payload: the highlight is the snippet, and a
-+    # ``text`` body riding alongside it never reaches the rendering.
-+    body = "whole page body " * 50
-+    _, patcher = _patched(
-+        {"results": [{"title": "T1", "url": "https://a.example", "highlights": ["H1"], "text": body}]}
-+    )
-+    with patcher:
-+        rendered, _, shaping = await WebSearchTool(api_key="k", provider="exa")._search("q1", 5)
-+
-+    assert "   H1" in rendered
-+    assert "whole page body" not in rendered
-+    assert shaping["snippet_chars"] < 20
-+
-+
-+@pytest.mark.asyncio
-+async def test_brave_results_reach_the_shared_rendering() -> None:
-+    _, patcher = _patched(
-+        {"web": {"results": [{"title": "T1", "url": "https://a.example", "description": "S1"}]}}
-+    )
-+    with patcher:
-+        rendered, urls, shaping = await WebSearchTool(api_key="k", provider="brave")._search("q1", 5)
-+
-+    assert urls == ["https://a.example"]
-+    assert "1. T1\n   https://a.example" in rendered
-+    assert shaping["n_served"] == 1
-+
-+
-+@pytest.mark.asyncio
-+async def test_firecrawl_results_reach_the_shared_rendering() -> None:
-+    _, patcher = _patched(
-+        {"success": True, "data": [{"title": "T1", "url": "https://a.example", "description": "S1"}]}
-+    )
-+    with patcher:
-+        rendered, urls, shaping = await WebSearchTool(api_key="k", provider="firecrawl")._search("q1", 5)
-+
-+    assert urls == ["https://a.example"]
-+    assert "1. T1\n   https://a.example" in rendered
-+    assert shaping["n_served"] == 1
-+
-+
-+@pytest.mark.asyncio
-+async def test_a_firecrawl_refusal_inside_a_200_is_an_error_not_a_dry_search() -> None:
-+    # Probed live: errors normally arrive status-coupled (400/500). If a refusal
-+    # ever lands inside a 200, it must classify as an error - a zero-hit
-+    # advances the saturation streak, and "the endpoint refused" must not.
-+    _, patcher = _patched({"success": False, "error": "Invalid request body"})
-+    with patcher:
-+        rendered, urls, shaping = await WebSearchTool(api_key="k", provider="firecrawl")._search("q1", 5)
-+
-+    assert rendered.startswith("Error:")
-+    assert "Invalid request body" in rendered
-+    assert urls == []
-+    assert shaping["n_served"] is None
-+
-+
-+@pytest.mark.asyncio
 +async def test_a_malformed_anysearch_payload_is_a_zero_hit_not_a_crash() -> None:
 +    _, patcher = _patched({"results": "not-a-list"})
 +    with patcher:
@@ -3325,68 +2617,11 @@ index 0000000..43c3a91
 +    assert selected_search_provider(object()) == DEFAULT_SEARCH_PROVIDER
 +
 +
-+class _StatusClient(_RecordingClient):
-+    """Answers every call with a real httpx status error, URL and query included,
-+    the way the live client would."""
-+
-+    def __init__(self, status: int) -> None:
-+        super().__init__(None)
-+        self._status = status
-+
-+    def _answer(self, method, url, kwargs):
-+        self.calls.append((method, url, kwargs))
-+        request = httpx.Request(method, url, params=kwargs.get("params"))
-+        return httpx.Response(self._status, request=request, json={})
-+
-+    async def post(self, url, **kwargs):
-+        return self._answer("POST", url, kwargs)
-+
-+    async def get(self, url, **kwargs):
-+        return self._answer("GET", url, kwargs)
-+
-+
-+@pytest.mark.asyncio
-+@pytest.mark.parametrize("provider", sorted(SEARCH_PROVIDERS))
-+async def test_a_status_error_never_echoes_the_key(provider: str) -> None:
-+    """httpx puts the whole request URL in a status error, and SerpApi carries
-+    its key as a query parameter, so the default text would hand the credential
-+    to the model and write it into the ledger. Every vendor renders as vendor
-+    plus status, and the shaping row records the status alone."""
-+    client = _StatusClient(401)
-+    with patch("raven.agent.tools.web.httpx.AsyncClient", lambda **kw: client):
-+        rendered, urls, shaping = await WebSearchTool(api_key="SECRET-KEY-123", provider=provider)._search("q1", 3)
-+
-+    assert "SECRET-KEY-123" not in rendered
-+    assert rendered == f"Error: {SEARCH_PROVIDERS[provider].label} answered HTTP 401"
-+    assert urls == []
-+    assert "SECRET-KEY-123" not in shaping["error"]
-+    assert shaping["status"] == 401 and shaping["quota_err"] is True
-+
-+
 +@pytest.mark.asyncio
 +async def test_the_unconfigured_error_names_the_selected_provider() -> None:
-+    """Named to the OPERATOR, on stderr - not to the model.
++    rendered, urls, _ = await WebSearchTool(provider="serpapi")._search("q", 5)
 +
-+    The message is split on purpose (main's product-surface audit): the tool
-+    return value tells the model the capability is gone and not to retry, and
-+    must not carry our config path, which a return value gets narrated back to
-+    whoever is watching. The provider's name, config path and env var go to the
-+    log instead - still per-spec, so a selected provider's missing key is never
-+    reported as another provider's.
-+    """
-+    from loguru import logger
-+
-+    lines: list[str] = []
-+    sink_id = logger.add(lines.append, level="ERROR")
-+    try:
-+        rendered, urls, _ = await WebSearchTool(provider="serpapi")._search("q", 5)
-+    finally:
-+        logger.remove(sink_id)
-+
-+    assert rendered.startswith("Error: web search is unavailable")
-+    assert "apiKey" not in rendered
-+    log = "".join(lines)
-+    assert "SerpApi" in log
-+    assert "tools.web.providers.serpapi.apiKey" in log
-+    assert "SERPAPI_API_KEY" in log
++    assert "SerpApi API key not configured" in rendered
++    assert "tools.web.providers.serpapi.apiKey" in rendered
++    assert "SERPAPI_API_KEY" in rendered
 +    assert urls == []

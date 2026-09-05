@@ -1,6 +1,6 @@
 """The viewer's file endpoint: who may read what, and how it is served.
 
-The path policy is the agent's own (``raven.agent.tools.filesystem.resolve_path``
+The path policy is the agent's own (``raven.agent.tools.filesystem._resolve_path``
 with the configured workspace and ``tools.restrict_to_workspace``), so these
 tests pin the wiring rather than a second policy: what the agent may read, the
 viewer serves; what it may not, the viewer refuses.
@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
-from raven.agent.tools.deliverables import DeliverableStore
+from raven.agent.tools._deliverables import DeliverableStore
 from raven.config import load_config
 from raven.rpc import files as files_module
 from raven.rpc.transports.ws import WsGateway, build_app

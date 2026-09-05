@@ -38,12 +38,6 @@ from loguru import logger
 
 _state: ContextVar[dict[str, Any] | None] = ContextVar("rpc_connection_state", default=None)
 
-# ids of the connection states whose sockets are still bound. Kept as ids
-# because a state dict is unhashable, and an id is stable for the dict's
-# lifetime; the holder of a state keeps the dict (and so the id) alive, so
-# id reuse cannot collide here.
-_live: set[int] = set()
-
 # conversation key -> the connection state of the surface that last sent a turn
 # for it. Process-wide because the reader is not on the owning connection: a
 # question is emitted from the engine's own task, which has no connection bound.
@@ -65,30 +59,16 @@ def bind_connection() -> Token:
     Called by a transport once per accepted connection, before it starts
     dispatching that connection's frames. Pair with :func:`unbind_connection`.
     """
-    state: dict[str, Any] = {}
-    token = _state.set(state)
-    _live.add(id(state))
-    return token
+    return _state.set({})
 
 
 def unbind_connection(token: Token) -> None:
     state = _state.get()
     if state is not None:
-        _live.discard(id(state))
         for key, owner in list(_owners.items()):
             if owner is state:
                 del _owners[key]
     _state.reset(token)
-
-
-def current_state() -> dict[str, Any] | None:
-    """The connection state bound in this context, or None when unbound."""
-    return _state.get()
-
-
-def is_bound(state: dict[str, Any] | None) -> bool:
-    """True while the connection that owns ``state`` is still bound."""
-    return state is not None and id(state) in _live
 
 
 def set_frame_sink(sink: SendFrame) -> bool:
@@ -199,11 +179,9 @@ __all__ = [
     "bind_connection",
     "claim_conversation",
     "conversation_scoped",
-    "current_state",
     "declare_surface",
     "declared_surface",
     "frame_sink_for",
-    "is_bound",
     "set_frame_sink",
     "unbind_connection",
 ]

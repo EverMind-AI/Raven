@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from raven.contracts.llm_provider import ErrorClassification
+    from raven.providers.base import ErrorClassification
 
 
 @dataclass(frozen=True)

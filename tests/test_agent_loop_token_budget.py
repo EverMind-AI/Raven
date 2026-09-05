@@ -21,9 +21,8 @@ from pathlib import Path
 
 import pytest
 
-import raven.agent.loop.organ_glue as agent_main
+import raven.agent.loop.main as agent_main
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.providers.base import LLMProvider, LLMResponse
 from raven.providers.binding import ModelBinding
 
@@ -48,8 +47,8 @@ def _loop(workspace: Path, *, window: int, ceiling: int, monkeypatch) -> AgentLo
         provider=_StubProvider(),
         workspace=workspace,
         model="stub",
-        policy=TurnPolicy(max_iterations=2),
-        tools=ToolWiring(restrict_to_workspace=True),
+        max_iterations=2,
+        restrict_to_workspace=True,
     )
     # The window is the binding's, so the fixture sets it where it lives
     # rather than on the loop -- which no longer has one of its own.
@@ -84,11 +83,7 @@ def test_an_honest_but_large_ceiling_does_not_eat_the_window(workspace, monkeypa
     budget = _loop(workspace, window=202_800, ceiling=131_000, monkeypatch=monkeypatch)._make_token_budget()
 
     assert budget.reserved_output == 131_000, "the model really can emit this much"
-    # 60_000 rather than 65_000: the system prompt embeds the workspace path,
-    # so the measured figure rides a few dozen tokens with tmp-path length.
-    # The bound guards history keeping most of the leftover window, not an
-    # exact split, so it stands clear of the boundary instead of on it.
-    assert budget.available_history > 60_000
+    assert budget.available_history > 65_000
 
 
 def test_a_ceiling_below_the_share_is_reserved_in_full(workspace, monkeypatch) -> None:

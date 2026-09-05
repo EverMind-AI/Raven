@@ -1,5 +1,3 @@
-"""Prompt-token estimation counts tool calls and reasoning fields for consolidation triggers."""
-
 from __future__ import annotations
 
 import asyncio
@@ -9,7 +7,7 @@ import pytest
 
 from raven.memory_engine.consolidate.consolidator import MemoryConsolidator
 from raven.session.manager import Session
-from raven.utils import images, tokens
+from raven.utils import helpers
 
 
 class _FakeEncoding:
@@ -21,7 +19,7 @@ def test_estimate_prompt_tokens_counts_assistant_tool_calls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        tokens.tiktoken,
+        helpers.tiktoken,
         "get_encoding",
         lambda _name: _FakeEncoding(),
     )
@@ -40,8 +38,8 @@ def test_estimate_prompt_tokens_counts_assistant_tool_calls(
         ],
     }
 
-    prompt_tokens = tokens.estimate_prompt_tokens([msg])
-    message_tokens = tokens.estimate_message_tokens(msg)
+    prompt_tokens = helpers.estimate_prompt_tokens([msg])
+    message_tokens = helpers.estimate_message_tokens(msg)
 
     assert prompt_tokens >= message_tokens
     assert prompt_tokens > 10_000
@@ -51,7 +49,7 @@ def test_estimate_counts_reasoning_fields(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        tokens.tiktoken,
+        helpers.tiktoken,
         "get_encoding",
         lambda _name: _FakeEncoding(),
     )
@@ -63,9 +61,9 @@ def test_estimate_counts_reasoning_fields(
         "thinking_blocks": [{"thinking": "t" * 5_000}],
     }
 
-    assert tokens.estimate_message_tokens(with_reasoning) > tokens.estimate_message_tokens(base)
-    assert tokens.estimate_prompt_tokens([with_reasoning]) > tokens.estimate_prompt_tokens([base])
-    assert tokens.estimate_message_tokens(with_reasoning) > 10_000
+    assert helpers.estimate_message_tokens(with_reasoning) > helpers.estimate_message_tokens(base)
+    assert helpers.estimate_prompt_tokens([with_reasoning]) > helpers.estimate_prompt_tokens([base])
+    assert helpers.estimate_message_tokens(with_reasoning) > 10_000
 
 
 def test_estimate_prompt_tokens_fallback_counts_tool_calls(
@@ -74,7 +72,7 @@ def test_estimate_prompt_tokens_fallback_counts_tool_calls(
     def _raise(_name: str) -> object:
         raise RuntimeError("encoding unavailable")
 
-    monkeypatch.setattr(tokens.tiktoken, "get_encoding", _raise)
+    monkeypatch.setattr(helpers.tiktoken, "get_encoding", _raise)
     msg = {
         "role": "assistant",
         "content": "",
@@ -90,7 +88,7 @@ def test_estimate_prompt_tokens_fallback_counts_tool_calls(
         ],
     }
 
-    assert tokens.estimate_prompt_tokens([msg]) > 10_000
+    assert helpers.estimate_prompt_tokens([msg]) > 10_000
 
 
 def test_consolidator_prompt_estimate_counts_tool_calls_for_trigger(
@@ -98,7 +96,7 @@ def test_consolidator_prompt_estimate_counts_tool_calls_for_trigger(
     tmp_path,
 ) -> None:
     monkeypatch.setattr(
-        tokens.tiktoken,
+        helpers.tiktoken,
         "get_encoding",
         lambda _name: _FakeEncoding(),
     )
@@ -148,7 +146,7 @@ def test_token_consolidation_triggers_on_tool_call_payload(
     tmp_path,
 ) -> None:
     monkeypatch.setattr(
-        tokens.tiktoken,
+        helpers.tiktoken,
         "get_encoding",
         lambda _name: _FakeEncoding(),
     )
@@ -227,10 +225,10 @@ def _data_uri(png: bytes) -> str:
 
 def test_estimate_image_tokens_matches_anthropic_published_values() -> None:
     # Published examples from Anthropic's vision docs (28x28 patches, cap 1568).
-    assert images.estimate_image_tokens(1000, 1000) == 1296
-    assert images.estimate_image_tokens(100, 100) == 16
+    assert helpers.estimate_image_tokens(1000, 1000) == 1296
+    assert helpers.estimate_image_tokens(100, 100) == 16
     # Beyond the cap the charge saturates rather than growing with area.
-    assert images.estimate_image_tokens(8000, 8000) == 1568
+    assert helpers.estimate_image_tokens(8000, 8000) == 1568
 
 
 def test_image_pixel_size_survives_every_real_jpeg_variant() -> None:
@@ -262,7 +260,7 @@ def test_image_pixel_size_survives_every_real_jpeg_variant() -> None:
         "fill_bytes": plain[:2] + b"\xff\xff\xff" + plain[2:],
     }
     for label, data in variants.items():
-        assert images.image_pixel_size(data) == (640, 480), label
+        assert helpers._image_pixel_size(data) == (640, 480), label
 
 
 def test_image_pixel_size_returns_none_on_malformed_jpeg_without_raising() -> None:
@@ -282,35 +280,35 @@ def test_image_pixel_size_returns_none_on_malformed_jpeg_without_raising() -> No
         "zero_length_segment": plain[:2] + b"\xff\xe0\x00\x00" + plain[4:],
         "not_an_image": b"hello world",
     }.items():
-        assert images.image_pixel_size(data) is None, label
+        assert helpers._image_pixel_size(data) is None, label
 
 
 def test_image_pixel_size_parses_png_gif_and_jpeg() -> None:
-    assert images.image_pixel_size(_png(640, 480)) == (640, 480)
+    assert helpers._image_pixel_size(_png(640, 480)) == (640, 480)
 
     gif = b"GIF89a" + (320).to_bytes(2, "little") + (240).to_bytes(2, "little")
-    assert images.image_pixel_size(gif) == (320, 240)
+    assert helpers._image_pixel_size(gif) == (320, 240)
 
     # SOF0 frame header: precision, height, width, components.
     sof = (
         b"\xff\xc0" + (11).to_bytes(2, "big") + b"\x08" + (200).to_bytes(2, "big") + (300).to_bytes(2, "big") + b"\x01"
     )
-    assert images.image_pixel_size(b"\xff\xd8\xff" + b"\xe0\x00\x02" + sof) == (300, 200)
+    assert helpers._image_pixel_size(b"\xff\xd8\xff" + b"\xe0\x00\x02" + sof) == (300, 200)
 
-    assert images.image_pixel_size(b"not an image") is None
+    assert helpers._image_pixel_size(b"not an image") is None
 
 
 def test_estimate_content_part_tokens_ignores_text_parts() -> None:
-    assert images.estimate_content_part_tokens({"type": "text", "text": "hi"}) is None
-    assert images.estimate_content_part_tokens("not a dict") is None
+    assert helpers.estimate_content_part_tokens({"type": "text", "text": "hi"}) is None
+    assert helpers.estimate_content_part_tokens("not a dict") is None
 
 
 def test_estimate_content_part_tokens_charges_ceiling_for_unparseable_image() -> None:
     remote = {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}
-    assert images.estimate_content_part_tokens(remote) == images._IMAGE_TOKEN_CAP
+    assert helpers.estimate_content_part_tokens(remote) == helpers._IMAGE_TOKEN_CAP
 
     corrupt = {"type": "image_url", "image_url": {"url": "data:image/png;base64,!!!!"}}
-    assert images.estimate_content_part_tokens(corrupt) == images._IMAGE_TOKEN_CAP
+    assert helpers.estimate_content_part_tokens(corrupt) == helpers._IMAGE_TOKEN_CAP
 
 
 def test_image_data_uri_is_billed_by_patch_area_not_base64_length() -> None:
@@ -323,9 +321,9 @@ def test_image_data_uri_is_billed_by_patch_area_not_base64_length() -> None:
     # The data URI really is enormous -- the assertion below is not vacuous.
     assert len(block["image_url"]["url"]) > 3_000_000
 
-    estimate = tokens.estimate_prompt_tokens([message])
+    estimate = helpers.estimate_prompt_tokens([message])
     assert 1296 <= estimate < 1400
-    assert tokens.estimate_message_tokens(message) == estimate
+    assert helpers.estimate_message_tokens(message) == estimate
 
 
 def test_image_tokens_survive_the_tiktoken_fallback_path(
@@ -334,11 +332,11 @@ def test_image_tokens_survive_the_tiktoken_fallback_path(
     """Images are counted outside tiktoken, so a tokenizer failure must not drop
     them -- nor may an image-only message report zero."""
     monkeypatch.setattr(
-        tokens.tiktoken,
+        helpers.tiktoken,
         "get_encoding",
         lambda _name: (_ for _ in ()).throw(RuntimeError("no tokenizer")),
     )
     block = {"type": "image_url", "image_url": {"url": _data_uri(_png(280, 280))}}
 
-    assert tokens.estimate_prompt_tokens([{"role": "user", "content": [block]}]) == 100
-    assert tokens.estimate_message_tokens({"role": "user", "content": [block]}) == 100
+    assert helpers.estimate_prompt_tokens([{"role": "user", "content": [block]}]) == 100
+    assert helpers.estimate_message_tokens({"role": "user", "content": [block]}) == 100

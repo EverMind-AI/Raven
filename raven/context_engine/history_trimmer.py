@@ -1,6 +1,7 @@
 """History trimming — the Curator's contribution to ``*history``.
 
-Owned by :class:`CuratorAssembler`, which calls these operations to decide
+Extracted from :class:`CuratorAssembler` so the Curator and the unified
+context engine share one implementation of the operations that decide
 which session messages reach the model:
 
 - **adjacency closure** (:meth:`canonical_ids`) — if a tool call is
@@ -15,10 +16,9 @@ which session messages reach the model:
   token cost, and drop the lowest-priority non-protected messages until
   it fits.
 
-This is the *only* code path that selects ``*history``. The
-``# Curator Working State`` section is rendered by
-:class:`CuratorSegmentBuilder` from the plan's working-state text — it is
-not this module's concern.
+This is the *only* code path that selects ``*history``. Segment 6
+(``# Curator Working State``) is rendered by :class:`ContextBuilder`
+from the plan's working-state text — it is not this module's concern.
 """
 
 from __future__ import annotations
@@ -26,9 +26,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from raven.contracts.llm_provider import LLMProvider
+from raven.providers.base import LLMProvider
 from raven.providers.binding import ModelBinding, active_window, resolve
-from raven.utils.tokens import estimate_prompt_tokens_chain
+from raven.utils.helpers import estimate_prompt_tokens_chain
 
 # Provider-safe message keys. Anything else on a session message
 # (timestamps, internal ids, manifest annotations) is dropped before

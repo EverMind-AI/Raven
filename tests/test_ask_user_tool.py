@@ -15,15 +15,14 @@ import json
 
 import pytest
 
-from raven.agent.loop.bundles import ToolWiring
 from raven.agent.tools.ask_user import (
     _MAX_JSON_LAYERS,
     AskUserTool,
     _normalize_options,
     _normalize_questions,
 )
+from raven.agent.tools.base import ToolResult
 from raven.agent.tools.registry import ToolRegistry
-from raven.contracts.tool import ToolResult
 
 
 class _StubBroker:
@@ -306,7 +305,7 @@ async def test_the_registry_path_does_not_rewrite_the_callers_arguments():
     """Normalizing must leave the caller's dict alone.
 
     The same `arguments` object the registry is handed also goes to the START
-    tool event and, on the assistant message, through `openai_tool_call`. Both
+    tool event and, on the assistant message, through `to_openai_tool_call`. Both
     happen before `tools.execute` today, so an in-place edit could not reach
     them -- but the object is shared, `cast_params` is the only thing standing
     between the model's text and a rewrite of it, and nothing was watching:
@@ -537,9 +536,7 @@ async def test_agent_loop_hands_the_configured_budget_to_the_tool(tmp_path):
         async def chat_with_retry(self, **kwargs):  # pragma: no cover - never invoked
             raise NotImplementedError
 
-    loop = AgentLoop(
-        provider=_Provider(), workspace=tmp_path, tools=ToolWiring(ask_user_config=AskUserToolConfig(timeout=42))
-    )
+    loop = AgentLoop(provider=_Provider(), workspace=tmp_path, ask_user_config=AskUserToolConfig(timeout=42))
     tool = loop.tools.get("ask_user")
     assert tool is not None
 

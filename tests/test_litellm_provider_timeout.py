@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from raven.contracts.llm_provider import ChatDelta, GenerationSettings
+from raven.providers.base import GenerationSettings, StreamDelta
 from raven.providers.litellm_provider import LiteLLMProvider
 
 
@@ -123,7 +123,7 @@ async def test_chat_stream_idle_cap_raises_timeout(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr("raven.providers.litellm_provider.acompletion", one_then_hang)
     provider = _make_provider(timeout=0.05)
-    seen: list[ChatDelta] = []
+    seen: list[StreamDelta] = []
     with pytest.raises(TimeoutError):
         async for delta in provider.chat_stream(messages=[{"role": "user", "content": "hi"}]):
             seen.append(delta)

@@ -4,8 +4,13 @@ One object bundles the live on-disk library, its retrieval index and the executo
 :meth:`load` is the execution entry; :meth:`listing` and :meth:`names` are what
 the tool advertises.
 
-Nothing here calls a model: the library is what the model chooses from, and
-:mod:`raven.playbook.matcher` says why the choice is the model's.
+**This used to be a funnel.** It scanned every user message, spent an LLM gate
+call on any message that mentioned a trigger word, and on a hit took over the
+whole turn -- the main agent never ran. That is gone (see
+:mod:`raven.playbook.matcher` for why), and with it three mechanisms that only
+existed to patch it: the per-conversation memory of refusals, the "which of these
+two did you mean" user prompt, and the gate itself. What remains is a library the
+model chooses from.
 
 Library reads reconcile content fingerprints with the directory, parsing only
 files whose bytes changed.
@@ -42,7 +47,6 @@ class PlaybookRuntime:
         *,
         store: PlaybookStore,
         executor: PlaybookExecutor,
-        generator: Any = None,
         disabled: Iterable[str] = (),
         disabled_source: "Callable[[], frozenset[str]] | None" = None,
         known_agents: "Callable[[], Iterable[str]] | None" = None,
@@ -63,10 +67,6 @@ class PlaybookRuntime:
         #: run of the same playbook starts with a fresh budget.
         self._gap_rounds: dict[tuple[str, str], int] = {}
         self._store = store
-        #: Carried, never called: creation's composer rides with the library so
-        #: the bundled ``create_playbook`` tool binds one object. ``None`` on a
-        #: host that assembles a runtime without creation (the CLI's run path).
-        self._generator = generator
         self._specs: dict[str, PlaybookSpec] = {}
         #: Parsed, and refused by the structural check. Kept rather than dropped
         #: because the reason is usually not in the file: an agent switched off,
@@ -296,16 +296,6 @@ class PlaybookRuntime:
         return True
 
     @property
-    def store(self) -> PlaybookStore:
-        """The library both entry tools write and read -- one place on disk."""
-        return self._store
-
-    @property
-    def generator(self) -> Any:
-        """Creation's composer, for the bundled ``create_playbook`` to bind."""
-        return self._generator
-
-    @property
     def dag_tool(self) -> Any:
         """The executor's private graph tool, for hosts wiring live-run concerns."""
         return self._executor.dag_tool
@@ -395,8 +385,7 @@ class PlaybookRuntime:
         The single entry, for the model's tool and for ``raven playbook run``
         alike. What "act on it" means is the playbook's own business rather than
         the caller's -- a ``dag`` playbook dispatches (after any gaps are filled
-        and the graph-level confirm passes: ``PlaybookSpec.confirm``, dispatched
-        as ``SubAgentDagSpec.confirm``), a ``prompt`` one comes back as composition
+        and its confirm gate passes), a ``prompt`` one comes back as composition
         guidance for the caller to build a graph from. The caller does not choose,
         and is not told to: ``mode`` is how the author wrote the file, not a
         decision anyone downstream should be making.

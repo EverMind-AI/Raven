@@ -18,10 +18,9 @@ from unittest.mock import patch
 
 import pytest
 
-from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.agent.loop.main import AgentLoop
+from raven.agent.tools.base import Tool
 from raven.config.schema import MCPServerConfig
-from raven.contracts.tool import Tool
 from raven.mcp.client import Connected
 from raven.mcp.naming import MCPToolRef
 from raven.mcp.prompts import PROMPT_TOOL_NAMES
@@ -82,9 +81,9 @@ def _loop(workspace: Path, servers: dict | None = None, disabled: list[str] | No
         provider=_Provider(),
         workspace=workspace,
         model="stub",
+        max_iterations=1,
         mcp_servers=servers or {},
-        policy=TurnPolicy(max_iterations=1),
-        tools=ToolWiring(disabled_tools=disabled or []),
+        disabled_tools=disabled or [],
     )
 
 
@@ -227,42 +226,3 @@ class TestGatingIsIdempotent:
             await loop.apply_mcp_config({"openseo": _cfg()})
         tool = loop.tools.get("list_mcp_resources")
         assert "openseo" in tool.parameters["properties"]["server"]["description"]
-
-
-class TestConnectPathAndClose:
-    """[F1] The plug.auth path (manager.connect) has no second sync, so the
-    post_connect ordering is the only chance the meta-tools get; and close_mcp
-    must withdraw the loop-owned five before nulling the manager."""
-
-    async def test_a_sole_resources_server_arriving_via_connect_brings_them(self, workspace):
-        loop = _loop(workspace)
-        with patch(_PATCH, new=_connect(_Caps())):
-            await loop.apply_mcp_config({"plain": _cfg("https://plain.test/mcp")})
-        assert loop.tools.get("read_mcp_resource") is None
-        with patch(_PATCH, new=_connect(_Caps(resources=object()))):
-            await loop._mcp_manager.connect("svc", _cfg())
-        assert loop.tools.get("read_mcp_resource") is not None, (
-            "post_connect fired before the state flip, so the sync never saw this connect"
-        )
-
-    async def test_a_forced_reconnect_of_the_sole_resources_server_keeps_them(self, workspace):
-        loop = _loop(workspace)
-        with patch(_PATCH, new=_connect(_Caps(resources=object()))):
-            await loop.apply_mcp_config({"svc": _cfg()})
-            assert loop.tools.get("read_mcp_resource") is not None
-            await loop._mcp_manager.connect("svc", _cfg("https://svc.test/mcp2"))
-        assert loop.tools.get("read_mcp_resource") is not None, (
-            "the blind pre-flip sync withdrew the five and nothing re-registered them"
-        )
-
-    async def test_close_mcp_withdraws_them_and_a_reconnect_restores_them(self, workspace):
-        loop = _loop(workspace)
-        with patch(_PATCH, new=_connect(_Caps(resources=object()))):
-            await loop.apply_mcp_config({"svc": _cfg()})
-            assert loop.tools.get("read_mcp_resource") is not None
-            await loop.close_mcp()
-            assert loop.tools.get("read_mcp_resource") is None, (
-                "the five are the loop's, not any server's; they must not outlive the manager"
-            )
-            await loop.apply_mcp_config({"svc": _cfg()})
-        assert loop.tools.get("read_mcp_resource") is not None

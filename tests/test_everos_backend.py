@@ -19,22 +19,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from raven.contracts.memory import MemoryBackend
-from raven.plugins import PluginContext, ServiceLocator
-
-# What the backend told the host through ServiceLocator.notify; the host (not
-# the plugin) decides how to show it, so the tests read the channel, not stderr.
-NOTICES: list[str] = []
-
-
-@pytest.fixture(autouse=True)
-def _fresh_notices():
-    NOTICES.clear()
-    yield
-    NOTICES.clear()
-
-
-from raven_everos.backend import (
+from raven.memory_engine import MemoryBackend
+from raven.plugin import PluginContext, ServiceLocator
+from raven.plugin.memory.everos._server import ProbeResult
+from raven.plugin.memory.everos.backend import (
     _PROFILE_MAX_CHARS,
     EverosBackend,
     ServiceState,
@@ -44,7 +32,6 @@ from raven_everos.backend import (
     convert_messages,
     make_backend,
 )
-from raven_everos.server import ProbeVerdict
 
 # ---------------------------------------------------------------------------
 # Fake adapter — records calls + returns canned data
@@ -103,12 +90,12 @@ def _no_capability_probe(monkeypatch: pytest.MonkeyPatch):
     depends on what that server answers. Unreachable is the quiet default; the
     tests about the warning install their own answer.
     """
-    from raven_everos import health
+    from raven.plugin.memory.everos import _health
 
     monkeypatch.setattr(
-        health,
+        _health,
         "probe_capabilities",
-        lambda *_a, **_kw: health.CapabilityReport(reachable=False, error="probe disabled in tests"),
+        lambda *_a, **_kw: _health.CapabilityReport(reachable=False, error="probe disabled in tests"),
     )
     return monkeypatch
 
@@ -122,7 +109,7 @@ def _ctx(
 ) -> PluginContext:
     return PluginContext(
         config=config,
-        services=ServiceLocator(workspace=tmp_path, user_id=user_id, agent_id=agent_id, notify=NOTICES.append),
+        services=ServiceLocator(workspace=tmp_path, user_id=user_id, agent_id=agent_id),
     )
 
 
@@ -154,7 +141,7 @@ class TestConstruction:
 class TestLifecycle:
     async def test_start_stop_idempotent(self, tmp_path: Path) -> None:
         b = _backend(tmp_path)
-        with patch("raven_everos.server.ensure_everos_server", new=AsyncMock()):
+        with patch("raven.plugin.memory.everos._server.ensure_everos_server", new=AsyncMock()):
             await b.start()
             await b.stop()
             await b.start()
@@ -163,7 +150,7 @@ class TestLifecycle:
     async def test_start_calls_ensure_everos_server(self, tmp_path: Path) -> None:
         b = EverosBackend(_ctx(tmp_path))
         with patch(
-            "raven_everos.server.ensure_everos_server",
+            "raven.plugin.memory.everos._server.ensure_everos_server",
             new=AsyncMock(),
         ) as mock_ensure:
             await b.start()
@@ -225,7 +212,7 @@ class TestShutdownFlushesUnfinishedSessions:
     async def test_the_sweep_is_bounded_when_a_flush_hangs(self, tmp_path: Path, monkeypatch) -> None:
         import time
 
-        from raven_everos import backend as mod
+        from raven.plugin.memory.everos import backend as mod
 
         monkeypatch.setattr(mod, "_SHUTDOWN_FLUSH_BUDGET_S", 0.05)
 
@@ -258,11 +245,11 @@ class TestColdStartSpeaksUp:
             if on_wait is not None:
                 on_wait()
 
-        with patch("raven_everos.server.ensure_everos_server", new=_waits):
+        with patch("raven.plugin.memory.everos._server.ensure_everos_server", new=_waits):
             b = EverosBackend(_ctx(tmp_path))
             await b.start()
 
-        assert "Starting memory service" in " ".join(NOTICES)
+        assert "Starting memory service" in capsys.readouterr().err
 
     async def test_an_already_running_server_stays_silent(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
         """``on_wait`` must not fire when there is nothing to wait for: this path
@@ -271,27 +258,27 @@ class TestColdStartSpeaksUp:
         async def _already_up(_base_url: str, *, on_wait=None, **_kw: object) -> None:
             return None
 
-        with patch("raven_everos.server.ensure_everos_server", new=_already_up):
+        with patch("raven.plugin.memory.everos._server.ensure_everos_server", new=_already_up):
             b = EverosBackend(_ctx(tmp_path))
             await b.start()
 
-        assert "Starting memory service" not in " ".join(NOTICES)
+        assert "Starting memory service" not in capsys.readouterr().err
 
     async def test_unconfigured_llm_degrades_with_an_actionable_line(
         self, tmp_path: Path, capsys: pytest.CaptureFixture
     ) -> None:
         """This is the out-of-the-box state: backend defaults to everos while the
         shipped everos.toml has an empty [llm] api_key."""
-        from raven_everos.server import EverosNotConfiguredError
+        from raven.plugin.memory.everos._server import EverosNotConfiguredError
 
         async def _unconfigured(*_a: object, **_kw: object) -> None:
             raise EverosNotConfiguredError("no llm")
 
-        with patch("raven_everos.server.ensure_everos_server", new=_unconfigured):
+        with patch("raven.plugin.memory.everos._server.ensure_everos_server", new=_unconfigured):
             b = EverosBackend(_ctx(tmp_path))
             await b.start()
 
-        err = " ".join(" ".join(NOTICES).split())
+        err = " ".join(capsys.readouterr().err.split())
         assert "its LLM is not configured" in err
         assert "raven onboard" in err
 
@@ -299,7 +286,7 @@ class TestColdStartSpeaksUp:
         async def _boom(*_a: object, **_kw: object) -> None:
             raise RuntimeError("EverOS server exited with code 1")
 
-        with patch("raven_everos.server.ensure_everos_server", new=_boom):
+        with patch("raven.plugin.memory.everos._server.ensure_everos_server", new=_boom):
             b = EverosBackend(_ctx(tmp_path))
             # Degrades rather than raising: the caller already treats a missing
             # memory service as a degradation, and the state machine keeps
@@ -307,7 +294,7 @@ class TestColdStartSpeaksUp:
             await b.start()
 
         assert b._state is not ServiceState.READY
-        err = " ".join(" ".join(NOTICES).split())
+        err = " ".join(capsys.readouterr().err.split())
         assert "exited with code 1" in err
         assert "without long-term memory" in err
 
@@ -334,10 +321,10 @@ class TestAUserManagedRootIsReadOnly:
         async def _ensure(*_a: object, **_kw: object) -> None:
             started.append(1)
 
-        monkeypatch.setattr("raven_everos.server.ensure_everos_server", _ensure)
+        monkeypatch.setattr("raven.plugin.memory.everos._server.ensure_everos_server", _ensure)
         monkeypatch.setattr(
-            "raven_everos.server.probe_health",
-            lambda _u, **_kw: ProbeVerdict.REFUSED,
+            "raven.plugin.memory.everos._server.probe_health",
+            lambda _u, **_kw: ProbeResult.REFUSED,
         )
 
         b = EverosBackend(_ctx(tmp_path))
@@ -345,7 +332,7 @@ class TestAUserManagedRootIsReadOnly:
 
         assert started == [], "started a server on a root raven does not own"
         assert b._state is ServiceState.FOREIGN
-        err = " ".join(" ".join(NOTICES).split())
+        err = " ".join(capsys.readouterr().err.split())
         assert "you manage is not running" in err
         assert "does not start or stop it" in err
 
@@ -358,10 +345,10 @@ class TestAUserManagedRootIsReadOnly:
         async def _ensure(*_a: object, **_kw: object) -> None:
             started.append(1)
 
-        monkeypatch.setattr("raven_everos.server.ensure_everos_server", _ensure)
+        monkeypatch.setattr("raven.plugin.memory.everos._server.ensure_everos_server", _ensure)
         monkeypatch.setattr(
-            "raven_everos.server.probe_health",
-            lambda _u, **_kw: ProbeVerdict.OK,
+            "raven.plugin.memory.everos._server.probe_health",
+            lambda _u, **_kw: ProbeResult.OK,
         )
 
         b = EverosBackend(_ctx(tmp_path))
@@ -369,7 +356,7 @@ class TestAUserManagedRootIsReadOnly:
 
         assert started == []
         assert b._state is ServiceState.READY
-        assert NOTICES == []
+        assert capsys.readouterr().err == ""
 
     def test_the_factory_drops_no_templates_into_it(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         self._not_owned(monkeypatch)
@@ -399,12 +386,12 @@ class TestStartWarnsWhenRecallCannotWork:
 
     @staticmethod
     def _capabilities(monkeypatch: pytest.MonkeyPatch, **caps: bool) -> None:
-        from raven_everos import health
+        from raven.plugin.memory.everos import _health
 
         monkeypatch.setattr(
-            health,
+            _health,
             "probe_capabilities",
-            lambda *_a, **_kw: health.CapabilityReport(reachable=True, capabilities=caps),
+            lambda *_a, **_kw: _health.CapabilityReport(reachable=True, capabilities=caps),
         )
 
     @staticmethod
@@ -428,7 +415,7 @@ class TestStartWarnsWhenRecallCannotWork:
         monkeypatch.setattr(EverosBackend, "_warn_if_recall_cannot_work", staticmethod(_warn))
         b = EverosBackend(_ctx(tmp_path))
 
-        with patch("raven_everos.server.ensure_everos_server", new=AsyncMock()):
+        with patch("raven.plugin.memory.everos._server.ensure_everos_server", new=AsyncMock()):
             await b.start()
 
         assert on_main == [False], "the health probe ran on the event loop's own thread"
@@ -442,12 +429,12 @@ class TestStartWarnsWhenRecallCannotWork:
         self._capabilities(_no_capability_probe, llm=True, embed=False)
         b = EverosBackend(_ctx(tmp_path))
 
-        with patch("raven_everos.server.ensure_everos_server", new=AsyncMock()):
+        with patch("raven.plugin.memory.everos._server.ensure_everos_server", new=AsyncMock()):
             await b.start()
 
         # Collapsed: rich wraps at the terminal width, so a raw substring match
         # would depend on how wide the machine running the tests happens to be.
-        err = " ".join(" ".join(NOTICES).split())
+        err = " ".join(capsys.readouterr().err.split())
         assert "falls back to keyword matching" in err
         assert "cascade backfill" in err
 
@@ -460,10 +447,10 @@ class TestStartWarnsWhenRecallCannotWork:
         self._capabilities(_no_capability_probe, llm=True, embed=False)
         b = EverosBackend(_ctx(tmp_path))
 
-        with patch("raven_everos.server.ensure_everos_server", new=AsyncMock()):
+        with patch("raven.plugin.memory.everos._server.ensure_everos_server", new=AsyncMock()):
             await b.start()
 
-        assert NOTICES == []
+        assert capsys.readouterr().err == ""
 
     async def test_writes_are_not_disabled_by_the_warning(
         self, tmp_path: Path, _no_capability_probe, capsys: pytest.CaptureFixture
@@ -474,7 +461,7 @@ class TestStartWarnsWhenRecallCannotWork:
         self._capabilities(_no_capability_probe, llm=True, embed=False)
         b = EverosBackend(_ctx(tmp_path))
 
-        with patch("raven_everos.server.ensure_everos_server", new=AsyncMock()):
+        with patch("raven.plugin.memory.everos._server.ensure_everos_server", new=AsyncMock()):
             await b.start()
 
         assert isinstance(b._adapter, _HttpEverosAdapter)
@@ -485,10 +472,10 @@ class TestStartWarnsWhenRecallCannotWork:
         self._capabilities(_no_capability_probe, llm=True, embed=True, rerank=False)
         b = EverosBackend(_ctx(tmp_path))
 
-        with patch("raven_everos.server.ensure_everos_server", new=AsyncMock()):
+        with patch("raven.plugin.memory.everos._server.ensure_everos_server", new=AsyncMock()):
             await b.start()
 
-        assert NOTICES == []
+        assert capsys.readouterr().err == ""
 
     async def test_a_server_that_cannot_report_says_nothing(
         self, tmp_path: Path, _no_capability_probe, capsys: pytest.CaptureFixture
@@ -498,10 +485,10 @@ class TestStartWarnsWhenRecallCannotWork:
         self._capabilities(_no_capability_probe)
         b = EverosBackend(_ctx(tmp_path))
 
-        with patch("raven_everos.server.ensure_everos_server", new=AsyncMock()):
+        with patch("raven.plugin.memory.everos._server.ensure_everos_server", new=AsyncMock()):
             await b.start()
 
-        assert NOTICES == []
+        assert capsys.readouterr().err == ""
 
 
 # ---------------------------------------------------------------------------
@@ -1019,7 +1006,7 @@ class TestStoreConversion:
         return value; remembering that a turn went unindexed is the caller's
         job (the AgentLoop's own retry-aware count), not the backend's.
         """
-        from raven_everos.backend import ServiceState
+        from raven.plugin.memory.everos.backend import ServiceState
 
         adapter = _FakeAdapter()
         adapter.memorize_raises = RuntimeError("everos down")
@@ -1110,7 +1097,7 @@ class TestIdentityFromServices:
     ) -> None:
         ctx = PluginContext(
             config={"user_id": "other"},
-            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default", notify=NOTICES.append),
+            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
         )
         make_backend(ctx)
         assert any("user_id" in r.message for r in caplog.records if r.levelname == "WARNING")
@@ -1122,7 +1109,7 @@ class TestIdentityFromServices:
     ) -> None:
         ctx = PluginContext(
             config={"user_id": "default"},
-            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default", notify=NOTICES.append),
+            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
         )
         make_backend(ctx)
         assert not [r for r in caplog.records if r.levelname == "WARNING"]
@@ -1131,11 +1118,11 @@ class TestIdentityFromServices:
     async def test_illegal_identity_is_reported_as_a_config_error(
         self, tmp_path: Path, bad: str, capsys: pytest.CaptureFixture
     ) -> None:
-        from raven_everos.backend import ServiceState
+        from raven.plugin.memory.everos.backend import ServiceState
 
         ctx = PluginContext(
             config={},
-            services=ServiceLocator(workspace=tmp_path, user_id=bad, agent_id="default", notify=NOTICES.append),
+            services=ServiceLocator(workspace=tmp_path, user_id=bad, agent_id="default"),
         )
         backend = make_backend(ctx)
         await backend.start()
@@ -1144,7 +1131,7 @@ class TestIdentityFromServices:
         # for it in config.json, and it must reach the terminal: the callers all
         # swallow a raise into logger.exception, and a one-shot CLI run writes no
         # log file for it to land in.
-        err = " ".join(" ".join(NOTICES).split())
+        err = " ".join(capsys.readouterr().err.split())
         assert "memory.userId" in err
         # The accepted-character class must survive rich's markup parser: it
         # looks exactly like a tag, and a swallowed one leaves the user matching
@@ -1160,15 +1147,15 @@ class TestIdentityFromServices:
         own honest count -- so this only pins that ``stop()`` stays silent."""
         ctx = PluginContext(
             config={},
-            services=ServiceLocator(workspace=tmp_path, user_id="a/b", agent_id="default", notify=NOTICES.append),
+            services=ServiceLocator(workspace=tmp_path, user_id="a/b", agent_id="default"),
         )
         backend = make_backend(ctx)
         await backend.start()
-        NOTICES.clear()
+        capsys.readouterr()
 
         assert await backend.store("s1", [{"role": "user", "content": "hi"}]) is False
         await backend.stop()
-        assert "unavailable" not in " ".join(NOTICES)
+        assert "unavailable" not in capsys.readouterr().err
 
 
 class TestServiceStateMachine:
@@ -1184,7 +1171,7 @@ class TestServiceStateMachine:
 
     @staticmethod
     def _backend(**cfg):
-        from raven_everos.backend import EverosBackend
+        from raven.plugin.memory.everos.backend import EverosBackend
 
         ctx = MagicMock()
         ctx.config = {"base_url": "http://localhost:18791", **cfg}
@@ -1196,7 +1183,7 @@ class TestServiceStateMachine:
     def test_a_real_backend_starts_unknown(self) -> None:
         """Production builds its own HTTP adapter, so the lifecycle is this
         backend's to establish and nothing is known until the first probe."""
-        from raven_everos.backend import EverosBackend, ServiceState
+        from raven.plugin.memory.everos.backend import EverosBackend, ServiceState
 
         ctx = MagicMock()
         ctx.config = {"base_url": "http://localhost:18791"}
@@ -1208,65 +1195,65 @@ class TestServiceStateMachine:
     def test_an_injected_adapter_is_assumed_ready(self) -> None:
         """The caller supplied the transport, so it owns what is behind it --
         there is no server here to probe or spawn."""
-        from raven_everos.backend import ServiceState
+        from raven.plugin.memory.everos.backend import ServiceState
 
         assert self._backend()._state is ServiceState.READY
 
     def test_probe_ok_reaches_ready(self) -> None:
-        from raven_everos.backend import ServiceState
-        from raven_everos.server import ProbeVerdict
+        from raven.plugin.memory.everos._server import ProbeResult
+        from raven.plugin.memory.everos.backend import ServiceState
 
         b = self._backend()
-        b._apply_probe(ProbeVerdict.OK)
+        b._apply_probe(ProbeResult.OK)
         assert b._state is ServiceState.READY
 
     def test_timeout_is_unresponsive_not_failed(self) -> None:
         """A hung server is listening, so re-probing it charges the full budget
         every time. Filing it as FAILED would be wrong in the other direction:
         FAILED means the child is gone."""
-        from raven_everos.backend import ServiceState
-        from raven_everos.server import ProbeVerdict
+        from raven.plugin.memory.everos._server import ProbeResult
+        from raven.plugin.memory.everos.backend import ServiceState
 
         b = self._backend()
         b._state = ServiceState.READY
-        b._apply_probe(ProbeVerdict.TIMEOUT)
+        b._apply_probe(ProbeResult.TIMEOUT)
         assert b._state is ServiceState.UNRESPONSIVE
 
     def test_refused_with_a_live_child_is_starting(self) -> None:
-        from raven_everos.backend import ServiceState
-        from raven_everos.server import ProbeVerdict
+        from raven.plugin.memory.everos._server import ProbeResult
+        from raven.plugin.memory.everos.backend import ServiceState
 
         b = self._backend()
         b._proc = MagicMock(**{"poll.return_value": None})
-        b._apply_probe(ProbeVerdict.REFUSED)
+        b._apply_probe(ProbeResult.REFUSED)
         assert b._state is ServiceState.STARTING
 
     def test_refused_with_a_dead_child_is_failed(self) -> None:
-        from raven_everos.backend import ServiceState
-        from raven_everos.server import ProbeVerdict
+        from raven.plugin.memory.everos._server import ProbeResult
+        from raven.plugin.memory.everos.backend import ServiceState
 
         b = self._backend()
         b._proc = MagicMock(**{"poll.return_value": 1, "returncode": 1})
-        b._apply_probe(ProbeVerdict.REFUSED)
+        b._apply_probe(ProbeResult.REFUSED)
         assert b._state is ServiceState.FAILED
 
     def test_refused_with_no_child_of_ours_is_starting(self) -> None:
         """``None`` means another process holds the spawn lock, so there is no
         exit code to read. Calling that FAILED would stop a start that is
         someone else's and going fine."""
-        from raven_everos.backend import ServiceState
-        from raven_everos.server import ProbeVerdict
+        from raven.plugin.memory.everos._server import ProbeResult
+        from raven.plugin.memory.everos.backend import ServiceState
 
         b = self._backend()
         b._proc = None
-        b._apply_probe(ProbeVerdict.REFUSED)
+        b._apply_probe(ProbeResult.REFUSED)
         assert b._state is ServiceState.STARTING
 
     def test_any_state_recovers_to_ready_on_a_later_probe(self) -> None:
         """FAILED is not terminal. The user can start the server by hand in
         another terminal, and the next probe has to see it."""
-        from raven_everos.backend import ServiceState
-        from raven_everos.server import ProbeVerdict
+        from raven.plugin.memory.everos._server import ProbeResult
+        from raven.plugin.memory.everos.backend import ServiceState
 
         for start in (
             ServiceState.FAILED,
@@ -1276,24 +1263,24 @@ class TestServiceStateMachine:
         ):
             b = self._backend()
             b._state = start
-            b._apply_probe(ProbeVerdict.OK)
+            b._apply_probe(ProbeResult.OK)
             assert b._state is ServiceState.READY, start
 
     def test_terminal_states_ignore_probes(self) -> None:
         """UNCONFIGURED, NO_BINARY and BAD_IDENTITY describe the install and its
         config, not the process. Probing cannot fix any of them, so a stray OK
         must not paper over them."""
-        from raven_everos.backend import ServiceState
-        from raven_everos.server import ProbeVerdict
+        from raven.plugin.memory.everos._server import ProbeResult
+        from raven.plugin.memory.everos.backend import ServiceState
 
         for terminal in (ServiceState.UNCONFIGURED, ServiceState.NO_BINARY, ServiceState.BAD_IDENTITY):
             b = self._backend()
             b._state = terminal
-            b._apply_probe(ProbeVerdict.OK)
+            b._apply_probe(ProbeResult.OK)
             assert b._state is terminal
 
     def test_may_spawn_only_from_states_that_can_be_fixed_by_spawning(self) -> None:
-        from raven_everos.backend import ServiceState
+        from raven.plugin.memory.everos.backend import ServiceState
 
         b = self._backend()
         can = {ServiceState.UNKNOWN}
@@ -1304,7 +1291,7 @@ class TestServiceStateMachine:
     def test_reports_each_state_once(self) -> None:
         """One line per problem per session. Re-reporting on every turn is how
         a warning becomes something users filter out."""
-        from raven_everos.backend import ServiceState
+        from raven.plugin.memory.everos.backend import ServiceState
 
         b = self._backend()
         b._state = ServiceState.FAILED
@@ -1326,7 +1313,7 @@ class TestRecallNeverBlocks:
 
     @staticmethod
     def _backend(state, adapter=None):
-        from raven_everos.backend import EverosBackend
+        from raven.plugin.memory.everos.backend import EverosBackend
 
         ctx = MagicMock()
         ctx.config = {"base_url": "http://localhost:18791"}
@@ -1338,7 +1325,7 @@ class TestRecallNeverBlocks:
         return b
 
     async def test_non_ready_returns_immediately_without_touching_the_adapter(self) -> None:
-        from raven_everos.backend import ServiceState
+        from raven.plugin.memory.everos.backend import ServiceState
 
         adapter = MagicMock()
         adapter.search = AsyncMock(side_effect=AssertionError("must not be called"))
@@ -1348,7 +1335,7 @@ class TestRecallNeverBlocks:
         kick.assert_called_once()
 
     async def test_non_ready_kicks_an_out_of_band_probe(self) -> None:
-        from raven_everos.backend import ServiceState
+        from raven.plugin.memory.everos.backend import ServiceState
 
         b = self._backend(ServiceState.FAILED)
         with patch.object(b, "_kick_probe") as kick:
@@ -1358,7 +1345,7 @@ class TestRecallNeverBlocks:
     async def test_a_timeout_demotes_so_the_next_turn_is_free(self) -> None:
         import httpx
 
-        from raven_everos.backend import ServiceState
+        from raven.plugin.memory.everos.backend import ServiceState
 
         adapter = MagicMock()
         adapter.search = AsyncMock(side_effect=httpx.ReadTimeout("hung"))
@@ -1369,7 +1356,7 @@ class TestRecallNeverBlocks:
     async def test_a_refusal_consults_the_child_process(self) -> None:
         import httpx
 
-        from raven_everos.backend import ServiceState
+        from raven.plugin.memory.everos.backend import ServiceState
 
         adapter = MagicMock()
         adapter.search = AsyncMock(side_effect=httpx.ConnectError("gone"))
@@ -1385,7 +1372,7 @@ class TestStoreIsDiscardedWhenTheServiceIsNotReady:
 
     @staticmethod
     def _backend(state):
-        from raven_everos.backend import EverosBackend
+        from raven.plugin.memory.everos.backend import EverosBackend
 
         ctx = MagicMock()
         ctx.config = {"base_url": "http://localhost:18791"}
@@ -1399,7 +1386,7 @@ class TestStoreIsDiscardedWhenTheServiceIsNotReady:
         return b
 
     async def test_dropped(self) -> None:
-        from raven_everos.backend import ServiceState
+        from raven.plugin.memory.everos.backend import ServiceState
 
         b = self._backend(ServiceState.FAILED)
         assert await b.store("s1", [{"role": "user", "content": "hi"}]) is False
@@ -1418,7 +1405,7 @@ class TestStoreReportsWhetherItLanded:
 
     @staticmethod
     def _backend(state, adapter):
-        from raven_everos.backend import EverosBackend
+        from raven.plugin.memory.everos.backend import EverosBackend
 
         ctx = MagicMock()
         ctx.config = {"base_url": "http://localhost:18791"}
@@ -1430,7 +1417,7 @@ class TestStoreReportsWhetherItLanded:
         return b
 
     async def test_true_when_the_write_lands(self) -> None:
-        from raven_everos.backend import ServiceState
+        from raven.plugin.memory.everos.backend import ServiceState
 
         adapter = MagicMock()
         adapter.memorize = AsyncMock(return_value=None)
@@ -1439,7 +1426,7 @@ class TestStoreReportsWhetherItLanded:
         assert await b.store("s", [{"role": "user", "content": "x"}]) is True
 
     async def test_false_when_the_service_is_not_ready(self) -> None:
-        from raven_everos.backend import ServiceState
+        from raven.plugin.memory.everos.backend import ServiceState
 
         adapter = MagicMock()
         adapter.memorize = AsyncMock(side_effect=AssertionError("must not be called"))
@@ -1448,7 +1435,7 @@ class TestStoreReportsWhetherItLanded:
         assert await b.store("s", [{"role": "user", "content": "x"}]) is False
 
     async def test_false_when_the_write_raises(self) -> None:
-        from raven_everos.backend import ServiceState
+        from raven.plugin.memory.everos.backend import ServiceState
 
         adapter = MagicMock()
         adapter.memorize = AsyncMock(side_effect=RuntimeError("everos down"))
@@ -1460,7 +1447,7 @@ class TestStoreReportsWhetherItLanded:
         """An empty slice and a dropped slice must not look the same: the
         importer would mark a real source failed over a message list that was
         legitimately empty after filtering."""
-        from raven_everos.backend import ServiceState
+        from raven.plugin.memory.everos.backend import ServiceState
 
         adapter = MagicMock()
         adapter.memorize = AsyncMock(return_value=None)
@@ -1483,7 +1470,7 @@ class TestWriteBudgetFollowsTheCaller:
 
     @staticmethod
     def _backend(adapter):
-        from raven_everos.backend import EverosBackend, ServiceState
+        from raven.plugin.memory.everos.backend import EverosBackend, ServiceState
 
         ctx = MagicMock()
         ctx.config = {"base_url": "http://localhost:18791"}
@@ -1495,7 +1482,7 @@ class TestWriteBudgetFollowsTheCaller:
         return b
 
     async def test_an_incremental_append_gets_the_short_budget(self, monkeypatch) -> None:
-        from raven_everos import backend as mod
+        from raven.plugin.memory.everos import backend as mod
 
         seen: list[float] = []
 
@@ -1513,7 +1500,7 @@ class TestWriteBudgetFollowsTheCaller:
         assert seen == [mod._STORE_TIMEOUT_S]
 
     async def test_a_final_flush_gets_the_extraction_budget(self, monkeypatch) -> None:
-        from raven_everos import backend as mod
+        from raven.plugin.memory.everos import backend as mod
 
         seen: list[float] = []
 
@@ -1533,7 +1520,7 @@ class TestWriteBudgetFollowsTheCaller:
     async def test_a_slow_extraction_is_not_a_dead_service(self) -> None:
         """Demoting on a write timeout would drop the *next* write too, so one
         slow extraction would cascade into losing the batch behind it."""
-        from raven_everos.backend import ServiceState
+        from raven.plugin.memory.everos.backend import ServiceState
 
         adapter = MagicMock()
         adapter.memorize = AsyncMock(side_effect=asyncio.TimeoutError())
@@ -1553,7 +1540,7 @@ class TestNotReadyStoresAllReportFalseTheSameWay:
 
     @staticmethod
     def _backend(state):
-        from raven_everos.backend import EverosBackend
+        from raven.plugin.memory.everos.backend import EverosBackend
 
         ctx = MagicMock()
         ctx.config = {"base_url": "http://localhost:18791"}
@@ -1568,7 +1555,7 @@ class TestNotReadyStoresAllReportFalseTheSameWay:
     async def test_a_write_that_really_was_lost_reports_false(self) -> None:
         """BAD_IDENTITY belongs here, not with the never-configured states: the
         service works, the config is wrong, and the turn it refuses is gone."""
-        from raven_everos.backend import ServiceState
+        from raven.plugin.memory.everos.backend import ServiceState
 
         retryable = (
             ServiceState.BAD_IDENTITY,
@@ -1586,7 +1573,7 @@ class TestNotReadyStoresAllReportFalseTheSameWay:
         Reporting False here would make the AgentLoop retry for a minute per
         turn and then announce lost turns to an install that never had any.
         """
-        from raven_everos.backend import ServiceState
+        from raven.plugin.memory.everos.backend import ServiceState
 
         never_had = (
             ServiceState.UNCONFIGURED,
@@ -1779,7 +1766,7 @@ class TestADeadChildIsReportedAsFailed:
     """
 
     async def test_a_child_that_exited_reaches_failed(self, tmp_path) -> None:
-        from raven_everos.backend import EverosBackend, ServiceState
+        from raven.plugin.memory.everos.backend import EverosBackend, ServiceState
 
         dead = MagicMock(**{"poll.return_value": 1, "returncode": 1})
 
@@ -1798,7 +1785,7 @@ class TestADeadChildIsReportedAsFailed:
         ctx.logger = MagicMock()
         b = EverosBackend(ctx)
 
-        with patch("raven_everos.server.ensure_everos_server", new=_boom):
+        with patch("raven.plugin.memory.everos._server.ensure_everos_server", new=_boom):
             await b.start()
 
         assert b._state is ServiceState.FAILED
@@ -1818,7 +1805,7 @@ class TestASessionPicksUpAServiceThatArrivesLate:
 
     @staticmethod
     def _backend(adapter):
-        from raven_everos.backend import EverosBackend, ServiceState
+        from raven.plugin.memory.everos.backend import EverosBackend, ServiceState
 
         ctx = MagicMock()
         ctx.config = {"base_url": "http://localhost:18791"}
@@ -1830,9 +1817,9 @@ class TestASessionPicksUpAServiceThatArrivesLate:
         return b
 
     async def test_a_later_turn_recalls_once_the_server_answers(self, monkeypatch) -> None:
-        from raven_everos import backend as mod
-        from raven_everos.backend import ServiceState
-        from raven_everos.server import ProbeVerdict
+        from raven.plugin.memory.everos import backend as mod
+        from raven.plugin.memory.everos._server import ProbeResult
+        from raven.plugin.memory.everos.backend import ServiceState
 
         adapter = MagicMock()
         adapter.search = AsyncMock(return_value=None)
@@ -1841,10 +1828,10 @@ class TestASessionPicksUpAServiceThatArrivesLate:
         # throttle, which has its own coverage.
         monkeypatch.setattr(mod, "_PROBE_MIN_INTERVAL_S", 0.0)
 
-        answers = iter([ProbeVerdict.REFUSED, ProbeVerdict.OK])
+        answers = iter([ProbeResult.REFUSED, ProbeResult.OK])
         monkeypatch.setattr(
-            "raven_everos.server.probe_health",
-            lambda _u, **_kw: next(answers, ProbeVerdict.OK),
+            "raven.plugin.memory.everos._server.probe_health",
+            lambda _u, **_kw: next(answers, ProbeResult.OK),
         )
 
         # Turn one: nothing there. Returns empty without touching the adapter,
@@ -1865,16 +1852,16 @@ class TestASessionPicksUpAServiceThatArrivesLate:
     async def test_a_terminal_state_never_recovers_this_way(self, monkeypatch) -> None:
         """UNCONFIGURED describes the install. A server answering on that port
         is somebody else's, and adopting it would hide a missing memory LLM."""
-        from raven_everos import backend as mod
-        from raven_everos.backend import ServiceState
-        from raven_everos.server import ProbeVerdict
+        from raven.plugin.memory.everos import backend as mod
+        from raven.plugin.memory.everos._server import ProbeResult
+        from raven.plugin.memory.everos.backend import ServiceState
 
         adapter = MagicMock()
         adapter.search = AsyncMock(return_value=None)
         b = self._backend(adapter)
         b._state = ServiceState.UNCONFIGURED
         monkeypatch.setattr(mod, "_PROBE_MIN_INTERVAL_S", 0.0)
-        monkeypatch.setattr("raven_everos.server.probe_health", lambda _u, **_kw: ProbeVerdict.OK)
+        monkeypatch.setattr("raven.plugin.memory.everos._server.probe_health", lambda _u, **_kw: ProbeResult.OK)
 
         assert await b.recall("q", user_id="u", top_k=5) == []
         assert b._probe_task is None, "probed a state no probe can resolve"
@@ -1902,25 +1889,24 @@ class TestTheDegradationWarningOnASelfManagedServer:
         ctx.config = {"base_url": "http://localhost:18791"}
         ctx.services.agent_id = "default"
         ctx.services.user_id = "default"
-        ctx.services.notify = NOTICES.append
         ctx.logger = MagicMock()
         return ctx
 
     async def _start_unowned(self, monkeypatch, *, caps: dict):
-        from raven_everos import health
-        from raven_everos.backend import EverosBackend
-        from raven_everos.server import ProbeVerdict
+        from raven.plugin.memory.everos import _health
+        from raven.plugin.memory.everos._server import ProbeResult
+        from raven.plugin.memory.everos.backend import EverosBackend
 
         monkeypatch.setattr("raven.config.update_everos.everos_owned", lambda: False)
         monkeypatch.setattr(
             "raven.config.update_everos.everos_role_configured",
             lambda _s: pytest.fail("read the local toml for a root raven does not own"),
         )
-        monkeypatch.setattr("raven_everos.server.probe_health", lambda _u, **_kw: ProbeVerdict.OK)
+        monkeypatch.setattr("raven.plugin.memory.everos._server.probe_health", lambda _u, **_kw: ProbeResult.OK)
         monkeypatch.setattr(
-            health,
+            _health,
             "probe_capabilities",
-            lambda *_a, **_kw: health.CapabilityReport(reachable=True, capabilities=caps),
+            lambda *_a, **_kw: _health.CapabilityReport(reachable=True, capabilities=caps),
         )
         b = EverosBackend(self._ctx())
         await b.start()
@@ -1931,7 +1917,7 @@ class TestTheDegradationWarningOnASelfManagedServer:
     ) -> None:
         await self._start_unowned(monkeypatch, caps={"llm": True, "embed": False})
 
-        err = " ".join(" ".join(NOTICES).split())
+        err = " ".join(capsys.readouterr().err.split())
         assert "embedding is unavailable" in err
         # Their server, their log. Pointing at raven's is a dead end.
         assert "everos-server.log" not in err
@@ -1941,7 +1927,7 @@ class TestTheDegradationWarningOnASelfManagedServer:
     ) -> None:
         await self._start_unowned(monkeypatch, caps={"llm": True, "embed": True})
 
-        assert "embedding is unavailable" not in " ".join(NOTICES)
+        assert "embedding is unavailable" not in capsys.readouterr().err
 
     async def test_a_server_too_old_to_report_is_not_condemned(
         self, monkeypatch, capsys: pytest.CaptureFixture
@@ -1949,7 +1935,7 @@ class TestTheDegradationWarningOnASelfManagedServer:
         """An empty capability map is silence, not a negative."""
         await self._start_unowned(monkeypatch, caps={})
 
-        assert "embedding is unavailable" not in " ".join(NOTICES)
+        assert "embedding is unavailable" not in capsys.readouterr().err
 
 
 class TestConvertMessagesTimestamps:

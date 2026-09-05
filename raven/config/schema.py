@@ -4,11 +4,10 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from loguru import logger
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings
 
-from raven.contracts.path_policy import WORKSPACE_DEFAULT_SENTINEL
 from raven.sandbox.config import SandboxConfig
 
 
@@ -34,138 +33,242 @@ class ChannelBase(Base):
     )
 
 
-def _to_camel_key(key: str) -> str:
-    head, *rest = key.split("_")
-    return head + "".join(part.title() for part in rest)
-
-
-class ChannelSocket(ChannelBase):
-    """The host-side view of one channel section: the three socket fields.
-
-    Cargo fields live with the adapter specs (``config_schema``) and travel
-    through the admission door; they ride along here as extras so a loaded
-    section round-trips, but nothing host-side may read them by name.
-    """
-
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="allow")
+class WhatsAppConfig(ChannelBase):
+    """WhatsApp channel configuration."""
 
     enabled: bool = False
-    allow_from: list[str] = Field(default_factory=lambda: ["*"])
+    bridge_url: str = "ws://localhost:3001"
+    bridge_token: str = ""  # Shared token for bridge auth (auto-generated when empty)
+    allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed phone numbers; ['*'] = anyone
+    group_policy: Literal["open", "mention"] = "open"  # "open" responds to all, "mention" only when @mentioned
+
+
+class TelegramConfig(ChannelBase):
+    """Telegram channel configuration."""
+
+    enabled: bool = False
+    token: str = Field(default="", json_schema_extra={"required": True})  # Bot token from @BotFather
+    allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed user IDs or usernames; ['*'] = anyone
+    proxy: str | None = None  # HTTP/SOCKS5 proxy URL, e.g. "http://127.0.0.1:7890" or "socks5://127.0.0.1:1080"
+    reply_to_message: bool = False  # If true, bot replies quote the original message
+    group_policy: Literal["open", "mention"] = (
+        "mention"  # "mention" responds when @mentioned or replied to, "open" responds to all
+    )
+
+
+class FeishuConfig(ChannelBase):
+    """Feishu/Lark channel configuration using WebSocket long connection."""
+
+    enabled: bool = False
+    app_id: str = Field(default="", json_schema_extra={"required": True})  # App ID from Feishu Open Platform
+    app_secret: str = Field(default="", json_schema_extra={"required": True})  # App Secret from Feishu Open Platform
+    encrypt_key: str = ""  # Encrypt Key for event subscription
+    verification_token: str = ""  # Verification Token for event subscription
+    allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed user open_ids; ['*'] = anyone
+    react_emoji: str = "THUMBSUP"  # Emoji type for message reactions (e.g. THUMBSUP, OK, DONE, SMILE)
+    group_policy: Literal["open", "mention"] = "mention"  # "mention" responds when @mentioned, "open" responds to all
+
+
+class DingTalkConfig(ChannelBase):
+    """DingTalk channel configuration using Stream mode."""
+
+    enabled: bool = False
+    client_id: str = Field(default="", json_schema_extra={"required": True})  # AppKey
+    client_secret: str = Field(default="", json_schema_extra={"required": True})  # AppSecret
+    allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed staff_ids; ['*'] = anyone
+
+
+class DiscordConfig(ChannelBase):
+    """Discord channel configuration."""
+
+    enabled: bool = False
+    token: str = Field(default="", json_schema_extra={"required": True})  # Bot token from Discord Developer Portal
+    allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed user IDs; ['*'] = anyone
+    gateway_url: str = "wss://gateway.discord.gg/?v=10&encoding=json"
+    intents: int = 37377  # GUILDS + GUILD_MESSAGES + DIRECT_MESSAGES + MESSAGE_CONTENT
+    group_policy: Literal["mention", "open"] = "mention"
+
+
+class MatrixConfig(ChannelBase):
+    """Matrix (Element) channel configuration."""
+
+    enabled: bool = False
+    homeserver: str = "https://matrix.org"
+    access_token: str = Field(default="", json_schema_extra={"required": True})
+    user_id: str = Field(default="", json_schema_extra={"required": True})  # @bot:matrix.org
+    device_id: str = ""
+    e2ee_enabled: bool = True  # Enable Matrix E2EE support (encryption + encrypted room handling).
+    sync_stop_grace_seconds: int = (
+        2  # Max seconds to wait for sync_forever to stop gracefully before cancellation fallback.
+    )
+    max_media_bytes: int = (
+        20 * 1024 * 1024
+    )  # Max attachment size accepted for Matrix media handling (inbound + outbound).
+    allow_from: list[str] = Field(default_factory=lambda: ["*"])  # ['*'] = anyone
+    group_policy: Literal["open", "mention", "allowlist"] = "open"
+    group_allow_from: list[str] = Field(default_factory=list)
+    allow_room_mentions: bool = False
+
+
+class EmailConfig(ChannelBase):
+    """Email channel configuration (IMAP inbound + SMTP outbound)."""
+
+    enabled: bool = False
+    consent_granted: bool = False  # Explicit owner permission to access mailbox data
+
+    # IMAP (receive)
+    imap_host: str = Field(default="", json_schema_extra={"required": True})
+    imap_port: int = 993
+    imap_username: str = Field(default="", json_schema_extra={"required": True})
+    imap_password: str = Field(default="", json_schema_extra={"required": True})
+    imap_mailbox: str = "INBOX"
+    imap_use_ssl: bool = True
+
+    # SMTP (send)
+    smtp_host: str = Field(default="", json_schema_extra={"required": True})
+    smtp_port: int = 587
+    smtp_username: str = Field(default="", json_schema_extra={"required": True})
+    smtp_password: str = Field(default="", json_schema_extra={"required": True})
+    smtp_use_tls: bool = True
+    smtp_use_ssl: bool = False
+    from_address: str = ""
+
+    # Behavior
+    auto_reply_enabled: bool = True  # If false, inbound email is read but no automatic reply is sent
+    poll_interval_seconds: int = 30
+    mark_seen: bool = True
+    max_body_chars: int = 12000
+    subject_prefix: str = "Re: "
+    allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed sender email addresses; ['*'] = anyone
+
+
+class MochatMentionConfig(Base):
+    """Mochat mention behavior configuration."""
+
+    require_in_groups: bool = False
+
+
+class MochatGroupRule(Base):
+    """Mochat per-group mention requirement."""
+
+    require_mention: bool = False
+
+
+class MochatConfig(ChannelBase):
+    """Mochat channel configuration."""
+
+    enabled: bool = False
+    base_url: str = "https://mochat.io"
+    socket_url: str = ""
+    socket_path: str = "/socket.io"
+    socket_disable_msgpack: bool = False
+    socket_reconnect_delay_ms: int = 1000
+    socket_max_reconnect_delay_ms: int = 10000
+    socket_connect_timeout_ms: int = 10000
+    refresh_interval_ms: int = 30000
+    watch_timeout_ms: int = 25000
+    watch_limit: int = 100
+    retry_delay_ms: int = 500
+    max_retry_attempts: int = 0  # 0 means unlimited retries
+    claw_token: str = Field(default="", json_schema_extra={"required": True})
+    agent_user_id: str = ""
+    sessions: list[str] = Field(default_factory=list)
+    panels: list[str] = Field(default_factory=list)
+    allow_from: list[str] = Field(default_factory=lambda: ["*"])  # ['*'] = anyone
+    mention: MochatMentionConfig = Field(default_factory=MochatMentionConfig)
+    groups: dict[str, MochatGroupRule] = Field(default_factory=dict)
+    reply_delay_mode: str = "non-mention"  # off | non-mention
+    reply_delay_ms: int = 120000
+
+
+class SlackDMConfig(Base):
+    """Slack DM policy configuration."""
+
+    enabled: bool = True
+    policy: str = "open"  # "open" or "allowlist"
+    allow_from: list[str] = Field(default_factory=list)  # Allowed Slack user IDs
+
+
+class SlackConfig(ChannelBase):
+    """Slack channel configuration."""
+
+    enabled: bool = False
+    mode: str = "socket"  # "socket" supported
+    webhook_path: str = "/slack/events"
+    bot_token: str = Field(default="", json_schema_extra={"required": True})  # xoxb-...
+    app_token: str = Field(default="", json_schema_extra={"required": True})  # xapp-...
+    user_token_read_only: bool = True
+    reply_in_thread: bool = True
+    react_emoji: str = "eyes"
+    allow_from: list[str] = Field(
+        default_factory=lambda: ["*"]
+    )  # Allowed Slack user IDs (sender-level); ['*'] = anyone
+    group_policy: str = "mention"  # "mention", "open", "allowlist"
+    group_allow_from: list[str] = Field(default_factory=list)  # Allowed channel IDs if allowlist
+    dm: SlackDMConfig = Field(default_factory=SlackDMConfig)
+
+
+class QQConfig(ChannelBase):
+    """QQ channel configuration using botpy SDK."""
+
+    enabled: bool = False
+    app_id: str = Field(default="", json_schema_extra={"required": True})  # bot AppID from q.qq.com
+    secret: str = Field(default="", json_schema_extra={"required": True})  # bot AppSecret from q.qq.com
+    allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed user openids; ['*'] = public access
+
+
+class WecomConfig(ChannelBase):
+    """WeCom (Enterprise WeChat) AI Bot channel configuration."""
+
+    enabled: bool = False
+    bot_id: str = Field(default="", json_schema_extra={"required": True})  # Bot ID from WeCom AI Bot platform
+    secret: str = Field(default="", json_schema_extra={"required": True})  # Bot Secret from WeCom AI Bot platform
+    allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed user IDs; ['*'] = anyone
+    welcome_message: str = ""  # Welcome message for enter_chat event
+
+
+class WeixinConfig(ChannelBase):
+    """Personal WeChat channel configuration."""
+
+    enabled: bool = False
+    allow_from: list[str] = Field(default_factory=lambda: ["*"])  # ['*'] = anyone
+    base_url: str = "https://ilinkai.weixin.qq.com"
+    cdn_base_url: str = "https://novac2c.cdn.weixin.qq.com/c2c"
+    route_tag: str | int | None = None
+    token: str = ""
+    state_dir: str = ""
+    poll_timeout: int = 35
 
 
 class ChannelsConfig(Base):
-    """Configuration for chat channels.
-
-    Channel sections are dynamic: any adapter the spec registry discovers may
-    have a section here, and no channel needs one to exist. Attribute access
-    answers with a :class:`ChannelSocket` view (extras carried) for known
-    adapters, so ``config.channels.telegram.enabled`` reads the same whether
-    or not the file has a telegram table.
-    """
-
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="allow")
+    """Configuration for chat channels."""
 
     send_progress: bool = True  # stream agent's text progress to the channel
     send_tool_hints: bool = False  # stream tool-call hints (e.g. read_file("…"))
-
-    def _adapter_names(self) -> set[str]:
-        from raven.channels.registry import discover_channel_names
-
-        return set(discover_channel_names())
-
-    def channel_entries(self) -> dict[str, "ChannelSocket"]:
-        """Socket views for every channel section present in the config."""
-        out: dict[str, ChannelSocket] = {}
-        for name, value in (self.model_extra or {}).items():
-            if isinstance(value, ChannelSocket):
-                out[name] = value
-            elif isinstance(value, dict):
-                out[name] = ChannelSocket.model_validate(value)
-        return out
-
-    def __getattr__(self, name: str) -> Any:
-        extra = self.__pydantic_extra__
-        if extra is not None and name in extra:
-            value = extra[name]
-            if isinstance(value, ChannelSocket):
-                return value
-            if isinstance(value, dict):
-                # Sticky coercion: the socket materializes into the extras on
-                # first access, so mutations persist and every reader sees one
-                # object.
-                socket = ChannelSocket.model_validate(value)
-                extra[name] = socket
-                return socket
-            return value
-        if not name.startswith("_") and name in self._adapter_names():
-            socket = ChannelSocket()
-            if extra is not None:
-                extra[name] = socket
-            return socket
-        raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
-
-    @model_serializer(mode="wrap")
-    def _drop_pristine_sections(self, handler: Any) -> Any:
-        """Keep the file sparse: a section indistinguishable from the default
-        socket (which sticky access materializes as a side effect) writes
-        nothing -- absent and default-valued read identically everywhere."""
-        data = handler(self)
-        if not isinstance(data, dict):
-            return data
-        pristine: dict[str, Any] = {}
-        pristine.update(ChannelSocket().model_dump())
-        pristine.update(ChannelSocket().model_dump(by_alias=True))
-        for name in list(self.__pydantic_extra__ or {}):
-            for key in (name, _to_camel_key(name)):
-                value = data.get(key)
-                if isinstance(value, dict) and all(k in pristine and pristine[k] == v for k, v in value.items()):
-                    del data[key]
-        return data
+    whatsapp: WhatsAppConfig = Field(default_factory=WhatsAppConfig)
+    telegram: TelegramConfig = Field(default_factory=TelegramConfig)
+    discord: DiscordConfig = Field(default_factory=DiscordConfig)
+    feishu: FeishuConfig = Field(default_factory=FeishuConfig)
+    mochat: MochatConfig = Field(default_factory=MochatConfig)
+    dingtalk: DingTalkConfig = Field(default_factory=DingTalkConfig)
+    email: EmailConfig = Field(default_factory=EmailConfig)
+    slack: SlackConfig = Field(default_factory=SlackConfig)
+    qq: QQConfig = Field(default_factory=QQConfig)
+    matrix: MatrixConfig = Field(default_factory=MatrixConfig)
+    wecom: WecomConfig = Field(default_factory=WecomConfig)
+    weixin: WeixinConfig = Field(default_factory=WeixinConfig)
 
     def enabled_channel_names(self) -> set[str]:
-        """Names of every enabled IM channel. Entry-driven, so a channel
-        section added to the config is covered without touching consumers
-        (the gateway cron partition, cron add's target validation)."""
-        return {name for name, socket in self.channel_entries().items() if socket.enabled}
-
-
-class CompactionConfig(Base):
-    """In-turn transcript compaction for long agentic turns.
-
-    Off by default: the loop's only in-turn shrink is then the reactive,
-    deterministic elision it has always run on a provider's overflow error.
-    Enabled, two layers join it, on the same usage readings:
-
-    - Proactive: before an LLM call, once the last observed context size
-      crosses the trigger, older tool-result bodies are pruned first
-      (deterministic, no LLM call) and, only if that is not enough, the
-      transcript head is replaced by an LLM summary while a recent tail
-      stays verbatim.
-    - Reactive completion: an overflow retry that finds nothing left to
-      elide may take the summary path instead of surfacing a fatal error.
-
-    Summaries always run on the turn's own model and provider -- a pinned
-    summary model outlives a model switch and then routes every summary to
-    a retired endpoint. A legacy ``model`` key in saved configs is accepted
-    and ignored.
-    """
-
-    enabled: bool = False
-    prune: bool = True
-    # None derives min(20000, resolved max output tokens) -- room for the reply.
-    reserved_tokens: int | None = None
-    # None keeps the sole trigger at ``window - reserved_tokens``; a fraction
-    # in (0, 1) also compacts once context crosses ``trigger_ratio * window``.
-    trigger_ratio: float | None = None
-    # None derives 25% of the usable window clamped to [2000, 8000] -- the
-    # verbatim tail preserved through a summary compaction.
-    preserve_recent_tokens: int | None = None
+        """Names of every enabled IM channel. Field-driven, so a channel
+        added to this model is covered without touching consumers (the
+        gateway cron partition, cron add's target validation)."""
+        return {name for name in type(self).model_fields if getattr(getattr(self, name, None), "enabled", False)}
 
 
 class AgentDefaults(Base):
     """Default agent configuration."""
 
-    workspace: str = WORKSPACE_DEFAULT_SENTINEL
+    workspace: str = "~/.raven/workspace"
     model: str = "anthropic/claude-opus-4-5"
     # The vendor whose credential serves ``model``. Required in practice: an id
     # alone does not name a credential -- `openrouter` serving
@@ -185,8 +288,6 @@ class AgentDefaults(Base):
     # window at construction time. A positive value pins the window, taking
     # priority over whatever the model's own catalogue reports.
     context_window_tokens: int | None = None
-    # In-turn transcript compaction knobs; factory-off (see CompactionConfig).
-    compaction: CompactionConfig = Field(default_factory=CompactionConfig)
     temperature: float = 0.1
     # Per-call wall-clock cap (seconds) for every LLM request (main loop and
     # sub-agents). Bounds a stalled backend that trickles bytes without ever
@@ -303,7 +404,8 @@ class ProviderConfig(Base):
     # vendor reachable by more than one account or region. Meaningful only for
     # a plain API-key provider reached through the litellm client -- a section
     # whose auth is OAuth, or that needs more than a key and an address (Azure
-    # OpenAI, Codex), gets this rejected at `make_provider`. Set and non-empty,
+    # OpenAI, Codex), gets this rejected at `make_provider` construction time
+    # (wired in a later stage; this field exists regardless). Set and non-empty,
     # it replaces the flat `api_key` outright rather than merging with it; an
     # entry inherits the flat `api_base`/`extra_headers` for whichever it does
     # not name itself -- see `raven.providers.endpoints.provider_endpoints` for the
@@ -349,10 +451,14 @@ class AzureProviderConfig(ProviderConfig):
     """Azure OpenAI, whose connection needs more than a key and an address.
 
     A deployment is a name the tenant gives one model, and it goes into the
-    request URL's path; declared here, it is a connection parameter separate
-    from the model id, so Azure ids are spelled like every other provider's.
+    request URL's path. It used to be read off ``agents.defaults.model``, which
+    made a model id double as a connection parameter: the id could carry no
+    prefix without the prefix landing in the path, so Azure was the one provider
+    whose ids had to be spelled differently from everyone else's. Declared here,
+    the model id is free to be a model id.
 
-    ``api_version`` is configurable because tenants run different ones.
+    ``api_version`` was hardcoded in the client, so a tenant on a different one
+    had no way to say so.
     """
 
     deployment: str = ""  # falls back to the model id, for configs written before this field
@@ -368,8 +474,14 @@ class GeminiProviderConfig(ProviderConfig):
             - "key1"
             - "key2"
 
-    Vertex is a separate provider (``vertex_ai``) reached through LiteLLM with
-    ``VERTEXAI_PROJECT`` and ``VERTEXAI_LOCATION``; it is not a flag on this one.
+    A ``vertex`` flag used to sit here, documented as setting
+    ``GOOGLE_GENAI_USE_VERTEXAI``. Nothing read it, and it could not have worked:
+    that variable belongs to the google-genai SDK, while requests go through
+    LiteLLM, which does not read it and reaches Vertex as a separate provider
+    (``vertex_ai``) needing ``VERTEXAI_PROJECT`` and ``VERTEXAI_LOCATION``. It was
+    settable from the CLI and covered by tests, so it read as a supported feature
+    while doing nothing at all. Reaching Vertex is a change to how a request is
+    routed, not a boolean on a key.
     """
 
     #: Several keys may be listed; the first is used. Round-robin rotation was
@@ -382,6 +494,13 @@ class GeminiProviderConfig(ProviderConfig):
         if self.api_key_list:
             return self.api_key_list[0]
         return self.api_key
+
+    @property
+    def all_keys(self) -> list[str]:
+        """Return all configured API keys."""
+        if self.api_key_list:
+            return list(self.api_key_list)
+        return [self.api_key] if self.api_key else []
 
 
 def _prefer_set_values(base: dict[str, Any], winner: dict[str, Any]) -> dict[str, Any]:
@@ -397,7 +516,7 @@ def _prefer_set_values(base: dict[str, Any], winner: dict[str, Any]) -> dict[str
     return merged
 
 
-def section_has_credentials(config: "ProviderConfig", spec: Any, name: str = "") -> bool:
+def _has_credentials(config: "ProviderConfig", spec: Any, name: str = "") -> bool:
     """Is this section actually usable, or just a placeholder?
 
     Every declared provider exists as an empty section whether or not the user
@@ -612,6 +731,30 @@ class GatewayLogConfig(Base):
     console_level: str = "INFO"
 
 
+class GatewayWebConfig(ChannelBase):
+    """Web-app channel for the gateway: a local WebSocket JSON-RPC endpoint a
+    client connects to over a WebSocket.
+
+    Configured off by default, but the gateway starts the endpoint either way --
+    see ``raven/cli/gateway_commands.py``: this flag decides whether the
+    configured host/port/token are used, not whether the channel exists, because
+    the endpoint is also how any other process asks a live channel adapter what
+    it is actually doing.
+
+    Off by default. When enabled, the gateway hosts a ``web`` channel — its own
+    streaming spine (build_web) plus a WS server — alongside the IM channels,
+    reusing the TUI RPC wire protocol (token.delta / thinking.delta / tool.* /
+    message.complete). Single-user by design: bound to loopback, not exposed
+    off-box; ``auth_token`` (if set) is a shared secret the client sends as the
+    first line, mirroring the TUI RpcServer's trust gate.
+    """
+
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    port: int = 8765
+    auth_token: str | None = None
+
+
 class GatewayPageConfig(Base):
     """The served page (`raven serve`'s browser front end) hosted inside the
     gateway process, on the gateway's own agent loop.
@@ -625,34 +768,6 @@ class GatewayPageConfig(Base):
 
     enabled: bool = True
     port: int = 18792
-
-
-class AcpModeConfig(Base):
-    """One operating profile a client may switch a session to over ACP.
-
-    The stable schema's session modes: a named profile a session runs in,
-    switched with ``session/set_mode``. Two things move with a mode -- the
-    tool-iteration ceiling the loop enforces, and an ``overlay`` the loop does
-    not interpret at all: it reaches the hook chain as
-    ``ctx.metadata["mode_overlay"]``, so a product's own hooks read their own
-    knobs from it. Everything else about the agent is the connection's,
-    identically, in every mode.
-    """
-
-    name: str
-    description: str = ""
-    max_tool_iterations: int | None = None
-    """``None`` inherits ``agents.defaults.maxToolIterations``."""
-    overlay: dict[str, Any] = Field(default_factory=dict)
-
-
-class AcpConfig(Base):
-    """The ACP surface's session modes: none declared means the surface is
-    absent from the wire, exactly as before."""
-
-    modes: dict[str, AcpModeConfig] = Field(default_factory=dict)
-    default_mode: str | None = None
-    """Which mode a new session starts in; the first declared one when unset."""
 
 
 class TuiConfig(Base):
@@ -675,117 +790,25 @@ class GatewayConfig(Base):
     user_pool: int = 4
     system_pool: int = 2
     send_max_retries: int = 3
-    # Seconds an in-flight turn may finish within on shutdown; 0.0 restores
-    # cancel-immediately.
-    shutdown_grace: float = 5.0
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
     log: GatewayLogConfig = Field(default_factory=GatewayLogConfig)
+    web: GatewayWebConfig = Field(default_factory=GatewayWebConfig)
     page: GatewayPageConfig = Field(default_factory=GatewayPageConfig)
-
-
-WebSearchProvider = Literal["serper", "anysearch", "serpapi", "tavily", "exa", "brave", "firecrawl"]
-WebFetchProvider = Literal["jina", "anysearch", "tavily", "exa", "firecrawl"]
-
-#: The bare environment variable each web vendor's tool falls back to when the
-#: config slot is empty, and the name ``~/.raven/env`` mirrors the slot out as.
-WEB_VENDOR_ENV_VARS: dict[str, str] = {
-    "serper": "SERPER_API_KEY",
-    "anysearch": "ANYSEARCH_API_KEY",
-    "serpapi": "SERPAPI_API_KEY",
-    "jina": "JINA_API_KEY",
-    "tavily": "TAVILY_API_KEY",
-    "exa": "EXA_API_KEY",
-    "brave": "BRAVE_API_KEY",
-    "firecrawl": "FIRECRAWL_API_KEY",
-}
-
-
-class WebProviderKey(Base):
-    """One web vendor's credential."""
-
-    api_key: str = ""
-
-
-class WebProvidersConfig(Base):
-    """Credentials keyed by vendor, not by the tool that happens to use them.
-
-    AnySearch, Tavily, Exa and Firecrawl each serve both ``web_search`` and
-    ``web_fetch`` off one account, so a key held per tool would have to be
-    pasted twice and could drift into two values for the same credential. Named
-    fields rather than a free dict so a misspelled vendor fails validation
-    instead of being kept silently -- which needs ``extra="forbid"``, since the
-    tree's default policy is to drop an unknown member. A typo here is exactly
-    the "feature X did nothing" case the loader refuses to mask with defaults.
-    """
-
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
-
-    serper: WebProviderKey = Field(default_factory=WebProviderKey)
-    anysearch: WebProviderKey = Field(default_factory=WebProviderKey)
-    serpapi: WebProviderKey = Field(default_factory=WebProviderKey)
-    jina: WebProviderKey = Field(default_factory=WebProviderKey)
-    tavily: WebProviderKey = Field(default_factory=WebProviderKey)
-    exa: WebProviderKey = Field(default_factory=WebProviderKey)
-    brave: WebProviderKey = Field(default_factory=WebProviderKey)
-    firecrawl: WebProviderKey = Field(default_factory=WebProviderKey)
-
-    def key_for(self, vendor: str) -> str:
-        """One vendor's configured key, or an empty string for an unknown vendor."""
-        if vendor not in type(self).model_fields:
-            return ""
-        return str(getattr(self, vendor).api_key or "")
 
 
 class WebSearchConfig(Base):
     """Web search tool configuration."""
 
-    provider: WebSearchProvider = "serper"
-    """Which backend ``web_search`` calls. The key lives under
-    ``tools.web.providers.<name>``, so switching does not mean re-pasting one."""
-    api_key: str = ""
-    """The Serper key on the pre-vendor layout. Still honoured, read after
-    ``tools.web.providers.serper.apiKey``; new writes go to the vendor slot."""
+    api_key: str = ""  # Serper API key
     max_results: int = 5
-
-
-class WebFetchConfig(Base):
-    """Web fetch tool configuration."""
-
-    provider: WebFetchProvider = "jina"
-    """Which backend ``web_fetch`` reads pages through. Jina is the only one that
-    works without a key; a keyed backend whose key does not resolve is replaced
-    by Jina at registration, and the log says so, because ``web_fetch`` is
-    always offered."""
 
 
 class WebToolsConfig(Base):
     """Web tools configuration."""
 
     proxy: str | None = None  # HTTP/SOCKS5 proxy URL, e.g. "http://127.0.0.1:7890" or "socks5://127.0.0.1:1080"
-    jina_api_key: str = ""
-    """The Jina key on the pre-vendor layout. Still honoured, read after
-    ``tools.web.providers.jina.apiKey``; new writes go to the vendor slot."""
-    providers: WebProvidersConfig = Field(default_factory=WebProvidersConfig)
+    jina_api_key: str = ""  # Jina Reader API key
     search: WebSearchConfig = Field(default_factory=WebSearchConfig)
-    fetch: WebFetchConfig = Field(default_factory=WebFetchConfig)
-
-    def vendor_key(self, vendor: str) -> str:
-        """The configured credential for one vendor, the legacy leaf included."""
-        if key := self.providers.key_for(vendor):
-            return key
-        if vendor == "serper":
-            return self.search.api_key
-        if vendor == "jina":
-            return self.jina_api_key
-        return ""
-
-    def vendor_keys(self) -> dict[str, str]:
-        """Every vendor with a resolved credential, ``{vendor: key}``."""
-        out = {}
-        for vendor in type(self.providers).model_fields:
-            if key := self.vendor_key(vendor):
-                out[vendor] = key
-        return out
 
 
 class ExecToolConfig(Base):
@@ -1081,7 +1104,7 @@ class ThirdPartyCliSubagentConfig(Base):
     Such a row is a stub, not a definition: name, kind, the flag, and an empty
     ``command``. It declares no launcher because it defines nothing -- the folder
     still defines the agent, and
-    :func:`raven.agent.subagent.vendored_agents.merge_product_seeds` reads only
+    :func:`raven.agent.subagent.vendored_agents.merge_vendored_seeds` reads only
     the flag from here. Nothing in it comes from the manifest, so nothing in it
     can go stale when the folder is upgraded.
 
@@ -1320,6 +1343,18 @@ class ThirdPartyOpenAISubagentConfig(Base):
         return cleaned
 
     @model_validator(mode="after")
+    def _allow_replayed_state(self) -> "ThirdPartyOpenAISubagentConfig":
+        """``stateful`` is honoured for this kind now.
+
+        It used to be rejected on the grounds that an HTTP agent has no
+        resumable session. It has one now, but Raven owns it: the message list
+        is replayed from ``raven/agent/subagent/instance_state.py`` rather than
+        resumed by the provider, so no ``resumeCommand`` is involved and there
+        is nothing for the cli-kind cross-check to verify here.
+        """
+        return self
+
+    @model_validator(mode="after")
     def _drop_declared_local_file_access(self) -> "ThirdPartyOpenAISubagentConfig":
         """Coerce rather than reject: this field is one an older form wrote.
 
@@ -1333,7 +1368,9 @@ class ThirdPartyOpenAISubagentConfig(Base):
 
         A hard reject is still right where the caller can act on it -- see
         ``reject_unsupported_openai_fields``, which the write path calls on an
-        incoming payload.
+        incoming payload. The neighbouring ``_allow_replayed_state`` no longer
+        rejects ``stateful`` because Raven now replays the message list itself
+        for this kind.
         """
         if self.reads_local_files:
             logger.warning(
@@ -1392,7 +1429,7 @@ class ThirdPartyAcpSubagentConfig(Base):
     Such a row is a stub, not a definition: name, kind, the flag, and an empty
     ``command``. It declares no launcher because it defines nothing -- the folder
     still defines the agent, and
-    :func:`raven.agent.subagent.vendored_agents.merge_product_seeds` reads only
+    :func:`raven.agent.subagent.vendored_agents.merge_vendored_seeds` reads only
     the flag from here. Nothing in it comes from the manifest, so nothing in it
     can go stale when the folder is upgraded.
 
@@ -1614,6 +1651,14 @@ AgentConfig = Annotated[
     Field(discriminator="kind"),
 ]
 
+# The pre-``agents`` spelling of the union, kept as an alias because "third
+# party" is still the right name for the three external transports where a
+# caller genuinely means those (the probe, the acp snapshot store).
+ThirdPartySubagentConfig = Annotated[
+    ThirdPartyCliSubagentConfig | ThirdPartyOpenAISubagentConfig | ThirdPartyAcpSubagentConfig,
+    Field(discriminator="kind"),
+]
+
 
 class PlaybookRouterConfig(Base):
     """How far the per-turn playbook listing is narrowed.
@@ -1750,7 +1795,6 @@ class Config(BaseSettings):
     subagents: SubagentsConfig = Field(default_factory=SubagentsConfig)
     playbooks: PlaybookConfig = Field(default_factory=PlaybookConfig)
     tui: TuiConfig = Field(default_factory=TuiConfig)
-    acp: AcpConfig = Field(default_factory=AcpConfig)
     # UI language chosen during onboarding. Drives the wizard/CLI copy and the
     # agent's reply language (injected into the system prompt). "en" | "zh".
     language: Literal["en", "zh"] = "en"
@@ -1766,26 +1810,30 @@ class Config(BaseSettings):
         separate home exists to avoid. An explicitly configured workspace is
         always used as written.
         """
-        from raven.config.paths import default_workspace
+        from raven.config.loader import raven_home
 
         raw = self.agents.defaults.workspace
         if raw == AgentDefaults.model_fields["workspace"].default:
-            return default_workspace()
+            return raven_home() / "workspace"
         return Path(raw).expanduser()
 
     def channel_workspaces(self) -> dict[str, str]:
         """Every channel that names its own working directory.
 
         Keyed by the channel name as it appears in a session key
-        (``qq:<open_id>``), which is the field name under ``channels``.
-        Channels that left ``workspace`` empty are omitted, so the resolver
-        falls back to ``<root>/<channel>`` for them.
+        (``web:<chat_id>``, ``qq:<open_id>``), which is the field name under
+        ``channels`` -- plus ``web``, whose config lives under ``gateway``
+        because the web channel is hosted by the gateway rather than dialled
+        out to. Channels that left ``workspace`` empty are omitted, so the
+        resolver falls back to ``<root>/<channel>`` for them.
         """
         found: dict[str, str] = {}
         for name, channel in self.channels:
             configured = getattr(channel, "workspace", "")
             if isinstance(configured, str) and configured.strip():
                 found[name] = configured.strip()
+        if self.gateway.web.workspace.strip():
+            found["web"] = self.gateway.web.workspace.strip()
         return found
 
     def effective_media_config(self) -> MediaGenConfig:
@@ -1796,8 +1844,8 @@ class Config(BaseSettings):
         each configured tool we default a missing key to
         ``providers.openrouter.apiKey`` so the chat key can be reused without
         re-declaring it. Tools the user did not configure are left untouched
-        (no key, no model) — ``AgentLoop`` withholds a media tool until it has
-        a key or model, so an OpenRouter key set for chat alone never
+        (no key, no model) — ``AgentLoop`` registers a media tool only when it
+        has a key or model, so an OpenRouter key set for chat alone never
         surfaces image/speech/video to the agent. Returns a copy so this
         resolution never mutates the raw config.
         """
@@ -1805,7 +1853,9 @@ class Config(BaseSettings):
         openrouter = self.providers.get("openrouter")
         or_key = openrouter.api_key if openrouter else ""
         for tool in (media.image, media.speech, media.video):
-            borrow_openrouter_key(tool, or_key)
+            configured = bool(tool.api_key or tool.model)
+            if configured and or_key and not tool.api_key:
+                tool.api_key = or_key
         return media
 
     def _match_provider(self, model: str | None = None) -> tuple["ProviderConfig | None", str | None]:
@@ -1864,7 +1914,7 @@ class Config(BaseSettings):
             if not spec.claims(model_id):
                 continue
             p = self.providers.get(spec.name)
-            if p and section_has_credentials(p, spec):
+            if p and _has_credentials(p, spec):
                 return p, spec.name
 
         # Explicit prefix naming a provider Raven has no spec for: LiteLLM knows
@@ -1877,7 +1927,7 @@ class Config(BaseSettings):
         # routed here, while display and startup both called it unconfigured.
         if prefix and find_by_name(prefix) is None:
             passthrough = self.providers.get(prefix)
-            if passthrough and section_has_credentials(passthrough, None, prefix):
+            if passthrough and _has_credentials(passthrough, None, prefix):
                 return passthrough, canonical_provider_name(prefix)
 
         # Fallback: configured local providers can route models without
@@ -1886,7 +1936,7 @@ class Config(BaseSettings):
             if not spec.is_local:
                 continue
             p = self.providers.get(spec.name)
-            if p and section_has_credentials(p, spec):
+            if p and _has_credentials(p, spec):
                 return p, spec.name
 
         # Fallback: gateways first, then others (follows registry order).
@@ -1907,7 +1957,7 @@ class Config(BaseSettings):
             if spec.is_oauth:
                 continue
             p = self.providers.get(spec.name)
-            if p and section_has_credentials(p, spec):
+            if p and _has_credentials(p, spec):
                 return p, spec.name
         return None, None
 
@@ -2005,11 +2055,10 @@ class Config(BaseSettings):
 
     @property
     def skill_forge(self):
-        """The default SkillForgeConfig.
-
-        Extension blocks live on ``RavenConfig`` (``load_raven_config``); a plain
-        ``Config`` answers with defaults so code that reads ``config.skill_forge``
-        works on either.
+        """Returns the default SkillForgeConfig. Extension blocks are
+        loaded via ``load_raven_config``, not through the base
+        Config. This property exists for backward compat with code that
+        accesses ``config.skill_forge`` on a plain ``Config`` instance.
         """
         from raven.config.raven import SkillForgeConfig
 
@@ -2020,89 +2069,3 @@ class Config(BaseSettings):
         env_nested_delimiter="__",
         extra="forbid",
     )
-
-
-def borrows_openrouter_key(tool: MediaToolConfig) -> bool:
-    """Whether this section is in the one state that borrows: configured (it
-    names a model or a key) yet keyless. Unconfigured sections borrow nothing,
-    which is what keeps a chat credential from quietly enabling tools that
-    bill per call."""
-    return bool((tool.api_key or tool.model) and not tool.api_key)
-
-
-def borrow_openrouter_key(tool: MediaToolConfig, openrouter_key: str) -> None:
-    """The media key-borrow rule, stated once, applied in place."""
-    if borrows_openrouter_key(tool) and openrouter_key:
-        tool.api_key = openrouter_key
-
-
-def live_web_search_key(section: Any) -> str | None:
-    """The Serper key from a raw ``tools.web.search`` subtree, or ``None``.
-
-    Validation and the credential read live here for the reason
-    :func:`live_media_tool_config`'s do: the caller (``config.live``) holds raw
-    file subtrees and must not handle credential fields itself. ``None`` is
-    "no usable answer" -- no section, or one the schema rejects -- and the
-    caller keeps what it had; an empty key in a valid section is a real
-    answer, which is how a key gets revoked without a restart.
-    """
-    if not isinstance(section, dict):
-        return None
-    try:
-        return WebSearchConfig.model_validate(section).api_key
-    except Exception:  # noqa: BLE001 - an invalid candidate dispenses no new answer
-        return None
-
-
-def live_web_provider_key(section: Any, vendor: str) -> str | None:
-    """One vendor's key from a raw ``tools.web.providers`` subtree, or ``None``.
-
-    The vendor-slot half of :func:`live_web_search_key`, and ``None`` means the
-    same thing: no usable answer, so the caller keeps what it had. An empty key
-    in a valid subtree is a real answer, which is how a key gets revoked
-    without a restart. An unknown vendor reads as empty rather than raising --
-    the selection is validated where it is set, and this reader must not turn a
-    stale spelling into a startup failure.
-    """
-    if not isinstance(section, dict):
-        return None
-    try:
-        return WebProvidersConfig.model_validate(section).key_for(vendor)
-    except Exception:  # noqa: BLE001 - an invalid candidate dispenses no new answer
-        return None
-
-
-def live_media_tool_config(section: Any, openrouter_section: Any) -> "MediaToolConfig | None":
-    """One media tool's section as a live file has it, resolved by the same
-    rule as :meth:`Config.effective_media_config`.
-
-    Takes raw file subtrees because the caller (``config.live``) holds no
-    validated ``Config``; validation happens here so the credential handling
-    stays in this module, next to the rule it applies. ``None`` is "no usable
-    answer" and the caller keeps what it had: the tool's own section failing
-    validation, and equally the borrow's input -- a configured-but-keyless
-    tool whose ``providers.openrouter`` slice is present but invalid gets no
-    new answer, never a valid-looking config with the borrowed key dropped.
-    """
-    if section is not None and not isinstance(section, dict):
-        return None
-    try:
-        cfg = MediaToolConfig.model_validate(section or {})
-    except Exception:  # noqa: BLE001 - a torn read is not worth a turn
-        return None
-    if borrows_openrouter_key(cfg):
-        # The borrow is a second input to the combined answer, so its slice is
-        # admitted on the same terms as the tool's own: absent means "nothing
-        # to lend" (a real, keyless answer), while present-but-invalid rejects
-        # the WHOLE answer -- degrading it to an empty borrow would hand the
-        # caller a valid-looking config that silently dropped the credential
-        # the last valid file lent.
-        if openrouter_section is not None:
-            if not isinstance(openrouter_section, dict):
-                return None
-            try:
-                openrouter_key = ProviderConfig.model_validate(openrouter_section).api_key
-            except Exception:  # noqa: BLE001 - an invalid candidate dispenses no new answer
-                return None
-            borrow_openrouter_key(cfg, openrouter_key)
-    return cfg

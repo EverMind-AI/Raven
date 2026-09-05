@@ -5,7 +5,6 @@ import json
 import pytest
 
 import raven.playbook.generator as generator_mod
-from raven.contracts.llm_provider import ErrorClassification
 from raven.playbook import (
     PlaybookGenerationError,
     PlaybookGenerator,
@@ -15,6 +14,7 @@ from raven.playbook import (
 )
 from raven.playbook.agent_profiles import PlaybookAgentProfile
 from raven.playbook.prompt import emit_tool
+from raven.providers.base import ErrorClassification
 
 ROSTER_DESCRIPTIONS = {
     "research-raven": "deep retrieval and fact-checking",
@@ -253,61 +253,6 @@ async def test_repair_loop_feeds_errors_back():
     assert "ghost-agent" in repair_msg and "emit_playbook" in repair_msg
 
 
-async def test_project_path_param_is_repaired_without_a_duplicate_node_input():
-    """Regression for the production request that exposed the two validators drifting."""
-    base = {
-        "name": "detect-project-changes",
-        "description": "detect code changes in a project directory",
-        "taskSummary": "detect project changes",
-        "mode": "dag",
-        "confirm": False,
-        "triggers": {"keywords": ["detect changes", "project changes"]},
-        "params": {
-            "project_path": {
-                "type": "string",
-                "required": False,
-                "default": ".",
-                "description": "which project directory should be inspected?",
-            }
-        },
-        "nodes": [
-            {
-                "id": "detect-changes",
-                "subagent": "code-raven",
-                "nodeSummary": "detect project changes",
-                "promptTemplate": "detect code changes under project directory ${params.project_path}",
-                "inputs": {"project_path": "${params.project_path}"},
-            }
-        ],
-    }
-    wrong_repair = json.loads(json.dumps(base))
-    wrong_repair["nodes"][0]["promptTemplate"] = "detect code changes under project directory {{ inputs.project_path }}"
-    correct = json.loads(json.dumps(base))
-    correct["nodes"][0].pop("inputs")
-
-    gen, _ = _generator([base, wrong_repair, correct])
-    result = await gen.generate(
-        "Detect code changes since the last release in the project directory; "
-        "project_path is optional and defaults to the current directory."
-    )
-
-    assert len(gen._provider.calls) == 3
-    messages = gen._provider.calls[-1]
-    assert "declared but never referenced" in messages[-2]["content"]
-    assert "must not be copied into node inputs" in messages[-1]["content"]
-    assert result.spec.nodes[0].inputs == {}
-    assert result.spec.nodes[0].prompt_template == "detect code changes under project directory ${params.project_path}"
-
-
-def test_generation_prompt_prevents_duplicate_param_inputs_before_repair() -> None:
-    from raven.playbook.prompt import SYSTEM_PROMPT
-
-    assert "never\ncopy a param into a node's `inputs`" in SYSTEM_PROMPT
-    assert "Every declared input must be referenced" in SYSTEM_PROMPT
-    assert "continuation nodes must omit `skills`" in SYSTEM_PROMPT
-    assert "continuation nodes may replace or clear `mcps`" in SYSTEM_PROMPT
-
-
 async def test_gives_up_after_budget_with_error_detail():
     bad = {"name": "x!", "mode": "dag"}
     gen, _ = _generator([bad, bad, bad, bad])
@@ -460,7 +405,7 @@ async def test_all_junk_triggers_feed_the_repair_loop():
 
     assert result.spec.triggers.keywords == ["user feedback", "feedback weekly"]
     repair_msg = gen._provider.calls[1][-1]["content"]
-    assert "every keyword candidate was dropped" in repair_msg
+    assert "every trigger candidate was dropped" in repair_msg
 
 
 async def test_revise_keeps_the_name_and_reports_fresh_notes():

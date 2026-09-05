@@ -19,7 +19,6 @@ import pytest
 
 from raven.agent import workdir
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
 from raven.agent.loop.checkpoint import CheckpointService
 from raven.config.raven import CheckpointConfig, RuntimeConfig
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
@@ -139,14 +138,12 @@ def _loop_agent(workspace: Path, *, checkpoint_enabled: bool) -> AgentLoop:
         provider=_ToolLoopProvider(),
         workspace=workspace,
         model="stub",
-        policy=TurnPolicy(max_iterations=2),
-        tools=ToolWiring(restrict_to_workspace=True),
-        engine=EngineWiring(
-            runtime_config=RuntimeConfig(
-                checkpoint=CheckpointConfig(
-                    policy="always" if checkpoint_enabled else "never",
-                ),
-            )
+        max_iterations=2,
+        restrict_to_workspace=True,
+        runtime_config=RuntimeConfig(
+            checkpoint=CheckpointConfig(
+                policy="always" if checkpoint_enabled else "never",
+            ),
         ),
     )
 
@@ -253,9 +250,9 @@ async def test_completed_status_and_snapshot(workspace):
         provider=_WriteThenStopProvider(),
         workspace=workspace,
         model="stub",
-        policy=TurnPolicy(max_iterations=5),
-        tools=ToolWiring(restrict_to_workspace=True),
-        engine=EngineWiring(runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="always"))),
+        max_iterations=5,
+        restrict_to_workspace=True,
+        runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="always")),
     )
     final, _used, _msgs, outcome = await _run_turn_body(agent, workspace)
     assert outcome.status == "completed"
@@ -271,9 +268,9 @@ async def test_error_status(workspace):
         provider=_ErrorProvider(),
         workspace=workspace,
         model="stub",
-        policy=TurnPolicy(max_iterations=5),
-        tools=ToolWiring(restrict_to_workspace=True),
-        engine=EngineWiring(runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="always"))),
+        max_iterations=5,
+        restrict_to_workspace=True,
+        runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="always")),
     )
     _final, _used, _msgs, outcome = await _run_turn_body(agent, workspace)
     assert outcome.status == "error"

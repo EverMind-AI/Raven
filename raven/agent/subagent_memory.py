@@ -32,8 +32,6 @@ from typing import Any
 import httpx
 from loguru import logger
 
-from raven.core.plugin_stack import everos_plugin_installed, everos_plugin_missing_note
-
 _PAGE_SIZE = 100
 _HTTP_TIMEOUT_S = 30.0
 _FLUSH_TIMEOUT_S = 360.0
@@ -41,7 +39,7 @@ _FLUSH_TIMEOUT_S = 360.0
 
 Flush is what triggers extraction -- it runs an LLM -- and everos itself
 budgets 360s for exactly this call (`_MEMORIZE_TIMEOUT_S` in
-`plugins-dist/everos-memory/raven_everos/backend.py`). `add` is a plain append and keeps
+`raven/plugin/memory/everos/backend.py`). `add` is a plain append and keeps
 the module's regular `_HTTP_TIMEOUT_S`.
 """
 
@@ -150,13 +148,7 @@ async def prime_from_turn(
         return False
     if not turn:
         return False
-    if not everos_plugin_installed():
-        # The read path below needs only httpx, so an agent that writes its own
-        # memories still reads back; priming is the half that needs the plugin's
-        # message shapes, and its absence is a status, not a failure.
-        logger.warning("Trace for {} was not written: {}", session_id, everos_plugin_missing_note())
-        return False
-    from raven_everos.backend import convert_messages
+    from raven.plugin.memory.everos.backend import convert_messages
 
     payload = convert_messages(
         _monotonic(turn),
@@ -199,7 +191,7 @@ def _monotonic(turn: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     if len(turn) < 2:
         return turn
-    from raven_everos.backend import as_ms_epoch
+    from raven.plugin.memory.everos.backend import as_ms_epoch
 
     stamps = [ms for row in turn[1:] if (ms := as_ms_epoch(row.get("timestamp")))]
     first = as_ms_epoch(turn[0].get("timestamp"))

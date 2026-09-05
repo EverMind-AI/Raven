@@ -68,8 +68,6 @@ jobs:
 
       - name: Python lint
         run: make lint-python
-      - name: Import contracts (layer boundaries)
-        run: make lint-imports
 
   unit:
     name: unit (py${{ matrix.python }} / ${{ matrix.os }})
@@ -191,33 +189,6 @@ jobs:
         # ("unrecognized arguments: -n"). It runs two tests here, so the workers
         # buy nothing -- the plugin only has to exist.
         run: uvx --python 3.12 --from "pytest>=8,<10" --with pytest-asyncio --with pytest-xdist pytest --noconftest tests/integration/test_cli_upgrade_real_uv.py -q
-
-  core-wheel:
-    name: kernel wheel smoke
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.2.0
-        with:
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-
-      - name: Set up Python
-        run: uv python install 3.12
-
-      - name: Install dependencies
-        run: make install-deps
-
-      # The closure guard in the unit suite proves the SOURCE kernel imports
-      # nothing else; this proves the ARTIFACT does -- built from the contract
-      # roster, installed into a clean venv with nothing but its own pins.
-      # norecursedirs keeps it out of the default pytest scope, so this job is
-      # what keeps the wheel honest on every push.
-      - name: Build and smoke the raven-core wheel
-        run: make check-core-wheel
 
   tui:
     name: TUI checks

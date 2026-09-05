@@ -3,7 +3,6 @@ import { useSyncExternalStore } from 'react'
 
 import { t } from '../../shell/bridge'
 import { SendGlyph } from '../../shell/ico'
-import { composing } from '../composer/store'
 import { instanceMark, instanceState } from './history'
 import * as store from './store'
 
@@ -375,14 +374,6 @@ export function InstanceComposer(
         placeholder={t('gui.ws.instance_say_hint', { name })}
         onInput={(e) => setText(e.currentTarget.value)}
         onKeyDown={(e) => {
-          /* The keystroke that confirms an IME candidate is an Enter too, and it
-             arrives while the composition is still open. Unguarded it sent the
-             half-typed line, and because the conversion then changed the text the
-             box was not emptied -- so the reader pressed Enter again, and that
-             second send, arriving while the instance was answering the first, was
-             queued. One line typed, one sent and one waiting behind it. Every
-             other field that submits on Enter asks this first. */
-          if (composing(e.nativeEvent)) return
           /* Enter sends, shift-enter breaks the line -- the composer's own rule,
              so the two do not disagree about the same keystroke. */
           if (e.key === 'Enter' && !e.shiftKey) {
@@ -426,11 +417,7 @@ export function InstanceConversation({ row }: { row: InstanceRow }): JSX.Element
         ? (
           <InstanceComposer
             open={{ kind: 'instance', agent: current.agent, handle: current.handle }}
-            /* What the instance is for, ahead of the slug and the handle -- the
-               order the panel's own header already uses. Asking for the id first
-               addressed the reader to `raven-f5caf2` inside a pane headed by the
-               task, which reads as two different things on one screen. */
-            name={current.title || current.nodeId || current.handle}
+            name={current.nodeId || current.handle}
             fail={store.sendFailOf(current.agent, current.handle)}
           />
         )

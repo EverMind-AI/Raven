@@ -10,7 +10,7 @@ off it. The entry-level `cwd` field stays the operator override.
 import asyncio
 from typing import Any
 
-from raven.acp_client.acp_agent import AcpAgentBackend
+from raven.agent.subagent.backends.acp_agent import AcpAgentBackend
 
 
 class _FakeClient:

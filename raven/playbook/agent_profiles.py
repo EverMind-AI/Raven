@@ -34,9 +34,10 @@ class AgentProfileSource(Protocol):
 def agent_profiles_from_registry(registry: "AgentRegistry") -> dict[str, PlaybookAgentProfile]:
     """Project enabled registry rows into the model-safe Playbook view.
 
-    MCP injection is advertised per agent (``row.injectable.mcps``); the runtime
-    delivers a node's ``mcps``. Registry transport/configuration fields
-    deliberately do not cross this boundary.
+    MCP injection is advertised per agent: the runtime-wide gate this used to
+    also require is gone, because the runtime now delivers a node's ``mcps``.
+    Registry transport/configuration fields deliberately do not cross this
+    boundary.
     """
     return {
         row.name: PlaybookAgentProfile(

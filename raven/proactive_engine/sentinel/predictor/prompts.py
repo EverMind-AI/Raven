@@ -15,8 +15,6 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from raven.i18n import zh_lexicon
-
 # Tool-call schema for the LLM. ``options`` is the only data path —
 # free-form text is not consumed downstream.
 _DISCOVERY_TOOL_SCHEMA: dict[str, Any] = {
@@ -42,7 +40,7 @@ _DISCOVERY_TOOL_SCHEMA: dict[str, Any] = {
                                 "type": "string",
                                 "description": (
                                     "Short user-facing title (≤ 30 chars). "
-                                    f"Imperative form: '{zh_lexicon.TASK_TITLE_EXAMPLE} X' / 'Draft "
+                                    "Imperative form: '草拟回复 X' / 'Draft "
                                     "reply to X'. No trailing punctuation."
                                 ),
                             },
@@ -155,8 +153,8 @@ def build_discovery_prompt(
         "much more likely to act on a deferred task when they can pick "
         "ONE entry-point from a menu of pre-decomposed approaches than "
         "when they have to remember it AND figure out where to start.\n"
-        "Example shape: ['Add an index (5 min)', 'Refactor the N+1 (30 min)', "
-        "'Add a cache layer (1 h)'] -- three approaches to the SAME deferred "
+        "Example shape: ['加索引 (5 min)', '重构 N+1 (30 min)', "
+        "'加缓存层 (1 h)'] — three approaches to the SAME deferred "
         "optimization, with effort estimates so the user picks by "
         "available time.\n"
         "Reserve the last 1-2 slots for unrelated 'continue X' options "

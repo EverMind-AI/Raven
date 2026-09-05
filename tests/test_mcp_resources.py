@@ -15,7 +15,7 @@ from pathlib import Path
 from mcp import types
 from pydantic import AnyUrl
 
-from raven.contracts.tool import ToolResult
+from raven.agent.tools.base import ToolResult
 from raven.mcp.resources import (
     MAX_BLOB_BYTES,
     ListMcpResourcesTool,

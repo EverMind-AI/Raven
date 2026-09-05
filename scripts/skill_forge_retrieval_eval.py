@@ -27,9 +27,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from raven.context_engine.base import AssemblyContext
-from raven.memory_engine.base import TokenBudget
-
 from raven.context_engine.segments.skills import SkillsSegmentBuilder
+from raven.memory_engine.base import TokenBudget
 from raven.memory_engine.skill_forge import (
     LocalSkillSource,
     SkillForgeRouter,
@@ -176,6 +175,7 @@ async def _segment_test(
         seg = await builder.build(ctx)
         ids = seg.meta.get("injected_skill_ids", [])
         print(f"  [{q['id']}] injected={ids}")
+        # Print first 2 header lines of the rendered segment
         head_lines = "\n".join(seg.text.splitlines()[:6])
         print(textwrap.indent(head_lines, "    "))
         print()

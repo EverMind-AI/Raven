@@ -1,15 +1,19 @@
-"""asyncio JSON-RPC 2.0 server loop over a full-duplex socket.
+"""asyncio JSON-RPC 2.0 server loop over a full-duplex socket (or, for tests, a
+POSIX pipe pair).
 
 Topology: the parent listens on a TCP-loopback socket; the Node child connects,
 sends an auth token line, then exchanges newline-JSON frames over the same
 connection. ``RpcServer`` is given the accepted socket *object* and wires it via
 ``loop.connect_accepted_socket`` (cross-platform: selector + proactor loops).
+A legacy pipe path (``request_fd``/``notify_fd`` + ``connect_read/write_pipe``)
+is retained for the ``--check`` smoke and unit tests.
+
 `RpcServer` owns the read pump (one line-delimited JSON frame per iteration),
 dispatches concurrently via `asyncio.create_task` so a long-running streaming
 subscription doesn't block other RPC calls, and serializes writes with an
 `asyncio.Lock` so concurrent dispatch tasks can't interleave bytes on the wire.
 
-Frame size limit: 1 MiB. Larger frames trigger immediate
+Frame size limit: 1 MiB (specs §2.5). Larger frames trigger immediate
 shutdown of the connection.
 """
 
@@ -19,6 +23,7 @@ import asyncio
 import json
 import os
 import socket
+import stat
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -27,25 +32,32 @@ if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
 
 
+# Per specs/tui-ipc.md §2.5
 MAX_FRAME_BYTES = 1 * 1024 * 1024  # 1 MiB
 
 
 class RpcServer:
-    """Read JSON-RPC frames from the connected socket, write responses back on it.
+    """Read JSON-RPC frames from `request_fd`, write responses to `notify_fd`.
 
     Args:
+        request_fd: POSIX fd opened for reading (the Node→Python pipe).
+        notify_fd:  POSIX fd opened for writing (the Python→Node pipe).
         dispatcher: a `Dispatcher` instance with all handlers registered.
-        sock: the accepted connection; the server owns it and closes it on `stop()`.
-        auth_token: the per-boot secret the client must present first; None skips the check.
+
+    The server takes ownership of the FDs: they are closed on `stop()`.
     """
 
     def __init__(
         self,
-        dispatcher: "Dispatcher",
+        request_fd: int = -1,
+        notify_fd: int = -1,
+        dispatcher: "Dispatcher | None" = None,
         *,
-        sock: "socket.socket",
+        sock: "socket.socket | None" = None,
         auth_token: str | None = None,
     ) -> None:
+        self._request_fd = request_fd
+        self._notify_fd = notify_fd
         self._dispatcher = dispatcher
         # Cross-platform production transport: a single connected TCP-loopback
         # socket passed as an object (no os.dup of a socket fd, which is not
@@ -57,7 +69,9 @@ class RpcServer:
         # talk to us" trust boundary. None disables the check (pipe/test paths).
         self._auth_token = auth_token
 
+        self._reader: asyncio.StreamReader | None = None
         self._write_transport: asyncio.WriteTransport | None = None
+        self._write_protocol: asyncio.BaseProtocol | None = None
         # Set on the socket paths only, purely for its ``drain()`` -- writes
         # still go through the transport. The pipe fallback wires a bare
         # ``BaseProtocol``, which carries no flow control to wait on.
@@ -75,7 +89,7 @@ class RpcServer:
     # ----- write side -------------------------------------------------------
 
     async def send_frame(self, frame: dict) -> None:
-        """Serialize and write a single JSON frame + newline to the socket.
+        """Serialize and write a single JSON frame + newline to `notify_fd`.
 
         All writes (responses + notifications) MUST go through this method so
         the lock serializes them.
@@ -117,7 +131,7 @@ class RpcServer:
         reader = asyncio.StreamReader(limit=MAX_FRAME_BYTES)
         reader_protocol = asyncio.StreamReaderProtocol(reader)
 
-        # The production transport in
+        # P0 fix (2026-05-15): the production transport in
         # ``tui_commands.run_subprocess_with_rpc`` dups the same accepted unix
         # socket fd into ``request_fd`` and ``notify_fd``. CPython's
         # ``connect_write_pipe`` builds a ``_UnixWritePipeTransport`` whose
@@ -134,13 +148,61 @@ class RpcServer:
         # the same fd instead. The transport's ``.write()`` works without
         # the spurious peer-close detection. We keep the pipe-based path as a
         # fallback for tests/CI that wire bare ``os.pipe()`` pairs.
-        self._sock.setblocking(False)
-        transport, _ = await loop.connect_accepted_socket(lambda: reader_protocol, self._sock)
-        self._write_transport = transport
-        self._writer = asyncio.StreamWriter(transport, reader_protocol, reader, loop)
+        req_is_sock = notif_is_sock = False
+        if self._sock is None:
+            try:
+                req_is_sock = stat.S_ISSOCK(os.fstat(self._request_fd).st_mode)
+                notif_is_sock = stat.S_ISSOCK(os.fstat(self._notify_fd).st_mode)
+            except OSError:
+                req_is_sock = notif_is_sock = False
+
+        if self._sock is not None:
+            # Cross-platform production path: full-duplex transport over a single
+            # connected socket object (TCP loopback). connect_accepted_socket is
+            # implemented on both the selector (POSIX) and proactor (Windows)
+            # event loops, and passing the socket object avoids os.dup of a
+            # socket fd -- which is unsupported on Windows.
+            self._sock.setblocking(False)
+            transport, _ = await loop.connect_accepted_socket(lambda: reader_protocol, self._sock)
+            self._write_transport = transport
+            self._write_protocol = reader_protocol
+            self._writer = asyncio.StreamWriter(transport, reader_protocol, reader, loop)
+        elif req_is_sock and notif_is_sock:
+            # Both fds are dups of the same accepted socket. Close the read
+            # dup and reclaim the write dup as a ``socket.socket`` — only one
+            # handle is needed for a full-duplex transport.
+            try:
+                os.close(self._request_fd)
+            except OSError:
+                pass
+            sock = socket.socket(fileno=self._notify_fd)
+            sock.setblocking(False)
+            transport, _ = await loop.connect_accepted_socket(lambda: reader_protocol, sock)
+            self._write_transport = transport
+            self._write_protocol = reader_protocol
+            self._writer = asyncio.StreamWriter(transport, reader_protocol, reader, loop)
+        else:
+            # Legacy / test path: bare pipes via ``os.pipe()``.
+            # `os.fdopen` so the transport owns a Python file object; loop
+            # will close the underlying fd when the transport closes.
+            await loop.connect_read_pipe(lambda: reader_protocol, os.fdopen(self._request_fd, "rb", buffering=0))
+            write_transport, write_protocol = await loop.connect_write_pipe(
+                asyncio.BaseProtocol,
+                os.fdopen(self._notify_fd, "wb", buffering=0),
+            )
+            self._write_transport = write_transport
+            self._write_protocol = write_protocol
+
+        self._reader = reader
 
         self._started.set()
-        logger.info("rpc: RpcServer started (pid={}, fd={})", os.getpid(), self._sock.fileno())
+        logger.info(
+            "rpc: RpcServer started (pid={}, request_fd={}, notify_fd={}, mode={})",
+            os.getpid(),
+            self._request_fd,
+            self._notify_fd,
+            "socket-obj" if self._sock is not None else ("socket" if req_is_sock else "pipe"),
+        )
 
         # Trust-boundary gate for the TCP-loopback transport: the peer must send
         # the shared secret as the very first newline-terminated line before any

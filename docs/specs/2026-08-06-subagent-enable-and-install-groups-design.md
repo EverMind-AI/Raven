@@ -115,9 +115,9 @@ def enabled_third_party(configs: Sequence[Any]) -> list[Any]:
     """
 ```
 
-It is called by `SubagentManager.add_third_party_subagent`
+It is called by `SubagentManager.set_third_party_subagents`
 (`raven/agent/subagent/manager.py:128`) and
-`SubAgentDagTool.add_third_party_subagent` (`raven/agent/subagent_dag/tool.py:120`).
+`SubAgentDagTool.set_third_party_subagents` (`raven/agent/subagent_dag/tool.py:120`).
 
 Filtering *inside the consumers* rather than at the call sites is deliberate. Five
 paths hand a config list to those setters -- `raven/cli/agent_commands.py:344`,

@@ -1,4 +1,4 @@
-"""Onboard's sub-agent step: discovery, readiness, and key placement."""
+"""Onboard's sub-agent step: discovery, key placement, and registration."""
 
 from __future__ import annotations
 
@@ -12,34 +12,32 @@ import pytest
 
 from raven.cli import onboard_commands, subagent_setup
 
-_MISSING_ENGINE = "raven_probe_engine_that_is_not_installed"
-
 
 def _folder(
     root: Path,
     name: str,
     *,
-    launcher: bool = True,
-    engine: dict[str, str] | None = None,
+    installer: bool = True,
+    checkout: str | None = "Raven-main",
+    venv: bool = True,
     model: str = "anthropic/claude-opus-5",
     manifest_model: str | None = None,
     display: str | None = None,
     api_base: str = "https://gw.example/api/v1",
 ) -> Path:
-    """Build one plausible product folder under ``root``."""
+    """Build one plausible sub-agent folder under ``root``."""
     folder = root / name
     folder.mkdir(parents=True)
-    manifest: dict[str, Any] = {
-        "name": display or name,
-        "kind": "acp",
-        "description": f"{name} does things",
-        "command": "{PYTHON} {SUBAGENT_DIR}/run.py --acp",
-        "cwd": "{SUBAGENT_DIR}",
-        "recommendedLlm": {"model": manifest_model or model, "apiBase": api_base},
-    }
-    if engine is not None:
-        manifest["engine"] = engine
-    (folder / "subagent.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (folder / "subagent.json").write_text(
+        json.dumps(
+            {
+                "name": display or name,
+                "description": f"{name} does things",
+                "recommendedLlm": {"model": manifest_model or model, "apiBase": api_base},
+            }
+        ),
+        encoding="utf-8",
+    )
     (folder / "config.json").write_text(
         json.dumps(
             {
@@ -53,8 +51,17 @@ def _folder(
         f"{subagent_setup._env_var(name)}=\nOTHER=keep\n",
         encoding="utf-8",
     )
-    if launcher:
-        (folder / "run.py").write_text("", encoding="utf-8")
+    if installer:
+        (folder / "install.py").write_text("import sys\nsys.exit(0)\n", encoding="utf-8")
+    if checkout:
+        project = folder / checkout
+        project.mkdir()
+        (project / "pyproject.toml").write_text('[project]\nname = "x"\n', encoding="utf-8")
+        if venv:
+            binaries = project / ".venv" / "bin"
+            binaries.mkdir(parents=True)
+            (binaries / "raven").write_text("#!/bin/sh\n", encoding="utf-8")
+            (binaries / "raven").chmod(0o755)
     return folder
 
 
@@ -76,7 +83,8 @@ class _ScriptedSelect:
         raise AssertionError(f"unscripted prompt: {message}")
 
     def confirm(self, message: str, **_kwargs: Any) -> Any:
-        """Same script, same matching: the prune's confirm reaches here."""
+        """Same script, same matching. Kept beside ``select`` because the build
+        offer is a confirm and the key choice is a select, and a run reaches both."""
         self.asked.append(message)
         for index, (needle, answer) in enumerate(self._answers):
             if needle in message:
@@ -127,58 +135,33 @@ class _RecordingConsole:
 # --------------------------------------------------------------------------- discovery
 
 
-def test_agents_root_is_none_for_an_sdist_wheel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # An sdist-built wheel puts raven/ in site-packages with no packaged tree
-    # and no sibling one. That absence is the gate, so it must read as
-    # "nothing to do", not as an error.
+def test_subagents_root_is_none_for_a_wheel_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A wheel puts raven/ in site-packages, where there is no sibling tree. That
+    # absence is the gate, so it must read as "nothing to do", not as an error.
     package = tmp_path / "site-packages" / "raven"
     package.mkdir(parents=True)
-    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "no-home"))
     monkeypatch.setattr("raven.__file__", str(package / "__init__.py"))
-    assert subagent_setup.agents_root() is None
+    assert subagent_setup.subagents_root() is None
 
 
-def test_agents_root_finds_the_tree_of_a_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_subagents_root_finds_the_tree_of_a_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "raven").mkdir()
-    (tmp_path / "agents").mkdir()
-    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "no-home"))
+    (tmp_path / "subagents").mkdir()
     monkeypatch.setattr("raven.__file__", str(tmp_path / "raven" / "__init__.py"))
-    assert subagent_setup.agents_root() == tmp_path / "agents"
+    assert subagent_setup.subagents_root() == tmp_path / "subagents"
 
 
-def test_discover_needs_only_the_manifest(tmp_path: Path) -> None:
-    # The same marker the agent layer's scan uses: a wizard that required more
-    # would set up fewer agents than the roster lists.
+def test_discover_skips_a_folder_that_ships_no_installer(tmp_path: Path) -> None:
     _folder(tmp_path, "raven-code")
-    plain = tmp_path / "raven-docs"
-    plain.mkdir()
+    _folder(tmp_path, "raven-docs", installer=False)
     assert [f.path.name for f in subagent_setup.discover(tmp_path)] == ["raven-code"]
 
 
-def test_discover_skips_a_folder_with_an_unreadable_manifest(tmp_path: Path) -> None:
+def test_discover_skips_a_folder_with_unreadable_json(tmp_path: Path) -> None:
     _folder(tmp_path, "raven-code")
     broken = _folder(tmp_path, "raven-broken")
-    (broken / "subagent.json").write_text("{not json", encoding="utf-8")
+    (broken / "config.json").write_text("{not json", encoding="utf-8")
     assert [f.path.name for f in subagent_setup.discover(tmp_path)] == ["raven-code"]
-
-
-def test_discover_skips_a_manifest_that_is_not_an_object(tmp_path: Path) -> None:
-    # Legal JSON is not enough: a manifest holding a list parses and then
-    # breaks every field read, taking the whole onboarding step with it.
-    _folder(tmp_path, "raven-code")
-    broken = _folder(tmp_path, "raven-broken")
-    (broken / "subagent.json").write_text("[]", encoding="utf-8")
-    assert [f.path.name for f in subagent_setup.discover(tmp_path)] == ["raven-code"]
-
-
-def test_discover_survives_an_unreadable_profile(tmp_path: Path) -> None:
-    # config.json refines the answer (which model actually runs); a broken one
-    # must not hide the product, only degrade to the manifest's annotation.
-    _folder(tmp_path, "raven-code", manifest_model="claims/that")
-    (tmp_path / "raven-code" / "config.json").write_text("{not json", encoding="utf-8")
-    found = subagent_setup.discover(tmp_path)
-    assert [f.path.name for f in found] == ["raven-code"]
-    assert found[0].recommended_model == "claims/that"
 
 
 def test_discover_reports_the_model_that_actually_runs(tmp_path: Path) -> None:
@@ -194,6 +177,31 @@ def test_discover_reports_the_model_that_actually_runs(tmp_path: Path) -> None:
 )
 def test_env_var_drops_the_raven_prefix(folder: str, expected: str) -> None:
     assert subagent_setup._env_var(folder) == expected
+
+
+def test_venv_ready_is_false_until_the_checkout_has_one(tmp_path: Path) -> None:
+    _folder(tmp_path, "raven-code", venv=False)
+    assert subagent_setup.discover(tmp_path)[0].venv_ready is False
+
+
+def test_a_present_but_unexecutable_launcher_is_not_built(tmp_path: Path) -> None:
+    # `subagents/install.sh` classifies the same folder with `[ -x ]`. Testing
+    # existence here instead would have the installer call a folder unbuilt while
+    # the wizard offered it, and the entry would fail the moment it was picked.
+    _folder(tmp_path, "raven-code")
+    launcher = tmp_path / "raven-code" / "Raven-main" / ".venv" / "bin" / "raven"
+    launcher.chmod(0o644)
+    assert subagent_setup.discover(tmp_path)[0].venv_ready is False
+
+
+def test_a_folder_with_two_projects_has_no_checkout(tmp_path: Path) -> None:
+    # Two candidates is ambiguous, and guessing one would build the wrong venv.
+    folder = _folder(tmp_path, "raven-code")
+    second = folder / "Vendored"
+    second.mkdir()
+    (second / "pyproject.toml").write_text('[project]\nname = "y"\n', encoding="utf-8")
+    found = subagent_setup.discover(tmp_path)[0]
+    assert found.checkout is None and found.venv_ready is False
 
 
 # --------------------------------------------------------------------------- key placement
@@ -243,9 +251,9 @@ def test_write_key_creates_from_the_template_and_locks_it_down(tmp_path: Path) -
 # --------------------------------------------------------------------------- pruning stale config rows
 #
 # A config row written by an older install.py outranks the manifest of the
-# folder it names, so a manifest an upgrade updated never reaches the roster.
+# folder it names, so a manifest a git pull updated never reaches the roster.
 # The step below deletes such rows (backing the list up first), leaving the
-# folders to discovery.
+# folders to vendored discovery.
 
 
 def _stale_config(path: Path, rows: list[dict[str, Any]]) -> Path:
@@ -385,7 +393,7 @@ def test_prune_stops_short_of_crashing_when_a_survivor_fails_validation(
 
 
 def test_prune_asks_first_and_keeps_everything_when_declined(tmp_path: Path) -> None:
-    # A same-name config row is also how a user edits a discovered agent, so the
+    # A same-name config row is also how a user edits a vendored agent, so the
     # deletion must not run unasked; a decline keeps the rows and writes nothing.
     _folder(tmp_path, "raven-research", display="Raven-Research")
     config = _stale_config(tmp_path, [{"name": "Raven-Research", "kind": "cli", "enabled": True}])
@@ -446,26 +454,22 @@ def test_prune_reports_an_unreadable_config(tmp_path: Path) -> None:
 
 
 def test_prune_summary_goes_through_the_wizard_language(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Every line in this step renders in the UI language; the summary must
+    # Every line in this step renders one language per _LANG; the summary must
     # not be the one line that prints both at once.
     _folder(tmp_path, "raven-research", display="Raven-Research")
     config = _stale_config(tmp_path, [{"name": "Raven-Research", "kind": "cli", "enabled": True}])
     folders = subagent_setup.discover(tmp_path)
     console = _RecordingConsole()
-    rendered: list[str] = []
-    monkeypatch.setattr(
-        subagent_setup,
-        "t",
-        lambda text, **arguments: rendered.append(text.format(**arguments) if arguments else text) or "RENDERED",
-    )
+    rendered: list[tuple[str, str]] = []
+    monkeypatch.setattr(onboard_commands, "_t", lambda en, zh: rendered.append((en, zh)) or "RENDERED")
 
     removed = subagent_setup._prune_shadowing_rows(
         folders, tmp_path, console, _AlwaysConfirm(True), [], config_path=config
     )
 
     assert removed == 1
-    assert any("Removed 1 shadowing" in text for text in rendered)
-    assert any("Backed up the previous list" in text for text in rendered)
+    assert any("Removed 1 shadowing" in en for en, _ in rendered)
+    assert any("Backed up the previous list" in en for en, _ in rendered)
     assert console.lines[-1] == "RENDERED"
 
 
@@ -474,7 +478,7 @@ def test_configure_non_interactive_prunes_nothing(tmp_path: Path, monkeypatch: p
     # saw offered is not something a non-interactive run should perform.
     _folder(tmp_path, "raven-research", display="Raven-Research")
     config = _stale_config(tmp_path, [{"name": "Raven-Research", "kind": "cli", "enabled": True}])
-    monkeypatch.setattr(subagent_setup, "agents_root", lambda: tmp_path)
+    monkeypatch.setattr(subagent_setup, "subagents_root", lambda: tmp_path)
     monkeypatch.setattr(subagent_setup, "get_config_path", lambda: config)
     monkeypatch.setattr(
         onboard_commands, "_require_questionary", lambda: pytest.fail("prompted in non-interactive mode")
@@ -491,7 +495,7 @@ def test_configure_non_interactive_prunes_nothing(tmp_path: Path, monkeypatch: p
 
 
 def test_configure_is_a_no_op_without_a_tree(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(subagent_setup, "agents_root", lambda: None)
+    monkeypatch.setattr(subagent_setup, "subagents_root", lambda: None)
     warnings: list[str] = []
     assert subagent_setup.configure_subagents(warnings=warnings) == 0
     assert warnings == []
@@ -500,7 +504,7 @@ def test_configure_is_a_no_op_without_a_tree(monkeypatch: pytest.MonkeyPatch) ->
 def test_configure_non_interactive_never_prompts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # An unattended install must not put agents in a roster nobody asked for.
     _folder(tmp_path, "raven-code")
-    monkeypatch.setattr(subagent_setup, "agents_root", lambda: tmp_path)
+    monkeypatch.setattr(subagent_setup, "subagents_root", lambda: tmp_path)
     monkeypatch.setattr(
         onboard_commands, "_require_questionary", lambda: pytest.fail("prompted in non-interactive mode")
     )
@@ -509,42 +513,22 @@ def test_configure_non_interactive_never_prompts(tmp_path: Path, monkeypatch: py
     assert warnings and "sub-agents" in warnings[0]
 
 
-def test_configure_skips_a_folder_whose_launcher_is_gone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # The same verdict the roster reads: setting up an agent whose launcher is
-    # missing puts a name on the table that fails the moment it is picked, and
-    # a key written for it would read as the wizard having broken something.
-    _folder(tmp_path, "raven-code", launcher=False)
-    monkeypatch.setattr(subagent_setup, "agents_root", lambda: tmp_path)
+def test_configure_skips_a_folder_that_is_not_built(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Registering an agent whose venv is missing puts a name in the roster that
+    # fails the moment it is picked.
+    _folder(tmp_path, "raven-code", venv=False)
+    monkeypatch.setattr(subagent_setup, "subagents_root", lambda: tmp_path)
     (tmp_path / "config.json").write_text("{}", encoding="utf-8")
     monkeypatch.setattr(subagent_setup, "get_config_path", lambda: tmp_path / "config.json")
     scripted = _ScriptedSelect([])
     monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
-    assert subagent_setup.configure_subagents(warnings=[]) == 0, "an unready folder is not a ready agent"
+    assert subagent_setup.configure_subagents(warnings=[]) == 0, "an unbuilt folder is not a ready agent"
     assert scripted.asked == [], "and it is never asked whose key it should spend"
-
-
-def test_configure_skips_a_folder_whose_engine_is_missing_and_names_the_wheel(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Present-but-disabled must reach the human: the reason line names the
-    # wheel to install, which no wizard prompt can do for them.
-    _folder(tmp_path, "raven-design", engine={"package": _MISSING_ENGINE, "wheel": "design-engine"})
-    monkeypatch.setattr(subagent_setup, "agents_root", lambda: tmp_path)
-    (tmp_path / "config.json").write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(subagent_setup, "get_config_path", lambda: tmp_path / "config.json")
-    scripted = _ScriptedSelect([])
-    monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
-    console = _RecordingConsole()
-    monkeypatch.setattr(onboard_commands, "console", console)
-
-    assert subagent_setup.configure_subagents(warnings=[]) == 0
-    assert scripted.asked == []
-    assert any("design-engine" in line for line in console.lines), console.lines
 
 
 def test_configure_inherit_writes_no_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _folder(tmp_path, "raven-code")
-    monkeypatch.setattr(subagent_setup, "agents_root", lambda: tmp_path)
+    monkeypatch.setattr(subagent_setup, "subagents_root", lambda: tmp_path)
     (tmp_path / "config.json").write_text("{}", encoding="utf-8")
     monkeypatch.setattr(subagent_setup, "get_config_path", lambda: tmp_path / "config.json")
     monkeypatch.setattr(subagent_setup, "host_openrouter_key", lambda: "")
@@ -558,7 +542,7 @@ def test_configure_inherit_writes_no_key(tmp_path: Path, monkeypatch: pytest.Mon
 
 def test_configure_own_key_writes_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _folder(tmp_path, "raven-code")
-    monkeypatch.setattr(subagent_setup, "agents_root", lambda: tmp_path)
+    monkeypatch.setattr(subagent_setup, "subagents_root", lambda: tmp_path)
     (tmp_path / "config.json").write_text("{}", encoding="utf-8")
     monkeypatch.setattr(subagent_setup, "get_config_path", lambda: tmp_path / "config.json")
     monkeypatch.setattr(subagent_setup, "host_openrouter_key", lambda: "")
@@ -576,7 +560,7 @@ def test_configure_own_key_writes_it(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
 def test_configure_skip_writes_no_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _folder(tmp_path, "raven-code")
-    monkeypatch.setattr(subagent_setup, "agents_root", lambda: tmp_path)
+    monkeypatch.setattr(subagent_setup, "subagents_root", lambda: tmp_path)
     (tmp_path / "config.json").write_text("{}", encoding="utf-8")
     monkeypatch.setattr(subagent_setup, "get_config_path", lambda: tmp_path / "config.json")
     monkeypatch.setattr(subagent_setup, "host_openrouter_key", lambda: "")
@@ -595,7 +579,7 @@ def test_configure_falls_back_to_this_ravens_llm_on_a_bad_key(tmp_path: Path, mo
     # A key that fails its probe must still be able to end in a working agent,
     # and the fallback must not leave the bad key on disk.
     _folder(tmp_path, "raven-code")
-    monkeypatch.setattr(subagent_setup, "agents_root", lambda: tmp_path)
+    monkeypatch.setattr(subagent_setup, "subagents_root", lambda: tmp_path)
     (tmp_path / "config.json").write_text("{}", encoding="utf-8")
     monkeypatch.setattr(subagent_setup, "get_config_path", lambda: tmp_path / "config.json")
     monkeypatch.setattr(subagent_setup, "host_openrouter_key", lambda: "")
@@ -615,7 +599,7 @@ def test_the_recommended_model_leads_the_menu(tmp_path: Path, monkeypatch: pytes
     # Order is the whole point of the first option: the recommended model is only
     # reachable through a key of its own, so it must not sit below the fallback.
     _folder(tmp_path, "raven-code")
-    monkeypatch.setattr(subagent_setup, "agents_root", lambda: tmp_path)
+    monkeypatch.setattr(subagent_setup, "subagents_root", lambda: tmp_path)
     monkeypatch.setattr(subagent_setup, "host_openrouter_key", lambda: "")
     monkeypatch.setattr(subagent_setup, "host_can_lend_a_key", lambda: True)
     scripted = _ScriptedSelect([("Set up", "skip")])
@@ -628,7 +612,7 @@ def test_an_openrouter_folder_reuses_the_hosts_key_without_asking(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _folder(tmp_path, "raven-code", api_base="https://openrouter.ai/api/v1")
-    monkeypatch.setattr(subagent_setup, "agents_root", lambda: tmp_path)
+    monkeypatch.setattr(subagent_setup, "subagents_root", lambda: tmp_path)
     monkeypatch.setattr(subagent_setup, "host_openrouter_key", lambda: "sk-or-host")
     monkeypatch.setattr(subagent_setup, "host_can_lend_a_key", lambda: True)
     scripted = _ScriptedSelect([("Set up", "own")])
@@ -647,7 +631,7 @@ def test_a_folder_on_another_gateway_does_not_reuse_the_openrouter_key(
     # against a private gateway would fail as a bad credential rather than as the
     # configuration mistake it is.
     _folder(tmp_path, "raven-code", api_base="http://10.0.0.9:3000/v1")
-    monkeypatch.setattr(subagent_setup, "agents_root", lambda: tmp_path)
+    monkeypatch.setattr(subagent_setup, "subagents_root", lambda: tmp_path)
     monkeypatch.setattr(subagent_setup, "host_openrouter_key", lambda: "sk-or-host")
     monkeypatch.setattr(subagent_setup, "host_can_lend_a_key", lambda: True)
     scripted = _ScriptedSelect([("Set up", "own")])
@@ -715,7 +699,7 @@ def test_an_oauth_host_is_not_offered_its_own_llm(tmp_path: Path, monkeypatch: p
     "registered". Offering the option at all is the defect.
     """
     _folder(tmp_path, "raven-code")
-    monkeypatch.setattr(subagent_setup, "agents_root", lambda: tmp_path)
+    monkeypatch.setattr(subagent_setup, "subagents_root", lambda: tmp_path)
     monkeypatch.setattr(subagent_setup, "host_openrouter_key", lambda: "")
     monkeypatch.setattr(subagent_setup, "host_can_lend_a_key", lambda: False)
     scripted = _ScriptedSelect([("Set up", "skip")])
@@ -726,7 +710,7 @@ def test_an_oauth_host_is_not_offered_its_own_llm(tmp_path: Path, monkeypatch: p
 
 def test_a_host_with_a_literal_key_keeps_the_option(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _folder(tmp_path, "raven-code")
-    monkeypatch.setattr(subagent_setup, "agents_root", lambda: tmp_path)
+    monkeypatch.setattr(subagent_setup, "subagents_root", lambda: tmp_path)
     monkeypatch.setattr(subagent_setup, "host_openrouter_key", lambda: "")
     monkeypatch.setattr(subagent_setup, "host_can_lend_a_key", lambda: True)
     scripted = _ScriptedSelect([("Set up", "skip")])
@@ -745,3 +729,87 @@ def test_an_oauth_sign_in_is_not_a_key_to_lend(tmp_path: Path, monkeypatch: pyte
 def test_a_literal_key_anywhere_is_a_key_to_lend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _host_config(tmp_path, monkeypatch, {"custom": {"apiKey": "sk-x", "apiBase": "http://10.0.0.9:3000/v1"}})
     assert subagent_setup.host_can_lend_a_key() is True
+
+
+# --------------------------------------------------------------------------- the build offer
+#
+# Everything past `_offer_to_build`'s first guard was unreached: the older test
+# pointed `subagents_root` at a tree with no `install.sh`, so the function
+# returned on the missing-installer branch and the confirm, the `bash install.sh
+# <folder>` call and the "re-read `venv_ready` rather than trust the exit status"
+# check never ran.
+
+
+def _tree_with_installer(tmp_path: Path, *, venv: bool = False) -> Path:
+    _folder(tmp_path, "raven-code", venv=venv)
+    (tmp_path / "install.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    return tmp_path
+
+
+def _build_call(monkeypatch: pytest.MonkeyPatch, *, code: int = 0, builds: Path | None = None) -> list[list[str]]:
+    """Stand in for the installer subprocess, recording the argv it was given."""
+    seen: list[list[str]] = []
+
+    def fake_run(argv: list[str], **_kwargs: Any) -> Any:
+        seen.append(argv)
+        if builds is not None:
+            launcher = builds / ".venv" / "bin" / "raven"
+            launcher.parent.mkdir(parents=True, exist_ok=True)
+            launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+            launcher.chmod(0o755)
+        return SimpleNamespace(returncode=code, stdout="", stderr="uv sync failed\n")
+
+    monkeypatch.setattr(subagent_setup.subprocess, "run", fake_run)
+    return seen
+
+
+def test_declining_the_build_leaves_the_folder_alone_and_asks_nothing_else(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _tree_with_installer(tmp_path)
+    monkeypatch.setattr(subagent_setup, "subagents_root", lambda: root)
+    monkeypatch.setattr(subagent_setup, "host_can_lend_a_key", lambda: True)
+    scripted = _ScriptedSelect([("Build it now", False)])
+    monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
+    calls = _build_call(monkeypatch)
+
+    assert subagent_setup.configure_subagents(warnings=[]) == 0
+    assert calls == [], "declining must not run the installer"
+    assert not any("Set up" in asked for asked in scripted.asked), "and must not go on to the key question"
+
+
+def test_accepting_runs_the_installer_for_that_folder_then_asks_about_the_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _tree_with_installer(tmp_path)
+    monkeypatch.setattr(subagent_setup, "subagents_root", lambda: root)
+    monkeypatch.setattr(subagent_setup, "host_openrouter_key", lambda: "")
+    monkeypatch.setattr(subagent_setup, "host_can_lend_a_key", lambda: True)
+    scripted = _ScriptedSelect([("Build it now", True), ("Set up", "inherit")])
+    monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
+    calls = _build_call(monkeypatch, builds=root / "raven-code" / "Raven-main")
+
+    assert subagent_setup.configure_subagents(warnings=[]) == 1
+    assert calls == [["bash", str(root / "install.sh"), "raven-code"]], "one folder, not the whole tree"
+
+
+def test_a_build_that_leaves_no_launcher_warns_whatever_it_exited(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`returncode == 0` is not the claim that matters.
+
+    The script does several things per folder; the one this step needs is a
+    launcher raven can start. Trusting the status would carry on to the key
+    question for an agent that cannot run.
+    """
+    root = _tree_with_installer(tmp_path)
+    monkeypatch.setattr(subagent_setup, "subagents_root", lambda: root)
+    monkeypatch.setattr(subagent_setup, "host_can_lend_a_key", lambda: True)
+    scripted = _ScriptedSelect([("Build it now", True)])
+    monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
+    _build_call(monkeypatch, code=0, builds=None)
+    warnings: list[str] = []
+
+    assert subagent_setup.configure_subagents(warnings=warnings) == 0
+    assert warnings and "build failed" in warnings[0]
+    assert not any("Set up" in asked for asked in scripted.asked)

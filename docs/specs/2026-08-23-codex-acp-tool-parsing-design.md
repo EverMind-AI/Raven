@@ -267,9 +267,9 @@ the `_RESULT_TEXT_CAP` slice.
 
 | file | change |
 |---|---|
-| `raven/acp_client/acp_dialects/codex.py` | grows from a result/argument patch into the full parser: sections 1, 2, 6 |
-| `raven/acp_client/acp_dialects/base.py` | `names_call`, `subject_from_result` hooks (defaults only) |
-| `raven/acp_client/acp_agent.py` | name guard, permission branch, plan branch |
+| `raven/agent/subagent/acp_dialects/codex.py` | grows from a result/argument patch into the full parser: sections 1, 2, 6 |
+| `raven/agent/subagent/acp_dialects/base.py` | `names_call`, `subject_from_result` hooks (defaults only) |
+| `raven/agent/subagent/backends/acp_agent.py` | name guard, permission branch, plan branch |
 | `raven/agent/acp/permissions.py` | `observe` parameter |
 | `raven/agent/acp/pool.py` | wire `observe=router.dispatch` |
 | `raven/agent/subagent/tool_vocabulary.py` | no change; codex names are absent from `RAVEN_NAME` and pass through |

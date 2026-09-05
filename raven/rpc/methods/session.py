@@ -36,17 +36,16 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
+from raven.cli.update_notice import update_notice
 from raven.config.loader import drain_migration_notices, load_config
 from raven.providers.rates import resolve_context_window
 from raven.rpc.errors import ConfigValidationError, SessionTitleTooLongError, TurnInProgressError
 from raven.rpc.methods import turn as turn_module
 from raven.rpc.methods.system import _raven_version
 from raven.session.export import default_export_path, write_transcript
-from raven.session.manager import new_chat_id
-from raven.session.resolve import manager_for
+from raven.session.manager import SessionManager, new_chat_id
 from raven.session.title import TITLE_STORAGE_MAX
-from raven.updates.update_notice import update_notice
-from raven.utils.tokens import estimate_prompt_tokens
+from raven.utils.helpers import estimate_prompt_tokens
 
 if TYPE_CHECKING:
     from raven.agent.loop.main import AgentLoop
@@ -229,6 +228,24 @@ async def _default_session_info(
     return info
 
 
+def _get_or_build_manager(config: "Config") -> SessionManager:
+    """Return a ``SessionManager`` for the configured workspace.
+
+    Module-level so tests can monkeypatch it to inject a pre-populated manager
+    without touching the filesystem (same seam as ``load_config``).
+    """
+    return SessionManager(config.workspace_path)
+
+
+def _manager_for(agent_loop: "AgentLoop | None", config: "Config") -> SessionManager:
+    """Prefer the loop's shared manager when available; fall back to a fresh one."""
+    if agent_loop is not None:
+        mgr = getattr(agent_loop, "sessions", None)
+        if isinstance(mgr, SessionManager):
+            return mgr
+    return _get_or_build_manager(config)
+
+
 # Matches both shapes run_subagent_dag's result text can start with:
 # "DAG run <id> finished: ..." once it completes in the foreground, or
 # "DAG run <id> started in the background ..." when it hands back early.
@@ -247,7 +264,7 @@ _SPAWN_TASK_ID_RE = re.compile(r"\bstarted \(id: ([0-9a-f]{8})\)")
 def _map_to_wire(messages: list[dict[str, Any]], session_key: str) -> list[dict[str, Any]]:
     """Map stored session messages to the GatewayTranscriptMessage wire shape.
 
-    The TS side (``gatewayTypes.ts``) expects ``{role, text?, context?, name?}``.
+    The TS side (``gatewayTypes.ts:23``) expects ``{role, text?, context?, name?}``.
     Stored messages carry ``content`` (not ``text``) so we rename the field.
     All well-formed stored messages are included (N stored → N wire) — no
     consolidation filter; non-dict or roleless entries are skipped with a
@@ -415,7 +432,7 @@ async def session_create(
             resolved = validate_override(workdir, config.workspace_path)
         except ValueError as e:
             raise ConfigValidationError(str(e), data={"field": "workdir"}) from e
-        manager_for(agent_loop, config).get_or_create(session_id).metadata["workdir"] = str(resolved)
+        _manager_for(agent_loop, config).get_or_create(session_id).metadata["workdir"] = str(resolved)
         info["cwd"] = str(resolved)
     return {
         "session_id": session_id,
@@ -439,7 +456,7 @@ async def session_close(
         return {"ok": True}
     config = load_config()
     agent_loop = _safe_invoke_factory(agent_loop_factory)
-    mgr = manager_for(agent_loop, config)
+    mgr = _manager_for(agent_loop, config)
     try:
         mgr.flush(session_key)
     except Exception:
@@ -479,7 +496,7 @@ async def session_resume(
 
     if session_key:
         try:
-            mgr = manager_for(agent_loop, config)
+            mgr = _manager_for(agent_loop, config)
             raw = mgr.peek(session_key)
             if raw is not None:
                 _fill_resumed_context(info, raw)
@@ -608,7 +625,7 @@ async def session_list(
     """
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
-    mgr = manager_for(agent_loop, config)
+    mgr = _manager_for(agent_loop, config)
     channels = params.get("channels")
     if not isinstance(channels, list) or not channels:
         channels = ["tui"]
@@ -644,7 +661,7 @@ async def session_delete(
             )
         agent_loop = _safe_invoke_factory(agent_loop_factory)
         config = load_config()
-        mgr = manager_for(agent_loop, config)
+        mgr = _manager_for(agent_loop, config)
         removed = mgr.delete(session_key)
         if agent_loop is not None:
             # Not gated on ``removed``: a session that switched model before its
@@ -666,7 +683,7 @@ async def session_most_recent(
     """``session.most_recent`` — return the most-recently-updated tui session key.
 
     Returns the SessionMostRecentResponse shape: {session_id?: string | null, ...}.
-    The TS caller (createGatewayEventHandler.ts) reads r?.session_id; null
+    The TS caller (createGatewayEventHandler.ts:242) reads r?.session_id; null
     is the tolerated no-sessions value.
 
     Scoped to this checkout: the TUI offers this session to reopen, and one
@@ -674,7 +691,7 @@ async def session_most_recent(
     """
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
-    mgr = manager_for(agent_loop, config)
+    mgr = _manager_for(agent_loop, config)
     chat_id = mgr.find_most_recent_chat_id("tui", this_project_only=True, include_archived=False)
     session_id = f"tui:{chat_id}" if chat_id else None
     return {"session_id": session_id}
@@ -696,7 +713,7 @@ async def session_title(
     Get path: returns the current title from the cached or disk-loaded
     session.
 
-    Wire shape per SessionTitleResponse (gatewayTypes.ts):
+    Wire shape per SessionTitleResponse (gatewayTypes.ts:154):
       {title?: string, session_key: string, pending: bool}
     """
     session_key = params.get("session_id", "")
@@ -705,7 +722,7 @@ async def session_title(
     title = params.get("title")
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
-    mgr = manager_for(agent_loop, config)
+    mgr = _manager_for(agent_loop, config)
 
     if title is not None:
         session = mgr.get_or_create(session_key)
@@ -755,7 +772,7 @@ async def session_pin(
         return {"pinned": pinned, "session_key": "", "pending": False}
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
-    mgr = manager_for(agent_loop, config)
+    mgr = _manager_for(agent_loop, config)
     session = mgr.get_or_create(session_key)
     if pinned:
         session.metadata["pinned"] = True
@@ -783,7 +800,7 @@ async def session_archive(
         return {"archived": archived, "session_key": "", "pending": False}
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
-    mgr = manager_for(agent_loop, config)
+    mgr = _manager_for(agent_loop, config)
     session = mgr.get_or_create(session_key)
     if archived:
         session.metadata["archived"] = True
@@ -820,7 +837,7 @@ async def session_clear(
         )
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
-    mgr = manager_for(agent_loop, config)
+    mgr = _manager_for(agent_loop, config)
     session = mgr.get_or_create(session_key)
     session.clear()
     if mgr.exists(session_key):
@@ -853,7 +870,7 @@ async def session_undo(
     n = params.get("n", 1)
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
-    mgr = manager_for(agent_loop, config)
+    mgr = _manager_for(agent_loop, config)
     session = mgr.get_or_create(session_key)
     removed = session.undo_last_turn(n)
     if removed and mgr.exists(session_key):
@@ -895,7 +912,7 @@ async def session_compress(
 
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
-    mgr = manager_for(agent_loop, config)
+    mgr = _manager_for(agent_loop, config)
     session = mgr.get_or_create(session_key)
     before_messages = len(session.messages)
 
@@ -915,8 +932,8 @@ async def session_compress(
     stats = await consolidator.maybe_consolidate_by_tokens(session, force=True)
     before_tokens = int(stats.get("before_tokens", 0))
     after_tokens = int(stats.get("after_tokens", before_tokens))
-    compacted = int(stats.get("compacted", 0))
-    if compacted and mgr.exists(session_key):
+    archived = int(stats.get("archived", 0))
+    if archived and mgr.exists(session_key):
         try:
             mgr.save(session)
         except Exception:
@@ -925,24 +942,24 @@ async def session_compress(
     # Consolidation annotates and advances ``last_consolidated``; it never
     # removes anything from the list. So the survivors are the slice past that
     # boundary, and the count comes from the same slice the payload does --
-    # deriving it as ``before - compacted`` let the number and the messages
+    # deriving it as ``before - archived`` let the number and the messages
     # beside it describe two different lists.
     survivors = session.messages[session.last_consolidated :]
-    headline = f"compacted {compacted} messages" if compacted else "nothing to compress"
+    headline = f"archived {archived} messages" if archived else "nothing to compress"
     result: dict[str, Any] = {
         "before_messages": before_messages,
         "after_messages": len(survivors),
         "before_tokens": before_tokens,
         "after_tokens": after_tokens,
-        "removed": compacted,
+        "removed": archived,
         "summary": {
             "headline": headline,
-            "noop": compacted == 0,
+            "noop": archived == 0,
             "token_line": f"{before_tokens} -> {after_tokens} tokens",
         },
     }
-    if compacted:
-        # A caller that just compacted half the transcript is looking at messages
+    if archived:
+        # A caller that just archived half the transcript is looking at messages
         # that no longer exist. Returning the survivors plus refreshed info and
         # usage is what lets it redraw instead of reporting a compaction while
         # still showing what was compacted -- the same three fields
@@ -954,7 +971,7 @@ async def session_compress(
         # where its turns run. The TUI adopts this bundle wholesale, so that
         # reads as `/compress` moving the session to another directory.
         #
-        # Best-effort on purpose: the compaction is the operation and it has already
+        # Best-effort on purpose: the archive is the operation and it has already
         # committed. Failing the whole call because a redraw aid could not be
         # assembled would report failure for work that succeeded, and would leave
         # the caller with neither the new transcript nor the knowledge that its
@@ -968,7 +985,7 @@ async def session_compress(
             if isinstance(usage, dict):
                 result["usage"] = usage
         except Exception:
-            logger.warning("session.compress: compacted {} but could not build the redraw payload", session_key)
+            logger.warning("session.compress: archived {} but could not build the redraw payload", session_key)
     return result
 
 
@@ -993,7 +1010,7 @@ async def session_branch(
     name = params.get("name")
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
-    mgr = manager_for(agent_loop, config)
+    mgr = _manager_for(agent_loop, config)
     child = mgr.fork(session_key, title=(name or None))
     if child is not None and agent_loop is not None:
         # A fork continues its parent's conversation, so it continues on the
@@ -1030,7 +1047,7 @@ async def session_export(
         return {"exported": False, "path": None, "reason": "not_found"}
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
-    mgr = manager_for(agent_loop, config)
+    mgr = _manager_for(agent_loop, config)
     res = mgr.resolve_key(value)
     if res.status == "ambiguous":
         return {

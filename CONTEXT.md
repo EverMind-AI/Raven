@@ -1,5 +1,8 @@
 # Raven Runtime
 
+> **Status: review baseline (2026-06-28).** Under team review via this PR — owners refine
+> their assigned terms by branching off this PR branch and merging back.
+
 The Python agent runtime: receives messages from chat channels, runs the agent loop
 against LLM providers, and hosts the feature engines (context, memory, proactive, eval)
 plus the TokenWise efficiency layer.
@@ -91,26 +94,11 @@ The behavioural `Protocol` seam between Spine and an agent implementation:
 supplies `AgentTurnRunner` (wraps `AgentLoop`). Gateway and TUI variants also exist.
 _Avoid_: conflating with Agent Loop — Turn Runner is the Protocol; Agent Loop is one implementation.
 
-**Agent Hook** (`contracts/loop_hooks.py`; implementations in `agent/hook/`):
-The turn-loop extension point: an `AgentHook` ABC with six async phases
-(`before_user_inbound`, `before_iteration`, `before_execute_tools`, `after_iteration`,
-`terminal_answerless`, `after_send`), all fired by the loop. A decision may pass through,
-short-circuit, modify outbound content, or roll the iteration back and re-sample (with
-injected messages and generation overrides for that one call); `before_iteration` may also
-withhold tools for the iteration, the iteration phases may leave the model a harness note on
-the last message (`append_note`), and `before_user_inbound` may rewrite the inbound text
-(`modified_content`, chained through `inbound_content`). Multiple hooks chain via `CompositeHook`; the EvalEngine
-wires three concrete implementations, and a product steers the loop with its own.
+**Agent Hook** (`agent/hook/`):
+The turn-loop extension point: an `AgentHook` ABC with five async phases
+(`before_user_inbound`, `before_iteration`, `after_iteration`, `after_send`, `on_tool_call`).
+Multiple hooks chain via `CompositeHook`; the EvalEngine wires three concrete implementations.
 _Avoid_: "callback" or "middleware" — neither captures the phase-specific, chain-aware semantics.
-
-**Session Mode** (`acp/modes.py`; declared under `acp.modes` in config):
-A named per-session operating profile a client switches over ACP `session/set_mode`; every
-session response carries the `SessionModeState`. Two things move with a mode: the iteration
-cap the loop enforces, and an `overlay` the loop hands the hook chain as
-`ctx.metadata["mode_overlay"]` without interpreting -- a product's own hooks read their own
-knobs from it. Session state, not transcript state; a switch lands on the session's next turn.
-_Avoid_: re-spelling a mode as a `session/set_config_option` entry -- modes are first-class in
-the stable schema.
 
 **Subagent** (`agent/subagent/`):
 A background agent task spawned by `SubagentManager`. Runs with its own tool set; its result
@@ -123,11 +111,9 @@ _Avoid_: conflating with a Turn — a Subagent lives outside the main turn and r
 The one list of agents raven can dispatch to, materialized once per process as an
 `AgentRegistry` that `spawn`, `run_subagent_dag` and the playbook generator all read.
 A row is a name plus a `kind` (`builtin` / `cli` / `acp` / `openai`) plus that kind's
-connection fields; the `kind` set is closed -- a new kind is a new backend module plus a
-branch in `agent/subagent/backends/__init__.py:build_third_party_backend`, and no plugin
-door for subagent kinds exists (recorded, not promised); `AgentCaps` and `Injectable` are *derived* from it, and are what a
+connection fields; `AgentCaps` and `Injectable` are *derived* from it, and are what a
 consumer branches on so that nothing has to switch on the transport.
-Three sources compose it, weakest first: **Product agent** rows discovered on the
+Three sources compose it, weakest first: **vendored** rows discovered on the
 filesystem, then `builtin` package seeds, then config. `builtin` rows are package seeds
 (`agent/subagent/builtin_agents.py`): they exist whether or not config mentions them, and a
 config row of the same name is a field-level override -- of every field but `enabled`,
@@ -141,32 +127,24 @@ _Avoid_: "third-party registry" — the table holds raven's own agents as well, 
 point of it: `spawn` and a DAG node pick from one roster, so an agent reachable from one
 entry point and not the other is no longer a state that exists.
 
-**Product agent** (`agent/subagent/vendored_agents.py`):
-An agent row discovered under the `agents/` product tree rather than written anywhere —
-one of the shipped products, each a launcher (`run.py`) over the installed raven plus a
-`subagent.json` manifest. Materialized as a row on every table build, so a folder that is
+**Vendored agent** (`agent/subagent/vendored_agents.py`):
+An agent row discovered under `subagents/` rather than written anywhere — one of the
+separate raven builds that ship beside this one, each its own checkout with its own venv
+and manifest. Materialized as a `cli` row on every table build, so a folder that is
 deleted stops being an agent and a manifest that changes is picked up without a stored
-copy to contradict it. The tree resolves through `agents_root()` — the raven home
-(`~/.raven/agents`, installed out of the wheel so a product's `.env` survives upgrades),
-then beside the package in a checkout, then the wheel's own `raven/agents`. Readiness
-(the launcher files its command names on disk, and its manifest-declared engine wheel
-importable where raven runs) decides `enabled`, not whether the row exists: an unready
-folder is listed and disabled with the reason on the row, because a name the dispatching
-model can pick and then fail on is worse than no name, and hiding it would also hide
-"present, not set up" from the operations view. A missing credential is deliberately not
-a readiness reason: the launcher inherits the host's provider block and refuses loudly at
-dispatch when there is truly nothing. Not deletable through config — removing one means
-removing its folder, or setting `"enabled": false` in its own `subagent.json`. On the
-RPC wire the row source is still spelled `vendored`; renaming that is a schema change.
-_Avoid_: "vendored agent" — the retired fork-tree (`subagents/`) meaning, whose rows
-carried venv and credential readiness; "third-party agent" — these are raven's own
-products, and nobody registered them; "builtin" — that is the in-process row, which has
-no subprocess and no launcher.
+copy to contradict it. Readiness (its venv built, and a credential of its own or a host
+provider key to inherit) decides `enabled`, not whether the row exists: an unready folder
+is listed and disabled, because a name the dispatching model can pick and then fail on is
+worse than no name, and hiding it would also hide "present, not set up" from the
+operations view. Not deletable through config — removing one means removing its folder,
+or setting `"enabled": false` in its own `subagent.json`.
+_Avoid_: "third-party agent" — these are raven's own builds, and nobody registered them;
+"builtin" — that is the in-process row, which has no subprocess and no venv.
 
 **Machine** (`raven/agent/subagent/dag_machines.py`):
-A compute host the owner registered with a machine-running agent's Raven install
+A compute host the owner registered with a vendored agent's own Raven install
 via `raven ops connection add`, reported by that agent's
-`raven ops connection doctor --json` as a `{name, usable}` row. An
+`raven ops connection doctor --json` as a `{name, usable}` row. A vendored
 on-call-style agent runs outside the dispatching Raven process — on a GPU
 box, a lab workstation, another machine entirely — so the DAG gate consults
 the agent before dispatching a graph that names it and refuses the run with
@@ -176,8 +154,8 @@ lists is refused under the same gate with the missing ones named; once
 settled the chosen machine is injected into every node's prompt so the
 writing and reporting halves of the graph agree on where the numbers came
 from. The check is silent — returning no `Verdict` rather than a blocking
-one — for graphs that name no machine-running agent, for installs
-that have not wired one up, and for agent installs where the doctor cannot
+one — for graphs that name no machine-running vendored agent, for installs
+that have not wired one up, and for agent checkouts where the doctor cannot
 be run at all; in those cases the graph dispatches exactly as it used to.
 _Avoid_: "host" / "server" / "node" (too broad, no link to the
 `ops connection` registry that supplies the rows); "GPU box" (only some are
@@ -242,7 +220,7 @@ still sits beside `description`,
 which answers a different question: `description` is matched against to decide whether to
 run the playbook at all, `task_summary` says what running it dispatches.
 _Avoid_: `label` for this on the spawn path — the tool parameter is gone. The wire field
-`SubagentCall.label` and the span attribute `subagent.label` (`raven/observability/semconv.py`)
+`SubagentCall.label` and the span attribute `subagent.label` (`raven/tracing/semconv.py`)
 keep the name and are filled from the summary.
 
 **Node summary** (`node_summary`, on `DagNodeSpec`):
@@ -262,13 +240,6 @@ wholesale, so a copy would be one dropped key away from vanishing. A run title i
 rather than empty when the instance came from no graph, so its presence is what a reader
 tests to decide whether to draw a source at all; a missing instance title falls back to the
 handle.
-
-Three sources, in precedence: a spawn's `task_summary`, a graph node's `node_summary`, and --
-for an instance nobody dispatched, one the reader started themselves -- the first line of the
-message that opened it, by `derive_title`, the same rule that names an untitled session. That
-third one is taken *once*, when the log is opened, so the opening message names the instance
-and later ones do not rename it; the header is written on `open` rather than on the first
-completed turn, or a panel would be headed by an id until something finished.
 _Avoid_: reading either as the node id or the handle - those are addresses. A playbook
 namespaces every node id with its own name and a run tag, which is exactly why they read
 badly as titles.
@@ -280,48 +251,9 @@ message, ask_user, spawn (Subagent), MCP, media generation, skill read/use, and 
 plugin market (`plugin`).
 _Avoid_: "function" — a Tool is the agent-facing capability, not a Python function.
 
-**Web Vendor** (`config/schema.py`, `WebProvidersConfig`):
-Who issues a web credential, as opposed to which tool spends it. Keys live at
-`tools.web.providers.<vendor>.apiKey` because one AnySearch, Tavily, Exa or Firecrawl
-account serves both `web_search` and `web_fetch`; a key held per tool would have to be
-pasted twice and could drift into two values for one credential. The pre-vendor leaves
-(`tools.web.search.apiKey`, `tools.web.jinaApiKey`) are still read, after the vendor
-slot, and only for Serper and Jina. `~/.raven/env` mirrors every vendor key out under
-its bare env var.
-_Avoid_: "provider" unqualified — that is the LLM Provider in this vocabulary; and
-"the web key" — there is one per vendor.
-
-**Web Search Provider** / **Web Fetch Provider** (`agent/tools/web.py`, `SEARCH_PROVIDERS` / `FETCH_PROVIDERS`):
-Which interchangeable backend each web tool calls: `tools.web.search.provider` selects
-`serper` (default), `anysearch`, `serpapi`, `tavily`, `exa`, `brave` or `firecrawl`, and
-`tools.web.fetch.provider` selects `jina` (default), `anysearch`, `tavily`, `exa` or
-`firecrawl`. Every endpoint is a literal in the tool, so a selection names a vendor and
-never a URL. `web_search` is registered whatever the config holds and *withheld* from the
-offered set while the selected vendor's key does not resolve, so a key pasted mid-run
-surfaces it without a restart -- read live from the vendor slot and, for Serper, from the
-pre-vendor leaf, in the order `WebToolsConfig.vendor_key` resolves them, and an empty slot
-is a revocation rather than a miss; `web_fetch` is always offered, falling back to Jina,
-which reads pages without a key. The two sub-agent launchers inherit the host's selection
-differently: the in-process backend (`agent/subagent/backends/raven_loop.py`) takes it and
-then declines to *register* `web_search` when no key resolves -- the older gate, which the
-vendored-invariant guard still requires there -- while the vendored checkout's launcher
-(`subagents/raven-research/run.py`) declines to copy a selection it cannot key and keeps
-its own default, because its gate exits rather than degrading. Most vendors take the key
-in a header; SerpApi takes it as a query parameter, so for that one the key travels inside
-every request URL and two surfaces have to keep it out -- the error path renders vendor plus
-status rather than the exception text, and the persisted log sink redacts a URL-borne
-credential (`cli/_log_file.py`), since httpx logs each request at INFO on the success path.
-_Avoid_: a per-vendor tool name — the model is always offered `web_search` and
-`web_fetch`, whichever vendor answers.
-
 **Tool Registry** (`agent/tools/registry.py`):
 The name→`Tool` table the Agent Loop dispatches into: resolves a tool by name and runs
 its `execute` under a timeout, returning the string result or a structured error.
-Three doors feed it, every one through `register` and its `admit_tool` check: the loop's
-own wiring registers the builtin tools (`agent/loop/wiring.py`), the assembly root registers
-plugin tools built by `PluginRegistry.build_tool` (`core/plugin_stack.py`), and `mcp_glue`
-registers MCP tools per connected server.
-_Avoid_: a fourth door -- a tool reaching the table any other way skips admission.
 
 **Deep Research** (`agent/tools/deep_research.py`):
 Opt-in tool delegating an open-ended research question to the MiroThinker API; returns a
@@ -363,7 +295,7 @@ the Context Engine assembles the whole window.
 The single backbone every turn flows through: one entry
 (`Scheduler.submit(TurnRequest) → TurnHandle.result()`) and one exit (`emit(Deliverable)`).
 Per-conversation **Lanes** are the unit of both ordering and cancellation. Deliberately
-not a broadcast bus.
+not a broadcast bus — replaces the dormant `bus/` pub/sub.
 _Avoid_: "the bus" — there is no Bus; "queue" for Lane — Lane is a serial+cancel domain.
 
 **Lane**:
@@ -437,10 +369,9 @@ Foresight is the stored memory artifact.
 ### Channels & Front-ends
 
 **Channel**:
-A platform adapter (`channels/base.py:ChannelBase` -- inherited for the plumbing,
-and satisfying the `Channel` paper: telegram, matrix, discord, ...) that connects
-an external chat platform to the Runtime; managed by the ChannelManager in
-gateway mode.
+A platform adapter (a `BaseChannel` subclass: telegram, matrix, discord, …) that
+connects an external chat platform to the Runtime; managed by the ChannelManager
+in gateway mode.
 _Avoid_: calling the TUI a channel — `channel="tui"` on a message is a routing tag, not a Channel
 
 **TUI**:
@@ -451,13 +382,6 @@ the Runtime solely via the RPC protocol. Not a Channel.
 The one-shot command-line entry point (`raven <command>`) for operations and
 configuration. Not a conversation front-end.
 _Avoid_: using "CLI" for the interactive REPL (retiring)
-
-**Routing Profile** (`routing/profiles.py`):
-A named quality-versus-cost weighting the model selector scores candidates with:
-`RoutingProfile(quality_weight, cost_weight)`, three shipped names in `ROUTING_PROFILES`
-(`best` 0.99/0.01, `balanced` 0.50/0.50, `eco` 0.20/0.80); `routing/selector.py` combines
-a model's quality score and its cost score by these weights.
-_Avoid_: confusing with Routing Tag — the tag names a turn's recipient, the profile weighs models.
 
 **Routing Tag**:
 The `channel` field on a `TurnRequest`; names the recipient — a Channel, or the TUI.
@@ -477,8 +401,8 @@ history. Never carries file bytes.
 ### Token Efficiency
 
 **TokenWise**:
-The token-efficiency shelf (L3): a set of independently toggled TokenStrategies, not a
-single module.
+The cross-cutting token-efficiency layer: a set of independently toggled
+TokenStrategies, not a single module.
 
 **TokenStrategy**:
 One independently enable-able efficiency measure, implemented as a `TokenStrategy` ABC
@@ -504,7 +428,6 @@ window). A Hermes-faithful `SystemAndTailCacheStrategy` ships alongside as an A/
 **UsageSnapshot**:
 The token/cost accounting unit for a single LLM call: input / output / cache-read /
 cache-write / reasoning tokens plus the estimated USD cost.
-_Avoid_: the turn-end wire payload is `TurnUsage` (rpc/models.py), not UsageSnapshot.
 
 **Provider**:
 An LLM vendor adapter (`providers/`: Anthropic, OpenAI, Gemini, …), shared by the
@@ -545,17 +468,7 @@ A Provider may declare several and is usable when any one is satisfied.
 `providers/auth.py::credential_status` answers "is this Provider usable", and is the
 only place that may: seven surfaces once decided it independently and disagreed with
 each other on the two configurations that made the rewrite necessary.
-_Avoid_: "credential kind" for the whole shape -- that names only the material.
-
-**Auth Shape**:
-Which of four ways setting up a Provider goes: a sign-in, an address, a key with an
-address, or a key alone (`providers/registry.py::auth_shape`). What the onboarding
-wizard and the model picker branch on, and coarser than an **Auth Method**: a shape
-says what the user is asked for, a method says what satisfies the connection and
-whether it is satisfied.
-_Avoid_: deriving it a second time from `is_oauth` / `is_local` / `requires_api_base`
--- that list is already read in two places, which is one more than the Auth Method
-entry above says this family may have.
+_Avoid_: "credential kind" for the whole shape — that names only the material.
 
 **Model Row**:
 One model as a person reads it: a Model Ref plus a label and a description, tagged with
@@ -633,10 +546,6 @@ this selects the *vendor* for an already-chosen model.
 The single transport between Runtime and any interactive client (stdio pipe / Unix socket
 for the TUI, a WebSocket for `raven serve`), carrying two message kinds: Request/Response
 (client → Runtime method calls) and Notification (Runtime → client one-way events).
-The rpc surface also hosts the CLI in-process: `cli.dispatch` runs Typer commands,
-`commands.catalog` reflects them into the slash catalog, and the console injection
-redirects their output — a surface-to-surface dependency the layer rule permits, recorded
-here so it is a seat and not a surprise.
 _Avoid_: calling it TUI-RPC — the terminal is one of its clients, not its owner; and calling
 a Notification "the bus" or "broadcast" — Spine events never cross into a client directly
 
@@ -677,8 +586,7 @@ The ordered blocks `ContextAssembler` renders into the system prompt, one per
 SegmentBuilder: `# Raven` (identity), the Bootstrap Files block, `# Memory`
 (host `user.md` ⊕ EverOS recall), `# Active Skills` (always-on) and `# Skills`
 (SkillForge-routed candidates — see SkillForge), and `# Curator Working State`
-(Segment 6). `context.dropSegments` names, by builder name, the host segments an agent does
-without — a product whose bootstrap files carry its own identity drops `identity`.
+(Segment 6).
 _Avoid_: treating the system prompt as one opaque blob — each segment has an owner and order.
 
 **Inject Mode**:
@@ -731,21 +639,7 @@ _Avoid_: archive vs Consolidation confusion — Archive loses nothing
 The legacy path's lossy distillation: when the prompt outgrows the window, old
 messages are summarized into memory notes and leave the live history view; the
 originals never return to context.
-_Avoid_: summarize, compact -- three neighbours split this ground: Archive evicts
-losslessly to disk, Consolidation distills across turns into memory notes, Compaction
-(below) squeezes the live prompt inside one turn.
-
-**Compaction** (`agents.defaults.compaction`, `config/schema.py:CompactionConfig`):
-In-turn transcript compaction for long agentic turns, off by default: the loop's only
-in-turn shrink is then the reactive, deterministic elision it has always run on a
-provider's overflow error. Enabled, two layers join it on the same usage readings: a
-proactive layer that, once context crosses the trigger, prunes older tool-result bodies
-first (deterministic, no LLM call) and only then replaces the transcript head with an LLM
-summary while a recent tail stays verbatim; and a reactive completion that lets an
-overflow retry with nothing left to elide take the summary path instead of surfacing a
-fatal error. Summaries always run on the turn's own model and provider. Compaction
-squeezes the live prompt inside one turn and writes no memory notes.
-_Avoid_: compact for Consolidation or Archive -- those are cross-turn; this is not.
+_Avoid_: summarize, compact (ambiguous between this and Archive)
 
 **Manifest**:
 Curator's per-message metadata index for one session (tokens, snippet, relevance,
@@ -767,26 +661,13 @@ and injects into the main agent's system prompt so evicted facts stay present.
 
 ### Memory
 
-**EverOS** (`plugins-dist/everos-memory/raven_everos/`):
-Raven's default memory-backend plugin (`everos-memory`; ships enabled, works out of
-the box). Its own distribution rather than part of the raven wheel, found through the
-`raven.plugins` entry-point group. (`plugins-dist/ppt-engine/` and
-`plugins-dist/design-engine/` ship the same way -- the group's other two
-distributed members, contributing a deck-building toolchain and a visual-design
-engine rather than memory.) Provides dual-track semantic recall — the user track (episodes/profiles,
+**EverOS** (`raven/plugin/memory/everos/`):
+Raven's default bundled memory-backend plugin (`everos-memory`; ships enabled, works
+out of the box). Provides dual-track semantic recall — the user track (episodes/profiles,
 injected into the `# Memory` segment) and the agent track (skills/cases, one of
 SkillForge's three sources at RRF weight 0.9). The name refers to the external package
 [EverMind-AI/EverOS](https://github.com/EverMind-AI/EverOS); the in-tree code is only an
 adapter. The same plugin also contributes the `understand_media` multimodal-parsing tool.
-
-**Memory Engine face** (`memory_engine/__init__.py`):
-The one address the rest of the tree reaches memory machinery by: `MemoryStore`,
-`MemoryConsolidator`, the attention and behaviors parsers, the skill catalog,
-sources, router, gate and rewriter, the store pipeline. Names resolve lazily, so
-importing the face costs nothing until one is used, and `tests/test_memory_engine_face.py`
-keeps every consumer on it -- the modules underneath are the engine's to rearrange.
-_Avoid_: importing `memory_engine.consolidate.consolidator` (or any other submodule)
-from outside the engine.
 
 **SkillForge** (`memory_engine/skill_forge/`):
 A skill retrieval and injection subsystem — it fuses candidates from three sources
@@ -823,7 +704,7 @@ candidates into the weighted RRF (weight 0.85, below Local 0.96 and Everos 0.9),
 `read_skill` / `use_skill` tools do on-demand body fetch / script materialization. Replaces
 the retired "Mass" source.
 
-**PlugHub** (`market/`, package renamed from `plughub/`; wire names and RPC group keep the `plughub` spelling):
+**PlugHub** (`plughub/`):
 The plugin marketplace: a catalogue of installable integrations (`catalog.json`), and the
 transactional installer that lands one. A catalogue entry contributes pieces -- an MCP
 server, credentials, a skill -- and `install` lands them all or none. Distinct from **Skill
@@ -833,7 +714,7 @@ the RPC groups (`plughub.*` vs `skillhub.*`) are separate.
 
 **`plugin` tool** (`agent/tools/plughub.py`):
 PlugHub's agent-facing surface: `find` / `connect` / `authorize` / `list` / `remove`, over the
-same `market/connect.py` transaction the panel's `plug.*` RPC drives, called in-process. It
+same `plughub/connect.py` transaction the panel's `plug.*` RPC drives, called in-process. It
 installs catalogue entries only and accepts no credentials, so an entry that needs an API key
 is reported by field name rather than installed; an OAuth connect returns the authorization
 URL as soon as the flow mints it instead of waiting for the click, and opens no page -- the
@@ -858,9 +739,9 @@ directory under a playbook root, in three regions — a two-field frontmatter
 `yaml playbook-spec` block holding every machine field. Being under a root is
 what makes it a playbook, so no marker field can disagree with where the file
 sits — one directory, one file, no sidecar and no lifecycle fields. The library
-is two such roots layered: `raven/playbook/builtin/` is the release layer — read-only,
-resolved at that path and absent until a release adds a playbook there; the layer is
-what lets a release carry a playbook, not a bundled catalogue — while `<agent_home>/playbooks/` (override:
+is two such roots layered: `raven/playbook/builtin/` ships with the package,
+has no write path, and ships empty — the layer is what lets a release carry a
+playbook, not a bundled catalogue — while `<agent_home>/playbooks/` (override:
 `playbooks.dir`) is
 where both creation entries — `raven playbook create` and the `create_playbook`
 tool — land their product, usable on arrival (`playbooks.disabled` holds one
@@ -936,14 +817,12 @@ _Avoid_: conflating with the Proactive Engine's Predictor — Foresight is the s
 memory artifact; the Predictor is the live proactive stage.
 
 **Consolidator** (`memory_engine/consolidate/`):
-The Memory Engine component (`MemoryConsolidator`) that performs Consolidation --
+The Memory Engine component (`MemoryConsolidator`) that performs Consolidation —
 under session-token pressure it annotates evicted message chunks into Episodes,
-refreshes hot Profile sections, and (opt-in) emits Foresight. The single context
-engine declares `owns_compaction`, so a turn does not call it for token pressure;
-`/new` still archives an unconsolidated session through it.
-_Avoid_: conflating with the Curator -- the Curator builds the context window
-losslessly and archives history itself; the Consolidator is what writes long-term
-memory.
+refreshes hot Profile sections, and (opt-in) emits Foresight. The agent loop skips
+it when the Curator Context Engine is active.
+_Avoid_: conflating with the Curator — the Curator builds the context window
+losslessly; the Consolidator is the legacy lossy path that writes long-term memory.
 
 ### Knowledge
 
@@ -976,323 +855,27 @@ Moving the endpoint or rotating the key does not make a base stale.
 
 ### Plugins
 
-**Plugin** (`plugins/`):
+**Plugin** (`plugin/`):
 A component declared by a `raven-plugin.toml` manifest (`[plugin]`: `id`, `version`, optional
 `bundled` / `enabled_by_default`). It contributes capabilities via
-`[[plugin.contributes.<kind>]]` arrays — currently `memory_backends`, `tools`, `hooks`, `services`, `tool_gates` and `session_observers` —
-each naming a `factory` (`module:callable`). The host passes the user's
-`plugins.config["<id>"]` dict verbatim to the factory as `PluginContext.config`. A `hooks`
-contribution returns an `AgentHook` the assembly root appends to the loop's chain: it is how
-product code steers the turn loop from a plugin directory (`<home>/plugins`, `./.raven/plugins`
-beside a product, a root named in `plugins.dirs`, or an entry point) instead of a fork. A factory
-may decline by returning `None` (a clean opt-out, logged, never fatal), and a contributed tool
-that needs what only the assembled loop owns declares `bind_runtime(handles)` and receives the
-frozen `RuntimeHandles` grants once the loop finishes assembling -- the register-first,
-bind-later idiom `ask_user` has always used for its broker, as a first-class contribution shape;
-a binder may raise `BindDeclinedError` to be taken off the table quietly, the late-bound twin of a
-factory returning `None`. The wheel carries its own shelf of such plugins,
-`raven/plugins/bundled/` (origin `bundled`, shadowed by nothing): the playbook entry tools
-(`load_playbook` / `create_playbook`) live there and bind the loop-assembled
-`RuntimeHandles.playbook_runtime` funnel, so the loop keeps one dispatch gate, one quota and
-one announce path while the tools ride the plugin contract.
+`[[plugin.contributes.<kind>]]` arrays — currently `memory_backends` and `tools` — each naming
+a `factory` (`module:callable`). The host passes the user's `plugins.config["<id>"]` dict
+verbatim to the factory as `PluginContext.config`.
 
-**Plugin Registry** (`plugins/registry.py`):
+**Plugin Registry** (`plugin/registry.py`):
 The `PluginRegistry` discovers manifests, activates those not in `plugins.disabled` (respecting
 `enabled_by_default`), resolves each `module:callable` factory by dynamic import, and registers
 contributions into per-kind tables — deduping plugins by `id` and contributions by `name`
 (`PluginConflictError` on collision). `build_memory_backend()` / `build_tool()` construct a
 contribution with a fresh `PluginContext`.
 
-**Service** (`raven/contracts/services.py`):
-A plugin's background-service contribution (the `services` kind): a resident host runs it
-and owns it, for watching that outlives any turn (an event poller pulling keyed wakes
-forward, a queue drainer). A dumb loop on the B side of the seam: it consumes its
-`PluginContext` and, when it declares `bind_runtime`, the late-bound `RuntimeHandles`
-grants -- and never mutates the host's assembly.
-
-**ToolGate** (`raven/contracts/tool_gate.py`):
-A plugin's per-call tool-adjudication contribution (the `tool_gates` kind). Gates are cast
-over the tool registry at assembly and fixed for the generation; `adjudicate` runs after
-parameters are validated and before dispatch. A non-None verdict replaces that one call's
-result (the call does not execute), None waves it through, and a gate that raises refuses
-the call it was adjudicating -- failing open would make its bugs silent permission grants.
-Gates run in lexicographic (name, contributing plugin id) order; the first non-None
-verdict wins.
-
-**SessionObserver** (`raven/contracts/session_events.py`):
-A plugin's session-retirement contribution (the `session_observers` kind): the session
-store calls `on_session_deleted` synchronously after it has acted on a delete, from
-whichever host surface asked. The store notifies and never waits -- an observer that
-raises is logged and skipped; no veto, no repair. For a plugin keeping per-session state
-outside the session store (an allocation ledger, a provisioned directory).
-
-**Visual Domain Selector** (`plugins-dist/design-engine/raven_design/selector.py`, hook seat `raven_design/plugin/hook.py`):
-The design engine's per-turn domain router, seated on the `hooks` kind
-(`before_user_inbound`): one LLM call per user turn compares the query against
-the full bodies of the fifteen packaged domain Skills and appends a two-tier
-card block (preferred and alternative Skill ids, bodies read on demand via
-`read_skill`) below a separator on the model's view of the inbound -- the
-session record keeps the user's own words on every turn outcome. The call
-rides the conversation's own binding; `plugins.config["design-engine"]
-.visualDomainSelector.enabled` is the off switch, and a selection failure
-degrades to the full description catalog for that turn.
-
-**Admission** (`config/admission.py`, `plugins/registry.py:_admit`, `agent/tools/registry.py:admit_tool`):
-The declare-check-dispense pattern at a boundary: the owner declares its authored members
-(a manifest's `config_schema`, a tool's four authored members), the door checks the
-declaration once at entry, and dispenses a frozen result (an admitted config slice, a
-`ToolSpec`) that the machinery reads afterwards. An empty declaration keeps verbatim
-pass-through. Failures name the owner and the key at the door, not deep inside a turn.
-
-**Config-with-cargo** (`channels/contract.py:ChannelSpec.config_schema`, `raven-plugin.toml [plugin.config_schema]`):
-A cargo declares the config keys only it consumes -- types, defaults, secrecy,
-requiredness, choices, nested `fields` -- next to the code that consumes them. The
-declaration is the only truth: the door
-dispenses from it, the writer (`config/update_channels.py`) validates through the same
-door, and the declaration guard (`tests/test_channels_config_declaration.py`) pins the
-door's own contract.
-_Avoid_: "schema" alone — the config file's JSON and the cargo declaration are
-different artifacts.
-
-**Channel Socket** (`config/schema.py:ChannelSocket`):
-The host-side view of one channel section: `enabled`, `allow_from`, `workspace` --
-what the host plugs every channel into, uniform across adapters. `ChannelsConfig` is
-dynamic: any discovered adapter answers a socket view whether or not the file has its
-section (sticky access, so mutation persists), and sections indistinguishable from the
-default socket are dropped at serialization to keep the file sparse.
-_Avoid_: "channel config class" (the twelve central classes are retired); cargo fields
-read through the dispensed view, never by name on the socket.
-
-**Generation** (`core/runtime.py`, gateway):
-One assembled `RavenRuntime` serving turns -- a frozen dataclass: after construction a
-generation is sealed. What FREEZE seals is member IDENTITY -- which objects the
-generation is made of; a member's own data plane stays its own business, and exactly
-three declared doors reconcile it mid-generation after the durable truth is written
-(the agents table via `apply_agents`, the MCP server set via `apply_mcp_config`, the
-default binding via `set_default_binding` -- criterion and roster on the `RavenRuntime`
-paper, operators pinned by the door-roster guard in `tests/test_core_runtime_swap.py`).
-Every other change is generation N+1, never an in-place mutation
-(the composition phases COLLECT / ADMIT / BIND / START / FREEZE; `build_runtime` maps
-its steps to them). A config change swaps generations at a turn
-boundary: BUILD N+1 comes first (a candidate that fails to assemble leaves N serving),
-SWAP re-runs the gateway's generation wiring (spine, sinks, sentinel attach), DISPOSE
-retires N in a pinned order (`RavenRuntime.dispose`). Process-lifetime transports --
-channels, cron, the sentinel runner, the control plane, health -- survive the swap. One
-swap at a time (`SwapCoordinator`: the slot is held from BUILD until right before the new
-loop runs, and accepted swaps are rate-limited). Honest timing: the serving loop stops
-within ~1s of the request; in-flight turns get `gateway.shutdown_grace` and are then
-cancelled. Triggers: `gateway.reload` on the Control Plane (cross-platform) and SIGHUP
-(POSIX alias of `reload --force`; a signal has no reply channel).
-_Avoid_: "hot reload" (`reload.mcp` is a tool-set reconcile inside one generation, and a
-preference edit taking effect is the Live preference lane below -- neither swaps a generation);
-"restart" (the `/restart` control command, a whole-process execv).
-
-**Live preference** (`config/live.py`):
-The pull lane for config that may change its answer while a generation serves: one file,
-re-parsed only when its bytes change, keeping the last good answer through a torn write.
-The module is the roster -- every key this lane serves has a named reader there (both file
-spellings), and machinery on this lane asks the reader, never the file by key: `disabled_tool_names`,
-`disabled_playbook_names`, `exec_extra_deny_patterns`, `web_search_key`,
-`media_tool_config`, `mcp_server_configs` (feeding the turn-boundary reconcile),
-`routing_profile`, `default_model`. The boundary is the module docstring's rule: anything
-whose change implies WORK rather than a different answer (constructing a provider,
-an MCP handshake, moving a workspace) keeps its apply path -- a door, the pool's
-fingerprint cache, or the generation swap. Timing is asymmetric by design: a revocation
-binds the next read (a tightened deny pattern gates the very next tool call), while an
-addition to the model's tool array lands on the next turn -- `ToolRegistry.turn_scope`
-freezes both registry membership and the withheld set at turn entry, because the array
-is the prompt-cache prefix and must not move between two model calls of one turn.
-_Avoid_: reading `config.json` keys ad hoc outside this module; treating a live
-preference as a door (doors reconcile members after a durable write; this lane never
-touches member identity).
-
-**Wire Schema** (`rpc-schema/openrpc.json` at repo root):
-The hand-maintained OpenRPC contract for the terminal dialect every interactive client
-speaks (TUI, the served page, ACP). Cross-language neutral ground, machine-read by both
-frontends' codegen scripts, the Python match guards, CI and a pre-commit drift hook --
-which is why it lives at the root and not inside any one consumer (moved up from
-`ui-tui/` by ce526ad5: a shared contract is not named after one of its clients). The
-gateway control plane has no OpenRPC document: its only client is another raven process.
-_Avoid_: treating it as a paper -- papers describe Python seams; this is a wire artifact
-consumed as cargo by tooling in two languages.
-
-**Control Plane** (`rpc/control.py` server, `gateway/live_probe.py` client):
-The gateway daemon's window for other raven processes: runtime facts only it can answer
-(`gateway.channels.live`, `.qr`, `gateway.status`) and host commands only it can execute
-(`gateway.channels.start`, `gateway.reload`, `gateway.shutdown`). Loopback WebSocket,
-per-boot token as the first frame, endpoint published in the gateway lock (0600);
-process-lifetime with the dispatcher registered once -- nothing on it depends on the
-generation. The charter is the whole vocabulary, pinned by `tests/test_rpc_control.py`;
-never on it: turn or chat streams, config writes. The server sits on the surface side
-because the daemon package is inner and may not import `raven.rpc`.
-_Avoid_: "web channel" / `web_rpc` (retired: the ui-webui dialect this grew out of).
-
-**Kernel** (`spine/` + `contracts/` + `tracing/` + `home.py`):
-The shippable core: the L0 spine, the L1 papers, tracing (whose only import-time edge
-into the kernel is the paper's instrument decorator), and the address resolver they all
-need. Machine-enforced by the "the kernel stands alone" import-linter contract in
-pyproject.toml, which carries no exceptions; the raven-core wheel is this set as a build
-artifact: `make build-core` runs scripts/build_core_wheel.py, whose roster is read from
-that same contract, and tests/integration/test_kernel_wheel_smoke.py proves the wheel
-stands alone in a clean venv.
-
-**Home** (`home.py`):
-Where raven keeps everything: `RAVEN_HOME` or `~/.raven`, and the config file inside it,
-with an override a second instance can set. Kernel rather than config, because the kernel
-has to find its own settings -- a core that could not locate `config.json` without the
-config shelf would not be the closure the wheel claims -- and because the answer steers
-the installer, the node runtime lookup, the trace directory, the cron store and the serve
-state file alike. `config/loader.py` re-exports all three names, so every existing caller
-reads them where it always did.
-_Avoid_: resolving `RAVEN_HOME` again anywhere else -- that is how two directories become
-the answer to one question.
-
-**PathPolicy** (`contracts/path_policy.py`):
-The disk-layout paper: the home rule's vocabulary (`HOME_ENV_VAR`,
-`DEFAULT_HOME_DIRNAME`, `CONFIG_FILENAME`) and the workspace default sentinel,
-declared once so neither the tree nor the vendored launchers (which re-derive
-them by hand) drift. Constants only, deliberately: path-escape checking is the
-tools' security boundary, and a callable protocol joins when a consumer types
-against it.
-_Avoid_: hardcoding `~/.raven`, `config.json` or the workspace sentinel string
-outside this paper and its implementers.
-
-**Historical Plans** (`docs/plans/`):
-An archive, not a promise: a plan describes the tree as it stood on its own
-date, and holding one to today's layout would make it lie about that date. A
-runnable snippet inside one is therefore not a public seam -- the public surface
-the vendored products pin is read out of `subagents/*/install.py`, `install.sh`
-and the README by `tests/test_external_consumer_surface.py`, and the living-doc
-pointer guard deliberately skips this directory.
-_Avoid_: updating an old plan to match a rename -- fix the living document that
-cites it instead, or leave it as the record it is.
-
-**Span Vocabulary** (`observability/`):
-What a raven span means -- the attribute extractors, and the usage block they report --
-as against the machinery that opens and closes one, which is kernel. The split is what
-lets the kernel stand alone: deciding that an LLM span carries its routing backend means
-splitting a model id (`providers/registry.py`), and putting a number on a usage block
-means pricing tokens (`token_wise/pricing.py`), so a kernel that held the vocabulary
-would reach into two shelves for it. An instrumented site passes its extractor as an
-argument (`@trace.instrument("llm.call", extract=semconv.llm_call)`), so the extractor
-travels with the caller and the kernel never names one.
-_Avoid_: "telemetry" for either half -- it names neither the machinery nor the meaning.
-
-**Layer Seats** (pyproject.toml `[tool.importlinter]` + `tests/test_l4_entrances.py`):
-Where every package sits, as the machine enforces it. Inner (may not import a surface):
-the shelves and engines the contract lists as sources (`tracing` among them -- a kernel
-member, seated inner here as well so every package appears in one roster), `config` and
-`utils` and `i18n` (cross-cutting leaves), `mcp`, `playbook`, `knowledge`, `skill_hub`, `trajectory`,
-`eval_engine` and `proactive_engine` (L3 shelf members -- proactive_engine originates
-turns through its schedulers and sentinel but is an engine the loop and the assembly root
-consume, not a transport), and `core` (the L2 assembly root). `templates` is packaged data
-and takes no seat. Surfaces: `cli`, `rpc`, and `acp` (an entrance: Raven serving as an
-agent for another host). `browser` and `importer` are seated inner (feature
-libraries consumed by surfaces, importing none themselves -- the edge is watched
-by the contract now, not by a ruling note). `evolver` is not a seat at all: it left the
-package for the repo-level `evolver/` tool (outside the wheel) that drives raven as a library,
-and a fifth import-linter contract keeps the runtime from importing it back. `agents/` is the
-same kind of non-seat: repo-level product definitions (the A/B pilots against the frozen
-`subagents/`) that consume installed raven over `raven acp`, with a sixth contract keeping
-the runtime out of them — the wheel carries the tree as data (`raven/agents`, mapped by
-`hatch_build.py`) for the roster's file-level discovery, which imports nothing from it;
-the directory name is provisional by ruling. One ruled edge: `trajectory` (L3)
-reaches `config.admission` for the door vocabulary and builds a loop by hand for replay --
-legal, because it is a harness over recorded runs, not an entrance. One package holds two
-seats: in `agent/`, `agent/loop` is the L2 harness shell every entrance runs, and its
-siblings -- `tools`, `subagent`, `context`, `hook`, `personalizer`,
-`workdir` -- are L3 cargo the loop consumes; the "cargo does not import the loop shell"
-import-linter contract keeps the two seats apart in the shared directory, which is why
-the package is not split physically (ruled 2026-08-30). The one exception the target
-tree always named: the ACP client family -- the client, the `acp_agent` backend that
-speaks it, and the `acp_dialects` that translate other vendors' tool records -- moved
-out to the top-level `acp_client/` shelf (2026-08-31), which joined the inner-layers
-seat list and stays under the cargo contract.
-`acp_client/` is named for its side of ACP (Raven driving somebody else's agent);
-`acp/` is the other side, the entrance.
-
-**Surfaces law** (ruled 2026-08-31):
-The three entrances relate asymmetrically. A SERVED surface (`rpc`, `acp`)
-never imports the launcher or a sibling surface's insides -- two import-linter
-contracts pin `{rpc, acp} -x-> cli` and `rpc -x-> acp` with zero exceptions.
-The LAUNCHER direction (`cli -> rpc/acp`) is sanctioned by the existing axiom
-that an entrance brings its own transport-side wiring: the cli is the entrance
-that assembles and hosts the others. What a served surface genuinely needs
-from the cli arrives by registration (`rpc/cli_socket.py` carries the console
-feature's command table; `rpc/serve_control.py` is owned by the reading side
-and armed by the host). The one remaining directed edge -- acp hosting an rpc
-stack over its translator -- is pinned to the single `raven.rpc.bootstrap`
-facade module by the roster guard in `tests/test_l4_entrances.py`.
-
-**Updates** (`updates/`):
-The install's own lifecycle as an inner feature library (the browser/importer
-pattern): release lookup and version keys, the upgrade plan and detached
-handoff (`upgrade`), the startup update nudge (`update_notice`), the beta
-channel pointer (`beta_channel`), and the install-integrity record
-(`install_guard`). Consumed by the cli (which keeps only the `raven upgrade`
-typer shell) and by `rpc.methods.system` -- the largest chunk of the
-rpc-imports-cli edges retired by moving it inward (2026-08-31).
-
-**Assembly Root** (`core/`):
-The package that composes a running agent out of parts: one `*_stack` builder per assembly
-concern, and `runtime.build_runtime` as the one door every entrance assembles through --
-an entrance brings its transport-side wiring (`TurnPolicy`, `HostWiring`) and takes back a
-`RavenRuntime`; deriving a cargo bundle by hand in an entrance is the regression
-`test_cli_agent_loop_parity.py` exists to catch. One deliberate bypass: `trajectory/replay.py`
-builds a loop by hand against a recorded run (fake provider, replaced registry) and drives it
-directly; it is a replay harness, not an entrance, and `test_cli_agent_loop_wiring.py` lists it.
-
-**Paper** (`contracts/`):
-A declared shape the layers hold each other to -- the shapes a shelf implements against,
-the asking capabilities a tool types against (`contracts/asking.py`). The turn contract is
-not a paper: it is spine's (`spine/turn.py`).
-Papers export declared members only and
-import no machinery -- the stdlib, pydantic, the other papers and the spine, nothing else
-(`TYPE_CHECKING` blocks exempt). Two promise tiers, stamped per module via `__tier__`:
-`contract` (frozen for every loop) and `factory_loop` (versioned with the factory loop).
-Both rules are enforced by `tests/test_contracts_two_tier_ledger.py`.
-The contract tier is versioned: `CONTRACTS_VERSION` (`contracts/__init__.py`) moves
-whenever a contract-tier paper's declared surface changes shape (never for prose);
-the surface digest pinned in the same test file makes a silent change a red gate.
-
 ### Security & Access
 
 **AUTH** (`auth/`):
-Authentication & authorization primitives (e.g. allowlist). Classified as a
-cross-cutting mechanism: a leaf consumed by inner layers and cargo, never the
-other way (enforced by the layer contracts in `pyproject.toml`).
+Authentication & authorization primitives (e.g. allowlist).
 
-**Security** (`security/`):
-The address vocabulary (`hosts.py`: what a host string denotes, in every
-spelling) that the outbound policy (`network.py`: default-deny fetchability, the
-guarded per-hop fetch), the market's vetting (`market/vetting.py`) and the browser's navigation
-policy all read; and prompt-injection fences (`trust.py`). A cross-cutting
-mechanism and a member of the channels' shared-services shelf -- cargo may
-depend on it (dingtalk and qq do). Same leaf rule as `auth`.
-
-**Templates** (`templates/`):
-Packaged data assets, zero Python: read as package data (`utils/workspace.py`)
-and shipped by the wheel, the per-language prompt templates under
-`templates/prompts/<language>/` among them. An asset directory, not a code
-package -- it takes no layer assignment.
-
-**I18n** (`i18n/`):
-User-facing text in the user's language. `t(text, **arguments)` translates by
-the English source text (gettext style, so a message id is the message), `t_in`
-does the same in a language the content rather than the UI decides, and
-`prompt(name)` loads a model-facing template from `templates/prompts/`. The
-Chinese catalog is `zh.py`; `zh_lexicon.py` holds Chinese language *data* an
-engine consults (cue words, punctuation classes, the legacy attention headers),
-which is not translation. The language is process state a host sets: the
-onboarding wizard from its first screen, every other entrance from
-`config.language`. A cross-cutting leaf, seated inner: `tests/test_i18n_boundary.py`
-keeps Chinese literals out of every other module.
-_Avoid_: calling `zh_lexicon` a catalog -- one is what raven says, the other is
-what raven recognises.
-
-**Browser** (`browser/`):
-Browser automation (`driver.py`) and its outbound policy (`policy.py`).
-Consumed by surfaces only; a surface-side feature library like `importer`.
+**SECURITY** (`security/`):
+Network access control (e.g. `network.py`).
 
 ### Execution & Evaluation
 
@@ -1301,10 +884,8 @@ Isolated command execution (microVM / boxlite); owns the debug server and VM lif
 
 **EvalEngine** (`eval_engine/`):
 The L3 evaluation engine: task judging and cognitive coordination, implemented as three
-`AgentHook` instances (`BeforeIterationHook`, `AfterIterationHook`, `ToolAuditHook`).
-Buildable (`core/eval_stack.py`) but unwired today: no production path constructs an
-EvalEngine or passes its hooks to the loop -- activation is a pending ruling, and this
-entry says so rather than describing wiring that does not exist.
+`AgentHook` instances (`BeforeIterationHook`, `AfterIterationHook`, `ToolAuditHook`)
+wired into `AgentLoop` via `CompositeHook`.
 
 **EvalJudge** (`eval_engine/judge/`):
 The single-call LLM judge behind the EvalEngine's task-completion check: it compares the
@@ -1414,28 +995,6 @@ directories (`SessionManager`'s `sessions/<group>/`), the Skill Hub cache (`skil
 _Avoid_: "workspace" unqualified — this term used to cover both agent-wide and per-session
 storage; it now names only the agent-wide tree, so an unqualified "workspace" should be
 Agent home or Session workspace, whichever is meant.
-
-**Product state root** (`raven/config/product_render.py:product_state_root`):
-Where a product served over ACP keeps its WORK -- repos, instance buckets, flow stores,
-rendered configs -- never in the product's own folder: default
-`<raven home>/workspace/subagent_sessions/<product>`, overridden by the product's own
-state-root variable (the `raven-` prefix drops, dashes become underscores, the rest
-upper-cases: `raven-code` answers to `CODE_STATE_ROOT`). The engine's own Agent home is
-deliberately NOT here -- it goes through the Product ACP home (below). Work where the
-work is, the home in the data directory.
-
-**Product ACP home** (`raven/config/product_render.py:product_acp_home`):
-The engine's own Agent home for a product served over ACP -- never inside the host's
-Agent home. The host hands a session's working directory to whatever it dispatches to,
-and a raven engine refuses a working directory that CONTAINS its own home (the per-turn
-checkpoint runs `add -A` over the working directory and would commit its config and
-provider tokens into a shadow repository) -- so homing an engine under the host Agent
-home made every dispatch fail while capability probing still passed. Default
-`<raven home>/subagent_sessions/<product>/acp`, checked against the CONFIGURED host
-Agent home (`agents.defaults.workspace`); when the default lands inside it, the engine
-is homed beside the host home instead, tagged per instance. A placement must also be
-creatable, and a refusal names the product's `*_ACP_HOME` override variable, which wins
-outright. The Product state root is untouched by all of this.
 
 **Subagent history** (`raven/agent/subagent/history.py`):
 The per-session audit trail of every delegation to a Subagent, inside that session's
@@ -1605,7 +1164,7 @@ _Avoid_: conflating it with the roster's `live-progress` tag, which says a trans
 its *intermediate work* (acp only) and is advertised to the model. Reply streaming is
 invisible to the model and is about the answer itself.
 
-**Capability Snapshot** (`raven/acp_client/capabilities.py`):
+**Capability Snapshot** (`raven/agent/acp/capabilities.py`):
 What one ACP agent reported at its last handshake - protocol version, whether it can
 resume / fork / load a session, whether it takes a Steer (`canSteer`, from
 `agentCapabilities._meta`), its models and auth methods - recorded by a Test and read
@@ -1622,7 +1181,7 @@ claim no measurement backs. The `/subagents` row for a stale entry asks for a te
 _Avoid_: reading it as a liveness check - it is one measurement, taken at Test time, not a
 statement about the agent right now.
 
-**Unattended Approval** (`raven/acp_client/permissions.py`):
+**Unattended Approval** (`raven/agent/acp/permissions.py`):
 How raven answers an ACP Subagent's `session/request_permission`: it approves, choosing
 from the options the agent offered by their protocol `kind` (`allow_always`, then
 `allow_once`) and never by `optionId`, which is the agent's own vocabulary. There is no
@@ -1636,7 +1195,7 @@ Distinct from what raven still refuses: `fs/read_text_file` and its siblings are
 unsupported in `CLIENT_CAPABILITIES`, and a handler returning `UNHANDLED` is how they stay
 that way.
 
-**Steer** (`raven/acp_client/protocol.py`, `raven/agent/subagent/activity.py`,
+**Steer** (`raven/agent/acp/protocol.py`, `raven/agent/subagent/activity.py`,
 `raven/agent/subagent/manager.py`):
 A person's words merged into a Subagent's turn while it is still running, read by the agent
 before its next model call, as opposed to a prompt that opens a turn. ACP 1.20.0 has no such
@@ -1656,7 +1215,7 @@ _Avoid_: "inject" for the whole feature - `injected` is one status of a steer, a
 `BusyPolicy.INJECT` is a different thing (a turn queued behind the running one);
 "interrupt" - a steer does not stop the turn.
 
-**Unprompted Turn** (`raven/acp_client/unprompted.py`):
+**Unprompted Turn** (`raven/agent/acp/unprompted.py`):
 A turn an ACP Subagent ran with nobody having asked - an on-call agent waking on its own
 schedule is the case it exists for. Every other sink on the session router is attached for
 one run and detached at its end, so these frames used to be dropped as a late usage report;
@@ -1671,7 +1230,7 @@ is the fallback ending.
 _Avoid_: "background turn" - nothing about it is backgrounded; it runs and streams like any
 other turn, and only its *origin* differs.
 
-**Elicitation Pass-Through** (`raven/acp_client/elicitor.py`):
+**Elicitation Pass-Through** (`raven/agent/acp/elicitor.py`):
 How an ACP Subagent's `elicitation/create` reaches the user. Form mode only, and advertised
 as only that: `url` elicitation is for out-of-band credential and payment collection, so
 advertising it would let a sub-agent send the reader to an address of its own choosing. The
@@ -1695,7 +1254,7 @@ by default and declines when a dispatch has no reachable user. **Question Autofi
 one thing that answers on this path without asking, and only from what the turn already
 established.
 
-**Ask-User Round Trip** (`raven/acp_client/ask_user.py`):
+**Ask-User Round Trip** (`raven/agent/acp/ask_user.py`):
 How an ACP Subagent's question reaches the user when it does not use `elicitation/create`.
 Raven-X routes its deep-research clarify through an extension of its own: the question
 leaves as a `session/update` whose `sessionUpdate` is `ask_user_request`, and the answer
@@ -1719,7 +1278,7 @@ _Avoid_: reading a dropped frame as a no-op. The agent blocks its tool call on t
 ten minutes before falling back to the question's default, so not answering is the stall this
 exists to prevent, not an abstention.
 
-**Question Autofill** (`raven/acp_client/autofill.py`, `raven/acp_client/resolver.py`):
+**Question Autofill** (`raven/agent/acp/autofill.py`, `raven/agent/acp/resolver.py`):
 The step in which raven answers a Subagent's question from the turn's own context instead
 of putting it to the user. It sits in front of both question routes -- **Elicitation
 Pass-Through** and **Ask-User Round Trip** -- and decides per form rather than per
@@ -1743,7 +1302,7 @@ fail-safe paths return (timeout, cancellation, an undeliverable question, connec
 and autofill never sets one, so a question it deferred and nobody answered is the same
 empty skip it always was.
 
-**Frame Journal** (`raven/acp_client/journal.py`):
+**Frame Journal** (`raven/agent/acp/journal.py`):
 Every frame of one ACP connection, both directions, in wire order, on disk. Distinct from
 the run transcript, which holds the `session/update` notifications routed to one session -
 the reading of a delegated run, and not everything that crossed the wire. Four classes of
@@ -1802,7 +1361,7 @@ agreement.
 _Avoid_: reading a step type as a raven tool name - it is the endpoint's, and **Tool
 Vocabulary** maps it.
 
-**ACP Dialect** (`raven/acp_client/acp_dialects/`):
+**ACP Dialect** (`raven/agent/subagent/acp_dialects/`):
 How one ACP adapter's tool-call frames are read into a record: the adapter's own name for the
 tool at the finest grain the transport gives - `_meta.claudeCode.toolName` where the adapter
 sends one, the spec's `kind` otherwise - the subject to show beside it, and output with the
@@ -1856,7 +1415,7 @@ claude-agent-acp name does too; a renderer answers with one of three verb tables
 vocabulary keyed the same way throughout.
 _Avoid_: applying it at write time - that is what this replaced.
 
-**Closing Message** (`raven/acp_client/acp_agent.py`, `activity.py`):
+**Closing Message** (`raven/agent/subagent/backends/acp_agent.py`, `activity.py`):
 What a delegated run said *after its last tool call*, as distinct from its whole reply. An
 ACP turn may narrate as it works - measured on codex-acp: a plan, then a progress note
 before each of three calls, then the report - and the run's returned answer joins all of it,
@@ -1882,7 +1441,7 @@ the record's directory - a task id no reader of a *conversation* ever sees.
 _Avoid_: reading the absence of live rows as "the turn ended" - a transport with no per-step
 visibility reports none for the whole of every turn.
 
-**Stop Reason** (`raven/acp_client/acp_agent.py`):
+**Stop Reason** (`raven/agent/subagent/backends/acp_agent.py`):
 What an ACP agent reports at the end of a turn. Only `end_turn` means it finished; every
 other value (`cancelled`, `max_tokens`, `refusal`, ...) leaves a reply that reads complete
 and is not. Such a reply is kept and carries an appended `[raven]` notice naming the stop
@@ -1924,31 +1483,6 @@ _Avoid_: it is not a synonym for a Python exception. A raised exception is only 
 of the two routes into this status, and `status[node.id] = "exception"` sits next to
 `except Exception as exc` in `_run_node` for that reason.
 
-**outbox** (`raven/agent/subagent/dag_adjudication.py`) -- a foreground DAG run's tray of
-events: its nodes' exception reports and its final result, waiting for the tool call
-that is awaiting the run. One per foreground run, in memory beside the run's
-adjudication desk. The desk carries decisions from the main agent to the run; the
-outbox carries reports from the run to the main agent. While the run is bound the
-outbox hands or buffers a question and drops a notification -- the blocking call is
-still there and the run's summary is what it will be handed, so announcing the same
-news again would put an unanswerable question beside it -- and never announces; once
-released it re-sends what is unanswered and announces later events as turns, both
-kinds.
-_Avoid_: "mailbox" -- the lane's inject mailbox is a different object with a different
-reader.
-
-**bound / released** (foreground DAG run; `raven/agent/subagent/dag_tool.py`,
-`raven/agent/loop/main.py`) -- a `background: false` run is *bound* while the turn that
-started it is still running, and *released* once that turn has ended, however it ended
-(`AgentLoop.run_turn` releases every run the conversation's turn still binds). A bound
-run's suspended nodes wait without a deadline and its outbox buffers; a released run
-behaves as a backgrounded one: the adjudication window is clocked from the release, the
-unanswered reports are re-sent as turns, a report the turn took but never decided
-counting as unanswered (they are dropped instead when the turn was cancelled), and later
-events announce -- notifications as well as questions, since no blocking call remains for
-a run's summary to reach. `resolve_dag_node` blocks only on a bound run.
-_Avoid_: "orphaned" -- a released run is not lost, it has changed lane.
-
 **Working directory** (`raven/agent/workdir.py`):
 The directory a turn reads and writes files in — shared by the session's leader `AgentLoop`
 and every Subagent it spawns, and resolved per turn by `WorkdirResolver.resolve()`.
@@ -1956,7 +1490,8 @@ and every Subagent it spawns, and resolved per turn by `WorkdirResolver.resolve(
 checkout you started it from (Workdir policy `LAUNCH_DIR`); intermediate artifacts it
 produces there go under that directory's `.raven/` (the shadow-git repo lives at
 `.raven/shadow.git`). `raven gateway` gives each channel one directory (Workdir policy
-`PER_CHANNEL`), set by `channels.<name>.workspace`, defaulting to `<agent home>/../tmp/<channel>`, i.e. `~/.raven/tmp/<channel>`.
+`PER_CHANNEL`), set by `channels.<name>.workspace` — `gateway.web.workspace` for the web
+channel — and defaulting to `<agent home>/../tmp/<channel>`, i.e. `~/.raven/tmp/<channel>`.
 Overridable per invocation via `--workspace`/`-w` (the working directory itself on
 tui/agent, the root the per-channel defaults hang off on gateway), or per running gateway
 session from the web UI, persisted in `Session.metadata["workdir"]` and taking effect on
@@ -1968,7 +1503,7 @@ _Avoid_: "session workspace" — the gateway's unit is the channel, not the conv
 _Avoid_: confusing with Agent home — when `restrict_to_workspace` fences tools, it admits
 both roots, but they stay two different directories with different lifetimes.
 
-**Project slug** (`project_slug()`, `raven/utils/paths.py`):
+**Project slug** (`project_slug()`, `raven/utils/helpers.py`):
 A launch directory flattened into one filesystem-safe segment, following the convention
 Claude Code uses for `~/.claude/projects/`: every run of non-alphanumeric characters becomes
 a single `-` (per character, not per run), and past 200 characters the slug is truncated with
@@ -1992,7 +1527,7 @@ under `agent_memory/profile/` (soul.md, agent.md) and `user_memory/profile/` (us
 `HEARTBEAT.md` / `TOOLS.md` stay at the Agent home root.
 
 **Onboarding** (`raven onboard` → `run_wizard`):
-The first-run wizard (LLM provider → sandbox → channel → EverOS memory → web access → sub-agents → cold-start import) that also seeds
+The first-run wizard (LLM provider → sandbox → channel → EverOS memory → web tool keys → sub-agents → cold-start import) that also seeds
 Agent home via `sync_workspace_templates()`; gated at startup by `ensure_configured_or_onboard()`.
 
 **Bootstrap Files**:

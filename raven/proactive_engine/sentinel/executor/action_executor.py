@@ -25,7 +25,6 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
-from raven.i18n import t
 from raven.proactive_engine.sentinel.types import (
     ActionExecutionResult,
     PendingDecision,
@@ -164,7 +163,7 @@ class ActionExecutor:
         return ActionExecutionResult(
             status="ok",
             exec_kind="reply",
-            output_text=t("Started for you: {title}", title=option.title),
+            output_text=f"已为您发起：{option.title}",
             side_effects=[f"injected user prompt ({len(prompt)} chars)"],
         )
 
@@ -228,7 +227,7 @@ class ActionExecutor:
         return ActionExecutionResult(
             status="ok",
             exec_kind="routine_confirm",
-            output_text=t("Habit confirmed: {title}", title=option.title),
+            output_text=f"已确认习惯：{option.title}",
             side_effects=side_effects,
         )
 
@@ -277,7 +276,7 @@ class ActionExecutor:
         return ActionExecutionResult(
             status="ok",
             exec_kind="tool",
-            output_text=output if output else t("Ran {tool}", tool=tool_name),
+            output_text=output if output else f"已执行 {tool_name}",
             side_effects=[f"called tool {tool_name}({args})"],
         )
 
@@ -316,7 +315,7 @@ class ActionExecutor:
         return ActionExecutionResult(
             status="ok",
             exec_kind="spawn",
-            output_text=ack or t("Dispatched a background task: {title}", title=option.title),
+            output_text=ack or f"已派出后台任务：{option.title}",
             side_effects=[f"spawned subagent for: {task_description[:80]}"],
         )
 

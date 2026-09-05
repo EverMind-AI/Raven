@@ -55,7 +55,7 @@ def _isolate_logging(tmp_path, monkeypatch):
     # redirect_loguru_to_file resolves the log dir via get_logs_dir() →
     # get_config_path(); clear any path a prior test pinned so it falls back
     # to the tmp HOME instead of leaking to a real instance dir.
-    monkeypatch.setattr("raven.home._current_config_path", None)
+    monkeypatch.setattr("raven.config.loader._current_config_path", None)
 
     root = logging.getLogger()
     saved_root_handlers = list(root.handlers)

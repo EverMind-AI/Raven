@@ -1,10 +1,9 @@
 """Tests for raven.utils.atomic_io."""
 
 import multiprocessing
-import os
 from pathlib import Path
 
-from raven.utils.atomic_io import atomic_replace, atomic_update, locked_append, write_transaction
+from raven.utils.atomic_io import atomic_replace, locked_append
 
 WRITERS = 2
 CALLS_PER_WRITER = 50
@@ -94,102 +93,3 @@ def test_helpers_work_cross_platform(tmp_path: Path):
     locked_append(path, ["x"])
     atomic_replace(path, "y\n")
     assert path.read_text(encoding="utf-8") == "y\n"
-
-
-def test_atomic_replace_preserves_the_targets_mode(tmp_path: Path):
-    """os.replace swaps the inode: a config chmod 600 (api keys) must not come
-    back world-readable after a save — the leak _persist_migrations documented
-    and five sibling _write_atomic copies never fixed."""
-    path = tmp_path / "config.json"
-    path.write_text("{}", encoding="utf-8")
-    os.chmod(path, 0o600)
-
-    atomic_replace(path, '{"k": 1}')
-
-    assert (path.stat().st_mode & 0o777) == 0o600
-
-
-def test_atomic_update_concurrent_increments_lose_nothing(tmp_path: Path):
-    """The locked RMW transaction is what the unlocked tmp+replace sites lack:
-    two writers read-modify-write concurrently and neither update is swallowed."""
-    import threading
-
-    path = tmp_path / "counter.txt"
-
-    def bump(_: int) -> None:
-        def update(current: str | None) -> tuple[str, None]:
-            value = int(current or "0")
-            return str(value + 1), None
-
-        atomic_update(path, update)
-
-    threads = [threading.Thread(target=bump, args=(i,)) for i in range(16)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-
-    assert path.read_text(encoding="utf-8") == "16"
-
-
-def test_atomic_replace_with_explicit_mode_holds_from_creation(tmp_path: Path):
-    """Secret-bearing files (serve.json's token) need their mode from the very
-    first byte; an explicit mode wins over both umask and a leftover tmp's
-    stale wide mode."""
-    path = tmp_path / "serve.json"
-    stale_tmp = tmp_path / "serve.json.tmp"
-    stale_tmp.write_text("crashed writer residue", encoding="utf-8")
-    os.chmod(stale_tmp, 0o644)
-
-    atomic_replace(path, '{"token": "s3cret"}', mode=0o600)
-
-    assert (path.stat().st_mode & 0o777) == 0o600
-    assert path.read_text(encoding="utf-8") == '{"token": "s3cret"}'
-
-
-def test_write_transaction_is_reentrant_for_the_helpers(tmp_path: Path):
-    """atomic_replace inside write_transaction on the same path must not
-    deadlock on the sidecar (a second flock in one process blocks)."""
-    path = tmp_path / "reg.json"
-    path.write_text("old", encoding="utf-8")
-
-    with write_transaction(path):
-        current = path.read_text(encoding="utf-8")
-        atomic_replace(path, current + "+new")
-
-    assert path.read_text(encoding="utf-8") == "old+new"
-    # The lock is genuinely released afterwards: a plain helper call proceeds.
-    atomic_replace(path, "after")
-    assert path.read_text(encoding="utf-8") == "after"
-
-
-def _probe_lock(lock_path_str: str, q) -> None:
-    from raven.utils.portable_lock import LockTimeoutError, file_lock
-
-    try:
-        with file_lock(Path(lock_path_str), blocking=False):
-            q.put("acquired")
-    except LockTimeoutError:
-        q.put("blocked")
-
-
-def test_write_transaction_excludes_other_processes(tmp_path: Path):
-    """Deterministic mutual exclusion: while a transaction is held, another
-    process's non-blocking acquire is refused — the lost-update window between
-    a registry's read and its flush is closed, not narrowed."""
-    path = tmp_path / "reg.json"
-    lock_path = path.parent / ".lock" / (path.name + ".lock")
-
-    with write_transaction(path):
-        q = multiprocessing.Queue()
-        proc = multiprocessing.Process(target=_probe_lock, args=(str(lock_path), q))
-        proc.start()
-        verdict = q.get(timeout=10)
-        proc.join(10)
-    assert verdict == "blocked"
-
-    q2 = multiprocessing.Queue()
-    proc2 = multiprocessing.Process(target=_probe_lock, args=(str(lock_path), q2))
-    proc2.start()
-    assert q2.get(timeout=10) == "acquired"
-    proc2.join(10)

@@ -18,8 +18,8 @@ from __future__ import annotations
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
-from raven.contracts.tool import Continuation, Tool, ToolOutput, ToolResult
+from raven.agent.tools.base import Continuation, Tool, ToolOutput, ToolResult
+from raven.providers.base import LLMResponse, ToolCallRequest
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
 

@@ -121,7 +121,7 @@ def rig(tmp_path, monkeypatch):
     written: list[dict] = []
     translator = UpdateTranslator(emit=written.append)
     # A stand-in for the engine that carries only what the ACP layer reads from
-    # it: the shared session manager. ``manager_for`` builds a throwaway one
+    # it: the shared session manager. ``_manager_for`` builds a throwaway one
     # when handed None, so a test that passed None would assert nothing about
     # where the working directory ends up.
     engine = SimpleRig(sessions=SessionManager(tmp_path / "ws"))
@@ -701,27 +701,6 @@ class TestSessionDelete:
 
         assert rig.engine.sessions.peek(session_id) is None
 
-    async def test_the_delete_face_reaches_the_shared_stores_observers(self, rig):
-        """[code seam-2] Every delete face resolves to the loop's shared
-        manager, so an observer attached there hears an ACP delete too --
-        with the removal outcome (paper: contracts/session_events.py)."""
-        heard: list[tuple[str, bool]] = []
-
-        class _Probe:
-            def on_session_deleted(self, session_key: str, removed: bool) -> None:
-                heard.append((session_key, removed))
-
-        session = rig.engine.sessions.get_or_create("acp:observed")
-        session.add_message("user", "hi")
-        rig.engine.sessions.save(session)
-        rig.engine.sessions.set_delete_observers((_Probe(),))
-        await rig.handshake()
-
-        response = await rig.call("session/delete", {"sessionId": "acp:observed"})
-
-        assert response["result"] == {}
-        assert heard == [("acp:observed", True)]
-
 
 class TestSessionInfoUpdate:
     async def test_a_change_of_title_is_announced_after_the_turn(self, rig):
@@ -885,7 +864,7 @@ class TestSessionList:
         def _explode(loop, config):
             raise OSError("session directory is gone")
 
-        monkeypatch.setattr("raven.rpc.methods.session.manager_for", _explode)
+        monkeypatch.setattr("raven.rpc.methods.session._manager_for", _explode)
         assert load_config() is not None
 
         response = await rig.call("session/list", {})
@@ -1567,66 +1546,3 @@ class TestErrorPassthrough:
 
             validate_outbound(response)
             assert json.dumps(response), "an error frame must be serialisable; data carries arbitrary values"
-
-
-class TestSessionModes:
-    """session/set_mode and the modes object on session responses."""
-
-    def _declare(self, rig, monkeypatch):
-        from raven.acp.modes import AcpModeProfile, SessionModes
-
-        modes = SessionModes(
-            {
-                "fast": AcpModeProfile(id="fast", name="Fast", description="bounded", max_iterations=None),
-                "deep": AcpModeProfile(
-                    id="deep", name="Deep", description="longer", max_iterations=60, overlay={"k": 10}
-                ),
-            },
-            default="fast",
-        )
-        rig.methods._modes = modes
-        applied: list[tuple] = []
-        rig.engine.set_session_policy = lambda key, **kw: applied.append((key, kw))
-        return modes, applied
-
-    async def test_without_declared_modes_set_mode_stays_not_implemented(self, rig):
-        from raven.acp.modes import SessionModes
-
-        rig.methods._modes = SessionModes({}, default=None)
-        await rig.handshake()
-        sid = await rig.new_session()
-        response = await rig.call("session/set_mode", {"sessionId": sid, "modeId": "deep"})
-        assert response["error"]["code"] == protocol.METHOD_NOT_FOUND
-
-    async def test_session_new_carries_the_mode_state(self, rig, monkeypatch):
-        self._declare(rig, monkeypatch)
-        await rig.handshake()
-        response = await rig.call("session/new", {"cwd": str(rig.tmp_path / "project"), "mcpServers": []})
-        state = response["result"]["modes"]
-        validate_def("SessionModeState", state)
-        assert state["currentModeId"] == "fast"
-        assert [m["id"] for m in state["availableModes"]] == ["fast", "deep"]
-
-    async def test_set_mode_switches_and_applies_the_policy(self, rig, monkeypatch):
-        modes, applied = self._declare(rig, monkeypatch)
-        await rig.handshake()
-        sid = await rig.new_session()
-        response = await rig.call("session/set_mode", {"sessionId": sid, "modeId": "deep"})
-        assert response["result"] == {}
-        assert modes.current(sid) == "deep"
-        assert applied[-1][0] == sid
-        assert applied[-1][1] == {"max_iterations": 60, "mode": "deep", "mode_overlay": {"k": 10}}
-
-    async def test_unknown_mode_is_invalid_params_naming_the_catalogue(self, rig, monkeypatch):
-        self._declare(rig, monkeypatch)
-        await rig.handshake()
-        sid = await rig.new_session()
-        response = await rig.call("session/set_mode", {"sessionId": sid, "modeId": "ultra"})
-        assert response["error"]["code"] == protocol.INVALID_PARAMS
-        assert response["error"]["data"]["availableModes"] == ["fast", "deep"]
-
-    async def test_unknown_session_is_resource_not_found(self, rig, monkeypatch):
-        self._declare(rig, monkeypatch)
-        await rig.handshake()
-        response = await rig.call("session/set_mode", {"sessionId": "ghost", "modeId": "deep"})
-        assert response["error"]["code"] == protocol.RESOURCE_NOT_FOUND

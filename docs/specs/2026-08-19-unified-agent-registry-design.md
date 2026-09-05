@@ -905,7 +905,7 @@ backend object, because the DAG tool and the sub-agent manager build separate ba
 - **J18** `playbook-spec.md` 的 `triggers` / `confirm` / 字段完整性三节改写；`test_playbook_tool.py` 与漏斗相关用例整体重写；`integration/test_playbook_real_llm.py` 的门控用例全部作废。
 
 ### G/H/I 迁移、测试、文档
-- **G1** 旧配置 `thirdParty` 键读时兼容、写回统一新键。改名的爆炸半径比首稿写的大：`schema.py` 的 `SubagentsConfig.third_party`、`update_subagents.py` 全套 helper、`rpc/methods/subagents.py`、`web_rpc/methods_config.py`（含 `SubagentsConfig(third_party=agents)` 这类构造）、`agent/loop/main.py:2192` 的 `apply_third_party_subagents`，以及 `enabled_third_party` / `third_party_agent_meta` / `add_third_party_subagent` 三个函数名（B2 只改了第一个）。
+- **G1** 旧配置 `thirdParty` 键读时兼容、写回统一新键。改名的爆炸半径比首稿写的大：`schema.py` 的 `SubagentsConfig.third_party`、`update_subagents.py` 全套 helper、`rpc/methods/subagents.py`、`web_rpc/methods_config.py`（含 `SubagentsConfig(third_party=agents)` 这类构造）、`agent/loop/main.py:2192` 的 `apply_third_party_subagents`，以及 `enabled_third_party` / `third_party_agent_meta` / `set_third_party_subagents` 三个函数名（B2 只改了第一个）。
 - **G2/G3** 归零——内置行沿用 `research-raven` 等现名，已有 playbook 与 instance 记录零迁移。
 - **H** **10 个测试文件**直接引用会被删/改名的符号（`test_playbook_{executor,generator,tool}`、`test_subagent_{acp,manager,third_party}`、`test_subagent_dag_runner`、`test_update_subagents`、`test_web_rpc_config`、`integration/test_playbook_real_llm`）；把 `third_party` / `"subagent":` 这类更宽的口径算上共 **25 个**要过一遍。首稿写的 16 两头都不对。
 - **I** 更新 `2026-08-11-external-agent-registry-design.md`（R1/R2 被扩展）、`2026-08-14-playbook-field-definition.md`（§5.1 中 instance 一行理由与代码不符）、`CONTEXT.md` 术语。**不动** `2026-08-17-auto-instance-handle-design.md`（自动铸句柄）与 `local/subagent-dag-orchestration` 之外的调度类设计稿——按 §0.5，那些是策略层资产。

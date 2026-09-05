@@ -12,7 +12,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from raven.config.raven import BehaviorsExtractConfig
-from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
 from raven.memory_engine.consolidate.behaviors import parse_behaviors
 from raven.memory_engine.consolidate.behaviors_extractor import (
     BehaviorsExtractor,
@@ -20,6 +19,7 @@ from raven.memory_engine.consolidate.behaviors_extractor import (
     _SessionOffset,
 )
 from raven.memory_engine.consolidate.consolidator import MemoryStore
+from raven.providers.base import LLMResponse, ToolCallRequest
 from raven.session.manager import SessionManager
 
 # ---------------------------------------------------------------------------

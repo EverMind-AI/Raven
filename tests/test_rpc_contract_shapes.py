@@ -43,10 +43,8 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-import raven.home as raven_home_module
 from raven.config.loader import set_config_path
 from raven.rpc.models import METHOD_MODELS
-from tests._everos_presence import everos_plugin_absent
 
 _NOT_SUPPORTED_IN_V01 = -32012
 
@@ -75,8 +73,9 @@ def workspace(tmp_path: Path) -> Path:
     cause is in this file, and it only shows up when collection order puts this
     file first.
     """
+    import raven.config.loader as loader
 
-    previous = raven_home_module._current_config_path
+    previous = loader._current_config_path
     ws = tmp_path / "ws"
     ws.mkdir()
     cfg_path = tmp_path / "config.json"
@@ -86,7 +85,7 @@ def workspace(tmp_path: Path) -> Path:
     cfg_path.write_text(json.dumps({"language": "en", "agents": {"defaults": {"workspace": str(ws)}}}))
     set_config_path(cfg_path)
     yield ws
-    raven_home_module._current_config_path = previous
+    loader._current_config_path = previous
 
 
 # ---------------------------------------------------------------------------
@@ -130,14 +129,9 @@ async def test_cron_save_every_and_at(workspace: Path) -> None:
     )
 
 
-async def test_settings_get_and_set(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from raven import i18n
+async def test_settings_get_and_set(workspace: Path) -> None:
     from raven.rpc.methods import console
 
-    # settings.set(language) flips the process-global reply language in-process
-    # (the console wires i18n.set_language); register the undo before driving
-    # it, so this test stops depending silently on the conftest autouse mask.
-    monkeypatch.setattr(i18n, "_language", i18n.current_language())
     _check("settings.get", await console.settings_get({}))
     _check("settings.set", await console.settings_set({"key": "language", "value": "zh"}))
     # The raw-write branch returns the same shape through a different path.
@@ -165,8 +159,8 @@ async def test_settings_usage_reads_what_the_default_tracker_writes(
     same default, which is what writing through one and reading through the
     other checks.
     """
-    from raven.contracts.token_strategy import UsageSnapshot
     from raven.rpc.methods.console import settings_usage
+    from raven.token_wise.base import UsageSnapshot
     from raven.token_wise.usage_tracker import UsageTracker
 
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
@@ -193,7 +187,6 @@ async def test_settings_everos(workspace: Path, tmp_path: Path, monkeypatch: pyt
         await console.settings_everos_set({"section": "llm", "fields": {"model": "gpt-4o"}}),
     )
     _check("settings.everosSet", await console.settings_everos_set({"section": "rerank", "clear": True}))
-    _check("settings.everos_set", await console.settings_everos_set({"section": "llm", "fields": {"model": "gpt-4o"}}))
     # The set has to survive the round trip: a section written and read back is
     # what the page shows, and it is the branch where `api_key_set` is true.
     await console.settings_everos_set({"section": "llm", "fields": {"api_key": "sk-x"}})
@@ -280,16 +273,6 @@ async def test_memory_stats_with_everos_down(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr("raven.rpc.methods.memory._cfg", lambda: ("http://x", "u", "a"))
     out = _check("memory.stats", await memory_stats({}))
     assert out.ok is False
-
-
-async def test_memory_stats_without_the_plugin() -> None:
-    """A third code path into the same shape: the backend is not installed."""
-    from raven.rpc.methods.memory import memory_stats
-
-    with everos_plugin_absent():
-        out = _check("memory.stats", await memory_stats({}))
-    assert out.ok is False
-    assert out.base_url == ""
 
 
 @pytest.mark.parametrize(
@@ -379,7 +362,7 @@ async def test_session_compress_without_a_consolidator(workspace: Path) -> None:
     assert out.summary.noop is True
 
 
-async def test_session_compress_after_compacting(workspace: Path) -> None:
+async def test_session_compress_after_archiving(workspace: Path) -> None:
     """The branch that carries ``info`` / ``messages`` / ``usage``.
 
     Those three are the whole reason the init bundle is modelled: they are the
@@ -396,7 +379,7 @@ async def test_session_compress_after_compacting(workspace: Path) -> None:
 
     class _Consolidator:
         async def maybe_consolidate_by_tokens(self, session: Any, force: bool = False) -> dict:
-            return {"before_tokens": 100, "after_tokens": 10, "compacted": 1}
+            return {"before_tokens": 100, "after_tokens": 10, "archived": 1}
 
     # The loop has to carry the two enumerations the init bundle reads, or the
     # redraw payload is skipped and this test passes without checking anything.

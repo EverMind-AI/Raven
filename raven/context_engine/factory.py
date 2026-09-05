@@ -1,24 +1,26 @@
 """Context engine factory — one engine.
 
-:func:`build_context_engine` returns one :class:`ContextAssembler` over an
-ordered list of :class:`SegmentBuilder`s, each owning one section of the
-system prompt:
+There is a single :class:`ContextAssembler`. Per the context-builder
+design it runs three lanes per turn (the prior ``legacy`` / ``curator`` /
+``default`` split is gone):
 
-- **Identity / Bootstrap / ActiveSkills** — the host's own sections.
-- **Memory** — ``backend.recall(user_id=...)`` (segment 3, ``# Memory``).
-- **Skills** — a :class:`SkillForgeRouter` over 1-3 sources (segment 5,
-  ``# Skills``), built only under pull discovery.
-- **Curator** — manifest build, history selection and
-  ``# Curator Working State``. Owns ``*history``.
+- **Curator lane** — manifest build + fast / slow / fallback history
+  selection + ``# Curator Working State``. Owns ``*history``.
+- **EverOS lane** — ``backend.recall(user_id=...)`` (segment 3,
+  ``# Memory``) and a :class:`SkillForgeRouter` over 1–3 sources (segment 5,
+  ``# Skills``).
+- **Host** — identity / bootstrap / always-skills, rendered by
+  :class:`ContextBuilder`.
 
-The SkillForgeRouter is assembled from up to three sources:
+The SkillForgeRouter is assembled from up to three hardcoded sources:
 
 - :class:`LocalSkillSource` — always; wraps the builder's existing
   ``LocalPool`` + ``SkillRegistry`` (no second disk scan).
 - :class:`EverosSkillSource` — only when a ``backend`` is wired. Bridges
   ``backend.recall(agent_id=...)`` into the router.
 - :class:`HubSkillSource` — only when ``skillForge.router.hub.endpoint``
-  is set: the remote Skill Hub marketplace.
+  is set. The remote Skill Hub marketplace (replaces the retired Mass
+  source).
 
 With no ``backend`` the engine still constructs: the recall lane yields
 ``[]`` and the router runs Local-only, so the agent boots even when no
@@ -33,6 +35,7 @@ from typing import TYPE_CHECKING, Callable
 
 from raven.agent.context import ContextBuilder
 from raven.context_engine.assembler import ContextAssembler
+from raven.context_engine.base import ContextEngine
 from raven.context_engine.scent import ScentMenu
 from raven.context_engine.segments import (
     ActiveSkillsSegmentBuilder,
@@ -42,8 +45,7 @@ from raven.context_engine.segments import (
     SkillsSegmentBuilder,
 )
 from raven.context_engine.segments.curator import CuratorSegmentBuilder
-from raven.contracts.context import ContextEngine
-from raven.contracts.llm_provider import LLMProvider
+from raven.providers.base import LLMProvider
 
 if TYPE_CHECKING:
     from raven.agent.subagent.backends import AgentMeta
@@ -53,8 +55,8 @@ if TYPE_CHECKING:
         SkillForgeConfig,
         SkillForgeRouterConfig,
     )
-    from raven.contracts.memory import MemoryBackend
-    from raven.memory_engine import (
+    from raven.memory_engine.backend import MemoryBackend
+    from raven.memory_engine.skill_forge import (
         LLMGateFilter,
         QueryRewriter,
         SkillForgeRouter,
@@ -88,9 +90,11 @@ def build_context_engine(
     into a pinned model *and its own credential*. Without it a pin has no
     credential of its own and the subsystem follows the conversation's model.
 
-    ``builder`` is read only for the shared ``MemoryStore`` and
-    ``LocalSkillCatalog`` it holds; nothing here dispatches on a configured
-    engine name, because there is one engine.
+    ``config.engine`` is no longer a dispatch key — there is a single
+    engine. The field is retained in :class:`ContextConfig` for config
+    back-compat but is ignored here. ``builder`` is used only as the
+    holder of the shared ``MemoryStore`` / ``LocalSkillCatalog`` until it
+    is retired.
     """
     from raven.config.raven import (
         MemoryConfig as _MemoryConfig,
@@ -185,9 +189,6 @@ def build_context_engine(
                 blocklist=(getattr(skill_forge_config, "blocklist", None) if skill_forge_config is not None else None),
             ),
         )
-    dropped = frozenset(getattr(config, "drop_segments", None) or ())
-    if dropped:
-        builders = [b for b in builders if b.name not in dropped]
     engine = ContextAssembler(
         builders, get_tool_definitions, now_fn=now_fn, get_tool_notices=get_tool_notices, scent=scent
     )
@@ -206,7 +207,7 @@ def _build_router(
     skill_hub_client: "SkillHubClient | None" = None,
 ) -> "SkillForgeRouter":
     """Assemble the 1-to-3 source SkillForgeRouter for segment 5."""
-    from raven.memory_engine import (
+    from raven.memory_engine.skill_forge import (
         EverosSkillSource,
         HubSkillSource,
         LocalSkillSource,
@@ -236,7 +237,7 @@ def _build_router(
             everos_source.weight = float(weights["everos"])
         sources.append(everos_source)
 
-    # ── Source 3: Hub (conditional on remote endpoint) ──────────────
+    # ── Source 4: Hub (conditional on remote endpoint) ──────────────
     hub_cfg = skill_forge_router_config.hub
     if hub_cfg.endpoint:
         from raven.skill_hub import SkillHubClient
@@ -283,7 +284,7 @@ def _build_rewriter_and_gate(
     if skill_forge_config is None or provider is None:
         return None, None
 
-    from raven.memory_engine import LLMGateFilter, QueryRewriter
+    from raven.memory_engine.skill_forge import LLMGateFilter, QueryRewriter
 
     rewriter: "QueryRewriter | None" = None
     if bool(getattr(skill_forge_config, "rewrite_enabled", False)):

@@ -14,7 +14,7 @@ from typing import Any, Iterator
 
 from loguru import logger
 
-from raven.utils.paths import safe_path_segment
+from raven.utils.helpers import safe_path_segment
 
 # Subtrees of agent home the agent must not be able to adopt as a working
 # directory: it would then write artifacts over its own memory and skills.
@@ -69,17 +69,6 @@ def bind(path: Path) -> Iterator[None]:
         yield
     finally:
         _CURRENT.reset(token)
-
-
-def repoint(path: Path) -> None:
-    """Repoint the running turn's binding so the very next read sees ``path``.
-
-    For the one caller that moves a session's root mid-turn (the
-    ``rebind_workdir`` grant), after persisting the override it repoints.
-    The enclosing ``bind``'s finally still resets the variable at turn end;
-    the next turn resolves the persisted override instead.
-    """
-    _CURRENT.set(path)
 
 
 def is_within(path: Path, root: Path) -> bool:

@@ -420,30 +420,9 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .sess .quick svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .sess:has(.ren) .quick { display: none; }
 .sess:has(.ren) .t { padding-right: 0; }
-/* As wide as the name it holds, not as wide as the rail.
-   The wrapper is a one-cell grid; `::after` renders the same text in that cell
-   with the same font, so the column is exactly as wide as the name is DRAWN --
-   which a character count cannot tell us, because this is a proportional face
-   and `WWWW` is four times the width of `iiii`. The input is laid into the same
-   cell and stretches to it. The trailing space in `content` is the caret's room.
-   Bounds live here rather than in the component: never narrower than a few
-   characters, never past the row, and a long name scrolls inside itself. */
-.sess .rensize {
-  display: inline-grid; min-width: 6ch; max-width: 100%;
-  font-size: 13px; font-weight: 500;
-}
-.sess .rensize::after,
 .sess .ren {
-  grid-area: 1 / 1; font: inherit; padding: 3px 6px;
-  border: 1px solid transparent; border-radius: 5px;
-}
-.sess .rensize::after {
-  content: attr(data-value) ' ';
-  visibility: hidden; white-space: pre; pointer-events: none;
-}
-.sess .ren {
-  min-width: 0; width: 100%; background: var(--ink);
-  border-color: var(--muted); outline: 0;
+  min-width: 0; background: var(--ink); border: 1px solid var(--muted);
+  border-radius: 5px; padding: 3px 6px; font-size: 13px; outline: 0; width: 100%;
 }
 
 /* Streaming and just-finished take the stamp's slot rather than the dot's.

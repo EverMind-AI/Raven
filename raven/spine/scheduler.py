@@ -63,9 +63,9 @@ class OriginPools:
         origin alone -- a direct chat is a USER turn with its own pool."""
         if req.direct_target is not None:
             return self._direct
-        return self._for_origin(req.origin)
+        return self.for_origin(req.origin)
 
-    def _for_origin(self, origin: Origin) -> asyncio.Semaphore:
+    def for_origin(self, origin: Origin) -> asyncio.Semaphore:
         if origin is Origin.USER:
             return self._user
         if origin in _SYSTEM_ORIGINS:
@@ -222,7 +222,7 @@ class Lane:
         Silent by design, unlike cancel_turn's queued branch above: its only two
         callers are Scheduler.shutdown's phase 2, where the process is already
         going down and every slot dies with it, and Lane.cancel via the gateway's
-        /stop path (the gateway's cancel_conversation), whose
+        /stop path (raven.cli.gateway_commands -> cancel_conversation), whose
         scheduler's lanes turn.send never binds -- so there is no client-facing
         slot here for the silence to strand.
         """
@@ -243,7 +243,7 @@ class Lane:
         """
         return self.cancel_running() + self.drain_pending()
 
-    def _idle_for(self, now: float) -> float | None:
+    def idle_for(self, now: float) -> float | None:
         """Seconds since the worker drained and the lane went idle, or None while
         it is still active. The reaper reads this to reclaim long-silent lanes.
         """
@@ -278,11 +278,11 @@ class Lane:
                     # Reachable today only through asyncio.run's own cancel-all sweep
                     # at loop close, not interpreter exit as such -- every current
                     # host is a top-level asyncio.run returning straight to process
-                    # exit, so the sweep coincides with any consumer-held turn state
-                    # dying with the process. But a consumer may key state in a
-                    # module global that outlives a loop: a future host that ran a
-                    # Scheduler inside asyncio.run and then kept the process alive
-                    # would open this door without a restart.
+                    # exit, so the sweep coincides with _active_turns dying with the
+                    # process. But _active_turns is a module global that outlives a
+                    # loop: a future host that ran a Scheduler inside asyncio.run and
+                    # then kept the process alive would open this door without a
+                    # restart.
                     self._run_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await self._run_task
@@ -524,12 +524,6 @@ class Scheduler:
         lane = self._lanes.get(conversation_id)
         return lane is not None and lane.running_future() is not None
 
-    def has_running(self) -> bool:
-        """True if any lane has a turn in flight, whatever its origin. The
-        gateway's reload guard asks this: a cron or sentinel turn mid-tool is
-        as much in flight as a user's."""
-        return any(lane.running_future() is not None for lane in self._lanes.values())
-
     async def _reap_loop(self) -> None:
         # Self-terminating, like the lane worker: runs while there are lanes to
         # reclaim and exits when none remain; the next submit restarts it.
@@ -597,7 +591,7 @@ class Scheduler:
         """
         reaped = 0
         for conversation_id, lane in list(self._lanes.items()):
-            idle = lane._idle_for(now)
+            idle = lane.idle_for(now)
             if idle is not None and idle >= _DEFAULT_IDLE_TTL:
                 del self._lanes[conversation_id]
                 reaped += 1

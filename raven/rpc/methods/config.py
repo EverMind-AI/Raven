@@ -1,15 +1,19 @@
-"""``config.get`` / ``config.set`` / ``config.unset`` RPC handlers.
+"""``config.get`` / ``config.set`` RPC handlers (specs §3.6).
+
+Contract source: ``docs/openspec/changes/tui-ipc-bridge/specs/tui-ipc.md §3.6``.
 
 The v0.1 surface exposes only **four hot-changeable** keys; any other write
 target raises :class:`ConfigFieldReadonlyError` (-32010). Values are stored
 in ``~/.raven/config.json`` using dotted-path nesting (``tui.theme`` →
-``{"tui": {"theme": "..."}}``) so that the same file is what ``raven.config.loader`` reads.
+``{"tui": {"theme": "..."}}``) so that the same file is loadable by the legacy
+``raven.config.raven_loader`` without any schema gymnastics.
 
 Validation
 ----------
 
 Per-key validators reject:
 
+* ``agent.thinking_budget``: must be a non-negative integer.
 * ``agent.temperature``: must be a number (int/float) in the closed range
   ``[0.0, 2.0]``.
 * ``tui.theme``: must be a non-empty string matching ``[A-Za-z0-9_-]+``.
@@ -28,16 +32,14 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from raven.core.config_stack import load_runtime_config
+from raven.cli._helpers import load_runtime_config, make_provider
 from raven.providers.auth import MissingCredentialsError
-from raven.providers.factory import make_provider
 from raven.providers.wire import stored_model_id
 from raven.rpc.errors import (
     ConfigFieldReadonlyError,
     ConfigValidationError,
     ModelNotAvailableError,
 )
-from raven.utils.atomic_io import atomic_replace
 
 if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
@@ -49,6 +51,7 @@ _CONFIG_FILENAME = "config.json"
 
 # Default values returned by config.get when the on-disk config omits the key.
 _DEFAULTS: dict[str, Any] = {
+    "agent.thinking_budget": 0,
     "agent.temperature": 1.0,
     "tui.theme": "default",
     "tui.show_token_usage": True,
@@ -62,6 +65,22 @@ _DEFAULTS: dict[str, Any] = {
 
 
 _THEME_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _validate_thinking_budget(value: Any) -> int:
+    # Booleans are a subclass of int — reject them explicitly so True doesn't
+    # silently coerce to 1.
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ConfigValidationError(
+            "agent.thinking_budget must be a non-negative integer",
+            data={"field": "agent.thinking_budget", "got": repr(value)},
+        )
+    if value < 0:
+        raise ConfigValidationError(
+            "agent.thinking_budget must be non-negative",
+            data={"field": "agent.thinking_budget", "value": value},
+        )
+    return value
 
 
 def _validate_temperature(value: Any) -> float:
@@ -116,6 +135,7 @@ def _validate_language(value: Any) -> str:
 
 
 _VALIDATORS: dict[str, Callable[[Any], Any]] = {
+    "agent.thinking_budget": _validate_thinking_budget,
     "agent.temperature": _validate_temperature,
     "tui.theme": _validate_theme,
     "tui.show_token_usage": _validate_show_token_usage,
@@ -137,6 +157,7 @@ CONFIG_WRITABLE_KEYS: tuple[str, ...] = tuple(_VALIDATORS.keys())
 # being touched. The wire key is the client's contract and is frozen; only the
 # right-hand side is this module's business.
 _STORAGE_PATHS: dict[str, str] = {
+    "agent.thinking_budget": "agents.defaults.thinking_budget",
     "agent.temperature": "agents.defaults.temperature",
     "tui.theme": "tui.theme",
     "tui.show_token_usage": "tui.show_token_usage",
@@ -200,18 +221,16 @@ def _save_config(payload: dict[str, Any]) -> None:
     from raven.config.loader import load_config
 
     path = _config_path()
-    previous = path.read_text(encoding="utf-8") if path.exists() else None
-    # The write and the rollback both go through the locked atomic replace:
-    # the load-back check proves the content, the replace makes each swap
-    # tear-proof against a concurrent reader.
-    atomic_replace(path, json.dumps(payload, indent=2, sort_keys=True))
+    previous = path.read_bytes() if path.exists() else None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     try:
         load_config(path)
     except Exception as exc:
         if previous is None:
             path.unlink(missing_ok=True)
         else:
-            atomic_replace(path, previous)
+            path.write_bytes(previous)
         raise ConfigValidationError(
             f"refusing this write: the config would no longer load ({exc}). Nothing was changed.",
             data={"reason": str(exc)},
@@ -239,31 +258,6 @@ def _set_nested(payload: dict[str, Any], dotted_key: str, value: Any) -> None:
             cur[part] = nxt
         cur = nxt
     cur[parts[-1]] = value
-
-
-def _unset_nested(payload: dict[str, Any], dotted_key: str) -> Any | None:
-    """Remove the leaf at the dotted path and prune emptied parents.
-
-    Returns the removed value, or ``None`` when nothing was stored. Pruning
-    matters: an override-free file should look override-free, not carry a
-    trail of empty tables that reads as configuration.
-    """
-    parts = dotted_key.split(".")
-    trail: list[dict[str, Any]] = []
-    cur: Any = payload
-    for part in parts[:-1]:
-        if not isinstance(cur, dict) or part not in cur:
-            return None
-        trail.append(cur)
-        cur = cur[part]
-    if not isinstance(cur, dict) or parts[-1] not in cur:
-        return None
-    previous = cur.pop(parts[-1])
-    for parent, part in zip(reversed(trail), reversed(parts[:-1])):
-        if parent[part]:
-            break
-        del parent[part]
-    return previous
 
 
 # ---------------------------------------------------------------------------
@@ -349,48 +343,6 @@ async def config_set(
     _save_config(payload)
 
     return {"applied": True, "previous": previous}
-
-
-async def config_unset(params: dict) -> dict:
-    """Remove a stored override so the default answers again.
-
-    Same whitelist as ``config.set``; ``"model"`` is refused because it is a
-    switch with scopes, not a stored override -- switching back is another
-    ``config.set``. Returns ``{removed, previous, default}``: ``removed`` is
-    False when nothing was stored, which is not an error -- the state the
-    caller asked for is the state they have.
-
-    Raises:
-        ConfigValidationError (-32011): params shape invalid, or key "model".
-        ConfigFieldReadonlyError (-32010): key not in the writable whitelist.
-    """
-    if not isinstance(params, dict):
-        raise ConfigValidationError(
-            "config.unset params must be an object",
-            data={"got": type(params).__name__},
-        )
-    key = params.get("key")
-    if not isinstance(key, str) or not key:
-        raise ConfigValidationError(
-            "config.unset params.key is required and must be a non-empty string",
-            data={"field": "key", "got": repr(key)},
-        )
-    if key == "model":
-        raise ConfigValidationError(
-            "'model' is a switch, not a stored override; switch back with config.set",
-            data={"field": "key"},
-        )
-    if key not in _VALIDATORS:
-        raise ConfigFieldReadonlyError(
-            f"key '{key}' is not in the v0.1 hot-changeable whitelist",
-            data={"field": key, "writable": list(CONFIG_WRITABLE_KEYS)},
-        )
-
-    payload = _load_config()
-    previous = _unset_nested(payload, _STORAGE_PATHS[key])
-    if previous is not None:
-        _save_config(payload)
-    return {"removed": previous is not None, "previous": previous, "default": _DEFAULTS[key]}
 
 
 def _set_model(
@@ -585,20 +537,18 @@ def register_config_methods(
     *,
     agent_loop_factory: "AgentLoopFactory | None" = None,
 ) -> None:
-    """Register ``config.get`` / ``config.set`` / ``config.unset`` on a dispatcher instance."""
+    """Register ``config.get`` / ``config.set`` on a dispatcher instance."""
 
     async def _set(params: dict) -> dict:
         return await config_set(params, agent_loop_factory=agent_loop_factory)
 
     dispatcher.register("config.get", config_get)
     dispatcher.register("config.set", _set)
-    dispatcher.register("config.unset", config_unset)
 
 
 __all__ = [
     "config_get",
     "config_set",
-    "config_unset",
     "register_config_methods",
     "CONFIG_WRITABLE_KEYS",
 ]

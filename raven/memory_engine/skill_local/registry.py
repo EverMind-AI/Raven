@@ -1,15 +1,18 @@
 """SkillRegistry — data layer for skills.
 
 Pure IO + frontmatter parsing + dependency checking. No rendering, no
-retrieval logic; callers reach it through :class:`LocalSkillCatalog`. Three
-pool layers, and the three-namespace metadata lookup
-(``raven > nanobot > openclaw``).
+retrieval logic. Ported from the pre-refactor ``agent/skills.py``, with
+three-layer pool semantics (workspace > external > builtin) and the same
+three-namespace metadata lookup (``raven > nanobot > openclaw``).
 
 Layers (highest priority first):
 
-  workspace : ``<workspace>/skills/``      — user's session/project pool
-  external  : each ``skillForge.localDirs`` entry — user's curated libraries
-  builtin   : packaged ``raven/memory_engine/skills/`` — ships with the install
+  workspace : ``<workspace>/skills/``     — user's session/project pool
+  external  : ``<skills_dir>/``           — user's curated library
+                                            (e.g. mirror of skill_library
+                                             output, mounted via
+                                             ``config.skill_forge.skills_dir``)
+  builtin   : packaged ``raven/skills/`` — ships with the install
 
 Disk layout supported per layer (auto-detected per top-level dir):
 
@@ -41,7 +44,8 @@ log = logging.getLogger(__name__)
 
 from raven.memory_engine.skill_local.types import SkillMeta
 
-# Default builtin skills directory.
+# Default builtin skills directory — mirrors the path used by the legacy
+# ``SkillsLoader`` so that replacing it is a drop-in change.
 #
 # Resolves to ``raven/memory_engine/skills/`` — the built-in markdown
 # library lives under the memory_engine package alongside the skill code
@@ -90,8 +94,8 @@ class SkillRegistry:
         # entries with colliding names across sources are kept distinct here.
         self._by_full_key: dict[tuple[str, str], SkillMeta] | None = None
         # Secondary index: name → first-priority meta (workspace > external >
-        # builtin > other sources alphabetical), for callers that do not
-        # carry a source.
+        # builtin > other sources alphabetical). For legacy callers that
+        # don't carry a source.
         self._by_name: dict[str, SkillMeta] | None = None
         # Sources that need a partial rescan on the next ``list_all``.
         # Empty set + ``_metas_cache`` not None ⇒ cache is fresh.
@@ -454,7 +458,7 @@ class SkillRegistry:
         # ``stable_key`` is the directory name. For everos it is
         # the sqlite ``skills.id`` string (the pipeline materializes
         # ``<workspace>/skills/everos/<sqlite_id>/SKILL.md``); for
-        # everything else it equals the display name.
+        # everything else it equals the display name (legacy convention).
         stable_key = skill_dir.name
         # Display name prefers frontmatter ``name`` so everos skills
         # whose directory is a numeric id still surface a human-readable
@@ -483,7 +487,7 @@ class SkillRegistry:
 
 
 def _parse_frontmatter(content: str) -> dict | None:
-    """Minimal YAML-lite parser for SKILL.md frontmatter.
+    """Minimal YAML-lite parser — matches legacy SkillsLoader behavior.
 
     Expected format::
 

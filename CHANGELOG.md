@@ -6,297 +6,6 @@ All notable changes to Raven are documented here.
 
 ### Added
 
-- `web_search` and `web_fetch` route through a vendor the deployment picks:
-  Serper, AnySearch, SerpApi, Tavily, Exa, Brave Search or Firecrawl for
-  search, Jina Reader, AnySearch, Tavily, Exa or Firecrawl for pages. Keys are
-  held once per vendor under `tools.web.providers.<vendor>.apiKey`, so a
-  vendor that serves both tools is pasted once; the pre-vendor
-  `tools.web.search.apiKey` and `tools.web.jinaApiKey` still count. The
-  onboarding wizard's web step asks for the vendor before the key (also
-  `--search-provider` / `--fetch-provider` / `--search-api-key` /
-  `--fetch-api-key`), the settings page and `settings.set` accept the new
-  keys, `raven doctor` names the selected vendor's slot, and `~/.raven/env`
-  mirrors every vendor key. A page reader selected without its key falls back
-  to Jina, and the log says so. The vendored research checkout's launcher
-  inherits the host's vendor choice and keys when its own config names none and
-  the key resolves for it; the in-repo research plugin keeps its own separate
-  search key.
-
-### Changed
-
-- `setup.status` now reads the config file `RAVEN_HOME` points at, like every
-  other reader; it used to answer for `~/.raven/config.json` regardless.
-- `raven channels *` and the gateway no longer warn that `channels.sendProgress`
-  / `channels.sendToolHints` "is not a table": section-wide settings are not
-  channels whose cargo failed to parse.
-- The bundled EverOS plugin declares the keys the onboarding wizard records
-  (`root`, `owned`, `agent_id`, `user_id`), so a boot no longer warns about
-  each of them; an invalid type now fails loudly at activation instead.
-- A context builder that runs after the prefix is assembled (the Curator)
-  now degrades like the others: its segment is dropped and named, the turn
-  runs on. Chat channels render that one notice as its own short line, so an
-  answer produced without long-term memory says so.
-- `raven sentinel tick` builds the same Sentinel stack the gateway runs
-  (shared state store, pending decisions, routines), so a CLI tick reads and
-  writes the quotas a live gateway would instead of a private copy.
-- **Architecture, v0.2.0.** The runtime is now layered by binding time and the
-  boundaries are machine-enforced: a kernel closed to drive-by edits
-  (`raven/spine`), the papers
-  (`raven/contracts`, every interface a shelf implements), the assembly root
-  (`raven/core`, where config becomes a running agent through one door,
-  `build_runtime`), the shelves (channels, plugins, providers, memory, ...),
-  and the entrances (`cli`, `rpc`, `acp`). Eight import-linter contracts run
-  in CI: inner layers never import an entrance (with no allowlisted
-  exceptions), the twelve channel adapters are mutually independent, the
-  kernel imports nothing else at module level, with no exception named at
-  all, the cargo under `raven/agent` never
-  imports the loop shell it is consumed by, the runtime never imports the
-  repo-level `evolver/` tool that drives it, it never imports the
-  `agents/` product definitions built on top of it, and the surfaces law
-  holds: the served surfaces (`rpc`, `acp`) never import the launcher and
-  rpc never imports acp -- what a served surface needs from the cli arrives
-  by registration, and acp reaches rpc only through the bootstrap facade. The papers hold shapes only (machinery such as provider retry
-  and tool-argument validation lives with the code that runs it, and a ledger
-  test keeps it there). `CONTEXT.md` records every package's seat.
-- The EverOS memory backend leaves the wheel: it is its own distribution
-  (`plugins-dist/everos-memory`), discovered through the `raven.plugins`
-  entry-point group like any third-party plugin. The default configuration is
-  unchanged; an install without the plugin keeps booting and says loudly that
-  the configured backend is missing.
-- The ACP client family (the client, the `acp_agent` sub-agent backend, the
-  `acp_dialects` translators) moves from `raven/agent` to the top-level
-  `raven/acp_client` package -- an address change only; `raven/acp` remains
-  the server side.
-- The playbook entry tools (`create_playbook`, `load_playbook`) are bundled
-  plugin cargo now (`raven/plugins/bundled/playbook`) and bind the
-  loop-assembled runtime late; `playbooks.enabled: false` behaves exactly as
-  before.
-- A running gateway's composition is sealed per generation: `RavenRuntime` is
-  frozen, and a composition change is the next generation through the swap
-  path (`raven gateway reload`), never an in-place mutation.
-- `raven/agent/subagent/test_state.py` is `probe_state.py`: a production
-  module was sitting on pytest's collection pattern.
-- **The second read of every module.** Each package was read against a
-  nine-item checklist (module docstring, prose in the present tense, no
-  cross-package reach into a private name, no import of a surface, no symbol
-  without a reader, no public seam without a test, glossary terms, no CJK
-  outside the catalog, test naming) and each finding verified independently:
-  617 findings, 423 confirmed. What landed from it: every cross-package reach
-  into a private name became a public seam (`SessionManager.session_path`,
-  `update_providers.oauth_credentials_present`, `schema.section_has_credentials`,
-  `ImportState.path`, `EverOSBackend.state`, `BehaviorsExtractor.extract_session`,
-  `AgentLoop.notify_turn_complete`, `dag_graph.REQUIRED_NON_BLANK`); symbols with
-  no reader are gone (two `raven.auth` placeholders, two MCP inventory views,
-  three ops helpers, the playbook trigger expansion the generator supersedes, an
-  fd-level terminal redirect, an ISO timestamp helper, a duplicated JSON parser,
-  an unread `memory_dir`, an ignored `llm_provider` parameter, three unfilled
-  `SkillMeta` fields, a method alias, a no-op validator, two dead config paths);
-  three untested seams got tests (the message splitter three channel adapters
-  share, the WhatsApp bridge's progress hook, and the control-plane client behind
-  `raven gateway status|reload|stop`, driven against a real control plane); five
-  channel adapters that wrote their description after a statement -- so the class
-  had no docstring at all -- have one; the memory store's lock is named for what
-  it is (portable, not fcntl, not a no-op on Windows); and three generated
-  benchmark reports, a 97 KB routing sample and two PLAN.md files left the
-  package. Throughout, prose that narrated the change which produced a rule now
-  states the rule: no design-doc sections, ticket ids, commit hashes, phase codes
-  or incident retellings.
-- The last two organs get instance sockets on the door: `build_runtime` takes
-  `context_engine=` (riding `EngineWiring`, where that organ's config already
-  rides) and `executor=` (beside `sandbox_config`, its config twin), and the
-  shell binds a handed instance instead of building its own. With provider,
-  session, routing, pool, memory and token_wise, all seven decision points are
-  now substitutable through the one door, and `tests/test_core_runtime_swap.py`
-  pins each one.
-- **The audit's second pass.** The confirmations above were written before
-  those passes landed, so the remainder was re-read against the tip and verified
-  again: 32 were already fixed, 3 were not defects, 67 stood. What that pass
-  found and fixed, beyond more of the same: `dry_query` in the repo-level
-  `evolver/` tree raised `TypeError` on every call, because a parameter removal
-  a few commits earlier had grepped `raven/` and `tests/` and the evolver is
-  neither -- it now has tests, so a signature change in `raven/` that breaks it
-  fails the suite. `MemoryStore` had two copies of the same compare-and-set
-  write; there is one, and the live caller is on it. `connect_mcp_servers` had
-  no caller and eight tests pinning its error policy while the connection
-  manager's own policy went unpinned; the function is gone and the tests drive
-  the live path (one of them had been passing against a handshake that never
-  completed). Four cross-package seams that only one caller crossed got tests,
-  and so did the personalizer, which nothing had constructed.
-- Two vocabularies the glossary had already ruled out are gone from the code.
-  `credential_kind` and the `CRED_*` constants are `auth_shape` and `SHAPE_*`
-  (CONTEXT.md gains the **Auth Shape** entry that separates what the wizard asks
-  for from what makes a connection valid), and the rates ladder no longer calls
-  itself pricing, which names the arithmetic on top of it.
-- **User-visible:** compaction stops calling itself archiving, because
-  `session.archive` is a different feature -- it hides a session and moves no
-  message. `session.compress` now answers `compacted N messages` where it said
-  `archived N messages`, and a `/new` that cannot fold the tail says "Memory
-  consolidation failed". The wire fields are unchanged: `session.compress` still
-  answers `removed`, and `session.archive` still takes `archived`.
-- The tripwire that guards the surface the vendored product installers import
-  named four symbols while those trees reach for eight. It reads the surface out
-  of `subagents/*/install.py`, `install.sh` and the README now, so a rename that
-  would break a downstream install fails here instead of there.
-- The span vocabulary moves out of the kernel to `raven/observability/`.
-  Deciding what a raven span *means* -- that an LLM span carries its routing
-  backend, that a usage block prices out at a number -- needs the provider
-  registry and the token ledger, so the kernel was reaching into two shelves for
-  it. The machinery it keeps: context, suppression, the `instrument` decorator,
-  the store. Instrumented call sites pass their extractor as an argument, so
-  nothing moved but eighteen imports.
-- `RAVEN_HOME` and the config path resolve in `raven/home.py`, a kernel module
-  that imports nothing: the kernel has to find its own settings, and a core that
-  needed the config shelf to locate `config.json` would not be the closure the
-  raven-core wheel claims. `config/loader.py` re-exports the three names, so
-  every caller reads them where it always did. With that, **all five
-  import-linter contracts carry no exceptions at all** -- the last three
-  `ignore_imports` entries in the tree are gone.
-- `raven.i18n` is seated as an inner cross-cutting leaf: it may not import a
-  surface, and the kernel may not import it. The glossary records what it is
-  and what `zh_lexicon` is not.
-- The sentinel planner's and the daily planner's system prompts are
-  per-language templates (`raven/templates/prompts/{en,zh}/`) loaded by
-  `raven.i18n.prompt`; their context blocks render through `t()`. An `en`
-  user's sentinel used to be prompted in Chinese.
-- Security: the three URL policies (egress fetch, market trust, browser
-  navigation) read one address vocabulary, `raven/security/hosts.py`
-  (canonical and browser-legacy spellings, UTS-46 mapping, IPv4 embedded in
-  IPv6, the names that mean this machine); the market's public-address check
-  and the browser's link-local check see through every spelling now.
-- Security: a base URL or redirect host the WeChat login exchange hands back
-  is adopted only over https and within the configured operator's domain;
-  a Discord `resume_gateway_url` outside the configured gateway's operator
-  is ignored in favour of the configured gateway. Both carry the bot token.
-- The evolver moves out of the `raven` package to the repo-level `evolver/`
-  tool (`python -m evolver run --config <yaml>`): it drives raven as a
-  library, ships in no wheel, and a fifth import-linter contract keeps the
-  runtime from importing it back.
-- Security: a market catalogue entry may name a remote MCP server only at a
-  public https address (a local or private one is refused before it is
-  written to the config); a redirect hop whose host does not resolve is
-  refused instead of waved through; an input image the model names by local
-  path honours `tools.restrictToWorkspace` like every file read.
-- The sentinel's replies and menus, the TUI launcher's errors, the WeChat
-  quote marker and the importers' preambles render in the user's language
-  through `raven.i18n` (English by default, Chinese when `language` is
-  `zh`); every `raven` command sets the language from the saved config.
-- The attention.md daily fire plan section is headed `## Today's fire plan`;
-  files written with the Chinese heading keep parsing through the legacy
-  alias table, which now lives with the other Chinese language data in
-  `raven/i18n/zh_lexicon.py` (cue words, punctuation classes, date counters).
-- `raven.i18n` translates user-facing text by its English source (`t("Back")`),
-  with the Chinese catalog in `raven/i18n/zh.py`; the onboarding wizard and
-  the CLI screens that carried `(en, zh)` pairs speak through it, and a test
-  keeps Chinese literals out of every other module (the files still carrying
-  them are listed, and the list only shrinks).
-- `AgentLoop` takes its five wiring bundles and nothing else: the flat
-  keyword shim that folded legacy names into them (used by tests only) is
-  gone, and the tests construct the bundles they mean.
-- `raven.memory_engine` is a package face: the store, the consolidator, the
-  skill catalog and router, the attention and behaviors parsers resolve as
-  names on the package (lazily), and nothing outside the engine imports its
-  submodules; a test keeps it so.
-- Modules that only type against the provider shapes (`LLMProvider`,
-  `LLMResponse`, `ToolCallRequest`, ...) import them from the paper,
-  `raven.contracts.llm_provider`; `raven.providers.base` is imported by the
-  adapters and fakes that subclass its machinery.
-- `settings.everos_set` is the RPC method's name; `settings.everosSet` stays
-  registered and declared (marked deprecated in the OpenRPC document) until
-  the TUI reads the new one. The `-32012` error class is `NotSupportedError`;
-  its wire message keeps the `not_supported_in_v01` spelling for the same
-  reason.
-- `RpcServer` takes the connected socket and nothing else: the POSIX pipe
-  path (`request_fd` / `notify_fd`, kept for a demo runner that no longer
-  exists) is gone with the workaround comments it needed, and the tests
-  hand the accepted connection over the way `raven tui` does.
-- The three asking capabilities (`QuestionResponder`, `ApprovalResponder`,
-  `Asker`) are papers in `raven/contracts/asking.py`; the tools and the ACP
-  client type against them from there.
-- Config version floor 4 retires three legacy leaves in the file instead of
-  in the schema: `skillForge.skillsDir` becomes the first `skillForge.localDirs`
-  entry, `skillForge.massLibraryDb` and `context.engine` are removed, each
-  with a notice on the first load. The model validators and the
-  DeprecationWarning that used to paper over them are gone.
-- The nine terminal-dialect RPC methods that had handlers but no contract
-  entry (`clipboard.paste`, `command.dispatch`, `delegation.status/pause`,
-  `input.detect_drop`, `session.interrupt`, `shell.exec`, `skills.manage`,
-  `subagent.interrupt`) are declared in `rpc-schema/openrpc.json` and
-  `METHOD_MODELS`; the registration guard's inherited allowlist is empty.
-- The Eval Engine has a config table (`evalEngine`, off by default) and
-  `build_runtime` mounts its three hooks when it is on; before, the engine
-  and its stack builder existed but nothing assembled them.
-- Config-slice admission (`admit_slice`, `dispense_channel_config`) lives in
-  `raven/config/admission.py`: the door validates config against a cargo
-  declaration, which is config vocabulary, so the channel commands, the
-  gateway manager, the trajectory redactor and the plugin registry reach it
-  without importing the assembly root.
-- **Generations.** The gateway rebuilds its runtime from config and swaps it in
-  at the loop's turn boundary instead of restarting: build the candidate first,
-  stop the serving generation, dispose it in a pinned order. Channels, cron,
-  the sentinel and the control plane survive the swap.
-- **Channel config lives with the adapter.** Each adapter's `spec.py` declares
-  its fields, defaults, secrecy and nesting; the twelve central per-channel
-  config classes are gone, `channels.<name>` sections are dynamic, and
-  `raven channels set/show` validate through the same admission door the
-  gateway dispenses through. Existing config files load unchanged.
-- The gateway's web channel is retired and its endpoint becomes the gateway
-  **control plane** (`ws://127.0.0.1:<port>/ws`, loopback, per-boot token
-  published in the gateway lock; for this one release the lock also carries the
-  older `web_*` spelling of that address, so a reader from the previous release
-  still finds it): six methods only -- `gateway.channels.live`,
-  `.qr`, `.start`, `gateway.status`, `gateway.reload`, `gateway.shutdown`.
-  `raven gateway reload|status|stop` drive it from the CLI; `reload` rebuilds the
-  runtime from config and swaps it in without a restart (SIGHUP stays as the
-  POSIX alias of `reload --force`). The `gateway.web` config table is removed on load with a
-  notice: proactive replies and heartbeat output that `web.enabled: true` used to
-  send to the web channel (which had no clients) now reach your IM channels and
-  the page. The control port no longer serves deliverable downloads; those routes
-  stay on the page transport behind its session guard.
-- A docs-governance pass caught the living records up with the tree: the
-  source-language rule and its exemption zones are written down in
-  `AGENTS.md`, the repo-layout table covers every package it names as a
-  commit scope, and the term canon (`CONTEXT.md`) records the full plugin
-  kind roster, compaction, and the product path vocabulary. Stale design
-  docs under `docs/` are stamped as dated records and the report assets
-  (rendered HTML, SVG diagrams, a market-comparison note) are removed.
-- A comment-rectification pass brought in-tree comments back to the
-  comment rules: English only, why over what, no edit markers.
-
-### Added
-
-- A top-level `agents/` directory holds product definitions built on the
-  installed runtime, A/B-able against the frozen vendored `subagents/`. The
-  first product, Raven-Research-NG, rebuilds the vendored research agent's
-  whole flow as a plugin (`agents/raven-research/plugins/research-flow`) on
-  public seams alone; the sixth import-linter contract keeps the runtime from
-  importing the products back.
-- Plugins can contribute agent hooks (`[[plugin.contributes.hooks]]`) beside
-  memory backends and tools; a config may name extra plugin roots
-  (`plugins.dirs`); a contributed tool that needs what only the assembled
-  loop owns declares `bind_runtime(handles)` and receives the frozen
-  `RuntimeHandles` grants. A factory may decline by returning `None`, a
-  binder by raising `BindDeclinedError` -- both leave the built-in serving.
-- The agent-hook surface is at version 3: `ctx.session_history` is populated
-  at every phase (the iteration phases included, post-consolidation), the
-  iteration context carries the turn's `max_iterations` and
-  `context_window_tokens` -- the cap the loop actually enforces and the
-  active binding's window, so a budget-shaped hook needs no config mirror --
-  `CompositeHook` chains every child's diagnostic `notes`, and a hook's
-  `observers` stash is filed at persist time, after the send fire.
-- The generation freeze law is written where its machine already stood:
-  FREEZE seals member identity, and exactly three declared doors reconcile a
-  member's data plane mid-generation after the durable truth is written --
-  the agents table (`apply_agents`), the MCP server set (`apply_mcp_config`)
-  and the default binding (`set_default_binding`). A door-roster guard pins
-  who may spell those reaches (the `getattr`/`hasattr` string forms
-  included), the plugin market holds the loop through the new `McpHost`
-  paper instead of `Any`, and the Generation glossary body now carries the
-  identity-vs-interior distinction its own carve-out already implied.
-- ACP session modes: `acp.modes` in a product's config becomes a client's
-  mode picker (`session/set_mode`), each mode a per-session overlay over the
-  base configuration. The mode entry alone carries `maxToolIterations`; the
-  overlay ships no copy, since the loop hands its hooks the enforced cap
-  directly (`ctx.max_iterations`).
 - `spawn` now records every sub-agent call on disk, the way `run_subagent_dag`
   already recorded every node: one directory per call under
   `<agent home>/sessions/<group>/<chat_id>/subagents/spawn/`, holding
@@ -370,7 +79,7 @@ All notable changes to Raven are documented here.
   line into a temporary `pyproject.toml` so the agents reached testers and no one
   else; both mechanisms at once made every wheel build fail on a duplicate archive
   path, and the tree now reaches stable releases and `git+` installs as well.
-- Setup now offers the sub-agents that ship with raven. Step 6 of the wizard
+- Setup now offers the sub-agents that ship with raven. Step 5 of the wizard
   lists each folder under `subagents/` and asks whether to run it on the model it is
   tuned for, on this raven's LLM, or not at all, then writes the roster entries. The
   tuned model leads the menu because it is the one a key of its own buys: inheritance
@@ -431,22 +140,6 @@ All notable changes to Raven are documented here.
   a note that happens to use double braces, used to be refused outright as `unrecognized
   placeholder '...'`; the grammar now only claims a body actually shaped like one of the six,
   and leaves everything else untouched.
-- Three more products join `agents/`: `raven-oncall`, `raven-code` and
-  `raven-ppt` rebuild their vendored twins on public seams (flow plugins
-  `oncall-flow` and `code-flow`; ppt ships no product-local plugins), each
-  accepted by transport-face equivalence against the frozen `subagents/`
-  tree and recorded in a migration closure record (oncall-closure-0901,
-  code-closure-0902, ppt-closure-0902).
-- Plugins can contribute three more kinds beside memory backends, tools and
-  hooks: background services (`[[plugin.contributes.services]]`), per-call
-  tool gates (`tool_gates`) and session observers (`session_observers`).
-  The papers are `raven/contracts/services.py`,
-  `raven/contracts/tool_gate.py` and `raven/contracts/session_events.py`;
-  `CONTRACTS_VERSION` moves to 5.
-- The ppt deck-building engine ships as its own distribution
-  (`plugins-dist/ppt-engine`, plugin id `ppt-engine`): eleven deck tools
-  and a staging hook on the `raven.plugins` entry-point group, with the
-  deck skill corpus and templates as package data.
 
 ### Fixed
 
@@ -468,13 +161,6 @@ All notable changes to Raven are documented here.
   (no tool-event sink listening on the channel), and have a later, unrelated call report the
   stale handle as its own. The handle is now cleared at the top of every call, ahead of every
   refusal.
-- A product engine served over ACP homed itself inside the host's Agent
-  home, so every dispatch to it failed before it started -- a raven engine
-  refuses a working directory that contains its own home -- while
-  capability probing still passed. Product engine homes now live under the
-  raven data directory (`product_acp_home` in
-  `raven/config/product_render.py`), checked against the configured host
-  Agent home, with a per-product `*_ACP_HOME` override that wins outright.
 
 ### Breaking Changes
 
@@ -487,7 +173,7 @@ All notable changes to Raven are documented here.
   entry that is an object naming neither a file nor a node is refused for the same reason:
   it used to render as its own Python repr.
 
-- `raven onboard --skip-deep-research` is now `--skip-subagents`, because step 6 is the
+- `raven onboard --skip-deep-research` is now `--skip-subagents`, because step 5 is the
   sub-agent step. Typer rejects an unknown option, so a script or CI job passing the old
   name exits 2 with `No such option` rather than skipping anything.
 
@@ -519,7 +205,7 @@ All notable changes to Raven are documented here.
   process launch directory instead of agent home.
 - `raven gateway` now gives each *channel* its own working directory instead of
   running every conversation in the agent-home root. Set it per channel with
-  `channels.<name>.workspace`,
+  `channels.<name>.workspace` (`gateway.web.workspace` for the web channel),
   configured alongside that channel's credentials; unset means
   `~/.raven/tmp/<channel>`. Existing files already at the agent-home root are
   left in place. A single session can still be pinned elsewhere from the web

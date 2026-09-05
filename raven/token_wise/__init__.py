@@ -2,12 +2,13 @@
 
 Public API:
     - ``StrategyRegistry``       — chains TokenStrategy hooks around LLM calls.
-    - ``UsageTracker``           — records tokens + cost per call.
-    - ``CacheOptimizer``         — Anthropic cache_control placement.
+    - ``UsageTracker``           — strategy 1: records tokens + cost per call.
+    - ``CacheOptimizer``         — strategy 2: Anthropic cache_control placement.
     - ``estimate_cost_usd``      — single source of truth for cost estimation.
 
-The ``install_from_config`` assembly helper lives in the assembly root
-(``raven.core.token_wise_stack``), not in TokenWise's strategy API.
+The ``install_from_config`` assembly helper lives in ``raven.cli._token_wise_stack``
+— it's CLI-layer composition, not part of TokenWise's strategy API.
+The token_wise package has no dependency on the CLI layer.
 """
 
 from raven.token_wise.cache_optimizer import CacheOptimizer

@@ -289,15 +289,7 @@ def test_stop_blocks_zombie_inbound(monkeypatch):
     ch._loop = MagicMock()
     ch._loop.is_running.return_value = True
     calls = []
-
-    def _capture(coro, loop):
-        # The bridge builds the coroutine before handing it over, so a fake that
-        # only records it leaves it unawaited -- a RuntimeWarning, and a suite
-        # where the next unawaited coroutine is one warning among several.
-        calls.append((coro, loop))
-        coro.close()
-
-    monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", _capture)
+    monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", lambda *a, **k: calls.append(a))
     ch._running = True
     ch._on_message_sync(MagicMock())
     assert len(calls) == 1

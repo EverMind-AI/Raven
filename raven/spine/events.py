@@ -22,10 +22,8 @@ class NoticeKind(StrEnum):
 
     PROGRESS = "progress"
     TOOL_HINT = "tool_hint"
-    # An optional organ failed this turn and the turn proceeded without it;
-    # outlets should render the detail so the user knows the answer was
-    # produced degraded (e.g. without long-term memory).
-    ORGAN_DEGRADED = "organ_degraded"
+    INJECTED = "injected"
+    DELIVERY_FAILED = "delivery_failed"
     # The runtime ended the turn on a safety decision. Unlike the kinds above,
     # this one replaces the answer rather than accompanying it, so an outlet
     # that renders nothing else should still render this.
@@ -131,6 +129,7 @@ class ToolEvent:
 class Text:
     content: str
     source: Source | None = None
+    reply_to: str | None = None
     conversation_id: str | None = None
 
 

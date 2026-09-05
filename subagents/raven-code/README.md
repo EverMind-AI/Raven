@@ -569,9 +569,7 @@ This matters more than it looks: the CLI itself prints `Using config: <path>` to
 **stderr** on every run. `run.py` captures the child's output rather than letting
 it inherit, so that line never reaches the reply.
 
-ACP diagnostics go to `<ACP home>/launcher.log` -- `CODE_ACP_HOME`, or
-`<raven data directory>/subagent_sessions/raven-code/acp` by default, which is
-not under the state root; CLI compatibility-mode
+ACP diagnostics go to `<state root>/acp/launcher.log`; CLI compatibility-mode
 diagnostics go to `<state root>/instance-<id>/launcher.log`. `--verbose` mirrors
 them to stderr and is for running by hand only, never for a spawn.
 
@@ -603,29 +601,11 @@ and so does `session_file`, which resolves against the same path, which is why
 the two cannot drift. Rendering it under
 
 ```
-<raven data directory>/subagent_sessions/raven-code/acp/
+<host Agent home>/subagent_sessions/raven-code/acp/
 ```
 
-keeps real task transcripts out of this folder.
-
-Under the raven **data** directory (`$RAVEN_HOME`, `~/.raven`) rather than under
-the host's Agent home, which is the other thing the host hands out: a session's
-working directory. A raven engine refuses to work in a directory that contains
-its own home, so homing this one under the host's Agent home made every dispatch
-fail before it started. `CODE_ACP_HOME` moves it.
-
-An operator who configures the host's Agent home to contain the raven data
-directory puts the default back inside it. The engine is then homed beside the
-Agent home, in a directory named for this `RAVEN_HOME` -- two instances on one
-machine are told apart by that name, and their ACP sessions and allocation state
-stay apart with it.
-
-Beside the Agent home is not always somewhere this run may write -- an Agent home
-of `~` puts the fallback in `/Users`. That is refused, naming `CODE_ACP_HOME`,
-rather than left to fail on the first `mkdir` with a bare permission error.
-
-`CODE_STATE_ROOT` moves the `raven-code/` root -- the repos and the CLI
-compatibility path's `instance-<id>/` -- which is work, and stays with the work.
+keeps real task transcripts out of this folder. `CODE_STATE_ROOT` moves the
+`raven-code/` root; the CLI compatibility path uses `instance-<id>/` below it.
 
 The rendered config also pins `agents.defaults.workspace` to that same state
 partition. That is Raven-Code's Agent home; the ACP session `cwd` remains the

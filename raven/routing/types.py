@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Protocol, runtime_checkable
+from typing import Literal
 
 # ── Benchmark data ─────────────────────────────────────────────────────────────
 
@@ -90,18 +90,3 @@ class SelectionResult:
     fallbacks: list[ModelScore]
     category: TaskCategory
     profile: RoutingProfileName
-
-
-@runtime_checkable
-class RoutesModels(Protocol):
-    """The single method the harness calls on a model router.
-
-    Measured surface: ``AgentLoop`` touches exactly this, behind an
-    ``if self.router is not None`` guard -- absence is a supported state.
-    Both in-repo routers (``ModelRouter``, ``KNNModelRouter``) satisfy it
-    structurally; this protocol pins the shape they converged on so a third
-    router cannot silently drift. In-package on purpose: it spares a third
-    party only 1,135 lines, which does not clear the L1 admission bar.
-    """
-
-    async def select_model_chain(self, prompt: str) -> tuple[str | None, list[str]]: ...

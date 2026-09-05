@@ -28,7 +28,6 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
-from raven.i18n import t
 from raven.proactive_engine.sentinel.predictor.prompts import (
     build_discovery_prompt,
     discovery_tool_schema,
@@ -40,17 +39,17 @@ from raven.proactive_engine.sentinel.types import (
 )
 
 if TYPE_CHECKING:
-    from raven.contracts.llm_provider import LLMProvider
-    from raven.memory_engine import MemoryStore
+    from raven.memory_engine.consolidate.consolidator import MemoryStore
     from raven.proactive_engine.sentinel.executor.dispatcher import NudgeDispatcher
     from raven.proactive_engine.sentinel.executor.pending_decision import PendingDecisionStore
     from raven.proactive_engine.sentinel.feedback.tracker import NudgeFeedbackTracker
-    from raven.proactive_engine.sentinel.predictor.context_assembler import PlannerContextAssembler
+    from raven.proactive_engine.sentinel.predictor.context_assembler import ContextAssembler
     from raven.proactive_engine.sentinel.predictor.routine_aggregator import RoutineAggregator
     from raven.proactive_engine.sentinel.predictor.routine_learner import RoutineLearner
     from raven.proactive_engine.sentinel.predictor.routine_store import RoutineStore
     from raven.proactive_engine.sentinel.predictor.routine_validator import RoutineValidator
     from raven.proactive_engine.sentinel.trigger_policy.policy import NudgePolicy
+    from raven.providers.base import LLMProvider
 
 
 # History lookback for the discovery prompt — long enough to capture
@@ -69,7 +68,7 @@ class TaskDiscoverer:
         dispatcher: "NudgeDispatcher",
         provider: "LLMProvider",
         model: str,
-        context_assembler: "PlannerContextAssembler | None" = None,
+        context_assembler: "ContextAssembler | None" = None,
         routine_store: "RoutineStore | None" = None,
         routine_learner: "RoutineLearner | None" = None,
         routine_aggregator: "RoutineAggregator | None" = None,
@@ -296,9 +295,7 @@ class TaskDiscoverer:
         by today's fresh menu. Prevents the silent-data-loss footgun
         where a user replied '/pick 2' and is mid-confirm when a new
         discovery run drops the original menu."""
-        notice = t(
-            "ℹ️ Your earlier unconfirmed task suggestions were replaced by today's new menu. To continue an earlier choice, pick it again from the new menu."
-        )
+        notice = "ℹ️ 您之前未确认的任务建议已被今天的新菜单替换。如需继续之前的选择，请在新菜单中重新挑选。"
         try:
             assert self._submit is not None
             from raven.spine import ChatType, Origin, Source, TurnRequest
@@ -475,7 +472,7 @@ class TaskDiscoverer:
         try:
             fh = self.context_assembler._fire_history(self._now_fn())
         except Exception as exc:
-            logger.warning("PlannerContextAssembler._fire_history failed: {}", exc)
+            logger.warning("ContextAssembler._fire_history failed: {}", exc)
             return ""
         recent = fh.get("recent_fires", [])
         if not recent:
@@ -553,7 +550,7 @@ class TaskDiscoverer:
         """Flag past-deadline options and float them to the front.
 
         Overdue items are the highest-signal nudges (a due date slipped),
-        so we surface them — prefixed with an overdue marker (``⚠️ overdue M/D``) and
+        so we surface them — prefixed with a ``⚠️ 逾期 M/D`` marker and
         ordered ahead of on-time options — rather than dropping them.
         ``deadline`` is the LLM-emitted ISO date already validated in
         ``_raw_to_option``; empty means no due date.
@@ -567,7 +564,7 @@ class TaskDiscoverer:
             except ValueError:
                 dl = None
             if dl is not None and dl < today:
-                opt.title = t("⚠️ overdue {month}/{day} {title}", month=dl.month, day=dl.day, title=opt.title)
+                opt.title = f"⚠️ 逾期 {dl.month}/{dl.day} {opt.title}"
                 overdue.append(opt)
             else:
                 current.append(opt)

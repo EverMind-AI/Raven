@@ -13,7 +13,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-from raven.config.paths import get_data_dir, get_sandbox_dir
 from raven.sandbox import (
     DirectExecutor,
     ExecResult,
@@ -457,48 +456,6 @@ class TestExecToolWithMockExecutor:
         assert "blocked" in result.model_text
         assert len(executor.calls) == 0
 
-    async def test_workspace_restriction_catches_a_path_glued_to_an_equals(self, tmp_path):
-        """--file=/etc/passwd names an outside path with no space before it."""
-        from raven.agent.tools.shell import ExecTool
-
-        executor = MockExecutor()
-        tool = ExecTool(
-            executor=executor,
-            working_dir=str(tmp_path),
-            restrict_to_workspace=True,
-        )
-        result = await tool.execute("tool --file=/etc/passwd", working_dir=str(tmp_path))
-        assert "blocked" in result.model_text
-        assert len(executor.calls) == 0
-
-    async def test_workspace_restriction_catches_a_path_after_a_stdin_redirect(self, tmp_path):
-        """wc -l </etc/passwd reads the file as surely as cat /etc/passwd does."""
-        from raven.agent.tools.shell import ExecTool
-
-        executor = MockExecutor()
-        tool = ExecTool(
-            executor=executor,
-            working_dir=str(tmp_path),
-            restrict_to_workspace=True,
-        )
-        result = await tool.execute("wc -l </etc/passwd", working_dir=str(tmp_path))
-        assert "blocked" in result.model_text
-        assert len(executor.calls) == 0
-
-    async def test_a_device_glued_to_an_equals_is_still_exempt(self, tmp_path):
-        """The new boundaries must not revoke the device exemption."""
-        from raven.agent.tools.shell import ExecTool
-
-        executor = MockExecutor()
-        tool = ExecTool(
-            executor=executor,
-            working_dir=str(tmp_path),
-            restrict_to_workspace=True,
-        )
-        result = await tool.execute("tool --log=/dev/null", working_dir=str(tmp_path))
-        assert "blocked" not in result
-        assert len(executor.calls) == 1
-
     async def test_non_sandboxed_deny_list_runs(self, tmp_path):
         """Non-sandboxed executor: deny-list guard is applied."""
         from raven.agent.tools.shell import ExecTool
@@ -550,61 +507,6 @@ class TestExecToolWithMockExecutor:
         result = await ExecTool(executor=executor, working_dir=str(tmp_path)).execute("osascript -e x")
         assert "blocked" not in result
         assert len(executor.calls) == 1
-
-    async def test_a_live_deny_edit_binds_the_very_next_call(self, tmp_path):
-        """Tightening a permission must not wait for the next turn, let alone the
-        next process: the pattern list is re-read before each classification.
-        Loosening rides the same read -- the list is the operator's own choice in
-        both directions."""
-        from raven.agent.tools.shell import ExecTool
-
-        extras: dict[str, list[str] | None] = {"value": []}
-        executor = DirectMockExecutor()
-        tool = ExecTool(
-            executor=executor,
-            working_dir=str(tmp_path),
-            extra_deny_source=lambda: extras["value"],
-        )
-        assert "blocked" not in await tool.execute("osascript -e x")
-
-        extras["value"] = [r"\bosascript\b"]
-        assert "blocked" in (await tool.execute("osascript -e x")).model_text
-
-        extras["value"] = []
-        assert "blocked" not in await tool.execute("osascript -e x")
-
-    async def test_a_bad_live_pattern_rejects_the_edit_not_the_policy(self, tmp_path):
-        from raven.agent.tools.shell import ExecTool
-
-        extras: dict[str, list[str] | None] = {"value": [r"\bosascript\b"]}
-        tool = ExecTool(
-            executor=DirectMockExecutor(),
-            working_dir=str(tmp_path),
-            extra_deny_source=lambda: extras["value"],
-        )
-        assert "blocked" in (await tool.execute("osascript -e x")).model_text
-
-        extras["value"] = [r"\bosascript\b", r"([unclosed"]
-        assert "blocked" in (await tool.execute("osascript -e x")).model_text, (
-            "a pattern that does not compile must keep the current set, not disarm it"
-        )
-
-    async def test_a_live_deny_edit_reaches_a_registered_approval_matcher_policy(self, tmp_path):
-        """The deny list is swapped on the policy in place, so the approval
-        families a surface registered survive the edit."""
-        from raven.agent.tools.shell import ExecTool
-
-        extras: dict[str, list[str] | None] = {"value": []}
-        tool = ExecTool(
-            executor=DirectMockExecutor(),
-            working_dir=str(tmp_path),
-            extra_deny_source=lambda: extras["value"],
-        )
-        tool.register_approval_matcher("push_command", lambda cmd: cmd.startswith("git push"))
-
-        extras["value"] = [r"\bosascript\b"]
-        assert "blocked" in (await tool.execute("osascript -e x")).model_text
-        assert tool._policy.approval_reason("git push origin main") == "push_command"
 
     async def test_path_append_sandboxed_injects_export(self, tmp_path):
         """path_append with sandboxed executor: wraps command with export PATH."""
@@ -1371,17 +1273,17 @@ class TestAgentLoopExecutorLifecycle:
 
 
 # ---------------------------------------------------------------------------
-# Connecting one MCP server: sandbox guard and transport behaviour
+# connect_mcp_servers sandbox guard
 # ---------------------------------------------------------------------------
 
 
-class TestConnectOneMcpServer:
+class TestConnectMcpSandboxGuard:
     async def test_stdio_sandboxed_no_spawning_raises(self):
         """Sandboxed executor without process-spawning raises SandboxInitError for stdio."""
         from contextlib import AsyncExitStack
 
         from raven.agent.tools.registry import ToolRegistry
-        from raven.mcp.client import connect_mcp_server
+        from raven.mcp.client import connect_mcp_servers
 
         executor = MockExecutor()  # is_sandboxed=True, supports_process_spawning=False
         cfg = MagicMock()
@@ -1389,22 +1291,22 @@ class TestConnectOneMcpServer:
         cfg.command = "mcp-server"
         cfg.args = []
         with pytest.raises(SandboxInitError, match="stdio transport"):
-            await connect_mcp_server("svc", cfg, ToolRegistry(), AsyncExitStack(), executor=executor)
+            await connect_mcp_servers({"svc": cfg}, ToolRegistry(), AsyncExitStack(), executor=executor)
 
-    async def test_stdio_no_executor_reaches_the_transport(self, monkeypatch):
+    async def test_stdio_no_executor_does_not_raise(self, monkeypatch):
         """executor=None falls through to the normal stdio path (no guard triggered)."""
         from contextlib import AsyncExitStack
 
         import mcp.client.stdio
 
         from raven.agent.tools.registry import ToolRegistry
-        from raven.mcp.client import connect_mcp_server
+        from raven.mcp.client import connect_mcp_servers
 
         reached = []
 
         def fake_stdio_client(params):
             reached.append(params.command)
-            raise RuntimeError("stdio_client reached -- expected in test")
+            raise RuntimeError("stdio_client reached — expected in test")
 
         monkeypatch.setattr(mcp.client.stdio, "stdio_client", fake_stdio_client)
 
@@ -1414,12 +1316,79 @@ class TestConnectOneMcpServer:
         cfg.args = []
         cfg.env = None
         cfg.tool_timeout = 30
-        # The guard must not fire. What surfaces instead is the fake transport's
-        # own error, and reaching it is the proof.
-        with pytest.raises(RuntimeError, match="stdio_client reached"):
-            await connect_mcp_server("svc", cfg, ToolRegistry(), AsyncExitStack(), executor=None)
+        # Guard should NOT raise; the transport error is caught per-server and logged.
+        await connect_mcp_servers({"svc": cfg}, ToolRegistry(), AsyncExitStack(), executor=None)
 
         assert reached == ["mcp-server"]
+
+    async def test_streamable_failure_does_not_cancel_following_server(self, monkeypatch):
+        """A transport task failure is isolated to the server being initialized."""
+        from contextlib import AsyncExitStack, asynccontextmanager
+        from types import SimpleNamespace
+
+        import anyio
+        import mcp
+        import mcp.client.streamable_http
+
+        from raven.agent.tools.registry import ToolRegistry
+        from raven.mcp.client import connect_mcp_servers
+
+        attempted = []
+
+        @asynccontextmanager
+        async def fake_streamable_http_client(url, http_client):
+            attempted.append(url)
+            if url == "https://bad.example/mcp":
+                async with anyio.create_task_group() as group:
+
+                    async def fail_transport():
+                        await anyio.sleep(0)
+                        raise RuntimeError("transport failed")
+
+                    group.start_soon(fail_transport)
+                    yield url, object(), None
+            else:
+                yield url, object(), None
+
+        class FakeSession:
+            def __init__(self, read, write):
+                self.read = read
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, traceback):
+                return False
+
+            async def initialize(self):
+                if self.read == "https://bad.example/mcp":
+                    await asyncio.Event().wait()
+
+            async def list_tools(self):
+                return SimpleNamespace(tools=[])
+
+        monkeypatch.setattr(mcp, "ClientSession", FakeSession)
+        monkeypatch.setattr(
+            mcp.client.streamable_http,
+            "streamable_http_client",
+            fake_streamable_http_client,
+        )
+
+        def config(url):
+            return SimpleNamespace(type="streamableHttp", url=url, headers=None, tool_timeout=30)
+
+        async with AsyncExitStack() as stack:
+            await connect_mcp_servers(
+                {
+                    "bad": config("https://bad.example/mcp"),
+                    "good": config("https://good.example/mcp"),
+                },
+                ToolRegistry(),
+                stack,
+            )
+
+        assert attempted == ["https://bad.example/mcp", "https://good.example/mcp"]
+        assert asyncio.current_task().cancelling() == 0
 
     async def test_streamable_external_cancellation_propagates(self, monkeypatch):
         """Cancellation of Raven's connection task is not treated as a server failure."""
@@ -1430,7 +1399,7 @@ class TestConnectOneMcpServer:
         import mcp.client.streamable_http
 
         from raven.agent.tools.registry import ToolRegistry
-        from raven.mcp.client import connect_mcp_server
+        from raven.mcp.client import connect_mcp_servers
 
         entered = asyncio.Event()
 
@@ -1465,7 +1434,7 @@ class TestConnectOneMcpServer:
             headers=None,
             tool_timeout=30,
         )
-        task = asyncio.create_task(connect_mcp_server("svc", cfg, ToolRegistry(), AsyncExitStack()))
+        task = asyncio.create_task(connect_mcp_servers({"svc": cfg}, ToolRegistry(), AsyncExitStack()))
         await entered.wait()
         task.cancel()
 
@@ -1482,7 +1451,7 @@ class TestConnectOneMcpServer:
         import mcp.client.sse
 
         from raven.agent.tools.registry import ToolRegistry
-        from raven.mcp.client import connect_mcp_server
+        from raven.mcp.client import connect_mcp_servers
 
         clients = []
 
@@ -1518,7 +1487,7 @@ class TestConnectOneMcpServer:
                 return False
 
             async def initialize(self):
-                return SimpleNamespace(capabilities=SimpleNamespace(tools=object()))
+                pass
 
             async def list_tools(self):
                 return SimpleNamespace(tools=[])
@@ -1534,7 +1503,7 @@ class TestConnectOneMcpServer:
             tool_timeout=30,
         )
         async with AsyncExitStack() as stack:
-            await connect_mcp_server("svc", cfg, ToolRegistry(), stack)
+            await connect_mcp_servers({"svc": cfg}, ToolRegistry(), stack)
 
         assert len(clients) == 1
         assert clients[0]["headers"] == {"X-Config": "config", "X-Shared": "sdk", "X-SDK": "sdk"}
@@ -1548,8 +1517,8 @@ class TestConnectOneMcpServer:
         # safe to do at client level at all.
         assert clients[0]["follow_redirects"] is False
 
-    async def test_unknown_transport_never_opens_a_connection(self, monkeypatch):
-        """An unknown transport is refused before any MCP connection is attempted."""
+    async def test_unknown_transport_is_skipped(self, monkeypatch):
+        """An unknown transport does not attempt to open an MCP connection."""
         from contextlib import AsyncExitStack
         from types import SimpleNamespace
 
@@ -1566,17 +1535,16 @@ class TestConnectOneMcpServer:
         monkeypatch.setattr(mcp_tools, "_mcp_server_connection", fake_connection)
         cfg = SimpleNamespace(type="websocket", command=None, url="wss://example.test/mcp")
 
-        with pytest.raises(mcp_tools.MCPConfigError, match="unknown transport"):
-            await mcp_tools.connect_mcp_server("svc", cfg, ToolRegistry(), AsyncExitStack())
+        await mcp_tools.connect_mcp_servers({"svc": cfg}, ToolRegistry(), AsyncExitStack())
 
         assert attempted is False
 
-    async def test_stdio_sandboxed_with_spawning_skips_the_guard(self):
+    async def test_stdio_sandboxed_with_spawning_does_not_raise(self):
         """Sandboxed executor that supports spawning does not trigger the guard."""
         from contextlib import AsyncExitStack
 
         from raven.agent.tools.registry import ToolRegistry
-        from raven.mcp.client import connect_mcp_server
+        from raven.mcp.client import connect_mcp_servers
 
         class SpawningExecutor(MockExecutor):
             @property
@@ -1584,7 +1552,7 @@ class TestConnectOneMcpServer:
                 return True
 
             async def start_process(self, command, args, env=None):
-                raise RuntimeError("start_process called -- expected in test")
+                raise RuntimeError("start_process called — expected in test")
 
         cfg = MagicMock()
         cfg.type = "stdio"
@@ -1592,10 +1560,55 @@ class TestConnectOneMcpServer:
         cfg.args = []
         cfg.env = None
         cfg.tool_timeout = 30
-        # Reaching start_process is the proof: the guard raises SandboxInitError
-        # before any transport is opened, so its message would surface instead.
-        with pytest.raises(RuntimeError, match="start_process called"):
-            await connect_mcp_server("svc", cfg, ToolRegistry(), AsyncExitStack(), executor=SpawningExecutor())
+        # Guard should NOT raise; error comes from start_process stub instead.
+        try:
+            await connect_mcp_servers({"svc": cfg}, ToolRegistry(), AsyncExitStack(), executor=SpawningExecutor())
+        except SandboxInitError:
+            pytest.fail("SandboxInitError should not be raised when spawning is supported")
+
+    async def test_sandbox_guard_on_second_server_partial_registration(self):
+        """SandboxInitError on server 2 aborts after server 1 was already processed.
+
+        Verifies: the guard raises (not swallowed), even after prior servers connected.
+        """
+        from contextlib import AsyncExitStack
+
+        from raven.agent.tools.registry import ToolRegistry
+        from raven.mcp.client import connect_mcp_servers
+
+        executor = MockExecutor()  # is_sandboxed=True, supports_process_spawning=False
+
+        cfg_http = MagicMock()
+        cfg_http.type = "streamableHttp"
+        cfg_http.url = "http://example.com/mcp"
+        cfg_http.command = None
+        cfg_http.headers = None
+
+        cfg_stdio = MagicMock()
+        cfg_stdio.type = "stdio"
+        cfg_stdio.command = "mcp-server"
+        cfg_stdio.args = []
+
+        # Server 1 is HTTP (no guard) — mock the transport so no real network request is
+        # made. anyio's cancel scopes inside streamable_http_client break when a real HTTP
+        # request fails in a pytest-asyncio test context; mocking avoids that.
+        # Server 2 is stdio (guard fires). SandboxInitError must propagate, not be swallowed.
+        from contextlib import asynccontextmanager
+        from unittest.mock import patch
+
+        @asynccontextmanager
+        async def _failing_http(*args, **kwargs):
+            raise ConnectionError("mock: no network in tests")
+            yield  # make it a generator
+
+        with patch("mcp.client.streamable_http.streamable_http_client", _failing_http):
+            with pytest.raises(SandboxInitError, match="stdio transport"):
+                await connect_mcp_servers(
+                    {"http_svc": cfg_http, "stdio_svc": cfg_stdio},
+                    ToolRegistry(),
+                    AsyncExitStack(),
+                    executor=executor,
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -1750,13 +1763,3 @@ def test_build_executor_warns_when_backend_none(monkeypatch, tmp_path):
     finally:
         logger.remove(sink)
     assert any("no isolation" in m for m in msgs)
-
-
-def test_a_backend_gets_its_own_home_under_the_data_dir() -> None:
-    """boxlite keeps its db, images and layers here rather than in ~/.boxlite,
-    so the directory has to exist by the time the backend is handed the path."""
-    home = get_sandbox_dir("boxlite")
-
-    assert home == get_data_dir() / "sandbox" / "boxlite"
-    assert home.is_dir()
-    assert get_sandbox_dir("other") == home.parent / "other"

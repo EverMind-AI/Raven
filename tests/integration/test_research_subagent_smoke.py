@@ -87,7 +87,7 @@ async def test_the_startup_backfill_measures_statefulness_by_itself(tmp_path: Pa
     """
     from types import SimpleNamespace
 
-    from raven.acp_client import capabilities
+    from raven.agent.acp import capabilities
     from raven.agent.subagent import probe
     from raven.agent.subagent.backends import agent_meta
     from raven.config.schema import ThirdPartyAcpSubagentConfig
@@ -97,7 +97,7 @@ async def test_the_startup_backfill_measures_statefulness_by_itself(tmp_path: Pa
     monkeypatch.setattr(probe, "_SCHEDULED", False)
 
     # The row discovery would build, resolved by hand: the suite's autouse
-    # ``no_discovered_products`` pin points discovery at nothing, deliberately.
+    # ``no_vendored_subagents`` pin points discovery at nothing, deliberately.
     manifest = json.loads((_FOLDER / "subagent.json").read_text(encoding="utf-8"))
     for field in ("command", "cwd"):
         manifest[field] = manifest[field].replace("{SUBAGENT_DIR}", str(_FOLDER)).replace("{PYTHON}", sys.executable)

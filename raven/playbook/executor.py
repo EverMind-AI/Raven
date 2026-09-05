@@ -13,8 +13,9 @@ is no model in the room, so ``_compose`` spends one call to turn the guidance in
 a graph. Deleting that path would have quietly removed the CLI's ability to run a
 prompt-mode playbook at all.
 
-This module builds no backends and resolves no agent names: each node names an
-agent on the shared table and the graph tool resolves it.
+This module builds no backends and resolves no agent names. Each node names an
+agent on the shared table and the graph tool looks it up, which is what removed
+the synthetic ``pb-<node>`` names every step used to run under.
 
 Stateless by design: a plan either runs, or comes back as questions the
 caller relays to the user, and the caller decides what to do with the answer --
@@ -30,13 +31,12 @@ from __future__ import annotations
 import re
 import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 from loguru import logger
 from pydantic import ValidationError
 
-from raven.agent.subagent.prompt_placeholders import iter_placeholders
 from raven.playbook.agent_profiles import AgentProfileSource, validate_node_capabilities
 from raven.playbook.llm_result import ProviderResponseError, RequiredToolError, required_tool_arguments
 from raven.playbook.mcp import playbook_mcp_servers
@@ -46,7 +46,9 @@ from raven.playbook.types import NodeSpec, PlaybookSpec
 from raven.playbook.validate import validate_graph_nodes
 
 if TYPE_CHECKING:
-    from raven.contracts.llm_provider import LLMProvider
+    from raven.providers.base import LLMProvider
+
+_NODE_REF_RE = re.compile(r"\{\{\s*([A-Za-z0-9_-]+)\.(output|output_path)\s*\}\}")
 
 
 def _fill_text(text: str, spec: PlaybookSpec, values: Mapping[str, str], where: str) -> str:
@@ -94,6 +96,9 @@ class ExecutionPlan:
     dispatched*. ``questions``: it cannot proceed, and ``reply`` says why."""
 
     reply: str = ""
+
+    notes: list[str] = field(default_factory=list)
+    """Degradations worth surfacing (unsupported mcps, unfillable requests)."""
 
 
 def _gap_reply(spec: PlaybookSpec, missing: list[tuple[str, str]], blanks: list[tuple[str, str]]) -> str:
@@ -200,18 +205,7 @@ def _apply_fills(
             updates.setdefault(node_id, {})[attr] = value
     if errors:
         return nodes, errors
-    filled: list[NodeSpec] = []
-    for node in nodes:
-        if node.id not in updates:
-            filled.append(node)
-            continue
-        try:
-            filled.append(NodeSpec.model_validate({**node.model_dump(), **updates[node.id]}))
-        except ValidationError as exc:
-            for error in exc.errors():
-                field = ".".join(str(part) for part in error["loc"]) or "<node>"
-                errors.append(f"fills[{node.id!r}] makes {field!r} invalid: {error['msg']}.")
-    return (nodes, errors) if errors else (filled, [])
+    return [n.model_copy(update=updates[n.id]) if n.id in updates else n for n in nodes], []
 
 
 def _is_blank(value: Any) -> bool:
@@ -268,16 +262,10 @@ def _namespace_run(spec_name: str, nodes: list[NodeSpec]) -> list[NodeSpec]:
     mapping = {n.id: f"{prefix}-{tag}-{n.id}" for n in nodes}
 
     def rewrite_refs(text: str) -> str:
-        rewritten: list[str] = []
-        last = 0
-        for start, end, placeholder in iter_placeholders(text):
-            if placeholder.kind not in ("output", "output_path"):
-                continue
-            rewritten.append(text[last:start])
-            rewritten.append("{{ %s.%s }}" % (mapping.get(placeholder.name, placeholder.name), placeholder.kind))
-            last = end
-        rewritten.append(text[last:])
-        return "".join(rewritten)
+        return _NODE_REF_RE.sub(
+            lambda m: "{{ %s.%s }}" % (mapping.get(m.group(1), m.group(1)), m.group(2)),
+            text,
+        )
 
     def rewrite_inputs(inputs: dict[str, object]) -> dict[str, object]:
         rewritten: dict[str, object] = {}

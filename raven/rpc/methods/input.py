@@ -19,13 +19,17 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import unquote, urlparse
 
-from raven.utils.images import detect_image_mime, estimate_image_tokens, image_pixel_size
+from raven.utils.helpers import (
+    _image_pixel_size,
+    detect_image_mime,
+    estimate_image_tokens,
+)
 
 if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
 
 
-# Enough for every header ``image_pixel_size`` parses; the file is not read
+# Enough for every header ``_image_pixel_size`` parses; the file is not read
 # past this, so dropping a large image costs one short read.
 _HEADER_BYTES = 4096
 
@@ -95,7 +99,7 @@ def _image_meta(path: Path) -> dict | None:
         return None
 
     meta: dict = {"is_image": True}
-    size = image_pixel_size(head)
+    size = _image_pixel_size(head)
     if size:
         meta["width"], meta["height"] = size
         meta["token_estimate"] = estimate_image_tokens(*size)

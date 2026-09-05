@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import json
-import time
 from types import SimpleNamespace
 
 import httpx
@@ -51,68 +48,10 @@ def _tokens(**kw):
     return OAuthToken(access_token="at-1", token_type="Bearer", refresh_token="rt-1", **kw)
 
 
-def _client_info(redirects: list[str], client_id: str = "cid"):
+def _client_info(redirects: list[str]):
     from mcp.shared.auth import OAuthClientInformationFull
 
-    return OAuthClientInformationFull(client_id=client_id, redirect_uris=redirects)
-
-
-async def _store_expired(storage, tokens) -> None:
-    """Store tokens whose deadline has already passed.
-
-    Tokens with no ``expires_in`` are stored as non-expiring, which is correct
-    and which sends every flow down the fast path -- so a test about the refresh
-    lock has to age them, or it silently stops testing the lock.
-    """
-    await storage.set_tokens(tokens)
-    path = mcp_oauth.credentials_path(storage._path.stem)  # noqa: SLF001 — test reaches for the file it wrote
-    data = json.loads(path.read_text())
-    data["expires_at"] = time.time() - 60
-    path.write_text(json.dumps(data))
-
-
-class _FakeProvider:
-    """The SDK provider surface the coordination wrapper actually touches.
-
-    Shaped after ``OAuthClientProvider``: ``_initialize`` loads both halves of
-    the stored credential, and ``can_refresh_token`` is the SDK's own test --
-    tokens with a refresh_token, plus a client to spend it as.
-    """
-
-    def __init__(self, **kw):
-        self.context = SimpleNamespace(
-            storage=kw["storage"],
-            current_tokens=None,
-            client_info=None,
-            token_expiry_time=None,
-            client_metadata=SimpleNamespace(redirect_uris=[REDIRECT]),
-            update_token_expiry=lambda _t: None,
-        )
-        # The SDK's own two predicates, copied rather than stubbed: a stub that
-        # always says "expired" would hide the whole expiry-adoption question.
-        self.context.is_token_valid = lambda: bool(
-            self.context.current_tokens
-            and self.context.current_tokens.access_token
-            and (not self.context.token_expiry_time or time.time() <= self.context.token_expiry_time)
-        )
-        self.context.can_refresh_token = lambda: bool(
-            self.context.current_tokens and self.context.current_tokens.refresh_token and self.context.client_info
-        )
-        self._initialized = False
-        self.sent: list[str] = []
-
-    async def _initialize(self):
-        self.context.current_tokens = await self.context.storage.get_tokens()
-        self.context.client_info = await self.context.storage.get_client_info()
-        self._initialized = True
-
-    async def _handle_refresh_response(self, response):
-        return bool(response)
-
-    async def async_auth_flow(self, request):
-        tokens = self.context.current_tokens
-        self.sent.append(tokens.refresh_token if tokens else "")
-        yield request
+    return OAuthClientInformationFull(client_id="cid", redirect_uris=redirects)
 
 
 async def test_token_roundtrip_and_permissions():
@@ -125,21 +64,15 @@ async def test_token_roundtrip_and_permissions():
     assert mode == 0o600
 
 
-async def test_a_drifted_callback_port_does_not_discard_the_registration():
-    """The client_id is the half of the credential a refresh runs on.
-
-    Dropping it here is what orphaned the refresh token: the SDK's only answer
-    to a missing client is to register a new one, and the token on disk was
-    minted for the old client_id. The redirect belongs to the browser flow, and
-    a refresh never sends one.
-    """
+async def test_client_info_port_drift_forces_reregistration():
     store = FileTokenStorage("srv", REDIRECT)
     await store.set_client_info(_client_info([REDIRECT]))
-    await store.set_tokens(_tokens())
+    assert (await store.get_client_info()) is not None
 
     drifted = FileTokenStorage("srv", "http://127.0.0.1:18793/oauth/callback")
-    kept = await drifted.get_client_info()
-    assert kept is not None and kept.client_id == "cid"
+    assert (await drifted.get_client_info()) is None
+    # Tokens survive the drift — only the registration is invalidated.
+    await store.set_tokens(_tokens())
     assert (await drifted.get_tokens()) is not None
 
 
@@ -171,9 +104,10 @@ async def test_the_callback_endpoint_is_stable_across_gateway_ports(monkeypatch)
 
     It is part of the registration the authorization server keeps, and the
     gateway's port moves (``pick_port`` probes forward when the preferred one
-    is taken). A moved redirect costs an authorization-code flow a fresh
-    registration, and sends the browser somewhere the user has to sit through
-    again -- so the redirect is kept off the gateway's port entirely.
+    is taken). A moved redirect makes ``get_client_info`` refuse the stored
+    registration, which re-runs dynamic client registration -- and the new
+    client cannot use the tokens minted for the old one, so a plugin the user
+    already authorized asks to be authorized again.
     """
     monkeypatch.setattr(mcp_oauth, "_callback_base", None)
     monkeypatch.setattr(mcp_oauth, "_fallback_runner", None)
@@ -366,9 +300,29 @@ async def test_two_providers_do_not_race_a_rotating_refresh_token(monkeypatch, t
     """
     from raven.mcp.oauth import FileTokenStorage, _coordinated_provider_class
 
-    cls = _coordinated_provider_class(_FakeProvider)
+    class Base:
+        def __init__(self, **kw):
+            self.context = SimpleNamespace(
+                storage=kw["storage"],
+                current_tokens=None,
+                is_token_valid=lambda: False,
+                update_token_expiry=lambda _t: None,
+            )
+            self._initialized = False
+            self.sent: list[str] = []
+
+        async def _initialize(self):
+            self.context.current_tokens = await self.context.storage.get_tokens()
+            self._initialized = True
+
+        async def async_auth_flow(self, request):
+            tokens = self.context.current_tokens
+            self.sent.append(tokens.refresh_token if tokens else "")
+            yield request
+
+    cls = _coordinated_provider_class(Base)
     storage = FileTokenStorage("rot", REDIRECT)
-    await _store_expired(storage, OAuthToken(access_token="a0", refresh_token="r0", token_type="Bearer"))
+    await storage.set_tokens(OAuthToken(access_token="a0", refresh_token="r0", token_type="Bearer"))
 
     host = cls(storage=storage, server_name="rot", can_park=True)
     bridged = cls(storage=storage, server_name="rot", can_park=False)
@@ -385,7 +339,7 @@ async def test_two_providers_do_not_race_a_rotating_refresh_token(monkeypatch, t
 
     # The host's refresh lands: the stored credential is now a different one, and
     # the one both providers are holding has been retired by the server.
-    await _store_expired(storage, OAuthToken(access_token="a1", refresh_token="r1", token_type="Bearer"))
+    await storage.set_tokens(OAuthToken(access_token="a1", refresh_token="r1", token_type="Bearer"))
     await run(bridged)
 
     # Without the re-read this is "r0" again -- the token that no longer works,
@@ -407,9 +361,29 @@ async def test_a_contended_refresh_gives_up_rather_than_run_unserialized(monkeyp
 
     monkeypatch.setattr(mcp_oauth, "_REFRESH_WAIT", 0.05)
 
-    cls = _coordinated_provider_class(_FakeProvider)
+    class Base:
+        def __init__(self, **kw):
+            self.context = SimpleNamespace(
+                storage=kw["storage"],
+                current_tokens=None,
+                is_token_valid=lambda: False,
+                update_token_expiry=lambda _t: None,
+            )
+            self._initialized = False
+            self.sent: list[str] = []
+
+        async def _initialize(self):
+            self.context.current_tokens = await self.context.storage.get_tokens()
+            self._initialized = True
+
+        async def async_auth_flow(self, request):
+            tokens = self.context.current_tokens
+            self.sent.append(tokens.refresh_token if tokens else "")
+            yield request
+
+    cls = _coordinated_provider_class(Base)
     storage = FileTokenStorage("contend", REDIRECT)
-    await _store_expired(storage, OAuthToken(access_token="a0", refresh_token="r0", token_type="Bearer"))
+    await storage.set_tokens(OAuthToken(access_token="a0", refresh_token="r0", token_type="Bearer"))
     bridged = cls(storage=storage, server_name="contend", can_park=False)
     await bridged._initialize()
 
@@ -426,191 +400,6 @@ async def test_a_contended_refresh_gives_up_rather_than_run_unserialized(monkeyp
     assert "re-authorized by another connection" in str(excinfo.value)
     # The point of the assertion: the shared token was never put on the wire.
     assert bridged.sent == []
-
-
-DRIFTED = "http://127.0.0.1:19999/oauth/callback"
-
-
-async def _drifted_provider(server: str, *, refresh_token: str | None) -> tuple:
-    """A provider whose stored registration was minted for another port."""
-    from raven.mcp.oauth import _coordinated_provider_class
-
-    cls = _coordinated_provider_class(_FakeProvider)
-    storage = FileTokenStorage(server, REDIRECT)
-    await storage.set_client_info(_client_info([DRIFTED], client_id="old-cid"))
-    await storage.set_tokens(OAuthToken(access_token="a0", refresh_token=refresh_token, token_type="Bearer"))
-    return cls(storage=storage, server_name=server), storage
-
-
-async def _drive_one_401(provider) -> None:
-    """Push one 401 through the wrapper, the way httpx would answer the server."""
-    req = httpx.Request("GET", "https://mcp.example/mcp")
-    flow = provider.async_auth_flow(req)
-    await flow.asend(None)
-    with contextlib.suppress(StopAsyncIteration):
-        await flow.asend(httpx.Response(401, request=req))
-    await flow.aclose()
-
-
-async def test_a_re_read_never_hands_an_expired_token_a_fresh_lease():
-    """The deadline is read back from the anchor, never recomputed.
-
-    ``update_token_expiry`` is ``now + expires_in``, which is only true at the
-    moment a token is minted. Applied to one read off disk it gives an hour-old
-    access token a fresh hour: the credential reads as valid, the refresh branch
-    never runs, and the stale token 401s -- whose handler is a browser, which is
-    the failure this coordination exists to prevent.
-    """
-    from raven.mcp.oauth import _coordinated_provider_class
-
-    cls = _coordinated_provider_class(_FakeProvider)
-    storage = FileTokenStorage("stale", REDIRECT)
-    await storage.set_client_info(_client_info([REDIRECT]))
-    await storage.set_tokens(OAuthToken(access_token="a0", refresh_token="r0", token_type="Bearer", expires_in=3600))
-    # An hour of wall clock, the way a restart sees it.
-    raw = json.loads(mcp_oauth.credentials_path("stale").read_text())
-    raw["expires_at"] = time.time() - 60
-    mcp_oauth.credentials_path("stale").write_text(json.dumps(raw))
-
-    provider = cls(storage=storage, server_name="stale")
-    anchored = storage.stored_token_expiry()
-
-    await provider._adopt_stored_tokens()
-    await provider._adopt_stored_tokens()
-
-    assert provider.context.token_expiry_time == anchored
-    assert provider.context.is_token_valid() is False
-
-
-async def test_a_drifted_registration_is_kept_while_a_refresh_can_spend_it():
-    """The whole point: the refresh goes out under the stored client_id.
-
-    Re-registering instead is what mints a client the stored refresh_token does
-    not belong to -- the authorization server answers `invalid_grant`, and the
-    only way back is a human in a browser.
-    """
-    provider, _ = await _drifted_provider("keep", refresh_token="r0")
-
-    async for _ in provider.async_auth_flow(object()):
-        break
-
-    assert provider.context.client_info is not None
-    assert provider.context.client_info.client_id == "old-cid"
-
-
-async def test_a_401_drops_a_drifted_registration_so_the_sdk_re_registers():
-    """The 401 is the transition, and the only one that matters.
-
-    Everything before it can still be served by the stored client; from it on,
-    the redirect raven listens on now is what goes on the wire, and this client
-    is not registered for it. Clearing it is what makes the SDK's
-    ``if not client_info`` take the branch that registers.
-    """
-    provider, _ = await _drifted_provider("drop", refresh_token=None)
-    await provider._initialize()
-    assert provider.context.client_info is not None
-
-    await _drive_one_401(provider)
-
-    assert provider.context.client_info is None
-
-
-async def test_a_401_with_a_valid_looking_token_still_drops_the_registration():
-    """The case an entry-point check cannot see.
-
-    A token the stored anchor still calls valid can be revoked server-side. No
-    refresh is attempted, so a guard keyed on "cannot refresh" never fires -- and
-    the authorization then goes out under a client_id registered for a callback
-    that moved, which the server answers with ``invalid_redirect_uri``.
-    """
-    provider, storage = await _drifted_provider("early401", refresh_token="r0")
-    raw = json.loads(mcp_oauth.credentials_path("early401").read_text())
-    raw["expires_at"] = time.time() + 3600
-    mcp_oauth.credentials_path("early401").write_text(json.dumps(raw))
-    await provider._initialize()
-    provider.context.token_expiry_time = storage.stored_token_expiry()
-    assert provider.context.is_token_valid() is True
-
-    await _drive_one_401(provider)
-
-    assert provider.context.client_info is None
-
-
-async def test_a_registration_that_still_matches_survives_a_401():
-    """The drop is keyed on the redirect and nothing else -- otherwise every 401
-    on a healthy server throws away a perfectly good registration."""
-    from raven.mcp.oauth import _coordinated_provider_class
-
-    cls = _coordinated_provider_class(_FakeProvider)
-    storage = FileTokenStorage("match", REDIRECT)
-    await storage.set_client_info(_client_info([REDIRECT], client_id="live-cid"))
-    await storage.set_tokens(OAuthToken(access_token="a0", token_type="Bearer"))
-    provider = cls(storage=storage, server_name="match")
-    await provider._initialize()
-
-    await _drive_one_401(provider)
-
-    assert provider.context.client_info is not None
-    assert provider.context.client_info.client_id == "live-cid"
-
-
-async def test_a_declared_client_replaces_the_dropped_one_rather_than_a_registration():
-    """A catalog-declared client is aimed at the redirect in use, so it can run
-    the authorization the dropped one cannot -- and using it saves the round trip
-    a dynamic registration would cost."""
-    provider, storage = await _drifted_provider("declared", refresh_token=None)
-    storage.use_preregistered_client(_client_info([REDIRECT], client_id="pub-client"))
-    await provider._initialize()
-
-    await _drive_one_401(provider)
-
-    assert provider.context.client_info is not None
-    assert provider.context.client_info.client_id == "pub-client"
-
-
-async def test_replacing_the_registration_takes_its_tokens_with_it():
-    """A token pair belongs to one client_id and dies with it.
-
-    The SDK stores a fresh registration before it opens the browser, so an
-    authorization the user abandons would otherwise leave the file holding a
-    client nobody authorized and tokens nobody can spend -- and the next connect
-    would put that pair on the wire to find out.
-    """
-    store = FileTokenStorage("replaced", REDIRECT)
-    await store.set_client_info(_client_info([REDIRECT], client_id="old-cid"))
-    await store.set_tokens(_tokens(expires_in=3600))
-    assert (await store.get_tokens()) is not None
-
-    await store.set_client_info(_client_info([REDIRECT], client_id="new-cid"))
-
-    assert (await store.get_tokens()) is None
-    assert store.stored_token_expiry() is None
-    assert (await store.get_client_info()).client_id == "new-cid"
-
-
-async def test_rewriting_the_same_registration_keeps_its_tokens():
-    """Only a change of client_id retires a credential. A rewrite that lands the
-    same client_id must not cost the tokens it still owns."""
-    store = FileTokenStorage("same", REDIRECT)
-    await store.set_client_info(_client_info([REDIRECT], client_id="cid-1"))
-    await store.set_tokens(_tokens(expires_in=3600))
-
-    await store.set_client_info(_client_info([REDIRECT], client_id="cid-1"))
-
-    assert (await store.get_tokens()) is not None
-
-
-async def test_a_stored_client_outranks_a_declared_one_while_it_can_refresh():
-    """The stored refresh token was minted for the stored client_id and no
-    other. Handing it to the catalog's client is an `invalid_grant` and a browser
-    trip that did not need to happen."""
-    storage = FileTokenStorage("outrank", REDIRECT)
-    await storage.set_client_info(_client_info([DRIFTED], client_id="old-cid"))
-    await storage.set_tokens(OAuthToken(access_token="a0", refresh_token="r0", token_type="Bearer"))
-    storage.use_preregistered_client(_client_info([REDIRECT], client_id="pub-client"))
-
-    got = await storage.get_client_info()
-    assert got is not None and got.client_id == "old-cid"
 
 
 async def test_callback_unknown_state_rejected():
@@ -726,42 +515,6 @@ async def test_tokens_that_declared_no_expiry_seed_nothing():
 
     store = FileTokenStorage("srv", REDIRECT)
     await store.set_tokens(OAuthToken(access_token="at-1", token_type="Bearer"))
-    assert store.stored_token_expiry() is None
-
-
-async def test_a_response_without_expires_in_is_stored_as_non_expiring():
-    """ "No deadline stated" and "deadline unknown" are opposite answers.
-
-    A server may legally omit ``expires_in``, and long-lived tokens usually do.
-    Recording that as an absent key made it indistinguishable from a file
-    written before the anchor existed -- so every flow re-applied the
-    unknown-age sentinel, refreshed, got another response without
-    ``expires_in``, and went round again. A rotating refresh token is then spent
-    once per request.
-    """
-    from mcp.shared.auth import OAuthToken
-
-    store = FileTokenStorage("noexp", REDIRECT)
-    await store.set_tokens(OAuthToken(access_token="a1", refresh_token="r1", token_type="Bearer"))
-
-    stored = json.loads(mcp_oauth.credentials_path("noexp").read_text())
-    assert "expires_at" in stored and stored["expires_at"] is None
-    assert store.stored_token_expiry() is None
-
-
-async def test_the_unknown_age_sentinel_retires_itself_after_one_refresh():
-    """It exists to make the FIRST request refresh, and storing the result is
-    what ends it -- otherwise the heal it triggers re-arms it."""
-    store = FileTokenStorage("legacy", REDIRECT)
-    path = mcp_oauth.credentials_path("legacy")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"tokens": {"access_token": "a0", "refresh_token": "r0", "token_type": "Bearer"}}))
-    assert store.stored_token_expiry() == 1.0
-
-    from mcp.shared.auth import OAuthToken
-
-    await store.set_tokens(OAuthToken(access_token="a1", refresh_token="r1", token_type="Bearer"))
-
     assert store.stored_token_expiry() is None
 
 
@@ -1021,142 +774,16 @@ async def test_a_preregistered_client_is_dropped_when_the_callback_port_moved(_f
     assert seen[-1] == "https://as.example/register"
 
 
-async def test_a_live_peer_adopts_the_client_along_with_the_tokens():
-    """Tokens and the client that minted them are one credential.
+async def test_a_preregistered_client_survives_a_drifted_stored_registration():
+    """Drift kills a registration raven minted, not one declared against a
+    redirect that is still the one in use."""
+    store = FileTokenStorage("srv", REDIRECT)
+    await store.set_client_info(_client_info(["http://127.0.0.1:19999/oauth/callback"]))
+    assert (await store.get_client_info()) is None
 
-    The host keeps a provider for its own connection while a bridged dispatch
-    needs another, and only the one performing a handoff learns the new owner.
-    A peer that adopts the replacement tokens while holding the client they
-    replaced sends `invalid_grant` and buys a browser for a credential that
-    works.
-    """
-    from raven.mcp.oauth import _coordinated_provider_class
-
-    cls = _coordinated_provider_class(_FakeProvider)
-    storage = FileTokenStorage("peer", REDIRECT)
-    await storage.set_client_info(_client_info([DRIFTED], client_id="old-cid"))
-    await storage.set_tokens(OAuthToken(access_token="a0", refresh_token="r0", token_type="Bearer"))
-    storage.use_preregistered_client(_client_info([REDIRECT], client_id="pub-client"))
-
-    peer = cls(storage=storage, server_name="peer")
-    await peer._initialize()
-    assert peer.context.client_info.client_id == "old-cid"
-
-    # What the other provider's handoff leaves behind.
-    storage.forget_client_info()
-    await storage.set_tokens(OAuthToken(access_token="a1", refresh_token="r1", token_type="Bearer"))
-
-    await peer._adopt_stored_tokens()
-
-    assert peer.context.current_tokens.refresh_token == "r1"
-    assert peer.context.client_info.client_id == "pub-client"
-
-
-async def test_the_endpoints_a_server_stated_are_written_and_read_back():
-    """The note the next process refreshes from.
-
-    Kept here rather than only in tests/integration: that directory is outside
-    `norecursedirs`, so CI never collects it, and a write path with no test CI
-    runs is a write path nobody is watching.
-    """
-    store = FileTokenStorage("endpoints", REDIRECT)
-    assert store.remembered_metadata() is None
-
-    asm = {
-        "issuer": "https://as.example",
-        "authorization_endpoint": "https://as.example/oauth/authorize",
-        "token_endpoint": "https://as.example/oauth/token",
-    }
-    store.remember_metadata(asm)
-
-    assert store.remembered_metadata() == asm
-    # Idempotent: the same document must not rewrite the file on every response.
-    before = mcp_oauth.credentials_path("endpoints").stat().st_mtime_ns
-    store.remember_metadata(asm)
-    assert mcp_oauth.credentials_path("endpoints").stat().st_mtime_ns == before
-
-
-async def test_a_note_without_a_token_endpoint_is_no_note_at_all():
-    """Half a document would seed the SDK with something it cannot refresh
-    against, and the guessed address is the better fallback."""
-    store = FileTokenStorage("halfnote", REDIRECT)
-    store.remember_metadata({"issuer": "https://as.example"})
-    assert store.remembered_metadata() is None
-
-
-async def test_a_provider_records_what_discovery_taught_it():
-    """The hook that turns a discovered document into the next process's note."""
-    from types import SimpleNamespace
-
-    from raven.mcp.oauth import _coordinated_provider_class
-
-    cls = _coordinated_provider_class(_FakeProvider)
-    storage = FileTokenStorage("learned", REDIRECT)
-    provider = cls(storage=storage, server_name="learned")
-    provider.context.oauth_metadata = SimpleNamespace(
-        model_dump=lambda **_: {
-            "issuer": "https://as.example",
-            "authorization_endpoint": "https://as.example/oauth/authorize",
-            "token_endpoint": "https://as.example/oauth/token",
-        }
-    )
-
-    provider._remember_metadata()
-
-    assert storage.remembered_metadata()["token_endpoint"].endswith("/oauth/token")
-
-
-async def test_a_provider_records_nothing_when_the_catalog_supplied_it():
-    """A declared document is the catalog's answer, not the server's. Recording
-    it would outlive the disarm that exists for a declaration gone wrong."""
-    from types import SimpleNamespace
-
-    from raven.mcp.oauth import _coordinated_provider_class
-
-    cls = _coordinated_provider_class(_FakeProvider)
-    storage = FileTokenStorage("declared", REDIRECT)
-    provider = cls(storage=storage, server_name="declared")
-    provider._asm_from_catalog = True
-    provider.context.oauth_metadata = SimpleNamespace(
-        model_dump=lambda **_: {"token_endpoint": "https://as.example/oauth/token"}
-    )
-
-    provider._remember_metadata()
-
-    assert storage.remembered_metadata() is None
-
-
-async def test_a_credential_is_read_as_one_thing():
-    """One read, so a peer writing between two reads cannot hand back the tokens
-    from after it beside the client from before it."""
-    store = FileTokenStorage("unit", REDIRECT)
-    await store.set_client_info(_client_info([REDIRECT], client_id="cid-1"))
-    await store.set_tokens(_tokens(expires_in=3600))
-
-    tokens, expiry, client = await store.get_credential()
-
-    assert tokens.refresh_token == "rt-1"
-    assert expiry == store.stored_token_expiry()
-    assert client.client_id == "cid-1"
-
-
-async def test_the_handoff_to_a_declared_client_takes_the_superseded_one_off_disk():
-    """A declared client taking over skips registration, so nothing else will
-    overwrite the registration it replaced. Left there, the next process pairs
-    the declared client's tokens with a client_id that did not mint them.
-
-    The declared client is not written in its place: it is a catalog fact, and a
-    copy here would outlive the entry that justified it.
-    """
-    store = FileTokenStorage("handoff", REDIRECT)
-    await store.set_client_info(_client_info([DRIFTED], client_id="old-cid"))
-    store.use_preregistered_client(_client_info([REDIRECT], client_id="pub-client"))
-
-    store.forget_client_info()
-
-    assert json.loads(mcp_oauth.credentials_path("handoff").read_text()).get("client_info") is None
-    # With nothing stored, the declared client is what the next read resolves to.
-    assert (await store.get_client_info()).client_id == "pub-client"
+    store.use_preregistered_client(_client_info([REDIRECT]))
+    declared = await store.get_client_info()
+    assert declared is not None and str(declared.redirect_uris[0]) == REDIRECT
 
 
 async def test_a_resource_the_url_does_not_canonicalize_to_is_fetched_instead(_fixed_callback):
@@ -1184,61 +811,3 @@ async def test_a_partial_endpoint_block_is_not_a_document(_fixed_callback):
         "srv", _server_cfg(issuer="https://as.example", token_endpoint="https://as.example/token")
     )
     assert not _is_seeded(provider)
-
-
-def test_delete_credentials_takes_the_lock_sidecar_with_it(tmp_path, monkeypatch):
-    """A deleted credential leaves no trace -- not even the lock file that
-    once guarded its writes."""
-    from raven.mcp import oauth
-
-    monkeypatch.setattr(oauth, "_credentials_dir", lambda: tmp_path)
-    path = oauth.credentials_path("example")
-    lock = path.parent / ".lock" / (path.name + ".lock")
-    lock.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("{}")
-    lock.write_text("")
-
-    oauth.delete_credentials("example")
-
-    assert not path.exists()
-    assert not lock.exists()
-    oauth.delete_credentials("example")
-
-
-async def test_concurrent_first_use_binds_one_listener_and_one_uri(monkeypatch):
-    """[race] apply gathers its connect attempts, so two OAuth servers on a
-    process's first apply reach the endpoint bootstrap together. Unlocked,
-    each bound its own listener and registered a different redirect URI --
-    the exact port drift the fixed port exists to prevent."""
-    import asyncio
-
-    monkeypatch.setattr(mcp_oauth, "_callback_base", None)
-    monkeypatch.setattr(mcp_oauth, "_fallback_runner", None)
-
-    started: list[int] = []
-
-    class _Site:
-        def __init__(self, _runner, _host, port):
-            self._port = port
-
-        async def start(self):
-            await asyncio.sleep(0)
-            started.append(self._port)
-
-    class _Runner:
-        def __init__(self, _app):
-            pass
-
-        async def setup(self):
-            await asyncio.sleep(0)
-
-    monkeypatch.setattr("aiohttp.web.TCPSite", _Site)
-    monkeypatch.setattr("aiohttp.web.AppRunner", _Runner)
-
-    a, b = await asyncio.gather(
-        mcp_oauth._ensure_callback_endpoint(),
-        mcp_oauth._ensure_callback_endpoint(),
-    )
-
-    assert a == b, "two first-use connects must agree on one redirect URI"
-    assert started == [mcp_oauth.CALLBACK_PORT], "one listener, not one per racer"

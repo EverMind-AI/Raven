@@ -1,5 +1,3 @@
-"""Lint the PR title from the PR_TITLE env var as the prospective squash-commit header."""
-
 from __future__ import annotations
 
 import os

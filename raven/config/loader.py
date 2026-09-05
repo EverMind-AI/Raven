@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -9,15 +10,13 @@ from typing import Any
 from pydantic import ValidationError
 
 from raven.config.schema import Config
-from raven.home import get_config_path, raven_home, set_config_path
-from raven.utils.atomic_io import atomic_replace, atomic_update
 
 # Generation counter for the run-once config migrations below. Bump it, and add
 # the matching rule, when a migration must run exactly once per config rather
 # than on every load -- the watermark is what lets a user re-set by hand
 # whatever a migration cleared. Kept out of the schema on purpose: see
 # ``_stamp_path``.
-CURRENT_CONFIG_VERSION = 5
+CURRENT_CONFIG_VERSION = 2
 
 # The generation that introduced each run-once migration. Each is gated on its
 # own floor rather than on "is this config current", because those are not the
@@ -29,9 +28,6 @@ CURRENT_CONFIG_VERSION = 5
 # notice invited them to. Adding a migration means adding a floor here.
 _CONTEXT_WINDOW_MIGRATION = 1
 _AUTO_PROVIDER_MIGRATION = 2
-_RETIRED_GATEWAY_WEB_MIGRATION = 3
-_LEGACY_LEAVES_MIGRATION = 4
-_PHANTOM_KNOBS_MIGRATION = 5
 
 # The context window every pre-0.1.11 bootstrap wrote to disk verbatim: back
 # then ``AgentDefaults.context_window_tokens`` defaulted to this number and
@@ -51,11 +47,11 @@ EXTENSION_KEYS = (
     "skillForge",
     "token_wise",
     "skill_forge",
-    # Each key is listed in both camelCase (preferred
+    # CFG-1 additions: each key is listed in both camelCase (preferred
     # by config files) and snake_case (preferred by Python).
     "plugins",
     "memory",
-    # Runtime block: checkpoint policy etc.
+    # Bug2 / runtime-discipline 5th pillar — checkpoint policy etc.
     "runtime",
     # In-tree observability tracing (raven.tracing).
     "tracing",
@@ -72,24 +68,13 @@ EXTENSION_KEYS = (
     "subagent_dag",
     "subagentQuestions",
     "subagent_questions",
-    # Eval Engine judge hooks (raven.eval_engine), off by default. Same
-    # consequence as sessionTitle above if omitted: the documented way to turn
-    # the engine on would fail base Config validation.
-    "evalEngine",
-    "eval_engine",
 )
+
+# Global variable to store current config path (for multi-instance support)
+_current_config_path: Path | None = None
 
 # Paths already warned about as malformed in this process; repeated
 # load_config calls (status/doctor load more than once) warn only once.
-__all__ = [
-    "ConfigReadError",
-    "get_config_path",
-    "load_config",
-    "raven_home",
-    "read_raw_or_raise",
-    "set_config_path",
-]
-
 _warned_paths: set[str] = set()
 
 # User-facing lines produced by a migration that actually changed something,
@@ -99,6 +84,32 @@ _warned_paths: set[str] = set()
 # announced where the user is looking. Drained, not read, so N loads per
 # process yield one telling.
 _migration_notices: list[str] = []
+
+
+def set_config_path(path: Path) -> None:
+    """Set the current config path (used to derive data directory)."""
+    global _current_config_path
+    _current_config_path = path
+
+
+def raven_home() -> Path:
+    """The directory raven keeps everything in.
+
+    ``RAVEN_HOME`` was already honoured by the installer, the node runtime
+    lookup, the tracing directory, the serve state file and the file server --
+    and ignored here, which is the one that decides where config.json, the cron
+    store and every runtime subdirectory live. Setting it used to give you a
+    split installation: the runtime in one place, the configuration in another.
+    """
+    home = os.environ.get("RAVEN_HOME", "").strip()
+    return Path(home).expanduser() if home else Path.home() / ".raven"
+
+
+def get_config_path() -> Path:
+    """Get the configuration file path."""
+    if _current_config_path:
+        return _current_config_path
+    return raven_home() / "config.json"
 
 
 class ConfigReadError(Exception):
@@ -144,7 +155,7 @@ def drain_migration_notices() -> list[str]:
 
     Drained rather than read so that a process loading the config several times
     (status and doctor do; the TUI RPC server reloads every turn) tells the user
-    once. Callers own the console they print them to.
+    once. Callers own a console -- see ``cli._helpers``.
     """
     notices = list(_migration_notices)
     _migration_notices.clear()
@@ -192,7 +203,7 @@ def _write_migration_version(config_path: Path) -> None:
     """
     stamp = _stamp_path(config_path)
     try:
-        atomic_replace(stamp, json.dumps({"version": CURRENT_CONFIG_VERSION}) + "\n")
+        stamp.write_text(json.dumps({"version": CURRENT_CONFIG_VERSION}) + "\n", encoding="utf-8")
     except OSError as exc:
         logging.getLogger(__name__).debug("Could not write the migration stamp %s: %s", stamp, exc)
 
@@ -322,84 +333,43 @@ def _persist_migrations(path: Path, from_version: int = 0) -> None:
     this process correct, and the write only serves to keep the file from
     disagreeing with it.
     """
-
-    def _apply(_text: str | None) -> tuple[str | None, bool]:
-        # Re-read inside the transaction so the migrated content is exactly
-        # what is on disk while the lock is held -- an update_* writer cannot
-        # slip an edit in between this read and the replace.
-        try:
-            raw = read_raw_or_raise(path)
-        except ConfigReadError:
-            return None, False
-
-        changed = False
-        if raw:
-            # Gated on the same per-migration floors the in-memory pass used, so the
-            # file and the loaded config owe each other nothing: persisting a
-            # migration the load path skipped would write an edit this process is
-            # not running on.
-            if from_version < _CONTEXT_WINDOW_MIGRATION:
-                changed = _migrate_legacy_context_window(raw) or changed
-            if from_version < _AUTO_PROVIDER_MIGRATION:
-                changed = _migrate_auto_provider(raw) or changed
-            if from_version < _RETIRED_GATEWAY_WEB_MIGRATION:
-                changed = _migrate_retired_gateway_web(raw) or changed
-            if from_version < _LEGACY_LEAVES_MIGRATION:
-                changed = _migrate_legacy_leaves(raw) or changed
-            if from_version < _PHANTOM_KNOBS_MIGRATION:
-                changed = _migrate_phantom_knobs(raw) or changed
-        if not changed:
-            return None, True
-        return json.dumps(raw, indent=2, ensure_ascii=False), True
-
     try:
-        parsed = atomic_update(path, _apply)
-    except OSError as exc:
-        logging.getLogger(__name__).debug("Could not persist config migration to %s: %s", path, exc)
+        raw = read_raw_or_raise(path)
+    except ConfigReadError:
         return
 
-    if parsed:
-        _write_migration_version(path)
+    changed = False
+    if raw:
+        # Gated on the same per-migration floors the in-memory pass used, so the
+        # file and the loaded config owe each other nothing: persisting a
+        # migration the load path skipped would write an edit this process is
+        # not running on.
+        if from_version < _CONTEXT_WINDOW_MIGRATION:
+            changed = _migrate_legacy_context_window(raw) or changed
+        if from_version < _AUTO_PROVIDER_MIGRATION:
+            changed = _migrate_auto_provider(raw) or changed
+    if changed:
+        # PID in the name: two processes migrating at once would otherwise share
+        # one temp path, and the second's truncating write could be read as an
+        # empty config.json by anyone loading between it and the replace.
+        tmp = path.with_name(f"{path.name}.migrating.{os.getpid()}")
+        try:
+            tmp.write_text(json.dumps(raw, indent=2, ensure_ascii=False), encoding="utf-8")
+            # os.replace swaps the inode, so the original's mode is not carried
+            # over by anything: a config the user tightened to owner-only (it
+            # holds providers.*.apiKey) would come back world-readable. See
+            # config.paths.restrict_to_owner on why a replacing writer owns this.
+            try:
+                os.chmod(tmp, path.stat().st_mode & 0o7777)
+            except OSError:
+                pass
+            os.replace(tmp, path)
+        except OSError as exc:
+            logging.getLogger(__name__).debug("Could not persist config migration to %s: %s", path, exc)
+            tmp.unlink(missing_ok=True)
+            return
 
-
-# The raw channel sections, exactly as the file spells them (sparse: only what
-# the user set). The delivery path reads cargo from here through the admission
-# door, so declared defaults -- not the central model's -- own an absent key.
-# Keyed per load; a malformed section yields an empty slice and a warning
-# rather than taking the load down (the socket half still validates).
-_channel_slices: dict[str, dict] = {}
-
-
-def channel_cargo_slice(name: str) -> dict:
-    """The sparse, file-true cargo slice for one channel (empty when unset)."""
-    return dict(_channel_slices.get(name, {}))
-
-
-def _stash_channel_slices(data: dict) -> None:
-    _channel_slices.clear()
-    channels = data.get("channels")
-    if not isinstance(channels, dict):
-        return
-    for name, section in channels.items():
-        if isinstance(section, dict):
-            _channel_slices[name] = dict(section)
-        elif name not in _CHANNELS_SECTION_FIELDS:
-            logging.getLogger(__name__).warning("channels.%s is not a table; its cargo reads as unset", name)
-
-
-def _channels_section_fields() -> frozenset[str]:
-    """The section-wide scalar keys of ``channels`` (``sendProgress`` and its
-    kin), in both spellings, so a setting is never mistaken for a channel
-    whose cargo failed to parse."""
-    from pydantic.alias_generators import to_camel
-
-    from raven.config.schema import ChannelsConfig
-
-    names = set(ChannelsConfig.model_fields)
-    return frozenset(names | {to_camel(n) for n in names})
-
-
-_CHANNELS_SECTION_FIELDS = _channels_section_fields()
+    _write_migration_version(path)
 
 
 def load_config(config_path: Path | None = None) -> Config:
@@ -425,7 +395,6 @@ def load_config(config_path: Path | None = None) -> Config:
             from_version = _migration_version(path)
             unstamped = from_version < CURRENT_CONFIG_VERSION
             data = _migrate_config(data, from_version=from_version)
-            _stash_channel_slices(data)
         except json.JSONDecodeError as e:
             # Boot on defaults for a malformed file (a transient mid-write race
             # shouldn't brick callers) but warn LOUDLY -- a persistent syntax
@@ -492,113 +461,12 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
         config_path: Optional path to save to. Uses default if not provided.
     """
     path = config_path or get_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
 
     data = config.model_dump(by_alias=True, exclude_defaults=True)
-    atomic_replace(path, json.dumps(data, indent=2, ensure_ascii=False))
 
-
-def _migrate_retired_gateway_web(data: dict[str, Any], *, notify: bool = False) -> bool:
-    """Drop the retired ``gateway.web`` table.
-
-    The web channel it configured is gone: the gateway's control plane needs
-    no configuration (loopback, per-boot token, endpoint published in the
-    lock), and proactive output that ``enabled: true`` used to route to a
-    channel with no clients now reaches the IM channels and the page.
-    Run once per config through the version floor, and persisted like its
-    two predecessors, so the file loses the key and the notice fires once.
-    """
-    gateway = data.get("gateway")
-    if not isinstance(gateway, dict) or "web" not in gateway:
-        return False
-    gateway.pop("web")
-    notice = (
-        "Removed `gateway.web` from your config: the web channel is retired. The gateway control "
-        "plane needs no settings (it binds loopback with a per-boot token), and proactive replies that "
-        "`web.enabled` used to send to the web channel now reach your IM channels and the page."
-    )
-    if notify and notice not in _migration_notices:
-        _migration_notices.append(notice)
-    return True
-
-
-def _migrate_phantom_knobs(data: dict[str, Any], *, notify: bool = False) -> bool:
-    """Retire the two knobs that were written and never read.
-
-    ``agents.defaults.thinkingBudget`` had a settings key on the wire and no
-    reader anywhere -- the loop never saw it (the schema carries no such field,
-    so the loaded config dropped it silently). ``tokenWise.smartRouting`` was a
-    config class whose only reference was a test asserting its default. Both
-    leave the file through the floor, told once, so the strict models need no
-    shim for them.
-    """
-    changed = False
-    defaults = (data.get("agents") or {}).get("defaults") or {}
-    for spelling in ("thinkingBudget", "thinking_budget"):
-        if spelling in defaults:
-            defaults.pop(spelling)
-            changed = True
-            notice = f"Migrated: dropped agents.defaults.{spelling} (written by the settings page, read by nothing)"
-            if notify and notice not in _migration_notices:
-                _migration_notices.append(notice)
-    tw = data.get("tokenWise") or data.get("token_wise") or {}
-    for spelling in ("smartRouting", "smart_routing"):
-        if spelling in tw:
-            tw.pop(spelling)
-            changed = True
-            notice = f"Migrated: dropped tokenWise.{spelling} (a router this build never consulted)"
-            if notify and notice not in _migration_notices:
-                _migration_notices.append(notice)
-    return changed
-
-
-def _migrate_legacy_leaves(data: dict[str, Any], *, notify: bool = False) -> bool:
-    """Retire the three leaves the schema kept accepting after their meaning left.
-
-    ``skillForge.skillsDir`` becomes the first ``skillForge.localDirs`` entry (the
-    model used to convert it on every load, with a DeprecationWarning nobody
-    saw); ``skillForge.massLibraryDb`` is dropped (the mass pool is retired; the
-    remote library is the Hub source); ``context.engine`` is dropped (one context
-    engine exists, the selector had no effect). Run once per config through the
-    version floor and persisted, so the file loses the keys and the model needs
-    no shim for them.
-    """
-    changed = False
-    notices: list[str] = []
-    for key in ("skillForge", "skill_forge"):
-        block = data.get(key)
-        if not isinstance(block, dict):
-            continue
-        for old in ("skills_dir", "skillsDir"):
-            if old not in block:
-                continue
-            path = block.pop(old)
-            changed = True
-            if path and "local_dirs" not in block and "localDirs" not in block:
-                block["localDirs" if key == "skillForge" else "local_dirs"] = [{"path": path}]
-                notices.append(
-                    f"Moved `{key}.{old}` in your config to `{key}.localDirs`: the single skills directory "
-                    "became a list of local skill sources."
-                )
-        for old in ("mass_library_db", "massLibraryDb"):
-            if old in block:
-                block.pop(old)
-                changed = True
-                notices.append(
-                    f"Removed `{key}.{old}` from your config: the mass pool is retired. The remote skill "
-                    "library is the Hub source, configured at `skillForge.router.hub.endpoint`."
-                )
-    context = data.get("context")
-    if isinstance(context, dict) and "engine" in context:
-        context.pop("engine")
-        changed = True
-        notices.append(
-            "Removed `context.engine` from your config: there is one context engine now, so the selector had no effect."
-        )
-    if notify:
-        for notice in notices:
-            if notice not in _migration_notices:
-                _migration_notices.append(notice)
-    return changed
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
 
 
 def _migrate_config(data: dict, *, pop_extension_keys: bool = True, from_version: int = CURRENT_CONFIG_VERSION) -> dict:
@@ -623,12 +491,6 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True, from_version
         _migrate_legacy_context_window(data, notify=True)
     if from_version < _AUTO_PROVIDER_MIGRATION:
         _migrate_auto_provider(data, notify=True)
-    if from_version < _RETIRED_GATEWAY_WEB_MIGRATION:
-        _migrate_retired_gateway_web(data, notify=True)
-    if from_version < _LEGACY_LEAVES_MIGRATION:
-        _migrate_legacy_leaves(data, notify=True)
-    if from_version < _PHANTOM_KNOBS_MIGRATION:
-        _migrate_phantom_knobs(data, notify=True)
 
     # Move tools.exec.restrictToWorkspace → tools.restrictToWorkspace
     tools = data.get("tools", {})
@@ -680,6 +542,9 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True, from_version
                 _log.info(
                     "Migrated: agents.defaults.everosSkillLight → skillForge.everos",
                 )
+
+    # skills_dir → local_dirs migration now handled by
+    # SkillForgeConfig._migrate_skills_dir model_validator (R5).
 
     # Same for the session-title gate, which changed both name and unit:
     # ``min_input_chars`` counted code points, ``min_input_width`` counts

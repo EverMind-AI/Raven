@@ -9,9 +9,9 @@ from typing import Any
 
 from loguru import logger
 
-from raven.contracts.memory import MemoryBackend
 from raven.importer.state import ImportState
 from raven.importer.types import ImportMessage, ImportSession, Scanner, ScanResult
+from raven.memory_engine.backend import MemoryBackend
 
 # Both bounds decide where batch boundaries fall, and EverOS derives its
 # message_id from (session_id, timestamp_ms, index-within-batch), so those

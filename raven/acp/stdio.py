@@ -20,7 +20,7 @@ import sys
 from collections.abc import AsyncIterator, Callable, Generator
 from typing import Any, BinaryIO
 
-from raven.acp_client.protocol import AcpProtocolError, decode, encode
+from raven.agent.acp.protocol import AcpProtocolError, decode, encode
 
 # One ACP frame is not a line of text. ``session/prompt`` carries images and
 # embedded resources, and base64 inflates by about 4/3, so a 4 MB screenshot
@@ -105,7 +105,7 @@ def claim_stdout() -> Generator[BinaryIO, None, None]:
 def write_frame(writer: BinaryIO, frame: dict[str, Any]) -> None:
     """Put one frame on the wire, whole, before returning.
 
-    Encoding is :func:`raven.acp_client.protocol.encode` rather than a second
+    Encoding is :func:`raven.agent.acp.protocol.encode` rather than a second
     serialiser, so both directions cannot drift on ``ensure_ascii`` or on
     whether the newline is part of the frame.
 

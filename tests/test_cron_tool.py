@@ -78,23 +78,3 @@ async def test_add_cron_expr_with_bad_tz_still_errors() -> None:
     result = await tool.execute(action="add", message="daily", cron_expr="0 9 * * *", tz="Not/AZone")
     assert "unknown timezone" in result
     cron.add_job.assert_not_called()
-
-
-async def test_cron_tool_context_isolation() -> None:
-    """Two concurrent turns share one CronTool instance (the gateway's user
-    pool is 4). The route must be turn-local: with plain attributes, turn B's
-    set_context redirected turn A's reminder to B's conversation."""
-    import asyncio
-
-    tool, cron = _tool()
-    seen: dict[str, tuple[str, str]] = {}
-
-    async def turn(name: str, channel: str, chat_id: str) -> None:
-        tool.set_context(channel, chat_id)
-        await asyncio.sleep(0)  # yield so the other turn's set_context runs
-        seen[name] = (tool._channel, tool._chat_id)
-
-    await asyncio.gather(turn("a", "telegram", "chat-a"), turn("b", "discord", "chat-b"))
-
-    assert seen["a"] == ("telegram", "chat-a")
-    assert seen["b"] == ("discord", "chat-b")

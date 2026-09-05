@@ -13,7 +13,6 @@ from types import SimpleNamespace
 
 import pytest
 
-import raven.home as raven_home_module
 from raven.agent.subagent import instances as instances_mod
 from raven.rpc.errors import RpcError
 from raven.rpc.methods.dag import dag_get, dag_node
@@ -249,7 +248,7 @@ def one_run_on_disk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     cfg.write_text(json.dumps({"agents": {"defaults": {"workspace": str(ws)}}}), encoding="utf-8")
     import raven.config.loader as loader
 
-    previous = raven_home_module._current_config_path
+    previous = loader._current_config_path
     loader.set_config_path(cfg)
 
     run = dag_root(SessionManager(ws).session_dir("tui:live")) / RUN_ID
@@ -258,7 +257,7 @@ def one_run_on_disk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     (run / "survey.prompt.md").write_text("look at the notes", encoding="utf-8")
     (run / "survey.out.md").write_text("the notes say yes", encoding="utf-8")
     yield run
-    raven_home_module._current_config_path = previous
+    loader._current_config_path = previous
 
 
 async def test_dag_node_reads_the_run_dir_when_no_tool_is_live(one_run_on_disk) -> None:
@@ -376,7 +375,7 @@ async def test_the_fallback_reads_the_directory_the_run_was_written_to(
     cfg.write_text(json.dumps({"agents": {"defaults": {"workspace": str(ws)}}}), encoding="utf-8")
     import raven.config.loader as loader
 
-    previous = raven_home_module._current_config_path
+    previous = loader._current_config_path
     loader.set_config_path(cfg)
     try:
         live = SessionManager(ws, project_slug="myproject", project_dir=project)
@@ -397,7 +396,7 @@ async def test_the_fallback_reads_the_directory_the_run_was_written_to(
         assert out["node"]["prompt"] == "look at the notes"
         assert out["node"]["output"] == "the notes say yes"
     finally:
-        raven_home_module._current_config_path = previous
+        loader._current_config_path = previous
 
 
 # ---------------------------------------------------------------------------

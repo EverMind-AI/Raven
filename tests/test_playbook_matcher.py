@@ -7,16 +7,17 @@ which playbooks get *described* to the model when the library is too big to list
 whole, which is what the router tests at the bottom cover.
 """
 
-from raven.contracts.llm_provider import LLMResponse
 from raven.playbook import (
     RouterSizes,
     TriggerIndex,
     Triggers,
+    expand_triggers,
     find_collisions,
     normalize,
     select_playbooks,
 )
 from raven.playbook.types import PlaybookSpec
+from raven.providers.base import ErrorClassification, LLMResponse
 
 
 class _ToolCall:
@@ -81,7 +82,84 @@ NEGATIVE = [
 # ---------------------------------------------------------------- triggers
 
 
-# stopword
+async def test_expansion_guards_drop_generic_and_short_entries():
+    provider = ScriptedProvider(
+        [
+            {
+                "keywords": ["SEO", "article", "search ranking", "w", "indexing"],
+                "phrases": ["write one that ranks", "help"],
+            }
+        ]
+    )
+    trig = await expand_triggers(
+        provider,
+        description="produce one SEO-optimized article for a given topic",
+        source_input="set me up an SEO workflow",
+        negative_samples=NEGATIVE,
+        rounds=1,
+    )
+    assert "seo" in trig.keywords  # normalized to lowercase
+    assert "search ranking" in trig.keywords
+    assert "write one that ranks" in trig.keywords  # phrases merge into the one list
+    assert "article" not in trig.keywords  # generic: hits 3/10 negatives
+    assert "w" not in trig.keywords  # rule filter: too short
+    assert "help" not in trig.keywords  # stopword
+
+
+async def test_expansion_keeps_seeds_unless_guards_drop_them():
+    provider = ScriptedProvider([{"keywords": [], "phrases": []}])
+    trig = await expand_triggers(
+        provider,
+        description="d" * 30,
+        seeds=Triggers(keywords=["proper-noun", "article"]),
+        negative_samples=NEGATIVE,
+        rounds=1,
+    )
+    assert trig.keywords == ["proper-noun"]
+
+
+async def test_expansion_unions_multiple_rounds():
+    provider = ScriptedProvider(
+        [
+            {"keywords": ["post a tweet"]},
+            {"keywords": ["tweet text", "write one that ranks"]},
+        ]
+    )
+    trig = await expand_triggers(provider, description="d" * 30, rounds=2)
+    assert set(trig.keywords) == {"post a tweet", "tweet text", "write one that ranks"}
+    assert len(provider.calls) == 2
+
+
+async def test_expansion_provider_error_stops_additional_sampling_rounds():
+    classification = ErrorClassification(
+        "upstream_transport_failure",
+        retryable=True,
+        should_fallback=True,
+    )
+    response = LLMResponse(
+        content="upstream did not process the request",
+        finish_reason="error",
+        error_classification=classification,
+    )
+    provider = ScriptedProvider([response, {"keywords": ["should not run"]}])
+
+    trig = await expand_triggers(
+        provider, description="specific trigger expansion", seeds=Triggers(keywords=["proper-noun"]), rounds=2
+    )
+
+    assert trig.keywords == ["proper-noun"]
+    assert len(provider.calls) == 1
+
+
+async def test_expansion_missing_tool_stops_additional_sampling_rounds():
+    provider = ScriptedProvider([None, {"keywords": ["should not run"]}])
+
+    trig = await expand_triggers(
+        provider, description="specific trigger expansion", seeds=Triggers(keywords=["proper-noun"]), rounds=2
+    )
+
+    assert trig.keywords == ["proper-noun"]
+    assert len(provider.calls) == 1
 
 
 def test_find_collisions_reports_shared_entries():
@@ -96,18 +174,17 @@ def test_find_collisions_reports_shared_entries():
 # ---------------------------------------------------------------- L1 index
 
 
-def test_index_counts_normalized_substrings():
+def test_index_matches_normalized_substrings():
     idx = TriggerIndex(
         {
             "seo": Triggers(keywords=["SEO", SEARCH_RANKING]),
             "feedback": Triggers(keywords=[USER_FEEDBACK]),
         }
     )
-    # Iteration order is first hit, and full width folds by NFKC.
-    assert list(idx.hit_counts(FULL_WIDTH_SEO_ASK)) == ["seo"]
-    assert list(idx.hit_counts(MIXED_ASK)) == ["seo", "feedback"]
-    assert idx.hit_counts(LUNCH) == {}
-    assert idx.hit_counts("") == {}
+    assert idx.match(FULL_WIDTH_SEO_ASK) == ["seo"]  # full-width folded by NFKC
+    assert idx.match(MIXED_ASK) == ["seo", "feedback"]
+    assert idx.match(LUNCH) == []
+    assert idx.match("") == []
 
 
 def test_normalize_folds_case_width_and_whitespace():

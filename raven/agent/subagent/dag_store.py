@@ -120,7 +120,7 @@ async def read_index(backend: Any, root: str) -> list[dict]:
 
     Args:
         backend (`BackendBase`):
-            The DAG core's file backend.
+            The session workspace backend.
         root (`str`):
             The session's DAG history root.
 
@@ -183,7 +183,7 @@ async def read_session_nodes(backend: Any, root: str) -> SessionNodes:
 
     Args:
         backend (`BackendBase`):
-            The DAG core's file backend.
+            The session workspace backend.
         root (`str`):
             The session's DAG history root.
 
@@ -241,7 +241,7 @@ def node_live_key(run_id: str, node_id: str) -> str:
 class DagRunStore:
     """Owns the on-disk layout for a single DAG run.
 
-    All I/O goes through the DAG core's file ``backend`` so it works for
+    All I/O goes through the workspace ``backend`` so it works for
     local, Docker, E2B, and remote backends alike.
     """
 
@@ -250,7 +250,7 @@ class DagRunStore:
 
         Args:
             backend (`BackendBase`):
-                The DAG core's file backend.
+                The session workspace backend.
             root (`str`):
                 The session's DAG history root -- already the full
                 ``.../subagents/mas_dag`` path, not a directory this

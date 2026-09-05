@@ -1,5 +1,3 @@
-"""The spine delivery contract: Capabilities, the Outlet protocols, and hub dispatch."""
-
 import asyncio
 import dataclasses
 
@@ -265,9 +263,6 @@ async def test_exhausted_retries_log_an_error_and_drop(hub, monkeypatch):
         logger.remove(sink_id)
     assert outlet.calls == delivery_mod._SEND_MAX_RETRIES + 1  # initial + retries
     assert not outlet.received  # dropped after exhaustion
-    # The drop is observable to code, not only to the log: a caller that needs
-    # to know the user never saw a reply reads the counter.
-    assert hub.dropped == 1
     err = next(line for line in lines if "delivery failed" in line)
     assert "tg" in err and "Text" in err and "transport down" in err  # channel + event + reason
 

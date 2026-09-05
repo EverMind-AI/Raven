@@ -22,7 +22,6 @@ from typing import Any, Awaitable, Callable
 
 from loguru import logger
 
-from raven.i18n import t
 from raven.proactive_engine.sentinel.types import PendingDecision, PlannerDecision, TaskOption
 from raven.spine import ChatType, Source, Text
 
@@ -47,7 +46,7 @@ def split_session_key(session_key: str) -> tuple[str, str]:
     if ":" in session_key:
         channel, chat_id = session_key.split(":", 1)
         return channel, chat_id
-    # Planner may emit a bare session key or alias ('tui:direct', 'telegram:home').
+    # Planner may emit a bare session key or alias ('cli:direct', 'telegram:home').
     # Default to a synthetic channel when parsing fails.
     return "sentinel", session_key or "direct"
 
@@ -213,21 +212,21 @@ def render_menu_markdown(decision: PendingDecision) -> str:
 
         Reply with a number to choose, or reply "skip".
     """
-    lines = [t("📋 [Today's suggestions]"), ""]
+    lines = ["📋 [今日建议]", ""]
     for idx, opt in enumerate(decision.options, start=1):
         marker = _option_type_marker(opt)
         lines.append(f"{idx}. {marker} {opt.title}")
         if opt.why:
             lines.append(f"   — {opt.why}")
     lines.append("")
-    lines.append(t('Reply with a number to choose, or reply "skip".'))
+    lines.append('回复数字选择，或回复 "跳过"。')
     return "\n".join(lines)
 
 
 def _option_type_marker(opt: TaskOption) -> str:
     if opt.type == "routine_confirm":
-        return t("(ongoing ✓)")
-    return t("(new task)")
+        return "(持续模式 ✓)"
+    return "(新任务)"
 
 
 __all__ = [

@@ -1,4 +1,4 @@
-"""DAG runner + native run_subagent_dag tool."""
+"""DAG runner + native run_subagent_dag tool (req4/P3)."""
 
 from __future__ import annotations
 
@@ -27,8 +27,8 @@ from raven.agent.subagent.dag_tool import _NODE_SCHEMA, GUIDE_SKILL_ID, SubAgent
 from raven.agent.subagent.mcp_grant import McpGrant, MissingServer
 from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.agent.subagent.prompt_errors import DagValidationError
+from raven.agent.tools.base import ToolResult
 from raven.config.schema import ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
-from raven.contracts.tool import ToolResult
 
 #: How long a drain waits for a cancelled background run to finish. Generous
 #: against the work (a node's subprocess teardown is milliseconds) and short
@@ -1064,7 +1064,7 @@ class TestBackgroundRun:
         leaves a real task running ``cat`` as a sub-agent -- a process that never
         exits on its own. pytest-asyncio then closes the loop through
         ``_cancel_all_tasks``, which cancels every pending task and gathers them;
-        cancellation has to travel down through ``_run_detached`` ->
+        cancellation has to travel down through ``_run_and_announce`` ->
         ``_run_group`` -> ``_run_node`` to a subprocess still being set up, and
         when it is caught mid-setup the gather never returns. Observed on a full
         run: three workers idle and one parked in that frame for over an hour.
@@ -1258,11 +1258,9 @@ class TestBackgroundRun:
 
         assert "started in the background" in out.model_text
         assert "2 nodes" in out.model_text
-        # This text is the only advertisement dag_status and cancel_dag get, so it
-        # carries the route as well as the names.
-        assert "dag_status" in out.model_text
-        assert "cancel_dag" in out.model_text
-        assert "tool_call" in out.model_text, "the controls are unnameable without the route"
+        # The acceptance text is the only advertisement the control tools get.
+        assert 'dag_status("' in out.model_text
+        assert 'cancel_dag("' in out.model_text
         # The outcome cannot be in the result -- nothing has run yet.
         assert "completed" not in out.model_text
 
@@ -1287,9 +1285,8 @@ class TestBackgroundRun:
 
         reachable.set_context("web", "default", "web:sess1")
         out = await reachable.execute(task_summary="run the graph under test", nodes=[node])
-        assert "dag_status" in out.model_text
-        assert "cancel_dag" in out.model_text
-        assert "tool_call" in out.model_text, "the controls are unnameable without the route"
+        assert 'dag_status("' in out.model_text
+        assert 'cancel_dag("' in out.model_text
 
         muted.set_context("web", "default", "web:sess2")
         out = await muted.execute(task_summary="run the graph under test", nodes=[node])
@@ -1895,12 +1892,12 @@ class TestGuideSkillPointer:
     def test_guide_id_resolves_against_the_shipped_registry(self, tmp_path: Path) -> None:
         """Pins the two halves together: the id the tool prints must be the id
         ``read_skill`` can actually resolve, or the instruction is a dead end."""
-        from raven.agent.tools.skill_hub import lookup_on_disk, split_qualified_id
+        from raven.agent.tools.skill_hub import _lookup_on_disk, _split_qualified_id
         from raven.memory_engine.skill_forge import LocalSkillCatalog
 
         registry = LocalSkillCatalog(tmp_path, start_watcher=False).registry
-        source, native = split_qualified_id(GUIDE_SKILL_ID)
-        assert lookup_on_disk(registry, source, native) is not None
+        source, native = _split_qualified_id(GUIDE_SKILL_ID)
+        assert _lookup_on_disk(registry, source, native) is not None
 
 
 async def test_run_subagent_dag_tool_unknown_subagent(tmp_path: Path) -> None:
@@ -2319,7 +2316,7 @@ class TestValidationErrorGuidesRetry:
             ],
         )
 
-        assert "duplicate node ids: ['a']. No sub-agent was run." in out
+        assert "node ids must be unique. No sub-agent was run." in out
 
 
 # --- references across runs in one conversation ---------------------------
@@ -4884,8 +4881,8 @@ async def _run_two_node_dag(
     instance_a=None,
     origin=_TEST_ORIGIN,
     adjudication_timeout_s=5,
+    adjudicate=None,
     semaphore=None,
-    control_reachable=None,
 ):
     """A two-node chain a->b, run through one shared fake backend.
 
@@ -4929,8 +4926,8 @@ async def _run_two_node_dag(
         max_continuations=max_continuations,
         origin=origin,
         adjudication_timeout_s=adjudication_timeout_s,
+        adjudicate=adjudicate,
         semaphore=semaphore,
-        control_reachable=control_reachable,
     )
 
 
@@ -4942,7 +4939,7 @@ async def test_a_node_judged_not_accomplished_suspends_and_reports(tmp_path):
     desk = AdjudicationDesk()
     reports = []
 
-    async def _announce(run_id, node_id, report, origin, **_):
+    async def _announce(run_id, node_id, report, origin):
         reports.append((node_id, report))
         desk.resolve(node_id, "abandon", None)
 
@@ -4963,7 +4960,7 @@ async def test_a_continued_node_runs_again_and_can_then_pass(tmp_path):
     desk = AdjudicationDesk()
     seen = []
 
-    async def _announce(run_id, node_id, report, origin, **_):
+    async def _announce(run_id, node_id, report, origin):
         desk.resolve(node_id, "continue", "use the staging token")
 
     async def _judge(**kwargs):
@@ -4982,7 +4979,7 @@ async def test_the_continuation_limit_fails_the_node(tmp_path):
     desk = AdjudicationDesk()
     reports = []
 
-    async def _announce(run_id, node_id, report, origin, **_):
+    async def _announce(run_id, node_id, report, origin):
         reports.append(report)
         desk.resolve(node_id, "continue", "try again")
 
@@ -5016,7 +5013,7 @@ async def test_a_bad_verdict_with_no_origin_does_not_crash_and_still_fails(tmp_p
     desk = AdjudicationDesk()
     announced = []
 
-    async def _announce(run_id, node_id, report, origin, **_):
+    async def _announce(run_id, node_id, report, origin):
         announced.append((node_id, report, origin))
 
     async def _judge(**kwargs):
@@ -5046,7 +5043,7 @@ async def test_a_bad_verdict_blocks_the_dependent_and_clears_the_manifest_output
     desk = AdjudicationDesk()
     fake = _FakeExec()
 
-    async def _announce(run_id, node_id, report, origin, **_):
+    async def _announce(run_id, node_id, report, origin):
         desk.resolve(node_id, "abandon", None)
 
     async def _judge(**kwargs):
@@ -5089,7 +5086,7 @@ async def test_a_continued_instance_node_is_sent_only_the_follow_up_and_keeps_it
     fake = _FakeExec()
     seen = []
 
-    async def _announce(run_id, node_id, report, origin, **_):
+    async def _announce(run_id, node_id, report, origin):
         desk.resolve(node_id, "continue", "use the staging token")
 
     async def _judge(**kwargs):
@@ -5131,7 +5128,7 @@ async def test_a_continued_stateless_node_sends_task_plus_previous_output_plus_m
     fake = _FakeExec()
     seen = []
 
-    async def _announce(run_id, node_id, report, origin, **_):
+    async def _announce(run_id, node_id, report, origin):
         desk.resolve(node_id, "continue", "use the staging token")
 
     async def _judge(**kwargs):
@@ -5165,7 +5162,7 @@ async def test_a_crashed_node_judge_call_is_told_it_crashed(tmp_path):
     fake = _FakeExec(fail_ids={"a"})
     seen = []
 
-    async def _announce(run_id, node_id, report, origin, **_):
+    async def _announce(run_id, node_id, report, origin):
         desk.resolve(node_id, "abandon", None)
 
     async def _judge(**kwargs):
@@ -5189,7 +5186,7 @@ async def test_every_attempt_is_archived_including_the_first(tmp_path):
     desk = AdjudicationDesk()
     seen = []
 
-    async def _announce(run_id, node_id, report, origin, **_):
+    async def _announce(run_id, node_id, report, origin):
         desk.resolve(node_id, "continue", "use the staging token")
 
     async def _judge(**kwargs):
@@ -5221,21 +5218,18 @@ async def test_a_raising_judge_fails_open_instead_of_crashing_the_node(tmp_path)
     assert result.summary["completed"] == 2
 
 
-async def test_a_raising_announce_fails_the_node_instead_of_stranding_it(tmp_path, monkeypatch):
+async def test_a_raising_announce_fails_the_node_instead_of_stranding_it(tmp_path):
     """An undeliverable report must not leave the desk open for the full
 
-    adjudication timeout blaming the agent for silence -- once the delivery
-    retries are spent it fails the node, naming the real cause. The backoff is
-    zeroed because what is under test is the outcome, not the wait.
+    adjudication timeout blaming the agent for silence -- it fails the node
+    right away, naming the real cause.
     """
-    from raven.agent.subagent import dag_adjudication as adj_mod
     from raven.agent.subagent.dag_adjudication import AdjudicationDesk
     from raven.agent.subagent.dag_verdict import Verdict
 
-    monkeypatch.setattr(adj_mod, "REPORT_DELIVERY_BACKOFF_S", 0.0)
     desk = AdjudicationDesk()
 
-    async def _announce(run_id, node_id, report, origin, **_):
+    async def _announce(run_id, node_id, report, origin):
         raise RuntimeError("delivery channel is down")
 
     async def _judge(**kwargs):
@@ -5250,84 +5244,6 @@ async def test_a_raising_announce_fails_the_node_instead_of_stranding_it(tmp_pat
     assert not desk.is_open("a")
 
 
-async def test_a_delivery_that_fails_once_is_retried_and_the_node_is_still_adjudicated(tmp_path):
-    """Delivery is a transport, not a decision.
-
-    The injected turn can lose a race with a gateway restart or a busy submit
-    queue. Failing the node on the first hiccup throws away a node that could
-    still have been adjudicated, and names the transport as the node's outcome.
-
-    Safe to retry because the announcer is all-or-nothing: the only step after
-    the injection is a fire-and-forget emit that swallows its own failure, so a
-    raise means nothing was delivered. `test_a_failing_delivery_marker_does_not
-    _fail_the_announce` in the manager suite pins that.
-    """
-    from raven.agent.subagent.dag_adjudication import CONTINUE, AdjudicationDesk
-    from raven.agent.subagent.dag_verdict import Verdict
-
-    desk = AdjudicationDesk()
-    attempts: list[str] = []
-    judged: list[dict] = []
-
-    async def _announce(run_id, node_id, report, origin, **_):
-        attempts.append(node_id)
-        if len(attempts) == 1:
-            raise RuntimeError("the submit queue was busy")
-        desk.resolve(node_id, CONTINUE, "use the staging token")
-
-    async def _judge(**kwargs):
-        judged.append(kwargs)
-        return Verdict(accomplished=len(judged) > 1, category="missing_credential", what_is_missing="a token")
-
-    result = await _run_two_node_dag(
-        tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce, adjudication_timeout_s=5
-    )
-
-    assert attempts == ["a", "a"], f"the failed delivery has to be attempted again, got {attempts}"
-    assert result.summary["completed"] == 2, (
-        f"the second delivery landed, so the node was answered and continued: {result.summary}"
-    )
-    error = {f["node"]: f for f in result.files}["a"]["error"] or ""
-    assert "could not be delivered" not in error, "a recovered delivery must not be recorded as the node's outcome"
-
-
-async def test_delivery_retries_are_bounded_and_the_node_still_fails_on_the_last_one(tmp_path, monkeypatch):
-    """Retrying is not waiting forever.
-
-    A bound run has no adjudication deadline, so an unbounded retry loop here
-    would spin for the life of the turn on a transport that is not coming back.
-    The attempt count is the bound, and the last failure keeps the behaviour the
-    undeliverable-report guard already had.
-    """
-    from raven.agent.subagent import dag_adjudication as adj_mod
-    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
-    from raven.agent.subagent.dag_verdict import Verdict
-
-    monkeypatch.setattr(adj_mod, "REPORT_DELIVERY_BACKOFF_S", 0.0)
-    desk = AdjudicationDesk()
-    attempts: list[str] = []
-
-    async def _announce(run_id, node_id, report, origin, **_):
-        attempts.append(node_id)
-        raise RuntimeError("delivery channel is down")
-
-    async def _judge(**_kwargs):
-        return Verdict(accomplished=False, category="missing_credential", what_is_missing="a token")
-
-    result = await _run_two_node_dag(
-        tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce, adjudication_timeout_s=0.3
-    )
-
-    assert len(attempts) == adj_mod.REPORT_DELIVERY_ATTEMPTS, (
-        f"every attempt and no more: {len(attempts)} of {adj_mod.REPORT_DELIVERY_ATTEMPTS}"
-    )
-    assert result.summary["failed"] == 1
-    error = {f["node"]: f for f in result.files}["a"]["error"] or ""
-    assert "delivery channel is down" in error, "the transport's own words stay in the record"
-    assert str(adj_mod.REPORT_DELIVERY_ATTEMPTS) in error, "and how many times it was tried"
-    assert not desk.is_open("a"), "a report nobody received must not leave the node waiting"
-
-
 async def test_a_node_does_not_suspend_on_a_report_it_cannot_deliver(tmp_path) -> None:
     """No origin means the announce cannot land, so the node must fail rather than wait.
 
@@ -5340,7 +5256,7 @@ async def test_a_node_does_not_suspend_on_a_report_it_cannot_deliver(tmp_path) -
 
     desk = AdjudicationDesk()
 
-    async def _announce(run_id, node_id, report, origin, **_):
+    async def _announce(run_id, node_id, report, origin):
         raise AssertionError("the announce must not be attempted without an origin")
 
     async def _judge(**kwargs):
@@ -5392,7 +5308,7 @@ async def test_the_judge_sees_the_current_attempts_transcript(tmp_path):
     desk = AdjudicationDesk()
     seen: list[dict] = []
 
-    async def _announce(run_id, node_id, report, origin, **_):
+    async def _announce(run_id, node_id, report, origin):
         desk.resolve(node_id, "continue", "use the staging token")
 
     async def _judge(*, node, store, output, error, crashed):
@@ -5439,7 +5355,7 @@ async def test_each_attempts_transcript_survives_the_next_attempt(tmp_path):
     desk = AdjudicationDesk()
     seen = []
 
-    async def _announce(run_id, node_id, report, origin, **_):
+    async def _announce(run_id, node_id, report, origin):
         desk.resolve(node_id, "continue", "use the staging token")
 
     async def _judge(**kwargs):
@@ -5479,7 +5395,7 @@ async def test_a_successful_continuation_clears_the_earlier_attempts_error(tmp_p
     desk = AdjudicationDesk()
     seen = []
 
-    async def _announce(run_id, node_id, report, origin, **_):
+    async def _announce(run_id, node_id, report, origin):
         desk.resolve(node_id, "continue", "use the staging token")
 
     async def _judge(**kwargs):
@@ -5521,170 +5437,197 @@ async def test_suspended_nodes_share_one_deadline_rather_than_queueing(tmp_path)
     assert elapsed < 0.5, f"four nodes took {elapsed:.3f}s, which looks serial"
 
 
-async def test_a_decision_restarts_the_window_for_the_nodes_still_waiting() -> None:
-    """The window measures silence, not the whole round.
-
-    Reports reach the agent one turn at a time -- the conversation lane is
-    serial -- so a node still queued behind another spends none of its own
-    window waiting to be asked. Three decisions, each well inside one window
-    but together past it: against a fixed deadline for the round the last two
-    time out having never reached the agent at all.
-    """
-    from raven.agent.subagent.dag_adjudication import CONTINUE, AdjudicationDesk
-    from raven.agent.subagent.dag_runner import _await_adjudications
-
-    desk = AdjudicationDesk()
-    status = {}
-    for i in range(3):
-        desk.open(f"n{i}")
-        status[f"n{i}"] = "exception"
-    errors: dict[str, str] = {}
-    continuations: dict[str, str] = {}
-
-    window = 0.4
-
-    async def _decide() -> None:
-        for i in range(3):
-            await asyncio.sleep(window / 2)
-            desk.resolve(f"n{i}", CONTINUE, f"try {i}")
-
-    driver = asyncio.create_task(_decide())
-    try:
-        await _await_adjudications(desk, status, errors, continuations, timeout_s=window, cancel=None)
-    finally:
-        await driver
-
-    assert status == {"n0": "pending", "n1": "pending", "n2": "pending"}
-    assert continuations == {"n0": "try 0", "n1": "try 1", "n2": "try 2"}
-    assert errors == {}
+# --- a foreground graph is adjudicated from the wave loop, by asking a person ---
 
 
-async def test_a_bound_run_waits_without_a_deadline_until_it_is_released() -> None:
-    """While the turn that owns a foreground run is alive there is no clock.
-
-    The decision lands well past the configured window but inside a window that
-    starts at release; a wait clocked from entry would already have failed the
-    node when the release arrived.
-    """
-    from raven.agent.subagent.dag_adjudication import CONTINUE, AdjudicationDesk
-    from raven.agent.subagent.dag_runner import _await_adjudications
-
-    desk = AdjudicationDesk()
-    desk.open("n0")
-    status = {"n0": "exception"}
-    errors: dict[str, str] = {}
-    continuations: dict[str, str] = {}
-    released = asyncio.Event()
-
-    async def _release_later() -> None:
-        await asyncio.sleep(0.3)
-        released.set()
-
-    async def _decide_later() -> None:
-        await asyncio.sleep(0.4)
-        desk.resolve("n0", CONTINUE, "go on")
-
-    side = [asyncio.create_task(_release_later()), asyncio.create_task(_decide_later())]
-    try:
-        await _await_adjudications(desk, status, errors, continuations, timeout_s=0.2, cancel=None, released=released)
-    finally:
-        await asyncio.gather(*side)
-
-    assert status == {"n0": "pending"}
-    assert continuations == {"n0": "go on"}
-    assert errors == {}
-
-
-async def test_the_window_starts_when_the_run_is_released() -> None:
-    """Released and then ignored, the node fails one window after the release, not after entry."""
+async def test_a_foreground_run_asks_a_person_and_continues_the_node(tmp_path):
+    """A blocking call cannot wait for `resolve_dag_node`: the turn that would send
+    it cannot start until this one ends. The node suspends the same way either
+    lane does, and the wave loop asks the person watching the call instead."""
     from raven.agent.subagent.dag_adjudication import AdjudicationDesk
-    from raven.agent.subagent.dag_runner import _await_adjudications
+    from raven.agent.subagent.dag_verdict import Verdict
 
     desk = AdjudicationDesk()
-    desk.open("n0")
-    status = {"n0": "exception"}
-    errors: dict[str, str] = {}
-    released = asyncio.Event()
-    asyncio.get_running_loop().call_later(0.2, released.set)
+    announced = []
+    asked = []
+    seen = []
 
-    started = time.perf_counter()
-    await _await_adjudications(desk, status, errors, {}, timeout_s=0.2, cancel=None, released=released)
-    elapsed = time.perf_counter() - started
+    async def _announce(run_id, node_id, report, origin):
+        announced.append(node_id)
 
-    assert status == {"n0": "failed"}
-    assert "timed out" in errors["n0"]
-    # The node waited twice the window here, so a message naming the window as the
-    # node's whole wait would be a false claim. It reports the silence instead.
-    assert "Nothing was decided for 0.2s" in errors["n0"], errors["n0"]
-    assert 0.35 < elapsed < 0.9, f"expected release (0.2s) + window (0.2s), got {elapsed:.3f}s"
+    async def _adjudicate(conversation_id, report, timeout_s):
+        asked.append((conversation_id, report, timeout_s))
+        return "use the staging token"
 
+    async def _judge(**kwargs):
+        seen.append(kwargs)
+        return Verdict(accomplished=len(seen) > 1)
 
-async def test_an_already_released_run_is_clocked_from_entry() -> None:
-    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
-    from raven.agent.subagent.dag_runner import _await_adjudications
+    result = await _run_two_node_dag(
+        tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce, adjudicate=_adjudicate
+    )
 
-    desk = AdjudicationDesk()
-    desk.open("n0")
-    status = {"n0": "exception"}
-    errors: dict[str, str] = {}
-    released = asyncio.Event()
-    released.set()
-
-    started = time.perf_counter()
-    await _await_adjudications(desk, status, errors, {}, timeout_s=0.2, cancel=None, released=released)
-    elapsed = time.perf_counter() - started
-
-    assert status == {"n0": "failed"}
-    assert elapsed < 0.5
+    assert result.summary["completed"] == 2
+    assert len(seen) == 3, "a was judged twice -- once short, once after the continuation -- and b once"
+    assert [c for c, _, _ in asked] == ["t"], "the question goes to the run's own conversation"
+    assert "did not accomplish its task" in asked[0][1]
+    assert announced == [], "a foreground node must not also wake the agent a turn later"
+    assert list(desk.open_nodes()) == [], "every desk entry is consumed by the answer"
 
 
-async def test_a_decision_landing_while_unclocked_leaves_the_wait_unclocked() -> None:
-    """Two open nodes, still bound: resolving one must not start a clock for the other.
+async def test_a_foreground_node_holds_no_dispatch_slot_while_the_person_thinks(tmp_path):
+    """The whole point of asking from the wave loop rather than inside the node.
 
-    A regression to an unconditional ``deadline = loop.time() + timeout_s`` on any
-    decided node -- dropping the ``still_bound`` check -- would clock n1 the moment
-    n0 resolves, and n1 would time out long before release ever arrives.
+    A person can take the full timeout to answer. If the node were still inside
+    `_run_node`'s `async with semaphore` it would hold a slot of the manager's
+    shared dispatch gate for that entire time, blocking every unrelated spawn and
+    every other graph -- and with a capacity of one, blocking all of them.
     """
-    from raven.agent.subagent.dag_adjudication import CONTINUE, AdjudicationDesk
-    from raven.agent.subagent.dag_runner import _await_adjudications
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
 
-    desk = AdjudicationDesk()
-    desk.open("n0")
-    desk.open("n1")
-    status = {"n0": "exception", "n1": "exception"}
-    errors: dict[str, str] = {}
-    continuations: dict[str, str] = {}
-    released = asyncio.Event()
+    gate = asyncio.Semaphore(1)
+    free_while_asking = []
 
-    async def _resolve_n0_early() -> None:
+    async def _adjudicate(conversation_id, report, timeout_s):
+        free_while_asking.append(not gate.locked())
+        return "abandon"
+
+    async def _judge(**kwargs):
+        return Verdict(accomplished=False, what_is_missing="a token")
+
+    await _run_two_node_dag(
+        tmp_path,
+        desk=AdjudicationDesk(),
+        judge_node=_judge,
+        announce_exception=None,
+        adjudicate=_adjudicate,
+        semaphore=gate,
+    )
+
+    assert free_while_asking == [True], "the dispatch slot must be back before the question is put"
+
+
+async def test_foreground_nodes_are_asked_one_at_a_time(tmp_path):
+    """`QuestionBroker` allows one pending question per conversation.
+
+    A second overlapping question displaces the first and resolves it to its
+    default, which reads here as an abandon nobody asked for. Two independent
+    nodes suspending in the same wave must therefore be asked in series.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    depth = 0
+    overlaps = []
+    order = []
+
+    async def _adjudicate(conversation_id, report, timeout_s):
+        nonlocal depth
+        depth += 1
+        overlaps.append(depth)
+        order.append(timeout_s)
+        # Long enough that a second question handed a fresh window would be
+        # measurably larger than one handed what is left of a shared one.
         await asyncio.sleep(0.05)
-        desk.resolve("n0", CONTINUE, "go on n0")
+        depth -= 1
+        return "abandon"
 
-    async def _release_and_resolve_n1_past_the_window() -> None:
-        await asyncio.sleep(0.4)
-        released.set()
-        desk.resolve("n1", CONTINUE, "go on n1")
+    async def _judge(**kwargs):
+        return Verdict(accomplished=False, what_is_missing="a token")
 
-    side = [
-        asyncio.create_task(_resolve_n0_early()),
-        asyncio.create_task(_release_and_resolve_n1_past_the_window()),
-    ]
-    try:
-        await _await_adjudications(desk, status, errors, continuations, timeout_s=0.2, cancel=None, released=released)
-    finally:
-        await asyncio.gather(*side)
+    spec = parse_dag_spec(
+        {
+            "task_summary": "two independent nodes",
+            "nodes": [
+                {"id": "a", "subagent": "x", "node_summary": "first", "prompt_template": "do a"},
+                {"id": "b", "subagent": "x", "node_summary": "second", "prompt_template": "do b"},
+            ],
+        }
+    )
+    result = await run_dag(
+        spec,
+        resolve=lambda node: _FakeExec(),
+        backend=LocalFileBackend(),
+        workdir=str(tmp_path),
+        run_root=str(tmp_path / "runs"),
+        desk=AdjudicationDesk(),
+        judge_node=_judge,
+        origin=_TEST_ORIGIN,
+        adjudication_timeout_s=5,
+        adjudicate=_adjudicate,
+    )
 
-    assert status == {"n0": "pending", "n1": "pending"}
-    assert continuations == {"n0": "go on n0", "n1": "go on n1"}
-    assert errors == {}
+    assert result.summary["failed"] == 2, "both were abandoned"
+    assert len(overlaps) == 2, "both independent nodes were asked about"
+    assert max(overlaps) == 1, f"two questions were outstanding at once: {overlaps}"
+    # One budget for the round, spent down: the second question cannot be handed
+    # a fresh window, or N nodes would cost N timeouts.
+    assert order[1] < order[0] - 0.04, f"the second question got a fresh window: {order}"
 
 
-def test_the_report_has_one_shape_addressed_to_the_agent():
-    """Both lanes hand the report to the main agent now, so there is one text.
+@pytest.mark.parametrize("answer", [None, "", "   ", "abandon", "Abandon"])
+async def test_a_foreground_node_without_a_continuation_fails(tmp_path, answer):
+    """No broker, no conversation, a timed-out question and an explicit abandon
+    all read the same: a continuation with nothing to say is already a failure
+    everywhere else, so there is nothing else for these to mean."""
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
 
-    The deadline line and the resolve_dag_node line are what a person being asked
-    synchronously could not use; nobody is asked that way any more.
-    """
+    desk = AdjudicationDesk()
+    asked = []
+    announced = []
+
+    async def _announce(run_id, node_id, report, origin):
+        announced.append(node_id)
+
+    async def _adjudicate(conversation_id, report, timeout_s):
+        asked.append(report)
+        return answer
+
+    async def _judge(**kwargs):
+        return Verdict(accomplished=False, what_is_missing="a token")
+
+    result = await _run_two_node_dag(
+        tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce, adjudicate=_adjudicate
+    )
+
+    assert result.summary["failed"] == 1
+    assert result.summary["skipped"] == 1
+    # An ordinary failure ends the same way, so the tally alone proves nothing
+    # about which path took it there: what does is that the person was asked and
+    # the agent was not.
+    assert len(asked) == 1
+    assert announced == []
+    assert list(desk.open_nodes()) == []
+
+
+async def test_a_foreground_adjudicator_that_raises_fails_the_node_not_the_run(tmp_path):
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    asked = []
+
+    async def _adjudicate(conversation_id, report, timeout_s):
+        asked.append(report)
+        raise RuntimeError("the broker is gone")
+
+    async def _judge(**kwargs):
+        return Verdict(accomplished=False, what_is_missing="a token")
+
+    result = await _run_two_node_dag(
+        tmp_path, desk=desk, judge_node=_judge, announce_exception=None, adjudicate=_adjudicate
+    )
+
+    assert result.summary["failed"] == 1
+    assert result.summary["skipped"] == 1
+    assert len(asked) == 1
+    assert list(desk.open_nodes()) == [], "a raising adjudicator must not leave the desk entry behind"
+
+
+def test_the_in_turn_report_drops_the_deadline_and_the_tool_instruction():
+    """Both closing lines are addressed at the main agent and wrong for a person."""
     from raven.agent.subagent.dag_runner import _exception_report
     from raven.agent.subagent.dag_verdict import Verdict
 
@@ -5704,15 +5647,113 @@ def test_the_report_has_one_shape_addressed_to_the_agent():
         "timeout_s": 600.0,
     }
 
-    report = _exception_report(**shared)
+    to_agent = _exception_report(**shared)
+    to_person = _exception_report(**shared, answered_in_turn=True)
 
-    assert "deciding within 600s" in report
-    assert "restarted by each decision" in report
-    assert "resolve_dag_node" in report
+    assert "deciding within 600s" in to_agent
+    assert "resolve_dag_node" in to_agent
+
+    assert "600" not in to_person, "a question asked synchronously has no deadline to promise"
+    assert "resolve_dag_node" not in to_person, "the person answering a blocking call cannot call a tool"
+    assert "abandon" in to_person, "they still need to be told how to give up on the node"
+    # Everything the decision actually turns on survives the swap.
     for kept in ("missing_credential", "a token", "2 continuation(s) left", "blocked while this waits: b"):
-        assert kept in report
-    with pytest.raises(TypeError):
-        _exception_report(**shared, answered_in_turn=True)
+        assert kept in to_person
+
+
+async def test_only_the_foreground_lane_is_handed_the_adjudicator(tmp_path, monkeypatch):
+    """A backgrounded run answers through `resolve_dag_node` and must keep doing so."""
+    from raven.agent.subagent import dag_tool as tool_mod
+
+    lanes = []
+
+    async def _fake_run_dag(spec, **kwargs):
+        lanes.append(kwargs.get("adjudicate"))
+        raise RuntimeError("far enough")
+
+    monkeypatch.setattr(tool_mod, "run_dag", _fake_run_dag)
+
+    async def _adjudicate(conversation_id, report, timeout_s):
+        return None
+
+    tool = SubAgentDagTool(
+        workspace=tmp_path,
+        agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")],
+        adjudicate=_adjudicate,
+    )
+    tool.set_context("web", "default", "web:sess1")
+    node = {"id": "a", "subagent": "echo", "node_summary": "say hello", "prompt_template": "hi"}
+
+    await tool.execute(task_summary="blocking", nodes=[node], background=False)
+    await tool.execute(task_summary="backgrounded", nodes=[node])
+    await asyncio.gather(*list(tool._runs.values()), return_exceptions=True)
+
+    assert lanes[0] is _adjudicate, "a blocking call has no other route to a decision"
+    assert lanes[1] is None, "a backgrounded run's turn has already returned, so the desk works"
+
+
+@pytest.mark.parametrize(
+    ("answer", "waits_out_the_budget", "expected"),
+    [
+        ("", True, "timed out"),
+        ("abandon", False, "abandoned"),
+        ("", False, "No decision was given"),
+    ],
+)
+async def test_a_foreground_timeout_is_not_reported_as_an_abandonment(answer, waits_out_the_budget, expected):
+    """The broker answers with its default -- an empty string -- when the budget it
+
+    was handed runs out, which is indistinguishable here from a person saying
+    nothing. Deciding on a budget read before the await makes every timeout look
+    like a decision the user made, which is the one thing the reason must never
+    claim falsely. The explicit-abandon row is the control: it must still say so.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_runner import _adjudicate_open_nodes
+
+    desk = AdjudicationDesk()
+    desk.open("a", "node 'a' did not accomplish its task")
+    status = {"a": "exception"}
+    errors: dict[str, str] = {}
+
+    async def _adjudicate(conversation_id, report, budget):
+        if waits_out_the_budget:
+            await asyncio.sleep(budget)
+        return answer
+
+    await _adjudicate_open_nodes(
+        desk, status, errors, {}, adjudicate=_adjudicate, origin=_TEST_ORIGIN, timeout_s=0.02, cancel=None
+    )
+
+    assert status["a"] == "failed"
+    assert expected in errors["a"], errors["a"]
+    if expected != "abandoned":
+        assert "abandoned" not in errors["a"], "a decision the user never made must not be attributed to them"
+
+
+async def test_a_foreground_node_with_nobody_to_ask_says_so(tmp_path):
+    """An origin carrying no conversation cannot be asked at all, which is not a
+    timeout and not an abandonment."""
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_runner import _adjudicate_open_nodes
+
+    desk = AdjudicationDesk()
+    desk.open("a", "report")
+    status = {"a": "exception"}
+    errors: dict[str, str] = {}
+    asked = []
+
+    async def _adjudicate(conversation_id, report, budget):
+        asked.append(report)
+        return "use the staging token"
+
+    await _adjudicate_open_nodes(
+        desk, status, errors, {}, adjudicate=_adjudicate, origin={"channel": "web"}, timeout_s=5, cancel=None
+    )
+
+    assert asked == [], "there was no conversation to put the question to"
+    assert status["a"] == "failed"
+    assert "nobody to ask" in errors["a"]
 
 
 class _StepsThenSilentExec(_FakeExec):
@@ -5752,7 +5793,7 @@ async def test_an_empty_attempt_does_not_inherit_the_previous_transcript(tmp_pat
     desk = AdjudicationDesk()
     seen = []
 
-    async def _announce(run_id, node_id, report, origin, **_):
+    async def _announce(run_id, node_id, report, origin):
         desk.resolve(node_id, "continue", "answer it directly this time")
 
     async def _judge(**kwargs):
@@ -5846,963 +5887,3 @@ async def test_a_runner_with_no_mode_source_dispatches_without_one() -> None:
     )
 
     assert execu.calls[0]["mode"] is None
-
-
-async def test_an_unstarted_background_run_retires_every_per_run_entry(tmp_path: Path) -> None:
-    """[leak] A task cancelled before its first tick never enters _run, whose
-    finally is the normal retirement site. The done-callback must retire the
-    per-run entries too, or active_run_ids() lists a dead run forever, its
-    node rows stay pinned running, and request_cancel claims a live run."""
-    import asyncio
-
-    tool = SubAgentDagTool(
-        workspace=tmp_path,
-        agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")],
-    )
-
-    async def _never(*_a, **_kw):
-        await asyncio.sleep(60)
-
-    tool._run_detached = _never
-
-    await tool.execute(
-        task_summary="background run for the leak probe",
-        nodes=[{"id": "a", "subagent": "echo", "node_summary": "n", "prompt_template": "p"}],
-        background=True,
-    )
-    (run_id,) = list(tool._runs)
-    assert run_id in tool._cancels
-
-    tool._runs[run_id].cancel()
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
-
-    assert run_id not in tool._runs
-    assert run_id not in tool._cancels, "an unstarted run must not pin liveness forever"
-    assert run_id not in tool._desks
-
-
-def test_the_agent_report_names_the_route_not_just_the_call():
-    """`resolve_dag_node` is schema-hidden, so naming it alone is not an instruction.
-
-    The model looks for the name in its own tool list, does not find it, and reports
-    that it has no way to answer -- the node then waits out its whole timeout. The
-    report has to spell the invocation the model can actually issue.
-    """
-    from raven.agent.subagent.dag_runner import _exception_report
-    from raven.agent.subagent.dag_verdict import Verdict
-
-    spec = parse_dag_spec(
-        {
-            "task_summary": "one node",
-            "nodes": [{"id": "a", "subagent": "x", "node_summary": "first", "prompt_template": "do a"}],
-        }
-    )
-    report = _exception_report(
-        run_id="r1",
-        node=spec.nodes[0],
-        verdict=Verdict(accomplished=False, category="missing_credential", what_is_missing="a token"),
-        attempt=1,
-        remaining=2,
-        blocked=["b"],
-        timeout_s=600.0,
-    )
-
-    assert "tool_call" in report, "the only route to a schema-hidden tool has to be named"
-    assert "resolve_dag_node" in report, "and the name tool_call is to forward to"
-    assert "not in your tool list" in report, (
-        "a model that just failed to find the name needs to be told why, or it reads "
-        "the instruction as stale rather than as one it can act on"
-    )
-    # The arguments still have to be answerable without guessing the schema.
-    for field in ("run_id", "node_id", "decision", "continue", "abandon", "r1"):
-        assert field in report
-
-
-async def _run_with_reachability(tmp_path, reachable, *, timeout_s=30):
-    """One suspending node, run with the given reachability predicate.
-
-    The timeout is long on purpose: the bug this guards is that the node waits
-    it out, so a short one would let the broken path pass on elapsed time.
-    """
-    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
-    from raven.agent.subagent.dag_verdict import Verdict
-
-    desk = AdjudicationDesk()
-    announced: list[tuple] = []
-
-    async def _announce(run_id, node_id, report, origin, **_):
-        announced.append((run_id, node_id, report, origin))
-
-    async def _judge(**kwargs):
-        return Verdict(accomplished=False, category="tool_failure", what_is_missing="a token")
-
-    started = time.monotonic()
-    result = await _run_two_node_dag(
-        tmp_path,
-        desk=desk,
-        judge_node=_judge,
-        announce_exception=_announce,
-        adjudication_timeout_s=timeout_s,
-        control_reachable=reachable,
-    )
-    return result, desk, announced, time.monotonic() - started
-
-
-async def test_a_node_does_not_suspend_when_no_route_can_answer_it(tmp_path) -> None:
-    """`tool_call` gone means `resolve_dag_node` is unnameable, so no answer can arrive.
-
-    Suspending anyway parks the node for the whole adjudication timeout and then
-    records that nobody answered -- blaming the agent for a question it had no way
-    to answer. The same reasoning the undeliverable-report guard already applies to
-    the outbound leg, applied to the return leg.
-    """
-    result, desk, _announced, elapsed = await _run_with_reachability(tmp_path, lambda: False)
-
-    assert result.summary["failed"] == 1
-    by_node = {f["node"]: f for f in result.files}
-    error = by_node["a"]["error"] or ""
-    assert "no route" in error.lower(), f"the error must name the real cause, got: {error!r}"
-    assert "tool_call" in error, "and point at the switch that causes it"
-    assert "timed out" not in error, "the agent must not be blamed for the host's missing route"
-    assert desk.open_nodes() == set()
-    assert elapsed < 10, f"the node must fail at once, not wait out the timeout (took {elapsed:.1f}s)"
-
-
-async def test_a_raising_reachability_predicate_fails_the_node_closed(tmp_path) -> None:
-    """Fail closed, matching how the acceptance text already treats a raising predicate."""
-    result, desk, _announced, elapsed = await _run_with_reachability(
-        tmp_path, lambda: (_ for _ in ()).throw(AttributeError("no controller"))
-    )
-
-    assert result.summary["failed"] == 1
-    by_node = {f["node"]: f for f in result.files}
-    assert "no route" in (by_node["a"]["error"] or "").lower()
-    assert desk.open_nodes() == set()
-    assert elapsed < 10
-
-
-async def test_an_unwired_reachability_predicate_still_suspends(tmp_path) -> None:
-    """`None` means the host never wired it, which must keep meaning "assume reachable".
-
-    Every pre-existing runner fixture omits the predicate; reading absent as
-    unreachable would silently turn all of them into immediate failures.
-    """
-    result, desk, announced, _elapsed = await _run_with_reachability(tmp_path, None, timeout_s=2)
-
-    assert len(announced) == 1, "the report still goes out when reachability is unknown"
-    assert "no route" not in ({f["node"]: f for f in result.files}["a"]["error"] or "").lower(), (
-        "an unwired predicate must not be read as a missing route"
-    )
-    assert desk.open_nodes() == set()
-
-
-async def test_the_tool_hands_its_reachability_predicate_to_the_runner(tmp_path, monkeypatch):
-    """The runner cannot ask whether an answer can come back unless it is given the predicate.
-
-    The tool has held it since the acceptance text needed it; without this the
-    runner defaults to "assume reachable" and the fail-fast path is dead code in
-    production however well it is covered by unit tests.
-    """
-    from raven.agent.subagent import dag_tool as tool_mod
-
-    seen = []
-
-    async def _fake_run_dag(spec, **kwargs):
-        seen.append(kwargs.get("control_reachable"))
-        raise RuntimeError("far enough")
-
-    monkeypatch.setattr(tool_mod, "run_dag", _fake_run_dag)
-
-    def _predicate() -> bool:
-        return False
-
-    tool = SubAgentDagTool(
-        workspace=tmp_path,
-        agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")],
-        control_reachable=_predicate,
-    )
-    tool.set_context("web", "default", "web:sess1")
-    node = {"id": "a", "subagent": "echo", "node_summary": "say hello", "prompt_template": "hi"}
-
-    await tool.execute(task_summary="backgrounded", nodes=[node])
-    await asyncio.gather(*list(tool._runs.values()), return_exceptions=True)
-
-    assert seen == [_predicate], "the runner must get the tool's own predicate, not a copy of the fold condition"
-
-
-async def test_the_acceptance_text_names_the_route_to_the_hidden_controls(tmp_path) -> None:
-    """Advertising `dag_status(...)` names a tool absent from the model's schema.
-
-    The acceptance text is the only advertisement these get, so it has to say how
-    they are reached, the same way the exception report does.
-    """
-    tool = SubAgentDagTool(
-        workspace=tmp_path,
-        agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")],
-        control_reachable=lambda: True,
-    )
-    tool.set_context("web", "default", "web:sess1")
-
-    out = await tool.execute(
-        task_summary="run the graph under test",
-        nodes=[{"id": "a", "subagent": "echo", "node_summary": "say hello", "prompt_template": "hi"}],
-    )
-
-    assert "tool_call" in out.model_text, "the controls are unnameable without the route"
-    assert "dag_status" in out.model_text
-    assert "cancel_dag" in out.model_text
-    assert "resolve_dag_node" in out.model_text
-
-
-def test_the_report_names_no_route_when_there_is_none() -> None:
-    """A node with no answer route is failed, not suspended -- the report must say so.
-
-    The announce is not gated on suspension, so this report reaches the model
-    anyway. Naming an invocation in it asks the model to answer a node that no
-    longer accepts an answer, through a route the host does not have: the same
-    dishonest advertisement this branch exists to remove, in the state the branch
-    itself introduced.
-    """
-    from raven.agent.subagent.dag_runner import _exception_report
-    from raven.agent.subagent.dag_verdict import Verdict
-
-    spec = parse_dag_spec(
-        {
-            "task_summary": "one node",
-            "nodes": [{"id": "a", "subagent": "x", "node_summary": "first", "prompt_template": "do a"}],
-        }
-    )
-    shared = {
-        "run_id": "r1",
-        "node": spec.nodes[0],
-        "verdict": Verdict(accomplished=False, category="tool_failure", what_is_missing="a token"),
-        "attempt": 1,
-        "remaining": 2,
-        "blocked": ["b"],
-        "timeout_s": 600.0,
-    }
-
-    routed = _exception_report(**shared)
-    unrouted = _exception_report(**shared, route_available=False)
-
-    assert "tool_call" in routed, "the control: with a route, the invocation is named"
-
-    assert "resolve_dag_node" not in unrouted, "no route means no call to name"
-    assert "Answer" not in unrouted, "and no instruction to answer something that accepts no answer"
-    # Naming tool_call as the *reason* is diagnostic, not an instruction: it points
-    # whoever reads this at the switch that caused it.
-    assert "tool_call is not available" in unrouted
-    assert "deciding within" not in unrouted, "there is no deadline: the node is not waiting"
-    assert "no route" in unrouted.lower(), "it has to say why this line of the graph is dead"
-    # What the decision would have turned on is still reported, because the agent
-    # may still re-plan around the dead node.
-    for kept in ("tool_failure", "a token", "blocked while this waits: b"):
-        assert kept in unrouted
-
-
-@pytest.mark.parametrize(
-    ("kwargs", "expected", "why"),
-    [
-        ({}, True, "a node that suspends really is waiting for a decision"),
-        ({"max_continuations": 0}, False, "the continuation limit is spent, so the desk never opens"),
-        ({"control_reachable": lambda: False}, False, "no route means the desk never opens either"),
-    ],
-)
-async def test_the_announcer_is_told_whether_a_decision_is_pending(tmp_path, kwargs, expected, why) -> None:
-    """The flag has to track suspension, not the fact that a report exists.
-
-    The announce is not gated on suspension -- a terminal node's report still goes
-    out, because the agent replans from it -- so the announcer is the only place
-    that can tell the two apart, and it can only do that if the runner says which
-    this is.
-    """
-    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
-    from raven.agent.subagent.dag_verdict import Verdict
-
-    seen: list[bool] = []
-
-    async def _announce(run_id, node_id, report, origin, *, awaiting_decision):
-        seen.append(awaiting_decision)
-
-    async def _judge(**_kw):
-        return Verdict(accomplished=False, category="tool_failure", what_is_missing="a token")
-
-    await _run_two_node_dag(
-        tmp_path,
-        desk=AdjudicationDesk(),
-        judge_node=_judge,
-        announce_exception=_announce,
-        adjudication_timeout_s=1,
-        **kwargs,
-    )
-
-    assert seen, "the report goes out in every one of these states"
-    assert seen[0] is expected, why
-
-
-async def test_the_no_route_failure_keeps_the_judge_s_reason(tmp_path) -> None:
-    """Two different facts, and the run record is the only place both reach a node's reader.
-
-    `errors` becomes the run record's `error` field, which the manifest carries and
-    `dag_status` renders, so replacing the judge's finding with the routing
-    explanation keeps "why nobody could be asked" and loses "why the node failed"
-    for anyone asking about the node. The injected report carries both and is durable
-    in its own right, as the turn it was injected as -- but it is found by reading the
-    conversation rather than the run.
-    """
-    result, _desk, _announced, _elapsed = await _run_with_reachability(tmp_path, lambda: False)
-
-    error = {f["node"]: f for f in result.files}["a"]["error"] or ""
-    assert "a token" in error, "the judge said what was missing; the record has to keep it"
-    assert "no route" in error.lower(), "and why it could not be adjudicated"
-    assert "timed out" not in error
-
-
-# --- a foreground run hands its reports to the turn awaiting it ------------------
-
-
-def _foreground_tool(tmp_path: Path, verdicts: list[Any], **kwargs: Any) -> SubAgentDagTool:
-    """A graph tool over the real ``cat`` sub-agent, judged by a scripted verdict list.
-
-    Each judge call pops the next verdict; once the list is spent every node is
-    accomplished. ``cat`` echoes the prompt, so a node finishes in milliseconds
-    and the test spends its time on the handoff, which is what is under test.
-    """
-    from raven.agent.subagent.dag_verdict import Verdict
-
-    tool = SubAgentDagTool(
-        workspace=tmp_path,
-        agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")],
-        **kwargs,
-    )
-    tool.set_context("web", "default", "web:fg")
-    script = list(verdicts)
-
-    async def _judge(**_kwargs: Any) -> Verdict:
-        return script.pop(0) if script else Verdict(accomplished=True)
-
-    tool._judge_node = lambda: _judge  # type: ignore[method-assign]
-    return tool
-
-
-def _falls_short(what: str = "a token"):
-    from raven.agent.subagent.dag_verdict import Verdict
-
-    return Verdict(accomplished=False, category="missing_credential", what_is_missing=what)
-
-
-_CHAIN = [
-    {"id": "a", "subagent": "echo", "node_summary": "first", "prompt_template": "do a"},
-    {"id": "b", "subagent": "echo", "node_summary": "second", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
-]
-_PAIR = [
-    {"id": "a", "subagent": "echo", "node_summary": "first", "prompt_template": "do a"},
-    {"id": "b", "subagent": "echo", "node_summary": "second", "prompt_template": "do b"},
-]
-_SOLO = [{"id": "a", "subagent": "echo", "node_summary": "only", "prompt_template": "do a"}]
-
-
-async def test_a_foreground_call_returns_the_first_report_while_the_graph_keeps_running(tmp_path: Path) -> None:
-    async with draining_dag_runs():
-        tool = _foreground_tool(tmp_path, [_falls_short()])
-
-        out = await tool.execute(task_summary="fg", nodes=_CHAIN, background=False)
-
-        text = out.model_text
-        assert "did not accomplish its task" in text and "a token" in text
-        assert "resolve_dag_node" in text
-        assert "returned before the graph finished" in text, "the agent is told the protocol"
-        (run_id,) = list(tool._runs)
-        assert not tool._runs[run_id].done(), "the graph is still running"
-        assert tool.is_foreground(run_id)
-
-
-async def test_resolving_the_node_and_awaiting_returns_the_final_result(tmp_path: Path) -> None:
-    from raven.agent.subagent.dag_adjudication import Final
-
-    async with draining_dag_runs():
-        tool = _foreground_tool(tmp_path, [_falls_short()])
-        await tool.execute(task_summary="fg", nodes=_CHAIN, background=False)
-        (run_id,) = list(tool._runs)
-
-        assert tool.resolve_node(run_id, "a", "continue", "use the staging token")
-        event = await tool.await_run(run_id)
-
-        assert isinstance(event, Final) and not event.stopped
-        final = tool.render_event(run_id, event)
-        assert "2 completed" in final.model_text
-        assert await tool.await_run(run_id) in (event, None), "after the run ends there is nothing more to wait for"
-
-
-async def test_a_second_suspended_node_is_handed_over_on_the_next_await(tmp_path: Path) -> None:
-    from raven.agent.subagent.dag_adjudication import Final, Report
-
-    async with draining_dag_runs():
-        tool = _foreground_tool(tmp_path, [_falls_short("token a"), _falls_short("token b")])
-        first = await tool.execute(task_summary="fg", nodes=_PAIR, background=False)
-        (run_id,) = list(tool._runs)
-        first_node = "a" if "node 'a'" in first.model_text else "b"
-        other = "b" if first_node == "a" else "a"
-
-        assert tool.resolve_node(run_id, first_node, "continue", "here you go")
-        second = await tool.await_run(run_id)
-
-        assert isinstance(second, Report) and second.node_id == other, "one report per take, the other node's"
-        assert tool.resolve_node(run_id, other, "abandon", None)
-        final = await tool.await_run(run_id)
-        assert isinstance(final, Final)
-        assert "1 completed" in tool.render_event(run_id, final).model_text
-        assert "1 failed" in tool.render_event(run_id, final).model_text
-
-
-async def test_a_foreground_run_with_no_suspension_returns_the_summary_as_before(tmp_path: Path) -> None:
-    async with draining_dag_runs():
-        tool = _foreground_tool(tmp_path, [])
-        out = await tool.execute(task_summary="fg", nodes=_CHAIN, background=False)
-        assert "2 completed" in out.model_text
-        assert "returned before the graph finished" not in out.model_text
-        assert not tool._runs, "a finished run leaves no task behind"
-        assert not tool._outboxes
-
-
-async def test_a_terminal_report_does_not_return_the_blocking_call(tmp_path: Path) -> None:
-    """A node that exhausts its continuations is failed, not suspended: the call that
-    resolves its last real suspension must reach the run's summary, not a report the
-    agent can never resolve."""
-    from raven.agent.subagent.dag_adjudication import Final
-    from raven.config.raven import SubagentDagConfig
-
-    async with draining_dag_runs():
-        tool = _foreground_tool(
-            tmp_path,
-            [_falls_short(), _falls_short()],
-            verdict_config=SubagentDagConfig(max_continuations=1),
-        )
-        first = await tool.execute(task_summary="fg", nodes=_CHAIN[:1], background=False)
-        assert "returned before the graph finished" in first.model_text, "the real suspension carries the tail"
-        (run_id,) = list(tool._runs)
-
-        assert tool.resolve_node(run_id, "a", "continue", "use the staging token")
-        event = await tool.await_run(run_id)
-
-        assert isinstance(event, Final), f"expected the run's summary, got {event!r}"
-        final = tool.render_event(run_id, event)
-        assert "finished:" in final.model_text
-        assert "returned before the graph finished" not in final.model_text
-
-
-async def test_a_backgrounded_run_still_announces_a_terminal_report(tmp_path: Path) -> None:
-    """The suspended-only guard belongs to the foreground closure alone: a background
-    run's announcer must still learn that a node exhausted its continuations."""
-    from raven.config.raven import SubagentDagConfig
-
-    reported: list[str] = []
-
-    async def _announce_exception(run_id: str, node_id: str, report: str, origin: dict, **_kwargs: Any) -> None:
-        reported.append(node_id)
-
-    async with draining_dag_runs():
-        tool = _foreground_tool(
-            tmp_path,
-            [_falls_short(), _falls_short()],
-            announce_exception=_announce_exception,
-            verdict_config=SubagentDagConfig(max_continuations=1),
-        )
-        await tool.execute(task_summary="bg", nodes=_CHAIN[:1], background=True)
-        (run_id,) = list(tool._runs)
-        for _ in range(300):
-            if reported:
-                break
-            await asyncio.sleep(0.01)
-
-        assert tool.resolve_node(run_id, "a", "continue", "use the staging token")
-        for _ in range(300):
-            if len(reported) >= 2:
-                break
-            await asyncio.sleep(0.01)
-
-        assert reported == ["a", "a"], "both the suspension and the terminal report reach the announcer"
-
-
-async def test_cancelling_the_awaiting_call_cancels_the_run(tmp_path: Path) -> None:
-    class _Sleeper:
-        kind = "raven-loop"
-
-        async def run(self, task: str, **_kwargs: Any) -> str:
-            await asyncio.sleep(60)
-            return "never"
-
-    async with draining_dag_runs():
-        tool = _foreground_tool(tmp_path, [])
-        tool._resolve_node = lambda node: _Sleeper()  # type: ignore[method-assign]
-        call = asyncio.create_task(tool.execute(task_summary="fg", nodes=_CHAIN[:1], background=False))
-        for _ in range(100):
-            await asyncio.sleep(0.01)
-            if tool._runs:
-                break
-        (run_id,) = list(tool._runs)
-        run_task = tool._runs[run_id]
-
-        call.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await call
-        await asyncio.gather(run_task, return_exceptions=True)
-
-        assert run_task.cancelled()
-        assert run_id not in tool._runs and run_id not in tool._outboxes
-
-
-# --- a turn's end releases the foreground runs it still binds --------------------
-
-
-async def _both_suspended(tool: SubAgentDagTool, run_id: str) -> None:
-    for _ in range(300):
-        desk = tool._desks.get(run_id)
-        if desk is not None and desk.open_nodes() == {"a", "b"}:
-            return
-        await asyncio.sleep(0.01)
-    raise AssertionError("both nodes should have suspended by now")
-
-
-async def test_release_re_sends_the_unanswered_report_and_clocks_the_run(tmp_path: Path) -> None:
-    """A released foreground run becomes a backgrounded one, with full information."""
-    from raven.config.raven import SubagentDagConfig
-
-    re_sent: list[tuple[str, str, dict]] = []
-    results: list[str] = []
-
-    async def _announce_exception(run_id: str, node_id: str, report: str, origin: dict, **_kwargs: Any) -> None:
-        re_sent.append((node_id, report, origin))
-
-    async def _announce(run_id: str, summary: str, origin: dict) -> None:
-        results.append(summary)
-
-    async with draining_dag_runs():
-        tool = _foreground_tool(
-            tmp_path,
-            [_falls_short("token a"), _falls_short("token b")],
-            announce=_announce,
-            announce_exception=_announce_exception,
-            verdict_config=SubagentDagConfig(adjudication_timeout_seconds=0.3),
-        )
-        first = await tool.execute(task_summary="fg", nodes=_PAIR, background=False)
-        (run_id,) = list(tool._runs)
-        run_task = tool._runs[run_id]
-        await _both_suspended(tool, run_id)
-        handed = "a" if "node 'a'" in first.model_text else "b"
-        buffered = "b" if handed == "a" else "a"
-
-        await tool.release_turn("web:fg", flush=True)
-
-        assert not tool.is_foreground(run_id)
-        assert [node for node, _, _ in re_sent] == [handed, buffered], (
-            "both are unanswered: the turn took one and never decided it, and never saw the other"
-        )
-        assert re_sent[0][2]["session_key"] == "web:fg"
-        assert "returned before the graph finished" not in re_sent[0][1], "an announced report carries no tail"
-
-        await asyncio.wait_for(run_task, timeout=5)
-        assert len(results) == 1 and "2 failed" in results[0], (
-            "clocked after release, both nodes time out and the summary announces"
-        )
-
-
-async def test_release_re_sends_a_report_the_turn_took_but_never_answered(tmp_path: Path) -> None:
-    """A take is not an answer.
-
-    One node, so nothing else can be re-sent in its place. The turn was handed the
-    report and ended without deciding; the node is still open on the desk and no
-    other route will ever ask about it again, which is what the returned tail
-    promises and what a backgrounded run would have done.
-    """
-    from raven.config.raven import SubagentDagConfig
-
-    re_sent: list[str] = []
-
-    async def _announce_exception(run_id: str, node_id: str, report: str, origin: dict, **_kwargs: Any) -> None:
-        re_sent.append(node_id)
-
-    async def _announce(run_id: str, summary: str, origin: dict) -> None:
-        return None
-
-    async with draining_dag_runs():
-        tool = _foreground_tool(
-            tmp_path,
-            [_falls_short("token a")],
-            announce=_announce,
-            announce_exception=_announce_exception,
-            verdict_config=SubagentDagConfig(adjudication_timeout_seconds=0.3),
-        )
-        first = await tool.execute(task_summary="fg", nodes=_SOLO, background=False)
-        assert "node 'a'" in first.model_text
-        run_task = tool._runs[next(iter(tool._runs))]
-
-        await tool.release_turn("web:fg", flush=True)
-
-        assert re_sent == ["a"], "the turn took this report and never answered it"
-        await asyncio.wait_for(run_task, timeout=5)
-
-
-async def test_release_does_not_re_send_a_report_the_turn_answered(tmp_path: Path) -> None:
-    """The guard on the other side: a decided node must not be asked about twice."""
-    from raven.agent.subagent.dag_adjudication import CONTINUE
-    from raven.config.raven import SubagentDagConfig
-
-    re_sent: list[str] = []
-
-    async def _announce_exception(run_id: str, node_id: str, report: str, origin: dict, **_kwargs: Any) -> None:
-        re_sent.append(node_id)
-
-    async def _announce(run_id: str, summary: str, origin: dict) -> None:
-        return None
-
-    async with draining_dag_runs():
-        tool = _foreground_tool(
-            tmp_path,
-            [_falls_short("token a")],
-            announce=_announce,
-            announce_exception=_announce_exception,
-            verdict_config=SubagentDagConfig(adjudication_timeout_seconds=0.3),
-        )
-        await tool.execute(task_summary="fg", nodes=_SOLO, background=False)
-        run_id = next(iter(tool._runs))
-        run_task = tool._runs[run_id]
-        assert tool.resolve_node(run_id, "a", CONTINUE, "here is the token")
-
-        await tool.release_turn("web:fg", flush=True)
-
-        assert re_sent == [], "an answered report is not re-sent"
-        await asyncio.wait_for(run_task, timeout=5)
-
-
-async def test_release_without_flush_drops_the_report_but_still_announces_the_result(tmp_path: Path) -> None:
-    from raven.config.raven import SubagentDagConfig
-
-    re_sent: list[str] = []
-    results: list[str] = []
-
-    async def _announce_exception(run_id: str, node_id: str, report: str, origin: dict, **_kwargs: Any) -> None:
-        re_sent.append(node_id)
-
-    async def _announce(run_id: str, summary: str, origin: dict) -> None:
-        results.append(summary)
-
-    async with draining_dag_runs():
-        tool = _foreground_tool(
-            tmp_path,
-            [_falls_short("token a"), _falls_short("token b")],
-            announce=_announce,
-            announce_exception=_announce_exception,
-            verdict_config=SubagentDagConfig(adjudication_timeout_seconds=0.3),
-        )
-        await tool.execute(task_summary="fg", nodes=_PAIR, background=False)
-        (run_id,) = list(tool._runs)
-        run_task = tool._runs[run_id]
-        await _both_suspended(tool, run_id)
-
-        await tool.release_turn("web:fg", flush=False)
-
-        await asyncio.wait_for(run_task, timeout=5)
-        assert re_sent == []
-        assert len(results) == 1
-
-
-async def test_a_released_run_announces_a_terminal_report_as_a_notification(tmp_path: Path) -> None:
-    """After the release there is no blocking call for the summary to reach.
-
-    Dropping a non-suspending report is right while the run is bound: the call is
-    still waiting and the summary is on its way to it. Released, that call is gone,
-    so a dropped terminal report reaches nobody until the whole graph finishes --
-    while `CONTEXT.md` promises a released run behaves as a backgrounded one, whose
-    announcer takes notifications as readily as questions.
-    """
-    from raven.agent.subagent.dag_adjudication import CONTINUE
-    from raven.config.raven import SubagentDagConfig
-
-    seen: list[tuple[str, bool]] = []
-
-    async def _announce_exception(
-        run_id: str, node_id: str, report: str, origin: dict, *, awaiting_decision: bool = True
-    ) -> None:
-        seen.append((node_id, awaiting_decision))
-
-    async def _announce(run_id: str, summary: str, origin: dict) -> None:
-        return None
-
-    async with draining_dag_runs():
-        tool = _foreground_tool(
-            tmp_path,
-            [_falls_short("token a"), _falls_short("token a still")],
-            announce=_announce,
-            announce_exception=_announce_exception,
-            verdict_config=SubagentDagConfig(max_continuations=1, adjudication_timeout_seconds=5.0),
-        )
-        await tool.execute(task_summary="fg", nodes=_SOLO, background=False)
-        run_id = next(iter(tool._runs))
-        run_task = tool._runs[run_id]
-
-        await tool.release_turn("web:fg", flush=True)
-        assert seen == [("a", True)], "the suspension replays on release, as promised"
-
-        assert tool.resolve_node(run_id, "a", CONTINUE, "use the staging token")
-        await asyncio.wait_for(run_task, timeout=10)
-
-    assert seen == [("a", True), ("a", False)], (
-        "the retry ended terminally after the release, so its report is a notification the "
-        "released lane must still announce"
-    )
-
-
-async def test_resolving_a_queued_node_is_answered_with_the_other_node_not_its_own(tmp_path: Path) -> None:
-    """The model-facing shape of the retirement rule, against a real outbox.
-
-    Both nodes suspend; the blocking call is handed one and the other queues. The
-    agent can still decide the queued one -- the report it did get names the nodes
-    blocked behind it, and `dag_status` lists them. Answering it must not be
-    followed by that same node's question.
-
-    Driven through the `resolve_node` / `await_run` pair `resolve_dag_node` itself
-    calls, because that tool's own tests stand on a stub loop and a stub stops
-    exactly where this defect lives.
-
-    What comes back instead is the other node's report: it was handed once, nobody
-    decided it, and `Outbox` records exactly that debt. An earlier version of this
-    test asserted a timeout here, on the reading that a retired report leaves
-    nothing to hand over. A timeout cannot tell "the decided node came back" from
-    "nothing came back at all", and what it blessed was a park that production has
-    no clock to end.
-    """
-    from raven.agent.subagent.dag_adjudication import CONTINUE
-
-    async with draining_dag_runs():
-        tool = _foreground_tool(tmp_path, [_falls_short("token a"), _falls_short("token b")])
-        first = await tool.execute(task_summary="fg", nodes=_PAIR, background=False)
-        run_id = next(iter(tool._runs))
-        try:
-            await _both_suspended(tool, run_id)
-            handed = "a" if "node 'a'" in first.model_text else "b"
-            queued = "b" if handed == "a" else "a"
-
-            assert tool.resolve_node(run_id, queued, CONTINUE, "here is what was missing")
-
-            try:
-                event = await asyncio.wait_for(tool.await_run(run_id), timeout=5)
-            except asyncio.TimeoutError:
-                raise AssertionError(
-                    f"nothing came back, and nothing ever will: node {handed!r} was handed once and is "
-                    "still undecided, so no node can suspend and the run cannot finish"
-                ) from None
-            assert getattr(event, "node_id", None) == handed, (
-                f"the next question is the node still open, not {getattr(event, 'node_id', event)!r}"
-            )
-        finally:
-            tool.request_cancel(run_id)
-
-
-async def test_deciding_the_node_the_call_was_not_handed_still_ends_the_tool_call(tmp_path: Path) -> None:
-    """The turn comes back, driven through the caller the model actually reaches.
-
-    Two nodes suspend, one report goes to the blocking call and the other queues,
-    and the agent decides the queued one. That is an ordinary decision: the report
-    it holds names the nodes blocked behind it and `dag_status` lists them.
-
-    Deciding it used to park the call with nothing able to wake it. Nothing can
-    suspend while the runner waits -- it waits only once nothing else can run --
-    so no report can arrive; the run cannot finish while a node is open, so no
-    final can either; and a bound run has no deadline. `blocking_for` keeps the
-    registry's ceiling off the call, asserted below, so "parked" meant "until
-    something kills the turn" -- and the cancel handler aborts the whole graph.
-
-    The outbox level is covered by `test_resolving_a_queued_node_is_answered_with_
-    the_other_node_not_its_own`. This drives `ResolveDagNodeTool.execute`, because
-    the absence of a ceiling is a property of the caller and the registry, not of
-    the outbox.
-    """
-    from types import SimpleNamespace
-
-    from raven.agent.subagent.dag_control_tools import ResolveDagNodeTool
-
-    async with draining_dag_runs():
-        tool = _foreground_tool(tmp_path, [_falls_short("token a"), _falls_short("token b")])
-        first = await tool.execute(task_summary="fg", nodes=_PAIR, background=False)
-        run_id = next(iter(tool._runs))
-        try:
-            await _both_suspended(tool, run_id)
-            handed = "a" if "node 'a'" in first.model_text else "b"
-            queued = "b" if handed == "a" else "a"
-
-            control = ResolveDagNodeTool(
-                loop=SimpleNamespace(tools=SimpleNamespace(get=lambda n: tool if n == "run_subagent_dag" else None))
-            )
-            control.set_context("web", "default", "web:fg")
-            params = {"run_id": run_id, "node_id": queued, "decision": "continue", "message": "here it is"}
-            assert control.blocking_for(params), "with a ceiling on this call the park would end as a timeout"
-
-            try:
-                out = await asyncio.wait_for(control.execute(**params), timeout=5)
-            except asyncio.TimeoutError:
-                raise AssertionError(
-                    f"the call never returned: node {handed!r} is still open, so the runner waits with no "
-                    "deadline while this taker waits for an event nobody can send"
-                ) from None
-
-            assert f"node {handed} needs a decision" in getattr(out, "display_text", ""), (
-                f"the still-open node is what this call is owed, got {getattr(out, 'display_text', out)!r}"
-            )
-        finally:
-            tool.request_cancel(run_id)
-
-
-async def test_a_suspended_node_holds_no_dispatch_slot(tmp_path: Path) -> None:
-    """The wait for a decision happens after the node has given its slot back.
-
-    Structural today -- the wait sits in the wave loop, outside the `async with
-    semaphore` in the node -- and nothing asserted it. A bound run has no deadline,
-    so a slot held across that wait would starve every unrelated spawn and graph
-    sharing the gate, with no clock to end it.
-    """
-    gate = asyncio.Semaphore(1)
-    async with draining_dag_runs():
-        tool = _foreground_tool(tmp_path, [_falls_short("token a")], gate=gate)
-        await tool.execute(task_summary="fg", nodes=_SOLO, background=False)
-        run_id = next(iter(tool._runs))
-        try:
-            # Let the wave loop reach the wait first. Sampling the gate the instant the
-            # report comes back proves nothing: it is free then because the node has
-            # released it and whatever runs next has not taken it yet.
-            await asyncio.sleep(0.3)
-            assert tool._desks[run_id].is_open("a"), "the node is still suspended, so this is the state under test"
-            assert not gate.locked(), "the wait is holding a dispatch slot no clock will ever release"
-            await asyncio.wait_for(gate.acquire(), timeout=1)
-            gate.release()
-        finally:
-            tool.request_cancel(run_id)
-
-
-async def test_a_resolve_through_the_control_tool_is_handed_the_run_it_completes(tmp_path: Path) -> None:
-    """The no-yield ordering, guarded at the caller that has to keep it.
-
-    `_retire` drops the run's outbox from the index `release_turn` reaches runs
-    through, so a run finishing before a taker exists has nowhere left to deliver.
-    Nothing opens that window because `ResolveDagNodeTool.execute` resolves and
-    awaits with no yield between -- and that is the code this drives, over a real
-    outbox. An earlier version called the tool's own `resolve_node` / `await_run`
-    back to back, which pins the outbox but never executes the call site, so an
-    `await` added there left it green.
-
-    What this catches is a yield long enough to lose the race; `await sleep(0)`
-    passes a tick, the run has not finished, and this stays green. The structural
-    half of the claim belongs to
-    `test_the_resolve_tool_parks_its_taker_before_it_yields`.
-    """
-    from types import SimpleNamespace
-
-    from raven.agent.subagent.dag_control_tools import ResolveDagNodeTool
-
-    async with draining_dag_runs():
-        tool = _foreground_tool(tmp_path, [_falls_short("token a")])
-        await tool.execute(task_summary="fg", nodes=_SOLO, background=False)
-        run_id = next(iter(tool._runs))
-
-        control = ResolveDagNodeTool(
-            loop=SimpleNamespace(tools=SimpleNamespace(get=lambda n: tool if n == "run_subagent_dag" else None))
-        )
-        control.set_context("web", "default", "web:fg")
-        out = await asyncio.wait_for(
-            control.execute(run_id=run_id, node_id="a", decision="continue", message="here is the token"),
-            timeout=10,
-        )
-
-        text = getattr(out, "model_text", out)
-        assert "finished: 1 completed" in text, (
-            f"the run finished on this decision, so its result belongs to this call, got {text[:200]!r}"
-        )
-        assert "will run again with your message" not in text, (
-            "that is the answer given when the run had nowhere left to deliver its result"
-        )
-
-
-async def test_a_stopped_run_tells_the_waiting_call_that_it_was_stopped(tmp_path: Path) -> None:
-    """The one sentence a hard-cancelled run gives the call that was waiting on it.
-
-    `stop()` is how a hard cancel reaches the outbox, and it wakes every parked
-    taker with `Stopped` rather than leaving it hanging. That event has exactly one
-    rendering and it is all the model gets -- no result, no report, no error -- so
-    if it rendered as nothing the blocking call would return nothing and the turn
-    would read as a graph that simply produced no answer.
-
-    Driven through the blocking call itself: `await_run` refuses a run that is
-    already stopped, because it is no longer bound, so a `Stopped` only ever
-    reaches a caller that was parked before the stop.
-    """
-
-    class _Sleeper:
-        kind = "raven-loop"
-
-        async def run(self, task: str, **_kwargs: Any) -> str:
-            await asyncio.sleep(60)
-            return "never"
-
-    async with draining_dag_runs():
-        tool = _foreground_tool(tmp_path, [])
-        tool._resolve_node = lambda node: _Sleeper()  # type: ignore[method-assign]
-        call = asyncio.create_task(tool.execute(task_summary="fg", nodes=_SOLO, background=False))
-        for _ in range(300):
-            await asyncio.sleep(0.01)
-            run_id = next(iter(tool._outboxes), None)
-            if run_id is not None and tool._outboxes[run_id]._takers:
-                break
-        run_id = next(iter(tool._outboxes))
-        assert tool._outboxes[run_id]._takers, "the blocking call never parked, so this is not the state under test"
-
-        tool._outboxes[run_id].stop()
-        out = await asyncio.wait_for(call, timeout=10)
-
-        text = getattr(out, "model_text", out)
-        assert run_id in text, f"the answer has to name the run it is about, got {text!r}"
-        assert "stopped" in text, f"and say what happened to it, got {text!r}"
-
-
-async def test_release_touches_only_the_named_conversation(tmp_path: Path) -> None:
-    async with draining_dag_runs():
-        tool = _foreground_tool(tmp_path, [_falls_short()])
-        await tool.execute(task_summary="fg", nodes=_CHAIN, background=False)
-        (run_id,) = list(tool._runs)
-
-        await tool.release_turn("web:somebody-else", flush=True)
-
-        assert tool.is_foreground(run_id), "another conversation's turn ending must not release this run"
-
-
-async def test_release_turn_survives_a_raising_outbox_and_still_releases_the_rest(tmp_path: Path) -> None:
-    """release_turn drains every outbox bound to the conversation even when one of
-    them blows up: a run behind a failing release must not be left bound to a
-    turn that has already ended -- unclocked, and waiting for a decision nobody
-    will make."""
-    second_chain = [
-        {"id": "c", "subagent": "echo", "node_summary": "first", "prompt_template": "do c"},
-        {
-            "id": "d",
-            "subagent": "echo",
-            "node_summary": "second",
-            "prompt_template": "{{ c.output }}",
-            "depends_on": ["c"],
-        },
-    ]
-    async with draining_dag_runs():
-        tool = _foreground_tool(tmp_path, [_falls_short(), _falls_short()])
-        await tool.execute(task_summary="fg1", nodes=_CHAIN, background=False)
-        await tool.execute(task_summary="fg2", nodes=second_chain, background=False)
-        run_ids = list(tool._runs)
-        assert len(run_ids) == 2
-        first_outbox, second_outbox = (tool._outboxes[run_id] for run_id in run_ids)
-
-        async def _raise(*, flush: bool) -> None:
-            raise RuntimeError("boom")
-
-        first_outbox.release = _raise
-
-        await tool.release_turn("web:fg", flush=True)
-
-        assert second_outbox.released.is_set(), "the second outbox still releases after the first one raises"

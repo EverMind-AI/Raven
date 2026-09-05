@@ -11,7 +11,6 @@ import * as store from './store'
 import * as tail from './tail'
 import * as attachmentCache from '../../shell/attachment-cache'
 import { markMissing as markDeliveryMissing } from '../workspace/deliveries'
-import { snapshot as deliveriesSnapshot } from '../workspace/deliveries'
 
 import type { Shell } from '../../shell/bridge'
 import type { ProseTarget } from '../../shell/prose'
@@ -282,11 +281,7 @@ describe('transcript island, history', () => {
     openFolds()
     const fold = $('.tfold')
     expect(fold).toBeTruthy()
-    /* The fold names what it holds. It used to say "done", which the fold's
-       own existence already means -- `collapse` builds one only after the
-       answer lands -- while implying the TASK had finished, which a
-       backgrounded graph outliving its turn makes false. */
-    expect(fold?.querySelector('.tfh .lb')?.textContent).toBe('en:gui.fold.steps')
+    expect(fold?.querySelector('.tfh .lb')?.textContent).toBe('en:gui.fold.done')
     expect(fold?.querySelector('.tfh .tm')?.textContent).toBe('3.0s')
     const step = fold?.querySelector('.tfb .step')
     expect(step).toBeTruthy()
@@ -966,83 +961,6 @@ describe("the turn's delivered files and file changes", () => {
     expect(box.querySelector('.changes')).toBeNull()
   })
 
-  it('does not give a sub-agent card the conversation\'s files of the same turn', async () => {
-    /* Both streams number their turns from one, and the registry is keyed by
-       turn -- so `ofTurn(1)` named two different things until the rows carried
-       which stream delivered them. The conversation's first turn and a delegated
-       run's first turn are not the same turn. */
-    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true, text: () => Promise.resolve('') }))
-    act(() => {
-      mount.history([
-        { role: 'user', text: 'ship it' },
-        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: manifest(['conversation.md']) },
-        { role: 'assistant', text: 'done' },
-      ])
-    })
-    await act(async () => { await Promise.resolve() })
-    expect($('.asec.deliveries .ahm .n')?.textContent).toBe('1')
-
-    const box = document.createElement('div')
-    document.body.append(box)
-    act(() => {
-      mount.agentStage(box, {
-        status: 'completed',
-        messages: [
-          { role: 'user', text: 'go', timestamp: iso(Date.now() - 9000) },
-          { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
-        ],
-      }, { key: 'agent-own', reset: true })
-    })
-    await act(async () => { await Promise.resolve() })
-
-    /* The run delivered nothing, so its stage shows no products -- not the
-       conversation's. */
-    expect(box.querySelector('.asec.deliveries')).toBeNull()
-    expect(box.textContent).not.toContain('conversation.md')
-    /* And the conversation still has its own. */
-    expect($('.asec.deliveries .ahm .n')?.textContent).toBe('1')
-  })
-
-  it('keeps the conversation\'s deliveries when a sub-agent panel paints', async () => {
-    /* Reported against the running page: the turn's card says it delivered a
-       file and the desk, in the same window, says the session has delivered
-       none. Opening a sub-agent panel is what does it.
-
-       `history()` empties the whole registry, and `agentPaintLane` replays
-       through `history()` on a lane of its own, four times per poll, to draw a
-       delegated run. So painting a sub-agent's stream throws away the
-       deliveries of the conversation underneath -- and nothing brings them back
-       until the reader switches conversations, because `loadDeliveries` only
-       runs when one is opened.
-
-       Both surfaces read this registry, so both lose it. */
-    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true, text: () => Promise.resolve('') }))
-    act(() => {
-      mount.history([
-        { role: 'user', text: 'ship it' },
-        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: manifest(['report.md']) },
-        { role: 'assistant', text: 'done' },
-      ])
-    })
-    await act(async () => { await Promise.resolve() })
-    expect($('.asec.deliveries .ahm .n')?.textContent).toBe('1')
-    expect(deliveriesSnapshot().length).toBe(1)
-
-    /* A delegated run's stage paints. Nothing about this conversation changed. */
-    const box = document.createElement('div')
-    document.body.appendChild(box)
-    act(() => {
-      mount.agentStage(box, {
-        status: 'ok',
-        messages: [{ role: 'user', text: 'go' }, { role: 'assistant', text: 'done' }],
-      }, { key: 'sp:1' })
-    })
-    await act(async () => { await Promise.resolve() })
-
-    expect(deliveriesSnapshot().length).toBe(1)
-    expect($('.asec.deliveries .ahm .n')?.textContent).toBe('1')
-  })
-
   it('keeps a missing delivery in place and marks it missing', async () => {
     const fetch = vi.fn()
     vi.stubGlobal('fetch', fetch)
@@ -1559,11 +1477,11 @@ describe('transcript island, language', () => {
     twoTurns()
     openTurns()
     expect($$('.wkin .wrow')[0]?.querySelector('.vb')?.textContent).toBe('en:gui.act.v.grep')
-    expect($('.tfh .lb')?.textContent).toBe('en:gui.fold.steps')
+    expect($('.tfh .lb')?.textContent).toBe('en:gui.fold.done')
     lang = 'zh'
     act(() => { mount.redraw() })
     expect($$('.wkin .wrow')[0]?.querySelector('.vb')?.textContent).toBe('zh:gui.act.v.grep')
-    expect($('.tfh .lb')?.textContent).toBe('zh:gui.fold.steps')
+    expect($('.tfh .lb')?.textContent).toBe('zh:gui.fold.done')
   })
 
   function twoTurns(): void {

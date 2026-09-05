@@ -27,8 +27,7 @@ from raven.context_engine.segments import (
     SkillsSegmentBuilder,
 )
 from raven.context_engine.segments.curator import CuratorSegmentBuilder
-from raven.contracts.assembled import TokenBudget
-from raven.contracts.memory import Memory
+from raven.memory_engine import Memory, TokenBudget
 from raven.memory_engine.skill_forge import RouterHit, SkillForgeRouter
 
 # ---------------------------------------------------------------------------
@@ -407,48 +406,6 @@ class TestFailureSemantics:
         eng = _engine(builder, router=SkillForgeRouter([]), backend=backend)
         ac = await eng.assemble("s", [], _budget(), turn=_turn())
         assert ac.metadata["memory_hits"] == 0
-
-    async def test_phase_a_builder_failure_degrades_its_segment_only(
-        self,
-        builder: ContextBuilder,
-    ) -> None:
-        """One failing segment builder loses its segment, never the turn; the
-        name lands in metadata so the loop can tell the user."""
-
-        class _Boom:
-            name = "boom"
-            order = 5
-
-            async def build(self, ctx):
-                raise RuntimeError("segment source down")
-
-        eng = _engine(builder, router=SkillForgeRouter([]), backend=_StubBackend())
-        eng._phase_a = [*eng._phase_a, _Boom()]
-        ac = await eng.assemble("s", [], _budget(), turn=_turn())
-        assert ac.metadata["degraded_segments"] == ["boom"]
-        assert ac.messages is not None  # the turn assembled; only the segment is gone
-
-    async def test_phase_b_builder_failure_degrades_its_segment_only(
-        self,
-        builder: ContextBuilder,
-    ) -> None:
-        """The prefix-dependent phase is isolated the same way: a Curator that
-        raises loses its segment and is named, and the turn still assembles on
-        the prefix and the raw history."""
-
-        class _Boom:
-            name = "curator-boom"
-            order = 60
-            needs_prefix = True
-
-            async def build(self, ctx):
-                raise RuntimeError("curator down")
-
-        eng = _engine(builder, router=SkillForgeRouter([]), backend=_StubBackend())
-        eng._phase_b = [*eng._phase_b, _Boom()]
-        ac = await eng.assemble("s", [], _budget(), turn=_turn())
-        assert ac.metadata["degraded_segments"] == ["curator-boom"]
-        assert ac.messages is not None
 
     async def test_single_skill_source_failure_isolated(
         self,

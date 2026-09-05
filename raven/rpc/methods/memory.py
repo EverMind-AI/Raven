@@ -30,7 +30,6 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from raven.core.plugin_stack import everos_plugin_installed, everos_plugin_missing_note
 from raven.rpc.errors import ConfigValidationError, InternalError
 
 if TYPE_CHECKING:
@@ -58,11 +57,10 @@ def _cfg() -> tuple[str, str, str]:
     not the base channels ``Config`` — hence ``load_raven_config``.
     """
     from raven.config.raven import load_raven_config
-    from raven_everos.server import DEFAULT_EVEROS_BASE_URL
 
     cfg = load_raven_config()
     plug = (cfg.plugins.config or {}).get("everos-memory", {})
-    base_url = str(plug.get("base_url") or DEFAULT_EVEROS_BASE_URL).rstrip("/")
+    base_url = str(plug.get("base_url") or "http://localhost:18791").rstrip("/")
     user_id = cfg.memory.user_id or "default"
     agent_id = cfg.memory.agent_id or "default"
     return base_url, user_id, agent_id
@@ -125,18 +123,6 @@ def _project(kind: str, row: dict[str, Any]) -> dict[str, Any]:
 async def memory_stats(params: dict) -> dict:
     """``memory.stats`` — never raises; the page opens even when EverOS is down."""
     del params
-    if not everos_plugin_installed():
-        # Same shape as an unreachable server, because it is the same answer to
-        # the page's question: no counts, and nothing it can do about it here.
-        logger.warning("memory.stats: {}", everos_plugin_missing_note())
-        return {
-            "ok": False,
-            "base_url": "",
-            "episodes": 0,
-            "profiles": 0,
-            "agent_cases": 0,
-            "agent_skills": 0,
-        }
     base_url, user_id, agent_id = _cfg()
     counts: dict[str, int] = {}
     ok = True
@@ -167,8 +153,6 @@ async def memory_list(params: dict) -> dict:
     kind = str(params.get("kind") or "")
     if kind not in _KINDS:
         raise ConfigValidationError(f"unknown memory kind: {kind!r}")
-    if not everos_plugin_installed():
-        raise InternalError(everos_plugin_missing_note())
     page = max(1, int(params.get("page") or 1))
     page_size = min(100, max(1, int(params.get("page_size") or 20)))
     q = str(params.get("q") or "").strip()

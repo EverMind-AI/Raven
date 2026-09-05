@@ -17,9 +17,8 @@ from pathlib import Path
 import httpx
 import pytest
 
-import raven.agent.loop.turn_path as agent_loop_main
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
+from raven.agent.loop import main as agent_loop_main
 from raven.providers import rates
 from raven.providers.base import LLMProvider, LLMResponse
 from raven.providers.binding import ModelBinding, use_binding
@@ -66,22 +65,22 @@ def workspace():
 
 @pytest.fixture(autouse=True)
 def _reset_openrouter_cache():
-    rates.reset_openrouter_cache()
+    rates._OPENROUTER_CACHE.clear()
     yield
-    rates.reset_openrouter_cache()
+    rates._OPENROUTER_CACHE.clear()
 
 
 def _make_agent(workspace: Path, provider: LLMProvider, model: str, window: int | None) -> AgentLoop:
     kwargs: dict = {}
     if window is not None:
-        kwargs["engine"] = EngineWiring(context_window_tokens=window)
+        kwargs["context_window_tokens"] = window
     return AgentLoop(
         provider=provider,
         workspace=workspace,
         model=model,
+        max_iterations=2,
+        restrict_to_workspace=True,
         **kwargs,
-        policy=TurnPolicy(max_iterations=2),
-        tools=ToolWiring(restrict_to_workspace=True),
     )
 
 

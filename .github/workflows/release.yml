@@ -67,9 +67,6 @@ jobs:
         run: |
           uv build --wheel
           uv build --sdist
-          # The everos memory plugin ships as its own wheel from the same
-          # release; gh release create uploads everything under dist/.
-          uv build --wheel plugins-dist/everos-memory -o dist
 
       # 4) Sanity gate: the wheel MUST contain the bundle and MUST NOT carry
       #    node_modules or ui-tui sources (keeps the wheel lean and the smoke honest).
@@ -77,7 +74,7 @@ jobs:
         run: |
           python3 - <<'PY'
           import glob, sys, zipfile
-          whl = sorted(glob.glob("dist/raven-*.whl"))[-1]
+          whl = sorted(glob.glob("dist/*.whl"))[-1]
           names = zipfile.ZipFile(whl).namelist()
           assert "raven/ui-tui/dist/entry.js" in names, "entry.js missing from wheel"
           assert "raven/ui/dist/index.html" in names, "index.html missing from wheel"

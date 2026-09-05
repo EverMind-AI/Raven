@@ -403,37 +403,3 @@ async def test_a_live_page_is_handed_back_without_relaunching(monkeypatch: pytes
     b._s.page = SimpleNamespace(is_closed=lambda: False)
 
     assert await b._ensure() is b._s.page
-
-
-def test_private_targets_are_allowed_by_default(monkeypatch):
-    from raven.browser.policy import BLOCK_PRIVATE_ENV_VAR, check_navigation
-
-    monkeypatch.delenv(BLOCK_PRIVATE_ENV_VAR, raising=False)
-    assert check_navigation("http://127.0.0.1:3000/") == "http://127.0.0.1:3000/"
-    assert check_navigation("http://10.0.0.5/") == "http://10.0.0.5/"
-
-
-def test_the_deployment_switch_refuses_private_targets(monkeypatch):
-    import pytest
-
-    from raven.browser.policy import BLOCK_PRIVATE_ENV_VAR, NavigationRefusedError, check_navigation
-
-    monkeypatch.setenv(BLOCK_PRIVATE_ENV_VAR, "1")
-    for target in ("http://127.0.0.1:3000/", "http://10.0.0.5/", "http://192.168.1.1/"):
-        with pytest.raises(NavigationRefusedError):
-            check_navigation(target)
-    assert check_navigation("https://example.com/").startswith("https://")
-
-
-def test_link_local_is_refused_with_or_without_the_switch(monkeypatch):
-    import pytest
-
-    from raven.browser.policy import BLOCK_PRIVATE_ENV_VAR, NavigationRefusedError, check_navigation
-
-    for value in (None, "1"):
-        if value is None:
-            monkeypatch.delenv(BLOCK_PRIVATE_ENV_VAR, raising=False)
-        else:
-            monkeypatch.setenv(BLOCK_PRIVATE_ENV_VAR, value)
-        with pytest.raises(NavigationRefusedError):
-            check_navigation("http://169.254.169.254/")

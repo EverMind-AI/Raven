@@ -18,6 +18,7 @@ from loguru import logger
 from raven.channels.adapters.email import parsing
 from raven.channels.adapters.email.mailbox import EmailMailbox
 from raven.channels.base import ChannelBase
+from raven.config.schema import EmailConfig
 
 _MAX_SEEN_UIDS = 100_000
 
@@ -25,11 +26,11 @@ _MAX_SEEN_UIDS = 100_000
 class EmailChannel(ChannelBase):
     """Email channel: poll IMAP for unread mail in, reply over SMTP out."""
 
-    config: Any
+    config: EmailConfig
     name = "email"
     display_name = "Email"
 
-    def __init__(self, config: Any):
+    def __init__(self, config: EmailConfig):
         super().__init__(config)
         self._stop_event = asyncio.Event()
         self._mailbox = EmailMailbox(config)

@@ -189,7 +189,7 @@ fall out rather than being enforced separately.
 
 One property is one `clarify.request`, asked in `properties` order.
 
-**The pair rule**, in `raven/acp_client/acp_dialects/claude_code.py`: an enum
+**The pair rule**, in `raven/agent/subagent/acp_dialects/claude_code.py`: an enum
 property `X` plus an optional free-text property `X_custom` renders as a single
 question - choices from `X`'s enum, free-text box writing to `X_custom`. This is
 the fixed convention documented in the adapter's `dist/elicitation.d.ts`: each

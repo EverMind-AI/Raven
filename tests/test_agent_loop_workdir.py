@@ -8,9 +8,8 @@ import pytest
 
 from raven.agent import workdir as workdir_mod
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.bundles import EngineWiring, SubagentWiring, TurnPolicy
 from raven.agent.workdir import WorkdirPolicy, WorkdirResolver
-from raven.contracts.llm_provider import LLMResponse
+from raven.providers.base import LLMResponse
 from raven.session.manager import SessionManager
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
@@ -68,7 +67,9 @@ def _resolver(tmp_path: Path) -> WorkdirResolver:
 
 def test_session_workdir_uses_the_resolver(tmp_path: Path) -> None:
     loop = AgentLoop(
-        provider=_FakeChatProvider(), workspace=tmp_path, subagents=SubagentWiring(workdir_resolver=_resolver(tmp_path))
+        provider=_FakeChatProvider(),
+        workspace=tmp_path,
+        workdir_resolver=_resolver(tmp_path),
     )
 
     assert loop.session_workdir("web:abc") == tmp_path / "chanwork" / "web"
@@ -100,7 +101,7 @@ async def test_turn_binds_the_session_workdir(tmp_path: Path) -> None:
     loop = AgentLoop(
         provider=_FakeReplyProvider(LLMResponse(content="ok", finish_reason="stop")),
         workspace=tmp_path,
-        subagents=SubagentWiring(workdir_resolver=_resolver(tmp_path)),
+        workdir_resolver=_resolver(tmp_path),
     )
     _stub_edges(loop)
 
@@ -125,9 +126,9 @@ def _checkpoint_loop(tmp_path: Path, provider) -> AgentLoop:
     return AgentLoop(
         provider=provider,
         workspace=tmp_path,
-        subagents=SubagentWiring(workdir_resolver=_resolver(tmp_path)),
-        engine=EngineWiring(runtime_config=runtime),
-        policy=TurnPolicy(interactive=True),
+        workdir_resolver=_resolver(tmp_path),
+        runtime_config=runtime,
+        interactive=True,
     )
 
 
@@ -219,7 +220,9 @@ def test_sandbox_mounts_the_root_covering_every_session(tmp_path: Path, monkeypa
 
     monkeypatch.setattr("raven.agent.loop.main.build_executor", _fake_build_executor)
     AgentLoop(
-        provider=_FakeChatProvider(), workspace=tmp_path, subagents=SubagentWiring(workdir_resolver=_resolver(tmp_path))
+        provider=_FakeChatProvider(),
+        workspace=tmp_path,
+        workdir_resolver=_resolver(tmp_path),
     )
 
     assert recorded["workspace"] == tmp_path / "chanwork"
@@ -246,7 +249,11 @@ def test_sandbox_skips_the_home_volume_when_the_mount_already_covers_it(tmp_path
 
     monkeypatch.setattr("raven.agent.loop.main.build_executor", _fake_build_executor)
     resolver = WorkdirResolver(WorkdirPolicy.LAUNCH_DIR, agent_home=tmp_path, launch_dir=tmp_path)
-    AgentLoop(provider=_FakeChatProvider(), workspace=tmp_path, subagents=SubagentWiring(workdir_resolver=resolver))
+    AgentLoop(
+        provider=_FakeChatProvider(),
+        workspace=tmp_path,
+        workdir_resolver=resolver,
+    )
 
     assert recorded["workspace"] == tmp_path
     assert recorded["extra_volumes"] == []
@@ -268,7 +275,9 @@ def test_sandboxed_turn_refuses_a_workdir_outside_the_mount(tmp_path, monkeypatc
         sessions=sessions,
     )
     loop = AgentLoop(
-        provider=_FakeChatProvider(), workspace=tmp_path / "home", subagents=SubagentWiring(workdir_resolver=resolver)
+        provider=_FakeChatProvider(),
+        workspace=tmp_path / "home",
+        workdir_resolver=resolver,
     )
     monkeypatch.setattr(type(loop._executor), "is_sandboxed", property(lambda self: True))
 
@@ -300,7 +309,9 @@ def test_sandboxed_turn_allows_an_override_reached_through_a_symlinked_ancestor(
         sessions=sessions,
     )
     loop = AgentLoop(
-        provider=_FakeChatProvider(), workspace=link_home, subagents=SubagentWiring(workdir_resolver=resolver)
+        provider=_FakeChatProvider(),
+        workspace=link_home,
+        workdir_resolver=resolver,
     )
     monkeypatch.setattr(type(loop._executor), "is_sandboxed", property(lambda self: True))
 
@@ -347,7 +358,7 @@ async def test_run_turn_refuses_a_workdir_outside_the_mount(tmp_path, monkeypatc
     loop = AgentLoop(
         provider=_FakeReplyProvider(LLMResponse(content="ok", finish_reason="stop")),
         workspace=tmp_path / "home",
-        subagents=SubagentWiring(workdir_resolver=resolver),
+        workdir_resolver=resolver,
     )
     _stub_edges(loop)
     monkeypatch.setattr(type(loop._executor), "is_sandboxed", property(lambda self: True))
@@ -359,7 +370,9 @@ async def test_run_turn_refuses_a_workdir_outside_the_mount(tmp_path, monkeypatc
 def test_peek_does_not_create_the_directory(tmp_path: Path) -> None:
     """Reporting where a session would work must not touch the disk."""
     loop = AgentLoop(
-        provider=_FakeChatProvider(), workspace=tmp_path, subagents=SubagentWiring(workdir_resolver=_resolver(tmp_path))
+        provider=_FakeChatProvider(),
+        workspace=tmp_path,
+        workdir_resolver=_resolver(tmp_path),
     )
 
     peeked = loop.peek_session_workdir("web:abc")
@@ -385,7 +398,9 @@ def test_peek_does_not_refuse_a_workdir_outside_the_mount(tmp_path, monkeypatch)
         sessions=sessions,
     )
     loop = AgentLoop(
-        provider=_FakeChatProvider(), workspace=tmp_path / "home", subagents=SubagentWiring(workdir_resolver=resolver)
+        provider=_FakeChatProvider(),
+        workspace=tmp_path / "home",
+        workdir_resolver=resolver,
     )
     monkeypatch.setattr(type(loop._executor), "is_sandboxed", property(lambda self: True))
 
@@ -407,7 +422,9 @@ def test_refused_workdir_is_not_created(tmp_path, monkeypatch) -> None:
         sessions=sessions,
     )
     loop = AgentLoop(
-        provider=_FakeChatProvider(), workspace=tmp_path / "home", subagents=SubagentWiring(workdir_resolver=resolver)
+        provider=_FakeChatProvider(),
+        workspace=tmp_path / "home",
+        workdir_resolver=resolver,
     )
     monkeypatch.setattr(type(loop._executor), "is_sandboxed", property(lambda self: True))
 

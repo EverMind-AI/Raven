@@ -32,7 +32,7 @@ from raven.channels.adapters.dingtalk.channel import (
     DingTalkCallbackHandler,
     DingTalkChannel,
 )
-from tests.conftest import make_channel_config, with_channel_fields
+from raven.config.schema import DingTalkConfig
 
 
 def _make_channel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DingTalkChannel:
@@ -41,7 +41,7 @@ def _make_channel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DingTalkCh
         "raven.channels.media.get_media_dir",
         lambda _channel: tmp_path,
     )
-    cfg = make_channel_config("dingtalk", enabled=True, client_id="ak", client_secret="sk")
+    cfg = DingTalkConfig(enabled=True, client_id="ak", client_secret="sk")
     return DingTalkChannel(cfg)
 
 
@@ -277,7 +277,7 @@ async def test_process_disallowed_sender_skips_download_and_dispatch(
     """Denied sender is rejected in process() before file download + dispatch —
     not merely dropped at the central intake."""
     ch = _make_channel(tmp_path, monkeypatch)
-    ch.config = with_channel_fields(ch.config, allow_from=[])  # deny all
+    ch.config.allow_from = []  # deny all
     ch._download_dingtalk_file = AsyncMock(return_value="/fake/x.jpg")
     ch._on_message = AsyncMock()
 
@@ -762,7 +762,7 @@ def test_dingtalk_satisfies_channel_contract() -> None:
     from raven.channels import Channel
     from raven.channels.contract import capability_violations
 
-    ch = DingTalkChannel(make_channel_config("dingtalk", enabled=True, client_id="ak", client_secret="sk"))
+    ch = DingTalkChannel(DingTalkConfig(enabled=True, client_id="ak", client_secret="sk"))
     assert isinstance(ch, Channel)  # name/capabilities/start/stop/send
     assert capability_violations(ch) == []  # no login/streaming declared or implemented
 

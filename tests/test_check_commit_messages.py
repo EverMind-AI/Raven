@@ -1,5 +1,3 @@
-"""The commit-range linter over a real git repo, merge commits included."""
-
 from __future__ import annotations
 
 import os

@@ -18,8 +18,6 @@ from raven.rpc.methods.delegation import (
     MAX_SPAWN_DEPTH,
     delegation_pause,
     delegation_status,
-    subagent_cancel_instance,
-    subagent_cancel_session,
     subagent_interrupt,
 )
 
@@ -42,15 +40,6 @@ class _FakeManager:
     async def cancel_by_id(self, task_id: str) -> bool:
         self.cancelled.append(task_id)
         return task_id in self.live
-
-    async def cancel_by_session(self, session_key: str) -> int:
-        self.cancelled.append(f"session:{session_key}")
-        return 2 if session_key in self.live else 0
-
-    async def cancel_by_instance(self, session_key: str, agent: str, handle: str) -> bool:
-        key = f"{session_key}:{agent}:{handle}"
-        self.cancelled.append(key)
-        return key in self.live
 
 
 def _factory(manager: object | None):
@@ -185,41 +174,3 @@ async def test_pausing_also_stops_a_dag_run_not_just_a_single_spawn() -> None:
     manager.set_paused(False)
     after = await tool.execute(nodes=[{"id": "a", "agent": "x", "prompt": "hi"}])
     assert "delegation is paused" not in after
-
-
-async def test_cancel_session_sweeps_and_reports_the_count() -> None:
-    """[N4-F3] The terminal dialect gains the sweep IM /stop always had."""
-    manager = _FakeManager()
-    manager.live.add("web:s1")
-    result = await subagent_cancel_session({"session_key": "web:s1"}, agent_loop_factory=_factory(manager))
-    assert result == {"cancelled": 2, "session_key": "web:s1"}
-    assert manager.cancelled == ["session:web:s1"]
-
-
-async def test_cancel_session_without_a_key_never_reaches_the_manager() -> None:
-    manager = _FakeManager()
-    result = await subagent_cancel_session({}, agent_loop_factory=_factory(manager))
-    assert result == {"cancelled": 0, "session_key": ""}
-    assert manager.cancelled == []
-
-
-async def test_cancel_instance_mirrors_interrupts_found_semantics() -> None:
-    """[N4-F4] The tested-but-unreachable primitive is a wire verb now; a row
-    that finished between render and keypress is not an error."""
-    manager = _FakeManager()
-    manager.live.add("web:s1:hang:h1")
-    hit = await subagent_cancel_instance(
-        {"session_key": "web:s1", "agent": "hang", "handle": "h1"}, agent_loop_factory=_factory(manager)
-    )
-    assert hit == {"found": True, "session_key": "web:s1", "agent": "hang", "handle": "h1"}
-    miss = await subagent_cancel_instance(
-        {"session_key": "web:s1", "agent": "gone", "handle": "h9"}, agent_loop_factory=_factory(manager)
-    )
-    assert miss["found"] is False
-
-
-async def test_cancel_instance_without_the_pair_never_reaches_the_manager() -> None:
-    manager = _FakeManager()
-    result = await subagent_cancel_instance({"session_key": "s"}, agent_loop_factory=_factory(manager))
-    assert result == {"found": False, "session_key": "s", "agent": "", "handle": ""}
-    assert manager.cancelled == []

@@ -23,8 +23,7 @@ group. The actual implementations live in per-feature modules:
     - ``trajectory`` → ``raven/cli/trajectory_commands.py``
 
 Shared helpers used across multiple command modules live in
-``raven/cli/_helpers.py`` (rendering) and ``raven/core/config_stack.py`` /
-``raven/core/provider_stack.py`` (assembly).
+``raven/cli/_helpers.py``.
 """
 
 import os
@@ -60,18 +59,6 @@ def version_callback(value: bool):
         raise typer.Exit()
 
 
-def _saved_language() -> str:
-    """The ``language`` a config on disk carries, ``en`` when there is none yet or it cannot be read."""
-    try:
-        import json
-
-        from raven.config.paths import get_config_path
-
-        return str(json.loads(get_config_path().read_text(encoding="utf-8")).get("language") or "en")
-    except Exception:
-        return "en"
-
-
 @app.callback()
 def main(
     ctx: typer.Context,
@@ -84,7 +71,6 @@ def main(
     session) and then enters the native TUI. Both paths share the identical
     pre-launch check by routing through the ``tui`` callback.
     """
-    i18n.set_language(_saved_language())
     if ctx.invoked_subcommand is not None:
         return
     from raven.cli.tui_commands import tui as _tui_entry
@@ -180,7 +166,6 @@ from raven.cli.plugin_commands import plugin_app
 
 app.add_typer(plugin_app, name="plugin")
 
-from raven import i18n
 from raven.cli.import_commands import import_app
 
 app.add_typer(import_app, name="import")

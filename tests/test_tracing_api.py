@@ -89,7 +89,7 @@ def test_a_root_span_at_the_top_carries_no_dispatch_link(trace_dir):
 
 
 def test_invocation_source_derives_from_enclosing_purpose(trace_dir):
-    from raven.observability import semconv
+    from raven.tracing import semconv
 
     # A model call nested under a purpose span self-labels with that purpose;
     # a model span never becomes its own source (model-under-model inherits).
@@ -107,7 +107,7 @@ def test_invocation_source_is_none_at_root(trace_dir):
 
 
 def test_purpose_spans_record_input_and_output(trace_dir):
-    from raven.observability import semconv
+    from raven.tracing import semconv
 
     class _R:
         need_retrieval = True
@@ -124,7 +124,7 @@ def test_purpose_spans_record_input_and_output(trace_dir):
 
 
 def test_personalize_extractor_records_step_io(trace_dir):
-    from raven.observability import semconv
+    from raven.tracing import semconv
 
     with trace.span("personalize.classify", kind="memory") as s:
         semconv.personalize(
@@ -174,7 +174,7 @@ def test_disabled_is_noop(trace_dir, monkeypatch):
 
 
 def test_tool_call_extractor(trace_dir):
-    from raven.observability import semconv
+    from raven.tracing import semconv
 
     with trace.span("tool.call") as s:
         semconv.tool_call(s, {"name": "list_dir", "params": {"path": "."}}, "a\nb", None)
@@ -187,7 +187,7 @@ def test_tool_call_extractor(trace_dir):
 
 
 def test_tool_call_retypes_to_skill(trace_dir):
-    from raven.observability import semconv
+    from raven.tracing import semconv
 
     with trace.span("tool.call") as s:
         semconv.tool_call(s, {"name": "use_skill", "params": {"skill_id": "local/weather"}}, "## weather\nbody", None)
@@ -200,7 +200,7 @@ def test_tool_call_retypes_to_skill(trace_dir):
 
 
 def test_skill_read_reports_materialized_bundle(trace_dir):
-    from raven.observability import semconv
+    from raven.tracing import semconv
 
     body = "## weather\nscripts_dir: /ws/skills/local/weather/scripts\ncached: true\n\nrun it"
     with trace.span("tool.call") as s:
@@ -213,7 +213,7 @@ def test_skill_read_reports_materialized_bundle(trace_dir):
 
 
 def test_tool_error_result_marks_status(trace_dir):
-    from raven.observability import semconv
+    from raven.tracing import semconv
 
     with trace.span("tool.call") as s:
         semconv.tool_call(s, {"name": "read_file", "params": {"path": "x"}}, "Error: no such file", None)
@@ -222,7 +222,7 @@ def test_tool_error_result_marks_status(trace_dir):
 
 
 def test_memory_extract_extractor(trace_dir):
-    from raven.observability import semconv
+    from raven.tracing import semconv
 
     with trace.span("memory.extract") as s:
         semconv.memory_extract(
@@ -235,7 +235,7 @@ def test_memory_extract_extractor(trace_dir):
 
 
 def test_memory_consolidate_extractor(trace_dir):
-    from raven.observability import semconv
+    from raven.tracing import semconv
 
     class _S:
         key = "cli:abc"
@@ -252,7 +252,7 @@ def test_memory_consolidate_extractor(trace_dir):
 def test_skill_gate_extractor_records_the_subagent_roster(trace_dir):
     """The roster is a gate input like the tool list: a trace that omits it
     cannot say whether a candidate was dropped for overlapping a sub-agent."""
-    from raven.observability import semconv
+    from raven.tracing import semconv
 
     with trace.span("skill.gate") as s:
         semconv.skill_gate(
@@ -273,7 +273,7 @@ def test_skill_gate_extractor_records_the_subagent_roster(trace_dir):
 
 
 def test_subagent_children_nest(trace_dir):
-    from raven.observability import semconv
+    from raven.tracing import semconv
 
     # A subagent span; its inner primitives nest under it via context propagation.
     with trace.span("subagent.run") as sa:
@@ -500,7 +500,7 @@ def test_span_kind_vocabulary_is_frozen():
 
 
 def test_standard_span_required_attributes(trace_dir):
-    from raven.observability import semconv
+    from raven.tracing import semconv
 
     class _Resp:
         content = "hi"
@@ -567,7 +567,7 @@ def test_provider_label_reports_the_normalized_route_prefix() -> None:
     needs one spelling per backend, which is why this goes through the registry's
     splitter rather than slicing the id here.
     """
-    from raven.observability.semconv import _provider_label
+    from raven.tracing.semconv import _provider_label
 
     assert _provider_label("openrouter/anthropic/claude-sonnet-4-5", "LiteLLMProvider") == "openrouter"
     assert _provider_label("nano-gpt/gpt-4o", "LiteLLMProvider") == "nano_gpt"
@@ -625,7 +625,7 @@ def test_the_served_page_is_distinguishable_from_the_terminal(trace_dir):
 
 
 def test_the_page_does_not_call_itself_web(trace_dir):
-    """`web` was the retired web channel, a different front end on its own channel. Two
+    """`web` is `raven/web_rpc`, a different front end on its own channel. Two
     different things under one label is worse than no label."""
     from raven.cli.serve_commands import SERVED_PAGE_SURFACE
 
@@ -700,8 +700,8 @@ def test_the_request_source_carries_the_surface_into_the_turn_seed():
     """The turn runs on the spine's own task, out of reach of the connection's
     contextvars, so the surface has to ride the TurnRequest into the root
     span's seed -- children then inherit it like the rest of the identity."""
-    from raven.observability.semconv import turn_seed
     from raven.spine import ChatType, Origin, Source, TurnRequest
+    from raven.tracing.semconv import turn_seed
 
     declared = TurnRequest(
         origin=Origin.USER,

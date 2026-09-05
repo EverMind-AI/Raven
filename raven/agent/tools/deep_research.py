@@ -22,9 +22,9 @@ import httpx
 from loguru import logger
 
 from raven.agent import workdir
+from raven.agent.tools.base import Tool
 from raven.config.schema import DeepResearchToolConfig
-from raven.contracts.asking import QuestionResponder
-from raven.contracts.tool import Tool
+from raven.rpc.question_broker import QuestionBroker
 
 DEFAULT_BASE_URL = "https://api.miromind.ai/v1"
 DEFAULT_MODEL = "mirothinker-1-7-deepresearch-mini"
@@ -120,14 +120,14 @@ class DeepResearchTool(Tool):
         # Late-bound (transport singleton) so the tool can ask the user
         # deep-vs-regular before a paid run; None where unavailable (e.g. raven
         # agent), in which case the run proceeds without asking.
-        self._broker: QuestionResponder | None = None
+        self._broker: QuestionBroker | None = None
 
     @staticmethod
     def is_configured(config: DeepResearchToolConfig) -> bool:
         """Whether a key is reachable, so the loop can register the tool opt-in."""
         return bool(config.api_key or os.environ.get("MIROTHINKER_API_KEY"))
 
-    def set_broker(self, broker: QuestionResponder | None) -> None:
+    def set_broker(self, broker: QuestionBroker | None) -> None:
         self._broker = broker
 
     def set_stream_callback(self, cb: StreamCallback | None) -> None:
@@ -337,7 +337,7 @@ _SETUP_STOP = (
 )
 
 
-async def _ask_search_mode(broker: QuestionResponder | None, cid: str) -> str | None:
+async def _ask_search_mode(broker: QuestionBroker | None, cid: str) -> str | None:
     """Ask the user deep-vs-regular for a research query. Returns ``"deep"`` /
     ``"regular"``, or ``None`` only when there is no broker at all (e.g. raven
     agent) -- then the caller honours the model's choice. Shared by the working
@@ -380,10 +380,10 @@ class DeepResearchOfferTool(Tool):
     blocking_interaction = True
 
     def __init__(self) -> None:
-        self._broker: QuestionResponder | None = None
+        self._broker: QuestionBroker | None = None
         self._cid: ContextVar[str] = ContextVar("deep_research_offer_cid", default="")
 
-    def set_broker(self, broker: QuestionResponder | None) -> None:
+    def set_broker(self, broker: QuestionBroker | None) -> None:
         self._broker = broker
 
     def set_context(self, channel: str, chat_id: str, session_key: str) -> None:

@@ -45,14 +45,14 @@ class TestVerdicts:
         assert [x.attempt_id for x in got] == ["att-1"]
         assert got[0].why == "wrong answer"
 
-    def test_verdicts_accumulate_in_the_order_they_were_recorded(self, tmp_path):
+    def test_verdicts_accumulate_and_latest_wins(self, tmp_path):
         tverdict.record_verdict("att-1", "fail", source="user", state_dir=tmp_path)
         tverdict.record_verdict("att-1", "infra", source="judge", state_dir=tmp_path)
         tverdict.record_verdict("att-2", "pass", source="eval", state_dir=tmp_path)
         assert len(tverdict.read_verdicts(tmp_path)) == 3
-        for_att_1 = tverdict.read_verdicts(tmp_path, attempt_id="att-1")
-        assert [v.status for v in for_att_1] == ["fail", "infra"]
-        assert tverdict.read_verdicts(tmp_path, attempt_id="att-missing") == []
+        assert len(tverdict.read_verdicts(tmp_path, attempt_id="att-1")) == 2
+        assert tverdict.latest_verdict("att-1", tmp_path).status == "infra"
+        assert tverdict.latest_verdict("att-missing", tmp_path) is None
 
     def test_invalid_input_rejected(self, tmp_path):
         with pytest.raises(ValueError):
@@ -205,7 +205,7 @@ def test_end_to_end_with_real_tracer(tmp_path, monkeypatch):
         got = list(tstore.iter_spans(tmp_path, attempt_id=aid))
         assert {s["name"] for s in got} == {"session.turn", "tool.call"}
         tverdict.record_verdict(aid, "fail", source="user", state_dir=tmp_path)
-        assert [v.status for v in tverdict.read_verdicts(tmp_path, attempt_id=aid)] == ["fail"]
+        assert tverdict.latest_verdict(aid, tmp_path).status == "fail"
         tstore.pin(aid, reason="repro", state_dir=tmp_path)
         assert all(tstore.is_pinned(s, tmp_path) for s in got)
     finally:

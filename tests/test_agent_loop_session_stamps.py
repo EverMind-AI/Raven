@@ -18,7 +18,6 @@ from typing import Any
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.providers.base import LLMProvider, LLMResponse
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
@@ -58,8 +57,8 @@ def _make_agent(workspace: Path) -> AgentLoop:
         provider=StubProvider(),
         workspace=workspace,
         model="stub",
-        policy=TurnPolicy(max_iterations=2),
-        tools=ToolWiring(restrict_to_workspace=True),
+        max_iterations=2,
+        restrict_to_workspace=True,
     )
 
 
@@ -164,8 +163,9 @@ async def test_the_user_message_is_stamped_at_turn_start_not_turn_end(workspace)
         provider=StubProvider(),
         workspace=workspace,
         model="stub",
-        policy=TurnPolicy(max_iterations=2, now_fn=fake_now),
-        tools=ToolWiring(restrict_to_workspace=True),
+        max_iterations=2,
+        restrict_to_workspace=True,
+        now_fn=fake_now,
     )
     out = await agent._process_message(_make_msg("hello"))
     assert out is not None
@@ -224,8 +224,8 @@ async def test_a_file_tools_diff_is_stored_on_its_tool_entry(workspace):
         provider=provider,
         workspace=workspace,
         model="stub",
-        policy=TurnPolicy(max_iterations=3),
-        tools=ToolWiring(restrict_to_workspace=True),
+        max_iterations=3,
+        restrict_to_workspace=True,
     )
     out = await agent._process_message(_make_msg("write it"))
     assert out is not None

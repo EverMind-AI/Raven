@@ -14,7 +14,6 @@ the registry resolves either way, as its dispatch never consults the schema.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from contextvars import ContextVar
 from typing import Any
@@ -23,7 +22,7 @@ from raven.agent.subagent.dag_adjudication import ABANDON, CONTINUE, DECISIONS
 from raven.agent.subagent.dag_live import cancel_run, live_run_ids, resolve_node
 from raven.agent.subagent.dag_reader import DagReadError
 from raven.agent.subagent.dag_resume import read_run_reconciled
-from raven.contracts.tool import Tool, ToolResult
+from raven.agent.tools.base import Tool
 
 _PROMPT_LINE_LIMIT = 10
 
@@ -89,8 +88,8 @@ class CancelDagTool(_ControlTool):
     @property
     def description(self) -> str:
         return (
-            "Stop an in-flight DAG run by its run id. Nodes already running are cancelled "
-            "immediately, pending nodes are skipped, and nothing further is announced for "
+            "Stop an in-flight DAG run by its run id. Nodes already running finish their "
+            "current step, pending nodes are skipped, and nothing further is announced for "
             "a cancelled run. Returns every node's state as of the cancellation."
         )
 
@@ -127,17 +126,17 @@ class CancelDagTool(_ControlTool):
         except DagReadError:
             return (
                 f"No DAG run {run_id} in this conversation: a run id must resolve under "
-                'this conversation\'s run history to be cancelled. tool_call name "dag_status" '
-                "with no run_id lists the runs this conversation has in flight."
+                "this conversation's run history to be cancelled. dag_status without a "
+                "run_id lists the runs this conversation has in flight."
             )
         if not cancel_run(self._loop, run_id):
             return (
                 f"No in-flight DAG run {run_id} to cancel: it is not running, or the id is wrong. "
-                'tool_call name "dag_status" with no run_id lists the runs currently in flight.'
+                "dag_status without a run_id lists the runs currently in flight."
             )
         head = (
-            f"Cancellation requested for DAG run {run_id}: running nodes are cancelled "
-            "immediately, pending nodes are skipped, and nothing further is announced for this run."
+            f"Cancellation requested for DAG run {run_id}: nodes stop after their current "
+            "step, pending nodes are skipped, and nothing further is announced for this run."
         )
         try:
             run = await self._read_live(run_id)
@@ -147,8 +146,7 @@ class CancelDagTool(_ControlTool):
 
 
 class ResolveDagNodeTool(_ControlTool):
-    """Answer a suspended node: continue it with a message, or abandon it. On a
-    bound foreground run, then wait for the next report or the final result."""
+    """Answer a suspended node: continue it with a message, or abandon it."""
 
     @property
     def name(self) -> str:
@@ -158,9 +156,7 @@ class ResolveDagNodeTool(_ControlTool):
     def description(self) -> str:
         return (
             "Decide what happens to a DAG node that reported it could not accomplish its "
-            "task: continue it with a message, or abandon it and skip its dependents. On a "
-            "run started with background=false this call also waits, and returns the next "
-            "report or the run's final result."
+            "task: continue it with a message, or abandon it and skip its dependents."
         )
 
     @property
@@ -176,7 +172,7 @@ class ResolveDagNodeTool(_ControlTool):
                     "description": (
                         "'continue' sends your message to the node and lets it try again. "
                         "'abandon' fails the node and skips its dependents; the rest of the "
-                        'graph carries on. To stop the whole run instead, use tool_call name "cancel_dag".'
+                        "graph carries on. To stop the whole run instead, call cancel_dag."
                     ),
                 },
                 "message": {
@@ -190,20 +186,7 @@ class ResolveDagNodeTool(_ControlTool):
             "required": ["run_id", "node_id", "decision"],
         }
 
-    def blocking_for(self, params: dict[str, Any]) -> bool:
-        """Blocking only when the named run is a bound foreground run.
-
-        The registry consults this to decide whether to put a ceiling on the
-        call, and the turn stream reports it as the call's blocking flag; both
-        must say "may go silent" for exactly the calls that will wait on the
-        graph and for no others.
-        """
-        tool = _registered_tool(self._loop)
-        is_foreground = getattr(tool, "is_foreground", None)
-        run_id = params.get("run_id")
-        return bool(is_foreground is not None and isinstance(run_id, str) and is_foreground(run_id))
-
-    async def execute(self, run_id: str, node_id: str, decision: str, message: str | None = None) -> "str | ToolResult":
+    async def execute(self, run_id: str, node_id: str, decision: str, message: str | None = None) -> str:
         if decision not in DECISIONS:
             return f"Error: decision must be '{CONTINUE}' or '{ABANDON}', not {decision!r}."
         if decision == CONTINUE and not (message or "").strip():
@@ -235,32 +218,14 @@ class ResolveDagNodeTool(_ControlTool):
         if not resolve_node(self._loop, run_id, node_id, decision, message):
             return (
                 f"Node '{node_id}' of run {run_id} is no longer waiting for a decision: it timed "
-                'out, the run was cancelled, or the id is wrong. tool_call name "dag_status" '
-                f'arguments {{"run_id": "{run_id}"}} shows where every node stands.'
+                f'out, the run was cancelled, or the id is wrong. dag_status("{run_id}") shows '
+                "where every node stands."
             )
-        # A bound foreground run: the turn that started it is this one, blocked
-        # on the graph by choice, so the decision is followed by the next thing
-        # the graph has to say -- another node's report, or the final result.
-        # Registered before the runner wakes: resolve_node above set the node's
-        # event, which only schedules the wake, and await_run parks its taker
-        # before yielding.
-        await_run = getattr(tool, "await_run", None)
-        event = None
-        if await_run is not None:
-            try:
-                event = await await_run(run_id)
-            except asyncio.CancelledError:
-                abort = getattr(tool, "abort_run", None)
-                if abort is not None:
-                    abort(run_id)
-                raise
-        if event is not None:
-            return tool.render_event(run_id, event)
         if decision == CONTINUE:
             return f"Node '{node_id}' of run {run_id} will run again with your message."
         return (
             f"Node '{node_id}' of run {run_id} is abandoned; its dependents are skipped and the "
-            'rest of the graph continues. Use tool_call name "cancel_dag" to stop the whole run.'
+            "rest of the graph continues. Use cancel_dag to stop the whole run."
         )
 
 
@@ -298,16 +263,12 @@ class DagStatusTool(_ControlTool):
             return (
                 "In-flight DAG runs: "
                 + ", ".join(runs)
-                + '. Call tool_call name "dag_status" arguments {"run_id": "<run_id>"} '
-                "for one run's per-node status."
+                + '. Call dag_status("<run_id>") for one run\'s per-node status.'
             )
         try:
             run = await self._read_live(run_id)
         except DagReadError as exc:
-            return (
-                f'No DAG run {run_id} found: {exc}. tool_call name "dag_status" with no run_id '
-                "lists the runs currently in flight."
-            )
+            return f"No DAG run {run_id} found: {exc}. dag_status without a run_id lists the runs currently in flight."
         return _render_run(run)
 
 

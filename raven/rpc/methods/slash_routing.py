@@ -4,7 +4,7 @@ Wires four RPC methods that the fork-imported hermes UI invokes but were not
 previously registered, causing dogfood failures:
 
 * ``slash.exec`` — hermes routes any *unknown* slash here
-  (``ui-tui/src/app/createSlashHandler.ts``) expecting
+  (``ui-tui/src/app/createSlashHandler.ts:82``) expecting
   ``{output?, warning?}``. We shlex-split the command, delegate to
   ``cli.dispatch``, and map the result. **Never raises -32xxx** — failures
   arrive as ``{output: "", warning: "..."}`` so the UI's ``.then()`` branch
@@ -46,7 +46,8 @@ _DEFAULT_WIDTH = 100
 
 The hermes ``createSlashHandler`` does not propagate viewport width to
 ``slash.exec`` (it only sends ``{command, session_id}``). 100 cols is a sane
-middle ground until the slash handler carries a width hint.
+middle ground — wide tables can be revisited in v0.0.3 if a width hint is
+added to the hermes slash handler.
 """
 
 _SLASH_TIMEOUT_S = 20.0
@@ -58,7 +59,7 @@ def _shape_unknown_command_warning(command: str) -> dict[str, str]:
     """Build a friendly message for an unknown / out-of-scope verb.
 
     We put the message in ``output`` (not ``warning``) on purpose: hermes's
-    ``createSlashHandler.ts`` falls back to ``/<name>: no output`` when
+    ``createSlashHandler.ts:88`` falls back to ``/<name>: no output`` when
     ``output`` is empty, so a ``warning``-only response renders as
 
         warning: unknown command: /asd …
@@ -98,7 +99,7 @@ async def slash_exec(params: dict[str, Any], *, confirm_broker: "ConfirmBroker |
        - timeout → "command exceeded N s timeout" warning
        - empty / whitespace command → "empty slash command" warning
 
-    Never raises -32xxx. Hermes's ``createSlashHandler.ts`` consumes the
+    Never raises -32xxx. Hermes's ``createSlashHandler.ts:83-92`` consumes the
     response via ``r?.output`` / ``r?.warning``.
 
     The caller's ``session_id`` is the conversation the slash was typed in, and
@@ -111,7 +112,7 @@ async def slash_exec(params: dict[str, Any], *, confirm_broker: "ConfirmBroker |
     conversation_id = str(params.get("session_id") or "").strip() or None
     if not raw_command:
         # Empty / whitespace slash → friendly hint in output (no warning field
-        # to avoid the createSlashHandler.ts "/: no output" tail).
+        # to avoid the createSlashHandler.ts:88 "/: no output" tail).
         return {"output": "(empty slash command — type /help for a list)"}
 
     try:
@@ -145,7 +146,7 @@ async def slash_exec(params: dict[str, Any], *, confirm_broker: "ConfirmBroker |
             conversation_id=conversation_id,
         )
     except NotDispatchCompatibleError:
-        # Either the dispatch blacklist (provider login / gateway / sandbox shell /
+        # Either P3 blacklist (provider login / gateway / sandbox shell /
         # channels login / agent-REPL) or a verb not in the whitelist. We
         # distinguish by checking the well-known blacklist prefixes.
         if _is_blacklist_argv(argv):
@@ -212,8 +213,8 @@ async def session_status(params: dict[str, Any]) -> dict[str, Any]:
 async def complete_slash(params: dict[str, Any]) -> dict[str, Any]:
     """No-op completion provider for slash names.
 
-    Silences the TUI completion hook's "completion unavailable" red-frame
-    toast; a real slash-registry walk is not implemented.
+    Silences ``useCompletion.ts:97-108``'s "completion unavailable" red-frame
+    toast. Real completion (slash registry walk) is v0.0.3 polish.
     """
     return {"items": [], "replace_from": 1}
 
@@ -221,7 +222,8 @@ async def complete_slash(params: dict[str, Any]) -> dict[str, Any]:
 async def complete_path(params: dict[str, Any]) -> dict[str, Any]:
     """No-op completion provider for filesystem paths.
 
-    Same rationale as :func:`complete_slash`: no suggestions, no toast spam.
+    Same rationale as :func:`complete_slash`. v0.0.3 may add glob-based
+    suggestions; v0.0.2 just stops the toast spam.
     """
     return {"items": []}
 

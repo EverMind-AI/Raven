@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import socket
 import tempfile
 from pathlib import Path
@@ -43,7 +44,7 @@ class FakeStreamingAgent:
 
     tools: dict = {}  # mirrors AgentLoop.tools (the TUI runner reads .get('message'))
 
-    async def run_turn(self, req, emit, drain, *, stream, inline_tool_stream=False, usage_sink=None) -> TurnOutcome:
+    async def run_turn(self, req, emit, drain, *, stream, usage_sink=None) -> TurnOutcome:
         if req.text == "hang":
             await asyncio.Event().wait()  # never set — cancelled by turn.cancel
         await emit(StreamDelta(delta="second-turn-token"))
@@ -129,8 +130,11 @@ async def test_turn2_streams_after_turn1_cancel_over_real_rpc() -> None:
     serve_task = None
     teardown = None
     try:
+        req_fd = os.dup(conn.fileno())
+        notif_fd = os.dup(conn.fileno())
+
         disp = Dispatcher()
-        server = RpcServer(disp, sock=conn)
+        server = RpcServer(req_fd, notif_fd, disp)
         emitter = SubscriptionEmitter(send_frame=server.send_frame)
         scheduler, _hub, turn_ids, teardown = build_rpc_spine(FakeStreamingAgent(), emitter, on_turn_end=clear_active)
         register_turn_methods(disp, emitter=emitter, scheduler=scheduler, turn_ids=turn_ids)

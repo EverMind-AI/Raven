@@ -131,11 +131,11 @@ def _cached_update() -> tuple[bool, str] | None:
     same conditions (opted out, no cache yet, install that cannot self-upgrade).
     """
     try:
-        from raven.updates.update_notice import read_cache, update_notice
+        from raven.cli.update_notice import _read_cache, update_notice
 
         if update_notice(_raven_version()) is None:
             return None
-        cache = read_cache() or {}
+        cache = _read_cache() or {}
         latest = cache.get("latest_version")
         return (True, latest) if isinstance(latest, str) else None
     except Exception:
@@ -187,7 +187,7 @@ async def system_version(params: dict, *, send_frame: Any = None) -> dict:
         import asyncio
 
         try:
-            from raven.updates.update_notice import check_for_update
+            from raven.cli.update_notice import check_for_update
 
             await asyncio.to_thread(check_for_update, _raven_version())
         except Exception:
@@ -210,8 +210,8 @@ async def system_upgrade(params: dict) -> dict:
     """
     import asyncio
 
-    from raven.rpc.serve_control import SERVE
-    from raven.updates.upgrade import UpgradeError, plan_upgrade, spawn_detached_upgrade
+    from raven.cli.serve_commands import SERVE
+    from raven.cli.upgrade_commands import UpgradeError, plan_upgrade, spawn_detached_upgrade
 
     # The dispatcher only lifts `detail` into error.data when no data dict is
     # given, so every refusal carries its own reason AND its human sentence --

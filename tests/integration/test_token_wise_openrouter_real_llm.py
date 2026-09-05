@@ -29,15 +29,15 @@ from pathlib import Path
 
 import pytest
 
+from raven.cli._token_wise_stack import install_from_config
 from raven.config.raven import TokenWiseConfig
-from raven.core.token_wise_stack import install_from_config
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.token_wise.registry import StrategyRegistry
 
 pytestmark = pytest.mark.real_llm
 
 KEY_FILE = Path(__file__).resolve().parent.parent.parent / "raven" / "key.env"
-REPORT_PATH = Path(__file__).resolve().parent.parent.parent / "reports" / "token_wise" / "EXPERIMENT_REPORT.md"
+REPORT_PATH = Path(__file__).resolve().parent.parent.parent / "raven" / "token_wise" / "EXPERIMENT_REPORT.md"
 MODEL = "anthropic/claude-sonnet-4-5"
 TURNS = 6
 COST_GUARD_USD = 0.50  # hard cap; abort if we go over

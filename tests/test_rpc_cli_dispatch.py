@@ -29,7 +29,7 @@ import pytest
 import typer
 
 from raven.rpc._ansi_filter import filter_ansi
-from raven.rpc._console_injection import inject_consoles
+from raven.rpc._console_injection import _CONSOLE_HOSTS, inject_consoles
 from raven.rpc.dispatcher import Dispatcher
 from raven.rpc.errors import (
     CliCommandTimeoutError,
@@ -150,39 +150,14 @@ def test_console_injection_patches_all_modules():
 
     The patch list was extended 4 → 12 after a merge introduced 8 new CLI modules.
     """
-    # The host set is every raven.cli module that defines a module-level rich
-    # console, read off the source so a discovery that silently skipped one
-    # would show up here.
-    import ast
-    from pathlib import Path
-
-    cli_dir = Path(__file__).resolve().parents[1] / "raven" / "cli"
-    assigned = set()
-    for path in cli_dir.glob("*.py"):
-        tree = ast.parse(path.read_text(errors="replace"))
-        for node in tree.body:
-            if isinstance(node, ast.Assign) and any(
-                isinstance(x, ast.Name) and x.id == "console" for x in node.targets
-            ):
-                assigned.add(f"raven.cli.{path.stem}")
-    from raven.rpc import cli_socket
-
-    found = {m.__name__ for m in cli_socket.console_hosts()}
-    # Every module that assigns a console is a host; modules that bind one by
-    # import (the onboarding screens share _onboard_shared's) are hosts too, so
-    # the discovered set may be larger, never smaller.
-    assert assigned <= found, f"console hosts missing modules that assign a console: {sorted(assigned - found)}"
-    assert len(found) >= 20
-    from raven.rpc import cli_socket
-
-    hosts = cli_socket.console_hosts()
-    originals = {mod: mod.console for mod in hosts}
+    assert len(_CONSOLE_HOSTS) == 12, "patch list locks 12 console hosts"
+    originals = {mod: mod.console for mod in _CONSOLE_HOSTS}
 
     from rich.console import Console as RichConsole
 
     sentinel = RichConsole(file=StringIO(), force_terminal=True, color_system="truecolor", width=80)
     with inject_consoles(sentinel):
-        for mod in hosts:
+        for mod in _CONSOLE_HOSTS:
             assert mod.console is sentinel, f"{mod.__name__}.console was not patched"
 
     # After exit: all restored.
@@ -691,19 +666,3 @@ async def test_abort_returns_confirmation_hint(fake_app_patch):
     assert "--yes" in result["stderr"]
     assert "Internal error" not in result["stderr"]
     assert "Abort" not in result["stderr"]
-
-
-async def test_an_unregistered_host_is_not_dispatch_compatible():
-    """The socket is the feature's only door: a host that never registered a
-    console (an acp server, a bare test stack) must see every argv as
-    not-dispatch-compatible rather than import its way to the cli."""
-    from raven.rpc import cli_socket
-    from raven.rpc.methods.cli_dispatch import _is_dispatch_compatible as is_dispatch_compatible
-
-    saved = (cli_socket.cli_commands(), cli_socket.console_hosts())
-    cli_socket.reset()
-    try:
-        assert is_dispatch_compatible(["version"]) is False
-    finally:
-        if saved[0] is not None:
-            cli_socket.register_cli(saved[0], saved[1])

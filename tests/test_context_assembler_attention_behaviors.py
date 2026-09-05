@@ -1,4 +1,4 @@
-"""P6 — PlannerContextAssembler injects attention.md (selected sections) + folded
+"""P6 — ContextAssembler injects attention.md (selected sections) + folded
 behaviors.md tail into PlannerContext.
 
 Covers:
@@ -23,7 +23,7 @@ from raven.memory_engine.consolidate.behaviors import (
 )
 from raven.memory_engine.consolidate.consolidator import MemoryStore
 from raven.proactive_engine.sentinel.predictor.context_assembler import (
-    PlannerContextAssembler,
+    ContextAssembler,
 )
 
 
@@ -46,8 +46,8 @@ def store(tmp_path: Path, clock: Clock) -> MemoryStore:
 
 
 @pytest.fixture
-def assembler(store, clock) -> PlannerContextAssembler:
-    return PlannerContextAssembler(
+def assembler(store, clock) -> ContextAssembler:
+    return ContextAssembler(
         memory_store=store,
         now_fn=clock,
     )
@@ -107,7 +107,7 @@ class TestAttentionForPlanner:
             "## Active threads\n- routine_x\n\n"
             "## Currently focused on\n- session cli:default\n",
         )
-        assembler = PlannerContextAssembler(
+        assembler = ContextAssembler(
             memory_store=store,
             now_fn=clock,
             attention_planner_sections=[
@@ -129,7 +129,7 @@ class TestAttentionForPlanner:
             "## Currently focused on\n- focus body\n\n## Pending proposals\n- prop body\n",
         )
         # Config order: Pending first, Currently second
-        assembler = PlannerContextAssembler(
+        assembler = ContextAssembler(
             memory_store=store,
             now_fn=clock,
             attention_planner_sections=[
@@ -145,7 +145,7 @@ class TestAttentionForPlanner:
             store,
             "## Pending proposals\n\n## Currently focused on\n- focus body\n",
         )
-        assembler = PlannerContextAssembler(
+        assembler = ContextAssembler(
             memory_store=store,
             now_fn=clock,
             attention_planner_sections=[
@@ -185,7 +185,7 @@ class TestBehaviorsForPlanner:
                 ),
             ],
         )
-        assembler = PlannerContextAssembler(
+        assembler = ContextAssembler(
             memory_store=store,
             now_fn=clock,
         )
@@ -208,7 +208,7 @@ class TestBehaviorsForPlanner:
                 _event(id="evt_fresh", day=now.date().isoformat(), summary="recent"),
             ],
         )
-        assembler = PlannerContextAssembler(
+        assembler = ContextAssembler(
             memory_store=store,
             now_fn=clock,
             behaviors_planner_window_days=14,
@@ -223,7 +223,7 @@ class TestBehaviorsForPlanner:
             for i in range(10)
         ]
         _seed_behaviors_events(store, events)
-        assembler = PlannerContextAssembler(
+        assembler = ContextAssembler(
             memory_store=store,
             now_fn=clock,
             behaviors_planner_max_events=3,
@@ -243,7 +243,7 @@ class TestBehaviorsForPlanner:
                 _event(id="evt_b", day="2026-05-29", start="09:00", end="09:30", summary="second"),
             ],
         )
-        assembler = PlannerContextAssembler(memory_store=store, now_fn=clock)
+        assembler = ContextAssembler(memory_store=store, now_fn=clock)
         ctx = assembler.assemble()
         # Most recent at the bottom — matches "scroll-down to see latest"
         assert ctx.behaviors_recent.index("first") < (ctx.behaviors_recent.index("second"))
@@ -275,7 +275,7 @@ class TestDefaults:
         # No explicit attention_planner_sections → uses the 7 defaults, which
         # now include the daily fire plan so a deferred deadline slot is in the
         # Planner's context.
-        assembler = PlannerContextAssembler(memory_store=store, now_fn=clock)
+        assembler = ContextAssembler(memory_store=store, now_fn=clock)
         ctx = assembler.assemble()
         for h2 in [
             "## Pending proposals",
@@ -284,7 +284,7 @@ class TestDefaults:
             "## Predicted next 3 days",
             "## Currently focused on",
             "## Recent proactive decisions (14d)",
-            "## Today's fire plan",
+            "## 今日 fire 计划",
         ]:
             assert h2 in ctx.attention_md, f"missing default section: {h2}"
         assert "deadline_report" in ctx.attention_md  # slot body reaches Planner

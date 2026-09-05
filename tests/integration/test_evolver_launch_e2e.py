@@ -16,10 +16,10 @@ from pathlib import Path
 import pytest
 import yaml
 
-from evolver.launch import runner as runner_mod
-from evolver.launch.contract import BenchBundle
-from evolver.launch.state import RunMeta
-from evolver.tree import git_ops
+from raven.evolver.launch import runner as runner_mod
+from raven.evolver.launch.contract import BenchBundle
+from raven.evolver.launch.state import RunMeta
+from raven.evolver.tree import git_ops
 
 
 @pytest.fixture(autouse=True)
@@ -86,11 +86,11 @@ def fake_bench(monkeypatch):
     }
 
     def build(ctx) -> BenchBundle:
-        from evolver.analysis.stability_bucket import StabilityBucket, TaskStability
-        from evolver.orchestrator.loop import EvolutionOrchestrator
-        from evolver.orchestrator.scoring import EvalBackend, TaskEval
-        from evolver.scheduler.anchor_selection import simple_anchor
-        from evolver.tree.node import HarnessNode
+        from raven.evolver.analysis.stability_bucket import StabilityBucket, TaskStability
+        from raven.evolver.orchestrator.loop import EvolutionOrchestrator
+        from raven.evolver.orchestrator.scoring import EvalBackend, TaskEval
+        from raven.evolver.scheduler.anchor_selection import simple_anchor
+        from raven.evolver.tree.node import HarnessNode
 
         work = Path(ctx.spec.work_dir)
         van = work / "runs" / "vanilla"

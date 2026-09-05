@@ -1,4 +1,4 @@
-"""Third-party subagent backends + manager wiring + spawn tool."""
+"""Third-party subagent backends + manager wiring + spawn tool (req5, P3b)."""
 
 from __future__ import annotations
 
@@ -801,9 +801,9 @@ def _make_agent_loop(tmp_path: Path, third_party: list | None = None):
         provider=_StubLoopProvider(),
         workspace=tmp_path,
         model="stub",
-        policy=TurnPolicy(max_iterations=2),
-        tools=ToolWiring(restrict_to_workspace=True),
-        subagents=SubagentWiring(agents=third_party),
+        max_iterations=2,
+        restrict_to_workspace=True,
+        agents=third_party,
     )
 
 
@@ -1554,7 +1554,6 @@ def test_local_file_access_defaults_by_kind_and_round_trips_camel() -> None:
 
 # --- instance registry ---------------------------------------------------
 
-from raven.agent.loop.bundles import SubagentWiring, ToolWiring, TurnPolicy
 from raven.agent.subagent.instances import InstanceRegistry
 
 
@@ -3125,8 +3124,7 @@ async def test_openai_backend_skips_frames_it_cannot_read(tmp_path: Path) -> Non
 def test_streaming_capability_is_read_from_the_transport() -> None:
     """A cli agent cannot be made to stream by declaring that it does: its stdout
     is buffered whole and the reply parsed out of it after exit."""
-    from raven.acp_client.acp_agent import AcpAgentBackend
-    from raven.agent.subagent.backends import RavenLoopBackend
+    from raven.agent.subagent.backends import AcpAgentBackend, RavenLoopBackend
 
     assert RavenLoopBackend.streams is True
     assert OpenAIApiBackend.streams is True
@@ -3143,8 +3141,7 @@ def test_every_backend_accepts_the_managers_call_shape() -> None:
     """
     import inspect
 
-    from raven.acp_client.acp_agent import AcpAgentBackend
-    from raven.agent.subagent.backends import RavenLoopBackend
+    from raven.agent.subagent.backends import AcpAgentBackend, RavenLoopBackend
 
     passed = {"task_id", "workspace", "executor", "session_key", "instance", "provider", "model"}
     for cls in (RavenLoopBackend, CliAgentBackend, OpenAIApiBackend, AcpAgentBackend):
@@ -3555,12 +3552,12 @@ def test_mint_handle_falls_back_when_the_seed_carries_no_usable_characters() -> 
 
 
 def test_mint_handle_falls_back_to_the_agent_name_for_a_non_ascii_seed() -> None:
-    handle = instances_mod.mint_handle("рефакторинг", fallback="claude_code")
+    handle = instances_mod.mint_handle("重构认证", fallback="claude_code")
     assert re.fullmatch(r"claude-code-[0-9a-f]{6}", handle)
 
 
 def test_mint_handle_falls_back_to_agent_when_the_fallback_is_also_non_ascii() -> None:
-    handle = instances_mod.mint_handle("рефакторинг", fallback="рефакторинг")
+    handle = instances_mod.mint_handle("重构认证", fallback="重构认证")
     assert handle.startswith("agent-")
 
 
@@ -3881,7 +3878,7 @@ def test_the_spawning_ravens_home_reaches_its_cli_subagent(monkeypatch: pytest.M
 
 def _acp_with_modes(tmp_path: Path, monkeypatch, modes) -> SpawnTool:
     """A roster carrying one acp agent whose probe measured ``modes``."""
-    from raven.acp_client.capabilities import CapabilitySnapshot
+    from raven.agent.acp.capabilities import CapabilitySnapshot
     from raven.agent.subagent import backends as backends_mod
     from raven.config.schema import ThirdPartyAcpSubagentConfig
 
@@ -3902,7 +3899,7 @@ def _acp_with_modes(tmp_path: Path, monkeypatch, modes) -> SpawnTool:
 def test_the_mode_enum_is_what_the_probe_measured(tmp_path: Path, monkeypatch) -> None:
     """Measured, never declared on the row: the menu the model picks from has to
     be the one the agent serves, or it names a mode the agent then refuses."""
-    from raven.acp_client.capabilities import AcpMode
+    from raven.agent.acp.capabilities import AcpMode
 
     tool = _acp_with_modes(
         tmp_path, monkeypatch, [AcpMode("fast", "Fast", "converges early"), AcpMode("deep", "Deep", "searches longer")]
@@ -3927,7 +3924,7 @@ def test_no_agent_with_modes_means_no_mode_parameter(tmp_path: Path) -> None:
 async def test_a_mode_aimed_at_an_agent_without_it_is_refused_with_the_real_list(tmp_path: Path, monkeypatch) -> None:
     """The schema's enum is the union over every agent (one property cannot
     depend on another's value), so the per-agent check is the tool's own."""
-    from raven.acp_client.capabilities import AcpMode
+    from raven.agent.acp.capabilities import AcpMode
 
     tool = _acp_with_modes(tmp_path, monkeypatch, [AcpMode("fast", "Fast", "")])
 
@@ -3950,7 +3947,7 @@ async def test_a_mode_aimed_at_an_agent_with_none_says_so(tmp_path: Path) -> Non
 
 
 def _moded_manager(tmp_path: Path, monkeypatch) -> SubagentManager:
-    from raven.acp_client.capabilities import AcpMode, CapabilitySnapshot
+    from raven.agent.acp.capabilities import AcpMode, CapabilitySnapshot
     from raven.agent.subagent import backends as backends_mod
     from raven.config.schema import ThirdPartyAcpSubagentConfig
 

@@ -184,36 +184,8 @@ def test_hand_written_invalid_graph_is_rejected_on_load(tmp_path):
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="references undeclared dependency"):
+    with pytest.raises(ValueError, match="not in its dependsOn"):
         _store(tmp_path).load("broken-graph")
-
-
-def test_hand_written_duplicate_param_input_is_rejected_on_load(tmp_path):
-    target = tmp_path / "broken-project-path"
-    target.mkdir()
-    (target / "playbook.md").write_text(
-        "---\nname: broken-project-path\ndescription: duplicates one runtime parameter\n---\n\n"
-        "```yaml playbook-spec\n"
-        "version: 1\nmode: dag\nconfirm: false\n"
-        "taskSummary: detect project changes\n"
-        "triggers:\n  keywords: [detect changes]\n"
-        "params:\n"
-        "  project_path:\n"
-        "    default: .\n"
-        "    description: which project directory should be inspected?\n"
-        "nodes:\n"
-        "  - id: detect-changes\n"
-        "    subagent: code-raven\n"
-        "    nodeSummary: detect project changes\n"
-        "    promptTemplate: inspect ${params.project_path}\n"
-        "    inputs:\n"
-        "      project_path: ${params.project_path}\n"
-        "```\n",
-        encoding="utf-8",
-    )
-
-    with pytest.raises(ValueError, match="must not be copied into node inputs"):
-        _store(tmp_path).load("broken-project-path")
 
 
 def test_save_rejects_a_semantically_invalid_graph(tmp_path):
@@ -230,27 +202,7 @@ def test_save_rejects_a_semantically_invalid_graph(tmp_path):
         }
     )
 
-    with pytest.raises(ValueError, match="references undeclared dependency"):
-        _store(tmp_path).save(bad)
-    assert list(tmp_path.rglob("playbook.md")) == []
-
-
-def test_save_rejects_a_param_duplicated_into_an_unused_node_input(tmp_path):
-    bad = _spec("duplicated parameter channel").model_copy(
-        update={
-            "nodes": [
-                NodeSpec(
-                    id="scan",
-                    subagent="research-raven",
-                    node_summary="scan the project",
-                    prompt_template="scan ${params.target}",
-                    inputs={"target": "${params.target}"},
-                )
-            ]
-        }
-    )
-
-    with pytest.raises(ValueError, match="must not be copied into node inputs"):
+    with pytest.raises(ValueError, match="not in its dependsOn"):
         _store(tmp_path).save(bad)
     assert list(tmp_path.rglob("playbook.md")) == []
 

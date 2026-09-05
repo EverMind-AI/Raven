@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
+from raven.agent.tools.base import ToolOutput, ToolResult
 from raven.agent.tools.filesystem import EditFileTool, WriteFileTool
 from raven.agent.tools.registry import ToolRegistry
-from raven.contracts.tool import ToolOutput, ToolResult
 
 
 def _diff_of(result: ToolResult | str) -> str | None:

@@ -1,7 +1,7 @@
 """Self-written async JSON-RPC 2.0 dispatcher.
 
-A self-written ~30-line dispatcher rather than an `ajsonrpc` / `jsonrpcserver`
-framework. Rationale:
+Decision: see design.md §3 D8 — we chose a self-written ~30-line dispatcher
+over `ajsonrpc` / `jsonrpcserver` framework. Rationale:
 - Pydantic v2 already covers schema validation (no framework dup).
 - Newline-delimited JSON framing is trivial.
 - Subscription registry + 16ms throttle is custom anyway.

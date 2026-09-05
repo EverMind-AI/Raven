@@ -1,20 +1,24 @@
-"""SkillForgeRouter data types — :class:`RouterHit` + :class:`ForgeSkillSource` Protocol.
+"""SkillForgeRouter data types — :class:`RouterHit` + :class:`SkillSource` Protocol.
 
 Two design points worth highlighting:
 
-- :class:`RouterHit` is **self-contained**. Unlike
+- :class:`RouterHit` is **self-contained**. Unlike the legacy
   ``ScoredSkill`` in :mod:`raven.memory_engine.skill_local.types` (which
   only carried name + score and forced consumers to re-fetch the body
   from SkillRegistry), :class:`RouterHit` ships the rendered ``content``
   so :class:`ContextBuilder` can write it straight into the prompt
   without a second round-trip to the source.
 
-- :class:`ForgeSkillSource` is **internal**. Per the design decision
+- :class:`SkillSource` is **internal**. Per the design decision
   recorded in the change plan, sources are hardcoded (Local + Mass +
   Everos) rather than exposed as a plugin contribution point.
   ``@runtime_checkable`` lets tests assert duck-typed conformance
   without inheritance; the cost is accepting any object whose surface
   matches, which is fine because the registration set is closed.
+
+The legacy ``ScoredSkill`` in ``skill/types.py`` stays untouched for
+now — :class:`LocalPool` and :class:`SkillService` continue to use it.
+The cleanup PR collapses the two once SkillService is removed.
 """
 
 from __future__ import annotations
@@ -25,7 +29,7 @@ from typing import Any, Protocol, runtime_checkable
 
 @dataclass(frozen=True)
 class RouterHit:
-    """One ranked skill returned by a :class:`ForgeSkillSource`.
+    """One ranked skill returned by a :class:`SkillSource`.
 
     Carries everything :class:`ContextBuilder` needs to render the
     skill into the system prompt — no further registry lookup happens
@@ -73,7 +77,7 @@ class RouterHit:
 
 
 @runtime_checkable
-class ForgeSkillSource(Protocol):
+class SkillSource(Protocol):
     """One pool of skills the router can ask. Internal Protocol — the
     set of sources is fixed at compile time (Local + Mass + Everos);
     third parties extend retrieval by contributing a
@@ -116,4 +120,4 @@ class ForgeSkillSource(Protocol):
         ...
 
 
-__all__ = ["RouterHit", "ForgeSkillSource"]
+__all__ = ["RouterHit", "SkillSource"]

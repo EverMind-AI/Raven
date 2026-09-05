@@ -40,7 +40,10 @@
   "search": {
    "includeSnippets": true,
    "saturation": {
-    "enabled": false
+    "enabled": true,
+    "k": 8,
+    "onSaturate": "widen",
+    "maxPages": 2
    }
   },
   "toolsAllowlist": [

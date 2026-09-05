@@ -375,7 +375,7 @@ class TestConfigOption:
         cfg = tmp_path / "instance" / "config.json"
         cfg.parent.mkdir()
         cfg.write_text("{}", encoding="utf-8")
-        monkeypatch.setattr("raven.home._current_config_path", None)
+        monkeypatch.setattr(loader, "_current_config_path", None)
         self._dont_serve(monkeypatch)
 
         acp_commands.acp(SimpleNamespace(invoked_subcommand=None), config=str(cfg), verbose=False)

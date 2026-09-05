@@ -356,7 +356,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         billing="plan",
         strip_model_prefix=False,
         model_overrides=(),
-        is_oauth=True,
+        is_oauth=True,  # OAuth-based authentication
         # No static default: every id we shipped here came back "not supported
         # when using Codex with a ChatGPT account", and the slugs an account does
         # offer are only knowable by asking it (see ``codex_catalog``). Empty
@@ -378,7 +378,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_api_base="",
         strip_model_prefix=False,
         model_overrides=(),
-        is_oauth=True,
+        is_oauth=True,  # OAuth-based authentication
         default_model="github_copilot/gpt-4o",
     ),
     # DeepSeek: needs "deepseek/" prefix for LiteLLM routing.
@@ -577,8 +577,10 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
 # Name and model-id primitives
 #
 # Every comparison of a provider name or a model-id prefix in this codebase goes
-# through these, so the rule is spelled once: a rule spelled at each call site
-# drifts, and a fix then lands at one site and misses the rest.
+# through these. They exist because the same rule used to be spelled out at each
+# call site, and the spellings drifted -- one site lowercased, another did not;
+# one counted LiteLLM's name for a vendor as that vendor's prefix, another did
+# not. A fix then landed at one site and missed the rest.
 # ---------------------------------------------------------------------------
 
 
@@ -598,39 +600,35 @@ def normalize_provider_name(name: str | None) -> str:
     return (name or "").strip().lower().replace("-", "_")
 
 
-SHAPE_OAUTH = "oauth"  # a token file, written by `raven provider login`
-SHAPE_LOCAL = "local"  # reached by address; there is no key
-SHAPE_ENDPOINT = "endpoint"  # a key plus a base URL the user supplies
-SHAPE_KEY = "key"  # a key alone, including vendors Raven carry no spec for
+CRED_OAUTH = "oauth"  # a token file, written by `raven provider login`
+CRED_LOCAL = "local"  # reached by address; there is no key
+CRED_ENDPOINT = "endpoint"  # a key plus a base URL the user supplies
+CRED_KEY = "key"  # a key alone, including vendors Raven carry no spec for
 
 
-def auth_shape(provider: str | None) -> str:
-    """Which of the four setup shapes this provider takes.
+def credential_kind(provider: str | None) -> str:
+    """Which of the four credential shapes this provider uses.
 
     Every decision about how a provider is set up follows from this: whether to
     ask for a key, an address, both, or neither. It lives here because it is a
-    fact about the provider, and because the wizard and the model picker both
-    need it and must not answer it separately.
-
-    Coarser than an Auth Method, and not the same question: a method says what
-    material satisfies a connection and whether it is satisfied
-    (``providers/auth.py::credential_status``), while a shape says what the
-    wizard asks for. The two derive from the same four spec predicates today,
-    in the same order, in two places.
+    fact about the provider, and because the two places that need it -- the
+    wizard and the model picker -- had answered it separately, with the picker
+    knowing only two shapes: it offered a local deployment a key prompt it cannot
+    use and no address field, which is the one thing it needs.
 
     Derived rather than stored: a spec is optional metadata, and a vendor Raven
     holds no spec for is reached with a key like most others.
     """
     spec = find_by_name(provider) if provider else None
     if spec is None:
-        return SHAPE_KEY
+        return CRED_KEY
     if spec.is_oauth:
-        return SHAPE_OAUTH
+        return CRED_OAUTH
     if spec.is_local:
-        return SHAPE_LOCAL
+        return CRED_LOCAL
     if spec.requires_api_base:
-        return SHAPE_ENDPOINT
-    return SHAPE_KEY
+        return CRED_ENDPOINT
+    return CRED_KEY
 
 
 def endpoints_unsupported_reason(provider_name: str | None) -> str | None:
@@ -802,9 +800,8 @@ def find_gateway(
       2. api_key prefix — e.g. "sk-or-" → OpenRouter.
       3. api_base keyword — e.g. "aihubmix" in URL → AiHubMix.
 
-    A standard provider with a custom api_base (e.g. DeepSeek behind a proxy) is
-    not mistaken for vLLM: detection is by provider_name, key prefix or base
-    keyword only.
+    A standard provider with a custom api_base (e.g. DeepSeek behind a proxy)
+    will NOT be mistaken for vLLM — the old fallback is gone.
     """
     # 1. Direct match by config key
     if provider_name:

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.plugins import PluginContext, ServiceLocator
+from raven.plugin import PluginContext, ServiceLocator
 
 
 class TestServiceLocator:
@@ -46,12 +46,12 @@ class TestPluginContext:
             services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
         )
         assert isinstance(ctx.logger, logging.Logger)
-        # Default name lands under the raven.plugins namespace so
+        # Default name lands under the raven.plugin namespace so
         # plugin output is grep-able alongside host output.
-        assert ctx.logger.name.startswith("raven.plugins")
+        assert ctx.logger.name.startswith("raven.plugin")
 
     def test_explicit_logger(self, tmp_path: Path) -> None:
-        my_logger = logging.getLogger("raven.plugins.everos")
+        my_logger = logging.getLogger("raven.plugin.everos")
         ctx = PluginContext(
             config={},
             services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
@@ -66,11 +66,3 @@ class TestPluginContext:
         )
         with pytest.raises(FrozenInstanceError):
             ctx.config = {"changed": True}  # type: ignore[misc]
-
-
-class TestProviderGrant:
-    def test_provider_is_an_optional_grant(self, tmp_path: Path) -> None:
-        bare = ServiceLocator(workspace=tmp_path, user_id="u", agent_id="a")
-        assert bare.provider is None
-        lent = object()
-        assert ServiceLocator(workspace=tmp_path, user_id="u", agent_id="a", provider=lent).provider is lent

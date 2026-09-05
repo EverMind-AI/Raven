@@ -1,14 +1,18 @@
 """The machines this instance can reach, named by their owner.
 
-A campaign that carries its own ``host``/``port``/``key`` puts the way in
-inside the thing being run, and leaves the agent to work the connection out for
-itself: a statement that does not spell the port out sends it guessing through
-22, 2222, 8022, ``~/.ssh/config`` and a stale ``known_hosts`` entry.
+A campaign used to carry its own ``host``/``port``/``key``, which put the way in
+inside the thing being run and left the agent to work the connection out for
+itself. Measured 2026-08-14 on two FEA tasks whose statement did not spell the
+port out: the loop tried port 22, then 2222, 8022, 10022, 443, read
+``~/.ssh/config``, pulled a stale port out of ``known_hosts`` and believed it,
+then read raven's own campaign directory to find the number -- a dozen rounds
+without submitting a single job, and one window ended up asking the owner
+whether a bastion was needed.
 
 None of that is the agent being slow. It had no way to reach a machine except to
 guess at one, so guessing is what it did.
 
-Here a machine is something the owner sets up once and names -- "my CPU box",
+Here a connection is something the owner sets up once and names -- "my CPU box",
 "the GPU machine" -- and the agent only ever sees the name and what the machine
 is. Three things follow:
 
@@ -26,8 +30,9 @@ wait until there is a platform that needs them (2026-08-17, deliberate): storing
 one means a keychain or a master password, and neither is worth building before
 something asks for it.
 
-Read-only here: the file is written by hand or by
-``raven ops connection add`` (``raven/cli/ops_connection_commands.py``).
+Read-only by design for now. The file is written by hand; ``raven connection
+add`` is product work that can wait until the shape is confirmed against a real
+task.
 """
 
 from __future__ import annotations
@@ -61,13 +66,15 @@ _WANTED = ("software", "budget_unit", "concurrency")
 
 _ID = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
-# Where a machine's budget is metered: a property of the machine, so it is not
-# restated in the meta of every campaign run on it.
+# Where a machine's budget is metered. Restated in every campaign's meta before
+# this field existed, which put a property of the machine inside the thing being
+# run on it.
 _BUDGET_UNITS = ("minute", "core-minute", "gpu-minute")
 
 # Names that mean a field this file reads, spelled the way someone writing the
-# file by hand reaches for first: without them a row written with ``name``
-# lists as its bare id, and nothing says why.
+# file by hand reaches for first. Not hypothetical: this repo's own fixture in
+# tests/test_ops_gate.py writes ``name``, and that connection lists as its bare
+# id because ``describe`` reads ``display_name`` -- nothing reported it.
 _MISSPELLED = {
     "name": "display_name",
     "hostname": "host",
@@ -311,6 +318,12 @@ def get(conn_id: str) -> dict[str, Any] | None:
     return None
 
 
+def display_name(conn_id: str) -> str:
+    """The owner's own word for this machine, or the id when it is unknown."""
+    row = get(conn_id)
+    return str(row.get("display_name") or conn_id) if row else str(conn_id)
+
+
 def resolve_into(meta: dict[str, Any]) -> dict[str, Any]:
     """``meta`` with its connection's transport filled in, or unchanged.
 
@@ -443,6 +456,48 @@ def describe() -> str:
     )
 
 
+def machine_for_path(path: str) -> tuple[str, str] | None:
+    """The machine a path belongs to, as ``(id, display_name)``, or None.
+
+    Answers one question and not the other: *whose* directory this is, never
+    *where the work should run*. A case can sit on the owner's laptop and belong
+    on the 32-core box; only the connection list, read whole, settles that.
+
+    Why this exists. A task statement gives a path, and the first thing anyone
+    does with a path is look at it. When the path is on a different machine that
+    look fails, and the failure is what makes the loop go and read the machine
+    list -- measured 2026-08-19 14:13, three local probes, "the path does not
+    exist", then ops_connections eight seconds later. When the path is on THIS
+    machine the look succeeds, and success carries no hint that the directory has
+    an owner: three runs, three times straight to a local shell, twice writing
+    into the owner's case. So the fact travels back the same way the failure does
+    -- in the tool's own result, at the moment of looking.
+
+    Claims come from ``paths`` when a connection lists them, and otherwise from
+    the absolute paths already written into ``software`` ("CalculiX 2.17
+    (/Evermind/...)"). Parsing a free-text field is loose on purpose: a claim
+    that is missed costs one line of provenance, and a claim that is wrong costs
+    one line that does not apply. Neither refuses anything, which is what makes a
+    stale list affordable here.
+    """
+    try:
+        target = Path(path).expanduser()
+        rows = load()
+    except Exception:  # noqa: BLE001 -- a look must not depend on this file
+        return None
+    for row in rows:
+        claims = row.get("paths")
+        if not isinstance(claims, list) or not claims:
+            claims = re.findall(r"(/[^\s(),;:]+)", str(row.get("software") or ""))
+        for claim in claims:
+            root = Path(str(claim)).expanduser()
+            if not _is_specific_enough(root):
+                continue
+            if target == root or root in target.parents:
+                return str(row.get("id") or ""), str(row.get("display_name") or row.get("id") or "")
+    return None
+
+
 # A claim shallower than this is a whole filesystem, not a case: "/", "/opt",
 # "/Users/admin". Honouring one would put a line about machines on every ordinary
 # look, and a note that fires everywhere is read as noise and then not read at
@@ -482,3 +537,16 @@ def _is_specific_enough(root: Path) -> bool:
     # A home directory itself: /Users/admin, /home/me. Two components, and every
     # ordinary look happens under it.
     return not (len(parts) == 2 and f"/{parts[0]}" in ("/Users", "/home"))
+
+
+def provenance_line(path: str) -> str:
+    """One line naming the machine a path is on, or "" when nothing claims it."""
+    found = machine_for_path(path)
+    if not found:
+        return ""
+    conn_id, name = found
+    return (
+        f"\n\nThis is on {name} (machine={conn_id}), one of the machines you have. "
+        f"Work that runs there and is worth watching goes through ops_declare and "
+        f"ops_submit; ops_connections shows what else is available and what each one has."
+    )

@@ -202,7 +202,7 @@ describe('opening and shutting the desk', () => {
     await act(async () => { desk.toggleSolo('file:/w/a.md') })
 
     await act(async () => {
-      deliveries.record(deliveries.SESSION, 1, manifest([{ path: '/w/b.md', name: 'b.md' }]))
+      deliveries.record(1, manifest([{ path: '/w/b.md', name: 'b.md' }]))
     })
 
     expect([...seen.of_('deliverables')]).toEqual([])
@@ -251,14 +251,10 @@ describe('the desk shelf', () => {
     expect(document.querySelector('.desk-count')).toBeNull()
   })
 
-  const at = (when: number, path: string, title: string): unknown => ({
-    raven_delivery: { delivered_at: when, files: [{ path, name: path.split('/').pop(), title }] },
-  })
-
   it('lists the whole session newest turn first, under a group per turn', async () => {
     workspace.restore({ changes: [], urls: [], file: null, turn: 2, unseen: 0, deliveries: [] })
-    deliveries.record(deliveries.SESSION, 1, manifest([{ path: '/w/old.md', name: 'old.md', title: 'Older brief' }]))
-    deliveries.record(deliveries.SESSION, 2, manifest([
+    deliveries.record(1, manifest([{ path: '/w/old.md', name: 'old.md', title: 'Older brief' }]))
+    deliveries.record(2, manifest([
       { path: '/w/a.md', name: 'a.md', title: 'Comparison', size: 1824 },
       { path: '/w/b.csv', name: 'b.csv', title: 'Pricing' },
     ]))
@@ -277,45 +273,8 @@ describe('the desk shelf', () => {
     expect(meta[2]).toBe('old.md · gui.ws.dlv_turn {"n":"1"}')
   })
 
-  it('does not read a delegated stream\'s turn as one of this conversation\'s', async () => {
-    /* Each stream counts its turns from one. A sub-agent row filed under its own
-       turn 2 was labelled "turn 2" on a conversation that has had five, and one
-       filed under 5 was grouped as "this turn" for no better reason than the
-       number matching. The shelf is session-wide, and the reader's position in it
-       is the conversation's turn -- a delegated row has no place in that count,
-       so it says what the file is and leaves the position out, exactly as a row
-       recovered from the registry does. */
-    workspace.restore({ changes: [], urls: [], file: null, turn: 5, unseen: 0, deliveries: [] })
-    deliveries.record('agent:one', 5, manifest([{ path: '/w/sub.md', name: 'sub.md', title: 'From a sub-agent' }]))
-    deliveries.record('agent:one', 2, manifest([{ path: '/w/sub2.md', name: 'sub2.md', title: 'Also delegated' }]))
-    await shelf()
-
-    /* Both unstamped, so they rank by arrival -- the later-recorded one on top. */
-    const meta = [...document.querySelectorAll('.desk-dlv-row .desk-name s')].map((n) => n.textContent)
-    expect(meta).toEqual(['sub2.md', 'sub.md'])
-    expect([...document.querySelectorAll('.desk-grp')].map((n) => n.textContent))
-      .toEqual(['gui.ws.turn_earlier'])
-  })
-
-  it('gives each group one heading, however the streams interleave', async () => {
-    /* The rows are ranked by when each delivery happened, so two streams on one
-       shelf are not contiguous by group. Emitting a heading whenever the key
-       changed from the row before rendered "This turn" / "Earlier" / "This turn"
-       -- three headings for two groups, and the reader cannot tell which of the
-       two "This turn" blocks is the one they are in. */
-    workspace.restore({ changes: [], urls: [], file: null, turn: 2, unseen: 0, deliveries: [] })
-    deliveries.record(deliveries.SESSION, 2, at(1_000, '/w/first.md', 'First'))
-    deliveries.record('agent:one', 1, at(2_000, '/w/mid.md', 'Delegated'))
-    deliveries.record(deliveries.SESSION, 2, at(3_000, '/w/last.md', 'Last'))
-    await shelf()
-
-    expect([...document.querySelectorAll('.desk-grp')].map((n) => n.textContent))
-      .toEqual(['gui.ws.turn_now', 'gui.ws.turn_earlier'])
-    expect(rowNames()).toEqual(['Last', 'First', 'Delegated'])
-  })
-
   it('opens the clicked row as a pane, carrying its download path', async () => {
-    deliveries.record(deliveries.SESSION, 1, manifest([
+    deliveries.record(1, manifest([
       { path: '/w/a.md', name: 'a.md', title: 'Comparison', download_path: '/files/download?token=t1' },
     ]))
     await shelf()
@@ -331,7 +290,7 @@ describe('the desk shelf', () => {
      show is worse than the note it answers with. */
   it('hands the path to a source that cannot read files, opening no pane', async () => {
     ;(window.DS!.workspace as WorkspaceSource).canBrowse = false
-    deliveries.record(deliveries.SESSION, 1, manifest([{ path: '/w/a.md', name: 'a.md', title: 'Comparison' }]))
+    deliveries.record(1, manifest([{ path: '/w/a.md', name: 'a.md', title: 'Comparison' }]))
     await shelf()
     await act(async () => {
       (document.querySelector('.desk-dlv-row') as HTMLElement).click()
@@ -342,7 +301,7 @@ describe('the desk shelf', () => {
   })
 
   it('marks a file that is gone, and still lets it be opened to say so', async () => {
-    deliveries.record(deliveries.SESSION, 1, manifest([{ path: '/w/gone.md', name: 'gone.md', missing: true }]))
+    deliveries.record(1, manifest([{ path: '/w/gone.md', name: 'gone.md', missing: true }]))
     await shelf()
 
     const row = document.querySelector('.desk-dlv-row') as HTMLButtonElement
@@ -353,8 +312,8 @@ describe('the desk shelf', () => {
 
   it('keeps one row for a re-delivered file, at its newest turn', async () => {
     workspace.restore({ changes: [], urls: [], file: null, turn: 3, unseen: 0, deliveries: [] })
-    deliveries.record(deliveries.SESSION, 1, manifest([{ path: '/w/a.md', name: 'a.md', title: 'First cut' }]))
-    deliveries.record(deliveries.SESSION, 3, manifest([{ path: '/w/a.md', name: 'a.md', title: 'Second cut' }]))
+    deliveries.record(1, manifest([{ path: '/w/a.md', name: 'a.md', title: 'First cut' }]))
+    deliveries.record(3, manifest([{ path: '/w/a.md', name: 'a.md', title: 'Second cut' }]))
     await shelf()
 
     expect(rowNames()).toEqual(['Second cut'])
@@ -373,7 +332,7 @@ describe('the desk shelf', () => {
     expect(document.querySelector('.desk-count')).toBeNull()
 
     await act(async () => {
-      deliveries.record(deliveries.SESSION, 1, manifest([{ path: '/w/a.md', name: 'a.md' }]))
+      deliveries.record(1, manifest([{ path: '/w/a.md', name: 'a.md' }]))
     })
 
     expect(bubble('deliverables')).toBe('1')
@@ -394,7 +353,7 @@ describe('the desk shelf', () => {
     })
 
     await act(async () => {
-      deliveries.record(deliveries.SESSION, 1, manifest([
+      deliveries.record(1, manifest([
         { path: '/w/a.md', name: 'a.md' },
         { path: '/w/b.md', name: 'b.md' },
       ]))
@@ -440,7 +399,7 @@ describe('the desk shelf', () => {
      effect running the open tab would otherwise paint a bubble for what is
      already on screen. */
   it('reports nothing new for the tab that is open, before any mark moves', async () => {
-    deliveries.record(deliveries.SESSION, 1, manifest([
+    deliveries.record(1, manifest([
       { path: '/w/a.md', name: 'a.md' },
       { path: '/w/b.md', name: 'b.md' },
     ]))
@@ -499,7 +458,7 @@ describe('the desk shelf', () => {
     render(<DeskPalette />)
     await act(async () => {
       desk.update({ paletteOpen: true, tab: 'diff' })
-      deliveries.record(deliveries.SESSION, 1, manifest([
+      deliveries.record(1, manifest([
         { path: '/w/a.md', name: 'a.md' },
         { path: '/w/b.md', name: 'b.md' },
       ]))
@@ -516,7 +475,7 @@ describe('the desk shelf', () => {
     })
     await act(async () => {
       setCurrent('s1')
-      deliveries.record(deliveries.SESSION, 1, manifest([
+      deliveries.record(1, manifest([
         { path: '/w/a.md', name: 'a.md' },
         { path: '/w/b.md', name: 'b.md' },
       ]))
@@ -533,7 +492,7 @@ describe('the desk shelf', () => {
     render(<DeskPalette />)
     await act(async () => {
       desk.update({ paletteOpen: true, tab: 'diff' })
-      deliveries.record(deliveries.SESSION, 1, manifest([
+      deliveries.record(1, manifest([
         { path: '/w/a.md', name: 'a.md' },
         { path: '/w/b.md', name: 'b.md' },
       ]))
@@ -564,7 +523,7 @@ describe('the desk shelf', () => {
     render(<DeskPalette />)
     await act(async () => {
       desk.update({ paletteOpen: true, tab: 'diff' })
-      deliveries.record(deliveries.SESSION, 1, manifest([{ path: '/w/a.md', name: 'a.md' }]))
+      deliveries.record(1, manifest([{ path: '/w/a.md', name: 'a.md' }]))
     })
     expect(bubble('deliverables')).toBe('1')
 
@@ -580,14 +539,14 @@ describe('the desk shelf', () => {
     await shelf()
     expect(rowNames()).toEqual([])
     await act(async () => {
-      deliveries.record(deliveries.SESSION, 1, manifest([{ path: '/w/late.md', name: 'late.md', title: 'Landed late' }]))
+      deliveries.record(1, manifest([{ path: '/w/late.md', name: 'late.md', title: 'Landed late' }]))
     })
     expect(rowNames()).toEqual(['Landed late'])
   })
 
   /* The legacy shell forwards view names this palette no longer has. */
   it('ignores a tab name it does not know instead of drawing another tab', async () => {
-    deliveries.record(deliveries.SESSION, 1, manifest([{ path: '/w/a.md', name: 'a.md', title: 'Comparison' }]))
+    deliveries.record(1, manifest([{ path: '/w/a.md', name: 'a.md', title: 'Comparison' }]))
     await shelf()
     await act(async () => {
       desk.openDeskTab('file' as 'diff')

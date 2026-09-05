@@ -1,10 +1,10 @@
-"""Raven feature configuration — extends the base Config with the blocks in ``EXTENSION_KEYS``.
+"""Raven feature configuration — extends the base Config with 4 feature blocks.
 
 Usage:
     from raven.config import RavenConfig, load_raven_config
 
     cfg = load_raven_config()
-    if cfg.skill_forge.enabled:
+    if cfg.context.engine == "curator":
         ...
 
 Design:
@@ -19,6 +19,8 @@ Design:
 from __future__ import annotations
 
 import json
+import logging
+import warnings
 from pathlib import Path
 from typing import Any, Literal
 
@@ -28,12 +30,10 @@ from pydantic.alias_generators import to_camel
 from raven.config.loader import (
     EXTENSION_KEYS,
     _migrate_config,
-    _migration_version,
     get_config_path,
 )
 from raven.config.loader import load_config as load_base_config
 from raven.config.schema import Config as BaseConfig
-from raven.i18n import zh_lexicon
 
 
 class _Base(BaseModel):
@@ -58,15 +58,17 @@ class _Base(BaseModel):
 
 
 class ContextConfig(_Base):
-    """Context engine tuning: which host segments render, and the Curator knobs."""
+    """Context engine selection and tuning."""
 
-    drop_segments: list[str] = Field(default_factory=list)
-    """Host prompt segments this agent does without, by builder name
-    (``identity``, ``bootstrap``, ``memory``, ``active_skills``, ``skills``,
-    ``curator``). A product with its own identity and contract in its bootstrap
-    files drops ``identity`` so the model is not told it is two things; a
-    research agent that keeps no long-term memory drops ``memory``. Unknown
-    names are ignored. Empty renders every segment, as before."""
+    engine: str = "unified"
+    """Deprecated — there is now a single :class:`ContextAssembler`.
+
+    The historical ``"legacy"`` / ``"curator"`` / ``"default"`` split was
+    collapsed: every turn runs the Curator history lane + the EverOS
+    recall / SkillForgeRouter lanes in one engine. The field is retained (as a
+    free string) so existing YAML setting ``engine: legacy`` etc. still
+    loads — the value is ignored by ``build_context_engine``.
+    """
 
     # Curator history-lane knobs.
     fast_path_threshold: float = 0.60
@@ -132,7 +134,7 @@ class ContextConfig(_Base):
 
 
 # ---------------------------------------------------------------------------
-# Feature 2 — Proactivity (sentinel block)
+# Feature 2 — Proactivity (Sentinel)
 # ---------------------------------------------------------------------------
 
 
@@ -231,7 +233,7 @@ class NudgePolicyConfig(_Base):
     # Content dedup — hash the nudge_message; reject duplicates within this window
     dedup_window_seconds: int = 86400  # 24h
 
-    # Memory-loading filter (smart loading): controls how PlannerContextAssembler
+    # Memory-loading filter (smart loading): controls how ContextAssembler
     # builds the memory_md slice of the Planner prompt. Defaults are pure
     # passthrough; users opt in via config when MEMORY.md grows large
     # enough that token cost / signal-to-noise becomes a concern.
@@ -258,11 +260,15 @@ class NudgePolicyConfig(_Base):
     #   - day:   stops "anniversary daily countdown" spam
     #   - week:  caps slow-burn topics (book reading reminder, fitness goal)
     # Set any cap to 0 to disable that layer.
-    max_per_topic_per_window: int = 1
+    max_per_topic_per_window: int = 1  # legacy alias for max_per_topic_per_hour
     topic_dedup_window_seconds: int = 3600  # 1h
     max_per_topic_per_day: int = 2
-    # 8 allows the natural pre-deadline cadence (a fire every 1-2 days as a
-    # deadline approaches) while still banning daily-for-a-week spam.
+    # Weekly cap raised 4 → 8: deadline reminders (clawtrack 5/12-5/14,
+    # birthday 5/20-5/24) need ~1 fire every 1-2 days across the
+    # "deadline approaches" stretch; old cap=4 burned through the budget
+    # in the first 3-4 days then denied all in-window fires that the
+    # type_a scorer was looking for. 8 still bans daily-for-a-week spam
+    # but allows the natural pre-deadline cadence.
     max_per_topic_per_week: int = 8
 
     # NudgeInjector settings
@@ -275,7 +281,7 @@ class NudgePolicyConfig(_Base):
 
 
 # Single source of truth for the Planner's attention.md section allowlist.
-# Both ``SentinelConfig.attention_planner_sections`` and ``PlannerContextAssembler``'s
+# Both ``SentinelConfig.attention_planner_sections`` and ``ContextAssembler``'s
 # no-config fallback reference this, so a deploy that sets the config and one
 # that relies on the fallback can't silently drift to different section sets.
 DEFAULT_PLANNER_ATTENTION_SECTIONS: tuple[str, ...] = (
@@ -285,12 +291,12 @@ DEFAULT_PLANNER_ATTENTION_SECTIONS: tuple[str, ...] = (
     "## Predicted next 3 days",
     "## Currently focused on",
     "## Recent proactive decisions (14d)",
-    "## Today's fire plan",
+    "## 今日 fire 计划",
 )
 
 
 class SentinelConfig(_Base):
-    """Proactive Engine configuration, under the sentinel key."""
+    """Sentinel proactivity configuration."""
 
     enabled: bool = False
     """Master switch — nothing runs until this is True."""
@@ -527,8 +533,9 @@ class BehaviorsExtractConfig(_Base):
 
     enabled: bool = False
     """Master switch — even with ``sentinel.enabled`` on, the extractor
-    only runs when this is True. Default off because each idle tick costs
-    one LLM call."""
+    only runs when this is True. Two failure modes drive default-off:
+    each idle tick costs one LLM call; behaviors.md is observable-only
+    in MVP (P6 wires reads but Phase-2 behavior is still in flux)."""
 
     idle_seconds: int = 900
     """Min consecutive idle time (no inbound across any session) before
@@ -633,7 +640,12 @@ class DailyAnalysisConfig(_Base):
             "i want ",
             "from now on",
             "going forward",
-            *zh_lexicon.DIRECTIVE_MARKERS,
+            "请",
+            "别",
+            "不要",
+            "应该",
+            "总是",
+            "永远",
         ]
     )
     """Prefix list scanned against the inbound window when the LLM call
@@ -692,6 +704,20 @@ class BudgetPolicyConfig(_Base):
     track_global_daily: bool = True
 
 
+class SmartRoutingConfig(_Base):
+    """SmartRouter configuration."""
+
+    enabled: bool = False
+    tiers: dict[str, list[str]] = Field(default_factory=dict)
+    """Which models each tier may route to. Empty out of the box: the table
+    this replaced named six models across three vendors, for users who may
+    hold no key for any of them, and routing has no meaning without models to
+    choose between -- so enabling this means listing your own."""
+
+    default_tier: Literal["light", "medium", "heavy"] = "heavy"
+    """Fallback tier when routing is uncertain — conservative default."""
+
+
 class ToolResultLifecycleConfig(_Base):
     """Tool result lifecycle management (the three-phase pruner)."""
 
@@ -735,15 +761,17 @@ class TokenWiseConfig(_Base):
     """Only inject skill summaries relevant to the current message."""
 
     tool_result_lifecycle: ToolResultLifecycleConfig = Field(default_factory=ToolResultLifecycleConfig)
+    smart_routing: SmartRoutingConfig = Field(default_factory=SmartRoutingConfig)
     budget: BudgetPolicyConfig = Field(default_factory=BudgetPolicyConfig)
 
 
 # ---------------------------------------------------------------------------
-# SkillForge
+# Feature 4 — SkillForge
 # ---------------------------------------------------------------------------
 #
 # SkillForge owns retrieval + execution + feedback emission. Evolution
-# is handled by the EverOS memory backend (``raven_everos``).
+# is handled by the embedded ``everos`` pipeline (see
+# ``raven.memory_engine.skill_local.evolver.everos``).
 #
 # The config is intentionally kept flat. Component-level knobs
 # (embedding model, BM25 parameters, RRF k, etc.) live in the
@@ -762,8 +790,10 @@ class EverOSConfig(_Base):
     """
 
     enabled: bool = False
-    # The per-turn tool-call gate is skill_forge.detect_min_tool_calls, so one
-    # threshold drives every auto-detect surface, this pipeline included.
+    # Note: the per-turn tool-call gate (formerly min_tool_calls / min_messages
+    # here) is now sourced from skill_forge.detect_min_tool_calls so the same
+    # threshold drives any future auto-detect surface in addition to this
+    # pipeline.
     # Number of similar existing skills shown to the skill_extractor
     # LLM as candidates for ``update``. 5 is enough — overlap between
     # turn-derived candidates above this rank is rare, and the prompt
@@ -790,7 +820,7 @@ class EverOSConfig(_Base):
 
 
 class LocalDirConfig(_Base):
-    """One local skill directory entry."""
+    """One local skill directory entry (R1)."""
 
     path: str
     """Absolute or ``~``-relative path. Expanded at startup."""
@@ -809,9 +839,9 @@ class LocalDirConfig(_Base):
 class SkillForgeConfig(_Base):
     """SkillForge configuration.
 
-    ``enabled=True`` (the default) activates the SkillForge retrieval/
+    ``enabled=True`` (default, R8) activates the SkillForge retrieval/
     injection pipeline. Set ``enabled=False`` to fall back to the
-    behaviour of handing the full skill directory to the LLM
+    pre-refactor behavior of handing the full skill directory to the LLM
     (component stubs that return empty lists also cause ``ContextBuilder``
     to fall back to the full directory automatically).
 
@@ -828,7 +858,7 @@ class SkillForgeConfig(_Base):
 
     # --- Master switch + location ---
     enabled: bool = True
-    """Master switch (default True). Activates the SkillForge
+    """Master switch (R8: default True). Activates the SkillForge
     retrieval/injection pipeline."""
 
     discovery: Literal["pull", "push"] = "pull"
@@ -871,18 +901,19 @@ class SkillForgeConfig(_Base):
     in this module."""
 
     local_dirs: list[LocalDirConfig] = Field(default_factory=list)
-    """Local skill directories to mount. List order = priority:
-    later entries override earlier on name collision."""
+    """Local skill directories to mount (R1). List order = priority:
+    later entries override earlier on name collision. Legacy
+    ``skills_dir`` auto-migrated via model_validator (R5)."""
 
     scan_max_depth: int = 5
-    """Maximum directory depth when scanning for SKILL.md files.
+    """Maximum directory depth when scanning for SKILL.md files (R2).
     Paths deeper than this below a layer root are silently skipped.
     Prevents unbounded filesystem walks on huge mirrors."""
 
     # --- Retrieval / reranker knobs ---
     embedding_model: str = "default"
     """Dense embedding model identifier. MUST match the embedding model
-    that produced the skill library's stored vectors, otherwise dense
+    that produced ``mass_library_db``'s stored vectors, otherwise dense
     retrieval returns garbage because the query vector lives in a different
     space. Configure this to match the embedding service and corpus used by
     your deployment."""
@@ -922,7 +953,7 @@ class SkillForgeConfig(_Base):
     top_k: int = 5
     """Number of skills returned by ``select()``."""
 
-    # --- Dual-pool fusion weights ---
+    # --- Dual-pool fusion weights (R6) ---
     local_pool_top_k: int = 10
     """Candidate count from the local BM25 pool per query."""
 
@@ -942,9 +973,34 @@ class SkillForgeConfig(_Base):
     """Enable a second retrieval path with LLM-rewritten queries."""
 
     rewrite_max_tokens: int = 8192
-    """Output token budget for the rewriter LLM call: 8192 leaves headroom for
-    reasoning traces (~3-4k tokens) on top of the rewrite output; a smaller
-    budget truncates the reply before its JSON is complete."""
+    """Output token budget for the rewriter LLM call. Defaults to 8192 to
+    leave headroom for Qwen3-style reasoning traces (~3-4k tokens) on top
+    of the actual rewrite output. The previous 1024 budget caused frequent
+    finish_reason=length truncations with empty visible content, which
+    surfaced as 'Failed to parse rewrite response as JSON' fallbacks."""
+
+    mass_library_db: str | None = None
+    """Path to a pre-built SQLite skill library (the "mass pool").
+    Set to ``None`` to disable the mass pool entirely — only the file-based
+    local pool (workspace + builtin + everos) will be used. Set this to a
+    deployment-specific database path when shipping a pre-built skill library.
+
+    When set, ``SkillService`` attaches the file in **read-only** mode at
+    startup and uses its (metadata + embedding) rows for dense retrieval
+    of curated mass skills.
+
+    Lifecycle:
+      - Operator builds the DB offline via
+        ``raven skill import-files <skills_dir> --db <path>`` followed
+        by ``raven skill rebuild-index --db <path>`` (encodes
+        embeddings into the same file).
+      - Deploys the resulting ``.db`` file alongside the runtime.
+      - At runtime, Raven never modifies it — replace the file to
+        update the library.
+
+    Body, frontmatter and embeddings live inline in the DB; SKILL.md
+    files for mass-library skills are not required on disk.
+    """
 
     # --- Skill injection mode (full_body vs summary) ---
     injection_mode: str = "full_body"
@@ -959,8 +1015,8 @@ class SkillForgeConfig(_Base):
     - ``"summary"``: build_skills_summary renders an XML directory of
       (name, description, available) tuples. Agent must call ``read_file``
       on a skill's SKILL.md to access its body — progressive disclosure,
-      cheaper in tokens, but agents often skip the read step entirely, so
-      retrieval quality drops against ``full_body``."""
+      cheaper in tokens but Round-D eval showed agents often skip the
+      read step entirely (top1_kw rate ~0.62 vs ~0.80 with full_body)."""
 
     inject_max: int = 2
     """Max skills inlined when ``injection_mode='full_body'``. Each skill body
@@ -968,10 +1024,10 @@ class SkillForgeConfig(_Base):
 
     disable_always: bool = False
     """When True, ``get_always_skills()`` returns [] and select() filters
-    out always:true skills. Default False (always skills inject)."""
+    out always:true skills. R8 default: False (always skills inject)."""
 
     always_max: int = 5
-    """Max always skills injected per turn. Exceeding this truncates
+    """Max always skills injected per turn (R3). Exceeding this truncates
     by local_dirs list order + alphabetical, with a WARN listing dropped
     skill names."""
 
@@ -981,8 +1037,8 @@ class SkillForgeConfig(_Base):
     ``llm_gate_pool_size`` candidates after RRF merge, then asks an LLM to
     plan + filter down to ``llm_gate_max_select`` skills. Empty result is
     valid ("inject nothing"). Costs one LLM call per ``select()`` invocation
-    but eliminates the ~30% noise-injection rate of pure-RRF top-K
-    (observed: irrelevant skills polluting the prompt). Disable to skip the
+    but eliminates the ~30% noise-injection rate of pure-RRF top-K (Round D
+    obs.: irrelevant skills polluting the prompt). Disable to skip the
     extra LLM call (rare; useful when LLM provider is unavailable)."""
 
     llm_gate_max_select: int = 2
@@ -1021,8 +1077,18 @@ class SkillForgeConfig(_Base):
 
     # --- Producer refresh trigger (optional, zero-config via .refresh_endpoint sentinel) ---
     refresh_url: str | None = None
-    """Reserved for a producer-side refresh service. Nothing reads it today; it
-    stays accepted so a config that set it keeps loading."""
+    """Producer-side refresh service base URL (e.g.
+    ``http://producer-host:8765``). When set, ``raven skill refresh
+    <source>`` POSTs ``<url>/refresh?source=...`` to trigger an immediate
+    git pull + ingest on the producer. The actual refresh runs producer-side;
+    the consumer just sends the trigger and lets the ``.stale`` flag
+    mechanism propagate the update.
+
+    Zero-config: when unset, the ``skill refresh`` CLI auto-discovers
+    the endpoint from ``<mass_library_db>/../.refresh_endpoint`` (a
+    single-line text file written by the producer admin during
+    ``export_to_mass_library --refresh-endpoint=URL``). 99% of users
+    don't need to set this field."""
 
     # --- Evolver model ---
     evolve_model: str | None = None
@@ -1079,9 +1145,21 @@ class SkillForgeConfig(_Base):
 
     @model_validator(mode="before")
     @classmethod
-    def _check_local_weight(cls, data: dict) -> dict:
+    def _migrate_skills_dir(cls, data: dict) -> dict:
+        """R5: auto-convert legacy ``skills_dir`` → ``local_dirs``."""
         if not isinstance(data, dict):
             return data
+        for old_key in ("skills_dir", "skillsDir"):
+            old_val = data.pop(old_key, None)
+            if old_val and "local_dirs" not in data and "localDirs" not in data:
+                data["local_dirs"] = [{"path": old_val}]
+                warnings.warn(
+                    f"skill_forge.{old_key} is deprecated, use local_dirs "
+                    f"instead. Auto-converted to local_dirs=[{{path: {old_val!r}}}]. "
+                    f"This field will be removed in a future release.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
         lw = data.get("local_weight") or data.get("localWeight")
         if lw is not None:
             lw = float(lw)
@@ -1091,7 +1169,7 @@ class SkillForgeConfig(_Base):
 
 
 # ---------------------------------------------------------------------------
-# Plugin / Memory backend / SkillForgeRouter
+# CFG-1 — Plugin / Memory backend / SkillForgeRouter
 # ---------------------------------------------------------------------------
 
 
@@ -1108,13 +1186,6 @@ class PluginsConfig(_Base):
 
     disabled: list[str] = Field(default_factory=list)
     """Plugin ids the user opted out of (e.g. ``["everos-memory"]``)."""
-
-    dirs: list[str] = Field(default_factory=list)
-    """Extra plugin roots to scan besides the built-in sources, each holding
-    ``<root>/<id>/raven-plugin.toml`` directories; scanned with project
-    priority. A product that ships plugins beside its own config points here
-    (``.raven/`` is git-ignored, so a checked-in plugin needs a root of its
-    own). Relative paths resolve against the working directory."""
 
     config: dict[str, dict[str, Any]] = Field(default_factory=dict)
     """Per-plugin configuration, keyed by plugin id. Each plugin's
@@ -1147,7 +1218,7 @@ class MemoryConfig(_Base):
 
     user_id: str = "default"
     """Bare user identity passed as ``backend.recall(user_id=...)`` for
-    the user-track recall channel inside ``PlannerContextAssembler.assemble``."""
+    the user-track recall channel inside ``ContextAssembler.assemble``."""
 
     agent_id: str = "default"
     """Bare agent identity passed as ``backend.recall(agent_id=...)`` by
@@ -1190,8 +1261,9 @@ class HubSourceConfig(_Base):
 class SkillForgeRouterConfig(_Base):
     """Multi-source skill routing policy.
 
-    The sources are Local, EverOS and Hub; this block tunes the weighted
-    RRF and the per-source plumbing.
+    Sources themselves are hardcoded (Local + Mass + Everos) per the
+    project-wide design decision; this block tunes the weighted RRF
+    and per-source plumbing.
     """
 
     enabled: bool = True
@@ -1255,7 +1327,7 @@ class CheckpointConfig(_Base):
 
     When active, the agent loop commits the workspace to an out-of-band
     shadow git repo at the end of each turn (covering both normal and
-    max-iteration exits). This is the safety net: a truncated
+    max-iteration exits). This is the safety net behind Bug2: a truncated
     multi-file edit leaves a recoverable snapshot, and the next turn gets a
     recovery prompt listing what the interrupted turn changed.
 
@@ -1269,7 +1341,7 @@ class CheckpointConfig(_Base):
                           have no "next turn" to inject recovery into, so
                           paying the snapshot cost there is wasted.
     - ``"never"``      — disabled entirely; loop is byte-identical to the
-                          loop without checkpoints (no commits, no interrupt
+                          pre-Bug2 baseline (no commits, no interrupt
                           reclassification, no recovery injection).
 
     Default ``"interactive"`` matches mature competitors (Claude Code,
@@ -1287,10 +1359,12 @@ class CheckpointConfig(_Base):
 
 
 class RuntimeConfig(_Base):
-    """Runtime discipline: the opt-in safety nets.
+    """Runtime discipline — the 5th feature pillar.
 
-    Holds ``checkpoint``; every net defaults off, so the all-off baseline is
-    the loop as it runs without them.
+    Houses the opt-in runtime safety nets. Bug2 ships ``checkpoint``;
+    later phases add ``journal`` / ``verifier`` / ``done_gate`` /
+    ``loop_detection`` (Bug3, us) and ``session`` (Bug1, dev) as sibling
+    sub-configs. All default off so the all-off baseline equals 68a3be7.
     """
 
     checkpoint: CheckpointConfig = Field(default_factory=CheckpointConfig)
@@ -1352,9 +1426,9 @@ class SessionTitleConfig(_Base):
 
     Columns rather than code points, because one threshold has to be fair to
     both scripts: at 6 code points "nihao" is skipped but the far more nameable
-    the five-character Chinese "what can you do" would be too, while at 6 columns the greetings fall below and the
+    "你能做什么" would be too, while at 6 columns the greetings fall below and the
     questions do not. Measured against 246 real openings, 6 columns separates
-    "?", "rpc", "hi", "nihao" and the two-character Chinese hello from the three-character "who are you" and everything longer.
+    "?", "rpc", "hi", "nihao" and "你好" from "你是谁" and everything longer.
 
     A message under the gate is not left waiting: `turn.send` reports that it
     did not start a namer, and the front end fills the mechanical title in at
@@ -1379,15 +1453,9 @@ class SubagentDagConfig(_Base):
     here: the task is one enum plus a sentence, not the reasoning the conversation
     needs."""
 
-    verdict_timeout_seconds: float = 180.0
+    verdict_timeout_seconds: float = 30.0
     """Wall clock for one judge call. Past this the node is treated as having
-    accomplished its task, which is what the previous behaviour was.
-
-    It has to leave room for the retry ladder it contains: `chat_with_retry` makes
-    four attempts with roughly 7s of jittered backoff between them, so a ceiling
-    close to the length of a few slow calls truncates the ladder instead of bounding
-    it -- and the truncation lands on the fail-open, judging an unjudged node
-    accomplished. 30s, the previous value, had no such room."""
+    accomplished its task, which is what the previous behaviour was."""
 
     evidence_budget_chars: int = 8000
     """Characters of the node's transcript, taken from the end, shown to the judge.
@@ -1425,53 +1493,6 @@ class SubagentQuestionsConfig(_Base):
     failure here."""
 
 
-# ---------------------------------------------------------------------------
-# Eval Engine -- judge hooks on the loop, off by default
-# ---------------------------------------------------------------------------
-
-
-class EvalEngineConfig(_Base):
-    """Eval Engine tunables.
-
-    Default is fully off: the assembly root mounts no hook. Operators flip
-    ``enabled = True`` and the relevant per-phase toggles to activate the
-    engine; ``build_runtime`` then extends the loop's hook chain with its
-    three hooks.
-    """
-
-    enabled: bool = False
-    """Master switch. Off means no Eval Engine hook is mounted."""
-
-    judge_model: str = "claude-haiku-4-5"
-    """Cheap small-batch model used for the LLM judge call. ``haiku`` is
-    the default since the judge is on a per-turn hot path."""
-
-    judge_timeout_seconds: float = 8.0
-    """Hard ceiling on a single judge call. Time-out -> judge returns
-    ``JudgeVerdict.unknown`` and the hook falls through pass-through."""
-
-    on_task_completion: bool = True
-    """When ``enabled``, run the after-iteration judge to write case.md /
-    behaviors.md outcomes. Set to False to silence the writer without
-    disabling the rest of the engine."""
-
-    on_tool_audit: bool = False
-    """Tool audit is an expensive per-tool-call check. Default off so the
-    engine ships safe but not loud."""
-
-    on_iteration_gate: bool = False
-    """Token-budget / pruning gate that runs before every iteration.
-    Default off so the engine has zero overhead in the common case."""
-
-    max_iteration_tokens: int = 40_000
-    """If ``on_iteration_gate`` is on, refuse to start another iteration
-    once the cumulative messages exceed this token budget."""
-
-    tool_denylist: list[str] = Field(default_factory=list)
-    """If ``on_tool_audit`` is on, tool names listed here are blocked
-    deterministically before any LLM safety check runs."""
-
-
 class RavenConfig(_Base):
     """Raven root config. Composes the base Config with feature extensions."""
 
@@ -1488,14 +1509,13 @@ class RavenConfig(_Base):
     session_title: SessionTitleConfig = Field(default_factory=SessionTitleConfig)
     subagent_dag: SubagentDagConfig = Field(default_factory=SubagentDagConfig)
     subagent_questions: SubagentQuestionsConfig = Field(default_factory=SubagentQuestionsConfig)
-    eval_engine: EvalEngineConfig = Field(default_factory=EvalEngineConfig)
 
-    # Plugin system + memory backend.
+    # CFG-1: plugin system + memory backend.
     plugins: PluginsConfig = Field(default_factory=PluginsConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
 
     # The full base config (agents, channels, providers, tools, routing).
-    # Kept as a nested field so we can round-trip the JSON with the base loader.
+    # Kept as a nested field so we can round-trip YAML with the base loader.
     base: BaseConfig = Field(default_factory=BaseConfig)
 
 
@@ -1521,13 +1541,66 @@ def load_raven_config(config_path: Path | None = None) -> RavenConfig:
                 data = json.load(f) or {}
         except (json.JSONDecodeError, OSError):
             data = {}
-        # The same migrations the base loader runs, gated by the same version
-        # floor, so legacy leaves reach their new home before the blocks are
-        # extracted (the base loader persisted the rewrite; this is the
-        # in-memory twin for the extension blocks).
-        data = _migrate_config(data, pop_extension_keys=False, from_version=_migration_version(actual_path))
+        # Apply the same migrations the base loader uses so legacy fields
+        # (e.g. ``agents.defaults.everos``) end up in their new
+        # home (``skillForge.everos``) before we extract blocks.
+        data = _migrate_config(data, pop_extension_keys=False)
+        # CFG-1 deprecation surface: warn once when the user still has
+        # the legacy ``skill_forge.mass_library_db`` field set without
+        # the new ``skill_router.mass.endpoint``. The two coexist for
+        # one release; CLEANUP removes the legacy field.
+        _warn_mass_library_db_deprecated(data)
         for key in EXTENSION_KEYS:
             if key in data and data[key] is not None:
                 overrides[key] = data[key]
 
     return RavenConfig(base=base, **overrides)
+
+
+def _warn_mass_library_db_deprecated(data: dict) -> None:
+    """Single-shot deprecation warning for ``skill_forge.mass_library_db``.
+
+    Fires when the user has the old field set AND has not switched to
+    the new ``skill_router.mass.endpoint``. We don't auto-migrate
+    because the old field is a local SQLite path and the new field is
+    an HTTP endpoint — semantically different, so the user must pick
+    one consciously.
+    """
+    legacy = None
+    for skill_forge_key in ("skill_forge", "skillForge"):
+        block = data.get(skill_forge_key)
+        if isinstance(block, dict):
+            legacy = block.get("mass_library_db") or block.get("massLibraryDb")
+            if legacy:
+                break
+    if not legacy:
+        return
+    new = None
+    # The remote skill library is now the Hub source at
+    # skillForge.router.hub (Mass was retired; Hub replaces it).
+    for sf_key in ("skill_forge", "skillForge"):
+        block = data.get(sf_key)
+        if isinstance(block, dict):
+            router = block.get("router")
+            if isinstance(router, dict):
+                new = (router.get("hub") or {}).get("endpoint")
+                if new:
+                    break
+    if new:
+        # User already set the new field — they're mid-migration. No
+        # warning, just a one-line info log.
+        logging.getLogger(__name__).info(
+            "config: both skill_forge.mass_library_db (legacy) and "
+            "skillForge.router.hub.endpoint are set; the legacy field is "
+            "ignored by the Skill Hub source and will be removed.",
+        )
+        return
+    warnings.warn(
+        "skill_forge.mass_library_db is deprecated and the local-matmul "
+        "mass-library path has been removed. Switch to "
+        "skillForge.router.hub.endpoint = '<URL>' to point at the remote "
+        "Skill Hub. The legacy field is read but ignored by the new "
+        "SkillForgeRouter / Skill Hub path.",
+        DeprecationWarning,
+        stacklevel=2,
+    )

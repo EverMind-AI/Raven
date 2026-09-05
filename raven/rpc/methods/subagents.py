@@ -1,10 +1,10 @@
 """``subagents.*`` RPC handlers: configure third-party sub-agents from the TUI.
 
 Thin adapters only. The config write path, the preset templates, the probe and
-the persisted test verdicts all live in ``raven.config`` / ``raven.agent.subagent``,
-and the served page reaches them through these same handlers; duplicating any of
-that logic here would let the TUI and the page disagree about what "installed"
-means or which fields a write is allowed to touch.
+the persisted test verdicts all already exist and are shared with the web RPC
+(`raven/web_rpc/methods_config.py`); duplicating any of that logic here would
+let the two surfaces disagree about what "installed" means or which fields a
+write is allowed to touch.
 
 The install group is computed here rather than in the client because a client
 that computes it is how the rule drifts: a second copy in the TUI, or in the
@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn
 
 from loguru import logger
@@ -30,7 +31,7 @@ from raven.agent.subagent.presets import (
     third_party_subagent_presets,
 )
 from raven.agent.subagent.probe import ProbeResult, probe_all, run_test
-from raven.agent.subagent.probe_state import TestStateStore
+from raven.agent.subagent.test_state import TestStateStore
 from raven.config.loader import get_config_path
 from raven.config.schema import SubagentsConfig
 from raven.config.update_subagents import (
@@ -175,22 +176,22 @@ async def _rows(*, probe: bool = True) -> list[dict]:
         merge_builtin_seeds,
     )
     from raven.agent.subagent.vendored_agents import (
-        discover_product_rows,
-        merge_product_seeds,
-        product_state,
+        discover_vendored_rows,
+        merge_vendored_seeds,
+        vendored_state,
     )
 
     # Composed exactly the way ``AgentRegistry.apply`` composes it, and for the
     # same reason the registry exists at all: this list is what a human reads to
     # answer "what can the model dispatch to", so a view assembled from a
     # different subset of the sources is a view that disagrees with the runtime.
-    # It did: the discovered rows were on the table and absent here, which reads
-    # as "the agents did not install" on the one screen built to tell you they
+    # It did: the vendored rows were on the table and absent here, which reads as
+    # "the agents did not install" on the one screen built to tell you they
     # had.
-    discovered = discover_product_rows()
-    discovered_names = {getattr(c, "name", "") for c in discovered}
-    unready = product_state()
-    merged = merge_product_seeds(configured, discovered)
+    vendored = discover_vendored_rows()
+    vendored_names = {getattr(c, "name", "") for c in vendored}
+    unready = vendored_state()
+    merged = merge_vendored_seeds(configured, vendored)
 
     # One merge, so the rows rendered here are the rows the runtime dispatches
     # against -- including an acp row of a built-in name, where the merge fills
@@ -218,11 +219,9 @@ async def _rows(*, probe: bool = True) -> list[dict]:
     # config entry to delete, and the delete button reads ``configured``. Removing
     # one means removing its folder. A row the user has also written by hand is
     # theirs, so it keeps the config source and its delete button.
-    # "vendored" is the wire name for a discovered row (the clients and the
-    # schema read it); renaming it is a schema change, not a refactor.
     entries += [
         (c, "config" if getattr(c, "name", "") in configured_names else "vendored")
-        if getattr(c, "name", "") in discovered_names
+        if getattr(c, "name", "") in vendored_names
         else (c, "config")
         for c in external
     ]
@@ -256,25 +255,26 @@ async def _rows(*, probe: bool = True) -> list[dict]:
 
     rows: list[dict] = []
     for (cfg, source), result in zip(entries, results, strict=True):
-        # The probe launches nothing: it checks the command's first token, which
-        # for one of these is the interpreter and always exists. So a folder
-        # whose launcher or engine is gone would probe "ready" while the roster
-        # -- correctly -- refused to advertise it. The readiness verdict
-        # overrides the probe for a discovered row, and carries the reason,
-        # because "not ready" without "why" sends the reader looking. Always
-        # `attention`, never `missing`: `missing` is what the page reads as
-        # "offer Install", and no state of a discovered row is installable from
-        # here -- a launcher ships with the wheel and an engine installs as a
-        # wheel of its own. That is also why a probe miss on a *ready* row is
-        # demoted below: readiness checks the command's absolute paths and the
-        # probe `which`es its first token, so a relative `SUBAGENT_PYTHON`
-        # can be ready by one rule and missing by the other -- and rendering
-        # `missing` would offer an Install whose click does nothing.
-        if source == "vendored":
-            if (verdict := unready.get(cfg.name)) and not verdict.ready:
-                result = replace(result, status="attention", detail=verdict.detail)
-            elif result.status == "missing":
-                result = replace(result, status="attention")
+        # The probe launches nothing: for a cli row it checks the command's first
+        # token, which for one of these is the interpreter and always exists. So a
+        # folder with no venv probed "ready" and this page called it installed
+        # while the roster -- correctly -- refused to advertise it. The readiness
+        # verdict overrides the probe for a vendored row, and carries the reason,
+        # because "not ready" without "why" sends the reader looking.
+        building = (task := _BUILDING.get(cfg.name)) is not None and not task.done()
+        if source == "vendored" and (verdict := unready.get(cfg.name)) and not verdict.ready:
+            # A build in flight outranks the reason it is fixing: leaving "venv not
+            # built -- run install.sh" on screen for the minutes a build takes
+            # reads as nothing having happened.
+            # And a reason the installer cannot fix is `attention`, not `missing`:
+            # `missing` is what the page reads as "offer Install", and offering it
+            # for a folder whose venv is already built and whose problem is a
+            # credential is offering a button that returns in seconds having
+            # changed nothing. `attention` renders the reason instead, which is
+            # what that folder needs a human to read.
+            detail = _BUILD_ERROR.get(cfg.name) or verdict.detail
+            missing = verdict.buildable and not building
+            result = replace(result, status="missing" if missing else "attention", detail="" if building else detail)
         last = result.last_test
         task = _RUNNING.get(cfg.name)
         rows.append(
@@ -287,14 +287,14 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 # config's); a preset row has none until it is configured.
                 "enabled": bool(getattr(cfg, "enabled", True)) if source != "preset" else False,
                 "configured": source == "config",
-                # Discovered under ``agents/`` rather than written anywhere.
+                # Discovered under ``subagents/`` rather than written anywhere.
                 # The page needs to tell the two apart: one is deletable, the
-                # other is a folder on disk. "vendored" is the wire name.
+                # other is a folder on disk.
                 "vendored": source == "vendored",
-                # Nothing is buildable in the product tree (launchers ship with
-                # the wheel; engines install as wheels), so no build is ever in
-                # flight. The key stays for wire compatibility.
-                "building": False,
+                # A vendored folder's venv is being built right now. Its own flag
+                # rather than `test_running`: a build and a test are different
+                # verbs on the same row, and one must not read as the other.
+                "building": building,
                 # Read from the same derivation the roster and the DAG pre-check
                 # use, never from `kind`: an acp row's statefulness comes from its
                 # own capability snapshot and an openai row's from a declaration.
@@ -413,20 +413,20 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
     except ValidationError as exc:
         _raise_config_error(exc)
     target = next((e for e in entries if e.get("name") == name), None)
-    materialized_discovered = target is None
+    materialized_vendored = target is None
     if target is None:
-        from raven.agent.subagent.vendored_agents import discover_product_rows
+        from raven.agent.subagent.vendored_agents import discover_vendored_rows
 
-        discovered = next((cfg for cfg in discover_product_rows() if getattr(cfg, "name", None) == name), None)
-        if discovered is None:
+        vendored = next((cfg for cfg in discover_vendored_rows() if getattr(cfg, "name", None) == name), None)
+        if vendored is None:
             raise SubagentNotFoundError(f"no configured sub-agent named {name!r}", data={"name": name})
-        target = discovered.model_dump(by_alias=True)
+        target = vendored.model_dump(by_alias=True)
         entries.append(target)
     new_name = _clean_name(params.get("new_name"), field="new_name")
     if new_name:
-        if materialized_discovered and new_name != name:
+        if materialized_vendored and new_name != name:
             raise ConfigFieldReadonlyError(
-                "a discovered sub-agent override cannot be renamed; its name binds it to the shipped launcher",
+                "a vendored sub-agent override cannot be renamed; its name binds it to the shipped launcher",
                 data={"field": "new_name", "name": name},
             )
         target["name"] = new_name
@@ -488,12 +488,12 @@ def _discovered_entry(name: str) -> dict | None:
 
     The command it carries is already resolved to this machine's paths, exactly
     as each folder's ``install.py`` resolves it: a stored row is a command line,
-    and ``merge_product_seeds`` has its own guard (``_launcher_is_gone``) for a
+    and ``merge_vendored_seeds`` has its own guard (``_launcher_is_gone``) for a
     stored path a later upgrade moved.
     """
-    from raven.agent.subagent.vendored_agents import discover_product_rows
+    from raven.agent.subagent.vendored_agents import discover_vendored_rows
 
-    for row in discover_product_rows():
+    for row in discover_vendored_rows():
         if row.name == name:
             return row.model_dump(by_alias=True)
     return None
@@ -593,29 +593,105 @@ async def subagents_remove(params: dict, *, agent_loop_factory: "AgentLoopFactor
 _RUNNING: dict[str, asyncio.Task] = {}
 
 
-async def subagents_build(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
-    """Report that there is nothing to build. Kept for wire compatibility.
+# name -> the in-flight build task, and name -> why the last one failed ("" once
+# one succeeds). Separate from `_RUNNING`: a build and a test are different verbs
+# on the same row and one must not cancel or shadow the other.
+_BUILDING: dict[str, asyncio.Task] = {}
+_BUILD_ERROR: dict[str, str] = {}
 
-    The fork-era tree had venvs this method's installer could produce; the
-    product tree has none. A launcher ships with the wheel, and a missing
-    engine installs as a wheel of its own -- an install this server must not
-    perform into its own running environment. The row's readiness detail
-    already names the wheel, so this answers with that reason rather than
-    starting anything; a client that still calls it learns why in `detail`.
+
+async def _run_installer(installer: "Path", folder_name: str) -> tuple[int, str]:
+    """Run the tree's installer for one folder. Returns ``(exit status, output)``.
+
+    Its own function so a test can stand in for it. Spawning a real subprocess
+    from an async test is what made these tests hang rather than fail: every test
+    gets a fresh event loop, and the second one to fork in a process waits forever
+    on a child watcher the first loop left behind. The seam is here rather than in
+    the test because the alternative is patching ``asyncio`` itself.
     """
-    from raven.agent.subagent.vendored_agents import product_folder, product_state
+    proc = await asyncio.create_subprocess_exec(
+        "bash",
+        str(installer),
+        folder_name,
+        cwd=str(installer.parent),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    out, _ = await proc.communicate()
+    return proc.returncode or 0, (out or b"").decode("utf-8", "replace")
+
+
+async def _build_vendored(
+    name: str, folder: "Path", installer: "Path", agent_loop_factory: "AgentLoopFactory | None" = None
+) -> None:
+    """Build one vendored folder's venv, recording why if it did not work.
+
+    The verdict is read back off the filesystem rather than taken from the exit
+    status: the script does several things per folder, and "it returned 0" is not
+    the same claim as "this checkout now has a launcher raven can start". Nothing
+    is returned -- the caller is long gone by the time this finishes, and the page
+    learns the outcome by seeing the row go ready in a later list.
+    """
+    from raven.agent.subagent.vendored_agents import checkout_of, venv_ready
+
+    code, out = await _run_installer(installer, folder.name)
+    if venv_ready(checkout_of(folder)):
+        _BUILD_ERROR.pop(name, None)
+        # Re-compose the table, or the agent is installed and uncallable. What a
+        # build changes is readiness, which lives on the filesystem -- and the
+        # roster the dispatching model reads is a snapshot taken the last time
+        # `apply` ran, which nothing here would otherwise trigger. So the page
+        # showed the row ready (it re-discovers per request) while the model's own
+        # list still did not have the name in it, and the only way to be believed
+        # was to restart. Same call a config write makes, for the same reason.
+        _hot_apply(agent_loop_factory)
+        logger.info("Built the vendored sub-agent {!r} and refreshed the agent table", name)
+        return
+    tail = out.strip().splitlines()
+    _BUILD_ERROR[name] = tail[-1] if tail else f"install.sh exited {code}"
+    logger.warning("Building the vendored sub-agent {!r} failed: {}", name, _BUILD_ERROR[name])
+
+
+async def subagents_build(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
+    """Start building one vendored folder's venv. Returns as soon as it is under way.
+
+    Not awaited, unlike every other method here: one of these is a few hundred MB
+    of downloads, so holding the request open would time it out on the client and
+    leave the build running with nobody able to see it. The row carries
+    ``building`` until it finishes, which is what the page watches.
+
+    Idempotent while running -- a second call for the same name reports the one
+    already in flight rather than starting a second `uv sync` against the same
+    directory, which is how a venv ends up half-written.
+    """
+    from raven.agent.subagent.vendored_agents import installer_for, vendored_folder
 
     name = params.get("name", "")
+    existing = _BUILDING.get(name)
+    if existing is not None and not existing.done():
+        return {"building": True, "detail": f"a build is already running for {name!r}"}
+
     # `detail` is repeated inside `data` deliberately: the dispatcher fills
     # `data` from `detail` only when a handler passed no `data` of its own, so a
-    # call site passing both drops the human-readable half.
-    if product_folder(name) is None:
-        detail = f"no discovered sub-agent named {name!r}"
+    # call site passing both drops the human-readable half. Both of these
+    # reported as a bare "subagent_not_found" -- the code name, with the reason
+    # discarded before it left the process.
+    folder = vendored_folder(name)
+    if folder is None:
+        detail = f"no vendored sub-agent named {name!r}"
         raise SubagentNotFoundError(detail, data={"name": name, "detail": detail})
-    verdict = product_state().get(name)
-    if verdict is not None and not verdict.ready:
-        return {"building": False, "detail": verdict.detail}
-    return {"building": False, "detail": f"nothing to build: {name!r} is ready"}
+    installer = installer_for(folder)
+    if installer is None:
+        detail = f"the sub-agent tree holding {name!r} ships no install.sh"
+        raise SubagentNotFoundError(detail, data={"name": name, "detail": detail})
+
+    _BUILD_ERROR.pop(name, None)
+    task = asyncio.ensure_future(_build_vendored(name, folder, installer, agent_loop_factory))
+    _BUILDING[name] = task
+    # Identity-checked on the way out, so a later call's entry is never removed
+    # by an earlier call's completion.
+    task.add_done_callback(lambda t: _BUILDING.pop(name, None) if _BUILDING.get(name) is t else None)
+    return {"building": True, "detail": ""}
 
 
 def _find(name: str, source: str) -> Any:
@@ -636,7 +712,7 @@ def _find(name: str, source: str) -> Any:
     return _as_configs([entry])[0]
 
 
-async def subagents_test(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
+async def subagents_test(params: dict) -> dict:
     """Dispatch the real agent once and report the verdict.
 
     This spends the agent's own quota, so it is only ever reached by an explicit
@@ -687,23 +763,6 @@ async def subagents_test(params: dict, *, agent_loop_factory: "AgentLoopFactory 
         detail=result.detail,
         tested_at_ms=int(time.time() * 1000),
     )
-    # Exactly the case where `_test_acp` wrote a capability snapshot. What an acp
-    # test changes is measured capability, which lives in that store -- and the
-    # roster reads `stateful` off a snapshot taken the last time `apply` ran, so
-    # leaving the table alone strands the agent on the old measurement:
-    # `subagents.list` re-reads the store and reports the new one, while
-    # `create_instance` reads the table and refuses the very agent the picker just
-    # offered. Same door a build takes after a filesystem change, for the same
-    # reason -- a write to durable truth the table has not been re-derived from.
-    if result.kind == "acp" and source == "config":
-        try:
-            _hot_apply(agent_loop_factory)
-        except Exception as exc:  # noqa: BLE001 - the measurement is already recorded
-            # The snapshot is on disk, so the verdict the caller asked for is real
-            # whatever the table does with it, and the next hot-apply picks it up.
-            # Raising would show a successful measurement as a failed test -- and
-            # the door re-reads a config file any other client may be writing.
-            logger.warning("subagent tested but the agent table was not re-composed: {}", exc)
     return {
         "ok": result.ok,
         "detail": result.detail,
@@ -744,21 +803,17 @@ def register_subagents_methods(
         return await subagents_remove(params, agent_loop_factory=agent_loop_factory)
 
     async def _build(params: dict) -> dict:
-        # Still wrapped like the writes above so the signature stays uniform;
-        # nothing is buildable in the product tree, and the handler says so.
+        # Wrapped like the four writes above, and for the same reason: a finished
+        # build has to re-compose the agent table, or the folder is installed and
+        # the model still cannot name it.
         return await subagents_build(params, agent_loop_factory=agent_loop_factory)
-
-    async def _test(params: dict) -> dict:
-        # Wrapped like the writes above: an acp test measures capabilities, and
-        # the table has to be re-derived from the snapshot it just recorded.
-        return await subagents_test(params, agent_loop_factory=agent_loop_factory)
 
     dispatcher.register("subagents.add", _add)
     dispatcher.register("subagents.update", _update)
     dispatcher.register("subagents.toggle", _toggle)
     dispatcher.register("subagents.remove", _remove)
     dispatcher.register("subagents.build", _build)
-    dispatcher.register("subagents.test", _test)
+    dispatcher.register("subagents.test", subagents_test)
     dispatcher.register("subagents.test_cancel", subagents_test_cancel)
 
 

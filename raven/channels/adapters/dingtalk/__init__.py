@@ -1,4 +1,4 @@
-"""DingTalk channel adapter.
+"""DingTalk channel adapter (migrated to the capability contract).
 
 Intentionally does NOT re-export ``DingTalkChannel`` — that would import
 dingtalk_stream at package import and defeat cheap spec discovery

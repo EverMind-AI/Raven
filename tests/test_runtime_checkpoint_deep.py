@@ -23,7 +23,6 @@ import pytest
 
 from raven.agent import workdir
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
 from raven.agent.loop.checkpoint import CheckpointService
 from raven.agent.loop.recovery import RecoveryLimits
 from raven.config.raven import CheckpointConfig, RuntimeConfig
@@ -204,12 +203,13 @@ def _agent_with_checkpoint(workspace: Path) -> AgentLoop:
         provider=_NoopProvider(),
         workspace=workspace,
         model="stub",
+        max_iterations=2,
+        restrict_to_workspace=True,
         # These checkpoint tests use a no-op model only as a "turn ends" stub;
         # empty-recovery is an orthogonal feature they don't exercise, so
         # disable it (a plain-empty response then completes immediately).
-        policy=TurnPolicy(max_iterations=2, empty_recovery=RecoveryLimits(enabled=False)),
-        tools=ToolWiring(restrict_to_workspace=True),
-        engine=EngineWiring(runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="always"))),
+        empty_recovery=RecoveryLimits(enabled=False),
+        runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="always")),
     )
 
 
@@ -238,10 +238,10 @@ def test_d3_repeated_stash_latest_wins(workspace):
     must replace the former — recovery prompt should reflect *current* state,
     not stale files."""
     agent = _agent_with_checkpoint(workspace)
-    from raven.agent.loop import LoopOutcome
+    from raven.agent.loop import TurnOutcome
 
-    out1 = LoopOutcome(status="interrupted", checkpoint_id="old", edited_files=["stale.py"])
-    out2 = LoopOutcome(status="interrupted", checkpoint_id="new", edited_files=["fresh.py"])
+    out1 = TurnOutcome(status="interrupted", checkpoint_id="old", edited_files=["stale.py"])
+    out2 = TurnOutcome(status="interrupted", checkpoint_id="new", edited_files=["fresh.py"])
     with workdir.bind(workspace):
         agent._stash_recovery("s", out1)
         agent._stash_recovery("s", out2)
@@ -337,12 +337,14 @@ def _agent(workspace: Path, *, policy: str, interactive: bool) -> AgentLoop:
         provider=_NoopProvider(),
         workspace=workspace,
         model="stub",
+        max_iterations=2,
+        restrict_to_workspace=True,
         # These checkpoint tests use a no-op model only as a "turn ends" stub;
         # empty-recovery is an orthogonal feature they don't exercise, so
         # disable it (a plain-empty response then completes immediately).
-        policy=TurnPolicy(max_iterations=2, empty_recovery=RecoveryLimits(enabled=False), interactive=interactive),
-        tools=ToolWiring(restrict_to_workspace=True),
-        engine=EngineWiring(runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy=policy))),
+        empty_recovery=RecoveryLimits(enabled=False),
+        runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy=policy)),
+        interactive=interactive,
     )
 
 
@@ -585,12 +587,14 @@ async def test_d9_agent_loop_degrades_when_shadow_dir_invalid(workspace):
         provider=_NoopProvider(),
         workspace=workspace,
         model="stub",
+        max_iterations=2,
+        restrict_to_workspace=True,
         # These checkpoint tests use a no-op model only as a "turn ends" stub;
         # empty-recovery is an orthogonal feature they don't exercise, so
         # disable it (a plain-empty response then completes immediately).
-        policy=TurnPolicy(max_iterations=2, empty_recovery=RecoveryLimits(enabled=False), interactive=True),
-        tools=ToolWiring(restrict_to_workspace=True),
-        engine=EngineWiring(runtime_config=bad_cfg),
+        empty_recovery=RecoveryLimits(enabled=False),
+        runtime_config=bad_cfg,
+        interactive=True,
     )
     with workdir.bind(workspace):
         assert agent._turn_checkpoint() is None, "bad config should degrade to no checkpoint"

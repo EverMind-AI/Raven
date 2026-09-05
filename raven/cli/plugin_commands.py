@@ -104,15 +104,19 @@ def register(app: typer.Typer) -> None:
         """List installed plugins + the active memory backend."""
         # Import lazily so ``raven --help`` doesn't pay for plugin
         # discovery on every invocation.
-        from raven.core.plugin_stack import discover_plugins
-        from raven.plugins import PluginRegistry
+        from raven.cli._plugin_stack import plugin_discovery_sources
+        from raven.plugin import (
+            PluginDiscovery,
+            PluginRegistry,
+        )
 
         ec_config = _load_ec_config(config_path)
 
         # Discover separately from activation so the table can show
         # both shadowed (lower-priority) plugins AND disabled ones,
-        # not just the live set. Same sources the live boot scans.
-        discovered = discover_plugins(ec_config)
+        # not just the live set. Same four sources the live boot scans.
+        discovery = PluginDiscovery(**plugin_discovery_sources())
+        discovered = discovery.discover()
 
         registry = PluginRegistry()
         disabled = frozenset(ec_config.plugins.disabled)
@@ -149,9 +153,9 @@ def _render_plugin_table(
 
     if not discovered:
         console.print(
-            "[yellow]No plugins discovered.[/yellow] The everos backend is "
-            "its own distribution — install [bold]everos-memory[/bold] — "
-            "or drop a manifest under [bold]~/.raven/plugins/[/bold].",
+            "[yellow]No plugins discovered.[/yellow] The everos backend "
+            "ships bundled — run [bold]uv sync[/bold] — or drop a manifest "
+            "under [bold]~/.raven/plugin/[/bold].",
         )
         return
 
@@ -197,14 +201,14 @@ def _render_plugin_table(
 
 
 def _source_label(source) -> str:
-    """Friendly label for a :class:`ManifestOrigin` enum value."""
-    from raven.plugins import ManifestOrigin
+    """Friendly label for a :class:`Source` enum value."""
+    from raven.plugin import Source
 
     return {
-        ManifestOrigin.ENTRY_POINTS: "entry_points",
-        ManifestOrigin.PROJECT: "project",
-        ManifestOrigin.USER: "user",
-        ManifestOrigin.BUNDLED: "bundled",
+        Source.ENTRY_POINTS: "entry_points",
+        Source.PROJECT: "project",
+        Source.USER: "user",
+        Source.BUNDLED: "bundled",
     }.get(source, str(source))
 
 

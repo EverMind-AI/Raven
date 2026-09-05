@@ -1,16 +1,25 @@
-"""Package skeleton smoke tests: the package imports and the paper shapes behave.
+"""Package skeleton smoke tests - verify the skeleton imports,
+and the surviving interface ABCs behave correctly.
 
-These tests pass on a fresh checkout with only Python stdlib and
+These tests should pass on a fresh checkout with only Python stdlib and
 pydantic + loguru installed. They do NOT require an LLM provider, a
 configured workspace, or any external service.
 
-Where the shapes live (the papers package):
+Relocation map (kept as a header note so future readers can trace where
+the symbols came from):
 
-    TokenStrategy / UsageSnapshot      raven.contracts.token_strategy
-    AssembledContext / TokenBudget     raven.contracts.assembled
+    raven.core.interfaces.TokenStrategy / UsageSnapshot
+        →  raven.token_wise.base
+    raven.core.interfaces.AssembledContext / TokenBudget
+        →  raven.memory_engine.base
 
-``raven.core`` is the assembly root; the tests below pin that it carries no
-interface shapes of its own.
+The three dead ABCs ``ContextEngine`` / ``Monitor`` / ``SkillHandler`` plus
+their helper dataclasses ``NudgeAction`` / ``SkillMeta`` / ``SkillExecutionOutcome``
+were removed (no implementations, alternate routes chosen by the
+design owners). The tests that exercised them are gone with them.
+
+``raven.core`` is fully removed now that AssembledContext + TokenBudget
+have moved to their permanent home under ``memory_engine``.
 """
 
 from __future__ import annotations
@@ -18,8 +27,8 @@ from __future__ import annotations
 import pytest
 
 from raven import __version__
-from raven.contracts.assembled import AssembledContext, TokenBudget
-from raven.contracts.token_strategy import TokenStrategy, UsageSnapshot
+from raven.memory_engine.base import AssembledContext, TokenBudget
+from raven.token_wise.base import TokenStrategy, UsageSnapshot
 
 # ---------------------------------------------------------------------------
 # Package metadata
@@ -31,25 +40,21 @@ def test_package_imports():
     assert __version__  # non-empty
 
 
-def test_assembled_shapes_live_in_the_papers():
-    from raven.contracts.assembled import AssembledContext as ReAssembled
-    from raven.contracts.assembled import TokenBudget as ReBudget
+def test_memory_engine_base_exports_assembled_dataclasses():
+    # AssembledContext + TokenBudget have their permanent home
+    # under memory_engine; raven.core is fully removed.
+    from raven.memory_engine.base import AssembledContext as ReAssembled
+    from raven.memory_engine.base import TokenBudget as ReBudget
 
     assert ReAssembled is AssembledContext
     assert ReBudget is TokenBudget
 
 
-def test_raven_core_is_the_assembly_root_not_the_old_context_home():
-    # raven.core was once a transitional home for AssembledContext/TokenBudget
-    # (now in memory_engine) and was deleted with a tombstone here. The name is
-    # re-founded as the assembly root (the *_stack builders). Keep the old
-    # meaning dead: a holdout importing the context types from here must still
-    # fail loudly, while the assembly stacks answer at their new address.
-    import raven.core
-
-    assert not hasattr(raven.core, "AssembledContext")
-    assert not hasattr(raven.core, "TokenBudget")
-    from raven.core.plugin_stack import build_plugin_registry  # noqa: F401
+def test_raven_core_module_is_gone():
+    # The transitional raven.core package was deleted. Any
+    # holdout import should fail loudly so callers update the path.
+    with pytest.raises(ModuleNotFoundError):
+        import raven.core  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
@@ -84,9 +89,7 @@ def test_minimal_token_strategy_subclass():
 # ---------------------------------------------------------------------------
 
 
-def test_token_budget_is_a_plain_shape():
-    import dataclasses
-
+def test_token_budget_threshold():
     b = TokenBudget(
         context_length=100_000,
         reserved_output=8_000,
@@ -94,15 +97,8 @@ def test_token_budget_is_a_plain_shape():
         reserved_system=2_000,
         available_history=86_000,
     )
-    assert dataclasses.is_dataclass(b)
-    assert [f.name for f in dataclasses.fields(b)] == [
-        "context_length",
-        "reserved_output",
-        "reserved_tools",
-        "reserved_system",
-        "available_history",
-    ]
-    assert b.available_history == 86_000
+    assert b.total_reserved == 14_000
+    assert b.threshold == int(86_000 * 0.75)
 
 
 def test_assembled_context_defaults():
@@ -154,10 +150,12 @@ def test_config_safe_defaults():
     # Risky/novel auto-* features must default to OFF so a fresh install
     # behaves like vanilla raven; the baseline retrieval pipeline
     # (context engine, skill_forge retrieval/injection) defaults ON as of R8.
+    assert cfg.context.engine == "unified"
     assert cfg.sentinel.enabled is False
     assert cfg.skill_forge.enabled is True  # R8: retrieval/injection pipeline on by default
     assert cfg.skill_forge.auto_detect is False
     assert cfg.skill_forge.auto_evolve is False
+    assert cfg.token_wise.smart_routing.enabled is False
     # Baseline memory/skill feature layer defaults ON: a
     # fresh install runs the everos memory backend, the SkillForgeRouter, and
     # empty-response recovery. Pinned so a future silent flip gets caught.

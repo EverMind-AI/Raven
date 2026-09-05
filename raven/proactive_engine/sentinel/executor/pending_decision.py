@@ -8,7 +8,7 @@ to). On match, ``mark_consumed`` records the pick.
 
 Backed by ``~/.raven/sentinel/pending_decisions.json`` via the same
 ``JsonStateStore`` abstraction NudgePolicy uses — fcntl-advisory lock so
-TUI + gateway processes don't clobber each other.
+REPL + gateway processes don't clobber each other.
 
 Lifecycle:
     put              — write a new decision; supersedes any prior live

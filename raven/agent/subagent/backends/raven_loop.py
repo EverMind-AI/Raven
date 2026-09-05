@@ -15,7 +15,11 @@ from typing import Any
 from loguru import logger
 
 from raven.agent.subagent import activity
-from raven.agent.subagent.backends.base import IN_SUBAGENT_RUN
+from raven.agent.subagent.backends.base import (
+    IN_SUBAGENT_RUN,
+    SubagentActionAbortedError,
+    SubagentNoAnswerError,
+)
 from raven.agent.subagent.mcp_grant import (
     McpGrant,
     McpSource,
@@ -23,32 +27,16 @@ from raven.agent.subagent.mcp_grant import (
     raven_loop_target,
     resolve_grant,
 )
+from raven.agent.tools.base import SKIPPED_AFTER_BLOCKED_CALL, Continuation
 from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.shell import ExecTool
-from raven.agent.tools.web import WebFetchTool, WebSearchTool, resolve_vendor_key
-from raven.config.live import LiveConfig, exec_extra_deny_patterns
+from raven.agent.tools.web import WebFetchTool, WebSearchTool
 from raven.config.schema import ExecToolConfig
-from raven.contracts.llm_provider import LLMProvider
-from raven.contracts.subagent_backend import SubagentActionAbortedError, SubagentNoAnswerError
-from raven.contracts.tool import SKIPPED_AFTER_BLOCKED_CALL, Continuation
-from raven.memory_engine import filter_by_required_tools
-from raven.providers.streaming import generation_kwargs, stream_llm_call
-from raven.providers.tool_calls import openai_tool_call
+from raven.memory_engine.skill_local.registry import filter_by_required_tools
+from raven.providers.base import LLMProvider
 from raven.security.trust import wrap_untrusted
-from raven.utils.messages import build_assistant_message
-
-_LIVE_CONFIG = LiveConfig()
-
-
-def _live_exec_extra_deny() -> list[str] | None:
-    """The operator's live exec deny extras, shared by every sub-agent run.
-
-    Module-level so the byte-compare cache is warm across runs; the answer is
-    identical to the main loop's reader, which is the point -- a tightened
-    permission gates a delegated shell the same call it gates a direct one.
-    """
-    return exec_extra_deny_patterns(_LIVE_CONFIG)
+from raven.utils.helpers import build_assistant_message
 
 
 def build_subagent_prompt(
@@ -85,7 +73,7 @@ def build_subagent_prompt(
     tools this sub-agent lacks is still withheld.
     """
     from raven.agent.context import ContextBuilder
-    from raven.memory_engine import LocalSkillCatalog
+    from raven.memory_engine.skill_forge import LocalSkillCatalog
 
     # Transient ContextBuilder just for the runtime-context builder; the
     # subagent has no ContextBuilder of its own (and must not start a watcher).
@@ -138,12 +126,9 @@ class RavenLoopBackend:
         agent_home: Path,
         restrict_to_workspace: bool = False,
         exec_config: "ExecToolConfig | None" = None,
-        search_api_key: str | None = None,
+        brave_api_key: str | None = None,
         jina_api_key: str | None = None,
         web_proxy: str | None = None,
-        web_search_provider: str = "serper",
-        web_fetch_provider: str = "jina",
-        web_provider_keys: dict[str, str] | None = None,
         tools_allow: Collection[str] | None = None,
         skills_allow: Collection[str] | None = None,
         mcp_allow: Collection[str] | None = None,
@@ -156,12 +141,9 @@ class RavenLoopBackend:
         self.agent_home = Path(agent_home)
         self.restrict_to_workspace = restrict_to_workspace
         self.exec_config = exec_config or ExecToolConfig()
-        self.search_api_key = search_api_key
+        self.brave_api_key = brave_api_key
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
-        self.web_search_provider = web_search_provider
-        self.web_fetch_provider = web_fetch_provider
-        self.web_provider_keys = web_provider_keys
         # Per-role capability whitelists (playbook roles build one backend per
         # role). None = current full set; [] = none; a list = only those.
         # skills_allow additionally stacks with the tool-based skill filter.
@@ -169,9 +151,6 @@ class RavenLoopBackend:
         self.skills_allow = skills_allow
         self.mcp_allow = list(mcp_allow) if mcp_allow is not None else None
         self.mcp_source: McpSource | None = None
-
-    def _web_key(self, vendor: str) -> str | None:
-        return resolve_vendor_key(vendor, self.web_provider_keys, self.search_api_key, self.jina_api_key)
 
     def set_mcp_source(self, source: McpSource | None) -> None:
         """Late-bind the host MCP view without rebuilding this cached backend."""
@@ -237,6 +216,10 @@ class RavenLoopBackend:
         on_messages: Callable[[list[dict[str, Any]]], None] | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> str:
+        # Deferred: importing raven.agent.loop runs its package init, which pulls
+        # in AgentLoop, which imports this package at module scope.
+        from raven.agent.loop.streaming import generation_kwargs, stream_llm_call
+
         # The spawn's snapshot wins over the pair this backend was built with;
         # see ``SubagentBackend.run``. The constructor pair remains the fallback
         # for callers that drive a backend directly.
@@ -277,10 +260,6 @@ class RavenLoopBackend:
                     path_append=self.exec_config.path_append,
                     executor=executor,
                     extra_deny_patterns=self.exec_config.extra_deny_patterns,
-                    # The same live deny source the main loop's ExecTool reads:
-                    # a tightened permission must gate a delegated shell the
-                    # same call it gates a direct one.
-                    extra_deny_source=_live_exec_extra_deny,
                     extra_allowed_dirs=allowed_dirs,
                     follow_binding=False,
                 )
@@ -290,19 +269,11 @@ class RavenLoopBackend:
         # text ends up in the parent turn. The whitelist stacks on top: a
         # whitelisted web_search without a key is still withheld.
         if allowed("web_search"):
-            search_provider = self.web_search_provider
-            web_search = WebSearchTool(
-                api_key=self._web_key(search_provider), proxy=self.web_proxy, provider=search_provider
-            )
+            web_search = WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy)
             if web_search.api_key:
                 tools.register(web_search)
         if allowed("web_fetch"):
-            fetch_provider = WebFetchTool.effective_provider(
-                self.web_fetch_provider, self._web_key(self.web_fetch_provider)
-            )
-            tools.register(
-                WebFetchTool(api_key=self._web_key(fetch_provider), proxy=self.web_proxy, provider=fetch_provider)
-            )
+            tools.register(WebFetchTool(api_key=self.jina_api_key, proxy=self.web_proxy))
 
         # A resumed instance brings its own history, system prompt included;
         # rebuilding the prompt here would append a second system turn. A
@@ -355,7 +326,7 @@ class RavenLoopBackend:
             # land here -- a streamed reply costs the same as a waited-for one.
             activity.note_usage(response.usage)
             if response.has_tool_calls:
-                tool_call_dicts = [openai_tool_call(tc) for tc in response.tool_calls]
+                tool_call_dicts = [tc.to_openai_tool_call() for tc in response.tool_calls]
                 messages.append(
                     build_assistant_message(
                         response.content or "",

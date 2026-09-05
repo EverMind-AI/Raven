@@ -8,6 +8,6 @@ RoutineAggregator + RoutineStore) and the daily task-discovery
 scanner (TaskDiscoverer + matching prompt).
 
 Re-exported from ``raven.proactive_engine.sentinel.__init__`` so
-the canonical import paths (``PlannerContextAssembler``, ``RoutineLearner``
+the canonical import paths (``ContextAssembler``, ``RoutineLearner``
 etc) still resolve via the parent package.
 """

@@ -22,7 +22,7 @@ reachable from the page instead of being a switch nothing acts on. Where a
 gateway already holds the instance lock (channels there, page separate --
 ``gateway.page.enabled = false``), the child is `serve` instead, since a second
 gateway cannot start at all; the page then reaches those adapters over
-``gateway.live_probe``. A page whose engine is gone is worse than one that never opened -- the tab
+``channels.live_probe``. A page whose engine is gone is worse than one that never opened -- the tab
 is still there, still looks live, and every send fails. `raven web --stop` is how
 you end it, and `--foreground` is the old behaviour for someone debugging.
 
@@ -46,7 +46,6 @@ from typing import Optional
 
 import typer
 
-from raven.rpc.serve_control import SERVE
 from raven.utils import asyncio_runner as bounded_asyncio
 
 # The repository's source tree, and the copy inside an installed wheel. The two
@@ -59,7 +58,7 @@ _PACKAGED_UI_DIST = Path(__file__).resolve().parent.parent / "ui" / "dist"
 SERVED_PAGE_SURFACE = "page"
 """What this host calls itself in a trace. See ``raven.tracing.set_surface``.
 
-Not "web": that name belonged to the retired web channel, a different front end on its
+Not "web": that name belongs to ``raven/web_rpc``, a different front end on its
 own channel, and two different things under one label is worse than no label.
 """
 
@@ -148,26 +147,81 @@ def _write_serve_state(port: int, token: str, cookie: str = "") -> Optional[Path
     instance. ``cookie`` is what keeps an open tab signed in across a restart;
     see :func:`adopt_stored_cookie`.
 
-    The mode is applied at the temp file's creation, not by a chmod afterwards:
-    writing the token first and narrowing the mode second leaves it
-    world-readable for the span in between, which is exactly long enough for
-    anything watching the directory. ``atomic_replace(mode=0o600)`` holds that
-    guarantee and additionally makes the swap tear-proof.
+    The mode is applied by ``os.open``, not by a chmod afterwards: writing the
+    token first and narrowing the mode second leaves it world-readable for the
+    span in between, which is exactly long enough for anything watching the
+    directory.
     """
     import json
     import os
 
-    from raven.utils.atomic_io import atomic_replace
-
     try:
         path = _state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
         state: dict[str, object] = {"port": port, "token": token, "pid": os.getpid()}
         if cookie:
             state["cookie"] = cookie
-        atomic_replace(path, json.dumps(state), mode=0o600)
+        payload = json.dumps(state)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, payload.encode("utf-8"))
+        finally:
+            os.close(fd)
+        # An existing file keeps its old mode through O_CREAT; narrow it too.
+        os.chmod(path, 0o600)
         return path
     except OSError:
         return None
+
+
+class _ServeControl:
+    """What a running gateway exposes to handlers that must restart it.
+
+    ``system.upgrade`` needs four things the RPC layer cannot know on its own:
+    which port to come back on, which shared secret and which browser session
+    cookie to keep (an open browser holds the cookie, and a relauncher holds the
+    token -- carrying only one of them would sign somebody out), and a way to end
+    the serve loop *after* its reply has been flushed.
+    """
+
+    def __init__(self) -> None:
+        self.port: Optional[int] = None
+        self.token: Optional[str] = None
+        self.cookie: Optional[str] = None
+        self._stop: Optional[asyncio.Event] = None
+        self.hosted_by_gateway = False
+
+    def arm(self, port: int, token: str, cookie: str, stop: asyncio.Event) -> None:
+        self.port, self.token, self.cookie, self._stop = port, token, cookie, stop
+
+    def arm_hosted(self, port: int, token: str, cookie: str) -> None:
+        """The gateway hosts the page: record the endpoint facts, no stop event.
+
+        ``system.upgrade``'s restart flow replaces a `raven serve` process with
+        another `raven serve`; ending the gateway's loop that way would drop the
+        IM channels and bring back the wrong process. So a hosted page carries
+        no shutdown handle, and upgrade refuses with its own reason instead
+        (see ``raven.rpc.methods.system.system_upgrade``).
+        """
+        self.port, self.token, self.cookie = port, token, cookie
+        self.hosted_by_gateway = True
+
+    def disarm(self) -> None:
+        self.port = self.token = self.cookie = self._stop = None
+        self.hosted_by_gateway = False
+
+    @property
+    def running(self) -> bool:
+        return self._stop is not None
+
+    def request_shutdown(self) -> bool:
+        if self._stop is None:
+            return False
+        self._stop.set()
+        return True
+
+
+SERVE = _ServeControl()
 
 
 _UPDATE_FIRST_CHECK_S = 90.0
@@ -215,7 +269,7 @@ def _update_poll_seconds() -> float:
     file appearing or being deleted, and a resident gateway that outlives the
     change should follow it without a restart.
     """
-    from raven.updates import beta_channel
+    from raven.cli import beta_channel
 
     return _UPDATE_POLL_BETA_S if beta_channel.is_active() else _UPDATE_POLL_STABLE_S
 
@@ -249,7 +303,7 @@ async def _announce_updates(broadcast, stop: asyncio.Event) -> None:
     """
     from importlib import metadata
 
-    from raven.updates.update_notice import Checked, check_now
+    from raven.cli.update_notice import Checked, check_now
 
     try:
         current = metadata.version("raven")
@@ -286,11 +340,8 @@ async def _serve_main(port: int, open_browser: bool) -> None:
     from aiohttp import web
     from loguru import logger
 
-    from raven.cli._console_feature import register_console_feature
     from raven.rpc.bootstrap import build_rpc_stack
     from raven.rpc.transports.ws import WsGateway, build_app, pick_port
-
-    register_console_feature()
 
     # Declared before anything can emit a span. The page runs on the terminal's
     # channel by design (one session pool), so `channel.id` cannot tell the two
@@ -334,7 +385,7 @@ async def _serve_main(port: int, open_browser: bool) -> None:
     # `raven tui` did this before, so someone who only ever runs the gateway
     # never learned a newer version existed (see cli/update_notice.py).
     try:
-        from raven.updates.update_notice import maybe_refresh_async
+        from raven.cli.update_notice import maybe_refresh_async
 
         maybe_refresh_async()
     except Exception as exc:  # never let a version check keep the gateway down
@@ -405,7 +456,7 @@ def _refuse_incomplete_install() -> None:
     """
     import time
 
-    from raven.updates.install_guard import inspect_install
+    from raven.cli._install_guard import inspect_install
 
     fault = inspect_install()
     if fault is None:
@@ -522,7 +573,7 @@ def _gateway_hosted_page() -> Optional[tuple[int, str]]:
     import json
     import time
 
-    from raven.gateway.lock import read_status
+    from raven.cli._gateway_lock import read_status
 
     status = read_status(now=time.time())
     if status is None or status.pid <= 0:
@@ -572,15 +623,15 @@ respawning forever is worse than one that stopped and said why."""
 
 
 def _web_state_path() -> Path:
-    from raven.config.loader import raven_home
+    import os
 
-    return raven_home() / "web.json"
+    return Path(os.environ.get("RAVEN_HOME", Path.home() / ".raven")) / "web.json"
 
 
 def _web_log_path() -> Path:
-    from raven.config.loader import raven_home
+    import os
 
-    return raven_home() / "web.log"
+    return Path(os.environ.get("RAVEN_HOME", Path.home() / ".raven")) / "web.log"
 
 
 def _write_web_state(port: int) -> None:
@@ -593,10 +644,10 @@ def _write_web_state(port: int) -> None:
     import json
     import os
 
-    from raven.utils.atomic_io import atomic_replace
-
     try:
-        atomic_replace(_web_state_path(), json.dumps({"pid": os.getpid(), "port": port}))
+        path = _web_state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"pid": os.getpid(), "port": port}), encoding="utf-8")
     except OSError as exc:
         typer.echo(f"warning: could not record the supervisor at {_web_state_path()}: {exc}")
 
@@ -645,7 +696,7 @@ def _gateway_holds_the_lock() -> bool:
     import time
 
     try:
-        from raven.gateway.lock import read_status
+        from raven.cli._gateway_lock import read_status
 
         return read_status(time.time()) is not None
     except Exception:
@@ -671,7 +722,7 @@ def _gateway_argv(port: int) -> list[str]:
     run: a second gateway exits on the lock, and a supervisor would spend its
     crash budget discovering that. ``gateway.page.enabled = false`` is a
     supported way to run -- channels in the gateway, page separate -- and in it
-    the page reaches the adapters over ``gateway.live_probe``, which finds the
+    the page reaches the adapters over ``channels.live_probe``, which finds the
     incumbent through the same lock. So this is not a downgrade: it is the shape
     that configuration asked for.
 

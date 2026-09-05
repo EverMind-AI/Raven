@@ -26,7 +26,7 @@ class CronPayload:
     message: str = ""
     channel: str | None = None  # e.g. "whatsapp"
     to: str | None = None  # e.g. phone number
-    # Sentinel-coordination tag: when set, this cron fire updates
+    # Sentinel-coordination tag (F-G): when set, this cron fire updates
     # the shared NudgePolicy ledger (topic_fired_at + record_dispatched)
     # so the L3 Sentinel's later proactive ticks skip the same topic
     # instead of double-nudging. Set by the LLM when creating crons
@@ -46,10 +46,6 @@ class CronPayload:
     # land in the pane the operator is already looking at.
     direct_agent: str | None = None
     direct_handle: str | None = None
-    # Keyed-wake resilience: fire this past-due one-shot once at startup
-    # instead of dropping it. Only the keyed-wake verbs set it; a plain
-    # reminder keeps the documented drop-plus-notice startup behavior.
-    fire_missed: bool = False
 
 
 @dataclass

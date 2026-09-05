@@ -262,7 +262,7 @@ class TestAnAcpRowCanReplaceTheSeed:
         """
         cfg = tmp_path / "instance" / "config.json"
         monkeypatch.setenv("RAVEN_HOME", "/srv/raven")
-        monkeypatch.setattr("raven.home._current_config_path", cfg)
+        monkeypatch.setattr("raven.config.loader._current_config_path", cfg)
         monkeypatch.setattr("raven.agent.subagent.builtin_agents.host_raven_acp_command", lambda: "/usr/bin/raven acp")
 
         merged = merge_builtin_seeds([self._acp()])
@@ -272,7 +272,7 @@ class TestAnAcpRowCanReplaceTheSeed:
 
     def test_a_host_reading_its_own_homes_config_adds_no_flag(self, monkeypatch) -> None:
         monkeypatch.setenv("RAVEN_HOME", "/srv/raven")
-        monkeypatch.setattr("raven.home._current_config_path", Path("/srv/raven/config.json"))
+        monkeypatch.setattr("raven.config.loader._current_config_path", Path("/srv/raven/config.json"))
         monkeypatch.setattr("raven.agent.subagent.builtin_agents.host_raven_acp_command", lambda: "/usr/bin/raven acp")
 
         merged = merge_builtin_seeds([self._acp()])
@@ -285,7 +285,7 @@ class TestAnAcpRowCanReplaceTheSeed:
         from raven.config.schema import ThirdPartyAcpSubagentConfig
 
         monkeypatch.setenv("RAVEN_HOME", "/srv/raven")
-        monkeypatch.setattr("raven.home._current_config_path", tmp_path / "config.json")
+        monkeypatch.setattr("raven.config.loader._current_config_path", tmp_path / "config.json")
         row = ThirdPartyAcpSubagentConfig.model_validate(
             {"name": GENERIC_AGENT, "kind": "acp", "command": "custom acp"}
         )
@@ -303,7 +303,7 @@ class TestAnAcpRowCanReplaceTheSeed:
         from raven.config.schema import ThirdPartyAcpSubagentConfig
 
         monkeypatch.delenv("RAVEN_HOME", raising=False)
-        monkeypatch.setattr("raven.home._current_config_path", tmp_path / "host" / "config.json")
+        monkeypatch.setattr("raven.config.loader._current_config_path", tmp_path / "host" / "config.json")
         monkeypatch.setattr("raven.agent.subagent.builtin_agents.host_raven_acp_command", lambda: "/usr/bin/raven acp")
         row = ThirdPartyAcpSubagentConfig.model_validate(
             {"name": GENERIC_AGENT, "kind": "acp", "command": "", "env": {"RAVEN_HOME": "/child-home"}}
@@ -323,7 +323,7 @@ class TestAnAcpRowCanReplaceTheSeed:
         from raven.config.schema import ThirdPartyAcpSubagentConfig
 
         monkeypatch.delenv("RAVEN_HOME", raising=False)
-        monkeypatch.setattr("raven.home._current_config_path", None)
+        monkeypatch.setattr("raven.config.loader._current_config_path", None)
         monkeypatch.setattr("raven.agent.subagent.builtin_agents.host_raven_acp_command", lambda: "/usr/bin/raven acp")
         row = ThirdPartyAcpSubagentConfig.model_validate(
             {"name": GENERIC_AGENT, "kind": "acp", "command": "", "env": {"RAVEN_HOME": "/child-home"}}
@@ -336,7 +336,7 @@ class TestAnAcpRowCanReplaceTheSeed:
     def test_a_config_path_with_a_space_stays_one_argv_token(self, monkeypatch, tmp_path) -> None:
         cfg = tmp_path / "my configs" / "config.json"
         monkeypatch.setenv("RAVEN_HOME", "/srv/raven")
-        monkeypatch.setattr("raven.home._current_config_path", cfg)
+        monkeypatch.setattr("raven.config.loader._current_config_path", cfg)
         monkeypatch.setattr("raven.agent.subagent.builtin_agents.host_raven_acp_command", lambda: "/usr/bin/raven acp")
 
         merged = merge_builtin_seeds([self._acp()])

@@ -21,7 +21,6 @@ from raven.agent.subagent_memory import (
     trace_session_id,
 )
 from raven.config.schema import SubagentEverosConfig
-from tests._everos_presence import everos_plugin_absent
 
 
 class _MockEverOS:
@@ -737,32 +736,6 @@ class TestPrimeFromTurn:
                 turn=[{"role": "system", "content": "dropped"}],
                 client=client,
             )
-        assert landed is False
-        assert calls == 0
-
-    @pytest.mark.asyncio
-    async def test_a_missing_plugin_is_a_status_not_a_crash(self) -> None:
-        """Priming needs the plugin's message shapes; reading back does not.
-
-        The record this returns to says ``unavailable``, which is the truth. A
-        traceback here would instead take down a background writer nobody asked
-        to be blocking.
-        """
-        calls = 0
-
-        def _handler(request: httpx.Request) -> httpx.Response:
-            nonlocal calls
-            calls += 1
-            return httpx.Response(200, json={})
-
-        with everos_plugin_absent():
-            async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as client:
-                landed = await prime_from_turn(
-                    identity=_identity(source="trace", user_id="liv", agent_id="coder"),
-                    session_id="trace:Coder:c1",
-                    turn=[{"role": "user", "content": "hi"}],
-                    client=client,
-                )
         assert landed is False
         assert calls == 0
 

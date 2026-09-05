@@ -978,7 +978,7 @@ Add the static resolver and the accessor:
         return self._everos_identities.get(agent or "")
 ```
 
-In `add_third_party_subagent`, alongside the existing `backends` / `meta` build
+In `set_third_party_subagents`, alongside the existing `backends` / `meta` build
 (the identity map is rebuilt with them so a hot config change applies to it too):
 
 ```python
@@ -1315,12 +1315,12 @@ Add to the `Raven-Code` entry in `~/.raven/config.json` via the supported API
 
 ```python
 uv run python -c "
-from raven.config.update_subagents import get_agents, set_agents
-entries = get_agents()
+from raven.config.update_subagents import get_third_party_subagents, set_third_party_subagents
+entries = get_third_party_subagents()
 for e in entries:
     if e['name'] == 'Raven-Code':
         e['everos'] = {'userId': 'raven-code', 'agentId': 'raven-code'}
-set_agents(entries)
+set_third_party_subagents(entries)
 print('ok')
 "
 ```

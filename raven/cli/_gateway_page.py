@@ -92,8 +92,8 @@ async def mount_page(agent_loop: Any, preferred_port: int) -> PageMount | None:
     from aiohttp import web
     from loguru import logger
 
-    from raven.cli._console_feature import register_console_feature
     from raven.cli.serve_commands import (
+        SERVE,
         _announce_updates,
         _write_serve_state,
         adopt_stored_cookie,
@@ -101,11 +101,9 @@ async def mount_page(agent_loop: Any, preferred_port: int) -> PageMount | None:
         resolve_ui_dist,
     )
     from raven.rpc.bootstrap import build_rpc_stack
-    from raven.rpc.serve_control import SERVE
     from raven.rpc.spine import RpcOutlet
     from raven.rpc.transports.ws import WsGateway, build_app, pick_port
 
-    register_console_feature()
     owner = await _standalone_serve_owner()
     if owner is not None:
         owner_pid, owner_port = owner
@@ -145,7 +143,7 @@ async def mount_page(agent_loop: Any, preferred_port: int) -> PageMount | None:
     SERVE.arm_hosted(bound_port, ws_gateway.session_token, ws_gateway.session_cookie)
 
     try:
-        from raven.updates.update_notice import maybe_refresh_async
+        from raven.cli.update_notice import maybe_refresh_async
 
         maybe_refresh_async()
     except Exception as exc:

@@ -6,7 +6,7 @@
 //
 // What gets emitted:
 //   - All `components/schemas/*` (SessionInfo, SessionMessage, McpServerInfo,
-//     McpToolInfo, SkillInfo, ModelInfo, TurnUsage, CliResult, StubResult,
+//     McpToolInfo, SkillInfo, ModelInfo, UsageSnapshot, CliResult, StubResult,
 //     all per-variant *Event types, plus the TurnEvent discriminated union)
 //   - One `<MethodName>Params` + `<MethodName>Result` interface per RPC method
 //     (37 methods × 2 = 74 method-scoped types)

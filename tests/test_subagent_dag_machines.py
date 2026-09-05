@@ -22,14 +22,6 @@ import pytest
 from raven.agent.subagent import dag_machines as _machines
 
 
-@pytest.fixture(autouse=True)
-def _empty_config_roster(monkeypatch):
-    """Pin the config roster empty: these tests drive the seed-manifest lane
-    unless a test installs rows of its own, and the developer machine's real
-    config must never leak into them."""
-    monkeypatch.setattr(_machines, "_config_rows", lambda: [])
-
-
 @pytest.fixture
 def oncall_flagged(monkeypatch):
     """Raven-Oncall's manifest claims machines; nobody else's does."""
@@ -116,7 +108,7 @@ def test_an_agent_whose_manifest_claims_nothing_refuses_nothing(oncall_flagged, 
 def test_a_manifest_that_cannot_be_read_refuses_nothing(monkeypatch, registry):
     from raven.agent.subagent import vendored_agents
 
-    monkeypatch.setattr(vendored_agents, "product_folder", lambda agent: None)
+    monkeypatch.setattr(vendored_agents, "vendored_folder", lambda agent: None)
     registry([])
 
     assert _machines.machineless(["Raven-Oncall"]) is None
@@ -124,12 +116,12 @@ def test_a_manifest_that_cannot_be_read_refuses_nothing(monkeypatch, registry):
 
 @pytest.mark.parametrize("spelling", ["runsOnMachines", "runs_on_machines"])
 def test_the_flag_is_read_off_the_manifest_in_either_spelling(monkeypatch, tmp_path, spelling):
-    """conftest points ``agents_root`` at nothing, so the folder is stubbed;
+    """conftest points ``subagents_root`` at nothing, so the folder is stubbed;
     what this pins is the read itself -- both manifest spellings count."""
     folder = tmp_path / "raven-oncall"
     folder.mkdir()
     (folder / "subagent.json").write_text(json.dumps({"name": "Raven-Oncall", spelling: True}), encoding="utf-8")
-    monkeypatch.setattr("raven.agent.subagent.vendored_agents.product_folder", lambda agent, root=None: folder)
+    monkeypatch.setattr("raven.agent.subagent.vendored_agents.vendored_folder", lambda agent, root=None: folder)
 
     assert _machines.runs_on_machines("Raven-Oncall") is True
 
@@ -138,7 +130,7 @@ def test_a_manifest_without_the_flag_claims_nothing(monkeypatch, tmp_path):
     folder = tmp_path / "raven-code"
     folder.mkdir()
     (folder / "subagent.json").write_text(json.dumps({"name": "Raven-Code"}), encoding="utf-8")
-    monkeypatch.setattr("raven.agent.subagent.vendored_agents.product_folder", lambda agent, root=None: folder)
+    monkeypatch.setattr("raven.agent.subagent.vendored_agents.vendored_folder", lambda agent, root=None: folder)
 
     assert _machines.runs_on_machines("Raven-Code") is False
 
@@ -172,7 +164,7 @@ class _Node:
 
 GPU = {
     "id": "conn_gpu",
-    "display_name": "GPU box A",
+    "display_name": "GPU机器",
     "kind": "gpu",
     "device": "2 x A800-80GB",
     "memory": "463 GB",
@@ -258,7 +250,7 @@ def test_two_machines_in_one_graph_are_both_told_to_everyone(monkeypatch):
     told = _machines.with_facts(nodes, verdict(GPU, CPU))
 
     for node in told:
-        assert "GPU box A" in node.prompt_template and "CPU box" in node.prompt_template
+        assert "GPU机器" in node.prompt_template and "CPU box" in node.prompt_template
 
 
 def test_two_rows_behind_one_id_strand_the_graph(monkeypatch, registry):
@@ -284,41 +276,3 @@ def test_whitespace_equivalent_duplicate_ids_also_strand_the_graph(monkeypatch, 
     stranded = _machines.machineless(["Raven-Oncall"])
 
     assert stranded is not None and stranded.usable == 0
-
-
-def test_the_config_roster_row_is_the_first_truth(monkeypatch):
-    """[C1] The flag must survive its vendored folder's retirement: a config
-    row is enough on its own, with no folder anywhere."""
-    monkeypatch.setattr(_machines, "_config_rows", lambda: [{"name": "Raven-Oncall", "runsOnMachines": True}])
-    monkeypatch.setattr("raven.agent.subagent.vendored_agents.product_folder", lambda agent, root=None: None)
-
-    assert _machines.runs_on_machines("Raven-Oncall") is True
-
-
-def test_a_named_config_row_overrides_the_seed_manifest(monkeypatch, tmp_path):
-    """A row that names the agent is authoritative in both directions -- a
-    False in config silences the check even while a stale folder claims True."""
-    folder = tmp_path / "raven-oncall"
-    folder.mkdir()
-    (folder / "subagent.json").write_text(
-        json.dumps({"name": "Raven-Oncall", "runsOnMachines": True}), encoding="utf-8"
-    )
-    monkeypatch.setattr("raven.agent.subagent.vendored_agents.product_folder", lambda agent, root=None: folder)
-    monkeypatch.setattr(_machines, "_config_rows", lambda: [{"name": "Raven-Oncall", "runsOnMachines": False}])
-
-    assert _machines.runs_on_machines("Raven-Oncall") is False
-
-
-def test_an_unreadable_config_roster_still_reaches_the_seed(monkeypatch, tmp_path):
-    def _boom():
-        raise OSError("config unreadable")
-
-    folder = tmp_path / "raven-oncall"
-    folder.mkdir()
-    (folder / "subagent.json").write_text(
-        json.dumps({"name": "Raven-Oncall", "runsOnMachines": True}), encoding="utf-8"
-    )
-    monkeypatch.setattr(_machines, "_config_rows", _boom)
-    monkeypatch.setattr("raven.agent.subagent.vendored_agents.product_folder", lambda agent, root=None: folder)
-
-    assert _machines.runs_on_machines("Raven-Oncall") is True

@@ -98,10 +98,6 @@ SECRET_SLOTS = {
     "RESEARCH_ANYSEARCH_API_KEY": ("tools", "web", "providers", "anysearch", "apiKey"),
     "RESEARCH_SERPAPI_API_KEY": ("tools", "web", "providers", "serpapi", "apiKey"),
     "RESEARCH_JINA_API_KEY": ("tools", "web", "providers", "jina", "apiKey"),
-    "RESEARCH_TAVILY_API_KEY": ("tools", "web", "providers", "tavily", "apiKey"),
-    "RESEARCH_EXA_API_KEY": ("tools", "web", "providers", "exa", "apiKey"),
-    "RESEARCH_BRAVE_API_KEY": ("tools", "web", "providers", "brave", "apiKey"),
-    "RESEARCH_FIRECRAWL_API_KEY": ("tools", "web", "providers", "firecrawl", "apiKey"),
 }
 
 # Where the same credential sits in a config on the pre-vendor layout. The host
@@ -136,21 +132,14 @@ SEARCH_PROVIDERS = {
     "serper": ("SERPER_API_KEY", "RESEARCH_SERPER_API_KEY"),
     "anysearch": ("ANYSEARCH_API_KEY", "RESEARCH_ANYSEARCH_API_KEY"),
     "serpapi": ("SERPAPI_API_KEY", "RESEARCH_SERPAPI_API_KEY"),
-    "tavily": ("TAVILY_API_KEY", "RESEARCH_TAVILY_API_KEY"),
-    "exa": ("EXA_API_KEY", "RESEARCH_EXA_API_KEY"),
-    "brave": ("BRAVE_API_KEY", "RESEARCH_BRAVE_API_KEY"),
-    "firecrawl": ("FIRECRAWL_API_KEY", "RESEARCH_FIRECRAWL_API_KEY"),
 }
 
-# The third element is whether the backend needs a key to read a page. Jina
-# does not - it works at a lower rate limit without one - which is why `web_fetch`
-# has always been offered on a bare checkout and must keep being offered.
+# The third element is whether the backend can read a page without a key. Jina
+# can, at a lower rate limit, which is why `web_fetch` has always been offered
+# on a bare checkout and must keep being offered.
 FETCH_PROVIDERS = {
     "jina": ("JINA_API_KEY", "RESEARCH_JINA_API_KEY", False),
     "anysearch": ("ANYSEARCH_API_KEY", "RESEARCH_ANYSEARCH_API_KEY", True),
-    "tavily": ("TAVILY_API_KEY", "RESEARCH_TAVILY_API_KEY", True),
-    "exa": ("EXA_API_KEY", "RESEARCH_EXA_API_KEY", True),
-    "firecrawl": ("FIRECRAWL_API_KEY", "RESEARCH_FIRECRAWL_API_KEY", True),
 }
 
 # Everything the runtime persists - transcripts above all - lands here rather
@@ -432,31 +421,6 @@ def render_config(source: Path, mode: str | None = None) -> Path:
                 f"provider in the host raven"
             )
         log(f"[run] llm: inherited from {HOST_CONFIG} ({taken}); tuned for {recommended_llm()}")
-
-    # The vendor choice inherits as well, where this folder's config leaves it
-    # unset: the host wizard is where a user picks a search vendor and a page
-    # reader, and a research run should search the way its host does unless
-    # its own config says otherwise. Only a vendor this checkout can serve is
-    # taken, so a host ahead of the fork cannot select a backend that is not here.
-    # The host tolerates a keyed reader with no key by falling back to Jina; the
-    # gates below refuse it. So a host choice whose key does not resolve here
-    # is not copied either, and this checkout's default runs instead of a
-    # launch that exits on a choice the user never made for it.
-    web = config.setdefault("tools", {}).setdefault("web", {})
-    for tool, table in (("search", SEARCH_PROVIDERS), ("fetch", FETCH_PROVIDERS)):
-        section = web.setdefault(tool, {})
-        if section.get("provider"):
-            continue
-        inherited = dig(host, ("tools", "web", tool, "provider"))
-        if inherited not in table:
-            continue
-        row = table[inherited]
-        needs_key = row[2] if tool == "fetch" else True
-        if needs_key and not (vendor_key(web, inherited) or os.environ.get(row[0])):
-            log(f"[run] web {tool}: host selects {inherited!r} but no key resolves here; keeping the default")
-            continue
-        section["provider"] = inherited
-        log(f"[run] web {tool}: provider {inherited!r} inherited from {HOST_CONFIG}")
 
     # After the LLM key, not before: that one is the more basic prerequisite, and
     # a deployment missing both should be told about it first rather than being

@@ -1,7 +1,7 @@
 """Is this request work to run and watch, and does this roster hold the agent for it?
 
-The judgement and its delivery were measured in on the on-call agent. The
-finding that decides
+The judgement and its delivery are ported from the on-call agent's own
+``raven/ops/watched.py``, where both were measured in. The finding that decides
 the shape (2026-08-19, three runs, same task): a request naming a solver on this
 very computer, a budget, and a shared machine was read correctly every time --
 and iteration 1 still went straight to a local shell. The fact placed at the top

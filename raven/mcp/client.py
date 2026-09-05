@@ -10,8 +10,8 @@ import httpx
 from loguru import logger
 
 from raven.agent.tools import media
+from raven.agent.tools.base import Tool, ToolResult
 from raven.agent.tools.registry import ToolRegistry
-from raven.contracts.tool import Tool, ToolResult
 from raven.mcp.naming import MCPToolRef, tool_name
 from raven.sandbox import SandboxInitError
 
@@ -47,8 +47,9 @@ class MCPToolWrapper(Tool):
         """This tool's origin record, for the registry to file at registration.
 
         Deliberately not a lookup table anyone queries: the wrapper holds the
-        pair because it needs it to place the call; the registry holds the one
-        queryable copy, and a public accessor here would be a second.
+        pair because it needs it to place the call, and the one queryable copy
+        lives in the registry. A public accessor that others could read back is
+        how the second source grew last time.
         """
         return MCPToolRef(name=self._name, server=self._server_name, tool=self._original_name)
 
@@ -310,3 +311,36 @@ async def connect_mcp_server(
         registered.append(wrapper.name)
         logger.debug("MCP: registered tool '{}' from server '{}'", wrapper.name, name)
     return Connected(names=registered, session=session, capabilities=handshake.capabilities)
+
+
+async def connect_mcp_servers(
+    mcp_servers: dict,
+    registry: ToolRegistry,
+    stack: AsyncExitStack,
+    executor: "SandboxExecutor | None" = None,
+) -> None:
+    """Connect to configured MCP servers and register their tools.
+
+    One-shot connect-all over a shared stack, and no longer the live path: the
+    agent loop connects through
+    :class:`~raven.mcp.manager.MCPConnectionManager`, which owns one
+    stack per server so servers can be attached and detached while raven runs.
+
+    This helper stays for callers that want one shot over one stack -- scripts
+    and tests. Note it does **not** honour ``enabled``, so it is not a drop-in
+    for the manager.
+    """
+    for name, cfg in mcp_servers.items():
+        try:
+            result = await connect_mcp_server(name, cfg, registry, stack, executor=executor)
+            logger.info("MCP server '{}': connected, {} tools registered", name, len(result.names))
+        except SandboxInitError:
+            # Propagates so the caller surfaces it as a startup error rather
+            # than running with a silently broken MCP server.
+            raise
+        except MCPConfigError as e:
+            logger.warning("MCP server '{}': {}, skipping", name, e)
+        except (Exception, BaseExceptionGroup) as e:
+            # BaseExceptionGroup is raised by anyio task groups (e.g. streamableHttp cancel
+            # scope failures) and is not a subclass of Exception in Python 3.11+.
+            logger.error("MCP server '{}': failed to connect: {}", name, e)

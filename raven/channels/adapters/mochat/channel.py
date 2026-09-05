@@ -21,6 +21,7 @@ from raven.channels.adapters.mochat.transport import SocketTransport
 from raven.channels.base import ChannelBase
 from raven.channels.errors import retryable_http, transient_network
 from raven.config.paths import get_runtime_subdir
+from raven.config.schema import MochatConfig
 
 # notify.* events the socket subscribes to; inbox.append is session-routed,
 # the message.* family is panel-routed.
@@ -39,9 +40,9 @@ class MochatChannel(ChannelBase):
     name = "mochat"
     display_name = "Mochat"
 
-    config: Any
+    config: MochatConfig
 
-    def __init__(self, config: Any):
+    def __init__(self, config: MochatConfig):
         super().__init__(config)
         self._api = MochatAPI(config)
         self._transport = SocketTransport(config, self._socket_handlers())
@@ -522,5 +523,5 @@ class MochatChannel(ChannelBase):
                 await self._api.send_session(target.id, content)
         except Exception as e:
             if retryable_http(e) or transient_network(e):
-                raise  # let the delivery hub back off and retry
+                raise  # let manager._send_with_retry back off and retry
             logger.error("Failed to send Mochat message: {}", e)

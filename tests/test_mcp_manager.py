@@ -8,9 +8,9 @@ from unittest.mock import patch
 
 import pytest
 
+from raven.agent.tools.base import Tool
 from raven.agent.tools.registry import ToolRegistry
 from raven.config.schema import MCPServerConfig
-from raven.contracts.tool import Tool
 from raven.mcp.manager import MCPConnectionManager
 from raven.mcp.naming import MCPToolRef
 from raven.sandbox import SandboxInitError
@@ -194,106 +194,6 @@ async def test_sandbox_init_error_propagates():
     with patch(_PATCH, new=guard):
         with pytest.raises(SandboxInitError):
             await mgr.apply_config({"srv": _cfg(command="mcp-server", url="")})
-
-
-async def test_a_sandbox_guard_surfaces_only_after_every_server_was_attempted():
-    """The guard reaches the caller, but not before the other servers had their turn.
-
-    ``apply_config`` marks every pending server ``connecting`` before it starts,
-    and skips a record that is not ``disconnected`` -- so abandoning the batch on
-    the first failure would park the untried servers there for good. The server
-    that did connect keeps its tools.
-    """
-    reg = ToolRegistry()
-    mgr = MCPConnectionManager(reg)
-    attempted: list[str] = []
-
-    async def connect(name, cfg, registry, stack, executor=None, http_auth=None):
-        attempted.append(name)
-        if name == "stdio_svc":
-            raise SandboxInitError("MCP server 'stdio_svc' uses stdio transport, but the sandbox cannot spawn")
-        full = f"mcp_{name}_a"
-        registry.register(FakeTool(full), origin=MCPToolRef(name=full, server=name, tool="a"))
-        return _connected([full])
-
-    with patch(_PATCH, new=connect):
-        with pytest.raises(SandboxInitError, match="stdio transport"):
-            await mgr.apply_config({"http_svc": _cfg(), "stdio_svc": _cfg(command="mcp-server", url="")})
-
-    assert sorted(attempted) == ["http_svc", "stdio_svc"], "the guard cut the batch short"
-    assert reg.has("mcp_http_svc_a"), "the server that connected before the guard fired lost its tools"
-    assert {s["name"]: s["state"] for s in mgr.status()} == {"http_svc": "connected", "stdio_svc": "error"}
-
-
-async def test_a_failed_transport_does_not_cancel_the_following_server(monkeypatch):
-    """A dying transport is one server's connection error, not the sync's.
-
-    The SDK opens streamableHttp inside an anyio task group. Entered into a
-    stack the caller owns, a transport that dies takes the caller down when that
-    outer stack unwinds -- past every per-server ``except`` -- so one MCP server
-    with an expired credential cost the user the whole answer.
-    ``_mcp_server_connection`` owns the transport, session and handshake as one
-    lifecycle, which is what turns that into this server's error. Driven through
-    the real ``connect_mcp_server`` for that reason: a stub would prove nothing
-    about the lifecycle.
-    """
-    import asyncio
-    from contextlib import asynccontextmanager
-    from types import SimpleNamespace
-
-    import anyio
-    import mcp
-    import mcp.client.streamable_http
-
-    bad, good = "https://bad.example/mcp", "https://good.example/mcp"
-    attempted: list[str] = []
-
-    @asynccontextmanager
-    async def fake_streamable_http_client(url, http_client):
-        attempted.append(url)
-        if url == bad:
-            async with anyio.create_task_group() as group:
-
-                async def fail_transport():
-                    await anyio.sleep(0)
-                    raise RuntimeError("transport failed")
-
-                group.start_soon(fail_transport)
-                yield url, object(), None
-        else:
-            yield url, object(), None
-
-    class FakeSession:
-        def __init__(self, read, write) -> None:
-            self.read = read
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, traceback):
-            return False
-
-        async def initialize(self):
-            if self.read == bad:
-                await asyncio.Event().wait()
-            return SimpleNamespace(capabilities=SimpleNamespace(tools=True))
-
-        async def list_tools(self):
-            return SimpleNamespace(tools=[SimpleNamespace(name="ping", description="", inputSchema={})])
-
-    monkeypatch.setattr(mcp, "ClientSession", FakeSession)
-    monkeypatch.setattr(mcp.client.streamable_http, "streamable_http_client", fake_streamable_http_client)
-
-    reg = ToolRegistry()
-    mgr = MCPConnectionManager(reg)
-    await mgr.apply_config({"bad": _cfg(url=bad), "good": _cfg(url=good)})
-
-    assert sorted(attempted) == [bad, good], "the good server was never reached"
-    assert {s["name"]: s["state"] for s in mgr.status()} == {"bad": "error", "good": "connected"}
-    assert reg.has("mcp_good_ping"), "the good server registered nothing, so containment proves too little"
-    assert asyncio.current_task().cancelling() == 0, "the caller was cancelled by the failed server"
-
-    await mgr.aclose()
 
 
 async def test_disconnect_drop_forgets_record():

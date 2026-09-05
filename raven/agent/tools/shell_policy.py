@@ -941,17 +941,6 @@ class ShellCommandPolicy:
         for name, matcher in surface_approval_families():
             self._approval_matchers.append((name, matcher, True))
 
-    def set_deny_patterns(self, deny_patterns: list[str]) -> None:
-        """Replace the hard-deny set, leaving the approval families alone.
-
-        The two lists change hands at different times: deny patterns follow the
-        operator's config while the process runs, approval families are
-        registered once by the surface -- rebuilding the whole policy for a
-        deny edit would silently drop them. Compiles before assigning, so a
-        bad pattern rejects the edit instead of leaving a half-armed policy.
-        """
-        self._deny_patterns = tuple(re.compile(pattern, re.IGNORECASE) for pattern in deny_patterns)
-
     def register_approval_matcher(self, name: str, matcher: ApprovalMatcher, *, escapes_sandbox: bool = True) -> None:
         """Extend approval classification with a named command-family matcher.
 

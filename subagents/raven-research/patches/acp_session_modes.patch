@@ -1,9 +1,9 @@
-diff --git a/raven/acp/loops.py b/raven/acp/loops.py
+diff --git A/tmp/rv/shipped/raven/acp/loops.py b/raven/acp/loops.py
 new file mode 100644
-index 0000000..29d0f31
+index 0000000..8a88fe0
 --- /dev/null
 +++ b/raven/acp/loops.py
-@@ -0,0 +1,272 @@
+@@ -0,0 +1,265 @@
 +"""One ``AgentLoop`` per ACP session, and the pieces the process shares.
 +
 +The ACP server used to hold a single engine for every session on the
@@ -102,7 +102,6 @@ index 0000000..29d0f31
 +        self._loops: OrderedDict[str, Any] = OrderedDict()
 +        self._tags: dict[str, Any] = {}
 +        self._on_create: list[Callable[[Any], None]] = []
-+        self._on_create: list[Callable[[Any, str], None]] = []
 +        self._busy: Callable[[str], bool] = lambda _conversation: False
 +        self._closing: set[asyncio.Task[None]] = set()
 +
@@ -118,18 +117,12 @@ index 0000000..29d0f31
 +        kwargs.setdefault("session_manager", getattr(loop, "sessions", None))
 +        return cls(lambda _conversation: loop, per_session=False, **kwargs)
 +
-+    def on_create(self, hook: Callable[[Any, str], None]) -> None:
++    def on_create(self, hook: Callable[[Any], None]) -> None:
 +        """Register a hook run on every engine as it is built.
 +
 +        The arming seam: capabilities the client declares once (``ask_user``)
 +        have to reach the engines built after the declaration too, not just the
 +        ones alive when it arrived.
-+
-+        The conversation is passed beside the engine because not every such
-+        capability is per-connection. A session's own MCP servers are held for
-+        the session and bound into whichever engine currently serves it, so the
-+        hook that rebinds them after an eviction has to know which session it is
-+        looking at -- the engine alone cannot say.
 +        """
 +        self._on_create.append(hook)
 +
@@ -175,7 +168,7 @@ index 0000000..29d0f31
 +        logger.info("acp: engine built for session {} ({} resident)", conversation, len(self._loops))
 +        for hook in self._on_create:
 +            try:
-+                hook(loop, conversation)
++                hook(loop)
 +            except Exception:
 +                logger.exception("acp: a session-engine create hook failed")
 +        self._evict_over_cap(keep=conversation)
@@ -277,20 +270,19 @@ index 0000000..29d0f31
 +
 +__all__ = ["DEFAULT_MAX_LOOPS", "AcpLoops", "close_loop"]
 diff --git a/raven/acp/methods.py b/raven/acp/methods.py
-index bf02b81..a7ee105 100644
+index bf02b81..4230f7b 100644
 --- a/raven/acp/methods.py
 +++ b/raven/acp/methods.py
-@@ -20,7 +20,8 @@ Two rules run through the whole file (the main repo's, kept):
+@@ -20,7 +20,7 @@ Two rules run through the whole file (the main repo's, kept):
  
  from __future__ import annotations
  
 -from collections.abc import Callable
 +from collections.abc import Awaitable, Callable
-+from contextlib import AsyncExitStack
  from typing import Any
  from urllib.parse import unquote, urlparse
  
-@@ -38,6 +39,12 @@ from raven.spine import ChatType, Origin, Source, TurnRequest
+@@ -38,6 +38,12 @@ from raven.spine import ChatType, Origin, Source, TurnRequest
  # consuming raven never calls, plus spec surface with no consumer here.
  # Answered with method-not-found -- the same answer an unknown name gets; the
  # set exists so a reader can tell "not built" from "not in the protocol".
@@ -303,7 +295,7 @@ index bf02b81..a7ee105 100644
  UNIMPLEMENTED_METHODS = frozenset(
      {
          "session/list",
-@@ -89,6 +96,11 @@ class AcpMethods:
+@@ -89,6 +95,11 @@ class AcpMethods:
      session loaded through one would be reloaded -- or missed -- by the turn
      that follows. ``None`` (a test without an engine) answers every
      ``session/load`` with -32002, which is honest for a store it cannot see.
@@ -315,13 +307,12 @@ index bf02b81..a7ee105 100644
      """
  
      def __init__(
-@@ -101,12 +113,21 @@ class AcpMethods:
+@@ -101,12 +112,15 @@ class AcpMethods:
          channel: str = "acp",
          question_broker: Any = None,
          arm_ask_user: Callable[[bool], None] | None = None,
 +        on_session_open: Callable[[str], Awaitable[Any]] | None = None,
 +        modes: Any = None,
-+        peek_session_loop: Callable[[str], Any] | None = None,
      ) -> None:
          self._submit = submit
          self._sessions = sessions
@@ -329,15 +320,10 @@ index bf02b81..a7ee105 100644
          self._session_manager = session_manager
          self._channel = channel
 +        self._on_session_open = on_session_open
-+        # Reads the engine currently serving a session without building one.
-+        # The reclaim needs it: hiding a session's tools before their sockets
-+        # close is this layer's one ordering guarantee, and by then the caller
-+        # that is ending the connection has no engine in hand.
-+        self._peek_session_loop = peek_session_loop
          # The ask_user round trip (raven/acp/questions.py). The broker resolves
          # ``_raven/clarify_respond``; ``arm_ask_user`` is the server's seam that
          # binds or unbinds it on the engine's tool, called from initialize with
-@@ -114,6 +135,19 @@ class AcpMethods:
+@@ -114,6 +128,10 @@ class AcpMethods:
          # the server knows the tool, and neither should know the other's half.
          self._question_broker = question_broker
          self._arm_ask_user = arm_ask_user
@@ -345,19 +331,10 @@ index bf02b81..a7ee105 100644
 +        # leaves session/set_mode method-not-found and every session response
 +        # without a ``modes`` object, which is the pre-modes wire byte for byte.
 +        self._modes = modes
-+        # One AsyncExitStack per session that brought MCP servers of its own.
-+        # Held here and not on the engine because the connections belong to the
-+        # session: an engine is evicted between turns (``AcpLoops``) and rebuilt
-+        # on the next one, and a grant that died with it would vanish silently
-+        # from a stateful session that had done nothing wrong.
-+        self._session_mcp: dict[str, Any] = {}
-+        # What each of those sessions is holding, by tool name, so the rebuild
-+        # above can hand the same tools to the new engine without reconnecting.
-+        self._session_mcp_tools: dict[str, dict[str, Any]] = {}
          self.initialized = False
          self.client = ClientCapabilities()
  
-@@ -204,6 +238,8 @@ class AcpMethods:
+@@ -204,6 +222,8 @@ class AcpMethods:
              return await self._session_prompt(params)
          if method == "session/cancel":
              return await self._session_cancel(params)
@@ -366,34 +343,22 @@ index bf02b81..a7ee105 100644
          if method == CLARIFY_RESPOND_METHOD:
              return self._clarify_respond(params)
          if method in UNIMPLEMENTED_METHODS:
-@@ -233,15 +269,18 @@ class AcpMethods:
-         session id, so the client's directory has nothing to bind to. Logged
-         so a client that expected it to matter leaves a trace.
-         """
--        self._refuse_per_session_mcp(params)
-+        servers = self._validated_mcp_servers(params)
-         cwd = params.get("cwd")
-         if isinstance(cwd, str) and cwd.strip():
-             logger.info("acp: session cwd {} noted and ignored; the workspace is fixed at construction", cwd)
+@@ -240,8 +260,9 @@ class AcpMethods:
          chat_id = _new_chat_id()
          session = AcpSession(session_id=f"{self._channel}:{chat_id}", chat_id=chat_id)
          self._sessions.add(session)
-+        # The engine first, because the servers are bound into the registry it
-+        # owns; then the servers, because the client may prompt at once.
-+        await self._adopt_per_session_mcp(session.session_id, servers, await self._open_session(session.session_id))
++        await self._open_session(session.session_id)
          logger.info("acp: session {} created", session.session_id)
 -        return {"sessionId": session.session_id}
 +        return self._with_modes({"sessionId": session.session_id}, session.session_id)
  
      async def _session_load(self, params: dict[str, Any]) -> dict[str, Any]:
          """Reopen a stored session, replaying it as it is loaded.
-@@ -252,11 +291,12 @@ class AcpMethods:
-         :mod:`raven.acp.replay`; continuity for the prompts that follow is the
+@@ -253,10 +274,11 @@ class AcpMethods:
          engine's session manager loading the same key from disk.
          """
--        stored, session = self._reopen(params)
-+        stored, session, servers = self._reopen(params)
-+        await self._adopt_per_session_mcp(session.session_id, servers, await self._open_session(session.session_id))
+         stored, session = self._reopen(params)
++        await self._open_session(session.session_id)
          for update in replay(stored.messages, cwd=None):
              self._emit(protocol.notification("session/update", {"sessionId": session.session_id, "update": update}))
          logger.info("acp: loaded session {} ({} stored message(s))", session.session_id, len(stored.messages))
@@ -402,61 +367,41 @@ index bf02b81..a7ee105 100644
  
      async def _session_resume(self, params: dict[str, Any]) -> dict[str, Any]:
          """Reopen a stored session for its own state, without replaying it.
-@@ -268,11 +308,12 @@ class AcpMethods:
-         way. This is also the method behind ``sessionCapabilities.resume`` --
+@@ -269,8 +291,9 @@ class AcpMethods:
          the key the consuming raven reads as statefulness (plan §6 decision A).
          """
--        _, session = self._reopen(params)
-+        _, session, servers = self._reopen(params)
-+        await self._adopt_per_session_mcp(session.session_id, servers, await self._open_session(session.session_id))
+         _, session = self._reopen(params)
++        await self._open_session(session.session_id)
          logger.info("acp: resumed session {}", session.session_id)
 -        return {}
 +        return self._with_modes({}, session.session_id)
  
--    def _reopen(self, params: dict[str, Any]) -> tuple[Any, AcpSession]:
-+    def _reopen(self, params: dict[str, Any]) -> tuple[Any, AcpSession, dict[str, Any]]:
+     def _reopen(self, params: dict[str, Any]) -> tuple[Any, AcpSession]:
          """The stored session behind ``params`` and its live registry entry.
- 
-         Only ids this channel minted are looked up: the engine's manager also
-@@ -283,7 +324,7 @@ class AcpMethods:
-         session shows a person an empty transcript for a conversation that had
-         one.
-         """
--        self._refuse_per_session_mcp(params)
-+        servers = self._validated_mcp_servers(params)
-         session_id = params.get("sessionId")
-         if not isinstance(session_id, str) or not session_id:
-             raise AcpMethodError(protocol.INVALID_PARAMS, "sessionId is required", {"field": "sessionId"})
-@@ -297,7 +338,27 @@ class AcpMethods:
-         if session is None:
-             session = AcpSession(session_id=session_id, chat_id=session_id[len(prefix) :])
+@@ -299,6 +322,22 @@ class AcpMethods:
              self._sessions.add(session)
--        return stored, session
-+        return stored, session, servers
-+
-+    async def _open_session(self, session_id: str) -> Any:
+         return stored, session
+ 
++    async def _open_session(self, session_id: str) -> None:
 +        """Build the session's engine, or fail the method that opened it.
 +
 +        The registry entry is rolled back on failure: a session that answered
 +        with an error and stayed registered would take a prompt, and the engine
 +        it could not build would be built again halfway through that turn --
 +        exactly the failure this ordering exists to prevent.
-+
-+        Returns the engine so the caller can scope this session's own MCP
-+        servers in the registry it owns. ``None`` where no hook is wired, which
-+        is a surface with no engine to scope anything in.
 +        """
 +        if self._on_session_open is None:
-+            return None
++            return
 +        try:
-+            return await self._on_session_open(session_id)
++            await self._on_session_open(session_id)
 +        except Exception:
 +            self._sessions.remove(session_id)
 +            raise
- 
++
      async def _session_prompt(self, params: dict[str, Any]) -> dict[str, Any]:
          """Run one turn and answer with its stop reason.
-@@ -401,6 +462,45 @@ class AcpMethods:
+ 
+@@ -401,6 +440,45 @@ class AcpMethods:
              self._sessions.settle_future(future, "cancelled")
          return None
  
@@ -502,270 +447,7 @@ index bf02b81..a7ee105 100644
      def _clarify_respond(self, params: dict[str, Any]) -> dict[str, Any]:
          """Resolve a pending ask_user question by requestId or sessionId.
  
-@@ -510,18 +610,181 @@ class AcpMethods:
-             )
-         return session
- 
--    @staticmethod
--    def _refuse_per_session_mcp(params: dict[str, Any]) -> None:
--        # MCP is connected once per process; nothing scopes a server to one
--        # session, and accepting the field would leave a client believing its
--        # tools are available. An empty array is the schema's normal value.
--        servers = params.get("mcpServers")
--        if isinstance(servers, list) and servers:
--            raise AcpMethodError(
--                protocol.INVALID_PARAMS,
--                "per-session MCP servers are not supported; configure MCP servers in raven's own config",
--                {"field": "mcpServers", "count": len(servers)},
-+    def _validated_mcp_servers(self, params: dict[str, Any]) -> dict[str, Any]:
-+        """The servers a session brought, as a config mapping. Empty is the normal value.
-+
-+        Dropped and logged, never refused. The servers a dispatcher attaches are
-+        a capability on top of the task, so one this build cannot honour costs the
-+        session those tools -- it must not cost the session. Answering
-+        ``session/new`` with ``-32602`` instead fails the whole dispatch over an
-+        optional attachment, and the sub-agent never runs at all.
-+
-+        Shape only. Whether this deployment can scope them at all is the
-+        *engine's* answer now that there is one engine per session, and no engine
-+        for this id exists yet at this point -- so that half is refused in
-+        :meth:`_adopt_per_session_mcp`, which runs once the engine is built and
-+        rolls the session back the same way a failed build does.
-+        """
-+        entries = params.get("mcpServers")
-+        if not isinstance(entries, list) or not entries:
-+            return {}
-+        servers: dict[str, Any] = {}
-+        for entry in entries:
-+            try:
-+                name, config = _acp_mcp_config(entry)
-+            except AcpMethodError as exc:
-+                logger.warning("acp: dropping a per-session MCP server: {}", exc)
-+                continue
-+            servers[name] = config
-+        return servers
-+
-+    async def _adopt_per_session_mcp(self, session_key: str, entries: dict[str, Any], agent_loop: Any) -> None:
-+        """Connect the servers a session brought, for that session alone.
-+
-+        The definitions come from whoever dispatched this agent and carry no
-+        credentials: each is a stdio stanza pointing at an endpoint that
-+        dispatcher opened, and the socket's mode is the whole of the boundary. So
-+        there is nothing here to merge into this agent's own config -- the servers
-+        are connected into a registry this session owns and made visible only for
-+        its turns (see ``ToolRegistry.bind_session_tools``).
-+
-+        Scoped even though ``agent_loop`` already serves this session alone: the
-+        one-engine-per-session registry is a build option (``AcpLoops.single``
-+        serves every session from one engine), and the scoping is what keeps that
-+        shape correct rather than an accident of the other one.
-+
-+        A server that fails to connect costs this session its tools and nothing
-+        else. The session is still minted: refusing it would turn one unreachable
-+        server into a sub-agent that cannot answer at all. An engine that cannot
-+        scope them at all is dropped on the same terms and for the same reason --
-+        the servers are a capability on top of the task, and failing the dispatch
-+        over an optional attachment is the worse answer.
-+
-+        Adopting is a replacement, and an empty set is one of the values it can
-+        take: ``session/load`` and ``session/resume`` carry the current dispatch's
-+        server list, not a delta, so a session reopened with none must be left
-+        holding none whatever it held before. Returning early on the empty case
-+        instead left the previous set bound -- the dispatcher had already closed
-+        that dispatch's endpoints, so the next turn was offered tools whose
-+        sockets were gone, which fails at the call rather than at the offer. Hence
-+        the release runs first, unconditionally; ``session/new`` reaches it with a
-+        freshly minted key and nothing to reclaim, which is why it needs no branch
-+        of its own.
-+        """
-+        await self._release_per_session_mcp(session_key, agent_loop)
-+        if not entries:
-+            return
-+        registry = self._per_session_registry(agent_loop)
-+        if registry is None:
-+            logger.warning(
-+                "acp: session {} brought {} MCP server(s) its engine cannot scope; dropping them",
-+                session_key,
-+                len(entries),
-             )
-+            return
-+        from raven.agent.tools.mcp import connect_mcp_servers
-+        from raven.agent.tools.registry import ToolRegistry
-+
-+        held = ToolRegistry()
-+        stack = AsyncExitStack()
-+        await stack.__aenter__()
-+        self._session_mcp[session_key] = stack
-+        try:
-+            # No executor: the endpoint is a unix socket on this host, so the
-+            # bridge command has to run where that socket is.
-+            await connect_mcp_servers(entries, held, stack, executor=None)
-+        except Exception:
-+            logger.exception("acp: connecting session {}'s MCP servers failed", session_key)
-+        tools = {name: tool for name in held.names() if (tool := held.get(name)) is not None}
-+        self._session_mcp_tools[session_key] = tools
-+        registry.bind_session_tools(session_key, tools)
-+        logger.info("acp: session {} brought {} MCP tool(s)", session_key, len(tools))
-+
-+    def rebind_session_mcp(self, agent_loop: Any, session_key: str) -> None:
-+        """Re-scope a session's already-connected servers into a fresh engine.
-+
-+        ``AcpLoops`` evicts the engine of an *idle* session to stay under its
-+        cap and builds a new one on the session's next turn. The connections
-+        survive that -- they are held here, keyed by session -- but the binding
-+        does not: it lived in the registry that went with the old engine. Without
-+        this the tools disappear between two turns of a stateful session that did
-+        nothing wrong, and the turn reports no tool rather than an error.
-+
-+        Nothing to do for a session that brought none, which is every session on
-+        a connection whose dispatcher configured no per-session servers.
-+        """
-+        tools = self._session_mcp_tools.get(session_key)
-+        if not tools:
-+            return
-+        registry = self._per_session_registry(agent_loop)
-+        if registry is None:
-+            return
-+        registry.bind_session_tools(session_key, tools)
-+        logger.info("acp: session {} kept its {} MCP tool(s) across an engine rebuild", session_key, len(tools))
-+
-+    async def _release_per_session_mcp(self, session_key: str, agent_loop: Any = None) -> None:
-+        """Drop one session's MCP servers: hidden first, then disconnected.
-+
-+        Hidden first because the two failures are not symmetric -- a turn that
-+        finds a tool whose connection is gone reports a broken tool call, while a
-+        turn that cannot see the tool asks for something else.
-+
-+        ``agent_loop`` is the engine currently serving the session, when the
-+        caller has one -- a re-adopt does, and its binding is the one that has to
-+        come off. :meth:`aclose` does not, so the engine is peeked instead:
-+        the connection ending is not the process ending, and a turn still in
-+        flight must not be left holding a tool whose socket just closed.
-+
-+        Idempotent. Reached from two places and only two, because this surface
-+        has no ``session/close`` and no ``session/delete``: a re-adopt, and
-+        :meth:`aclose` when the connection ends. A session therefore holds its
-+        servers for the life of the connection, which is the same lifetime the
-+        session itself has here.
-+        """
-+        if agent_loop is None and self._peek_session_loop is not None:
-+            agent_loop = self._peek_session_loop(session_key)
-+        registry = self._per_session_registry(agent_loop) if agent_loop is not None else None
-+        if registry is not None:
-+            registry.release_session_tools(session_key)
-+        self._session_mcp_tools.pop(session_key, None)
-+        stack = self._session_mcp.pop(session_key, None)
-+        if stack is None:
-+            return
-+        try:
-+            await stack.aclose()
-+        except (RuntimeError, BaseExceptionGroup):
-+            # The MCP SDK's anyio cancel scopes are noisy when the close lands on
-+            # a different task than the connect did, which is the normal case here.
-+            logger.debug("acp: closing session {}'s MCP servers was noisy", session_key)
-+        except Exception:
-+            logger.exception("acp: closing session {}'s MCP servers failed", session_key)
-+
-+    async def aclose(self) -> None:
-+        """Reclaim every session's MCP servers. Called when the connection ends.
-+
-+        The only reclaim point this surface has, so it is not merely tidy: each
-+        connection a session brought is a subprocess, and nothing else would kill
-+        them. Best-effort per session -- one failure must not cost the rest.
-+        """
-+        for session_key in list(self._session_mcp):
-+            await self._release_per_session_mcp(session_key)
-+
-+    @staticmethod
-+    def _per_session_registry(agent_loop: Any) -> Any:
-+        """The tool registry one engine's session servers can be scoped in, or None.
-+
-+        None says this engine cannot scope them -- a stub loop in a test, or a
-+        registry too old to have the seam -- which is why the field is refused
-+        rather than accepted in that state.
-+
-+        Read off the engine rather than injected, because after the move to one
-+        engine per session there is no connection-wide registry to inject: the
-+        session's tools live in the registry of whichever engine currently serves
-+        it, which is also why they have to be re-bound when that engine is
-+        rebuilt (see :meth:`rebind_session_mcp`).
-+        """
-+        tools = getattr(agent_loop, "tools", None)
-+        return tools if hasattr(tools, "bind_session_tools") else None
- 
-     def _say(self, session: AcpSession, text: str) -> None:
-         self._emit(
-@@ -562,6 +825,69 @@ def _file_uri_to_path(uri: str) -> str | None:
-     return path or None
- 
- 
-+def _acp_mcp_config(entry: Any) -> tuple[str, Any]:
-+    """One ACP ``McpServer`` object as a ``(name, MCPServerConfig)`` pair.
-+
-+    Stdio only, matching what ``mcpCapabilities`` declares: every server a
-+    dispatcher hands a sub-agent projects to a stdio stanza pointing at a host
-+    endpoint, whatever the upstream transport is. An http or sse stanza is
-+    refused rather than connected -- the capability said it would not come, and
-+    honouring it anyway would put the definition (and its credentials) in this
-+    process.
-+    """
-+    from raven.config.schema import MCPServerConfig
-+
-+    if not isinstance(entry, dict):
-+        raise AcpMethodError(
-+            protocol.INVALID_PARAMS, "each mcpServers entry must be an object", {"field": "mcpServers"}
-+        )
-+    name = entry.get("name")
-+    if not isinstance(name, str) or not name:
-+        raise AcpMethodError(protocol.INVALID_PARAMS, "an mcpServers entry needs a name", {"field": "mcpServers.name"})
-+    if entry.get("type") not in (None, "stdio") or entry.get("url"):
-+        raise AcpMethodError(
-+            protocol.INVALID_PARAMS,
-+            "only stdio MCP servers are supported per session; see mcpCapabilities",
-+            {"field": "mcpServers.type", "name": name},
-+        )
-+    command = entry.get("command")
-+    if not isinstance(command, str) or not command:
-+        raise AcpMethodError(
-+            protocol.INVALID_PARAMS,
-+            "a stdio mcpServers entry needs a command",
-+            {"field": "mcpServers.command", "name": name},
-+        )
-+    args = [str(arg) for arg in entry.get("args") or []]
-+    return name, MCPServerConfig(type="stdio", command=command, args=args, env=_acp_env(entry.get("env"), name))
-+
-+
-+def _acp_env(raw: Any, name: str) -> dict[str, str]:
-+    """The ``env`` of a stdio stanza, in either shape the wire uses.
-+
-+    The schema's shape is a list of ``{name, value}`` objects; a mapping is
-+    accepted too because it says the same thing unambiguously and a client that
-+    sends one is not wrong about anything a refusal would teach it.
-+    """
-+    if raw is None:
-+        return {}
-+    if isinstance(raw, dict):
-+        return {str(key): str(value) for key, value in raw.items()}
-+    if isinstance(raw, list):
-+        env: dict[str, str] = {}
-+        for item in raw:
-+            if not isinstance(item, dict) or not isinstance(item.get("name"), str):
-+                raise AcpMethodError(
-+                    protocol.INVALID_PARAMS,
-+                    "each mcpServers env entry must be an object with a name",
-+                    {"field": "mcpServers.env", "name": name},
-+                )
-+            env[item["name"]] = str(item.get("value") or "")
-+        return env
-+    raise AcpMethodError(
-+        protocol.INVALID_PARAMS, "mcpServers env must be a list or an object", {"field": "mcpServers.env", "name": name}
-+    )
-+
-+
- __all__ = [
-     "IGNORED_NOTIFICATIONS",
-     "UNIMPLEMENTED_METHODS",
-diff --git a/raven/acp/modes.py b/raven/acp/modes.py
+diff --git A/tmp/rv/shipped/raven/acp/modes.py b/raven/acp/modes.py
 new file mode 100644
 index 0000000..524d7eb
 --- /dev/null
@@ -968,7 +650,7 @@ index 0000000..524d7eb
 +
 +__all__ = ["AcpModeProfile", "SessionModes", "build_session_modes", "resolve_profiles"]
 diff --git a/raven/acp/server.py b/raven/acp/server.py
-index cfec0fe..de12d62 100644
+index cfec0fe..cddf826 100644
 --- a/raven/acp/server.py
 +++ b/raven/acp/server.py
 @@ -1,12 +1,13 @@
@@ -1047,7 +729,7 @@ index cfec0fe..de12d62 100644
      )
      # The ask_user round trip (questions.py). Built unconditionally -- it is
      # inert until armed -- and armed only from initialize, when the client
-@@ -77,28 +84,64 @@ async def serve(
+@@ -77,27 +84,46 @@ async def serve(
      # registry without ask_user, arms nothing and the handoff stays the
      # transport.
      question_broker = build_question_broker(emit)
@@ -1081,22 +763,7 @@ index cfec0fe..de12d62 100644
 +            _arm_one(agent_loop, enabled)
          logger.info("acp: ask_user round trip {}", "armed" if enabled else "disarmed")
  
-+    # Latched like ``declared`` above: the hook is registered before the methods
-+    # layer exists, because the methods layer is built with ``loops.get`` and the
-+    # engines it builds run this hook.
-+    served: dict[str, Any] = {}
-+
-+    def _on_engine_built(agent_loop: Any, conversation: str) -> None:
-+        _arm_one(agent_loop, declared["ask_user"])
-+        # A session whose engine was evicted between turns keeps its MCP
-+        # connections -- they are held by the methods layer -- but not the
-+        # binding, which went with the old engine's registry. See
-+        # AcpMethods.rebind_session_mcp.
-+        methods_now = served.get("methods")
-+        if methods_now is not None:
-+            methods_now.rebind_session_mcp(agent_loop, conversation)
-+
-+    loops.on_create(_on_engine_built)
++    loops.on_create(lambda agent_loop: _arm_one(agent_loop, declared["ask_user"]))
 +
      methods = AcpMethods(
          submit=scheduler.submit,
@@ -1115,27 +782,9 @@ index cfec0fe..de12d62 100644
          arm_ask_user=arm_ask_user,
 +        on_session_open=loops.get,
 +        modes=modes,
-+        peek_session_loop=loops.peek,
      )
-+    served["methods"] = methods
      logger.info("acp: engine ready on channel {}", channel)
  
-     tasks: set[asyncio.Task[None]] = set()
-@@ -114,6 +157,14 @@ async def serve(
-         # on an answer that can no longer arrive.
-         question_broker.cancel_all()
-         await _drain(sessions, tasks)
-+        # After the drain, so a handler still finishing cannot find its tools
-+        # gone; before the engine teardown, because each of these is a
-+        # subprocess of ours and no other path reclaims them -- this surface has
-+        # no session/close.
-+        try:
-+            await methods.aclose()
-+        except Exception:
-+            logger.exception("acp: reclaiming per-session MCP servers failed")
-         try:
-             await teardown()
-         except Exception:
 diff --git a/raven/cli/acp_commands.py b/raven/cli/acp_commands.py
 index 61de584..0a6fd3f 100644
 --- a/raven/cli/acp_commands.py
@@ -1447,10 +1096,10 @@ index 61de584..0a6fd3f 100644
 +
  __all__ = ["acp_app"]
 diff --git a/raven/config/schema.py b/raven/config/schema.py
-index abd4aa4..0392e10 100644
+index abd4aa4..839ebfb 100644
 --- a/raven/config/schema.py
 +++ b/raven/config/schema.py
-@@ -733,19 +733,145 @@ class GatewayConfig(Base):
+@@ -733,19 +733,140 @@ class GatewayConfig(Base):
      log: GatewayLogConfig = Field(default_factory=GatewayLogConfig)
  
  
@@ -1540,31 +1189,26 @@ index abd4aa4..0392e10 100644
 +    anysearch: WebProviderKey = Field(default_factory=WebProviderKey)
 +    serpapi: WebProviderKey = Field(default_factory=WebProviderKey)
 +    jina: WebProviderKey = Field(default_factory=WebProviderKey)
-+    tavily: WebProviderKey = Field(default_factory=WebProviderKey)
-+    exa: WebProviderKey = Field(default_factory=WebProviderKey)
-+    brave: WebProviderKey = Field(default_factory=WebProviderKey)
-+    firecrawl: WebProviderKey = Field(default_factory=WebProviderKey)
 +
 +
  class WebSearchConfig(Base):
      """Web search tool configuration."""
  
 -    api_key: str = ""  # Serper API key
-+    provider: Literal["serper", "anysearch", "serpapi", "tavily", "exa", "brave", "firecrawl"] = "serper"
++    provider: Literal["serper", "anysearch", "serpapi"] = "serper"
 +    """Which backend ``web_search`` calls. Default keeps the measured wire traffic.
 +
 +    The key itself lives under ``tools.web.providers.<name>``, so switching does
-+    not require re-pasting one and switching back restores the previous. AnySearch,
-+    Tavily, Exa and Firecrawl serve no result offset, which the tool declares to
-+    the saturation rule up front (``paginates``) rather than issuing a request it
-+    cannot serve."""
++    not require re-pasting one and switching back restores the previous. AnySearch
++    serves no page beyond the first, which the tool declares to the saturation
++    rule up front (``paginates``) rather than issuing a request it cannot serve."""
      max_results: int = 5
  
  
 +class WebFetchConfig(Base):
 +    """Web fetch tool configuration."""
 +
-+    provider: Literal["jina", "anysearch", "tavily", "exa", "firecrawl"] = "jina"
++    provider: Literal["jina", "anysearch"] = "jina"
 +    """Which backend ``web_fetch`` reads pages through. Default keeps the
 +    measured wire traffic (``r.jina.ai``, unauthenticated when no key is set).
 +
@@ -1573,7 +1217,7 @@ index abd4aa4..0392e10 100644
 +    27,786 for the same page, because it keeps the navigation chrome Jina strips,
 +    and it carries no publication date. An arm reading pages through it is a
 +    different arm, not the same arm on another vendor."""
-+    fallback: list[Literal["jina", "anysearch", "tavily", "exa", "firecrawl"]] = Field(default_factory=list)
++    fallback: list[Literal["jina", "anysearch"]] = Field(default_factory=list)
 +    """Backends to try, in order, when the selected one fails to return a page.
 +
 +    Empty by default, which is the behaviour every measured run so far had. It
@@ -1598,7 +1242,7 @@ index abd4aa4..0392e10 100644
      corpus_endpoint: str | None = None
      """Route ``web_search`` / ``web_fetch`` at a fixed-corpus retrieval service
      instead of the live web (e.g. ``http://127.0.0.1:8765`` for BrowseComp-Plus).
-@@ -860,6 +986,7 @@ class Config(BaseSettings):
+@@ -860,6 +981,7 @@ class Config(BaseSettings):
      channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
      providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
      gateway: GatewayConfig = Field(default_factory=GatewayConfig)
@@ -1606,12 +1250,12 @@ index abd4aa4..0392e10 100644
      tools: ToolsConfig = Field(default_factory=ToolsConfig)
      routing: RoutingConfig = Field(default_factory=RoutingConfig)
      cron: CronConfig = Field(default_factory=CronConfig)
-diff --git a/tests/test_acp_loops.py b/tests/test_acp_loops.py
+diff --git A/tmp/rv/shipped/tests/test_acp_loops.py b/tests/test_acp_loops.py
 new file mode 100644
-index 0000000..2aad804
+index 0000000..db45a09
 --- /dev/null
 +++ b/tests/test_acp_loops.py
-@@ -0,0 +1,323 @@
+@@ -0,0 +1,312 @@
 +"""The per-session engine registry: isolation, the cap, and the close order."""
 +
 +import asyncio
@@ -1719,28 +1363,17 @@ index 0000000..2aad804
 +async def test_create_hooks_run_on_every_engine_including_later_ones():
 +    loops = _registry()
 +    seen: list[str] = []
-+    loops.on_create(lambda agent_loop, _conversation: seen.append(agent_loop.conversation))
++    loops.on_create(lambda agent_loop: seen.append(agent_loop.conversation))
 +    await loops.get("acp:a")
 +    await loops.get("acp:b")
 +    await loops.get("acp:a")
 +    assert seen == ["acp:a", "acp:b"]
 +
 +
-+async def test_a_create_hook_is_told_which_session_the_engine_serves():
-+    """The engine alone cannot say. A hook that re-scopes something held per
-+    session -- the servers a session brought -- has to be handed the id."""
-+    loops = _registry()
-+    seen: list[tuple[str, str]] = []
-+    loops.on_create(lambda agent_loop, conversation: seen.append((agent_loop.conversation, conversation)))
-+    await loops.get("acp:a")
-+    await loops.get("acp:b")
-+    assert seen == [("acp:a", "acp:a"), ("acp:b", "acp:b")]
-+
-+
 +async def test_a_failing_create_hook_does_not_lose_the_engine():
 +    loops = _registry()
 +
-+    def boom(_agent_loop, _conversation):
++    def boom(_agent_loop):
 +        raise RuntimeError("hook exploded")
 +
 +    loops.on_create(boom)
@@ -1935,7 +1568,7 @@ index 0000000..2aad804
 +    first = await loops.get("acp:a")
 +
 +    assert await loops.get("acp:a") is first
-diff --git a/tests/test_acp_modes.py b/tests/test_acp_modes.py
+diff --git A/tmp/rv/shipped/tests/test_acp_modes.py b/tests/test_acp_modes.py
 new file mode 100644
 index 0000000..91fdc7e
 --- /dev/null

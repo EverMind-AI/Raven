@@ -13,12 +13,17 @@ from typing import Any, NamedTuple
 
 from loguru import logger
 
-from raven.agent.subagent.backends.base import ABORTED_ACTION_RESULT, IN_SUBAGENT_RUN
+from raven.agent.subagent.backends.acp_agent import AcpAgentBackend
+from raven.agent.subagent.backends.base import (
+    ABORTED_ACTION_RESULT,
+    IN_SUBAGENT_RUN,
+    SubagentActionAbortedError,
+    SubagentBackend,
+)
 from raven.agent.subagent.backends.cli_agent import CliAgentBackend
 from raven.agent.subagent.backends.openai_api import OpenAIApiBackend
 from raven.agent.subagent.backends.raven_loop import RavenLoopBackend, build_subagent_prompt
 from raven.agent.subagent.presets import session_mcp_for
-from raven.contracts.subagent_backend import SubagentActionAbortedError, SubagentBackend
 
 
 class AgentMeta(NamedTuple):
@@ -62,7 +67,7 @@ class AgentMeta(NamedTuple):
     modes: tuple[Any, ...] = ()
     """The operating profiles this agent offers, or ``()`` when it offers none.
 
-    ``raven.acp_client.capabilities.AcpMode`` records, measured at registration
+    ``raven.agent.acp.capabilities.AcpMode`` records, measured at registration
     from the agent's own session response -- only the acp transport has them.
     Unlike the three capabilities above these are not a yes/no about the
     transport but a menu the dispatching model picks from, so they reach the
@@ -202,7 +207,7 @@ def acp_snapshot_for(cfg: Any) -> Any:
     the alternative is a capability quietly disappearing with nothing anywhere
     connecting it to the edit that caused it.
     """
-    from raven.acp_client.capabilities import SnapshotStore
+    from raven.agent.acp.capabilities import SnapshotStore
 
     name = getattr(cfg, "name", "") or ""
     try:
@@ -312,8 +317,7 @@ def build_third_party_backend(cfg: Any, *, registry: Any = None, timeout: int | 
             allow_mcp_secrets=cfg.allow_mcp_secrets,
         )
     if kind == "acp":
-        from raven.acp_client.acp_agent import AcpAgentBackend
-        from raven.acp_client.capabilities import CapabilitySnapshot
+        from raven.agent.acp.capabilities import CapabilitySnapshot
 
         snapshot = acp_snapshot_for(cfg)
         return AcpAgentBackend(
@@ -360,6 +364,7 @@ __all__ = [
     "session_mcp_effective",
     "third_party_agent_meta",
     "RavenLoopBackend",
+    "AcpAgentBackend",
     "CliAgentBackend",
     "OpenAIApiBackend",
     "build_subagent_prompt",

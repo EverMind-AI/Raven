@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from raven.session.manager import Session
-from raven.utils.paths import ensure_dir, safe_filename
+from raven.utils.helpers import ensure_dir, safe_filename
 
 _ROLE_HEADINGS = {
     "user": "## 🧑 User",

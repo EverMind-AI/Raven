@@ -3,6 +3,7 @@
 from raven.agent.loop.failure_streak import loop_break_nudge
 from raven.agent.tools.skill_hub import FindSkillTool, ReadSkillTool
 from raven.context_engine.assembler import ContextAssembler
+from raven.context_engine.base import AssemblyContext
 from raven.context_engine.scent import (
     ScentMenu,
     build_scent_query,
@@ -10,7 +11,6 @@ from raven.context_engine.scent import (
     novelty,
     recent_user_window,
 )
-from raven.contracts.context import AssemblyContext
 from raven.skill_hub.policy import SkillPolicy
 
 WINDOW = "这周的数据帮我整理个周报\n先按渠道分组"

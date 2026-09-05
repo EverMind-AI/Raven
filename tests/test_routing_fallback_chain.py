@@ -81,39 +81,3 @@ async def test_route_none_yields_empty_chain(monkeypatch):
     primary, fallbacks = await router.select_model_chain("hi")
     assert primary is None
     assert fallbacks == []
-
-
-@pytest.mark.asyncio
-async def test_live_fallback_source_outranks_the_boot_value(monkeypatch):
-    # The configured default model can change while the process runs; the
-    # chain's last resort follows the file, not the constructor.
-    router = ModelRouter(api_key="test", fallback_model="z/boot", fallback_source=lambda: "z/edited")
-
-    async def fake_route(_prompt):
-        return _result("a/primary", ["b/second"])
-
-    monkeypatch.setattr(router, "route", fake_route)
-    _, fallbacks = await router.select_model_chain("hi")
-    assert fallbacks == ["b/second", "z/edited"]
-
-
-@pytest.mark.asyncio
-async def test_an_empty_live_answer_keeps_the_boot_fallback(monkeypatch):
-    router = ModelRouter(api_key="test", fallback_model="z/boot", fallback_source=lambda: None)
-
-    async def fake_route(_prompt):
-        return _result("a/primary", [])
-
-    monkeypatch.setattr(router, "route", fake_route)
-    _, fallbacks = await router.select_model_chain("hi")
-    assert fallbacks == ["z/boot"]
-
-
-def test_live_profile_must_be_a_known_name():
-    # A half-typed edit of routing.profile must not KeyError the selector; the
-    # boot profile answers until the file says something usable.
-    router = ModelRouter(api_key="test", profile="eco", profile_source=lambda: "banlanced")
-    assert router._current_profile() == "eco"
-
-    router2 = ModelRouter(api_key="test", profile="eco", profile_source=lambda: "best")
-    assert router2._current_profile() == "best"

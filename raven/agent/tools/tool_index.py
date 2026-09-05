@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Any
 from raven.utils.bm25 import BM25Okapi, tokenize
 
 if TYPE_CHECKING:
-    from raven.contracts.tool import Tool
+    from raven.agent.tools.base import Tool
 
 # Catalog signature: one (name, indexed-text) pair per tool. The indexed text
 # embeds description + parameter schema, so the signature changes whenever any

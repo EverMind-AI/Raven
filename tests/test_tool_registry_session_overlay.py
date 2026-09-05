@@ -21,9 +21,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from raven.agent.loop.bundles import TurnPolicy
+from raven.agent.tools.base import Tool
 from raven.agent.tools.registry import ToolRegistry
-from raven.contracts.tool import Tool
 
 
 class _Stub(Tool):
@@ -275,7 +274,7 @@ class TestTheTurnIsWhereTheScopeOpens:
             def get_default_model(self) -> str:
                 return "stub"
 
-        return AgentLoop(provider=_Provider(), workspace=workspace, model="stub", policy=TurnPolicy(max_iterations=1))
+        return AgentLoop(provider=_Provider(), workspace=workspace, model="stub", max_iterations=1)
 
     @staticmethod
     def _request(conversation: str) -> Any:

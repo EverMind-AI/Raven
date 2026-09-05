@@ -1,5 +1,3 @@
-"""The shared lint rules for commit messages, PR titles, and PR bodies."""
-
 from __future__ import annotations
 
 import re

@@ -1,9 +1,9 @@
 """Per-server MCP connection lifecycle.
 
-The live path for every MCP server the agent loop talks to: each server owns
-a private ``AsyncExitStack`` so it can be attached, detached, and reconnected
-independently while the loop runs (plugin install/uninstall, re-auth, config
-edits -- no restart).
+Replaces the shared-stack, one-shot connect in ``connect_mcp_servers`` for
+the live agent loop: each server owns a private ``AsyncExitStack`` so it can
+be attached, detached, and reconnected independently while the loop runs
+(plugin install/uninstall, re-auth, config edits — no restart).
 
 Ordering constraint worth flagging: ``disconnect`` withdraws the server's
 tools *before* closing its stack, so the agent never sees a tool whose session
@@ -66,7 +66,9 @@ _HANDSHAKE_TIMEOUT = 90.0
 # How long a server may stay exempt from that bound because it is parked at the
 # browser-authorization step. Derived, not chosen: it has to outlast the OAuth
 # flow's own timeout so a real flow always resolves first and only a leaked one
-# hits this. A literal here would invert the moment that timeout is raised.
+# hits this. Written as a literal it silently inverted when the flow timeout was
+# raised, and the watchdog started cancelling authorizations the page had just
+# promised the reader another eight minutes for.
 _REAP_ROUNDS = 5
 """How many times ``reap_attempts`` re-reads the task sets before giving up.
 
@@ -244,6 +246,32 @@ class MCPConnectionManager:
                 out.append(name)
         return sorted(out)
 
+    def tools_of(self, server: str) -> dict[str, str]:
+        """Registered name -> the tool's own name, for one server.
+
+        Both halves come from the registry's origin index, which is the only
+        record of them. A caller that wants to show a bare tool name takes it
+        from here rather than stripping a prefix off the registered name: the
+        name is sanitised, capped and possibly hash-suffixed, so the prefix it
+        appears to carry is not reliably the server's.
+        """
+        return {n: ref.tool for n in self._registry.names_from(server) if (ref := self._registry.origin_of(n))}
+
+    def tools_by_server(self) -> dict[str, dict[str, str]]:
+        """:meth:`tools_of` for every server at once, in one pass.
+
+        A caller listing N servers reads this instead of calling ``tools_of``
+        N times: that method scans the whole origin index per server, so the
+        per-server form costs N passes where this costs one. Servers with no
+        registered tools are absent rather than empty, which is what
+        ``dict.get(name, {})`` at the call site wants.
+        """
+        out: dict[str, dict[str, str]] = {}
+        for name in self._registry.names():
+            if (ref := self._registry.origin_of(name)) is not None:
+                out.setdefault(ref.server, {})[name] = ref.tool
+        return out
+
     def tool_map(self) -> dict[str, str]:
         """Registered tool name -> owning server name."""
         return {n: ref.server for n in self._registry.names() if (ref := self._registry.origin_of(n))}
@@ -317,35 +345,6 @@ class MCPConnectionManager:
         """
         async with self._lock:
             await self._disconnect_locked(name, drop=drop)
-
-    async def executor_lost(self, reason: str) -> list[str]:
-        """Every connected stdio server just lost its child process: the
-        sandbox executor those transports ran under closed. Detach them and
-        park the records in ``error`` -- the state the retry door
-        (``connect``/authorize) owns -- instead of letting ``connected``
-        stand for processes that are gone, which no reload would ever retry
-        (the config did not change). HTTP and SSE transports do not ride the
-        executor and are untouched; the next connect brings a fresh executor,
-        because connects take a provider, not an instance.
-        """
-        lost: list[str] = []
-        async with self._lock:
-            for conn in list(self._conns.values()):
-                if conn.state != "connected" or resolve_transport(conn.config) != "stdio":
-                    continue
-                conn.epoch = None
-                for t in self._registry.names_from(conn.name):
-                    self._registry.unregister(t)
-                if conn.stack is not None:
-                    await self._close_stack(conn.stack)
-                    conn.stack = None
-                conn.session = None
-                conn.capabilities = None
-                self._set_state(conn, "error", reason)
-                lost.append(conn.name)
-        if lost:
-            logger.warning("MCP: sandbox executor closed under connected stdio server(s): {}", ", ".join(lost))
-        return lost
 
     def config_changed(self, cfg_servers: dict) -> bool:
         """Whether :meth:`apply_config` would do anything -- without doing it.
@@ -778,20 +777,12 @@ class MCPConnectionManager:
             conn.stack = stack
             conn.session = result.session
             conn.capabilities = result.capabilities
+            if self._post_connect is not None:
+                self._post_connect()
             # No local copy of ``registered``: the blacklist may have just
             # unregistered some of those names, and the registry is what knows.
             live = self._registry.names_from(name)
             self._set_state(conn, "connected")
-            # After the state flip, not before: post_connect runs the loop's
-            # meta-tool sync, and ``servers_offering`` only counts a record
-            # once it is "connected" -- pre-flip, the sync could never see the
-            # server this commit just connected, so a plug.auth connect of the
-            # sole resources server never gained (or, on a forced reconnect,
-            # silently lost) the five meta-tools. The old order guarded a
-            # blacklist that unregistered names at connect; it is report-only
-            # now.
-            if self._post_connect is not None:
-                self._post_connect()
             logger.info("MCP server '{}': connected, {} tools registered", name, len(live))
             return self._snapshot(conn)
 

@@ -16,7 +16,6 @@ import pytest
 
 from raven.rpc.errors import ConfigValidationError, InternalError
 from raven.rpc.methods import memory
-from tests._everos_presence import everos_plugin_absent
 
 
 @pytest.fixture(autouse=True)
@@ -224,38 +223,3 @@ async def test_delete_validates_params():
         await memory.memory_delete({"kind": "episode", "id": ""})
     with pytest.raises(ConfigValidationError):
         await memory.memory_delete({"kind": "bogus", "id": "x"})
-
-
-# ── the plugin that is not there ─────────────────────────────────────────
-
-
-class TestWithoutTheMemoryPlugin:
-    """The backend ships as its own distribution now, and may not be installed.
-
-    Both read methods used to reach it through a module-level constant, so the
-    page's first call raised ``ModuleNotFoundError`` at the dispatcher instead
-    of answering. Each degrades in the shape it already declared: stats opens
-    the page empty, list fails typed.
-    """
-
-    @pytest.mark.asyncio
-    async def test_stats_opens_the_page_with_nothing_in_it(self):
-        with everos_plugin_absent():
-            out = await memory.memory_stats({})
-
-        assert out["ok"] is False
-        assert out["base_url"] == ""
-        assert out["episodes"] == 0
-
-    @pytest.mark.asyncio
-    async def test_list_fails_typed_and_names_the_distribution(self):
-        with everos_plugin_absent(), pytest.raises(InternalError) as exc:
-            await memory.memory_list({"kind": "episode"})
-
-        assert "everos-memory" in str(exc.value)
-
-    @pytest.mark.asyncio
-    async def test_an_unknown_kind_is_still_the_first_answer(self):
-        """Argument validation does not depend on a backend being installed."""
-        with everos_plugin_absent(), pytest.raises(ConfigValidationError):
-            await memory.memory_list({"kind": "nope"})

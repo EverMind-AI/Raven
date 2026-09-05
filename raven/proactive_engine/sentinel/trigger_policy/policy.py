@@ -6,7 +6,7 @@ dedup, and dismissal cooldown in one place.
 
 Design:
 - Optionally file-backed via JsonStateStore (when running multiple Raven
-  processes, e.g. TUI + gateway together). Without a store, state is
+  processes, e.g. REPL + gateway together). Without a store, state is
   process-local and resets on restart.
 - Deterministic via injectable ``now_fn`` — tests freeze time.
 - Thread-safety: the policy is designed for a single asyncio event loop. No
@@ -122,11 +122,11 @@ class NudgePolicy:
 
     Usage:
         policy = NudgePolicy(config, now_fn=datetime.now)
-        verdict = policy.check("nudge", session_key="tui:direct",
+        verdict = policy.check("nudge", session_key="cli:direct",
                                content="hello", priority="low")
         if verdict.verdict == "allow":
             await dispatch(...)
-            policy.record_fired("nudge", session_key="tui:direct",
+            policy.record_fired("nudge", session_key="cli:direct",
                                 content="hello")
     """
 
@@ -298,12 +298,16 @@ class NudgePolicy:
         # cross-priority. Adaptive tuning's global rate misses this because
         # one topic's stubborn rejects average out against another topic's
         # accepts. Caller passes the count from NudgeFeedbackTracker.
-        # The planner always supplies a topic_tag; a caller that passes None
-        # (a test, or a spawn with no literal message) is bucketed rather than
-        # bypassed: non-empty content gets a content-hash bucket, so unrelated
-        # nudges do not false-dedup while exact-content repeats still collide,
-        # and empty content with no tag skips the per-topic gates because those
-        # decisions are individuated by spawn_task / target_session.
+        # Tag-less dispatches (planner.py R fix guarantees non-None now,
+        # but legacy / test callers may still pass None) are bucketed
+        # into ``_untagged`` so the per-topic gates engage instead of
+        # being silently bypassed.
+        # Tag-less paths with non-empty content get a content-hash bucket so
+        # unrelated nudges don't false-dedup each other while exact-content
+        # repeats still collide. Empty content with no tag (typical spawn
+        # without a literal message) bypasses per-topic gates entirely —
+        # those decisions are individuated by spawn_task / target_session.
+        # R fix in planner.py supplies a real tag for normal nudge paths.
         if topic_tag:
             effective_tag: str | None = topic_tag
         elif content:

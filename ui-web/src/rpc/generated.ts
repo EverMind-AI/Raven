@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 160 methods, 89 component schemas.
+// 147 methods, 89 component schemas.
 
 /* eslint-disable */
 /**
@@ -138,7 +138,7 @@ export interface SessionInitInfo {
 /**
  * ``info.usage`` — the boot baseline, refreshed by each turn's completion.
  *
- * Distinct from :class:`TurnUsage`, which is the per-turn event payload:
+ * Distinct from :class:`UsageSnapshot`, which is the per-turn event payload:
  * this one carries the context-window fill a banner draws, and its counters
  * are named for the session rather than for one LLM call.
  */
@@ -758,7 +758,7 @@ export interface InstanceRow {
    */
   resumable?: boolean;
   /**
-   * What this instance was asked, in one line: a spawn's task_summary, or a graph node's node_summary, or -- for an instance nobody dispatched, one the user made by hand -- the first line of the message that opened it, taken once so later messages do not rename it. Absent only for work that ran before any of those existed, or when that first message yielded nothing; a reader falls back to the handle.
+   * What this instance was asked, in one line: a graph node's node_summary, or a spawn's task_summary. Absent for an instance nobody dispatched (one the user made by hand) and for work that ran before those fields existed; a reader falls back to the handle.
    */
   title?: string;
   /**
@@ -801,7 +801,7 @@ export interface DirectTurn {
    */
   interrupted?: boolean;
 }
-export interface TurnUsage {
+export interface UsageSnapshot {
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
@@ -1006,7 +1006,7 @@ export interface MessageCompleteEvent {
   type: 'message.complete';
   payload: {
     turn_id: string;
-    usage: TurnUsage;
+    usage: UsageSnapshot;
     target?: DirectTarget;
     /**
      * How long the whole turn took, measured server-side from the moment the runner picked the turn up to the moment it returned. Sent so a live client does not have to time the turn with its own clock: a browser stopwatch starts when the events arrive rather than when the work did, and only exists while that page is open, so the same turn came out one number live and another after a reload. Absent means unknown, same rule as reasoning_ms -- fall back to timing it locally, never to zero.
@@ -1809,14 +1809,6 @@ export interface ConfigSetResult {
   scope?: 'session' | 'default';
   session_id?: string;
   applies_to_session?: boolean;
-}
-export interface ConfigUnsetParams {
-  key: string;
-}
-export interface ConfigUnsetResult {
-  removed: boolean;
-  previous: JsonValue | null;
-  default: JsonValue | null;
 }
 export interface SubagentListParams {
   /**
@@ -3396,135 +3388,6 @@ export interface KnowledgeSearchParams {
 export interface KnowledgeSearchResult {
   hits: KnowledgeHit[];
 }
-export interface ClipboardPasteParams {}
-export interface ClipboardPasteResult {
-  attached: boolean;
-  message?: string;
-  width?: number;
-  height?: number;
-  token_estimate?: number;
-}
-export interface CommandDispatchParams {
-  name: string;
-  arg?: string;
-}
-export interface CommandDispatchResult {
-  /**
-   * `exec` (a shell-style command ran) or `skill` (the name resolved to a skill).
-   */
-  type: string;
-  output?: string;
-  name?: string;
-  message?: string;
-}
-export interface DelegationStatusParams {}
-export interface DelegationStatusResult {
-  max_concurrent_children: number;
-  max_spawn_depth: number;
-  paused: boolean;
-}
-export interface DelegationPauseParams {
-  paused: boolean;
-}
-export interface DelegationPauseResult {
-  paused: boolean;
-}
-export interface InputDetectDropParams {
-  text: string;
-}
-export interface InputDetectDropResult {
-  matched: boolean;
-  name?: string;
-  /**
-   * The resolved absolute path when matched.
-   */
-  text?: string;
-  is_image?: boolean;
-  width?: number;
-  height?: number;
-  token_estimate?: number;
-}
-export interface SessionInterruptParams {
-  session_id: string;
-}
-export interface SessionInterruptResult {
-  ok: boolean;
-}
-export interface ShellExecParams {
-  command: string;
-}
-export interface ShellExecResult {
-  code: number;
-  stdout: string;
-  stderr: string;
-}
-export interface SkillsManageParams {
-  /**
-   * One of list, inspect, search, browse, install.
-   */
-  action: string;
-  query?: string;
-  page?: number;
-}
-export interface SkillsManageResult {
-  /**
-   * `list`: names grouped by source.
-   */
-  skills?: {
-    [k: string]: string[];
-  };
-  /**
-   * `inspect`: one skill's metadata, {} when unknown.
-   */
-  info?: {
-    [k: string]: JsonValue;
-  };
-  /**
-   * `search`: matches.
-   */
-  results?: {
-    [k: string]: JsonValue;
-  }[];
-  /**
-   * `browse`: one page of the hub.
-   */
-  items?: {
-    [k: string]: JsonValue;
-  }[];
-  page?: number;
-  total?: number;
-  total_pages?: number;
-  /**
-   * `install`.
-   */
-  installed?: boolean;
-  name?: string;
-}
-export interface SubagentInterruptParams {
-  subagent_id: string;
-}
-export interface SubagentInterruptResult {
-  found: boolean;
-  subagent_id: string;
-}
-export interface SubagentCancelSessionParams {
-  session_key: string;
-}
-export interface SubagentCancelSessionResult {
-  cancelled: number;
-  session_key: string;
-}
-export interface SubagentCancelInstanceParams {
-  session_key?: string;
-  agent: string;
-  handle: string;
-}
-export interface SubagentCancelInstanceResult {
-  found: boolean;
-  session_key: string;
-  agent: string;
-  handle: string;
-}
 
 // ---------------------------------------------------------------------------
 // Method map -- generated from the contract's method list.
@@ -3565,7 +3428,6 @@ export interface RpcMethods {
   'model.remove_endpoint': { params: ModelRemoveEndpointParams; result: ModelRemoveEndpointResult };
   'config.get': { params: ConfigGetParams; result: ConfigGetResult };
   'config.set': { params: ConfigSetParams; result: ConfigSetResult };
-  'config.unset': { params: ConfigUnsetParams; result: ConfigUnsetResult };
   'subagent.list': { params: SubagentListParams; result: SubagentListResult };
   'subagent.context': { params: SubagentContextParams; result: SubagentContextResult };
   'subagents.list': { params: SubagentsListParams; result: SubagentsListResult };
@@ -3628,7 +3490,6 @@ export interface RpcMethods {
   'settings.usage': { params: SettingsUsageParams; result: SettingsUsageResult };
   'settings.everos': { params: SettingsEverosParams; result: SettingsEverosResult };
   'settings.everosSet': { params: SettingsEverosSetParams; result: SettingsEverosSetResult };
-  'settings.everos_set': { params: SettingsEverosSetParams; result: SettingsEverosSetResult };
   'channels.status': { params: ChannelsStatusParams; result: ChannelsStatusResult };
   'channels.configure': { params: ChannelsConfigureParams; result: ChannelsConfigureResult };
   'channels.qr': { params: ChannelsQrParams; result: ChannelsQrResult };
@@ -3681,17 +3542,6 @@ export interface RpcMethods {
   'knowledge.documents.index': { params: KnowledgeDocumentsIndexParams; result: KnowledgeDocumentsIndexResult };
   'knowledge.documents.delete': { params: KnowledgeDocumentsDeleteParams; result: KnowledgeDocumentsDeleteResult };
   'knowledge.search': { params: KnowledgeSearchParams; result: KnowledgeSearchResult };
-  'clipboard.paste': { params: ClipboardPasteParams; result: ClipboardPasteResult };
-  'command.dispatch': { params: CommandDispatchParams; result: CommandDispatchResult };
-  'delegation.status': { params: DelegationStatusParams; result: DelegationStatusResult };
-  'delegation.pause': { params: DelegationPauseParams; result: DelegationPauseResult };
-  'input.detect_drop': { params: InputDetectDropParams; result: InputDetectDropResult };
-  'session.interrupt': { params: SessionInterruptParams; result: SessionInterruptResult };
-  'shell.exec': { params: ShellExecParams; result: ShellExecResult };
-  'skills.manage': { params: SkillsManageParams; result: SkillsManageResult };
-  'subagent.interrupt': { params: SubagentInterruptParams; result: SubagentInterruptResult };
-  'subagent.cancel_session': { params: SubagentCancelSessionParams; result: SubagentCancelSessionResult };
-  'subagent.cancel_instance': { params: SubagentCancelInstanceParams; result: SubagentCancelInstanceResult };
 }
 
 /** The literal union of callable method names. */
@@ -3718,14 +3568,11 @@ export const RPC_METHODS = [
   "channels.status",
   "clarify.respond",
   "cli.dispatch",
-  "clipboard.paste",
-  "command.dispatch",
   "commands.catalog",
   "complete.path",
   "complete.slash",
   "config.get",
   "config.set",
-  "config.unset",
   "confirm.respond",
   "cron.delete",
   "cron.list",
@@ -3735,8 +3582,6 @@ export const RPC_METHODS = [
   "cron.set_enabled",
   "dag.get",
   "dag.node",
-  "delegation.pause",
-  "delegation.status",
   "deliverables.list",
   "ext.list",
   "fs.list",
@@ -3745,7 +3590,6 @@ export const RPC_METHODS = [
   "fs.reveal",
   "fs.upload",
   "image.attach",
-  "input.detect_drop",
   "knowledge.bases.create",
   "knowledge.bases.delete",
   "knowledge.bases.list",
@@ -3797,7 +3641,6 @@ export const RPC_METHODS = [
   "session.export",
   "session.get",
   "session.history",
-  "session.interrupt",
   "session.list",
   "session.most_recent",
   "session.pin",
@@ -3810,12 +3653,10 @@ export const RPC_METHODS = [
   "session.usage",
   "settings.everos",
   "settings.everosSet",
-  "settings.everos_set",
   "settings.get",
   "settings.set",
   "settings.usage",
   "setup.status",
-  "shell.exec",
   "skill.list",
   "skill.pin",
   "skill.unpin",
@@ -3823,16 +3664,12 @@ export const RPC_METHODS = [
   "skillhub.install",
   "skillhub.remove",
   "skillhub.search",
-  "skills.manage",
   "skills.reload",
   "slash.exec",
   "spawn_tree.list",
   "spawn_tree.load",
   "spawn_tree.save",
-  "subagent.cancel_instance",
-  "subagent.cancel_session",
   "subagent.context",
-  "subagent.interrupt",
   "subagent.list",
   "subagents.add",
   "subagents.build",

@@ -1198,71 +1198,17 @@ function DataPage({ s }: { s: SettingsState }): JSX.Element {
    separate settings page of four unexplained key fields; a key belongs on the
    tool it unlocks, where "set / not set" reads next to the switch it gates. */
 const TOOL_CRED: Record<string, string> = {
+  web_search: 'tools.web.search.apiKey',
+  web_fetch: 'tools.web.jinaApiKey',
   image_generate: 'tools.media.image.apiKey',
   deep_research: 'tools.deepResearch.apiKey',
 }
 
-/* The two web tools route through a vendor the user picks, and the vendor
-   decides which key slot the tool reads (tools.web.providers.<vendor>.apiKey).
-   Mirrors WebSearchProvider / WebFetchProvider in raven/config/schema.py. */
-interface WebVendorPick {
-  path: string
-  vendors: string[]
-  fallback: string
-}
-const WEB_VENDOR: Record<string, WebVendorPick> = {
-  web_search: {
-    path: 'tools.web.search.provider',
-    vendors: ['serper', 'anysearch', 'serpapi', 'tavily', 'exa', 'brave', 'firecrawl'],
-    fallback: 'serper',
-  },
-  web_fetch: {
-    path: 'tools.web.fetch.provider',
-    vendors: ['jina', 'anysearch', 'tavily', 'exa', 'firecrawl'],
-    fallback: 'jina',
-  },
-}
-const WEB_VENDOR_LABEL: Record<string, string> = {
-  serper: 'Serper',
-  anysearch: 'AnySearch',
-  serpapi: 'SerpApi',
-  jina: 'Jina Reader',
-  tavily: 'Tavily',
-  exa: 'Exa',
-  brave: 'Brave Search',
-  firecrawl: 'Firecrawl',
-}
-function webVendor(id: string, raw: Record<string, unknown>): string {
-  const pick = WEB_VENDOR[id]!
-  return String(V(raw, pick.path, pick.fallback))
-}
-function toolCred(id: string, raw: Record<string, unknown>): string | undefined {
-  if (WEB_VENDOR[id]) return `tools.web.providers.${webVendor(id, raw)}.apiKey`
-  return TOOL_CRED[id]
-}
-/* The pre-vendor leaf this vendor's key may still sit in, or undefined. A
-   config written before the vendor layout holds its key there and the tools
-   still read it, after the slot -- so the row must count it as configured and
-   Clear must retire it. Named once, because a reader that knows about the leaf
-   and a writer that does not is how a cleared credential stays live. */
-function legacyCred(id: string, raw: Record<string, unknown>): string | undefined {
-  /* The id is tested before the vendor is asked: `webVendor` reads a table
-     keyed by web tool, and every other tool reaches here too. */
-  if (id === 'web_search' && webVendor(id, raw) === 'serper') return 'tools.web.search.apiKey'
-  if (id === 'web_fetch' && webVendor(id, raw) === 'jina') return 'tools.web.jinaApiKey'
-  return undefined
-}
-function credOn(id: string, raw: Record<string, unknown>, cred: string): boolean {
-  if (V(raw, cred, '')) return true
-  const legacy = legacyCred(id, raw)
-  return !!(legacy && V(raw, legacy, ''))
-}
-
 function ToolLine({ row, raw, s }: { row: ToolRow; raw: Record<string, unknown>; s: SettingsState }): JSX.Element {
-  const cred = toolCred(row.id, raw)
+  const cred = TOOL_CRED[row.id]
   /* The key's state rides on the row itself: a switched-on tool with no key
      is the gap this chip exists to make visible. */
-  const keyOn = !!cred && credOn(row.id, raw, cred)
+  const keyOn = !!cred && !!V(raw, cred, '')
   return (
     <div className={'trow' + (row.on ? '' : ' off')}>
       <div className="nm">
@@ -1321,60 +1267,16 @@ function ToolLine({ row, raw, s }: { row: ToolRow; raw: Record<string, unknown>;
   )
 }
 
-function ToolCredRow({
-  id,
-  path,
-  raw,
-  say,
-}: {
-  id: string
-  path: string
-  raw: Record<string, unknown>
-  say: () => void
-}): JSX.Element {
+function ToolCredRow({ path, raw, say }: { path: string; raw: Record<string, unknown>; say: () => void }): JSX.Element {
   const box = useRef<HTMLInputElement>(null)
-  const on = credOn(id, raw, path)
-  const pick = WEB_VENDOR[id]
+  const on = !!V(raw, path, '')
   const put = (v: string): void => {
     void store.write(path, v).then((r) => {
       if (r === 'notlive') say()
     })
   }
-  /* Every path that currently holds the credential, not just the slot this
-     editor writes: the tools resolve the slot first and fall back to the
-     pre-vendor leaf, so emptying the slot alone leaves an upgraded config's key
-     serving -- and emptying it after a replacement was pasted resurrects the
-     older secret. */
-  const clear = (): void => {
-    const legacy = legacyCred(id, raw)
-    void (async () => {
-      const outcomes = [await store.write(path, '')]
-      if (legacy && V(raw, legacy, '')) outcomes.push(await store.write(legacy, ''))
-      if (outcomes.includes('notlive')) say()
-    })()
-  }
   return (
     <div className="tkrow tkey">
-      {pick && (
-        /* The vendor first, because it decides which slot the key beside it
-           fills: switching vendors re-points the field, it never blanks a key. */
-        <select
-          className="mlend"
-          aria-label={t('gui.caps.vendor')}
-          value={webVendor(id, raw)}
-          onChange={(e) => {
-            void store.write(pick.path, e.currentTarget.value).then((r) => {
-              if (r === 'notlive') say()
-            })
-          }}
-        >
-          {pick.vendors.map((v) => (
-            <option key={v} value={v}>
-              {WEB_VENDOR_LABEL[v] ?? v}
-            </option>
-          ))}
-        </select>
-      )}
       <span className={'kchip' + (on ? '' : ' off')}>
         <span className="led" />
         <span>{t(on ? 'gui.set.tls.key_set' : 'gui.set.tls.key_unset')}</span>
@@ -1394,7 +1296,7 @@ function ToolCredRow({
         {t(on ? 'gui.model.update' : 'gui.plug.connect')}
       </button>
       {on && (
-        <button className="mini ghost" onClick={clear}>
+        <button className="mini ghost" onClick={() => put('')}>
           {t('gui.set.tls.clear')}
         </button>
       )}
@@ -1412,11 +1314,11 @@ function ToolGroupCard({ g, rows, s }: { g: ToolGroup; rows: ToolRow[]; s: Setti
     <Scard title={t(g.label)} desc={t('gui.caps.tool_on', { on, all: rows.length })}>
       <div className="fset">
         {rows.map((r) => {
-          const cred = toolCred(r.id, s.snap.raw)
+          const cred = TOOL_CRED[r.id]
           return (
             <Fragment key={r.id}>
               <ToolLine row={r} raw={s.snap.raw} s={s} />
-              {cred && s.toolKeyEdit === r.id && <ToolCredRow id={r.id} path={cred} raw={s.snap.raw} say={say} />}
+              {cred && s.toolKeyEdit === r.id && <ToolCredRow path={cred} raw={s.snap.raw} say={say} />}
             </Fragment>
           )
         })}

@@ -83,11 +83,11 @@ The bilingual onboarding wizard configures seven areas without requiring manual 
 2. Sandbox or execution location
 3. Chat channels
 4. EverOS long-term memory
-5. Web access (pick a search vendor and a page reader, give each its key)
+5. Web tool keys (Serper for `web_search`, Jina for `web_fetch`)
 6. Sub-agents shipped in this checkout
 7. Cold-start import from other AI tools
 
-Step 5 also mirrors every web vendor key into `~/.raven/env` (owner-only) and offers to add one
+Step 5 also mirrors the two keys into `~/.raven/env` (owner-only) and offers to add one
 guarded `source` line to your shell rc, so new shells and the `cli` / `acp` sub-agents --
 whose environment is captured from a login shell -- inherit them.
 
@@ -194,7 +194,6 @@ raven gateway
 | `raven sentinel status` | Inspect proactive memory and scheduled nudges |
 | `raven cron list` | Inspect scheduled jobs |
 | `raven gateway` | Run messaging gateways |
-| `raven gateway reload` / `status` / `stop` | Drive a running gateway through its control plane (rebuild from config without a restart, inspect the generation, stop gracefully) |
 | `raven upgrade` | Upgrade a managed installation |
 
 Run `raven --help` or `raven <command> --help` for the complete CLI surface.
@@ -216,64 +215,13 @@ Run `raven --help` or `raven <command> --help` for the complete CLI surface.
 
 </div>
 
-## Repo layout
-
-The top-level packages under `raven/`, in one line each. This list is the
-canonical set of commit scopes (see `AGENTS.md`); a change living wholly in a
-top-level tree outside `raven/` uses that tree as its scope instead (`agents`,
-`evolver`, `ui`, ...). Layer seats (which package may
-import which) are recorded under **Layer Seats** in `CONTEXT.md`, routed from
-`CONTEXT-MAP.md`; this section only says what each package does.
-
-| Package | What it is |
-|---|---|
-| `acp` | ACP server side: raven as an agent another host can talk to |
-| `acp_client` | ACP client side: raven driving a third-party local agent as a sub-agent backend |
-| `agent` | The agent loop, its tools, and sub-agent orchestration |
-| `auth` | Authentication and authorization primitives |
-| `browser` | Browser automation and its outbound-address policy |
-| `channels` | Per-service channel adapters (telegram, discord, feishu, ...) and the channel contract |
-| `cli` | The `raven` command-line surface |
-| `config` | Config schema, loader, migrations, and update helpers |
-| `contracts` | The papers: declared shapes, two promise tiers, no machinery |
-| `context_engine` | Context assembly for a turn |
-| `core` | Assembly root: the *_stack builders and the admission door |
-| `eval_engine` | Evaluation harness |
-| `gateway` | Daemon plumbing: channel manager, outlet, live probe, run lock |
-| `i18n` | User-facing text in the user's language |
-| `importer` | External data import |
-| `knowledge` | Knowledge base service |
-| `market` | Plugin market: catalog, trust, install, ledger |
-| `mcp` | MCP client machinery |
-| `memory_engine` | Long-term memory engine |
-| `home` | Where raven keeps everything: the one address resolver |
-| `observability` | What a raven span means: the attribute vocabulary and the usage it reports |
-| `ops` | Machine registry and on-call operations |
-| `playbook` | Playbook runtime |
-| `plugins` | Plugin discovery, manifests, registry, and bundled plugins |
-| `proactive_engine` | Cron, heartbeat, sentinel: turns raven starts itself |
-| `providers` | LLM provider pool and resolution |
-| `routing` | Model routing |
-| `rpc` | The RPC surface (TUI and tools talk here) |
-| `sandbox` | Execution sandboxing |
-| `security` | Outbound address policy and prompt-injection fences |
-| `session` | Session export and titles |
-| `skill_hub` | Skill hub: client, install engine, policy and install audit |
-| `spine` | The kernel: submit, lanes, cancel, emit, delivery |
-| `templates` | Packaged data assets (no Python) |
-| `token_wise` | Token efficiency: cache optimizer, usage tracker |
-| `tracing` | Span capture: context, the instrument decorator, the store |
-| `trajectory` | Turn trajectory store and verdicts |
-| `updates` | The install's own lifecycle: release lookup, upgrade plan and handoff, update nudge |
-| `utils` | Shared helpers, including the atomic write primitive |
-
 ## Architecture
 
 ```text
 CLI / TUI / Messaging Gateways
               |
               v
-          RPC / Spine
+          TUI-RPC / Spine
               |
               v
            Agent Loop
@@ -290,28 +238,24 @@ CLI / TUI / Messaging Gateways
       +--- Proactivity + Evolver
 ```
 
-The Python runtime and React/Ink TUI communicate only through the typed RPC contract. The Spine carries runtime events, while the Agent Loop coordinates providers, tools, context, memory, skills, subagents, and proactive work.
+The Python runtime and React/Ink TUI communicate only through typed TUI-RPC. The Spine carries runtime events, while the Agent Loop coordinates providers, tools, context, memory, skills, subagents, and proactive work.
 
 Key directories:
 
 ```text
 raven/
 ├── spine/              # Per-turn backbone: submit -> lanes -> emit
-├── contracts/          # Papers: the interfaces every shelf implements
-├── core/               # Assembly root: build_runtime and the *_stack builders
 ├── agent/              # Agent loop, tools, hooks, subagents, context builder
 ├── channels/           # Telegram, Discord, Slack, Matrix, WhatsApp, WeCom, ...
-├── gateway/            # Daemon plumbing: channel manager, outlet, generations, lock
 ├── rpc/                # Python side of the native TUI protocol
 ├── providers/          # LLM provider adapters
 ├── context_engine/     # Context assembly and Curator path
 ├── proactive_engine/   # Sentinel, scheduler, nudges, feedback
 ├── memory_engine/      # EverOS memory, local skills, SkillForge
 ├── playbook/           # Stored orchestrations: library, match funnel, executor
-├── token_wise/         # Usage tracking and cache placement
-├── tracing/            # Span capture (the dashboard lives in cli/tracing_viewer/)
-├── observability/      # The span vocabulary a standalone kernel may not hold
-├── home.py             # RAVEN_HOME and the config path, resolved once
+├── token_wise/         # Usage tracking, cache placement, routing
+├── tracing/            # Span capture and local tracing dashboard
+├── evolver/            # Benchmark-driven harness self-evolution
 ├── sandbox/            # Isolated command execution
 ├── security/           # Trust boundaries and network checks
 ├── cli/                # `raven` command line entry point
@@ -320,9 +264,6 @@ raven/
 ui-tui/                 # React/Ink native terminal UI
 bridge/                 # WhatsApp TypeScript bridge
 benchmarks/             # Benchmark adapters, including AppWorld evolver wiring
-evolver/                # Benchmark-driven harness self-evolution: a tool over the library, not in the wheel
-agents/                 # Product definitions served over ACP: launcher + rendered config + product plugins
-plugins-dist/           # Standalone plugin distributions (everos-memory, ppt-engine) on the raven.plugins entry-point group
 ```
 
 <br>

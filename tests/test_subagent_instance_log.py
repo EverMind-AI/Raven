@@ -5,13 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from raven.agent.subagent.instance_log import (
-    append_turn,
-    build_turn,
-    instance_title,
-    open_instance_log,
-    transcript_path,
-)
+from raven.agent.subagent.instance_log import append_turn, build_turn, transcript_path
 
 
 def test_turn_is_prompt_then_work_then_answer() -> None:
@@ -75,40 +69,3 @@ def test_append_turn_writes_exactly_what_build_turn_returns(tmp_path: Path) -> N
     rows = [row for row in written if row.get("_type") != "metadata"]
     expected = build_turn(**kwargs)
     assert [(r["role"], r["content"]) for r in rows] == [(e["role"], e["content"]) for e in expected]
-
-
-def test_an_instance_is_named_before_it_has_said_anything(tmp_path: Path) -> None:
-    # The title used to arrive with the first turn, and the first turn is
-    # written when the dispatch *finishes*. Every surface that heads a panel by
-    # what the instance was dispatched for therefore fell back to the handle --
-    # an id -- for exactly as long as the run was still going.
-    open_instance_log(tmp_path, agent="Coder", handle="h1", session_key="s1", kind="spawn", title="Draft a deck")
-
-    assert instance_title(tmp_path, "Coder", "h1") == "Draft a deck"
-
-
-def test_opening_an_instance_twice_writes_one_header(tmp_path: Path) -> None:
-    # An instance is reached through several lanes and a later dispatch of the
-    # same handle joins its conversation. It must not rename it, and must not
-    # leave a second metadata row in the middle of the file.
-    open_instance_log(tmp_path, agent="Coder", handle="h1", session_key="s1", kind="spawn", title="first")
-    open_instance_log(tmp_path, agent="Coder", handle="h1", session_key="s1", kind="dag", title="second")
-    append_turn(tmp_path, agent="Coder", handle="h1", session_key="s1", kind="dag", prompt="go", answer="done")
-
-    written = [
-        json.loads(line)
-        for line in transcript_path(tmp_path, "Coder", "h1").read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-
-    assert [row.get("_type") for row in written].count("metadata") == 1
-    assert instance_title(tmp_path, "Coder", "h1") == "first"
-
-
-def test_an_unnamed_instance_still_opens(tmp_path: Path) -> None:
-    # A direct chat has no line saying what the instance is for, and must not
-    # invent one -- but the header it opens is still the file's first row.
-    open_instance_log(tmp_path, agent="Coder", handle="h1", session_key="s1", kind="chat")
-
-    assert transcript_path(tmp_path, "Coder", "h1").is_file()
-    assert instance_title(tmp_path, "Coder", "h1") == ""

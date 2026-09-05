@@ -19,9 +19,8 @@ from typing import Any
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.bundles import ToolWiring, TurnPolicy
+from raven.agent.tools.base import Tool
 from raven.agent.tools.message import MessageTool
-from raven.contracts.tool import Tool
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 
@@ -83,8 +82,8 @@ def _make_agent(workspace: Path, responses: list[LLMResponse], *tools: Tool) -> 
         provider=_ScriptedProvider(responses),
         workspace=workspace,
         model="stub",
-        policy=TurnPolicy(max_iterations=5),
-        tools=ToolWiring(restrict_to_workspace=True),
+        max_iterations=5,
+        restrict_to_workspace=True,
     )
     for t in tools:
         agent.tools.register(t)
@@ -174,7 +173,7 @@ async def test_tool_start_carries_blocking_false_for_a_plain_tool(workspace) -> 
 
 
 async def test_tool_complete_truncated_flag(workspace) -> None:
-    from raven.agent.loop._shared import _TOOL_PREVIEW_MAX_CHARS
+    from raven.agent.loop.main import _TOOL_PREVIEW_MAX_CHARS
 
     over = "X" * (_TOOL_PREVIEW_MAX_CHARS + 100)
     tool = _FakeTool("grep", result=over)

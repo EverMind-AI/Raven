@@ -1,5 +1,5 @@
 """Third-party CLI agent backend: shell out to an external agent (claude code,
-codex, ...) as a spawned sub-agent.
+codex, ...) as a spawned sub-agent (req5).
 
 Runs on the host rather than through the sandbox executor - these CLIs need the
 host's auth, config, and PATH, which is the login shell's rather than raven's
@@ -56,7 +56,7 @@ from raven.agent.subagent.mcp_grant import (
 )
 
 if TYPE_CHECKING:
-    from raven.contracts.llm_provider import LLMProvider
+    from raven.providers.base import LLMProvider
 
 
 _READ_CHUNK = 65536

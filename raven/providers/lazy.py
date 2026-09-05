@@ -15,7 +15,7 @@ from typing import Any
 
 from loguru import logger
 
-from raven.providers.base import ChatDelta, GenerationSettings, LLMProvider, LLMResponse
+from raven.providers.base import GenerationSettings, LLMProvider, LLMResponse, StreamDelta
 
 
 class LazyProvider(LLMProvider):
@@ -140,7 +140,7 @@ class LazyProvider(LLMProvider):
 
         Answering identity here rather than forwarding is not a missing method
         but a wrong answer: the base class supplies one, so the caller sizes a
-        request against the Model Ref while the inner sends the gateway
+        request against the stored id while the inner sends the gateway
         spelling, and the two are separate catalogue rows.
 
         Post-materialization like ``emits_unparsed_reasoning``, and for the same
@@ -211,7 +211,7 @@ class LazyProvider(LLMProvider):
     async def chat(self, *args: Any, **kwargs: Any) -> LLMResponse:
         return await self._built().chat(*args, **kwargs)
 
-    async def chat_stream(self, *args: Any, **kwargs: Any) -> AsyncIterator[ChatDelta]:
+    async def chat_stream(self, *args: Any, **kwargs: Any) -> AsyncIterator[StreamDelta]:
         async for delta in self._built().chat_stream(*args, **kwargs):
             yield delta
 

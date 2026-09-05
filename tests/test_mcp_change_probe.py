@@ -19,8 +19,8 @@ from contextlib import AsyncExitStack
 
 import pytest
 
+from raven.agent.tools.base import Tool
 from raven.agent.tools.registry import ToolRegistry
-from raven.contracts.tool import Tool
 from raven.mcp.manager import MCPConnection, MCPConnectionManager
 from raven.mcp.naming import MCPToolRef
 

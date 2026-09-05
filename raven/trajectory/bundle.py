@@ -88,7 +88,7 @@ def _default_workspace() -> Path:
 def _session_source(session_key: str, workspace: Path | None) -> Path:
     from raven.session.manager import SessionManager
 
-    return SessionManager(workspace or _default_workspace()).session_path(session_key)
+    return SessionManager(workspace or _default_workspace())._get_session_path(session_key)
 
 
 def collect_bundle(

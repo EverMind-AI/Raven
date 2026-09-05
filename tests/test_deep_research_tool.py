@@ -16,7 +16,6 @@ import httpx
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.bundles import ToolWiring
 from raven.agent.tools import deep_research as dr_mod
 from raven.agent.tools.deep_research import (
     DeepResearchManager,
@@ -451,9 +450,7 @@ class _StubProvider:
 
 def _offer_loop(tmp_path: Path) -> AgentLoop:
     """A loop that starts unconfigured, so the offer stand-in is registered."""
-    return AgentLoop(
-        provider=_StubProvider(), workspace=tmp_path, tools=ToolWiring(deep_research_config=DeepResearchToolConfig())
-    )
+    return AgentLoop(provider=_StubProvider(), workspace=tmp_path, deep_research_config=DeepResearchToolConfig())
 
 
 def test_promote_swaps_offer_for_real_when_key_appears(tmp_path: Path, monkeypatch):
@@ -600,9 +597,8 @@ def test_disabled_tools_removes_deep_research_in_either_mode(tmp_path: Path, mon
     loop = AgentLoop(
         provider=_StubProvider(),
         workspace=tmp_path,
-        tools=ToolWiring(
-            deep_research_config=DeepResearchToolConfig(api_key=api_key), disabled_tools=["deep_research"]
-        ),
+        deep_research_config=DeepResearchToolConfig(api_key=api_key),
+        disabled_tools=["deep_research"],
     )
     offered = {d["function"]["name"] for d in loop.tools.get_definitions()}
     assert "deep_research" not in offered
@@ -624,7 +620,8 @@ def test_disabled_deep_research_survives_the_promotion_path(tmp_path: Path, monk
     loop = AgentLoop(
         provider=_StubProvider(),
         workspace=tmp_path,
-        tools=ToolWiring(deep_research_config=DeepResearchToolConfig(), disabled_tools=["deep_research"]),
+        deep_research_config=DeepResearchToolConfig(),
+        disabled_tools=["deep_research"],
     )
     offered = lambda: {d["function"]["name"] for d in loop.tools.get_definitions()}  # noqa: E731
     assert "deep_research" not in offered()

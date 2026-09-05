@@ -212,18 +212,7 @@ export function pickDefault(anchor: HTMLElement): boolean {
   const s = source()
   if (!s.pickModel) return false
   s.pickModel(anchor, () => {
-    /* Both halves of the default pair: a cross-provider pick moves the default
-       badge with the model, or the page keeps marking the old provider until a
-       reload. */
-    const src = source()
-    set({
-      snap: {
-        ...state.snap,
-        model: src.model(),
-        curProvider: src.defaultProvider ? src.defaultProvider() : state.snap.curProvider,
-      },
-      epoch: state.epoch + 1,
-    })
+    set({ snap: { ...state.snap, model: source().model() }, epoch: state.epoch + 1 })
   })
   return true
 }

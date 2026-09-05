@@ -60,7 +60,7 @@ def _resolve_media(paths: list[str] | None) -> tuple[Media, ...]:
     """
     if not paths:
         return ()
-    from raven.agent.tools.filesystem import resolve_path
+    from raven.agent.tools.filesystem import _resolve_path
     from raven.config import load_config
 
     try:
@@ -81,7 +81,7 @@ def _resolve_media(paths: list[str] | None) -> tuple[Media, ...]:
         if not isinstance(raw, str) or not raw.strip():
             continue
         try:
-            resolved = resolve_path(raw.strip(), workspace, allowed)
+            resolved = _resolve_path(raw.strip(), workspace, allowed)
             if not resolved.is_file():
                 logger.warning("turn.send: attachment {} does not resolve to a file", raw)
                 continue
@@ -211,9 +211,8 @@ def _name_session(
     """
     try:
         from raven.config.raven import load_raven_config
-        from raven.rpc.methods.session import _safe_invoke_factory
+        from raven.rpc.methods.session import _manager_for, _safe_invoke_factory
         from raven.rpc.session_naming import name_session_alongside_turn
-        from raven.session.resolve import manager_for
 
         agent_loop = _safe_invoke_factory(agent_loop_factory)
         if agent_loop is None:
@@ -231,7 +230,7 @@ def _name_session(
         task = name_session_alongside_turn(
             session_key=parsed.session_key,
             text=parsed.content or "",
-            mgr=manager_for(agent_loop, config),
+            mgr=_manager_for(agent_loop, config),
             provider=getattr(agent_loop, "provider", None),
             emitter=emitter,
             enabled=settings.enabled,
@@ -577,7 +576,7 @@ def register_turn_methods(
     ``default_channel`` is the ``source.channel`` stamped on a turn when the
     client omits one — and it MUST match the channel the outlet was registered
     under (the hub routes deliverables by ``source.channel``), or the reply is
-    dropped. Defaults to ``"tui"``.
+    dropped. Defaults to ``"tui"``; the web channel (build_web) passes ``"web"``.
     """
 
     async def _send(params: dict[str, Any]) -> dict[str, Any]:

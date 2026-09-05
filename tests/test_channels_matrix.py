@@ -94,6 +94,18 @@ def test_build_attachment_content_encrypted():
     assert enc["file"]["url"] == "mxc://h/c" and "url" not in enc
 
 
+def test_build_thread_relates_to():
+    rel = content.build_thread_relates_to({"thread_root_event_id": "$r", "thread_reply_to_event_id": "$y"})
+    assert rel == {
+        "rel_type": "m.thread",
+        "event_id": "$r",
+        "m.in_reply_to": {"event_id": "$y"},
+        "is_falling_back": True,
+    }
+    assert content.build_thread_relates_to(None) is None
+    assert content.build_thread_relates_to({"thread_root_event_id": ""}) is None
+
+
 # ── event extraction ──────────────────────────────────────────────────
 
 

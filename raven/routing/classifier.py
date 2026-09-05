@@ -9,11 +9,15 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
 from loguru import logger
 
 from raven.routing.types import ClassificationResult, TaskCategory
+
+if TYPE_CHECKING:
+    pass
 
 # ── 23 categories → task IDs ───────────────────────────────────────────────────
 
@@ -51,13 +55,6 @@ _EMBEDDING_DATA_PATH = Path(__file__).parent / "embedding_data.json"
 
 OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
 EMBEDDING_MODEL = "text-embedding-3-small"
-
-
-def routing_api_key(config) -> str:
-    """The key the router calls OpenRouter with: ``routing.api_key``, else the
-    configured openrouter provider's key, else empty."""
-    openrouter = config.providers.get("openrouter")
-    return config.routing.api_key or getattr(openrouter, "api_key", "") or ""
 
 
 async def fetch_embedding(

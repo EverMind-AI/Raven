@@ -171,7 +171,7 @@ export interface SessionInitInfo {
 /**
  * ``info.usage`` — the boot baseline, refreshed by each turn's completion.
  *
- * Distinct from :class:`TurnUsage`, which is the per-turn event payload:
+ * Distinct from :class:`UsageSnapshot`, which is the per-turn event payload:
  * this one carries the context-window fill a banner draws, and its counters
  * are named for the session rather than for one LLM call.
  *
@@ -937,7 +937,7 @@ export interface InstanceRow {
    */
   resumable?: boolean;
   /**
-   * What this instance was asked, in one line: a spawn's task_summary, or a graph node's node_summary, or -- for an instance nobody dispatched, one the user made by hand -- the first line of the message that opened it, taken once so later messages do not rename it. Absent only for work that ran before any of those existed, or when that first message yielded nothing; a reader falls back to the handle.
+   * What this instance was asked, in one line: a graph node's node_summary, or a spawn's task_summary. Absent for an instance nobody dispatched (one the user made by hand) and for work that ran before those fields existed; a reader falls back to the handle.
    */
   title?: string;
   /**
@@ -985,9 +985,9 @@ export interface DirectTurn {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "TurnUsage".
+ * via the `definition` "UsageSnapshot".
  */
-export interface TurnUsage {
+export interface UsageSnapshot {
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
@@ -1314,7 +1314,7 @@ export interface MessageCompleteEvent {
   type: 'message.complete';
   payload: {
     turn_id: string;
-    usage: TurnUsage;
+    usage: UsageSnapshot;
     target?: DirectTarget;
     /**
      * How long the whole turn took, measured server-side from the moment the runner picked the turn up to the moment it returned. Sent so a live client does not have to time the turn with its own clock: a browser stopwatch starts when the events arrive rather than when the work did, and only exists while that page is open, so the same turn came out one number live and another after a reload. Absent means unknown, same rule as reasoning_ms -- fall back to timing it locally, never to zero.
@@ -2457,22 +2457,6 @@ export interface ConfigSetResult {
   scope?: 'session' | 'default';
   session_id?: string;
   applies_to_session?: boolean;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "ConfigUnsetParams".
- */
-export interface ConfigUnsetParams {
-  key: string;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "ConfigUnsetResult".
- */
-export interface ConfigUnsetResult {
-  removed: boolean;
-  previous: JsonValue | null;
-  default: JsonValue | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -4605,223 +4589,6 @@ export interface KnowledgeSearchParams {
  */
 export interface KnowledgeSearchResult {
   hits: KnowledgeHit[];
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "ClipboardPasteParams".
- */
-export interface ClipboardPasteParams {}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "ClipboardPasteResult".
- */
-export interface ClipboardPasteResult {
-  attached: boolean;
-  message?: string;
-  width?: number;
-  height?: number;
-  token_estimate?: number;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "CommandDispatchParams".
- */
-export interface CommandDispatchParams {
-  name: string;
-  arg?: string;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "CommandDispatchResult".
- */
-export interface CommandDispatchResult {
-  /**
-   * `exec` (a shell-style command ran) or `skill` (the name resolved to a skill).
-   */
-  type: string;
-  output?: string;
-  name?: string;
-  message?: string;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "DelegationStatusParams".
- */
-export interface DelegationStatusParams {}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "DelegationStatusResult".
- */
-export interface DelegationStatusResult {
-  max_concurrent_children: number;
-  max_spawn_depth: number;
-  paused: boolean;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "DelegationPauseParams".
- */
-export interface DelegationPauseParams {
-  paused: boolean;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "DelegationPauseResult".
- */
-export interface DelegationPauseResult {
-  paused: boolean;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "InputDetectDropParams".
- */
-export interface InputDetectDropParams {
-  text: string;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "InputDetectDropResult".
- */
-export interface InputDetectDropResult {
-  matched: boolean;
-  name?: string;
-  /**
-   * The resolved absolute path when matched.
-   */
-  text?: string;
-  is_image?: boolean;
-  width?: number;
-  height?: number;
-  token_estimate?: number;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "SessionInterruptParams".
- */
-export interface SessionInterruptParams {
-  session_id: string;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "SessionInterruptResult".
- */
-export interface SessionInterruptResult {
-  ok: boolean;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "ShellExecParams".
- */
-export interface ShellExecParams {
-  command: string;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "ShellExecResult".
- */
-export interface ShellExecResult {
-  code: number;
-  stdout: string;
-  stderr: string;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "SkillsManageParams".
- */
-export interface SkillsManageParams {
-  /**
-   * One of list, inspect, search, browse, install.
-   */
-  action: string;
-  query?: string;
-  page?: number;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "SkillsManageResult".
- */
-export interface SkillsManageResult {
-  /**
-   * `list`: names grouped by source.
-   */
-  skills?: {
-    [k: string]: string[];
-  };
-  /**
-   * `inspect`: one skill's metadata, {} when unknown.
-   */
-  info?: {
-    [k: string]: JsonValue;
-  };
-  /**
-   * `search`: matches.
-   */
-  results?: {
-    [k: string]: JsonValue;
-  }[];
-  /**
-   * `browse`: one page of the hub.
-   */
-  items?: {
-    [k: string]: JsonValue;
-  }[];
-  page?: number;
-  total?: number;
-  total_pages?: number;
-  /**
-   * `install`.
-   */
-  installed?: boolean;
-  name?: string;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "SubagentInterruptParams".
- */
-export interface SubagentInterruptParams {
-  subagent_id: string;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "SubagentInterruptResult".
- */
-export interface SubagentInterruptResult {
-  found: boolean;
-  subagent_id: string;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "SubagentCancelSessionParams".
- */
-export interface SubagentCancelSessionParams {
-  session_key: string;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "SubagentCancelSessionResult".
- */
-export interface SubagentCancelSessionResult {
-  cancelled: number;
-  session_key: string;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "SubagentCancelInstanceParams".
- */
-export interface SubagentCancelInstanceParams {
-  session_key?: string;
-  agent: string;
-  handle: string;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "SubagentCancelInstanceResult".
- */
-export interface SubagentCancelInstanceResult {
-  found: boolean;
-  session_key: string;
-  agent: string;
-  handle: string;
 }
 
 // ---- Schema-name aliases for structurally-deduplicated types ----

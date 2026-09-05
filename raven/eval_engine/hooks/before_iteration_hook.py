@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import logging
 
-from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
+from raven.agent.hook.base import AgentHook, AgentHookContext, HookDecision
 from raven.eval_engine.config import EvalEngineConfig
 
 logger = logging.getLogger(__name__)

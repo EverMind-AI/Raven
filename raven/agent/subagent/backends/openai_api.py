@@ -1,5 +1,5 @@
 """Third-party OpenAI-compatible HTTP agent backend (mirothinker, …) as a
-spawned sub-agent.
+spawned sub-agent (req5).
 
 Each call is one Chat Completions request. A resumed instance replays its
 prior ``history`` as the leading messages instead of the endpoint holding any
@@ -26,7 +26,7 @@ from raven.agent.subagent.backends.base import bounded_delta, clamp_output
 from raven.agent.subagent.openai_steps import OpenAIStepReader
 
 if TYPE_CHECKING:
-    from raven.contracts.llm_provider import LLMProvider
+    from raven.providers.base import LLMProvider
 
 
 class OpenAIApiBackend:

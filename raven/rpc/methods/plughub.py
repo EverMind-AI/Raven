@@ -14,7 +14,7 @@ Six methods back the GUI's plugin pages:
 * ``plug.toggle``   — enabled flag + live sync.
 * ``plug.auth``     — force-reconnect one server (retry / re-authorize).
 
-The transaction itself lives in :mod:`raven.market.connect`, shared with the
+The transaction itself lives in :mod:`raven.plughub.connect`, shared with the
 agent's ``plugin`` tool, which drives the same install/rollback/connect path
 in-process from a turn. What is left here is the RPC surface's own job:
 JSON-RPC-shaped params in, typed RPC errors out.
@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from raven.market.connect import (
+from raven.plughub.connect import (
     PlugConnectError,
     PlugRuntimeUnavailableError,
     installed_names,
@@ -66,8 +66,8 @@ def _as_rpc(e: PlugConnectError) -> Exception:
 
 
 async def plughub_search(params: dict) -> dict:
-    from raven.market import catalog_categories, catalog_search
-    from raven.market.vetting import HubTrustError
+    from raven.plughub import catalog_categories, catalog_search
+    from raven.plughub.trust import HubTrustError
 
     q = str(params.get("q") or "").strip()
     category = str(params.get("category") or "").strip()
@@ -85,8 +85,8 @@ async def plughub_search(params: dict) -> dict:
 
 
 async def plughub_detail(params: dict) -> dict:
-    from raven.market import catalog_detail
-    from raven.market.vetting import HubTrustError
+    from raven.plughub import catalog_detail
+    from raven.plughub.trust import HubTrustError
 
     entry_id = str(params.get("id") or "")
     try:
@@ -102,7 +102,7 @@ async def plughub_detail(params: dict) -> dict:
 
 
 async def plug_install(params: dict, *, agent_loop_factory: Any = None) -> dict:
-    from raven.market.connect import install_and_connect
+    from raven.plughub.connect import install_and_connect
 
     try:
         result = await install_and_connect(params.get("id"), params.get("form"), _safe_loop(agent_loop_factory))
@@ -118,7 +118,7 @@ async def plug_install(params: dict, *, agent_loop_factory: Any = None) -> dict:
 
 
 async def plug_remove(params: dict, *, agent_loop_factory: Any = None) -> dict:
-    from raven.market.connect import remove
+    from raven.plughub.connect import remove
 
     try:
         return await remove(params.get("name"), _safe_loop(agent_loop_factory))
@@ -127,8 +127,8 @@ async def plug_remove(params: dict, *, agent_loop_factory: Any = None) -> dict:
 
 
 async def plug_toggle(params: dict, *, agent_loop_factory: Any = None) -> dict:
-    from raven.market import toggle_server
-    from raven.market.install import PlugInstallError
+    from raven.plughub import toggle_server
+    from raven.plughub.install import PlugInstallError
 
     try:
         name = server_name(params.get("name"), "name")
@@ -152,7 +152,7 @@ async def plug_toggle(params: dict, *, agent_loop_factory: Any = None) -> dict:
 
 
 async def plug_auth(params: dict, *, agent_loop_factory: Any = None) -> dict:
-    from raven.market.connect import authorize
+    from raven.plughub.connect import authorize
 
     try:
         return await authorize(params.get("name"), _safe_loop(agent_loop_factory))

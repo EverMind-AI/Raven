@@ -1,4 +1,4 @@
-"""Ported DAG core: graph validation, placeholders, render, store.
+"""Ported DAG core (req4/P3): graph validation, placeholders, render, store.
 
 Covers the provider-agnostic core of the sub-agent DAG subsystem (no agentscope);
 render/store are exercised over a tiny in-memory duck-typed backend.
@@ -12,9 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from raven.agent.loop.bundles import SubagentWiring, ToolWiring, TurnPolicy
 from raven.agent.subagent.dag_capabilities import validate_capabilities
-from raven.agent.subagent.dag_graph import collect_static_graph_errors, parse_dag_spec, validate_and_order
+from raven.agent.subagent.dag_graph import parse_dag_spec, validate_and_order
 from raven.agent.subagent.dag_reader import DagReadError, read_node, read_run
 from raven.agent.subagent.dag_render import render_prompt
 from raven.agent.subagent.dag_store import DagRunStore, SessionNodes, make_run_id
@@ -47,112 +46,7 @@ def test_topo_order_and_parse() -> None:
     assert validate_and_order(spec) == ["a", "b"]
 
 
-def test_duplicate_node_error_names_the_duplicate_ids() -> None:
-    spec = parse_dag_spec(
-        {
-            "task_summary": "reject duplicate node ids",
-            "nodes": [
-                {"id": "a", "subagent": "x", "node_summary": "first", "prompt_template": "one"},
-                {"id": "a", "subagent": "x", "node_summary": "second", "prompt_template": "two"},
-            ],
-        }
-    )
-
-    assert collect_static_graph_errors(spec.nodes)[0] == "duplicate node ids: ['a']"
-    with pytest.raises(DagValidationError) as exc_info:
-        validate_and_order(spec)
-    assert str(exc_info.value) == "duplicate node ids: ['a']"
-
-
-@pytest.mark.parametrize(
-    "value",
-    [None, 3, {}, {"file": ""}, {"node": ""}, {"file": "a.md", "extra": "x"}, {"file": "a", "node": "b"}],
-)
-def test_static_validation_rejects_every_unsupported_input_shape(value: object) -> None:
-    spec = parse_dag_spec(
-        {
-            "task_summary": "validate one node input",
-            "nodes": [
-                {
-                    "id": "a",
-                    "subagent": "x",
-                    "node_summary": "consume one input",
-                    "prompt_template": "use {{ inputs.material }}",
-                    "inputs": {"material": value},
-                }
-            ],
-        }
-    )
-
-    assert collect_static_graph_errors(spec.nodes)
-    with pytest.raises(DagValidationError):
-        validate_and_order(spec)
-
-
-def test_static_validation_can_check_an_unfilled_playbook_node_without_weakening_dispatch() -> None:
-    spec = parse_dag_spec(
-        {
-            "task_summary": "load a fillable playbook node",
-            "nodes": [
-                {
-                    "id": "a",
-                    "subagent": "x",
-                    "node_summary": "fill the prompt later",
-                    "prompt_template": "",
-                    "inputs": {"material": "still validate this shape"},
-                }
-            ],
-        }
-    )
-
-    assert collect_static_graph_errors(spec.nodes, allowed_blank_fields=frozenset({"prompt_template"})) == []
-    with pytest.raises(DagValidationError, match="cannot run without"):
-        validate_and_order(spec)
-
-
-def test_allowing_a_blank_prompt_does_not_allow_a_malformed_input() -> None:
-    spec = parse_dag_spec(
-        {
-            "task_summary": "load a fillable playbook node",
-            "nodes": [
-                {
-                    "id": "a",
-                    "subagent": "x",
-                    "node_summary": "fill the prompt later",
-                    "prompt_template": "",
-                    "inputs": {"material": 3},
-                }
-            ],
-        }
-    )
-
-    errors = collect_static_graph_errors(spec.nodes, allowed_blank_fields=frozenset({"prompt_template"}))
-
-    assert any("literal string" in error for error in errors)
-
-
-@pytest.mark.parametrize("instance", ["", " ", " handle", "handle "])
-def test_instance_rejects_blank_or_invisible_edge_whitespace(instance: str) -> None:
-    with pytest.raises(DagValidationError):
-        parse_dag_spec(
-            {
-                "task_summary": "reject an ambiguous instance handle",
-                "nodes": [
-                    {
-                        "id": "a",
-                        "subagent": "x",
-                        "node_summary": "run one node",
-                        "prompt_template": "hello",
-                        "instance": instance,
-                    }
-                ],
-            }
-        )
-
-    assert _NODE_SCHEMA["properties"]["instance"]["minLength"] == 1
-
-
-@pytest.mark.parametrize("name", ["General Audit", "MiniMax M2.5", "Исследователь", "claude_code", "a"])
+@pytest.mark.parametrize("name", ["General Audit", "MiniMax M2.5", "研究员", "claude_code", "a"])
 def test_subagent_name_takes_any_name_the_config_layer_accepts(name: str) -> None:
     # A sub-agent name is a roster key, never a path: `spawn` dispatches to
     # "General Audit" happily, so a DAG node naming the same agent must not be
@@ -1196,7 +1090,7 @@ def test_subagent_dag_config_defaults():
     cfg = RavenConfig().subagent_dag
     assert cfg.verdict_enabled is True
     assert cfg.verdict_model is None
-    assert cfg.verdict_timeout_seconds == 180.0
+    assert cfg.verdict_timeout_seconds == 30.0
     assert cfg.evidence_budget_chars == 8000
     assert cfg.adjudication_timeout_seconds == 600.0
     assert cfg.max_continuations == 2
@@ -1307,11 +1201,57 @@ def test_agent_loop_passes_its_subagent_dag_config_to_the_registered_tool(tmp_pa
         provider=_StubProvider(),
         workspace=tmp_path,
         model="stub",
-        policy=TurnPolicy(max_iterations=2),
-        tools=ToolWiring(restrict_to_workspace=True),
-        subagents=SubagentWiring(subagent_dag_config=non_default),
+        max_iterations=2,
+        restrict_to_workspace=True,
+        subagent_dag_config=non_default,
     )
 
     tool = loop.tools.get("run_subagent_dag")
     assert tool is not None
     assert tool._verdict_config.verdict_model == "cheap-tier"
+
+
+async def test_agent_loop_wires_the_adjudicator_into_the_registered_tool(tmp_path):
+    """The blocking lane's only route to a decision, and it has to survive startup.
+
+    Unwired, every foreground node that fell short would take the plain failure
+    path -- which is indistinguishable from the feature working, right up until
+    someone runs a graph with `background=false` and is never asked anything.
+    """
+    from raven.agent.loop import AgentLoop
+    from raven.providers.base import LLMProvider, LLMResponse
+
+    class _StubProvider(LLMProvider):
+        def __init__(self) -> None:
+            super().__init__(api_key="test")
+
+        async def chat(
+            self,
+            messages,
+            tools=None,
+            model=None,
+            max_tokens=4096,
+            temperature=0.7,
+            reasoning_effort=None,
+            tool_choice=None,
+        ):
+            return LLMResponse(content="stub", finish_reason="stop")
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+    loop = AgentLoop(
+        provider=_StubProvider(),
+        workspace=tmp_path,
+        model="stub",
+        max_iterations=2,
+        restrict_to_workspace=True,
+    )
+
+    tool = loop.tools.get("run_subagent_dag")
+    assert tool is not None
+    assert tool._adjudicate == loop._adjudicate_node
+
+    # No broker is wired in this loop, so the round trip is structurally
+    # unavailable and the caller is told so rather than left waiting.
+    assert await loop._adjudicate_node("web:sess1", "node 'a' did not accomplish its task") is None

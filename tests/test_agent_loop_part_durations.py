@@ -19,8 +19,7 @@ from typing import Any
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.bundles import ToolWiring, TurnPolicy
-from raven.providers.base import ChatDelta, LLMProvider, LLMResponse, ToolCallRequest
+from raven.providers.base import LLMProvider, LLMResponse, StreamDelta, ToolCallRequest
 from raven.rpc.methods.session import _map_to_wire
 from raven.rpc.models import TranscriptMessage
 from raven.spine.message import ChatType, Source
@@ -47,10 +46,10 @@ class ThinkingStreamProvider(LLMProvider):
     async def chat_stream(self, **kwargs: Any):
         thought, content, tool_calls = self._script.pop(0)
         for piece in thought:
-            yield ChatDelta(content=None, reasoning_content=piece)
+            yield StreamDelta(content=None, reasoning_content=piece)
         await asyncio.sleep(GAP_S)
         for call in tool_calls:
-            yield ChatDelta(
+            yield StreamDelta(
                 content=None,
                 tool_call_delta={
                     "tool_calls": [
@@ -63,8 +62,8 @@ class ThinkingStreamProvider(LLMProvider):
                 },
             )
         if content:
-            yield ChatDelta(content=content)
-        yield ChatDelta(content=None, finish_reason="tool_calls" if tool_calls else "stop")
+            yield StreamDelta(content=content)
+        yield StreamDelta(content=None, finish_reason="tool_calls" if tool_calls else "stop")
 
     async def chat(self, messages, tools=None, model=None, **kwargs: Any):
         return LLMResponse(content="unused", finish_reason="stop")
@@ -109,8 +108,8 @@ async def _run_a_thinking_turn_with_a_slow_tool(workspace: Path) -> list[dict[st
         provider=provider,
         workspace=workspace,
         model="stub",
-        policy=TurnPolicy(max_iterations=3),
-        tools=ToolWiring(restrict_to_workspace=True),
+        max_iterations=3,
+        restrict_to_workspace=True,
     )
     real_execute = agent.tools.execute
 

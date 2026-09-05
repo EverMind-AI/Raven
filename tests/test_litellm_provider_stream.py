@@ -1,7 +1,7 @@
 """Streaming tests for `LiteLLMProvider.chat_stream`.
 
 Covers:
-- happy-path: chat_stream yields ChatDelta sequence matching mock chunks
+- happy-path: chat_stream yields StreamDelta sequence matching mock chunks
 - _normalize_stream_chunk default OpenAI shape extraction
 - None-content chunks (e.g. final stop chunk) are skipped (return None → no yield)
 - signature parity with chat() (messages/tools/model/max_tokens/temperature/
@@ -22,7 +22,7 @@ from typing import Any
 
 import pytest
 
-from raven.providers.base import ChatDelta, GenerationSettings, LLMProvider, LLMResponse
+from raven.providers.base import GenerationSettings, LLMProvider, LLMResponse, StreamDelta
 from raven.providers.litellm_provider import LiteLLMProvider
 
 # ---------- Test doubles modelling OpenAI ChatCompletionChunk shape ----------
@@ -76,7 +76,7 @@ def _make_provider() -> LiteLLMProvider:
 
 @pytest.mark.asyncio
 async def test_chat_stream_yields_stream_deltas_in_order(monkeypatch: pytest.MonkeyPatch) -> None:
-    """chat_stream yields ChatDelta sequence matching mock OpenAI-shape chunks."""
+    """chat_stream yields StreamDelta sequence matching mock OpenAI-shape chunks."""
     chunks = [_chunk("Hel"), _chunk("lo"), _chunk(" world")]
 
     captured_kwargs: dict[str, Any] = {}
@@ -91,7 +91,7 @@ async def test_chat_stream_yields_stream_deltas_in_order(monkeypatch: pytest.Mon
     )
 
     provider = _make_provider()
-    out: list[ChatDelta] = []
+    out: list[StreamDelta] = []
     async for delta in provider.chat_stream(
         messages=[{"role": "user", "content": "hi"}],
         model="openai/gpt-4o",
@@ -99,7 +99,7 @@ async def test_chat_stream_yields_stream_deltas_in_order(monkeypatch: pytest.Mon
         out.append(delta)
 
     assert [d.content for d in out] == ["Hel", "lo", " world"]
-    assert all(isinstance(d, ChatDelta) for d in out)
+    assert all(isinstance(d, StreamDelta) for d in out)
     # stream=True must be forwarded to LiteLLM
     assert captured_kwargs.get("stream") is True
     # Usage must be requested explicitly — OpenAI-compatible providers omit the
@@ -195,7 +195,7 @@ async def test_chat_stream_signature_parity_with_chat(monkeypatch: pytest.Monkey
 
     provider = _make_provider()
     tools = [{"type": "function", "function": {"name": "noop", "parameters": {}}}]
-    out: list[ChatDelta] = []
+    out: list[StreamDelta] = []
     async for delta in provider.chat_stream(
         messages=[{"role": "user", "content": "hi"}],
         tools=tools,
@@ -391,7 +391,7 @@ async def test_chat_stream_surfaces_upstream_finish_reason(
 
     monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
 
-    out: list[ChatDelta] = []
+    out: list[StreamDelta] = []
     async for delta in _make_provider().chat_stream(messages=[{"role": "user", "content": "hi"}]):
         out.append(delta)
 

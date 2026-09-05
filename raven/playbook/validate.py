@@ -20,11 +20,15 @@ Nothing here calls an LLM or touches disk.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+import re
+from collections.abc import Iterable
 
-from raven.agent.subagent.dag_graph import collect_static_graph_errors
+from raven.agent.subagent.dag_graph import _REQUIRED_NON_BLANK
 from raven.playbook.params import param_refs
 from raven.playbook.types import NodeSpec, PlaybookSpec
+
+_NODE_REF_RE = re.compile(r"\{\{\s*([A-Za-z0-9_-]+)\.(output|output_path)\s*\}\}")
+
 
 _REFERENCE_RULE = (
     "a secret may only be referenced from an mcpServers env or headers value, "
@@ -103,8 +107,10 @@ def validate_structure(
 
     ``known_agents`` comes from the agent table, and ``None`` means the caller has
     none -- the names are then *not checked at all* rather than checked against a
-    guess, because a guessed list reports a well-configured agent invalid and a
-    deleted one fine.
+    guess. The four hardcoded names this used to default to were a fiction the
+    table has since replaced: with them, a playbook naming a perfectly well
+    configured ``claude_code`` was reported invalid, and one naming a deleted agent
+    was reported fine.
 
     Every caller in the tree does have a table (the package's built-in rows are
     seeds, so it is never empty), so ``None`` is for a caller written later that
@@ -163,24 +169,34 @@ def validate_graph_nodes(
     reachable, and the checks that need one are then skipped rather than run
     against a stand-in.
     """
-    fillable = _fillable_fields() if allow_blank_fillable else frozenset()
-    errors = collect_static_graph_errors(nodes, allowed_blank_fields=fillable, check_paths=False)
+    errors: list[str] = []
     agents = None if known_agents is None else set(known_agents)
+    ids = [n.id for n in nodes]
+    if len(ids) != len(set(ids)):
+        dupes = sorted({i for i in ids if ids.count(i) > 1})
+        errors.append(f"duplicate node ids: {dupes}")
+    known_ids = set(ids)
 
+    fillable = _fillable_fields() if allow_blank_fillable else frozenset()
     for node in nodes:
-        if agents is not None and node.subagent.strip() and node.subagent not in agents:
+        blank = [f for f in _REQUIRED_NON_BLANK if not str(getattr(node, f, "") or "").strip()]
+        reportable = [f for f in blank if f not in fillable]
+        if reportable:
+            errors.append(f"node {node.id!r}: missing {sorted(reportable)} -- a node cannot run without them")
+        if agents is not None and "subagent" not in blank and node.subagent not in agents:
             errors.append(f"node {node.id!r}: agent {node.subagent!r} is not registered (known: {sorted(agents)})")
+        for dep in node.depends_on:
+            if dep not in known_ids:
+                errors.append(f"node {node.id!r}: dependsOn {dep!r} names unknown node")
+        allowed = set(node.depends_on)
+        for ref, _kind in _NODE_REF_RE.findall(node.prompt_template):
+            if ref not in allowed:
+                errors.append(f"node {node.id!r}: {{{{ {ref}.* }}}} references a node not in its dependsOn")
         for ref in param_refs(node.prompt_template):
             if ref not in param_names:
                 errors.append(f"node {node.id!r}: params.{ref} names no declared param")
             # A secret here is withheld at fill time, not refused at the file --
             # see the note in :func:`validate_structure`.
-        for key, value in node.inputs.items():
-            for ref in _nested_param_refs(value):
-                errors.append(
-                    f"node {node.id!r}: input {key!r} contains params.{ref}; params belong directly in "
-                    "promptTemplate and must not be copied into node inputs"
-                )
 
     # Rule 7: a handle on a stateless agent promises continuity the run cannot
     # deliver, and the author only finds out by reading a downstream node that
@@ -200,11 +216,9 @@ def validate_graph_nodes(
     # Rule 8: nodes sharing an instance continue one session — they must be the
     # same agent (two agents sharing a handle share no session) and must form a
     # dependency chain (a shared session cannot run concurrently).
-    # Rule 9: only the node opening a shared session may set its skill menu. A
-    # resumed raven-loop session keeps the system prompt it opened with, so a
-    # continuation node's skills cannot take effect. MCP grants are different:
-    # the DAG runtime resolves them per dispatch, so a continuation may replace
-    # or clear them.
+    # Rule 9: only the node opening a shared session may set its skill or MCP
+    # menu. A resumed raven-loop session keeps the system prompt it opened with,
+    # so injection fields on continuation nodes cannot take effect.
     by_instance: dict[str, list[NodeSpec]] = {}
     for node in nodes:
         if node.instance:
@@ -219,7 +233,7 @@ def validate_graph_nodes(
             )
         if len(members) < 2:
             continue
-        declaring = [m for m in members if m.skills is not None]
+        declaring = [m for m in members if m.skills is not None or m.mcps is not None]
         if not declaring:
             continue
         ids = {m.id for m in members}
@@ -229,23 +243,13 @@ def validate_graph_nodes(
         offenders = sorted(m.id for m in declaring if m.id != heads[0].id)
         if offenders:
             errors.append(
-                f"nodes {offenders} declare skills while continuing instance {handle!r} "
+                f"nodes {offenders} declare skills or mcps while continuing instance {handle!r} "
                 f"opened by node {heads[0].id!r}; a resumed session keeps its opening skill menu, "
-                f"so move that field to {heads[0].id!r} or use a separate instance"
+                f"so move those fields to {heads[0].id!r} or use a separate instance"
             )
 
+    errors.extend(_cycle_errors(nodes))
     return errors
-
-
-def _nested_param_refs(value: object) -> set[str]:
-    """Return param references nested in a node input value."""
-    if isinstance(value, str):
-        return set(param_refs(value))
-    if isinstance(value, Mapping):
-        return {ref for nested in value.values() for ref in _nested_param_refs(nested)}
-    if isinstance(value, list | tuple):
-        return {ref for nested in value for ref in _nested_param_refs(nested)}
-    return set()
 
 
 def _ancestors(nodes: list[NodeSpec]) -> dict[str, set[str]]:
@@ -259,8 +263,7 @@ def _ancestors(nodes: list[NodeSpec]) -> dict[str, set[str]]:
 
     A fixpoint rather than recursion, so a cycle terminates rather than blowing
     the stack; a cycle makes each member its own ancestor, which reads as "no
-    head"; the cycle has already been reported by
-    :func:`collect_static_graph_errors`.
+    head" and is left to :func:`_cycle_errors` to report.
     """
     reach = {n.id: set(n.depends_on) for n in nodes}
     changed = True
@@ -283,6 +286,21 @@ def _forms_chain(members: list[NodeSpec], nodes: list[NodeSpec]) -> bool:
             if a < b and b not in reach.get(a, set()) and a not in reach.get(b, set()):
                 return False
     return True
+
+
+def _cycle_errors(nodes: list[NodeSpec]) -> list[str]:
+    node_ids = {n.id for n in nodes}
+    deps = {n.id: set(n.depends_on) & node_ids for n in nodes}
+    ready = [nid for nid, ups in deps.items() if not ups]
+    seen: set[str] = set()
+    while ready:
+        nid = ready.pop()
+        seen.add(nid)
+        for other, ups in deps.items():
+            if other not in seen and ups <= seen and other not in ready:
+                ready.append(other)
+    stuck = sorted(set(deps) - seen)
+    return [f"dependency cycle involving nodes: {stuck}"] if stuck else []
 
 
 def check_assets(

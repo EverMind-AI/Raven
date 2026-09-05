@@ -339,7 +339,7 @@ class TestRenderedConfigSweep:
     That file is a copy of the config with every secret from the folder's
     `.env` merged in, at mode 600. The one-shot path removes it in a `finally`;
     the `--acp` path cannot, because the host tears an ACP server down by
-    SIGKILLing its process group (`raven/acp_client/client.py:272`) and no
+    SIGKILLing its process group (`raven/agent/acp/client.py:272`) and no
     `finally` runs under SIGKILL. The sweep on the next launch is the only
     thing that ever removes it, and it was keyed on age -- a rule written for a
     stranding that used to happen only when something went wrong, and under ACP

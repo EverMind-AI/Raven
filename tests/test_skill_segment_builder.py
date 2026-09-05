@@ -14,9 +14,8 @@ from typing import Any
 
 from raven.agent.subagent.backends import AgentMeta
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
+from raven.context_engine.base import AssemblyContext, TokenBudget
 from raven.context_engine.segments.skills import SkillsSegmentBuilder
-from raven.contracts.assembled import TokenBudget
-from raven.contracts.context import AssemblyContext
 from raven.memory_engine.skill_forge import (
     LLMGateFilter,
     QueryRewriter,
@@ -46,7 +45,7 @@ class _StubProvider:
 
 
 class _StubSource:
-    """ForgeSkillSource that returns a hard-coded hit list."""
+    """SkillSource that returns a hard-coded hit list."""
 
     def __init__(self, name: str, hits: list[RouterHit], weight: float = 1.0) -> None:
         self.name = name
@@ -658,11 +657,11 @@ async def test_the_note_follows_the_real_tool_on_every_channel(tmp_path: Path) -
     through the real _set_tool_context, read back through the real definitions.
     Every surface receives the same delivery instruction."""
     from raven.agent.loop.main import AgentLoop
+    from raven.agent.tools._deliverables import DeliverableStore
+    from raven.agent.tools.base import Tool
     from raven.agent.tools.deliver import DeliverFilesTool
-    from raven.agent.tools.deliverables import DeliverableStore
     from raven.agent.tools.registry import ToolRegistry
     from raven.context_engine.segments import render
-    from raven.contracts.tool import Tool
 
     class _PlainTool(Tool):
         """A second tool proves channel filtering preserves the full schema."""

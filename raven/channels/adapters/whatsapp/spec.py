@@ -17,13 +17,4 @@ SPEC = ChannelSpec(
     display_name="WhatsApp",
     factory=_make,
     capabilities=Capabilities(interactive_login=True),
-    # Cargo declaration (config-with-cargo): the fields only this adapter
-    # consumes, with their defaults, secrecy and nesting -- the declaration
-    # is the only truth. Socket fields (enabled / allow_from / workspace)
-    # stay with the host.
-    config_schema={
-        "bridge_url": {"type": "string", "default": "ws://localhost:3001"},
-        "bridge_token": {"type": "string", "default": "", "secret": True},
-        "group_policy": {"type": "string", "default": "open", "choices": ["open", "mention"]},
-    },
 )

@@ -24,9 +24,8 @@ from typing import Any
 
 import pytest
 
-from raven.agent.loop.bundles import SubagentWiring, ToolWiring, TurnPolicy
 from raven.agent.loop.main import AgentLoop
-from raven.contracts.llm_provider import LLMResponse
+from raven.providers.base import LLMResponse
 
 _TOKEN = "harness"
 CLIENT_VERSION = "0.1.0"
@@ -54,10 +53,10 @@ class ScriptedProvider:
         return await self.chat_with_retry(*args, **kwargs)
 
     async def chat_stream(self, *, messages, tools=None, model=None, **_kwargs):
-        from raven.contracts.llm_provider import ChatDelta
+        from raven.providers.base import StreamDelta
 
         response = await self.chat_with_retry(messages=messages, tools=tools, model=model)
-        yield ChatDelta(content=response.content or "")
+        yield StreamDelta(content=response.content or "")
 
 
 async def make_loop(
@@ -81,7 +80,7 @@ async def make_loop(
     workspace.mkdir()
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
     if measure:
-        from raven.acp_client.capabilities import SnapshotStore, verify_agent
+        from raven.agent.acp.capabilities import SnapshotStore, verify_agent
 
         store = SnapshotStore()
         for cfg in agents or []:
@@ -91,9 +90,9 @@ async def make_loop(
         provider=ScriptedProvider(),
         workspace=workspace,
         model="stub",
-        policy=TurnPolicy(max_iterations=2),
-        tools=ToolWiring(restrict_to_workspace=True),
-        subagents=SubagentWiring(agents=agents),
+        max_iterations=2,
+        restrict_to_workspace=True,
+        agents=agents,
     )
 
 
@@ -144,7 +143,7 @@ class TuiRpcHarness:
             await asyncio.wait_for(self._server, timeout=10.0)
         except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
             self._server.cancel()
-        from raven.acp_client.pool import close_pool
+        from raven.agent.acp.pool import close_pool
 
         await close_pool()
 

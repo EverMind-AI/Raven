@@ -1,8 +1,7 @@
 """What a call cost, given what it used.
 
-Used by the turn path's usage accounting and the observability usage view.
-Returning a consistent cost from one place prevents drift between "what we
-tracked" and "what we reported".
+Used by ``UsageTracker`` and ``BudgetAlerter``. Returning a consistent cost from
+one place prevents drift between "what we tracked" and "what we budgeted".
 
 The rates themselves are a fact about the provider's catalogue, so they come from
 ``raven.providers.rates``; what lives here is the arithmetic on top of them --

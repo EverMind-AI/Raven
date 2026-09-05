@@ -24,10 +24,11 @@ from typing import Any, Literal
 import aiohttp
 from loguru import logger
 
+from raven.agent.acp.capabilities import SnapshotStore, verify_agent
 from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_backend
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.instances import InstanceRegistry
-from raven.agent.subagent.probe_state import LastTest
+from raven.agent.subagent.test_state import LastTest
 
 ProbeStatus = Literal["ready", "attention", "missing", "unknown"]
 Source = Literal["config", "preset"]
@@ -412,10 +413,6 @@ async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
     slow first `npx` download) as this test's verdict forever. A truly absent
     executable still fails fast -- launch raises before any timeout waits.
     """
-    # Function-level on purpose: the acp client family is future shelf cargo,
-    # and this module must not name it at import time (binding-time debt).
-    from raven.acp_client.capabilities import SnapshotStore, verify_agent
-
     snapshot = await verify_agent(cfg)
     if source == "config":
         # Presets are templates, not entries: recording a snapshot for one would
@@ -477,8 +474,6 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any]) -> None:
     a roster that reports an agent stateful and dispatches it stateless until
     the next restart or hot-apply.
     """
-    from raven.acp_client.capabilities import SnapshotStore, verify_agent
-
     store = SnapshotStore()
     recorded = False
     for row in rows:

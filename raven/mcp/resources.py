@@ -23,8 +23,8 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from raven.contracts.tool import Tool, ToolResult
-from raven.utils.images import image_block, text_block
+from raven.agent.tools.base import Tool, ToolResult
+from raven.utils.helpers import image_block, text_block
 
 if TYPE_CHECKING:
     from raven.mcp.manager import MCPConnectionManager
@@ -340,7 +340,7 @@ def _data_uri(raw: bytes, mime: str) -> str:
 
 
 def _write_blob(server: str, uri: str, raw: bytes, mime: str, *, workspace: Any) -> str | None:
-    """Land a binary resource under Agent home (``<agent home>/mcp_resources/``).
+    """Land a binary resource under the workspace and return its path.
 
     Returns None when there is nowhere to write -- a caller built without a
     workspace still gets the description and any renderable block, which beats

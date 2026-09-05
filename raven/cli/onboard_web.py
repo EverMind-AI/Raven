@@ -1,15 +1,13 @@
 """Web tool credentials cluster of the onboard wizard (Step 5).
 
-Two tools, each behind a vendor the user picks here, and the keys are not the
-same kind of thing. A search key is what makes ``web_search`` exist at all --
-the agent loop withholds the tool entirely without one -- while the page
-reader defaults to Jina, which works unauthenticated at a lower rate limit, so
-its key only raises the ceiling; the other readers refuse without one. The
-screen says so, because presenting the keys as equal blanks invites skipping
-the one that actually costs a capability.
+Two keys, and they are not the same kind of thing. Serper is what makes
+``web_search`` exist at all -- the agent loop withholds the tool entirely
+without one -- while Jina only raises the ceiling on ``web_fetch``, which reads
+pages unauthenticated at a lower rate limit either way. The screen says so,
+because presenting them as two equal blanks invites skipping the one that
+actually costs a capability.
 
-Providers and keys land in ``config.json`` through ``update_tools``, keyed by
-vendor (``tools.web.providers.<vendor>.apiKey``), and the keys are then mirrored
+Both land in ``config.json`` through ``update_tools``, and are then mirrored
 into ``~/.raven/env`` as ``export`` lines. The mirror is what reaches consumers
 that never read raven's config: the user's own shell, and -- the reason it is
 here rather than in a docs page -- every ``cli`` and ``acp`` sub-agent, whose
@@ -25,7 +23,7 @@ of these keys have to refresh it for "config is the single source of truth" to
 hold. This module owns the screen and the shell wiring; the rc only ever gains a
 guarded ``source`` line, never a credential.
 
-Shared wizard UI state (``console``, ``_QMARK``, ...) lives in
+Shared wizard UI state (``console``, ``_t``, ``_QMARK``, ...) lives in
 ``onboard_commands`` and is reached through the ``oc`` module reference, as in
 ``onboard_channels`` -- so a test monkeypatching an attribute there still takes
 effect here.
@@ -39,9 +37,8 @@ from typing import Optional
 
 import typer
 
-from raven.cli import _onboard_shared as oc
+from raven.cli import onboard_commands as oc
 from raven.config.env_file import write_env_file
-from raven.i18n import t
 
 #: Trailing comment on the line appended to the rc, and the marker that makes a
 #: second ``raven onboard`` run leave the file alone.
@@ -55,19 +52,15 @@ SOURCE_LINE = f'[ -f "$HOME/.raven/env" ] && . "$HOME/.raven/env"  {RC_MARKER}'
 #: none exist, ``~/.profile`` is the one a login shell reads by convention.
 _BASH_LOGIN_CANDIDATES = (".bash_profile", ".bash_login", ".profile")
 
-
-def _stored_provider(kind: str) -> str:
-    """The vendor config currently selects for ``search`` or ``fetch``."""
-    from raven.config.update_tools import get_web_fetch, get_web_search
-
-    return get_web_search()["provider"] if kind == "search" else get_web_fetch()["provider"]
+_SERPER_SIGNUP = "https://serper.dev"
+_JINA_SIGNUP = "https://jina.ai/reader"
 
 
-def _stored_key(vendor: str) -> str:
-    """One vendor's key as config holds it, unredacted."""
-    from raven.config.update_tools import get_web_provider_key
+def _stored_keys() -> tuple[str, str]:
+    """The Serper and Jina keys as config holds them, unredacted."""
+    from raven.config.update_tools import get_jina_api_key, get_serper_api_key
 
-    return get_web_provider_key(vendor, redact=False)
+    return get_serper_api_key(redact=False), get_jina_api_key(redact=False)
 
 
 def rc_targets_for(shell_name: str) -> list[Path]:
@@ -121,7 +114,7 @@ def _prompt_key(*, label: str, obtain_from: str, current: str, optional_note: st
     questionary = oc._require_questionary()
     from raven.cli._styles import RAVEN_STYLE
 
-    state = t("configured, Enter keeps it") if current else t("Enter skips")
+    state = oc._t("configured, Enter keeps it", "已配置,回车沿用") if current else oc._t("Enter skips", "回车跳过")
     return questionary.password(
         f"{label} ({obtain_from}) [{state}]:",
         style=RAVEN_STYLE,
@@ -134,73 +127,50 @@ def _confirm_rc(targets: list[Path]) -> bool:
     """Ask before touching the user's shell files, having shown the exact line."""
     listed = "\n".join(f"    [dim]{path}[/dim]" for path in targets)
     oc.console.print()
-    oc.console.print(t("  [dim]To hand these to new shells and to cli/acp sub-agents, this line goes in:[/dim]"))
+    oc.console.print(
+        oc._t(
+            "  [dim]To hand these to new shells and to cli/acp sub-agents, this line goes in:[/dim]",
+            "  [dim]要让新开的终端和 cli/acp 子代理拿到这两个 key,需要加这一行:[/dim]",
+        )
+    )
     oc.console.print(listed, highlight=False)
     oc.console.print(f"    [accent]{SOURCE_LINE}[/accent]", highlight=False)
     return typer.confirm(
-        t("  Append it to {a0} file(s)?", a0=len(targets)),
+        oc._t(f"  Append it to {len(targets)} file(s)?", f"  追加到这 {len(targets)} 个文件?"),
         default=False,
     )
 
 
-def _pick_provider(kind: str, current: str) -> Optional[str]:
-    """One vendor pick. Enter keeps ``current``; ``None`` means abort."""
-    from raven.agent.tools.web import FETCH_PROVIDERS, SEARCH_PROVIDERS
-    from raven.cli._styles import RAVEN_STYLE
+def _write_keys(serper: str, jina: str) -> Optional[Path]:
+    """Persist whichever key is non-empty; return the refreshed mirror's path."""
+    from raven.config.update_tools import set_jina_api_key, set_web_search
 
-    questionary = oc._require_questionary()
-    specs = SEARCH_PROVIDERS if kind == "search" else FETCH_PROVIDERS
-    choices = []
-    for vendor, spec in specs.items():
-        note = ""
-        if kind == "fetch" and not spec.needs_key:
-            note = t(" (no key needed)")
-        elif kind == "fetch":
-            note = t(" (key required)")
-        choices.append(questionary.Choice(f"{spec.label}{note}", value=vendor))
-    title = t("Search provider (web_search)") if kind == "search" else t("Page reader (web_fetch)")
-    return questionary.select(
-        f"{title}:",
-        choices=choices,
-        default=next((c for c in choices if c.value == current), None),
-        style=RAVEN_STYLE,
-        qmark=oc._QMARK,
-    ).ask()
-
-
-def _write(
-    *,
-    search_provider: Optional[str] = None,
-    fetch_provider: Optional[str] = None,
-    keys: Optional[dict[str, str]] = None,
-) -> Optional[Path]:
-    """Persist what was chosen; return the refreshed mirror's path.
-
-    A provider is written only when one was picked, a key only when one was
-    typed: an empty answer keeps whatever config already holds, so re-running
-    the wizard never blanks a credential.
-    """
-    from raven.config.update_tools import set_web_fetch, set_web_provider_key, set_web_search
-
-    if search_provider:
-        set_web_search({"provider": search_provider})
-    if fetch_provider:
-        set_web_fetch({"provider": fetch_provider})
-    for vendor, key in (keys or {}).items():
-        if key:
-            set_web_provider_key(vendor, key)
+    if serper:
+        set_web_search({"api_key": serper})
+    if jina:
+        set_jina_api_key(jina)
     return write_env_file()
 
 
 def _report(path: Optional[Path]) -> None:
     if path is None:
         return
-    oc.console.print(t("  [green]✓ Keys written to config and mirrored to {path} (owner-only).[/green]", path=path))
+    oc.console.print(
+        oc._t(
+            f"  [green]✓ Keys written to config and mirrored to {path} (owner-only).[/green]",
+            f"  [green]✓ key 已写入配置,并镜像到 {path}(仅本人可读)。[/green]",
+        )
+    )
     # Both are surprising enough to be worth a line each. The capture is cached
     # per process, so a gateway already running keeps the environment it started
     # with; and a Debian ~/.bashrc returns early for non-interactive shells, so
     # a plain `bash script.sh` never reaches an appended line.
-    oc.console.print(t("  [dim]A running gateway / TUI picks these up on its next restart.[/dim]"))
+    oc.console.print(
+        oc._t(
+            "  [dim]A running gateway / TUI picks these up on its next restart.[/dim]",
+            "  [dim]正在运行的 gateway / TUI 需重启后生效。[/dim]",
+        )
+    )
 
 
 def _step5_web(
@@ -210,91 +180,62 @@ def _step5_web(
     yes: bool = False,
     serper_api_key: Optional[str] = None,
     jina_api_key: Optional[str] = None,
-    search_provider: Optional[str] = None,
-    fetch_provider: Optional[str] = None,
-    search_api_key: Optional[str] = None,
-    fetch_api_key: Optional[str] = None,
 ) -> object:
-    """Step 5 -- pick a search vendor and a page reader, and give each its key.
+    """Step 5 -- Serper / Jina keys, optional, forward-only.
 
     The flags are honoured even when the screen itself is skipped: a
-    non-interactive run auto-skips, and dropping a value the caller passed
-    explicitly would be the wrong reading of ``--non-interactive``. The two
-    legacy flags name their vendor; the four newer ones name a role, and a key
-    given for a role lands under whichever vendor that role selects.
+    non-interactive run auto-skips, and dropping a key the caller passed
+    explicitly would be the wrong reading of ``--non-interactive``.
     """
-    from raven.agent.tools.web import FETCH_PROVIDERS, SEARCH_PROVIDERS
+    oc._step_header(5, oc._t("Web access", "联网能力"))
 
-    oc._step_header(5, t("Web access"))
-
-    for flag, value, table in (
-        ("--search-provider", search_provider, SEARCH_PROVIDERS),
-        ("--fetch-provider", fetch_provider, FETCH_PROVIDERS),
-    ):
-        if value and value not in table:
-            raise typer.BadParameter(f"{value!r} is not a web vendor; one of: {', '.join(table)}", param_hint=flag)
-
-    if any((serper_api_key, jina_api_key, search_provider, fetch_provider, search_api_key, fetch_api_key)):
-        keys: dict[str, str] = {}
-        if serper_api_key:
-            keys["serper"] = serper_api_key
-        if jina_api_key:
-            keys["jina"] = jina_api_key
-        if search_api_key:
-            keys[search_provider or _stored_provider("search")] = search_api_key
-        if fetch_api_key:
-            keys[fetch_provider or _stored_provider("fetch")] = fetch_api_key
-        _report(_write(search_provider=search_provider, fetch_provider=fetch_provider, keys=keys))
+    if serper_api_key or jina_api_key:
+        _report(_write_keys(serper_api_key or "", jina_api_key or ""))
         return None
 
     if skip or non_interactive:
-        oc.console.print(t("  [dim]Skipping the web tool keys (set them up later: raven onboard).[/dim]"))
+        oc.console.print(
+            oc._t(
+                "  [dim]Skipping the web tool keys (set them up later: raven onboard).[/dim]",
+                "  [dim]跳过联网 key(以后可用 raven onboard 设置)。[/dim]",
+            )
+        )
         return None
 
     oc.console.print(
-        t(
-            "  [dim]web_search[/dim]  Search the web — needs the chosen vendor's key; without\n"
-            "              one the tool is not offered to the model at all.\n"
-            "  [dim]web_fetch [/dim]  Read a page — Jina works with no key at a lower rate limit;\n"
-            "              every other reader needs its key."
+        oc._t(
+            "  [dim]web_search[/dim]  Search the web — needs a Serper key; without one the\n"
+            "              tool is not offered to the model at all.\n"
+            "  [dim]web_fetch [/dim]  Read a page — works with no key at a lower rate limit;\n"
+            "              a Jina key raises it.",
+            "  [dim]web_search[/dim]  搜索网页 — 需要 Serper key;没有 key 时这个工具\n"
+            "              根本不会提供给模型。\n"
+            "  [dim]web_fetch [/dim]  读取网页 — 没有 key 也能用,只是限流更低;\n"
+            "              填 Jina key 可提高限额。",
         ),
         highlight=False,
     )
     oc.console.print()
 
-    search = _pick_provider("search", _stored_provider("search"))
-    if search is None:
-        raise typer.Exit(1)
-    spec = SEARCH_PROVIDERS[search]
-    keys = {}
-    search_key = _prompt_key(
-        label=t("{label} API key", label=spec.label),
-        obtain_from=spec.signup,
-        current=_stored_key(search),
-        optional_note=t(" enables web_search"),
+    stored_serper, stored_jina = _stored_keys()
+    serper = _prompt_key(
+        label=oc._t("Serper API key", "Serper API key"),
+        obtain_from=_SERPER_SIGNUP,
+        current=stored_serper,
+        optional_note=oc._t(" enables web_search", " 启用 web_search"),
     )
-    if search_key is None:
+    if serper is None:
         raise typer.Exit(1)
-    keys[search] = search_key.strip()
-
-    fetch = _pick_provider("fetch", _stored_provider("fetch"))
-    if fetch is None:
+    jina = _prompt_key(
+        label=oc._t("Jina API key", "Jina API key"),
+        obtain_from=_JINA_SIGNUP,
+        current=stored_jina,
+        optional_note=oc._t(" optional", " 可选"),
+    )
+    if jina is None:
         raise typer.Exit(1)
-    fetch_spec = FETCH_PROVIDERS[fetch]
-    # One account serves both tools for the dual-use vendors, so a key just
-    # typed (or already stored) for the search side is not asked for twice.
-    if not (fetch == search and (keys[search] or _stored_key(search))):
-        fetch_key = _prompt_key(
-            label=t("{label} API key", label=fetch_spec.label),
-            obtain_from=fetch_spec.signup,
-            current=_stored_key(fetch),
-            optional_note=t(" required for web_fetch") if fetch_spec.needs_key else t(" optional"),
-        )
-        if fetch_key is None:
-            raise typer.Exit(1)
-        keys[fetch] = fetch_key.strip()
 
-    path = _write(search_provider=search, fetch_provider=fetch, keys=keys)
+    path = _write_keys(serper.strip(), jina.strip())
     _report(path)
 
     if path is None:
@@ -302,9 +243,9 @@ def _step5_web(
     targets = rc_targets()
     if not targets:
         oc.console.print(
-            t(
-                "  [dim]$SHELL is not bash or zsh; add this line yourself:[/dim]\n    {SOURCE_LINE}",
-                SOURCE_LINE=SOURCE_LINE,
+            oc._t(
+                f"  [dim]$SHELL is not bash or zsh; add this line yourself:[/dim]\n    {SOURCE_LINE}",
+                f"  [dim]$SHELL 不是 bash / zsh,请自行加这一行:[/dim]\n    {SOURCE_LINE}",
             ),
             highlight=False,
         )
@@ -317,9 +258,19 @@ def _step5_web(
         return None
     touched = [target for target in targets if ensure_rc_source_line(target)]
     for target in touched:
-        oc.console.print(t("  [green]✓ Added to {target}[/green]", target=target))
+        oc.console.print(
+            oc._t(
+                f"  [green]✓ Added to {target}[/green]",
+                f"  [green]✓ 已加入 {target}[/green]",
+            )
+        )
     if touched:
-        oc.console.print(t("  [dim]New shells pick it up; sub-agents on the next raven restart.[/dim]"))
+        oc.console.print(
+            oc._t(
+                "  [dim]New shells pick it up; sub-agents on the next raven restart.[/dim]",
+                "  [dim]新开的终端立即生效;子代理需 raven 重启后生效。[/dim]",
+            )
+        )
     return None
 
 

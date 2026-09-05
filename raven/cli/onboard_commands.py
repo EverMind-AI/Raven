@@ -4,15 +4,15 @@ Goal: get a new user from ``pip install`` to a working agent in a few
 minutes, without ever opening ``~/.raven/config.json`` or
 ``~/.everos/raven/everos.toml``.
 
-Steps:
+Steps (mirrors ``my_docs/temp/onboard-flow.mermaid``):
   0. Welcome
   1. LLM provider (required; multi-provider, in-step connectivity + test probe)
   2. Sandbox / run location (optional, single-select)
   3. Chat channel (optional, stackable)
   4. EverOS long-term memory (optional; llm/embedding required once enabled,
      rerank/multimodal optional)
-  5. Web access (optional; pick a search vendor and a page reader and give
-     each its key; keys are mirrored to ~/.raven/env so sub-agents inherit them)
+  5. Web tool keys (optional; Serper enables web_search, Jina raises web_fetch's
+     rate limit; mirrored to ~/.raven/env so sub-agents inherit them)
   6. Sub-agents shipped in this checkout (optional; per folder, own key or
      this raven's LLM)
   7. Cold-start import from other AI tools (optional)
@@ -36,36 +36,75 @@ import sys
 from typing import Any, Callable, Optional
 
 import typer
+from rich.console import Console
 from rich.panel import Panel
 
-from raven import i18n
 from raven.cli import onboard_channels, onboard_everos, onboard_web
-from raven.cli._helpers import print_probe_troubleshooting
-from raven.cli._onboard_shared import (  # noqa: F401  (re-exports: tests and
-    # sibling wizards address these through this module's namespace)
-    _ABORT_EVEROS,
-    _BACK,
-    _POINTER,
-    _QMARK,
-    _TOTAL_STEPS,
-    _back_placeholder,
-    _failure_choice,
-    _field_placeholder,
-    _load_raw_config,
-    _prompt_api_key,
-    _require_questionary,
-    _step_header,
-    console,
+from raven.cli._helpers import (
+    DEFAULT_PROBE_MESSAGE,
+    print_probe_troubleshooting,
+    send_probe,
 )
-from raven.core.provider_stack import DEFAULT_PROBE_MESSAGE, send_probe
-from raven.i18n import t
+from raven.cli._theme import POINTER, QMARK
 from raven.providers.registry import (
-    SHAPE_ENDPOINT,
-    SHAPE_LOCAL,
-    SHAPE_OAUTH,
-    auth_shape,
+    CRED_ENDPOINT,
+    CRED_LOCAL,
+    CRED_OAUTH,
+    credential_kind,
 )
 from raven.providers.wire import stored_model_id
+
+
+class _ThemedConsole(Console):
+    """Console that applies the light/dark theme on its first render.
+
+    Theming is deferred to the first ``print`` (never at import) so plain
+    ``raven ...`` commands don't detect or probe the terminal. Because every
+    onboard render goes through ``print`` on this instance, there is no
+    "push the theme before rendering" ordering constraint and no dependence on
+    which entry point (wizard, ``raven deep-research enable``, ...) ran first.
+    """
+
+    _themed: bool = False
+
+    def print(self, *args: Any, **kwargs: Any) -> None:
+        if not self._themed:
+            from raven.cli._theme import build_rich_theme, detect_scheme
+
+            self.push_theme(build_rich_theme(detect_scheme()))
+            self._themed = True
+        super().print(*args, **kwargs)
+
+
+console = _ThemedConsole()
+
+_TOTAL_STEPS = 7
+
+# Sentinel returned by a screen function to ask the runner to go back one
+# screen; ``None`` from a picker means Ctrl+C (exit).
+_BACK = object()
+
+# Sentinel a required EverOS role returns when the user chooses to give up EverOS
+# rather than configure it; ``_step4_memory`` then leaves memory disabled.
+_ABORT_EVEROS = object()
+
+# Unified prompt chrome (display-only), shared with every other command's
+# prompts: a single-space qmark renders as one blank, which -- with
+# questionary's own leading space -- puts every prompt line on the same 2-space
+# column as our printed help/status lines, so the left edge stays flush instead
+# of jittering between 1- and 2-space indents.
+_QMARK = QMARK
+_POINTER = POINTER
+
+# UI language, chosen on the wizard's first screen. ``_t`` returns the English
+# or Chinese variant so every later prompt / message stays bilingual.
+_LANG = "en"
+
+
+def _t(en: str, zh: str) -> str:
+    """Return ``zh`` when the user picked Chinese, else ``en``."""
+    return zh if _LANG == "zh" else en
+
 
 # ---------------------------------------------------------------------------
 # Curated provider catalogue surfaced in Step 1's picker.
@@ -86,10 +125,11 @@ _CURATED_GROUPS: list[dict[str, Any]] = [
             {
                 "name": "openrouter",
                 "label": "OpenRouter (recommended - one key, many models)",
+                "label_zh": "OpenRouter(推荐 · 一个 Key 调用多家模型)",
             },
-            {"name": "openai", "label": "OpenAI"},
-            {"name": "anthropic", "label": "Anthropic"},
-            {"name": "gemini", "label": "Gemini"},
+            {"name": "openai", "label": "OpenAI", "label_zh": "OpenAI"},
+            {"name": "anthropic", "label": "Anthropic", "label_zh": "Anthropic"},
+            {"name": "gemini", "label": "Gemini", "label_zh": "Gemini"},
             # Marked because EverMind and MiniMax collaborate in the open, not
             # because it ranks differently on capability -- "open-source" rather
             # than a bare "partner", which in a list of vendors reads as paid
@@ -99,16 +139,17 @@ _CURATED_GROUPS: list[dict[str, Any]] = [
             {
                 "name": "minimax",
                 "label": "MiniMax (open-source partner)",
+                "label_zh": "MiniMax(开源合作伙伴)",
             },
-            {"name": "deepseek", "label": "DeepSeek"},
-            {"name": "zai", "label": "Z.ai (Zhipu)"},
-            {"name": "dashscope", "label": "DashScope"},
-            {"name": "moonshot", "label": "Moonshot"},
-            {"name": "volcengine", "label": "VolcEngine"},
-            {"name": "siliconflow", "label": "SiliconFlow"},
-            {"name": "groq", "label": "Groq"},
-            {"name": "aihubmix", "label": "AiHubMix"},
-            {"name": "azure_openai", "label": "Azure OpenAI"},
+            {"name": "deepseek", "label": "DeepSeek", "label_zh": "DeepSeek"},
+            {"name": "zai", "label": "Z.ai (Zhipu)", "label_zh": "Z.ai(智谱)"},
+            {"name": "dashscope", "label": "DashScope", "label_zh": "阿里云百炼"},
+            {"name": "moonshot", "label": "Moonshot", "label_zh": "Moonshot(月之暗面)"},
+            {"name": "volcengine", "label": "VolcEngine", "label_zh": "火山方舟"},
+            {"name": "siliconflow", "label": "SiliconFlow", "label_zh": "硅基流动"},
+            {"name": "groq", "label": "Groq", "label_zh": "Groq"},
+            {"name": "aihubmix", "label": "AiHubMix", "label_zh": "AiHubMix"},
+            {"name": "azure_openai", "label": "Azure OpenAI", "label_zh": "Azure OpenAI"},
         ],
     },
     {
@@ -117,20 +158,22 @@ _CURATED_GROUPS: list[dict[str, Any]] = [
             {
                 "name": "github_copilot",
                 "label": "GitHub Copilot (OAuth)",
+                "label_zh": "GitHub Copilot(OAuth 登录)",
             },
-            {"name": "openai_codex", "label": "OpenAI Codex (OAuth)"},
+            {"name": "openai_codex", "label": "OpenAI Codex (OAuth)", "label_zh": "OpenAI Codex(OAuth 登录)"},
             {
                 "name": "minimax_global",
                 "label": "MiniMax Global (OAuth)",
+                "label_zh": "MiniMax Global(OAuth 登录)",
             },
-            {"name": "minimax_cn", "label": "MiniMax CN (OAuth)"},
+            {"name": "minimax_cn", "label": "MiniMax CN (OAuth)", "label_zh": "MiniMax CN(OAuth 登录)"},
         ],
     },
     {
         "kind": "local",
         "providers": [
-            {"name": "ollama_chat", "label": "Ollama (local)"},
-            {"name": "hosted_vllm", "label": "vLLM / self-hosted"},
+            {"name": "ollama_chat", "label": "Ollama (local)", "label_zh": "Ollama(本地)"},
+            {"name": "hosted_vllm", "label": "vLLM / self-hosted", "label_zh": "vLLM / 自托管"},
         ],
     },
     {
@@ -139,10 +182,12 @@ _CURATED_GROUPS: list[dict[str, Any]] = [
             {
                 "name": _PICK_LITELLM_VENDOR,
                 "label": "Another supported vendor (type to search)",
+                "label_zh": "其他支持的厂商(输入可搜索)",
             },
             {
                 "name": "custom",
                 "label": "Self-hosted OpenAI-compatible endpoint",
+                "label_zh": "自建 OpenAI 兼容端点",
             },
         ],
     },
@@ -152,6 +197,55 @@ _CURATED_GROUPS: list[dict[str, Any]] = [
 _CURATED_PROVIDERS: list[dict[str, Any]] = [
     entry for group in _CURATED_GROUPS for entry in group["providers"] if entry["name"] != _PICK_LITELLM_VENDOR
 ]
+
+_QUESTIONARY_INSTALL_HINT = (
+    "[red]Missing dependency:[/red] [accent]questionary[/accent] is required for "
+    "interactive onboarding.\n"
+    "Install it with: [accent]uv add 'questionary>=2.0,<3.0'[/accent]\n"
+    "Or re-run with [accent]--non-interactive[/accent] plus the relevant flags."
+)
+
+
+_PROMPT_THEMED = False
+
+
+def _theme_questionary(questionary: Any) -> None:
+    """Give every ``select`` a consistent pointer and drop questionary's own
+    "(Use arrow keys)" hint — the step header already prints the controls.
+
+    Display-only and applied once: we wrap ``questionary.select`` so callers
+    that don't pass ``pointer`` / ``instruction`` inherit the unified look,
+    while any explicit value still wins (``setdefault``).
+    """
+    global _PROMPT_THEMED
+    if _PROMPT_THEMED:
+        return
+    import functools
+
+    _orig_select = questionary.select
+
+    @functools.wraps(_orig_select)
+    def _themed_select(*args: Any, **kwargs: Any) -> Any:
+        kwargs.setdefault("pointer", _POINTER)
+        # questionary shows "(Use arrow keys)" when instruction is falsy; a
+        # single space is truthy yet visually blank, so it hides that hint
+        # (the step header already prints the controls).
+        kwargs.setdefault("instruction", " ")
+        return _orig_select(*args, **kwargs)
+
+    questionary.select = _themed_select
+    _PROMPT_THEMED = True
+
+
+def _require_questionary() -> Any:
+    """Lazy-import :mod:`questionary` so missing-package errors stay scoped here."""
+    try:
+        import questionary
+    except ModuleNotFoundError:
+        console.print(_QUESTIONARY_INSTALL_HINT)
+        raise typer.Exit(1)
+    _theme_questionary(questionary)
+    return questionary
 
 
 def _config_language() -> str:
@@ -167,11 +261,12 @@ def _config_language() -> str:
 
 
 def _pick_language() -> None:
-    """First screen: choose the wizard's language. Updates the UI language.
+    """First screen: choose the wizard's language. Updates module-level ``_LANG``.
 
     Persistence happens later (after bootstrap created the config file), via
     ``set_language`` in :func:`_run_wizard_body`.
     """
+    global _LANG
     questionary = _require_questionary()
     from raven.cli._styles import RAVEN_STYLE
 
@@ -197,18 +292,36 @@ def _pick_language() -> None:
             questionary.Choice("English", value="en"),
             questionary.Choice("中文(简体)", value="zh"),
         ],
-        default=i18n.current_language(),  # preselect the saved language on a re-run
+        default=_LANG,  # preselect the saved language on a re-run
         style=RAVEN_STYLE,
         qmark=_QMARK,
     ).ask()
     if picked is None:
         raise typer.Exit(1)
-    i18n.set_language(picked)
+    _LANG = picked
 
 
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
+
+def _step_header(n: int, title: str) -> None:
+    # Progress dots: filled for done/current steps, hollow for upcoming ones.
+    dots = " ".join("[accent]●[/accent]" if i <= n else "[grey37]○[/grey37]" for i in range(1, _TOTAL_STEPS + 1))
+    console.print()
+    console.print(
+        Panel(
+            f"[heading]{title}[/heading]",
+            title=f"[bold][accent]{_t('Step', '步骤')} {n}/{_TOTAL_STEPS}[/accent][/bold]",
+            title_align="left",
+            subtitle=dots,
+            subtitle_align="right",
+            border_style="border",
+            padding=(0, 2),
+        )
+    )
+    console.print()  # breathing room between the header and the step's prompts
 
 
 def _check_tty_or_die(non_interactive: bool) -> None:
@@ -222,6 +335,19 @@ def _check_tty_or_die(non_interactive: bool) -> None:
             "[accent]raven onboard --non-interactive --provider <name> --api-key <key>[/accent]"
         )
         raise typer.Exit(2)
+
+
+def _load_raw_config() -> dict[str, Any]:
+    """Return the parsed on-disk config, or ``{}`` if absent/empty.
+
+    A present-but-unparseable config raises ConfigReadError (surfaced cleanly by
+    the CLI entrypoint) instead of being silently treated as empty -- which
+    would let onboard misread state and write over a config whose only fault is
+    a syntax typo.
+    """
+    from raven.config.loader import get_config_path, read_raw_or_raise
+
+    return read_raw_or_raise(get_config_path()) or {}
 
 
 def _configured_providers() -> list[str]:
@@ -313,16 +439,15 @@ def _bootstrap_empty_config() -> None:
     """
     from raven.config.loader import get_config_path, load_config, save_config
     from raven.config.paths import get_workspace_path
-    from raven.utils.workspace import sync_workspace_templates
+    from raven.utils.helpers import sync_workspace_templates
 
     path = get_config_path()
     if not path.exists():
-        # Creates the file; save_config dumps with exclude_defaults, so a
-        # fresh config is sparse -- it records what the user set, nothing else.
-        save_config(load_config())
+        save_config(load_config())  # writes default Config() to disk
+    onboard_everos._init_extension_block_defaults()
     workspace = get_workspace_path()
     workspace.mkdir(parents=True, exist_ok=True)
-    sync_workspace_templates(workspace, notify=lambda m: console.print(f"  [dim]{m}[/dim]"))
+    sync_workspace_templates(workspace)
 
 
 # ---------------------------------------------------------------------------
@@ -334,7 +459,7 @@ def _provider_label(name: str) -> str:
     """Display label for a provider, falling back to the registry's display_name."""
     for entry in _CURATED_PROVIDERS:
         if entry["name"] == name:
-            return t(entry["label"])
+            return _t(entry["label"], entry.get("label_zh", entry["label"]))
     try:
         from raven.providers.registry import find_by_name
 
@@ -370,6 +495,34 @@ def _validate_provider_name(name: str) -> str:
     # and a former name would have the wizard reading one section and writing
     # another.
     return spec.name
+
+
+def _back_placeholder(allow_back: bool, label: Optional[str] = None) -> Any:
+    """A faint in-field placeholder telling the user what an empty submit does.
+
+    Rendered greyed inside the input (via prompt_toolkit's ``placeholder``),
+    it disappears the moment they type and leaves nothing behind once the
+    prompt is answered. Returns ``None`` when back isn't offered. ``label``
+    overrides the default "go back" wording for prompts where an empty submit
+    means something else (e.g. cancelling rather than rewinding a step).
+    """
+    if not allow_back:
+        return None
+    return [("fg:#6c6c6c italic", label or _t("empty ↵ to go back", "留空回车返回上一步"))]
+
+
+def _field_placeholder(allow_back: bool, required: bool) -> Any:
+    """In-field hint for a channel credential prompt.
+
+    First field: empty submit rewinds to the channel picker (back). Later
+    optional fields: empty submit skips them. Required later fields get no
+    hint — an empty submit there silently drops a value the channel needs.
+    """
+    if allow_back:
+        return _back_placeholder(True)
+    if not required:
+        return [("fg:#6c6c6c italic", _t("empty ↵ to skip", "留空回车跳过"))]
+    return None
 
 
 def _collect_fields(prompts: list[Callable[[], Any]]) -> Optional[list[Any]]:
@@ -417,15 +570,15 @@ def _select_provider_row() -> Optional[str]:
         for entry in group["providers"]:
             choices.append(
                 questionary.Choice(
-                    t(entry["label"]),
+                    _t(entry["label"], entry.get("label_zh", entry["label"])),
                     value=entry["name"],
                 )
             )
     choices.append(questionary.Separator())
-    choices.append(questionary.Choice(t("Back"), value=_BACK))
+    choices.append(questionary.Choice(_t("Back", "返回"), value=_BACK))
 
     return questionary.select(
-        t("Provider:"),
+        _t("Provider:", "服务商:"),
         choices=choices,
         style=RAVEN_STYLE,
         qmark=_QMARK,
@@ -490,7 +643,10 @@ def _prompt_litellm_vendor() -> Optional[str]:
     choices = _litellm_vendor_choices()
 
     typed = questionary.autocomplete(
-        t("Vendor name ({a0} supported - type to search, Tab to complete, empty to go back):", a0=len(choices)),
+        _t(
+            f"Vendor name ({len(choices)} supported - type to search, Tab to complete, empty to go back):",
+            f"厂商名(支持 {len(choices)} 家 — 输入可搜索,Tab 补全,留空返回):",
+        ),
         choices=choices,
         style=RAVEN_STYLE,
         qmark=_QMARK,
@@ -506,6 +662,42 @@ def _prompt_litellm_vendor() -> Optional[str]:
     # through the same gate the --provider flag goes through, which is what turns
     # a typo into a message instead of a traceback.
     return normalize_provider_name(typed)
+
+
+def _prompt_api_key(provider: str, *, allow_back: bool = False, back_label: Optional[str] = None) -> Any:
+    """Ask for an API key (hidden input). Returns ``_BACK`` on empty submit
+    when ``allow_back`` is set, else the key string. ``back_label`` overrides
+    the empty-submit hint for callers where it cancels rather than rewinds."""
+    questionary = _require_questionary()
+    from raven.cli._styles import RAVEN_STYLE
+
+    def _validate(v: str) -> Any:
+        if allow_back and v == "":
+            return True  # a truly-empty submit is the back/cancel signal
+        return (
+            True
+            if len(v.strip()) >= 8
+            else _t(
+                "API key looks off (empty or too short) — please re-enter (≥ 8 chars).",
+                "API Key 看起来不对(过短或为空),请重新输入(至少 8 位)。",
+            )
+        )
+
+    key = questionary.password(
+        _t("Paste your API key:", "粘贴你的 API Key:"),
+        validate=_validate,
+        placeholder=_back_placeholder(allow_back, back_label),
+        style=RAVEN_STYLE,
+        qmark=_QMARK,
+    ).ask()
+    if key is None:
+        raise typer.Exit(1)
+    key = key.strip()
+    if allow_back and key == "":
+        return _BACK
+    if not key:
+        raise typer.Exit(1)
+    return key
 
 
 def _prompt_local_api_base(spec: Any, *, current: str = "", allow_back: bool = False) -> Any:
@@ -525,10 +717,14 @@ def _prompt_local_api_base(spec: Any, *, current: str = "", allow_back: bool = F
     def _validate(v: str) -> Any:
         if allow_back and v.strip() == "":
             return True
-        return True if v.strip().startswith(("http://", "https://")) else t("URL must start with http:// or https://")
+        return (
+            True
+            if v.strip().startswith(("http://", "https://"))
+            else _t("URL must start with http:// or https://", "地址需以 http:// 或 https:// 开头")
+        )
 
     url = questionary.text(
-        t("{a0} server URL:", a0=spec.label),
+        _t(f"{spec.label} server URL:", f"{spec.label} 服务地址:"),
         default=current or spec.default_api_base or "",
         validate=_validate,
         placeholder=_back_placeholder(allow_back),
@@ -558,10 +754,14 @@ def _prompt_base_url(default: str = "https://", *, allow_back: bool = False) -> 
     def _validate(v: str) -> Any:
         if allow_back and v == "":
             return True
-        return True if v.startswith(("http://", "https://")) else t("URL must start with http:// or https://")
+        return (
+            True
+            if v.startswith(("http://", "https://"))
+            else _t("URL must start with http:// or https://", "地址需以 http:// 或 https:// 开头")
+        )
 
     url = questionary.text(
-        t("Base URL (must include /v1):"),
+        _t("Base URL (must include /v1):", "Base URL(需包含 /v1):"),
         default=seed,
         validate=_validate,
         placeholder=_back_placeholder(allow_back),
@@ -587,10 +787,13 @@ def _prompt_custom_model(*, allow_back: bool = False) -> Any:
     def _validate(v: str) -> Any:
         if allow_back and v.strip() == "":
             return True
-        return True if v.strip() else t("Model id is required for custom endpoints.")
+        return True if v.strip() else _t("Model id is required for custom endpoints.", "自定义端点必须指定模型 id。")
 
     model = questionary.text(
-        t("Default model id (e.g. 'gpt-3.5-turbo' or 'qwen-max'):"),
+        _t(
+            "Default model id (e.g. 'gpt-3.5-turbo' or 'qwen-max'):",
+            "默认模型 id(如 'gpt-3.5-turbo' 或 'qwen-max'):",
+        ),
         validate=_validate,
         placeholder=_back_placeholder(allow_back),
         style=RAVEN_STYLE,
@@ -617,18 +820,34 @@ def _run_oauth_login(provider: str) -> bool:
     from raven.providers.registry import find_by_name
 
     spec = find_by_name(provider)
-    if auth_shape(provider) != SHAPE_OAUTH:
-        console.print(t("  [red]✗ {provider} is not an OAuth provider.[/red]", provider=provider))
+    if credential_kind(provider) != CRED_OAUTH:
+        console.print(
+            _t(
+                f"  [red]✗ {provider} is not an OAuth provider.[/red]",
+                f"  [red]✗ {provider} 不是 OAuth 服务商。[/red]",
+            )
+        )
         raise typer.Exit(1)
     handler = _LOGIN_HANDLERS.get(spec.name)
     if not handler:
-        console.print(t("  [red]✗ No login handler registered for {provider}.[/red]", provider=provider))
+        console.print(
+            _t(
+                f"  [red]✗ No login handler registered for {provider}.[/red]",
+                f"  [red]✗ 未为 {provider} 注册登录处理器。[/red]",
+            )
+        )
         raise typer.Exit(1)
-    console.print(t("  [accent]Starting OAuth login for {a0}…[/accent]\n", a0=spec.label))
     console.print(
-        t(
+        _t(
+            f"  [accent]Starting OAuth login for {spec.label}…[/accent]\n",
+            f"  [accent]正在为 {spec.label} 启动 OAuth 登录…[/accent]\n",
+        )
+    )
+    console.print(
+        _t(
             "  [dim]A browser window / link will open — finish the sign-in there, "
-            "then come back here. This waits until you're done.[/dim]\n"
+            "then come back here. This waits until you're done.[/dim]\n",
+            "  [dim]会打开浏览器窗口 / 链接 — 在那里完成登录后回到这里;这里会一直等到你完成。[/dim]\n",
         )
     )
     try:
@@ -638,7 +857,12 @@ def _run_oauth_login(provider: str) -> bool:
         if exc.exit_code:
             return False
     except Exception as exc:  # network / browser / token errors — recoverable
-        console.print(t("  [yellow]✗ Login didn't complete: {exc}[/yellow]", exc=exc))
+        console.print(
+            _t(
+                f"  [yellow]✗ Login didn't complete: {exc}[/yellow]",
+                f"  [yellow]✗ 登录未完成:{exc}[/yellow]",
+            )
+        )
         return False
     return True
 
@@ -655,15 +879,15 @@ def _verify_provider(provider: str, *, skip_test: bool = False) -> tuple[bool, s
     # A local deployment has no key to verify -- what is being checked is that
     # the address answers, and saying "API key" there describes a field the user
     # was never asked for.
-    if auth_shape(provider) == SHAPE_LOCAL:
-        console.print(t("  [dim]⏳ Reaching the server…[/dim]"))
+    if credential_kind(provider) == CRED_LOCAL:
+        console.print(_t("  [dim]⏳ Reaching the server…[/dim]", "  [dim]⏳ 正在连接服务…[/dim]"))
     else:
-        console.print(t("  [dim]⏳ Verifying your API key…[/dim]"))
+        console.print(_t("  [dim]⏳ Verifying your API key…[/dim]", "  [dim]⏳ 正在验证 API Key…[/dim]"))
     result = probe(provider)
     if result["ok"]:
         models = result.get("models_count")
-        suffix = t(" ({models} models available)", models=models) if models else ""
-        console.print(t("  [green]✓ Connected!{suffix}[/green]", suffix=suffix))
+        suffix = _t(f" ({models} models available)", f"(共 {models} 个可用模型)") if models else ""
+        console.print(_t(f"  [green]✓ Connected!{suffix}[/green]", f"  [green]✓ 连接成功!{suffix}[/green]"))
         return True, "valid", result.get("model_ids")
 
     status = result.get("status", "unknown")
@@ -681,25 +905,42 @@ def _verify_provider(provider: str, *, skip_test: bool = False) -> tuple[bool, s
     if status == "no_probe_endpoint" or (status == "not_configured" and "api_base" in (result.get("error") or "")):
         if skip_test:
             console.print(
-                t(
-                    "  [dim]Skipping the model-list pre-check (this provider has no public /models endpoint); connectivity is not tested (--skip-test).[/dim]"
+                _t(
+                    "  [dim]Skipping the model-list pre-check (this provider has no public /models endpoint); connectivity is not tested (--skip-test).[/dim]",
+                    "  [dim]跳过模型列表预检(该服务商无公开 /models 端点);未做连通测试(--skip-test)。[/dim]",
                 )
             )
         else:
             console.print(
-                t(
-                    "  [dim]Skipping the model-list pre-check (this provider has no public /models endpoint); the test message below will confirm connectivity.[/dim]"
+                _t(
+                    "  [dim]Skipping the model-list pre-check (this provider has no public /models endpoint); the test message below will confirm connectivity.[/dim]",
+                    "  [dim]跳过模型列表预检(该服务商无公开 /models 端点);稍后的测试消息会验证连通。[/dim]",
                 )
             )
         return True, "skipped", None
     hint_map = {
-        "invalid_key": t("Auth failed: the API key is invalid — check for typos / stray spaces."),
-        "no_credits": t("Account out of credits or not provisioned — top up and retry."),
-        "rate_limited": t("Rate limited — wait a bit and retry, or switch provider."),
-        "network_error": t("Network error reaching the provider — check network / proxy / VPN."),
-        "oauth_token_missing": t("Run: raven provider login {a0}", a0=provider.replace("_", "-")),
+        "invalid_key": _t(
+            "Auth failed: the API key is invalid — check for typos / stray spaces.",
+            "鉴权失败:API Key 无效 — 检查有无拼写错误或多余空格。",
+        ),
+        "no_credits": _t(
+            "Account out of credits or not provisioned — top up and retry.",
+            "账户余额不足或未开通 — 充值后重试。",
+        ),
+        "rate_limited": _t(
+            "Rate limited — wait a bit and retry, or switch provider.",
+            "触发限流 — 稍等后重试,或更换服务商。",
+        ),
+        "network_error": _t(
+            "Network error reaching the provider — check network / proxy / VPN.",
+            "连接服务商时网络出错 — 检查网络 / 代理 / VPN。",
+        ),
+        "oauth_token_missing": _t(
+            f"Run: raven provider login {provider.replace('_', '-')}",
+            f"请运行:raven provider login {provider.replace('_', '-')}",
+        ),
     }
-    msg = hint_map.get(status, t("Verification failed: {status}", status=status))
+    msg = hint_map.get(status, _t(f"Verification failed: {status}", f"验证失败:{status}"))
     console.print(f"  [yellow]✗ {msg}[/yellow]" + (f"  [dim]{result['error']}[/dim]" if result.get("error") else ""))
     return False, status, None
 
@@ -722,7 +963,7 @@ def _model_routes_to_provider(model: str, spec: Any) -> bool:
 # provider -- which field to prompt for, what a failure offers to change, what
 # "remove" clears, whether a rollback applies -- follows from this one question,
 # and it was being answered independently at thirteen sites off two spec flags.
-# Sites did disagree in practice:
+# Each of the last two review rounds found a site that disagreed with the others:
 # a rollback that wrote credentials to an OAuth provider and killed the wizard, a
 # menu that offered a key prompt to one, a prompt that half-guarded a spec it had
 # already dereferenced. Answer it once.
@@ -794,17 +1035,23 @@ def _pick_model(
             # just above it and read as a failure to a user for whom nothing
             # had failed.
             console.print(
-                t("  [dim]This provider has no model list to fetch - offering the ones we know.[/dim]")
+                _t(
+                    "  [dim]This provider has no model list to fetch - offering the ones we know.[/dim]",
+                    "  [dim]该服务商没有可拉取的模型列表,先列出已知的。[/dim]",
+                )
                 if probe_status == "skipped"
-                else t("  [dim]Couldn't reach the provider for its model list - offering the ones we know.[/dim]")
+                else _t(
+                    "  [dim]Couldn't reach the provider for its model list - offering the ones we know.[/dim]",
+                    "  [dim]未能向服务商拉取模型列表,先列出已知的。[/dim]",
+                )
             )
             model_ids = known
 
     if default_value and default_value == spec.default_model:
         console.print(
-            t(
-                "  [dim]Default: {default_value} — recommended balance of quality/cost for daily use.[/dim]",
-                default_value=default_value,
+            _t(
+                f"  [dim]Default: {default_value} — recommended balance of quality/cost for daily use.[/dim]",
+                f"  [dim]默认:{default_value} — 质量/成本均衡,适合日常使用。[/dim]",
             )
         )
 
@@ -822,7 +1069,10 @@ def _pick_model(
         # hard-coded id could not be.
         if not default_value:
             default_value = choices[0]
-        prompt_label = t("Default model ({a0} available — type to filter, Tab to complete):", a0=len(choices))
+        prompt_label = _t(
+            f"Default model ({len(choices)} available — type to filter, Tab to complete):",
+            f"默认模型(共 {len(choices)} 个 — 输入可筛选,Tab 补全):",
+        )
         chosen = questionary.autocomplete(
             prompt_label,
             choices=choices,
@@ -833,18 +1083,26 @@ def _pick_model(
             match_middle=True,
         ).ask()
     else:
-        console.print(t("  [dim]Couldn't fetch the model list — enter the model id by hand.[/dim]"))
+        console.print(
+            _t(
+                "  [dim]Couldn't fetch the model list — enter the model id by hand.[/dim]",
+                "  [dim]未能拉取模型列表,请手动输入模型 id。[/dim]",
+            )
+        )
         if default_value:
             chosen = questionary.text(
-                t("Default model (press Enter for [{default_value}]):", default_value=default_value),
+                _t(
+                    f"Default model (press Enter for [{default_value}]):",
+                    f"默认模型(回车使用 [{default_value}]):",
+                ),
                 default=default_value,
                 style=RAVEN_STYLE,
                 qmark=_QMARK,
             ).ask()
         else:
             chosen = questionary.text(
-                t("Default model id for {provider}:", provider=provider),
-                validate=lambda v: True if v.strip() else t("Model id is required."),
+                _t(f"Default model id for {provider}:", f"{provider} 的默认模型 id:"),
+                validate=lambda v: True if v.strip() else _t("Model id is required.", "必须指定模型 id。"),
                 style=RAVEN_STYLE,
                 qmark=_QMARK,
             ).ask()
@@ -860,7 +1118,12 @@ def _pick_model(
             # Said out loud: the prompt has already echoed an empty answer, and the
             # next thing on screen is a test message being sent. Without this the
             # model it was sent with appears nowhere.
-            console.print(t("  [dim]No model entered - using {default_value}.[/dim]", default_value=default_value))
+            console.print(
+                _t(
+                    f"  [dim]No model entered - using {default_value}.[/dim]",
+                    f"  [dim]未输入模型,使用 {default_value}。[/dim]",
+                )
+            )
             return _format_model_for_provider(provider, spec, default_value)
         raise typer.Exit(1)
     return _format_model_for_provider(provider, spec, chosen)
@@ -880,7 +1143,7 @@ def _roll_back_provider_fields(provider: str, spec: Any, *, old_key: Optional[st
     layer refuses to write credential fields for them, and doing it anyway turned
     a failed verification into a dead wizard.
     """
-    if auth_shape(provider) == SHAPE_OAUTH:
+    if credential_kind(provider) == CRED_OAUTH:
         return
     _write_provider_fields(provider, {"api_key": old_key or "", "api_base": old_base})
 
@@ -900,7 +1163,7 @@ def _write_provider_fields(provider: str, fields: dict[str, Any]) -> None:
         console.print(f"  [red]✗[/red] {exc}")
         raise typer.Exit(1)
     except ValidationError as exc:
-        console.print(t("  [red]✗ Validation failed:[/red]\n{exc}", exc=exc))
+        console.print(_t(f"  [red]✗ Validation failed:[/red]\n{exc}", f"  [red]✗ 校验失败:[/red]\n{exc}"))
         raise typer.Exit(1)
 
 
@@ -926,6 +1189,29 @@ def _persist_default_model(model: Optional[str], provider: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _failure_choice(options: list[tuple[str, str]], *, non_interactive: bool) -> str:
+    """Render a numbered failure submenu, return the chosen value.
+
+    ``options`` is a list of ``(label, value)``. In non-interactive mode the
+    last option (always "continue anyway") is auto-chosen so headless runs
+    never block.
+    """
+    if non_interactive:
+        return options[-1][1]
+    questionary = _require_questionary()
+    from raven.cli._styles import RAVEN_STYLE
+
+    chosen = questionary.select(
+        _t("What would you like to do?", "想做什么?"),
+        choices=[questionary.Choice(label, value=value) for label, value in options],
+        style=RAVEN_STYLE,
+        qmark=_QMARK,
+    ).ask()
+    if chosen is None:
+        raise typer.Exit(1)
+    return chosen
+
+
 def _run_test_probe(
     provider: str,
     *,
@@ -944,23 +1230,31 @@ def _run_test_probe(
     model was fixed with the base_url upfront (Switch re-enters both).
     """
     console.print(
-        t('  [dim]Sending test message: "{DEFAULT_PROBE_MESSAGE}"[/dim]', DEFAULT_PROBE_MESSAGE=DEFAULT_PROBE_MESSAGE)
+        _t(
+            f'  [dim]Sending test message: "{DEFAULT_PROBE_MESSAGE}"[/dim]',
+            f'  [dim]正在发送测试消息:"{DEFAULT_PROBE_MESSAGE}"[/dim]',
+        )
     )
     try:
         text, tokens, elapsed = send_probe()
     except Exception as exc:
-        console.print(t("  [red]✗ Test failed:[/red] {exc}", exc=exc))
+        console.print(_t(f"  [red]✗ Test failed:[/red] {exc}", f"  [red]✗ 测试失败:[/red] {exc}"))
         console.print(
-            t("  [dim]Run 'raven provider test' to re-check, or confirm the model is served by this provider.[/dim]")
+            _t(
+                "  [dim]Run 'raven provider test' to re-check, or confirm the model is served by this provider.[/dim]",
+                "  [dim]可运行 'raven provider test' 复查,或确认该模型确由此服务商提供。[/dim]",
+            )
         )
         print_probe_troubleshooting(provider)
-        options = [(t("Retry"), "retry")]
+        options = [(_t("Retry", "重试"), "retry")]
         if allow_repick:
-            options.append((t("Re-pick model"), "repick"))
-        options.append((t("Sign in again"), "reauth") if is_oauth else (t("Re-enter key"), "rekey"))
+            options.append((_t("Re-pick model", "重新选模型"), "repick"))
+        options.append(
+            (_t("Sign in again", "重新登录"), "reauth") if is_oauth else (_t("Re-enter key", "重新填 Key"), "rekey")
+        )
         options += [
-            (t("Switch provider"), "switch"),
-            (t("Continue anyway"), "continue"),
+            (_t("Switch provider", "更换服务商"), "switch"),
+            (_t("Continue anyway", "仍然继续"), "continue"),
         ]
         choice = _failure_choice(options, non_interactive=non_interactive)
         if choice == "retry":
@@ -1048,13 +1342,18 @@ def _configure_one_provider(
                 continue
 
         spec = find_by_name(provider)
-        kind = auth_shape(provider)
-        is_oauth = kind == SHAPE_OAUTH
-        is_custom = kind == SHAPE_ENDPOINT
+        kind = credential_kind(provider)
+        is_oauth = kind == CRED_OAUTH
+        is_custom = kind == CRED_ENDPOINT
         # The interactive picker already echoes the chosen provider; only print
         # an explicit confirmation when it came from --provider (no echo then).
         if flag_provider:
-            console.print(t("  [dim]Provider:[/dim] [accent]{a0}[/accent]", a0=_provider_label(provider)))
+            console.print(
+                _t(
+                    f"  [dim]Provider:[/dim] [accent]{_provider_label(provider)}[/accent]",
+                    f"  [dim]服务商:[/dim] [accent]{_provider_label(provider)}[/accent]",
+                )
+            )
 
         # Snapshot the stored key before _collect_credentials overwrites it, so a
         # failed re-configuration of an existing provider can be rolled back to
@@ -1073,7 +1372,7 @@ def _configure_one_provider(
             provider,
             is_oauth=is_oauth,
             is_custom=is_custom,
-            is_local=kind == SHAPE_LOCAL,
+            is_local=kind == CRED_LOCAL,
             api_key=api_key,
             base_url=base_url,
             model=model,
@@ -1160,8 +1459,8 @@ def _collect_credentials(
                 return None
             choice = _failure_choice(
                 [
-                    (t("Retry"), "retry"),
-                    (t("Back (pick another provider)"), "back"),
+                    (_t("Retry", "重试"), "retry"),
+                    (_t("Back (pick another provider)", "返回(改选服务商)"), "back"),
                 ],
                 non_interactive=non_interactive,
             )
@@ -1281,12 +1580,16 @@ def _resolve_model_with_test(
         if not ok:
             options = (
                 [
-                    (t("Retry"), "retry"),
+                    (_t("Retry", "重试"), "retry"),
                     # A local deployment that cannot be reached is usually a
                     # wrong address, and this is the branch it lands in -- so
                     # retry alone left the one thing worth changing unreachable.
-                    *([(t("Re-enter server URL"), "rebase")] if auth_shape(provider) == SHAPE_LOCAL else []),
-                    (t("Continue anyway"), "continue"),
+                    *(
+                        [(_t("Re-enter server URL", "重新填服务地址"), "rebase")]
+                        if credential_kind(provider) == CRED_LOCAL
+                        else []
+                    ),
+                    (_t("Continue anyway", "仍然继续"), "continue"),
                 ]
                 if status == "network_error"
                 else [
@@ -1294,19 +1597,19 @@ def _resolve_model_with_test(
                     # A local deployment has no key to re-enter, so offering that
                     # left a mistyped address with no way back to the field.
                     (
-                        (t("Sign in again"), "reauth")
-                        if auth_shape(provider) == SHAPE_OAUTH
-                        else (t("Re-enter server URL"), "rebase")
-                        if auth_shape(provider) == SHAPE_LOCAL
-                        else (t("Re-enter key"), "rekey")
+                        (_t("Sign in again", "重新登录"), "reauth")
+                        if credential_kind(provider) == CRED_OAUTH
+                        else (_t("Re-enter server URL", "重新填服务地址"), "rebase")
+                        if credential_kind(provider) == CRED_LOCAL
+                        else (_t("Re-enter key", "重新填 Key"), "rekey")
                     ),
                     # Also retry, because this branch takes the failures that
                     # cannot be sorted: a credential the account refused and a
                     # refresh that could not reach the network arrive as the same
                     # thing, and only one of them is fixed by signing in again.
-                    (t("Retry"), "retry"),
-                    (t("Switch provider"), "switch"),
-                    (t("Continue anyway"), "continue"),
+                    (_t("Retry", "重试"), "retry"),
+                    (_t("Switch provider", "更换服务商"), "switch"),
+                    (_t("Continue anyway", "仍然继续"), "continue"),
                 ]
             )
             choice = _failure_choice(options, non_interactive=non_interactive)
@@ -1370,7 +1673,7 @@ def _resolve_model_with_test(
             provider,
             non_interactive=non_interactive,
             warnings=warnings,
-            is_oauth=auth_shape(provider) == SHAPE_OAUTH,
+            is_oauth=credential_kind(provider) == CRED_OAUTH,
         )
         if result == "switch":
             return None
@@ -1405,7 +1708,7 @@ def _configure_existing_provider_model(*, non_interactive: bool) -> bool:
     if not choices:
         return False
     provider = questionary.select(
-        t("Choose the provider for the default model:"),
+        _t("Choose the provider for the default model:", "选择默认模型对应的服务商:"),
         choices=choices,
         style=RAVEN_STYLE,
         qmark=_QMARK,
@@ -1430,7 +1733,7 @@ def _configure_existing_provider_model(*, non_interactive: bool) -> bool:
         provider,
         non_interactive=False,
         warnings=[],
-        is_oauth=auth_shape(provider) == SHAPE_OAUTH,
+        is_oauth=credential_kind(provider) == CRED_OAUTH,
     )
     if result == "reauth":
         return _run_oauth_login(provider)
@@ -1453,9 +1756,9 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
         if not configured:
             return
         choices = [questionary.Choice(_provider_label(n), value=n) for n in configured]
-        choices.append(questionary.Choice(t("Back"), value=_BACK))
+        choices.append(questionary.Choice(_t("Back", "返回"), value=_BACK))
         target = questionary.select(
-            t("Pick a provider to manage:"),
+            _t("Pick a provider to manage:", "选择要管理的服务商:"),
             choices=choices,
             style=RAVEN_STYLE,
             qmark=_QMARK,
@@ -1464,14 +1767,17 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
             return
 
         action = questionary.select(
-            t("What would you like to do with {a0}?", a0=_provider_label(target)),
+            _t(
+                f"What would you like to do with {_provider_label(target)}?",
+                f"对 {_provider_label(target)} 想做什么?",
+            ),
             choices=[
-                questionary.Choice(t("Update API key"), value="update"),
+                questionary.Choice(_t("Update API key", "更新 API Key"), value="update"),
                 questionary.Choice(
-                    t("Remove (clear this provider's key)"),
+                    _t("Remove (clear this provider's key)", "移除(清除该服务商的 Key)"),
                     value="remove",
                 ),
-                questionary.Choice(t("Back"), value=_BACK),
+                questionary.Choice(_t("Back", "返回"), value=_BACK),
             ],
             style=RAVEN_STYLE,
             qmark=_QMARK,
@@ -1480,19 +1786,20 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
             continue
         if action == "update":
             target_spec = find_by_name(target)
-            if auth_shape(target) == SHAPE_OAUTH:
+            if credential_kind(target) == CRED_OAUTH:
                 # Nothing here to update: the credential is a token file, and the
                 # ops layer refuses credential writes for these -- so offering the
                 # key prompt ended the wizard instead of editing anything.
                 console.print(
-                    t(
-                        "  [dim]{a0} signs in through OAuth. Run: raven provider login {a1}[/dim]",
-                        a0=_provider_label(target),
-                        a1=target.replace("_", "-"),
+                    _t(
+                        f"  [dim]{_provider_label(target)} signs in through OAuth. "
+                        f"Run: raven provider login {target.replace('_', '-')}[/dim]",
+                        f"  [dim]{_provider_label(target)} 通过 OAuth 登录。"
+                        f"请运行: raven provider login {target.replace('_', '-')}[/dim]",
                     )
                 )
                 continue
-            if auth_shape(target) == SHAPE_LOCAL:
+            if credential_kind(target) == CRED_LOCAL:
                 # A local deployment holds no key; what there is to update is
                 # where it lives. Offering the key prompt wrote a credential into
                 # a provider that never reads one, and left the address alone.
@@ -1504,7 +1811,7 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
                     stored = ""
                 retyped = _prompt_local_api_base(target_spec, current=stored)
                 _write_provider_fields(target, {"api_base": retyped})
-            elif auth_shape(target) == SHAPE_ENDPOINT:
+            elif credential_kind(target) == CRED_ENDPOINT:
                 # A self-hosted endpoint is a key *and* the address it is sent
                 # to. Updating only the key left the one field that moves when
                 # the user redeploys -- the URL -- unreachable from this menu.
@@ -1519,7 +1826,12 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
                 _write_provider_fields(target, {"api_key": retyped_key, "api_base": retyped_url})
             else:
                 _write_provider_fields(target, {"api_key": _prompt_api_key(target)})
-            console.print(t("  [green]✓ Updated {a0}.[/green]", a0=_provider_label(target)))
+            console.print(
+                _t(
+                    f"  [green]✓ Updated {_provider_label(target)}.[/green]",
+                    f"  [green]✓ 已更新 {_provider_label(target)}。[/green]",
+                )
+            )
         elif action == "remove":
             current = _load_current_default_model()
             from raven.providers.registry import find_by_name, normalize_provider_name, split_model_id
@@ -1536,9 +1848,10 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
                 was_default_source = bool(current and prefix == normalize_provider_name(target))
             if was_default_source:
                 confirm = questionary.confirm(
-                    t(
-                        "The current default model comes from {a0}; removing it means you'll need to pick a new default. Remove anyway?",
-                        a0=_provider_label(target),
+                    _t(
+                        f"The current default model comes from {_provider_label(target)}; "
+                        "removing it means you'll need to pick a new default. Remove anyway?",
+                        f"当前默认模型来自 {_provider_label(target)};移除后需要重新选择默认模型。仍要移除吗?",
                     ),
                     default=False,
                     style=RAVEN_STYLE,
@@ -1552,11 +1865,13 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
             # to clear and refuses the write, so it is told where its credential
             # actually lives instead of ending the run.
             target_spec = find_by_name(target)
-            if auth_shape(target) == SHAPE_OAUTH:
+            if credential_kind(target) == CRED_OAUTH:
                 console.print(
-                    t(
-                        "  [dim]{a0}'s credential is an OAuth token, not a config field, so there is nothing here to remove.[/dim]",
-                        a0=_provider_label(target),
+                    _t(
+                        f"  [dim]{_provider_label(target)}'s credential is an OAuth token, not a config field, "
+                        "so there is nothing here to remove.[/dim]",
+                        f"  [dim]{_provider_label(target)} 的凭据是 OAuth token,不在配置字段里,"
+                        "这里没有可移除的内容。[/dim]",
                     )
                 )
                 continue
@@ -1572,7 +1887,12 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
                 # the migration that rewrites it will not come back for a config
                 # already stamped at the current generation.
                 set_default_model("", provider="")
-            console.print(t("  [green]✓ Removed {a0}'s configuration.[/green]", a0=_provider_label(target)))
+            console.print(
+                _t(
+                    f"  [green]✓ Removed {_provider_label(target)}'s configuration.[/green]",
+                    f"  [green]✓ 已移除 {_provider_label(target)} 的配置。[/green]",
+                )
+            )
 
 
 def _step1_provider(
@@ -1587,8 +1907,13 @@ def _step1_provider(
 ) -> object:
     """Step 1 screen. Returns ``_BACK`` only when the user backs out of the
     first-run picker on the welcome screen (handled by the runner)."""
-    _step_header(1, t("Choose your LLM provider"))
-    console.print(t("  [dim]Raven's chat and reasoning are all driven by it.[/dim]"))
+    _step_header(1, _t("Choose your LLM provider", "选择 LLM 服务商"))
+    console.print(
+        _t(
+            "  [dim]Raven's chat and reasoning are all driven by it.[/dim]",
+            "  [dim]Raven 的对话与思考都由它驱动。[/dim]",
+        )
+    )
 
     configured = _configured_providers()
     if non_interactive or not configured:
@@ -1611,12 +1936,15 @@ def _step1_provider(
     while True:
         names = ", ".join(_provider_label(n).split(" (")[0] for n in _configured_providers())
         action = questionary.select(
-            t("LLM provider already configured: {names}. What would you like to do?", names=names),
+            _t(
+                f"LLM provider already configured: {names}. What would you like to do?",
+                f"LLM 服务商已配置:{names}。想做什么?",
+            ),
             choices=[
-                questionary.Choice(t("Done, continue"), value="done"),
-                questionary.Choice(t("Choose default model"), value="model"),
-                questionary.Choice(t("Add another provider"), value="add"),
-                questionary.Choice(t("Edit / remove a provider"), value="edit"),
+                questionary.Choice(_t("Done, continue", "完成,继续"), value="done"),
+                questionary.Choice(_t("Choose default model", "选择默认模型"), value="model"),
+                questionary.Choice(_t("Add another provider", "新增一个服务商"), value="add"),
+                questionary.Choice(_t("Edit / remove a provider", "编辑 / 移除服务商"), value="edit"),
             ],
             style=RAVEN_STYLE,
             qmark=_QMARK,
@@ -1628,14 +1956,22 @@ def _step1_provider(
             # a default model, so deleting every provider can't slip through.
             if not (_configured_providers() and _load_current_default_model()):
                 console.print(
-                    t("  [yellow]At least one provider with a default model is required — add or re-pick one.[/yellow]")
+                    _t(
+                        "  [yellow]At least one provider with a default model is required — add or re-pick one.[/yellow]",
+                        "  [yellow]至少需要一个带默认模型的服务商 — 请新增或重新选择一个。[/yellow]",
+                    )
                 )
                 continue
             return None
         if action == "model":
             if _configure_existing_provider_model(non_interactive=False):
                 continue
-            console.print(t("  [yellow]Could not configure a default model. Choose a provider and try again.[/yellow]"))
+            console.print(
+                _t(
+                    "  [yellow]Could not configure a default model. Choose a provider and try again.[/yellow]",
+                    "  [yellow]无法配置默认模型,请重新选择服务商。[/yellow]",
+                )
+            )
         if action == "add":
             _configure_one_provider(
                 provider=None,
@@ -1674,7 +2010,7 @@ def _probe_boxlite() -> tuple[bool, str]:
     ``reason`` ∈ ``"ok"`` / ``"missing"`` / ``"error"``. The runtime import is
     the same availability gate ``build_executor`` uses for the boxlite backend.
     """
-    console.print(t("  [dim]⏳ Checking sandbox availability…[/dim]"))
+    console.print(_t("  [dim]⏳ Checking sandbox availability…[/dim]", "  [dim]⏳ 正在检测沙箱可用性…[/dim]"))
     try:
         import boxlite  # noqa: F401
     except ImportError:
@@ -1686,9 +2022,11 @@ def _probe_boxlite() -> tuple[bool, str]:
 
 def _warn_host_risk() -> None:
     console.print(
-        t(
+        _t(
             "  [yellow]⚠ Third-party messages (channels, imports) can inject instructions.[/yellow]\n"
-            "  [yellow]⚠ On the host, injected commands execute with full host privileges.[/yellow]"
+            "  [yellow]⚠ On the host, injected commands execute with full host privileges.[/yellow]",
+            "  [yellow]⚠ 第三方消息(渠道、导入内容)可能向智能体注入指令。[/yellow]\n"
+            "  [yellow]⚠ 本机模式下,注入的命令将以宿主机全部权限执行。[/yellow]",
         )
     )
 
@@ -1699,7 +2037,7 @@ def _confirm_host_run(questionary: Any) -> bool:
 
     _warn_host_risk()
     confirmed = questionary.confirm(
-        t("Run directly on the host anyway?"),
+        _t("Run directly on the host anyway?", "仍要在本机直接运行吗?"),
         default=False,
         style=RAVEN_STYLE,
         qmark=_QMARK,
@@ -1711,11 +2049,15 @@ def _confirm_host_run(questionary: Any) -> bool:
 
 def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
     """Step 2 — choose run location (host / boxlite sandbox)."""
-    _step_header(2, t("Choose where Raven runs code / commands"))
+    _step_header(2, _t("Choose where Raven runs code / commands", "选择 Raven 运行代码 / 命令的位置"))
 
     if skip or non_interactive:
-        run_loc = t("Host (direct)") if _current_sandbox_backend() == "none" else t("Sandbox (boxlite)")
-        console.print(t("  [dim]Keeping run location: {location}.[/dim]", location=run_loc))
+        console.print(
+            _t(
+                "  [dim]Keeping run location: host (direct).[/dim]",
+                "  [dim]保持运行位置:本机直接运行。[/dim]",
+            )
+        )
         if _current_sandbox_backend() == "none":
             _warn_host_risk()
         return None
@@ -1726,23 +2068,33 @@ def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
     current = _current_sandbox_backend()
     choices: list[Any] = []
     if current != "none":
-        choices.append(questionary.Choice(t("Keep current: sandbox (boxlite)"), value="keep"))
+        choices.append(
+            questionary.Choice(_t("Keep current: sandbox (boxlite)", "沿用当前:沙箱(boxlite)"), value="keep")
+        )
     choices.extend(
         [
             questionary.Choice(
-                t("Host (direct) — simplest, runs right on your machine"),
+                _t(
+                    "Host (direct) — simplest, runs right on your machine",
+                    "本机直接运行 — 最简单,直接在你的电脑上执行",
+                ),
                 value="none",
             ),
             questionary.Choice(
-                t("Sandbox isolation (boxlite) — isolated in a lightweight VM, safer (needs platform support)"),
+                _t(
+                    "Sandbox isolation (boxlite) — isolated in a lightweight VM, safer (needs platform support)",
+                    "沙箱隔离(boxlite)— 用轻量虚拟机隔离,更安全,需环境支持",
+                ),
                 value="boxlite",
             ),
-            questionary.Choice(t("Back"), value=_BACK),
+            questionary.Choice(_t("Back", "返回"), value=_BACK),
         ]
     )
 
     while True:
-        picked = questionary.select(t("Run location:"), choices=choices, style=RAVEN_STYLE, qmark=_QMARK).ask()
+        picked = questionary.select(
+            _t("Run location:", "运行位置:"), choices=choices, style=RAVEN_STYLE, qmark=_QMARK
+        ).ask()
         if picked is None:
             raise typer.Exit(1)
         if picked is _BACK:
@@ -1754,7 +2106,12 @@ def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
         if not _confirm_host_run(questionary):
             continue
         _persist_sandbox_backend("none")
-        console.print(t("  [green]✓ Running directly on the host.[/green]"))
+        console.print(
+            _t(
+                "  [green]✓ Running directly on the host.[/green]",
+                "  [green]✓ 将在本机直接运行。[/green]",
+            )
+        )
         return None
 
     # boxlite — probe before committing.
@@ -1763,35 +2120,41 @@ def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
         if ok:
             _persist_sandbox_backend("boxlite")
             console.print(
-                t(
+                _t(
                     "  [green]✓ Sandbox available. Using default resources "
-                    "(2 CPU / 2 GB / network); tune in the config file if needed.[/green]"
+                    "(2 CPU / 2 GB / network); tune in the config file if needed.[/green]",
+                    "  [green]✓ 沙箱可用。将使用默认资源(2 CPU / 2 GB / 联网);如需调整可改配置文件。[/green]",
                 )
             )
             return None
         if reason == "missing":
             console.print(
-                t(
+                _t(
                     "  [yellow]✗ Sandbox runtime (boxlite) isn't installed.[/yellow]\n"
                     "  [dim]Install it, then choose “Retry after install”:  "
-                    "pip install 'raven\\[sandbox]'[/dim]"
+                    "pip install 'raven\\[sandbox]'[/dim]",
+                    "  [yellow]✗ 未安装沙箱运行时(boxlite)。[/yellow]\n"
+                    "  [dim]先安装,再选「安装后重试」:  "
+                    "pip install 'raven\\[sandbox]'[/dim]",
                 )
             )
         else:  # reason == "error": importable but failed to initialize
             console.print(
-                t(
+                _t(
                     "  [yellow]✗ Sandbox runtime (boxlite) is installed but failed to "
                     "start.[/yellow]\n"
                     "  [dim]Your machine may lack the required virtualization support. "
-                    "Fall back to host, or check the boxlite setup docs.[/dim]"
+                    "Fall back to host, or check the boxlite setup docs.[/dim]",
+                    "  [yellow]✗ 沙箱运行时(boxlite)已安装,但启动失败。[/yellow]\n"
+                    "  [dim]可能本机缺少所需的虚拟化支持。可退回本机运行,或查阅 boxlite 安装文档。[/dim]",
                 )
             )
         while True:
             choice = _failure_choice(
                 [
-                    (t("Fall back to host"), "host"),
-                    (t("Retry after install"), "retry"),
-                    (t("Skip"), "skip"),
+                    (_t("Fall back to host", "退回本机运行"), "host"),
+                    (_t("Retry after install", "安装后重试"), "retry"),
+                    (_t("Skip", "跳过"), "skip"),
                 ],
                 non_interactive=non_interactive,
             )
@@ -1803,7 +2166,12 @@ def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
                 if not _confirm_host_run(questionary):
                     continue
                 _persist_sandbox_backend("none")
-                console.print(t("  [green]✓ Running directly on the host.[/green]"))
+                console.print(
+                    _t(
+                        "  [green]✓ Running directly on the host.[/green]",
+                        "  [green]✓ 将在本机直接运行。[/green]",
+                    )
+                )
             return None
 
 
@@ -1819,13 +2187,20 @@ def _print_next_steps(*, warnings: list[str], show_next_steps: bool = True) -> N
     if warnings:
         console.print(
             Panel(
-                t("[bold yellow]⚠ Setup finished with warnings[/bold yellow]")
+                _t(
+                    "[bold yellow]⚠ Setup finished with warnings[/bold yellow]",
+                    "[bold yellow]⚠ 配置完成,但有警告[/bold yellow]",
+                )
                 + "\n\n"
-                + t("[dim]These items didn't pass a connectivity test:[/dim] ")
+                + _t(
+                    "[dim]These items didn't pass a connectivity test:[/dim] ",
+                    "[dim]以下项目未通过连通测试:[/dim] ",
+                )
                 + f"{', '.join(warnings)}\n"
-                + t(
+                + _t(
                     "[dim]Fix them before relying on the related features "
-                    "(re-run [/dim][accent]raven onboard[/accent][dim] to reconfigure).[/dim]"
+                    "(re-run [/dim][accent]raven onboard[/accent][dim] to reconfigure).[/dim]",
+                    "[dim]在依赖相关功能前请先修复(重新运行 [/dim][accent]raven onboard[/accent][dim] 重新配置)。[/dim]",
                 ),
                 border_style="yellow",
                 padding=(1, 2),
@@ -1834,7 +2209,10 @@ def _print_next_steps(*, warnings: list[str], show_next_steps: bool = True) -> N
     else:
         console.print(
             Panel(
-                t("[bold green]🎉 Setup complete![/bold green]"),
+                _t(
+                    "[bold green]🎉 Setup complete![/bold green]",
+                    "[bold green]🎉 配置完成![/bold green]",
+                ),
                 border_style="green",
                 padding=(0, 2),
             )
@@ -1842,21 +2220,29 @@ def _print_next_steps(*, warnings: list[str], show_next_steps: bool = True) -> N
 
     # Recap what was configured (read from disk) so the user has closure.
     provs = ", ".join(_provider_label(n).split(" (")[0] for n in _configured_providers()) or "—"
-    run_loc = t("Host (direct)") if _current_sandbox_backend() == "none" else t("Sandbox (boxlite)")
-    chans = ", ".join(onboard_channels._enabled_channels()) or t("none")
-    mem = t("EverOS") if onboard_everos._memory_enabled() else t("[yellow]off[/yellow]")
+    run_loc = (
+        _t("Host (direct)", "本机直接运行")
+        if _current_sandbox_backend() == "none"
+        else _t("Sandbox (boxlite)", "沙箱(boxlite)")
+    )
+    chans = ", ".join(onboard_channels._enabled_channels()) or _t("none", "无")
+    mem = (
+        _t("EverOS", "EverOS")
+        if onboard_everos._memory_enabled()
+        else _t("[yellow]off[/yellow]", "[yellow]未启用[/yellow]")
+    )
     recap = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
     recap.add_column(style="dim", no_wrap=True)
     recap.add_column()
-    recap.add_row(t("Provider"), provs)
-    recap.add_row(t("Default model"), _load_current_default_model() or "—")
-    recap.add_row(t("Run location"), run_loc)
-    recap.add_row(t("Channels"), chans)
-    recap.add_row(t("Memory"), mem)
+    recap.add_row(_t("Provider", "服务商"), provs)
+    recap.add_row(_t("Default model", "默认模型"), _load_current_default_model() or "—")
+    recap.add_row(_t("Run location", "运行位置"), run_loc)
+    recap.add_row(_t("Channels", "聊天渠道"), chans)
+    recap.add_row(_t("Memory", "长期记忆"), mem)
     console.print(
         Panel(
             recap,
-            title=f"[bold]{t('Your setup')}[/bold]",
+            title=f"[bold]{_t('Your setup', '你的配置')}[/bold]",
             title_align="left",
             border_style="#8a6d00",
             padding=(1, 2),
@@ -1866,23 +2252,28 @@ def _print_next_steps(*, warnings: list[str], show_next_steps: bool = True) -> N
     if not show_next_steps:
         # The startup gate runs the wizard with the TUI already on its way in,
         # so a list of commands to try next is answered before it is read.
-        console.print(t("  [dim]Setup complete - starting the TUI...[/dim]"))
+        console.print(
+            _t(
+                "  [dim]Setup complete - starting the TUI...[/dim]",
+                "  [dim]配置完成,正在进入 TUI...[/dim]",
+            )
+        )
         return
 
     table = Table(show_header=False, box=None, padding=(0, 3, 0, 0))
     table.add_column(style="accent", no_wrap=True)
     table.add_column(style="dim")
-    table.add_row("raven", t("launch the native TUI (default)"))
-    table.add_row("raven gateway", t("run the gateway (serve channels)"))
-    table.add_row('raven agent -m "hello, world"', t("ask a one-shot question"))
-    table.add_row("raven channels list", t("see connected chat channels"))
-    table.add_row("raven provider list", t("check your provider config"))
-    table.add_row("raven import run", t("import AI tool history into Raven"))
-    table.add_row("raven --help", t("see all available commands"))
+    table.add_row("raven", _t("launch the native TUI (default)", "启动原生 TUI(默认)"))
+    table.add_row("raven gateway", _t("run the gateway (serve channels)", "运行网关(对接渠道)"))
+    table.add_row('raven agent -m "hello, world"', _t("ask a one-shot question", "一次性提问"))
+    table.add_row("raven channels list", _t("see connected chat channels", "查看已接入的渠道"))
+    table.add_row("raven provider list", _t("check your provider config", "检查当前服务商配置"))
+    table.add_row("raven import run", _t("import AI tool history into Raven", "将其他 AI 工具的记忆导入 Raven"))
+    table.add_row("raven --help", _t("see all available commands", "查看所有可用命令"))
     console.print(
         Panel(
             table,
-            title=f"[bold]{t('Get started')}[/bold]",
+            title=f"[bold]{_t('Get started', '开始使用')}[/bold]",
             title_align="left",
             border_style="border",
             padding=(1, 2),
@@ -1916,18 +2307,33 @@ def _tier_choice_label(name: str, width: int, contents: str, cost: str) -> str:
 
 def _step7_import(*, skip: bool, non_interactive: bool) -> object:
     """Step 7 — optionally import conversation history from other AI tools."""
-    _step_header(7, t("Import history from other AI tools"))
+    _step_header(7, _t("Import history from other AI tools", "从其他 AI 工具导入历史"))
 
     if skip:
-        console.print(t("  [dim]Skipped via --skip-import.[/dim]"))
+        console.print(
+            _t(
+                "  [dim]Skipped via --skip-import.[/dim]",
+                "  [dim]已通过 --skip-import 跳过。[/dim]",
+            )
+        )
         return None
 
     if non_interactive:
-        console.print(t("  [dim]Skipped (non-interactive).[/dim]"))
+        console.print(
+            _t(
+                "  [dim]Skipped (non-interactive).[/dim]",
+                "  [dim]已跳过（非交互）。[/dim]",
+            )
+        )
         return None
 
     if not onboard_everos._memory_enabled():
-        console.print(t("  [dim]Skipped — EverOS long-term memory is required for history import.[/dim]"))
+        console.print(
+            _t(
+                "  [dim]Skipped — EverOS long-term memory is required for history import.[/dim]",
+                "  [dim]已跳过——历史导入需要先启用 EverOS 长期记忆。[/dim]",
+            )
+        )
         return None
 
     import sys
@@ -1937,10 +2343,13 @@ def _step7_import(*, skip: bool, non_interactive: bool) -> object:
 
     questionary = _require_questionary()
     action = questionary.select(
-        t("Would you like to import conversation history from other AI tools? (Claude Code, Codex, etc.)"),
+        _t(
+            "Would you like to import conversation history from other AI tools? (Claude Code, Codex, etc.)",
+            "是否要从其他 AI 工具（Claude Code、Codex 等）导入对话历史？",
+        ),
         choices=[
-            questionary.Choice(t("Yes"), value="yes"),
-            questionary.Choice(t("No"), value="no"),
+            questionary.Choice(_t("Yes", "是"), value="yes"),
+            questionary.Choice(_t("No", "否"), value="no"),
         ],
         style=RAVEN_STYLE,
         qmark=_QMARK,
@@ -1948,7 +2357,7 @@ def _step7_import(*, skip: bool, non_interactive: bool) -> object:
     if action is None:
         raise typer.Exit(1)
     if action == "no":
-        console.print(t("  [dim]Skipped.[/dim]"))
+        console.print(_t("  [dim]Skipped.[/dim]", "  [dim]已跳过。[/dim]"))
         return None
 
     # Set up file logging for the entire import lifecycle.
@@ -2004,7 +2413,7 @@ def _step7_import_body(
         # Not assume_yes: the wizard's own "Start?" gate sits further down, past
         # the prompts this return skips, so nothing else asks before the copy.
         if not asyncio.run(_install_skills_without_a_scan(None, assume_yes=False)):
-            console.print(t("  No importable data found."))
+            console.print(_t("  No importable data found.", "  未找到可导入的数据。"))
         return None
 
     # Discovery walks the whole Hermes skill tree, and every prompt below can be
@@ -2017,10 +2426,13 @@ def _step7_import_body(
         m = sum(1 for r in items if r.kind == SourceKind.MEMORY_FILE)
         c = sum(1 for r in items if r.kind == SourceKind.CONVERSATION)
         if m and c:
-            return t("{name} ({m} memory files, {c} conversations)", name=name, m=m, c=c)
+            return _t(
+                f"{name} ({m} memory files, {c} conversations)",
+                f"{name}（{m} 个记忆文件，{c} 个对话）",
+            )
         if m:
-            return t("{name} ({m} memory files)", name=name, m=m)
-        return t("{name} ({c} conversations)", name=name, c=c)
+            return _t(f"{name} ({m} memory files)", f"{name}（{m} 个记忆文件）")
+        return _t(f"{name} ({c} conversations)", f"{name}（{c} 个对话）")
 
     by_platform: dict[str, list[ScanResult]] = {}
     for r in all_results:
@@ -2048,7 +2460,7 @@ def _step7_import_body(
         ]
         platform_choices.append(
             questionary.Choice(
-                _platform_label(all_results, t("All platforms")),
+                _platform_label(all_results, _t("All platforms", "全部平台")),
                 value="all",
             )
         )
@@ -2060,7 +2472,10 @@ def _step7_import_body(
         # with the full-width pair the rest of the Chinese copy uses.
         platform_choices.extend(
             questionary.Choice(
-                t("{a0} (coming soon)", a0=PLATFORM_DISPLAY_NAMES.get(p.value, p.value)),
+                _t(
+                    f"{PLATFORM_DISPLAY_NAMES.get(p.value, p.value)} (coming soon)",
+                    f"{PLATFORM_DISPLAY_NAMES.get(p.value, p.value)}（即将支持）",
+                ),
                 value=f"coming:{p.value}",
                 disabled=True,
             )
@@ -2073,12 +2488,12 @@ def _step7_import_body(
         # changing your mind one prompt later should too.
         platform_choices.append(
             questionary.Choice(
-                t("Skip import"),
+                _t("Skip import", "跳过导入"),
                 value=skip_value,
             )
         )
         selected_platform = questionary.select(
-            t("Select platform:"),
+            _t("Select platform:", "选择平台："),
             choices=platform_choices,
             style=RAVEN_STYLE,
             qmark=_QMARK,
@@ -2086,7 +2501,7 @@ def _step7_import_body(
         if selected_platform is None:
             raise typer.Exit(1)
         if selected_platform == skip_value:
-            console.print(t("  [dim]Skipped.[/dim]"))
+            console.print(_t("  [dim]Skipped.[/dim]", "  [dim]已跳过。[/dim]"))
             return None
 
         if selected_platform == "all":
@@ -2101,16 +2516,15 @@ def _step7_import_body(
         # installs a dozen skills the user was never told about.
         skills = hermes_skill_count if selected_platform in ("all", Platform.HERMES.value) else 0
         console.print(
-            t(
-                "  {a0} items selected ({mem} memory files, {skills} skills, {conv} conversations).",
-                a0=len(results) + skills,
-                mem=mem,
-                skills=skills,
-                conv=conv,
+            _t(
+                f"  {len(results) + skills} items selected "
+                f"({mem} memory files, {skills} skills, {conv} conversations).",
+                f"  已选 {len(results) + skills} 项（{mem} 个记忆文件，{skills} 个技能，{conv} 个对话）。",
             )
             if skills
-            else t(
-                "  {a0} items selected ({mem} memory files, {conv} conversations).", a0=len(results), mem=mem, conv=conv
+            else _t(
+                f"  {len(results)} items selected ({mem} memory files, {conv} conversations).",
+                f"  已选 {len(results)} 项（{mem} 个记忆文件，{conv} 个对话）。",
             )
         )
 
@@ -2123,20 +2537,21 @@ def _step7_import_body(
             # mid-word at 80 columns.
             console.print()
             console.print(
-                t(
+                _t(
                     "  [dim]Memory files are preferences and project knowledge; skills are copied "
-                    "into the local skill pool; conversations are full chat history.[/dim]"
+                    "into the local skill pool; conversations are full chat history.[/dim]",
+                    "  [dim]记忆文件是偏好与项目知识，技能会复制进本地技能池，对话是完整聊天历史。[/dim]",
                 ),
                 highlight=False,
             )
             console.print()
-            file_label = t("Memory files only")
-            full_label = t("Full import")
+            file_label = _t("Memory files only", "仅记忆文件")
+            full_label = _t("Full import", "完整导入")
             label_width = max(_cell_len(file_label), _cell_len(full_label))
             file_contents = (
-                t("{mem} memory files + {skills} skills", mem=mem, skills=skills)
+                _t(f"{mem} memory files + {skills} skills", f"{mem} 个记忆文件 + {skills} 个技能")
                 if skills
-                else t("{mem} memory files", mem=mem)
+                else _t(f"{mem} memory files", f"{mem} 个记忆文件")
             )
             tier_choices = []
             if mem:
@@ -2146,7 +2561,7 @@ def _step7_import_body(
                             file_label,
                             label_width,
                             file_contents,
-                            t("minutes, low LLM cost"),
+                            _t("minutes, low LLM cost", "分钟级，LLM 开销小"),
                         ),
                         value=Tier.MEMORY_FILES,
                     )
@@ -2156,20 +2571,20 @@ def _step7_import_body(
                     _tier_choice_label(
                         full_label,
                         label_width,
-                        t("the above + {conv} conversations", conv=conv),
-                        t("hours, high LLM cost"),
+                        _t(f"the above + {conv} conversations", f"以上全部 + {conv} 个对话"),
+                        _t("hours, high LLM cost", "数小时，LLM 开销大"),
                     ),
                     value=Tier.FULL,
                 )
             )
             tier_choices.append(
                 questionary.Choice(
-                    t("Back"),
+                    _t("Back", "返回"),
                     value=back_value,
                 )
             )
             selected_tier = questionary.select(
-                t("Select import tier:"),
+                _t("Select import tier:", "选择导入档位："),
                 choices=tier_choices,
                 style=RAVEN_STYLE,
                 qmark=_QMARK,
@@ -2177,7 +2592,7 @@ def _step7_import_body(
             if selected_tier is None:
                 raise typer.Exit(1)
             if selected_tier == back_value:
-                _step_header(7, t("Import history from other AI tools"))
+                _step_header(7, _t("Import history from other AI tools", "从其他 AI 工具导入历史"))
                 break
 
             # -- Filter --
@@ -2188,7 +2603,7 @@ def _step7_import_body(
                 # uninstalled unless they are handled here.
                 scope = None if selected_platform == "all" else Platform(selected_platform)
                 if not asyncio.run(_install_skills_without_a_scan(scope, assume_yes=False)):
-                    console.print(t("  No items match the selected tier."))
+                    console.print(_t("  No items match the selected tier.", "  所选档位无匹配项。"))
                 return None
 
             f_mem = sum(1 for r in filtered if r.kind == SourceKind.MEMORY_FILE)
@@ -2196,18 +2611,21 @@ def _step7_import_body(
 
             # -- Execution mode --
             exec_mode = questionary.select(
-                t("Select execution mode:"),
+                _t("Select execution mode:", "选择执行方式："),
                 choices=[
                     questionary.Choice(
-                        t("Run now (wait for completion, show progress)"),
+                        _t("Run now (wait for completion, show progress)", "立即执行（等待完成，显示进度）"),
                         value="foreground",
                     ),
                     questionary.Choice(
-                        t("Run in background (use raven import status to check progress)"),
+                        _t(
+                            "Run in background (use raven import status to check progress)",
+                            "后台执行（用 raven import status 查看进度）",
+                        ),
                         value="background",
                     ),
                     questionary.Choice(
-                        t("Back"),
+                        _t("Back", "返回"),
                         value=back_value,
                     ),
                 ],
@@ -2229,24 +2647,30 @@ def _step7_import_body(
     platform_display = (
         PLATFORM_DISPLAY_NAMES.get(selected_platform, selected_platform)
         if selected_platform != "all"
-        else t("All platforms")
+        else _t("All platforms", "全部平台")
     )
-    tier_display = t("Memory files only") if selected_tier == Tier.MEMORY_FILES else t("Full import")
-    mode_display = t("Run now") if exec_mode == "foreground" else t("Background")
+    tier_display = (
+        _t("Memory files only", "仅记忆文件") if selected_tier == Tier.MEMORY_FILES else _t("Full import", "完整导入")
+    )
+    mode_display = _t("Run now", "立即执行") if exec_mode == "foreground" else _t("Background", "后台执行")
     console.print(
-        t(
-            "\n  About to import:\n    Platform: {platform_display}\n    Tier:     {tier_display}\n    Items:    {a2} ({f_mem} memory files, {skills} skills, {f_conv} conversations)\n    Mode:     {mode_display}",
-            platform_display=platform_display,
-            tier_display=tier_display,
-            a2=len(filtered) + skills,
-            f_mem=f_mem,
-            skills=skills,
-            f_conv=f_conv,
-            mode_display=mode_display,
+        _t(
+            f"\n  About to import:\n"
+            f"    Platform: {platform_display}\n"
+            f"    Tier:     {tier_display}\n"
+            f"    Items:    {len(filtered) + skills} ({f_mem} memory files, "
+            f"{skills} skills, {f_conv} conversations)\n"
+            f"    Mode:     {mode_display}",
+            f"\n  即将导入:\n"
+            f"    平台:     {platform_display}\n"
+            f"    档位:     {tier_display}\n"
+            f"    数量:     {len(filtered) + skills} 项"
+            f"（{f_mem} 个记忆文件，{skills} 个技能，{f_conv} 个对话）\n"
+            f"    执行方式: {mode_display}",
         )
     )
     if not typer.confirm(
-        t("  Start?"),
+        _t("  Start?", "  开始执行？"),
         default=True,
     ):
         return None
@@ -2266,7 +2690,12 @@ def _step7_import_body(
         raven_bin = shutil.which("raven")
         platform_flag = selected_platform if selected_platform != "all" else None
         if not raven_bin:
-            console.print(t("  [red]Cannot find 'raven' command. Falling back to foreground execution.[/red]"))
+            console.print(
+                _t(
+                    "  [red]Cannot find 'raven' command. Falling back to foreground execution.[/red]",
+                    "  [red]找不到 'raven' 命令。回退到前台执行。[/red]",
+                )
+            )
             exec_mode = "foreground"
         elif platform_flag is None and len(by_platform) > 1:
             # `import run` has no way to say "every platform": with no --platform
@@ -2275,9 +2704,10 @@ def _step7_import_body(
             # no terminal to ask on, so it would hang unseen after this step had
             # already reported the import as started.
             console.print(
-                t(
+                _t(
                     "  [yellow]An all-platforms import cannot run in the background yet;\n"
-                    "  running it in the foreground instead.[/yellow]"
+                    "  running it in the foreground instead.[/yellow]",
+                    "  [yellow]全平台导入暂不支持后台执行，改为前台运行。[/yellow]",
                 )
             )
             exec_mode = "foreground"
@@ -2292,9 +2722,11 @@ def _step7_import_body(
                 start_new_session=True,
             )
             console.print(
-                t(
-                    "\n  Import started in background.\n  Check progress: [accent]raven import status[/accent]\n  Log: {log_path}",
-                    log_path=log_path,
+                _t(
+                    f"\n  Import started in background.\n"
+                    f"  Check progress: [accent]raven import status[/accent]\n"
+                    f"  Log: {log_path}",
+                    f"\n  导入已在后台启动。\n  查看进度: [accent]raven import status[/accent]\n  详细日志: {log_path}",
                 )
             )
             return None
@@ -2311,7 +2743,7 @@ def _step7_import_body(
             console=console,
         ) as progress:
             task_id = progress.add_task(
-                t("Importing..."),
+                _t("Importing...", "导入中..."),
                 total=len(items),
             )
 
@@ -2353,17 +2785,13 @@ def run_wizard(
     skip_import: bool = False,
     serper_api_key: Optional[str] = None,
     jina_api_key: Optional[str] = None,
-    search_provider: Optional[str] = None,
-    fetch_provider: Optional[str] = None,
-    search_api_key: Optional[str] = None,
-    fetch_api_key: Optional[str] = None,
     non_interactive: bool = False,
     yes: bool = False,
     reset: bool = False,
     skip_test: bool = False,
     show_next_steps: bool = True,
 ) -> None:
-    """Run the seven-step onboarding wizard end-to-end.
+    """Run the 6-step onboarding wizard end-to-end.
 
     The reusable entry point: the ``onboard`` CLI command and the startup gate
     both call this. Screens form a state machine so a ``0) Back`` choice can
@@ -2391,10 +2819,6 @@ def run_wizard(
             skip_import=skip_import,
             serper_api_key=serper_api_key,
             jina_api_key=jina_api_key,
-            search_provider=search_provider,
-            fetch_provider=fetch_provider,
-            search_api_key=search_api_key,
-            fetch_api_key=fetch_api_key,
             non_interactive=non_interactive,
             yes=yes,
             reset=reset,
@@ -2408,16 +2832,19 @@ def run_wizard(
 def _step6_subagents(*, skip: bool, non_interactive: bool, warnings: list[str]) -> object:
     """Step 6 — the sub-agents in this checkout, optional, forward-only.
 
-    This is a wizard step rather than an installer step because it needs a
-    configured host raven, and ``subagents/install.sh`` runs before one exists.
-    Skipped on --skip-subagents or non-interactive; roster membership comes from
-    discovery either way, so leaving it undone just means the vendored agents
-    stay listed-and-disabled until their venvs are built, and re-running
-    ``onboard`` builds them.
+    Registration is a wizard step rather than an installer step because it needs
+    a configured host raven, and ``subagents/install.sh`` runs before one exists.
+    Skipped on --skip-subagents or non-interactive; leaving it undone just means
+    an empty third-party roster, and re-running ``onboard`` fills it in.
     """
-    _step_header(6, t("Sub-agents"))
+    _step_header(6, _t("Sub-agents", "子代理"))
     if skip or non_interactive:
-        console.print(t("  [dim]Skipping the sub-agents (set them up later: raven onboard).[/dim]"))
+        console.print(
+            _t(
+                "  [dim]Skipping the sub-agents (set them up later: raven onboard).[/dim]",
+                "  [dim]跳过子代理(以后可用 raven onboard 设置)。[/dim]",
+            )
+        )
         return None
     from raven.cli.subagent_setup import configure_subagents
 
@@ -2440,38 +2867,42 @@ def _run_wizard_body(
     skip_import: bool = False,
     serper_api_key: Optional[str] = None,
     jina_api_key: Optional[str] = None,
-    search_provider: Optional[str] = None,
-    fetch_provider: Optional[str] = None,
-    search_api_key: Optional[str] = None,
-    fetch_api_key: Optional[str] = None,
     non_interactive: bool = False,
     yes: bool = False,
     reset: bool = False,
     skip_test: bool = False,
     show_next_steps: bool = True,
 ) -> None:
+    global _LANG
     _check_tty_or_die(non_interactive)
-    i18n.set_language(_config_language())  # start from the saved language (default "en")
+    _LANG = _config_language()  # start from the saved language (default "en")
     if not non_interactive:
-        _pick_language()  # may change the UI language (persisted after bootstrap below)
+        _pick_language()  # may change _LANG (persisted after bootstrap below)
     _handle_existing_config(reset=reset, yes=yes, non_interactive=non_interactive)
     _bootstrap_empty_config()
     if not non_interactive:
         from raven.config.update import set_language
 
-        set_language(i18n.current_language())  # persist now that config.json exists
+        set_language(_LANG)  # persist now that config.json exists
 
     console.print()
     console.print(
         Panel(
-            t(
+            _t(
                 "[bold][accent]✨ Welcome to the Raven setup wizard[/accent][/bold]\n\n"
                 "[dim]We'll configure, in order:[/dim]\n"
                 "  [accent]①[/accent] LLM      [accent]②[/accent] Run location      "
                 "[accent]③[/accent] Chat channel      [accent]④[/accent] Long-term memory\n"
                 "  [accent]⑤[/accent] Web access      [accent]⑥[/accent] Sub-agents         "
                 "[accent]⑦[/accent] Import history\n\n"
-                "[dim]↑↓ select · Enter confirm · Ctrl+C quit anytime — anything already written is kept.[/dim]"
+                "[dim]↑↓ select · Enter confirm · Ctrl+C quit anytime — anything already written is kept.[/dim]",
+                "[bold][accent]✨ 欢迎使用 Raven 配置向导[/accent][/bold]\n\n"
+                "[dim]我们将依次配置:[/dim]\n"
+                "  [accent]①[/accent] LLM      [accent]②[/accent] 运行位置      "
+                "[accent]③[/accent] 聊天渠道      [accent]④[/accent] 长期记忆\n"
+                "  [accent]⑤[/accent] 联网能力      [accent]⑥[/accent] 子代理      "
+                "[accent]⑦[/accent] 历史导入\n\n"
+                "[dim]↑↓ 选择 · Enter 确认 · 随时 Ctrl+C 退出 — 已写入的配置会保留。[/dim]",
             ),
             border_style="border",
             padding=(1, 2),
@@ -2503,7 +2934,7 @@ def _run_wizard_body(
             skip_test=skip_test,
         ),
         # Ahead of the sub-agents screen on purpose: the folders it sets up fall
-        # back to the host's config for these vendors and keys, so writing them
+        # back to the host's config for exactly these two keys, so writing them
         # first is what lets a folder inherit rather than be asked again.
         lambda: onboard_web._step5_web(
             skip=skip_web,
@@ -2511,10 +2942,6 @@ def _run_wizard_body(
             yes=yes,
             serper_api_key=serper_api_key,
             jina_api_key=jina_api_key,
-            search_provider=search_provider,
-            fetch_provider=fetch_provider,
-            search_api_key=search_api_key,
-            fetch_api_key=fetch_api_key,
         ),
         lambda: _step6_subagents(
             skip=skip_subagents,
@@ -2539,7 +2966,7 @@ def _run_wizard_body(
                 _pick_language()
                 from raven.config.update import set_language
 
-                set_language(i18n.current_language())
+                set_language(_LANG)
             else:
                 index -= 1
         else:
@@ -2581,9 +3008,17 @@ def ensure_ready_to_start(*, non_interactive: bool = False) -> None:
     # credentials, or the id may resolve to a provider that never served it (a
     # deployment name carrying another vendor's keyword does that). Naming a cause
     # we have not established sends the user to fix the wrong thing.
-    console.print(t("  [yellow]No usable provider resolves the default model ({model}).[/yellow]", model=model))
     console.print(
-        t("  [dim]Choose one that works: `raven tui` then /model. Or `raven onboard` to set this up again.[/dim]")
+        _t(
+            f"  [yellow]No usable provider resolves the default model ({model}).[/yellow]",
+            f"  [yellow]默认模型({model})解析不到可用的服务商。[/yellow]",
+        )
+    )
+    console.print(
+        _t(
+            "  [dim]Choose one that works: `raven tui` then /model. Or `raven onboard` to set this up again.[/dim]",
+            "  [dim]换一个能用的:`raven tui` 后按 /model。或用 `raven onboard` 重新配置。[/dim]",
+        )
     )
 
 
@@ -2615,26 +3050,6 @@ def register(app: typer.Typer) -> None:
             None,
             "--jina-api-key",
             help="Jina key for web_fetch (honoured even under --non-interactive, which skips Step 5)",
-        ),
-        search_provider: Optional[str] = typer.Option(
-            None,
-            "--search-provider",
-            help="web_search vendor: serper, anysearch, serpapi, tavily, exa, brave or firecrawl",
-        ),
-        fetch_provider: Optional[str] = typer.Option(
-            None,
-            "--fetch-provider",
-            help="web_fetch vendor: jina, anysearch, tavily, exa or firecrawl",
-        ),
-        search_api_key: Optional[str] = typer.Option(
-            None,
-            "--search-api-key",
-            help="Key for the web_search vendor (the one --search-provider names, or the configured one)",
-        ),
-        fetch_api_key: Optional[str] = typer.Option(
-            None,
-            "--fetch-api-key",
-            help="Key for the web_fetch vendor (the one --fetch-provider names, or the configured one)",
         ),
         skip_sandbox: bool = typer.Option(False, "--skip-sandbox", help="Skip Step 2 (run location)"),
         skip_channel: bool = typer.Option(False, "--skip-channel", help="Skip Step 3 (channel setup)"),
@@ -2674,10 +3089,6 @@ def register(app: typer.Typer) -> None:
             skip_import=skip_import,
             serper_api_key=serper_api_key,
             jina_api_key=jina_api_key,
-            search_provider=search_provider,
-            fetch_provider=fetch_provider,
-            search_api_key=search_api_key,
-            fetch_api_key=fetch_api_key,
             non_interactive=non_interactive,
             yes=yes,
             reset=reset,

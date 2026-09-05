@@ -13,11 +13,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import raven.home as raven_home_module
+from raven.agent.tools.base import Tool
 from raven.config import update_tools
-from raven.config.env_file import MIRRORED_KEYS
-from raven.config.schema import WEB_VENDOR_ENV_VARS
-from raven.contracts.tool import Tool
 from raven.rpc.methods import console as console_module
 from raven.rpc.methods.console import _SETTINGS_SIMPLE_KEYS, _hub_marker_name
 
@@ -44,12 +41,6 @@ def test_the_settings_whitelist_is_exactly_this_set() -> None:
         "tools.exec.timeout",
         "tools.web.search.apiKey",
         "tools.web.jinaApiKey",
-        "tools.web.search.provider",
-        "tools.web.fetch.provider",
-        *(
-            f"tools.web.providers.{vendor}.apiKey"
-            for vendor in ("serper", "anysearch", "serpapi", "jina", "tavily", "exa", "brave", "firecrawl")
-        ),
         "tools.media.image.apiKey",
         "tools.deepResearch.apiKey",
         "channels.sendProgress",
@@ -74,7 +65,7 @@ def test_the_hub_marker_is_none_when_the_market_is_absent(monkeypatch: pytest.Mo
     real_import = builtins.__import__
 
     def _no_skillhub(name, *args, **kwargs):
-        if name == "raven.skill_hub.hub":
+        if name == "raven.rpc.methods.skillhub":
             raise ImportError("market not installed")
         return real_import(name, *args, **kwargs)
 
@@ -393,12 +384,11 @@ async def test_ext_list_reports_a_server_by_the_tools_it_registered(
     assert by_name["data.warehouse"]["tool_count"] == 1, "a sanitised server name lost its tools"
     assert by_name["data.warehouse"]["connected"] is True
 
-    # Non-empty is the load-bearing half. `plugin_discovery_sources()` scans the
-    # `raven.plugins` entry-point group, which the dev environment fills with
-    # `everos-memory`, so discovery always has something to find -- and an empty
-    # list therefore means the block raised and its `except` swallowed it, which
-    # is what the stub above used to cause. A shape assertion alone would hold
-    # vacuously over that empty list.
+    # Non-empty is the load-bearing half. `plugin_discovery_sources()` points its
+    # bundled_dir at `raven/plugin/memory/`, which is in this tree, so discovery
+    # always has something to find -- and an empty list therefore means the block
+    # raised and its `except` swallowed it, which is what the stub above used to
+    # cause. A shape assertion alone would hold vacuously over that empty list.
     assert result["plugins"], "plugin discovery returned nothing; it raised and was swallowed"
     assert all({"id", "display_name", "version", "enabled", "bundled"} <= set(row) for row in result["plugins"]), (
         result["plugins"]
@@ -489,18 +479,19 @@ def isolated_config(tmp_path: Path):
     """A config path of our own -- the cron store hangs off its parent."""
     import json
 
+    import raven.config.loader as loader
     from raven.config.loader import set_config_path
 
     # Restored, not cleared: the global outlives this module, and after the rpc
     # rename this file collects ahead of `test_segments.py`, which reads the
     # real config. Clearing left that module reading a different one than it
     # does on its own.
-    previous = raven_home_module._current_config_path
+    previous = loader._current_config_path
     cfg_path = tmp_path / "config.json"
     cfg_path.write_text(json.dumps({"agents": {"defaults": {"workspace": str(tmp_path / "ws")}}}))
     set_config_path(cfg_path)
     yield
-    raven_home_module._current_config_path = previous
+    loader._current_config_path = previous
 
 
 @pytest.mark.asyncio
@@ -1024,7 +1015,7 @@ async def test_channels_configure_asks_the_gateway_to_start_the_adapter(isolated
         asked.append((name, enabled))
         return "started" if enabled else "stopped"
 
-    import raven.gateway.live_probe as probe
+    import raven.channels.live_probe as probe
 
     probe_start = probe.channel_start
     probe.channel_start = fake_start
@@ -1046,7 +1037,7 @@ async def test_channels_configure_still_applies_when_no_gateway_answers(isolated
     successful write into an error."""
     import json as _json
 
-    import raven.gateway.live_probe as probe
+    import raven.channels.live_probe as probe
     from raven.config.loader import get_config_path
 
     async def boom(name: str, *, enabled: bool = True) -> str:
@@ -1149,7 +1140,7 @@ async def test_deliverables_list_answers_for_the_conversation_not_the_transcript
     """The registry is the answer after a reconnect or a compaction: a client
     reads the manifests off turn events while it is connected, and this is what
     is left when it was not."""
-    from raven.agent.tools.deliverables import DeliverableStore
+    from raven.agent.tools._deliverables import DeliverableStore
 
     store = DeliverableStore(tmp_path / "deliverables.json")
     mine = _file(tmp_path, "brief.md")
@@ -1189,7 +1180,7 @@ async def test_deliverables_list_answers_for_the_conversation_not_the_transcript
 async def test_deliverables_list_says_a_file_is_gone_rather_than_dropping_it(tmp_path: Path) -> None:
     """It is still something this conversation handed over. Saying so is more
     use than a row that quietly disappears."""
-    from raven.agent.tools.deliverables import DeliverableStore
+    from raven.agent.tools._deliverables import DeliverableStore
 
     store = DeliverableStore(tmp_path / "deliverables.json")
     target = _file(tmp_path, "gone.md")
@@ -1226,8 +1217,8 @@ async def test_deliverables_list_is_empty_without_a_key_or_a_store() -> None:
 def settings_cfg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A config this suite may write, with ``~`` pointed somewhere disposable.
 
-    ``settings.set`` now refreshes ``~/.raven/env`` for every mirrored web
-    key, so an unisolated home would have this rewrite the developer's real one.
+    ``settings.set`` now refreshes ``~/.raven/env`` for the two web keys, so an
+    unisolated home would have this rewrite the developer's real one.
     """
     path = tmp_path / "config.json"
     path.write_text("{}", encoding="utf-8")
@@ -1240,34 +1231,18 @@ def settings_cfg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return path
 
 
-#: Every key whose write must refresh the mirror, paired with the variable it
-#: is expected to land as. The vendor half is derived from the same mapping the
-#: mirror is, so a new vendor arrives here with a case already; the pin below
-#: catches a key that reaches ``MIRRORED_KEYS`` by any other route.
-_MIRRORED_KEY_ENV_VARS = [
-    ("tools.web.search.apiKey", "SERPER_API_KEY"),
-    ("tools.web.jinaApiKey", "JINA_API_KEY"),
-    *((f"tools.web.providers.{vendor}.apiKey", var) for vendor, var in WEB_VENDOR_ENV_VARS.items()),
-]
-
-
-def test_the_mirror_cases_cover_every_mirrored_key() -> None:
-    """The parametrisation below is only as good as its coverage of the tuple
-    ``settings.set`` actually gates on, and the two pre-vendor leaves in it are
-    listed by hand at both ends."""
-    assert [key for key, _ in _MIRRORED_KEY_ENV_VARS] == list(MIRRORED_KEYS)
-
-
-@pytest.mark.parametrize(("key", "env_var"), _MIRRORED_KEY_ENV_VARS)
+@pytest.mark.parametrize(
+    ("key", "env_var"),
+    [("tools.web.search.apiKey", "SERPER_API_KEY"), ("tools.web.jinaApiKey", "JINA_API_KEY")],
+)
 async def test_settings_set_refreshes_the_shell_env_mirror(
     settings_cfg: Path, tmp_path: Path, key: str, env_var: str
 ) -> None:
-    """Every mirrored key, because the settings page can write any of them.
+    """Both keys, because the settings page can write either one.
 
     Parametrised rather than asserted on one: the jina half has no other write
-    path at all outside the wizard, and a per-vendor slot has none either, so a
-    mirror wired for Serper alone would look right and leave those keys
-    permanently stale.
+    path at all outside the wizard, so a mirror wired for Serper alone would
+    look right and leave that key permanently stale.
     """
     await console_module.settings_set({"key": key, "value": "rotated-1"})
 
@@ -1284,16 +1259,6 @@ async def test_settings_set_of_an_unrelated_key_does_not_create_the_mirror(setti
     await console_module.settings_set({"key": "tools.exec.timeout", "value": 42})
 
     assert not (tmp_path / ".raven" / "env").exists()
-
-
-async def test_settings_set_writes_the_config_in_the_shared_formatting(settings_cfg: Path) -> None:
-    """The bytes every ``update_*`` writer lays down: two-space indent, raw
-    UTF-8 rather than ASCII escapes, no trailing newline. A save that drifted
-    from this would rewrite every line of the file on the next change."""
-    await console_module.settings_set({"key": "plugins.disabled", "value": ["caf\u00e9-plugin"]})
-
-    expected = '{\n  "plugins": {\n    "disabled": [\n      "caf\u00e9-plugin"\n    ]\n  }\n}'
-    assert settings_cfg.read_bytes() == expected.encode("utf-8")
 
 
 @pytest.mark.asyncio
@@ -1363,7 +1328,7 @@ async def test_ext_list_carries_the_manager_state_and_the_authorization_url(
     loop = SimpleNamespace(
         context=SimpleNamespace(skills=_Catalog()),
         tools=ToolRegistry(),
-        mcp_manager_if_started=_Manager(),
+        _mcp_manager=_Manager(),
     )
 
     result = await console_module.ext_list({}, agent_loop_factory=lambda: loop)
@@ -1378,184 +1343,3 @@ async def test_ext_list_carries_the_manager_state_and_the_authorization_url(
     # A configured server the manager has never seen keeps the old reading.
     assert by_name["unknown"]["state"] == "disconnected"
     assert by_name["unknown"]["auth_url"] is None
-
-
-async def test_a_language_switch_reaches_the_running_process(tmp_path, monkeypatch) -> None:
-    """Writing the file is half of it: `t()` answers from a module-level
-    language that only the CLI seeds, so a console switch that stopped at the
-    file left every later reply in the old language until a restart."""
-    from raven import i18n
-    from raven.config import update as config_update
-
-    monkeypatch.setattr(config_update, "set_language", lambda value: "en")
-    monkeypatch.setattr(i18n, "_language", "en")
-
-    result = await console_module.settings_set({"key": "language", "value": "zh"})
-
-    assert result["applied"] is True
-    assert i18n.current_language() == "zh"
-
-
-async def test_a_rejected_language_changes_nothing(tmp_path, monkeypatch) -> None:
-    from raven import i18n
-    from raven.config import update as config_update
-    from raven.rpc.errors import ConfigValidationError as RpcConfigValidationError
-
-    monkeypatch.setattr(config_update, "set_language", lambda value: "en")
-    monkeypatch.setattr(i18n, "_language", "en")
-
-    with pytest.raises(RpcConfigValidationError):
-        await console_module.settings_set({"key": "language", "value": "de"})
-
-    assert i18n.current_language() == "en"
-
-
-# ---------------------------------------------------------------------------
-# ext.list reports availability, not membership
-# ---------------------------------------------------------------------------
-
-
-def _console_loop(workspace: Path, monkeypatch: pytest.MonkeyPatch, raw: dict):
-    """A real on-disk config, and a loop assembled from it the production way.
-
-    Both halves matter. A hand-built stand-in is what let this defect hide: an
-    object carrying ``tool_names`` and nothing else answers every availability
-    question by omission, which is the one thing under test. And the surface
-    explains an unavailable tool by reading the config file, so the file has to
-    be the same one the loop was built from or the two answer about different
-    deployments.
-    """
-    import json
-
-    from raven.agent.loop import AgentLoop
-    from raven.config.loader import load_config
-    from tests._wiring import wire
-    from tests.test_tool_capabilities import _StubProvider
-
-    for var in ("SERPER_API_KEY", "OPENROUTER_API_KEY"):
-        monkeypatch.delenv(var, raising=False)
-    cfg_path = workspace / "config.json"
-    cfg_path.write_text(json.dumps(raw), encoding="utf-8")
-    monkeypatch.setattr("raven.home._current_config_path", cfg_path)
-
-    config = load_config(cfg_path)
-    kw = {}
-    if config.tools.web.search.api_key:
-        kw["search_api_key"] = config.tools.web.search.api_key
-    loop = AgentLoop(
-        provider=_StubProvider(),
-        workspace=workspace,
-        model="stub",
-        **wire(media_config=config.effective_media_config(), **kw),
-    )
-    # No withheld source installed here on purpose: AgentLoop installs its own,
-    # which reads the live config -- the file above -- and unions the off switch
-    # with the unconfigured names. Overriding it with a disabled-only lambda was
-    # enough to make the credential-gate cases pass for the wrong reason.
-    return loop
-
-
-async def _ext_rows(loop, monkeypatch: pytest.MonkeyPatch) -> dict[str, dict]:
-    from raven.config import raven as raven_config
-
-    monkeypatch.setattr(
-        raven_config,
-        "load_raven_config",
-        lambda: SimpleNamespace(skill_forge=None, plugins=SimpleNamespace(disabled=[])),
-    )
-    monkeypatch.setattr(console_module, "_hub_marker_name", lambda: None)
-    result = await console_module.ext_list({}, agent_loop_factory=lambda: loop)
-    return {t["name"]: t for t in result["tools"]}
-
-
-_CRED_TOOLS = (
-    # The vendor slot, not the pre-vendor leaf: a key is held per vendor now,
-    # and the row has to send the deployer to the slot the default reads.
-    ("web_search", "tools.web.providers.serper.apiKey", "SERPER_API_KEY"),
-    ("image_generate", "tools.media.image.apiKey", "OPENROUTER_API_KEY"),
-    ("text_to_speech", "tools.media.speech.apiKey", "OPENROUTER_API_KEY"),
-    ("video_generate", "tools.media.video.apiKey", "OPENROUTER_API_KEY"),
-)
-
-
-@pytest.mark.parametrize(("tool", "setting", "env"), _CRED_TOOLS)
-async def test_an_unconfigured_tool_is_reported_unavailable_with_what_it_needs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tool: str, setting: str, env: str
-) -> None:
-    """A credential-less tool is registered and withheld rather than left out,
-    so membership stopped meaning the model can call it. Reporting ``enabled``
-    off membership told a deployer the capability was on while the model was
-    never offered it -- and said nothing about what to set.
-
-    The setting names the *key* field: for the media family the config path is
-    the model, and pointing there sends the reader to a line holding no key.
-    """
-    loop = _console_loop(tmp_path, monkeypatch, {})
-
-    assert loop.tools.has(tool), "this case is about a REGISTERED tool the model is not offered"
-    assert not loop.tools.offers_by_name(tool)
-
-    row = (await _ext_rows(loop, monkeypatch))[tool]
-    assert row["enabled"] is False
-    assert row["needs"] == {"setting": setting, "env": env}
-
-
-async def test_a_configured_tool_is_reported_available_with_nothing_owed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The other direction, so the fix cannot pass by reporting everything off."""
-    loop = _console_loop(
-        tmp_path,
-        monkeypatch,
-        # The media tool's own section, not a chat OpenRouter key: a key
-        # configured for chat deliberately does not enable a billed media tool.
-        {"tools": {"web": {"search": {"apiKey": "sk-serper"}}, "media": {"image": {"apiKey": "sk-img"}}}},
-    )
-
-    rows = await _ext_rows(loop, monkeypatch)
-    for tool in ("web_search", "image_generate"):
-        assert loop.tools.offers_by_name(tool), tool
-        assert rows[tool]["enabled"] is True, tool
-        assert rows[tool]["needs"] is None, tool
-
-
-@pytest.mark.parametrize("tool", ["web_search", "text_to_speech"])
-async def test_a_switched_off_tool_is_not_reported_as_missing_a_credential(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tool: str
-) -> None:
-    """Unavailable has two unrelated causes and the surface must not merge them.
-
-    A switched-off tool usually has its key set, so answering the operator's
-    own off switch with "set this credential" points at a line already filled
-    in. Only the credential gate earns a ``needs``; the switch is reported by
-    ``enabled`` alone, which is what keeps the row switchable.
-    """
-    loop = _console_loop(
-        tmp_path,
-        monkeypatch,
-        {
-            "tools": {
-                "web": {"search": {"apiKey": "sk-serper"}},
-                "media": {"speech": {"apiKey": "sk-tts"}},
-                "disabledTools": ["web_search", "text_to_speech"],
-            }
-        },
-    )
-
-    assert loop.tools.has(tool)
-    assert not loop.tools.offers_by_name(tool), "the off switch has to bite for this case to mean anything"
-
-    row = (await _ext_rows(loop, monkeypatch))[tool]
-    assert row["enabled"] is False
-    assert row["needs"] is None, "a configured tool the operator switched off owes no credential"
-
-
-async def test_a_tool_needing_no_credential_stays_reported_available(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A plain tool owes nothing, so it must not grow a needs row from the roster."""
-    loop = _console_loop(tmp_path, monkeypatch, {})
-
-    row = (await _ext_rows(loop, monkeypatch))["read_file"]
-    assert row["enabled"] is True
-    assert row["needs"] is None

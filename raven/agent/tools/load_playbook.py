@@ -26,12 +26,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from raven.contracts.tool import Tool
-from raven.plugins.context import BindDeclinedError
+from raven.agent.tools.base import Tool
 
 if TYPE_CHECKING:
     from raven.playbook.runtime import PlaybookRuntime
-    from raven.plugins.context import RuntimeHandles
 
 
 class LoadPlaybookTool(Tool):
@@ -41,7 +39,7 @@ class LoadPlaybookTool(Tool):
     # the call returns as soon as the graph is accepted.
     timeout_seconds = 120.0
 
-    def __init__(self, runtime: "PlaybookRuntime | None" = None) -> None:
+    def __init__(self, runtime: "PlaybookRuntime") -> None:
         self._runtime = runtime
         #: The message this turn is about, for ranking the listing. Set by the
         #: loop before the description is read; empty is fine and yields a stable
@@ -49,18 +47,6 @@ class LoadPlaybookTool(Tool):
         self._turn_message = ""
         self._turn_view: tuple[list[tuple[str, str]], list[str]] | None = None
         self._view_revision = -1
-
-    def bind_runtime(self, handles: "RuntimeHandles") -> None:
-        """Receive the loop's assembled funnel; decline when there is none.
-
-        The bundled factory builds this tool before the loop exists, so the
-        runtime arrives here rather than in the constructor. ``None`` means
-        this loop built no funnel (the feature is off, or its assembly
-        failed): the decline asks the loop to take the tool off the table.
-        """
-        if handles.playbook_runtime is None:
-            raise BindDeclinedError("this loop built no playbook runtime")
-        self._runtime = handles.playbook_runtime
 
     @property
     def name(self) -> str:
@@ -78,12 +64,6 @@ class LoadPlaybookTool(Tool):
         self._turn_view = None
 
     def _library_view(self) -> tuple[list[tuple[str, str]], list[str]]:
-        if self._runtime is None:
-            # Admission reads ``description`` and ``parameters`` when the tool
-            # registers, and registration precedes ``_bind_plugin_runtime`` --
-            # an unbound loader shows the empty-library face until it is bound
-            # (or unregistered by its own decline).
-            return [], []
         if self._turn_view is None or self._view_revision != self._runtime.revision:
             self._turn_view = self._runtime.library_view(self._turn_message)
             # library_view() reconciles the directory and may advance the
@@ -180,4 +160,5 @@ class LoadPlaybookTool(Tool):
         # guidance to compose from, or what is still missing. The distinction is
         # carried by the words rather than a separate field, because the caller's
         # next move is a reply or a call either way.
-        return plan.reply
+        notes = "".join(f"\n[note] {n}" for n in plan.notes)
+        return f"{plan.reply}{notes}"

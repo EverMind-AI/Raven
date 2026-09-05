@@ -66,7 +66,6 @@ def test_every_payload_field_survives_a_store_round_trip(tmp_path: Path):
         topic_tag="meds",
         direct_agent="Raven-Oncall",
         direct_handle="inst-7",
-        fire_missed=True,
     )
 
     # A field left at its default cannot show a loss: the value that survives

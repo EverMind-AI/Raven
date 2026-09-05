@@ -1,12 +1,14 @@
 """ANSI escape-sequence whitelist filter for ``cli.dispatch`` output.
 
-The rich-rendered output returned from ``cli.dispatch`` MAY contain SGR (color / style) sequences but MUST NOT
+Per ``docs/openspec/changes/tui-ipc-bridge/design.md §3 D7 implementation
+decision 5`` and ``specs/tui-ipc.md §3.8``, the rich-rendered output returned
+from ``cli.dispatch`` MAY contain SGR (color / style) sequences but MUST NOT
 contain cursor movement, screen-clear, OSC 8 hyperlinks, or
 DECSET/DECRST (alt-screen / paste-mode) — those would corrupt the TUI's Ink
 reconciler.
 
-Black-listing interactive Rich widgets (``Live`` / ``Progress`` /
-``Prompt``) at dispatch is the first defense; this filter is the
+S2 black-listing of interactive Rich widgets (``Live`` / ``Progress`` /
+``Prompt``) at the whitelist layer is the first defense; this filter is the
 second.
 
 What we KEEP:

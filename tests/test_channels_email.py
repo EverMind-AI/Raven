@@ -112,7 +112,7 @@ def test_reply_subject():
     assert parsing.reply_subject("Re: Hello") == "Re: Hello"  # idempotent
     assert parsing.reply_subject("RE: shouty") == "RE: shouty"  # case-insensitive
     assert parsing.reply_subject("") == "Re: Raven reply"
-    assert parsing.reply_subject("x", "AW: ") == "AW: x"
+    assert parsing.reply_subject("x", "回复: ") == "回复: x"
 
 
 # ── parsing: parse_message ─────────────────────────────────────────────

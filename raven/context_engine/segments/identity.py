@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from raven.context_engine.base import AssemblyContext, Segment
 from raven.context_engine.segments import render
-from raven.contracts.context import AssemblyContext, Segment
 
 
 class IdentitySegmentBuilder:
@@ -52,10 +52,14 @@ class IdentitySegmentBuilder:
         return [(m.name, m.owns) for m in metas if getattr(m, "owns", "") and getattr(m, "name", "") != GENERIC_AGENT]
 
     async def build(self, ctx: AssemblyContext) -> Segment | None:
-        # Playbooks are listed in ``load_playbook``'s tool description and
-        # nowhere else: one resident surface, where the parameter table lives,
-        # where it can be narrowed per turn, and where the model is standing
-        # when it has to choose. A second listing here would drift against it.
+        # The playbook library used to be listed here as well as in the tool.
+        # Two resident surfaces describing the same thing is how they drift, and
+        # this one drifted first: it told the model that playbooks are "triggered
+        # by asking" and that a disabled one runs on an explicit ask, both of
+        # which described the passive matcher that no longer exists. The listing
+        # lives in ``load_playbook``'s description, where it can also carry the
+        # parameter table and be narrowed per turn -- and where the model is
+        # standing when it has to choose.
         return Segment(
             text=render.identity_text(
                 self._workspace,

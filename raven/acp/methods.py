@@ -37,10 +37,8 @@ from loguru import logger
 from raven.acp import protocol, redact
 from raven.acp.capabilities import ClientCapabilities, initialize_result
 from raven.acp.config_options import MODEL_OPTION_ID, model_option, set_model
-from raven.acp.modes import SessionModes, build_session_modes
 from raven.acp.replay import replay
 from raven.acp.updates import AcpSession, TurnAlreadyRunningError, UpdateTranslator
-from raven.config import load_config
 
 # Methods in the stable manifest that raven does not serve yet. Answered with
 # method-not-found, which is the same answer an unknown name gets -- the
@@ -48,6 +46,7 @@ from raven.config import load_config
 # in the protocol" and "not built yet".
 UNIMPLEMENTED_METHODS = frozenset(
     {
+        "session/set_mode",
         "logout",
     }
 )
@@ -136,12 +135,8 @@ class AcpMethods:
         outbound: Any = None,
         questions: Any = None,
         channel: str = "acp",
-        modes: "SessionModes | None" = None,
     ) -> None:
         self._dispatcher = dispatcher
-        # Resolved from config on first use when not injected, so a test can
-        # hand in a catalogue and a live process reads the file it serves.
-        self._modes = modes
         self._translator = translator
         self._emit = emit
         self._agent_loop = agent_loop
@@ -255,8 +250,6 @@ class AcpMethods:
             return await self._session_close(params)
         if method == "session/delete":
             return await self._session_delete(params)
-        if method == "session/set_mode":
-            return self._session_set_mode(params)
         if method == "session/set_config_option":
             return await self._set_config_option(params)
         if method == "session/prompt":
@@ -316,7 +309,7 @@ class AcpMethods:
         options = await self._config_options()
         if options:
             result["configOptions"] = options
-        return self._with_modes(result, session.session_id)
+        return result
 
     async def _session_load(self, params: dict[str, Any]) -> dict[str, Any]:
         """Reopen a stored session, replaying it as it is loaded.
@@ -370,7 +363,7 @@ class AcpMethods:
             self._emit(protocol.notification("session/update", {"sessionId": session_id, "update": update}))
         logger.info("acp: replayed {} update(s) for {}", len(updates), session_id)
         self._announce_commands(session_id)
-        return self._with_modes({}, session_id)
+        return {}
 
     async def _session_resume(self, params: dict[str, Any]) -> dict[str, Any]:
         """Reopen a stored session for its own state, without replaying it.
@@ -419,7 +412,7 @@ class AcpMethods:
         await self._adopt_per_session_mcp(session_id, servers)
         logger.info("acp: resumed session {}", session_id)
         self._announce_commands(session_id)
-        return self._with_modes({}, session_id)
+        return {}
 
     async def _session_close(self, params: dict[str, Any]) -> dict[str, Any]:
         """Drop one session from this connection.
@@ -534,82 +527,16 @@ class AcpMethods:
         if self._agent_loop is None:
             return []
         from raven.config import load_config
-        from raven.session.resolve import manager_for
+        from raven.rpc.methods.session import _manager_for
 
         try:
-            entries = manager_for(self._agent_loop, load_config()).list_sessions(channel=self._channel)
+            entries = _manager_for(self._agent_loop, load_config()).list_sessions(channel=self._channel)
         except Exception:
             logger.exception("acp: listing stored sessions failed")
             return []
         entries = [entry for entry in entries if isinstance(entry, dict)]
         entries.sort(key=lambda e: str(e.get("last_user_message_at") or e.get("updated_at") or ""), reverse=True)
         return entries
-
-    # -- session modes -----------------------------------------------------
-
-    def _session_modes(self) -> SessionModes:
-        if self._modes is None:
-            self._modes = build_session_modes(load_config())
-        return self._modes
-
-    def _session_set_mode(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Switch which profile this session's next turn runs on.
-
-        Nothing is interrupted: a switch during a turn leaves that turn on the
-        profile it started with and lands on the next one, because the loop
-        reads its per-session policy once, at a turn's start. The session is
-        looked up first, so an unknown session is -32002 rather than a mode
-        error about a session that does not exist; a deployment with no modes
-        declared keeps answering method-not-found, the same as before the
-        surface existed.
-        """
-        modes = self._session_modes()
-        if not modes.enabled:
-            raise AcpMethodError(protocol.METHOD_NOT_FOUND, "session/set_mode: no modes are declared")
-        session = self._session_for(params)
-        mode_id = params.get("modeId")
-        if not isinstance(mode_id, str) or not mode_id:
-            raise AcpMethodError(protocol.INVALID_PARAMS, "modeId is required", {"field": "modeId"})
-        try:
-            modes.set(session.session_id, mode_id)
-        except KeyError as exc:
-            raise AcpMethodError(
-                protocol.INVALID_PARAMS,
-                f"unknown mode {mode_id!r}",
-                {"field": "modeId", "availableModes": list(modes.ids())},
-            ) from exc
-        self._apply_mode(session)
-        return {}
-
-    def _with_modes(self, result: dict[str, Any], session_id: str) -> dict[str, Any]:
-        """Add the session's ``modes`` object to a session response, if any.
-
-        On all three routes in: a client that reconnects to a session it did
-        not open has no other way to learn which mode it is in.
-        """
-        state = self._session_modes().state(session_id)
-        if state is not None:
-            result["modes"] = state
-        return result
-
-    def _apply_mode(self, session: AcpSession) -> None:
-        """Hand the session's profile to the loop as its per-session policy.
-
-        The loop is the one that enforces the iteration cap and shows the hooks
-        the overlay; this method only says which profile the session is on.
-        A loop that has no per-session policy (a test rig) is left alone.
-        """
-        modes = self._session_modes()
-        profile = modes.profile(session.session_id) if modes.enabled else None
-        setter = getattr(self._agent_loop, "set_session_policy", None)
-        if profile is None or setter is None:
-            return
-        setter(
-            session.session_key,
-            max_iterations=profile.max_iterations,
-            mode=profile.id,
-            mode_overlay=profile.overlay,
-        )
 
     async def _set_config_option(self, params: dict[str, Any]) -> dict[str, Any]:
         """Apply one configuration option and answer with the full current set.
@@ -677,7 +604,6 @@ class AcpMethods:
             ) from exc
         try:
             try:
-                self._apply_mode(session)
                 accepted = await self._call(
                     "turn.send",
                     {"session_key": session.session_key, "content": text, "media": media},
@@ -1033,7 +959,7 @@ class AcpMethods:
         cached session and persisted with its first save -- as lazy as the mint
         itself, so a client that opens a session and says nothing writes no file.
 
-        It has to be *the engine's* manager. ``manager_for(None, config)`` builds
+        It has to be *the engine's* manager. ``_manager_for(None, config)`` builds
         a fresh ``SessionManager`` every call and caches nothing, so writing the
         metadata through one would write it into an object discarded on the next
         line -- and the session would silently run in the wrong directory. Without
@@ -1042,12 +968,12 @@ class AcpMethods:
         edited the wrong tree" is not a failure anyone would trace back to here.
         """
         from raven.config import load_config
-        from raven.session.resolve import manager_for
+        from raven.rpc.methods.session import _manager_for
 
         if self._agent_loop is None:
             logger.warning("acp: no engine, so {} cannot be pinned to {}", session_key, cwd)
             return
-        manager_for(self._agent_loop, load_config()).get_or_create(session_key).metadata["workdir"] = cwd
+        _manager_for(self._agent_loop, load_config()).get_or_create(session_key).metadata["workdir"] = cwd
 
     def _session_manager(self) -> Any:
         """The engine's own session manager, or a throwaway one when there is no engine.
@@ -1058,9 +984,9 @@ class AcpMethods:
         they need and let the no-engine case fall through to its honest no-op.
         """
         from raven.config import load_config
-        from raven.session.resolve import manager_for
+        from raven.rpc.methods.session import _manager_for
 
-        return manager_for(self._agent_loop, load_config())
+        return _manager_for(self._agent_loop, load_config())
 
     def _announce_commands(self, session_id: str) -> None:
         """One ``available_commands_update`` per session, on its own stream.

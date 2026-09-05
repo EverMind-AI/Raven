@@ -1,9 +1,9 @@
-"""Two-layer long-term memory: a profile and the episodes behind it.
+"""Two-layer long-term memory (MEMORY.md + HISTORY.md).
 
-``MemoryStore`` reads and writes ``user.md`` (the profile) and ``episodes.md``
-(the episode log) under a portable file lock; ``MemoryConsolidator`` is the
-token-pressure path that annotates evicted conversation into episodes and
-folds them back into the profile.
+Migrated from ``raven.memory_engine.consolidate.consolidator``. The implementation —
+``MemoryStore`` (read/write under fcntl lock) + ``MemoryConsolidator``
+(boundary-aware token-driven compaction) — is unchanged; only the import
+path and physical home moved as part of the EverBrain L4 consolidation.
 """
 
 from raven.memory_engine.consolidate.consolidator import (

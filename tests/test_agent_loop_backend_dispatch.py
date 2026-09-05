@@ -18,7 +18,6 @@ from typing import Any
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
 from raven.tracing import spans as _spans
 from raven.tracing import trace
 
@@ -90,9 +89,9 @@ def _make_loop(workspace: Path, *, backend=None) -> AgentLoop:
         provider=_StubProvider(),
         workspace=workspace,
         model="stub",
-        policy=TurnPolicy(max_iterations=2),
-        tools=ToolWiring(restrict_to_workspace=True),
-        engine=EngineWiring(backend=backend),
+        max_iterations=2,
+        restrict_to_workspace=True,
+        backend=backend,
     )
 
 
@@ -610,11 +609,11 @@ class TestTheGiveUpMessageIsHonest:
         agent = _make_loop(tmp_path, backend=_Never())
         agent._dispatch_backend_store("s", [{"role": "user", "content": "x"}])
 
-        dropped = await agent.drain_backend_stores(timeout=5.0)
+        await agent.drain_backend_stores(timeout=5.0)
 
         assert agent._store_pipeline.dropped == 1
-        assert dropped == 1  # the host renders the notice from this count; the loop prints nothing
-        assert "were not written" not in capsys.readouterr().err
+        err = capsys.readouterr().err
+        assert "1 turn(s) were not written to long-term memory" in err
 
     async def test_a_turn_that_succeeds_on_retry_is_not_counted(
         self, tmp_path: Path, monkeypatch, capsys: pytest.CaptureFixture

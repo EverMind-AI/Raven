@@ -200,7 +200,7 @@ EOF
 ## Task 2: The plan row carries Claude Code's own name
 
 **Files:**
-- Modify: `raven/acp_client/acp_dialects/claude_code.py`
+- Modify: `raven/agent/subagent/acp_dialects/claude_code.py`
 - Test: `tests/test_acp_dialects.py`
 - Test data: `tests/acp_frames.py`
 
@@ -234,7 +234,7 @@ Expected: FAIL, `assert 'plan' == 'TodoWrite'` (the base class default).
 
 - [ ] **Step 3: Set the name on the dialect**
 
-In `raven/acp_client/acp_dialects/claude_code.py`, inside
+In `raven/agent/subagent/acp_dialects/claude_code.py`, inside
 `class ClaudeCodeDialect`, directly under `key = "claude-agent-acp"`:
 
 ```python
@@ -330,7 +330,7 @@ existing list of "things this adapter does that the spec does not describe":
 
 ```bash
 make lint-python
-git add raven/acp_client/acp_dialects/claude_code.py tests/test_acp_dialects.py tests/acp_frames.py
+git add raven/agent/subagent/acp_dialects/claude_code.py tests/test_acp_dialects.py tests/acp_frames.py
 git commit -m "$(cat <<'EOF'
 feat(agent): name the claude-agent-acp plan row for the tool behind it
 

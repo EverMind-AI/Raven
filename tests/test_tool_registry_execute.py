@@ -14,10 +14,10 @@ from pathlib import Path
 
 import pytest
 
+from raven.agent.tools.base import Continuation, Tool, ToolOutput, ToolResult
 from raven.agent.tools.filesystem import WriteFileTool
 from raven.agent.tools.registry import ToolRegistry
-from raven.contracts.llm_provider import RunMeta, TruncationInfo
-from raven.contracts.tool import Continuation, Tool, ToolOutput, ToolResult
+from raven.providers.base import RunMeta, TruncationInfo
 
 
 class _Split(Tool):
@@ -551,20 +551,3 @@ def test_a_tool_that_speaks_to_one_case_speaks_to_both() -> None:
     mismatched = [type(t).__name__ for t in tools if bool(t.truncation_hint) != bool(t.incomplete_hint)]
 
     assert not mismatched, "these answer one case and not the other: " + ", ".join(mismatched)
-
-
-@pytest.mark.asyncio
-async def test_a_registry_built_with_no_gates_casts_nothing_and_serves_as_before():
-    """[seam-1 A5] The gate seam's absence pin: default construction casts no
-    gate, so the execute path every other test in this file covers IS the
-    no-gate path -- byte-parity with a registry that never heard of gates is
-    what this file keeps proving. The empty tuple is the whole of the new
-    state, and there is no way to cast one after construction.
-    """
-    reg = _registry(_Plain())
-
-    assert reg._tool_gates == ()
-    assert reg.tool_gates == ()
-    with pytest.raises(AttributeError):
-        reg.tool_gates = ("late",)  # type: ignore[misc]
-    assert await reg.execute("plain", {}) == "plain output"

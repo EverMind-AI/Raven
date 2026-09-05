@@ -37,11 +37,10 @@ import json
 from itertools import zip_longest
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from raven.agent.tools.base import Tool
 from raven.agent.tools.registry import absent_tool_error
 from raven.agent.tools.tool_index import ToolIndex, rank_tools
-from raven.contracts.token_strategy import TokenStrategy
-from raven.contracts.tool import Tool
-from raven.i18n import zh_lexicon
+from raven.token_wise.base import TokenStrategy
 
 if TYPE_CHECKING:
     from raven.agent.tools.registry import ToolRegistry
@@ -300,28 +299,16 @@ class ToolSearchController:
             return False
         return TOOL_CALL_NAME not in self._registry.withheld_names()
 
-    def target_is_blocking(self, name: Any, arguments: Any = None) -> bool:
+    def target_is_blocking(self, name: Any) -> bool:
         """Whether the tool ``tool_call`` would forward to is a blocking interaction.
 
         A meta-tool target is refused by :meth:`call`, so it reports non-blocking
         here too — which also stops the registry lookup recursing back into this
         controller.
-
-        ``arguments`` travel with the question because a target's verdict may turn
-        on them: `resolve_dag_node` blocks only for a bound foreground run, which
-        it can tell only from ``run_id``. Asked without them it answered "not
-        blocking" for every call, and the registry put its default ceiling on a
-        wait that has none. A JSON string is tolerated the way :meth:`call`
-        tolerates it; anything that is not an object counts as no arguments.
         """
         if not isinstance(name, str) or name in META_TOOL_NAMES:
             return False
-        if isinstance(arguments, str):
-            try:
-                arguments = json.loads(arguments)
-            except json.JSONDecodeError:
-                arguments = None
-        return self._registry.is_blocking(name, arguments if isinstance(arguments, dict) else {})
+        return self._registry.is_blocking(name)
 
     async def call(self, name: str, arguments: dict[str, Any] | None) -> str:
         """Invoke a cataloged tool: forward to the registry (validates args).
@@ -356,7 +343,7 @@ class ToolSearchTool(Tool):
             "Search the catalog of additional tools that are available but not "
             "currently loaded. Returns matching tools with their description and "
             "parameter schema, ready to invoke with tool_call. Query with task "
-            f"keywords, e.g. 'create github issue' or '{zh_lexicon.TOOL_SEARCH_QUERY_EXAMPLE}'."
+            "keywords, e.g. 'create github issue' or '生成图片'."
         )
 
     @property
@@ -399,10 +386,10 @@ class ToolCallTool(Tool):
     def description(self) -> str:
         return (
             "Invoke a tool by name that is not in your tool list, passing its "
-            "arguments. The name may come from tool_search, from another tool's "
-            "result, or from a report or notice you were sent that named the call "
-            "to make. If the arguments don't fit the tool's schema the registry "
-            "returns a validation error describing the fix; adjust and call again."
+            "arguments -- one found via tool_search, or one that another tool's "
+            "result told you to call. If the arguments don't fit the tool's schema "
+            "the registry returns a validation error describing the fix; adjust "
+            "and call again."
         )
 
     @property
@@ -412,10 +399,7 @@ class ToolCallTool(Tool):
             "properties": {
                 "name": {
                     "type": "string",
-                    "description": (
-                        "Exact tool name, from a tool_search result, from a tool result that "
-                        "named it, or from a report or notice that named the call to make."
-                    ),
+                    "description": "Exact tool name, from a tool_search result or from a tool result that named it.",
                 },
                 "arguments": {
                     "type": "object",
@@ -426,7 +410,7 @@ class ToolCallTool(Tool):
         }
 
     def blocking_for(self, params: dict[str, Any]) -> bool:
-        return self._ctrl.target_is_blocking(params.get("name"), params.get("arguments"))
+        return self._ctrl.target_is_blocking(params.get("name"))
 
     def metadata_owner(self, params: dict[str, Any]) -> Tool:
         return self._ctrl.resolve_target(params.get("name")).tool or self

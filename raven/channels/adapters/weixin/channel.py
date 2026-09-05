@@ -19,7 +19,7 @@ from collections import OrderedDict
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 
 import httpx
 from loguru import logger
@@ -33,9 +33,8 @@ from raven.channels.errors import retryable_http
 from raven.channels.media import save_media_bytes
 from raven.channels.transcribe import transcribe_audio
 from raven.config.paths import get_runtime_subdir
-from raven.i18n import t
-from raven.utils.atomic_io import atomic_replace
-from raven.utils.messages import split_message
+from raven.config.schema import WeixinConfig
+from raven.utils.helpers import split_message
 
 _DEDUP_CAP = 1000
 
@@ -44,36 +43,7 @@ _DEDUP_CAP = 1000
 _PAUSE_TICK_S = 30
 
 
-def _registrable_domain(host: str) -> str:
-    labels = [part for part in host.lower().strip(".").split(".") if part]
-    return ".".join(labels[-2:])
-
-
-def _operator_base(candidate: str, configured: str) -> str:
-    """``candidate`` as the base to adopt, or ``""`` when it must not be.
-
-    A response may move this channel to another host of the same operator (the
-    registrable domain of ``configured``) over https. Anything else would send
-    the bot token and every later call to a host the configuration never named,
-    so it is refused and the channel stays on the base it has.
-    """
-    target = (candidate or "").strip().rstrip("/")
-    if not target:
-        return ""
-    parts = urlparse(target)
-    host = (parts.hostname or "").lower()
-    if parts.scheme.lower() != "https" or not host:
-        logger.warning("weixin: refusing a base that is not https ({}); staying on the current base", target)
-        return ""
-    if _registrable_domain(host) != _registrable_domain((urlparse(configured).hostname or "").lower()):
-        logger.warning(
-            "weixin: refusing a base outside the configured operator ({}); staying on the current base", target
-        )
-        return ""
-    return target
-
-
-def _https_redirect_target(host: str, configured: str) -> str:
+def _https_redirect_target(host: str) -> str:
     """The https base a ``scaned_but_redirect`` response may move polling to.
 
     Returns ``""`` for anything unusable, which leaves the caller on the base
@@ -85,9 +55,9 @@ def _https_redirect_target(host: str, configured: str) -> str:
     Refused rather than silently upgraded -- coercing it to https would hide a
     misconfigured or hostile upstream instead of reporting it.
 
-    The host must belong to the configured operator (:func:`_operator_base`):
-    moving polling to another operator's host would send the bot token and every
-    later call there.
+    The host itself is not pinned to the configured origin. That is a wider
+    question about whether a response may move polling off-host at all, and it
+    is not settled here.
     """
     host = (host or "").strip()
     if not host:
@@ -99,23 +69,19 @@ def _https_redirect_target(host: str, configured: str) -> str:
     if lowered.startswith("http://"):
         logger.warning("weixin: refusing a plaintext redirect_host ({}); staying on the current base", host)
         return ""
-    return _operator_base(host if lowered.startswith("https://") else f"https://{host}", configured)
+    return host if lowered.startswith("https://") else f"https://{host}"
 
 
 class WeixinChannel(ChannelBase):
     """Personal WeChat channel using the iLink HTTP long-poll API."""
 
-    config: Any
+    config: WeixinConfig
     name = "weixin"
     display_name = "WeChat"
     capabilities = Capabilities(interactive_login=True, file_attachments=True)  # QR pairing via iLink
 
-    def __init__(self, config: Any):
+    def __init__(self, config: WeixinConfig):
         super().__init__(config)
-        # The service can hand back a relocated endpoint (login redirect,
-        # status baseurl); that is runtime state, not config -- the dispensed
-        # config is frozen, and this attribute is what moves.
-        self._base_url: str = config.base_url
         self._client: httpx.AsyncClient | None = None
         self._token: str = ""
         self._updates_buf: str = ""
@@ -178,23 +144,22 @@ class WeixinChannel(ChannelBase):
             else {}
         )
         if data.get("base_url"):
-            self._base_url = data["base_url"]
+            self.config.base_url = data["base_url"]
         return bool(self._token)
 
     def _save_state(self) -> None:
         try:
-            atomic_replace(
-                self._dir() / "account.json",
+            (self._dir() / "account.json").write_text(
                 json.dumps(
                     {
                         "token": self._token,
                         "get_updates_buf": self._updates_buf,
                         "context_tokens": self._context_tokens,
                         "typing_tickets": self._typing.snapshot(),
-                        "base_url": self._base_url,
+                        "base_url": self.config.base_url,
                     },
                     ensure_ascii=False,
-                ),
+                )
             )
         except Exception as e:
             # A silent failure here means the auth token never hits disk and
@@ -210,7 +175,7 @@ class WeixinChannel(ChannelBase):
         self, endpoint: str, params: dict | None = None, *, base_url: str | None = None, auth: bool = True
     ) -> dict:
         assert self._client is not None
-        url = f"{(base_url or self._base_url).rstrip('/')}/{endpoint}"
+        url = f"{(base_url or self.config.base_url).rstrip('/')}/{endpoint}"
         resp = await self._client.get(url, params=params, headers=self._headers(auth=auth))
         resp.raise_for_status()
         return resp.json()
@@ -219,7 +184,9 @@ class WeixinChannel(ChannelBase):
         assert self._client is not None
         payload = dict(body or {})
         payload.setdefault("base_info", p.BASE_INFO)
-        resp = await self._client.post(f"{self._base_url}/{endpoint}", json=payload, headers=self._headers(auth=auth))
+        resp = await self._client.post(
+            f"{self.config.base_url}/{endpoint}", json=payload, headers=self._headers(auth=auth)
+        )
         resp.raise_for_status()
         return resp.json()
 
@@ -249,7 +216,7 @@ class WeixinChannel(ChannelBase):
             qrcode_id, scan_url = await self._fetch_qr()
             self.pending_qr = scan_url
             self._print_qr(scan_url)
-            poll_base = self._base_url
+            poll_base = self.config.base_url
             refreshes = 0
 
             while self._running:
@@ -276,8 +243,8 @@ class WeixinChannel(ChannelBase):
                         logger.error("Login confirmed but no bot_token in response")
                         return False
                     self._token = token
-                    if accepted := _operator_base(status_data.get("baseurl") or "", self.config.base_url):
-                        self._base_url = accepted
+                    if status_data.get("baseurl"):
+                        self.config.base_url = status_data["baseurl"]
                     self._save_state()
                     self.pending_qr = None
                     logger.info(
@@ -288,7 +255,7 @@ class WeixinChannel(ChannelBase):
                     return True
                 if status == "scaned_but_redirect":
                     host = str(status_data.get("redirect_host", "") or "").strip()
-                    if (redirected := _https_redirect_target(host, self.config.base_url)) and redirected != poll_base:
+                    if (redirected := _https_redirect_target(host)) and redirected != poll_base:
                         poll_base = redirected
                 elif status == "expired":
                     refreshes += 1
@@ -297,7 +264,7 @@ class WeixinChannel(ChannelBase):
                         return False
                     qrcode_id, scan_url = await self._fetch_qr()
                     self.pending_qr = scan_url
-                    poll_base = self._base_url
+                    poll_base = self.config.base_url
                     self._print_qr(scan_url)
                     continue
                 await asyncio.sleep(1)
@@ -377,7 +344,7 @@ class WeixinChannel(ChannelBase):
 
     async def _rebind_loop(self) -> None:
         """Fetch a code, watch it, and swap the account only once confirmed."""
-        poll_base = self._base_url
+        poll_base = self.config.base_url
         try:
             qrcode_id, scan_url = await self._fetch_qr()
             self.pending_qr = scan_url
@@ -415,7 +382,7 @@ class WeixinChannel(ChannelBase):
                     return
                 if status == "scaned_but_redirect":
                     host = str(status_data.get("redirect_host", "") or "").strip()
-                    if (redirected := _https_redirect_target(host, self.config.base_url)) and redirected != poll_base:
+                    if (redirected := _https_redirect_target(host)) and redirected != poll_base:
                         poll_base = redirected
                     self._rebind = {**self._rebind, "phase": "scanned"}
                 elif status == "expired":
@@ -425,7 +392,7 @@ class WeixinChannel(ChannelBase):
                         return
                     qrcode_id, scan_url = await self._fetch_qr()
                     self.pending_qr = scan_url
-                    poll_base = self._base_url
+                    poll_base = self.config.base_url
                     self._rebind = {**self._rebind, "phase": "waiting", "refreshes": refreshes, "code_at": time.time()}
                     continue
                 await asyncio.sleep(1)
@@ -458,8 +425,8 @@ class WeixinChannel(ChannelBase):
         same recovery, not just the ones that spoke inside that window.
         """
         self._token = token
-        if accepted := _operator_base(base_url, self.config.base_url):
-            self._base_url = accepted
+        if base_url:
+            self.config.base_url = base_url
         self._updates_buf = ""
         self._context_tokens = {}
         self._typing.restore({})
@@ -672,7 +639,7 @@ class WeixinChannel(ChannelBase):
             quoted.append(ref["title"])
         if ref_item and (rt := (ref_item.get("text_item") or {}).get("text", "")):
             quoted.append(rt)
-        return [t("[quoted: {items}]\n{text}", items=" | ".join(quoted), text=text) if quoted else text]
+        return [f"[引用: {' | '.join(quoted)}]\n{text}" if quoted else text]
 
     @staticmethod
     def _first_quoted_media(items: list[dict]) -> tuple[int, dict] | None:
@@ -824,7 +791,7 @@ class WeixinChannel(ChannelBase):
             await self._send_media_file(chat_id, path, ctx_token)
         except (httpx.TimeoutException, httpx.TransportError):
             logger.opt(exception=True).warning("Network error sending media {}", path)
-            raise  # let the delivery hub retry
+            raise  # let ChannelManager retry
         except httpx.HTTPStatusError as e:
             if e.response is not None and e.response.status_code >= 500:
                 logger.exception("Server error sending media {}", path)

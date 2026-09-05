@@ -1,5 +1,3 @@
-"""The spine event contracts: closed enums and frozen lifecycle dataclasses."""
-
 import dataclasses
 from typing import get_args
 
@@ -14,6 +12,7 @@ from raven.spine import (
     Notice,
     NoticeKind,
     Reasoning,
+    RunnerEvent,
     Source,
     StreamDelta,
     Text,
@@ -25,7 +24,6 @@ from raven.spine import (
     TurnStarted,
     Usage,
 )
-from raven.spine.events import RunnerEvent
 
 
 def test_usage_is_frozen_with_three_int_fields():
@@ -40,14 +38,12 @@ def test_notice_kind_is_closed_enum_with_progress_and_tool_hint():
     # separately from progress (send_progress), as the bus path did.
     # action_blocked is the one kind that REPLACES the answer rather than
     # accompanying it, which is why an outlet that drops the rest still shows it.
-    # organ_degraded accompanies an answer produced without an optional organ
-    # (degrade-with-notice ruling): the user must be able to tell a memoryless
-    # answer from a remembered one.
     assert {k.value for k in NoticeKind} == {
         "progress",
         "tool_hint",
+        "injected",
+        "delivery_failed",
         "action_blocked",
-        "organ_degraded",
     }
     assert str(NoticeKind.PROGRESS) == "progress"
     assert str(NoticeKind.TOOL_HINT) == "tool_hint"
@@ -93,6 +89,7 @@ def test_every_deliverable_defaults_source_to_none():
     assert Reasoning(content="r").source is None
     assert Notice(kind=NoticeKind.PROGRESS).source is None
     # the other defaulted stamp/payload slots
+    assert Text(content="hi").reply_to is None
     assert StreamDelta(delta="d").stream_id is None
     assert Notice(kind=NoticeKind.PROGRESS).detail is None
 
@@ -176,8 +173,8 @@ def test_deliverable_is_the_runner_event_union_under_its_delivery_role_name():
 
 def test_notice_wraps_a_typed_kind_and_carries_source_and_detail():
     src = Source(channel="t", chat_id="c", sender_id="u", chat_type=ChatType.DM)
-    n = Notice(kind=NoticeKind.ORGAN_DEGRADED, source=src, detail="telegram send failed")
-    assert n.kind is NoticeKind.ORGAN_DEGRADED  # kind stays the closed-set enum
+    n = Notice(kind=NoticeKind.DELIVERY_FAILED, source=src, detail="telegram send failed")
+    assert n.kind is NoticeKind.DELIVERY_FAILED  # kind stays the closed-set enum
     assert n.source is src and n.detail == "telegram send failed"  # parallel fields, not in the enum
 
 

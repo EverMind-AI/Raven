@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
 from raven.proactive_engine.sentinel.predictor.routine_validator import (
     VALIDATOR_TOOL,
     RoutineValidator,
 )
 from raven.proactive_engine.sentinel.types import Routine
+from raven.providers.base import LLMResponse, ToolCallRequest
 
 # ── stubs ─────────────────────────────────────────────────────────────
 

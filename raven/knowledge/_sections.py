@@ -9,6 +9,8 @@ format with no headings to cut on.
 
 from __future__ import annotations
 
+from raven.knowledge._types import Chunk
+
 SECTION_TEXT = "section_text"
 """Metadata key: the whole section, carried on the first chunk that came from it.
 
@@ -39,10 +41,42 @@ SECTION_ORDINAL = "section_ordinal"
 The section identity. A heading path is not one -- two same-named children of one
 parent share it, and a reader keying on the path alone hands a hit in the second
 section the text of the first. The boundary is only knowable while the document is
-being cut, so the parser records it.
+being cut, so the parser records it and :func:`section_key` prefers it.
 
 Absent on every chunk indexed before the structured parser, and on documents with
 no headings, where there is one section and nothing to disambiguate. Defined here
 with :data:`SECTION_TEXT` for the same reason: this side has to read chunks no
 parser of ours produced, so it cannot depend on the writer being installed.
 """
+
+
+def section_key(chunk: Chunk) -> tuple:
+    """Identify the section a chunk belongs to, within its document.
+
+    Prefers :data:`SECTION_ORDINAL`, which is unique per document and is the only
+    thing that separates two same-named siblings; the heading path is a fallback
+    for chunks indexed before the parser recorded one. A document is indexed in
+    one pass, so its chunks are either all ordinal-keyed or none are -- the two
+    kinds do not mix within one document and cannot mis-group against each other.
+
+    Chunks with neither -- everything indexed before the structured parser, and
+    documents with no headings -- all answer to one key, which is correct: they
+    really did come from a single unstructured section.
+    """
+    ordinal = chunk.metadata.get(SECTION_ORDINAL)
+    if isinstance(ordinal, int) and not isinstance(ordinal, bool):
+        return (ordinal,)
+    return tuple(heading_path_of(chunk))
+
+
+def heading_path_of(chunk: Chunk) -> list[str]:
+    """The ancestor headings of a chunk, for a citation.
+
+    Kept apart from :func:`section_key`. That one is an identity and is allowed to
+    be opaque -- it is an ordinal whenever the parser recorded one -- while this is
+    the human-readable path a reader is shown. They were the same function once,
+    and the moment the identity stopped being the path a citation started reading
+    "1" instead of "Usage > Example".
+    """
+    path = chunk.metadata.get("heading_path")
+    return [str(part) for part in path] if isinstance(path, list) else []

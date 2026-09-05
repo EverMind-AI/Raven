@@ -12,8 +12,8 @@ from typing import Any
 
 import pytest
 
-from raven.contracts.llm_provider import GenerationSettings
 from raven.providers.azure_openai_provider import AzureOpenAIProvider
+from raven.providers.base import GenerationSettings
 
 
 class _HangingClient:

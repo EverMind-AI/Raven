@@ -1,9 +1,10 @@
 """Parameter values and parameter references, for one playbook.
 
 Two halves of one contract live here: what a declared parameter resolves to at
-run time, and where that value may be written into the file's own text. One
-pattern, ``_PARAM_REF_RE``, is the only definition of a parameter reference, so
-substitution and validation cannot disagree about what one looks like.
+run time, and where that value may be written into the file's own text. Both
+used to sit in the executor with the reference pattern duplicated in the
+validator, so a spelling one substituted and the other did not check was one
+edit away.
 
 Two spellings mean the same thing: ``${params.X}`` and ``{{ params.X }}``. The
 second exists because ``{{ ... }}`` is the file's other placeholder family (a

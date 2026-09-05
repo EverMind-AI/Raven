@@ -157,12 +157,7 @@ def test_a_whole_handshake_runs_in_one_process(tmp_path):
     # order was asserting a timing coincidence; JSON-RPC pairs answers by id for
     # exactly this reason, and a client that needed the order could not pipeline
     # at all.
-    frames = _frames(result.stdout)
-    # A minted session announces its slash commands once, as a notification;
-    # everything else on the channel is an answer to one of the three requests.
-    notices = [f for f in frames if "id" not in f]
-    assert [n["method"] for n in notices] == ["session/update"], notices
-    answers = {f["id"]: f for f in frames if "id" in f}
+    answers = {f["id"]: f for f in _frames(result.stdout)}
     assert sorted(answers) == [1, 2, 3]
     assert answers[1]["result"]["authMethods"] == []
     assert answers[2]["result"]["sessionId"].startswith("acp:")

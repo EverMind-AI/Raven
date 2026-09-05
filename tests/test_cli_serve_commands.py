@@ -653,7 +653,7 @@ class TestTheSupervisor:
         exits on the lock -- and a supervisor would spend its whole crash budget
         finding that out, leaving no page at all. Standalone serve is the only
         child that CAN run, and it is not a downgrade: the page reaches the
-        incumbent's adapters over `gateway.live_probe`, which finds it through
+        incumbent's adapters over `channels.live_probe`, which finds it through
         that same lock.
         """
         argv = self.argv_with_lock(object(), 18999)
@@ -668,7 +668,7 @@ class TestTheSupervisor:
         engine without channels, which is where this surface already was and is
         one `raven gateway` away from right.
         """
-        from raven.gateway import lock as _gateway_lock
+        from raven.cli import _gateway_lock
 
         def _explode(now: float) -> None:
             raise OSError("lock unreadable")
@@ -861,7 +861,7 @@ class TestAResidentGatewayAnnouncesUpdatesItself:
             checks["n"] += 1
             return update_notice.Checked("0.1.12b9", reached=True)
 
-        from raven.updates import update_notice
+        from raven.cli import update_notice
 
         monkeypatch.setattr(update_notice, "check_now", _check)
 
@@ -894,7 +894,7 @@ class TestAResidentGatewayAnnouncesUpdatesItself:
             checks["n"] += 1
             return update_notice.Checked(None, reached=True)
 
-        from raven.updates import update_notice
+        from raven.cli import update_notice
 
         monkeypatch.setattr(update_notice, "check_now", _check)
 
@@ -917,7 +917,7 @@ class TestAResidentGatewayAnnouncesUpdatesItself:
             checks["n"] += 1
             raise RuntimeError("offline")
 
-        from raven.updates import update_notice
+        from raven.cli import update_notice
 
         monkeypatch.setattr(update_notice, "check_now", _check)
 
@@ -943,7 +943,7 @@ class TestThePollFollowsTheChannelItIsWatching:
     @pytest.fixture
     def channel(self, monkeypatch):
         """Put the install on, or off, the beta channel."""
-        from raven.updates import beta_channel
+        from raven.cli import beta_channel
 
         def _set(active: bool) -> None:
             monkeypatch.setattr(beta_channel, "is_active", lambda: active)
@@ -980,7 +980,7 @@ class TestThePollFollowsTheChannelItIsWatching:
 
     async def test_consecutive_failures_back_off_and_one_answer_resets(self, monkeypatch) -> None:
         """The loop's own bookkeeping, read off what it asks to wait for next."""
-        from raven.updates import update_notice
+        from raven.cli import update_notice
 
         monkeypatch.setattr(serve_commands, "_UPDATE_FIRST_CHECK_S", 0.001)
         asked: list[int] = []
@@ -1017,7 +1017,7 @@ class TestThePollFollowsTheChannelItIsWatching:
     async def test_a_check_that_raises_counts_as_a_failure(self, monkeypatch) -> None:
         """An exception out of the check is the offline case arriving by a second
         route, so it has to slow the loop down the same way a reported one does."""
-        from raven.updates import update_notice
+        from raven.cli import update_notice
 
         monkeypatch.setattr(serve_commands, "_UPDATE_FIRST_CHECK_S", 0.001)
         asked: list[int] = []
@@ -1151,7 +1151,7 @@ class TestAGatewayHostedPage:
     serve.json's pid are the same process."""
 
     def _lock_says(self, monkeypatch, pid: int | None) -> None:
-        from raven.gateway import lock as _gateway_lock
+        from raven.cli import _gateway_lock
 
         info = None if pid is None else _gateway_lock.LockInfo(pid=pid, started_at=0.0, config_path="")
         monkeypatch.setattr(_gateway_lock, "read_status", lambda now: info)
@@ -1247,13 +1247,13 @@ class TestRefusingAnIncompleteInstall:
     `build_app` picks the page route once."""
 
     def test_a_sound_install_is_let_through(self, monkeypatch) -> None:
-        from raven.updates import install_guard as _install_guard
+        from raven.cli import _install_guard
 
         monkeypatch.setattr(_install_guard, "inspect_install", lambda: None)
         serve_commands._refuse_incomplete_install()
 
     def test_a_half_written_install_refuses_before_the_port_is_bound(self, monkeypatch) -> None:
-        from raven.updates import install_guard as _install_guard
+        from raven.cli import _install_guard
 
         def unreachable(*_args, **_kwargs):
             raise AssertionError("the gateway must not start on a half-written installation")
@@ -1271,7 +1271,7 @@ class TestRefusingAnIncompleteInstall:
         assert excinfo.value.exit_code == serve_commands.INCOMPLETE_INSTALL_EXIT
 
     def test_it_names_the_repair_a_reader_can_run(self, monkeypatch, capsys) -> None:
-        from raven.updates import install_guard as _install_guard
+        from raven.cli import _install_guard
 
         monkeypatch.setattr(
             _install_guard,
@@ -1288,7 +1288,7 @@ class TestRefusingAnIncompleteInstall:
         `_HEALTHY_RUN_S`, and an install window is short enough to burn through
         all five. Spending the window asleep in one process is what keeps the
         supervisor trying."""
-        from raven.updates import install_guard as _install_guard
+        from raven.cli import _install_guard
 
         running = _install_guard.InstallFault("upgrading", "an upgrade to 9.9.9 is replacing this installation")
         verdicts = [running, running, None]
@@ -1305,7 +1305,7 @@ class TestRefusingAnIncompleteInstall:
         assert excinfo.value.exit_code == serve_commands.INCOMPLETE_INSTALL_EXIT
 
     def test_it_gives_up_on_an_upgrade_that_never_ends(self, monkeypatch) -> None:
-        from raven.updates import install_guard as _install_guard
+        from raven.cli import _install_guard
 
         fault = _install_guard.InstallFault("upgrading", "an upgrade is replacing this installation")
         monkeypatch.setattr(_install_guard, "inspect_install", lambda: fault)

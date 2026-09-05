@@ -1,5 +1,5 @@
 """Custom Hatchling build hook: conditionally package the prebuilt TUI bundle,
-the served page, and the agents/ product tree.
+the served page, and the vendored sub-agent tree.
 
 The TUI ships as a single self-contained esbuild bundle at ``ui-tui/dist/entry.js``.
 We want a wheel to carry it so `pip`/`uv tool install` yields a working
@@ -20,26 +20,41 @@ why an editable build carries neither artifact: the checkout it reads is the
 one it was built from, so a packaged copy there is dead weight. All three trees
 this hook maps are therefore skipped for ``version == "editable"``.
 
-``agents/`` is force-included file by file rather than as one directory,
+``subagents/`` is force-included file by file rather than as one directory,
 because a directory entry would ship the working copy rather than the source.
 Hatchling applies no ``include`` / ``exclude`` config to a force-included path:
 ``recurse_forced_files`` drops a hardcoded set of directories (``.venv``,
-``.git``, the caches) and nothing else. What sits next to the source in a
-working copy is each product's ``.env`` — written by the onboarding wizard and
-holding a real provider key. Reading the list from git instead is safe by
-construction, and is the same rule ``scripts/check_vendored_subagents.py``
-applies to the frozen fork tree for the same reason.
+``.git``, the caches) and nothing else. What sits next to the source in a built
+working copy is each fork's ``.env`` — scaffolded by ``subagents/install.sh``
+and filled with a real provider key — plus rollback tarballs and benchmark data,
+none of it committed and all of it swept up by a directory walk. Reading the
+list from git instead is safe by construction, and is the same rule
+``scripts/check_vendored_subagents.py`` already applies for the same reason.
 """
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path, PurePosixPath
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
-PRODUCTS_ROOT = "agents"
+VENDOR_ROOT = "subagents"
+
+# RAVEN_WHEEL_SLIM=1 builds the headless cloud wheel: no vendored sub-agent
+# tree and no prebuilt UI bundles. The full wheel is ~106 MiB compressed and
+# ~94% of it is the sub-agent snapshots (raven-ppt alone carries 74 MiB of
+# .pptx templates); a provisioner that only runs `raven acp` inside a sandbox
+# pays that on every upload for assets nothing there ever opens. The slim
+# wheel is ~5 MiB. Sub-agents on such installs come from their own
+# distribution channel (or not at all); `raven tui` / `raven serve` fall back
+# to their source-checkout resolvers, which headless installs never call.
+
+
+def _slim_build() -> bool:
+    return os.environ.get("RAVEN_WHEEL_SLIM", "") not in ("", "0")
 
 
 def _is_secret(relative_path: str) -> bool:
@@ -53,7 +68,7 @@ def _is_secret(relative_path: str) -> bool:
 class CustomBuildHook(BuildHookInterface):
     def initialize(self, version: str, build_data: dict) -> None:
         self._include_prebuilt_assets(build_data, version)
-        self._include_agent_products(build_data, version)
+        self._include_vendored_subagents(build_data, version)
 
     def _include_prebuilt_assets(self, build_data: dict, version: str) -> None:
         """Map the prebuilt TUI bundle and served page into ``raven/``.
@@ -75,6 +90,11 @@ class CustomBuildHook(BuildHookInterface):
         and the npm command, ``raven web`` names ``ui-web/build.py``.
         """
         if version == "editable":
+            return
+        if _slim_build():
+            self.app.display_info(
+                "RAVEN_WHEEL_SLIM: building without the TUI and web bundles."
+            )
             return
 
         dist = Path(self.root) / "ui-tui" / "dist"
@@ -108,53 +128,54 @@ class CustomBuildHook(BuildHookInterface):
                 "run `python ui-web/build.py` before building a release wheel."
             )
 
-    def _include_agent_products(self, build_data: dict, version: str) -> None:
-        """Map each committed file of ``agents/`` into ``raven/agents``.
+    def _include_vendored_subagents(self, build_data: dict, version: str) -> None:
+        """Map each committed file of ``subagents/`` into ``raven/subagents``.
 
-        A wheel that carries the tree is what puts the agent products on a
-        machine that installed raven from a release: ``agents_root()`` finds
-        the packaged copy and ``_install_packaged_tree()`` copies it out to
-        the raven home, where an upgrade cannot take a product's ``.env``
-        with it. Without it, onboarding step 5 has nothing to offer and the
-        products exist only in source checkouts.
+        A wheel that carries the tree is what puts the agents on a machine
+        that installed raven from a release: ``subagents_root()`` finds the
+        packaged copy and ``_install_packaged_tree()`` copies it out to the raven
+        home, where an upgrade cannot take the built venvs with it. Without it,
+        onboarding step 5 has nothing to offer and the agents exist only in source
+        checkouts.
 
-        Copies rather than moves, and both copies stay: the one under
-        site-packages is what the installer's RECORD owns, and it is the
-        fallback ``agents_root`` falls back to when the copy-out fails. The
-        tree is a few launchers and their prompt assets, small either way.
-
-        The tree's own ``__init__.py`` is left out: it exists so the repo can
-        address the directory as a package, and packaged it would mint an
-        importable ``raven.agents`` subpackage nothing imports.
+        Copies rather than moves, and both copies stay: the one under site-packages
+        is what the installer's RECORD owns, and it is the fallback ``subagents_root``
+        falls back to when the copy-out fails. So an install carrying this tree holds
+        it twice, about 106 MiB in each place.
 
         Skipped for an editable build, which *is* a source checkout -- there
-        ``agents_root()`` already reads the tree beside the package. Hatchling
+        ``subagents_root()`` already reads the tree beside the package. Hatchling
         honours this map for editable builds too (``get_forced_inclusion_map``
-        folds ``build_data`` in through ``build_force_include``), so without
-        the guard every ``uv sync`` copies the tree into a site-packages
-        directory that nothing ever reads.
+        folds ``build_data`` in through ``build_force_include``), so without the
+        guard every ``uv sync`` copies 106 MiB into a site-packages directory that
+        nothing ever reads.
         """
         if version == "editable":
             return
+        if _slim_build():
+            self.app.display_info(
+                "RAVEN_WHEEL_SLIM: building without the vendored sub-agents."
+            )
+            return
 
         root = Path(self.root)
-        if not (root / PRODUCTS_ROOT).is_dir():
+        if not (root / VENDOR_ROOT).is_dir():
             # Loud rather than silent, for the reason the sdist note above the
             # build step in .github/workflows/release.yml already records: a
             # combined `uv build` builds the wheel from a freshly made sdist, and
             # the sdist carries neither this tree nor a .git to read it from.
             self.app.display_warning(
-                f"{PRODUCTS_ROOT}/ not found — building WITHOUT the agent products. "
-                "Onboarding step 5 will report no products. Build the wheel "
+                f"{VENDOR_ROOT}/ not found — building WITHOUT the vendored sub-agents. "
+                "Onboarding step 5 will report no sub-agent tree. Build the wheel "
                 "directly from a git checkout, not from an sdist."
             )
             return
 
-        tracked = self._committed_paths(PRODUCTS_ROOT)
+        tracked = self._committed_paths(VENDOR_ROOT)
         if tracked is None:
             self.app.display_warning(
-                f"git cannot list {PRODUCTS_ROOT}/ — building WITHOUT the agent products. "
-                "The wheel's onboarding step 5 will report no products. Build "
+                f"git cannot list {VENDOR_ROOT}/ — building WITHOUT the vendored sub-agents. "
+                "The wheel's onboarding step 5 will report no sub-agent tree. Build "
                 "from a git checkout to include them."
             )
             return
@@ -163,16 +184,14 @@ class CustomBuildHook(BuildHookInterface):
             # that this tree is not committed. Saying "git cannot list" there
             # would send the reader to look for a broken checkout.
             self.app.display_warning(
-                f"git tracks no files under {PRODUCTS_ROOT}/ — building WITHOUT the "
-                "agent products. The wheel's onboarding step 5 will report no "
-                "products."
+                f"git tracks no files under {VENDOR_ROOT}/ — building WITHOUT the "
+                "vendored sub-agents. The wheel's onboarding step 5 will report no "
+                "sub-agent tree."
             )
             return
 
         forced = build_data.setdefault("force_include", {})
         for relative_path in tracked:
-            if relative_path == f"{PRODUCTS_ROOT}/__init__.py":
-                continue
             if _is_secret(relative_path):
                 msg = (
                     f"refusing to package {relative_path}: a filled-in secrets file "

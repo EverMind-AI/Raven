@@ -22,12 +22,8 @@ Lifecycle:
   ``start_background()``.
 - ``pending_ids()`` / ``pending_count()`` — introspection.
 
-Pending defers survive a restart when the caller supplies a ``store``: the
-assembly passes the sentinel's shared ``JsonStateStore``, and this manager
-reloads from it at construction. Without one the queue is in-memory only,
-which is what a test or a one-shot caller gets.
-
 Known limitations (v1):
+- Not persisted — process restart loses all pending defers (documented).
 - "Settled" is purely time-based (no LLM eval of defer_condition).
 """
 

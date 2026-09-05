@@ -12,6 +12,8 @@ import pytest
 from raven.rpc.dispatcher import Dispatcher
 from raven.rpc.methods import terminal as terminal_mod
 from raven.rpc.methods.terminal import (
+    get_latest_cols,
+    get_latest_rows,
     register_terminal_methods,
     terminal_resize,
 )
@@ -30,19 +32,19 @@ def _reset_terminal_state() -> None:
 async def test_terminal_resize_records_cols_and_rows() -> None:
     result = await terminal_resize({"cols": 120, "rows": 40})
     assert result == {"ok": True}
-    assert terminal_mod._LATEST_COLS == 120
-    assert terminal_mod._LATEST_ROWS == 40
+    assert get_latest_cols() == 120
+    assert get_latest_rows() == 40
 
 
 async def test_terminal_resize_partial_payload_only_records_provided_dims() -> None:
     await terminal_resize({"cols": 80})
-    assert terminal_mod._LATEST_COLS == 80
-    assert terminal_mod._LATEST_ROWS is None
+    assert get_latest_cols() == 80
+    assert get_latest_rows() is None
 
     await terminal_resize({"rows": 24})
     # cols persists across calls.
-    assert terminal_mod._LATEST_COLS == 80
-    assert terminal_mod._LATEST_ROWS == 24
+    assert get_latest_cols() == 80
+    assert get_latest_rows() == 24
 
 
 async def test_terminal_resize_rejects_non_positive_and_bool() -> None:
@@ -51,13 +53,13 @@ async def test_terminal_resize_rejects_non_positive_and_bool() -> None:
     # Booleans are subclass of int but should be ignored.
     result = await terminal_resize({"cols": True, "rows": False})
     assert result == {"ok": True}
-    assert terminal_mod._LATEST_COLS is None
-    assert terminal_mod._LATEST_ROWS is None
+    assert get_latest_cols() is None
+    assert get_latest_rows() is None
 
     # Zero / negative dims are also rejected.
     await terminal_resize({"cols": 0, "rows": -1})
-    assert terminal_mod._LATEST_COLS is None
-    assert terminal_mod._LATEST_ROWS is None
+    assert get_latest_cols() is None
+    assert get_latest_rows() is None
 
 
 async def test_terminal_resize_accepts_empty_params() -> None:

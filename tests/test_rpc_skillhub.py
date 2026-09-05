@@ -15,7 +15,6 @@ import pytest
 
 from raven.rpc.errors import ConfigValidationError
 from raven.rpc.methods import skillhub
-from raven.skill_hub import hub
 
 
 class _Resp:
@@ -83,7 +82,7 @@ DETAIL = {
 
 @pytest.fixture
 def workspace(tmp_path, monkeypatch):
-    monkeypatch.setattr(hub, "_skills_dir", lambda: tmp_path / "skills")
+    monkeypatch.setattr(skillhub, "_skills_dir", lambda: tmp_path / "skills")
     return tmp_path / "skills"
 
 
@@ -93,7 +92,7 @@ def _stub_hub(monkeypatch, *, detail=None, zip_bytes=b"", search=None, download=
             return search or {"items": [], "total": 0}
         return detail if detail is not None else DETAIL
 
-    monkeypatch.setattr(hub, "_hub_json", _json)
+    monkeypatch.setattr(skillhub, "_hub_json", _json)
 
     class _Client:
         def __init__(self, *a, **k):
@@ -117,7 +116,7 @@ def _stub_hub(monkeypatch, *, detail=None, zip_bytes=b"", search=None, download=
                 return download(url)
             return _Resp(content=zip_bytes, ctype="application/zip")
 
-    monkeypatch.setattr(hub.httpx, "AsyncClient", _Client)
+    monkeypatch.setattr(skillhub.httpx, "AsyncClient", _Client)
 
 
 @pytest.mark.asyncio
@@ -133,7 +132,7 @@ async def test_install_unpacks_and_marks(workspace, monkeypatch):
     # is where SkillRegistry looks for it.
     assert (target / "SKILL.md").read_text() == "# demo"
     assert (target / "refs" / "a.md").is_file()
-    marker = json.loads((target / hub.MARKER).read_text())
+    marker = json.loads((target / skillhub.MARKER).read_text())
     assert marker["id"] == "uuid-1"
     assert marker["skill_id"] == "acme/pack/demo-skill"
 
@@ -210,7 +209,7 @@ async def test_install_rejects_archive_without_skill_md(workspace, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_install_rejects_oversize_archive(workspace, monkeypatch):
-    monkeypatch.setattr(hub, "_MAX_ZIP_BYTES", 10)
+    monkeypatch.setattr(skillhub, "_MAX_ZIP_BYTES", 10)
     _stub_hub(monkeypatch, zip_bytes=_zip({"demo-skill/SKILL.md": "# demo" * 50}))
 
     with pytest.raises(ConfigValidationError):
@@ -236,7 +235,7 @@ async def test_search_forwards_filters_and_paging(workspace, monkeypatch):
         seen["params"] = params
         return {"items": [], "total": 93007, "page": 3, "limit": 24}
 
-    monkeypatch.setattr(hub, "_hub_json", _json)
+    monkeypatch.setattr(skillhub, "_hub_json", _json)
 
     r = await skillhub.skillhub_search(
         {"query": "git", "category": "DEV", "tags": "vitest,ci", "min_score": 0.7, "page": 3, "limit": 24}
@@ -262,7 +261,7 @@ async def test_search_omits_empty_filters(workspace, monkeypatch):
         seen["params"] = params
         return {"items": [], "total": 0}
 
-    monkeypatch.setattr(hub, "_hub_json", _json)
+    monkeypatch.setattr(skillhub, "_hub_json", _json)
 
     await skillhub.skillhub_search({})
 
@@ -283,7 +282,7 @@ async def test_search_sorts_page_by_quality_score(workspace, monkeypatch):
     async def _json(path, params=None):
         return {"items": raw, "total": 5}
 
-    monkeypatch.setattr(hub, "_hub_json", _json)
+    monkeypatch.setattr(skillhub, "_hub_json", _json)
 
     r = await skillhub.skillhub_search({"query": "anything"})
 
@@ -298,9 +297,9 @@ async def test_search_surfaces_hub_error_code(workspace, monkeypatch):
     async def _json(path, params=None):
         # The envelope check lives in _unwrap_body, which _hub_json runs; call the
         # real thing so the hub's error code is what reaches the handler.
-        return hub._unwrap_body(400, json.dumps({"error": "Invalid search params", "status": 60002}).encode())
+        return skillhub._unwrap_body(400, json.dumps({"error": "Invalid search params", "status": 60002}).encode())
 
-    monkeypatch.setattr(hub, "_hub_json", _json)
+    monkeypatch.setattr(skillhub, "_hub_json", _json)
 
     with pytest.raises(ConfigValidationError) as err:
         await skillhub.skillhub_search({"query": "x"})
@@ -309,22 +308,22 @@ async def test_search_surfaces_hub_error_code(workspace, monkeypatch):
 
 def test_base_url_env_override(monkeypatch):
     monkeypatch.setenv("RAVEN_SKILLHUB_URL", "http://127.0.0.1:8000/")
-    assert hub._base_url() == "http://127.0.0.1:8000"
+    assert skillhub._base_url() == "http://127.0.0.1:8000"
     monkeypatch.delenv("RAVEN_SKILLHUB_URL")
-    assert hub._base_url() == hub.DEFAULT_BASE_URL
+    assert skillhub._base_url() == skillhub.DEFAULT_BASE_URL
 
 
 def test_strip_root_only_when_single_wrapper():
-    assert hub._strip_root(["pack/SKILL.md", "pack/a/b.md"]) == "pack"
-    assert hub._strip_root(["SKILL.md", "a/b.md"]) == ""
-    assert hub._strip_root(["p1/SKILL.md", "p2/SKILL.md"]) == ""
+    assert skillhub._strip_root(["pack/SKILL.md", "pack/a/b.md"]) == "pack"
+    assert skillhub._strip_root(["SKILL.md", "a/b.md"]) == ""
+    assert skillhub._strip_root(["p1/SKILL.md", "p2/SKILL.md"]) == ""
 
 
 def test_safe_name_strips_path_characters():
-    assert hub._safe_name("../../etc/passwd") == "etcpasswd"
-    assert hub._safe_name("  a b/c  ") == "abc"
-    assert hub._safe_name("...") == "skill"
-    assert Path(hub._safe_name("ok-name_1.2")).name == "ok-name_1.2"
+    assert skillhub._safe_name("../../etc/passwd") == "etcpasswd"
+    assert skillhub._safe_name("  a b/c  ") == "abc"
+    assert skillhub._safe_name("...") == "skill"
+    assert Path(skillhub._safe_name("ok-name_1.2")).name == "ok-name_1.2"
 
 
 # ---------------------------------------------------------------------------
@@ -359,7 +358,7 @@ async def test_install_skips_files_a_skill_is_not_made_of(workspace, monkeypatch
 
 @pytest.mark.asyncio
 async def test_install_skips_a_single_oversized_member(workspace, monkeypatch):
-    monkeypatch.setattr(hub, "MAX_ZIP_ENTRY_BYTES", 32)
+    monkeypatch.setattr(skillhub, "MAX_ZIP_ENTRY_BYTES", 32)
     _stub_hub(monkeypatch, zip_bytes=_zip({"demo-skill/SKILL.md": "# demo", "demo-skill/big.md": "x" * 400}))
 
     out = await skillhub.skillhub_install({"id": "uuid-1"})
@@ -381,7 +380,7 @@ async def test_a_failed_reinstall_leaves_the_previous_install_in_place(workspace
     target = workspace / "demo-skill"
     assert (target / "SKILL.md").read_text() == "# v1"
     assert (target / "keep.md").read_text() == "keep"
-    assert json.loads((target / hub.MARKER).read_text())["id"] == "uuid-1"
+    assert json.loads((target / skillhub.MARKER).read_text())["id"] == "uuid-1"
     # No staging or backup directory left behind.
     assert sorted(p.name for p in workspace.iterdir()) == ["demo-skill"]
 
@@ -426,7 +425,7 @@ async def test_install_refuses_to_take_over_another_hub_entrys_directory(workspa
 
 @pytest.mark.asyncio
 async def test_download_stops_at_the_cap_instead_of_measuring_afterwards(workspace, monkeypatch):
-    monkeypatch.setattr(hub, "_MAX_ZIP_BYTES", 8)
+    monkeypatch.setattr(skillhub, "_MAX_ZIP_BYTES", 8)
     _stub_hub(monkeypatch, zip_bytes=_zip({"demo-skill/SKILL.md": "# demo" * 200}))
 
     with pytest.raises(ConfigValidationError) as err:
@@ -459,7 +458,7 @@ async def test_install_refuses_a_presigned_url_it_should_not_follow(workspace, m
     with pytest.raises(ConfigValidationError):
         await skillhub.skillhub_install({"id": "uuid-1"})
     # The refusal happens before the fetch: the second URL was never requested.
-    assert reached == [f"{hub._base_url()}/openapi/v1/skills/uuid-1/download"]
+    assert reached == [f"{skillhub._base_url()}/openapi/v1/skills/uuid-1/download"]
 
 
 @pytest.mark.asyncio
@@ -488,7 +487,7 @@ async def test_a_skill_id_with_slashes_stays_one_path_segment(workspace, monkeyp
         seen["path"] = path
         return DETAIL
 
-    monkeypatch.setattr(hub, "_hub_json", _json)
+    monkeypatch.setattr(skillhub, "_hub_json", _json)
 
     await skillhub.skillhub_detail({"id": "acme/pack/demo?x=1"})
 
@@ -497,8 +496,8 @@ async def test_a_skill_id_with_slashes_stays_one_path_segment(workspace, monkeyp
 
 def test_base_url_refuses_a_plaintext_remote_hub(monkeypatch):
     monkeypatch.setenv("RAVEN_SKILLHUB_URL", "http://hub.example.com")
-    with pytest.raises(hub.SkillHubRequestError):
-        hub._base_url()
+    with pytest.raises(ConfigValidationError):
+        skillhub._base_url()
 
 
 def test_the_installed_index_ignores_a_staging_directory(workspace):
@@ -511,11 +510,11 @@ def test_the_installed_index_ignores_a_staging_directory(workspace):
     """
     workspace.mkdir(parents=True)
     (workspace / ".demo.new.abc123").mkdir()
-    (workspace / ".demo.new.abc123" / hub.MARKER).write_text(json.dumps({"id": "uuid-staging"}))
+    (workspace / ".demo.new.abc123" / skillhub.MARKER).write_text(json.dumps({"id": "uuid-staging"}))
     (workspace / "demo").mkdir()
-    (workspace / "demo" / hub.MARKER).write_text(json.dumps({"id": "uuid-1"}))
+    (workspace / "demo" / skillhub.MARKER).write_text(json.dumps({"id": "uuid-1"}))
 
-    index = hub._installed_index()
+    index = skillhub._installed_index()
 
     assert index["uuid-1"]["name"] == "demo"
     assert "uuid-staging" not in index
@@ -583,7 +582,7 @@ async def test_a_redirect_loop_is_refused_rather_than_followed(workspace, monkey
 
 
 def skillhub_max_hops() -> int:
-    from raven.market.vetting import MAX_REDIRECTS
+    from raven.plughub.trust import MAX_REDIRECTS
 
     return MAX_REDIRECTS
 
@@ -606,7 +605,7 @@ async def test_a_metadata_request_may_not_be_redirected_at_all(workspace, monkey
         def stream(self, method, url, params=None, follow_redirects=None):
             return _Resp(status=302, location="http://127.0.0.1:9001/", content=b"")
 
-    monkeypatch.setattr(hub.httpx, "AsyncClient", _Client)
+    monkeypatch.setattr(skillhub.httpx, "AsyncClient", _Client)
 
     with pytest.raises(ConfigValidationError) as err:
         await skillhub.skillhub_search({})
@@ -615,7 +614,7 @@ async def test_a_metadata_request_may_not_be_redirected_at_all(workspace, monkey
 
 @pytest.mark.asyncio
 async def test_a_flood_of_metadata_is_refused_instead_of_buffered(workspace, monkeypatch):
-    monkeypatch.setattr(hub, "_MAX_JSON_BYTES", 64)
+    monkeypatch.setattr(skillhub, "_MAX_JSON_BYTES", 64)
     read = {"bytes": 0}
 
     class _Flood(_Resp):
@@ -640,7 +639,7 @@ async def test_a_flood_of_metadata_is_refused_instead_of_buffered(workspace, mon
         def stream(self, method, url, params=None, follow_redirects=None):
             return _Flood()
 
-    monkeypatch.setattr(hub.httpx, "AsyncClient", _Client)
+    monkeypatch.setattr(skillhub.httpx, "AsyncClient", _Client)
 
     from raven.rpc.errors import InternalError
 

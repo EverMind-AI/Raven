@@ -128,9 +128,7 @@ Inputs that change per run become params (a map keyed by param name).
 `description` is required: it doubles as the follow-up question when the
 value is missing, so phrase it as a directly askable question. A param with
 a default is never asked for. Templates reference values as
-${params.<key>}. Params are substituted directly in `promptTemplate`; never
-copy a param into a node's `inputs` or reference it through
-{{ inputs.<key> }}. Anything fixable at generation time must not be a param.
+${params.<key>}. Anything fixable at generation time must not be a param.
 
 `type: secret` is for a credential the run must be given and the playbook
 must not carry. A secret may be referenced **only** from an `mcpServers`
@@ -186,20 +184,15 @@ otherwise set it to false. Never put `confirm` on an individual node.
 - Configuration hangs on the node, not the role: `skills`/`mcps` are what
   this step injects. Nodes using separate sessions may differ, but when nodes
   share an `instance`, only the node opening that session may set
-  `skills`; continuation nodes must omit `skills`. MCP grants are resolved for
-  every node dispatch, so continuation nodes may replace or clear `mcps`.
-  Skills may only reference names from the candidate list. Each `mcps` name
-  must be one the host has configured (listed below) or one this playbook
-  defines in `mcpServers`; a name from neither is not delivered.
+  `skills`/`mcps`; continuation nodes must omit both fields. Skills may only
+  reference names from the candidate list. Each `mcps` name must be one the
+  host has configured (listed below) or one this playbook defines in
+  `mcpServers`; a name from neither is not delivered.
 - `promptTemplate` is the step's work order: state the criteria, the
   prohibitions and the hard format constraints so the step's job is
   unambiguous. Reference upstream output with {{ <upstreamId>.output }}
   (content) or {{ <upstreamId>.output_path }} (file path); every referenced
   upstream must be listed in this node's dependsOn.
-- `inputs` is only for literal material, files, or node outputs supplied to this
-  node. Every declared input must be referenced in `promptTemplate` as
-  {{ inputs.<key> }} or {{ inputs.<key>.path }}. Never duplicate a playbook
-  param in `inputs`; use ${params.<key>} directly in the template instead.
 - `dependsOn` is the whole graph language: empty = a start node; several =
   a join; nodes with no dependency between them run in parallel.
 - Consecutive steps by one agent that must keep memory (revising a draft
@@ -360,11 +353,13 @@ COMPOSE_TOOL_NAME = "emit_graph"
 def compose_tool() -> list[dict[str, Any]]:
     """Forced-call schema for prompt-mode graph composition: a bare node list.
 
-    The node schema is found by following the model's own ``$ref`` rather than
-    by name: ``NodeSpec`` is an alias of ``DagNodeSpec``, so pydantic titles the
-    definition ``DagNodeSpec`` and a lookup by the alias answers ``{}`` -- which
-    would send ``items`` out empty and leave the prose in
-    ``build_compose_prompt`` as the call's only field guidance.
+    The node schema is found through the model's own reference rather than by
+    name. ``NodeSpec`` is an alias of ``DagNodeSpec`` since the two definitions
+    merged, so pydantic titles the definition ``DagNodeSpec`` and a lookup by the
+    alias returned ``{}`` -- ``items`` went out empty, leaving the prose in
+    ``build_compose_prompt`` as the only field guidance the call had. That was
+    survivable while the two agreed; a model following prose that names a field
+    the model forbids gets one repair round holding nothing but "not permitted".
     """
     schema = PlaybookSpec.model_json_schema(by_alias=True)
     node_schema = _node_schema_of(schema)
@@ -398,17 +393,15 @@ def build_compose_prompt(
         "are hard constraints: use instance only when stateful=true, path placeholders "
         "only when readsLocalFiles=true, skills only when injectableSkills=true, and "
         "mcps only when injectableMcps=true; when nodes share an instance, only "
-        "the node opening that session may set skills, and continuation nodes "
-        "must omit skills; mcps is resolved per dispatch and may be replaced or "
-        "cleared by a continuation node; every "
+        "the node opening that session may set skills or mcps, and continuation "
+        "nodes must omit both fields; every "
         "{{ <upstreamId>.output }} reference must have that upstream in the "
         "node's dependsOn;\n"
         "nodes with no dependency between them run in parallel; the graph is "
         "fixed once assembled, so design no run-time branches or loops.\n"
         f"Params are already substituted (original param names: "
         f"{', '.join(param_names) if param_names else 'none'}); "
-        "no ${params.*} may appear anywhere in the graph. Every declared input "
-        "must be referenced in its node's promptTemplate.\n\n"
+        "no ${params.*} may appear in promptTemplate.\n\n"
         f"# Available agents\n{_render_agents(agent_profiles)}\n\n"
         f"# Assembly guidance\n{prompts_filled}"
     )

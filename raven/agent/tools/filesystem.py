@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Any
 
 from raven.agent import workdir
-from raven.contracts.tool import FileChange, Tool, ToolResult
-from raven.utils.images import detect_image_mime
+from raven.agent.tools.base import FileChange, Tool, ToolResult
+from raven.utils.helpers import detect_image_mime
 
 _DIFF_MAX_LINES = 400
 
@@ -36,7 +36,7 @@ def _unified(before: str, after: str, name: str) -> str | None:
     return "\n".join(out)
 
 
-def resolve_path(
+def _resolve_path(
     path: str,
     workspace: Path | None = None,
     allowed_dirs: tuple[Path, ...] = (),
@@ -71,7 +71,7 @@ def _with_current_root(allowed_dirs: tuple[Path, ...], bound: Path | None) -> tu
     that already fell back to the tool's own ``workspace``. Folding in that
     fallback would silently widen the fence to a root the operator never put
     in ``allowed_dirs``. An empty ``allowed_dirs`` must stay empty regardless
-    -- that is the "fence disabled" signal ``resolve_path`` checks for.
+    -- that is the "fence disabled" signal ``_resolve_path`` checks for.
     """
     if not allowed_dirs or bound is None:
         return allowed_dirs
@@ -101,7 +101,7 @@ class _FsTool(Tool):
     def _resolve(self, path: str) -> Path:
         bound = workdir.current() if self._follow_binding else None
         current_root = bound or self._workspace
-        return resolve_path(path, current_root, _with_current_root(self._allowed_dirs, bound))
+        return _resolve_path(path, current_root, _with_current_root(self._allowed_dirs, bound))
 
 
 # ---------------------------------------------------------------------------

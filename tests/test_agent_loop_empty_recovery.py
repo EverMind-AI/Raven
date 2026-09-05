@@ -19,7 +19,6 @@ from unittest.mock import patch
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.agent.loop.recovery import (
     POST_TOOL_NUDGE,
     RecoveryAction,
@@ -46,8 +45,9 @@ def _make_agent(workspace: Path, provider: LLMProvider, limits: RecoveryLimits |
         provider=provider,
         workspace=workspace,
         model="stub",
-        policy=TurnPolicy(max_iterations=10, empty_recovery=limits),
-        tools=ToolWiring(restrict_to_workspace=True),
+        max_iterations=10,
+        restrict_to_workspace=True,
+        empty_recovery=limits,
     )
 
 

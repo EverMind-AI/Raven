@@ -1,8 +1,7 @@
 """``raven tracing`` — open the tracing dashboard.
 
 The dashboard is a dependency-free Node viewer bundled under
-``raven/cli/tracing_viewer/`` -- a surface the CLI launches, kept out of the
-``tracing`` kernel package. Instrumentation itself runs in-process (installed at
+``raven/tracing/viewer/``. Instrumentation itself runs in-process (installed at
 CLI startup, see :mod:`raven.tracing`); this command only launches the viewer
 that reads the captured spans from ``~/.raven/traces``.
 
@@ -45,7 +44,7 @@ console = Console()
 
 
 def _viewer_dir() -> Path:
-    return Path(__file__).resolve().parent / "tracing_viewer"
+    return Path(__file__).resolve().parent.parent / "tracing" / "viewer"
 
 
 # Asset the viewer must still be able to read off disk for the page to work.
@@ -191,12 +190,10 @@ def _stop_viewer() -> None:
 
 
 def _resolve_node() -> str:
-    from raven.cli.tui_commands import _MIN_NODE_VERSION, find_node
+    from raven.cli.tui_commands import find_node
 
-    node, version = find_node()
-    # find_node returns the best node it saw even below the minimum, so the
-    # version check is the caller's -- the TUI's own launch does the same.
-    if not node or version is None or version < _MIN_NODE_VERSION:
+    node, _version = find_node()
+    if not node:
         console.print(
             "[red]Node (>= 22) not found.[/red] The tracing dashboard needs the "
             "same Node runtime as the TUI.\n"

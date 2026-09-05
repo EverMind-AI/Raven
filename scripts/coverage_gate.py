@@ -17,16 +17,12 @@ DEFAULT_TOLERANCE = 0.05
 # Glob magic so ** matches zero-or-more path components; the default pathspec
 # raven/**/*.py drops top-level files like raven/__init__.py because plain * spans
 # slashes and the middle separator then has nothing to match.
-PRODUCTION_PATHSPECS = (
-    ":(glob)raven/**/*.py",
-    # Distributables beside the host wheel (the everos memory plugin) are
-    # production code too; without this a change there dodges the diff gate.
-    ":(glob)plugins-dist/**/*.py",
-)
+PRODUCTION_PATHSPEC = ":(glob)raven/**/*.py"
 DEFAULT_DIFF_THRESHOLD = 90.0
 OMITTED_PATHS = {
     "raven/__main__.py",
-    "evolver/__main__.py",
+    "raven/evolver/__main__.py",
+    "raven/utils/win_fcntl_shim.py",
 }
 
 
@@ -265,8 +261,8 @@ def git_diff_inputs(base_ref: str, head: str | None) -> tuple[dict[str, set[int]
     merge_base = _git("merge-base", base_ref, "HEAD").strip()
     end = head or ""
     range_args = [merge_base, end] if end else [merge_base]
-    diff = _git("diff", "--unified=0", "--no-color", "--diff-filter=ACMR", *range_args, "--", *PRODUCTION_PATHSPECS)
-    names = _git("diff", "--name-only", "--diff-filter=A", *range_args, "--", *PRODUCTION_PATHSPECS)
+    diff = _git("diff", "--unified=0", "--no-color", "--diff-filter=ACMR", *range_args, "--", PRODUCTION_PATHSPEC)
+    names = _git("diff", "--name-only", "--diff-filter=A", *range_args, "--", PRODUCTION_PATHSPEC)
     return parse_changed_lines(diff), {name for name in names.splitlines() if name}
 
 

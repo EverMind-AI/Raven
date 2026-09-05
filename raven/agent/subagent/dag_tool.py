@@ -16,18 +16,13 @@ readable summary.
 
 A run is backgrounded by default, like ``spawn``: the call returns as soon as
 the graph is accepted and the result comes back later as an announced turn.
-``background=false`` blocks instead -- until the graph finishes, or until a
-node reports it could not accomplish its task, whichever comes first. That
-report is the call's result; the agent answers it with ``resolve_dag_node``,
-which returns the next report or the final result. The run is *bound* to the
-turn that started it: no adjudication deadline runs while that turn lives, and
-when it ends the run is *released* and behaves as a backgrounded one from then
-on (see ``raven.agent.subagent.dag_adjudication.Outbox``).
+``background=false`` keeps the old behaviour of blocking until the graph
+finishes and returning the summary as the tool result.
 
 Live progress (``dag_run_started`` / ``dag_node_updated`` / ``dag_run_completed``)
 rides a late-bound sink — NOT the spine. The turn's conversation is delivered
 per-turn via ``set_context`` (the loop calls it, like spawn/message); the sink
-(wired by the host to the page's emitter) fans the event to that
+(wired by the gateway to the web channel's emitter) fans the event to that
 conversation's subscribers, where the service translates it to an AgentScope
 CustomEvent the web UI's DAG graph already renders.
 """
@@ -46,7 +41,7 @@ from loguru import logger
 
 from raven.agent import workdir
 from raven.agent.subagent.backends.base import IN_SUBAGENT_RUN
-from raven.agent.subagent.dag_adjudication import AdjudicationDesk, Final, Outbox, Report, Stopped
+from raven.agent.subagent.dag_adjudication import AdjudicationDesk
 from raven.agent.subagent.dag_capabilities import AgentCapabilities, validate_capabilities
 from raven.agent.subagent.dag_graph import DagNodeSpec, SubAgentDagSpec, parse_dag_spec, validate_and_order
 from raven.agent.subagent.dag_machines import refusal as machines_refusal
@@ -64,16 +59,15 @@ from raven.agent.subagent.instances import mint_handle
 from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.subagent_memory import EverosIdentity
+from raven.agent.tools.base import Tool, ToolResult
 from raven.config.raven import SubagentDagConfig
 from raven.config.schema import MCPServerConfig
-from raven.contracts.tool import Tool, ToolResult
-from raven.security.trust import wrap_untrusted
 
 if TYPE_CHECKING:
     from raven.agent.subagent.registry import AgentRegistry
 
 # Sink: (conversation_id, event_name, payload) -> awaitable. Late-bound by the
-# host (the page mount wires it to the page's emitter).
+# host (gateway wires it to the web channel's emitter).
 ProgressSink = Callable[[str, str, dict], Awaitable[None]]
 
 # (run_id, summary_text, origin) -> awaitable. How a backgrounded run's result
@@ -94,6 +88,14 @@ QuotaCharger = Callable[[str | None], "str | None"]
 # ``confirm`` gate's only route to a human; hosts that have no way to ask leave it
 # unwired, and see ``_confirmed`` for what happens then.
 Ask = Callable[[str, str], Awaitable[bool]]
+
+# (conversation_id, report, timeout_s) -> the message to continue the node with,
+# "abandon" or "" to give up on it, or None when there is no route to a human at
+# all. `timeout_s` is the runner's remaining budget for the whole adjudication
+# round, not this one question's: see ``_adjudicate_open_nodes`` for why the
+# questions are asked in series and why that makes the budget shared. Only a
+# foreground run is handed one; a backgrounded run answers through the desk.
+Adjudicate = Callable[[str, str, float | None], Awaitable[str | None]]
 
 
 def _with_notices(result: "str | ToolResult", notices: list[str]) -> "str | ToolResult":
@@ -191,14 +193,6 @@ _CLOSE_TIMEOUT_SECONDS = 5.0
 # skill is not installed — better no instruction than one that 404s.
 GUIDE_SKILL_ID = "local/subagent-dag-orchestration"
 
-_FOREGROUND_REPORT_TAIL = (
-    "This call returned before the graph finished. The graph is still running and this node "
-    "is waiting for your decision. Decide with resolve_dag_node, which returns the next such "
-    "report or the run's final result. The deadline above is paused while this turn runs; if "
-    "you end the turn without deciding, the report is re-sent to you as a message and the "
-    "deadline starts."
-)
-
 _NODE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -262,8 +256,6 @@ _NODE_SCHEMA: dict[str, Any] = {
         },
         "instance": {
             "type": "string",
-            "minLength": 1,
-            "pattern": r"^\S(?:.*\S)?$",
             "description": (
                 "Optional stable handle; nodes sharing it run sequentially and reuse one sub-agent "
                 "session, including across separate runs in this conversation. Only give the same "
@@ -285,8 +277,7 @@ class SubAgentDagTool(Tool):
     """Orchestrate a graph of sub-agent tasks in one call (file-based passing)."""
 
     timeout_seconds = 1800.0
-    # Manual stop (request_cancel / ``subagent.interrupt`` on the run id /
-    # ``subagent.cancel_session``) replaces the timer
+    # Manual stop (request_cancel / the cancel RPCs) replaces the timer
     # ceiling: the registry skips asyncio.wait_for for blocking_interaction
     # tools, so a long-running DAG is ended by hand, not by a clock. Declared
     # for every call, background or not, the same way ``spawn`` declares it
@@ -315,6 +306,7 @@ class SubAgentDagTool(Tool):
         ask: "Ask | None" = None,
         control_reachable: "Callable[[], bool] | None" = None,
         provider_for: "Callable[[], Any] | None" = None,
+        adjudicate: "Adjudicate | None" = None,
         verdict_config: "SubagentDagConfig | None" = None,
     ) -> None:
         # Read through to SubagentManager's flag rather than mirroring it: this
@@ -365,10 +357,12 @@ class SubAgentDagTool(Tool):
         # from the same config as the loop but holds no provider of its own, and an
         # unwired host (tests, offline entry points) simply skips the judgement.
         self._provider_for = provider_for
+        # Only handed to a foreground run: a backgrounded one answers through
+        # `resolve_dag_node`, which a foreground call's own turn cannot reach.
+        self._adjudicate = adjudicate
         self._verdict_config = verdict_config if verdict_config is not None else SubagentDagConfig()
         self._cancels: dict[str, asyncio.Event] = {}
         self._desks: dict[str, AdjudicationDesk] = {}
-        self._outboxes: dict[str, Outbox] = {}
         # Strong references to in-flight background runs. Without them the event
         # loop only weakly references a bare create_task, and a run can be
         # garbage-collected mid-graph.
@@ -499,88 +493,7 @@ class SubAgentDagTool(Tool):
     def resolve_node(self, run_id: str, node_id: str, decision: str, message: str | None) -> bool:
         """Answer one suspended node. False when nothing was waiting on it."""
         desk = self._desks.get(run_id)
-        if desk is None or not desk.resolve(node_id, decision, message):
-            return False
-        # The outbox owes a re-send for every report it handed over and nobody
-        # decided; this is the decision, so that debt is settled.
-        if (outbox := self._outboxes.get(run_id)) is not None:
-            outbox.answered(node_id)
-        return True
-
-    def is_foreground(self, run_id: str) -> bool:
-        """Whether ``run_id`` is a foreground run still bound to the turn that started it."""
-        outbox = self._outboxes.get(run_id)
-        return outbox is not None and outbox.bound
-
-    async def await_run(self, run_id: str) -> "Report | Final | Stopped | None":
-        """The next event of a bound foreground run, or None when there is no such run to wait on."""
-        outbox = self._outboxes.get(run_id)
-        if outbox is None or not outbox.bound:
-            return None
-        return await outbox.take()
-
-    def abort_run(self, run_id: str) -> None:
-        """Hard-cancel a run whose awaiting tool call was cancelled.
-
-        The outbox is stopped first so a release that races this (the turn's own
-        finally) finds nothing to re-send for a run that is being killed.
-        """
-        outbox = self._outboxes.get(run_id)
-        if outbox is None:
-            # Only a foreground run is one a caller can be blocked on; a background
-            # graph must survive its caller's cancellation.
-            return
-        outbox.stop()
-        task = self._runs.get(run_id)
-        if task is not None and not task.done():
-            task.cancel()
-
-    async def release_turn(self, conversation: str, *, flush: bool) -> None:
-        """The turn on ``conversation`` has ended: release every foreground run it still binds.
-
-        ``flush`` is False when the turn was cancelled: the user just stopped the
-        agent, and re-raising the run's open questions at them is noise. A run
-        released this way still announces what happens to it later.
-        """
-        for outbox in list(self._outboxes.values()):
-            if outbox.bound and outbox.conversation == conversation:
-                try:
-                    await outbox.release(flush=flush)
-                except Exception:  # noqa: BLE001 - one run must not strand the conversation's others
-                    logger.opt(exception=True).warning("DAG run outbox could not be released")
-
-    def render_event(self, run_id: str, event: "Report | Final | Stopped") -> "str | ToolResult":
-        """One outbox event as a tool result, addressed to the agent that is waiting."""
-        if isinstance(event, Report):
-            # Fenced like an announced report is (SubagentManager.announce_dag_exception):
-            # the report quotes the node's output and transcript.
-            return ToolResult(
-                model_text=wrap_untrusted(event.text, source="subagent") + "\n\n" + _FOREGROUND_REPORT_TAIL,
-                display_text=f"DAG {run_id}: node {event.node_id} needs a decision",
-            )
-        if isinstance(event, Final):
-            return event.result
-        if isinstance(event, Stopped):
-            return f"DAG run {run_id} was stopped before it finished."
-        raise TypeError(f"not an outbox event: {event!r}")
-
-    def _report_announcer(self, run_id: str, origin: _DagOrigin):
-        async def _announce(node_id: str, text: str, *, awaiting_decision: bool) -> None:
-            if self._announce_exception is None:
-                logger.info("DAG run {} node {} reported after release with no announcer wired", run_id, node_id)
-                return
-            await self._announce_exception(run_id, node_id, text, origin.as_dict(), awaiting_decision=awaiting_decision)
-
-        return _announce
-
-    def _final_announcer(self, run_id: str, origin: _DagOrigin):
-        async def _announce(result: Any) -> None:
-            if self._announce is None:
-                logger.info("DAG run {} finished after release with no announcer wired", run_id)
-                return
-            await self._announce(run_id, str(getattr(result, "model_text", result)), origin.as_dict())
-
-        return _announce
+        return False if desk is None else desk.resolve(node_id, decision, message)
 
     def active_run_ids(self) -> list[str]:
         """Ids of runs currently accepting a cancel request."""
@@ -780,10 +693,8 @@ class SubAgentDagTool(Tool):
                     "description": (
                         "Default true: return as soon as the run starts and get the result as an "
                         "announcement when the graph finishes, leaving you free to work meanwhile. "
-                        "Set false only when you cannot continue without the outputs: the call then "
-                        "blocks until the graph finishes or a node reports it could not accomplish "
-                        "its task, whichever comes first, and answering that report with "
-                        "resolve_dag_node resumes the wait."
+                        "Set false only when you cannot continue without the outputs -- that blocks "
+                        "until every node is done and returns the full summary as this call's result."
                     ),
                 },
                 "confirm": {
@@ -1027,67 +938,26 @@ class SubAgentDagTool(Tool):
         cancel = asyncio.Event()
         self._cancels[run_id] = cancel
 
-        outbox: Outbox | None = None
         if not background:
-            outbox = Outbox(
-                conversation=origin.conversation,
-                announce_report=self._report_announcer(run_id, origin),
-                announce_final=self._final_announcer(run_id, origin),
+            result = await self._run(
+                spec, run_id, cancel, origin, dirs, call_id, auto_instances, dispatch_backends, foreground=True
             )
-            self._outboxes[run_id] = outbox
+            return _with_notices(result, notices)
 
         task = asyncio.create_task(
-            self._run_detached(spec, run_id, cancel, origin, dirs, call_id, auto_instances, dispatch_backends, outbox)
+            self._run_and_announce(spec, run_id, cancel, origin, dirs, call_id, auto_instances, dispatch_backends)
         )
         self._runs[run_id] = task
-
-        def _retire(_t: "asyncio.Task") -> None:
-            # A task cancelled before its first tick never enters _run, whose
-            # finally is what normally retires the run's cancel/desk entries --
-            # and that window is real: _adopt indexes the task immediately, so
-            # a same-tick /stop or the shutdown sweep cancels it un-started.
-            # Left behind, active_run_ids() lists the dead run forever and its
-            # node rows stay pinned running. The pops are idempotent with the
-            # finally's own.
-            self._runs.pop(run_id, None)
-            self._cancels.pop(run_id, None)
-            self._desks.pop(run_id, None)
-            # Dropping the outbox here is what makes `resolve_dag_node`'s shape
-            # load-bearing rather than stylistic: `release_turn` reaches a run
-            # through this index, so a run that finishes before a taker exists has
-            # nowhere left to deliver. The resolve tool resolves and awaits with no
-            # yield between, which is why no such window opens today. Guarded by
-            # test_the_resolve_tool_parks_its_taker_before_it_yields, which reads
-            # that shape out of the source: a behavioural test only catches a yield
-            # once it lasts long enough to lose the race, and the claim here is
-            # about any yield at all.
-            self._outboxes.pop(run_id, None)
-
-        task.add_done_callback(_retire)
+        task.add_done_callback(lambda _t: self._runs.pop(run_id, None))
         if self._adopt is not None:
             self._adopt(run_id, task, origin.conversation)
-        if outbox is not None:
-            # Registered before the task's first tick: create_task only schedules
-            # it, and take() parks its taker before yielding, so the run cannot
-            # produce an event into an empty tray.
-            try:
-                event = await outbox.take()
-            except asyncio.CancelledError:
-                # The user stopped the agent while it was blocked on this graph.
-                # A blocking call means "I am waiting on this", so the graph goes
-                # with the turn, as it did when the call ran the graph inline.
-                self.abort_run(run_id)
-                raise
-            if task.done():
-                # ``put_final`` hands this event to our taker before ``_run_detached``
-                # returns, so the task's own done-callback (``_retire`` above) is still
-                # queued a tick behind this wakeup -- a caller inspecting ``_runs`` the
-                # instant this call returns, as a finished run with no suspension does,
-                # must not see a task that is done in every sense but bookkeeping.
-                _retire(task)
-            return _with_notices(self.render_event(run_id, event), notices)
+        controls = ""
         if self._control_reachable is None:
-            reachable = True
+            controls = (
+                f'Check its progress with dag_status("{run_id}") and stop it with cancel_dag("{run_id}"). '
+                "If a node reports it could not accomplish its task, you will be told, and you answer "
+                "with resolve_dag_node. "
+            )
         else:
             # Fail closed: the predicate runs after the background task is
             # already created, so a failure here must mute the hint rather
@@ -1096,18 +966,12 @@ class SubAgentDagTool(Tool):
                 reachable = self._control_reachable()
             except Exception:  # noqa: BLE001
                 reachable = False
-        # None of the three are in your tool schema, so the hint names the route
-        # as well as the name -- a model that looks one up and does not find it
-        # reads the whole advertisement as stale.
-        controls = (
-            f'Check its progress with tool_call name "dag_status" arguments {{"run_id": "{run_id}"}}, '
-            f'and stop it with tool_call name "cancel_dag" arguments {{"run_id": "{run_id}"}}. '
-            "If a node reports it could not accomplish its task, you will be told, and you answer the "
-            'same way with "resolve_dag_node". These three are not in your tool list; tool_call is how '
-            "you reach them. "
-            if reachable
-            else ""
-        )
+            if reachable:
+                controls = (
+                    f'Check its progress with dag_status("{run_id}") and stop it with cancel_dag("{run_id}"). '
+                    "If a node reports it could not accomplish its task, you will be told, and you answer "
+                    "with resolve_dag_node. "
+                )
         return _with_notices(
             ToolResult(
                 model_text=(
@@ -1159,7 +1023,7 @@ class SubAgentDagTool(Tool):
             return False
         return bool(answer)
 
-    async def _run_detached(
+    async def _run_and_announce(
         self,
         spec: SubAgentDagSpec,
         run_id: str,
@@ -1169,32 +1033,9 @@ class SubAgentDagTool(Tool):
         call_id: str | None,
         auto_instances: frozenset[str],
         dispatch_backends: dict[str, Any],
-        outbox: Outbox | None,
     ) -> None:
-        """Run a graph as its own task, then hand the result on.
-
-        A foreground run puts it in its outbox: the tool call awaiting the run
-        takes it, or, if the turn has ended by then, the outbox announces it. A
-        backgrounded run announces it directly, as before.
-        """
-        try:
-            result = await self._run(
-                spec, run_id, cancel, origin, dirs, call_id, auto_instances, dispatch_backends, outbox=outbox
-            )
-        except asyncio.CancelledError:
-            if outbox is not None:
-                outbox.stop()
-            raise
-        except Exception as exc:  # noqa: BLE001 - the awaiting call has no other way to learn the run died
-            # `_run` already turns a `run_dag` failure into this text; a failure of
-            # `_run` itself used to propagate to the inline caller. Detached, it would
-            # die with the task and leave the outbox's taker waiting forever, so it
-            # takes the same shape and travels the same route.
-            logger.opt(exception=True).error("DAG run {} raised outside run_dag: {}", run_id, exc)
-            result = f"Error running DAG {run_id}: {exc}"
-        if outbox is not None:
-            await outbox.put_final(result, stopped=cancel.is_set())
-            return
+        """Run a backgrounded graph, then send its summary back as a turn."""
+        result = await self._run(spec, run_id, cancel, origin, dirs, call_id, auto_instances, dispatch_backends)
         if cancel.is_set():
             # A stop the user asked for. ``run_dag`` still returns normally,
             # with a running node recorded ``cancelled`` and a pending one
@@ -1220,12 +1061,11 @@ class SubAgentDagTool(Tool):
         """Tell a drawn graph the run is over when it ended with no manifest.
 
         ``dag_run_started`` has already drawn the nodes by the time a collapse
-        or a stop lands, and the drawing only settles on a terminal event. When
-        the call that reaches here already delivered the run's outcome as its
-        tool result, a graph left mid-flight was visible right next to it;
-        otherwise -- backgrounded from the start, or a foreground call that
-        already returned a report in an earlier turn -- the graph reads as
-        still running until a reload reconciles it against ``active_run_ids``.
+        or a stop lands, and the drawing only settles on a terminal event.
+        Blocking, the same turn also delivered the outcome as the tool result,
+        so a graph left mid-flight was visible next to it; backgrounded, the
+        tool row already says "started", leaving the graph reading as still
+        running until a reload reconciles it against ``active_run_ids``.
 
         The manifest carries no counts because the run produced none -- what it
         asserts is that there will be no more events, plus why. A consumer
@@ -1317,25 +1157,12 @@ class SubAgentDagTool(Tool):
         call_id: str | None,
         auto_instances: frozenset[str],
         dispatch_backends: dict[str, Any],
-        outbox: Outbox | None = None,
+        foreground: bool = False,
     ) -> str | ToolResult:
         """Execute one validated graph and render its outcome."""
         emit = self._emitter(origin.conversation, call_id)
         desk = AdjudicationDesk()
         self._desks[run_id] = desk
-        announce_exception = self._announce_exception
-        released: asyncio.Event | None = None
-        if outbox is not None:
-
-            async def _to_outbox(
-                _run_id: str, node_id: str, report: str, _origin: dict[str, str], *, awaiting_decision: bool
-            ) -> None:
-                # Whether a notification is dropped depends on whether a blocking call is
-                # still there to be handed the summary, which is the outbox's own state.
-                await outbox.put_report(node_id, report, awaiting_decision=awaiting_decision)
-
-            announce_exception = _to_outbox
-            released = outbox.released
         try:
             result = await run_dag(
                 spec,
@@ -1356,12 +1183,11 @@ class SubAgentDagTool(Tool):
                 auto_instances=auto_instances,
                 desk=desk,
                 judge_node=self._judge_node(),
-                announce_exception=announce_exception,
+                announce_exception=self._announce_exception,
                 origin=origin.as_dict(),
                 max_continuations=self._verdict_config.max_continuations,
                 adjudication_timeout_s=self._verdict_config.adjudication_timeout_seconds,
-                control_reachable=self._control_reachable,
-                released=released,
+                adjudicate=self._adjudicate if foreground else None,
             )
         except DagValidationError as exc:
             return self._validation_error(exc)
@@ -1374,8 +1200,7 @@ class SubAgentDagTool(Tool):
             await self._close_graph(emit, run_id, len(spec.nodes), {"error": str(exc)})
             return f"Error running DAG {run_id}: {exc}"
         except asyncio.CancelledError:
-            # The other way a run is stopped. The model's ``cancel_dag`` tool
-            # (via ``cancel_dag_run``) sets the event and
+            # The other way a run is stopped. ``dag.cancel`` sets the event and
             # lets ``run_dag`` return, so the graph settles on its own manifest;
             # ``/stop`` and the shutdown sweep instead cancel the task, a route
             # this branch opened by adopting the run into the manager's index.

@@ -18,7 +18,7 @@ An omitted `instance` always still produces *some* handle: the manager derives
 `handle = instance or task_id` (`raven/agent/subagent/manager.py:337`) and each
 transport derives the same thing again for itself
 (`raven/agent/subagent/backends/cli_agent.py:368`,
-`raven/acp_client/acp_agent.py:343`). A DAG node passes
+`raven/agent/subagent/backends/acp_agent.py:343`). A DAG node passes
 `task_id=node.id`, so its unnamed handle is its own node id.
 
 What the omission actually costs differs per transport, and none of the three
@@ -42,7 +42,7 @@ documents this and states the fix is to namespace the write, not to tighten the
 lookup.
 
 **The ACP transport has no gate at all.** `AcpAgentBackend._open_session`
-(`raven/acp_client/acp_agent.py:460`) looks up the bare handle
+(`raven/agent/subagent/backends/acp_agent.py:460`) looks up the bare handle
 whenever the agent is stateful, without the `resumable` check the CLI transport
 applies (`cli_agent.py:389`) and without `hold_handle`. An unnamed DAG node
 reaching a hit there resumes a prior run's session, and two concurrent runs

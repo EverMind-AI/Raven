@@ -1,5 +1,3 @@
-"""The upgrade flow against a real uv: the running tool replaces itself in place."""
-
 from __future__ import annotations
 
 import os
@@ -60,7 +58,7 @@ def _build_fixture(source_root: Path, output_root: Path, version: str, uv_path: 
                     return 2
 
                 sys.path.insert(0, os.environ["RAVEN_UPGRADE_SOURCE"])
-                from raven.updates import upgrade as upgrade_commands
+                from raven.cli import upgrade_commands
 
                 target = upgrade_commands._uv_tool_target()
                 if target is None:

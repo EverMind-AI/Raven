@@ -20,9 +20,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from raven.agent.loop.bundles import SubagentWiring, ToolWiring, TurnPolicy
 from raven.agent.loop.main import AgentLoop
-from raven.contracts.llm_provider import LLMResponse
+from raven.providers.base import LLMResponse
 from raven.spine import ChatType, Origin, Source, TurnRequest
 
 _CONVERSATION = "tui:smoke"
@@ -47,12 +46,12 @@ class _EchoProvider:
 
     async def chat_stream(self, *, messages, tools=None, model=None, **_kwargs):
         """The same reply, cut in two, so a streamed turn is visibly not one frame."""
-        from raven.contracts.llm_provider import ChatDelta
+        from raven.providers.base import StreamDelta
 
         response = await self.chat_with_retry(messages=messages, tools=tools, model=model)
         text = response.content or ""
         for piece in (text[:5], text[5:]):
-            yield ChatDelta(content=piece)
+            yield StreamDelta(content=piece)
 
 
 def _req(text: str, *, target: tuple[str, str] | None = None) -> TurnRequest:
@@ -81,25 +80,12 @@ def loop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AgentLoop:
     workspace.mkdir()
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
 
-    from raven.config.schema import ThirdPartyCliSubagentConfig
-
-    # A row for the agent the tests address: the registry dispatches only to
-    # names on its table, and the tests swap the row's backend for a fake. A
-    # resume command makes the row stateful, which is what a direct chat needs.
-    coder = ThirdPartyCliSubagentConfig(
-        name="Coder",
-        kind="cli",
-        command="/usr/bin/true {agent_id}",
-        resume_command="/usr/bin/true {agent_id}",
-        enabled=True,
-    )
     return AgentLoop(
         provider=_EchoProvider(),
         workspace=workspace,
         model="stub",
-        policy=TurnPolicy(max_iterations=2),
-        tools=ToolWiring(restrict_to_workspace=True),
-        subagents=SubagentWiring(agents=[coder]),
+        max_iterations=2,
+        restrict_to_workspace=True,
     )
 
 
@@ -216,7 +202,7 @@ async def test_a_third_party_instance_answers_and_lands_in_the_handoff(loop: Age
     from raven.agent.subagent.direct_chat import direct_root
 
     backend = _LockTakingBackend()
-    loop.subagents.registry._backends["Coder"] = backend
+    loop.subagents._backends["Coder"] = backend
 
     replies: list[str] = []
     await asyncio.wait_for(_run(loop, _req("who are you", target=("Coder", "greet")), replies), timeout=5)

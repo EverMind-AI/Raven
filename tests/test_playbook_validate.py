@@ -1,9 +1,5 @@
 """The field definition's rule table: graph coherence, references, instances."""
 
-import pytest
-
-from raven.agent.subagent.dag_graph import SubAgentDagSpec, validate_and_order
-from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.playbook import NodeSpec, ParamSpec, PlaybookSpec, Triggers
 from raven.playbook.params import fill_param_refs_without_secrets, secret_param_names
 from raven.playbook.validate import (
@@ -48,34 +44,9 @@ def test_unknown_agent_is_an_error():
 def test_reference_must_be_inside_depends_on():
     nodes = [_node("a"), _node("b", template="use {{ a.output }}")]
     errors = validate_graph_nodes(nodes, set())
-    assert any("references undeclared dependency 'a'" in e for e in errors)
+    assert any("not in its dependsOn" in e for e in errors)
     ok = [_node("a"), _node("b", template="use {{ a.output }}", depends_on=["a"])]
     assert validate_graph_nodes(ok, set()) == []
-
-
-def test_path_confinement_waits_for_dispatch_roots(tmp_path) -> None:
-    inside = tmp_path / "notes.md"
-    reusable_nodes = [
-        _node("a", template=f"read {{{{ ref:{inside} }}}}"),
-        _node(
-            "a",
-            template="read {{ inputs.material }}",
-            inputs={"material": {"file": str(inside)}},
-        ),
-    ]
-
-    for node in reusable_nodes:
-        assert validate_graph_nodes([node], set()) == []
-        spec = SubAgentDagSpec(task_summary="read a reusable path", nodes=[node])
-        assert validate_and_order(spec, roots=(str(tmp_path),)) == ["a"]
-
-    outside = tmp_path.parent / "outside.md"
-    spec = SubAgentDagSpec(
-        task_summary="reject a path outside the session",
-        nodes=[_node("a", template=f"read {{{{ ref:{outside} }}}}")],
-    )
-    with pytest.raises(DagValidationError, match="outside the session workdir"):
-        validate_and_order(spec, roots=(str(tmp_path),))
 
 
 def test_a_blank_node_summary_is_rejected_here_not_only_at_dispatch():
@@ -100,35 +71,11 @@ def test_param_refs_must_be_declared():
     )
 
 
-def test_params_must_not_be_duplicated_into_node_inputs() -> None:
-    params = {"project_path": ParamSpec(default=".", description="which project directory?")}
-    duplicated = _node(
-        "detect",
-        template="inspect ${params.project_path}",
-        inputs={"project_path": "${params.project_path}"},
-    )
-    errors = validate_structure(_spec([duplicated], params=params))
-    assert any("declared but never referenced" in error for error in errors)
-    assert any("must not be copied into node inputs" in error for error in errors)
-
-    wrong_repair = _node(
-        "detect",
-        template="inspect {{ inputs.project_path }}",
-        inputs={"project_path": "${params.project_path}"},
-    )
-    errors = validate_structure(_spec([wrong_repair], params=params))
-    assert not any("declared but never referenced" in error for error in errors)
-    assert any("must not be copied into node inputs" in error for error in errors)
-
-    correct = _node("detect", template="inspect ${params.project_path}")
-    assert validate_structure(_spec([correct], params=params)) == []
-
-
 def test_cycles_and_unknown_deps_are_errors():
     errors = validate_graph_nodes([_node("a", depends_on=["b"]), _node("b", depends_on=["a"])], set())
     assert any("cycle" in e for e in errors)
     errors = validate_graph_nodes([_node("a", depends_on=["nope"])], set())
-    assert any("depends on unknown 'nope'" in e for e in errors)
+    assert any("unknown node" in e for e in errors)
 
 
 #: Rules 8 and 9 are about how same-instance members relate to each other, so they
@@ -146,35 +93,14 @@ def test_instance_members_must_form_a_chain():
     assert validate_graph_nodes(ok, set(), stateful_agents=_STATEFUL) == []
 
 
-def test_a_continuation_node_cannot_reconfigure_the_shared_skill_menu():
-    late = [
-        _node("a", instance="w", skills=["s1"]),
-        _node("b", instance="w", depends_on=["a"], skills=["later"]),
-    ]
-    errors = validate_graph_nodes(late, set(), stateful_agents=_STATEFUL)
-    assert any("continuing instance 'w'" in error and "opened by node 'a'" in error for error in errors)
-
-
-def test_a_continuation_node_may_replace_or_clear_its_mcp_grant():
-    for later in (["m2"], []):
-        nodes = [
-            _node("a", instance="w", mcps=["m1"]),
-            _node("b", instance="w", depends_on=["a"], mcps=later),
+def test_a_continuation_node_cannot_reconfigure_the_shared_session():
+    for field in ("skills", "mcps"):
+        late = [
+            _node("a", instance="w", skills=["s1"]),
+            _node("b", instance="w", depends_on=["a"], **{field: ["later"]}),
         ]
-        assert validate_graph_nodes(nodes, set(), stateful_agents=_STATEFUL) == []
-
-
-@pytest.mark.parametrize(
-    "value",
-    ["${params.project_path}", "{{ params.project_path }}", {"file": "${params.project_path}"}],
-)
-def test_every_param_spelling_is_rejected_inside_node_inputs(value: object) -> None:
-    params = {"project_path": ParamSpec(default=".", description="which project directory?")}
-    node = _node("detect", template="inspect {{ inputs.project_path }}", inputs={"project_path": value})
-
-    errors = validate_structure(_spec([node], params=params))
-
-    assert any("must not be copied into node inputs" in error for error in errors)
+        errors = validate_graph_nodes(late, set(), stateful_agents=_STATEFUL)
+        assert any("continuing instance 'w'" in error and "opened by node 'a'" in error for error in errors)
 
 
 def test_only_the_opening_node_may_configure_a_shared_session():

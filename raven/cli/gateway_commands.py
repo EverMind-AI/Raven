@@ -10,9 +10,7 @@ this command body.
 from __future__ import annotations
 
 import asyncio
-import signal
 import time
-from contextlib import suppress
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -22,25 +20,37 @@ from rich.console import Console
 
 from raven import __logo__
 from raven.cli._helpers import (
+    build_model_routing,
     load_runtime_config,
+    make_resolving_provider,
     parse_fake_now,
     print_config_migration_notices,
     print_deprecated_memory_window_notice,
-    report_dropped_memory_writes,
 )
-from raven.core.provider_stack import build_model_routing
-from raven.providers.factory import make_resolving_provider
+from raven.cli._plugin_stack import build_plugin_registry, build_plugin_tools, maybe_build_memory_backend
 from raven.utils import asyncio_runner as bounded_asyncio
-from raven.utils.workspace import sync_workspace_templates
+from raven.utils.helpers import sync_workspace_templates
 
 if TYPE_CHECKING:
     from raven.config.schema import GatewayPageConfig
 
 console = Console()
 
-# Minimum spacing between accepted generation swaps (each one cancels every
-# in-flight turn and reconnects MCP); see SwapCoordinator.
-_SWAP_MIN_INTERVAL_S = 5.0
+
+_GATEWAY_IM_CHANNELS: tuple[str, ...] = (
+    "whatsapp",
+    "telegram",
+    "discord",
+    "feishu",
+    "mochat",
+    "dingtalk",
+    "email",
+    "slack",
+    "qq",
+    "matrix",
+    "wecom",
+    "weixin",
+)
 
 
 def _risk_banner(config) -> str | None:
@@ -54,10 +64,11 @@ def _risk_banner(config) -> str | None:
         return None
 
     open_channels = []
-    for name, section in config.channels.channel_entries().items():
-        if not section.enabled:
+    for name in type(config.channels).model_fields:
+        section = getattr(config.channels, name, None)
+        if section is None or not getattr(section, "enabled", False):
             continue
-        if "*" in (section.allow_from or []):
+        if "*" in (getattr(section, "allow_from", None) or []):
             open_channels.append(name)
     if not open_channels:
         return None
@@ -79,12 +90,14 @@ def _build_gateway_channels(config) -> set[str]:
     ``enabled_channel_names``, so a channel added to ``ChannelsConfig`` is
     covered without touching this module).
 
-    The gateway owns cron jobs for its IM channels. It does NOT claim ``tui``
-    jobs: those fire in the interactive process that created them, so a
-    TUI-set reminder delivers to the TUI rather than racing the gateway and
-    being forwarded to an IM channel -- fire at origin, no trigger-time
-    re-routing. The trade-off is no cross-process fallback while that process
-    is down.
+    The gateway owns cron jobs for its IM channels. It does NOT claim
+    ``tui``/``cli`` jobs: those fire in the interactive process that created
+    them (the TUI / ``raven agent`` session), so a TUI-set reminder always
+    delivers to the TUI rather than racing the gateway and being forwarded to an
+    IM channel — fire-at-origin, no trigger-time re-routing. The trade-off is no
+    cross-process fallback while that process is down; restoring "fire at origin,
+    hand off only after the origin exits" is a deferred cron-delivery-ownership
+    design, not this set.
 
     ``tui`` is deliberately NOT derived from ``gateway.page.enabled`` here. The
     partition has to follow the mount's outcome, not the config's intent:
@@ -97,6 +110,15 @@ def _build_gateway_channels(config) -> set[str]:
     in :func:`register`, which runs before ``cron.start()``.
     """
     return config.channels.enabled_channel_names()
+
+
+def _build_deliverable_store(config):
+    """Build the shared store backing ``deliver_files`` on every outlet."""
+
+    from raven.agent.tools._deliverables import DeliverableStore
+    from raven.config.paths import get_deliverables_path
+
+    return DeliverableStore(get_deliverables_path())
 
 
 def _format_question_body(params: dict) -> str:
@@ -177,21 +199,10 @@ def page_target(page_config: "GatewayPageConfig", page_port: int | None) -> int 
 
 
 def register(app: typer.Typer) -> None:
-    """Attach the ``gateway`` group to ``app``: the daemon as the bare command,
-    the control-plane verbs (reload / status / stop) as sub-commands."""
-    from raven.cli import gateway_control_commands
+    """Attach the ``gateway`` command to ``app``."""
 
-    gateway_app = typer.Typer(
-        invoke_without_command=True,
-        no_args_is_help=False,
-        help="Start the Raven gateway, or drive a running one (reload / status / stop).",
-    )
-    app.add_typer(gateway_app, name="gateway")
-    gateway_control_commands.register(gateway_app)
-
-    @gateway_app.callback()
+    @app.command()
     def gateway(
-        ctx: typer.Context,
         port: int | None = typer.Option(None, "--port", "-p", help="Gateway port"),
         page_port: int | None = typer.Option(
             None,
@@ -225,21 +236,20 @@ def register(app: typer.Typer) -> None:
         ),
     ):
         """Start the Raven gateway."""
-        if ctx.invoked_subcommand is not None:
-            return
-        from raven.agent.loop.bundles import HostWiring, TurnPolicy
+        from raven.agent.loop import AgentLoop
         from raven.agent.loop.recovery import limits_from_defaults
         from raven.agent.workdir import WorkdirPolicy, WorkdirResolver, validate_override
+        from raven.channels.manager import ChannelManager
+        from raven.config.paths import get_cron_dir
         from raven.config.raven import load_raven_config
-        from raven.core.cron_stack import build_cron_service
-        from raven.gateway.manager import ChannelManager
+        from raven.proactive_engine.schedulers.cron.service import CronService
+        from raven.proactive_engine.schedulers.heartbeat.service import HeartbeatService
         from raven.session.manager import SessionManager
 
         # load_runtime_config must run FIRST: it calls set_config_path() so
         # that subsequent load_raven_config() reads from --config, not the
         # default ~/.raven/config.json. Otherwise skill_forge / sentinel
         # from --config are silently ignored.
-        config_path_arg = config
         config = load_runtime_config(config, home=home)
 
         from raven.cli._log_file import redirect_loguru_to_file
@@ -253,7 +263,7 @@ def register(app: typer.Typer) -> None:
             terminal_level="DEBUG" if verbose else log_cfg.console_level,
         )
 
-        from raven.gateway.lock import GatewayAlreadyRunningError, acquire, publish_control_endpoint
+        from raven.cli._gateway_lock import GatewayAlreadyRunningError, acquire, publish_web_endpoint
 
         # Held for the whole process; closing/GC of this handle releases the lock.
         try:
@@ -269,6 +279,7 @@ def register(app: typer.Typer) -> None:
 
         ec_config = load_raven_config()
         sentinel_cfg = ec_config.sentinel
+        skill_forge_cfg = ec_config.skill_forge
         print_deprecated_memory_window_notice(config)
         print_config_migration_notices()
         port = port if port is not None else config.gateway.port
@@ -278,8 +289,8 @@ def register(app: typer.Typer) -> None:
         banner = _risk_banner(config)
         if banner is not None:
             console.print(banner, style="bold red", markup=False)
-        sync_workspace_templates(config.workspace_path, notify=lambda m: console.print(f"  [dim]{m}[/dim]"))
-        provider = make_resolving_provider(config, config_supplier=lambda: load_runtime_config(None, None))
+        sync_workspace_templates(config.workspace_path)
+        provider = make_resolving_provider(config)
         session_manager = SessionManager(config.workspace_path)
         session_root = None
         if workspace:
@@ -307,7 +318,9 @@ def register(app: typer.Typer) -> None:
         # the TUI can deliver but gateway can't (gateway has no tui outlet).
         # Without this, you'd see "Unknown channel: tui" warnings + lost TUI
         # reminders when both processes are running.
-        cron = build_cron_service(allowed_channels=_build_gateway_channels(config))
+        cron_store_path = get_cron_dir() / "jobs.json"
+        gateway_channels = _build_gateway_channels(config)
+        cron = CronService(cron_store_path, allowed_channels=gateway_channels)
 
         # Create model router (and, for the knn backend, wrap the provider).
         router, provider = build_model_routing(config, provider)
@@ -316,11 +329,10 @@ def register(app: typer.Typer) -> None:
         # NudgeInjector serves as the AgentLoop response_modifier;
         # SentinelRunner.on_user_inbound tracks reply engagement.
         # These bindings must happen BEFORE AgentLoop construction.
-        from raven.core.proactive_stack import (
+        from raven.cli._proactive_stack import (
             attach_sentinel_decision_consumer,
             attach_sentinel_spawn,
             build_sentinel_stack,
-            sentinel_hooks,
         )
 
         sentinel_runner, sentinel_response_modifier, sentinel_on_user_inbound = build_sentinel_stack(
@@ -334,47 +346,94 @@ def register(app: typer.Typer) -> None:
         # Anti-runaway reset: genuine user activity on a (channel, chat_id)
         # zeroes the silent-fire counters of the jobs bound to it. Chained
         # after the Sentinel engagement hook, not replacing it.
-        from raven.core.cron_stack import chain_cron_activity_reset
+        from raven.cli._cron_handler import chain_cron_activity_reset
 
         on_user_inbound = chain_cron_activity_reset(cron, inner=sentinel_on_user_inbound)
 
-        # Gateway-side memory-backend wiring. Mirrors the one-shot agent
+        # Gateway-side memory-backend wiring. Mirrors the REPL
         # bootstrap (cli/agent_commands.py). Returns ``None`` when no
-        # plugin contributes the configured backend — AgentLoop then runs
-        # without a memory backend. Lifecycle (start /
+        # plugin contributes the configured backend — AgentLoop falls
+        # back to its legacy ``self.memory`` path. Lifecycle (start /
         # stop) lands inside the run-loop coroutine below.
         # One registry shared by both contribution points, so plugins are
         # discovered and activated once rather than per consumer.
-        from raven.core.runtime import build_runtime
+        plugin_registry = build_plugin_registry(ec_config)
+        backend = maybe_build_memory_backend(config.workspace_path, ec_config, registry=plugin_registry)
+        # The ``tools`` contribution point, at parity with agent / tui. Without
+        # it a plugin-contributed tool (everos's understand_media, which reads
+        # the attachments only the web UI can upload) is missing from the web UI
+        # while present in both terminal surfaces.
+        plugin_tools = build_plugin_tools(config.workspace_path, ec_config, registry=plugin_registry)
 
-        runtime = build_runtime(
-            config,
-            ec_config,
-            provider=provider,
-            session_manager=session_manager,
-            router=router,
-            workdir_resolver=workdir_resolver,
-            policy=TurnPolicy(
-                max_iterations=config.agents.defaults.max_tool_iterations,
-                empty_recovery=limits_from_defaults(config.agents.defaults),
-                interactive=False,
-                now_fn=parse_fake_now(fake_now),
-            ),
-            host=HostWiring(
-                notify=lambda m: console.print(m, style="yellow", markup=False),
-                cron_service=cron,
-                channels_config=config.channels,
-                hooks=sentinel_hooks(on_user_inbound, sentinel_response_modifier),
-            ),
+        # Built before AgentLoop (registration happens in its constructor) so
+        # the same instance can also be handed to the web JSON-RPC server
+        # further down, once it is built inside run().
+        deliverables = _build_deliverable_store(config)
+
+        # Create agent with cron service
+        from raven.cli._token_wise_stack import caching_probe, install_from_config
+        from raven.providers.pool import ProviderPool
+
+        strategies = install_from_config(
+            ec_config.token_wise,
+            supports_caching=caching_probe(provider),
         )
-        agent = runtime.loop
-        backend = runtime.backend
-        # The web surface serves this same store; generations that follow
-        # receive it back through _prepare_swap, so the handle is stable.
-        deliverables = runtime.deliverables
 
-        # Sentinel attach and the wake hook are generation wiring: they bind to
-        # the live agent object, so they happen in _bind_generation below.
+        agent = AgentLoop(
+            provider_pool=ProviderPool(lambda: load_runtime_config(None, None)),
+            provider=provider,
+            strategies=strategies,
+            now_fn=parse_fake_now(fake_now),
+            workspace=config.workspace_path,
+            model=config.agents.defaults.model,
+            max_iterations=config.agents.defaults.max_tool_iterations,
+            empty_recovery=limits_from_defaults(config.agents.defaults),
+            context_window_tokens=config.agents.defaults.context_window_tokens,
+            max_concurrent_subagents=config.agents.defaults.max_concurrent_subagents,
+            max_subagent_spawns_per_hour=config.agents.defaults.max_subagent_spawns_per_hour,
+            brave_api_key=config.tools.web.search.api_key or None,
+            jina_api_key=config.tools.web.jina_api_key or None,
+            web_proxy=config.tools.web.proxy or None,
+            media_config=config.effective_media_config(),
+            deep_research_config=config.tools.deep_research,
+            exec_config=config.tools.exec,
+            ask_user_config=config.tools.ask_user,
+            cron_service=cron,
+            restrict_to_workspace=config.tools.restrict_to_workspace,
+            session_manager=session_manager,
+            workdir_resolver=workdir_resolver,
+            mcp_servers=config.tools.mcp_servers,
+            tool_search_config=config.tools.tool_search,
+            sandbox_config=config.tools.sandbox,
+            channels_config=config.channels,
+            deliverables=deliverables,
+            router=router,
+            skill_forge_config=skill_forge_cfg,
+            context_config=ec_config.context,
+            runtime_config=ec_config.runtime,
+            subagent_dag_config=ec_config.subagent_dag,
+            subagent_questions_config=ec_config.subagent_questions,
+            # Gateway sessions are inherently multi-turn (each RPC session
+            # gets a key and can receive a recovery block on its next call).
+            interactive=True,
+            response_modifier=sentinel_response_modifier,
+            on_user_inbound=on_user_inbound,
+            backend=backend,
+            plugin_tools=plugin_tools,
+            memory_config=ec_config.memory,
+            skill_forge_router_config=ec_config.skill_forge.router,
+            agents=config.subagents.agents,
+            playbook_config=config.playbooks,
+        )
+        agent.configure_personalization(config.agents.defaults.enable_personalization)
+
+        # Sentinel's ProactiveSpawn wraps the AgentLoop's SubagentManager; wire it
+        # now that agent is constructed.
+        attach_sentinel_spawn(sentinel_runner, agent)
+        # Wire DecisionRouter / ActionExecutor / DecisionConsumer
+        # (ActionExecutor needs agent.tools + agent.subagents, so this also
+        # has to happen post-AgentLoop construction).
+        attach_sentinel_decision_consumer(sentinel_runner, agent, sentinel_cfg=sentinel_cfg)
 
         # ChannelManager must be built before make_on_cron_job — the
         # closure captures channels.enabled_channels for trigger-time
@@ -385,16 +444,25 @@ def register(app: typer.Typer) -> None:
         if sentinel_runner is not None:
             sentinel_runner.set_channel_manager(channels)
 
-        from raven.core.cron_stack import make_on_cron_job
+        from raven.cli._cron_handler import make_on_cron_job
 
         # Event wake: in-process producers (cron completions) can end the
         # heartbeat sleep early instead of waiting for the next interval.
         # Busy check covers spine-dispatched turns only (user messages) —
         # exactly the lane a wake must never compete with.
         hb_cfg = config.gateway.heartbeat
-        from raven.core.proactive_stack import build_heartbeat, build_wake
+        wake = None
+        system_events = None
+        if hb_cfg.event_wake:
+            from raven.proactive_engine.system_events import SystemEventQueue
+            from raven.proactive_engine.wake import WakeScheduler
 
-        wake, system_events = build_wake(hb_cfg, is_busy=lambda: agent.is_processing)
+            system_events = SystemEventQueue()
+            wake = WakeScheduler(
+                is_busy=lambda: agent.is_processing,
+                min_interval_s=hb_cfg.event_wake_min_interval_s,
+            )
+            agent.on_turn_complete.append(wake.on_turn_complete)
 
         def _pick_heartbeat_target() -> tuple[str, str]:
             """Pick a routable channel/chat target for heartbeat-triggered messages."""
@@ -452,30 +520,12 @@ def register(app: typer.Typer) -> None:
                 )
 
         async def run():
-            # `raven web --stop` and a systemd stop deliver SIGTERM. Parity
-            # with Ctrl-C means cancelling THIS task in-loop so the graceful
-            # chain below runs: the stdlib runner converts only SIGINT into a
-            # main-task cancel, and a handler that raises KeyboardInterrupt
-            # escapes run_until_complete without cancelling anything --
-            # teardown then fell to the runner's 2-second sweep.
-            main_task = asyncio.current_task()
-            term_signalled = False
-
-            def _on_term() -> None:
-                nonlocal term_signalled
-                if term_signalled or main_task is None:
-                    return
-                term_signalled = True
-                main_task.cancel()
-
-            with suppress(NotImplementedError, RuntimeError, ValueError):
-                asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, _on_term)
             health_server = None
             gw_teardown = None
-            gw_scheduler = None
             heartbeat = None
             question_broker = None
-            control = None
+            web_server = None
+            web_teardown = None
             page_mount = None
             # Bring the memory backend online before any turn
             # runs. ``backend`` is ``None`` when no plugin is wired;
@@ -491,56 +541,155 @@ def register(app: typer.Typer) -> None:
                     _logger.exception(
                         "memory backend start failed; continuing with legacy memory path",
                     )
-
-            async def _bind_generation():
-                nonlocal gw_teardown, gw_scheduler, question_broker, page_mount, heartbeat
-
-                # Generation wiring: everything here binds to the live agent
-                # object and is torn down and re-run at a generation swap.
-                # Sentinel's ProactiveSpawn wraps the AgentLoop's
-                # SubagentManager; the decision consumer needs agent.tools +
-                # agent.subagents, so both attach post-construction.
-                attach_sentinel_spawn(sentinel_runner, agent)
-                decision_consumer = attach_sentinel_decision_consumer(sentinel_runner, agent, sentinel_cfg=sentinel_cfg)
-                if wake is not None:
-                    agent.on_turn_complete.append(wake.on_turn_complete)
-
+            try:
                 # Spine assembly for the gateway's host sources (cron submits
                 # through it, replies route to channels via a per-channel outlet).
                 # Built here, inside the running loop, not in the sync command
                 # prologue: Scheduler pins its home loop at construction (submit
                 # must come from that loop), and the prologue has no loop yet.
-                from raven.gateway.spine import build_gateway
+                from raven.cli._gateway_spine import build_gateway
 
                 gw_scheduler, gw_hub, gw_readback_texts, gw_sources, gw_teardown = build_gateway(
                     agent,
                     channels.channels,
                     user_pool=config.gateway.user_pool,
-                    cut_by_reload=lambda: swaps.in_flight,
                     system_pool=config.gateway.system_pool,
                     send_max_retries=config.gateway.send_max_retries,
-                    shutdown_grace=config.gateway.shutdown_grace,
                 )
 
                 # A channel enabled while the gateway runs gets its outlet too:
                 # build_gateway registers one per channel that existed at
                 # launch, and without this a hot-started channel could receive
                 # but every reply to it was dropped by the hub.
-                from raven.gateway.outlet import ChannelOutletAdapter
+                from raven.channels.outlet import ChannelOutletAdapter
 
                 channels.on_started = lambda ch: gw_hub.register(ChannelOutletAdapter(ch))
                 # And retired when it stops, so a channel disabled and enabled
                 # again is not left replying through the adapter it dropped.
                 channels.on_stopped = gw_hub.retire
 
+                # Web-app channel: its own streaming spine + a WebSocket
+                # JSON-RPC server a client connects to, built alongside the
+                # gateway's spine and sharing this agent_loop. The gateway runner
+                # is non-streaming (proactive replies are one Text); a streaming
+                # client wants token streaming, so it gets its own streaming
+                # runner (build_web). Built here, BEFORE the proactive wiring, so
+                # proactive producers can target it.
+                #
+                # The front end this was built for (`ui-webui`) has been retired.
+                # The channel stays because of what the next comment says: it is
+                # the only way to ask a live adapter anything.
+                web_cfg = config.gateway.web
+                web_scheduler = None
+                web_hub = None
+                # Always on now, not only when the operator turned it on. This
+                # is the only place a live adapter can be asked whether a
+                # channel is actually paired, and `raven serve` has to be able
+                # to ask -- otherwise every surface reports the config file's
+                # `enabled` flag as if it were a connection.
+                #
+                # Opted in (`gateway.web.enabled`) keeps the configured port and
+                # token, for a client that has been pointed at them. Otherwise
+                # the port
+                # is probed forward from the default and the token is minted for
+                # this boot: neither is written to config, so no stale secret
+                # outlives the process. Loopback either way.
+                import secrets
+
+                from raven.rpc.dispatcher import Dispatcher
+                from raven.rpc.methods.turn import clear_active
+                from raven.rpc.subscriptions import SubscriptionEmitter
+                from raven.rpc.transports.ws import pick_port
+                from raven.web_rpc.methods import register_web_methods
+                from raven.web_rpc.server import WebSocketRpcServer
+                from raven.web_rpc.spine import build_web
+
+                web_host = web_cfg.host if web_cfg.enabled else "127.0.0.1"
+                web_port = web_cfg.port if web_cfg.enabled else await pick_port(web_cfg.port)
+                # Never unauthenticated: the server only checks a token when
+                # one is set, and this port can drive the agent. Minting one
+                # when none is configured costs a legitimate client nothing --
+                # publish_web_endpoint below is where local clients read it.
+                web_token = web_cfg.auth_token or secrets.token_urlsafe(24)
+
+                web_readback_texts: dict[str, str] = {}
+                web_server = WebSocketRpcServer(
+                    host=web_host,
+                    port=web_port,
+                    auth_token=web_token,
+                    deliverables=deliverables,
+                )
+                web_emitter = SubscriptionEmitter(send_frame=web_server.broadcast)
+                # One map, two readers: `turn.send` records a direct chat's
+                # addressee here and the outlet reads it back to tag that
+                # lane's events with it. Built here so both get the same
+                # object, as raven/rpc/bootstrap.py does for the TUI.
+                web_direct_targets: dict[str, dict[str, str]] = {}
+                web_scheduler, web_hub, web_turn_ids, web_teardown = build_web(
+                    agent,
+                    web_emitter,
+                    on_turn_end=clear_active,
+                    readback_texts=web_readback_texts,
+                    direct_targets=web_direct_targets,
+                    user_pool=config.gateway.user_pool,
+                    system_pool=config.gateway.system_pool,
+                )
+                web_dispatcher = Dispatcher()
+                register_web_methods(
+                    web_dispatcher,
+                    emitter=web_emitter,
+                    scheduler=web_scheduler,
+                    turn_ids=web_turn_ids,
+                    direct_targets=web_direct_targets,
+                    agent=agent,
+                    cron=cron,
+                    config=config,
+                    channel_manager=channels,
+                    raven_config=ec_config,
+                )
+                web_server.bind(web_dispatcher)
+                # Published beside the lock rather than in config: a client finds
+                # the gateway the same way `doctor` does, and the credential dies
+                # with the process instead of outliving it in a settings file.
+                publish_web_endpoint(web_host, web_port, web_token or "")
+
+                # Fan run_subagent_dag progress (dag_run_started / _node_updated
+                # / _run_completed) to the turn's conversation on the web
+                # channel, as a "custom" wire event the service translates to
+                # an AgentScope CustomEvent (lights up the web UI's DAG graph).
+                async def _dag_progress_to_web(conversation: str, name: str, payload: dict) -> None:
+                    await web_emitter.emit(conversation, {"type": "custom", "name": name, "payload": payload})
+
+                agent.set_dag_progress_sink(_dag_progress_to_web)
+
+                # Fan per-turn SkillForge-injected skills to the web UI's
+                # skill panel as a "skills_injected" custom event (same
+                # translation path as DAG progress above).
+                async def _skills_to_web(conversation: str, name: str, payload: dict) -> None:
+                    await web_emitter.emit(conversation, {"type": "custom", "name": name, "payload": payload})
+
+                agent.set_skills_sink(_skills_to_web)
+                console.print(f"[green]✓[/green] Web channel: ws://{web_cfg.host}:{web_cfg.port}/ws")
+
                 # Proactive target (cron / sentinel / heartbeat / subagent /
-                # deep_research): the gateway spine. Its hub delivers to the IM
-                # channels and, while a page is mounted, to the page.
-                pro_submit = gw_scheduler.submit
-                pro_hub = gw_hub
-                pro_readback = gw_readback_texts
-                pro_channel = "cli"
-                pro_heartbeat_target: tuple[str, str] | None = None
+                # deep_research). Single-user + web-primary (P1.2): when the web
+                # channel is on, proactive output is routed to it (source.channel
+                # == "web") so it surfaces in the web UI; otherwise it stays on the
+                # gateway spine (IM/cli). Channel *inbound* and the ask_user
+                # round-trip stay on the gateway spine regardless (P1.2 does not
+                # bridge ask_user to the web client yet).
+                if web_cfg.enabled:
+                    pro_submit = web_scheduler.submit
+                    pro_hub = web_hub
+                    pro_readback = web_readback_texts
+                    pro_channel = "web"
+                    pro_heartbeat_target: tuple[str, str] | None = ("web", "default")
+                else:
+                    pro_submit = gw_scheduler.submit
+                    pro_hub = gw_hub
+                    pro_readback = gw_readback_texts
+                    pro_channel = "cli"
+                    pro_heartbeat_target = None
 
                 cron.on_job = make_on_cron_job(
                     submit=pro_submit,
@@ -550,7 +699,7 @@ def register(app: typer.Typer) -> None:
                     wake=wake,
                     cron_service=cron,
                 )
-                # Missed-reminder observer: past-due tui one-shots whose
+                # Missed-reminder observer: past-due tui/cli one-shots whose
                 # session closed before firing surface once through the same
                 # system-event -> heartbeat wake path as cron completions.
                 # Needs the event-wake plumbing; without it there is no sink,
@@ -558,7 +707,7 @@ def register(app: typer.Typer) -> None:
                 # false). Wired before cron.start() — the start-time check is
                 # the first observation pass.
                 if system_events is not None and wake is not None and config.cron.notify_missed:
-                    from raven.core.cron_stack import make_on_missed_foreign
+                    from raven.cli._cron_handler import make_on_missed_foreign
 
                     cron.on_missed_foreign = make_on_missed_foreign(system_events, wake)
 
@@ -584,11 +733,14 @@ def register(app: typer.Typer) -> None:
                     await pro_submit(req).result()
                     return ""
 
-                heartbeat = build_heartbeat(
-                    config,
-                    provider,
+                heartbeat = HeartbeatService(
+                    workspace=config.workspace_path,
+                    provider=provider,
                     model=agent.model,
                     on_execute=on_heartbeat_execute,
+                    on_notify=None,
+                    interval_s=hb_cfg.interval_s,
+                    enabled=hb_cfg.enabled,
                     wake=wake,
                     system_events=system_events,
                 )
@@ -600,8 +752,11 @@ def register(app: typer.Typer) -> None:
                     sentinel_runner.dispatcher.set_post(pro_hub.post)
                 if sentinel_runner is not None and sentinel_runner.task_discoverer is not None:
                     sentinel_runner.task_discoverer.set_submit(pro_submit)
-                if decision_consumer is not None and getattr(decision_consumer, "executor", None) is not None:
-                    decision_consumer.executor.set_submit(pro_submit)
+                if (
+                    agent.decision_consumer is not None
+                    and getattr(agent.decision_consumer, "executor", None) is not None
+                ):
+                    agent.decision_consumer.executor.set_submit(pro_submit)
                 # Subagent result re-injection submits a SUBAGENT-origin turn.
                 agent.subagents.set_submit(pro_submit)
                 # Deep research (channel/async) delivers its finished answer back
@@ -673,6 +828,7 @@ def register(app: typer.Typer) -> None:
                     # spines (a tui cron job's reply, a subagent announce whose
                     # conversation lives on the page) to the page.
                     gw_hub.register(page_mount.outlet)
+                    web_hub.register(page_mount.outlet)
                     # Only now is this process a tui surface, so only now may it
                     # claim tui cron jobs. Deciding the partition here rather
                     # than from gateway.page.enabled is what keeps a gateway
@@ -687,9 +843,9 @@ def register(app: typer.Typer) -> None:
                     # path serve and the TUI use. Only tui jobs: an IM job's
                     # reply is already delivered on its own channel, and the
                     # page has no claim on it.
-                    from raven.rpc.cron_events import build_cron_callback_spine
+                    from raven.cli.tui_commands import _build_cron_callback_spine
 
-                    cron.on_job = build_cron_callback_spine(
+                    cron.on_job = _build_cron_callback_spine(
                         cron.on_job,
                         page_mount.emitter,
                         default_channel=pro_channel,
@@ -699,9 +855,10 @@ def register(app: typer.Typer) -> None:
 
                 # Channel inbound runs through the spine: a permitted
                 # message is submitted as a USER turn. /stop and /restart are
-                # control commands: intercepted here rather than submitted as
-                # turns, or the agent would reply to the text. The cid matches
-                # the lane key (conversation or channel:chat_id).
+                # control commands (the bus drainer's job) — intercepted here, not
+                # submitted as turns (else the agent would reply to the text). cid
+                # matches the lane key (conversation or channel:chat_id), the same
+                # session key the bus path's _handle_stop used.
                 from dataclasses import replace
 
                 from raven.spine import Text
@@ -742,226 +899,6 @@ def register(app: typer.Typer) -> None:
                 for _ch in channels.channels.values():
                     _ch.intake.set_submit(_inbound_dispatch)
 
-            from raven.core.runtime import SwapCandidate, SwapCoordinator
-
-            # Spacing between accepted swaps is its own number, not the
-            # teardown grace: a grace of 0 must not switch the storm guard off.
-            swaps = SwapCoordinator(min_interval_s=_SWAP_MIN_INTERVAL_S)
-
-            async def _unbind_generation():
-                # The generation slice of the shutdown path, in the same
-                # order; the process-lifetime transports (channels, cron,
-                # sentinel, control plane, health) stay up through a swap.
-                nonlocal gw_teardown, page_mount
-                if heartbeat is not None:
-                    heartbeat.stop()
-                if question_broker is not None:
-                    question_broker.cancel_all()
-                # Cancel sub-agents before the spines tear down, same reason
-                # as the shutdown path: a result re-injection into a spine
-                # already gone would record as a failure rather than a stop.
-                # dispose() cancels again, which is an idempotent no-op.
-                await agent.subagents.cancel_all()
-                if page_mount is not None:
-                    await page_mount.teardown()
-                    page_mount = None
-                # The claim followed the mount: the next bind re-adds "tui"
-                # iff the next generation mounts a page, so a reload that
-                # turns the page off stops claiming tui cron jobs the hub
-                # could then only drop. discard() is safe when no page ever
-                # mounted.
-                cron.allowed_channels.discard("tui")
-                if gw_teardown is not None:
-                    await gw_teardown()
-                    gw_teardown = None
-                await runtime.dispose()
-
-            async def _request_swap() -> dict:
-                # The one guarded entry for every trigger. BUILD N+1 comes
-                # first, while generation N keeps serving: a config that fails
-                # to load or assemble gives the slot back and leaves N
-                # untouched. Only a fully built candidate stops the loop --
-                # which happens within about a second; in-flight turns then
-                # get shutdown_grace before they are cancelled.
-                refused = swaps.begin()
-                if refused is not None:
-                    return {"ok": False, "reason": refused}
-                try:
-                    # The same overrides the launch used: --config is sticky
-                    # in the loader, --home is not, and a swapped generation
-                    # must not quietly move the workspace.
-                    new_config = load_runtime_config(config_path_arg, home=home)
-                    new_ec = load_raven_config()
-                    new_provider = make_resolving_provider(
-                        new_config, config_supplier=lambda: load_runtime_config(None, None)
-                    )
-                    new_router, new_provider = build_model_routing(new_config, new_provider)
-                    nxt = build_runtime(
-                        new_config,
-                        new_ec,
-                        provider=new_provider,
-                        session_manager=session_manager,
-                        router=new_router,
-                        workdir_resolver=workdir_resolver,
-                        deliverables=deliverables,
-                        policy=TurnPolicy(
-                            max_iterations=new_config.agents.defaults.max_tool_iterations,
-                            empty_recovery=limits_from_defaults(new_config.agents.defaults),
-                            interactive=False,
-                            now_fn=parse_fake_now(fake_now),
-                        ),
-                        host=HostWiring(
-                            notify=lambda m: console.print(m, style="yellow", markup=False),
-                            cron_service=cron,
-                            channels_config=new_config.channels,
-                            hooks=sentinel_hooks(on_user_inbound, sentinel_response_modifier),
-                        ),
-                    )
-                except Exception as exc:
-                    swaps.abort()
-                    _logger.exception(
-                        "generation swap aborted: rebuild from config failed; the running generation keeps serving",
-                    )
-                    return {"ok": False, "reason": "build_failed", "error": f"{type(exc).__name__}: {exc}"}
-                swaps.stage(SwapCandidate(new_config, new_ec, new_provider, new_router, nxt))
-                agent.stop()
-                return {
-                    "ok": True,
-                    "generation": swaps.generation + 1,
-                    "swap": "pending",
-                    "grace_s": config.gateway.shutdown_grace,
-                }
-
-            def _on_sighup() -> None:
-                # A signal has no reply channel, so it is the forced form of
-                # gateway.reload; a refusal is logged since nobody else hears it.
-                async def _signalled() -> None:
-                    reply = await _reload(force=True)
-                    if not reply.get("ok"):
-                        _logger.warning("SIGHUP reload refused: {}", reply.get("reason"))
-
-                swaps.track(asyncio.create_task(_signalled()))
-
-            async def _serve_generations():
-                # One iteration per generation: agent.run() returning with a
-                # built candidate staged is a swap; returning without one is
-                # shutdown. DISPOSE of N happens only after N+1 is in hand.
-                nonlocal config, ec_config, provider, router, runtime, agent, backend
-                while True:
-                    # One call site covers generation one and every swap: a
-                    # fresh generation's loop has a fresh started-flag, and
-                    # the call is idempotent within a generation.
-                    try:
-                        await agent.start_plugin_services()
-                    except Exception:
-                        _logger.exception("plugin services failed to start; continuing without them")
-                    # Release right before run(): the slot stays claimed
-                    # through wiring so no trigger can stop a loop that has
-                    # not started yet.
-                    swaps.release()
-                    await agent.run()
-                    swap = swaps.take()
-                    if swap is None:
-                        return
-                    await _unbind_generation()
-                    config, ec_config, provider, router, runtime = (
-                        swap.config,
-                        swap.ec_config,
-                        swap.provider,
-                        swap.router,
-                        swap.runtime,
-                    )
-                    agent = runtime.loop
-                    backend = runtime.backend
-                    if backend is not None:
-                        try:
-                            await backend.start()
-                        except Exception:
-                            _logger.exception(
-                                "memory backend start failed; continuing with legacy memory path",
-                            )
-                    try:
-                        await _bind_generation()
-                    except Exception:
-                        # BUILD covered assembly, not wiring; a wiring failure
-                        # here is fatal for the process because generation N is
-                        # already disposed -- say so instead of exiting silently.
-                        _logger.exception(
-                            "generation swap failed while wiring generation {}; the gateway cannot continue",
-                            swaps.generation + 1,
-                        )
-                        raise
-                    await heartbeat.start()
-                    _logger.info("generation {} wired; starting", swaps.generation + 1)
-
-            # The control plane: process-lifetime, registered once. Nothing on
-            # it depends on the generation, so nothing here rebinds at a swap;
-            # the endpoint is published only after the site actually bound.
-            import os
-            import secrets
-
-            from raven.rpc.control import ControlPlaneServer, register_control_methods
-            from raven.rpc.dispatcher import Dispatcher
-            from raven.rpc.transports.ws import pick_port
-
-            started_at = time.time()
-            shutdown_requested = False
-            main_task = asyncio.current_task()
-
-            def _status() -> dict:
-                from raven.config.loader import get_config_path
-
-                return {
-                    "pid": os.getpid(),
-                    "started_at": started_at,
-                    "generation": swaps.generation,
-                    "swap_in_flight": swaps.in_flight,
-                    "config_path": str(get_config_path()),
-                    "page": {"mounted": page_mount is not None, "url": getattr(page_mount, "url", None)},
-                }
-
-            async def _shutdown() -> None:
-                nonlocal shutdown_requested
-                shutdown_requested = True
-                if main_task is not None:
-                    # One tick later, so the {ok: true} reply leaves before
-                    # the teardown closes the control socket.
-                    asyncio.get_running_loop().call_soon(main_task.cancel)
-
-            async def _reload(force: bool) -> dict:
-                # A swap cancels every in-flight turn, sub-agent and pending
-                # question; refuse while there is work unless told to force.
-                if not force:
-                    questions = question_broker.pending_count() if question_broker is not None else 0
-                    if page_mount is not None:
-                        questions += page_mount.question_broker.pending_count()
-                    subagents = agent.subagents.get_running_count()
-                    in_flight = agent.is_processing or (gw_scheduler is not None and gw_scheduler.has_running())
-                    if in_flight or questions or subagents:
-                        return {"ok": False, "reason": "busy", "subagents": subagents, "questions": questions}
-                return await _request_swap()
-
-            control_dispatcher = Dispatcher()
-            register_control_methods(
-                control_dispatcher,
-                channel_manager=channels,
-                request_swap=_reload,
-                status=_status,
-                shutdown=_shutdown,
-            )
-            # Never unauthenticated and never configured: the token is minted
-            # per boot and dies with the process; the port is probed forward
-            # from the historical default. Local clients read both from the
-            # lock payload, the same way `doctor` finds the gateway.
-            control_token = secrets.token_urlsafe(24)
-
-            try:
-                control = ControlPlaneServer(await pick_port(8765), auth_token=control_token)
-                control.bind(control_dispatcher)
-                bound_host, bound_port = await control.start()
-                publish_control_endpoint(bound_host, bound_port, control_token)
-                console.print(f"[green]✓[/green] Control plane: ws://{bound_host}:{bound_port}/ws")
-                await _bind_generation()
                 await cron.start()
                 await heartbeat.start()
                 if sentinel_runner is not None:
@@ -975,36 +912,18 @@ def register(app: typer.Typer) -> None:
                         port,
                         exc,
                     )
-                # SIGHUP = rebuild from config and swap at the next turn
-                # boundary. Unavailable on platforms without signal-handler
-                # support in the event loop; the gateway serves fine without.
-                import signal as _signal
-
-                try:
-                    asyncio.get_running_loop().add_signal_handler(_signal.SIGHUP, _on_sighup)
-                except (AttributeError, NotImplementedError, RuntimeError):
-                    pass
                 coros = [
-                    _serve_generations(),
+                    agent.run(),
                     channels.start_all(),
                     _delayed_discover_trigger_drain(),
                 ]
                 if health_server is not None:
                     coros.append(health_server.serve_forever())
-                coros.append(control.serve())
+                if web_server is not None:
+                    coros.append(web_server.serve_forever())
                 await asyncio.gather(*coros)
             except KeyboardInterrupt:
                 console.print("\nShutting down...")
-            except asyncio.CancelledError:
-                # gateway.shutdown cancels this task on purpose, and so does
-                # the SIGTERM handler above; anything else cancelling it is
-                # not ours to swallow.
-                if term_signalled:
-                    console.print("\nShutting down...")
-                elif shutdown_requested:
-                    console.print("\nShutting down (control plane)...")
-                else:
-                    raise
             finally:
                 if health_server is not None:
                     health_server.close()
@@ -1020,10 +939,10 @@ def register(app: typer.Typer) -> None:
                     question_broker.cancel_all()  # release any turn blocked on ask_user
                 if page_mount is not None:
                     await page_mount.teardown()
-                if control is not None:
-                    await control.stop()
-                from raven.acp_client.client import begin_drain
-                from raven.acp_client.pool import close_pool
+                if web_server is not None:
+                    await web_server.stop()
+                from raven.agent.acp.client import begin_drain
+                from raven.agent.acp.pool import close_pool
 
                 # Before anything tears a transport down: an ACP connection
                 # closed first fails every pending turn with a connection error,
@@ -1035,6 +954,8 @@ def register(app: typer.Typer) -> None:
                 # on when its process is about to go.
                 begin_drain()
                 await agent.subagents.cancel_all()
+                if web_teardown is not None:
+                    await web_teardown()
                 if gw_teardown is not None:
                     await gw_teardown()
                 # ACP agents are launched with start_new_session, so they do not
@@ -1047,14 +968,9 @@ def register(app: typer.Typer) -> None:
                 # Stop the memory-backend plugin last so any
                 # in-flight backend.store / backend.feedback calls
                 # spawned during AgentLoop teardown can complete.
-                try:
-                    await agent.stop_plugin_services()
-                except Exception:
-                    _logger.exception("plugin services stop failed; continuing shutdown")
                 if backend is not None:
                     try:
-                        dropped = await agent.drain_backend_stores()
-                        report_dropped_memory_writes(dropped, console)
+                        await agent.drain_backend_stores()
                         await backend.stop()
                     except Exception:
                         _logger.exception(

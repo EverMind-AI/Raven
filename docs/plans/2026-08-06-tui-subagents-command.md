@@ -759,7 +759,7 @@ from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS, third_par
 from raven.config.update_subagents import (
     get_third_party_subagents,
     remove_third_party_subagent,
-    set_agents,
+    set_third_party_subagents,
 )
 from raven.rpc.errors import SubagentNotFoundError
 
@@ -808,7 +808,7 @@ async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory |
     if entry.get("kind") == "openai" and not (entry.get("apiKey") or "").strip():
         entry["enabled"] = False
     kept = list(get_third_party_subagents(config_path=get_config_path()))
-    set_agents([*kept, entry], config_path=get_config_path())
+    set_third_party_subagents([*kept, entry], config_path=get_config_path())
     _hot_apply(agent_loop_factory)
     return {"added": True, "name": entry["name"]}
 
@@ -830,7 +830,7 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
     # overwrite a real key with whitespace that no caller can see or recover.
     if (params.get("api_key") or "").strip():
         target["apiKey"] = params["api_key"]
-    set_agents(entries, config_path=get_config_path())
+    set_third_party_subagents(entries, config_path=get_config_path())
     _hot_apply(agent_loop_factory)
     return {"updated": True, "name": target["name"]}
 
@@ -844,7 +844,7 @@ async def subagents_toggle(params: dict, *, agent_loop_factory: "AgentLoopFactor
     if target is None:
         raise SubagentNotFoundError(f"no configured sub-agent named {name!r}", data={"name": name})
     target["enabled"] = enabled
-    set_agents(entries, config_path=get_config_path())
+    set_third_party_subagents(entries, config_path=get_config_path())
     _hot_apply(agent_loop_factory)
     return {"enabled": enabled}
 
@@ -886,7 +886,7 @@ Then extend `register_subagents_methods` with closures that bind `agent_loop_fac
 uv run pytest tests/test_rpc_subagents.py -v
 ```
 
-Expected: all pass. If `test_add_rejects_a_duplicate_name_without_writing` fails, check that `set_agents` raises before writing (it validates and checks duplicates first - `update_subagents.py:57-66`); do not add a second duplicate check here.
+Expected: all pass. If `test_add_rejects_a_duplicate_name_without_writing` fails, check that `set_third_party_subagents` raises before writing (it validates and checks duplicates first - `update_subagents.py:57-66`); do not add a second duplicate check here.
 
 - [ ] **Step 5: Shrink the in-progress allowlist**
 

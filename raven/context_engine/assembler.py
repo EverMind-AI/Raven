@@ -27,17 +27,20 @@ from dataclasses import replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
 
-from loguru import logger
-
+from raven.context_engine.base import (
+    AssembledPrefix,
+    AssemblyContext,
+    ContextEngine,
+    SegmentBuilder,
+)
 from raven.context_engine.scent import ScentMenu
 from raven.context_engine.segments import render
-from raven.contracts.assembled import AssembledContext, TokenBudget
-from raven.contracts.context import AssembledPrefix, AssemblyContext, ContextEngine, SegmentBuilder
+from raven.memory_engine.base import AssembledContext, TokenBudget
 from raven.providers.prompt_cache import STABLE_PREFIX_KEY
 
 if TYPE_CHECKING:
-    from raven.contracts.context import TurnContext
-    from raven.contracts.llm_provider import LLMProvider
+    from raven.context_engine.curator import TurnContext
+    from raven.providers.base import LLMProvider
 
 
 _SEG_SEP = "\n\n---\n\n"
@@ -144,18 +147,11 @@ class ContextAssembler(ContextEngine):
         )
 
         # ── Phase A — independent segment builders, concurrent ──────
-        # One failing builder degrades its segment, never the turn; the names
-        # are recorded in metadata so the loop can surface a Notice.
-        a_segs = await asyncio.gather(*[b.build(ctx) for b in self._phase_a], return_exceptions=True)
-        degraded: list[str] = []
-        for builder, seg in zip(self._phase_a, a_segs):
-            if isinstance(seg, Exception):
-                degraded.append(builder.name)
-                logger.opt(exception=seg).error("segment builder {} failed; assembling without it", builder.name)
+        a_segs = await asyncio.gather(*[b.build(ctx) for b in self._phase_a])
         meta: dict[str, Any] = {}
         prefix_parts: list[tuple[int, str, bool]] = []
         for builder, seg in zip(self._phase_a, a_segs):
-            if seg is None or isinstance(seg, Exception):
+            if seg is None:
                 continue
             meta |= seg.meta
             if seg.text:
@@ -169,7 +165,7 @@ class ContextAssembler(ContextEngine):
                 ctx = replace(ctx, scent_text=scent.text)
                 # Under pull no SkillsSegmentBuilder runs, so the menu is the
                 # only writer of this key: the after-turn backend feedback
-                # keeps receiving the skills the model was offered.
+                # (FB-1) keeps receiving the skills the model was offered.
                 meta |= {"injected_skill_ids": list(scent.skill_ids)}
         user_msg = self._build_user(ctx)
 
@@ -182,21 +178,13 @@ class ContextAssembler(ContextEngine):
                 tool_defs=self.get_tool_definitions(),
             ),
         )
-        # The same rule as Phase A: a failing Curator loses its segment (the
-        # turn runs on the prefix and the raw history), never the turn.
-        b_segs = await asyncio.gather(*[b.build(ctx_b) for b in self._phase_b], return_exceptions=True)
-        for builder, seg in zip(self._phase_b, b_segs):
-            if isinstance(seg, Exception):
-                degraded.append(builder.name)
-                logger.opt(exception=seg).error("segment builder {} failed; assembling without it", builder.name)
-        if degraded:
-            meta["degraded_segments"] = degraded
+        b_segs = await asyncio.gather(*[b.build(ctx_b) for b in self._phase_b])
 
         system = system_prefix
         history: list[dict[str, Any]] = []
         seg6_parts: list[tuple[int, str]] = []
         for builder, seg in zip(self._phase_b, b_segs):
-            if seg is None or isinstance(seg, Exception):
+            if seg is None:
                 continue
             meta |= seg.meta
             if seg.text:

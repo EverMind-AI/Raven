@@ -264,26 +264,9 @@ def register(app: typer.Typer) -> None:
         # model) is missing, run the onboarding wizard first. Only on an
         # interactive TTY — scripted one-shots (`-m`) and non-TTY pipes must
         # fail loudly later rather than block on prompts.
-        #
-        # ★ 20260828 (Framework, product-surface audit). ``config is None`` is
-        # part of the gate, and it is load-bearing rather than cosmetic. This
-        # block runs BEFORE ``load_runtime_config`` — the only caller of
-        # ``set_config_path`` on this path, twenty-five lines below — so
-        # ``_is_config_populated`` reads ``get_config_path()``, which is still
-        # the DEFAULT ``~/.raven/config.json``. A demo launched as
-        # ``raven agent --config .../student_sglang.json`` on a machine whose
-        # default config is absent therefore opened on a four-step provider
-        # wizard while a fully valid config sat unread on the command line.
-        #
-        # Skipping rather than reordering: the wizard WRITES to
-        # ``get_config_path()``, so making the check see ``--config`` would
-        # point the wizard at the operator's own named file. An explicit
-        # ``--config`` is the operator naming the file; if that file is
-        # incomplete the run must fail loudly later, which is what this gate's
-        # own docstring asks for on every other non-interactive path.
         from raven.cli.onboard_commands import _is_config_populated
 
-        if config is None and message is None and _stdout_isatty() and not _is_config_populated():
+        if message is None and _stdout_isatty() and not _is_config_populated():
             from raven.cli.onboard_commands import ensure_configured_or_onboard
 
             ensure_configured_or_onboard()

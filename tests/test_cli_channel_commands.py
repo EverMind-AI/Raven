@@ -15,7 +15,6 @@ from typer.testing import CliRunner
 
 from raven.cli.commands import app
 from raven.config.loader import set_config_path
-from tests.conftest import make_channel_config
 
 runner = CliRunner()
 
@@ -535,8 +534,9 @@ def test_channels_login_helptext_lists_args_and_options(tmp_config: Path) -> Non
 def whatsapp_channel(tmp_config: Path):
     """A WhatsAppChannel instance with a dummy config."""
     from raven.channels.adapters.whatsapp.channel import WhatsAppChannel
+    from raven.config.schema import WhatsAppConfig
 
-    return WhatsAppChannel(make_channel_config("whatsapp"))
+    return WhatsAppChannel(WhatsAppConfig())
 
 
 def test_whatsapp_login_runs_bridge_subprocess(

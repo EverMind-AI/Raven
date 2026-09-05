@@ -208,10 +208,6 @@ class QuestionBroker:
         if not task.cancelled() and task.exception() is not None:
             logger.warning("question_broker: clarify.closed was not delivered: {}", task.exception())
 
-    def pending_count(self) -> int:
-        """How many conversations are blocked on a question right now."""
-        return len(self._pending)
-
     def pending_req(self, conversation_id: str) -> str | None:
         """Return the pending request_id for a conversation, else ``None``."""
         pending = self._pending.get(conversation_id)
@@ -260,9 +256,6 @@ class RoutingQuestionBroker:
 
     def _route(self, conversation_id: str) -> QuestionBroker:
         return self._page if conversation_id.startswith(self._page_prefix) else self._channel
-
-    def pending_count(self) -> int:
-        return self._page.pending_count() + self._channel.pending_count()
 
     async def await_question(
         self,

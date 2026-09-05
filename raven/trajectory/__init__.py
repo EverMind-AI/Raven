@@ -81,6 +81,7 @@ from raven.trajectory.store import (
 from raven.trajectory.verdict import (
     VERDICT_STATUSES,
     Verdict,
+    latest_verdict,
     read_verdicts,
     record_verdict,
 )
@@ -111,6 +112,7 @@ __all__ = [
     "get_uploader",
     "is_pinned",
     "iter_spans",
+    "latest_verdict",
     "load_expectation",
     "load_recording",
     "minimize_bundle",

@@ -4,7 +4,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from typing import Any, Awaitable, Callable
 
-from raven.contracts.tool import Tool
+from raven.agent.tools.base import Tool
 
 
 @dataclass(frozen=True)
