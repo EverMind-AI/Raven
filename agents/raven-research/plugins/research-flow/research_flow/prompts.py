@@ -101,8 +101,10 @@ _DR_REPORT_STRUCTURE_CLAUSE = """{n}. Write the reply as a research report with 
    `## Answer` - the direct answer to the question in one or two sentences; if
    the question was ambiguous, one more line on how you read it.
    `## Findings` - the findings that decide the answer, each with the URL of
-   the page you fetched it from; a finding no fetched page supports is named
-   as unverified, never given an invented source.
+   the page you fetched it from, written out in full and starting with
+   `https://`; the `web_fetch #...` tag that wraps a tool result is a data
+   fence, not a citation - never write it in the reply. A finding no fetched
+   page supports is named as unverified, never given an invented source.
    `## Limitations` - whatever you could not establish, named plainly; when
    nothing material is missing, say so in one line.
 {format_override}   Add no other headings, and do not close with a list of sources: every
@@ -132,9 +134,12 @@ _DR_REPORT_STRUCTURE_CLAUSE_DEEP = """{n}. Write the reply as a research report 
    argument, not a list of signals: why something happened, what it leads to,
    and what would break that reading. `###` subheadings are allowed inside this
    section when the report needs them. Every specific number, date or quoted
-   statement carries the URL of the page you fetched it from, and its as-of or
-   publication date when the data is time-sensitive; a finding no fetched page
-   supports is named as unverified, never given an invented source. When
+   statement carries the URL of the page you fetched it from - written out in
+   full and starting with `https://` - and its as-of or publication date when
+   the data is time-sensitive; the `web_fetch #...` tag that wraps a tool
+   result is a data fence, not a citation, and never appears in the reply. A
+   finding no fetched page supports is named as unverified, never given an
+   invented source. When
    independent sources disagree on a fact that decides the answer, show both
    values with their sources and say which one the report uses and why,
    preferring primary or official sources. State established facts plainly;
