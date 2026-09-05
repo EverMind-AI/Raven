@@ -63,17 +63,20 @@ def grounded(launcher, tmp_path, monkeypatch):
 # --- byte parity: the carried assets and the roster identity -----------------
 
 
-def test_the_roster_row_is_the_vendored_twins_byte_for_byte():
-    """The whole file, not a field list: this product changes nothing about
-    how the host router sees it, runsOnMachines stays absent on both sides,
-    and recommendedLlm.provider keeps the load-bearing name ``ppt`` (C2:
-    gateway detection and prompt caching key on it)."""
-    ours = (RUN_PY.parent / "subagent.json").read_bytes()
-    theirs = (FORK / "subagent.json").read_bytes()
+def test_the_roster_row_is_the_vendored_twins_modulo_the_engine_declaration():
+    """The fork's file field for field, plus exactly one ledgered delta: the
+    ``engine`` declaration product discovery probes readiness with (the fork
+    twin's venv gate has no counterpart here, so the wheel probe is what keeps
+    an engineless install listed-but-disabled instead of failing at dispatch).
+    Everything the host router reads stays the twin's: runsOnMachines stays
+    absent on both sides, and recommendedLlm.provider keeps the load-bearing
+    name ``ppt`` (C2: gateway detection and prompt caching key on it)."""
+    ours = json.loads((RUN_PY.parent / "subagent.json").read_text(encoding="utf-8"))
+    theirs = json.loads((FORK / "subagent.json").read_text(encoding="utf-8"))
+    assert ours.pop("engine") == {"package": "raven_ppt", "wheel": "ppt-engine"}
     assert ours == theirs
-    row = json.loads(ours)
-    assert "runsOnMachines" not in row
-    assert row["recommendedLlm"]["provider"] == "ppt"
+    assert "runsOnMachines" not in ours
+    assert ours["recommendedLlm"]["provider"] == "ppt"
 
 
 #: Trunk tools the fork loop never registered under this product's config;

@@ -1,15 +1,15 @@
-"""Discovering the ``subagents/`` tree as agent rows (raven/agent/subagent/vendored_agents.py).
+"""Discovering the ``agents/`` product tree as agent rows (raven/agent/subagent/vendored_agents.py).
 
-The vendored raven builds are registered by scanning, not by a written list,
+The shipped agent products are registered by scanning, not by a written list,
 so what needs guarding is the scan's edges: where it looks, what it does with a
 folder that is not ready, and that removing a folder removes its row. The last
 one is the whole point of scanning rather than storing -- a stored row would
 outlive the folder it launches.
 
 Every test builds its own tree under ``tmp_path``. The suite's autouse
-``no_vendored_subagents`` fixture points discovery at nothing, so these opt back
-in by patching the root, which is also what keeps them independent of whether the
-developer running them has built the real folders' venvs.
+``no_discovered_products`` fixture points discovery at nothing, so these opt
+back in by patching the root, which is also what keeps them independent of
+which engine wheels the developer running them has installed.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from raven.agent.subagent import vendored_agents as va
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent.registry import AgentRegistry
 
-_REAL_SUBAGENTS_ROOT = va.subagents_root
+_REAL_AGENTS_ROOT = va.agents_root
 """Captured at import, before the autouse pin replaces the module attribute.
 
 ``TestWhereTheTreeIs`` is the one place that tests the real lookup rather than
@@ -32,10 +32,13 @@ standing on it, and the fixture that keeps the rest of the suite deterministic
 would otherwise leave it asserting against its own stub -- a test that passes
 whatever the function does."""
 
+_MISSING_ENGINE = "raven_probe_engine_that_is_not_installed"
+"""An import name no environment carries, for the engine-absent branch."""
+
 _MANIFEST = {
     "name": "Raven-Probe",
     "kind": "cli",
-    "description": "a vendored build",
+    "description": "a shipped product",
     "enabled": True,
     "command": "{PYTHON} {SUBAGENT_DIR}/run.py --prompt-file {prompt_file} --session {agent_id}",
     "resumeCommand": "{PYTHON} {SUBAGENT_DIR}/run.py --prompt-file {prompt_file} --session {agent_id}",
@@ -48,7 +51,7 @@ _MANIFEST = {
 _ACP_MANIFEST = {
     "name": "Raven-Probe-Acp",
     "kind": "acp",
-    "description": "a vendored build served over acp",
+    "description": "a shipped product served over acp",
     "enabled": True,
     "command": "{PYTHON} {SUBAGENT_DIR}/run.py",
     "cwd": "{SUBAGENT_DIR}",
@@ -57,43 +60,35 @@ _ACP_MANIFEST = {
 }
 
 
-def _folder(root: Path, name: str, *, manifest: dict | None = None, venv: bool = False) -> Path:
-    """One folder shaped the way the real ones are: manifest, installer, checkout."""
+def _product(root: Path, name: str, *, manifest: dict | None = None, launcher: bool = True) -> Path:
+    """One folder shaped the way the real ones are: manifest, launcher, profile."""
     folder = root / name
-    (folder / "Build").mkdir(parents=True)
+    folder.mkdir(parents=True)
     (folder / "subagent.json").write_text(json.dumps(manifest or _MANIFEST), encoding="utf-8")
     (folder / "config.json").write_text("{}", encoding="utf-8")
-    (folder / "install.py").write_text("", encoding="utf-8")
-    (folder / "Build" / "pyproject.toml").write_text("", encoding="utf-8")
-    if venv:
-        launcher = folder / "Build" / ".venv" / "bin" / "raven"
-        launcher.parent.mkdir(parents=True)
-        launcher.write_text("#!/bin/sh\n", encoding="utf-8")
-        launcher.chmod(0o755)
+    if launcher:
+        (folder / "run.py").write_text("", encoding="utf-8")
     return folder
 
 
 @pytest.fixture
 def tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    root = tmp_path / "subagents"
+    root = tmp_path / "agents"
     root.mkdir()
-    monkeypatch.setattr(va, "subagents_root", lambda: root)
-    # A lendable host key by default: the launchers inherit the host's provider
-    # block, so this is the ordinary machine, not a special case.
-    monkeypatch.setattr(va, "host_can_lend_a_key", lambda: True)
+    monkeypatch.setattr(va, "agents_root", lambda: root)
     return root
 
 
 def test_a_folder_becomes_a_cli_row_with_its_placeholders_resolved(tree: Path) -> None:
     """``{SUBAGENT_DIR}`` and ``{PYTHON}`` only, and only in the command fields.
 
-    The same pair each folder's ``install.py`` substitutes. A row whose command
+    The same pair each product's ``install.py`` substitutes. A row whose command
     still held a literal ``{SUBAGENT_DIR}`` would be handed to a shell as that
     text and fail in a way that names no cause.
     """
-    _folder(tree, "raven-probe", venv=True)
+    _product(tree, "raven-probe")
 
-    (row,) = va.discover_vendored_rows()
+    (row,) = va.discover_product_rows()
 
     assert row.name == "Raven-Probe" and row.kind == "cli"
     assert "{SUBAGENT_DIR}" not in row.command and "{PYTHON}" not in row.command
@@ -101,6 +96,12 @@ def test_a_folder_becomes_a_cli_row_with_its_placeholders_resolved(tree: Path) -
     # The task-time placeholders are *not* resolved here -- the cli backend
     # substitutes those per dispatch.
     assert "{prompt_file}" in row.command and "{agent_id}" in row.command
+    # resumeCommand materializes with command: the cli backend executes
+    # `resume_command or command`, so a template left in only one of them is a
+    # resume that hands the shell a literal {PYTHON}.
+    assert "{SUBAGENT_DIR}" not in row.resume_command and "{PYTHON}" not in row.resume_command
+    assert str(tree / "raven-probe") in row.resume_command
+    assert "{prompt_file}" in row.resume_command and "{agent_id}" in row.resume_command
 
 
 def test_an_acp_manifest_becomes_an_acp_row_with_its_cwd_resolved(tree: Path) -> None:
@@ -113,9 +114,9 @@ def test_an_acp_manifest_becomes_an_acp_row_with_its_cwd_resolved(tree: Path) ->
     is part of the pool's launch key -- every new workspace would relaunch the
     server and kill the sessions the old one was serving.
     """
-    _folder(tree, "raven-probe", manifest=_ACP_MANIFEST, venv=True)
+    _product(tree, "raven-probe", manifest=_ACP_MANIFEST)
 
-    (row,) = va.discover_vendored_rows()
+    (row,) = va.discover_product_rows()
 
     assert row.kind == "acp"
     assert row.name == "Raven-Probe-Acp"
@@ -125,9 +126,9 @@ def test_an_acp_manifest_becomes_an_acp_row_with_its_cwd_resolved(tree: Path) ->
 
 
 def test_an_unready_acp_folder_is_listed_disabled_like_a_cli_one(tree: Path) -> None:
-    _folder(tree, "raven-probe", manifest=_ACP_MANIFEST, venv=False)
+    _product(tree, "raven-probe", manifest=_ACP_MANIFEST, launcher=False)
 
-    (row,) = va.discover_vendored_rows()
+    (row,) = va.discover_product_rows()
 
     assert row.kind == "acp" and row.enabled is False
 
@@ -135,58 +136,77 @@ def test_an_unready_acp_folder_is_listed_disabled_like_a_cli_one(tree: Path) -> 
 def test_the_manifests_name_wins_over_the_folders(tree: Path) -> None:
     """So a row written by the folder's own ``install.py`` collides with the
     discovered one and overrides it, instead of the table carrying both."""
-    _folder(tree, "raven-probe", venv=True)
+    _product(tree, "raven-probe")
 
-    (row,) = va.discover_vendored_rows()
+    (row,) = va.discover_product_rows()
 
     assert row.name == "Raven-Probe"
 
 
-def test_an_unbuilt_venv_lists_the_row_disabled_rather_than_dropping_it(tree: Path) -> None:
+def test_a_missing_launcher_lists_the_row_disabled_rather_than_dropping_it(tree: Path) -> None:
     """Present-but-not-set-up is what the operations view has to show.
 
     Disabled keeps it off the roster the dispatching model reads, which is the
     point: a name the model can pick and then fail on is worse than no name.
-    Dropping the row instead would also hide the folder from the human who needs
-    to know it is there and needs building.
+    Dropping the row instead would also hide the folder from the human who
+    needs to know it is there and broken.
     """
-    _folder(tree, "raven-probe", venv=False)
+    _product(tree, "raven-probe", launcher=False)
 
-    (row,) = va.discover_vendored_rows()
-
-    assert row.enabled is False
-
-
-def test_no_credential_anywhere_disables_the_row(tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A built venv is not enough when nothing can pay for the model."""
-    monkeypatch.setattr(va, "host_can_lend_a_key", lambda: False)
-    _folder(tree, "raven-probe", venv=True)
-
-    (row,) = va.discover_vendored_rows()
+    (row,) = va.discover_product_rows()
 
     assert row.enabled is False
 
 
-def test_the_folders_own_key_is_enough_without_a_host_key(tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(va, "host_can_lend_a_key", lambda: False)
-    folder = _folder(tree, "raven-probe", venv=True)
-    (folder / ".env").write_text("PROBE_API_KEY=sk-real\n", encoding="utf-8")
+def test_a_missing_engine_wheel_disables_the_row(tree: Path) -> None:
+    """A launcher in place is not enough when the engine it serves is absent.
 
-    (row,) = va.discover_vendored_rows()
+    The launcher's own refusal (``run.py`` probes ``find_spec`` and exits) is
+    loud but late -- at dispatch; this keeps the name out of the roster the
+    model picks from, while the row stays visible with the wheel named.
+    """
+    _product(
+        tree,
+        "raven-probe",
+        manifest={**_ACP_MANIFEST, "engine": {"package": _MISSING_ENGINE, "wheel": "probe-engine"}},
+    )
+
+    (row,) = va.discover_product_rows()
+
+    assert row.enabled is False
+    verdict = va.product_state()["Raven-Probe-Acp"]
+    assert verdict.kind == "engine"
+    assert "probe-engine" in verdict.detail
+
+
+def test_an_importable_engine_leaves_the_row_enabled(tree: Path) -> None:
+    """The probe is presence where raven runs, nothing more: an importable
+    package answers it, and the row is as ready as one with no engine at all."""
+    _product(
+        tree,
+        "raven-probe",
+        manifest={**_ACP_MANIFEST, "engine": {"package": "json", "wheel": "probe-engine"}},
+    )
+
+    (row,) = va.discover_product_rows()
 
     assert row.enabled is True
 
 
-def test_a_scaffolded_env_with_no_value_does_not_count_as_a_key(tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """``write_key`` copies ``.env.example`` before a key is supplied, so a file
-    of bare ``NAME=`` lines is an unconfigured folder, not a configured one."""
+def test_no_credential_check_happens_at_discovery(tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A keyless folder on a keyless host is still advertised.
+
+    Deliberate: the launcher inherits the host's provider block when the folder
+    holds no key, and refuses loudly at dispatch when there is truly nothing --
+    a discovery-time credential verdict would be a second reader of that fact,
+    free to disagree with the one that rules.
+    """
     monkeypatch.setattr(va, "host_can_lend_a_key", lambda: False)
-    folder = _folder(tree, "raven-probe", venv=True)
-    (folder / ".env").write_text("PROBE_API_KEY=\nOTHER=keep\n", encoding="utf-8")
+    _product(tree, "raven-probe")
 
-    (row,) = va.discover_vendored_rows()
+    (row,) = va.discover_product_rows()
 
-    assert row.enabled is False
+    assert row.enabled is True
 
 
 def test_removing_a_folder_removes_its_row(tree: Path) -> None:
@@ -197,70 +217,61 @@ def test_removing_a_folder_removes_its_row(tree: Path) -> None:
     """
     import shutil
 
-    _folder(tree, "raven-one", manifest={**_MANIFEST, "name": "One"}, venv=True)
-    _folder(tree, "raven-two", manifest={**_MANIFEST, "name": "Two"}, venv=True)
-    assert {r.name for r in va.discover_vendored_rows()} == {"One", "Two"}
+    _product(tree, "raven-one", manifest={**_MANIFEST, "name": "One"})
+    _product(tree, "raven-two", manifest={**_MANIFEST, "name": "Two"})
+    assert {r.name for r in va.discover_product_rows()} == {"One", "Two"}
 
     shutil.rmtree(tree / "raven-two")
 
-    assert {r.name for r in va.discover_vendored_rows()} == {"One"}
-
-
-def test_a_folder_without_an_installer_is_not_a_subagent_folder(tree: Path) -> None:
-    """Same judgement ``discover`` makes: both files or neither. A directory that
-    merely happens to hold a ``subagent.json`` is not an installed agent."""
-    folder = _folder(tree, "raven-probe", venv=True)
-    (folder / "install.py").unlink()
-
-    assert va.discover_vendored_rows() == []
+    assert {r.name for r in va.discover_product_rows()} == {"One"}
 
 
 def test_one_unreadable_manifest_does_not_take_the_others_down(tree: Path) -> None:
-    _folder(tree, "raven-good", manifest={**_MANIFEST, "name": "Good"}, venv=True)
-    bad = _folder(tree, "raven-bad", venv=True)
+    _product(tree, "raven-good", manifest={**_MANIFEST, "name": "Good"})
+    bad = _product(tree, "raven-bad")
     (bad / "subagent.json").write_text("{ not json", encoding="utf-8")
 
-    assert [r.name for r in va.discover_vendored_rows()] == ["Good"]
+    assert [r.name for r in va.discover_product_rows()] == ["Good"]
 
 
 def test_no_tree_is_no_rows_rather_than_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The wheel case, which is most installs: the table is exactly what it was
-    before discovery existed."""
-    monkeypatch.setattr(va, "subagents_root", lambda: None)
+    """The sdist-wheel case: the table is exactly what it was before discovery
+    existed."""
+    monkeypatch.setattr(va, "agents_root", lambda: None)
 
-    assert va.discover_vendored_rows() == []
+    assert va.discover_product_rows() == []
 
 
 class TestWhereTheTreeIs:
-    """``subagents_root`` prefers the writable copy, and why."""
+    """``agents_root`` prefers the writable copy, and why."""
 
     def test_the_raven_home_copy_wins_over_the_packaged_one(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A venv lives inside its folder's checkout, so a tree under
-        site-packages loses every venv when the wheel is replaced. Preferring the
-        home copy is what keeps the agents in the roster across an upgrade.
+        """A product's ``.env`` lives inside its folder, so a tree under
+        site-packages loses every key when the wheel is replaced. Preferring the
+        home copy is what keeps the keys across an upgrade.
         """
         home = tmp_path / "home"
-        (home / "subagents").mkdir(parents=True)
+        (home / "agents").mkdir(parents=True)
         package = tmp_path / "site-packages" / "raven"
-        (package / "subagents").mkdir(parents=True)
+        (package / "agents").mkdir(parents=True)
         (package / "__init__.py").write_text("", encoding="utf-8")
         monkeypatch.setenv("RAVEN_HOME", str(home))
         monkeypatch.setattr("raven.__file__", str(package / "__init__.py"))
 
-        assert _REAL_SUBAGENTS_ROOT() == home / "subagents"
+        assert _REAL_AGENTS_ROOT() == home / "agents"
 
     def test_the_checkout_tree_is_found_beside_the_package(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         clone = tmp_path / "clone"
-        (clone / "subagents").mkdir(parents=True)
+        (clone / "agents").mkdir(parents=True)
         (clone / "raven").mkdir()
         monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "empty-home"))
         monkeypatch.setattr("raven.__file__", str(clone / "raven" / "__init__.py"))
 
-        assert _REAL_SUBAGENTS_ROOT() == clone / "subagents"
+        assert _REAL_AGENTS_ROOT() == clone / "agents"
 
     def test_a_wheel_with_the_tree_gets_it_installed_out_to_the_home(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -268,35 +279,35 @@ class TestWhereTheTreeIs:
         """The packaged copy is a source, not the place it is used from.
 
         Looking it up is what triggers the copy, so the answer is the home path
-        even on the very first call -- which is the point: whatever venvs get
-        built next are built somewhere an upgrade does not delete.
+        even on the very first call -- which is the point: whatever keys get
+        written next are written somewhere an upgrade does not delete.
         """
         package = tmp_path / "site-packages" / "raven"
-        _folder(package / "subagents", "raven-probe")
+        _product(package / "agents", "raven-probe")
         home = tmp_path / "home"
         monkeypatch.setenv("RAVEN_HOME", str(home))
         monkeypatch.setattr("raven.__file__", str(package / "__init__.py"))
 
-        assert _REAL_SUBAGENTS_ROOT() == home / "subagents"
-        assert (home / "subagents" / "raven-probe" / "subagent.json").is_file()
+        assert _REAL_AGENTS_ROOT() == home / "agents"
+        assert (home / "agents" / "raven-probe" / "subagent.json").is_file()
 
     def test_an_uncopyable_packaged_tree_is_still_used_where_it_lies(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A read-only home degrades to the packaged tree rather than to nothing.
 
-        The agents then work until the next upgrade wipes their venvs, which is
+        The agents then work until the next upgrade drops their keys, which is
         worse than the copied-out arrangement and better than no agents at all.
         """
         import shutil as real_shutil
 
         package = tmp_path / "site-packages" / "raven"
-        _folder(package / "subagents", "raven-probe")
+        _product(package / "agents", "raven-probe")
         monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "unwritable"))
         monkeypatch.setattr("raven.__file__", str(package / "__init__.py"))
         monkeypatch.setattr(real_shutil, "copytree", lambda *a, **k: (_ for _ in ()).throw(OSError("read-only")))
 
-        assert _REAL_SUBAGENTS_ROOT() == package / "subagents"
+        assert _REAL_AGENTS_ROOT() == package / "agents"
 
 
 class TestOnTheTable:
@@ -309,7 +320,7 @@ class TestOnTheTable:
         one has been wrong while the other was right -- ``names`` filters to
         enabled rows, ``roster_text`` renders descriptions and capability tags.
         """
-        _folder(tree, "raven-probe", venv=True)
+        _product(tree, "raven-probe")
         registry = AgentRegistry()
 
         registry.apply([])
@@ -325,7 +336,7 @@ class TestOnTheTable:
         """An acp row builds an acp backend and the roster tags follow the kind:
         the live event stream is a property of the transport, so the row has to
         reach the table as acp for the model to be told about it."""
-        _folder(tree, "raven-probe", manifest=_ACP_MANIFEST, venv=True)
+        _product(tree, "raven-probe", manifest=_ACP_MANIFEST)
         registry = AgentRegistry()
 
         registry.apply([])
@@ -335,7 +346,7 @@ class TestOnTheTable:
         assert "live-progress" in registry.roster_text()
 
     def test_an_unready_folder_is_on_the_table_but_not_in_the_enum(self, tree: Path) -> None:
-        _folder(tree, "raven-probe", venv=False)
+        _product(tree, "raven-probe", launcher=False)
         registry = AgentRegistry()
 
         registry.apply([])
@@ -347,7 +358,7 @@ class TestOnTheTable:
         """Discovery adds; it does not replace. The in-process agent is what a
         dag node uses to run raven itself, and what stored direct-chat records
         resolve against."""
-        _folder(tree, "raven-probe", venv=True)
+        _product(tree, "raven-probe")
         registry = AgentRegistry()
 
         registry.apply([])
@@ -364,7 +375,7 @@ class TestOnTheTable:
         """
         from raven.config.schema import ThirdPartyCliSubagentConfig
 
-        _folder(tree, "raven-probe", venv=True)
+        _product(tree, "raven-probe")
         mine = ThirdPartyCliSubagentConfig(name="Raven-Probe", command="my-own {prompt}", description="mine")
         registry = AgentRegistry()
 
@@ -379,7 +390,7 @@ class TestOnTheTable:
         from raven.config.schema import ThirdPartyCliSubagentConfig
 
         for name in ("raven-a", "raven-b", "raven-c"):
-            _folder(tree, name, manifest={**_MANIFEST, "name": name.upper()}, venv=True)
+            _product(tree, name, manifest={**_MANIFEST, "name": name.upper()})
         registry = AgentRegistry()
 
         registry.apply([ThirdPartyCliSubagentConfig(name="RAVEN-B", command="x {prompt}")])
@@ -390,10 +401,10 @@ class TestOnTheTable:
 def test_the_lending_test_reads_the_file_the_launcher_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """One credential, one answer.
 
-    The launchers are standard-library-only scripts that accept exactly one shape:
-    a literal ``apiKey`` on some provider section of the host's ``config.json``.
-    Asking ``providers.auth`` instead would call an OAuth-signed-in host lendable
-    and advertise an agent that dies at its first dispatch.
+    The launchers' ``inherit_llm`` accepts exactly one shape: a literal
+    ``apiKey`` on some provider section of the host's ``config.json``. Asking
+    ``providers.auth`` instead would call an OAuth-signed-in host lendable and
+    advertise an agent that dies at its first dispatch.
     """
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
 
@@ -407,8 +418,9 @@ def test_the_lending_test_reads_the_file_the_launcher_reads(tmp_path: Path, monk
 
 
 def test_the_interpreter_is_this_one_unless_the_environment_names_another() -> None:
-    """``install.py``'s own default order, minus its ``--python`` flag. Any
-    python3 satisfies it: each launcher is standard-library only."""
+    """``install.py``'s own default order, minus its ``--python`` flag. The
+    launchers import raven, and this process's interpreter has it by
+    definition."""
     import sys
 
     assert va._resolved_python() == sys.executable
@@ -423,58 +435,40 @@ def test_the_interpreter_is_this_one_unless_the_environment_names_another() -> N
 class TestInstallingTheWheelsOwnTree:
     """``_install_packaged_tree`` -- why a wheel's tree is copied out at all.
 
-    Each folder's venv is built inside its own checkout, and a wheel install is
-    replaced wholesale on upgrade. Left under site-packages the venvs die every
-    time and every agent falls out of the roster until something spends
-    minutes rebuilding them. These pin the three states that follow from copying
-    it out under a version stamp.
+    A product's ``.env`` is written into its own folder, and a wheel install is
+    replaced wholesale on upgrade. Left under site-packages the keys die every
+    time and every agent falls back to inheriting the host's LLM until someone
+    types them again. These pin the states that follow from copying it out
+    under a version stamp.
     """
 
     def _packaged(self, tmp_path: Path) -> Path:
-        packaged = tmp_path / "site-packages" / "raven" / "subagents"
+        packaged = tmp_path / "site-packages" / "raven" / "agents"
         packaged.mkdir(parents=True)
         for name in ("raven-one", "raven-two"):
-            _folder(packaged, name, manifest={**_MANIFEST, "name": name})
-        # The tree's own files, which live beside the folders rather than inside
-        # any of them -- the shape the real tree has.
-        (packaged / "install.sh").write_text("#!/bin/sh\n", encoding="utf-8")
-        (packaged / "install.sh").chmod(0o755)
+            _product(packaged, name, manifest={**_MANIFEST, "name": name})
+        # A root-level file the way the real tree ships one (its README); the
+        # copy-out is folder-shaped and leaves it behind.
         (packaged / "README.md").write_text("the tree\n", encoding="utf-8")
         return packaged
 
-    def test_the_trees_own_files_come_with_it(self, tmp_path: Path) -> None:
-        """``install.sh`` above all, and it is not inside any folder.
-
-        It is what builds a folder's venv and it knows each folder's optional
-        dependency extra, so a tree copied without it lists every agent and can
-        build none. Measured on a real install: the page offered Install, the call
-        answered "no install.sh", and that reached the reader as a bare "subagent
-        not found" -- see the reason's own journey in ``subagents_build``.
-        """
-        installed = tmp_path / "home" / "subagents"
-
-        va._install_packaged_tree(self._packaged(tmp_path), installed)
-
-        assert (installed / "install.sh").is_file()
-        assert os.access(installed / "install.sh", os.X_OK), "copied without its mode, so nothing can run it"
-        assert (installed / "README.md").is_file()
-
-    def test_every_folder_can_name_its_installer_afterwards(self, tmp_path: Path) -> None:
-        """The end the copy exists for, asserted through the reader the page uses
-        rather than on the file: `installer_for` returning None is the exact state
-        that produced the unexplained failure."""
-        installed = tmp_path / "home" / "subagents"
-        va._install_packaged_tree(self._packaged(tmp_path), installed)
-
-        for folder in sorted(p for p in installed.iterdir() if p.is_dir()):
-            assert va.installer_for(folder) == installed / "install.sh", folder.name
-
     def test_a_fresh_install_lands_every_folder_in_the_raven_home(self, tmp_path: Path) -> None:
-        installed = tmp_path / "home" / "subagents"
+        installed = tmp_path / "home" / "agents"
 
         va._install_packaged_tree(self._packaged(tmp_path), installed)
 
         assert {p.name for p in installed.iterdir() if p.is_dir()} == {"raven-one", "raven-two"}
+        assert (installed / "raven-one" / "run.py").is_file()
+
+    def test_only_the_product_folders_are_copied_out(self, tmp_path: Path) -> None:
+        """The folders are the products; the tree's root files are packaging
+        residue here (the fork tree's ``install.sh`` rationale retired with the
+        venvs it built)."""
+        installed = tmp_path / "home" / "agents"
+
+        va._install_packaged_tree(self._packaged(tmp_path), installed)
+
+        assert not (installed / "README.md").exists()
 
     def test_a_folder_deleted_under_the_same_version_stays_deleted(self, tmp_path: Path) -> None:
         """Otherwise the scan's whole point is undone: a user removes an agent,
@@ -482,7 +476,7 @@ class TestInstallingTheWheelsOwnTree:
         import shutil
 
         packaged = self._packaged(tmp_path)
-        installed = tmp_path / "home" / "subagents"
+        installed = tmp_path / "home" / "agents"
         va._install_packaged_tree(packaged, installed)
 
         shutil.rmtree(installed / "raven-two")
@@ -490,29 +484,29 @@ class TestInstallingTheWheelsOwnTree:
 
         assert {p.name for p in installed.iterdir() if p.is_dir()} == {"raven-one"}
 
-    def test_an_upgrade_restores_what_the_release_ships_without_losing_a_venv(self, tmp_path: Path) -> None:
-        """The venv is the expensive part, and a new release of the same fork does
-        not invalidate it -- so the refresh copies over the folder and leaves it."""
+    def test_an_upgrade_restores_what_the_release_ships_without_losing_a_key(self, tmp_path: Path) -> None:
+        """The ``.env`` is the part only the user can produce, and a new release
+        of the same product does not invalidate it -- the packaged tree never
+        carries one, so the refresh has nothing to overwrite it with."""
         import shutil
 
         packaged = self._packaged(tmp_path)
-        installed = tmp_path / "home" / "subagents"
+        installed = tmp_path / "home" / "agents"
         va._install_packaged_tree(packaged, installed)
-        launcher = installed / "raven-one" / "Build" / ".venv" / "bin" / "raven"
-        launcher.parent.mkdir(parents=True)
-        launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+        env = installed / "raven-one" / ".env"
+        env.write_text("ONE_API_KEY=sk-typed-by-hand\n", encoding="utf-8")
         shutil.rmtree(installed / "raven-two")
 
         (installed / ".raven-version").write_text("0.0.0-older", encoding="utf-8")
         va._install_packaged_tree(packaged, installed)
 
         assert {p.name for p in installed.iterdir() if p.is_dir()} == {"raven-one", "raven-two"}
-        assert launcher.is_file(), "the upgrade must not throw away a built venv"
+        assert env.read_text(encoding="utf-8") == "ONE_API_KEY=sk-typed-by-hand\n"
 
     def test_an_unwritable_home_is_a_warning_rather_than_a_failed_start(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Not having the vendored agents is a smaller problem than not starting."""
+        """Not having the products is a smaller problem than not starting."""
         import shutil as real_shutil
 
         def _explode(*_args, **_kwargs):
@@ -520,7 +514,7 @@ class TestInstallingTheWheelsOwnTree:
 
         monkeypatch.setattr(real_shutil, "copytree", _explode)
 
-        va._install_packaged_tree(self._packaged(tmp_path), tmp_path / "home" / "subagents")
+        va._install_packaged_tree(self._packaged(tmp_path), tmp_path / "home" / "agents")
 
 
 class TestAStoredRowThatWentStale:
@@ -546,13 +540,13 @@ class TestAStoredRowThatWentStale:
 
         from raven.config.schema import ThirdPartyCliSubagentConfig
 
-        _folder(tree, "raven-probe", venv=True)
+        _product(tree, "raven-probe")
         stale = ThirdPartyCliSubagentConfig(
             name="Raven-Probe",
-            command=f"{sys.executable} /gone/site-packages/raven/subagents/raven-probe/run.py {{prompt}}",
+            command=f"{sys.executable} /gone/site-packages/raven/agents/raven-probe/run.py {{prompt}}",
         )
 
-        merged = va.merge_vendored_seeds([stale], va.discover_vendored_rows())
+        merged = va.merge_product_seeds([stale], va.discover_product_rows())
 
         assert len(merged) == 1
         assert str(tree) in merged[0].command
@@ -563,13 +557,12 @@ class TestAStoredRowThatWentStale:
 
         from raven.config.schema import ThirdPartyCliSubagentConfig
 
-        folder = _folder(tree, "raven-probe", venv=True)
-        (folder / "run.py").write_text("", encoding="utf-8")
+        folder = _product(tree, "raven-probe")
         mine = ThirdPartyCliSubagentConfig(
             name="Raven-Probe", command=f"{sys.executable} {folder / 'run.py'} --mine {{prompt}}"
         )
 
-        merged = va.merge_vendored_seeds([mine], va.discover_vendored_rows())
+        merged = va.merge_product_seeds([mine], va.discover_product_rows())
 
         assert "--mine" in merged[0].command
 
@@ -578,12 +571,65 @@ class TestAStoredRowThatWentStale:
         and guessing that it is broken would delete a working registration."""
         from raven.config.schema import ThirdPartyCliSubagentConfig
 
-        _folder(tree, "raven-probe", venv=True)
+        _product(tree, "raven-probe")
         on_path = ThirdPartyCliSubagentConfig(name="Raven-Probe", command="my-agent --run {prompt}")
 
-        merged = va.merge_vendored_seeds([on_path], va.discover_vendored_rows())
+        merged = va.merge_product_seeds([on_path], va.discover_product_rows())
 
         assert merged[0].command == "my-agent --run {prompt}"
+
+
+class TestAWindowsShapedCommand:
+    """Drive-letter paths are absolute paths to both readiness probes.
+
+    ``token.startswith("/")`` matched no token of a native-Windows command
+    line (``C:\\Python312\\python.exe ...``), so ``_launcher_missing`` checked
+    no file and reported ready -- a product with no launcher on disk went onto
+    the roster as exactly the name the module docstring promises the
+    dispatching model will not be handed. The pure-path judgment reads the
+    token's shape, not the host's flavor, which is why these run on POSIX: a
+    Windows-shaped token here fails the existence check and reads as missing,
+    the fail-closed direction.
+    """
+
+    _WIN_COMMAND = r"C:\Python312\python.exe C:\raven\agents\raven-win\run.py --prompt-file {prompt_file}"
+
+    def test_a_missing_windows_launcher_disables_the_row_with_the_token_named(self, tree: Path) -> None:
+        manifest = {
+            "name": "Raven-Win",
+            "kind": "cli",
+            "description": "a manifest resolved on native windows",
+            "command": self._WIN_COMMAND,
+        }
+        _product(tree, "raven-win", manifest=manifest, launcher=False)
+
+        (row,) = va.discover_product_rows()
+        verdict = va.product_state()["Raven-Win"]
+
+        assert row.enabled is False
+        assert verdict.kind == "launcher"
+        assert r"C:\Python312\python.exe" in verdict.detail
+
+    def test_a_stored_windows_row_whose_launcher_is_gone_loses_to_the_discovered_one(self, tree: Path) -> None:
+        """The same shape through ``_launcher_is_gone``: a POSIX host cannot
+        run a drive-letter command either way, so the discovered row that does
+        work is the one that must win."""
+        from raven.config.schema import ThirdPartyCliSubagentConfig
+
+        _product(tree, "raven-probe")
+        stale = ThirdPartyCliSubagentConfig(name="Raven-Probe", command=self._WIN_COMMAND)
+
+        assert va._launcher_is_gone(stale) is True
+        merged = va.merge_product_seeds([stale], va.discover_product_rows())
+        assert len(merged) == 1
+        assert str(tree) in merged[0].command
+
+    def test_both_drive_letter_spellings_are_checked(self) -> None:
+        """Backslash and forward-slash drive paths are one shape to the pure
+        classes, and a token with no absolute shape at all stays unchecked."""
+        assert va._launcher_missing({"command": r"C:\gone\python.exe"}) == r"C:\gone\python.exe"
+        assert va._launcher_missing({"command": "C:/gone/python.exe"}) == "C:/gone/python.exe"
+        assert va._launcher_missing({"command": "my-agent --run {prompt}"}) == ""
 
 
 class TestTheEdgesThatDegrade:
@@ -595,48 +641,13 @@ class TestTheEdgesThatDegrade:
     degradation nobody exercises is a degradation nobody knows the shape of.
     """
 
-    def test_a_folder_with_two_checkouts_is_not_ready(self, tree: Path) -> None:
-        """``checkout_of`` wants a lone ``pyproject.toml`` and says so; two of them
-        is an ambiguity, and guessing which venv to check would be a coin flip."""
-        folder = _folder(tree, "raven-probe", venv=True)
-        (folder / "Second").mkdir()
-        (folder / "Second" / "pyproject.toml").write_text("", encoding="utf-8")
-
-        assert va.checkout_of(folder) is None
-        (row,) = va.discover_vendored_rows()
-        assert row.enabled is False
-
     def test_no_tree_anywhere_reads_as_no_tree(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         clone = tmp_path / "clone"
         (clone / "raven").mkdir(parents=True)
         monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "no-home"))
         monkeypatch.setattr("raven.__file__", str(clone / "raven" / "__init__.py"))
 
-        assert _REAL_SUBAGENTS_ROOT() is None
-
-    def test_a_manifest_holding_a_list_is_skipped_not_crashed(self, tree: Path) -> None:
-        folder = _folder(tree, "raven-probe", venv=True)
-        (folder / "subagent.json").write_text("[]", encoding="utf-8")
-
-        assert va.discover_vendored_rows() == []
-
-    def test_an_unreadable_env_file_counts_as_no_key(self, tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """A directory named ``.env`` is the reachable version of this: the read
-        raises, and a raise here would take the whole table with it."""
-        monkeypatch.setattr(va, "host_can_lend_a_key", lambda: False)
-        folder = _folder(tree, "raven-probe", venv=True)
-        (folder / ".env").mkdir()
-
-        assert va.api_key_present(folder, "PROBE_API_KEY") is False
-        assert va.discover_vendored_rows()[0].enabled is False
-
-    def test_the_process_environment_supplies_a_key_too(self, tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Same order the launcher reads in: environment first, then ``.env``."""
-        monkeypatch.setattr(va, "host_can_lend_a_key", lambda: False)
-        monkeypatch.setenv("PROBE_API_KEY", "sk-from-the-env")
-        _folder(tree, "raven-probe", venv=True)
-
-        assert va.discover_vendored_rows()[0].enabled is True
+        assert _REAL_AGENTS_ROOT() is None
 
     def test_an_unparseable_host_config_is_nothing_to_lend(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -654,6 +665,21 @@ class TestTheEdgesThatDegrade:
 
         assert va.host_can_lend_a_key() is False
 
+    def test_a_manifest_holding_a_list_is_skipped_not_crashed(self, tree: Path) -> None:
+        folder = _product(tree, "raven-probe")
+        (folder / "subagent.json").write_text("[]", encoding="utf-8")
+
+        assert va.discover_product_rows() == []
+
+    def test_a_malformed_engine_block_reads_as_no_engine(self, tree: Path) -> None:
+        """A manifest typo degrades to the launcher's own loud refusal at
+        dispatch rather than a scan crash or a silently dropped folder."""
+        _product(tree, "raven-probe", manifest={**_ACP_MANIFEST, "engine": "not-a-mapping"})
+
+        (row,) = va.discover_product_rows()
+
+        assert row.enabled is True
+
     def test_a_nameless_row_on_either_side_is_dropped(self, tree: Path) -> None:
         """Both merge loops skip a row with no name, because a row that cannot be
         addressed cannot be dispatched to or overridden."""
@@ -662,128 +688,78 @@ class TestTheEdgesThatDegrade:
             name = ""
             command = "x"
 
-        merged = va.merge_vendored_seeds([_Nameless()], [_Nameless()])
+        merged = va.merge_product_seeds([_Nameless()], [_Nameless()])
 
         assert merged == []
 
     def test_a_packaged_folder_without_a_manifest_is_not_copied_out(self, tmp_path: Path) -> None:
-        """The install-out step uses the same "is this a subagent folder" test the
+        """The install-out step uses the same "is this a product folder" test the
         scan does, so a stray directory in the wheel does not land in the home."""
         packaged = tmp_path / "packaged"
-        _folder(packaged, "raven-real")
+        _product(packaged, "raven-real")
         (packaged / "docs").mkdir()
-        installed = tmp_path / "home" / "subagents"
+        installed = tmp_path / "home" / "agents"
 
         va._install_packaged_tree(packaged, installed)
 
         assert {p.name for p in installed.iterdir() if p.is_dir()} == {"raven-real"}
 
-    @pytest.mark.skipif(os.geteuid() == 0, reason="chmod 000 does not block root")
-    def test_an_unreadable_env_file_is_not_a_crash(self, tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Mode 000 is reachable: ``write_key`` chmods these to 600, and a file
-        copied between accounts or restored from a backup can land unreadable.
-        A raise here would take the whole agent table down with one folder.
+    def test_the_verdict_names_the_reason_kind(self, tree: Path) -> None:
+        """The page branches on the kind rather than matching a sentence, so the
+        two kinds and their order (a folder with both problems reports the
+        launcher first -- no engine matters until something can be started) are
+        the contract."""
+        _product(tree, "raven-gone", manifest={**_MANIFEST, "name": "Gone"}, launcher=False)
+        _product(
+            tree,
+            "raven-engineless",
+            manifest={**_ACP_MANIFEST, "name": "Engineless", "engine": {"package": _MISSING_ENGINE}},
+        )
+        _product(
+            tree,
+            "raven-both",
+            manifest={**_ACP_MANIFEST, "name": "Both", "engine": {"package": _MISSING_ENGINE}},
+            launcher=False,
+        )
 
-        Skipped as root, which the CI image runs as: the mode is advisory there,
-        the read succeeds and the key is found. Kept for the shape it documents,
-        not for the coverage -- the two cases below hold the guard at every uid,
-        because arranging for the read to be *denied* is what needs a non-root
-        uid, while forcing it to *fail* does not."""
-        monkeypatch.setattr(va, "host_can_lend_a_key", lambda: False)
-        folder = _folder(tree, "raven-probe", venv=True)
-        env = folder / ".env"
-        env.write_text("PROBE_API_KEY=sk-real\n", encoding="utf-8")
-        env.chmod(0o000)
-        try:
-            assert va.api_key_present(folder, "PROBE_API_KEY") is False
-        finally:
-            env.chmod(0o600)
-
-    def test_an_env_holding_a_non_utf8_byte_disables_rather_than_raising(
-        self, tree: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """``UnicodeDecodeError`` is a ``ValueError``, so an ``except OSError``
-        here does not catch it.
-
-        The whole chain is unguarded above this: ``credential_ready`` runs after
-        ``_scan``'s per-folder ``except`` has closed, ``AgentRegistry.apply`` is
-        called unguarded from ``SubagentManager.__init__``, and that from
-        ``AgentLoop.__init__`` -- so one latin-1 byte in one folder's ``.env``
-        stopped the loop from constructing. Asserted end to end, not just on the
-        helper, because the helper returning False is not what was at risk.
-        """
-        monkeypatch.setattr(va, "host_can_lend_a_key", lambda: False)
-        folder = _folder(tree, "raven-probe", venv=True)
-        (folder / ".env").write_bytes(b"PROBE_API_KEY=sk-caf\xe9\n")
-
-        assert va.api_key_present(folder, "PROBE_API_KEY") is False
-        assert va.discover_vendored_rows()[0].enabled is False
-
-    def test_a_read_that_fails_outright_disables_rather_than_raising(
-        self, tree: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The ``OSError`` half of the same guard, at any uid.
-
-        The mode-000 case above is the real-world shape of this, but it can only
-        assert it where the mode is enforced. Forcing the read to raise covers the
-        branch as root too, which is where CI runs.
-        """
-        monkeypatch.setattr(va, "host_can_lend_a_key", lambda: False)
-        folder = _folder(tree, "raven-probe", venv=True)
-        (folder / ".env").write_text("PROBE_API_KEY=sk-real\n", encoding="utf-8")
-
-        def _denied(*_args: object, **_kwargs: object) -> str:
-            raise PermissionError("denied")
-
-        monkeypatch.setattr(Path, "read_text", _denied)
-
-        assert va.api_key_present(folder, "PROBE_API_KEY") is False
-
-    def test_the_verdict_says_which_reasons_the_installer_can_fix(
-        self, tree: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Only the unbuilt venv. The page gates its Install button on this, so a
-        reason it cannot fix must not read as one it can -- a credential is not
-        something ``install.sh`` can mint, and an ambiguous checkout defeats the
-        installer the same way it defeats us."""
-        monkeypatch.setattr(va, "host_can_lend_a_key", lambda: False)
-        _folder(tree, "raven-unbuilt", manifest={**_MANIFEST, "name": "Unbuilt"}, venv=False)
-        keyless = _folder(tree, "raven-keyless", manifest={**_MANIFEST, "name": "Keyless"}, venv=True)
-        muddled = _folder(tree, "raven-muddled", manifest={**_MANIFEST, "name": "Muddled"}, venv=True)
-        (muddled / "Second").mkdir()
-        (muddled / "Second" / "pyproject.toml").write_text("", encoding="utf-8")
-        (keyless / ".env").write_text("PROBE_API_KEY=\n", encoding="utf-8")
-
-        state = va.vendored_state()
+        state = va.product_state()
 
         assert {name: v.kind for name, v in state.items()} == {
-            "Unbuilt": "venv",
-            "Keyless": "credential",
-            "Muddled": "checkout",
-        }
-        assert {name: v.buildable for name, v in state.items()} == {
-            "Unbuilt": True,
-            "Keyless": False,
-            "Muddled": False,
+            "Gone": "launcher",
+            "Engineless": "engine",
+            "Both": "launcher",
         }
         assert not any(v.ready for v in state.values())
+        # An undeclared wheel name falls back to the import name, so the detail
+        # still tells the reader what to install.
+        assert _MISSING_ENGINE in state["Engineless"].detail
 
     def test_a_ready_folder_reports_ready_with_no_reason(self, tree: Path) -> None:
-        _folder(tree, "raven-probe", venv=True)
+        _product(tree, "raven-probe")
 
-        (verdict,) = va.vendored_state().values()
+        (verdict,) = va.product_state().values()
 
         assert verdict.ready is True and verdict.kind == "" and verdict.detail == ""
 
+    def test_the_folder_behind_a_name_is_looked_up_not_derived(self, tree: Path) -> None:
+        """The manifest names itself (``Raven-Probe``) and the folder is spelled
+        differently (``raven-probe``); a mapping guessed from either spelling
+        breaks on the next product."""
+        folder = _product(tree, "raven-probe")
+
+        assert va.product_folder("Raven-Probe") == folder
+        assert va.product_folder("raven-probe") is None
+
     def test_a_config_row_naming_no_folder_is_simply_appended(self, tree: Path) -> None:
         """The ordinary case for every agent a user registers themselves: it is
-        not a vendored folder, so it joins the list rather than overriding one."""
+        not a discovered product, so it joins the list rather than overriding
+        one."""
         from raven.config.schema import ThirdPartyCliSubagentConfig
 
-        _folder(tree, "raven-probe", venv=True)
+        _product(tree, "raven-probe")
         mine = ThirdPartyCliSubagentConfig(name="my-codex", command="codex {prompt}")
 
-        merged = va.merge_vendored_seeds([mine], va.discover_vendored_rows())
+        merged = va.merge_product_seeds([mine], va.discover_product_rows())
 
         assert [getattr(r, "name") for r in merged] == ["Raven-Probe", "my-codex"]
 
@@ -792,18 +768,18 @@ def test_a_manifest_that_declares_itself_off_stays_off(tree: Path) -> None:
     """`"enabled": false` is a field the manifest has; ignoring it accepted a
     declaration and did the opposite. Both conditions hold: a folder that says it
     is off stays off, and one that cannot start is off whatever it says."""
-    _folder(tree, "raven-probe", manifest={**_MANIFEST, "enabled": False}, venv=True)
+    _product(tree, "raven-probe", manifest={**_MANIFEST, "enabled": False})
 
-    (row,) = va.discover_vendored_rows()
+    (row,) = va.discover_product_rows()
 
     assert row.enabled is False
 
 
 def test_a_manifest_can_declare_what_its_agent_owns(tree: Path) -> None:
-    from raven.agent.subagent.vendored_agents import discover_vendored_rows
+    from raven.agent.subagent.vendored_agents import discover_product_rows
 
-    _folder(tree, "scribe", manifest={**_MANIFEST, "name": "Scribe", "owns": "owns decks."}, venv=True)
-    row = next(r for r in discover_vendored_rows() if r.name == "Scribe")
+    _product(tree, "scribe", manifest={**_MANIFEST, "name": "Scribe", "owns": "owns decks."})
+    row = next(r for r in discover_product_rows() if r.name == "Scribe")
     assert row.owns == "owns decks."
 
 
@@ -813,19 +789,15 @@ def test_a_stored_row_written_before_owns_existed_still_gets_it(tree: Path) -> N
     would be silently inert until every agent was reinstalled. ``owns`` is a
     manifest fact about what the agent is for, not a user preference, so an
     unset one is filled from the folder."""
-    from raven.agent.subagent.vendored_agents import discover_vendored_rows, merge_vendored_seeds
+    from raven.agent.subagent.vendored_agents import discover_product_rows, merge_product_seeds
 
-    folder = _folder(tree, "scribe", manifest={**_MANIFEST, "name": "Scribe", "owns": "owns decks."}, venv=True)
-    # Without this the stored row's command names a launcher that is not there,
-    # which sends the merge down the wholesale-replacement path and would let
-    # this test pass without the field-level fill existing.
-    (folder / "run.py").write_text("", encoding="utf-8")
-    discovered = discover_vendored_rows()
+    _product(tree, "scribe", manifest={**_MANIFEST, "name": "Scribe", "owns": "owns decks."})
+    discovered = discover_product_rows()
     stored = next(r for r in discovered if r.name == "Scribe").model_copy(
         update={"owns": None, "description": "edited by the user"}
     )
 
-    merged = merge_vendored_seeds([stored], discovered)
+    merged = merge_product_seeds([stored], discovered)
     row = next(r for r in merged if r.name == "Scribe")
     assert row.owns == "owns decks."
     # Proves the fill was field-level: a wholesale swap would take the
@@ -836,14 +808,13 @@ def test_a_stored_row_written_before_owns_existed_still_gets_it(tree: Path) -> N
 def test_an_explicit_empty_owns_is_the_users_opt_out(tree: Path) -> None:
     """Absent and explicitly-blank are different answers: blank means the user
     took the agent out of the delegation section on purpose."""
-    from raven.agent.subagent.vendored_agents import discover_vendored_rows, merge_vendored_seeds
+    from raven.agent.subagent.vendored_agents import discover_product_rows, merge_product_seeds
 
-    folder = _folder(tree, "scribe", manifest={**_MANIFEST, "name": "Scribe", "owns": "owns decks."}, venv=True)
-    (folder / "run.py").write_text("", encoding="utf-8")
-    discovered = discover_vendored_rows()
+    _product(tree, "scribe", manifest={**_MANIFEST, "name": "Scribe", "owns": "owns decks."})
+    discovered = discover_product_rows()
     stored = next(r for r in discovered if r.name == "Scribe").model_copy(update={"owns": ""})
 
-    merged = merge_vendored_seeds([stored], discovered)
+    merged = merge_product_seeds([stored], discovered)
     assert next(r for r in merged if r.name == "Scribe").owns == ""
 
 
@@ -851,26 +822,26 @@ class TestTheShippedManifests:
     """The real ``subagent.json`` files, validated as what they declare.
 
     Every other test here stands on a synthetic tree, which is what keeps them
-    independent of whether the developer has built the folders' venvs. That
-    leaves the shipped manifests themselves unguarded, and they are the one part
-    a user cannot fix: a manifest that fails validation drops its folder from the
+    independent of which engine wheels the developer has installed. That leaves
+    the shipped manifests themselves unguarded, and they are the one part a
+    user cannot fix: a manifest that fails validation drops its folder from the
     roster with a log line nobody reads, and one that carries a field its own
-    ``kind`` does not support is rejected outright by the install-time write path
-    (``update_subagents.reject_unsupported_acp_fields``) -- so the folder installs
-    on some paths and not others.
+    ``kind`` does not support is rejected outright by the install-time write
+    path (``update_subagents.reject_unsupported_acp_fields``) -- so the folder
+    installs on some paths and not others.
 
-    Read from the repository rather than through ``subagents_root()``: the point
+    Read from the repository rather than through ``agents_root()``: the point
     is the files this commit ships, not whichever tree the machine running the
     tests happens to resolve to.
     """
 
     @staticmethod
     def _manifests() -> list[tuple[str, dict]]:
-        root = Path(__file__).resolve().parent.parent / "subagents"
+        root = Path(__file__).resolve().parent.parent / "agents"
         found = [
             (p.parent.name, json.loads(p.read_text(encoding="utf-8"))) for p in sorted(root.glob("*/subagent.json"))
         ]
-        assert found, f"no vendored manifests under {root}"
+        assert found, f"no product manifests under {root}"
         return found
 
     def test_every_manifest_validates_under_the_schema_its_kind_names(self) -> None:
@@ -882,6 +853,28 @@ class TestTheShippedManifests:
                 model.model_validate(entry)
             except Exception as exc:  # noqa: BLE001 - the folder name is the whole point of the message
                 pytest.fail(f"{folder}: manifest does not validate as kind {entry.get('kind')!r}: {exc}")
+
+    def test_every_manifest_ships_its_launcher(self) -> None:
+        """The readiness probe reads the command's file tokens, so a manifest
+        whose ``run.py`` is missing would ship a permanently disabled row."""
+        root = Path(__file__).resolve().parent.parent / "agents"
+        for folder, _entry in self._manifests():
+            assert (root / folder / "run.py").is_file(), f"{folder}: no run.py beside the manifest"
+
+    def test_every_declared_engine_resolves_in_the_dev_environment(self) -> None:
+        """The engine wheels are workspace dev dependencies, so a declaration
+        with a typo in its import name fails here rather than shipping a
+        product that is disabled on every install with the engine present."""
+        import importlib.util
+
+        declared = [
+            (folder, entry["engine"]) for folder, entry in self._manifests() if isinstance(entry.get("engine"), dict)
+        ]
+        assert {f for f, _ in declared} == {"raven-design", "raven-ppt"}, "the two engine-backed products"
+        for folder, engine in declared:
+            assert engine.get("wheel"), f"{folder}: an engine declaration must name its wheel for the hint"
+            package = engine.get("package") or ""
+            assert importlib.util.find_spec(package) is not None, f"{folder}: engine package {package!r} not found"
 
     def test_no_acp_manifest_declares_a_cli_only_field(self) -> None:
         """These are rejected on the write path, not merely warned about, so a
@@ -913,17 +906,10 @@ class TestTheShippedManifests:
         """Whether to pin ``cwd`` is per folder, but the value is not.
 
         Pinning keeps the pool's launch key constant, so one server serves every
-        workspace -- which is right for a folder whose agent does not work in the
-        caller's tree, and wrong for one that does: the agent's own working
-        directory can only reach it as the launch cwd, so a folder that must edit
-        the caller's files has to leave this unset and accept a connection per
-        workspace. raven-research pins it and ignores the session cwd outright;
-        raven-code leaves it unset because its ``run.py`` reads the process
-        working directory to set the engine's workspace.
-
-        What is asserted is only that a folder which does pin it names its own
-        directory rather than a literal path, since an absolute path baked into a
-        manifest is wrong on every machine but the one it was written on.
+        workspace. What is asserted is only that a folder which does pin it
+        names its own directory rather than a literal path, since an absolute
+        path baked into a manifest is wrong on every machine but the one it was
+        written on.
         """
         for folder, entry in self._manifests():
             if entry.get("kind") != "acp" or "cwd" not in entry:
@@ -940,7 +926,7 @@ class TestTheShippedManifests:
     def test_each_installer_resolves_every_placeholder_field_its_manifest_uses(self) -> None:
         """Discovery and ``install.py`` must agree on the resolved row.
 
-        ``_PLACEHOLDER_FIELDS`` is documented as "exactly the set each folder's
+        ``_PLACEHOLDER_FIELDS`` is documented as "exactly the set each product's
         own install.py substitutes", and a field resolved in one but not the
         other means a discovered row and an installed row disagreeing -- for
         ``cwd``, one with a real path and one with the literal
@@ -950,7 +936,7 @@ class TestTheShippedManifests:
         not against the whole tuple: a folder whose manifest declares no ``cwd``
         is not made wrong by an installer that would not have resolved one.
         """
-        root = Path(__file__).resolve().parent.parent / "subagents"
+        root = Path(__file__).resolve().parent.parent / "agents"
         for folder, entry in self._manifests():
             source = (root / folder / "install.py").read_text(encoding="utf-8")
             for field in va._PLACEHOLDER_FIELDS:
@@ -967,12 +953,11 @@ def test_a_stored_row_of_the_old_kind_loses_to_the_folders_new_one(tree: Path) -
     already registered it. The launcher still exists here, so this can only pass
     through the kind check rather than the stale-path one.
     """
-    from raven.agent.subagent.vendored_agents import discover_vendored_rows, merge_vendored_seeds
+    from raven.agent.subagent.vendored_agents import discover_product_rows, merge_product_seeds
     from raven.config.schema import ThirdPartyCliSubagentConfig
 
-    folder = _folder(tree, "scribe", manifest={**_ACP_MANIFEST, "name": "Scribe"}, venv=True)
-    (folder / "run.py").write_text("", encoding="utf-8")
-    discovered = discover_vendored_rows()
+    folder = _product(tree, "scribe", manifest={**_ACP_MANIFEST, "name": "Scribe"})
+    discovered = discover_product_rows()
     assert next(r for r in discovered if r.name == "Scribe").kind == "acp"
 
     stored = ThirdPartyCliSubagentConfig(
@@ -982,7 +967,7 @@ def test_a_stored_row_of_the_old_kind_loses_to_the_folders_new_one(tree: Path) -
     )
     assert not va._launcher_is_gone(stored), "the launcher must exist, or this passes for the wrong reason"
 
-    row = next(r for r in merge_vendored_seeds([stored], discovered) if r.name == "Scribe")
+    row = next(r for r in merge_product_seeds([stored], discovered) if r.name == "Scribe")
     assert row.kind == "acp"
     assert row.cwd == str(folder)
 
@@ -990,15 +975,99 @@ def test_a_stored_row_of_the_old_kind_loses_to_the_folders_new_one(tree: Path) -
 def test_a_stored_row_of_the_same_kind_still_wins(tree: Path) -> None:
     """The boundary on the check above: a same-kind row is the user's edit of the
     baseline and keeps winning, which is what makes the config editable at all."""
-    from raven.agent.subagent.vendored_agents import discover_vendored_rows, merge_vendored_seeds
+    from raven.agent.subagent.vendored_agents import discover_product_rows, merge_product_seeds
 
-    folder = _folder(tree, "scribe", manifest={**_ACP_MANIFEST, "name": "Scribe"}, venv=True)
-    (folder / "run.py").write_text("", encoding="utf-8")
-    discovered = discover_vendored_rows()
+    _product(tree, "scribe", manifest={**_ACP_MANIFEST, "name": "Scribe"})
+    discovered = discover_product_rows()
     stored = next(r for r in discovered if r.name == "Scribe").model_copy(
         update={"description": "edited by the user", "ready_timeout_ms": 90000}
     )
 
-    row = next(r for r in merge_vendored_seeds([stored], discovered) if r.name == "Scribe")
+    row = next(r for r in merge_product_seeds([stored], discovered) if r.name == "Scribe")
     assert row.description == "edited by the user"
     assert row.ready_timeout_ms == 90000
+
+
+def test_a_disabled_stored_row_of_the_old_kind_keeps_its_no(tree: Path) -> None:
+    """A stale row is two things at once: a definition to drop and a switch to keep.
+
+    Fork-era installs wrote the operator's off onto the full definition row --
+    there was no stub to hold it -- so discarding the row whole on a transport
+    change silently re-enabled every agent an operator had switched off.
+    """
+    from raven.agent.subagent.vendored_agents import discover_product_rows, merge_product_seeds
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+
+    folder = _product(tree, "scribe", manifest={**_ACP_MANIFEST, "name": "Scribe"})
+    stored = ThirdPartyCliSubagentConfig(
+        name="Scribe",
+        command=f"{folder / 'run.py'} --prompt-file {{prompt_file}}",
+        description="the row install.py wrote, switched off by the operator",
+        enabled=False,
+    )
+    assert not va._launcher_is_gone(stored), "the launcher must exist, or the kind check is never reached"
+
+    row = next(r for r in merge_product_seeds([stored], discover_product_rows()) if r.name == "Scribe")
+    assert row.kind == "acp"
+    assert row.enabled is False
+
+
+def test_a_disabled_stored_row_with_a_gone_launcher_keeps_its_no(tree: Path) -> None:
+    """The other stale branch carries the flag the same way: the discovered
+    command replaces the dead one, and the operator's off stays on the row."""
+    import sys
+
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+
+    _product(tree, "raven-probe")
+    stale = ThirdPartyCliSubagentConfig(
+        name="Raven-Probe",
+        command=f"{sys.executable} /gone/site-packages/raven/agents/raven-probe/run.py {{prompt}}",
+        enabled=False,
+    )
+
+    (row,) = va.merge_product_seeds([stale], va.discover_product_rows())
+    assert str(tree) in row.command
+    assert row.enabled is False
+
+
+def test_a_stored_true_on_a_stale_row_never_overrides_readiness(tree: Path) -> None:
+    """Only the "no" travels. A stored true is not carried onto the discovered
+    row: enabled there is the folder's readiness verdict, and a flag written
+    against the old transport says nothing about whether the new one can start.
+    """
+    from raven.agent.subagent.vendored_agents import discover_product_rows, merge_product_seeds
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+
+    ready = _product(tree, "scribe", manifest={**_ACP_MANIFEST, "name": "Scribe"})
+    engineless = _product(
+        tree,
+        "quill",
+        manifest={**_ACP_MANIFEST, "name": "Quill", "engine": {"package": _MISSING_ENGINE, "wheel": "probe-engine"}},
+    )
+    stored = [
+        ThirdPartyCliSubagentConfig(name="Scribe", command=f"{ready / 'run.py'} {{prompt}}", enabled=True),
+        ThirdPartyCliSubagentConfig(name="Quill", command=f"{engineless / 'run.py'} {{prompt}}", enabled=True),
+    ]
+
+    merged = {r.name: r for r in merge_product_seeds(stored, discover_product_rows())}
+    assert merged["Scribe"].kind == "acp" and merged["Scribe"].enabled is True
+    assert merged["Quill"].kind == "acp" and merged["Quill"].enabled is False
+
+
+def test_a_disabled_stored_row_for_an_unready_folder_stays_off(tree: Path) -> None:
+    """Both say no: the operator's flag and the folder's readiness agree, and
+    carrying the flag onto an already-disabled row must not flip anything."""
+    from raven.agent.subagent.vendored_agents import discover_product_rows, merge_product_seeds
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+
+    folder = _product(
+        tree,
+        "scribe",
+        manifest={**_ACP_MANIFEST, "name": "Scribe", "engine": {"package": _MISSING_ENGINE, "wheel": "probe-engine"}},
+    )
+    stored = ThirdPartyCliSubagentConfig(name="Scribe", command=f"{folder / 'run.py'} {{prompt}}", enabled=False)
+
+    row = next(r for r in merge_product_seeds([stored], discover_product_rows()) if r.name == "Scribe")
+    assert row.kind == "acp"
+    assert row.enabled is False

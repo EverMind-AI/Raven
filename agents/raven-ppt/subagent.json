@@ -6,6 +6,10 @@
   "enabled": true,
   "command": "{PYTHON} {SUBAGENT_DIR}/run.py --acp",
   "cwd": "{SUBAGENT_DIR}",
+  "engine": {
+    "package": "raven_ppt",
+    "wheel": "ppt-engine"
+  },
   "readyTimeoutMs": 180000,
   "timeout": null,
   "maxOutputChars": 60000,
