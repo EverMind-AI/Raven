@@ -1,4 +1,7 @@
-/** Tests for the desk palette's per-conversation open/shut memory. */
+/** Tests for the desk palette's per-conversation open/shut memory: what the
+ * reader stated, and null where they stated nothing. Who supplies the fallback
+ * for null, and on what evidence, is `deskStore`'s -- see `deskUp` there.
+ */
 
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it } from 'vitest'
@@ -11,27 +14,28 @@ afterEach(() => {
 })
 
 describe('the palette memory', () => {
-  /* The two screens are not one screen: a conversation is where the desk earns
-     its place, and a draft is three empty lists over an empty composer. */
-  it('shows the desk on a conversation and not on a draft', () => {
-    expect(palette.read('s1')).toBe(true)
-    expect(palette.read(null)).toBe(false)
+  /* Nothing stated is not the same as stated shut, and collapsing the two is
+     what made an implicit default outlive the moment it was implied. The draft
+     screen is the exception and keeps two values: it has no id to file under. */
+  it('says nothing about a conversation the reader has not answered for', () => {
+    expect(palette.stated('s1')).toBeNull()
+    expect(palette.stated(null)).toBeNull()
   })
 
   it('remembers the collapse under the conversation it was made in', () => {
     palette.write('s1', false)
 
-    expect(palette.read('s1')).toBe(false)
+    expect(palette.stated('s1')).toBe(false)
     /* And nowhere else. One global flag let the last conversation decide for
        every other one, which is the thing this replaces. */
-    expect(palette.read('s2')).toBe(true)
+    expect(palette.stated('s2')).toBeNull()
   })
 
   it('remembers an open the reader asked for on a conversation they had collapsed', () => {
     palette.write('s1', false)
     palette.write('s1', true)
 
-    expect(palette.read('s1')).toBe(true)
+    expect(palette.stated('s1')).toBe(true)
   })
 
   /* A preference the reader stated, not a record of what was on screen: it has
@@ -48,16 +52,16 @@ describe('the palette memory', () => {
   it('reads a scalar left by an older build as nothing stored', () => {
     localStorage.setItem('raven.gui.desk.open', 'true')
 
-    expect(palette.read(null)).toBe(false)
-    expect(palette.read('s1')).toBe(true)
+    expect(palette.stated(null)).toBeNull()
+    expect(palette.stated('s1')).toBeNull()
     palette.write('s1', false)
-    expect(palette.read('s1')).toBe(false)
+    expect(palette.stated('s1')).toBe(false)
   })
 
   it('does not carry unreadable storage into a decision', () => {
     localStorage.setItem('raven.gui.desk.open', '{ not json')
 
-    expect(palette.read('s1')).toBe(true)
+    expect(palette.stated('s1')).toBeNull()
   })
 
   describe('a draft becoming a conversation', () => {
@@ -69,7 +73,7 @@ describe('the palette memory', () => {
 
       palette.adopt('s9')
 
-      expect(palette.read('s9')).toBe(false)
+      expect(palette.stated('s9')).toBe(false)
     })
 
     it('leaves a conversation that has its own answer alone', () => {
@@ -78,33 +82,30 @@ describe('the palette memory', () => {
 
       palette.adopt('s9')
 
-      expect(palette.read('s9')).toBe(true)
+      expect(palette.stated('s9')).toBe(true)
     })
 
-    it('adopts once, so the next new conversation starts from the default', () => {
+    it('adopts once, so the next new conversation is left unanswered', () => {
       palette.write(null, false)
       palette.adopt('s9')
 
       palette.adopt('s10')
 
-      expect(palette.read('s10')).toBe(true)
+      expect(palette.stated('s10')).toBeNull()
     })
 
-    /* The reader who never touched it on the draft said nothing to carry. */
-    it('carries nothing when the draft was left as it was', () => {
+    /* The reader who never touched it on the draft said nothing to carry, and
+       nothing is what is recorded. Writing an implicit answer here instead was
+       tried and is exactly what must not happen: it files a default as a
+       preference, and the conversation then stays however it looked one second
+       in -- across a switch away and back, and across a reload -- never
+       reaching the answer a conversation with something in it should get. */
+    it('records nothing when the draft was left as it was', () => {
       palette.adopt('s9')
 
-      expect(palette.read('s9')).toBe(true)
+      expect(palette.stated('s9')).toBeNull()
+      expect(localStorage.getItem('raven.gui.desk.open')).toBeNull()
     })
-  })
-
-  it('keeps the newest conversations when the store fills up', () => {
-    for (let i = 0; i < 60; i += 1) palette.write(`s${i}`, false)
-
-    expect(palette.read('s59')).toBe(false)
-    /* Dropped, so it answers with the default rather than with a stale row. */
-    expect(palette.read('s0')).toBe(true)
-    expect(Object.keys(JSON.parse(localStorage.getItem('raven.gui.desk.open') || '{}')).length).toBe(50)
   })
 })
 
@@ -133,16 +134,16 @@ describe('when storage refuses the answer', () => {
   it('still answers with what the reader said', () => {
     refusing(() => palette.write('s1', false))
 
-    expect(palette.read('s1')).toBe(false)
+    expect(palette.stated('s1')).toBe(false)
     /* And it really was refused -- otherwise this passes on the stored row and
        proves nothing. */
     expect(localStorage.getItem('raven.gui.desk.open')).toBeNull()
   })
 
-  it('leaves a conversation it was never asked about on its default', () => {
+  it('leaves a conversation it was never asked about unanswered', () => {
     refusing(() => palette.write('s1', false))
 
-    expect(palette.read('s2')).toBe(true)
+    expect(palette.stated('s2')).toBeNull()
   })
 
   /* A draft's answer is for a conversation with none of its own, and a refused
@@ -153,6 +154,6 @@ describe('when storage refuses the answer', () => {
 
     palette.adopt('s1')
 
-    expect(palette.read('s1')).toBe(false)
+    expect(palette.stated('s1')).toBe(false)
   })
 })
