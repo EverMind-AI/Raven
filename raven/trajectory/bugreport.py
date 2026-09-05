@@ -280,14 +280,21 @@ def _is_str_list(value: Any) -> bool:
     return isinstance(value, list) and all(isinstance(item, str) for item in value)
 
 
+_COMPLETENESS_STATUSES = ("complete", "degraded", "unreplayable", "unknown")
+_SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
+
+
 def _validate_record(payload: dict[str, Any], dir_name: str) -> None:
-    """Full v1 structure validation of a record payload.
+    """Full v1 structure validation of a record payload, invariants included.
 
     The record is a machine-local file, but a damaged or hand-edited one is
-    untrusted input all the same: a reader must never crash on it, and above
-    all must never turn its fields into path operations — ``report_id`` names
-    the package file, so it is held to its exact grammar and to the directory
-    it lives in.
+    untrusted input all the same: a reader must never crash on it, must never
+    turn its fields into path operations (``report_id`` names the package
+    file, so it is held to its exact grammar and to the directory it lives
+    in), and must never present a state the pipeline cannot produce — the
+    per-status invariants pin each field combination to the state machine.
+    Runtime facts (the package file still existing on disk) are deliberately
+    not checked; only the fields' own consistency is.
     """
 
     def _check(condition: Any, what: str) -> None:
@@ -303,7 +310,9 @@ def _validate_record(payload: dict[str, Any], dir_name: str) -> None:
     _check(isinstance(attempt, dict), "attempt")
     _check(isinstance(attempt.get("attempt_id"), str) and attempt["attempt_id"], "attempt id")
     _check(attempt.get("session_key") is None or isinstance(attempt["session_key"], str), "session key")
-    _check(_is_str_list(attempt.get("member_traces")) and attempt["member_traces"], "member traces")
+    traces = attempt.get("member_traces")
+    _check(_is_str_list(traces) and traces, "member traces")
+    _check(all(traces) and sorted(set(traces)) == traces, "member traces must be non-empty, unique, ascending")
     _check(isinstance(attempt.get("merged_definition"), bool), "merged flag")
     problem = payload.get("problem")
     _check(isinstance(problem, dict), "problem")
@@ -311,7 +320,8 @@ def _validate_record(payload: dict[str, Any], dir_name: str) -> None:
     for key in ("expected", "actual", "steps"):
         _check(isinstance(problem.get(key), str), key)
     _check(problem.get("severity") in ("", *SEVERITIES), "severity")
-    _check(payload.get("status") in (STATUS_DRAFT, STATUS_LOCAL_READY, STATUS_FAILED), "status")
+    status = payload.get("status")
+    _check(status in (STATUS_DRAFT, STATUS_LOCAL_READY, STATUS_FAILED), "status")
     failure = payload.get("failure")
     _check(isinstance(failure, dict), "failure")
     _check(isinstance(failure.get("reason"), str), "failure reason")
@@ -327,19 +337,38 @@ def _validate_record(payload: dict[str, Any], dir_name: str) -> None:
     _check(_is_int(package.get("size_bytes")) and package["size_bytes"] >= 0, "package size")
     completeness = payload.get("completeness")
     _check(isinstance(completeness, dict), "completeness")
-    _check(
-        isinstance(completeness.get("status"), str) and _is_str_list(completeness.get("reasons")), "completeness fields"
-    )
+    _check(completeness.get("status") in _COMPLETENESS_STATUSES, "completeness status")
+    _check(_is_str_list(completeness.get("reasons")), "completeness reasons")
     redaction = payload.get("redaction")
     _check(isinstance(redaction, dict), "redaction")
-    _check(
-        redaction.get("classification") in (CLASSIFICATION_CLEAN, CLASSIFICATION_NEEDS_REVIEW, CLASSIFICATION_BLOCKED),
-        "classification",
-    )
+    # A blocked or unreviewed record cannot legally land: blocked never
+    # creates a record, and landing itself is the user's confirmation.
+    _check(redaction.get("classification") in (CLASSIFICATION_CLEAN, CLASSIFICATION_NEEDS_REVIEW), "classification")
     _check(_is_str_list(redaction.get("reasons")), "redaction reasons")
-    _check(isinstance(redaction.get("reviewed_by_user"), bool), "reviewed flag")
-    for key in ("upload", "links"):
-        _check(isinstance(payload.get(key), dict), key)
+    _check(redaction.get("reviewed_by_user") is True, "reviewed flag")
+    upload = payload.get("upload")
+    _check(isinstance(upload, dict), "upload")
+    for key in ("state", "issue_url", "receipt"):
+        _check(isinstance(upload.get(key), str), f"upload {key}")
+    links = payload.get("links")
+    _check(isinstance(links, dict), "links")
+    for key in ("issue", "pr", "regression_case"):
+        _check(isinstance(links.get(key), str), f"links {key}")
+
+    # Per-status invariants (the state machine's field combinations).
+    if status == STATUS_LOCAL_READY:
+        _check(package["path"] and _SHA256_HEX.fullmatch(package["sha256"]), "local_ready package identity")
+        _check(package["size_bytes"] > 0, "local_ready package size")
+        _check(snapshot["kept"] is False, "local_ready keeps no snapshot")
+        _check(failure["reason"] == "" and failure["retryable"] is False, "local_ready carries no failure")
+    else:
+        _check(
+            package["path"] == "" and package["sha256"] == "" and package["size_bytes"] == 0,
+            "package fields before local_ready",
+        )
+        _check(snapshot["kept"] is True, "snapshot kept before local_ready")
+        if status == STATUS_FAILED:
+            _check(failure["reason"] != "", "failed needs a reason")
 
 
 def load_record(record_dir: Path) -> dict[str, Any]:

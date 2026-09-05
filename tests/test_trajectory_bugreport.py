@@ -229,7 +229,7 @@ def test_classify_clean_ignores_ordinary_pattern_hits():
 
 
 def _valid_payload(report_id="br-20260904-abcdef", status="failed"):
-    return {
+    payload = {
         "schema": breport.RECORD_SCHEMA,
         "schema_version": 1,
         "report_id": report_id,
@@ -249,9 +249,16 @@ def _valid_payload(report_id="br-20260904-abcdef", status="failed"):
         "package": {"path": "", "sha256": "", "size_bytes": 0},
         "completeness": {"status": "unknown", "reasons": []},
         "redaction": {"classification": "clean", "reasons": [], "reviewed_by_user": True},
-        "upload": {},
-        "links": {},
+        "upload": {"state": "", "issue_url": "", "receipt": ""},
+        "links": {"issue": "", "pr": "", "regression_case": ""},
     }
+    if status == "local_ready":
+        payload["failure"] = {"reason": "", "retryable": False, "retry_count": 0}
+        payload["snapshot"]["kept"] = False
+        payload["package"] = {"path": "/somewhere/br.tar.gz", "sha256": "0" * 64, "size_bytes": 10}
+    elif status == "draft":
+        payload["failure"] = {"reason": "", "retryable": False, "retry_count": 0}
+    return payload
 
 
 def test_record_roundtrip_is_atomic(tmp_path):
@@ -285,6 +292,42 @@ def _damage(payload, spec):
         payload["report_id"] = "../../outside"
     elif spec == "mismatched-id":
         payload["report_id"] = "br-20260904-ffffff"
+    elif spec == "ready-empty-package":
+        payload["status"] = "local_ready"
+        payload["failure"] = {"reason": "", "retryable": False, "retry_count": 0}
+        payload["snapshot"]["kept"] = False
+    elif spec == "ready-kept-snapshot":
+        payload.update(_valid_payload(payload["report_id"], status="local_ready"))
+        payload["snapshot"]["kept"] = True
+    elif spec == "ready-bad-sha":
+        payload.update(_valid_payload(payload["report_id"], status="local_ready"))
+        payload["package"]["sha256"] = "zz"
+    elif spec == "ready-carries-failure":
+        payload.update(_valid_payload(payload["report_id"], status="local_ready"))
+        payload["failure"]["retryable"] = True
+    elif spec == "failed-empty-reason":
+        payload["failure"]["reason"] = ""
+    elif spec == "failed-retryable-unkept":
+        payload["snapshot"]["kept"] = False
+    elif spec == "draft-with-package":
+        payload.update(_valid_payload(payload["report_id"], status="draft"))
+        payload["package"]["path"] = "/somewhere/early.tar.gz"
+    elif spec == "bad-completeness":
+        payload["completeness"]["status"] = "anything"
+    elif spec == "missing-upload-fields":
+        payload["upload"] = {}
+    elif spec == "missing-links-fields":
+        payload["links"] = {}
+    elif spec == "traces-empty-string":
+        payload["attempt"]["member_traces"] = [""]
+    elif spec == "traces-duplicate":
+        payload["attempt"]["member_traces"] = ["trace-1", "trace-1"]
+    elif spec == "traces-unsorted":
+        payload["attempt"]["member_traces"] = ["trace-2", "trace-1"]
+    elif spec == "blocked-classification":
+        payload["redaction"]["classification"] = "blocked"
+    elif spec == "unreviewed":
+        payload["redaction"]["reviewed_by_user"] = False
     return payload
 
 
@@ -300,7 +343,30 @@ _DAMAGE_SPECS = [
     "bad-digest",
     "traversal-id",
     "mismatched-id",
+    "ready-empty-package",
+    "ready-kept-snapshot",
+    "ready-bad-sha",
+    "ready-carries-failure",
+    "failed-empty-reason",
+    "failed-retryable-unkept",
+    "draft-with-package",
+    "bad-completeness",
+    "missing-upload-fields",
+    "missing-links-fields",
+    "traces-empty-string",
+    "traces-duplicate",
+    "traces-unsorted",
+    "blocked-classification",
+    "unreviewed",
 ]
+
+
+@pytest.mark.parametrize("status", ["draft", "failed", "local_ready"])
+def test_every_legal_status_loads(tmp_path, status):
+    record_dir = tmp_path / "br-20260904-abcdef"
+    record_dir.mkdir()
+    breport.save_record(record_dir, _valid_payload(status=status))
+    assert breport.load_record(record_dir)["status"] == status
 
 
 @pytest.mark.parametrize("spec", _DAMAGE_SPECS)
