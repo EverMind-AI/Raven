@@ -1292,3 +1292,44 @@ def test_report_bug_tty_confirmation_shows_canonical_summary(state, _no_machine_
     assert "Cancelled — no bug report was created." in r.output
     assert breport.list_reports(state) == []
     assert _staging_entries(state) == []
+
+
+def test_report_bug_summary_shows_session_and_trajectory_context(state, _no_machine_secrets, monkeypatch):
+    from raven.cli import trajectory_commands as tcmd
+
+    _simple_log(state)
+    monkeypatch.setattr(tcmd, "_stdin_is_tty", lambda: True)
+    monkeypatch.setattr(tcmd.typer, "confirm", lambda *_a, **_k: False)
+
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "context check"])
+
+    assert r.exit_code == 1
+    assert "Session:" in r.output and "cli:a" in r.output
+    assert "last activity" in r.output
+    assert "Trajectory:" in r.output and "span(s)" in r.output
+    assert "session record" in r.output
+
+
+def test_report_bug_needs_review_shows_sanitized_samples(state, _no_machine_secrets, monkeypatch):
+    """The independent authorization is judged on the bounded sample block."""
+    from raven.cli import trajectory_commands as tcmd
+
+    _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
+
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes", "--accept-risk"])
+    assert r.exit_code == 0, r.output
+    assert "residual scan flagged" in r.output
+    assert "spans.jsonl:" in r.output
+
+    monkeypatch.setattr(tcmd, "_stdin_is_tty", lambda: True)
+    confirms: list[str] = []
+
+    def _reject(message, *_a, **_k):
+        confirms.append(message)
+        return False
+
+    monkeypatch.setattr(tcmd.typer, "confirm", _reject)
+    _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
+    r2 = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x"])
+    assert r2.exit_code == 1
+    assert "spans.jsonl:" in r2.output

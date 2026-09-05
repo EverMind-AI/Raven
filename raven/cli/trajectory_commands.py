@@ -463,9 +463,16 @@ def _print_bug_cli_summary(prep) -> None:
     attempt = meta["attempt"]
     completeness = meta["completeness"]
     redaction = meta["redaction"]
+    manifest = prep.manifest if isinstance(prep.manifest, dict) else {}
     exact = sum(redaction["exact_replacements"].values())
     patterns = sum(redaction["pattern_replacements"].values())
     console.print("Bug report summary", highlight=False)
+    time_range = manifest.get("time_range") or {}
+    last_activity = str(time_range.get("end") or "?")[:16].replace("T", " ")
+    console.print(
+        f"  Session:      {escape(str(prep.session_key or '(no session)'))} · last activity {escape(last_activity)}",
+        highlight=False,
+    )
     traces = attempt.get("member_traces") or []
     console.print(
         f"  Attempt:      {escape(str(attempt.get('attempt_id')))} · {len(traces)} member trace(s)", highlight=False
@@ -476,6 +483,12 @@ def _print_bug_cli_summary(prep) -> None:
             console.print(f"  {label + ':':<14}{escape(meta['problem'][key])}", highlight=False)
     if meta.get("reporter"):
         console.print(f"  Reporter:     {escape(meta['reporter'])} (included in the package)", highlight=False)
+    session_note = "included" if manifest.get("session_included") else "missing"
+    console.print(
+        f"  Trajectory:   {manifest.get('span_count')} span(s) · session record {session_note}"
+        f" · {manifest.get('artifact_count')} artifact(s), {len(manifest.get('missing_artifacts') or [])} missing",
+        highlight=False,
+    )
     line = completeness["status"]
     console.print(f"  Completeness: {escape(line)}", highlight=False)
     for reason in completeness["reasons"]:
@@ -483,8 +496,17 @@ def _print_bug_cli_summary(prep) -> None:
     counts = f"{exact} known-value + {patterns} pattern replacement(s)"
     if prep.classification == breport.CLASSIFICATION_NEEDS_REVIEW:
         console.print(f"  Redaction:    {counts} · NEEDS REVIEW", highlight=False)
+        findings = redaction["residual_findings"]
         for reason in prep.reasons:
-            console.print(f"    - {escape(reason)}", highlight=False)
+            suffix = ":" if reason.startswith("residual") and findings else ""
+            console.print(f"    - {escape(reason)}{suffix}", highlight=False)
+            if reason.startswith("residual"):
+                # The bounded sample block the independent authorization is
+                # judged on — sanitized canonical values, never raw input.
+                for finding in findings[:5]:
+                    console.print(f"        {escape(f'{finding["file"]}: {finding["sample"]}')}", highlight=False)
+                if len(findings) > 5:
+                    console.print(f"        ... and {len(findings) - 5} more (see redaction.json)", highlight=False)
     else:
         console.print(f"  Redaction:    {counts} · residual scan: clean", highlight=False)
     console.print(
