@@ -1,3 +1,5 @@
+"""The large-file gate: size ceiling, blocked asset types, and the source-tree exemptions."""
+
 from __future__ import annotations
 
 from pathlib import Path

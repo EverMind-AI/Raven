@@ -145,7 +145,7 @@ async def slash_exec(params: dict[str, Any], *, confirm_broker: "ConfirmBroker |
             conversation_id=conversation_id,
         )
     except NotDispatchCompatibleError:
-        # Either P3 blacklist (provider login / gateway / sandbox shell /
+        # Either the dispatch blacklist (provider login / gateway / sandbox shell /
         # channels login / agent-REPL) or a verb not in the whitelist. We
         # distinguish by checking the well-known blacklist prefixes.
         if _is_blacklist_argv(argv):

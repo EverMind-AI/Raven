@@ -198,7 +198,7 @@ def render_config(source: Path) -> Path:
         engine_slice = config.setdefault("plugins", {}).setdefault("config", {}).setdefault(ENGINE_PLUGIN_ID, {})
         engine_slice.setdefault("webProxy", web_proxy)
 
-    # The migration floor for the retired fork key (D4): the shipped config no
+    # The migration floor for the retired fork key: the shipped config no
     # longer carries tools.ppt, but an operator's carried copy might, and the
     # trunk loader would ignore it without a word -- the knobs look honoured
     # and are not. Dropped here, once, with the successor named.

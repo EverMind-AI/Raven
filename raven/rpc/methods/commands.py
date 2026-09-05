@@ -38,9 +38,9 @@ from raven.rpc.methods._typer_reflect import (
 )
 
 # Single source of truth for blacklist + agent-REPL filter — see
-# ``cli_dispatch.py`` header for rationale (design.md §D4.4 — one set
+# ``cli_dispatch.py`` header for rationale: one set
 # read by both ``cli.dispatch`` rejection and ``commands.catalog`` exclusion
-# so the two can never drift).
+# so the two can never drift.
 from raven.rpc.methods.cli_dispatch import (
     _DISPATCH_BLACKLIST,
     _is_agent_repl,

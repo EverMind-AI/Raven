@@ -51,11 +51,11 @@ EXTENSION_KEYS = (
     "skillForge",
     "token_wise",
     "skill_forge",
-    # CFG-1 additions: each key is listed in both camelCase (preferred
+    # Each key is listed in both camelCase (preferred
     # by config files) and snake_case (preferred by Python).
     "plugins",
     "memory",
-    # Bug2 / runtime-discipline 5th pillar — checkpoint policy etc.
+    # Runtime block: checkpoint policy etc.
     "runtime",
     # In-tree observability tracing (raven.tracing).
     "tracing",

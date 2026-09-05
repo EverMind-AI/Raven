@@ -731,7 +731,21 @@ _Avoid_: archive vs Consolidation confusion — Archive loses nothing
 The legacy path's lossy distillation: when the prompt outgrows the window, old
 messages are summarized into memory notes and leave the live history view; the
 originals never return to context.
-_Avoid_: summarize, compact (ambiguous between this and Archive)
+_Avoid_: summarize, compact -- three neighbours split this ground: Archive evicts
+losslessly to disk, Consolidation distills across turns into memory notes, Compaction
+(below) squeezes the live prompt inside one turn.
+
+**Compaction** (`agents.defaults.compaction`, `config/schema.py:CompactionConfig`):
+In-turn transcript compaction for long agentic turns, off by default: the loop's only
+in-turn shrink is then the reactive, deterministic elision it has always run on a
+provider's overflow error. Enabled, two layers join it on the same usage readings: a
+proactive layer that, once context crosses the trigger, prunes older tool-result bodies
+first (deterministic, no LLM call) and only then replaces the transcript head with an LLM
+summary while a recent tail stays verbatim; and a reactive completion that lets an
+overflow retry with nothing left to elide take the summary path instead of surfacing a
+fatal error. Summaries always run on the turn's own model and provider. Compaction
+squeezes the live prompt inside one turn and writes no memory notes.
+_Avoid_: compact for Consolidation or Archive -- those are cross-turn; this is not.
 
 **Manifest**:
 Curator's per-message metadata index for one session (tokens, snippet, relevance,
@@ -756,7 +770,10 @@ and injects into the main agent's system prompt so evicted facts stay present.
 **EverOS** (`plugins-dist/everos-memory/raven_everos/`):
 Raven's default memory-backend plugin (`everos-memory`; ships enabled, works out of
 the box). Its own distribution rather than part of the raven wheel, found through the
-`raven.plugins` entry-point group. Provides dual-track semantic recall — the user track (episodes/profiles,
+`raven.plugins` entry-point group. (`plugins-dist/ppt-engine/` and
+`plugins-dist/design-engine/` ship the same way -- the group's other two
+distributed members, contributing a deck-building toolchain and a visual-design
+engine rather than memory.) Provides dual-track semantic recall — the user track (episodes/profiles,
 injected into the `# Memory` segment) and the agent track (skills/cases, one of
 SkillForge's three sources at RRF weight 0.9). The name refers to the external package
 [EverMind-AI/EverOS](https://github.com/EverMind-AI/EverOS); the in-tree code is only an
@@ -962,7 +979,7 @@ Moving the endpoint or rotating the key does not make a base stale.
 **Plugin** (`plugins/`):
 A component declared by a `raven-plugin.toml` manifest (`[plugin]`: `id`, `version`, optional
 `bundled` / `enabled_by_default`). It contributes capabilities via
-`[[plugin.contributes.<kind>]]` arrays — currently `memory_backends`, `tools` and `hooks` —
+`[[plugin.contributes.<kind>]]` arrays — currently `memory_backends`, `tools`, `hooks`, `services`, `tool_gates` and `session_observers` —
 each naming a `factory` (`module:callable`). The host passes the user's
 `plugins.config["<id>"]` dict verbatim to the factory as `PluginContext.config`. A `hooks`
 contribution returns an `AgentHook` the assembly root appends to the loop's chain: it is how
@@ -985,6 +1002,40 @@ The `PluginRegistry` discovers manifests, activates those not in `plugins.disabl
 contributions into per-kind tables — deduping plugins by `id` and contributions by `name`
 (`PluginConflictError` on collision). `build_memory_backend()` / `build_tool()` construct a
 contribution with a fresh `PluginContext`.
+
+**Service** (`raven/contracts/services.py`):
+A plugin's background-service contribution (the `services` kind): a resident host runs it
+and owns it, for watching that outlives any turn (an event poller pulling keyed wakes
+forward, a queue drainer). A dumb loop on the B side of the seam: it consumes its
+`PluginContext` and, when it declares `bind_runtime`, the late-bound `RuntimeHandles`
+grants -- and never mutates the host's assembly.
+
+**ToolGate** (`raven/contracts/tool_gate.py`):
+A plugin's per-call tool-adjudication contribution (the `tool_gates` kind). Gates are cast
+over the tool registry at assembly and fixed for the generation; `adjudicate` runs after
+parameters are validated and before dispatch. A non-None verdict replaces that one call's
+result (the call does not execute), None waves it through, and a gate that raises refuses
+the call it was adjudicating -- failing open would make its bugs silent permission grants.
+Gates run in lexicographic (name, contributing plugin id) order; the first non-None
+verdict wins.
+
+**SessionObserver** (`raven/contracts/session_events.py`):
+A plugin's session-retirement contribution (the `session_observers` kind): the session
+store calls `on_session_deleted` synchronously after it has acted on a delete, from
+whichever host surface asked. The store notifies and never waits -- an observer that
+raises is logged and skipped; no veto, no repair. For a plugin keeping per-session state
+outside the session store (an allocation ledger, a provisioned directory).
+
+**Visual Domain Selector** (`plugins-dist/design-engine/raven_design/selector.py`, hook seat `raven_design/plugin/hook.py`):
+The design engine's per-turn domain router, seated on the `hooks` kind
+(`before_user_inbound`): one LLM call per user turn compares the query against
+the full bodies of the fifteen packaged domain Skills and appends a two-tier
+card block (preferred and alternative Skill ids, bodies read on demand via
+`read_skill`) below a separator on the model's view of the inbound -- the
+session record keeps the user's own words on every turn outcome. The call
+rides the conversation's own binding; `plugins.config["design-engine"]
+.visualDomainSelector.enabled` is the off switch, and a selection failure
+degrades to the full description catalog for that turn.
 
 **Admission** (`config/admission.py`, `plugins/registry.py:_admit`, `agent/tools/registry.py:admit_tool`):
 The declare-check-dispense pattern at a boundary: the owner declares its authored members
@@ -1363,6 +1414,28 @@ directories (`SessionManager`'s `sessions/<group>/`), the Skill Hub cache (`skil
 _Avoid_: "workspace" unqualified — this term used to cover both agent-wide and per-session
 storage; it now names only the agent-wide tree, so an unqualified "workspace" should be
 Agent home or Session workspace, whichever is meant.
+
+**Product state root** (`raven/config/product_render.py:product_state_root`):
+Where a product served over ACP keeps its WORK -- repos, instance buckets, flow stores,
+rendered configs -- never in the product's own folder: default
+`<raven home>/workspace/subagent_sessions/<product>`, overridden by the product's own
+state-root variable (the `raven-` prefix drops, dashes become underscores, the rest
+upper-cases: `raven-code` answers to `CODE_STATE_ROOT`). The engine's own Agent home is
+deliberately NOT here -- it goes through the Product ACP home (below). Work where the
+work is, the home in the data directory.
+
+**Product ACP home** (`raven/config/product_render.py:product_acp_home`):
+The engine's own Agent home for a product served over ACP -- never inside the host's
+Agent home. The host hands a session's working directory to whatever it dispatches to,
+and a raven engine refuses a working directory that CONTAINS its own home (the per-turn
+checkpoint runs `add -A` over the working directory and would commit its config and
+provider tokens into a shadow repository) -- so homing an engine under the host Agent
+home made every dispatch fail while capability probing still passed. Default
+`<raven home>/subagent_sessions/<product>/acp`, checked against the CONFIGURED host
+Agent home (`agents.defaults.workspace`); when the default lands inside it, the engine
+is homed beside the host home instead, tagged per instance. A placement must also be
+creatable, and a refusal names the product's `*_ACP_HOME` override variable, which wins
+outright. The Product state root is untouched by all of this.
 
 **Subagent history** (`raven/agent/subagent/history.py`):
 The per-session audit trail of every delegation to a Subagent, inside that session's
