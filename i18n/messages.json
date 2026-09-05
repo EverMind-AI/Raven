@@ -1931,9 +1931,9 @@
       "en": "show the work behind this answer",
       "zh": "展开这次回答之前的过程"
     },
-    "gui.fold.done": {
-      "en": "done",
-      "zh": "已完成"
+    "gui.fold.steps": {
+      "en": "steps",
+      "zh": "过程"
     },
     "gui.freq.cron": {
       "en": "Custom",
