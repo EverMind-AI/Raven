@@ -194,7 +194,7 @@ def vision_verdict(
 
     # Imported inside the call: rates reaches back into this package's
     # registry, so a module-level import here would close the loop.
-    from raven.providers.rates import openrouter_input_modalities, warm_catalog_in_background
+    from raven.providers.rates import openrouter_input_modalities, rates_offline_active, warm_catalog_in_background
 
     try:
         mods = openrouter_input_modalities(model)
@@ -204,7 +204,10 @@ def vision_verdict(
         logger.debug("vision_verdict: catalog lookup failed for {}: {}", model, e)
         return None
     if mods is None:
-        warm_catalog_in_background()
+        # An offline context (a trajectory replay, say) must not start the
+        # background catalog fetch; the caller keeps today's unknown verdict.
+        if not rates_offline_active():
+            warm_catalog_in_background()
         return None
     return "image" in mods
 

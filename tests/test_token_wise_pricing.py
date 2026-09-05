@@ -96,3 +96,28 @@ def test_a_plan_billed_provider_reports_no_per_token_cost():
 
     # The same vendor's metered API is unaffected: that one is per-token.
     assert estimate_cost_usd("minimax/MiniMax-M3", 1_000_000, 0) == pytest.approx(0.3)
+
+
+def test_offline_context_neither_warns_nor_consumes_the_warning():
+    """An offline replay prices nothing and must leave no trace: no unknown-model
+    warning, no _WARNED_UNKNOWN mutation — the one-time warning still belongs to
+    the next real call after the context exits."""
+    import loguru
+
+    from raven.providers.rates import rates_offline
+    from raven.token_wise import pricing
+
+    seen: list[str] = []
+    handler_id = loguru.logger.add(lambda m: seen.append(m), level="WARNING")
+    try:
+        with rates_offline():
+            assert estimate_cost_usd("ghost-vendor/offline-model", 10, 10) is None
+        assert not [m for m in seen if "ghost-vendor/offline-model" in m]
+        assert "ghost-vendor/offline-model" not in pricing._WARNED_UNKNOWN
+
+        estimate_cost_usd("ghost-vendor/offline-model", 10, 10)
+    finally:
+        loguru.logger.remove(handler_id)
+
+    assert len([m for m in seen if "ghost-vendor/offline-model" in m]) == 1
+    assert "ghost-vendor/offline-model" in pricing._WARNED_UNKNOWN

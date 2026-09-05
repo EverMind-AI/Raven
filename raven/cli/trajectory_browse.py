@@ -68,6 +68,7 @@ from raven.cli import trajectory_commands as tcmd
 from raven.cli._theme import POINTER, QMARK
 from raven.session.manager import SessionManager
 from raven.tracing import config as tracing_config
+from raven.trajectory import bugreport as breport
 from raven.trajectory import store as tstore
 from raven.trajectory.bundle import _default_workspace, collect_bundle
 from raven.trajectory.cassette import minimize_bundle
@@ -109,6 +110,14 @@ _HELP_ACTION = (
     "[↑↓] move · [Enter] run · [Esc] back",
 )
 _VERDICT_HINT = "[↑↓] move · [Enter] record · [Esc] cancel"
+_HELP_BUG_REPORTS = (
+    "Bug reports filed from this attempt, newest first.",
+    "[↑↓] move · [Enter] open · [Esc] back",
+)
+_PII_NOTE = (
+    "  Note: this check looks for credentials only — names, business data, and\n  customer content are NOT anonymized."
+)
+_CANCELLED_MESSAGE = "Cancelled — no bug report was created."
 
 # Flush a lone ESC after 50ms instead of prompt_toolkit's 0.5s: the default
 # disambiguation wait (ESC prefixes every escape sequence) reads as lag on a
@@ -446,6 +455,7 @@ def _attempt_fixed(count: int) -> list[tuple[str, int]]:
         ("VERDICT", 7),
         ("PIN", 3),
         ("MERGED", 6),
+        ("RPT", 3),
     ]
 
 
@@ -511,6 +521,7 @@ def _attempt_table(rows: list[AttemptRow], width: int) -> tuple[str, list[list[t
             ("class:text", _collapse_text(r.verdict) or ""),
             ("class:success", "✓") if r.pinned else ("class:text", ""),
             ("class:success", "✓") if r.merged else ("class:text", ""),
+            ("class:success", "✓") if r.reported else ("class:text", ""),
         ]
         if len(layout) > len(cells):
             cells.append(("class:text", _collapse_text(r.preview) or ""))
@@ -544,6 +555,7 @@ class AttemptRow:
     pinned: bool
     preview: str | None
     merged: bool
+    reported: bool = False
     turn_previews: tuple[_TurnPreview, ...] = ()
 
 
@@ -603,6 +615,16 @@ def scan_sessions(workspace: Path, state_dir: Path | None = None) -> list[Sessio
     registry = tstore.pins(state)
     verdict_rows = read_verdicts(state)
     owner_by_trace = {t: def_id for def_id, entry in defs.items() for t in entry["traces"]}
+    # Bug report records, read once for the whole snapshot (this read also
+    # performs the persisted-draft crash recovery). Matching is by the frozen
+    # association: the recorded attempt id, or any member-trace overlap.
+    reported_keys: set[str] = set()
+    reported_traces: set[str] = set()
+    for _record_dir, record in breport.list_reports(state):
+        attempt = record.get("attempt") or {}
+        if attempt.get("attempt_id"):
+            reported_keys.add(attempt["attempt_id"])
+        reported_traces.update(attempt.get("member_traces") or [])
 
     logical: dict[Any, dict[str, Any]] = {}
     bogus = 0
@@ -696,6 +718,7 @@ def scan_sessions(workspace: Path, state_dir: Path | None = None) -> list[Sessio
             pinned=_pinned(aid, g["traces"]),
             preview=_label_text(first_input, _PREVIEW_LIMIT),
             merged=aid in defs,
+            reported=aid in reported_keys or bool(reported_traces.intersection(g["traces"])),
             turn_previews=turns,
         )
         by_session.setdefault(row.session_key, []).append(row)
@@ -839,6 +862,277 @@ def _merge_action(session_row: SessionRow, questionary: Any, style: Any) -> None
         pass
 
 
+def _print_stale_refresh() -> None:
+    console.print("The attempt changed while the report was being prepared — nothing was created.")
+    console.print("The list was refreshed; pick the attempt again.")
+
+
+def _print_report_ready(record: dict[str, Any]) -> None:
+    console.print(f"[green]✓[/green] Bug report {escape(record['report_id'])} ready (local_ready)", highlight=False)
+    console.print(f"  Package: [cyan]{escape(record['package']['path'])}[/cyan]", highlight=False)
+    console.print("  Not uploaded — hand the package file to a developer yourself.")
+    console.print('  Reopen this attempt\'s actions to view it under "Bug reports".')
+
+
+def _print_packaging_failure(report_id: str, reason: str, *, retryable: bool) -> None:
+    console.print(f"[red]✗ Bug report {escape(report_id)} failed: {escape(reason)}[/red]", highlight=False)
+    if retryable:
+        console.print('  The collected snapshot is kept. Retry from this attempt\'s "Bug reports"')
+        console.print("  entry — retrying will not re-collect the trajectory.")
+
+
+def _print_blocked(trigger: str) -> None:
+    if trigger == "trajectory":
+        console.print("[red]✗ Cannot create a bug report from this attempt.[/red]", highlight=False)
+        console.print(
+            "  The original trajectory contains a private key block. Even though the copy\n"
+            "  was redacted, this material is not allowed to leave the machine as a bug\n"
+            "  report package.\n"
+            "  Remove the key from the source data and retry, or use the expert command\n"
+            "  `raven trajectory report` at your own risk.",
+            highlight=False,
+        )
+    else:
+        console.print("[red]✗ Cannot create a bug report with these details.[/red]", highlight=False)
+        console.print(
+            "  The problem details you entered contain a private key block. This material\n"
+            "  is not allowed to leave the machine as a bug report package.\n"
+            "  Start over and describe the problem without pasting the key itself.",
+            highlight=False,
+        )
+
+
+def _ask_problem_fields(questionary: Any, style: Any) -> dict[str, str]:
+    """The required description plus the optional detail fields (design 1.2/1.3)."""
+    while True:
+        # Trimmed before the emptiness check: a spaces-only entry must reprompt
+        # rather than land a report whose required description looks blank.
+        description = _ask_action(
+            questionary.text("Describe the problem (required):", style=style, qmark=QMARK)
+        ).strip()
+        if description:
+            break
+        console.print("A problem description is required to file a bug report.")
+    fields = {"description": description, "expected": "", "actual": "", "severity": "", "steps": "", "reporter": ""}
+    add_more = _ask_action(
+        questionary.confirm(
+            "Add more detail (expected, actual, severity, steps)?", default=False, style=style, qmark=QMARK
+        )
+    )
+    if not add_more:
+        return fields
+    fields["expected"] = _ask_action(questionary.text("Expected result (Enter to skip):", style=style, qmark=QMARK))
+    fields["actual"] = _ask_action(questionary.text("Actual result (Enter to skip):", style=style, qmark=QMARK))
+    severity = _ask_action(
+        questionary.select(
+            "Severity:",
+            choices=[questionary.Choice(label, value=label) for label in ("(skip)", *breport.SEVERITIES)],
+            style=style,
+            qmark=QMARK,
+            pointer=POINTER,
+            instruction=" ",
+        )
+    )
+    fields["severity"] = "" if severity == "(skip)" else severity
+    fields["steps"] = _ask_action(questionary.text("Steps to reproduce (Enter to skip):", style=style, qmark=QMARK))
+    fields["reporter"] = _ask_action(
+        questionary.text(
+            "Your name or handle (Enter to skip; it will be included in the package):", style=style, qmark=QMARK
+        )
+    )
+    return fields
+
+
+def _summary_line(label: str, value: str) -> None:
+    console.print(f"  {label + ':':<14}{value}", highlight=False)
+
+
+def _print_bug_summary(session_row: SessionRow, index: int, row: AttemptRow, prep: Any) -> None:
+    """The final confirmation block, rendered from the frozen canonical
+    metadata (the text the user approves is the text that ships)."""
+    meta = prep.package_metadata
+    manifest = prep.manifest
+    console.print("Bug report summary", highlight=False)
+    title = _collapse_text(session_row.title) or "?"
+    _summary_line("Session", f"{escape(title)}          last activity {_fmt_ts_full(session_row.end)}")
+    _summary_line("Attempt", f"#{index} · {row.turns} turn(s) · started {_fmt_ts_full(row.start)}")
+    _summary_line("Problem", escape(_collapse_text(meta["problem"]["description"]) or ""))
+    for label, key in (("Expected", "expected"), ("Actual", "actual"), ("Severity", "severity"), ("Steps", "steps")):
+        if meta["problem"].get(key):
+            _summary_line(label, escape(_collapse_text(meta["problem"][key]) or ""))
+    if meta.get("reporter"):
+        _summary_line("Reporter", f"{escape(_collapse_text(meta['reporter']) or '')} (included in the package)")
+    session_note = "included" if manifest.get("session_included") else "missing"
+    missing = len(manifest.get("missing_artifacts") or [])
+    _summary_line(
+        "Trajectory",
+        f"{manifest.get('span_count')} span(s) · session record {session_note}"
+        f" · {manifest.get('artifact_count')} artifact(s), {missing} missing",
+    )
+    completeness = meta["completeness"]
+    _summary_line("Completeness", escape(completeness["status"]))
+    for reason in completeness["reasons"]:
+        console.print(f"    - {escape(reason)}", highlight=False)
+    redaction = meta["redaction"]
+    exact = sum(redaction["exact_replacements"].values())
+    patterns = sum(redaction["pattern_replacements"].values())
+    counts = f"{exact} known-value + {patterns} pattern replacement(s)"
+    if prep.classification == breport.CLASSIFICATION_NEEDS_REVIEW:
+        _summary_line("Redaction", f"{counts} · NEEDS REVIEW")
+        findings = redaction["residual_findings"]
+        for reason in prep.reasons:
+            console.print(f"    - {escape(reason)}{':' if reason.startswith('residual') and findings else ''}")
+            if reason.startswith("residual"):
+                for finding in findings[:5]:
+                    sample = _collapse_text(f"{finding['file']}: {finding['sample']}") or ""
+                    console.print(f"        {escape(sample)}", highlight=False)
+                if len(findings) > 5:
+                    console.print(f"        ... and {len(findings) - 5} more (see redaction.json)")
+    else:
+        _summary_line("Redaction", f"{counts} · residual scan: clean")
+    console.print(_PII_NOTE, highlight=False)
+    _summary_line("Will produce", f"bug report package {prep.report_id}.tar.gz (kept locally)")
+    console.print("  Nothing will be uploaded — the package stays on this machine.")
+
+
+def _confirm_create(questionary: Any, style: Any, prep: Any) -> bool:
+    ok = _ask_action(questionary.confirm("Create the bug report?", default=True, style=style, qmark=QMARK))
+    if not ok:
+        return False
+    if prep.classification == breport.CLASSIFICATION_NEEDS_REVIEW:
+        return bool(
+            _ask_action(
+                questionary.confirm(
+                    "The redaction needs review: flagged content may include real secrets. Ship the package anyway?",
+                    default=False,
+                    style=style,
+                    qmark=QMARK,
+                )
+            )
+        )
+    return True
+
+
+def _bug_report_action(
+    session_row: SessionRow, index: int, row: AttemptRow, workspace: Path, questionary: Any, style: Any
+) -> None:
+    """The Report-a-bug flow: freeze first, confirm the frozen bytes, then pack.
+
+    Any exit before the record lands deletes the staging directory; the pin
+    from bundling stays (it cannot be told apart from a user's own pin, and
+    the disclosure line covers it)."""
+    status = console.status("Collecting the trajectory snapshot...", spinner="dots")
+
+    def _collected() -> None:
+        console.print("Snapshot collected; the attempt was pinned so cleanup won't remove it.")
+        status.update("Redacting a copy...")
+
+    try:
+        with status:
+            prep = breport.prepare_trajectory(
+                row.key, expected_traces=row.traces, workspace=workspace, on_collected=_collected
+            )
+    except breport.StaleAttemptError:
+        _print_stale_refresh()
+        return
+    except (ValueError, LookupError, breport.PreparationError) as exc:
+        console.print(f"[red]✗ Could not prepare the trajectory snapshot: {escape(str(exc))}[/red]", highlight=False)
+        return
+
+    try:
+        if prep.classification == breport.CLASSIFICATION_BLOCKED:
+            _print_blocked("trajectory")
+            return
+        fields = _ask_problem_fields(questionary, style)
+        try:
+            prep = breport.freeze_export(prep, **fields)
+        except breport.PreparationError as exc:
+            console.print(
+                f"[red]✗ Could not prepare the trajectory snapshot: {escape(str(exc))}[/red]", highlight=False
+            )
+            return
+        if prep.classification == breport.CLASSIFICATION_BLOCKED:
+            _print_blocked("problem")
+            return
+        _print_bug_summary(session_row, index, row, prep)
+        if not _confirm_create(questionary, style, prep):
+            console.print(_CANCELLED_MESSAGE)
+            return
+        try:
+            _record_dir, record = breport.confirm_and_package(prep)
+        except breport.StaleAttemptError:
+            _print_stale_refresh()
+            return
+        except breport.PreparationError as exc:
+            console.print(
+                f"[red]✗ Could not prepare the trajectory snapshot: {escape(str(exc))}[/red]", highlight=False
+            )
+            return
+        except breport.PackagingError as exc:
+            _print_packaging_failure(prep.report_id, str(exc), retryable=exc.retryable)
+            return
+        _print_report_ready(record)
+    except _ActionCancelledError:
+        console.print(_CANCELLED_MESSAGE)
+    finally:
+        # A no-op after the record landed (the staging directory was renamed
+        # into place); everywhere else it removes the pre-confirmation state.
+        prep.cleanup()
+
+
+def _print_report_details(record: dict[str, Any]) -> None:
+    console.print(f"Bug report {escape(record['report_id'])} ({escape(record['status'])})", highlight=False)
+    console.print(f"  Created:  {_fmt_ts_full(record.get('created_at'))}", highlight=False)
+    description = _collapse_text((record.get("problem") or {}).get("description")) or ""
+    console.print(f"  Problem:  {escape(description)}", highlight=False)
+    completeness = record.get("completeness") or {}
+    status_text = str(completeness.get("status") or "unknown")
+    reasons = completeness.get("reasons") or []
+    if reasons:
+        status_text += f" ({len(reasons)} reason(s))"
+    console.print(f"  Completeness: {escape(status_text)}", highlight=False)
+    if record["status"] == breport.STATUS_LOCAL_READY:
+        console.print(f"  Package:  [cyan]{escape(record['package']['path'])}[/cyan]", highlight=False)
+        console.print("  Not uploaded — hand the package file to a developer yourself.")
+    elif record["status"] == breport.STATUS_FAILED:
+        console.print(f"  Failure:  {escape(record['failure'].get('reason') or '')}", highlight=False)
+
+
+def _bug_reports_screen(row: AttemptRow, questionary: Any, style: Any) -> None:
+    """List, inspect, and retry this attempt's bug reports (design 1.8)."""
+    reports = breport.reports_for_attempt(row.key, row.traces)
+    while reports:
+        choices = []
+        for record_dir, record in reports:
+            description = _label_text((record.get("problem") or {}).get("description"), 40) or ""
+            label = (
+                f"{record['report_id']}  {record['status']:<11}"
+                f"  {_fmt_ts_full(record.get('created_at'))}  {description}"
+            )
+            choices.append(questionary.Choice(label, value=(record_dir, record)))
+        picked = _select_screen(questionary, style, "Bug report:", _HELP_BUG_REPORTS, choices)
+        if picked is _BACK:
+            return
+        record_dir, record = picked
+        _print_report_details(record)
+        if record["status"] == breport.STATUS_FAILED and record["failure"].get("retryable"):
+            action = _select_screen(
+                questionary, style, "Action:", _HELP_ACTION, [questionary.Choice("Retry packaging", value="retry")]
+            )
+            if action is _BACK:
+                reports = breport.reports_for_attempt(row.key, row.traces)
+                continue
+            try:
+                with console.status("Packing the report...", spinner="dots"):
+                    retried = breport.retry_packaging(record_dir)
+            except breport.PackagingError as exc:
+                _print_packaging_failure(record["report_id"], str(exc), retryable=exc.retryable)
+            else:
+                _print_report_ready(retried)
+        reports = breport.reports_for_attempt(row.key, row.traces)
+    console.print("[dim]No bug reports for this attempt.[/dim]")
+
+
 def _attempt_screen(session_row: SessionRow, workspace: Path, questionary: Any, style: Any) -> object:
     """Pick an attempt and run one action. Returns _BACK or _REFRESH."""
     default: Any = None
@@ -881,6 +1175,7 @@ def _attempt_screen(session_row: SessionRow, workspace: Path, questionary: Any, 
         _crumb("Attempt", f"#{index}")
 
         actions = [
+            ("Report a bug", "bug"),
             ("Save (bundle)", "save"),
             ("Report (redact + tarball)", "report"),
             ("Minimize (cassette)", "minimize"),
@@ -889,13 +1184,21 @@ def _attempt_screen(session_row: SessionRow, workspace: Path, questionary: Any, 
         ]
         if row.merged:
             actions.append(("Split", "split"))
+        report_count = len(breport.reports_for_attempt(row.key, row.traces))
+        if report_count:
+            actions.append((f"Bug reports ({report_count})", "bug_list"))
         action = _select_screen(
             questionary, style, "Action:", _HELP_ACTION, [questionary.Choice(t, value=v) for t, v in actions]
         )
         if action is _BACK:
             continue
         _crumb("Action", {v: t for t, v in actions}[action])
-        _run_action(action, row, workspace, questionary, style)
+        if action == "bug":
+            _bug_report_action(session_row, index, row, workspace, questionary, style)
+        elif action == "bug_list":
+            _bug_reports_screen(row, questionary, style)
+        else:
+            _run_action(action, row, workspace, questionary, style)
         return _REFRESH
 
 
@@ -905,6 +1208,10 @@ def browse_trajectories(workspace: Path | None = None) -> None:
     from raven.cli._styles import RAVEN_STYLE
 
     ws = workspace or _default_workspace()
+    try:
+        breport.cleanup_stale_staging()
+    except Exception:
+        _log.debug("stale bug report staging cleanup failed", exc_info=True)
     current_key: Any = _UNSET
     try:
         while True:

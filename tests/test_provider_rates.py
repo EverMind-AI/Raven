@@ -1050,3 +1050,54 @@ def test_dotted_variants_are_a_fallback_not_a_rewrite():
     # Only digit-to-digit boundaries count: the hyphen in "x-1" joins a letter
     # to a digit and is left alone.
     assert rates._dotted_version_variants("x-1-2-3") == ["x-1.2-3", "x-1-2.3", "x-1.2.3"]
+
+
+# ── offline context (rates_offline) ────────────────────────────────────
+
+
+def test_offline_context_blocks_warm_and_lookups(monkeypatch):
+    """Inside rates_offline(): no warm thread, no fetch, no rate ladder."""
+    import threading
+
+    called = threading.Event()
+    monkeypatch.setattr(rates, "_fetch_openrouter_models", lambda **_k: called.set() or {})
+    monkeypatch.setattr(rates, "_WARM_AT", 0.0)
+    monkeypatch.setattr(rates, "_OPENROUTER_CACHE_TIME", 0.0)
+
+    with rates.rates_offline():
+        rates.warm_catalog_in_background()
+        assert rates.token_rates("openrouter/openai/gpt-4o-mini") is None
+
+    assert not called.wait(0.3)
+
+
+def test_offline_context_does_not_leak(monkeypatch):
+    """After the context exits, a normal turn's warm still fires its thread."""
+    import threading
+
+    called = threading.Event()
+    monkeypatch.setattr(rates, "_fetch_openrouter_models", lambda **_k: called.set() or {})
+    monkeypatch.setattr(rates, "_WARM_AT", 0.0)
+    monkeypatch.setattr(rates, "_OPENROUTER_CACHE_TIME", 0.0)
+
+    with rates.rates_offline():
+        rates.warm_catalog_in_background()
+
+    rates.warm_catalog_in_background()
+    assert called.wait(5), "the warm thread should run normally outside the offline context"
+
+
+def test_offline_fetch_entry_is_cache_only(monkeypatch):
+    """Even a direct fetch call inside the context answers from cache only."""
+    monkeypatch.setattr(rates, "_OPENROUTER_CACHE_TIME", 0.0)
+    rates._OPENROUTER_CACHE.update({"m": {"pricing": {}}})
+
+    def _boom(*_a, **_k):
+        raise AssertionError("network fetch attempted inside rates_offline()")
+
+    monkeypatch.setattr(rates.model_catalog_cache, "load", lambda: None)
+    monkeypatch.setattr(rates.httpx, "get", _boom, raising=False)
+    with rates.rates_offline():
+        # The real implementation (conftest's autouse guard stubs the name).
+        table = _REAL_FETCH()
+    assert table == {"m": {"pricing": {}}}
