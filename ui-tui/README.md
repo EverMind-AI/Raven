@@ -1,14 +1,12 @@
 # Raven TUI (ui-tui/)
 
-Raven's native TUI subprocess. Spawned by Python `raven tui` command.
-Renders Ink + React directly to the terminal.
-
-## Status: bootstrap (L2-α `tui-bootstrap`)
-
-Currently only renders a "Hello Raven TUI · Ctrl+C to exit" smoke screen.
-Real business UI arrives in subsequent L2s (`tui-fork-hermes-import` pulls
-hermes ui-tui wholesale; `tui-ipc-bridge` connects Python business layer;
-case1/case3 集 adapt and test). See `../docs/openspec/changes/tui-bootstrap/`.
+Raven's native terminal UI: an Ink + React child process rendered straight to
+the terminal. The Python parent (`raven tui`) spawns the bundled
+`dist/entry.js` under Node and drives it over bidirectional JSON-RPC pipes;
+the spawn, handshake and lifecycle mechanics are documented where they live,
+in `raven/cli/tui_commands.py`, and the wire schema is
+`rpc-schema/openrpc.json`. Domain terms for this tree are in
+`ui-tui/CONTEXT.md`.
 
 ## Development
 
@@ -22,7 +20,7 @@ npm run type-check       # tsc strict
 npm run lint             # eslint
 ```
 
-From the Raven repo root, after `uv pip install -e .`:
+From the Raven repo root, with the project environment synced (`uv sync`):
 
 ```bash
 raven tui --check     # smoke: boot subprocess then exit (exit code 0/1/2)
@@ -30,16 +28,8 @@ raven tui             # interactive: Ctrl+C to exit
 raven tui --dev       # tsx watch mode via subprocess
 ```
 
-## Architecture
-
-Python parent → `subprocess.Popen([node, dist/entry.js])` → Ink/React in child.
-Signal handling (SIGINT/SIGTERM/SIGHUP) forwarded parent → child with 5s
-escalation to SIGKILL. Child exit code is propagated as parent exit code.
-
-No IPC in this L2; bidirectional JSON-RPC arrives in `tui-ipc-bridge` L2.
-
 ## Attribution
 
 Some scaffolding patterns (Node subprocess lifecycle, esbuild config, terminal
-mode reset) reference hermes-agent (MIT, © 2025 Nous Research). See
+mode reset) reference hermes-agent (MIT, (c) 2025 Nous Research). See
 `../NOTICES.md` and `../LICENSES/MIT-hermes-agent.txt` at repo root.

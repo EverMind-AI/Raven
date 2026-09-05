@@ -1,6 +1,6 @@
 // Raven TUI RPC — typed error class hierarchy.
 //
-// Mirrors the 15 server-defined error codes in specs/tui-ipc.md §4.
+// Mirrors the 15 server-defined error codes in `raven/rpc/errors.py`.
 // `rpcErrorFromFrame(frame)` is the canonical constructor used by `client.ts`
 // when a JSON-RPC error response arrives — it selects the matching subclass
 // by `code`, falling back to the generic `RpcError` for unknown codes.
@@ -20,7 +20,7 @@ export class RpcError extends Error {
   }
 }
 
-// -- Server-defined business errors (specs §4) -------------------------------
+// -- Server-defined business errors -------------------------------
 
 export class SessionNotFoundError extends RpcError {
   constructor(f: JsonRpcErrorObject) {

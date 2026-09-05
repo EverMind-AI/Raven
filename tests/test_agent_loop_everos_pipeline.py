@@ -9,8 +9,8 @@ One channel turn must, in order:
   1. recall on BOTH lanes during context assembly
      (``user_id`` for the # Memory segment, ``agent_id`` for EverosSkillSource);
   2. inject the recalled user memory + everos skill into the prompt the LLM sees;
-  3. after the turn, ``backend.store(session_key, turn_slice)`` (AG-1);
-  4. after the turn, ``backend.feedback`` with the injected everos native ids only (FB-1).
+  3. after the turn, ``backend.store(session_key, turn_slice)``;
+  4. after the turn, ``backend.feedback`` with the injected everos native ids only.
 
 Plus the resilience contract: no backend = silent legacy mode, and a
 store/feedback exception must not derail the turn (the turn is already saved).
@@ -155,7 +155,7 @@ async def test_full_turn_recalls_injects_stores_and_feeds_back(tmp_path: Path) -
     assert _USER_MEMO in prompt
     assert _AGENT_SKILL_BODY in prompt
 
-    # 3) AG-1: the turn slice was forwarded to the backend exactly once.
+    # 3) the turn slice was forwarded to the backend exactly once.
     # Dispatch only enqueues; the worker drains it off the turn path.
     await agent.drain_backend_stores(timeout=5.0)
     assert len(backend.store_calls) == 1
@@ -164,7 +164,7 @@ async def test_full_turn_recalls_injects_stores_and_feeds_back(tmp_path: Path) -
     roles = [m.get("role") for m in call["messages"]]
     assert "user" in roles and "assistant" in roles
 
-    # 4) FB-1: feedback fired with the everos native id only (prefix stripped).
+    # 4) feedback fired with the everos native id only (prefix stripped).
     assert len(backend.feedback_calls) == 1
     sig = backend.feedback_calls[0]
     assert sig["kind"] == "skill_usage"

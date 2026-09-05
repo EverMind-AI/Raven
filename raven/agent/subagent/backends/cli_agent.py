@@ -1,5 +1,5 @@
 """Third-party CLI agent backend: shell out to an external agent (claude code,
-codex, ...) as a spawned sub-agent (req5).
+codex, ...) as a spawned sub-agent.
 
 Runs on the host rather than through the sandbox executor - these CLIs need the
 host's auth, config, and PATH, which is the login shell's rather than raven's

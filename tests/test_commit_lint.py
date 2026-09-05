@@ -1,3 +1,5 @@
+"""The commit/PR lint rules: accepted shapes and every rejection reason."""
+
 from __future__ import annotations
 
 import subprocess

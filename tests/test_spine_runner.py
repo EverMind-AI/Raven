@@ -1,3 +1,5 @@
+"""The spine TurnRunner contract: outcomes, the runner protocol, and emitted events."""
+
 import dataclasses
 
 import pytest

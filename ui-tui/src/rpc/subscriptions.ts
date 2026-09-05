@@ -1,6 +1,6 @@
 // Raven TUI RPC — server-push subscription registry.
 //
-// Server sends `method: "event"` JSON-RPC notification frames (specs §2.4)
+// Server sends `method: "event"` JSON-RPC notification frames
 // with `params: { subscription_id, event }`. This registry maps
 // subscription_id → handler so `RpcClient` can route each frame to the right
 // consumer.

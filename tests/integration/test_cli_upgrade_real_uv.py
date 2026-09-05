@@ -1,3 +1,5 @@
+"""The upgrade flow against a real uv: the running tool replaces itself in place."""
+
 from __future__ import annotations
 
 import os

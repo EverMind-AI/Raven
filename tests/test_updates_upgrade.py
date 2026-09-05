@@ -1,3 +1,5 @@
+"""The updates surface: release parsing, version gates, and the self-replacement flow."""
+
 from __future__ import annotations
 
 import ctypes

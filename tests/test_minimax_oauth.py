@@ -1,3 +1,5 @@
+"""The MiniMax OAuth device flow: token persistence, refresh retries, and rejections."""
+
 from __future__ import annotations
 
 import time

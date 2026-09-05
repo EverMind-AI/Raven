@@ -20,7 +20,7 @@ _Avoid_: "global model switch" -- that was the pre-session behaviour.
 **Overlay**:
 A modal layer over the chat view, tracked in `overlayStore` and driven by keyboard. Kinds
 split into RPC-driven (Confirm, Approval, Clarify, Sudo, Secret) and user-toggled (Agents,
-Model Picker, Picker, Pager, New Instance Picker) overlays; the FPS counter is a separate
+Model Picker, Picker, Pager, New Instance Picker, Skills Hub, Subagents Hub) overlays; the FPS counter is a separate
 component, not an overlay-store kind.
 
 **MessageLine**:

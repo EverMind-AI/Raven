@@ -626,7 +626,7 @@ class TurnPathMixin:
         tools_used: list[str] = []
         effective_model = model or self.model
 
-        # Bug2 / decision B — track whether the turn was a normal exit or a
+        # Track whether the turn was a normal exit or a
         # max-iter interruption. ``status`` is the only piece read downstream
         # (used to label the shadow-git commit and stamp the ``LoopOutcome``).
         status = "completed"
@@ -645,7 +645,7 @@ class TurnPathMixin:
         reactive_summary_tried = False
         # Image-demotion recovery: bound per turn, same reason.
         image_demote_retries = 0
-        # Tool-failure-loop break (#1b): track consecutive hard failures of the
+        # Tool-failure-loop break: track consecutive hard failures of the
         # same tool *with the same kind of error* across iterations; nudge once
         # per fresh streak, bounded/turn.
         loop_fail_key: tuple[str, str] | None = None
@@ -905,9 +905,9 @@ class TurnPathMixin:
                 },
                 usage_snapshot,
             )
-            # tui-chat L2-A wire: stream caller (turn.* handler) may want the
+            # The stream caller (turn.* handler) may want the
             # final-iteration usage to populate `message.complete.payload.usage`
-            # per CAP-CHAT-1 wire shape. Use the wire-contract TurnUsage
+            # on the wire. Use the wire-contract TurnUsage
             # fields (prompt_tokens / completion_tokens / total_tokens) — not
             # the agent-internal snapshot with model / cache / cost fields.
             if response.usage:
@@ -1210,7 +1210,7 @@ class TurnPathMixin:
                                 SKIPPED_AFTER_BLOCKED_CALL,
                             )
                         break
-                    # #1b Track consecutive same-tool deterministic failures
+                    # Track consecutive same-tool deterministic failures
                     # (transient errors excluded — a retry would clear those).
                     if is_hard_tool_failure(model_text):
                         failure_key = (tool_call.name, failure_class(model_text))
@@ -1251,7 +1251,7 @@ class TurnPathMixin:
                         await on_token_delta(_ABORTED_ACTION_REPLY)
                     break
 
-                # #1b Failure-loop break: the same tool failed deterministically
+                # Failure-loop break: the same tool failed deterministically
                 # `threshold` times running → append a change-approach nudge to
                 # the last tool result so the model stops repeating a dead call.
                 if (
@@ -1297,7 +1297,7 @@ class TurnPathMixin:
             else:
                 clean = self._strip_think(response.content)
                 # Don't persist error responses to session history — they can
-                # poison the context and cause permanent 400 loops (#1303).
+                # poison the context and cause permanent 400 loops.
                 if response.finish_reason == "error":
                     logger.error("LLM returned error: {}", (clean or "")[:200])
                     final_content = clean or "Sorry, I encountered an error calling the AI model."
@@ -1891,9 +1891,9 @@ class TurnPathMixin:
                 "messages": all_msgs[turn_start_idx:],
             },
         )
-        # AG-1: plugin-side indexing (third peer step in after-turn pipeline).
+        # Plugin-side indexing (third peer step in the after-turn pipeline).
         self._dispatch_backend_store(key, session.messages[prev_len:])
-        # FB-1: forward source-qualified skill-usage feedback. Only
+        # Forward source-qualified skill-usage feedback. Only
         # ``everos/`` prefix is forwarded to the plugin; static-library
         # sources (``local`` / ``mass``) have no feedback channel.
         await self._dispatch_backend_feedback(
@@ -2169,9 +2169,9 @@ class TurnPathMixin:
         (executor / debug server / MCP up, then idle). A spine runner calls the
         public ``run_turn`` to satisfy the TurnRunner protocol.
 
-        ``stream`` is the canon Q2-D assembly switch: a streaming outlet (TUI)
-        wires it True so the reply goes out as StreamDelta and dissolves (b2 — no
-        trailing Text); a non-streaming outlet (REPL) wires it False so the reply
+        ``stream`` is the reply-assembly switch: a streaming outlet (TUI) wires
+        it True so the reply goes out as StreamDelta and dissolves with no
+        trailing Text; a non-streaming outlet (REPL) wires it False so the reply
         is one Text. It gates both LLM callbacks (the loop streams when either is
         wired) and the message-tool routing, so the whole reply travels one way.
 
@@ -2264,7 +2264,7 @@ class TurnPathMixin:
                 self._direct_handoff.record(session_key, exc.meta)
                 raise
             self._direct_handoff.record(session_key, meta)
-            # Same rule as the main path below (canon Q2-D b2): what streamed is
+            # Same rule as the main path below: what streamed is
             # already on screen, so a closing Text would render the reply twice.
             # An instance whose transport cannot stream never sets the flag and
             # is delivered whole, which is what every direct chat did before.
@@ -2476,8 +2476,8 @@ class TurnPathMixin:
             if cron_token is not None and isinstance(cron_tool, CronTool):
                 cron_tool.reset_cron_context(cron_token)
 
-        # Single return->emit boundary (N-UNIFORM). MediaOut is independent of the
-        # stream and precedes Text (G-MEDIA-2(a): the current order is media-first).
+        # Single return->emit boundary. MediaOut is independent of the
+        # stream and precedes Text (the current order is media-first).
         if out is not None:
             reply_content, reply_media = out
             if reply_media:

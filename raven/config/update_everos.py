@@ -4,7 +4,7 @@ This module is the ONLY write path for the EverOS memory-model sections
 (llm / embedding / rerank / multimodal) and for the ``[api]`` address. The
 onboard wizard's memory step writes here; EverOS reads it back through its own
 pydantic-settings loader (user-level toml, ``EVEROS_*`` env). It lives apart
-from raven's ``config.json`` because EverOS owns this channel — see plan rule.
+from raven's ``config.json`` because EverOS owns this channel.
 
 Only those sections are writable; the rest EverOS ships (memory / sqlite /
 lancedb) are preserved untouched on every write.

@@ -4,6 +4,7 @@
 
 - [Raven Runtime](./CONTEXT.md) — the Python agent runtime: channels, spine, agent loop, engines, providers
 - [TUI](./ui-tui/CONTEXT.md) — the terminal frontend (`ui-tui/`, React/Ink); talks to the Runtime only via the RPC protocol
+- [Products over ACP](./agents/README.md) -- the product-serving vocabulary: rendered config, state root, ACP home, tool-face pin, seed-once
 
 ## Relationships
 

@@ -1,3 +1,5 @@
+"""The RPC spine seam: protocol conformance and the asking capabilities a turn carries."""
+
 import asyncio
 from dataclasses import replace
 

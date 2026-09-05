@@ -1,4 +1,4 @@
-"""DAG runner + native run_subagent_dag tool (req4/P3)."""
+"""DAG runner + native run_subagent_dag tool."""
 
 from __future__ import annotations
 

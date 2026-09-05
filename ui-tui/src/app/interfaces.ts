@@ -81,7 +81,7 @@ export interface GatewayServices {
   gw: GatewayClient
   rpc: GatewayRpc
   /**
-   * Typed RpcClient handle for the Phase 6 chat path (per design.md §D7).
+   * Typed RpcClient handle for the typed chat path.
    * Optional because the gateway-stub fixture used in tests does not own a
    * real socket; production wiring always populates it via entry.tsx.
    */
@@ -251,7 +251,7 @@ export interface InputHandlerContext {
    * `isTurnActive()` returns true, the Ctrl+C handler routes to
    * `chatStream.cancel()` (which fires `turn.cancel`) instead of the legacy
    * `turnController.interruptTurn()` path that posts `session.interrupt`.
-   * Per design.md §D5: turn-period Ctrl+C → typed cancel; input-period
+   * Turn-period Ctrl+C → typed cancel; input-period
    * Ctrl+C → legacy exit via die().
    */
   chatStreamRef?: RefObject<{

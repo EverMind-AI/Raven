@@ -90,3 +90,4 @@ jobs:
             BASE="$(git rev-list --max-parents=0 HEAD)"
           fi
           PYTHONPATH=. python3 scripts/check_large_files.py "$BASE..HEAD"
+          PYTHONPATH=. python3 scripts/check_source_language.py "$BASE..HEAD"
