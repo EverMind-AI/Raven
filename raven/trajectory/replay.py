@@ -519,6 +519,34 @@ class ReplayProvider(LLMProvider):
         *,
         stream: bool,
     ) -> LLMResponse:
+        """One recorded response, with a corrupt-recording backstop.
+
+        A crash while consuming the recording (a payload shape the validator
+        did not anticipate) must surface as a fatal divergence: raising would
+        let the harness convert it into an ordinary error reply and the replay
+        would end looking merely "unconsumed" instead of broken.
+        """
+        try:
+            return self._feed_response(messages, tools, model, stream=stream)
+        except Exception as exc:
+            div = Divergence(
+                kind="llm",
+                index=self._state.llm_cursor,
+                fatal=True,
+                field="corrupt recording",
+                detail=f"replay could not consume the recording ({type(exc).__name__})",
+            )
+            self._state.record(div)
+            return _halted_response(div.render())
+
+    def _feed_response(
+        self,
+        messages: list[dict[str, Any]] | None,
+        tools: list[dict[str, Any]] | None,
+        model: str | None,
+        *,
+        stream: bool,
+    ) -> LLMResponse:
         state = self._state
         if state.halted:
             return _halted_response("replay already halted; no further calls are fed")
@@ -691,6 +719,23 @@ class ReplayToolRegistry(ToolRegistry):
         return list(self._definitions)
 
     async def execute(self, name: str, params: dict[str, Any], *, run_meta: Any = None) -> str:
+        # The same corrupt-recording backstop as the model feed: a crash while
+        # consuming the recording must become a fatal divergence, not an
+        # ordinary tool error the loop shrugs off.
+        try:
+            return self._feed_result(name, params)
+        except Exception as exc:
+            div = Divergence(
+                kind="tool",
+                index=self._state.tool_cursor,
+                fatal=True,
+                field="corrupt recording",
+                detail=f"replay could not consume the recording ({type(exc).__name__})",
+            )
+            self._state.record(div)
+            return f"Error: replay halted: {div.render()}"
+
+    def _feed_result(self, name: str, params: dict[str, Any]) -> str:
         state = self._state
         if state.halted:
             return "Error: replay halted; no further tool results are fed."
@@ -823,16 +868,32 @@ def validate_recording(recording: Recording) -> list[str]:
     for turn in recording.turns:
         if turn.session_key is not None and not isinstance(turn.session_key, str):
             _add("a turn session key is not a string")
+
+    def _check_tool_call_entries(entries: Any, what: str) -> None:
+        """``tool_calls``-shaped lists: entries and their function sub-objects."""
+        if entries is None:
+            return
+        if not isinstance(entries, list) or any(not isinstance(tc, dict) for tc in entries):
+            _add(f"a {what} tool_calls entry is not an object")
+            return
+        for tc in entries:
+            for key in ("id", "name"):
+                value = tc.get(key)
+                if value is not None and not isinstance(value, str):
+                    _add(f"a {what} tool call {key} is not a string")
+            arguments = tc.get("arguments")
+            if arguments is not None and not isinstance(arguments, dict):
+                _add(f"a {what} tool call arguments is not an object")
+            function = tc.get("function")
+            if function is not None and not isinstance(function, dict):
+                _add(f"a {what} tool call function is not an object")
+
     for call in recording.llm_calls:
         output = call.output
         if output is not None and not isinstance(output, dict):
             _add("a model call output payload is not an object")
         elif isinstance(output, dict):
-            tool_calls = output.get("tool_calls")
-            if tool_calls is not None and (
-                not isinstance(tool_calls, list) or any(not isinstance(tc, dict) for tc in tool_calls)
-            ):
-                _add("a model call output tool_calls entry is not an object")
+            _check_tool_call_entries(output.get("tool_calls"), "model call output")
             for key in ("content", "reasoning_content", "finish_reason"):
                 value = output.get(key)
                 if value is not None and not isinstance(value, str):
@@ -841,18 +902,34 @@ def validate_recording(recording: Recording) -> list[str]:
             if usage is not None and not isinstance(usage, dict):
                 _add("a model call output usage is not an object")
             thinking = output.get("thinking_blocks")
-            if thinking is not None and not isinstance(thinking, list):
-                _add("a model call output thinking_blocks is not a list")
+            if thinking is not None and (
+                not isinstance(thinking, list) or any(not isinstance(block, dict) for block in thinking)
+            ):
+                _add("a model call output thinking_blocks entry is not an object")
         payload = call.input
         if payload is not None and not isinstance(payload, dict):
             _add("a model call input payload is not an object")
         elif isinstance(payload, dict):
-            for key in ("messages", "tools"):
-                value = payload.get(key)
-                if value is not None and (
-                    not isinstance(value, list) or any(not isinstance(item, dict) for item in value)
-                ):
-                    _add(f"a model call input {key} entry is not an object")
+            messages = payload.get("messages")
+            if messages is not None and (
+                not isinstance(messages, list) or any(not isinstance(item, dict) for item in messages)
+            ):
+                _add("a model call input messages entry is not an object")
+            elif isinstance(messages, list):
+                for message in messages:
+                    _check_tool_call_entries(message.get("tool_calls"), "model call input message")
+            tools = payload.get("tools")
+            if tools is not None and (not isinstance(tools, list) or any(not isinstance(t, dict) for t in tools)):
+                _add("a model call input tools entry is not an object")
+            elif isinstance(tools, list):
+                for tool in tools:
+                    function = tool.get("function")
+                    if function is not None and not isinstance(function, dict):
+                        _add("a model call input tool function is not an object")
+                    elif isinstance(function, dict):
+                        name = function.get("name")
+                        if name is not None and not isinstance(name, str):
+                            _add("a model call input tool function name is not a string")
             model = payload.get("model")
             if model is not None and not isinstance(model, str):
                 _add("a model call input model is not a string")
@@ -960,11 +1037,16 @@ async def run_replay(bundle_dir: Path, mode: str = "warn") -> ReplayReport:
     async def _drop_delta(_text: str) -> None:
         return None
 
+    from raven.token_wise.pricing import pricing_suppressed
+
     workspace = Path(tempfile.mkdtemp(prefix="raven-replay-"))
     replies: list[str | None] = []
     turns_replayed = 0
     try:
-        with trace.suppress():
+        # Suppress pricing alongside tracing: cost estimation reaches remote
+        # model catalogs (LiteLLM, OpenRouter) and a mock replay must neither
+        # gate on the network nor leak that it ran.
+        with trace.suppress(), pricing_suppressed():
             sessions = SessionManager(workspace)
             session_key = recording.turns[0].session_key or recording.manifest.get("session_key")
             pre_attempt = _pre_attempt_messages(recording)

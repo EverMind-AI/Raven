@@ -1042,3 +1042,15 @@ def test_deliverable_probe_missing_tool_input_end_to_end(state, workspace, tmp_p
     assert recording.tool_calls[0].name is None
     report = asyncio.run(run_replay(delivered, mode="warn"))
     assert not [d for d in report.divergences if d.fatal]
+
+
+def test_freeze_export_makes_no_network_calls(state, workspace, monkeypatch):
+    import raven.providers.rates as rates
+
+    def _no_network(*_a, **_k):
+        raise AssertionError("freeze_export reached a network entry point")
+
+    monkeypatch.setattr(rates, "_fetch_openrouter_models", _no_network)
+    monkeypatch.setattr(rates, "token_rates", _no_network)
+    _record_dir, record = _full_flow(state, workspace)
+    assert record["status"] == "local_ready"

@@ -421,3 +421,114 @@ def test_non_fatal_divergences_do_not_degrade(tmp_path):
     assert status == "complete", reasons
     report = asyncio.run(run_replay(tree, mode="warn"))
     assert any(d.field == "unconsumed" for d in report.divergences)
+
+
+# ── review fixes: offline probe, nested shapes, sanitized turn refs ────
+
+
+def test_probe_makes_no_network_calls(tmp_path, monkeypatch):
+    """Cost estimation reaches remote model catalogs; the probe must not."""
+    import raven.providers.rates as rates
+
+    def _no_network(*_a, **_k):
+        raise AssertionError("the replay probe reached a network entry point")
+
+    monkeypatch.setattr(rates, "_fetch_openrouter_models", _no_network)
+    monkeypatch.setattr(rates, "token_rates", _no_network)
+    tree = _bundle(tmp_path)
+    status, reasons = _evaluate(tree)
+    assert (status, reasons) == ("complete", [])
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "tool-function-not-object",
+        "tool-function-name-not-string",
+        "message-tool-calls-scalar",
+        "message-tool-call-function-bad",
+        "output-tool-call-bad-name",
+        "output-tool-call-bad-id",
+        "thinking-block-not-object",
+    ],
+)
+def test_nested_payload_shapes_are_unreplayable(tmp_path, case):
+    if case == "tool-function-not-object":
+        llm = ((_llm_input(tools=[{"function": "bad"}]), _llm_output()),)
+    elif case == "tool-function-name-not-string":
+        llm = ((_llm_input(tools=[{"function": {"name": 42}}]), _llm_output()),)
+    elif case == "message-tool-calls-scalar":
+        llm = ((_llm_input(messages=[{"role": "assistant", "tool_calls": ["bad"]}]), _llm_output()),)
+    elif case == "message-tool-call-function-bad":
+        llm = ((_llm_input(messages=[{"role": "assistant", "tool_calls": [{"function": "bad"}]}]), _llm_output()),)
+    elif case == "output-tool-call-bad-name":
+        llm = ((_llm_input(), _llm_output(content=None, tool_calls=[{"id": "t", "name": 42, "arguments": {}}])),)
+    elif case == "output-tool-call-bad-id":
+        llm = ((_llm_input(), _llm_output(content=None, tool_calls=[{"id": 42, "name": "x", "arguments": {}}])),)
+    else:
+        llm = ((_llm_input(), {**_llm_output(), "thinking_blocks": ["bad"]}),)
+    tree = _bundle(tmp_path, llm_calls=llm)
+
+    status, reasons = _evaluate(tree)
+
+    assert status == "unreplayable"
+    assert any("violates the replay contract" in r for r in reasons)
+
+
+def test_provider_backstop_catches_unanticipated_shapes(tmp_path, monkeypatch):
+    """Even a shape the validator missed must end as a fatal divergence, not complete."""
+    tree = _bundle(tmp_path, llm_calls=((_llm_input(tools=[{"function": "bad"}]), _llm_output()),))
+    monkeypatch.setattr(tcomp, "validate_recording", lambda _r: [])
+
+    status, reasons = _evaluate(tree)
+
+    assert status == "unreplayable"
+    assert any("corrupt recording" in r for r in reasons)
+
+
+def test_nulled_turn_ref_is_counted_without_manifest_help(tmp_path):
+    """A sanitized (nulled) turn reference must surface even off a legacy manifest."""
+    null_turn_span = {
+        "traceId": "trace-c",
+        "spanId": "turn-null",
+        "name": "session.turn",
+        "startTime": "2026-08-20T10:00:00+00:00",
+        "endTime": "2026-08-20T10:00:01+00:00",
+        "attributes": {"attempt.id": "trace-c", "session.key": "cli:c", "turn.input.artifact_path": None},
+    }
+    tree = _bundle(
+        tmp_path,
+        llm_calls=((_llm_input(), _llm_output()),) * 2,
+        spans_extra=(null_turn_span,),
+        manifest_extra={"missing_artifacts": []},
+    )
+
+    status, reasons = _evaluate(tree)
+
+    assert status != "complete"
+    assert any("turn input(s) could not be loaded" in r for r in reasons)
+
+
+def test_turn_gap_reported_alongside_other_role_misses(tmp_path):
+    """Counting settles the generic list; one missing role never swallows another."""
+    null_turn_span = {
+        "traceId": "trace-c",
+        "spanId": "turn-null",
+        "name": "session.turn",
+        "startTime": "2026-08-20T10:00:00+00:00",
+        "endTime": "2026-08-20T10:00:01+00:00",
+        "attributes": {"attempt.id": "trace-c", "session.key": "cli:c", "turn.input.artifact_path": None},
+    }
+    tree = _bundle(
+        tmp_path,
+        llm_calls=((None, _llm_output()), (None, _llm_output())),
+        spans_extra=(null_turn_span,),
+        manifest_extra={"missing_artifacts": ["turn.json", "llm-in-0.json", "llm-in-1.json", "extra.png"]},
+    )
+
+    status, reasons = _evaluate(tree)
+
+    assert status == "degraded"
+    assert any("turn input(s) could not be loaded" in r for r in reasons)
+    assert any("model call input" in r for r in reasons)
+    assert any("1 referenced artifact(s) are missing" in r for r in reasons)

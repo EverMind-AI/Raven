@@ -99,7 +99,9 @@ def _turn_span_count(tree: Path) -> int:
     count = 0
     for span in deduped.values():
         attrs = span.get("attributes")
-        if isinstance(attrs, dict) and attrs.get("turn.input.artifact_path"):
+        # Key presence, not truthiness: sanitization nulls a missing artifact's
+        # reference, and that turn is exactly the loss this count must surface.
+        if isinstance(attrs, dict) and "turn.input.artifact_path" in attrs:
             count += 1
     return count
 
@@ -179,8 +181,9 @@ def evaluate_completeness(tree: Path, redaction: RedactionReport | None = None) 
         unreplayable.append(f"the recording violates the replay contract: {category}")
 
     turn_spans = _turn_span_count(tree)
-    if recording.turns and turn_spans > len(recording.turns):
-        degraded.append(f"{turn_spans - len(recording.turns)} recorded turn input(s) could not be loaded")
+    turn_gap = max(0, turn_spans - len(recording.turns))
+    if recording.turns and turn_gap:
+        degraded.append(f"{turn_gap} recorded turn input(s) could not be loaded")
 
     llm_inputs_missing = sum(1 for call in recording.llm_calls if call.input is None)
     if llm_inputs_missing:
@@ -195,15 +198,21 @@ def evaluate_completeness(tree: Path, redaction: RedactionReport | None = None) 
     if session_degraded:
         degraded.append(session_degraded)
 
-    # Role-attributed gaps already carry their own reasons; this line only
-    # covers missing artifacts nothing above accounted for.
+    # Role-attributed gaps already carry their own reasons; the generic line
+    # covers only what none of them accounted for — settled by count, never by
+    # a boolean "some role was missing" that would swallow the whole list.
     missing = manifest.get("missing_artifacts")
-    if (
-        isinstance(missing, list)
-        and missing
-        and not (llm_inputs_missing or tool_inputs_missing or turn_spans > len(recording.turns))
-    ):
-        degraded.append(f"{len(missing)} referenced artifact(s) are missing")
+    if isinstance(missing, list) and missing:
+        role_attributed = (
+            turn_gap
+            + llm_inputs_missing
+            + tool_inputs_missing
+            + sum(1 for call in recording.llm_calls if call.output is None)
+            + sum(1 for call in recording.tool_calls if call.result is None)
+        )
+        leftover = len(missing) - role_attributed
+        if leftover > 0:
+            degraded.append(f"{leftover} referenced artifact(s) are missing")
 
     if redaction is not None and redaction.skipped_binaries:
         degraded.append(f"{len(redaction.skipped_binaries)} non-UTF-8 file(s) were excluded from the redacted copy")
