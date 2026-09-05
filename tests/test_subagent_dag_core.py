@@ -1,4 +1,4 @@
-"""Ported DAG core: graph validation, placeholders, render, store.
+"""Ported DAG core (req4/P3): graph validation, placeholders, render, store.
 
 Covers the provider-agnostic core of the sub-agent DAG subsystem (no agentscope);
 render/store are exercised over a tiny in-memory duck-typed backend.

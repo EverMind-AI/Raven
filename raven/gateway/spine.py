@@ -172,7 +172,7 @@ def build_gateway(
     """Wire the gateway's spine pieces: a hub with a ChannelOutletAdapter per
     channel (so a reply reaches its target channel), and a Scheduler whose runner
     is the agent loop's non-streaming run_turn (proactive replies are one Text,
-    not a token stream). Returns (scheduler, hub, readback_texts,
+    not a token stream — canon Q2-D). Returns (scheduler, hub, readback_texts,
     sources, teardown); teardown stops the scheduler then closes the hub's outlet
     workers. ``sources`` maps a live turn's conversation id to its real inbound
     Source — the ask_user question outbound reuses it to reach the exact (topic-

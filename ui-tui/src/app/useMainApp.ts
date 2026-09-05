@@ -466,11 +466,13 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
     [gw, sys]
   )
 
-  // Typed chat path scaffold. The
+  // Phase 6 typed chat path scaffold (per design.md §D7). The
   // `ChatStreamHandle` is constructed once per `sid` change and exposed
   // through `chatStreamRef` so the Ctrl+C handler in useInputHandlers
   // can route into `turn.cancel` whenever a typed turn is in flight.
-  // The effect below installs and attaches the live handle per session.
+  // Live `attach()` is deferred until the Python `turn.*` handlers ship
+  // (separate L2 phase) — until then the handle stays detached and is a
+  // no-op, but the wiring is in place so the flip is a one-line change.
   const chatStreamRef = useRef<ChatStreamHandle | null>(null)
 
   const gateway = useMemo(() => ({ gw, rpc, rpcClient }), [gw, rpc, rpcClient])
@@ -513,7 +515,7 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   // Install / replace the typed chat stream handle whenever the session
   // identifier changes. The handle is created eagerly AND attach()-ed so
   // turn.subscribe streams token.delta events through the typed path
-  // (turn streaming is live). The Ctrl+C handler in
+  // (Phase 4 turn-streaming live per design.md §D7). The Ctrl+C handler in
   // useInputHandlers reads `chatStreamRef.current` to prefer a typed
   // `turn.cancel` whenever a turn is in flight.
   useEffect(() => {

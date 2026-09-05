@@ -99,16 +99,19 @@ export class WhatsAppClient {
       markOnlineOnConnect: false
     })
 
+    // Handle WebSocket errors
     if (this.sock.ws && typeof this.sock.ws.on === 'function') {
       this.sock.ws.on('error', (err: Error) => {
         console.error('WebSocket error:', err.message)
       })
     }
 
+    // Handle connection updates
     this.sock.ev.on('connection.update', async (update: any) => {
       const { connection, lastDisconnect, qr } = update
 
       if (qr) {
+        // Display QR code in terminal
         console.log('\n📱 Scan this QR code with WhatsApp (Linked Devices):\n')
         qrcode.generate(qr, { small: true })
         this.options.onQR(qr)
@@ -135,8 +138,10 @@ export class WhatsAppClient {
       }
     })
 
+    // Save credentials on update
     this.sock.ev.on('creds.update', saveCreds)
 
+    // Handle incoming messages
     this.sock.ev.on('messages.upsert', async ({ messages, type }: { messages: any[]; type: string }) => {
       if (type !== 'notify') {
         return

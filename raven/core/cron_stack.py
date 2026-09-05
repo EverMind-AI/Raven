@@ -315,7 +315,7 @@ def _record_cron_dispatch_to_ledger(
 
     The fire IS logged as ``dispatched`` so Sentinel's topic_quota gate
     sees it, but it's IMMEDIATELY marked NEUTRAL so it doesn't pollute
-    ``acceptance_rate``. Rationale: cron is user-initiated — the
+    ``acceptance_rate``. Rationale (B4): cron is user-initiated — the
     user explicitly scheduled it. Sentinel's adaptive-tuning uses
     acceptance_rate to decide "is the user receptive to OUR proactive
     nudges". Cron fires aren't OUR proposals; counting them as
@@ -353,8 +353,8 @@ def _record_cron_dispatch_to_ledger(
                 source="cron",
                 details={"topic_tag": topic_tag, "cron_id": job.id} if topic_tag else {"cron_id": job.id},
             )
-            # Cron fires don't count toward acceptance_rate (denominator or
-            # numerator): the user explicitly scheduled them. Mark NEUTRAL right away.
+            # B4: cron fires don't count toward acceptance_rate (denominator
+            # OR numerator). Mark NEUTRAL right away.
             feedback.record_neutral(nudge_id, reason="cron-initiated")
     except Exception as exc:  # noqa: BLE001 — ledger write is best-effort
         logger.warning(

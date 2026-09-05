@@ -299,7 +299,7 @@ class OpsAskOwnerTool(_OpsScheduler):
                 ),
                 eta_seconds=_ASK_WAKE_MINUTES * 60,
             )
-        # Model-mediated delivery: the allowed text goes back to the model
+        # Model-mediated delivery (D4): the allowed text goes back to the model
         # with the sending named as its next act. The trail records that the
         # contract allowed the ask; whether it was then sent is the message
         # tool's record, not this one's to invent.
@@ -712,7 +712,7 @@ class OpsFinishTool(_OpsScheduler):
         # been checked -- condition_type, the state-claim check, missing_fields
         # and unmeasured_fields all ran above -- so handing it over introduces
         # no unverified content. Handed back AFTER the close, as the text to
-        # send with the message tool: the close never waits on a
+        # send with the message tool (D3/D4): the close never waits on a
         # channel, which is the failure the fork's two-call shape kept hitting.
         md = _write_report_md(cdir, campaign, subject, outcome, observed, baseline, narrative, watch)
         summary = _finish_summary(campaign, subject, outcome, observed, baseline, narrative, watch)

@@ -1,5 +1,3 @@
-"""Lint the PR body from the PR_BODY env var; it becomes the squash commit body."""
-
 from __future__ import annotations
 
 import os

@@ -219,16 +219,13 @@ Run `raven --help` or `raven <command> --help` for the complete CLI surface.
 ## Repo layout
 
 The top-level packages under `raven/`, in one line each. This list is the
-canonical set of commit scopes (see `AGENTS.md`); a change living wholly in a
-top-level tree outside `raven/` uses that tree as its scope instead (`agents`,
-`evolver`, `ui`, ...). Layer seats (which package may
+canonical set of commit scopes (see `AGENTS.md`). Layer seats (which package may
 import which) are recorded under **Layer Seats** in `CONTEXT.md`, routed from
 `CONTEXT-MAP.md`; this section only says what each package does.
 
 | Package | What it is |
 |---|---|
 | `acp` | ACP server side: raven as an agent another host can talk to |
-| `acp_client` | ACP client side: raven driving a third-party local agent as a sub-agent backend |
 | `agent` | The agent loop, its tools, and sub-agent orchestration |
 | `auth` | Authentication and authorization primitives |
 | `browser` | Browser automation and its outbound-address policy |
@@ -264,7 +261,6 @@ import which) are recorded under **Layer Seats** in `CONTEXT.md`, routed from
 | `token_wise` | Token efficiency: cache optimizer, usage tracker |
 | `tracing` | Span capture: context, the instrument decorator, the store |
 | `trajectory` | Turn trajectory store and verdicts |
-| `updates` | The install's own lifecycle: release lookup, upgrade plan and handoff, update nudge |
 | `utils` | Shared helpers, including the atomic write primitive |
 
 ## Architecture
@@ -321,8 +317,6 @@ ui-tui/                 # React/Ink native terminal UI
 bridge/                 # WhatsApp TypeScript bridge
 benchmarks/             # Benchmark adapters, including AppWorld evolver wiring
 evolver/                # Benchmark-driven harness self-evolution: a tool over the library, not in the wheel
-agents/                 # Product definitions served over ACP: launcher + rendered config + product plugins
-plugins-dist/           # Standalone plugin distributions (everos-memory, ppt-engine) on the raven.plugins entry-point group
 ```
 
 <br>

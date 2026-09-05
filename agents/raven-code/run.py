@@ -192,7 +192,7 @@ def render_config(source: Path, partition: Path, gate: dict[str, str]) -> Path:
     # code-flow slice it would deploy the very coding-agent-with-no-approval-
     # gate the swap ordering exists to prevent (the fork armed via env,
     # regardless of config file). setdefault, so an operator's explicit false
-    # still opts out.
+    # still opts out -- the D6 shape.
     flow_slice.setdefault("enabled", True)
 
     partition.mkdir(parents=True, exist_ok=True)

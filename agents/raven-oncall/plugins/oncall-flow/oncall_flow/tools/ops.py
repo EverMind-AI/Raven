@@ -2410,9 +2410,9 @@ class OpsCheckLaterTool(_OpsScheduler):
     timeout_seconds = 30.0
 
     # The fork's ends_turn=True ("waiting is the whole point, the turn is over")
-    # is a loop primitive the trunk does not have; the gate hook says
-    # the same thing through after_iteration short_circuit. Every refusal
-    # below is a plain string on purpose: under the hook,
+    # is a loop primitive the trunk does not have; the part-2c gate hook says
+    # the same thing through after_iteration short_circuit (verdict feature
+    # 1(b)). Every refusal below is a plain string on purpose: under the hook,
     # as under the fork's ends_turn=False override, a refused wait leaves the
     # turn open -- nothing was arranged, and a closed turn here is the one
     # state no wake recovers.

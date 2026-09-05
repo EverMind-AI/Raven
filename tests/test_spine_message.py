@@ -1,5 +1,3 @@
-"""The spine message contracts: ChatType and Source."""
-
 import dataclasses
 
 import pytest

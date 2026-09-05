@@ -98,17 +98,17 @@ def _no_leaked_skill_watchers() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
-def no_vendored_subagents(monkeypatch):
+def no_discovered_products(monkeypatch):
     """Pin agent-table discovery off, so the suite sees the same table everywhere.
 
-    ``AgentRegistry.apply`` discovers rows from the ``subagents/`` tree, and the
-    suite runs inside a checkout that has one. Left alone, every table assertion
-    would depend on machine state a test never set: four extra rows, each enabled
-    or not according to whether that developer had built the folder's venv and
-    supplied its key. A test that wants the discovered rows patches
-    ``subagents_root`` itself to a tree it built.
+    ``AgentRegistry.apply`` discovers rows from the ``agents/`` product tree, and
+    the suite runs inside a checkout that has one. Left alone, every table
+    assertion would depend on machine state a test never set: five extra rows,
+    each enabled or not according to which engine wheels that developer has
+    installed. A test that wants the discovered rows patches ``agents_root``
+    itself to a tree it built.
     """
-    monkeypatch.setattr("raven.agent.subagent.vendored_agents.subagents_root", lambda: None)
+    monkeypatch.setattr("raven.agent.subagent.vendored_agents.agents_root", lambda: None)
 
 
 @pytest.fixture(autouse=True, scope="session")

@@ -1,7 +1,5 @@
 # EverOS memory — extraction & retrieval E2E test plan
 
-> Dated test plan (2026-06). API claims predate the current recall contract (`raven/contracts/memory.py`: explicit `user_id` / `agent_id`, no `owner_id` prefixes) and the plugin's move to `plugins-dist/everos-memory/`.
-
 End-to-end test plan for the `raven_everos` memory backend over a real
 `everos` runtime. Validates dual-track recall (user-side memory +
 agent-side skills) and that memory extraction produces skills matching

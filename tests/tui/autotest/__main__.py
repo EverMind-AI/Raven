@@ -1,5 +1,3 @@
-"""Entry point for ``python -m tests.tui.autotest``, delegating to the autotest CLI."""
-
 import sys
 
 from .cli import main

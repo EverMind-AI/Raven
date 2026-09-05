@@ -398,5 +398,6 @@ class Personalizer:
                 # Insert under the existing section header, keeping the content after it
                 updated = current.replace(header, f"{header}\n{fact_lines}", 1)
             else:
+                # Create a new section at the end of the file
                 updated = current.rstrip() + f"\n\n{header}\n{fact_lines}\n"
             self.memory.write_long_term(updated)

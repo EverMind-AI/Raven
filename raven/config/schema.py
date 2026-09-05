@@ -1081,7 +1081,7 @@ class ThirdPartyCliSubagentConfig(Base):
     Such a row is a stub, not a definition: name, kind, the flag, and an empty
     ``command``. It declares no launcher because it defines nothing -- the folder
     still defines the agent, and
-    :func:`raven.agent.subagent.vendored_agents.merge_vendored_seeds` reads only
+    :func:`raven.agent.subagent.vendored_agents.merge_product_seeds` reads only
     the flag from here. Nothing in it comes from the manifest, so nothing in it
     can go stale when the folder is upgraded.
 
@@ -1392,7 +1392,7 @@ class ThirdPartyAcpSubagentConfig(Base):
     Such a row is a stub, not a definition: name, kind, the flag, and an empty
     ``command``. It declares no launcher because it defines nothing -- the folder
     still defines the agent, and
-    :func:`raven.agent.subagent.vendored_agents.merge_vendored_seeds` reads only
+    :func:`raven.agent.subagent.vendored_agents.merge_product_seeds` reads only
     the flag from here. Nothing in it comes from the manifest, so nothing in it
     can go stale when the folder is upgraded.
 

@@ -1,5 +1,3 @@
-"""The loop passes tool_call_id only to tools whose signature accepts it."""
-
 from __future__ import annotations
 
 from typing import Any

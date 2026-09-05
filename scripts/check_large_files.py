@@ -1,5 +1,3 @@
-"""CI gate against oversized files and report-asset file types in a revision range."""
-
 from __future__ import annotations
 
 import argparse

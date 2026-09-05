@@ -1,5 +1,3 @@
-"""The spine turn contracts: Origin, BusyPolicy, and TurnRequest."""
-
 import dataclasses
 
 import pytest

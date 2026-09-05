@@ -196,7 +196,7 @@ class OpsEventWatcher:
 
         if is_concluded(campaign_dir):
             # A concluded campaign must not come back: stand its one pending
-            # wake down (the ops scheduling tools refuse to schedule new ones) and
+            # wake down (the part-2b tools refuse to schedule new ones) and
             # probe nothing.
             if wakes.cancel_look(self._scheduler, campaign):
                 log_event(campaign_dir, "wake_cancelled", reason="campaign concluded")

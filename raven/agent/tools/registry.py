@@ -713,8 +713,10 @@ class ToolRegistry:
             )
 
         try:
+            # Attempt to cast parameters to match schema types
             params = cast_params(tool.parameters, tool.cast_params(params))
 
+            # Validate parameters
             errors = validate_params(tool.parameters, params) + tool.validate_params(params)
             if errors:
                 return f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors) + _hint

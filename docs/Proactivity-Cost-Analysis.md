@@ -1,7 +1,5 @@
 # Sentinel Proactivity — 引入成本分析
 
-> Snapshot of 2026-04. Config claims predate `planner_model` (now plumbed in `raven/core/proactive_stack.py`).
-
 **数据来源**：`proactivity-eval/output/longrun/v4a/`，6 personas × 30 模拟天，T=0
 **模型**：主 AgentLoop 与 Sentinel Planner **共用同一个 backend** = 本地 vLLM `qwen3.5-27B`（`~/.hermes/config.yaml`，Volcano API gateway）。`commands.py:1230` 中 `ProactivePlanner(provider, provider.get_default_model())`——目前没有独立的 `planner_model` 配置项。
 **评估时间**：2026-04-27

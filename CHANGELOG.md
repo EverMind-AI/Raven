@@ -252,15 +252,6 @@ All notable changes to Raven are documented here.
   send to the web channel (which had no clients) now reach your IM channels and
   the page. The control port no longer serves deliverable downloads; those routes
   stay on the page transport behind its session guard.
-- A docs-governance pass caught the living records up with the tree: the
-  source-language rule and its exemption zones are written down in
-  `AGENTS.md`, the repo-layout table covers every package it names as a
-  commit scope, and the term canon (`CONTEXT.md`) records the full plugin
-  kind roster, compaction, and the product path vocabulary. Stale design
-  docs under `docs/` are stamped as dated records and the report assets
-  (rendered HTML, SVG diagrams, a market-comparison note) are removed.
-- A comment-rectification pass brought in-tree comments back to the
-  comment rules: English only, why over what, no edit markers.
 
 ### Added
 
@@ -431,22 +422,6 @@ All notable changes to Raven are documented here.
   a note that happens to use double braces, used to be refused outright as `unrecognized
   placeholder '...'`; the grammar now only claims a body actually shaped like one of the six,
   and leaves everything else untouched.
-- Three more products join `agents/`: `raven-oncall`, `raven-code` and
-  `raven-ppt` rebuild their vendored twins on public seams (flow plugins
-  `oncall-flow` and `code-flow`; ppt ships no product-local plugins), each
-  accepted by transport-face equivalence against the frozen `subagents/`
-  tree and recorded in a migration closure record (oncall-closure-0901,
-  code-closure-0902, ppt-closure-0902).
-- Plugins can contribute three more kinds beside memory backends, tools and
-  hooks: background services (`[[plugin.contributes.services]]`), per-call
-  tool gates (`tool_gates`) and session observers (`session_observers`).
-  The papers are `raven/contracts/services.py`,
-  `raven/contracts/tool_gate.py` and `raven/contracts/session_events.py`;
-  `CONTRACTS_VERSION` moves to 5.
-- The ppt deck-building engine ships as its own distribution
-  (`plugins-dist/ppt-engine`, plugin id `ppt-engine`): eleven deck tools
-  and a staging hook on the `raven.plugins` entry-point group, with the
-  deck skill corpus and templates as package data.
 
 ### Fixed
 
@@ -468,13 +443,6 @@ All notable changes to Raven are documented here.
   (no tool-event sink listening on the channel), and have a later, unrelated call report the
   stale handle as its own. The handle is now cleared at the top of every call, ahead of every
   refusal.
-- A product engine served over ACP homed itself inside the host's Agent
-  home, so every dispatch to it failed before it started -- a raven engine
-  refuses a working directory that contains its own home -- while
-  capability probing still passed. Product engine homes now live under the
-  raven data directory (`product_acp_home` in
-  `raven/config/product_render.py`), checked against the configured host
-  Agent home, with a per-product `*_ACP_HOME` override that wins outright.
 
 ### Breaking Changes
 

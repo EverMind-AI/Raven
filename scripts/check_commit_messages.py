@@ -1,5 +1,3 @@
-"""Lint every commit message in a revision range against the repo's message rules."""
-
 from __future__ import annotations
 
 import os

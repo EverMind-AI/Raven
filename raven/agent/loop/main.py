@@ -269,7 +269,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # sync with what we record on persisted messages.
         self._now_fn = now_fn or datetime.now
 
-        # Optional plugin-provided MemoryBackend.
+        # AG-1: optional plugin-provided MemoryBackend.
         # Bootstrap wires this from ``PluginRegistry.build_memory_backend``;
         # legacy callsites pass ``None`` and retain the existing post-turn
         # pipeline unchanged. See ``_dispatch_backend_store`` for the call
@@ -400,7 +400,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 provider_pool=provider_pool,
             )
 
-        # Checkpointing is configured under ``runtime.checkpoint``;
+        # Runtime discipline (5th pillar). Bug2 uses ``runtime.checkpoint``;
         # gated by (policy, interactive) — see ``_checkpoint_active``. When
         # the gate is closed the loop is byte-identical to baseline.
         if runtime_config is None:

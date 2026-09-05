@@ -1,7 +1,5 @@
 # Skill Hub 集成方案
 
-> Design record (2026-06). Shipped as `raven/skill_hub/` -- see `CONTEXT.md` for current terms.
-
 把远程 Skill Hub(语义检索 + 元数据/正文 + zip 下载的技能市场)接入 Raven,使
 agent 能在每轮**发现**相关 skill、由 **LLM 决策**用哪个、**按需取正文/脚本**并**执行**。
 

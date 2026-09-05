@@ -1,4 +1,4 @@
-"""Per-turn shadow-git checkpoint of the workspace (a recovery safety net).
+"""Per-turn shadow-git checkpoint of the workspace (Bug2 safety net).
 
 Commits the workspace to an out-of-band git repo (separate ``--git-dir``,
 work-tree pointed at the real workspace) at the end of each turn. The user's
@@ -159,7 +159,7 @@ class CheckpointService:
             )
         candidate = (self._workspace / shadow_dir).resolve()
         # Containment is a load-bearing invariant: per-workspace recovery
-        # isolation breaks if the shadow git lands outside its
+        # isolation (Bug2) breaks if the shadow git lands outside its
         # workspace, since a second AgentLoop on a different workspace
         # configured with a similarly-escaping path could share the repo
         # and cross-contaminate ``edited_files``. ``..`` / absolute paths /

@@ -462,7 +462,7 @@ class SandboxDebugServer:
         async def _wait_task():
             try:
                 result = await execution.wait()
-                # Drain remaining stdout before announcing exit. Without this,
+                # P1.4: drain remaining stdout before announcing exit. Without this,
                 # the client breaks on `exit` and loses the last few stdout chunks
                 # that are still queued in stdout_task. Bound the wait so a stuck
                 # stdout iterator can't deadlock the session forever.
@@ -496,7 +496,7 @@ class SandboxDebugServer:
                 except Exception:
                     pass
 
-            # Any path out of this loop — clean EOF, exception, cancellation —
+            # P1.2: any path out of this loop — clean EOF, exception, cancellation —
             # must fire done_event so an idle shell whose client just walked away
             # is torn down instead of becoming an orphan inside the VM.
             #

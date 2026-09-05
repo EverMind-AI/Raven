@@ -52,6 +52,7 @@ process.on('SIGTERM', async () => {
   process.exit(0)
 })
 
+// Start the server
 server.start().catch(error => {
   console.error('Failed to start bridge:', error)
   process.exit(1)
