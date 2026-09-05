@@ -1063,3 +1063,147 @@ def test_minimize_rejects_unreplayable_bundle(state, tmp_path) -> None:
 
     assert r.exit_code == 1
     assert "not fully replayable" in r.stdout
+
+
+# ── report-bug (the scriptable bug report entry) ───────────────────────
+
+_PEM = "-----BEGIN PRIVATE KEY-----\nMIIabcdef\n-----END PRIVATE KEY-----"
+_ENTROPY_TOKEN = "aB3xK9mQ7pL2vR8sT4wZ6yN1"
+
+
+@pytest.fixture
+def _no_machine_secrets(monkeypatch):
+    from raven.trajectory import bugreport as breport
+
+    monkeypatch.setattr(breport, "collect_known_secrets", lambda _p: ([], True))
+
+
+def _simple_log(state, attrs=None):
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a", attrs=attrs)])
+
+
+def _staging_entries(state):
+    from raven.trajectory import bugreport as breport
+
+    staging = breport.bugreports_root(state) / breport.STAGING_DIR
+    return list(staging.iterdir()) if staging.is_dir() else []
+
+
+def test_report_bug_happy_path_with_yes(state, _no_machine_secrets):
+    from raven.trajectory import bugreport as breport
+
+    _simple_log(state)
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "it broke", "--yes"])
+
+    assert r.exit_code == 0, r.output
+    assert "ready (local_ready)" in r.output
+    assert "Not uploaded" in r.output
+    assert "the attempt was pinned" in r.output
+    ((_dir, record),) = breport.list_reports(state)
+    assert record["problem"]["description"] == "it broke"
+    assert _staging_entries(state) == []
+
+
+def test_report_bug_requires_description(state, _no_machine_secrets):
+    _simple_log(state)
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "--yes"])
+    assert r.exit_code != 0
+
+
+def test_report_bug_non_tty_without_yes_fails_before_side_effects(state, _no_machine_secrets):
+    from raven.trajectory import bugreport as breport
+    from raven.trajectory import store as tstore_module
+
+    _simple_log(state)
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "it broke"])
+
+    assert r.exit_code == 1
+    assert "nothing was collected or pinned" in r.output
+    assert breport.list_reports(state) == []
+    assert not (breport.bugreports_root(state) / breport.STAGING_DIR).exists()
+    assert tstore_module.pins(state) == {}
+
+
+def test_report_bug_needs_review_requires_accept_risk(state, _no_machine_secrets):
+    from raven.trajectory import bugreport as breport
+
+    _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "it broke", "--yes"])
+
+    assert r.exit_code == 1
+    assert "--accept-risk" in r.output
+    assert "residual scan flagged" in r.output
+    assert breport.list_reports(state) == []
+    assert _staging_entries(state) == []
+
+
+def test_report_bug_accept_risk_ships_needs_review(state, _no_machine_secrets):
+    from raven.trajectory import bugreport as breport
+
+    _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "it broke", "--yes", "--accept-risk"])
+
+    assert r.exit_code == 0, r.output
+    ((_dir, record),) = breport.list_reports(state)
+    assert record["redaction"]["classification"] == "needs_review"
+    assert record["status"] == "local_ready"
+
+
+def test_report_bug_blocked_cannot_be_forced(state, _no_machine_secrets):
+    from raven.trajectory import bugreport as breport
+
+    _simple_log(state, attrs={"llm.output": _PEM})
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "it broke", "--yes", "--accept-risk"])
+
+    assert r.exit_code == 1
+    assert "private key block" in r.output
+    assert breport.list_reports(state) == []
+    assert _staging_entries(state) == []
+
+
+def test_report_bug_rejects_bogus_severity(state, _no_machine_secrets):
+    _simple_log(state)
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--severity", "urgent", "--yes"])
+    assert r.exit_code == 1
+    assert "--severity must be one of" in r.output
+
+
+def test_report_bug_traversal_id_fails_cleanly(state, _no_machine_secrets):
+    _simple_log(state)
+    r = runner.invoke(trajectory_app, ["report-bug", "../escape", "-d", "x", "--yes"])
+    assert r.exit_code == 1
+    assert "Could not prepare the trajectory snapshot" in r.output
+
+
+def test_report_bug_freeze_failure_cleans_staging(state, _no_machine_secrets, monkeypatch):
+    from raven.trajectory import bugreport as breport
+
+    _simple_log(state)
+
+    def _boom(*_a, **_k):
+        raise breport.PreparationError("disk full")
+
+    monkeypatch.setattr(breport, "freeze_export", _boom)
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes"])
+
+    assert r.exit_code == 1
+    assert "Could not prepare the trajectory snapshot: disk full" in r.output
+    assert breport.list_reports(state) == []
+    assert _staging_entries(state) == []
+
+
+def test_report_bug_stale_at_confirmation_cleans_staging(state, _no_machine_secrets, monkeypatch):
+    from raven.trajectory import bugreport as breport
+
+    _simple_log(state)
+
+    def _stale(*_a, **_k):
+        raise breport.StaleAttemptError("changed")
+
+    monkeypatch.setattr(breport, "confirm_and_package", _stale)
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes"])
+
+    assert r.exit_code == 1
+    assert "The attempt changed" in r.output
+    assert breport.list_reports(state) == []
+    assert _staging_entries(state) == []

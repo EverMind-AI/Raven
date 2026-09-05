@@ -10,6 +10,12 @@ wrappers over the trajectory layer:
   (:func:`raven.trajectory.bundle.collect_bundle`; auto-pins the id).
 - ``report``  — re-pack, redact a copy (three layers, original untouched),
   preview residual suspects, and produce a shareable ``.tar.gz``.
+- ``report-bug`` — the scriptable face of the browser's "Report a bug": file
+  a Bug Report (record + shippable package with the problem metadata) for an
+  explicit attempt and description (:mod:`raven.trajectory.bugreport`). Unlike
+  ``report``, its deliverable embeds the trajectory inside a problem-metadata
+  envelope and is gated by the redaction classification; ``blocked`` cannot be
+  bypassed by any flag.
 - ``replay``  — feed a bundle's recorded model replies and tool results back
   through the live harness (:func:`raven.trajectory.replay.run_replay`; no
   real tool code runs, no spans are emitted).
@@ -275,6 +281,179 @@ def _report_attempt(
         console.print("  [dim]local backend: nothing was uploaded — hand the file over yourself[/dim]")
     finally:
         shutil.rmtree(staging, ignore_errors=True)
+
+
+@trajectory_app.command("report-bug")
+def trajectory_report_bug(
+    id_: str = typer.Argument(..., metavar="ID", help="Attempt id or trace id"),
+    description: str = typer.Option(..., "--description", "-d", help="One-line problem description (required)"),
+    expected: str = typer.Option("", "--expected", help="Expected result"),
+    actual: str = typer.Option("", "--actual", help="Actual result"),
+    severity: str = typer.Option("", "--severity", help="low | medium | high | critical"),
+    steps: str = typer.Option("", "--steps", help="Steps to reproduce"),
+    reporter: str = typer.Option("", "--reporter", help="Your name or handle (included in the package)"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the creation confirmation (for scripts)"),
+    accept_risk: bool = typer.Option(
+        False,
+        "--accept-risk",
+        help="Grant the separate needs_review authorization (--yes does not imply it)",
+    ),
+    workspace: Path | None = typer.Option(
+        None, "--workspace", "-w", help="Workspace holding the session records (default: the configured workspace)"
+    ),
+    config: Path | None = typer.Option(
+        None, "--config", exists=True, help="Config file the traced agent ran with (seeds redaction + environment)"
+    ),
+) -> None:
+    """File a Bug Report for an attempt: a local record plus a shippable package.
+
+    The package embeds a redacted, path-sanitized Trajectory Report inside a
+    problem-metadata envelope (completeness, environment, redaction summary).
+    Without a TTY, --yes is required and needs_review additionally requires
+    --accept-risk; blocked reports cannot be produced by any flag.
+    """
+    import sys
+
+    from raven.trajectory import bugreport as breport
+
+    if severity and severity not in breport.SEVERITIES:
+        console.print(f"[red]--severity must be one of: {', '.join(breport.SEVERITIES)}[/red]")
+        raise typer.Exit(code=1)
+
+    interactive = sys.stdin.isatty()
+    # Authorization preflight, before any side effect: collection pins the
+    # attempt and creates staging state, and a script that cannot confirm has
+    # no screen on which that could be disclosed.
+    if not interactive and not yes:
+        console.print("[red]--yes is required without a TTY; nothing was collected or pinned.[/red]")
+        raise typer.Exit(code=1)
+
+    try:
+        prep = breport.prepare_trajectory(id_, workspace=workspace, config_path=config)
+    except breport.StaleAttemptError:
+        console.print("[red]The attempt changed while the report was being prepared — nothing was created.[/red]")
+        raise typer.Exit(code=1)
+    except (ValueError, LookupError, breport.PreparationError) as exc:
+        console.print(f"[red]✗ Could not prepare the trajectory snapshot: {escape(str(exc))}[/red]", highlight=False)
+        raise typer.Exit(code=1)
+    console.print("Snapshot collected; the attempt was pinned so cleanup won't remove it.")
+
+    exit_code = 0
+    try:
+        if prep.classification == breport.CLASSIFICATION_BLOCKED:
+            _print_blocked_cli()
+            exit_code = 1
+            return
+        try:
+            prep = breport.freeze_export(
+                prep,
+                description=description,
+                expected=expected,
+                actual=actual,
+                severity=severity,
+                steps=steps,
+                reporter=reporter,
+            )
+        except breport.PreparationError as exc:
+            console.print(
+                f"[red]✗ Could not prepare the trajectory snapshot: {escape(str(exc))}[/red]", highlight=False
+            )
+            exit_code = 1
+            return
+        if prep.classification == breport.CLASSIFICATION_BLOCKED:
+            _print_blocked_cli()
+            exit_code = 1
+            return
+
+        _print_bug_cli_summary(prep)
+        if not yes and not typer.confirm("Create the bug report?", default=True):
+            console.print("Cancelled — no bug report was created.")
+            exit_code = 1
+            return
+        if prep.classification == breport.CLASSIFICATION_NEEDS_REVIEW and not accept_risk:
+            if interactive:
+                if not typer.confirm(
+                    "The redaction needs review: flagged content may include real secrets. Ship the package anyway?",
+                    default=False,
+                ):
+                    console.print("Cancelled — no bug report was created.")
+                    exit_code = 1
+                    return
+            else:
+                console.print(
+                    "[red]The redaction needs review; pass --accept-risk to grant the separate"
+                    " authorization (--yes does not imply it):[/red]"
+                )
+                for reason in prep.reasons:
+                    console.print(f"  - {escape(reason)}", highlight=False)
+                exit_code = 1
+                return
+
+        try:
+            _record_dir, record = breport.confirm_and_package(prep)
+        except breport.StaleAttemptError:
+            console.print("[red]The attempt changed while the report was being prepared — nothing was created.[/red]")
+            exit_code = 1
+            return
+        except breport.PreparationError as exc:
+            console.print(
+                f"[red]✗ Could not prepare the trajectory snapshot: {escape(str(exc))}[/red]", highlight=False
+            )
+            exit_code = 1
+            return
+        except breport.PackagingError as exc:
+            console.print(f"[red]✗ Bug report {escape(prep.report_id)} failed: {escape(str(exc))}[/red]")
+            if exc.retryable:
+                console.print('  The collected snapshot is kept. Retry from "Bug reports" in raven trajectory.')
+            exit_code = 1
+            return
+        console.print(f"[green]✓[/green] Bug report {escape(record['report_id'])} ready (local_ready)", highlight=False)
+        console.print(f"  Package: [cyan]{escape(record['package']['path'])}[/cyan]", highlight=False)
+        console.print("  Not uploaded — hand the package file to a developer yourself.")
+    finally:
+        # A no-op once the record landed; on every earlier exit it removes the
+        # pre-confirmation staging state (mirrors the browser flow).
+        prep.cleanup()
+        if exit_code:
+            raise typer.Exit(code=exit_code)
+
+
+def _print_blocked_cli() -> None:
+    console.print("[red]✗ Cannot create a bug report from this material.[/red]")
+    console.print(
+        "  It contains a private key block; even though the copy was redacted, it is\n"
+        "  not allowed to leave the machine as a bug report package.",
+        highlight=False,
+    )
+
+
+def _print_bug_cli_summary(prep) -> None:
+    from raven.trajectory import bugreport as breport
+
+    meta = prep.package_metadata
+    completeness = meta["completeness"]
+    redaction = meta["redaction"]
+    exact = sum(redaction["exact_replacements"].values())
+    patterns = sum(redaction["pattern_replacements"].values())
+    console.print(f"  Problem:      {escape(prep.problem['description'])}", highlight=False)
+    line = completeness["status"]
+    if completeness["reasons"]:
+        line += f" ({len(completeness['reasons'])} reason(s))"
+    console.print(f"  Completeness: {escape(line)}", highlight=False)
+    counts = f"{exact} known-value + {patterns} pattern replacement(s)"
+    if prep.classification == breport.CLASSIFICATION_NEEDS_REVIEW:
+        console.print(f"  Redaction:    {counts} · NEEDS REVIEW", highlight=False)
+        for reason in prep.reasons:
+            console.print(f"    - {escape(reason)}", highlight=False)
+    else:
+        console.print(f"  Redaction:    {counts} · residual scan: clean", highlight=False)
+    console.print(
+        "  Note: this check looks for credentials only — names, business data, and\n"
+        "  customer content are NOT anonymized.",
+        highlight=False,
+    )
+    console.print(f"  Will produce: bug report package {escape(prep.report_id)}.tar.gz (kept locally)")
+    console.print("  Nothing will be uploaded — the package stays on this machine.")
 
 
 @trajectory_app.command("replay")
