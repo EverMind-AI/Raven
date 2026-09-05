@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from loguru import logger
 
-from raven.providers.rates import is_plan_billed, token_rates
+from raven.providers.rates import is_plan_billed, rates_offline_active, token_rates
 
 # Track which unknown models we've already warned about so we log once each.
 _WARNED_UNKNOWN: set[str] = set()
@@ -46,6 +46,12 @@ def estimate_cost_usd(
     pay-as-you-go rate the user is not paying -- $2.50 per million for a Copilot
     seat. Callers already degrade on None; the tokens are still counted.
     """
+    if rates_offline_active():
+        # An offline context (a trajectory replay, say) prices nothing — and it
+        # must leave no trace: falling through would log the one-time
+        # unknown-model warning and consume it from the process-global cache,
+        # stealing it from the next real turn.
+        return None
     if is_plan_billed(model):
         return None
 
