@@ -485,7 +485,7 @@
     },
     "gui.deleg.spawn_verb": {
       "en": "Spawn",
-      "zh": "Spawn"
+      "zh": "派出"
     },
     "gui.deleg.tail_hint": {
       "en": "Open what this run is doing",
@@ -1185,7 +1185,7 @@
     },
     "gui.composer_ph": {
       "en": "Do anything",
-      "zh": "Do anything"
+      "zh": "想做什么都可以"
     },
     "gui.compress.done": {
       "en": "Archived {n} messages - {before} to {after} tokens",
@@ -4993,7 +4993,7 @@
     },
     "gui.ws.save_copy": {
       "en": "Save a copy",
-      "zh": "\u4fdd\u5b58\u526f\u672c"
+      "zh": "保存副本"
     },
     "gui.ws.expand_lines": {
       "en": "show {n} more",
