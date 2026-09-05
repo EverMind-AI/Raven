@@ -19,12 +19,15 @@ Two questions, deliberately answered from different places:
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import pathlib
 import re
 import sys
 import threading
 import time
 from functools import lru_cache
+from typing import Iterator
 
 import httpx
 from loguru import logger
@@ -58,6 +61,31 @@ _OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 _OPENROUTER_CACHE_TTL = 3600
 _OPENROUTER_CACHE: dict[str, dict] = {}
 _OPENROUTER_CACHE_TIME: float = 0.0
+
+# An offline context (a trajectory replay feeding recorded responses, say) must
+# not gate on the network or leak that it ran: no rate lookup, no catalog warm,
+# no fetch. A ContextVar, not a process global — real turns running
+# concurrently in the same process keep warming and pricing normally. Note that
+# a ContextVar does not cross into worker threads, so the warm guard must run
+# before the background thread is created.
+_OFFLINE: contextvars.ContextVar[bool] = contextvars.ContextVar("rates_offline", default=False)
+
+
+@contextlib.contextmanager
+def rates_offline() -> Iterator[None]:
+    """Inside: rate/catalog code answers from local data only, never the network."""
+    token = _OFFLINE.set(True)
+    try:
+        yield
+    finally:
+        _OFFLINE.reset(token)
+
+
+def rates_offline_active() -> bool:
+    """Whether the current context forbids rate/catalog network activity."""
+    return _OFFLINE.get()
+
+
 # Monotonic stamp of the last background warm attempt (0 = never), and how
 # long a failed one waits before another is allowed. See
 # warm_catalog_in_background.
@@ -258,7 +286,7 @@ def _fetch_openrouter_models(*, allow_fetch: bool = True) -> dict[str, dict]:
     """
     global _OPENROUTER_CACHE, _OPENROUTER_CACHE_TIME
 
-    if not allow_fetch:
+    if not allow_fetch or _OFFLINE.get():
         return _cache_only_openrouter_models()
 
     now = time.time()
@@ -337,6 +365,10 @@ def warm_catalog_in_background() -> None:
     """
     global _WARM_AT
 
+    # Checked before the thread is created: the ContextVar would not cross
+    # into the worker, so this is the only point the offline promise can hold.
+    if _OFFLINE.get():
+        return
     if _OPENROUTER_CACHE and _OPENROUTER_CACHE_TIME and time.time() - _OPENROUTER_CACHE_TIME < _OPENROUTER_CACHE_TTL:
         return
     now = time.monotonic()
@@ -560,6 +592,10 @@ def token_rates(model: str, input_tokens: int = 0, output_tokens: int = 0) -> tu
     Token counts are passed through because a vendor may price by size, so the
     rate for a 200k-token prompt is not always the rate for a short one.
     """
+    if _OFFLINE.get():
+        # An offline context has no use for a cost figure, and both the
+        # LiteLLM tier and the OpenRouter tiers can reach the network.
+        return None
     return (
         _try_openrouter_rates(model, table=_fresh_openrouter_models())
         or _try_litellm_rates(model, input_tokens, output_tokens)

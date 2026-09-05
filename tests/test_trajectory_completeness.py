@@ -427,17 +427,24 @@ def test_non_fatal_divergences_do_not_degrade(tmp_path):
 
 
 def test_probe_makes_no_network_calls(tmp_path, monkeypatch):
-    """Cost estimation reaches remote model catalogs; the probe must not."""
+    """Cost lookups AND the background catalog warm (started by the vision
+    probe) reach remote model catalogs; the replay probe must trigger neither.
+
+    Counted with recording no-ops, not raising stubs: the warm's fetch runs in
+    a daemon thread that swallows exceptions, so a raising stub proves nothing.
+    """
     import raven.providers.rates as rates
 
-    def _no_network(*_a, **_k):
-        raise AssertionError("the replay probe reached a network entry point")
+    calls: list[str] = []
+    monkeypatch.setattr(rates, "warm_catalog_in_background", lambda: calls.append("warm"))
+    monkeypatch.setattr(rates, "_fetch_openrouter_models", lambda **_k: calls.append("fetch") or {})
+    monkeypatch.setattr(rates, "_try_litellm_rates", lambda *_a, **_k: calls.append("litellm") or None)
 
-    monkeypatch.setattr(rates, "_fetch_openrouter_models", _no_network)
-    monkeypatch.setattr(rates, "token_rates", _no_network)
     tree = _bundle(tmp_path)
     status, reasons = _evaluate(tree)
+
     assert (status, reasons) == ("complete", [])
+    assert calls == []
 
 
 @pytest.mark.parametrize(

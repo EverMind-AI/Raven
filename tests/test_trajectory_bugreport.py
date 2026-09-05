@@ -1045,12 +1045,16 @@ def test_deliverable_probe_missing_tool_input_end_to_end(state, workspace, tmp_p
 
 
 def test_freeze_export_makes_no_network_calls(state, workspace, monkeypatch):
+    """Counted with recording no-ops — the catalog warm swallows exceptions in
+    its daemon thread, so a raising stub would pass without proving anything."""
     import raven.providers.rates as rates
 
-    def _no_network(*_a, **_k):
-        raise AssertionError("freeze_export reached a network entry point")
+    calls: list[str] = []
+    monkeypatch.setattr(rates, "warm_catalog_in_background", lambda: calls.append("warm"))
+    monkeypatch.setattr(rates, "_fetch_openrouter_models", lambda **_k: calls.append("fetch") or {})
+    monkeypatch.setattr(rates, "_try_litellm_rates", lambda *_a, **_k: calls.append("litellm") or None)
 
-    monkeypatch.setattr(rates, "_fetch_openrouter_models", _no_network)
-    monkeypatch.setattr(rates, "token_rates", _no_network)
     _record_dir, record = _full_flow(state, workspace)
+
     assert record["status"] == "local_ready"
+    assert calls == []

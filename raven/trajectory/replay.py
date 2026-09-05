@@ -1037,16 +1037,17 @@ async def run_replay(bundle_dir: Path, mode: str = "warn") -> ReplayReport:
     async def _drop_delta(_text: str) -> None:
         return None
 
-    from raven.token_wise.pricing import pricing_suppressed
+    from raven.providers.rates import rates_offline
 
     workspace = Path(tempfile.mkdtemp(prefix="raven-replay-"))
     replies: list[str | None] = []
     turns_replayed = 0
     try:
-        # Suppress pricing alongside tracing: cost estimation reaches remote
-        # model catalogs (LiteLLM, OpenRouter) and a mock replay must neither
-        # gate on the network nor leak that it ran.
-        with trace.suppress(), pricing_suppressed():
+        # Offline alongside trace suppression: rate lookups and the background
+        # catalog warm (the vision-capability probe starts one) reach remote
+        # model catalogs, and a mock replay must neither gate on the network
+        # nor leak that it ran.
+        with trace.suppress(), rates_offline():
             sessions = SessionManager(workspace)
             session_key = recording.turns[0].session_key or recording.manifest.get("session_key")
             pre_attempt = _pre_attempt_messages(recording)
