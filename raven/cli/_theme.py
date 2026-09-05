@@ -9,6 +9,10 @@ and Python cannot share code), but the mapping is not 1:1:
     inline body text, not large glyphs.
   - border stays a gold accent (matching the CLI's gold panel borders), whereas
     theme.ts ``border`` is a neutral grey; separator reuses that grey ``#d0d7de``.
+  - success has no theme.ts ramp; both values are GitHub-style greens chosen to
+    clear 4.5:1 on their respective backgrounds (white / #1e1e1e).
+  - help is the inline help/table-header text in interactive menus: readable
+    (>= 4.5:1) but quieter than body text — separator is too dark for prose.
 
 Detection is kept out of import time and runs on the first themed render (see
 ``onboard_commands._ThemedConsole``). Only truecolor values are provided;
@@ -44,6 +48,8 @@ PALETTE: dict[Scheme, dict[str, str]] = {
         "separator": "#444444",
         "disabled": "#585858",
         "error": "#ff5f5f",
+        "success": "#3fb950",
+        "help": "#9e9e9e",
     },
     "light": {
         "accent": "#935F00",
@@ -55,6 +61,8 @@ PALETTE: dict[Scheme, dict[str, str]] = {
         "separator": "#d0d7de",
         "disabled": "#6e7681",
         "error": "#cf222e",
+        "success": "#1a7f37",
+        "help": "#57606a",
     },
 }
 
@@ -203,6 +211,8 @@ def build_rich_theme(scheme: Scheme):
             "separator": p["separator"],
             "disabled": p["disabled"],
             "error": p["error"],
+            "success": p["success"],
+            "help": p["help"],
         }
     )
 
@@ -224,5 +234,7 @@ def build_questionary_style(scheme: Scheme):
             ("disabled", f"fg:{p['disabled']} italic"),
             ("validation-toolbar", f"fg:{p['error']} bold"),
             ("text", f"fg:{p['text']}"),
+            ("success", f"fg:{p['success']}"),
+            ("help", f"fg:{p['help']}"),
         ]
     )
