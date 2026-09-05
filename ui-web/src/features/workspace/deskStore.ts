@@ -131,10 +131,49 @@ function remember(): void {
   })
 }
 
+const TABS: readonly DeskTab[] = ['deliverables', 'agents', 'diff']
+
+/* What each tab is counting, as the identity of every item in it -- read from
+   the source that tab draws from, so "what is in it" and "what is new in it"
+   can never disagree: the changes this session made, the files it delivered,
+   the background work it started.
+
+   Each id is the key that source already uses for the item, so a door that
+   opens ONE thing can name the same thing this does: a change is its path and
+   the turn that made it, a delivery is its path, an instance is its handle
+   under its agent. */
+export function idsOf(tab: DeskTab): string[] {
+  if (tab === 'diff') return workspace.shared().changes.map((c) => `${c.key}:${c.turn}`)
+  if (tab === 'deliverables') return deliveries.paths()
+  return agents.instances().map((it) => `${it.agent}:${it.handle}`)
+}
+
+/* Whether the desk should be up for this conversation, when the reader has not
+   said. The note in `palette.ts` states the rule and this is where it can be
+   applied: a palette over nothing written, delivered or delegated is three empty
+   lists, and a conversation that HAS those is where the desk earns its place.
+
+   Read from the tabs' own contents rather than a flag, so a conversation one
+   second old and a draft answer the same way -- which is the whole point, since
+   the first message turns one into the other in place. And a conversation the
+   reader returns to answers the way it always did, because by then it has
+   something in it.
+
+   Only ever a fallback: a reader who has stated an answer keeps it, open or
+   shut, and that is what `palette.stated` returns. */
+const worthShowing = (): boolean => TABS.some((tab) => idsOf(tab).length > 0)
+
+const deskUp = (key: string | null): boolean =>
+  palette.stated(key) ?? (key ? worthShowing() : false)
+
+/* The draft screen is shut unless the reader opened it, and does not weigh what
+   is on the desk. It has no conversation to weigh: what the tabs hold belongs to
+   whichever one was last on screen, and that is not this one. */
+
 function initialState(): DeskState {
   return {
     tab: 'deliverables',
-    paletteOpen: palette.read(currentSession()),
+    paletteOpen: deskUp(currentSession()),
     panes: [],
     solo: null,
     active: null,
@@ -243,23 +282,6 @@ function addPane(pane: DeskPane, supersedes?: string | null): void {
    ranks them in. Deliverables first because a file handed over is what the
    session produced; then the work it delegated; then what it edited on the
    way. */
-const TABS: readonly DeskTab[] = ['deliverables', 'agents', 'diff']
-
-/* What each tab is counting, as the identity of every item in it -- read from
-   the source that tab draws from, so "what is in it" and "what is new in it"
-   can never disagree: the changes this session made, the files it delivered,
-   the background work it started.
-
-   Each id is the key that source already uses for the item, so a door that
-   opens ONE thing can name the same thing this does: a change is its path and
-   the turn that made it, a delivery is its path, an instance is its handle
-   under its agent. */
-export function idsOf(tab: DeskTab): string[] {
-  if (tab === 'diff') return workspace.shared().changes.map((c) => `${c.key}:${c.turn}`)
-  if (tab === 'deliverables') return deliveries.paths()
-  return agents.instances().map((it) => `${it.agent}:${it.handle}`)
-}
-
 /* What is in this tab that the reader has not seen.
 
    Zero for the tab that is showing, said here rather than left to the record
@@ -370,7 +392,7 @@ export function toggleDesk(): void {
 }
 
 function applyPalette(key: string | null): void {
-  const paletteOpen = palette.read(key)
+  const paletteOpen = deskUp(key)
   if (paletteOpen !== state.paletteOpen) update({ paletteOpen })
 }
 
@@ -481,11 +503,11 @@ export function closePane(id: string): void {
     solo: state.solo === id ? null : state.solo,
     active: state.active === id ? panes[panes.length - 1]?.id || null : state.active,
     /* The last window closing gives the reader their desk back -- as they left
-       it, not open. `palette.read` is the same answer `sync` gives on a session
+       it, not open. `deskUp` is the same answer `sync` gives on a session
        switch, so a conversation whose desk the reader collapsed stays collapsed
        here too. While windows remain there is nothing to hand back: the desk is
        still standing down for them. */
-    ...(panes.length ? {} : { paletteOpen: palette.read(currentSession()) }),
+    ...(panes.length ? {} : { paletteOpen: deskUp(currentSession()) }),
   })
   if (!panes.length) shell().workspaceSetOpen?.(false)
 }
@@ -552,9 +574,55 @@ export function applyLayout(kept: DeskSaved): void {
   })
 }
 
-export function notifyDesk(): void {
+/* The desk gaining its first item, whichever tab it lands in.
+ *
+ * This is when the fallback can be weighed and, for a conversation the reader
+ * returns to, the ONLY time: `sync` runs on a session switch and the desk is
+ * empty then -- `reset` tears it down on the way out and the replay refills it
+ * after. So the open answer is reached here or nowhere.
+ *
+ * Which makes one event of two cases that look different and are not: a
+ * conversation being replayed, and a first delivery landing in the one on
+ * screen. Both are the desk going from nothing to something, which is exactly
+ * when it stops being three empty lists.
+ *
+ * Three guards, and each is a different question:
+ *
+ * - not while a window is up. The desk is down for two unrelated reasons that
+ *   look identical in the state -- nothing to show, and standing aside for a
+ *   pane -- and answering the first would pull the desk over a file the reader
+ *   had just opened. `closePane` states the same rule from the other end.
+ * - one direction only. Content leaving is not a reason to take the desk away
+ *   from a reader who is looking at it.
+ * - `worthShowing` rather than `deskUp`, with the stated answer asked
+ *   separately: this is the fallback's own path, and `deskUp` would answer it
+ *   with the reader's own open, which the first guard has already dealt with. */
+function weighTheDesk(): void {
+  const key = currentSession()
+  if (!state.panes.length && !state.paletteOpen && palette.stated(key) === null && worthShowing()) {
+    update({ paletteOpen: true })
+    return
+  }
   update({})
 }
+
+export function notifyDesk(): void {
+  weighTheDesk()
+}
+
+/* The third source, which sends no news of its own.
+ *
+ * Changed files and deliveries reach `notifyDesk` through the workspace, but
+ * delegated rows are polled -- `DeskApp` asks every few seconds and the answer
+ * lands in the subagents store, which re-renders the palette from its own
+ * subscription and tells this one nothing. A background playbook that spawns an
+ * instance and writes no file is a conversation whose only desk content arrives
+ * that way, and it left the desk down for good.
+ *
+ * Subscribed here rather than fixed at the poll: the poll is one of several
+ * writers -- the panel refreshes on its own, and `shell/resume` forces one --
+ * and a store should hear its own evidence change wherever it changes from. */
+agents.subscribe(weighTheDesk)
 
 export function reset(): void {
   /* The palette is NOT shut here, and that is the point: a reset runs on the way
