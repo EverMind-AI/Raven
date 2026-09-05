@@ -282,11 +282,7 @@ describe('transcript island, history', () => {
     openFolds()
     const fold = $('.tfold')
     expect(fold).toBeTruthy()
-    /* The fold names what it holds. It used to say "done", which the fold's
-       own existence already means -- `collapse` builds one only after the
-       answer lands -- while implying the TASK had finished, which a
-       backgrounded graph outliving its turn makes false. */
-    expect(fold?.querySelector('.tfh .lb')?.textContent).toBe('en:gui.fold.steps')
+    expect(fold?.querySelector('.tfh .lb')?.textContent).toBe('en:gui.fold.done')
     expect(fold?.querySelector('.tfh .tm')?.textContent).toBe('3.0s')
     const step = fold?.querySelector('.tfb .step')
     expect(step).toBeTruthy()
@@ -1559,11 +1555,11 @@ describe('transcript island, language', () => {
     twoTurns()
     openTurns()
     expect($$('.wkin .wrow')[0]?.querySelector('.vb')?.textContent).toBe('en:gui.act.v.grep')
-    expect($('.tfh .lb')?.textContent).toBe('en:gui.fold.steps')
+    expect($('.tfh .lb')?.textContent).toBe('en:gui.fold.done')
     lang = 'zh'
     act(() => { mount.redraw() })
     expect($$('.wkin .wrow')[0]?.querySelector('.vb')?.textContent).toBe('zh:gui.act.v.grep')
-    expect($('.tfh .lb')?.textContent).toBe('zh:gui.fold.steps')
+    expect($('.tfh .lb')?.textContent).toBe('zh:gui.fold.done')
   })
 
   function twoTurns(): void {
