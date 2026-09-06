@@ -192,6 +192,12 @@ async def run_script(
         # cloned out of it and edited.
         env["PPT_TEMPLATE"] = str(template.prepared)
         env["PPT_TEMPLATE_SOURCE"] = str(template.source)
+    # Set with or without a template bound: `bundled()` in the projected ppt_template
+    # answers by this, and a program that borrows a page should learn a name is wrong
+    # rather than that nothing can be opened.
+    from raven_ppt.services.template.defaults import templates_dir
+
+    env["PPT_BUNDLED_TEMPLATES"] = str(templates_dir())
 
     runner = workdir / "_run_build.py"
     runner.write_text(_RUNNER, encoding="utf-8")

@@ -22,15 +22,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
+
+from loguru import logger
 
 from raven.contracts.tool import Tool, ToolResult
 from raven.utils.images import image_block, text_block
 from raven_ppt.backends.script import deck_path
 from raven_ppt.contracts import Project, brief_path, load_brief, load_outline, outline_path
-from raven_ppt.services import regress
 from raven_ppt.stages.build import BATCH_VIEWS
 from raven_ppt.tools import _return
 from raven_ppt.tools._args import ArgumentError, as_ints
@@ -55,11 +57,29 @@ RECORD_FILE = "review.json"
 # seen. Eight leaves a deck of the usual length two or three batches deep. If a run is
 # ever actually limited, that is the measurement this should be set from.
 READERS = 8
+# How long one reading may take, all pages together, before the pages still being
+# read are given up and named as unread. Measured on an 88-minute run: six whole-deck
+# builds spent 434, 208, 198, 900, 439 and 423 seconds, 43 of the 88 minutes, and the
+# 900 was the build tool's own timeout -- every second of it a reasoning model
+# thinking about one page's picture, fifteen pages at a time. A page not read within
+# the budget comes back on the next build like any other unread page; a build that
+# takes four minutes to answer is one the author waits for, one that takes fifteen
+# is a turn lost.
+READING_BUDGET_S = 240.0
+# And how long all of a deck's readings may take together before the gates are the
+# only thing reading it. Measured on a 20-page run: 18 whole-deck builds, each one
+# re-reading the pages the last revision touched, 136 of the run's 327 minutes inside
+# ppt_build. A reading is worth most on the first draft and least on the eighteenth
+# revision, when the author is polishing against the gates anyway.
+READING_DECK_BUDGET_S = 900.0
 
 # What one page's reply may cost. A reviewer that finds four problems writes four
 # short objects; reasoning models spend from the same budget, which is why this is
 # not tight.
-REPLY_TOKENS = 2500
+# Room for the reply and for a reasoning model's thinking before it, which spends
+# from the same budget: at 2500 a reader cut off mid-object was asked again at 5000,
+# and the second call cost what the first had. Sized so one call is the call.
+REPLY_TOKENS = 8000
 
 # The document both sides read. The author writes against it and this call judges the
 # render by it, and that is the point of it being a file rather than a string here: a
@@ -133,6 +153,7 @@ class PptReviewTool(Tool):
         self.workspace = workspace
         self.views = views
         self.composer = composer
+        self.last_reading: dict[str, Any] = {}
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -181,7 +202,9 @@ class PptReviewTool(Tool):
                 hint="the requirements are the skill's; a build without the skill has no design review",
             )
 
-        renders = await self.views.pages(built, deck.review_dir / "review", wanted or None)
+        renders = _fresh_build_renders(deck, built, wanted) or await self.views.pages(
+            built, deck.review_dir / "review", wanted or None
+        )
         if not renders:
             return _return.failed(
                 "the pages could not be rendered on this machine, so nothing could be looked at",
@@ -214,6 +237,14 @@ class PptReviewTool(Tool):
             # Named rather than dropped: a page the reviewer could not read is not a
             # page that came back clean, and the two are one list once they are merged.
             payload["could_not_be_read"] = unread
+        last = getattr(self, "last_reading", None) or {}
+        payload["reading_seconds"] = last.get("seconds", 0.0)
+        if last.get("over_budget"):
+            payload["reading_budget"] = (
+                f"{len(last['over_budget'])} page(s) were still being read when the {READING_BUDGET_S:.0f}s "
+                f"reading budget ran out ({', '.join(str(n) for n in last['over_budget'])}); they stay unread "
+                "and the next build reads them"
+            )
         if len(renders) > len(shown):
             payload["pages_not_reviewed"] = sorted(set(renders) - set(shown))
         # What the record is for: the automatic reading runs while a page-version of the
@@ -265,9 +296,11 @@ class PptReviewTool(Tool):
         asked = BRIEF.format(language=language, requirements=requirements())
 
         reading = asyncio.Semaphore(READERS)
+        seconds: dict[int, float] = {}
 
         async def one(number: int) -> tuple[int, list[dict[str, str]]] | None:
             async with reading:
+                started = time.monotonic()
                 reply = await self.composer.ask(
                     asked,
                     [
@@ -276,13 +309,37 @@ class PptReviewTool(Tool):
                     ],
                     max_tokens=REPLY_TOKENS,
                 )
+                seconds[number] = round(time.monotonic() - started, 1)
             try:
                 payload = json.loads(reply[reply.index("{") : reply.rindex("}") + 1])
             except (ValueError, AttributeError):
                 return None
             return number, _vetted(payload.get("problems")), str(payload.get("reads") or "").strip()
 
-        read = [entry for entry in await asyncio.gather(*(one(number) for number in shown)) if entry]
+        # Bounded as a whole, not per page: the budget is what the author waits, and
+        # a page still being read when it runs out is left for the next build rather
+        # than making this one late.
+        started = time.monotonic()
+        tasks = {asyncio.ensure_future(one(number)): number for number in shown}
+        done, pending = await asyncio.wait(tasks, timeout=READING_BUDGET_S)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        read = [task.result() for task in done if not task.cancelled() and task.exception() is None and task.result()]
+        self.last_reading = {
+            "seconds": round(time.monotonic() - started, 1),
+            "per_page_s": {str(number): seconds[number] for number in sorted(seconds)},
+            "over_budget": sorted(tasks[task] for task in pending),
+        }
+        logger.info(
+            "ppt_review: read {} of {} page(s) in {}s ({} over the {:.0f}s budget)",
+            len(read),
+            len(shown),
+            self.last_reading["seconds"],
+            len(pending),
+            READING_BUDGET_S,
+        )
         return (
             {number: problems for number, problems, _ in read},
             {number: reads for number, _, reads in read if reads},
@@ -308,9 +365,68 @@ def _marked(deck: Project, read: Iterable[int]) -> dict[str, str | None]:
     known fingerprints and an empty mark, so the next build launched the reader on two
     pages nobody had changed.
     """
-    now = regress.code_by_page(deck)
+    now = render_by_page(deck)
     marks = {**_marks(deck), **{page: now.get(page, "") for page in read}}
     return {str(page): marks[page] for page in sorted(marks)}
+
+
+def _fresh_build_renders(deck: Project, built: Path, wanted: list[int]) -> dict[int, Path]:
+    """The build's own page renders, when every page asked for has one newer than the deck.
+
+    The build rendered every page to measure it fourteen seconds ago; rendering them
+    again for the reader was the same fourteen seconds, and the reader's record is
+    keyed by the build's renders anyway.
+    """
+    try:
+        drawn = built.stat().st_mtime
+    except OSError:
+        return {}
+    have = {
+        number: png for png in deck.review_dir.glob("page-*.png") if (number := _build_render_number(png)) is not None
+    }
+    fresh = {number: png for number, png in have.items() if png.stat().st_mtime >= drawn}
+    if not fresh:
+        return {}
+    if wanted and any(number not in fresh for number in wanted):
+        return {}
+    return {number: fresh[number] for number in (wanted or sorted(fresh))}
+
+
+def render_by_page(deck: Project) -> dict[int, str]:
+    """Per page, a fingerprint of what the last build rendered: sha1 of its PNG.
+
+    The version a reading is recorded at. It used to be the fingerprint of the code
+    that drew the page, and a revision that touched five pages -- or one line of the
+    prelude every page runs -- made every one of them unread again: a 20-page run
+    built the whole deck 18 times and re-read pages whose pixels had not moved, 136
+    of its 327 minutes. Pixels are what the reader looks at, so pixels are the
+    version: a page whose render is byte-identical to the one that was read has been
+    read. Pages the last build did not render are left out, so a caller sees
+    "unknown" rather than "unchanged".
+    """
+    import hashlib
+
+    found: dict[int, str] = {}
+    for png in deck.review_dir.glob("page-*.png"):
+        number = _build_render_number(png)
+        if number is None:
+            continue
+        try:
+            found[number] = hashlib.sha1(png.read_bytes(), usedforsecurity=False).hexdigest()
+        except OSError:
+            continue
+    return found
+
+
+def _build_render_number(png: Path) -> int | None:
+    """The page a build render names, or None for any other file in the review directory.
+
+    The build writes `page-001.png`, three digits, and only that spelling is a version:
+    the tool's own batch views and a reader's renders land beside them under other
+    names, and a looser match let two files answer for one page.
+    """
+    tail = png.stem.rsplit("-", 1)[-1]
+    return int(tail) if len(tail) == 3 and tail.isdigit() else None
 
 
 def _marks(deck: Project) -> dict[int, str | None]:
@@ -366,7 +482,7 @@ def _already_read(deck: Project) -> set[int]:
     version has become unknown -- nothing there says the page changed, and re-reading a
     whole deck on that silence costs a reading per build and finds nothing new.
     """
-    now = regress.code_by_page(deck)
+    now = render_by_page(deck)
     covered = set()
     for page, code in _marks(deck).items():
         if code is None:
@@ -379,6 +495,39 @@ def _already_read(deck: Project) -> set[int]:
     return covered
 
 
+def reading_seconds_spent(deck: Project) -> float:
+    """How many seconds this deck's readings have taken so far, all rounds together."""
+    try:
+        said = json.loads((deck.review_dir / RECORD_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return 0.0
+    try:
+        return float(said.get("reading_seconds_total") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def readings_taken(deck: Project) -> int:
+    """How many readings this deck has already had.
+
+    The record is rewritten by each reading rather than appended to, so the count has
+    to ride in it. It is what bounds the automatic reading: a page is unread again once
+    the code that drew it changes, and a revision usually changes several pages, so
+    without a count the reading re-arms itself every time the author acts on it.
+    Measured on a fifteen-page run: two readings, thirty reader calls, opinions on
+    eleven pages, and fifty edits after the first build.
+    """
+    try:
+        said = json.loads((deck.review_dir / RECORD_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return 0
+    count = said.get("readings") if isinstance(said, dict) else None
+    if isinstance(count, int) and count >= 0:
+        return count
+    # A record written before the count existed is one reading that happened.
+    return 1 if isinstance(said, dict) and said.get("pages_read") is not None else 0
+
+
 def _record(deck: Project, payload: dict[str, Any]) -> None:
     """Leave the list on disk, and never fail the call over it.
 
@@ -388,7 +537,18 @@ def _record(deck: Project, payload: dict[str, Any]) -> None:
     try:
         deck.review_dir.mkdir(parents=True, exist_ok=True)
         (deck.review_dir / RECORD_FILE).write_text(
-            json.dumps({"schema": "raven_ppt.review.v1", **payload}, ensure_ascii=False, indent=1),
+            json.dumps(
+                {
+                    "schema": "raven_ppt.review.v1",
+                    "readings": readings_taken(deck) + 1,
+                    "reading_seconds_total": round(
+                        reading_seconds_spent(deck) + float(payload.get("reading_seconds") or 0.0), 1
+                    ),
+                    **payload,
+                },
+                ensure_ascii=False,
+                indent=1,
+            ),
             encoding="utf-8",
         )
     except OSError:

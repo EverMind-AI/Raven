@@ -15,13 +15,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from raven_ppt.contracts import BuildOutcome, Finding, Project, brief_path, load_brief
+from raven_ppt.contracts.masters import Bands
 from raven_ppt.services.gates import (
     DeckUnderReview,
     check_deck,
     figure_labels,
     load_figure_catalog,
 )
+from raven_ppt.services.gates.grading import checks_for
 from raven_ppt.services.ingest import CATALOGUE_FILE, MATERIALS_FILE
+from raven_ppt.services.template.bands import bands_of, read_bands, write_bands
 from raven_ppt.stages._views import DeckViews
 
 
@@ -32,22 +35,137 @@ class DeckMeasurer:
     views: DeckViews = field(default_factory=DeckViews)
     skipped: list[str] = field(default_factory=list)
 
-    async def __call__(self, project: Project, pptx: Path, outcome: BuildOutcome | None = None) -> list[Finding]:
+    async def __call__(
+        self,
+        project: Project,
+        pptx: Path,
+        outcome: BuildOutcome | None = None,
+        changed: str = "delivery",
+    ) -> list[Finding]:
+        """Measure the built deck, running the checks the change is worth.
+
+        `changed` says what this build altered, and the default is the one that runs
+        everything: a caller that does not know spends the full pass rather than
+        quietly skipping a refusal. See `gates.grading.checks_for` -- the names it
+        leaves out are checks that did not run, which is not the same answer as a
+        check that found nothing, and the caller has to carry the previous build's
+        findings for them.
+        """
         pdf = await self.views.pdf(pptx, project.review_dir)
+        prototypes = _prototypes(project)
         deck = DeckUnderReview(
             pptx_path=pptx,
             pdf_path=pdf,
+            rendered_pages=await self._rendered(project, pdf, outcome),
             outcome=outcome,
             figure_labels=_figure_labels(project),
             figure_catalogue=_figure_catalogue(project),
             materials=_materials(project),
             brief=load_brief(brief_path(project)),
             template=_template(project),
-            prototypes=_prototypes(project),
+            prototypes=prototypes,
+            band_grid=_bands(project, prototypes, pdf),
             outline=_outline(project),
         )
         self.skipped.clear()
-        return check_deck(deck, on_error=lambda name, exc: self.skipped.append(f"{name}: {exc}"))
+        wanted = checks_for(changed, has_render=pdf is not None)
+        return check_deck(deck, only=wanted, on_error=lambda name, exc: self.skipped.append(f"{name}: {exc}"))
+
+    async def _rendered(self, project: Project, pdf: Path | None, outcome: BuildOutcome | None) -> list[Path] | None:
+        """Every page as a PNG, rasterising only the pages that are not already one.
+
+        Handed to the record rather than left to the checks. A pixel check that finds
+        no renders rasterises the deck itself, at every page, on every build: measured
+        on a fifteen-page 6.6MB deck, 19.6s of a 30.7s measurement, against 4.4s for
+        the five pages a revision had touched. Passing them in also means one
+        rasterisation serves every check instead of one per check.
+
+        A page is reused only when its PNG is newer than the file it was drawn from and
+        the deck still has the page count the directory holds. Both halves are needed:
+        the PDF is rewritten whole on every build, so its own timestamp says nothing
+        about which page changed, and a deck that gained or lost a page renumbers every
+        PNG after the insertion.
+        """
+        if pdf is None:
+            return None
+        pages = getattr(outcome, "pages", None)
+        if not isinstance(pages, int) or pages <= 0:
+            return None
+        folder = project.review_dir
+        have = {number: folder / f"page-{number:03d}.png" for number in range(1, pages + 1)}
+        stale = sorted(number for number, png in have.items() if not png.is_file())
+        if len(list(folder.glob("page-*.png"))) != pages:
+            stale = sorted(have)
+        fresh = _drawn_again(project, outcome)
+        if fresh is None:
+            stale = sorted(have)
+        else:
+            stale = sorted(set(stale) | fresh)
+        if stale:
+            await self.views.pages_of(pdf, folder, stale)
+        return [have[number] for number in sorted(have) if have[number].is_file()] or None
+
+
+def _drawn_again(project: Project, outcome: BuildOutcome | None) -> set[int] | None:
+    """The pages whose code differs from the version the last render was taken of.
+
+    None when the question cannot be answered -- no fingerprints yet, or a page count
+    that moved -- and the caller then rasterises everything, which is the safe way to
+    be wrong about a cache.
+    """
+    from raven_ppt.backends.script.workspace import script_path
+    from raven_ppt.services import seen
+
+    sources = getattr(outcome, "sources", None)
+    if not sources:
+        return None
+    try:
+        script = script_path(project).read_text(encoding="utf-8")
+    except (OSError, AttributeError):
+        return None
+    blocks = seen.blocks_of(script, sources)
+    if not blocks:
+        return None
+    # Every page's own code plus the prelude they all run: the pixels a page shows
+    # depend on both, and a cache keyed on the page span alone served stale renders
+    # to every pixel gate after a shared constant changed.
+    prelude = seen.shared_digest(script, sources)
+    blocks = {page: f"{digest}.{prelude}" for page, digest in blocks.items()}
+    known = _rendered_marks(project)
+    if known is None:
+        _write_rendered_marks(project, blocks)
+        return None
+    _write_rendered_marks(project, blocks)
+    return {page for page, digest in blocks.items() if known.get(str(page)) != digest}
+
+
+RENDERED_FILE = "rendered.json"
+
+
+def _rendered_marks(project: Project) -> dict[str, str] | None:
+    """The fingerprints the PNGs on disk were taken of, or None when there are none."""
+    import json
+
+    try:
+        raw = json.loads((project.state_dir / RENDERED_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    pages = raw.get("pages") if isinstance(raw, dict) else None
+    return {str(k): str(v) for k, v in pages.items()} if isinstance(pages, dict) else None
+
+
+def _write_rendered_marks(project: Project, blocks: dict[int, str]) -> None:
+    """Never fail a measurement over the cache's own bookkeeping."""
+    import json
+
+    try:
+        project.state_dir.mkdir(parents=True, exist_ok=True)
+        (project.state_dir / RENDERED_FILE).write_text(
+            json.dumps({"pages": {str(page): digest for page, digest in blocks.items()}}, indent=1),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
 
 
 def _outline(project: Project):
@@ -72,6 +190,25 @@ def _template(project: Project) -> Path | None:
 
     path = prepared_path(project)
     return path if path.is_file() else None
+
+
+def _bands(project: Project, prototypes: Path | None, pdf: Path | None) -> Bands | None:
+    """The deck's band grid: the one recorded beside the template, else measured once.
+
+    Written down on first measurement because deriving it opens the template and reads
+    the render, and every build after the first would pay that again for an answer that
+    cannot change while the template does not.
+    """
+    kept = read_bands(project)
+    if kept is not None or prototypes is None:
+        return kept
+    measured = bands_of(prototypes, pdf)
+    if measured is not None:
+        try:
+            write_bands(project, measured)
+        except OSError:
+            pass  # the reading still serves this build
+    return measured
 
 
 def _prototypes(project: Project) -> Path | None:

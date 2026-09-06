@@ -129,16 +129,42 @@ def materials_from_prompt(text: str) -> list[str]:
     The tail is trimmed a character at a time until what is left is a file, rather
     than by stripping ASCII full stops: prose in any script puts its punctuation
     against the path, and a mark that is not ASCII stays attached.
+
+    One match can hold more than one path, so the scan carries on past the file it
+    just found instead of taking it as the answer for the whole match. The pattern
+    ends a path on ASCII punctuation, so ``a.md, b.md`` arrives as two matches and
+    ``a.md`` plus an ideographic comma plus ``b.md`` arrives as one -- and taking
+    the first file in it dropped ``b.md`` without a word, which is the silence
+    ``stage`` refuses for a file it cannot copy. Widening the pattern instead was
+    tried and is worse: every mark added to it is a mark a filename may not
+    contain, and ``/root/report (final).md`` written in full-width brackets really
+    does exist.
     """
     found: list[str] = []
     for match in _PATH_RE.findall(text):
-        for end in range(len(match), 1, -1):
-            candidate = match[:end]
-            if Path(candidate).is_file():
-                if Path(candidate).suffix.lower() in MATERIAL_SUFFIXES and candidate not in found:
-                    found.append(candidate)
-                break
+        for candidate in _files_in(match):
+            if Path(candidate).suffix.lower() in MATERIAL_SUFFIXES and candidate not in found:
+                found.append(candidate)
     return found
+
+
+def _files_in(match: str) -> Iterator[str]:
+    """Every existing file named inside one prose match, longest name first.
+
+    Walks the match one path-start at a time: the longest prefix that is a file is
+    the answer for that start, and the search resumes at the next ``/`` after it.
+    A start that names nothing is not the end of the match either -- a name that
+    does not exist can be followed by one that does.
+    """
+    rest = match
+    while len(rest) > 1:
+        hit = next((end for end in range(len(rest), 1, -1) if Path(rest[:end]).is_file()), None)
+        if hit is not None:
+            yield rest[:hit]
+        following = rest.find("/", hit if hit is not None else 1)
+        if following < 0:
+            return
+        rest = rest[following:]
 
 
 def unique_sources(paths: list[str]) -> list[str]:
