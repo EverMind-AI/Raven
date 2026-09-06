@@ -37,23 +37,30 @@ and then deleted: it bounded a deck at what the template's own pages happened to
 hold, which is the opposite of what a program-writing author needs.
 """
 
+from raven_ppt.services.template.bands import bands_of, bands_path, read_bands, write_bands
 from raven_ppt.services.template.bind import BoundTemplate, bind, bound
 from raven_ppt.services.template.compose import (
     adapt,
+    add_unit,
     arrangement,
+    backdrop,
     boxes,
     clone_page,
+    clone_shape,
     drop_shape,
     fill,
     helper_source,
+    layout_pictures,
     place,
     prototype,
+    remove_unit,
     replace_picture,
     replace_text,
     shape_at,
     units,
+    wash,
 )
-from raven_ppt.services.template.decompile import PageSource, decompile
+from raven_ppt.services.template.decompile import PageSource, decompile, needed_imports
 from raven_ppt.services.template.defaults import (
     DEFAULT_TEMPLATES,
     DefaultTemplate,
@@ -87,6 +94,10 @@ from raven_ppt.services.template.prepare import (
 from raven_ppt.services.template.theme import theme_name, theme_of
 
 __all__ = [
+    "bands_of",
+    "bands_path",
+    "read_bands",
+    "write_bands",
     "House",
     "Row",
     "house_style",
@@ -111,11 +122,17 @@ __all__ = [
     "TemplateLayout",
     "bind",
     "bound",
+    "add_unit",
+    "backdrop",
     "clone_page",
+    "clone_shape",
     "decompile",
+    "needed_imports",
     "drop_shape",
+    "remove_unit",
     "helper_source",
     "inspect_template",
+    "layout_pictures",
     "prepare",
     "prepared_path",
     "strip_hidden",
@@ -124,6 +141,7 @@ __all__ = [
     "theme_of",
     "replace_picture",
     "replace_text",
+    "wash",
     "template_path",
     "DEFAULT_TEMPLATES",
     "DefaultTemplate",

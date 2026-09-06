@@ -224,3 +224,117 @@ def test_a_photograph_used_as_a_shape_fill_is_still_the_templates(tmp_path: Path
     findings = template_pictures(deck, template)
     assert [f.kind for f in findings] == ["template_picture"]
     assert findings[0].detail["pages"] == {"1": 1}, "the fill counted once, not once per ancestor"
+
+
+def _bundled(monkeypatch, tmp_path: Path, stem: str, template: Path) -> Path:
+    """Make `template` answer as the bundled template called `stem`."""
+    from raven_ppt.services.template import defaults
+
+    folder = tmp_path / "bundled"
+    folder.mkdir(exist_ok=True)
+    target = folder / f"{stem}.pptx"
+    target.write_bytes(template.read_bytes())
+    monkeypatch.setattr(defaults, "templates_dir", lambda: folder)
+    return target
+
+
+def test_a_borrowed_page_is_held_to_the_file_it_borrowed_from(tmp_path: Path, monkeypatch) -> None:
+    from raven_ppt.services.measure.adherence import prototype_kept
+
+    """The plan says `borrowed` and `prototype`; the check opens that file, not the bound one."""
+    from raven_ppt.contracts.outline import Outline, PagePlan
+
+    bound = _template(tmp_path / "bound.pptx")
+    other = Presentation()
+    other.slide_width, other.slide_height = Inches(13.333), Inches(7.5)
+    page = other.slides.add_slide(other.slide_layouts[6])
+    for index in range(6):
+        page.shapes.add_textbox(Inches(0.5 + index * 2.0), Inches(4.4), Inches(1.5), Inches(0.6))
+    other.save(str(tmp_path / "other.pptx"))
+    lender = _bundled(monkeypatch, tmp_path, "lender", tmp_path / "other.pptx")
+
+    deck = Presentation(str(lender))
+    deck.save(str(tmp_path / "deck.pptx"))
+    plan = Outline(takeaway="t", pages=(PagePlan(page=1, claim="c", prototype=1, borrowed="lender"),))
+
+    assert prototype_kept(tmp_path / "deck.pptx", bound, plan) == [], "page 1 is the lender's page 1, kept"
+
+    wrong = Outline(takeaway="t", pages=(PagePlan(page=1, claim="c", prototype=1),))
+    found = prototype_kept(tmp_path / "deck.pptx", bound, wrong)
+    assert [finding.kind for finding in found] == ["prototype_kept"], "read against the bound template it is not"
+
+
+def test_a_borrowed_prototype_names_the_lender_in_its_remedy(tmp_path: Path, monkeypatch) -> None:
+    from raven_ppt.contracts.outline import Outline, PagePlan
+    from raven_ppt.services.measure.adherence import prototype_kept
+
+    bound = _template(tmp_path / "bound.pptx")
+    lender = _bundled(monkeypatch, tmp_path, "lender", bound)
+    other = Presentation()
+    other.slide_width, other.slide_height = Inches(13.333), Inches(7.5)
+    page = other.slides.add_slide(other.slide_layouts[6])
+    for index in range(6):
+        page.shapes.add_textbox(Inches(0.5 + index * 2.0), Inches(4.4), Inches(1.5), Inches(0.6))
+    other.save(str(tmp_path / "deck.pptx"))
+    plan = Outline(takeaway="t", pages=(PagePlan(page=1, claim="c", prototype=2, borrowed="lender"),))
+
+    found = prototype_kept(tmp_path / "deck.pptx", None, plan)
+
+    assert len(found) == 1
+    assert "bundled template lender's page 2" in found[0].message
+    assert "prototype(bundled('lender'), 2)" in found[0].message
+    assert lender.is_file()
+
+
+def test_placeholder_copy_reads_the_borrowed_files_too(tmp_path: Path) -> None:
+    from raven_ppt.services.measure.adherence import placeholder_copy
+
+    lender = Presentation()
+    lender.slide_width, lender.slide_height = Inches(13.333), Inches(7.5)
+    page = lender.slides.add_slide(lender.slide_layouts[6])
+    box = page.shapes.add_textbox(Inches(1), Inches(1), Inches(6), Inches(1))
+    box.text_frame.text = "借来的模板自己的示例文字"
+    lender.save(str(tmp_path / "lender.pptx"))
+    bound = _template(tmp_path / "bound.pptx")
+    lender.save(str(tmp_path / "deck.pptx"))
+
+    assert placeholder_copy(tmp_path / "deck.pptx", bound) == [], "the bound template never said it"
+    found = placeholder_copy(tmp_path / "deck.pptx", bound, [tmp_path / "lender.pptx"])
+    assert [finding.kind for finding in found] == ["placeholder_copy"]
+    assert "借来的模板自己的示例文字" in found[0].message
+
+
+def test_a_photograph_on_the_layout_is_reported_once_per_layout(tmp_path: Path) -> None:
+    """The template's picture that `template_pictures` cannot see: it is on the layout
+    every page inherits, not on the page. Named once with every page under it, because
+    the fix is one call for the whole layout."""
+    from PIL import Image
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    from raven_ppt.services.measure.adherence import layout_photographs, layouts_with_photographs
+    from tests._ppt_engine_fixtures import layout_picture
+
+    image = tmp_path / "photo.png"
+    Image.new("RGB", (800, 600), (90, 90, 90)).save(image)
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    layout = presentation.slide_layouts[6]
+    layout_picture(layout, image, 0, 0, 6.4, 4.7)
+    layout_picture(layout, image, 12, 7, 0.5, 0.4)  # a mark, not content
+    presentation.slides.add_slide(layout)
+    presentation.slides.add_slide(presentation.slide_layouts[5])
+    presentation.slides.add_slide(layout)
+    template = tmp_path / "template.pptx"
+    presentation.save(str(template))
+    deck = tmp_path / "deck.pptx"
+    presentation.save(str(deck))
+
+    carried = layouts_with_photographs(deck)
+    assert list(carried.values()) == [([1, 3], ["6.4x4.7in"])]
+
+    findings = layout_photographs(deck, template)
+    assert [f.kind for f in findings] == ["layout_picture"]
+    assert "under page(s) 1, 3" in findings[0].message
+    assert "layout_pictures(slide)" in findings[0].message
+    assert layout_photographs(deck, None) == [], "no template bound, nothing to call the template's own"

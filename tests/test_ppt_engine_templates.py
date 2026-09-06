@@ -1,6 +1,6 @@
 """The ppt-engine template payload machinery: pins, the gitignore fence, the pulls.
 
-The 12 bundled deck templates (70.53 MiB, 11 over the repo's 1 MiB cap)
+The 8 bundled deck templates (35.73 MiB, 5 over the repo's 1 MiB cap)
 never enter git; ``plugins-dist/ppt-engine/templates.manifest.json`` is the
 tracked truth and ``fetch_templates.py`` the only way payload reaches the
 gitignored destination. What this family pins: the manifest agrees with the
@@ -22,11 +22,11 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 ENGINE_HOME = REPO / "plugins-dist" / "ppt-engine"
 MANIFEST = ENGINE_HOME / "templates.manifest.json"
-FORK_TEMPLATES = REPO / "subagents" / "raven-ppt" / "Raven-PPT" / "raven" / "ppt" / "assets" / "templates"
+REGISTRY = "https://gitlab.com/api/v4/projects/84258686/packages/generic/ppt-templates/"
 
-fork_present = pytest.mark.skipif(
-    not FORK_TEMPLATES.is_dir(),
-    reason="the vendored fork tree is retired; the pins now hold against fetched payload",
+payload_present = pytest.mark.skipif(
+    not any((ENGINE_HOME / "raven_ppt" / "assets" / "templates").glob("*.pptx")),
+    reason="the template payload is fetched, not tracked; run plugins-dist/ppt-engine/fetch_templates.py",
 )
 
 
@@ -55,19 +55,19 @@ def _pinned(payload: dict[str, bytes]) -> dict:
     }
 
 
-@fork_present
-def test_the_manifest_pins_exactly_the_forks_twelve_templates(manifest):
-    """Names, sizes and sha256 all recomputed from the vendored tree: the
-    manifest is derived truth, never hand-kept."""
-    fork = {
-        path.name: {"bytes": path.stat().st_size, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
-        for path in FORK_TEMPLATES.glob("*.pptx")
-    }
-    assert len(manifest["files"]) == 12
-    assert {entry["name"] for entry in manifest["files"]} == set(fork)
+def test_the_manifest_names_the_eight_templates_and_a_real_endpoint(manifest):
+    """The pins are the tracked truth and the endpoint is a place, not a placeholder:
+    the eight re-cut templates live as a generic package in the project's own GitLab
+    package registry, so a fresh clone fetches them with the token that cloned it."""
+    assert len(manifest["files"]) == 8
+    assert [entry["name"] for entry in manifest["files"]] == sorted(entry["name"] for entry in manifest["files"])
     for entry in manifest["files"]:
-        assert entry["bytes"] == fork[entry["name"]]["bytes"], entry["name"]
-        assert entry["sha256"] == fork[entry["name"]]["sha256"], entry["name"]
+        assert entry["name"].endswith(".pptx")
+        assert entry["bytes"] > 0
+        assert len(entry["sha256"]) == 64 and int(entry["sha256"], 16) >= 0
+    assert manifest["endpoint"]["status"] == "NAMED"
+    assert manifest["endpoint"]["url"].startswith(REGISTRY)
+    assert "GITLAB_TOKEN" in manifest["endpoint"]["auth"]
 
 
 def test_the_destination_gitignore_fences_every_pinned_file(manifest):
@@ -89,18 +89,61 @@ def test_the_destination_gitignore_fences_every_pinned_file(manifest):
     assert rc == 1, "the fence itself must stay trackable"
 
 
-def test_the_stub_endpoint_is_refused_with_the_owner_card(machinery, manifest, tmp_path, capsys):
+def test_the_stub_endpoint_is_refused_with_the_owner_card(machinery, tmp_path, capsys):
     """Constraint (c): machinery lands against a stub, never an invented
     host. The refusal names the owners and the ruling instead of guessing."""
-    assert manifest["endpoint"]["status"] == "UN-NAMED"
-    assert manifest["endpoint"]["url"].startswith("stub://")
-    rc = machinery.main(["--dest", str(tmp_path / "dest")])
+    manifest_path = tmp_path / "m.json"
+    stub = _pinned({"a.pptx": b"deck-a"})
+    stub["endpoint"] = {
+        "url": "stub://ppt-templates-host.un-named",
+        "status": "UN-NAMED",
+        "owner": "maintainer + raven-ppt product team, jointly (ppt verdict C4)",
+        "ruling": "card-ppt-c4-template-hosting-0901.md",
+    }
+    manifest_path.write_text(json.dumps(stub))
+    rc = machinery.main(["--manifest", str(manifest_path), "--dest", str(tmp_path / "dest")])
     assert rc == machinery.EXIT_UNNAMED
     err = capsys.readouterr().err
     assert "refusing to invent one" in err
     assert "owner" in err
     assert "C4" in err
     assert not (tmp_path / "dest").exists()
+
+
+def test_a_private_registry_gets_the_token_the_environment_holds(machinery, tmp_path, monkeypatch):
+    """The project is private: without a header the registry answers 404 for every
+    file. The personal token wins over the CI job token, and a public host gets none."""
+    import io
+
+    assert machinery.auth_headers({"GITLAB_TOKEN": "glpat-x", "CI_JOB_TOKEN": "job"}) == {"PRIVATE-TOKEN": "glpat-x"}
+    assert machinery.auth_headers({"CI_JOB_TOKEN": "job"}) == {"JOB-TOKEN": "job"}
+    assert machinery.auth_headers({}) == {}
+
+    monkeypatch.setenv("GITLAB_TOKEN", "glpat-x")
+    seen: list[tuple[str, dict]] = []
+
+    class _Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_urlopen(request):
+        seen.append((request.full_url, dict(request.header_items())))
+        return _Response(b"deck-a")
+
+    monkeypatch.setattr(machinery.urllib.request, "urlopen", fake_urlopen)
+    manifest_path = tmp_path / "m.json"
+    named = _pinned({"a.pptx": b"deck-a"})
+    named["endpoint"] = {"url": "https://registry.example/ppt-templates/1", "status": "NAMED"}
+    manifest_path.write_text(json.dumps(named))
+
+    rc = machinery.main(["--manifest", str(manifest_path), "--dest", str(tmp_path / "dest")])
+
+    assert rc == machinery.EXIT_OK
+    assert seen == [("https://registry.example/ppt-templates/1/a.pptx", {"Private-token": "glpat-x"})]
+    assert (tmp_path / "dest" / "a.pptx").read_bytes() == b"deck-a"
 
 
 def test_a_local_pull_copies_and_verifies(machinery, tmp_path, capsys):
@@ -156,8 +199,8 @@ def test_a_named_file_endpoint_pulls_through_the_url_lane(machinery, tmp_path):
     assert (dest / "a.pptx").read_bytes() == b"deck-a"
 
 
-@fork_present
-def test_the_real_fork_payload_satisfies_the_shipped_manifest(machinery, manifest):
-    """The strongest whole-cloth check: every pinned template hashed against
-    the vendored tree through the machinery's own verify."""
-    assert machinery.verify(FORK_TEMPLATES, manifest) == []
+@payload_present
+def test_the_fetched_payload_satisfies_the_shipped_manifest(machinery, manifest):
+    """The strongest whole-cloth check: every pinned template hashed against what the
+    registry served, through the machinery's own verify."""
+    assert machinery.verify(ENGINE_HOME / "raven_ppt" / "assets" / "templates", manifest) == []

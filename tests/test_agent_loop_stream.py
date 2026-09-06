@@ -242,10 +242,13 @@ async def test_llm_call_stream_passes_messages_tools_model_to_provider() -> None
 # ---------------------------------------------------------------------------
 
 
-async def test_llm_call_stream_timeout_returns_structured_error() -> None:
-    """A mid-stream stall (TimeoutError from the per-chunk idle cap) terminates
-    with a structured, retryable error response instead of propagating and
-    crashing the turn. Already-streamed content is preserved on the response."""
+async def test_llm_call_stream_timeout_after_output_fails_the_turn_unless_asked() -> None:
+    """A mid-stream stall (TimeoutError from the per-chunk idle cap) after words were
+    streamed follows the same rule as any other mid-stream failure: the turn fails
+    (N-TURNFAILED) unless the caller asked to retry after output. Handed back as a
+    retryable response instead, the loop's own ladder asked again and an
+    interactive client received the words of two attempts. Asked for, the response
+    is structured and retryable, with the streamed content preserved on it."""
 
     class _TimeoutStreamProvider:
         classify_error = LLMProvider.classify_error
@@ -254,20 +257,31 @@ async def test_llm_call_stream_timeout_returns_structured_error() -> None:
             yield ChatDelta(content="partial")
             raise TimeoutError
 
-    call = _bind_helper(_TimeoutStreamProvider())
     seen: list[str] = []
 
     async def on_delta(text: str) -> None:
         seen.append(text)
 
-    response = await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
+    with pytest.raises(TimeoutError):
+        await _bind_helper(_TimeoutStreamProvider())(messages=[], tools=None, model="m", on_token_delta=on_delta)
+    assert seen == ["partial"]
+
+    from raven.agent.loop.recovery import RecoveryLimits
+
+    fake_self = SimpleNamespace(
+        provider=_TimeoutStreamProvider(),
+        _MAX_STREAM_RECONNECTS=AgentLoop._MAX_STREAM_RECONNECTS,
+        _recovery_limits=RecoveryLimits(llm_retry_after_output=True),
+    )
+    response = await AgentLoop._llm_call_stream.__get__(fake_self)(
+        messages=[], tools=None, model="m", on_token_delta=on_delta
+    )
 
     assert response.finish_reason == "error"
     assert response.error_classification is not None
     assert response.error_classification.category == "network"
     assert response.error_classification.retryable is True
     assert response.content == "partial"
-    assert seen == ["partial"]
 
 
 class _ApiError(Exception):
@@ -834,3 +848,141 @@ async def test_a_call_that_never_thought_reports_no_thinking_time() -> None:
     )
 
     assert response.reasoning_ms is None
+
+
+# ---------------------------------------------------------------------------
+# the loop's own ladder, after the reconnects
+# ---------------------------------------------------------------------------
+
+
+def _bind_with_ladder(provider: Any, delays: tuple[float, ...]):
+    """Bind the helper to a stand-in that also carries the turn's recovery limits."""
+    from raven.agent.loop.recovery import RecoveryLimits
+
+    fake_self = SimpleNamespace(
+        provider=provider,
+        _MAX_STREAM_RECONNECTS=AgentLoop._MAX_STREAM_RECONNECTS,
+        _recovery_limits=RecoveryLimits(llm_error_retry_delays=delays),
+    )
+    return AgentLoop._llm_call_stream.__get__(fake_self)
+
+
+class _FailsThenStreams:
+    """Raises `failures` retryable errors before the first delta, then streams an answer."""
+
+    classify_error = LLMProvider.classify_error
+
+    def __init__(self, failures: int, error: Exception | None = None) -> None:
+        self.failures = failures
+        self.error = error or _ApiError("APIError: OpenrouterException - Server disconnected")
+        self.calls = 0
+
+    async def chat_stream(self, **_kwargs: Any):
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise self.error
+            yield  # pragma: no cover - makes this an async generator
+        yield ChatDelta(content="recovered")
+
+
+async def test_llm_call_stream_waits_out_the_loops_ladder_before_giving_up() -> None:
+    """The provider's reconnect is immediate and single; a gateway that serves error
+    pages for a few minutes outlasts it. The loop's ladder is waited out next, and the
+    turn goes on -- one measured build lost 62 minutes of work to a 40-second outage."""
+    provider = _FailsThenStreams(failures=3)
+    call = _bind_with_ladder(provider, delays=(0.0, 0.0))
+
+    async def on_delta(_text: str) -> None:
+        return None
+
+    response = await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
+
+    assert provider.calls == 4, "one call, one reconnect, two waits, then the answer"
+    assert response.content == "recovered"
+
+
+async def test_llm_call_stream_raises_once_the_ladder_is_spent() -> None:
+    """The ladder is the budget: past it the turn fails the way N-TURNFAILED asks."""
+    provider = _FailsThenStreams(failures=10)
+    call = _bind_with_ladder(provider, delays=(0.0,))
+
+    async def on_delta(_text: str) -> None:
+        return None
+
+    with pytest.raises(_ApiError):
+        await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
+
+    assert provider.calls == 3  # the call, the reconnect, the one wait
+
+
+async def test_llm_call_stream_hands_an_image_refusal_back_as_an_error_response() -> None:
+    """A picture the endpoint will not take is not waited on and not raised: the
+    recovery is to take the picture out of the messages, which only the loop can do,
+    so the verdict travels back as the error response its strip-and-retry acts on."""
+    provider = _FailsThenStreams(
+        failures=10, error=_BadRequestError("At most 0 image(s) may be provided in one prompt.")
+    )
+    call = _bind_with_ladder(provider, delays=(0.0, 0.0))
+
+    async def on_delta(_text: str) -> None:
+        return None
+
+    response = await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
+
+    assert provider.calls == 1
+    assert response.finish_reason == "error"
+    assert response.error_classification is not None and response.error_classification.strip_images
+
+
+class _DiesMidStream:
+    """Streams a few words, then loses the connection; answers whole on the next call."""
+
+    classify_error = LLMProvider.classify_error
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def chat_stream(self, **_kwargs: Any):
+        self.calls += 1
+        if self.calls == 1:
+            yield ChatDelta(content="half an ")
+            raise _ApiError("APIError: OpenrouterException - Network connection lost.")
+        yield ChatDelta(content="whole answer")
+
+
+async def test_llm_call_stream_retries_after_output_only_when_asked() -> None:
+    """A mid-stream failure after words were streamed fails the turn, as N-TURNFAILED
+    asks -- a person watching would see the words twice. An unattended caller says so
+    through the limits and gets the call asked again: one deck build had two hours
+    behind it when a dropped connection ended the turn with nothing published."""
+    from types import SimpleNamespace
+
+    from raven.agent.loop.recovery import RecoveryLimits
+
+    provider = _DiesMidStream()
+    fake_self = SimpleNamespace(
+        provider=provider,
+        _MAX_STREAM_RECONNECTS=AgentLoop._MAX_STREAM_RECONNECTS,
+        _recovery_limits=RecoveryLimits(llm_error_retry_delays=(0.0,), llm_retry_after_output=True),
+    )
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    response = await AgentLoop._llm_call_stream.__get__(fake_self)(
+        messages=[], tools=None, model="m", on_token_delta=on_delta
+    )
+    assert response.content == "whole answer", "the half is dropped, the retry's answer is the answer"
+    assert seen == ["half an ", "whole answer"], "the caller saw both -- the price the caller agreed to"
+    assert provider.calls == 2
+
+    fresh = _DiesMidStream()
+    fake_self = SimpleNamespace(
+        provider=fresh,
+        _MAX_STREAM_RECONNECTS=AgentLoop._MAX_STREAM_RECONNECTS,
+        _recovery_limits=RecoveryLimits(llm_error_retry_delays=(0.0,)),
+    )
+    with pytest.raises(_ApiError):
+        await AgentLoop._llm_call_stream.__get__(fake_self)(messages=[], tools=None, model="m", on_token_delta=on_delta)
+    assert fresh.calls == 1, "off, the turn fails on the first mid-stream error"

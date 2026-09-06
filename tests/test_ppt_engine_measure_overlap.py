@@ -53,7 +53,10 @@ def test_a_figure_under_two_cards_is_reported(tmp_path: Path) -> None:
 
     findings = overlap_findings(built)
     assert [f.kind for f in findings] == ["covered_shape"]
-    assert findings[0].severity.value == "blocking"
+    # Reported, not refused: the finding is inferred from the file's z-order, and that
+    # inference has refused correct work before (D15, and a bundled template whose page
+    # renders as designed). See the note beside its DISPATCH row.
+    assert findings[0].severity.value == "warning"
     assert findings[0].detail["hidden"] >= COVERED
     assert findings[0].detail["under"] == [2, 3]
 

@@ -17,6 +17,7 @@ that goes wrong quietly, when one copy is taught about grouped shapes.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,11 +66,32 @@ class Rect:
         )
 
 
+# The last few decks opened, by path, mtime and size. A measurement pass opens the
+# same file from forty-odd call sites, and parsing a 25MB deck costs 0.13s each time:
+# 10.5s of a 45s pass on one measured build. Nothing under `measure` writes to what
+# it opened, so one parse per file version serves them all; a rebuilt deck has a new
+# mtime and misses.
+_OPENED: dict[tuple[str, int, int], Any] = {}
+_OPENED_MAX = 4
+
+
 def open_deck(pptx_path: Path) -> Any:
-    """The built deck, as python-pptx sees it."""
+    """The built deck, as python-pptx sees it. Read-only: callers must not save it."""
     from pptx import Presentation
 
-    return Presentation(str(pptx_path))
+    path = Path(pptx_path)
+    try:
+        stat = path.stat()
+        key = (str(path.resolve()), stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        return Presentation(str(path))
+    deck = _OPENED.get(key)
+    if deck is None:
+        deck = Presentation(str(path))
+        while len(_OPENED) >= _OPENED_MAX:
+            _OPENED.pop(next(iter(_OPENED)))
+        _OPENED[key] = deck
+    return deck
 
 
 def iter_shapes(shapes: Any) -> Iterator[Any]:
@@ -131,6 +153,34 @@ def page_box(shape: Any) -> Rect | None:
         height *= scale_y
         element = element.getparent()
     return Rect(x / EMU_PER_INCH, y / EMU_PER_INCH, (x + width) / EMU_PER_INCH, (y + height) / EMU_PER_INCH)
+
+
+def ink_box(shape: Any) -> Rect | None:
+    """`page_box` with the shape's own rotation applied, which is where the ink lands.
+
+    A rotated shape is painted about its centre, so its declared rectangle is not the
+    one the render fills. Measured on a bundled template: a heading inside three nested
+    groups carries `rot="5400000"` and declares 0.57 x 2.34in, and the renderer sets a
+    2.34 x 0.57in line. Reading the ground at the declared box crops a strip straight
+    across the words instead of along them -- the gold pill under the type came to 17%
+    of that strip and the white page under it 18%, so the mode was white, and the
+    contrast reading called seven of that template's own pages unreadable at 1.0:1 with
+    nothing wrong on any of them.
+
+    The axis-aligned bounding box of the rotated rectangle, so it is never narrower than
+    the ink: a 2-degree lift on a picture reaches past its own edges too, which is the
+    other half of what this is for.
+    """
+    where = page_box(shape)
+    if where is None:
+        return None
+    angle = math.radians(float(getattr(shape, "rotation", 0.0) or 0.0))
+    if not angle:
+        return where
+    across = abs(where.width * math.cos(angle)) + abs(where.height * math.sin(angle))
+    down = abs(where.width * math.sin(angle)) + abs(where.height * math.cos(angle))
+    middle_x, middle_y = (where.x0 + where.x1) / 2, (where.y0 + where.y1) / 2
+    return Rect(middle_x - across / 2, middle_y - down / 2, middle_x + across / 2, middle_y + down / 2)
 
 
 def has_text(shape: Any) -> bool:
@@ -287,6 +337,30 @@ def shows_picture(shape: Any) -> bool:
     return picture_blob(shape) is not None
 
 
+def picture_opacity(shape: Any) -> float:
+    """How much of what is under a picture it keeps out, 0.0 to 1.0.
+
+    PowerPoint's Picture Transparency is an `a:alphaModFix` on the blip, and a picture
+    at 40 percent does not hide the rule beneath it. The fill answer next to this one
+    reads `a:alpha` and finds none on a blip, so a translucent photograph came back
+    fully opaque -- which is the reading `is_panel` refused to make for a fill and this
+    made for an image.
+    """
+    blip = _blip(shape)
+    if blip is None:
+        return 1.0
+    alphas = [_alpha_value(node) for node in blip.iter() if node.tag.endswith("}alphaModFix")]
+    return min(alphas) if alphas else 1.0
+
+
+def _blip(shape: Any) -> Any:
+    """The `a:blip` this shape shows an image through, or None."""
+    try:
+        return shape._element.find(f".//{_DRAWING_NS}blip")
+    except (AttributeError, TypeError):
+        return None
+
+
 # Where a fill stops being a cover. Rendered at 80dpi with 20pt text under a
 # mid-blue band: at 100% the words are gone, at 90% they are a ghost, at 80% they
 # are legible but poorly, and from 70% down they read plainly. Above this line a
@@ -294,11 +368,27 @@ def shows_picture(shape: Any) -> bool:
 COVERING_OPACITY = 0.8
 
 
+def _fill_alphas(shape: Any) -> list[float]:
+    """Every `a:alpha` this shape's fill states, as fractions.
+
+    Empty means the fill states none, which is opaque. python-pptx has no alpha of
+    its own, so this reads the drawing. `fore_color` raises on a gradient, hence
+    the second look at `a:gradFill`.
+    """
+    try:
+        fill = shape.fill.fore_color._xFill
+    except (AttributeError, NotImplementedError, TypeError, ValueError):
+        fill = None
+    if fill is None:
+        fill = _gradient_fill(shape)
+    if fill is None:
+        return []
+    found = [_alpha_value(alpha) for alpha in fill.iter() if alpha.tag.endswith("}alpha")]
+    return [one for one in found if one is not None]
+
+
 def fill_opacity(shape: Any) -> float:
     """How much of what is under this shape its fill keeps out, 0.0 to 1.0.
-
-    python-pptx has no alpha of its own, so this reads the `a:alpha` the drawing
-    writes; a solid fill states none and is opaque.
 
     A gradient is read through its stops, and the reason is a false refusal: the
     scrim that makes type legible over a photograph is a `gradFill` from opaque to
@@ -308,17 +398,20 @@ def fill_opacity(shape: Any) -> float:
     anywhere is, because a reader looking at the picture is looking through the
     stop that hides least.
     """
-    try:
-        fill = shape.fill.fore_color._xFill
-    except (AttributeError, NotImplementedError, TypeError, ValueError):
-        fill = None
-    if fill is None:
-        fill = _gradient_fill(shape)
-    if fill is None:
-        return 1.0
-    alphas = [_alpha_value(alpha) for alpha in fill.iter() if alpha.tag.endswith("}alpha")]
-    alphas = [one for one in alphas if one is not None]
+    alphas = _fill_alphas(shape)
     return min(alphas) if alphas else 1.0
+
+
+def fill_showing(shape: Any) -> float:
+    """How much of this shape's fill a reader can see anywhere on it, 0.0 to 1.0.
+
+    The other side of `fill_opacity`, and a different question: whether the shape is
+    painted at all, rather than whether it hides what is beneath. A gradient answers
+    it at the stop that shows most, because a card tinted 25% at its top and 0% at
+    its bottom is a card a reader sees.
+    """
+    alphas = _fill_alphas(shape)
+    return max(alphas) if alphas else 1.0
 
 
 def _gradient_fill(shape: Any) -> Any | None:
@@ -339,23 +432,193 @@ def _alpha_value(alpha: Any) -> float | None:
         return None
 
 
-def is_panel(shape: Any) -> bool:
-    """A filled shape -- a card, a band, a rule -- rather than a bare frame.
+# The theme slots that name a page's own ground rather than a colour on it.
+_GROUND_SCHEMES = frozenset({"bg1", "bg2", "lt1", "lt2"})
+
+
+def _ground_only_fill(shape: Any) -> bool:
+    """Whether every colour in this shape's fill is one of the page's ground slots.
+
+    A shape filled with nothing but `bg1` is painted the colour of the page it sits
+    on, so at less than full opacity it puts nothing on the page. Five cards on one
+    bundled template's page 6 and five on its page 14 are drawn that way -- `bg1` at
+    50% to 70% -- and every pixel inside them renders 255,255,255 against a
+    252,254,254 ground. Read as containers they were reported as cards using a third
+    of their height, about cards a reader cannot see.
+
+    A `p:style` fill states no colour here and is not one of these: it resolves to a
+    theme fill, which is an accent rather than the ground.
+
+    The reverse case is a dark page, where a half-transparent white is the scrim the
+    design is made of. No bundled template has one -- all eight are light -- so this
+    reads the shape alone; a dark template arriving here would want the page's own
+    ground read first.
+    """
+    properties = None
+    try:
+        properties = shape.fill._xPr
+    except (AttributeError, NotImplementedError, TypeError, ValueError):
+        return False
+    if properties is None:
+        return False
+    named: set[str] = set()
+    for tag in ("solidFill", "gradFill"):
+        block = properties.find(f"{_DRAWING_NS}{tag}")
+        if block is None:
+            continue
+        if block.find(f"{_DRAWING_NS}srgbClr") is not None:
+            return False
+        for colour in block.iter(f"{_DRAWING_NS}schemeClr"):
+            named.add(colour.get("val") or "")
+    return bool(named) and named <= _GROUND_SCHEMES
+
+
+def is_filled(shape: Any) -> bool:
+    """A shape with paint on it -- a card, a band, a tint -- rather than a bare frame.
 
     python-pptx raises several different ways when a shape has no fill to speak
     of (a picture, a connector, a graphic frame), and every one of them means
     the same thing here.
 
+    How see-through the paint is does not enter into it, which is what separates this
+    from `is_panel`. The way a current template draws a card is a fill at 5% to 25%
+    alpha, sometimes a `gradFill` running to nothing at one edge: across the twelve
+    bundled templates 159 shapes are painted that way and 131 of them are card-sized,
+    including every card on four of the templates' content pages. Rendered, they are
+    plainly cards -- so the readings that ask "is this a card" (`cards`, the container
+    and row readings, `page_signature`, the evidence census) ask this, and only the
+    occlusion readings ask `is_panel`.
+    """
+    try:
+        kind = shape.fill.type
+    except (AttributeError, NotImplementedError, TypeError, ValueError):
+        return False
+    # `BACKGROUND` is an author saying "no fill" and is answered here: every shape
+    # python-pptx draws also carries a `p:style`, so falling through to that would make
+    # a deliberately bare frame a panel.
+    if kind == _FILL_BACKGROUND:
+        return False
+    filled = kind is not None
+    if not filled:
+        # Nothing in the shape's own `spPr` does not mean nothing is painted:
+        # PowerPoint's default shape leaves the fill to a `p:style` whose `a:fillRef`
+        # names one of the theme's fill styles, and the renderer resolves it. Two of the
+        # four cards on a bundled template's page are drawn that way, and reading only
+        # `spPr` called them bare frames -- so every check built on this saw two cards
+        # where a reader sees four, and a page of cards was reported as copy with no
+        # edges around it.
+        filled = _styled_fill(shape)
+    if not filled:
+        return False
+    showing = fill_showing(shape)
+    # A fill transparent at every stop is a hit region or a leftover, not a shape a
+    # reader meets: sixteen of them sit across the bundled templates.
+    if showing <= 0.0:
+        return False
+    return showing >= 1.0 or not _ground_only_fill(shape)
+
+
+def is_connector(shape: Any) -> bool:
+    """Whether this shape is a line between two points rather than a form.
+
+    A template's column divider is a `p:cxnSp`. It has no fill to speak of and no
+    text, so every census built on fills or copy missed it: one bundled template
+    separates five columns of copy with five of these and nothing else, and a census
+    of what divides its pages read that page as undivided.
+    """
+    element = getattr(shape, "_element", None)
+    return element is not None and str(element.tag).endswith("}cxnSp")
+
+
+def has_outline(shape: Any) -> bool:
+    """Whether this shape is drawn with a visible stroke.
+
+    The other way a template makes an edge without a fill: the numbered rings down one
+    bundled page are outline-only circles. An unstated line is not counted -- it may
+    resolve to a theme stroke, and reading it as drawn would find an edge on every
+    text box.
+    """
+    try:
+        kind = shape.line.fill.type
+    except (AttributeError, NotImplementedError, TypeError, ValueError):
+        return False
+    return kind is not None and kind != _FILL_BACKGROUND
+
+
+def is_panel(shape: Any) -> bool:
+    """A filled shape whose paint hides what is under it.
+
     A fill you can see through is not one of these. The occlusion check asks what
     is hidden, and a translucent band over a chart is a layer the author drew on
     purpose -- refusing it would refuse the technique the charts reference now
-    teaches.
+    teaches. Asking "is this a card" wants `is_filled` instead.
     """
-    try:
-        filled = shape.fill.type is not None and shape.fill.type != _FILL_BACKGROUND
-    except (AttributeError, NotImplementedError, TypeError, ValueError):
+    return is_filled(shape) and fill_opacity(shape) >= COVERING_OPACITY
+
+
+# The rectangle family: a card, a band, a strip, corner treatments aside.
+_RECTANGLES = frozenset(
+    {
+        "rect",
+        "roundRect",
+        "round1Rect",
+        "round2DiagRect",
+        "round2SameRect",
+        "snip1Rect",
+        "snip2DiagRect",
+        "snip2SameRect",
+        "snipRoundRect",
+    }
+)
+
+
+def is_rectangular(shape: Any) -> bool:
+    """Whether the shape's own outline is a rectangle, so "how full is it" applies.
+
+    Anything else a template draws -- an ellipse, a donut, a triangle, a callout with a
+    tail, a freeform mask -- covers a fraction of its own bounding box, so a check that
+    reads copy against that box reports it as a container nobody filled however it is
+    filled. Measured across the twelve bundled templates and two built decks: 117 of
+    the 328 shapes the two fill checks treated as panels are not rectangles (85
+    freeform masks, 13 ellipses, 4 parallelograms, 4 teardrops, 4 tailed callouts, 3
+    donuts, a block arc, a triangle, a diamond, a home plate). A 4.05in hub disc with
+    one line of label on it came back as "14% of its height", which is a description of
+    a hub and not a defect.
+
+    A shape that states no geometry at all is a rectangle -- a picture frame, a
+    placeholder. A `custGeom` is not: its path is arbitrary.
+    """
+    element = getattr(shape, "_element", None)
+    if element is None:
+        return True
+    properties = element.find(f"{_PRESENTATION_NS}spPr")
+    if properties is None:
+        return element.find(f".//{_DRAWING_NS}custGeom") is None
+    preset = properties.find(f"{_DRAWING_NS}prstGeom")
+    if preset is not None:
+        return preset.get("prst") in _RECTANGLES
+    return properties.find(f"{_DRAWING_NS}custGeom") is None
+
+
+def _styled_fill(shape: Any) -> bool:
+    """Whether this shape takes a fill from the theme through its own `p:style`.
+
+    `a:fillRef idx="0"` is the one that means no fill; every other index points into
+    the theme's `fillStyleLst`.
+    """
+    element = getattr(shape, "_element", None)
+    if element is None:
         return False
-    return filled and fill_opacity(shape) >= COVERING_OPACITY
+    style = element.find(f"{_PRESENTATION_NS}style")
+    if style is None:
+        return False
+    reference = style.find(f"{_DRAWING_NS}fillRef")
+    if reference is None:
+        return False
+    try:
+        return int(reference.get("idx", "0")) > 0
+    except (TypeError, ValueError):
+        return False
 
 
 def shape_rect_emu(shape: Any) -> Rect:

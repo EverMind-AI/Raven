@@ -206,3 +206,45 @@ def test_an_empty_directory_publishes_nothing(tmp_path):
 
 
 # -- delivery ----------------------------------------------------------------
+
+
+def test_two_paths_in_one_match_are_both_material(tmp_path):
+    """A delimiter the pattern does not end on joins two names into one match.
+
+    The pattern ends a path on ASCII punctuation, so ``a.md, b.md`` arrives as two
+    matches and the same sentence written with an ideographic comma arrives as one.
+    Taking the first file in it as the answer for the whole match dropped the second
+    document without a word. Widening the pattern is the other way to fix this and is
+    worse: every mark added to it is a mark a filename may not contain.
+    """
+    first, second = tmp_path / "one.md", tmp_path / "two.md"
+    for path in (first, second):
+        path.write_text("facts", encoding="utf-8")
+
+    for joiner in ("\u3001", "\uff09\u548c\uff08", "\u300d\u548c\u300c", "\u060c", "\u0964"):
+        assert materials.materials_from_prompt(f"{first}{joiner}{second}") == [
+            str(first),
+            str(second),
+        ], joiner
+
+
+def test_a_filename_holding_wide_punctuation_survives_a_second_path(tmp_path):
+    """The name itself can hold the marks a prose delimiter is made of.
+
+    A pattern taught to end on full-width brackets cuts this path in half and finds
+    nothing, which is why the fix is in the walk and not in the character class.
+    """
+    named = tmp_path / "\u62a5\u544a\uff08\u7ec8\u7248\uff09.md"
+    other = tmp_path / "b.md"
+    for path in (named, other):
+        path.write_text("facts", encoding="utf-8")
+
+    assert materials.materials_from_prompt(f"{named}\u3001{other}") == [str(named), str(other)]
+
+
+def test_a_name_that_does_not_exist_does_not_hide_the_next_one(tmp_path):
+    """The scan carries on past a path that names nothing, not only past a hit."""
+    real = tmp_path / "real.md"
+    real.write_text("facts", encoding="utf-8")
+
+    assert materials.materials_from_prompt(f"{tmp_path / 'ghost.md'}\u3001{real}") == [str(real)]

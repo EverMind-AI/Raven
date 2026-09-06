@@ -7,9 +7,18 @@ they stop. The dials themselves, the seven `mark` kinds and a full hand-drawn ta
 [deck/build/references/tables.md](deck/build/references/tables.md); the chart forms are in
 [deck/build/references/charts.md](deck/build/references/charts.md).
 
+One dial governs the rest of them: **a table spans the box it is handed**, in the
+proportions its columns measure, and spreads its rows into it down to five rows or so. So
+the box is where a table's width is said -- `frame.body` for a page-wide one, a
+`split_left` column for a table with something beside it -- and `weights` is left for the
+one thing the box cannot say: a column that has to be wider, or level with its
+neighbours, rather than as wide as what it holds. One table below wants that; the other
+six take the box and nothing else.
+
 Every block here runs. They assume the setup block of the skill's §3 plus `FACE`/`HAN` for
 the theme's two faces, `INK`/`MUTED`/`ACCENT` for `T["foreground"]`, `T["muted"]` and
-`T["accent"]`, and `frame = page()`.
+`T["accent"]`, and `frame = page()` -- except the two passages that cite, which ask for
+the strip themselves with `page(footer=True)` inside their own block.
 A passage whose bands are measured before they are drawn ends that line as
 `frame = page().holding(*heights)`, so the room the body was given and nothing asked for
 becomes air above and below the run instead of a band of white along the page's foot (the
@@ -22,11 +31,18 @@ body cut to the sum of their heights first leaves them touching.
 A chart alone states numbers; the lane says what to conclude. Pair this with `M11` --
 accent the one item the lane is about.
 
-The lane's two blocks are not the same weight: an `accent_soft` card (`M3`) carrying an
-icon and a title outweighs a quiet `LABEL_PT` line under it, and two level cards would
-say they weigh the same.
+The lane is a heading and one card. What used to sit under the card -- a quiet
+`LABEL_PT` line saying why one bar is short -- is a caption on the chart, and a caption
+goes in the page's foot (`M6`): `footer()`'s `note` at 3.83in of the 10.29in lane the
+strip has beside the page number. The card is then the lane's only block, so `card_size`
+alone sets its height and the heading over it is the only other weight. Do not put a
+second card in the room the line gave up: two level cards say they weigh the same, and a
+lane has one answer. No band of white comes of it either -- the chart holds the body's
+whole height either way, and the strip's cost is the 0.58in `page(footer=True)` takes off
+the body, paid once for the page instead of once per figure.
 
 ```python
+frame = page(footer=True)
 plot, lane = frame.body.split_left(0.66)
 horizontal_bar(slide, plot, T, [("华东", 46.3), ("华北", 42.1), ("西南", 39.4), ("华南", 31.8)],
                accent="华东", unit="%")
@@ -37,9 +53,8 @@ answer = down.take(card_size(lane.w, icon="target", title="华东一地占四成
                              body="其余三地合计才追平它。", font=FACE).h)
 card(slide, answer, T, tint="accent_soft", icon="target", title="华东一地占四成",
      body="其余三地合计才追平它。", font=FACE, cjk_font=HAN)
-down.skip(GUTTER)
-write(slide, down.rest(), "华南低于线的原因是三月才接入，不到一个季度。",
-      size=LABEL_PT, colour=MUTED, font=FACE, cjk_font=HAN)
+footer(slide, frame.footer, T, note="注：华南三月才接入，不到一个季度，所以低于线。",
+       font=FACE, cjk_font=HAN)
 ```
 
 ### P15 -- Two charts read against one scale
@@ -100,16 +115,23 @@ one pass. `table_size(rows, T, box=room)` is asked before a cell is drawn, becau
 rows at `BODY_PT` and six at `LABEL_PT` are not the same page and building it is the only
 other way to find out.
 
+A `口径` column would be the source line written six times, and the measurement says what
+that costs: 3.20in of an 11.89in table, the widest column on the page, to say `网关日志`
+once per row. It is a caption, so it is one note in the foot instead (`M6`), the source and
+the caveat joined with `；`, and the five columns that carry data take the room back --
+1.83/2.03/1.94/1.31/1.57in becomes 2.51/2.78/2.66/1.79/2.15in.
+
 ```python
 rows = [
-    ["站点", "接入", "日均调用", "P95", "失败率", "口径"],
-    ["华东一区", "2025-04", "182 万", "42ms", "0.03%", "网关日志"],
-    ["华东二区", "2025-06", "141 万", "47ms", "0.04%", "网关日志"],
-    ["华北", "2025-09", "96 万", "88ms", "0.11%", "网关日志"],
-    ["西南", "2025-11", "74 万", "91ms", "0.13%", "网关日志"],
-    ["华南", "2026-03", "38 万", "94ms", "0.21%", "网关日志，仅两月"],
-    ["东北", "2026-03", "21 万", "97ms", "0.24%", "网关日志，仅两月"],
+    ["站点", "接入", "日均调用", "P95", "失败率"],
+    ["华东一区", "2025-04", "182 万", "42ms", "0.03%"],
+    ["华东二区", "2025-06", "141 万", "47ms", "0.04%"],
+    ["华北", "2025-09", "96 万", "88ms", "0.11%"],
+    ["西南", "2025-11", "74 万", "91ms", "0.13%"],
+    ["华南", "2026-03", "38 万", "94ms", "0.21%"],
+    ["东北", "2026-03", "21 万", "97ms", "0.24%"],
 ]
+frame = page(footer=True)
 down = stack(frame.body)
 write(slide, down.take(0.72), "只有两个华东站点把 P95 压在 50ms 以内，其余四地都卡在同一处：共享的旧网关。",
       size=LEAD_PT, bold=True, colour=INK, font=FACE, cjk_font=HAN)
@@ -117,6 +139,8 @@ down.skip(0.14)
 room = down.rest()
 size = BODY_PT if table_size(rows, T, box=room, size=BODY_PT).h <= room.h else LABEL_PT
 table(slide, room, rows, T, size=size, emphasize_rows=(1, 2))
+footer(slide, frame.footer, T, note="来源：网关日志，六站同一口径；华南、东北 2026-03 接入，仅两月。",
+       font=FACE, cjk_font=HAN)
 ```
 
 ### P37 -- A two-axis matrix, the cell being the answer
@@ -125,8 +149,10 @@ The cell is the answer, so the cells hold nothing: a mark handed an empty cell t
 whole of it, and four columns of ticks and crosses are read across a row faster than four
 columns of the words for them. The legend is not optional -- a tick, a cross and a
 half-filled dot are conventions, and the page states them once, drawn with the same `mark`
-that filled the cells. `weights` because the content is marks and not strings: without
-them a matrix sizes itself off its labels and sits in half the page.
+that filled the cells. `weights` not for the width -- the table spans its box without
+them -- but because the four criteria have to be one column width: sized off their own
+headers `冷启动` comes out 2.09in against 2.53in for the other three, and a tick centred
+0.22in out of step with the three beside it reads as a different question.
 
 ```python
 rows = [
@@ -245,6 +271,11 @@ the same item. What they will not do is line up -- `horizontal_bar` lays out its
 so five bars and five table rows land at five different heights. The pairing is by order
 and by the accent; do not draw a rule between the two implying otherwise.
 
+No `weights`: the `split_left` column is the width, and letting the four columns measure
+themselves keeps `日均调用（万）` on one line -- 1.3 of a five-part division left that
+column 1.64in and wrapped its header onto two, a header row of 1.07in against 0.90in and
+the difference taken off the five rows under it.
+
 ```python
 calls = [("华东一区", 182), ("华东二区", 141), ("华北", 96), ("西南", 74), ("华南", 38)]
 detail = {"华东一区": ("42ms", "0.03%"), "华东二区": ("47ms", "0.04%"), "华北": ("88ms", "0.11%"),
@@ -254,7 +285,7 @@ rows += [[name, f"{value}", *detail[name]] for name, value in calls]
 grid, plot = frame.body.split_left(0.52)
 laid = table_size(rows, T, box=grid, size=BODY_PT)
 table(slide, Box(grid.x0, grid.y0, grid.x1, grid.y0 + laid.h), rows, T, size=BODY_PT,
-      weights=(1.5, 1.3, 1.0, 1.0), emphasize_rows=(1,))
+      emphasize_rows=(1,))
 horizontal_bar(slide, Box(plot.x0, plot.y0, plot.x1, plot.y0 + laid.h), T, calls,
                accent="华东一区", unit="万", axis_max=200)
 ```
@@ -317,6 +348,10 @@ the deep end of the ramp is whatever `contrast` says still carries it. Four step
 from the page's own ground toward its accent, and a legend under the grid saying what
 the steps are -- without the legend a tint is decoration.
 
+No `weights`: the tinted cells are the picture and they have to be one size, which is
+what the measurement already gives them -- four two-character headers come out 2.39in
+each across the body, and the label column beside them 2.32in.
+
 ```python
 rows = [
     ["场景", "华东", "华北", "西南", "华南"],
@@ -344,7 +379,7 @@ for r, line in enumerate(rows[1:], start=1):
         band[(r, c)] = steps[min(int(float(value) * len(steps)), len(steps) - 1)]
 down = stack(frame.body)
 table(slide, down.take(2.60), rows, T, size=BODY_PT, fills=band,
-      weights=(1.4, 1.0, 1.0, 1.0, 1.0), align=("left", "center", "center", "center", "center"))
+      align=("left", "center", "center", "center", "center"))
 down.skip(0.16)
 key = down.take(0.32).split_left(0.46)[0]
 for cell, paint, name in zip(key.columns(4, gutter=0.08), steps, ("0.25", "0.50", "0.75", "1.00")):

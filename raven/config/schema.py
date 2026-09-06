@@ -211,6 +211,15 @@ class AgentDefaults(Base):
     post_tool_empty_max_nudges: int = 1
     thinking_prefill_max_retries: int = 2
     empty_content_max_retries: int = 3
+    # Seconds to wait before asking the model again when a call fails with a
+    # retryable error the provider's own short ladder could not clear; one entry per
+    # further attempt, per turn. Empty disables it. A long autonomous run wants a
+    # longer list than a chat does: set it to minutes for a deck build.
+    llm_error_retry_delays: list[float] = Field(default_factory=lambda: [15.0, 30.0, 60.0])
+    # Whether a streamed model call that fails after it has already produced output is
+    # asked again (the output is produced twice for whoever watched the stream). Off for
+    # a chat; on for an unattended run whose client is a machine, such as a deck build.
+    llm_retry_after_output: bool = False
     # Deprecated compatibility field: accepted from old configs but ignored at runtime.
     memory_window: int | None = Field(default=None, exclude=True)
     reasoning_effort: str | None = None  # low / medium / high — enables LLM thinking mode

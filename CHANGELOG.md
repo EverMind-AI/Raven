@@ -24,6 +24,60 @@ All notable changes to Raven are documented here.
 
 ### Changed
 
+- The ppt engine (`plugins-dist/ppt-engine`) carries the fork's layout work:
+  eight bundled templates instead of twelve (four dropped for looks), a curated
+  set of reference pages any deck may borrow across templates through
+  `adapt(prs, prototype(bundled('<template>'), N), ...)`, `add_unit` /
+  `remove_unit` / `clone_shape` / `swap_icon` for growing, shrinking and
+  re-drawing a template's repeated units, fill in reading order with the
+  numbered-tile rule, and measurements that read a tinted card as a card
+  (`is_filled`) and report a body nothing divides (`undivided_body`). A build
+  that succeeds still hands its stderr back as warnings, and a shape placed at
+  more than twice its box's proportion warns instead of refusing. `backdrop`
+  lays a generated picture behind everything on a page, cover-cropped and
+  washed to an `alpha` of its own, and `layout_pictures` reaches the
+  photographs a template keeps on its layouts -- which `ppt_template` now
+  lists and a new `layout_picture` warning names, since `pictures={...}` on a
+  cloned page never touched them.
+- A card's plane is now told apart from its ground by colour difference rather
+  than luminance ratio, and pushed towards the accent until it is (the beige
+  template's cards sat at a dE of 7 on its own ground and were cards only to the
+  file); the soft tile is deepened so it still leads the plane. A picture frame
+  with its own outline is filled with `cover` instead of shrunk inside it. A
+  tinted-header table's emphasised row takes a tint a step deeper than the
+  header's, and every mark a table says as a glyph is set in one symbol face at
+  1.3x the copy, so a scale's full and half steps come out one size. The image
+  tool asks for a photographic manner for any subject with a face in the world
+  and the template's manner only for a concept.
+- The deck engine's replies to the author are slimmer: `ppt_template` states a
+  reply budget instead of letting the host cut a five-page reference in half
+  (pages that do not fit are named in `pages_not_read`), folds a run of
+  custom-drawn decoration into one line (a Bauhaus contents page went from
+  12,800 to 4,000 characters), states the imports once per reply and a run's
+  type on one line; `ppt_build` repeats a page's plan only when that page has
+  something to fix.
+- A model call that fails with a retryable error after the provider's own
+  seconds-long ladder now waits out a second, longer one
+  (`agents.defaults.llmErrorRetryDelays`, default 15/30/60s) before the turn
+  is given up; a body that is not JSON and a wording no bucket names are both
+  retried instead of ending the turn, and an image the endpoint refuses for its
+  size -- or a text-only model refuses at all -- is taken out of the
+  conversation and the call asked again. The streaming path, which every ACP
+  hosting uses, waits out the same ladder after its one reconnect instead of
+  failing the turn on the second error. An unattended run may also ask, with
+  `agents.defaults.llmRetryAfterOutput`, for a streamed call that failed after
+  it had produced output to be asked again (the deck launcher does); off, the
+  turn fails as before.
+- The deck engine's second reader is bounded: one reading stops at 240 s and
+  names the pages it did not get to, a deck's readings together stop at 15 min,
+  a reading is recorded at the version of the pixels it read (the build's own
+  render of the page) rather than the code that drew it, so a revision re-reads
+  only the pages whose render changed, the reader answers in one call with room
+  for a reasoning model's thinking (no doubled-budget retry), and it reads the
+  build's renders instead of rendering the deck again. Measured on a 20-page
+  run, 18 whole-deck builds had each re-read the pages the last revision
+  touched, 136 of the run's 327 minutes. The deck launcher keeps a configured
+  context window that is under the catalog's ceiling as a cap.
 - `setup.status` now reads the config file `RAVEN_HOME` points at, like every
   other reader; it used to answer for `~/.raven/config.json` regardless.
 - `raven channels *` and the gateway no longer warn that `channels.sendProgress`
@@ -450,6 +504,21 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- A shell command the safety guard refuses is refused as a command, not as the
+  task: the tool result no longer says "stop this operation immediately", which
+  an unattended agent read as the whole job and ended a deck build on.
+- `read_file` handed a URL says so and names `web_fetch`, instead of a "File
+  not found" that reads as a misspelling and sends the caller retrying the
+  same URL with prefixes.
+- The deck engine's material scan reads every path in one prose match, so two
+  documents joined by an ideographic comma both arrive instead of the second
+  being dropped without a word.
+- The deck launcher (`agents/raven-ppt`) writes the host's or the environment's
+  HTTPS proxy into `tools.web.proxy`, since the engine's fetch deliberately
+  ignores the process environment; it disables `ask_user`, which an
+  unattended build cannot answer; and on the own-key branch against OpenRouter
+  it hands the same key to the image generator (`tools.media.image.apiKey`,
+  or `PPT_IMAGE_API_KEY`), so a deck can generate its backdrops.
 - An `inputs.<key>` placeholder naming a key the template's `inputs` never defined rendered
   the literal text `None` into the sub-agent's prompt -- indistinguishable from a real answer
   -- instead of being refused as the typo it almost always is. Fixed on both

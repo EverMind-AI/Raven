@@ -1,74 +1,55 @@
 {
-  "purpose": "Per-file sha256 pins for the 12 bundled deck templates the ppt engine offers when a task brings no template of its own. The pins are the tracked truth; the .pptx payload stays out of git (see the destination directory's .gitignore) and out of PRs, and rides only the built ppt-engine wheel as package data.",
+  "purpose": "Per-file sha256 pins for the 8 bundled deck templates the ppt engine offers when a task brings no template of its own. The pins are the tracked truth; the .pptx payload stays out of git (see the destination directory's .gitignore) and out of PRs: it is hosted as a generic package in the project's GitLab package registry and rides the built ppt-engine wheel as package data.",
   "endpoint": {
-    "url": "stub://ppt-templates-host.un-named",
-    "status": "UN-NAMED",
+    "url": "https://gitlab.com/api/v4/projects/84258686/packages/generic/ppt-templates/2026.09.03",
+    "status": "NAMED",
+    "package": "ppt-templates 2026.09.03, generic package registry of gitlab.com/npc-work/aic/ai/raven (project 84258686)",
+    "auth": "the project is private: fetch_templates.py sends PRIVATE-TOKEN from $GITLAB_TOKEN (any token that can read the repository), or JOB-TOKEN from $CI_JOB_TOKEN inside CI",
     "owner": "maintainer + raven-ppt product team, jointly (ppt verdict C4)",
-    "ruling": "card-ppt-c4-template-hosting-0901.md; review-eight-rulings-0901.md item 7: mechanism CONFIRMED as registry + CI sha256-pinned fetch, the physical hosting endpoint still to be named by the owners",
-    "note": "fetch_templates.py refuses to pull while this url keeps the stub scheme -- naming a real endpoint here is the owners' one-line edit. Until then, pull --from the vendored fork tree: subagents/raven-ppt/Raven-PPT/raven/ppt/assets/templates"
+    "note": "a new template cut is a new package version: upload the files, rewrite the pins, bump this url; the old version stays downloadable for older checkouts"
   },
   "destination": "raven_ppt/assets/templates",
-  "source_of_truth": "subagents/raven-ppt/Raven-PPT/raven/ppt/assets/templates @ TREE_HASHES raven-ppt=0dcf1c11a38384fe2faf65d330848faf2a6b0da67a52ac12ec99ab7d3d94a1b6",
+  "source_of_truth": "GitLab generic package ppt-templates/2026.09.03 (project 84258686): the eight re-cut templates this branch bundles; the sealed fork under subagents/ keeps its own twelve and is not the payload",
   "files": [
     {
       "name": "amber_wave_quarterly_summary.pptx",
-      "bytes": 1160964,
-      "sha256": "ba72c84d2b6d1b666f569f07daefd178f7d80d6b0ee5f1152e0b675ede81f9b8"
+      "bytes": 717535,
+      "sha256": "4e4994f5c2436771a01f43f7ef25d13a1a1b492ca4f11d3fe2e5350fe67fa825"
     },
     {
       "name": "beige_geometric_general_report.pptx",
-      "bytes": 1173895,
-      "sha256": "88d1a4d12cdac4da21c46c131de2e4d1cd27442692d5d596873fe114197ccea5"
+      "bytes": 748798,
+      "sha256": "d63c47c66e0dcab00272bea7136bc6f27251c481220f8396a6bae3543f2ec163"
     },
     {
       "name": "blue_minimal_general_analysis.pptx",
-      "bytes": 4167455,
-      "sha256": "d4b646e829bdc969f9bdc15ae6bfaf9fd4340eccebdbf0626466a577c5211c3c"
-    },
-    {
-      "name": "blue_photo_work_summary.pptx",
-      "bytes": 6708373,
-      "sha256": "c9aa5946c6aa694714de955c104d3fe03ed857cfc290a2c882697cd55e6530d6"
+      "bytes": 3751723,
+      "sha256": "6999220b1ecb69c351de1d910f17cf6e90b842cc425ba5d8a6f57b43ef95c6e2"
     },
     {
       "name": "gold_panel_year_end_summary.pptx",
-      "bytes": 3611492,
-      "sha256": "d7f8e67dea93eb7bddf84fbc66683c38c4d7eed0d39a5f7aa4acf22546a1d122"
-    },
-    {
-      "name": "green_dimensional_design_portfolio.pptx",
-      "bytes": 1763023,
-      "sha256": "6012b89555a60e9eb71c1410387763a00eb6ea9d23d01357480ef08fbbb4a1d7"
-    },
-    {
-      "name": "green_playful_personal_resume.pptx",
-      "bytes": 19014918,
-      "sha256": "362838d128256596f4d30c61a91fa07e14d981b3edfd09072b43df3b496dd339"
+      "bytes": 3097013,
+      "sha256": "2f25cb1cbcdb36472e79a00656336fbeec21913ef6f830b7ed685023f21ffc36"
     },
     {
       "name": "mint_memphis_thesis_defense.pptx",
-      "bytes": 816999,
-      "sha256": "884ff9dc09adb0a27930eaf4d7826b23f6f25af42ae5214eb01231e552044e66"
+      "bytes": 387444,
+      "sha256": "43a3fcbf14def273316d37818846e5f4877d2f9cf6966887efa98c9f5e63f3e4"
     },
     {
       "name": "red_chinese_traditional_culture.pptx",
-      "bytes": 9874890,
-      "sha256": "23d636290cc0d3c4e5bad1acfe70177c64eb9f387d827cfb78bd3f87a2b67ca3"
-    },
-    {
-      "name": "taupe_photo_business_plan.pptx",
-      "bytes": 5010821,
-      "sha256": "6470e49a511ce470051ab90d904ae9c62fb9b9e7f3820b78ed3af8aae2620eca"
+      "bytes": 9446372,
+      "sha256": "9b116f42a2b756487c4a7b1a8c66915b9bfbd18aa9b46fa062c3c7b3303c5efd"
     },
     {
       "name": "teal_illustrated_work_analysis.pptx",
-      "bytes": 6292221,
-      "sha256": "93605a411287ed1bd5b17a61af554f095d87c176e675f5184bb870a29175e800"
+      "bytes": 5798967,
+      "sha256": "438f3ba2914da16eda88dadc1e47f31caec8324a322f15b62f037751e5ae0f58"
     },
     {
       "name": "warm_bauhaus_quarterly_review.pptx",
-      "bytes": 14364000,
-      "sha256": "06fcce6c13194f3c5c5c07d89dd7b9172493f5e58bd504898dd1a1066ac0312c"
+      "bytes": 13517532,
+      "sha256": "e5628a4a7dd293141408e54839736b70a492d1f7e228073eb284057d20ff519f"
     }
   ]
 }

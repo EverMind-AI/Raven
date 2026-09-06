@@ -218,9 +218,13 @@ class ExecTool(Tool):
     # Perl, or another shell form that performs the same protected action.
     # Runtime enforcement in AgentLoop is still authoritative; the instruction
     # keeps traces and any non-AgentLoop registry consumers equally explicit.
+    # Said as a refusal of the command, not of the task: an unattended agent told to
+    # "stop this operation immediately" read it as the whole job and ended a deck
+    # build with nothing published, on a curl loop a pattern happened to match.
     _STOP_INSTRUCTION = (
-        " Stop this operation immediately. Do not retry it with another command, "
-        "tool, script, interpreter, or equivalent method."
+        " This command will not run here. Do not retry it with another command, "
+        "tool, script, interpreter, or equivalent method; carry on with the rest of "
+        "the task without it."
     )
 
     @property

@@ -285,7 +285,7 @@ def test_the_chevron_resolves_to_the_numbers_office_draws() -> None:
 
     A 217x84 frame with the default half adjustment: the notch is 42 in from the
     left, the body ends at 175, and the point is at (217, 42). Everything
-    `chevron_row` computes is a projection of these six numbers, so they are the
+    `preset` draws from is a projection of these six numbers, so they are the
     thing worth writing down.
     """
     geometry = preset_geometry("chevron", 217, 84)

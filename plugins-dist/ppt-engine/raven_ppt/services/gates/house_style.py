@@ -21,6 +21,7 @@ program.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 from raven_ppt.contracts import Finding, Severity
@@ -107,7 +108,7 @@ def _title_of(rows, house_width):
     return max(wide or rows, key=lambda shape: ((shape.height or 0), -(shape.top or 0)))
 
 
-def title_row_findings(pptx_path: Path, prototypes: Path | None, outline: object | None = None) -> list[Finding]:
+def title_row_findings(pptx_path: Path, prototypes: Path | None, structural: Sequence[int] = ()) -> list[Finding]:
     """Content pages whose title row is not where the template puts one.
 
     The one element every page of a deck shares. `type_drift` measures the sizes and
@@ -124,9 +125,13 @@ def title_row_findings(pptx_path: Path, prototypes: Path | None, outline: object
 
     Only the pages the deck composed. A cloned page carries the template's own title row
     by construction -- the closing page of one deck puts its title mid-page, which is the
-    template's design and was this check's first false positive. Which pages those are
-    comes from the outline, where the author named a prototype and `prototype_kept`
-    already checked the promise; geometry alone recognised two of the four.
+    template's design and was this check's first false positive. Two readings find those
+    pages and both are needed: `_cloned_pages` matches geometry against the template's
+    structural prototypes, and `structural` is what the author itself declared. The
+    declaration was taken as an argument here and never read, and geometry alone missed
+    every page the author composed *as* a cover or a divider rather than cloning one:
+    across four live decks this reported nine pages, and eight of them were a contents,
+    a section or a closing page the outline had already named.
     """
     if prototypes is None or not Path(prototypes).is_file():
         return []
@@ -138,10 +143,12 @@ def title_row_findings(pptx_path: Path, prototypes: Path | None, outline: object
     if house is None or house.title is None or house.title.pages < 2:
         return []  # no row the template itself agrees on, so nothing to hold a page to
     wanted = house.title.box
-    promised = {
-        page.page for page in getattr(outline, "pages", ()) or () if getattr(page, "prototype", None) is not None
-    }
-    cloned = promised or _cloned_pages(pptx_path, Path(prototypes), roles(menu(Path(prototypes))))
+    # Measured, not promised: naming a prototype is now the default for a content
+    # page, so trusting the promise skipped every page in the deck. `_cloned_pages`
+    # already restricts itself to the template's structural pages, which is the set
+    # whose title row is the template's own and not this page's to answer for.
+    cloned = _cloned_pages(pptx_path, Path(prototypes), roles(menu(Path(prototypes))))
+    cloned |= set(structural)
     findings: list[Finding] = []
     presentation = open_deck(pptx_path)
     band = (presentation.slide_height or 0) / EMU_PER_INCH * 0.35

@@ -18,6 +18,7 @@ from unittest import mock
 import pytest
 
 from raven_ppt.contracts import Project
+from raven_ppt.tools import review as review_module
 from raven_ppt.tools.review import MAX_PAGES, READERS, PptReviewTool
 
 pytest.importorskip("pptx")
@@ -177,7 +178,7 @@ async def test_a_page_read_before_it_had_a_version_is_unread_once_it_has_one(tmp
     rewritten -- fingerprint appeared, so the delivered build skipped the reading it had
     promised for the version that was going to ship.
     """
-    from raven_ppt.tools.review import RECORD_FILE, _already_read, regress
+    from raven_ppt.tools.review import RECORD_FILE, _already_read
 
     deck = _deck(tmp_path, pages=2)
     deck.review_dir.mkdir(parents=True, exist_ok=True)
@@ -186,15 +187,15 @@ async def test_a_page_read_before_it_had_a_version_is_unread_once_it_has_one(tmp
         encoding="utf-8",
     )
 
-    with mock.patch.object(regress, "code_by_page", return_value={}):
+    with mock.patch.object(review_module, "render_by_page", return_value={}):
         assert _already_read(deck) == {1, 2}, "no version to disagree with, so nothing says either changed"
 
-    with mock.patch.object(regress, "code_by_page", return_value={1: "now-known", 2: "drawn-by"}):
+    with mock.patch.object(review_module, "render_by_page", return_value={1: "now-known", 2: "drawn-by"}):
         # Page 2 was read at the version it still carries; page 1 was read at no version
         # and now has one, which is the transition that used to ship unread.
         assert _already_read(deck) == {2}
 
-    with mock.patch.object(regress, "code_by_page", return_value={1: "now-known", 2: "rewritten"}):
+    with mock.patch.object(review_module, "render_by_page", return_value={1: "now-known", 2: "rewritten"}):
         assert _already_read(deck) == set()
 
 
@@ -206,7 +207,7 @@ async def test_the_old_list_field_is_not_the_same_mark_as_a_version_nobody_wrote
     one alone: the old field made no claim about any version, and a fingerprint turning
     up later is not news about a page it never described.
     """
-    from raven_ppt.tools.review import RECORD_FILE, _already_read, regress
+    from raven_ppt.tools.review import RECORD_FILE, _already_read
 
     deck = _deck(tmp_path, pages=2)
     deck.review_dir.mkdir(parents=True, exist_ok=True)
@@ -214,7 +215,7 @@ async def test_the_old_list_field_is_not_the_same_mark_as_a_version_nobody_wrote
         json.dumps({"schema": "raven_ppt.review.v1", "pages_read": [1, 2]}), encoding="utf-8"
     )
 
-    with mock.patch.object(regress, "code_by_page", return_value={1: "now-known", 2: "also-known"}):
+    with mock.patch.object(review_module, "render_by_page", return_value={1: "now-known", 2: "also-known"}):
         assert _already_read(deck) == {1, 2}
 
 
@@ -228,7 +229,7 @@ async def test_a_partly_reviewed_legacy_record_keeps_the_pages_it_did_not_cover(
     build launched the reader on pages nobody had changed, which is the cost the
     old-record compatibility exists to avoid.
     """
-    from raven_ppt.tools.review import RECORD_FILE, _already_read, _marked, regress
+    from raven_ppt.tools.review import RECORD_FILE, _already_read, _marked
 
     deck = _deck(tmp_path, pages=3)
     deck.review_dir.mkdir(parents=True, exist_ok=True)
@@ -236,7 +237,7 @@ async def test_a_partly_reviewed_legacy_record_keeps_the_pages_it_did_not_cover(
         json.dumps({"schema": "raven_ppt.review.v1", "pages_read": [1, 2, 3]}), encoding="utf-8"
     )
 
-    with mock.patch.object(regress, "code_by_page", return_value={1: "one", 2: "two", 3: "three"}):
+    with mock.patch.object(review_module, "render_by_page", return_value={1: "one", 2: "two", 3: "three"}):
         written = _marked(deck, [1])
         assert written == {"1": "one", "2": None, "3": None}, "untouched legacy marks survive the write"
 
@@ -257,7 +258,7 @@ async def test_writing_the_record_never_changes_a_page_the_round_did_not_read(tm
     mistake -- a write that quietly restates a mark -- and a case list only catches the
     instance somebody thought of.
     """
-    from raven_ppt.tools.review import RECORD_FILE, _already_read, _marked, regress
+    from raven_ppt.tools.review import RECORD_FILE, _already_read, _marked
 
     records: list[object] = [
         [1, 2, 3],
@@ -276,7 +277,7 @@ async def test_writing_the_record_never_changes_a_page_the_round_did_not_read(tm
         for now in fingerprints:
             for read in ([], [1], [2], [1, 2], [1, 2, 3]):
                 record.write_text(json.dumps({"pages_read": held}), encoding="utf-8")
-                with mock.patch.object(regress, "code_by_page", return_value=now):
+                with mock.patch.object(review_module, "render_by_page", return_value=now):
                     before = _already_read(deck)
                     written = _marked(deck, read)
                     record.write_text(json.dumps({"pages_read": written}), encoding="utf-8")
@@ -748,3 +749,58 @@ async def test_the_verdict_rides_with_the_page_it_is_about(tmp_path) -> None:
     said = [b["text"] for b in reply.blocks if isinstance(b, dict) and b.get("text")]
 
     assert any("reads as: plain, and short of its region" in text for text in said)
+
+
+@pytest.mark.asyncio
+async def test_a_reading_gives_up_pages_still_being_read_when_its_budget_runs_out(tmp_path, monkeypatch) -> None:
+    """Six whole-deck builds on one run spent 43 of its 88 minutes reading, one of them
+    the build tool's own 900s timeout, every second a reasoning model thinking about one
+    page's picture. The reading is bounded as a whole: a page still being read when the
+    budget runs out is left for the next build and named, the others come back, and the
+    reply says how long the reading took."""
+    from raven_ppt.tools import review as module
+
+    class Slow(Composer):
+        async def ask(self, system: str, parts, *, max_tokens: int) -> str:
+            said = "\n".join(part.get("text", "") for part in parts if isinstance(part, dict))
+            if "Page 2." in said:
+                await asyncio.sleep(3.0)
+            return await super().ask(system, parts, max_tokens=max_tokens)
+
+    monkeypatch.setattr(module, "READING_BUDGET_S", 0.4)
+    deck = _deck(tmp_path, pages=3)
+    tool = PptReviewTool(tmp_path, Views(3), composer=Slow(_ONE))
+
+    reply = await tool.execute(project="ws")
+    payload = _payload(reply)
+
+    assert payload["could_not_be_read"] == [2]
+    assert payload["pages_reviewed"] == 2
+    assert "reading budget ran out (2)" in payload["reading_budget"]
+    assert payload["reading_seconds"] < 3.0
+    assert set(tool.last_reading["per_page_s"]) == {"1", "3"}
+    assert tool.last_reading["over_budget"] == [2]
+    record = json.loads((deck.review_dir / module.RECORD_FILE).read_text(encoding="utf-8"))
+    assert set(record["pages_read"]) == {"1", "3"}, "an unread page is not marked read"
+
+
+@pytest.mark.asyncio
+async def test_a_decks_readings_add_up_in_the_record(tmp_path) -> None:
+    """Eighteen whole-deck builds on one run each re-read the pages the last revision
+    touched. The record now carries the seconds all of a deck's readings have taken,
+    which is what the build tool holds against the deck's own budget."""
+    from raven_ppt.tools import review as module
+
+    deck = _deck(tmp_path, pages=3)
+    tool = PptReviewTool(tmp_path, Views(3), composer=Composer(_ONE))
+    assert module.reading_seconds_spent(deck) == 0.0
+
+    await tool.execute(project="ws")
+    first = module.reading_seconds_spent(deck)
+    assert first >= 0.0
+    record = json.loads((deck.review_dir / module.RECORD_FILE).read_text(encoding="utf-8"))
+    assert record["reading_seconds_total"] == first
+    assert "reading_seconds" in record
+
+    await tool.execute(project="ws")
+    assert module.reading_seconds_spent(deck) >= first, "rounds accumulate rather than replace"

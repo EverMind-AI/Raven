@@ -126,7 +126,10 @@ async def test_all_example_pages_come_back_as_pictures(workspace: Path, house: P
     assert len(body["template_pages"]) == 2
     next_step = body["next_step"]
     assert next_step.startswith("clone the template's structural pages")
-    assert "adaptable prototypes" in body["content_pages"]
+    # Named page by page and by the shape each page holds. Prose about "adaptable
+    # prototypes" left a live run cloning only the pages the reply named by role.
+    assert body["content_pages"].startswith("1 of the template's pages are content examples")
+    assert "Clone the one whose arrangement matches" in body["content_pages"]
 
 
 async def test_a_machine_that_cannot_render_still_binds(workspace: Path, house: Path):
@@ -240,3 +243,72 @@ async def test_a_project_name_that_is_not_one(workspace: Path):
 
     assert not body["ok"]
     assert "not a usable project name" in body["error"]
+
+
+async def test_the_reply_names_the_layouts_that_carry_pictures(workspace: Path, house: Path, image):
+    """A photograph on the layout shows on every page and is on none of them, so the
+    author told to replace the template's pictures found nothing on the page to replace.
+    The reply names the layout and the call that reaches it."""
+    from pptx import Presentation
+
+    from tests._ppt_engine_fixtures import layout_picture
+
+    presentation = Presentation(str(house))
+    layout = presentation.slides[0].slide_layout
+    layout_picture(layout, image("cover.png", (60, 60, 60)), 0, 0, 6.4, 4.7)
+    presentation.save(str(house))
+
+    tool = PptTemplateTool(workspace, views=FakeViews())
+    result = await tool.execute(project="deck", path=str(house))
+
+    body = _body(result)
+    assert body["layout_pictures"] == [
+        f"layout '{layout.name}' carries 1 picture(s) (6.4x4.7in), under example page(s) 1, 2 -- on the page you "
+        "build from one of those: `replace_picture(layout_pictures(slide)[0], FIGURES / 'x.png', 'cover')`"
+    ], "a picture short of the page is swapped at full strength; a page-sized one would carry alpha=0.25"
+
+    assert "layout_pictures(slide)[0]" in body["next_step"]
+
+
+async def test_a_page_larger_than_the_whole_budget_is_still_bounded(workspace: Path, house: Path, monkeypatch):
+    """The budget used to apply from the second page on, so a single page of 19,000
+    characters crossed the host's 16,000-character mark and came back cut mid-line,
+    reading as a complete page. It stops at a whole line inside the budget, says so
+    where it stops, and the reply names the page as cut."""
+    from raven_ppt.tools import template as module
+
+    monkeypatch.setattr(module, "SOURCE_BUDGET_CHARS", 400)
+    tool = PptTemplateTool(workspace, FakeViews())
+    await tool.execute(project="talk", path="uploads/house-style.pptx")
+
+    result = await tool.execute(project="talk", pages=[1])
+
+    code = result.blocks[0]["text"]
+    body = _body(result)
+    assert body["pages_read"] == [1]
+    assert body["pages_cut"]["1"]["lines_withheld"] > 0
+    assert "# -- cut:" in code and "clone" in code
+    kept = code.split("# -- cut:")[0]
+    assert len(kept) <= 400 + len("\n".join(f"# {line}" for line in ["x"] * 8)) + 300, (
+        "the page stops inside the budget, plus the imports"
+    )
+    assert "clone" in body["next_step"]
+
+
+async def test_rebinding_drops_the_band_grid_read_off_the_previous_template(workspace: Path, house: Path):
+    """`bands.json` is a reading of one template's pages, kept beside it the way the
+    palette is; a rebind dropped the palette and not the grid, so every band check then
+    judged the new deck against the previous template's rows (a 37% error in the body
+    area on two synthetic templates differing only in title-row height)."""
+    from raven_ppt.services.template.bands import bands_path
+
+    tool = PptTemplateTool(workspace, FakeViews())
+    project = Project(workspace=workspace, slug="talk")
+
+    await tool.execute(project="talk", path="uploads/house-style.pptx")
+    bands_path(project).write_text('{"schema": "stale", "title_bottom": 1.0}', encoding="utf-8")
+
+    body = _body(await tool.execute(project="talk", path="uploads/house-style.pptx"))
+
+    assert body["ok"]
+    assert not bands_path(project).exists(), "the grid goes with the template it was read from"

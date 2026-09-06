@@ -6,7 +6,7 @@ it as files instead: ``ppt_theme.py`` beside ``themes.json``, ``ppt_icons.py``
 beside ``icons.json`` and ``icon_keywords.json``, ``ppt_shapes.py`` beside
 ``shapes.json``, dropped into the build directory where the script runs. The
 script does ``from ppt_theme import THEMES, rgb``, ``from ppt_icons import
-add_icon`` and ``from ppt_shapes import chevron_row``.
+add_icon`` and ``from ppt_shapes import timeline``.
 
 The keywords are a second file rather than a field inside ``icons.json`` because
 the two are read by different code at different times: the geometry is walked
@@ -37,6 +37,7 @@ from pathlib import Path
 
 from raven_ppt.services.assets import icons, shapes
 from raven_ppt.services.assets.themes import THEME_GUIDE, THEMES
+from raven_ppt.services.template.theme import _readable
 
 THEME_MODULE_FILENAME = "ppt_theme.py"
 THEME_DATA_FILENAME = "themes.json"
@@ -413,10 +414,12 @@ def add_icon(slide, name, left, top, size, colour, width_pt=1.75):
     """
     side = float(size)
     if side < _TOO_SMALL_FOR_EMU:
-        raise ValueError(
-            f"size={size!r} is {side / _EMU_IN:.8f}in: add_icon's left, top and size are EMU, so write "
-            f"Inches({size!r}). Every box it answers with, and the_ink_an_icon_covers takes, is inches."
-        )
+        # Inches were handed in: a side under a hundredth of an inch is not a small
+        # icon, it is `0.4` written the way the rest of the reference reads. Refusing it
+        # cost a live build a round to learn `Inches(0.4)`; the number means one thing,
+        # so it is read as that. All three together, because an author who wrote the
+        # size in inches wrote the corner in inches.
+        left, top, side = float(left) * _EMU_IN, float(top) * _EMU_IN, side * _EMU_IN
     name = _resolve(name)
     colour = _line_color(colour)
     scale = side / _GRID
@@ -455,17 +458,134 @@ def add_icon(slide, name, left, top, size, colour, width_pt=1.75):
     if not shapes:
         raise LookupError(f"icon {name!r} carries no strokes to draw")
     return Icon(shapes, _ink_box(shapes))
+
+
+# A shape wider or taller than this is a figure, not an icon, and `swap_icon` refuses it
+# rather than paint a two-inch stroke drawing where a photograph was.
+_ICON_AT_MOST_IN = 1.6
+
+
+def swap_icon(slide, shape, name, colour=None):
+    """Replace an icon the template drew with `name`, in its box and its colour.
+
+    The one graphic on a cloned page that has to change with the content, and the one
+    `adapt` cannot reach: a template's icon is a freeform path (or a small group of
+    them) holding no text, so `texts=` and `items=` pass it by and a page about supply
+    chains keeps the trophy the template shipped. `shape` is what `shape_near(slide, x,
+    y)` or `shape_at(slide, n)` found -- the path itself, or the group of paths it is
+    drawn as; a group's parts are taken together.
+
+    The new icon is drawn on the page where the old one was, as large as the old one's
+    box, and in the old one's colour: an `srgbClr` comes across as that colour, and a
+    `schemeClr` as the same theme slot, so an icon on a page borrowed from another
+    template keeps following this deck's palette. Pass `colour` -- '#RRGGBB' or an
+    RGBColor -- to override either. The old shape is removed, not hidden.
+
+    Refused when `shape` is bigger than an icon ({_ICON_AT_MOST_IN}in on a side): that
+    is a figure or a panel, and `replace_picture` or `drop_shape` is the call for it.
+    """
+    from pptx.enum.dml import MSO_THEME_COLOR
+
+    left, top, width, height = _page_box_emu(shape)
+    side_in = max(width, height) / _EMU_IN
+    if side_in > _ICON_AT_MOST_IN:
+        raise ValueError(
+            f"swap_icon replaces icons, and this shape is {width / _EMU_IN:.2f}x{height / _EMU_IN:.2f}in: "
+            f"a picture wants replace_picture, a panel wants drop_shape"
+        )
+    inherited = _first_colour(shape)
+    theme_slot = None
+    if colour is None:
+        if inherited is None:
+            raise ValueError(
+                f"the shape at ({left / _EMU_IN:.2f}, {top / _EMU_IN:.2f})in states no colour of its own; "
+                "pass colour='#RRGGBB' (T['accent'] or T['accent_ink'] are the usual answers)"
+            )
+        kind, value = inherited
+        if kind == "srgb":
+            colour = "#" + value
+        else:
+            theme_slot = value
+            colour = "#000000"
+    side = max(width, height)
+    icon = add_icon(slide, name, left + (width - side) // 2, top + (height - side) // 2, side, colour)
+    if theme_slot is not None:
+        slot = _THEME_SLOTS.get(theme_slot)
+        if slot is None:
+            raise ValueError(f"the old icon is painted in theme slot {theme_slot!r}, which has no python-pptx name; pass colour=")
+        for drawn in icon:
+            if drawn.fill.type == 1:
+                drawn.fill.fore_color.theme_color = getattr(MSO_THEME_COLOR, slot)
+            else:
+                drawn.line.color.theme_color = getattr(MSO_THEME_COLOR, slot)
+    parent = shape._element.getparent()
+    if parent is not None:
+        parent.remove(shape._element)
+    return icon
+
+
+_THEME_SLOTS = {
+    "accent1": "ACCENT_1", "accent2": "ACCENT_2", "accent3": "ACCENT_3",
+    "accent4": "ACCENT_4", "accent5": "ACCENT_5", "accent6": "ACCENT_6",
+    "tx1": "TEXT_1", "tx2": "TEXT_2", "bg1": "BACKGROUND_1", "bg2": "BACKGROUND_2",
+    "dk1": "DARK_1", "dk2": "DARK_2", "lt1": "LIGHT_1", "lt2": "LIGHT_2",
+    "hlink": "HYPERLINK", "folHlink": "FOLLOWED_HYPERLINK",
+}
+_A = "http://schemas.openxmlformats.org/drawingml/2006/main"
+
+
+def _first_colour(shape):
+    """('srgb', 'RRGGBB') or ('scheme', 'accent2') for the first colour the shape paints, or None.
+
+    Fill before line, and the shape's own properties before its children's: an icon
+    drawn as a group of paths states the colour on each path, not on the group.
+    """
+    element = shape._element
+    for tag in ("solidFill", "ln"):
+        for block in element.iter(f"{{{_A}}}{tag}"):
+            for node in block.iter():
+                if node.tag == f"{{{_A}}}srgbClr":
+                    return ("srgb", (node.get("val") or "000000").upper())
+                if node.tag == f"{{{_A}}}schemeClr":
+                    return ("scheme", node.get("val") or "")
+    return None
+
+
+def _page_box_emu(shape):
+    """(left, top, width, height) of `shape` on the page, in EMU, through any groups.
+
+    A grouped shape's own numbers are in its group's child space; each enclosing group
+    maps that space onto its extent. `page_position` in ppt_template does the same walk
+    in inches, and this module cannot import it -- the projected modules stand alone.
+    """
+    x, y = float(shape.left or 0), float(shape.top or 0)
+    w, h = float(shape.width or 0), float(shape.height or 0)
+    node = shape._element.getparent()
+    while node is not None and node.tag == f"{{{_P}}}grpSp":
+        xfrm = node.find(f"{{{_P}}}grpSpPr/{{{_A}}}xfrm")
+        if xfrm is not None:
+            off, ext = xfrm.find(f"{{{_A}}}off"), xfrm.find(f"{{{_A}}}ext")
+            choff, chext = xfrm.find(f"{{{_A}}}chOff"), xfrm.find(f"{{{_A}}}chExt")
+            if None not in (off, ext, choff, chext):
+                sx = int(ext.get("cx")) / max(1, int(chext.get("cx")))
+                sy = int(ext.get("cy")) / max(1, int(chext.get("cy")))
+                x = int(off.get("x")) + (x - int(choff.get("x"))) * sx
+                y = int(off.get("y")) + (y - int(choff.get("y"))) * sy
+                w, h = w * sx, h * sy
+        node = node.getparent()
+    return int(x), int(y), int(w), int(h)
 '''
 
 
 _SHAPE_MODULE = '''"""Office preset shapes, positioned by the engine rather than by eye.
 
-    from ppt_shapes import chevron_row, connect, preset, timeline
+    from ppt_shapes import connect, preset, timeline
     from ppt_layout import LABEL_PT, write
 
-    for step, label in zip(chevron_row(slide, band, T, 5), ("采集", "清洗", "标注", "训练", "评测")):
-        write(slide, step.box, label, size=LABEL_PT, colour=T["background"], font=F, cjk_font=HAN,
-              align="center", anchor="middle")
+    track = timeline(slide, band, T, 5)
+    for stop, label in zip(track.stops, ("采集", "清洗", "标注", "训练", "评测")):
+        write(slide, stop.box, label, size=LABEL_PT, colour=T["foreground"], font=F, cjk_font=HAN,
+              align="center")
 
 Office's preset geometries, by their DrawingML names -- `chevron`, `rightArrow`,
 `flowChartDecision`. `PRESET_NAMES` is the 109 of Office's 177 that a business page can
@@ -573,37 +693,19 @@ PRESET_NAMES = [name for name in _ALL_NAMES if name not in _OUT_OF_VOCABULARY]
 _SHAPE_OF = {member.xml_value: member for member in MSO_SHAPE.__members__.values()}
 _CONNECTORS = {"straight": MSO_CONNECTOR.STRAIGHT, "elbow": MSO_CONNECTOR.ELBOW, "curved": MSO_CONNECTOR.CURVE}
 
-# A step's copy sits in the shape's own text rectangle, which for a chevron is inset
-# past both points -- that inset is why the words do not sit on the arrow.
-Step = namedtuple("Step", "shape box")
 # `box` is the region under the spine and `above` the one over it, so a stop can carry
 # a label and a date without either being placed by hand.
 Stop = namedtuple("Stop", "mark box above")
 Track = namedtuple("Track", "spine stops")
 
 
-class Row(list):
-    """The steps one `chevron_row` drew.
-
-    A list, because `for step in chevron_row(...)` and `zip(chevron_row(...), labels)`
-    are how the return reads. `steps` is that same list under the name its sibling
-    `timeline` gives the stops, so one call does not have to be remembered differently
-    from the other.
-    """
-
-    __slots__ = ()
-
-    @property
-    def steps(self):
-        return self
-
 
 def _how_many(n, what, thing):
     """The count, whether `n` is the count or the things to be counted.
 
-    `chevron_row(slide, box, T, labels)` is what a caller holding the labels writes,
+    `timeline(slide, box, T, stops)` is what a caller holding the milestones writes,
     and `len` is the number it meant. The copy is still written by the caller, into
-    the box each step hands back -- so the deck's one ramp decides its size, and a
+    the box each stop hands back -- so the deck's one ramp decides its size, and a
     row that was handed its labels does not end up with two of each.
     """
     if hasattr(n, "__len__") and not isinstance(n, str):
@@ -707,8 +809,9 @@ def preset(slide, box, theme, name, *, adj=None, tint="accent", outline=None, wi
     you and it raises naming the one you passed. `tint` and `outline` name a theme
     colour or give a '#RRGGBB'; either may be None for no fill or no line.
 
-    Copy goes in with `ppt_layout.write` into `box`, or into the narrower box
-    `chevron_row` hands back for a shape with points in the way.
+    Copy goes in with `ppt_layout.write` into `box`. A shape with points in the way --
+    a chevron, an arrow -- has a text rectangle narrower than its frame, so inset the
+    box yourself rather than writing to the frame's own edges.
     """
     name = _resolve(name)
     shape = slide.shapes.add_shape(_SHAPE_OF[name], *box.pptx())
@@ -716,64 +819,6 @@ def preset(slide, box, theme, name, *, adj=None, tint="accent", outline=None, wi
     if adj is not None:
         _adjust(shape, name, adj)
     return shape
-
-
-def chevron_row(slide, box, theme, n, *, adj=0.5, tint="accent", flat_start=True, outline=None):
-    """`n` chevrons interlocking across `box`, and the text box inside each.
-
-    `n` is the number of steps or the steps themselves -- pass the labels and `len` is
-    the count. The labels are not written for you: each `Step` carries the box its copy
-    goes in, and `ppt_layout.write` puts it there at a size from the deck's ramp.
-
-    The arithmetic is the whole point of the helper. A chevron's notch is
-    `min(width, height) * adj` deep, so the next one has to start exactly that far
-    short of where this one ends -- then the point lands in the notch and the row
-    reads as one sequence. Off by a tenth of an inch and it reads as five shapes
-    that nearly touch, which is what a program computing it between renders produces.
-
-    `flat_start` gives the first step a flat left edge, which is what a sequence that
-    starts here looks like; pass False when the row continues something.
-
-    Every step carries a hairline outline in the theme's ground colour, because a row in
-    one solid `tint` with no outline is one long arrow with five words on it -- the notch
-    between two steps of the same fill is a colour boundary with no colour change at it.
-    An `outline` of your own still wins; see SEAM_PT for what the render measured.
-
-    Returns a list of `Step(shape, box)`. Write into `step.box`.
-    """
-    n = _how_many(n, "chevron row", "step")
-    share = min(max(float(adj), 0.0), 1.0)
-    height = box.h
-    # Solve the row: n shapes of one width, each overlapping the last by its notch.
-    width = (box.w + (n - 1) * height * share) / n
-    if width < height:
-        # A tall step notches on its width instead, so the solve changes with it.
-        width = box.w / (n - (n - 1) * share)
-    overlap = min(width, height) * share
-    seam = outline is None
-    steps = []
-    for index in range(n):
-        x0 = box.x0 + index * (width - overlap)
-        first = index == 0 and flat_start
-        shape = preset(
-            slide,
-            Box(x0, box.y0, x0 + width, box.y1),
-            theme,
-            "homePlate" if first else "chevron",
-            adj=share,
-            tint=tint,
-            outline=theme["background"] if seam else outline,
-            width_pt=SEAM_PT if seam else 1.5,
-        )
-        if first:
-            inner = Box(x0, box.y0, x0 + width - overlap / 2, box.y1)
-        elif width > 2 * overlap:
-            inner = Box(x0 + overlap, box.y0, x0 + width - overlap, box.y1)
-        else:
-            # Squatter than two notches: the preset gives up on the inset and so does this.
-            inner = Box(x0, box.y0, x0 + width, box.y1)
-        steps.append(Step(shape, inner))
-    return Row(steps)
 
 
 def timeline(slide, box, theme, n, *, tint="accent", arrow=True, colour=None):
@@ -988,6 +1033,13 @@ def theme_catalog() -> dict[str, dict]:
         # A property rather than a field, and the one the author actually needs for
         # a deck in Chinese: `font_family` alone leaves Han to the viewer's fallback.
         entry["cjk_font_family"] = theme.cjk_family
+        # Derived rather than stored, and derived the same way a template's own palette
+        # derives it. The reference sends every author here -- "a number or heading in
+        # the accent's colour takes accent_ink" -- and a preset theme carried no such
+        # field, so the one route without a template answered that advice with a
+        # KeyError. An accent mixed towards the background cannot be written on its own
+        # tint; this is the accent darkened along the ink until it can.
+        entry["accent_ink"] = _readable(theme.accent, theme.accent_soft, theme.foreground)
         catalog[theme_id] = entry
     return catalog
 

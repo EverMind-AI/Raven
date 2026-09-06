@@ -19,6 +19,7 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from raven_ppt.services.template.bands import bands_path
 from raven_ppt.services.template.inventory import (
     PREPARED_FILE,
     TEMPLATE_FILE,
@@ -77,6 +78,10 @@ def bind(source: Path, project) -> BoundTemplate | None:
     # kept across a rebind it would put the last template's colours in this one --
     # which `bound` would then read back as this template's own.
     palette_path(project).unlink(missing_ok=True)
+    # The band grid is the same kind of reading and lives in the same slot: kept
+    # across a rebind, `_bands` reads it back first and every band check judges the
+    # new deck against the previous template's rows.
+    bands_path(project).unlink(missing_ok=True)
     # On the copy, before anything counts its pages: a hidden slide is absent from
     # the render, so leaving it in makes the file's page numbers disagree with the
     # render's for every page after it.
