@@ -39,6 +39,7 @@ from raven.agent.tools.file_search import FindTool, GrepTool
 from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.media_gen import (
     ImageGenerateTool,
+    MusicGenerateTool,
     SpeechGenerateTool,
     VideoGenerateTool,
 )
@@ -870,6 +871,7 @@ class AgentLoop:
             (ImageGenerateTool, media.image),
             (SpeechGenerateTool, media.speech),
             (VideoGenerateTool, media.video),
+            (MusicGenerateTool, media.music),
         )
         for cls, tool_cfg in media_tools:
             if tool_cfg.api_key or tool_cfg.model:

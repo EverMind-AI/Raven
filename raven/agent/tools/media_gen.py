@@ -25,6 +25,16 @@ Video uses a separate async endpoint (NOT chat-completions):
   ``kwaivgi/kling-v3.0-std`` (Kling v3 Standard). Requires postpaid billing /
   credits enabled on the OpenRouter account.
 
+Music uses the MiniMax REST API (also not chat-completions):
+
+- ``music_generate``  → ``POST {base}/music_generation`` with
+  ``{model, prompt, lyrics, output_format, ...}`` → ``base_resp.status_code``
+  ``0`` on success, ``data.status`` ``2`` when the track is ready, and
+  ``data.audio`` as either a hex-encoded payload (``output_format:"hex"``) or
+  a list of downloadable URLs (``output_format:"url"``). Default model
+  ``music-3.0``; cover models ``music-cover`` / ``music-cover-free`` take a
+  reference track via ``audio_url`` / ``audio_base64``.
+
 Generated files are written under ``<workspace>/<output_subdir>`` and the path
 is returned so the agent can forward it with the ``message`` tool's ``media``
 field. A denied request (HTTP 403) hints at setting ``tools.media.proxy``.
@@ -625,3 +635,299 @@ class VideoGenerateTool(_OpenRouterMediaTool):
             await asyncio.sleep(self._POLL_INTERVAL_S)
             waited += self._POLL_INTERVAL_S
         return {"status": "timeout"}
+
+
+_MUSIC_DEFAULT_BASE = "https://api.minimax.io/v1"
+_MUSIC_AUDIO_FORMATS = ("mp3", "wav", "pcm")
+
+
+class MusicGenerateTool(Tool):
+    """Generate music or a cover via MiniMax's ``/music_generation`` endpoint.
+
+    MiniMax is a dedicated REST API, not chat-completions: one synchronous POST
+    returns the finished track. Success is ``base_resp.status_code == 0``;
+    ``data.status`` is ``2`` when the track is ready. ``data.audio`` carries the
+    result as a hex-encoded payload (``output_format:"hex"``, the only form
+    ``stream`` accepts) or a list of downloadable URLs (``output_format:"url"``,
+    which expire after 24h so the tool downloads them immediately). Cover models
+    (``music-cover`` / ``music-cover-free``) take a reference track through
+    ``audio_url`` / ``audio_base64``.
+    """
+
+    name = "music_generate"
+    default_model = "music-3.0"
+    description = (
+        "Generate music (or a cover of a reference track) from a text prompt. "
+        "Saves the audio under the workspace and returns its path; forward it "
+        "to the user with the `message` tool's `media` field."
+    )
+    timeout_seconds = 600.0
+
+    def __init__(
+        self,
+        config: "MediaToolConfig | None" = None,
+        *,
+        workspace: Path | None = None,
+        proxy: str | None = None,
+        output_subdir: str = "generated",
+    ):
+        self._config = config
+        self._workspace = Path(workspace) if workspace else Path.cwd()
+        self._proxy = proxy
+        self._output_subdir = output_subdir
+
+    @property
+    def api_key(self) -> str:
+        cfg_key = getattr(self._config, "api_key", "") if self._config else ""
+        return cfg_key or os.environ.get("MINIMAX_API_KEY", "")
+
+    @property
+    def api_base(self) -> str:
+        cfg_base = getattr(self._config, "api_base", "") if self._config else ""
+        return (cfg_base or _MUSIC_DEFAULT_BASE).rstrip("/")
+
+    def _model(self, override: str | None) -> str:
+        cfg_model = getattr(self._config, "model", "") if self._config else ""
+        return override or cfg_model or self.default_model
+
+    def _output_path(self, ext: str) -> Path:
+        out_dir = self._workspace / self._output_subdir
+        out_dir.mkdir(parents=True, exist_ok=True)
+        return out_dir / f"{self.name}-{uuid.uuid4().hex[:12]}.{ext}"
+
+    def _no_key_error(self) -> str:
+        return json.dumps(
+            {
+                "error": (
+                    "music_generate: no API key configured. Set it in "
+                    "~/.raven/config.json under tools.media.music.apiKey or "
+                    "providers.minimax.apiKey, or export MINIMAX_API_KEY, then "
+                    "restart the gateway."
+                )
+            },
+            ensure_ascii=False,
+        )
+
+    def _format_http_error(self, e: httpx.HTTPStatusError) -> str:
+        body = e.response.text[:400]
+        logger.error("{} HTTP {}: {}", self.name, e.response.status_code, body)
+        return json.dumps({"error": f"HTTP {e.response.status_code}: {body}"}, ensure_ascii=False)
+
+    parameters = {
+        "type": "object",
+        "properties": {
+            "prompt": {
+                "type": "string",
+                "description": "Style/mood description of the music to create, or the target cover style",
+            },
+            "lyrics": {
+                "type": "string",
+                "description": "Song lyrics, one line per verse, with optional section tags like [Verse]/[Chorus]",
+            },
+            "model": {
+                "type": "string",
+                "description": (
+                    "Optional MiniMax music model override. Generation: music-3.0 "
+                    "(default), music-2.6, music-3.0-free, music-2.6-free. Cover: "
+                    "music-cover, music-cover-free."
+                ),
+            },
+            "output_format": {
+                "type": "string",
+                "enum": ["url", "hex"],
+                "default": "url",
+                "description": "'url' returns downloadable links (expire in 24h, downloaded here); 'hex' returns the raw audio bytes",
+            },
+            "audio_setting": {
+                "type": "object",
+                "description": 'Audio container settings, e.g. {"format": "mp3", "sample_rate": 44100, "bitrate": 256000}',
+            },
+            "is_instrumental": {"type": "boolean", "description": "Generate instrumental music with no vocals"},
+            "lyrics_optimizer": {
+                "type": "boolean",
+                "description": "Auto-generate lyrics from the prompt when lyrics is empty",
+            },
+            "stream": {
+                "type": "boolean",
+                "default": False,
+                "description": "Stream the audio; only hex output is supported",
+            },
+            "audio_url": {
+                "type": "string",
+                "description": "Reference audio URL (cover models only); local paths are read and base64-encoded",
+            },
+            "audio_base64": {"type": "string", "description": "Base64-encoded reference audio (cover models only)"},
+            "cover_feature_id": {
+                "type": "string",
+                "description": "Feature id from the music cover preprocess API (cover models only)",
+            },
+            "aigc_watermark": {
+                "type": "integer",
+                "description": "Required on the China (api.minimaxi.com) endpoint: 1 embeds an AIGC watermark, 0 does not",
+            },
+        },
+        "required": [],
+    }
+
+    async def execute(
+        self,
+        prompt: str | None = None,
+        lyrics: str | None = None,
+        model: str | None = None,
+        output_format: str = "url",
+        audio_setting: dict[str, Any] | None = None,
+        is_instrumental: bool | None = None,
+        lyrics_optimizer: bool | None = None,
+        stream: bool = False,
+        audio_url: str | None = None,
+        audio_base64: str | None = None,
+        cover_feature_id: str | None = None,
+        aigc_watermark: int | None = None,
+        **kwargs: Any,
+    ) -> str:
+        if not self.api_key:
+            return self._no_key_error()
+        if not (prompt or lyrics or audio_url or audio_base64 or cover_feature_id):
+            return json.dumps(
+                {"error": "music_generate: provide a prompt, lyrics, or a reference audio"},
+                ensure_ascii=False,
+            )
+
+        model_id = self._model(model)
+        payload: dict[str, Any] = {"model": model_id}
+        if prompt:
+            payload["prompt"] = prompt
+        if lyrics:
+            payload["lyrics"] = lyrics
+        fmt = "hex" if stream else (output_format or "url")
+        payload["output_format"] = fmt
+        if stream:
+            payload["stream"] = True
+        if audio_setting:
+            payload["audio_setting"] = audio_setting
+        if is_instrumental is not None:
+            payload["is_instrumental"] = bool(is_instrumental)
+        if lyrics_optimizer is not None:
+            payload["lyrics_optimizer"] = bool(lyrics_optimizer)
+        if cover_feature_id:
+            payload["cover_feature_id"] = cover_feature_id
+        if aigc_watermark is not None:
+            payload["aigc_watermark"] = int(aigc_watermark)
+        if audio_url:
+            if audio_url.startswith(("http://", "https://", "data:")):
+                payload["audio_url"] = audio_url
+            else:
+                try:
+                    payload["audio_base64"] = base64.b64encode(Path(audio_url).expanduser().read_bytes()).decode(
+                        "ascii"
+                    )
+                except OSError as e:
+                    return json.dumps({"error": f"could not read reference audio: {e}"}, ensure_ascii=False)
+        elif audio_base64:
+            payload["audio_base64"] = audio_base64
+
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        try:
+            async with httpx.AsyncClient(proxy=self._proxy, timeout=300.0) as client:
+                if stream:
+                    audio_hex = await self._stream_hex(client, headers, payload)
+                    resp = {"data": {"audio": audio_hex, "status": 2}, "base_resp": {"status_code": 0}}
+                else:
+                    r = await client.post(f"{self.api_base}/music_generation", headers=headers, json=payload)
+                    r.raise_for_status()
+                    resp = r.json()
+                base_resp = resp.get("base_resp") or {}
+                if base_resp.get("status_code", 0) != 0:
+                    return json.dumps(
+                        {
+                            "error": base_resp.get("status_msg") or f"status_code={base_resp.get('status_code')}",
+                            "model": model_id,
+                        },
+                        ensure_ascii=False,
+                    )
+                data = resp.get("data") or {}
+                audio = data.get("audio")
+                if not audio:
+                    status = data.get("status")
+                    return json.dumps(
+                        {
+                            "error": f"music generation status={status}" if status else "no audio returned",
+                            "model": model_id,
+                        },
+                        ensure_ascii=False,
+                    )
+                if fmt == "url":
+                    paths = await self._download_urls(client, audio, audio_setting)
+                else:
+                    paths = [str(self._save_hex(audio, audio_setting))]
+        except httpx.HTTPStatusError as e:
+            return self._format_http_error(e)
+        except Exception as e:
+            logger.error("music_generate error: {}", e)
+            return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+        logger.info("music_generate: {} file(s) via {} -> {}", len(paths), model_id, paths)
+        return json.dumps({"success": True, "model": model_id, "paths": paths}, ensure_ascii=False)
+
+    async def _stream_hex(self, client: httpx.AsyncClient, headers: dict[str, str], payload: dict[str, Any]) -> str:
+        """Concatenate the hex chunks of a streamed music response.
+
+        Each SSE ``data:`` event carries either a JSON object whose ``data.audio``
+        is a hex chunk or a bare hex string; ``[DONE]`` ends the stream.
+        """
+        hex_parts: list[str] = []
+        async with client.stream("POST", f"{self.api_base}/music_generation", headers=headers, json=payload) as r:
+            if r.status_code >= 400:
+                await r.aread()
+                r.raise_for_status()
+            async for line in r.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                data = line[len("data:") :].strip()
+                if not data or data == "[DONE]":
+                    continue
+                try:
+                    obj = json.loads(data)
+                except json.JSONDecodeError:
+                    hex_parts.append(data)
+                    continue
+                if isinstance(obj, dict):
+                    audio = (obj.get("data") or {}).get("audio")
+                    if audio:
+                        hex_parts.append(audio)
+        return "".join(hex_parts)
+
+    async def _download_urls(
+        self,
+        client: httpx.AsyncClient,
+        audio: Any,
+        audio_setting: dict[str, Any] | None,
+    ) -> list[str]:
+        """Download each audio URL (pre-signed, no auth) and save it locally."""
+        urls = audio if isinstance(audio, list) else [audio]
+        paths: list[str] = []
+        for url in urls:
+            if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+                continue
+            r = await client.get(url, timeout=180.0)
+            r.raise_for_status()
+            path = self._output_path(self._ext_for_url(url, audio_setting))
+            path.write_bytes(r.content)
+            paths.append(str(path))
+        if not paths:
+            raise ValueError("no downloadable audio URLs in response")
+        return paths
+
+    def _ext_for_url(self, url: str, audio_setting: dict[str, Any] | None) -> str:
+        suffix = Path(url.split("?", 1)[0]).suffix.lstrip(".").lower()
+        if suffix in _MUSIC_AUDIO_FORMATS:
+            return suffix
+        fmt = (audio_setting or {}).get("format", "mp3")
+        return fmt if fmt in _MUSIC_AUDIO_FORMATS else "mp3"
+
+    def _save_hex(self, audio_hex: str, audio_setting: dict[str, Any] | None) -> Path:
+        fmt = (audio_setting or {}).get("format", "mp3")
+        fmt = fmt if fmt in _MUSIC_AUDIO_FORMATS else "mp3"
+        path = self._output_path(fmt)
+        path.write_bytes(bytes.fromhex(audio_hex))
+        return path
