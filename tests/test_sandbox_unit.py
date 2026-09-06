@@ -1052,6 +1052,62 @@ class TestConnectMcpSandboxGuard:
 
         assert reached == ["mcp-server"]
 
+    async def test_stdio_sdk_cancellation_does_not_escape(self, monkeypatch):
+        """A bare transport cancellation is isolated to the failing MCP server."""
+        from contextlib import AsyncExitStack
+
+        import mcp.client.stdio
+
+        from raven.agent.tools.mcp import connect_mcp_servers
+        from raven.agent.tools.registry import ToolRegistry
+
+        def fake_stdio_client(params):
+            raise asyncio.CancelledError()
+
+        monkeypatch.setattr(mcp.client.stdio, "stdio_client", fake_stdio_client)
+
+        cfg = MagicMock()
+        cfg.type = "stdio"
+        cfg.command = "mcp-server"
+        cfg.args = []
+        cfg.env = None
+        cfg.tool_timeout = 30
+
+        await connect_mcp_servers({"svc": cfg}, ToolRegistry(), AsyncExitStack(), executor=None)
+
+    async def test_stdio_external_cancellation_propagates(self, monkeypatch):
+        """Cancellation of Raven's connection task is never treated as an MCP failure."""
+        from contextlib import AsyncExitStack, asynccontextmanager
+
+        import mcp.client.stdio
+
+        from raven.agent.tools.mcp import connect_mcp_servers
+        from raven.agent.tools.registry import ToolRegistry
+
+        entered = asyncio.Event()
+
+        @asynccontextmanager
+        async def fake_stdio_client(params):
+            entered.set()
+            await asyncio.Event().wait()
+            yield
+
+        monkeypatch.setattr(mcp.client.stdio, "stdio_client", fake_stdio_client)
+
+        cfg = MagicMock()
+        cfg.type = "stdio"
+        cfg.command = "mcp-server"
+        cfg.args = []
+        cfg.env = None
+        cfg.tool_timeout = 30
+
+        task = asyncio.create_task(connect_mcp_servers({"svc": cfg}, ToolRegistry(), AsyncExitStack(), executor=None))
+        await entered.wait()
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
     async def test_streamable_failure_does_not_cancel_following_server(self, monkeypatch):
         """A transport task failure is isolated to the server being initialized."""
         from contextlib import AsyncExitStack, asynccontextmanager
