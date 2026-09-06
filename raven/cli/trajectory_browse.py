@@ -933,6 +933,7 @@ def _print_review_item(item: Any, index: int, total: int, index_by_id: dict[str,
 
 
 _REVIEW_CANCEL = "__cancel_report__"
+_REVIEW_UNDECIDED = "__no_decision__"
 
 
 def _ask_review_item(
@@ -940,7 +941,9 @@ def _ask_review_item(
 ) -> str:
     _print_review_item(item, index, total, index_by_id)
     # questionary.Choice falls back to the title when value is None, so the
-    # cancel row needs an explicit sentinel value.
+    # cancel/placeholder rows need explicit sentinel values. Suspected items
+    # have no default action: the pointer starts on a placeholder that records
+    # nothing, so a bare Enter cannot silently keep an unknown token.
     if item.kind == treview.KIND_CONFIRMED:
         choices = [
             questionary.Choice("Acknowledge and continue", value=treview.ACTION_ACKNOWLEDGED),
@@ -948,16 +951,22 @@ def _ask_review_item(
         ]
     else:
         choices = [
+            questionary.Choice("(select a decision)", value=_REVIEW_UNDECIDED),
             questionary.Choice("Keep (harmless, ship as-is)", value=treview.ACTION_KEPT),
             questionary.Choice("Replace with [REDACTED:user-confirmed]", value=treview.ACTION_REDACTED),
             questionary.Choice("Cancel the report", value=_REVIEW_CANCEL),
         ]
-    action = _ask_action(
-        questionary.select("Decision:", choices=choices, style=style, qmark=QMARK, pointer=POINTER, instruction=" ")
-    )
-    if action == _REVIEW_CANCEL:
-        raise treview.ReviewCancelledError("the report was cancelled from the review screen")
-    return action
+    while True:
+        action = _ask_action(
+            questionary.select(
+                "Decision:", choices=choices, style=style, qmark=QMARK, pointer=POINTER, instruction=" "
+            )
+        )
+        if action == _REVIEW_CANCEL:
+            raise treview.ReviewCancelledError("the report was cancelled from the review screen")
+        if action != _REVIEW_UNDECIDED:
+            return action
+        console.print("  This item has no default — choose Keep, Replace, or Cancel.", highlight=False)
 
 
 def _conflicted_review_items(items: list[Any], actions: dict[str, str]) -> list[Any]:

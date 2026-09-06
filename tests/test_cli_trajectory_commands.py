@@ -1320,6 +1320,86 @@ def test_report_bug_summary_shows_session_and_trajectory_context(state, _no_mach
     assert "session record" in r.output
 
 
+class _FakeReviewQuestionary:
+    """Minimal questionary stand-in: every select resolves via the factory.
+
+    No ``application`` attribute, so ``_inject_bindings`` leaves it untouched
+    and the real ``_ask`` / ``_ask_action`` conversion logic runs.
+    """
+
+    class Choice:
+        def __init__(self, title, value=None):
+            self.title = title
+            self.value = value if value is not None else title
+
+    def __init__(self, result_factory):
+        self._factory = result_factory
+
+    def select(self, *_a, **_k):
+        factory = self._factory
+        return type("_Ask", (), {"unsafe_ask": staticmethod(factory)})()
+
+
+def _tty_review_setup(state, monkeypatch, attrs):
+    from raven.cli import trajectory_commands as tcmd
+
+    _simple_log(state, attrs=attrs)
+    monkeypatch.setattr(tcmd, "_stdin_is_tty", lambda: True)
+
+
+def test_report_bug_tty_escape_during_review_cancels(state, _no_machine_secrets, monkeypatch):
+    import raven.cli.trajectory_browse as tbrowse
+    from raven.trajectory import bugreport as breport
+
+    _tty_review_setup(state, monkeypatch, {"llm.output": f"token {_ENTROPY_TOKEN}"})
+    monkeypatch.setattr(tbrowse, "_require_questionary", lambda: _FakeReviewQuestionary(lambda: tbrowse._BACK))
+
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x"])
+
+    assert r.exit_code == 1
+    assert "Cancelled — no bug report was created." in r.output
+    assert breport.list_reports(state) == []
+    assert _staging_entries(state) == []
+
+
+def test_report_bug_tty_ctrl_c_during_review_cancels(state, _no_machine_secrets, monkeypatch):
+    import raven.cli.trajectory_browse as tbrowse
+    from raven.trajectory import bugreport as breport
+
+    def _interrupt():
+        raise KeyboardInterrupt
+
+    _tty_review_setup(state, monkeypatch, {"llm.output": f"token {_ENTROPY_TOKEN}"})
+    monkeypatch.setattr(tbrowse, "_require_questionary", lambda: _FakeReviewQuestionary(_interrupt))
+
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x"])
+
+    assert r.exit_code == 1
+    assert "Cancelled — no bug report was created." in r.output
+    assert breport.list_reports(state) == []
+    assert _staging_entries(state) == []
+
+
+def test_report_bug_tty_conflict_then_cancel(state, _no_machine_secrets, monkeypatch):
+    import raven.cli.trajectory_browse as tbrowse
+    from raven.trajectory import bugreport as breport
+    from raven.trajectory import review as treview
+
+    inner = "Hj5tR8uE3iO7pA1sD4fGk9lZ"
+    outer = inner + "W6xC2v"
+    _tty_review_setup(state, monkeypatch, {"llm.output": f"a {inner} b {outer}"})
+    answers = iter([treview.ACTION_KEPT, treview.ACTION_REDACTED, tbrowse._REVIEW_CANCEL])
+    monkeypatch.setattr(tbrowse, "_require_questionary", lambda: _FakeReviewQuestionary(lambda: next(answers)))
+
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x"])
+
+    assert r.exit_code == 1
+    assert "must share one decision" in r.output
+    assert "Cancelled — no bug report was created." in r.output
+    assert breport.list_reports(state) == []
+    assert _staging_entries(state) == []
+
+
 def test_report_bug_summary_shows_semantic_decisions(state, _no_machine_secrets, monkeypatch):
     """The confirmation summary lists every decision with its semantic source."""
     from raven.cli import trajectory_commands as tcmd

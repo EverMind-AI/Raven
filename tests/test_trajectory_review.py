@@ -342,6 +342,61 @@ def test_apply_acknowledges_private_key_and_emits_notice(tmp_path):
     assert decision["category"] == "private-key-block"
 
 
+def test_apply_renames_paths_carrying_redacted_tokens(tmp_path):
+    """Tar member names come from the tree, so a redacted value in a file name
+    must be renamed with the same replacement its references got."""
+    tree = tmp_path / "trajectory"
+    (tree / "artifacts").mkdir(parents=True)
+    _write(tree / "artifacts", f"{TOKEN_A}.json", "clean content")
+    _write(tree, "spans.jsonl", f'{{"tool.output.artifact_path": "artifacts/{TOKEN_A}.json"}}')
+    report = _report(tree)
+    items = treview.build_review_items([report])
+
+    treview.apply_review_decisions(items, _decisions(items, **{TOKEN_A: treview.ACTION_REDACTED}), reports=[report])
+
+    assert not (tree / "artifacts" / f"{TOKEN_A}.json").exists()
+    renamed = tree / "artifacts" / "[REDACTED:user-confirmed].json"
+    assert renamed.exists() and renamed.read_text(encoding="utf-8") == "clean content"
+    spans = (tree / "spans.jsonl").read_text(encoding="utf-8")
+    assert '"artifacts/[REDACTED:user-confirmed].json"' in spans
+    rels = [str(p.relative_to(tree)) for p in tree.rglob("*") if p.is_file()]
+    assert not any(TOKEN_A in rel for rel in rels)
+
+
+def test_apply_rename_collision_aborts(tmp_path):
+    tree = tmp_path / "trajectory"
+    (tree / "artifacts").mkdir(parents=True)
+    _write(tree / "artifacts", f"{TOKEN_A}.json", "clean content")
+    _write(tree / "artifacts", "[REDACTED:user-confirmed].json", "already here")
+    _write(tree, "spans.jsonl", f'{{"tool.output.artifact_path": "artifacts/{TOKEN_A}.json"}}')
+    report = _report(tree)
+    items = treview.build_review_items([report])
+
+    with pytest.raises(breport.PreparationError, match="collides"):
+        treview.apply_review_decisions(items, _decisions(items, **{TOKEN_A: treview.ACTION_REDACTED}), reports=[report])
+
+
+def test_apply_renamed_file_updates_kept_finding_source(tmp_path):
+    tree = tmp_path / "trajectory"
+    (tree / "artifacts").mkdir(parents=True)
+    _write(tree / "artifacts", f"{TOKEN_B}.json", f"keep {TOKEN_A}")
+    _write(tree, "spans.jsonl", f'{{"tool.output.artifact_path": "artifacts/{TOKEN_B}.json"}}')
+    report = _report(tree)
+    items = treview.build_review_items([report])
+
+    treview.apply_review_decisions(
+        items,
+        _decisions(items, **{TOKEN_A: treview.ACTION_KEPT, TOKEN_B: treview.ACTION_REDACTED}),
+        reports=[report],
+    )
+
+    renamed = tree / "artifacts" / "[REDACTED:user-confirmed].json"
+    assert renamed.read_text(encoding="utf-8") == f"keep {TOKEN_A}"
+    (entry,) = json.loads((tree / tredact.REDACTION_METADATA_FILE).read_text(encoding="utf-8"))["residual_findings"]
+    assert entry["file"] == "artifacts/[REDACTED:user-confirmed].json"
+    assert TOKEN_B not in json.dumps(entry)
+
+
 def test_apply_conflicting_decisions_touch_nothing(tmp_path):
     tree = tmp_path / "trajectory"
     _write(tree, "spans.jsonl", f"{TOKEN_INNER} {TOKEN_OUTER}")

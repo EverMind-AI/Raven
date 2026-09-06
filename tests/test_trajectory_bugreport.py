@@ -1064,6 +1064,38 @@ def test_mixed_decisions_recorded_and_replaced_token_scrubbed(state, workspace, 
     assert keep in spans and "[REDACTED:user-confirmed]" in spans
 
 
+def test_redacted_value_in_artifact_filename_never_reaches_the_package(state, workspace, tmp_path):
+    """The reviewed-verified leak: replacing a token rewrites its references,
+    but the artifact file itself would keep the name and ship as a tar member.
+    Member names and contents must both be clean after the rename."""
+    artifact = tmp_path / f"{_ENTROPY_TOKEN}.json"
+    artifact.write_text(json.dumps({"result": "clean"}), encoding="utf-8")
+
+    _record_dir, record = _full_flow(
+        state,
+        workspace,
+        attrs={"tool.output.artifact_path": str(artifact)},
+        decide=_decide_all(treview.ACTION_REDACTED),
+    )
+
+    assert record["status"] == "local_ready"
+    rid = record["report_id"]
+    with tarfile.open(record["package"]["path"]) as tar:
+        assert not any(_ENTROPY_TOKEN in name for name in tar.getnames())
+        inner = tar.extractfile(f"{rid}/trajectory/trace-1.tar.gz").read()
+    inner_tar = tmp_path / "inner.tar.gz"
+    inner_tar.write_bytes(inner)
+    with tarfile.open(inner_tar) as tar:
+        names = tar.getnames()
+        assert not any(_ENTROPY_TOKEN in name for name in names)
+        assert any(name.endswith("artifacts/[REDACTED:user-confirmed].json") for name in names)
+        extract_dir = tmp_path / "inner"
+        tar.extractall(extract_dir, filter="data")
+    spans = (extract_dir / "trace-1" / "spans.jsonl").read_text(encoding="utf-8")
+    assert _ENTROPY_TOKEN not in spans
+    assert "artifacts/[REDACTED:user-confirmed].json" in spans
+
+
 def test_all_findings_replaced_still_needs_review(state, workspace):
     prep = _prepared(state, workspace, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
     prep = breport.freeze_export(prep, description="it broke", decide=_decide_all(treview.ACTION_REDACTED))

@@ -354,10 +354,15 @@ def trajectory_report_bug(
 
     def _decide(items: list, reasons: list[str]) -> list:
         if interactive:
+            from raven.cli import trajectory_browse as tbrowse
             from raven.cli._styles import RAVEN_STYLE
-            from raven.cli.trajectory_browse import _require_questionary, make_review_decider
 
-            return make_review_decider(_require_questionary(), RAVEN_STYLE)(items, reasons)
+            try:
+                return tbrowse.make_review_decider(tbrowse._require_questionary(), RAVEN_STYLE)(items, reasons)
+            except (tbrowse._ActionCancelledError, tbrowse._CancelledError) as exc:
+                # Esc/Ctrl-C during adjudication: the CLI has no outer screen
+                # to unwind to, so both mean "cancel this report".
+                raise treview.ReviewCancelledError("cancelled from the review screen") from exc
         if not accept_risk:
             # Deciding needs authorization a script has not granted; stop
             # before any further export work (the staging cleanup still runs).
