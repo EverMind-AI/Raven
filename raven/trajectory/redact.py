@@ -132,6 +132,11 @@ _CANDIDATE = re.compile(r"[A-Za-z0-9_\-+=]{20,}")
 # (<seq>-<traceId>-<session>-<label>-<hash>.json), and every bundle references
 # them — flagging those would put false positives in every report preview.
 _TRACING_ID = re.compile(r"(?:trace|span|att)-[0-9a-f]{6,}")
+# Provider-generated tool-call ids (``call_`` + alphanumerics) hit the entropy
+# bar in every trajectory that carries a tool call — same nature as the
+# tracing-id exemption above. Anchored full match: a credential merely
+# containing ``call_`` does not qualify.
+_CALL_ID = re.compile(r"^call_[A-Za-z0-9]+$")
 _UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 _PURE_DIGITS = re.compile(r"^[0-9]+$")
@@ -169,12 +174,20 @@ class KnownSecret:
 
 @dataclass
 class ResidualFinding:
-    """One suspicious token that survived redaction (layer 3 reports, never rewrites)."""
+    """One suspicious token that survived redaction (layer 3 reports, never rewrites).
+
+    ``token`` and ``occurrences`` live in memory only, for the review flow to
+    adjudicate by value and render context; :meth:`RedactionReport.metadata`
+    never serializes them — the plaintext and full source lines must not land
+    in ``redaction.json``.
+    """
 
     category: str
     sample: str
     file: str
     count: int = 1
+    token: str = ""
+    occurrences: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -470,9 +483,9 @@ def scan_residuals(root: Path) -> list[ResidualFinding]:
     Reports long tokens whose Shannon entropy clears a charset-aware bar
     (:func:`_flag_threshold`) — pure hex and letter-only tokens included,
     since real credentials take both shapes. Skipped as benign: tracing ids
-    (by prefix), UUIDs, date-stamped names, and digit-only tokens (ids and
-    quantities; a 10-symbol alphabet cannot clear any meaningful entropy
-    bar). Deduped by token value.
+    (by prefix), provider tool-call ids (``call_…``), UUIDs, date-stamped
+    names, and digit-only tokens (ids and quantities; a 10-symbol alphabet
+    cannot clear any meaningful entropy bar). Deduped by token value.
     """
     findings: dict[str, ResidualFinding] = {}
     for path in sorted(p for p in root.rglob("*") if p.is_file()):
@@ -481,12 +494,12 @@ def scan_residuals(root: Path) -> list[ResidualFinding]:
         except (OSError, UnicodeDecodeError):
             continue
         rel = str(path.relative_to(root))
-        for line in text.splitlines():
+        for line_no, line in enumerate(text.splitlines(), 1):
             for match in _CANDIDATE.finditer(line):
                 token = match.group(0)
                 if "REDACTED" in token:
                     continue
-                if _TRACING_ID.search(token) or _UUID.match(token) or _DATE.search(token):
+                if _TRACING_ID.search(token) or _CALL_ID.match(token) or _UUID.match(token) or _DATE.search(token):
                     continue
                 if _PURE_DIGITS.match(token):
                     continue
@@ -494,13 +507,25 @@ def scan_residuals(root: Path) -> list[ResidualFinding]:
                     continue
                 if _entropy(token) < _flag_threshold(token):
                     continue
+                occurrence = {
+                    "file": rel,
+                    "line_no": line_no,
+                    "line": line,
+                    "start": match.start(),
+                    "end": match.end(),
+                }
                 known = findings.get(token)
                 if known:
                     known.count += 1
+                    known.occurrences.append(occurrence)
                     continue
                 category = "jwt-like" if token.startswith("eyJ") else "high-entropy"
                 findings[token] = ResidualFinding(
-                    category=category, sample=_sample(line, match.start(), match.end()), file=rel
+                    category=category,
+                    sample=_sample(line, match.start(), match.end()),
+                    file=rel,
+                    token=token,
+                    occurrences=[occurrence],
                 )
     return list(findings.values())
 
