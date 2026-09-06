@@ -554,3 +554,80 @@ async def test_a_cancelled_taker_is_forgotten() -> None:
 
     await box.put_report("a", "report a", awaiting_decision=True)
     assert await box.take() == Report("a", "report a"), "the report was buffered, not lost on a dead taker"
+
+
+from raven.agent.subagent.dag_adjudication import (
+    ABANDON,
+    CONTINUE,
+    DECISIONS,
+    REPLAN,
+    AdjudicationDesk,
+    ReplanPlan,
+)
+
+
+def _plan(run_id: str = "run-new", from_node: str = "a") -> ReplanPlan:
+    return ReplanPlan(
+        run_id=run_id,
+        from_node=from_node,
+        reason="the plan was wrong",
+        nodes=(),
+        backends={},
+        auto_instances=frozenset(),
+        notices=(),
+    )
+
+
+def test_replan_is_a_decision() -> None:
+    assert REPLAN == "replan"
+    assert DECISIONS == (CONTINUE, ABANDON, REPLAN)
+
+
+def test_resolving_a_replan_sets_the_replanned_event() -> None:
+    desk = AdjudicationDesk()
+    desk.open("a")
+    assert not desk.replanned.is_set()
+
+    assert desk.resolve("a", REPLAN, "the plan was wrong", plan=_plan()) is True
+
+    assert desk.replanned.is_set()
+    assert desk.take_plan() == _plan()
+
+
+def test_resolving_a_continue_leaves_the_replanned_event_alone() -> None:
+    desk = AdjudicationDesk()
+    desk.open("a")
+
+    assert desk.resolve("a", CONTINUE, "try again") is True
+
+    assert not desk.replanned.is_set()
+    assert desk.take_plan() is None
+
+
+def test_a_replan_nobody_waits_for_sets_nothing() -> None:
+    desk = AdjudicationDesk()
+
+    assert desk.resolve("gone", REPLAN, "too late", plan=_plan()) is False
+
+    assert not desk.replanned.is_set(), "an unrecorded answer must not interrupt the run"
+    assert desk.take_plan() is None
+
+
+def test_take_plan_consumes() -> None:
+    desk = AdjudicationDesk()
+    desk.open("a")
+    desk.resolve("a", REPLAN, "the plan was wrong", plan=_plan())
+
+    assert desk.take_plan() is not None
+    assert desk.take_plan() is None
+
+
+def test_the_replanned_answer_is_still_taken_per_node() -> None:
+    desk = AdjudicationDesk()
+    desk.open("a")
+    desk.resolve("a", REPLAN, "the plan was wrong", plan=_plan())
+
+    answer = desk.take("a")
+    assert answer is not None
+    assert answer.decision == REPLAN
+    assert answer.plan is not None

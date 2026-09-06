@@ -158,8 +158,10 @@ def _graph_of(session_dir: Path, run_id: str) -> dict[str, Any]:
     Read rather than copied onto the registry row: the graph is where the two
     lines were written, so a row cannot disagree with the run it belongs to, and
     the three writers that rebuild a registry record wholesale cannot drop them.
-    A run's graph never changes after it is written, so the stamp check is what
-    makes a two-second poll cost one ``stat`` per run.
+    A run's graph is written once and then changes at most once more, when a
+    replan notes its successor on it, so the stamp check is what makes a
+    two-second poll cost one ``stat`` per run. It is load-bearing rather than
+    belt-and-braces: without it that note would never be seen here.
 
     ``{}`` for a run whose dir is gone or whose id is not one -- a title is not
     worth failing a list over, and the caller falls back to the handle.

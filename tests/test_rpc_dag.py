@@ -8,6 +8,7 @@ full output, which the graph itself never carries.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -578,3 +579,25 @@ async def test_a_loop_that_cannot_answer_still_falls_back_to_the_tool() -> None:
     )
 
     assert {f["node"]: f for f in result["run"]["files"]}["node-a"]["status"] == "interrupted"
+
+
+def test_the_replanned_event_is_in_the_contract_and_the_models() -> None:
+    schemas = json.loads(Path("rpc-schema/openrpc.json").read_text())["components"]["schemas"]
+
+    assert "DagRunReplannedEvent" in schemas
+
+
+def test_the_progress_event_maps_to_the_wire_event() -> None:
+    from raven.rpc.spine import _DAG_WIRE_EVENT, _dag_payload
+
+    assert _DAG_WIRE_EVENT["dag_run_replanned"] == "dag.run_replanned"
+    assert _dag_payload(
+        "dag_run_replanned",
+        {"run_id": "r1", "replan_run_id": "r2", "from_node": "a", "reason": "wrong"},
+    ) == {"run_id": "r1", "replan_run_id": "r2", "from_node": "a", "reason": "wrong"}
+
+
+def test_an_unmapped_progress_event_is_still_dropped() -> None:
+    from raven.rpc.spine import _DAG_WIRE_EVENT
+
+    assert "dag_node_started" not in _DAG_WIRE_EVENT

@@ -3030,6 +3030,53 @@ describe('transcript island, delegated calls', () => {
        says where this step's material comes from. */
     expect(panel.querySelector('.tpl .ph')!.textContent).toBe('{{ tb-scan.output }}')
   })
+
+  it('names the run that took over, before the old one is done', () => {
+    /* `dag.run_replanned` can land on a run that is still going -- the decision
+       swaps its remaining nodes into a fresh run without waiting for this one
+       to wind down, so the row has to show up before `dag.run_completed` ever
+       does. */
+    act(() => {
+      const st = mount.step()
+      st.tool('run_subagent_dag', {
+        nodes: [{ id: 'a', subagent: 'Raven', node_summary: 'step', depends_on: [] }],
+      })
+      mount.dagFeed('dag.run_started', { run_id: 'r1', nodes: [{ id: 'a', subagent: 'Raven', depends_on: [] }] })
+      mount.dagFeed('dag.run_replanned', { run_id: 'r1', replan_run_id: 'r2' })
+    })
+    const card = openDagCard()
+    expect(dagField(card, 'gui.dag.replanned_into')).toBe('r2')
+  })
+
+  it('keeps the link once the old run finishes, in the order the backend guarantees', () => {
+    /* The backend emits `dag.run_replanned` right after the decision is
+       recorded, strictly before the old run's own `dag.run_completed` -- never
+       the other way around. That order is load-bearing here: `dag.run_completed`
+       deletes this run from `dagLive`, so a `dag.run_replanned` arriving after it
+       would find no card waiting and get silently dropped. Sent in the order the
+       backend actually guarantees, the link has to survive its own run finishing,
+       alongside the node states that run's own completion carries in. */
+    act(() => {
+      const st = mount.step()
+      st.tool('run_subagent_dag', {
+        nodes: [
+          { id: 'a', subagent: 'Raven', node_summary: 'first', depends_on: [] },
+          { id: 'b', subagent: 'Raven', node_summary: 'second', depends_on: ['a'] },
+        ],
+      })
+      mount.dagFeed('dag.run_started', {
+        run_id: 'r1',
+        nodes: [{ id: 'a', subagent: 'Raven', depends_on: [] }, { id: 'b', subagent: 'Raven', depends_on: ['a'] }],
+      })
+      mount.dagFeed('dag.node_updated', { run_id: 'r1', node: 'a', status: 'completed' })
+      mount.dagFeed('dag.node_updated', { run_id: 'r1', node: 'b', status: 'completed' })
+      mount.dagFeed('dag.run_replanned', { run_id: 'r1', replan_run_id: 'r2' })
+      mount.dagFeed('dag.run_completed', { run_id: 'r1' })
+    })
+    const card = openDagCard()
+    expect(dagField(card, 'gui.dag.replanned_into')).toBe('r2')
+    expect(dagNodeStates(card)).toEqual(['completed', 'completed'])
+  })
 })
 
 /* What a conversation costs to open should be what it shows, not everything it

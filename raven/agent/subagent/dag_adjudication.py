@@ -19,6 +19,8 @@ from typing import Any, Protocol
 
 from loguru import logger
 
+from raven.agent.subagent.dag_graph import DagNodeSpec
+
 # A failed report delivery is retried: an announcer is a transport, and an injected
 # turn can lose a race with a gateway restart or a busy submit queue, which is no
 # reason to discard a report. Bounded, because a bound run has no adjudication
@@ -54,7 +56,36 @@ async def deliver_report(send: Callable[[], Awaitable[None]], *, what: str) -> E
 
 CONTINUE = "continue"
 ABANDON = "abandon"
-DECISIONS = (CONTINUE, ABANDON)
+REPLAN = "replan"
+DECISIONS = (CONTINUE, ABANDON, REPLAN)
+
+
+@dataclass(frozen=True)
+class ReplanPlan:
+    """A validated replacement graph, on its way from the resolve call to the run.
+
+    Carries its own ``run_id`` because the run winding down names it: a node reason
+    saying it was superseded with no destination leaves the reader of that run
+    nowhere to go, and the id cannot be minted later than the wind-down that cites
+    it. ``backends`` travels here rather than being resolved by the runner because
+    the dispatch map is a closure owned by ``SubAgentDagTool._run``.
+
+    ``task_summary`` and ``confirm`` default so existing construction sites (a
+    chain of replans is not the only one) do not need updating, but a real
+    ``prepare_replan`` call fills both in: the successor's own submission has to
+    inherit them from the old run's spec the same way ``prepare_replan`` itself
+    does, or a second hop in the same chain loses its title and its confirm gate.
+    """
+
+    run_id: str
+    from_node: str
+    reason: str
+    nodes: tuple[DagNodeSpec, ...]
+    backends: dict[str, Any]
+    auto_instances: frozenset[str]
+    notices: tuple[str, ...]
+    task_summary: str = ""
+    confirm: bool = False
 
 
 @dataclass(frozen=True)
@@ -63,6 +94,7 @@ class Adjudication:
 
     decision: str
     message: str | None = None
+    plan: ReplanPlan | None = None
 
 
 class AdjudicationDesk:
@@ -71,6 +103,8 @@ class AdjudicationDesk:
     def __init__(self) -> None:
         self._waiting: dict[str, asyncio.Event] = {}
         self._answers: dict[str, Adjudication] = {}
+        self.replanned = asyncio.Event()
+        self._plan: ReplanPlan | None = None
 
     def open(self, node_id: str) -> asyncio.Event:
         """Start waiting on ``node_id``. The event fires when an answer lands."""
@@ -91,18 +125,26 @@ class AdjudicationDesk:
     def open_nodes(self) -> set[str]:
         return set(self._waiting)
 
-    def resolve(self, node_id: str, decision: str, message: str | None) -> bool:
+    def resolve(self, node_id: str, decision: str, message: str | None, plan: ReplanPlan | None = None) -> bool:
         """Record an answer and wake the waiter. False when nobody was waiting.
 
         The caller reports that False to the model rather than swallowing it: by
         the time an answer arrives the node may have timed out or the run may
         have been cancelled, and a silently discarded decision looks to the model
         exactly like one that was applied.
+
+        A replan also fires ``replanned``, which is what lets the scheduling round
+        in flight be interrupted rather than drained -- but only once the answer
+        is recorded, so an answer nobody was waiting for cannot tear down a run
+        it was never going to reach.
         """
         event = self._waiting.get(node_id)
         if event is None:
             return False
-        self._answers[node_id] = Adjudication(decision=decision, message=message)
+        self._answers[node_id] = Adjudication(decision=decision, message=message, plan=plan)
+        if decision == REPLAN:
+            self._plan = plan
+            self.replanned.set()
         event.set()
         return True
 
@@ -110,6 +152,11 @@ class AdjudicationDesk:
         """The answer for ``node_id``, consumed. ``None`` if none landed."""
         self._waiting.pop(node_id, None)
         return self._answers.pop(node_id, None)
+
+    def take_plan(self) -> ReplanPlan | None:
+        """The replacement graph a replan landed, consumed."""
+        plan, self._plan = self._plan, None
+        return plan
 
     def close(self, node_id: str) -> None:
         """Stop waiting on ``node_id`` without consuming an answer."""
