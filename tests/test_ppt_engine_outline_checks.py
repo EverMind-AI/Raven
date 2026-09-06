@@ -281,12 +281,31 @@ def test_the_page_structure_a_plan_declares_survives_the_round_trip(tmp_path) ->
     from raven_ppt.contracts.project import Project
 
     path = outline_path(Project(workspace=tmp_path, slug="deck"))
-    write_outline(Outline(takeaway="t", pages=(PagePlan(page=1, claim="c", layout="P14 + M4 + M11"),)), path)
+    plan = PagePlan(
+        page=1,
+        claim="c",
+        layout="P14",
+        layers=("M4", "M11"),
+        anti_pattern="a lane that would read the same with the chart removed",
+    )
+    write_outline(Outline(takeaway="t", pages=(plan,)), path)
 
     outline = load_outline(path)
 
     assert outline is not None
-    assert outline.pages[0].layout == "P14 + M4 + M11"
+    assert outline.pages[0].layout == "P14"
+    assert outline.pages[0].layers == ("M4", "M11")
+    assert outline.pages[0].anti_pattern == plan.anti_pattern
+
+    # And the shape this field used to have, which is on disk in every outline written
+    # before the split: the ids come apart into the two fields rather than the structure
+    # column reading `P14 + M4 + M11` for one page and `P14` for the next, which is not a
+    # spread of structures however it is counted.
+    write_outline(Outline(takeaway="t", pages=(PagePlan(page=1, claim="c", layout="P14 + M4 + M11"),)), path)
+    legacy = load_outline(path)
+
+    assert legacy is not None
+    assert (legacy.pages[0].layout, legacy.pages[0].layers) == ("P14", ("M4", "M11"))
 
 
 # --- the sources' own citations -------------------------------------------
@@ -760,6 +779,28 @@ def test_a_layout_id_the_catalogue_does_not_carry_is_refused() -> None:
     assert f"{structures[0]} to {structures[-1]}" in findings[0].message
 
 
+def test_the_field_offers_the_catalogue_and_nothing_else() -> None:
+    """A closed list rather than free text, and the list is the catalogue's own.
+
+    Free text is what the field had when a live run filled it with `P01`, `P04`, `P07`.
+    The refusal caught it after the fact; an enum means the ids are the only thing that
+    can be written -- and built off `catalogue_ids` so the list a caller picks from and
+    the list it is checked against cannot come apart when layouts.md gains a structure.
+    """
+    from raven_ppt.tools.outline import _layer_enum, _structure_enum, catalogue_ids
+
+    known = catalogue_ids()
+    structures = {one for one in known if one.startswith("P")}
+    layers = {one for one in known if one.startswith("M")}
+
+    assert set(_structure_enum()) == structures | {""}, "the structure list is not the catalogue's"
+    assert set(_layer_enum()) == layers, "the layer list is not the catalogue's"
+    assert "P01" not in _structure_enum() and "P99" not in _structure_enum()
+    # Part 1 folded forty-one ids into eleven skeletons and every one of them is still
+    # writable: the convergence is what you read, not what you may say.
+    assert len(structures) == 41, f"{len(structures)} structures, and the passages are for 41"
+
+
 def test_the_guard_refuses_only_what_claims_to_be_an_id() -> None:
     """Both directions, because "the guard is too tight" is filed as often as too loose.
 
@@ -974,3 +1015,77 @@ async def test_a_uniform_layout_column_comes_back_from_the_tool(tmp_path) -> Non
     assert len(reported) == 1
     assert reported[0]["severity"] == "warning"
     assert reported[0]["detail"]["composition"] == structures[0]
+
+
+def _borrowing_plan(**fields) -> Outline:
+    return Outline(takeaway="t", pages=(PagePlan(page=1, claim="c", says=("a", "b", "c"), **fields),))
+
+
+def test_a_borrowed_page_from_a_content_page_of_another_bundled_template_passes() -> None:
+    from raven_ppt.services.template.defaults import bundled_path
+    from raven_ppt.tools.outline import _borrowed_pages
+
+    bound = bundled_path("amber_wave_quarterly_summary")
+    lender = bundled_path("gold_panel_year_end_summary")
+    if bound is None or lender is None:
+        pytest.skip("the bundled templates this reads are not on this checkout")
+
+    plan = _borrowing_plan(prototype=13, borrowed="gold_panel_year_end_summary")
+
+    assert _borrowed_pages(plan, _Bound(bound)) == []
+
+
+def test_a_borrowed_name_that_ships_no_template_is_refused_with_the_ones_that_do() -> None:
+    from raven_ppt.services.template.defaults import bundled_path
+    from raven_ppt.tools.outline import _borrowed_pages
+
+    bound = bundled_path("amber_wave_quarterly_summary")
+    if bound is None:
+        pytest.skip("the bundled templates this reads are not on this checkout")
+
+    found = _borrowed_pages(_borrowing_plan(prototype=3, borrowed="gold"), _Bound(bound))
+
+    assert [(f.kind, f.severity.value, f.page) for f in found] == [("borrowed", "blocking", 1)]
+    assert "no bundled template is called 'gold'" in found[0].message
+    assert "gold_panel_year_end_summary" in found[0].message
+
+
+def test_borrowing_a_cover_or_the_bound_template_itself_is_refused() -> None:
+    from raven_ppt.services.template.defaults import bundled_path
+    from raven_ppt.tools.outline import _borrowed_pages
+
+    bound = bundled_path("amber_wave_quarterly_summary")
+    if bound is None or bundled_path("gold_panel_year_end_summary") is None:
+        pytest.skip("the bundled templates this reads are not on this checkout")
+
+    cover = _borrowed_pages(_borrowing_plan(prototype=1, borrowed="gold_panel_year_end_summary"), _Bound(bound))
+    assert len(cover) == 1 and "cover" in cover[0].message and "13" in cover[0].message
+
+    own = _borrowed_pages(_borrowing_plan(prototype=6, borrowed="amber_wave_quarterly_summary"), _Bound(bound))
+    assert len(own) == 1 and "built in" in own[0].message
+
+    unnumbered = _borrowed_pages(_borrowing_plan(prototype=None, borrowed="gold_panel_year_end_summary"), _Bound(bound))
+    assert len(unnumbered) == 1 and "no `prototype`" in unnumbered[0].message
+
+
+def test_a_borrowed_page_outside_the_curated_reference_list_is_refused() -> None:
+    """`reference_pages` is not "any content page": it holds the pages measured to carry
+    into another template's theme and master. A content page outside it may look fine in
+    its own deck and arrive with source-specific styling, which is what the list was cut
+    to exclude, so a plan naming one is refused at the plan."""
+    from raven_ppt.services.template.defaults import REFERENCE_PAGES, bundled_path
+    from raven_ppt.tools.outline import _borrowed_pages
+
+    bound = bundled_path("amber_wave_quarterly_summary")
+    lender = bundled_path("gold_panel_year_end_summary")
+    if bound is None or lender is None:
+        pytest.skip("the bundled templates this reads are not on this checkout")
+
+    curated = REFERENCE_PAGES["gold_panel_year_end_summary"]
+    assert 10 not in curated, "this case needs a content page the curated list leaves out"
+
+    found = _borrowed_pages(_borrowing_plan(prototype=10, borrowed="gold_panel_year_end_summary"), _Bound(bound))
+
+    assert [(f.kind, f.severity.value, f.page) for f in found] == [("borrowed", "blocking", 1)]
+    assert "verified to carry" in found[0].message
+    assert str(curated[0]) in found[0].message, "the reply names the pages that are offered"

@@ -29,7 +29,7 @@ from typing import Any
 from raven_ppt.contracts.findings import Finding, Severity
 from raven_ppt.services.measure.geometry import (
     EMU_PER_INCH,
-    is_panel,
+    is_filled,
     iter_shapes,
     open_deck,
     page_box,
@@ -214,7 +214,7 @@ def _read(slide: Any, canvas_h: float) -> tuple[set[str], list[Any], int] | None
             if area >= REGION_MIN_AREA_IN:
                 regions.append(box)
             continue
-        if not is_panel(shape):
+        if not is_filled(shape):
             continue
         if area < MARK_MAX_AREA_IN:
             marks += 1

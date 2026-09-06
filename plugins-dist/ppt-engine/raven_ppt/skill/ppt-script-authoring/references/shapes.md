@@ -6,7 +6,6 @@ Called from §4 and §7.5 of the skill.
 
 | | |
 | --- | --- |
-| `chevron_row(slide, box, theme, n, *, adj=0.5, tint="accent", flat_start=True, outline=None)` | → `[Step(shape, box)]`, n interlocking chevrons filling `box`; `n` may be the labels instead, and `len` is the count |
 | `timeline(slide, box, theme, n, *, tint="accent", arrow=True, colour=None)` | → `Track(spine, stops)`; each stop has `mark`, `box` under the spine and `above` over it; `n` may be the stops instead |
 | `connect(slide, start, end, theme, *, kind="straight", arrow=True, colour=None, width_pt=1.5)` | an arrow between two boxes; `kind` is "straight", "elbow" or "curved" |
 | `preset(slide, box, theme, name, *, adj=None, tint="accent", outline=None, width_pt=1.5)` | any preset filling `box`; `adj` is one fraction per knob |
@@ -18,10 +17,10 @@ Constants: `PRESET_NAMES`.
 
 ```python
 from ppt_layout import the_largest_step_this_copy_takes
-from ppt_shapes import chevron_row, connect, preset, timeline   # 109 Office preset names
+from ppt_shapes import connect, preset, timeline   # 109 Office preset names
 
 labels = ("采集", "清洗", "标注", "训练", "评测")
-steps = chevron_row(slide, band, T, labels)
+track = timeline(slide, band, T, labels)
 size = min(the_largest_step_this_copy_takes(label, one.box, font=F) for one, label in zip(steps, labels))
 for one, label in zip(steps, labels):
     write(slide, one.box, label, size=size, colour=T["background"], font=F, cjk_font=HAN,
@@ -29,13 +28,13 @@ for one, label in zip(steps, labels):
 ```
 
 **A sequence is drawn with the shape that means sequence.** Five rectangles with gaps
-between them is a list; five chevrons that interlock is a process, and the difference
+between them is a list; a spine with five stops on it is a process, and the difference
 is legible from the back of the room. The same for a decision (`flowChartDecision`), a
 milestone scale (`timeline`), a route between two regions (`connect`). These are real
 Office presets, so they stay editable, take the deck's theme, and keep the text
 rectangle that holds a label clear of the point.
 
-**Never compute the geometry yourself.** `chevron_row` solves the row: every step the
+**Never compute the geometry yourself.** `timeline` solves the row: every stop the
 same width, each notch landing exactly on the previous point, the run filling the box
 to both edges. A hand-placed row is off by a fraction and reads as five shapes that
 nearly touch. It hands back `step.box` — the shape's own text rectangle, already inset

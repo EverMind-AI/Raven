@@ -120,6 +120,106 @@ def _one(deck: Path, page: Path, prototypes: Path | None):
     return findings[0]
 
 
+def _mixed(path: Path, stated: str, inherited: str) -> Path:
+    """One block whose runs are split between a stated colour and an inherited one."""
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    page = presentation.slides.add_slide(presentation.slide_layouts[6])
+    for index in range(4):
+        page.shapes.add_textbox(Inches(7.22 + index * 0.31), Inches(0.44), Inches(0.29), Inches(0.27))
+    box = page.shapes.add_textbox(Inches(8.11), Inches(3.07), Inches(3.0), Inches(0.6))
+    para = box.text_frame.paragraphs[0]
+    quiet = para.add_run()
+    quiet.text = inherited
+    quiet.font.size = Pt(20)
+    loud = para.add_run()
+    loud.text = stated
+    loud.font.size = Pt(20)
+    loud.font.color.rgb = RGBColor(*_BACKGROUND)
+    presentation.save(str(path))
+    return path
+
+
+def test_a_block_most_of_which_inherits_its_colour_is_not_judged_on_the_rest(tmp_path: Path) -> None:
+    """The largest run of the *block*, not of whichever runs happen to state a colour.
+
+    A bundled template has a body block of seventeen characters where sixteen inherit
+    their colour and one states #F8F8F8. Judged on that character, the block read as
+    near-white type -- and the ground under it is the white page, because the copy a
+    reader sees there is the dark that the sixteen inherited. Seven of that template's
+    own pages came back blocking at 1.0:1 with nothing wrong on any of them.
+    """
+    ground = _rendered(tmp_path / "page-001.png", (8.11, 3.07, 3.0, 0.6), ground=_SURFACE)
+
+    # One character stating it against sixteen inheriting: not stated here, not judged.
+    minority = _mixed(tmp_path / "minority.pptx", "跨", "单击此处添加文本单击此处添加")
+    assert contrast_findings(minority, None, pages=[ground]) == []
+
+    # And the other way, which is what the rule is for: the stated runs carry the block,
+    # so the block is judged and the same ink on the same ground is still refused.
+    majority = _mixed(tmp_path / "majority.pptx", "本页要记住的一句话是这个", "跨")
+    found = contrast_findings(majority, None, pages=[ground])
+    assert [one.kind for one in found] == ["unreadable"], [one.message for one in found]
+    assert found[0].severity is Severity.BLOCKING
+
+
+def test_type_whose_colour_is_the_theme_s_is_judged_on_what_it_resolves_to(tmp_path: Path) -> None:
+    """A run coloured by a theme slot states no rgb, and the check used to skip it as
+    'not stated here'. A cloned template page colours nearly everything that way --
+    twelve of thirteen blocks on one measured page -- so a 1.09:1 body line went
+    unjudged. Resolved through the palette the way the reference resolves it, white
+    type on the white page is refused; the theme's dark text on the same page is not."""
+    from pptx.enum.dml import MSO_THEME_COLOR
+
+    ground = _rendered(tmp_path / "page-001.png", (8.11, 3.07, 3.0, 0.6), ground=(0xFF, 0xFF, 0xFF))
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    page = presentation.slides.add_slide(presentation.slide_layouts[6])
+    box = page.shapes.add_textbox(Inches(8.11), Inches(3.07), Inches(3.0), Inches(0.6))
+    run = box.text_frame.paragraphs[0].add_run()
+    run.text = "本页要记住的一句话是这个"
+    run.font.size = Pt(20)
+    run.font.color.theme_color = MSO_THEME_COLOR.BACKGROUND_1
+    path = tmp_path / "theme.pptx"
+    presentation.save(str(path))
+
+    found = contrast_findings(path, None, pages=[ground])
+    assert [one.kind for one in found] == ["unreadable"], [one.message for one in found]
+    assert found[0].detail["ink"] == "FFFFFF"
+
+    run.font.color.theme_color = MSO_THEME_COLOR.TEXT_1
+    presentation.save(str(path))
+    assert contrast_findings(path, None, pages=[ground]) == []
+
+
+def test_type_that_states_nothing_is_judged_on_what_the_master_gives_it(tmp_path: Path) -> None:
+    """No colour anywhere on the run: the master's text style says what it is, and the
+    check judges that instead of looking away. Dark on white reads, so nothing is
+    reported -- the point is that the block was measured at all."""
+    from PIL import Image
+
+    from raven_ppt.services.measure.contrast import _declared, _measure
+    from raven_ppt.services.template.decompile import page_design
+
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    page = presentation.slides.add_slide(presentation.slide_layouts[6])
+    box = page.shapes.add_textbox(Inches(1), Inches(1), Inches(3.0), Inches(0.6))
+    box.text_frame.text = "本页要记住的一句话是这个"
+    design = page_design(presentation, page)
+
+    from PIL import ImageDraw
+
+    rendered = Image.new("RGB", _CANVAS, (0xFF, 0xFF, 0xFF))
+    # The glyphs, as the render would paint them: a dark stroke through the box.
+    ImageDraw.Draw(rendered).rectangle([80, 88, 280, 100], fill=(0, 0, 0))
+
+    assert _declared(box.text_frame, design) is None
+    measured = _measure(box, rendered, 13.333, 7.5, design)
+    assert measured is not None, "an inherited colour is a colour the reader sees"
+    assert measured[0] > 10, "the master's dark text on white is readable"
+
+
 def test_the_band_a_template_designs_in_is_not_reported(tmp_path: Path) -> None:
     """The whole of what the removed warning tier used to say.
 
@@ -333,3 +433,51 @@ def test_the_refusal_names_who_drew_the_shape_on_a_dark_template_too(tmp_path: P
     assert finding.severity == Severity.BLOCKING
     assert finding.detail["drawn_by"] == "authored"
     assert "this shape is your own program's" in finding.message
+
+
+def _two_grounds(path: Path, right: tuple[int, int, int]) -> Path:
+    """A page where the label's box crosses from one ground onto a second one.
+
+    The live shape this reproduces is a chart's own label at (8.72, 5.66) 1.75in wide:
+    its first four characters sit on the panel and its last five on the cream wedge
+    beside it, and one ground for the whole box is the panel.
+    """
+    from PIL import Image, ImageDraw
+
+    image = Image.new("RGB", _CANVAS, (0xFF, 0xFF, 0xFF))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle(
+        [8.0 * _PX_PER_INCH, 2.9 * _PX_PER_INCH, 11.2 * _PX_PER_INCH, 3.8 * _PX_PER_INCH], fill=(0x96, 0x83, 0x6E)
+    )
+    draw.rectangle([9.7 * _PX_PER_INCH, 2.9 * _PX_PER_INCH, 11.2 * _PX_PER_INCH, 3.8 * _PX_PER_INCH], fill=right)
+    image.save(path)
+    return path
+
+
+def test_a_label_that_crosses_onto_a_second_ground_is_judged_on_the_worse_one(tmp_path: Path):
+    """The live miss: white on brown for four characters and white on cream for five.
+
+    One ground per block read the brown at 3.43:1 and published; the cream the last
+    five characters actually sit on is 1.08:1, which is what a reader gets.
+    """
+    deck = _composed(tmp_path / "deck.pptx", text="the label")
+    page = _two_grounds(tmp_path / "page-001.png", right=(0xF5, 0xEF, 0xE4))
+
+    findings = contrast_findings(deck, None, pages=[page])
+
+    assert [one.kind for one in findings] == ["unreadable"]
+    assert findings[0].detail["ratio"] < 1.3
+    assert findings[0].severity is Severity.BLOCKING
+
+
+def test_the_far_end_of_one_gradient_is_not_a_second_ground(tmp_path: Path):
+    """Four pages across two bundled templates set white type over a gradient pill.
+
+    Every one is readable, and every one was reported the moment slices were read at
+    all. A gradient's two ends measure 1.26 to 1.77 against each other where a genuine
+    second ground measured 3.18, so the ends of one fill are one ground.
+    """
+    deck = _composed(tmp_path / "deck.pptx", text="the label")
+    page = _two_grounds(tmp_path / "page-001.png", right=(0xE3, 0xB7, 0x73))
+
+    assert contrast_findings(deck, None, pages=[page]) == []

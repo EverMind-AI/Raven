@@ -50,7 +50,21 @@ PRODUCT = "raven-ppt"
 SECRET_SLOTS = {
     "PPT_SERPER_API_KEY": ("tools", "web", "search", "apiKey"),
     "PPT_JINA_API_KEY": ("tools", "web", "jinaApiKey"),
+    "PPT_IMAGE_API_KEY": ("tools", "media", "image", "apiKey"),
 }
+IMAGE_KEY_SLOT = SECRET_SLOTS["PPT_IMAGE_API_KEY"]
+
+# Where the web tools take their proxy from, and the environment names that
+# stand in for it. The engine's fetch builds its client with `trust_env=False` on
+# purpose -- a deck's downloads must not silently follow whatever proxy happens
+# to be exported -- so nothing under the runtime reads HTTPS_PROXY. On a host
+# that reaches the internet through one, that leaves every fetch failing as
+# "host unreachable": a live run spent three rounds on it (a thumbnail host was
+# refused as unreachable, and the same proxy answered it in 0.33s), and settled
+# for a worse picture. The translation belongs here, once, in the open, rather
+# than in a client that would then be following an environment nobody declared.
+PROXY_SLOT = ("tools", "web", "proxy")
+PROXY_ENV = ("PPT_PROXY", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy")
 
 # The one secret whose absence is fatal: no pictures makes a poorer deck, no
 # model makes no deck at all.
@@ -129,6 +143,11 @@ def render_config(source: Path) -> Path:
     host = render.host_config()
 
     render.apply_secret_slots(config, host, slots=SECRET_SLOTS, required=(), lookup=env_value)
+    if not render.dig(config, PROXY_SLOT):
+        from_host = render.dig(host, PROXY_SLOT)
+        if proxy := (from_host or next((value for name in PROXY_ENV if (value := env_value(name))), "")):
+            render.put(config, PROXY_SLOT, proxy)
+            log(f"[run] web: proxy={'host' if from_host else 'own'}")
 
     llm_key = REQUIRED_SECRETS[0]
     if api_key := env_value(llm_key):
@@ -149,6 +168,21 @@ def render_config(source: Path) -> Path:
             for provider in config.get("providers", {}).values():
                 if isinstance(provider, dict):
                     provider["apiBase"] = api_base
+        # The pictures are paid for by the key that pays for the words, when the
+        # gateway is OpenRouter: GPT Image 2 is an OpenRouter model, and a run
+        # without this asked for tools.media.image.apiKey and drew no backdrop it
+        # could have generated. An explicit PPT_IMAGE_API_KEY has already landed in
+        # the slot above and wins; another gateway gets nothing written, since the
+        # image tool would only send that gateway a request it cannot serve.
+        if not render.dig(config, IMAGE_KEY_SLOT):
+            bases = [
+                str(provider.get("apiBase") or "")
+                for provider in config.get("providers", {}).values()
+                if isinstance(provider, dict)
+            ]
+            if any("openrouter.ai" in base for base in bases):
+                render.put(config, IMAGE_KEY_SLOT, api_key)
+                log("[run] images: the LLM key also pays for GPT Image 2 (tools.media.image.apiKey)")
         defaults = config.get("agents", {}).get("defaults", {})
         log(f"[run] llm: own key (provider={defaults.get('provider')} model={defaults.get('model')})")
     else:
@@ -169,9 +203,17 @@ def render_config(source: Path) -> Path:
     shipped_window = defaults.get("contextWindowTokens")
     model = defaults.get("model") or ""
     if window := model_context_window(model):
-        defaults["contextWindowTokens"] = window
-        note = "" if window == shipped_window else f", replacing the configured {shipped_window}"
-        log(f"[run] window: {window} for {model}, from the host model catalog{note}")
+        # The catalog's number is the model's ceiling, and the configured one is
+        # allowed to be lower: it is what the deck run is willing to carry. A run
+        # that took the catalog's 1.3M as its window let the transcript grow to
+        # 450k tokens a call -- 62M input tokens and 77 seconds a turn over 137
+        # turns -- because nothing compacted short of a ceiling it never reached.
+        if isinstance(shipped_window, int) and 0 < shipped_window < window:
+            log(f"[run] window: {shipped_window} from config, under the {window} the host catalog gives {model}")
+        else:
+            defaults["contextWindowTokens"] = window
+            note = "" if window == shipped_window else f", replacing the configured {shipped_window}"
+            log(f"[run] window: {window} for {model}, from the host model catalog{note}")
     else:
         log(f"[run] window: {shipped_window} from config; the host catalog has no entry for {model or '(no model)'}")
 

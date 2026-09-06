@@ -22,14 +22,18 @@ from typing import Any
 
 from raven_ppt.contracts.findings import Finding, Severity
 from raven_ppt.services.measure.geometry import (
+    COVERING_OPACITY,
     EMU_PER_POINT,
     Rect,
     cell_boxes,
     has_text,
+    is_filled,
     is_panel,
+    is_rectangular,
     iter_shapes,
     open_deck,
     pages,
+    picture_opacity,
     shape_rect_pt,
     shows_picture,
 )
@@ -44,6 +48,11 @@ COLLISION_SHARE = 0.4
 # rather than a tick or a bullet.
 RULE_MAX_HEIGHT_PT = 4.5
 RULE_MIN_WIDTH_PT = 36.0
+# And how much of one has to survive what was painted over it to still be ink on the
+# page. The width above asks whether a shape is a divider at all and is answered before
+# anything is cut; asking it again of the pieces means a rule mostly covered stops
+# existing, and the two 30pt ends of one still strike whatever they cross.
+RULE_PIECE_MIN_PT = 4.0
 # Through the glyphs, not grazing an edge. The top quarter is spared -- a rule
 # over a word's ascenders reads as a border -- and the bottom gets less, because
 # a word's bbox ends below its descenders and a line at three-quarter height
@@ -54,6 +63,11 @@ RULE_BOTTOM_SPARE = 0.15
 # A card, not a rule or a mark.
 CARD_MIN_WIDTH_PT = 72.0
 CARD_MIN_HEIGHT_PT = 36.0
+# What counts as the page's own ground rather than a panel on it. Strict on both sides:
+# a band the full width of the page but a fraction of its height is a panel and is
+# measured as one -- only a shape that covers the canvas is the ground.
+GROUND_WIDTH_SHARE = 0.98
+GROUND_HEIGHT_SHARE = 0.95
 # A word belongs to a card when the card holds this much of it. Deliberately not
 # "the card contains the word's centre": by centre alone a word that has escaped
 # far enough -- centre and all -- stops being anyone's problem, and that is
@@ -96,7 +110,20 @@ BODY_TOP_PT = 1.25 * 72
 BODY_BOTTOM_PT = 6.90 * 72
 HEADER_BOTTOM_PT = 1.70 * 72
 EMPTY_GAP_PT = 0.95 * 72
-EMPTY_TRAILING_PT = 1.20 * 72
+# How much of the body may be left empty under the last thing on the page. Measured on
+# five decks: a reader called out a page trailing off at 0.80in of the body unused, and
+# the deck whose feet and bands they were happy with peaks at 0.55in. 1.20in passed the
+# page they complained about -- and the 0.60in between the body's floor and the trim is
+# on top of whatever this allows, so the field a reader sees is larger than the number.
+EMPTY_TRAILING_PT = 0.75 * 72
+# And how much may be left above the first thing on it. The same number, because the
+# question is the same one asked at the other end -- and it has to be asked, or a run
+# centred in the body hides half of what the trailing reading would have reported. That
+# is not a hypothetical: the trailing message's own remedy splits the leftover above and
+# below the run, so a page reported at 3.30in of trailing blank came back at 1.20in with
+# 2.10in moved to where nothing read it, and the table that should have filled the band
+# stayed 62 percent short of it.
+EMPTY_LEADING_PT = 0.75 * 72
 EMPTY_PANEL_BOTTOM_PT = 0.75 * 72
 EMPTY_PANEL_USED_SHARE = 0.58
 LOOSE_HEADER_GAP_PT = 0.30 * 72
@@ -161,10 +188,17 @@ def rule_strikes(
     painted = by_page(words)
     findings: list[Finding] = []
     for page, drawn in sorted(rules.items()):
-        reported = 0
+        # Every piece of one divider carries that divider's y-span, so this counts
+        # dividers: a rule cut into seven by the icons drawn over it would otherwise
+        # spend the whole page budget naming one line seven times, and the three other
+        # rules striking copy on that page would never be reached.
+        struck: set[tuple[float, float]] = set()
         for rule in drawn:
-            if reported >= per_page:
+            if len(struck) >= per_page:
                 break
+            span = (round(rule.y0, 1), round(rule.y1, 1))
+            if span in struck:
+                continue
             middle = (rule.y0 + rule.y1) / 2
             for word in painted.get(page, ()):
                 tall = word.y1 - word.y0
@@ -184,7 +218,7 @@ def rule_strikes(
                         detail={"text": word.text[:28], "rule_y_pt": round(middle, 2)},
                     )
                 )
-                reported += 1
+                struck.add(span)
                 break
     return findings
 
@@ -534,7 +568,12 @@ def excessive_whitespace(
     body_bottom = min(BODY_BOTTOM_PT, page_height * 0.94)
     painted = by_page(words)
     skipped = set(structural)
+    # Two lists, two questions. `panels` is what the page draws, which counts as body
+    # content wherever it sits; `fillable` drops what is not a rectangle, because how
+    # much of itself a shape's copy fills is the one question a bounding box cannot
+    # answer for a circle or a chevron.
     panels = cards(pptx_path)
+    fillable = cards(pptx_path, fillable=True)
     findings: list[Finding] = []
 
     for number, slide in pages(pptx_path):
@@ -585,6 +624,17 @@ def excessive_whitespace(
             box = shape_rect_pt(shape)
             if box.y1 > body_top and box.y0 < body_bottom:
                 intervals.append((max(body_top, box.y0), min(body_bottom, box.y1)))
+        # And what the page draws. Words, pictures and charts were the whole of this, so
+        # a page whose body holds a diagram read as a body holding nothing: the arrow of
+        # one template's four-step page and the six discs of another's are autoshapes,
+        # and the field they fill was reported as blank. `cards` is the same list the
+        # panel reading uses and already drops the page's own ground, so a full-bleed
+        # background does not swallow the page. Unfiltered by shape: a disc holding a
+        # label is content whatever its geometry, which is the opposite of what the
+        # fill-share reading needs.
+        for box in panels.get(number, ()):
+            if box.y1 > body_top and box.y0 < body_bottom:
+                intervals.append((max(body_top, box.y0), min(body_bottom, box.y1)))
 
         bands = _vertical_bands(intervals)
         if bands:
@@ -607,6 +657,26 @@ def excessive_whitespace(
                         )
                     )
                     reported += 1
+            leading = bands[0][0] - body_top
+            if reported < per_page and leading >= EMPTY_LEADING_PT:
+                findings.append(
+                    _empty_finding(
+                        number,
+                        "leading_body",
+                        leading,
+                        (
+                            f"the page's first substantive body content starts {leading / 72:.2f}in below the "
+                            "body's own top, leaving that field empty. A run centred in the body reads as a "
+                            "run that ran out rather than one that was placed: grow the load-bearing element "
+                            "until it reaches, and a table grows by being handed the band -- `table(slide, "
+                            "band, ...)` spreads into what it is given, so the band and not the table is what "
+                            "to decide"
+                        ),
+                        body_top,
+                        bands[0][0],
+                    )
+                )
+                reported += 1
             trailing = body_bottom - bands[-1][1]
             if reported < per_page and trailing >= EMPTY_TRAILING_PT:
                 findings.append(
@@ -617,12 +687,15 @@ def excessive_whitespace(
                         (
                             f"the page's last substantive body content ends {trailing / 72:.2f}in above the body "
                             "boundary, leaving the lower field unfinished. Increase the main content's scale, or "
-                            "use the space for the page's conclusion; and where the run was measured and taken off "
-                            "a cursor, that field is room the body was given and nothing asked for -- pass the "
-                            "run's heights and the gaps between them to page().holding(*heights), which cuts the "
-                            "body to the run and splits the leftover above and below it. Not for a run something "
-                            "else already spreads into the whole body, such as card_group(down=True), whose cards "
-                            "would then touch"
+                            "use the space for the page's conclusion. Grow it first: a table is handed a band "
+                            "and spreads into it, so `table(slide, band, ...)` fills whatever it is given and the "
+                            "band is the only decision -- measuring the content's own height and drawing at that "
+                            "leaves exactly this field. Only for a run that genuinely cannot be grown, pass its "
+                            "heights and the gaps between them to page().holding(*heights), which cuts the body to "
+                            "the run and splits the leftover above and below it; that moves half the field to the "
+                            "top of the page, where `leading_body` reports it, rather than closing it. Not for a "
+                            "run something else already spreads into the whole body, such as card_group(down=True), "
+                            "whose cards would then touch"
                         ),
                         bands[-1][1],
                         body_bottom,
@@ -630,7 +703,7 @@ def excessive_whitespace(
                 )
                 reported += 1
 
-        for panel in panels.get(number, ()):
+        for panel in fillable.get(number, ()):
             if reported >= per_page:
                 break
             inside = [
@@ -1051,28 +1124,92 @@ def hairline_rules(pptx_path: Path) -> dict[int, list[Rect]]:
     """
     found: dict[int, list[Rect]] = {}
     for number, slide in pages(pptx_path):
-        drawn: list[Rect] = []
-        for shape in iter_shapes(slide.shapes):
-            if has_text(shape):
-                continue
+        rules: list[tuple[int, Rect]] = []
+        covers: list[tuple[int, Rect]] = []
+        for order, shape in enumerate(iter_shapes(slide.shapes)):
             box = shape_rect_pt(shape)
-            if box.height <= RULE_MAX_HEIGHT_PT and box.width >= RULE_MIN_WIDTH_PT:
-                drawn.append(box)
-        found[number] = drawn
+            if not has_text(shape) and box.height <= RULE_MAX_HEIGHT_PT and box.width >= RULE_MIN_WIDTH_PT:
+                rules.append((order, box))
+                continue
+            # Its own copy does not stop a shape covering a line: the shape that hid
+            # one on the live page was a filled disc with its label on it. A picture
+            # answers the same opacity question a fill does -- one set to 40 percent
+            # shows the rule through it.
+            if is_panel(shape) or (shows_picture(shape) and picture_opacity(shape) >= COVERING_OPACITY):
+                covers.append((order, box))
+        # Later paints over earlier, so a rule loses only what is drawn after it. Read
+        # in one pass this was backwards -- the covers collected were the ones already
+        # behind the line -- and the hub that hides it comes three shapes later.
+        found[number] = [
+            piece for order, rule in rules for piece in _uncovered(rule, [box for at, box in covers if at > order])
+        ]
     return found
 
 
-def cards(pptx_path: Path) -> dict[int, list[Rect]]:
-    """Every filled panel big enough to hold copy, in points, keyed by page."""
+def _uncovered(rule: Rect, covers: Sequence[Rect]) -> list[Rect]:
+    """`rule` with the spans an opaque shape was drawn over it removed.
+
+    A spoke in a hub-and-spoke diagram runs the width of the page and the hub is
+    painted on top of its middle, so on paper it is two segments with a disc between
+    them -- and the hub's own label sits on the disc, not on the line. Read whole, that
+    line crosses the label across 100 percent of its width, which is how a live deck
+    was told a divider struck through text that nothing touches. Splitting the rule is
+    what makes the reading match the render; trimming it to its longest surviving piece
+    would keep the same lie on the other side of the hub.
+    """
+    middle = (rule.y0 + rule.y1) / 2
+    spans = [(rule.x0, rule.x1)]
+    for cover in covers:
+        if not (cover.y0 <= middle <= cover.y1):
+            continue
+        cut: list[tuple[float, float]] = []
+        for x0, x1 in spans:
+            if cover.x1 <= x0 or cover.x0 >= x1:
+                cut.append((x0, x1))
+                continue
+            if x0 < cover.x0:
+                cut.append((x0, cover.x0))
+            if cover.x1 < x1:
+                cut.append((cover.x1, x1))
+        spans = cut
+    return [Rect(x0, rule.y0, x1, rule.y1) for x0, x1 in spans if x1 - x0 >= RULE_PIECE_MIN_PT]
+
+
+def cards(pptx_path: Path, *, fillable: bool = False) -> dict[int, list[Rect]]:
+    """Every filled panel big enough to hold copy, in points, keyed by page.
+
+    `fillable` drops the panels that are not rectangles, and belongs only to the reading
+    that asks how much of a panel its copy filled: a circle covers at most 79% of its own
+    bounding box, so a hub with one label under it reads as a panel using 14% of its
+    height whatever is drawn in it. The other readings built on this list want them --
+    copy running out of a chevron is still copy running out of it, and a gap a disc
+    covers is not a gap. 519 of the 977 panels across the twelve bundled templates are
+    not rectangles, so which of the two a caller wants is not a detail.
+
+    The page's own ground is not one of them. A rectangle covering the whole canvas is
+    what the page is painted on, and each of the three readings built on this list says
+    something false about it: copy cannot escape it without leaving the page, its bottom
+    rim is the page's own edge, and its fill share is how full the page is rather than
+    whether a container was filled. A dark closing page was reported as "a 7.50in-high
+    panel using 42% of its height" -- which is a description of the design.
+    """
+    presentation = open_deck(pptx_path)
+    page_width = (presentation.slide_width or 0) / EMU_PER_POINT
+    page_height = (presentation.slide_height or 0) / EMU_PER_POINT
     found: dict[int, list[Rect]] = {}
     for number, slide in pages(pptx_path):
         panels: list[Rect] = []
         for shape in iter_shapes(slide.shapes):
-            if has_text(shape) or not is_panel(shape):
+            if has_text(shape) or not is_filled(shape):
+                continue
+            if fillable and not is_rectangular(shape):
                 continue
             box = shape_rect_pt(shape)
-            if box.width >= CARD_MIN_WIDTH_PT and box.height >= CARD_MIN_HEIGHT_PT:
-                panels.append(box)
+            if box.width < CARD_MIN_WIDTH_PT or box.height < CARD_MIN_HEIGHT_PT:
+                continue
+            if box.width >= page_width * GROUND_WIDTH_SHARE and box.height >= page_height * GROUND_HEIGHT_SHARE:
+                continue
+            panels.append(box)
         found[number] = panels
     return found
 

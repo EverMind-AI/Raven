@@ -32,6 +32,7 @@ template's, so the deck that ignored its template scores 12-23% by area.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -170,7 +171,7 @@ def _from_one_of(shapes: set, prototypes: dict[int, set], named: dict[str, int])
 PLACEHOLDER_MIN_CHARS = 5
 
 
-def placeholder_copy(pptx_path: Path, template: Path | None) -> list[Finding]:
+def placeholder_copy(pptx_path: Path, template: Path | None, borrowed: Sequence[Path] = ()) -> list[Finding]:
     """Text blocks a page cloned from the template and never replaced.
 
     From a live deck that otherwise used its template well: page 4 carried
@@ -184,10 +185,16 @@ def placeholder_copy(pptx_path: Path, template: Path | None) -> list[Finding]:
 
     URLs and pure digits are skipped: a template's own watermark and its page numbers
     come through cloning too, and neither is an unfilled slot.
+
+    `borrowed` is every other bundled template the plan took a page from: a page cloned
+    out of one of those carries that file's example copy, which the bound template's
+    text set does not hold.
     """
-    if template is None or not Path(template).is_file():
+    sources = [Path(template)] if template is not None and Path(template).is_file() else []
+    sources += [Path(other) for other in borrowed if Path(other).is_file()]
+    if not sources:
         return []
-    placeholders = _texts(Path(template))
+    placeholders: set[str] = set().union(*(_texts(source) for source in sources))
     if not placeholders:
         return []
     findings: list[Finding] = []
@@ -223,7 +230,7 @@ PICTURE_IS_DECORATION = 0.10
 PICTURE_IS_BACKGROUND = 0.55
 
 
-def template_pictures(pptx_path: Path, template: Path | None) -> list[Finding]:
+def template_pictures(pptx_path: Path, template: Path | None, borrowed: Sequence[Path] = ()) -> list[Finding]:
     """Pages still showing a photograph the template shipped.
 
     Measured on two live decks: `replace_picture` was called zero times in both, and
@@ -235,10 +242,15 @@ def template_pictures(pptx_path: Path, template: Path | None) -> list[Finding]:
     is no way to tell a template's decorative graphic from its placeholder photograph
     -- both arrive as a PNG -- so the author decides: replace it with a figure, drop
     it, or keep it if it is part of the design.
+
+    `borrowed` is every other bundled template the plan took a page from; a stock
+    photograph cloned out of one of those is as much a placeholder as the bound one's.
     """
-    if template is None or not Path(template).is_file():
+    sources = [Path(template)] if template is not None and Path(template).is_file() else []
+    sources += [Path(other) for other in borrowed if Path(other).is_file()]
+    if not sources:
         return []
-    known = _picture_hashes(Path(template))
+    known: set[str] = set().union(*(_picture_hashes(source) for source in sources))
     if not known:
         return []
     pages: dict[int, int] = {}
@@ -267,6 +279,74 @@ def template_pictures(pptx_path: Path, template: Path | None) -> list[Finding]:
                 f"the frame (`drop=[n]`), or keep it if it is part of the design rather than a photograph"
             ),
             detail={"pages": {str(k): v for k, v in sorted(pages.items())}, "distinct": len(distinct)},
+        )
+    ]
+
+
+def layouts_with_photographs(pptx_path: Path) -> dict[str, tuple[list[int], list[str]]]:
+    """Each layout carrying a picture big enough to be content, with the pages built on it.
+
+    Keyed by layout name; the value is (page numbers, picture sizes as "WxHin"). Pictures
+    on a layout are inherited by every page on it and are not on the page, so the
+    per-page reading above never sees them -- which is how a deck shipped with the
+    template's photograph on every section page and nothing reported.
+    """
+    try:
+        presentation = open_deck(pptx_path)
+    except Exception:  # noqa: BLE001 -- an unreadable deck is not a measurement
+        return {}
+    canvas = (presentation.slide_width or 1) * (presentation.slide_height or 1)
+    carried: dict[str, tuple[list[int], list[str]]] = {}
+    for number, slide in enumerate(presentation.slides, start=1):
+        layout = slide.slide_layout
+        sizes = [
+            f"{shape.width / EMU_PER_INCH:.1f}x{shape.height / EMU_PER_INCH:.1f}in"
+            for shape in iter_shapes(layout.shapes)
+            if picture_blob(shape) is not None
+            and shape.width
+            and shape.height
+            and (shape.width * shape.height) / canvas >= PICTURE_IS_DECORATION
+        ]
+        if not sizes:
+            continue
+        pages, _ = carried.setdefault(layout.name or "unnamed layout", ([], sizes))
+        pages.append(number)
+    return carried
+
+
+def layout_photographs(pptx_path: Path, template: Path | None) -> list[Finding]:
+    """Pages sitting on a layout that carries the template's own photograph.
+
+    The other half of `template_pictures`: that one reads the pictures on the page, and
+    a template's cover, section and closing photographs are as often on the *layout*,
+    where `pictures={...}` on a cloned page never reaches them. Reported, not refused,
+    and once per layout rather than once per page, because the fix is one call for the
+    whole layout -- and because an illustration the designer drew there is the design,
+    which the author keeps.
+    """
+    if template is None or not Path(template).is_file():
+        return []
+    carried = layouts_with_photographs(pptx_path)
+    if not carried:
+        return []
+    named = "; ".join(
+        f"'{layout}' ({', '.join(sizes)}) under page(s) {', '.join(str(page) for page in pages)}"
+        for layout, (pages, sizes) in carried.items()
+    )
+    return [
+        Finding(
+            kind="layout_picture",
+            severity=Severity.WARNING,
+            message=(
+                f"the template's own picture is on the layout, not the page, so every page on it shows it: {named}. "
+                "`pictures={...}` on the cloned page cannot reach a layout's picture. `layout_pictures(slide)` "
+                "returns them, largest first, and `replace_picture(layout_pictures(slide)[0], FIGURES/'x.png', "
+                "'cover', alpha=0.25)` changes the picture for every page on that layout at once -- a picture "
+                "generated in the deck's own style is the usual replacement, and one the size of the page is the "
+                "page's background, so it takes the `alpha` or the type over it drowns. Keep it if it is the "
+                "design (an illustration) rather than a stock photograph"
+            ),
+            detail={layout: {"pages": pages, "sizes": sizes} for layout, (pages, sizes) in carried.items()},
         )
     ]
 
@@ -361,17 +441,31 @@ def prototype_kept(pptx_path: Path, template: Path | None, outline: Any | None) 
     or the outline (promise the page it was actually built on), and both are the
     author's to choose.
     """
-    if template is None or outline is None or not Path(template).is_file():
+    from raven_ppt.services.template.defaults import bundled_path
+
+    if outline is None:
         return []
-    prototypes = _pages(Path(template))
-    if not prototypes:
-        return []
+    bound = Path(template) if template is not None and Path(template).is_file() else None
+    read: dict[Path, dict[int, set[tuple[float, float, float, float]]]] = {}
+
+    def pages_of(source: Path) -> dict[int, set[tuple[float, float, float, float]]]:
+        if source not in read:
+            read[source] = _pages(source)
+        return read[source]
+
     built = _pages(pptx_path)
     findings: list[Finding] = []
     for page in getattr(outline, "pages", ()):
         wanted = getattr(page, "prototype", None)
         if wanted is None:
             continue  # the page said it would be drawn, and the geometry gates own it
+        # A borrowed page promised a page of another bundled template, and is held to
+        # that file's geometry rather than the bound template's.
+        stem = getattr(page, "borrowed", "")
+        source = bundled_path(stem) if stem else bound
+        if source is None:
+            continue
+        prototypes = pages_of(source)
         boxes = prototypes.get(wanted)
         shapes = built.get(page.page)
         if not boxes or not shapes or len(shapes) < MIN_SHAPES:
@@ -385,18 +479,20 @@ def prototype_kept(pptx_path: Path, template: Path | None, outline: Any | None) 
         # and the finding said only "it came from somewhere else" -- true, and no help.
         actual = _nearest(shapes, prototypes, exclude=wanted)
         instead = ""
+        whose = f"the bundled template {stem}'s" if stem else "the template's"
         if actual is not None:
             number, matched = actual
-            instead = f" It matches the template's page {number} ({matched:.0%} of its shapes)."
+            instead = f" It matches {whose} page {number} ({matched:.0%} of its shapes)."
+        call = f"prototype(bundled({stem!r}), {wanted})" if stem else f"prototype(tpl, {wanted})"
         findings.append(
             Finding(
                 kind="prototype_kept",
                 severity=Severity.WARNING,
                 page=page.page,
                 message=(
-                    f"page {page.page} says in the outline that it is built on the template's page {wanted}, and "
+                    f"page {page.page} says in the outline that it is built on {whose} page {wanted}, and "
                     f"{share:.0%} of its shapes sit where that page puts one.{instead} Build it on the page it "
-                    f"promised -- `adapt(prs, prototype(tpl, {wanted}), ...)`, which counts from 1 -- or change the "
+                    f"promised -- `adapt(prs, {call}, ...)`, which counts from 1 -- or change the "
                     f"outline to name the page it is really built on. A plan nobody follows is worse than no "
                     f"plan, because the checks that trust it stop meaning anything"
                 ),

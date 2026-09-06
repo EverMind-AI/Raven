@@ -14,6 +14,11 @@ skill's §6.5). Not for a run something else already spreads into the whole body
 `card_group(..., down=True)` given the body puts the leftover between its own cards, and a
 body cut to the sum of their heights first leaves them touching.
 
+A passage whose figures carry a caption asks for the page's foot as well --
+`frame = page(footer=True)` -- because the caption goes on one line in `footer()`'s `note`,
+joined with `；` where the page has more than one figure, and never under the picture
+(`M6`); the height that frees goes back to the figure.
+
 They also assume the seven picture helpers from
 [deck/build/references/layouts-primitives.md](deck/build/references/layouts-primitives.md)
 -- `cover`, `scrim`, `vignette`, `clip`, `fade`, `duotone`, `lift`. Open that file first;
@@ -73,10 +78,13 @@ Unequal on purpose. A page where every region carries the same weight has argued
 nothing.
 
 ```python
+frame = page(footer=True)
 lead, rest = frame.body.split_left(0.62)
-picture_fit(slide, f"{FIGURES}/fig7.png", lead, T, caption="图 6：主结构")
-for box, name in zip(rest.rows(2), ("图 7：注意力图", "图 8：失败样例")):
-    picture_fit(slide, f"{FIGURES}/fig8.png", box, T, caption=name, size=LABEL_PT)
+picture_fit(slide, f"{FIGURES}/fig7.png", lead, T)
+for box in rest.rows(2):
+    picture_fit(slide, f"{FIGURES}/fig8.png", box, T)
+footer(slide, frame.footer, T, note="来源：论文图 1-3；图 6 主结构；图 7 注意力图；图 8 失败样例",
+       font=FACE, cjk_font=HAN)
 ```
 
 ### P28 -- An asymmetric collage: one dominant figure, smaller ones over its corner
@@ -88,18 +96,17 @@ covers about an eighth of the one under it, and at three fifths `covered_shape` 
 deck for hiding evidence.
 
 ```python
-room = Box(frame.body.x0, frame.body.y0, frame.body.x1, frame.body.y1 - 0.44)
-lead = Box(room.x0, room.y0, room.x0 + 7.40, room.y1)
+frame = page(footer=True)
+lead = Box(frame.body.x0, frame.body.y0, frame.body.x0 + 7.40, frame.body.y1)
 lift(cover(slide, f"{FIGURES}/fig1.png", lead))
-over = ((f"{FIGURES}/fig2.png", Box.at(lead.x1 - 1.05, room.y0 + 0.20, w=3.10, h=2.00), -3.0),
-        (f"{FIGURES}/fig3.png", Box.at(lead.x1 - 0.35, room.y0 + 2.55, w=3.30, h=2.10), 2.5))
+over = ((f"{FIGURES}/fig2.png", Box.at(lead.x1 - 1.05, lead.y0 + 0.20, w=3.10, h=2.00), -3.0),
+        (f"{FIGURES}/fig3.png", Box.at(lead.x1 - 0.35, lead.y0 + 2.55, w=3.30, h=2.10), 2.5))
 for figure, box, angle in over:
     picture = cover(slide, figure, box)
     picture.rotation = angle
     lift(picture)
-write(slide, Box.corners(lead.x0, room.y1 + 0.08, frame.body.x1, frame.body.y1),
-      "主图承担结构，压角的两张是证据，不是装饰。", size=LABEL_PT, colour=MUTED,
-      font=FACE, cjk_font=HAN)
+footer(slide, frame.footer, T, note="来源：论文图 1-3；主图承担结构，压角的两张是证据",
+       font=FACE, cjk_font=HAN)
 ```
 
 ### P29 -- Picture in picture: the detail inset over the wide shot
@@ -110,16 +117,16 @@ The `plane` one notch larger than the inset is its mount, and what separates the
 pictures without a rule.
 
 ```python
-wide = Box(frame.body.x0, frame.body.y0, frame.body.x1, frame.body.y1 - 0.50)
+frame = page(footer=True)
+wide = frame.body
 cover(slide, f"{FIGURES}/fig1.png", wide)
 inset = Box.at(wide.x1 - 4.30, wide.y1 - 2.90, w=4.00, h=2.60)
 write(slide, Box.corners(inset.x0, inset.y0 - 0.40, inset.x1, inset.y0 - 0.06), "细节：p95 延迟",
       size=LABEL_PT, colour=T["background"], font=FACE, cjk_font=HAN)
 plane(slide, inset.inset(-0.06, -0.06), T, tint="background")
 lift(cover(slide, f"{FIGURES}/fig2.png", inset))
-write(slide, Box.corners(frame.body.x0, wide.y1 + 0.12, frame.body.x1, frame.body.y1),
-      "全景说结构，嵌进去的一张说这一页要看的那一处。", size=LABEL_PT, colour=MUTED,
-      font=FACE, cjk_font=HAN)
+footer(slide, frame.footer, T, note="来源：论文图 1 与图 2；全景说结构，嵌进去的一张说这一处",
+       font=FACE, cjk_font=HAN)
 ```
 
 ### P30 -- The same figure twice: the whole of it, and a zoom on the part under discussion
@@ -131,8 +138,9 @@ to the frame and a frame of the wrong aspect distorts it. `M22` marks the region
 original and `connect` ties the two together.
 
 ```python
+frame = page(footer=True)
 whole, aside = frame.body.split_left(0.55, gutter=0.40)
-shown = picture_fit(slide, f"{FIGURES}/table2.png", whole, T, caption="表 2：各基线的时延与总分（论文原图）")
+shown = picture_fit(slide, f"{FIGURES}/table2.png", whole, T)
 region = (0.06, 0.52, 0.52, 0.74)                       # left, top, right, bottom of the source
 lens = Box(shown.box.x0 + shown.box.w * region[0], shown.box.y0 + shown.box.h * region[1],
            shown.box.x0 + shown.box.w * region[2], shown.box.y0 + shown.box.h * region[3])
@@ -150,6 +158,8 @@ connect(slide, lens, zoom, T, kind="curved", colour="accent")
 write(slide, Box.corners(zoom.x0, zoom.y1 + 0.14, zoom.x1, zoom.y1 + 1.20),
       "K=2 这六行是本页的结论：块大小从 128 到 8192，p50 只动了 0.05s。",
       size=BODY_PT, colour=INK, font=FACE, cjk_font=HAN)
+footer(slide, frame.footer, T, note="来源：论文表 2 各基线的时延与总分；右侧是其中 K=2 六行的放大",
+       font=FACE, cjk_font=HAN)
 ```
 
 ### P31 -- A montage of figures under one band of type
@@ -200,11 +210,14 @@ The missing tile is what makes the grid a composition instead of a contact sheet
 not fill every slot just because there is a grid.
 
 ```python
+frame = page(footer=True)
 cells = frame.body.grid(3, 2, gutter=GUTTER)
 write(slide, cells[0], ["六个站点", "同一套权重，六种现场。"], size=LEAD_PT, colour=INK,
       font=FACE, cjk_font=HAN, anchor="middle")
-for cell, name in zip(cells[1:], ("华东", "华北", "西南", "华南", "东北")):
-    picture_fit(slide, f"{FIGURES}/fig9.png", cell, T, caption=name, size=LABEL_PT)
+for cell in cells[1:]:
+    picture_fit(slide, f"{FIGURES}/fig9.png", cell, T)
+footer(slide, frame.footer, T, note="来源：五个站点同一天的现场照；按行依次为华东、华北、西南、华南、东北",
+       font=FACE, cjk_font=HAN)
 ```
 
 ### P13 -- A full-height rail down one side
@@ -213,20 +226,27 @@ The rail carries the header, so this page builds its own `Frame` rather than cal
 `page()` and `heading()`. A deck may do this -- what it may not do is give each page a
 different header, so if one page reads this way the rest of that section does too.
 
+The frame's fourth box is the foot, and here it has to be a real strip rather than the
+placeholder a hand-built `Frame` starts with: the rail is 2.38in wide inside its margin,
+which is narrower than the lane a note needs, so the foot goes under the figure beside the
+rail and the figure's own region stops above it.
+
 ```python
 rail = Box.corners(0.0, 0.0, MARGIN + 3.10, CANVAS_H)
 plane(slide, rail, T, tint="accent_soft")
 inner = rail.inset(MARGIN, MARGIN)
+foot = Box.corners(rail.x1 + GUTTER, CANVAS_H - MARGIN - 0.30, CANVAS_W - MARGIN, CANVAS_H - MARGIN)
 own = Frame(Box(inner.x0, inner.y0, inner.x1, inner.y0 + 0.30),
             Box(inner.x0, inner.y0 + 0.34, inner.x1, inner.y0 + 1.90),
             Box(inner.x0, inner.y0 + 2.10, inner.x1, inner.y1),
-            Box(inner.x0, inner.y1, inner.x1, inner.y1))
+            foot)
 write(slide, own.kicker, "03 / 06 · 结构", size=KICKER_PT, colour=MUTED, font=FACE, cjk_font=HAN)
 write(slide, own.title, "一侧通栏侧栏", size=TITLE_PT, bold=True, colour=INK, font=FACE, cjk_font=HAN)
 write(slide, own.body, "侧栏承担页眉，正文区整块留给图。", size=LABEL_PT, colour=MUTED,
       font=FACE, cjk_font=HAN)
-body = Box.corners(rail.x1 + GUTTER, MARGIN, CANVAS_W - MARGIN, CANVAS_H - MARGIN)
-picture_fit(slide, f"{FIGURES}/fig10.png", body, T, caption="图 9：本节要讲的结构")
+body = Box.corners(rail.x1 + GUTTER, MARGIN, CANVAS_W - MARGIN, foot.y0 - GUTTER)
+picture_fit(slide, f"{FIGURES}/fig10.png", body, T)
+footer(slide, own.footer, T, note="来源：论文图 9；本节要讲的结构", font=FACE, cjk_font=HAN)
 ```
 
 ### P32 -- Image navigation cards: a contents page whose entries are pictures
@@ -282,8 +302,9 @@ for icon, head, said, offset in notes:
 
 Two pictures doing two different jobs on one page, which is the argument for it: the banner
 gives the page somewhere to be and the figure gives it a number. The banner is
-cover-cropped to a band that runs off the left edge; the figure is `picture_fit` with its
-caption, because it is the evidence.
+cover-cropped to a band that runs off the left edge; the figure is `picture_fit`, whole,
+because it is the evidence -- and what each of the two is goes in the page's foot with the
+source (`M6`), not under either of them.
 
 The panel is already the ground, so the bands sit straight on the tint, each with its own
 icon (`M1`): a card on `accent_soft` is a surface on a surface. Measure the bands off
@@ -292,10 +313,11 @@ bands cut to a third of the panel each leave an inch of air inside every one of 
 the set stops reading as a set.
 
 ```python
+frame = page(footer=True)
 left, panel = frame.body.split_left(0.62, gutter=0.34)
 down = stack(left, gutter=0.18)
 cover(slide, f"{FIGURES}/photo.jpg", Box.corners(0.0, down.take(1.90).y0, left.x1, down.y - 0.18))
-picture_fit(slide, f"{FIGURES}/fig2.png", down.rest(), T, caption="图 4：检索时延分布（论文原图）")
+picture_fit(slide, f"{FIGURES}/fig2.png", down.rest(), T)
 plane(slide, panel, T, tint="accent_soft", radius=True)
 inner = stack(panel.inset(PAD + 0.10))
 write(slide, inner.take(0.46), "这一页在说什么", size=LEAD_PT, bold=True, colour=INK,
@@ -314,6 +336,8 @@ for (icon, head, body), tall in zip(notes, bands):
           size=BODY_PT, bold=True, colour=INK, font=FACE, cjk_font=HAN, anchor="middle")
     write(slide, Box.corners(band.x0, band.y0 + 0.38, band.x1, band.y1), body,
           size=LABEL_PT, colour=MUTED, font=FACE, cjk_font=HAN)
+footer(slide, frame.footer, T, note="来源：图 4 检索时延分布（论文原图）；氛围照取自公开图库",
+       font=FACE, cjk_font=HAN)
 ```
 
 ### M1-M11 -- five of them at once, on top of `P9`

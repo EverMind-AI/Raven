@@ -37,6 +37,7 @@ dependencies = [
     "pypdfium2>=4.30,<5",
     # ppt_fetch / ppt_generate_image / ppt_image_search speak HTTP themselves.
     "httpx>=0.28.0,<1.0.0",
+    "matplotlib>=3.11.1",
 ]
 
 # The one line that makes this package findable: PluginDiscovery._scan_entry_points
@@ -58,7 +59,7 @@ packages = ["raven_ppt"]
 # own assets ride the same way: shape/icon data and the DejaVu measuring fonts
 # under services/assets, the deck-authoring skill, the fork's three drifted
 # identity prompts, and -- once fetched against the pinned manifest -- the
-# twelve bundled templates.
+# eight bundled templates.
 [tool.hatch.build]
 include = [
     "raven_ppt/**/*.py",
