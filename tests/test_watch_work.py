@@ -13,6 +13,8 @@ path-touching tool call, and a parse error there would break looking at files.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from raven.agent.subagent import watch_work
@@ -105,34 +107,75 @@ def test_asked_for_handles_block_content_and_empty_history():
     assert watch_work.asked_for([]) == ""
 
 
-# --- oncall_agent: who on this roster runs work on machines ---
+# --- the declaration: settled at admission, carried on the table ---
 
 
-@pytest.mark.asyncio
-async def test_the_agent_whose_manifest_claims_machines_is_the_one_named(monkeypatch):
-    monkeypatch.setattr(
-        "raven.agent.subagent.dag_machines.runs_on_machines",
-        lambda agent: agent == "Raven-Oncall",
-    )
+def _admitted(tmp_path, entry: dict):
+    """One folder manifest through the real admission path, to a table row.
 
-    assert await watch_work.oncall_agent(["Raven-Code", "Raven-Oncall"]) == "Raven-Oncall"
+    ``discover_product_rows`` for the half that reads the folder, then
+    ``_row_for`` for the half the registry dispenses -- neither reimplemented
+    here, because a stand-in for either would keep passing on the day the real
+    one stops carrying the declaration, which is the failure being pinned.
+    """
+    from raven.agent.subagent.registry import _row_for
+    from raven.agent.subagent.vendored_agents import discover_product_rows
+
+    folder = tmp_path / "raven-oncall"
+    folder.mkdir()
+    (folder / "subagent.json").write_text(json.dumps(entry), encoding="utf-8")
+    (folder / "install.py").write_text("", encoding="utf-8")
+    (cfg,) = discover_product_rows(root=tmp_path)
+    return _row_for(cfg)
 
 
-@pytest.mark.asyncio
-async def test_an_empty_registry_still_names_the_agent(monkeypatch):
-    """The flag is about the agent, not the registry's contents: an empty
-    registry must still name the specialist -- the spawn-side check is what
-    refuses it, and that refusal is how the owner gets asked for a machine."""
-    monkeypatch.setattr("raven.agent.subagent.dag_machines.runs_on_machines", lambda agent: True)
+@pytest.mark.parametrize("kind", ["cli", "acp"])
+@pytest.mark.parametrize("spelling", ["ownsWatchedWork", "owns_watched_work", "runsOnMachines", "runs_on_machines"])
+def test_every_spelling_the_schema_ever_accepted_reaches_the_table(kind, spelling, tmp_path):
+    """Both legacy spellings are what a row or a folder written before the
+    rename carries, and ``Base`` sets ``populate_by_name``, so both were valid.
+    A declaration admitted here has to arrive on the dispensed row: the reader
+    downstream has no other source, so a spelling dropped at admission is a
+    steering that goes quiet on upgrade with nothing said."""
+    row = _admitted(tmp_path, {"name": "Raven-Oncall", "kind": kind, "command": "run", spelling: True})
 
-    assert await watch_work.oncall_agent(["Raven-Oncall"]) == "Raven-Oncall"
+    assert row.owns_watched_work is True
+    assert row.meta().owns_watched_work is True
 
 
-@pytest.mark.asyncio
-async def test_a_roster_nobody_flags_names_nobody(monkeypatch):
-    monkeypatch.setattr("raven.agent.subagent.dag_machines.runs_on_machines", lambda agent: False)
+@pytest.mark.parametrize("kind", ["cli", "acp"])
+def test_a_manifest_without_the_declaration_reaches_the_table_without_it(kind, tmp_path):
+    row = _admitted(tmp_path, {"name": "Raven-Code", "kind": kind, "command": "run"})
 
-    assert await watch_work.oncall_agent(["Raven-Code"]) is None
+    assert row.owns_watched_work is False
+    assert row.meta().owns_watched_work is False
+
+
+# --- oncall_agent: which row on this roster the request belongs with ---
+
+
+def _meta(name: str, *, owns_watched_work: bool):
+    from raven.agent.subagent.backends import AgentMeta
+
+    return AgentMeta(name, "", False, False, owns_watched_work=owns_watched_work)
+
+
+def test_the_row_that_declares_watched_work_is_the_one_named():
+    roster = [_meta("Raven-Code", owns_watched_work=False), _meta("Raven-Oncall", owns_watched_work=True)]
+
+    assert watch_work.oncall_agent(roster) == "Raven-Oncall"
+
+
+def test_a_roster_nobody_flags_names_nobody():
+    assert watch_work.oncall_agent([_meta("Raven-Code", owns_watched_work=False)]) is None
+
+
+def test_a_row_that_cannot_answer_the_question_names_nobody():
+    """Duck-typed rows reach this from the DAG runner and from test doubles; one
+    that never heard of the declaration is not the specialist."""
+    from types import SimpleNamespace
+
+    assert watch_work.oncall_agent([SimpleNamespace(name="Raven-Code")]) is None
 
 
 # --- the nudge itself ---
@@ -157,13 +200,13 @@ class _Response:
 
 
 class _SpawnStub:
+    """Real ``AgentMeta`` rows, because the hook reads the declaration off them."""
+
     def __init__(self, names):
         self._names = names
 
     def _agents(self):
-        from types import SimpleNamespace
-
-        return [SimpleNamespace(name=n) for n in self._names]
+        return [_meta(n, owns_watched_work=n == "Raven-Oncall") for n in self._names]
 
 
 class _Tools:
@@ -201,16 +244,8 @@ def _loop(names=("Raven-Oncall",), verdict='{"watched": true, "paths": ["/tmp/ar
 ACCEPTED = "Subagent [x] started (id: abc123). I'll notify you when it completes."
 
 
-@pytest.fixture
-def oncall_on_roster(monkeypatch):
-    async def fake_oncall(names):
-        return "Raven-Oncall" if "Raven-Oncall" in names else None
-
-    monkeypatch.setattr(watch_work, "oncall_agent", fake_oncall)
-
-
 @pytest.mark.asyncio
-async def test_a_look_at_the_named_path_gains_the_line(oncall_on_roster):
+async def test_a_look_at_the_named_path_gains_the_line():
     loop, state = _loop()
     out = await loop._note_watch_work(
         state, "read_file", {"path": "/tmp/arena/run.sh"}, "file contents", "run /tmp/arena, 25 min budget"
@@ -220,7 +255,7 @@ async def test_a_look_at_the_named_path_gains_the_line(oncall_on_roster):
 
 
 @pytest.mark.asyncio
-async def test_exec_commands_are_searched_for_the_path(oncall_on_roster):
+async def test_exec_commands_are_searched_for_the_path():
     loop, state = _loop()
     out = await loop._note_watch_work(
         state, "exec", {"command": "cd /tmp/arena/runs && bash run.sh"}, "ok", "run /tmp/arena"
@@ -229,7 +264,7 @@ async def test_exec_commands_are_searched_for_the_path(oncall_on_roster):
 
 
 @pytest.mark.asyncio
-async def test_the_judgement_is_paid_once_per_turn(oncall_on_roster):
+async def test_the_judgement_is_paid_once_per_turn():
     loop, state = _loop()
     for _ in range(3):
         await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "run /tmp/arena")
@@ -237,21 +272,21 @@ async def test_the_judgement_is_paid_once_per_turn(oncall_on_roster):
 
 
 @pytest.mark.asyncio
-async def test_a_not_watched_verdict_leaves_every_result_alone(oncall_on_roster):
+async def test_a_not_watched_verdict_leaves_every_result_alone():
     loop, state = _loop(verdict='{"watched": false, "paths": []}')
     out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "read this file for me")
     assert out == "r"
 
 
 @pytest.mark.asyncio
-async def test_a_look_elsewhere_stays_clean_even_on_a_watched_turn(oncall_on_roster):
+async def test_a_look_elsewhere_stays_clean_even_on_a_watched_turn():
     loop, state = _loop()
     out = await loop._note_watch_work(state, "read_file", {"path": "/etc/hosts"}, "r", "run /tmp/arena")
     assert out == "r"
 
 
 @pytest.mark.asyncio
-async def test_after_a_real_oncall_dispatch_the_turn_goes_quiet(oncall_on_roster):
+async def test_after_a_real_oncall_dispatch_the_turn_goes_quiet():
     loop, state = _loop()
     await loop._note_watch_work(state, "spawn", {"subagent": "Raven-Oncall"}, ACCEPTED, "run /tmp/arena")
     out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "run /tmp/arena")
@@ -260,7 +295,7 @@ async def test_after_a_real_oncall_dispatch_the_turn_goes_quiet(oncall_on_roster
 
 
 @pytest.mark.asyncio
-async def test_an_unrelated_spawn_silences_nothing(oncall_on_roster):
+async def test_an_unrelated_spawn_silences_nothing():
     """Reproduced in review: a spawn of another agent read as a hand-off and
     suppressed the next matching path nudge."""
     loop, state = _loop(names=("Raven-Code", "Raven-Oncall"))
@@ -279,7 +314,7 @@ async def test_an_unrelated_spawn_silences_nothing(oncall_on_roster):
         "Error: prompt_template names a file this sub-agent cannot be given",
     ],
 )
-async def test_a_refused_dispatch_of_any_shape_silences_nothing(oncall_on_roster, refusal):
+async def test_a_refused_dispatch_of_any_shape_silences_nothing(refusal):
     loop, state = _loop()
     await loop._note_watch_work(state, "spawn", {"subagent": "Raven-Oncall"}, refusal, "run /tmp/arena")
     out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "run /tmp/arena")
@@ -287,7 +322,7 @@ async def test_a_refused_dispatch_of_any_shape_silences_nothing(oncall_on_roster
 
 
 @pytest.mark.asyncio
-async def test_two_interleaved_turns_never_share_watch_state(oncall_on_roster):
+async def test_two_interleaved_turns_never_share_watch_state():
     """run_turn lets turns from other sessions run concurrently on the one
     loop object: B's dispatch must not silence A, and A's verdict must not
     answer for B."""
@@ -303,7 +338,7 @@ async def test_two_interleaved_turns_never_share_watch_state(oncall_on_roster):
 
 
 @pytest.mark.asyncio
-async def test_a_roster_without_the_specialist_asks_no_judgement(oncall_on_roster):
+async def test_a_roster_without_the_specialist_asks_no_judgement():
     loop, state = _loop(names=("Raven-Code",))
     out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "run /tmp/arena")
     assert out == "r"
@@ -311,10 +346,10 @@ async def test_a_roster_without_the_specialist_asks_no_judgement(oncall_on_roste
 
 
 @pytest.mark.asyncio
-async def test_a_judgement_that_blows_up_never_reaches_the_result(oncall_on_roster, monkeypatch):
+async def test_a_judgement_that_blows_up_never_reaches_the_result(monkeypatch):
     loop, state = _loop()
 
-    async def broken(names):
+    def broken(agents):
         raise RuntimeError("probe exploded")
 
     monkeypatch.setattr(watch_work, "oncall_agent", broken)
@@ -322,43 +357,16 @@ async def test_a_judgement_that_blows_up_never_reaches_the_result(oncall_on_rost
     assert out == "r"
 
 
-# --- the spawn-side half: nowhere to run is refused before anything runs ---
+# --- the spawn itself: nothing stands between the call and the manager ---
 
 
 @pytest.mark.asyncio
-async def test_spawning_a_machineless_oncall_agent_is_refused_with_the_ask(monkeypatch):
-    """The DAG path had this check; the failure that bought it here was a single
-    spawn -- the agent booted, found the registry empty, and the owner learned
-    it one sub-agent run too late."""
-    from raven.agent.subagent import dag_machines as _machines
+async def test_a_spawn_reaches_the_manager(tmp_path, monkeypatch):
+    """Including the specialist, with no machine set up anywhere. The host used
+    to read the owner's registry here and refuse a spawn it found empty; where
+    the work runs is now the sub-agent's own question, asked after it starts."""
+    monkeypatch.setenv("RAVEN_CONNECTIONS", str(tmp_path / "never-written.json"))
     from raven.agent.subagent.spawn_tool import SpawnTool
-
-    async def fake_verdict(agents, **kwargs):
-        return _machines.Verdict(agent=agents[0], usable=0, listed=0)
-
-    monkeypatch.setattr(_machines, "verdict_for_async", fake_verdict)
-
-    class _Manager:
-        async def spawn(self, **kwargs):
-            raise AssertionError("nothing may be dispatched")
-
-    tool = SpawnTool(manager=_Manager())
-    out = await tool.execute("watch a case", "run the case", subagent="Raven-Oncall")
-
-    assert "Nothing was dispatched" in out
-    for asked in ("port", "private key", "installed", "budget"):
-        assert asked in out, f"the owner must be asked for the {asked}"
-
-
-@pytest.mark.asyncio
-async def test_a_spawn_nobody_answers_for_dispatches_as_before(monkeypatch, tmp_path):
-    from raven.agent.subagent import dag_machines as _machines
-    from raven.agent.subagent.spawn_tool import SpawnTool
-
-    async def fake_verdict(agents, **kwargs):
-        return None
-
-    monkeypatch.setattr(_machines, "verdict_for_async", fake_verdict)
 
     class _Manager:
         def __init__(self, tmp):
@@ -378,7 +386,7 @@ async def test_a_spawn_nobody_answers_for_dispatches_as_before(monkeypatch, tmp_
 
     mgr = _Manager(tmp_path)
     tool = SpawnTool(manager=mgr)
-    out = await tool.execute("do a thing", "the task", subagent="Raven-Code")
+    out = await tool.execute("watch a case", "run the case", subagent="Raven-Oncall")
 
     assert mgr.spawned and out == "spawned ok"
 
@@ -387,62 +395,15 @@ async def test_a_spawn_nobody_answers_for_dispatches_as_before(monkeypatch, tmp_
 
 
 @pytest.mark.asyncio
-async def test_a_machineless_refusal_keeps_the_turn_nudged_and_sharpens_it(oncall_on_roster):
-    """The first live run: spawn refused for having no machine, and the plain
-    flag silenced every look after it -- at exactly the moment the model chose
-    to run trials by hand."""
-    loop, state = _loop()
-    refusal = "'Raven-Oncall' runs work on the owner's machines...\nNothing was dispatched. Ask the owner..."
-    out = await loop._note_watch_work(state, "spawn", {"subagent": "Raven-Oncall"}, refusal, "run /tmp/arena")
-    assert out == refusal, "the refusal itself is not annotated"
-
-    after = await loop._note_watch_work(state, "exec", {"command": "bash /tmp/arena/run.sh"}, "ok", "run /tmp/arena")
-    assert "STOP running this by hand" in after
-    assert "end your turn" in after
-
-
-@pytest.mark.asyncio
-async def test_a_successful_dispatch_still_goes_quiet(oncall_on_roster):
+async def test_a_successful_dispatch_still_goes_quiet():
     loop, state = _loop()
     await loop._note_watch_work(state, "spawn", {"subagent": "Raven-Oncall"}, ACCEPTED, "run /tmp/arena")
     out = await loop._note_watch_work(state, "read_file", {"path": "/tmp/arena/x"}, "r", "run /tmp/arena")
     assert out == "r"
 
 
-def test_the_machineless_nudge_names_the_ask_and_the_stop():
-    line = watch_work.machineless_nudge("Raven-Oncall")
-    assert "STOP" in line
-    for asked in ("ssh", "address/port/user/key", "budget", "jobs at once"):
-        assert asked in line
-    assert "connection add" in line
-
-
 @pytest.mark.asyncio
-async def test_the_refusal_carries_the_runnable_add_command(monkeypatch):
-    """Registration has to be one runnable line. Measured 2026-08-27, before
-    `ops connection` was lifted into this install: the model collected every
-    answer from the owner, found no command to put them in, and hand-ran the
-    work over ssh instead."""
-    from raven.agent.subagent import dag_machines as _machines
-    from raven.agent.subagent.spawn_tool import SpawnTool
-
-    async def fake_verdict(agents, **kwargs):
-        return _machines.Verdict(agent=agents[0], usable=0, listed=0)
-
-    monkeypatch.setattr(_machines, "verdict_for_async", fake_verdict)
-
-    tool = SpawnTool(manager=None)
-    out = await tool.execute("watch a case", "run it", subagent="Raven-Oncall")
-
-    assert "raven ops connection add --non-interactive" in out
-    assert "--transport local" in out, "the this-very-computer shape must be named too"
-    assert "tell them in your reply what you wrote down" in out, (
-        "self-registration of this very computer is allowed, but the owner is told"
-    )
-
-
-@pytest.mark.asyncio
-async def test_a_declined_graph_silences_nothing(oncall_on_roster):
+async def test_a_declined_graph_silences_nothing():
     """Reproduced in review: the declined-graph message carries no error prefix,
     and the old DAG leg searched the serialized call, so naming the on-call
     agent in the graph was enough to read a non-dispatch as a hand-off."""
@@ -459,7 +420,7 @@ async def test_a_declined_graph_silences_nothing(oncall_on_roster):
 
 
 @pytest.mark.asyncio
-async def test_a_graph_that_merely_mentions_the_agent_silences_nothing(oncall_on_roster):
+async def test_a_graph_that_merely_mentions_the_agent_silences_nothing():
     loop, state = _loop(names=("Raven-Code", "Raven-Oncall"))
     await loop._note_watch_work(
         state,
@@ -473,7 +434,7 @@ async def test_a_graph_that_merely_mentions_the_agent_silences_nothing(oncall_on
 
 
 @pytest.mark.asyncio
-async def test_an_accepted_graph_with_an_oncall_node_goes_quiet(oncall_on_roster):
+async def test_an_accepted_graph_with_an_oncall_node_goes_quiet():
     loop, state = _loop(names=("Raven-Code", "Raven-Oncall"))
     await loop._note_watch_work(
         state,

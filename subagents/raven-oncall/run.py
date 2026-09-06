@@ -121,8 +121,7 @@ def connections_registry() -> Path:
     then wrong from the first machine the owner adds, with nothing to say so --
     five byte-identical copies were on this computer when that was noticed. The
     machines belong to the owner, `raven ops connection add` writes to the
-    owner's file, and the host's graph check reads that same file before it will
-    dispatch an on-call node. Three readers, one file.
+    owner's file, and this instance reads that same file. Two readers, one file.
 
     An install that predates this and keeps its own list stays on it: stranding a
     working install to make the point is not worth it.

@@ -90,6 +90,9 @@ class AgentRow:
     config: Any
     """The validated config object. Only the backend factory reads it."""
 
+    owns_watched_work: bool = False
+    """Whether this agent owns run-and-watch work; see ``AgentMeta``."""
+
     def meta(self) -> AgentMeta:
         """This row as the roster renders it."""
         return AgentMeta(
@@ -100,6 +103,7 @@ class AgentRow:
             self.caps.live_progress,
             self.owns,
             self.caps.modes,
+            self.owns_watched_work,
         )
 
 
@@ -140,6 +144,7 @@ def _row_for(cfg: Any) -> AgentRow:
         injectable=Injectable(skills=builtin, mcps=injectable_mcps),
         owns=meta.owns,
         config=cfg,
+        owns_watched_work=meta.owns_watched_work,
     )
 
 

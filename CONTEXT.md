@@ -158,7 +158,11 @@ A row is a name plus a `kind` (`builtin` / `cli` / `acp` / `openai`) plus that k
 connection fields; the `kind` set is closed -- a new kind is a new backend module plus a
 branch in `agent/subagent/backends/__init__.py:build_third_party_backend`, and no plugin
 door for subagent kinds exists (recorded, not promised); `AgentCaps` and `Injectable` are *derived* from it, and are what a
-consumer branches on so that nothing has to switch on the transport.
+consumer branches on so that nothing has to switch on the transport. A declaration a row
+carries (`owns`, `owns_watched_work`) is read once here, where the schema resolves every
+spelling it has ever accepted, and travels on the row and its `AgentMeta`; a consumer that
+re-opened config or a folder manifest for itself would be a second reader free to disagree
+with the table being dispatched against.
 Three sources compose it, weakest first: **Product agent** rows discovered on the
 filesystem, then `builtin` package seeds, then config. `builtin` rows are package seeds
 (`agent/subagent/builtin_agents.py`): they exist whether or not config mentions them, and a
@@ -195,22 +199,17 @@ carried venv and credential readiness; "third-party agent" — these are raven's
 products, and nobody registered them; "builtin" — that is the in-process row, which has
 no subprocess and no launcher.
 
-**Machine** (`raven/agent/subagent/dag_machines.py`):
-A compute host the owner registered with a machine-running agent's Raven install
-via `raven ops connection add`, reported by that agent's
-`raven ops connection doctor --json` as a `{name, usable}` row. An
-on-call-style agent runs outside the dispatching Raven process — on a GPU
-box, a lab workstation, another machine entirely — so the DAG gate consults
-the agent before dispatching a graph that names it and refuses the run with
-an explicit `raven ops connection add` prompt if no usable machine is
-registered. A graph whose nodes would land on more machines than the agent
-lists is refused under the same gate with the missing ones named; once
-settled the chosen machine is injected into every node's prompt so the
-writing and reporting halves of the graph agree on where the numbers came
-from. The check is silent — returning no `Verdict` rather than a blocking
-one — for graphs that name no machine-running agent, for installs
-that have not wired one up, and for agent installs where the doctor cannot
-be run at all; in those cases the graph dispatches exactly as it used to.
+**Machine** (`raven/ops/connections.py`):
+A compute host the owner registered with `raven ops connection add`, held in
+`connections.json` beside the config or wherever `RAVEN_CONNECTIONS` points.
+An on-call-style agent runs its work outside the dispatching Raven
+process — on a GPU box, a lab workstation, another machine entirely — and the
+host's whole part in that is keeping the registry and handing it over: a
+launcher points the agent's `RAVEN_CONNECTIONS` at the owner's store rather
+than copying rows into the agent's own home. Which machine a job lands on,
+and whether it can run at all, is settled inside the agent that runs it.
+Nothing on the dispatch path reads the registry, so no graph and no spawn is
+ever refused over the state of it.
 _Avoid_: "host" / "server" / "node" (too broad, no link to the
 `ops connection` registry that supplies the rows); "GPU box" (only some are
 GPU hosts, and the term covers any registered compute destination);

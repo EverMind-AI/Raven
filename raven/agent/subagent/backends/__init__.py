@@ -73,6 +73,18 @@ class AgentMeta(NamedTuple):
     into this slot with nothing raising.
     """
 
+    owns_watched_work: bool = False
+    """Whether this agent owns work that has to be run AND watched to an outcome.
+
+    Read off the validated config rather than re-opened from the roster or the
+    folder's manifest, so the legacy spellings the schema accepts are honoured
+    once, at admission, instead of being taught to a second reader that would
+    disagree with the table the loop dispatches against.
+
+    Not rendered into any tool description: it decides which agent a run-and-watch
+    request is steered toward, which is a routing question, not a capability the
+    model chooses between."""
+
 
 def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
     """The advertised capabilities of one agent config, any kind.
@@ -124,6 +136,8 @@ def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
             True,
             True,
             getattr(cfg, "owns", None) or "",
+            (),
+            bool(getattr(cfg, "owns_watched_work", False)),
         )
     modes: tuple[Any, ...] = ()
     if kind == "acp":
@@ -148,6 +162,7 @@ def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
         kind == "acp",
         getattr(cfg, "owns", None) or "",
         modes,
+        bool(getattr(cfg, "owns_watched_work", False)),
     )
 
 

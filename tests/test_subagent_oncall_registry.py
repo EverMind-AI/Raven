@@ -40,8 +40,8 @@ def roots(tmp_path):
 
 
 def test_the_owners_registry_is_what_an_instance_is_pointed_at(monkeypatch, roots):
-    """`raven ops connection add` writes here, and the host's graph check reads
-    here. An instance reading anywhere else is a third answer to one question."""
+    """`raven ops connection add` writes here and the instance reads here. An
+    instance reading anywhere else is a second answer to one question."""
     host, state = roots
     (host / "connections.json").write_text("{}", encoding="utf-8")
 

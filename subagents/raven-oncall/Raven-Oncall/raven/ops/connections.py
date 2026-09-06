@@ -98,9 +98,9 @@ class Problem:
     """One thing wrong with a row. ``blocking`` means the machine cannot be used.
 
     The two levels are not decoration. A blocking problem is the ground a caller
-    refuses on -- the host's graph check asks exactly this before dispatching an
-    on-call node -- while the rest is worth telling the owner and worth nobody's
-    refusal. Folding them together would mean a registry that predates a field
+    refuses on -- an agent reading this list to pick a machine has nowhere to put
+    the work without one -- while the rest is worth telling the owner and worth
+    nobody's refusal. Folding them together would mean a registry that predates a field
     reads as broken, and a check that condemns working machines gets turned off.
     """
 

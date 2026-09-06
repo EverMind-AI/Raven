@@ -1182,14 +1182,23 @@ class ThirdPartyCliSubagentConfig(Base):
     name: str
     kind: Literal["cli"] = "cli"
     description: str = ""
-    runs_on_machines: bool = False
-    """This agent runs work on the owner's registered machines (the on-call
-    shape). The host's pre-dispatch machine check and the watch-work nudge key
-    on it: an agent so marked is refused a dispatch while the registry is
-    empty, and is the one a run-and-watch request is steered toward. Declared
-    in the manifest rather than probed off the checkout's binary -- the probe
-    was a subprocess per roster per process, and what it really asked was this
-    one bit."""
+    owns_watched_work: bool = Field(
+        default=False,
+        # Both spellings of the old name. ``Base`` sets ``populate_by_name``, so
+        # a row written before this field was renamed is valid under either
+        # ``runsOnMachines`` or ``runs_on_machines``, and dropping one is as
+        # silent as dropping both: the model ignores the unknown key and dumps
+        # the new field as False, which cannot be told from the owner turning it
+        # off. A dump re-serialises under the new name only, so a rewrite heals.
+        validation_alias=AliasChoices("ownsWatchedWork", "owns_watched_work", "runsOnMachines", "runs_on_machines"),
+    )
+    """This agent owns work that has to be run AND watched to an outcome (the
+    on-call shape). The watch-work nudge keys on it: an agent so marked is the
+    one a run-and-watch request is steered toward. Where that work runs is the
+    agent's own business -- the host records no machine for it and checks none.
+    Declared in the manifest rather than probed off the checkout's binary --
+    the probe was a subprocess per roster per process, and what it really asked
+    was this one bit."""
     preset: str | None = None
     """Which built-in preset this entry was created from, or ``None`` for a
     hand-written one.
@@ -1496,14 +1505,23 @@ class ThirdPartyAcpSubagentConfig(Base):
     """Operator override for the roster line. Blank means "use what the handshake
     reported" (``agentInfo.name`` plus version), which is the point of ACP: the
     agent describes itself, so a human does not have to."""
-    runs_on_machines: bool = False
-    """This agent runs work on the owner's registered machines (the on-call
-    shape). The host's pre-dispatch machine check and the watch-work nudge key
-    on it: an agent so marked is refused a dispatch while the registry is
-    empty, and is the one a run-and-watch request is steered toward. Declared
-    in the manifest rather than probed off the checkout's binary -- the probe
-    was a subprocess per roster per process, and what it really asked was this
-    one bit."""
+    owns_watched_work: bool = Field(
+        default=False,
+        # Both spellings of the old name. ``Base`` sets ``populate_by_name``, so
+        # a row written before this field was renamed is valid under either
+        # ``runsOnMachines`` or ``runs_on_machines``, and dropping one is as
+        # silent as dropping both: the model ignores the unknown key and dumps
+        # the new field as False, which cannot be told from the owner turning it
+        # off. A dump re-serialises under the new name only, so a rewrite heals.
+        validation_alias=AliasChoices("ownsWatchedWork", "owns_watched_work", "runsOnMachines", "runs_on_machines"),
+    )
+    """This agent owns work that has to be run AND watched to an outcome (the
+    on-call shape). The watch-work nudge keys on it: an agent so marked is the
+    one a run-and-watch request is steered toward. Where that work runs is the
+    agent's own business -- the host records no machine for it and checks none.
+    Declared in the manifest rather than probed off the checkout's binary --
+    the probe was a subprocess per roster per process, and what it really asked
+    was this one bit."""
     preset: str | None = None
     """Which built-in preset this entry was created from, or ``None`` for a
     hand-written one. Provenance only -- see the cli config for why the web UI
