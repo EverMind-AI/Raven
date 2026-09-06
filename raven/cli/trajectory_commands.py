@@ -14,8 +14,9 @@ wrappers over the trajectory layer:
   a Bug Report (record + shippable package with the problem metadata) for an
   explicit attempt and description (:mod:`raven.trajectory.bugreport`). Unlike
   ``report``, its deliverable embeds the trajectory inside a problem-metadata
-  envelope and is gated by the redaction classification; ``blocked`` cannot be
-  bypassed by any flag.
+  envelope and is gated by the redaction classification: review findings are
+  adjudicated per item, and shipping a review report always takes an explicit
+  risk authorization (never implied by ``--yes``).
 - ``replay``  — feed a bundle's recorded model replies and tool results back
   through the live harness (:func:`raven.trajectory.replay.run_replay`; no
   real tool code runs, no spans are emitted).
@@ -296,7 +297,14 @@ def trajectory_report_bug(
     accept_risk: bool = typer.Option(
         False,
         "--accept-risk",
-        help="Grant the separate needs_review authorization (--yes does not imply it)",
+        help="Authorize a review report: acknowledges confirmed-sensitive items"
+        " and grants the risk consent (--yes does not imply it)",
+    ),
+    keep_findings: bool = typer.Option(
+        False, "--keep-findings", help="Keep every suspected finding as-is (confirms they are harmless)"
+    ),
+    redact_findings: bool = typer.Option(
+        False, "--redact-findings", help="Replace every suspected finding with [REDACTED:user-confirmed]"
     ),
     workspace: Path | None = typer.Option(
         None, "--workspace", "-w", help="Workspace holding the session records (default: the configured workspace)"
@@ -309,9 +317,11 @@ def trajectory_report_bug(
 
     The package embeds a redacted, path-sanitized Trajectory Report inside a
     problem-metadata envelope (completeness, environment, redaction summary).
-    Review findings are adjudicated per item on a TTY; without one, --yes is
-    required and any review report additionally requires --accept-risk
-    (findings ship as kept, private-key hits as acknowledged).
+    Review findings are adjudicated per item on a TTY (a flag pre-decides the
+    items of its kind); without one, --yes is required, suspected findings
+    need --keep-findings or --redact-findings, and every review report needs
+    --accept-risk — a run missing flags fails listing all items and every
+    missing flag at once, producing nothing.
     """
     from raven.trajectory import bugreport as breport
     from raven.trajectory import review as treview
@@ -324,6 +334,11 @@ def trajectory_report_bug(
         raise typer.Exit(code=1)
     if severity and severity not in breport.SEVERITIES:
         console.print(f"[red]--severity must be one of: {', '.join(breport.SEVERITIES)}[/red]")
+        raise typer.Exit(code=1)
+    if keep_findings and redact_findings:
+        console.print(
+            "[red]--keep-findings and --redact-findings are mutually exclusive; nothing was collected or pinned.[/red]"
+        )
         raise typer.Exit(code=1)
 
     interactive = _stdin_is_tty()
@@ -352,29 +367,58 @@ def trajectory_report_bug(
         for reason in reasons:
             console.print(f"  - {escape(reason)}", highlight=False)
 
-    def _decide(items: list, reasons: list[str]) -> list:
-        if interactive:
-            from raven.cli import trajectory_browse as tbrowse
-            from raven.cli._styles import RAVEN_STYLE
+    def _print_review_failure(items: list, reasons: list[str], missing: list[str]) -> None:
+        from raven.cli import trajectory_browse as tbrowse
 
-            try:
-                return tbrowse.make_review_decider(tbrowse._require_questionary(), RAVEN_STYLE)(items, reasons)
-            except (tbrowse._ActionCancelledError, tbrowse._CancelledError) as exc:
-                # Esc/Ctrl-C during adjudication: the CLI has no outer screen
-                # to unwind to, so both mean "cancel this report".
-                raise treview.ReviewCancelledError("cancelled from the review screen") from exc
-        if not accept_risk:
-            # Deciding needs authorization a script has not granted; stop
-            # before any further export work (the staging cleanup still runs).
-            _deny_noninteractive(reasons)
-            raise typer.Exit(code=1)
-        return [
-            treview.ReviewDecision(
-                item.id,
-                treview.ACTION_ACKNOWLEDGED if item.kind == treview.KIND_CONFIRMED else treview.ACTION_KEPT,
-            )
-            for item in items
-        ]
+        console.print(f"[red]The redaction needs review; {len(items)} item(s) require your decision:[/red]")
+        for warning in tbrowse._review_warnings(reasons):
+            console.print(f"  [yellow]! {escape(warning)}[/yellow]", highlight=False)
+        index_by_id = {item.id: index for index, item in enumerate(items, 1)}
+        for index, item in enumerate(items, 1):
+            tbrowse._print_review_item(item, index, len(items), index_by_id)
+        console.print(f"[red]Pass: {'; '.join(missing)} (--yes does not imply them).[/red]")
+
+    def _decide(items: list, reasons: list[str]) -> list:
+        if not interactive:
+            # Missing flags are judged on the ORIGINAL items, before any
+            # early return or decision application: otherwise a run whose
+            # items are all flag-covered but that lacks --accept-risk would
+            # keep exporting and fail late without the item listing (a
+            # redact run would even rewrite the context before failing).
+            missing = []
+            if any(item.kind == treview.KIND_SUSPECTED for item in items) and not (keep_findings or redact_findings):
+                missing.append("--keep-findings or --redact-findings")
+            if not accept_risk:
+                missing.append("--accept-risk")
+            if missing:
+                _print_review_failure(items, reasons, missing)
+                raise typer.Exit(code=1)
+        flag_decisions: list = []
+        remaining: list = []
+        for item in items:
+            if item.kind == treview.KIND_CONFIRMED and accept_risk:
+                flag_decisions.append(treview.ReviewDecision(item.id, treview.ACTION_ACKNOWLEDGED))
+            elif item.kind == treview.KIND_SUSPECTED and (keep_findings or redact_findings):
+                action = treview.ACTION_REDACTED if redact_findings else treview.ACTION_KEPT
+                flag_decisions.append(treview.ReviewDecision(item.id, action))
+            else:
+                remaining.append(item)
+        if not remaining:
+            return flag_decisions
+        # Only reachable on a TTY (without one, missing flags exited above
+        # and complete flags leave nothing remaining). Linked groups exist
+        # only among suspected items and the flags cover a kind whole, so a
+        # group is never split between flags and interaction.
+        from raven.cli import trajectory_browse as tbrowse
+        from raven.cli._styles import RAVEN_STYLE
+
+        try:
+            decided = tbrowse.make_review_decider(tbrowse._require_questionary(), RAVEN_STYLE)(remaining, reasons)
+        except (tbrowse._ActionCancelledError, tbrowse._CancelledError) as exc:
+            # Esc/Ctrl-C during adjudication: the CLI has no outer screen
+            # to unwind to, so both mean "cancel this report".
+            raise treview.ReviewCancelledError("cancelled from the review screen") from exc
+        return flag_decisions + decided
 
     exit_code = 0
     try:
