@@ -67,131 +67,33 @@ TWO = [
 ]
 
 
-def test_the_listing_names_the_machines_and_what_they_are(store):
+def test_what_travels_never_carries_the_way_in(store):
+    """The reader does not authenticate, so a key path is only something to
+    misuse -- and it was exactly what the loop went hunting for. Asserted on
+    the projection rather than on a rendering of it: the rendering is each
+    installation's own, and this is the last point under this module's
+    control."""
     store(TWO)
-    text = connections.describe()
-    assert "my CPU box" in text and "the GPU machine" in text
-    assert "4 x A100 80G" in text and "core-minute" in text
+
+    for row in connections.load():
+        projected = connections.shown(row)
+        assert {"host", "port", "user", "key", "transport"}.isdisjoint(projected)
+        assert "id_rsa" not in str(projected) and "root" not in str(projected)
 
 
-def test_the_listing_never_shows_credentials(store):
-    """The agent does not authenticate, so a key path is only something to
-    misuse -- and it was exactly what the loop went hunting for."""
-    store(TWO)
-    text = connections.describe()
-    assert "id_rsa" not in text and "root" not in text
-
-
-def test_two_machines_at_one_address_are_told_apart_by_name(store):
+def test_two_machines_at_one_address_are_told_apart_by_id(store):
     """'on 14.103.100.27' names neither of these."""
     store(TWO)
-    assert connections.get("conn_cpu")["port"] == 58717
-    assert connections.get("conn_gpu")["port"] == 64101
 
+    rows = {row["id"]: row for row in connections.load()}
 
-def test_with_no_connection_it_says_to_ask_rather_than_to_look(store):
-    store([])
-    text = connections.describe()
-    assert "ask" in text.lower()
-    assert "do not look" in text.lower() or "rather than looking" in text.lower()
-
-
-def test_a_campaign_naming_a_connection_gets_its_address(store):
-    store(TWO)
-    meta = {"connection": "conn_gpu", "backend": "process"}
-    got = connections.resolve_into(meta)
-    assert (got["host"], got["port"], got["user"]) == ("14.103.100.27", 64101, "root")
-
-
-def test_a_campaign_without_a_connection_is_untouched(store):
-    """Every campaign written before this exists and must keep running."""
-    store(TWO)
-    meta = {"host": "10.0.0.1", "port": 22, "backend": "process"}
-    assert connections.resolve_into(meta) == meta
-
-
-def test_an_unknown_connection_id_does_not_invent_an_address(store):
-    store(TWO)
-    meta = {"connection": "conn_gone"}
-    assert connections.resolve_into(meta) == meta
-
-
-def test_the_campaigns_own_value_wins_over_the_connection(store):
-    """A campaign may override one field without describing the machine again."""
-    store(TWO)
-    got = connections.resolve_into({"connection": "conn_cpu", "port": 2222})
-    assert got["port"] == 2222 and got["host"] == "14.103.100.27"
+    assert rows["conn_cpu"]["port"] == 58717
+    assert rows["conn_gpu"]["port"] == 64101
 
 
 def test_a_missing_store_is_no_connections_not_a_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(connections, "store_path", lambda: tmp_path / "nope.json")
     assert connections.load() == []
-
-
-def test_the_listing_says_what_each_machine_has_installed(store):
-    """The deciding attribute, and it is not what the machine is made of.
-
-    Measured 2026-08-17 on the real pair: CalculiX runs only on the box with the
-    A800s, because its binary needs a glibc the 32-core box does not have. "A
-    CPU-only solver belongs on the CPU box" would pick the one machine that
-    cannot run it.
-    """
-    store(TWO)
-    text = connections.describe()
-    assert "CalculiX" in text and "OpenFOAM" in text
-
-
-def test_the_listing_names_the_three_shapes_a_target_can_have(store):
-    """This listing is the first stop for anything that needs a machine, so the
-    fork belongs in it.
-
-    Measured twice on 2026-08-21: a watch task came through here, picked the right
-    machine off this very text -- its own reasoning quoted the sentinel line out of
-    the software field -- and then built its own monitor out of write_file and
-    cron. Nothing on the way had said a campaign could be a watch; every sign said
-    case, trial, round. A document saying so would not have been read at the
-    moment of choosing, and this text is.
-    """
-    store(TWO)
-    text = connections.describe()
-
-    for shape in ("optimize", "complete", "condition"):
-        assert shape in text
-    assert "readings" in text, "what a watch declares instead of a case"
-    assert "looks" in text, "a budget that is not machine time"
-    assert "ops_check_later" in text and "cron" in text, (
-        "the alternative it actually reached for has to be named, or the loop is "
-        "choosing between one option it was told about and one it thought of itself"
-    )
-
-
-def test_the_listing_says_where_the_id_goes(monkeypatch):
-    """An id with no destination gets dropped.
-
-    Measured 2026-08-19: a loop reached this listing, picked the right machine,
-    wrote "that one is this laptop, I will just run it here", and hand-ran five
-    trials. The run before it skipped the listing, was handed ops_declare by a
-    tool result, and used it. The listing named a parameter and no call.
-    """
-    from raven.ops.connections import describe
-
-    monkeypatch.setattr(
-        "raven.ops.connections.load",
-        lambda: [
-            {"id": "conn_here", "display_name": "the laptop", "kind": "cpu"},
-        ],
-    )
-
-    out = describe()
-
-    assert "ops_declare" in out, "the next call has to be named, not just the parameter"
-    assert "costs nothing and runs nothing" in out, (
-        "declaring is free, and a loop weighing whether it is worth it needs that"
-    )
-    assert "not distance" in out, (
-        "the machine being this computer is what made it decide the machinery was "
-        "unnecessary; the listing has to answer that where it arises"
-    )
 
 
 def test_a_broken_file_is_not_reported_as_an_empty_one(store, tmp_path, monkeypatch):
@@ -208,13 +110,10 @@ def test_a_broken_file_is_not_reported_as_an_empty_one(store, tmp_path, monkeypa
     path.write_text('{"connections": [{"id": "conn_gpu", "host": "1.2.3.4",}]}', encoding="utf-8")
 
     found = connections.read()
-    text = connections.describe()
 
     assert found.state == connections.UNREADABLE
     assert "not valid JSON" in found.detail
-    assert "cannot be read" in text
-    assert "NOT the same as having no machines" in text
-    assert "no machine is set up" not in text.lower(), "the false half of the old answer"
+    assert connections.load() == [], "and the rows are empty, which is the half that misled"
 
 
 def test_an_absent_file_still_reads_as_absent(tmp_path, monkeypatch):
@@ -222,22 +121,6 @@ def test_an_absent_file_still_reads_as_absent(tmp_path, monkeypatch):
 
     assert connections.read().state == connections.MISSING
     assert connections.load() == []
-
-
-def test_the_request_names_every_field_the_owner_has_to_supply(store):
-    """The loop cannot fill any of this in, so the ask has to be complete.
-
-    The old text said to ask the owner and never said what for, which leaves the
-    loop to compose the question -- and the fields it cannot see are exactly the
-    ones it would leave out.
-    """
-    store([])
-
-    text = connections.describe()
-
-    for asked in ("port", "private key", "installed", "budget", "at once", "directories"):
-        assert asked in text, asked
-    assert "raven ops connection add" in text
 
 
 def test_a_row_with_no_way_in_blocks_and_a_thin_one_does_not(store):
