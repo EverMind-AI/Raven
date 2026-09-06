@@ -636,14 +636,19 @@ async def instances_set_mode(
 ) -> dict[str, Any]:
     """Put one instance in an operating mode (``subagents.instance.set_mode``).
 
-    The user's own half of what the spawn call's ``mode`` does for the main
-    agent: a direct chat is a continuation, so the effort level has to be
-    changeable without abandoning the conversation to start a new one at a
-    different level -- which is the only thing the roster could offer while the
-    modes were separate agents.
+    The one thing that outranks the session's tier, and a person sets it: a
+    direct chat is a continuation, so the effort level has to be changeable
+    without abandoning the conversation to start a new one at a different level
+    -- which is the only thing the roster could offer while the modes were
+    separate agents. Nothing a dispatch names competes with it; the spawn tool
+    offers no mode at all.
 
-    Answers with the mode in force and the menu it came from, so a caller can
-    render the control from this one reply. An unknown mode is the manager's
+    Answers with this instance's own override, what it inherits when it has none,
+    and the menu both came from, so a caller can render the control from this one
+    reply. The two are reported apart rather than collapsed into an effective
+    mode: collapsing them would make ``clear`` unobservable, since a cleared
+    instance and one explicitly set to the session's tier would read identically.
+    An unknown mode is the manager's
     ``ValueError``, surfaced as a refusal naming what the agent does offer,
     never a silent no-op that would leave the next turn at the old effort with
     the UI showing the new one.
@@ -652,8 +657,10 @@ async def instances_set_mode(
     sentinel mode id -- an agent is free to call one of its own modes
     "default", and a sentinel would take that name away from it:
 
-    - neither field: **report** what is in force and what is on offer;
-    - ``clear: true``: drop the override, back to the agent's own default;
+    - neither field: **report** the override, what is inherited, and what is on offer;
+    - ``clear: true``: drop the override. The session's tier is then what the next
+      dispatch runs at, clamped to this agent's menu; only where there is no tier
+      to inherit does the agent's own default run;
     - ``mode: "<id>"``: switch, from the instance's next turn on.
     """
     manager = _manager(agent_loop_factory)
@@ -669,11 +676,15 @@ async def instances_set_mode(
         # docstring above argues against, and the caller would render the mode
         # it asked for over an override that was never recorded.
         if reading:
-            return {"mode": None, "availableModes": []}
+            return {"mode": None, "inherited": None, "availableModes": []}
         raise ConfigValidationError("sub-agents are not configured, so an instance has no mode to set")
     if reading:
         return {
             "mode": manager.instance_mode(session_key, agent, handle),
+            # What runs when the override is absent. Reported alongside it because
+            # `mode: null` alone reads as "the agent's own default", which stopped
+            # being true the moment a session tier could be inherited here.
+            "inherited": manager.resolve_mode(session_key, agent, None),
             "availableModes": [
                 {"id": m.id, "name": m.name, "description": m.description} for m in manager.agent_modes(agent)
             ],
@@ -693,6 +704,7 @@ async def instances_set_mode(
         raise ConfigValidationError(str(exc)) from exc
     return {
         "mode": applied,
+        "inherited": manager.resolve_mode(session_key, agent, None),
         "availableModes": [
             {"id": m.id, "name": m.name, "description": m.description} for m in manager.agent_modes(agent)
         ],

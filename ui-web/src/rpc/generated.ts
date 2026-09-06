@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 160 methods, 89 component schemas.
+// 161 methods, 89 component schemas.
 
 /* eslint-disable */
 /**
@@ -1988,7 +1988,27 @@ export interface SubagentsInstanceSetModeParams {
 }
 export interface SubagentsInstanceSetModeResult {
   /**
-   * The mode now in force, or null when the agent's own default is. Null is the ordinary answer to a read with no override set and to every clear, not an error.
+   * This instance's own override, or null when it has none. Null is the ordinary answer to a read with no override set and to every clear, not an error.
+   */
+  mode?: string | null;
+  /**
+   * What a dispatch runs at when there is no override: this session's tier, clamped to what the agent offers. Null when nothing is inherited and the agent's own default is what runs.
+   */
+  inherited?: string | null;
+  availableModes?: {
+    id: string;
+    name?: string;
+    description?: string;
+  }[];
+}
+export interface SessionSetModeParams {
+  session_key: string;
+  mode?: string;
+  clear?: boolean;
+}
+export interface SessionSetModeResult {
+  /**
+   * The tier now in force.
    */
   mode?: string | null;
   availableModes?: {
@@ -3583,6 +3603,7 @@ export interface RpcMethods {
   'subagents.instance.forget': { params: SubagentsInstanceForgetParams; result: SubagentsInstanceForgetResult };
   'subagents.instance.steer': { params: SubagentsInstanceSteerParams; result: SubagentsInstanceSteerResult };
   'subagents.instance.set_mode': { params: SubagentsInstanceSetModeParams; result: SubagentsInstanceSetModeResult };
+  'session.set_mode': { params: SessionSetModeParams; result: SessionSetModeResult };
   'system.hello': { params: SystemHelloParams; result: SystemHelloResult };
   'system.ping': { params: SystemPingParams; result: SystemPingResult };
   'system.version': { params: SystemVersionParams; result: SystemVersionResult };
@@ -3803,6 +3824,7 @@ export const RPC_METHODS = [
   "session.pin",
   "session.resume",
   "session.save",
+  "session.set_mode",
   "session.status",
   "session.steer",
   "session.title",
