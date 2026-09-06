@@ -89,6 +89,9 @@ CANVAS_W, CANVAS_H = 13.333, 7.5
 # The safe area. Type outside it reads as falling off the page, and a projector
 # crops less predictably than a screen.
 MARGIN = 0.72
+# A plane's corner, in inches rather than as a share of its short side, so a tall panel
+# and a one-line strip on the same page come out with the same curve.
+PLANE_RADIUS_IN = 0.10
 # One gap, everywhere. Six different gaps on one page is what "no structure" looks
 # like; a single number is what makes a three-card row read as three cards.
 GUTTER = 0.28
@@ -319,11 +322,36 @@ class Frame(namedtuple("Frame", "kicker title body footer")):
     rail or a full-bleed opener is made of -- every helper that takes a frame takes
     yours without knowing the difference.
 
-    `body` is the room the page may use, which is more than most pages use. `holding`
-    is what to do with the difference.
+    `body` is the room the page may use, which is more than most pages use. `laying`
+    and `holding` are the two things to do with the difference, and one of them has to
+    be done: a body used down to 60% of its height and left empty under that is the
+    commonest defect a delivered deck has.
     """
 
     __slots__ = ()
+
+    def laying(self, *heights, gutter=GUTTER):
+        """A cursor down the body with the leftover already spent between the bands.
+
+        `stack(frame.body).spread(*heights)` in one call, because the version that took
+        two was not written: the room a page is given is not the room it holds, and every
+        cursor that walks the body top-down leaves the difference at the foot unless it
+        is told otherwise. Eleven of eighteen pages of one delivered run ended their
+        content between 60% and 70% down; the call that fixes it existed the whole time.
+
+        Pass the bands and take them back in the same order, and **no `skip` between
+        them** -- the gaps are what the leftover became, so skipping one overruns the
+        body by exactly what was skipped:
+
+            down = frame.laying(figure.h, rows.h)
+            band = down.take(figure.h)
+            grid = down.take(rows.h)
+
+        For components. Running copy spread down a region reads worse than copy left at
+        the top of one -- for a page whose body genuinely holds less than it was given,
+        `holding` cuts the region instead of stretching the gaps.
+        """
+        return stack(self.body, gutter).spread(*heights)
 
     def holding(self, *heights):
         """This frame with its body cut to the run these heights add up to.
@@ -347,6 +375,13 @@ class Frame(namedtuple("Frame", "kicker title body footer")):
         whether the render reported a trailing field. The two are made equal instead,
         measured from the heading's edge and to the page's. A run with less slack than
         that difference sits on the safe margin rather than being pushed through it.
+
+        What is under the body is what decides that, so a page that reserved the footer
+        strip is the other case: the white under its body ends at the footer's hairline
+        one `GUTTER` below it, which is the same `GUTTER` that is over it, and an even
+        split already reads even. Correcting anyway lifted the run by the whole
+        `MARGIN - GUTTER` -- measured on two reference pages, 0.44in more air above the
+        run than below, which reads as content pushed down onto the foot.
 
         Because it moves the region and not a cursor, it answers for the page rather
         than for one lane: `columns`, `split_left` and a stack down each lane all come
@@ -383,7 +418,10 @@ class Frame(namedtuple("Frame", "kicker title body footer")):
         slack = self.body.h - sum(float(height) for height in heights)
         if slack <= 0:
             return self
-        above = min(slack, (slack + MARGIN - GUTTER) / 2)
+        # A body that stops a GUTTER short of the footer box is a page that reserved the
+        # strip, and what is under it is that GUTTER rather than the page's margin.
+        below = GUTTER if self.body.y1 <= self.footer.y0 - GUTTER / 2 else MARGIN
+        above = min(slack, (slack + below - GUTTER) / 2)
         return self._replace(
             body=Box(self.body.x0, self.body.y0 + above, self.body.x1, self.body.y1 - (slack - above))
         )
@@ -468,6 +506,27 @@ def _ink_box(shapes):
 # 1.197 ems both times, in the Latin faces and in the CJK one. Reserving the type
 # size alone is a fifth short, which is one line in five landing outside its box.
 _LINE_BOX = 1.2
+# What a *table cell* holding Han has to be given instead, which is a different
+# question from the pitch above and has a different answer.
+#
+# A row height is a floor the renderer may raise, and it raised every one: swept over
+# 32 renders (12, 14, 16 and 20pt against paddings of 0, 0.03, 0.06 and 0.12in, Han
+# and Latin), the height a cell came back at less its padding was 1.400 to 1.425 em
+# for Han at every size, against 1.155 to 1.173 for Latin. Charging 1.2 left each Han
+# row 0.037in short at 12pt through 0.061in at 20pt, and a short row is not a cosmetic
+# matter: the arithmetic the module hands back is then wrong about where the table
+# ends. Measured on a nine-row Han table, `table_size(...).h` came back 0.44in short
+# of the render, so a source note placed at the answer's own `box.y1` set its glyphs
+# 0.08in inside the last row, and `rule(slide, drawn.box, T)` -- the module's own
+# prescription for underlining a table -- landed 0.35in inside it, across a hairline.
+# Anything drawn from `plan.heights` drifts by the same arithmetic, accumulating down
+# the table: a four-row Han table put its last row's progress bar 52 percent above
+# its own boundary rule, in the row above.
+#
+# Zero padding is exempt in the measurement -- the `body_h` floor already clears the
+# renderer there -- but it is not exempted here: the floor is a maximum of the two,
+# so a table that did not need this does not pay for it.
+_CELL_LINE_BOX_HAN = 1.47
 # What `write` and `points` spend on their own margins before a character is set.
 _FRAME_SIDE = 0.04
 _FRAME_ENDS = 0.02
@@ -478,9 +537,67 @@ def _line_h(size, spacing=1.0):
     return size * _LINE_BOX * spacing / 72.0
 
 
+class Run(namedtuple("Run", "text size bold colour")):
+    """One stretch of a line with its own size, weight or colour.
+
+    A paragraph handed to `write` may be a sequence of these instead of a string, and
+    what the sequence buys is the one thing a whole-box style cannot say: the number in
+    the accent and its unit in body ink, on one line. `no_anchor` asks for exactly that
+    -- "set the number or the claim that carries it two steps up the size ladder" -- and
+    until now the only way to comply was a second text box beside the first, or a
+    run-level writer of the author's own. Two live authors wrote one; one of them used
+    it for four lines of this shape:
+
+        write(slide, box, [[Run("\u8425\u6536 "), Run("1.4 \u4ebf\u5143", size=16, bold=True, colour=ACCENT_INK)]], size=14)
+
+    Every field but the text is optional and falls back to the `write` call's own, so a
+    line that needs one emphasised word states one field on one run.
+    """
+
+    __slots__ = ()
+
+    def __new__(cls, text, size=None, bold=None, colour=None):
+        return super().__new__(cls, str(text), size, bold, colour)
+
+
 def _paragraphs(text):
-    """`text` as the list of paragraphs the copy helpers treat it as."""
-    return list(text) if isinstance(text, (list, tuple)) else [text]
+    """`text` as the list of paragraphs the copy helpers treat it as.
+
+    A newline inside a string is one of them. `write` turns it into an `<a:br/>` and the
+    renderer sets a second line, and this used to hand the measurers one paragraph -- so
+    a band measured with `text_size` came back one line short and whatever sat under it
+    was painted over. Two of the picture passages write a title that way and only got
+    away with it by hard-coding the band's height.
+    """
+    # A Run is a tuple, so without these two both would be taken apart field by
+    # field and set as four paragraphs of its repr: one handed in as the whole copy,
+    # and one standing alone where a paragraph was expected.
+    items = [text] if isinstance(text, Run) else (list(text) if isinstance(text, (list, tuple)) else [text])
+    lines = []
+    for item in items:
+        if isinstance(item, Run):
+            lines.append([item])
+            continue
+        if _is_runs(item):
+            lines.append([one if isinstance(one, Run) else Run(one) for one in item])
+            continue
+        lines.extend(str(item).splitlines() or [""])
+    return lines
+
+
+def _is_runs(item) -> bool:
+    """Whether this paragraph is a sequence of runs rather than a string."""
+    return isinstance(item, (list, tuple)) and not isinstance(item, Run)
+
+
+def _flat(line) -> str:
+    """A paragraph's text, whichever way it was written, for measuring and for width."""
+    return "".join(one.text for one in line) if _is_runs(line) else str(line)
+
+
+def _largest(line, size):
+    """The size a paragraph's line box is set by: its tallest run."""
+    return max([one.size or size for one in line], default=size) if _is_runs(line) else size
 
 
 # Where a Latin word may be broken without a hyphen being added, because the
@@ -561,20 +678,31 @@ def _wrapped(line, room, size, face, bold):
     return lines or [""]
 
 
-def _copy_extent(text, width, size, face, bold):
-    """(lines, widest line in inches) for this copy in a box `width` inches across."""
+def _copy_extent(text, width, size, face, bold, spacing=1.0):
+    """(lines, widest line in inches, height in inches) for copy in a box `width` across.
+
+    The height is summed line by line rather than read as the line count times the
+    tallest line in the block: one 26pt heading over four lines of body copy is one
+    tall line and four short ones, and five tall ones comes back nearly an inch over.
+    """
     room = width - 2 * _FRAME_SIDE
     if room <= 0:
         raise ValueError(f"{width:.2f}in is no width to set copy in")
-    lines, widest = 0, 0.0
+    lines, widest, tall = 0, 0.0, 0.0
     for line in _paragraphs(text):
-        broken = _wrapped(str(line), room, size, face, bold)
+        # A line of mixed runs sets at the largest of them, both for how much room it
+        # takes across and for how tall its line box is -- a renderer lays the line out
+        # to its tallest run, so measuring the whole string at the call's own size reads
+        # a 26pt number as body copy and comes back short.
+        at = _largest(line, size)
+        broken = _wrapped(_flat(line), room, at, face, bold)
         lines += len(broken)
+        tall += len(broken) * _line_h(at, spacing)
         for one in broken:
             # Bold sets wider than the estimate for the same string, by the same 1.08
             # a sized column allows for its header.
-            widest = max(widest, _em_width(one, size, face) * (1.08 if bold else 1.0))
-    return lines, widest
+            widest = max(widest, _em_width(one, at, face) * (1.08 if bold else 1.0))
+    return lines, widest, tall
 
 
 def lines_needed(text, width, *, size=BODY_PT, font=None, bold=False):
@@ -600,8 +728,8 @@ def text_size(text, width, *, size=BODY_PT, font=None, bold=False, spacing=1.15)
     face scaled in. It decides a layout, and the render-side measurements still catch
     what it misses.
     """
-    lines, widest = _copy_extent(text, width, size, font, bold)
-    return Box.at(0.0, 0.0, w=min(width, widest + 2 * _FRAME_SIDE), h=lines * _line_h(size, spacing) + 2 * _FRAME_ENDS)
+    _lines, widest, tall = _copy_extent(text, width, size, font, bold, spacing)
+    return Box.at(0.0, 0.0, w=min(width, widest + 2 * _FRAME_SIDE), h=tall + 2 * _FRAME_ENDS)
 
 
 def points_size(items, width, *, size=BODY_PT, font=None, spacing=1.25):
@@ -613,13 +741,13 @@ def points_size(items, width, *, size=BODY_PT, font=None, spacing=1.25):
     and a list stacked against `text_size` comes up short by both of them.
     """
     hang = size * 1.5 / 72.0
-    lines, widest = _copy_extent(items, width - hang, size, font, False)
+    _lines, widest, tall = _copy_extent(items, width - hang, size, font, False, spacing)
     gaps = max(0, len(_paragraphs(items)) - 1) * size * 0.45 / 72.0
     return Box.at(
         0.0,
         0.0,
         w=min(width, widest + hang + 2 * _FRAME_SIDE),
-        h=lines * _line_h(size, spacing) + gaps + 2 * _FRAME_ENDS,
+        h=tall + gaps + 2 * _FRAME_ENDS,
     )
 
 
@@ -655,6 +783,34 @@ def fits(what, box, *, size=BODY_PT, font=None, bold=False, spacing=1.15):
 # On a one-character edit, 1 of 1296 ramp answers moved two steps and 163 of 1296
 # integer answers moved two points or more.
 _RAMP = (NUMBER_PT, TITLE_PT, LEAD_PT, BODY_PT, LABEL_PT)
+
+# What the page gave up to fit. Written to rather than returned, because the caller
+# that asks for a size is not always the one that would report the answer, and a
+# concession nobody wrote down is the one thing the invariants say must not happen:
+# `the_largest_step_this_copy_takes` used to walk the whole ramp and hand back the
+# floor with nothing to say it had, so a page squeezed to the floor read exactly like
+# a page that fit. `what_this_page_gave_up()` empties it, which is how a build reads
+# one page's concessions without inheriting the last one's.
+_GAVE_UP = []
+
+
+def _gave_up(what, asked, got, detail=""):
+    _GAVE_UP.append({"what": what, "asked": asked, "got": got, "detail": detail})
+
+
+def what_this_page_gave_up():
+    """Every concession made since this was last called, and clears the record.
+
+    A concession is a size stepped down, a line broken where the copy did not ask
+    for a break, or a figure shrunk to fit. Ask for it right after drawing a page and
+    put it in the page's own note: the render shows the result and not the fact that
+    something was surrendered to get there.
+
+        for gone in what_this_page_gave_up():
+            print(f"page {n}: {gone['what']} {gone['asked']} -> {gone['got']}")
+    """
+    given, _GAVE_UP[:] = list(_GAVE_UP), []
+    return given
 
 
 # What guessing a size costs, and what `wrap` is worth: ten live pages picked their own
@@ -708,6 +864,13 @@ def the_largest_step_this_copy_takes(text, box, *, font=None, bold=False, spacin
     wants a bigger box or shorter copy, not another build.
     """
     paragraphs = _paragraphs(text)
+    if any(_is_runs(line) for line in paragraphs):
+        raise ValueError(
+            "this answers what one size a block of copy takes, and a run that states its own size is "
+            "not part of that question. Ask about the copy as plain text, then set the emphasised run "
+            "from the answer: size = the_largest_step_this_copy_takes(text, box); write(slide, box, "
+            "[[Run(head, bold=True), Run(rest)]], size=size)"
+        )
     if largest not in _RAMP:
         raise ValueError(
             f"{largest} is not a step of the ramp. Say which step to stop at -- LABEL_PT, BODY_PT, LEAD_PT, "
@@ -717,19 +880,20 @@ def the_largest_step_this_copy_takes(text, box, *, font=None, bold=False, spacin
     for size in _RAMP:
         if size <= largest and _copy_takes(paragraphs, box, size, font, bold, spacing, wrap):
             return size
+    _gave_up("type size", largest, BODY_FLOOR_PT, _first_words(paragraphs))
     return BODY_FLOOR_PT
 
 
 def _copy_takes(paragraphs, box, size, font, bold, spacing, wrap):
     """Whether `paragraphs` sit inside `box` at `size`, on the lines they were given."""
-    lines, _ = _copy_extent(paragraphs, box.w, size, font, bold)
+    lines, _widest, _tall = _copy_extent(paragraphs, box.w, size, font, bold)
     if not wrap and lines > len(paragraphs):
         return False
     if wrap:
         # A line break cannot fall inside a Latin word, so wrapping does not save one
         # that is wider than the box -- the renderer breaks it mid-word instead, and
         # the estimate that counted it as two lines would call that a fit.
-        run = max((_unbroken(one) for one in paragraphs), key=len, default="")
+        run = max((_unbroken(_flat(one)) for one in paragraphs), key=len, default="")
         if run and _em_width(run, size, font) * (1.08 if bold else 1.0) > box.w - 2 * _FRAME_SIDE + 1e-9:
             return False
     return lines * _line_h(size, spacing) + 2 * _FRAME_ENDS <= box.h + 1e-9
@@ -791,6 +955,119 @@ def page(kicker=True, footer=False):
     return Frame(kicker_box, title_box, Box(MARGIN, top, CANVAS_W - MARGIN, bottom), footer_box)
 
 
+# How far `_em_width` can run under the render. Measured at the size a footer note is
+# set at, over seven real notes: the worst came out 3.8% wider than the estimate, and a
+# Latin-only line 12% narrower -- so the risk is all on the mixed CJK side and this is
+# five percent rather than the two an earlier sample of longer strings suggested.
+# Charged against a lane wherever the answer is a refusal, so the one-line answer is not
+# the one the render disagrees with. What it costs is a note between 9.80in and 10.09in
+# being asked to shorten when it would just have fitted; what it buys is that a note
+# which renders onto a second line is not passed as one, and the second line of a footer
+# is drawn into the page's own margin.
+_ESTIMATE_SLACK = 1.05
+
+
+def footer(slide, box, theme, *, note=None, number=True, colour=None, font=None, cjk_font=None):
+    """The page's own bottom edge: a hairline, an optional note, and the page number.
+
+    `page(footer=True)` has always handed back a footer region and nothing drew in it,
+    so twenty-nine live pages out of twenty-nine reserved the strip and left it empty.
+    What that costs is not the number: a body ending two thirds down an otherwise blank
+    page reads as unfinished, and a rule across the foot is what tells a reader the
+    page ends there because it was meant to.
+
+    The number is a real `slidenum` field rather than a digit, so it stays right when a
+    page is inserted ahead of it. Every bundled template defines a page-number
+    placeholder on its master and none of them puts one on a page: python-pptx does not
+    clone a footer placeholder onto a slide, so a deck built by cloning came out with
+    no page numbers at all.
+
+    `colour` is for a template that paints its own band across the foot -- the note and
+    the number have to read on that band, and the theme's `muted` is chosen against the
+    page's ground.
+
+    `note` is one line. The strip is the page's bottom edge and there is nothing under
+    it but the margin, so a note that wraps is a note drawn outside the page rather than
+    a taller footer -- and with autofit off that is what it did, silently. So the length
+    is measured here and a second line comes back as this call refusing, with the width
+    it had and the width it needed.
+    """
+    ink = _paint(theme, colour, "muted")
+    line = Box.at(box.x0, box.y0, w=box.w, h=0.008)
+    bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, *line.pptx())
+    bar.fill.solid()
+    bar.fill.fore_color.rgb = _rgb(_paint(theme, None, "grid"))
+    bar.line.fill.background()
+    # Directly under the hairline and the rest of the strip is the note's: started
+    # 0.10in down, its 0.20in box was 0.07in shorter than the single 12pt line it holds,
+    # and the last 0.04in of every note on every page set below the strip.
+    top = box.y0 + line.h
+    room = max(0.2, box.h - line.h)
+    lane = box.w - 1.6
+    if note:
+        # `_em_width` runs within a percent of the render, measured over five strings at
+        # two sizes, over-estimating Latin and under-estimating CJK. The lane is charged
+        # that percent, so a note that only just fits is not reported as fitting.
+        # The width the test above actually allows, so the refusal can name it. Printing
+        # the bare lane instead told an author a 10.21in note did not fit 10.29in: true,
+        # because the lane is charged the estimate's slack and the frame's own margins,
+        # and unusable, because the two numbers printed say it fits. That author cut the
+        # note to just under the width it was shown and the next build failed the same
+        # way -- one iteration spent on a message that reported a different pair of
+        # numbers than the decision used.
+        allowed = lane / _ESTIMATE_SLACK - 2 * _FRAME_SIDE
+        width = _em_width(note, KICKER_PT, font)
+        if lines_needed(note, lane / _ESTIMATE_SLACK, size=KICKER_PT, font=font) > 1:
+            over = max(1, round(len(note) * (width - allowed) / width)) if width > 0 else 1
+            raise ValueError(
+                f"a footer note is one line and this one wraps: {width:.2f}in of copy where the strip "
+                f"allows {allowed:.2f}in beside the page number -- about {over} characters too many. "
+                f"(The strip is {lane:.2f}in wide; the rest is the frame's margins and the margin the "
+                f"width estimate is charged against the render.) Under the strip is the page's own "
+                f"margin, so a second line is drawn off the page. Shorten it: the source stays and the "
+                f"least of what follows it goes."
+            )
+        write(slide, Box.at(box.x0, top, w=lane, h=room), note,
+              size=KICKER_PT, colour=ink, font=font, cjk_font=cjk_font, align="left")
+    if number:
+        holder = write(slide, Box.at(box.x1 - 1.2, top, w=1.2, h=room), "00",
+                       size=KICKER_PT, colour=ink, font=font, cjk_font=cjk_font, align="right")
+        _as_slide_number(holder)
+    return Drawn(_bare(bar), line)
+
+
+def _as_slide_number(drawn):
+    """Turn a written run into the field PowerPoint renumbers.
+
+    The run's own properties move onto the field rather than being dropped with it, or
+    the number comes back at the theme's default size in the theme's default colour --
+    the one thing an author cannot see from the file they just wrote.
+    """
+    # `write` hands back a Drawn whose first field is the *text frame*, not the shape,
+    # so both have to be accepted here or the field is never written and the number
+    # stays the literal that was measured with.
+    target = getattr(drawn, "shape", drawn)
+    frame = getattr(target, "text_frame", target)
+    if not getattr(frame, "paragraphs", None):
+        return drawn
+    paragraph = frame.paragraphs[0]._p
+    run = paragraph.find(f"{{{_A}}}r")
+    if run is None:
+        return drawn
+    field = paragraph.makeelement(
+        f"{{{_A}}}fld", {"id": "{2B7A9F1C-4E3D-4A5B-9C8D-1F2E3A4B5C6D}", "type": "slidenum"}
+    )
+    properties = run.find(f"{{{_A}}}rPr")
+    if properties is not None:
+        # Moved, not copied: the run this came off is replaced on the next line.
+        field.append(properties)
+    text = field.makeelement(f"{{{_A}}}t", {})
+    text.text = "1"
+    field.append(text)
+    paragraph.replace(run, field)
+    return drawn
+
+
 def rule(slide, box, theme, thickness=0.03, colour=None):
     """A hairline under a box: a chart's baseline, a table's header, a real divider.
 
@@ -812,23 +1089,56 @@ def rule(slide, box, theme, thickness=0.03, colour=None):
     return Drawn(_bare(shape), drawn)
 
 
-def plane(slide, box, theme, tint="surface", radius=False):
+def plane(slide, box, theme, tint="surface", radius=True, opacity=1.0):
     """Paint a region, so the page's divisions are visible rather than implied.
 
     `tint` names a theme colour -- "surface" for a grouped zone, "accent_soft" for
     the one zone that carries the page's answer. No outline: an edge and a tint
     together read as a form to fill in.
+
+    `opacity` below 1 makes it a veil rather than a ground, which is the one way to
+    set copy over a photograph and have it stay readable: the picture shows through
+    and the type has something even to sit on. Three of the twelve pages of a
+    reference deck are a full-bleed photograph with a title on it, and without this
+    an author has two choices, both bad -- white type straight onto the picture, which
+    `unreadable` reports where the picture happens to be pale, or an opaque panel,
+    which is the photograph thrown away. A dark veil at 0.35 to 0.55 over a photograph
+    is the usual setting.
+
+    Rounded by default, and `radius=False` for a band that runs to the trim, where a
+    corner radius on an edge the page cuts off reads as a mistake. The radius is
+    `PLANE_RADIUS_IN` of an inch and not a share of the shape: the adjustment python-pptx
+    takes is a fraction of the short side, so one number gave a 4.8in panel a visible
+    curve and a 0.6in strip a 2.6pt one that reads as square. Every plane on a page
+    should carry the same corner.
     """
+    if not 0.0 < opacity <= 1.0:
+        raise ValueError(f"opacity is a share of 1, so {opacity!r} is not one: 0.35 to 0.55 veils a photograph")
     shape = slide.shapes.add_shape(
         MSO_SHAPE.ROUNDED_RECTANGLE if radius else MSO_SHAPE.RECTANGLE, *box.pptx()
     )
     shape.fill.solid()
     shape.fill.fore_color.rgb = _rgb(_paint_of(theme, tint))
+    if opacity < 1.0:
+        _veil(shape, opacity)
     shape.line.fill.background()
     _bare(shape)
     if radius:
-        shape.adjustments[0] = 0.06
+        short = min(box.w, box.h)
+        shape.adjustments[0] = min(PLANE_RADIUS_IN / short, 0.5) if short > 0 else 0.06
     return Drawn(shape, box)
+
+
+def _veil(shape, opacity):
+    """Set the fill's alpha, which python-pptx has no property for."""
+    from pptx.oxml.ns import qn
+
+    fill = shape.fill._xPr.find(qn("a:solidFill"))
+    colour = fill.find(qn("a:srgbClr"))
+    for stale in colour.findall(qn("a:alpha")):
+        colour.remove(stale)
+    alpha = colour.makeelement(qn("a:alpha"), {"val": str(int(round(opacity * 100000)))})
+    colour.append(alpha)
 
 
 def _with_faces(theme, font, cjk_font):
@@ -989,13 +1299,15 @@ def write(
     lines = _paragraphs(text)
     for index, line in enumerate(lines):
         para = frame.paragraphs[0] if index == 0 else frame.add_paragraph()
-        para.text = str(line)
         para.alignment = horizontal
         para.line_spacing = spacing
-        for run in para.runs:
-            run.font.size = Pt(size)
-            run.font.bold = bold
-            run.font.color.rgb = _rgb(colour)
+        pieces = line if _is_runs(line) else [Run(line)]
+        for piece in pieces:
+            run = para.add_run()
+            run.text = piece.text
+            run.font.size = Pt(piece.size if piece.size is not None else size)
+            run.font.bold = bold if piece.bold is None else piece.bold
+            run.font.color.rgb = _rgb(colour if piece.colour is None else piece.colour)
             if font:
                 run.font.name = font
             if cjk_font:
@@ -1023,7 +1335,7 @@ def _east_asian(run, name):
 
 
 def table(slide, box, rows, theme, *, weights=None, size=LABEL_PT, numeric_from=None,
-          style="minimal", emphasize_rows=(), emphasize_columns=(), group_rows=None,
+          style="header_tint", emphasize_rows=(), emphasize_columns=(), group_rows=None,
           indent_rows=(), total_rows=(), marks=None, header_size=None, align=None,
           rule_pt=None, grid_pt=None, row_height=None, header_height=None,
           padding=None, fill=True, column_rules=True, banding=False, fills=None):
@@ -1034,8 +1346,11 @@ def table(slide, box, rows, theme, *, weights=None, size=LABEL_PT, numeric_from=
     that fights whatever palette the deck is in. On a dark page the grid is the loudest
     thing on the slide.
 
-    So the defaults here draw the other kind: quiet lines at one weight, no banding
-    and no filled column. The rule between the columns was off here too, on the
+    So the defaults here draw the other kind: quiet lines at one weight, no banding,
+    no filled column -- and the header on the theme's own `accent_soft`, because a
+    header row separated from its data by a line alone reads as a fourth data row. The
+    tint was a keyword away and a delivered deck's table was called ugly for not
+    turning it: a default is what ships. The rule between the columns was off here too, on the
     reading that alignment already told one column from the next -- and that reading
     expired when every non-numeric column started being centred, because a centred
     cell has no visible edge to be centred against. `column_rules=False` takes it back
@@ -1081,8 +1396,9 @@ def table(slide, box, rows, theme, *, weights=None, size=LABEL_PT, numeric_from=
     figures leaves a four-column comparison of sentences ragged down three left edges.
     `numeric_from` takes an index for a table the measurement reads differently, and
     `align` names every column outright. `style` is optional and applies
-    to this table only: `minimal` keeps the quiet treatment, `header_tint` gives the
-    header a restrained surface, and `compact` reduces row padding for a dense lookup.
+    to this table only: `header_tint` is the default and tints the header row,
+    `minimal` takes that tint back off for a table that has no header to speak of, and
+    `compact` reduces row padding for a dense lookup.
     `row_rules` is the fourth, and it is now the same table as `minimal`: the row
     boundaries it used to switch on are what every style draws, and the name is still
     accepted so that a script already passing it keeps building. `emphasize_rows` tints
@@ -1093,6 +1409,12 @@ def table(slide, box, rows, theme, *, weights=None, size=LABEL_PT, numeric_from=
     shortening headers and guessing at `weights` to buy room the measurement already
     finds. `weights` is still there for a table that wants a column wider than its
     content.
+
+    **A table spans the box it is given**, in those proportions. So the box is where
+    you say how much room this table gets: hand it `frame.body` and it runs margin to
+    margin like the heading over it, hand it one column of a `split_left` and it stops
+    there. A two-column table of five figures does not want the whole page -- give it
+    a column and put something beside it.
 
     Beyond the grid, five things a table has to be able to say. `emphasize_rows` and
     `emphasize_columns` tint the row or the column carrying the page's point in the
@@ -1157,6 +1479,9 @@ def table(slide, box, rows, theme, *, weights=None, size=LABEL_PT, numeric_from=
     )
     widths, heights, width = plan.widths, plan.heights, plan.width
     groups, cell_marks = plan.groups, plan.marks
+    # The plan's rows and not the caller's: a mark that could be said in its cell was
+    # put into the copy there, and the widths and heights were measured off that.
+    rows = plan.rows
     head_pt = size if header_size is None else header_size
     ends = _CELL_ENDS if padding is None else float(padding)
     grid_w = GRID_RULE_PT if grid_pt is None else float(grid_pt)
@@ -1211,8 +1536,13 @@ def table(slide, box, rows, theme, *, weights=None, size=LABEL_PT, numeric_from=
                 cell.fill.solid()
                 cell.fill.fore_color.rgb = _rgb(theme["accent_soft"])
             elif r in emphasize_rows or c in emphasize_columns:
+                # Under a tinted header the emphasised row is a second tint, not the
+                # header's: a live scoring table set its header and its winning row in
+                # the same accent_soft, and the winner read as a second header.
                 cell.fill.solid()
-                cell.fill.fore_color.rgb = _rgb(theme["accent_soft"])
+                cell.fill.fore_color.rgb = _rgb(
+                    _emphasis_tint(theme) if style == "header_tint" else theme["accent_soft"]
+                )
             elif r in banded:
                 cell.fill.solid()
                 cell.fill.fore_color.rgb = _rgb(theme["surface"])
@@ -1249,7 +1579,12 @@ def table(slide, box, rows, theme, *, weights=None, size=LABEL_PT, numeric_from=
             frame = cell.text_frame
             frame.word_wrap = True
             para = frame.paragraphs[0]
-            para.text = groups[r] if r in groups else str(value)
+            marked = None if r in groups else plan.glyphs.get((r, c))
+            steps = ()
+            if marked is None:
+                para.text = groups[r] if r in groups else str(value)
+            else:
+                steps = _write_marks(para, marked)
             # The header takes its column's alignment, not its own: a left-aligned
             # "差值" over a right-aligned column of numbers sits over nothing.
             # A group's name is a heading over the rows under it, so it stays left.
@@ -1268,13 +1603,26 @@ def table(slide, box, rows, theme, *, weights=None, size=LABEL_PT, numeric_from=
                     run.font.name = theme["font_family"]
                 if theme.get("cjk_font_family"):
                     _east_asian(run, theme["cjk_font_family"])
+            # After the loop above, which paints every run one colour: a scale reads
+            # only because the steps that are not filled are visibly not filled.
+            for run, filled in steps:
+                run.font.color.rgb = _rgb(
+                    _paint(theme, marked[1], "accent") if filled else theme.get("muted", theme["foreground"])
+                )
+                run.font.size = Pt(_mark_pt(head_pt if r == 0 else size))
+                run.font.name = _MARK_FACE
 
     for (r, c), (kind, value, paint) in sorted(cell_marks.items()):
+        # The cell says it itself now, and drawing it again would put two of them on
+        # the page -- one of which drifts.
+        if (r, c) in plan.glyphs:
+            continue
         text = "" if (r in groups and c) else str(rows[r][c])
         cell = _cell_box(box, widths, heights, r, c)
         reading = text if value is None and kind in _NUMERIC_MARKS else value
         room = _mark_room(
-            cell, text, size, aligns[c] == PP_ALIGN.RIGHT, theme.get("font_family"), _mark_scale(size, ends)
+            cell, text, size, aligns[c], theme.get("font_family"), _mark_scale(size, ends),
+            lane=None if kind in _FILLING_MARKS else _mark_width(kind, reading, _mark_scale(size, ends)),
         )
         mark(slide, room, theme, kind, reading, colour=paint)
     return Drawn(tbl, Box.at(box.x0, box.y0, w=width, h=plan.height))
@@ -1294,14 +1642,74 @@ _CELL_ENDS = 0.03
 HEADER_RULE_PT = 3.5
 GRID_RULE_PT = 2.5
 
-# How much air a row may take to fill a box it does not fill on its own. One line's
-# worth: past that, three rows in a half-page band stop reading as rows and start
-# reading as three bands with a word in each.
-_ROW_FILL_MAX = 1.0
+# How much air a row may take to fill a box it does not fill on its own, in lines. Two
+# and a half: rendered at every row count over a 4.67in body, five rows and up fill it
+# exactly, four stop 0.53in short at 1.04in a row and still read as rows, and past that
+# the leftover white is the honest sign that a three-row table does not want a whole
+# page. One line's worth -- what this was -- left a five-row table 1.50in short of the
+# body every other element on the page ran to; uncapped, three rows came out 1.56in each
+# and read as three bands with a word in each.
+_ROW_FILL_MAX = 2.5
 
 # The arithmetic `table` draws from, so that `table_size` cannot answer for a
 # different table than the one that gets drawn.
-_Plan = namedtuple("_Plan", "widths heights width height groups marks")
+_Plan = namedtuple("_Plan", "widths heights width height groups marks rows glyphs")
+
+# The marks a cell can carry as its own copy, and the characters they are said in.
+#
+# A glyph is set by the renderer inside the cell, so it moves when the row moves --
+# and a row moves whenever the renderer wants more height than the file asked for.
+# Drawn as shapes over the table they stayed on the file's grid instead: measured on
+# a live five-row table, the renderer grew each body row 0.05in and the fourth row's
+# dots came out 0.19in above their own cell, half a row, sitting on the rule over
+# them. The drift accumulates down the table, so the last row is always the worst.
+# `progress` is not here because a bar is a length and not a character, and `delta`
+# because its triangle is one fact and the cell's number the other.
+_HARVEY_FULL = "\u25cf"
+_HARVEY_HALF = "\u25d0"
+_HARVEY_EMPTY = "\u25cb"
+# Between two steps, so a row of them reads as separate marks rather than a bar.
+_MARK_GAP = "\u2009"
+# One face for every glyph a mark is written as. Left to the copy's face, a full
+# circle came from Arial and the half circle beside it from whatever face had one,
+# so a scale's steps were two sizes; and Arial's is small against 12pt copy. Segoe
+# UI Symbol carries all five glyphs at one design, and a renderer without it
+# substitutes one face for the run rather than one per glyph.
+_MARK_FACE = "Segoe UI Symbol"
+_MARK_GLYPH_SCALE = 1.3
+
+
+def _mark_pt(size):
+    """The size a mark's glyphs are set at, off the copy they sit beside."""
+    return round(size * _MARK_GLYPH_SCALE, 1)
+
+
+def _emphasis_tint(theme):
+    """A tint a step deeper than the header's tile, for the row a tinted-header table emphasises."""
+    soft, accent = _rgb(theme["accent_soft"]), _rgb(theme["accent"])
+    mixed = tuple(round(a + (b - a) * 0.35) for a, b in zip(soft, accent, strict=True))
+    return "#{:02X}{:02X}{:02X}".format(*mixed)
+
+
+def _mark_glyphs(kind, value):
+    """The mark as (character, reads as filled) pairs, or None where it needs geometry."""
+    if kind == "harvey":
+        level, steps = _rating(value)
+        said = []
+        for step in range(steps):
+            share = min(1.0, max(0.0, level - step))
+            glyph = _HARVEY_FULL if share >= 0.75 else _HARVEY_HALF if share >= 0.25 else _HARVEY_EMPTY
+            said.append((glyph, share >= 0.25))
+        return said
+    if kind == "status_dot":
+        return [(_HARVEY_FULL, True)]
+    if kind == "check":
+        return [("\u2713", True)]
+    if kind == "cross":
+        return [("\u2717", False)]
+    if kind == "partial":
+        return [(_HARVEY_HALF, True)]
+    return None
 
 
 _CELL_ALIGNS = {"left": PP_ALIGN.LEFT, "center": PP_ALIGN.CENTER, "right": PP_ALIGN.RIGHT}
@@ -1501,6 +1909,13 @@ def _table_geometry(rows, theme, *, weights, size, style, group_rows, marks, roo
     cell_marks = {
         _cell_key(where, rows, columns): _mark_spec(spec, theme) for where, spec in dict(marks or {}).items()
     }
+    # Said in the cell where it can be said there -- but charged exactly as before.
+    # `_mark_floors` reads `cell_marks`, so dropping a mark from it drops the lane its
+    # column was being given: a ten-step scale then took the room out of the label
+    # column beside it, which came back 0.53in against a 0.55in floor. So the glyphs
+    # are for the filling and the drawing, and the arithmetic above them does not know
+    # they exist.
+    filled_rows, glyphs = _marks_in_cells(rows, cell_marks)
     head_pt = size if header_size is None else float(header_size)
     ends = _CELL_ENDS if padding is None else float(padding)
     # A row is never shorter than the line in it. Measured on the render: a compact
@@ -1508,11 +1923,12 @@ def _table_geometry(rows, theme, *, weights, size, style, group_rows, marks, roo
     # tenth of an inch past where the table said they ended -- and the hairline placed
     # from those heights came down through the last row's figures. The floor is the
     # line box plus the cell's own margins, which is what the renderer is doing.
-    floor = _line_h(size) + 2 * ends
+    han = _has_han(rows)
+    floor = _cell_floor(size, ends, han)
     head_h = max((size + 12) / 72, floor)
     body_h = max((size + 5 if style == "compact" else size + 10) / 72, floor)
     # A header set larger than the body it heads needs the room its own line takes.
-    head_h = max(head_h, (head_pt + 12) / 72, _line_h(head_pt) + 2 * ends)
+    head_h = max(head_h, (head_pt + 12) / 72, _cell_floor(head_pt, ends, han))
     face = theme.get("font_family") if theme else None
     indented = {_body_row(index, len(rows), "indent_rows") for index in indent_rows}
 
@@ -1520,10 +1936,15 @@ def _table_geometry(rows, theme, *, weights, size, style, group_rows, marks, roo
     head_floors = _header_floors(rows[0], head_pt, face)
 
     def spread_of(shares):
-        # Sized weights are inches, so a table whose content is narrower than its box
-        # stays narrow rather than being stretched across it: five columns spread over
-        # 12.6in put so much air between them that the eye loses the row. Given weights
-        # are proportions and mean "fill the box".
+        # A box is what the author gave this table, so the table spans it -- the
+        # predecessor let an unweighted table stay at its content width, and five real
+        # tables measured 43% to 92% of the box they were handed, a page-wide table
+        # stopping 6.8in short of the margin every other element on the page ran to.
+        # The air an unweighted table used to leave behind reads worse than the air
+        # inside it: rendered both ways, the short table left the page looking
+        # unfinished and the spread one still reads, because every style draws the row
+        # boundaries that carry the eye across. A table that should not span the page
+        # is a table given a narrower box.
         total = float(sum(shares))
         if room is None:
             # Proportions carry no width of their own, so with no box to fill they are
@@ -1531,7 +1952,7 @@ def _table_geometry(rows, theme, *, weights, size, style, group_rows, marks, roo
             # table is given when nobody weights it. Summing them as inches instead
             # would make `weights=[0.34, 0.16, 0.28, 0.22]` a table one inch wide.
             return float(sum(content)) if weights else total
-        return room if weights else min(room, total)
+        return room
 
     def laid():
         # What each column holds before a mark is charged to it. The marks are then
@@ -1539,7 +1960,13 @@ def _table_geometry(rows, theme, *, weights, size, style, group_rows, marks, roo
         # keeps an unmarked column from paying for a neighbour's rating.
         base_shares = list(weights) if weights else content
         divided_over = spread_of(base_shares)
-        base = _column_widths(base_shares, divided_over, head_floors)
+        # The marks are charged against what the strings ask for and not against the
+        # width the table is spread to: a spread table's columns already sum to the box,
+        # so slack measured there is nought and every mark was left the room it had
+        # without one -- none. Given weights keep dividing the whole width, which is the
+        # author's division and not a mark's to take from.
+        asked_over = divided_over if weights else float(sum(content))
+        base = _column_widths(base_shares, asked_over, head_floors)
         # The marks are charged against the width the table is going to have, which is
         # the width `base` was just divided over. Only one table has none: unweighted
         # and unboxed, whose width is the sum of shares that the mark floors themselves
@@ -1553,21 +1980,109 @@ def _table_geometry(rows, theme, *, weights, size, style, group_rows, marks, roo
         shares = list(weights) if weights else _content_weights(rows, size, skip=set(groups), minimums=floors, face=face)
         # Given weights get the same treatment as a starved heading: a column too narrow
         # for the mark in it is raised and the shortfall comes off the columns with slack.
-        sized = _column_widths(shares, spread_of(shares), [max(pair) for pair in zip(head_floors, floors)])
-        tall = _row_heights(rows, sized, groups, indented, size, head_pt, head_h, body_h, ends, face)
+        raised = [max(pair) for pair in zip(head_floors, floors)]
+        width = spread_of(shares)
+        # A mark's width is inches; a share is a proportion. Folded into the shares, the
+        # inches were scaled along with them the moment the table spanned a box: a
+        # five-step rating needing 0.99in came out 2.98in of a page-wide table, and the
+        # label column it qualifies fell from 2.84in to 1.86in for it. So the marks are
+        # set aside first and the strings divide what is left -- the same order
+        # `_mark_floors` charges them in, now held to through the division as well.
+        held = [max(0.0, floor - holds) for floor, holds in zip(floors, base)]
+        if any(held) and sum(held) < width:
+            over = _column_widths(
+                base_shares,
+                width - sum(held),
+                [max(0.0, floor - hold) for floor, hold in zip(raised, held)],
+            )
+            sized = [part + hold for part, hold in zip(over, held)]
+        else:
+            sized = _column_widths(shares, width, raised)
+        tall = _row_heights(
+            rows, sized, groups, indented, size, head_pt, head_h, body_h, ends, face, han,
+            marked={r for r, _ in glyphs},
+        )
         if header_height is not None:
             tall[0] = max(tall[0], float(header_height))
         if row_height is not None:
             tall[1:] = [max(value, float(row_height)) for value in tall[1:]]
         if fill and room_h:
             tall = _filled_heights(tall, room_h, size)
-        return sized, spread_of(shares), tall
+        return sized, width, tall
 
     widths, width, heights = laid()
-    return _Plan(tuple(widths), tuple(heights), width, sum(heights), groups, cell_marks)
+    return _Plan(tuple(widths), tuple(heights), width, sum(heights), groups, cell_marks, filled_rows, glyphs)
 
 
-def _row_heights(rows, widths, groups, indented, size, head_pt, head_h, body_h, ends, face):
+def _write_marks(para, marked):
+    """The cell's copy and its mark's steps, as runs, and which of them are filled.
+
+    One run per step, because a step that is not filled is set in the quiet tone and a
+    single run cannot hold two colours. The gap between them rides on the step before
+    it, so a scale is as many runs as it has steps.
+    """
+    pairs, _paint, before = marked
+    steps = []
+    if before:
+        first = para.add_run()
+        first.text = f"{before}{_MARK_GAP}"
+    for index, (glyph, filled) in enumerate(pairs):
+        run = para.add_run()
+        run.text = glyph if index == len(pairs) - 1 else f"{glyph}{_MARK_GAP}"
+        steps.append((run, filled))
+    return steps
+
+
+def _marks_in_cells(rows, cell_marks):
+    """(rows with the sayable marks in their cells, what to colour in them).
+
+    A mark that can be a character is written into its cell's copy, so the renderer
+    sets it inside the cell and it moves when the row moves. The cell keeps whatever
+    it already said -- a rating column shows its figure and its dots -- so the glyphs
+    are appended rather than substituted.
+    """
+    said = {}
+    for where, (kind, value, paint) in cell_marks.items():
+        pairs = _mark_glyphs(kind, value)
+        if pairs is not None:
+            said[where] = (pairs, paint, "")
+    if not said:
+        return rows, {}
+    grown = [list(line) for line in rows]
+    for where in list(said):
+        r, c = where
+        if not (0 <= r < len(grown) and 0 <= c < len(grown[r])):
+            del said[where]
+            continue
+        pairs, paint, _ = said[where]
+        before = str(grown[r][c])
+        said[where] = (pairs, paint, before if before.strip() else "")
+        marks_text = _MARK_GAP.join(glyph for glyph, _filled in pairs)
+        grown[r][c] = f"{before}{_MARK_GAP}{marks_text}" if before.strip() else marks_text
+    return [tuple(line) for line in grown], said
+
+
+def _has_han(rows):
+    """Whether any cell of this table holds a Han character.
+
+    Per table and not per cell: one row given more height than its neighbours is a
+    table with a limp, and a table with Han anywhere is set in a face whose line box
+    is the taller one throughout.
+    """
+    return any(_han(character) for line in rows for value in line for character in str(value))
+
+
+def _line_box(size, han):
+    """One line of a table cell, in inches -- the renderer's own floor, not the pitch."""
+    return size * (_CELL_LINE_BOX_HAN if han else _LINE_BOX) / 72.0
+
+
+def _cell_floor(size, ends, han):
+    """The shortest a cell holding one line of `size` may be drawn."""
+    return _line_box(size, han) + 2 * ends
+
+
+def _row_heights(rows, widths, groups, indented, size, head_pt, head_h, body_h, ends, face, han=False, marked=()):
     """Every row as tall as the lines its own cells wrap onto.
 
     A height off the type alone is one line's worth whatever the cell holds, and a
@@ -1596,7 +2111,12 @@ def _row_heights(rows, widths, groups, indented, size, head_pt, head_h, body_h, 
                 if widths[column] - side <= 0:
                     continue
                 counted = max(counted, len(_wrapped(str(value), widths[column] - side, point, face, bold)))
-        heights.append(max(head_h if index == 0 else body_h, counted * _line_h(point) + 2 * ends))
+        line = counted * _line_box(point, han)
+        # A row that says a mark in a cell holds a line of the mark's size as well; the
+        # glyphs are Latin, so it is the Latin box at that size and not the Han one.
+        if index in marked:
+            line = max(line, _line_box(_mark_pt(point), False))
+        heights.append(max(head_h if index == 0 else body_h, line + 2 * ends))
     return heights
 
 
@@ -1621,7 +2141,7 @@ def _filled_heights(heights, room, size):
 # the frame and without it put every glyph, the accent rule and the last row's hairline
 # on the identical pixel at 144dpi, with the frame's own strips straddling the table's
 # outer edges.
-def table_size(rows, theme, *, weights=None, size=LABEL_PT, style="minimal", numeric_from=None,
+def table_size(rows, theme, *, weights=None, size=LABEL_PT, style="header_tint", numeric_from=None,
                group_rows=None, marks=None, header_size=None, indent_rows=(), row_height=None,
                header_height=None, padding=None, fill=True, box=None):
     """How much of the page this table will take, before a cell of it is drawn.
@@ -1646,7 +2166,23 @@ def table_size(rows, theme, *, weights=None, size=LABEL_PT, style="minimal", num
     With `box`, the answer is placed at that box's top-left corner and the box is the
     room the table spreads into -- which is what `fill` does, and the height comes
     back as the box's own where there was slack to take. `fill=False` answers for the
-    table its content asks for. Without a box it is a size at the origin and the
+    table its content asks for.
+
+    **So do not ask this in order to decide how much of a region to give the table.**
+    From five rows up the answer *is* `box.h`, and asking it about the whole body and
+    then putting a band above the table is circular: the height came back for a region
+    the table is not going to be drawn in, and `take` refuses it at the band where the
+    room runs out. A live build failed four times over exactly this -- a 4.22in answer
+    measured against a 4.67in body, drawn under a 0.62in band. Either hand `table` the
+    band and let it fill it, which needs no measurement at all, or pass `box=` **the
+    band the table will be drawn in**. `fill=False` answers what the content alone asks
+    for, and that answer is a measurement and not a height to draw at: a table drawn at
+    it sits in a band it does not fill. Measured on a live page, one five-row table came
+    back 4.69in with `fill` and 1.77in without -- 62 percent shorter, in the 5.10in band
+    it had been handed. So when something goes under the table, take that something off
+    the region first and pass `box=` what is left, `fill` still on; asking without `fill`
+    answers whether the content fits at all, which is a different question from where the
+    table ends. Without a box it is a size at the origin and the
     table is as wide as its content wants -- and given `weights` are apportioned over
     that width, because proportions carry no width of their own. That answer is the
     one to build on: every column of a weighted table drawn in a box at least this
@@ -2032,7 +2568,7 @@ def _cell_box(box, widths, heights, row, column):
     return Box(x0, y0, x0 + widths[column], y0 + heights[row])
 
 
-def _mark_room(cell, text, size, right_aligned, face=None, height=None):
+def _mark_room(cell, text, size, aligned, face=None, height=None, lane=None):
     """The part of a cell its own string does not need.
 
     A mark beside a string is the common case -- a bar beside its percentage, a dot
@@ -2041,10 +2577,18 @@ def _mark_room(cell, text, size, right_aligned, face=None, height=None):
     with `_em_width` rather than split down the middle and hoped over. A string is
     never given more than three fifths, so a mark always has room to be a mark.
 
+    `aligned` is the cell's own paragraph alignment, and all three answers differ: the
+    string keeps the side its alignment puts it on and the mark takes what is left, which
+    for a centred string is the wider of the two ends rather than either one.
+
     `height` caps how tall the mark may be drawn and centres it in the row, which is
     the same number the column was sized from -- every mark takes its dimensions out
     of the box handed to it, so a cap that applied only to the sizing would leave the
-    drawn mark and the width bought for it describing different marks.
+    drawn mark and the width bought for it describing different marks. `lane` is the
+    same for the width: a glyph centres in whatever it is handed, so the whole leftover
+    put the arrow in the middle of the empty half and left it an inch and a half from
+    the figure it reads. `_mark_width` already knows what each kind needs, and the lane
+    hugs the side the string is on, so the two sit together however wide the column is.
     """
     inner = Box(cell.x0 + _CELL_SIDE, cell.y0, cell.x1 - _CELL_SIDE, cell.y1)
     if height is not None and 0.0 < height < inner.h:
@@ -2053,9 +2597,28 @@ def _mark_room(cell, text, size, right_aligned, face=None, height=None):
     if not text.strip():
         return inner
     needed = min(inner.w * 0.6, _em_width(text, size, face) + _CELL_SIDE)
-    if right_aligned:
-        return Box(inner.x0, inner.y0, inner.x1 - needed, inner.y1)
-    return Box(inner.x0 + needed, inner.y0, inner.x1, inner.y1)
+    if aligned == PP_ALIGN.CENTER:
+        # A centred string sits in the middle, so neither end of the cell is the leftover:
+        # both are, and taking the left one at the string's width put a rating straight
+        # over the figure it rates. Rendered on a delivered page, the dots ran through
+        # "3.4". The wider side, and the string keeps the middle.
+        middle = (inner.x0 + inner.x1) / 2
+        left, right = Box(inner.x0, inner.y0, middle - needed / 2, inner.y1), Box(
+            middle + needed / 2, inner.y0, inner.x1, inner.y1
+        )
+        room = left if left.w >= right.w else right
+        if lane and lane < room.w:
+            return (
+                Box(room.x1 - lane, room.y0, room.x1, room.y1)
+                if room is left
+                else Box(room.x0, room.y0, room.x0 + lane, room.y1)
+            )
+        return room
+    if aligned == PP_ALIGN.RIGHT:
+        room = Box(inner.x0, inner.y0, inner.x1 - needed, inner.y1)
+        return Box(room.x1 - lane, room.y0, room.x1, room.y1) if lane and lane < room.w else room
+    room = Box(inner.x0 + needed, inner.y0, inner.x1, inner.y1)
+    return Box(room.x0, room.y0, room.x0 + lane, room.y1) if lane and lane < room.w else room
 
 
 def _mark_scale(size, ends):
@@ -2118,6 +2681,13 @@ def _mark_width(kind, value, row_height):
     if kind == "progress":
         return row_height * 3.4
     return row_height * 0.62
+
+
+# A bar is a length against the whole, so it takes the width beside its figure rather
+# than a lane of its own: two shares only compare when the two tracks are the same
+# track. Every other mark is a glyph, and a glyph centres in whatever it is handed --
+# the leftover of a 2.5in column put the arrow an inch and a half from its number.
+_FILLING_MARKS = ("progress",)
 
 
 def _mark_spec(spec, theme=None):
@@ -2386,6 +2956,14 @@ class Stack:
 
     __slots__ = ("box", "gutter", "spent_by_rest", "spread_short", "spread_to_fit", "taken", "y")
 
+    def __iter__(self):
+        raise TypeError(
+            "a Stack is a cursor down a region, not the bands it will hand out -- it does not know how "
+            "many there are until you ask. For a band at a measured height call take(h) once per band; "
+            "for a fixed number of equal bands ask the region instead: region.rows(n) hands back a list "
+            "you can zip against your content"
+        )
+
     def __init__(self, box, gutter=0.0):
         self.box = box
         self.gutter = gutter
@@ -2540,8 +3118,17 @@ class Stack:
         if height <= 0:
             raise ValueError("a band takes some height")
         if height > self.left + 1e-9:
-            raise ValueError(
-                f"{height:.2f}in was asked for and {self.left:.2f}in is left in this region"
+            # Said, not refused. The refusal this used to be was the commonest way a build
+            # ended -- 65 of 228 measured crashes -- and one refusal hid every page after
+            # it: a live run rebuilt six times against the same sentence and shipped
+            # nothing. The band is drawn at the height asked and runs past the region's
+            # bottom; the review reports what it covers on that page, the other pages
+            # come out, and the author reads the same arithmetic here as a warning.
+            import warnings
+
+            warnings.warn(
+                "Drawn past the region: "
+                + f"{height:.2f}in was asked for and {self.left:.2f}in is left in this region"
                 # The band that refuses is never the band that overspent, so the refusal
                 # says what the region has already paid out. A run reading only the last
                 # number went back and shortened the last card twice, on a page whose
@@ -2582,8 +3169,36 @@ class Stack:
                     if self.gutter
                     else ""
                 )
+                # The commonest way a first band eats the whole region: something was
+                # asked how tall it would be *in this region* and answered with the
+                # region, because it fills what it is given. Two live builds looped on
+                # it, each having measured a table against the whole body and then wanted
+                # a legend under it.
+                + (
+                    f"And the {self.box.h:.2f}in this region has is what the first band spent, to the "
+                    f"inch. A table or a card group asked how tall it will be in a box answers with "
+                    f"the box, because it spreads into what it is given -- so measuring against the "
+                    f"whole region and then wanting a band under it cannot come out. Take the band "
+                    f"you want under it off the region first and measure against that -- which is "
+                    f"the box the table is going to be drawn in. Not fill=False: that answers what the "
+                    f"content alone asks for, and a table drawn at that height stands in a band it does "
+                    f"not fill, measured once at 1.77in of a 5.10in band. "
+                    if self.taken == 1 and abs(self.y - self.gutter - self.box.y0 - self.box.h) <= 0.2
+                    else ""
+                )
+                # What to do about *this* build, which everything above is silent on: the
+                # advice before this sentence is all about the run before it was drawn, and
+                # a program meeting it has already drawn four bands. A live run retried the
+                # identical code twice against an identical refusal, so the shortfall and
+                # the two ways out are named here in the numbers of the band that failed.
+                + f"This band is {height - self.left:.2f}in over what is left. Either fit it into the "
+                f"{self.left:.2f}in there is -- fits(what, down.room) answers that without drawing -- or "
+                f"shorten an earlier band and take this one again. "
                 + "Measure every band first and ask short_by(*heights) before drawing any of them -- "
-                "asked at the last band, the only band left to shorten is the last one"
+                "asked at the last band, the only band left to shorten is the last one. "
+                + f"This band was drawn anyway, {height - self.left:.2f}in past the region's bottom, so the page "
+                "builds and the review reports what it covers; shorten the run and build again",
+                stacklevel=2,
             )
         band = Box(self.box.x0, self.y, self.box.x1, self.y + height)
         self.y = band.y1 + self.gutter
@@ -2743,14 +3358,19 @@ def points(slide, box, theme, items, *, size=BODY_PT, numbered=False, mark="\u20
     lines = _paragraphs(items)
     for index, line in enumerate(lines):
         para = frame.paragraphs[0] if index == 0 else frame.add_paragraph()
-        para.text = str(line)
+        pieces = line if _is_runs(line) else [Run(line)]
+        for piece in pieces:
+            para.add_run().text = piece.text
         para.line_spacing = spacing
         if index:
             para.space_before = Pt(size * 0.45)
         _bullet(para, size, numbered=numbered, mark=mark, colour=_paint(theme, mark_colour, "accent"))
-        for run in para.runs:
-            run.font.size = Pt(size)
-            run.font.color.rgb = _rgb(_paint(theme, colour, "foreground"))
+        for run, piece in zip(para.runs, pieces):
+            run.font.size = Pt(piece.size if piece.size is not None else size)
+            if piece.bold is not None:
+                run.font.bold = piece.bold
+            ink = piece.colour if piece.colour is not None else _paint(theme, colour, "foreground")
+            run.font.color.rgb = _rgb(ink)
             face = font or theme.get("font_family")
             han = cjk_font or theme.get("cjk_font_family")
             if face:
@@ -2895,6 +3515,12 @@ def formula(slide, box, text, theme, *, size=BODY_PT, align="left", anchor="top"
     theme = _with_faces(theme, font, cjk_font)
     face = theme.get("font_family")
     lines = _paragraphs(text)
+    if any(_is_runs(line) for line in lines):
+        raise ValueError(
+            "a formula sets every run at one size on purpose -- the renderer shrinks a raised or "
+            "lowered run on its own, and a second size here multiplies the two. Write the expression "
+            "as a string and mark its parts with _x and ^x; `write` is the helper that takes runs"
+        )
     chosen, lines = _formula_size(lines, box.w, size, face)
     left, top, width, height = box.pptx()
     frame = slide.shapes.add_textbox(left, top, width, height).text_frame
@@ -3304,8 +3930,18 @@ def _formula_size(lines, width, size, face=None):
     for line in lines:
         split.extend(_clauses(str(line)))
     if len(split) > len(lines):
+        _gave_up("formula lines", len(lines), len(split), "broken at its own separators")
         return _formula_size(split, width, size, face)
     return chosen, lines
+
+
+def _first_words(paragraphs, most=28):
+    """Enough of the copy to recognise which block gave way."""
+    for paragraph in paragraphs:
+        words = _flat(paragraph).strip()
+        if words:
+            return words[:most]
+    return ""
 
 
 def _clauses(text):

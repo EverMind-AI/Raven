@@ -27,6 +27,7 @@ _needs_templates = pytest.mark.skipif(
     reason="the template payload is fetched, not tracked; see plugins-dist/ppt-engine/templates.manifest.json",
 )
 
+from raven_ppt.services.template.defaults import DEFAULT_TEMPLATES
 from raven_ppt.services.template.inventory import TemplateInventory
 from raven_ppt.services.template.theme import (
     _GRID_MIX,
@@ -124,7 +125,7 @@ def test_the_plane_is_visible_on_its_ground_and_carries_the_ink_that_is_written_
 
 @pytest.mark.parametrize(
     "accent",
-    ["#155FFD", "#1A3397", "#B1EC52", "#B38D76", "#05A3F1", "#11B582", "#000000", "#FFFF00"],
+    ["#155FFD", "#1A3397", "#B1EC52", "#B38D76", "#05A3F1", "#11B582", "#000000", "#FFFF00", "#CC6633", "#C8AF92"],
 )
 def test_the_quiet_plane_stays_quieter_than_the_tile_that_carries_the_answer(accent: str) -> None:
     """Both off the same tint, because two planes on two scales trade places.
@@ -215,7 +216,7 @@ def test_no_scheme_slot_is_a_hairline_so_the_grid_stays_mixed() -> None:
 
 
 @_needs_templates
-@pytest.mark.parametrize("index", range(10))
+@pytest.mark.parametrize("index", range(len(DEFAULT_TEMPLATES)))
 def test_every_bundled_template_keeps_a_visible_plane_and_a_legible_muted(index: int) -> None:
     """The guarantees the derived palette carries, over every template that ships.
 
@@ -242,3 +243,24 @@ def test_every_bundled_template_keeps_a_visible_plane_and_a_legible_muted(index:
     assert _contrast(muted, surface) >= _LEGIBLE
     assert surface not in {"#F0F0F0", "#E7E6E6", "#E6E6E6"}
     assert _contrast(surface, ground) < _contrast(str(entry["accent_soft"]), ground)
+
+
+def test_a_plane_too_close_to_its_ground_is_pushed_off_it() -> None:
+    """The beige template paints a #F2E3CB ground and a #FAF1E2 plane: 1.13:1 against
+    it, which is the ratio a blue plane reads well at on white, and two live pages'
+    cards were cards only to the file. Visibility is a colour difference, not a
+    luminance ratio: a plane under PLANE_FLOOR of dE is walked towards the accent
+    until it clears, one already clear is left exactly as it was, and the tile the
+    answer sits on is deepened so that it still leads the plane it was quieter than."""
+    from raven_ppt.services.template.theme import PLANE_FLOOR, _contrast, _distance, _visible
+
+    pushed = _visible("#FAF1E2", "#CC6633", "#F2E3CB")
+    assert pushed != "#FAF1E2"
+    assert _distance(pushed, "#F2E3CB") >= PLANE_FLOOR
+    assert _visible("#EAF1FF", "#155FFD", "#FFFFFF") == "#EAF1FF", "a visible plane is not touched"
+
+    entry = theme_of(_scheme(_LIGHT_MAP, lt1="#F2E3CB", dk1="#2B1D14", accent1="#CC6633", lt2="#FAF1E2"))
+    ground, plane, tile = (str(entry[key]) for key in ("background", "surface", "accent_soft"))
+    assert _distance(plane, ground) >= PLANE_FLOOR
+    assert _contrast(plane, ground) < _contrast(tile, ground)
+    assert _distance(tile, ground) > _distance(plane, ground)

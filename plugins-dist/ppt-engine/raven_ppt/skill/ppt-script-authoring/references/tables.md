@@ -221,21 +221,28 @@ plane(slide, Box.at(band.x0, band.y0, w=laid.w, h=laid.h), T, T["surface"])
 table(slide, band, rows, T, marks=marks)
 ```
 
-**And `weights` is the only way to make a table fill its box.** Without `weights` the box is a
-ceiling, not a target: the table comes out as wide as its content wants and stops, however
-much room you hand it. That is right for a two-column lookup and wrong under a full-width
-row of cards -- measured on a delivered page whose five-column table ended at 56% of a
-band whose three cards above it ran to 94%, and where widening the box changed nothing at
-all, because the box was never what decided. Given `weights` are proportions and mean
-"fill the box", so a table that has to line up with something above it declares them:
+**A table fills the box it is given, so the box is where you say how wide it is.** It used
+to stop at its content width whatever room it was handed: five real tables measured 43% to
+92% of their box, and a delivered page had a five-column table end at 56% of a band whose
+three cards above it ran to 94%. Now the columns keep their measured proportions and
+divide the box, so a table under a full-width row lines up with it by being given the same
+box -- and a table that should not run the page's whole width is a table given a narrower
+box, never the whole body with `weights` guessed to make up a difference.
+
+`weights` stays for the one thing the measurement cannot know: a column that has to be
+wider than its own content. Four verdict columns that must read as equal, for instance --
+sized from their own headers, `冷启动` came out 2.09in against 2.53in for the other three
+and the ticks in it sat 0.22in off their neighbours:
 
 ```python
 ppt_layout.table(slide, band, rows, T, weights=(2.0, 1.4, 1.6, 1.6, 1.8))
 ```
 
 The numbers are relative, so they read as "the first column gets a fifth more than the
-second"; only their ratios matter. `table_size(rows, T, box=band)` answers with the width
-either way, so the disagreement is visible before the page is drawn.
+second"; only their ratios matter. And they are not free: measured on one reference page,
+`weights` cut a header's column to 1.64in and wrapped it onto a second line, taking 0.17in
+off every row below it. Ask `table_size(rows, T, box=band)` both ways and keep the one
+whose columns you can defend.
 
 **Rows are measured, not assumed.** Each row is as tall as the lines its own cells wrap
 onto at the widths the columns actually get, and a declared row height is only a floor.
@@ -244,12 +251,19 @@ ends up rather than where the arithmetic first named it -- which is what `rule_s
 reports when a divider comes down through a row's copy.
 
 **And the rows spread into the box.** Whatever slack a region has over the table's own
-content goes onto the rows in equal parts, capped at one line's worth each so a
-three-row table stays a three-row table instead of becoming three bands. `fill=False`
-turns that off. It is still worth asking `table_size(rows, theme, box=band)` while the
-page is being written: a four-column table of short values comes back narrow whatever
-you do with the height, and the answer to that is more to say — a column of commentary,
-a `mark` column, the rows you were going to summarise — not a wider table.
+content goes onto the rows in equal parts, capped at two and a half lines each: rendered
+at every row count over a 4.67in body, five rows and up fill it exactly, four stop 0.53in
+short at 1.04in a row and still read as rows, and past that the leftover white is the
+honest sign that a three-row table does not want a whole page. `fill=False` turns it off.
+
+**So do not ask `table_size` in order to decide how much of a region to give the table.**
+From five rows up the answer *is* `box.h`, and asking it about the whole body and then
+putting a band above the table is circular -- the height came back for a region the table
+is not going to be drawn in, and `take` refuses it at the band where the room runs out. A
+live build failed four times on exactly that: a 4.22in answer measured against a 4.67in
+body, drawn under a 0.62in band. Hand `table` the band and let it fill it, which needs no
+measurement at all, or pass `box=` the band the table will be drawn in. `fill=False` is
+the one case where this answers a height you can spend.
 
 It also carries the five things a table has to be able to say: `emphasize_rows` and
 `emphasize_columns` tint the row or column carrying the claim, `group_rows` turns a

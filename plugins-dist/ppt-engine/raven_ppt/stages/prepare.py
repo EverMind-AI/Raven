@@ -121,7 +121,19 @@ class PrepareStage:
 
     composer: Any | None = None
     ingest: Callable[[Path, Path], Any] | None = None
-    max_tokens: int = 4000
+    # Shared with the model's thinking, which is why this is not 4000. A reasoning
+    # model spends its reasoning from the same budget as its answer, so the ceiling
+    # has to hold both: three live runs at 4000 came back with 2009 characters of a
+    # 2009-character string, then 100 of 100, then nothing at all, and each one cost
+    # the author a round and four to six minutes to ask again. The answer itself is a
+    # plan of about 2000 characters; the rest of this is headroom for the thinking in
+    # front of it, and a ceiling is only spent when it is used.
+    max_tokens: int = 16000
+    # What the doubled retry below may not exceed. Doubling an already-raised ceiling
+    # is how a caller's guess turns into a gateway's 400 about max_tokens, and the
+    # branch after it would then report that instead of the parse failure it was
+    # written for.
+    max_intake_tokens: int = 32000
 
     async def run(self, project: Project, task: str, files: Sequence[str] = ()) -> StageResult:
         taken = self._take(project, files)
@@ -225,6 +237,26 @@ class PrepareStage:
             parts.append(text_block(f"The first of the ingested materials:\n\n{state.excerpt}"))
         reply = await self.composer.ask(intake_brief(), parts, max_tokens=self.max_tokens)
         payload = loads_maybe_fenced(reply)
+        if payload is None and not getattr(self.composer, "failure", ""):
+            # `_composer` already retries a cut reply at twice the budget, and it did
+            # not fire here: it reads the cut off the stream's `finish_reason`, and
+            # this gateway sends none, so a truncated-but-non-empty reply looked like
+            # a finished one. What the composer cannot know and this caller does is
+            # what the reply had to be. A non-empty reply that is not JSON is a reply
+            # that stopped early, and the answer to that is a bigger budget rather
+            # than the same one, which by the composer's own reasoning would truncate
+            # in the same place. Once: a second failure is not about length.
+            reply = await self.composer.ask(
+                intake_brief(), parts, max_tokens=min(self.max_tokens * 2, self.max_intake_tokens)
+            )
+            payload = loads_maybe_fenced(reply)
+            if payload is None and getattr(self.composer, "failure", ""):
+                # The bigger budget was this caller's guess, so a transport failure it
+                # provoked is this caller's to drop: reporting a gateway's complaint
+                # about the retry sends the next actor to fix a request the model never
+                # read, which is the inversion the branch below exists to prevent.
+                self.composer.failure = ""
+
         if payload is None:
             # The transport's own reason first when there is one. Without this a
             # gateway answering 503 was reported as "the reply did not parse",

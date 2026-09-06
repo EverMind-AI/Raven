@@ -343,6 +343,12 @@ def _sniff(payload: bytes) -> tuple[bytes, str, str]:
             return payload, ".pptx", _TEMPLATE
         raise ValueError("that download is a ZIP archive but not a PowerPoint file")
     if (image := _image_suffix(payload)) is not None:
+        # A WebP arrives from most image hosts and python-pptx places none of them,
+        # so the ingest refused it as unreadable; one run spent three fetches on the
+        # same picture that way. It is a raster already, so it becomes the one the deck
+        # can place, here, for the same reason the SVG below does.
+        if image == ".webp":
+            return _as_png(payload), ".png", _IMAGE
         return payload, image, _IMAGE
     text = _as_text(payload)
     if text is None:
@@ -401,6 +407,25 @@ def _as_text(payload: bytes) -> str | None:
         return None
     printable = sum(1 for char in sample if char.isprintable() or char in "\t\r\n")
     return text if printable / len(sample) >= 0.95 else None
+
+
+def _as_png(payload: bytes) -> bytes:
+    """The same picture as PNG, with the description the file carried about itself.
+
+    Re-encoding drops the EXIF block, and `_embedded_caption` is what reads the
+    description out of a fetch that arrived with no caption -- so the text moves into
+    a PNG text chunk it also reads, or the conversion would cost the provenance.
+    """
+    from PIL import Image, PngImagePlugin
+
+    described = _embedded_caption(payload)
+    with Image.open(io.BytesIO(payload)) as image:
+        out = io.BytesIO()
+        info = PngImagePlugin.PngInfo()
+        if described:
+            info.add_text("Description", described)
+        image.convert("RGBA" if image.mode in ("RGBA", "LA", "P") else "RGB").save(out, format="PNG", pnginfo=info)
+    return out.getvalue()
 
 
 def _image_suffix(payload: bytes) -> str | None:

@@ -124,7 +124,7 @@ def _covered(pieces: list[Piece], page: int) -> list[Finding]:
         findings.append(
             Finding(
                 kind="covered_shape",
-                severity=Severity.BLOCKING,
+                severity=Severity.WARNING,
                 page=page,
                 message=(
                     f"the {piece.kind} at shape {piece.index}"

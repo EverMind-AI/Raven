@@ -128,7 +128,7 @@ EVERY_PRIMITIVE = textwrap.dedent(
     from ppt_layout import (
         Box, GUTTER, card, formula, heading, mark, page, plane, points, rule, table, write,
     )
-    from ppt_shapes import chevron_row, connect, preset, timeline
+    from ppt_shapes import connect, preset, timeline
     from ppt_theme import THEMES
 
     T = THEMES["ink-graphite"]
@@ -196,8 +196,9 @@ EVERY_PRIMITIVE = textwrap.dedent(
     # SLIDE 5
     five = prs.slides.add_slide(prs.slide_layouts[6])
     rows = page().body.rows(3)
-    for step, label in zip(chevron_row(five, rows[0], T, 5), ("采集", "清洗", "标注", "训练", "评测")):
-        write(five, step.box, label, size=16, colour=T["background"], font=F, cjk_font=C, align="center", anchor="middle")
+    steps = timeline(five, rows[0], T, 5)
+    for stop, label in zip(steps.stops, ("采集", "清洗", "标注", "训练", "评测")):
+        write(five, stop.above, label, size=16, colour=T["foreground"], font=F, cjk_font=C, align="center")
     track = timeline(five, rows[1], T, 4)
     for stop, when in zip(track.stops, ("Q1", "Q2", "Q3", "Q4")):
         write(five, stop.box, when, size=14, colour=T["muted"], font=F, cjk_font=C, align="center")

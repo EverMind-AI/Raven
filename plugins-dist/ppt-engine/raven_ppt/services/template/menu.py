@@ -25,8 +25,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
-from raven_ppt.services.measure.geometry import PICTURE, is_panel, iter_shapes
+from raven_ppt.services.measure.geometry import EMU_PER_INCH, PICTURE, is_filled, iter_shapes
+from raven_ppt.services.measure.variety import page_signature
 
 # What a page is *for*, when the page says so itself. A deck built in someone's
 # template has to open, index and close in their template's own pages -- those three
@@ -60,14 +62,42 @@ class PageEntry:
     unwritable: tuple[str, ...] = ()
     role: str = ""
     """`cover`, `agenda`, `closing`, or empty for an ordinary content page."""
+    slots: int = 0
+    """How many times the page's longest repeating unit repeats: the number of items
+    `adapt(items=...)` can fill before it has to be a different page.
+
+    The count an author actually chooses a prototype by -- five findings want a page
+    with five slots -- and the one the listing did not carry: a live program filled a
+    four-slot row with five items, was refused, and spent a round learning the count
+    the render already showed."""
+    arrangement: str = ""
+    """What the page is made of and the grid it falls into, as `page_signature` reads it.
+
+    The one thing an author choosing a prototype needs and the menu did not carry. A
+    content page came back as its heading -- somebody else's quarterly report -- the
+    layout name every content page in the file shares, and two counts, so the only
+    signal telling one from another was the thumbnail. Measured on a live run against
+    an eighteen-page template: the program cloned all five pages the reply named by
+    role and drew every one of the twelve content pages from primitives, losing the
+    template's own timeline, its ring of badges and its figure cards. The run before
+    it, whose request happened to list the arrangements in prose, cloned eleven."""
+    hidden: bool = False
+    """Marked not-for-show in the file. Numbering still counts it, because the
+    numbers a page is asked for by are its place in the file; offering it is what
+    has to stop. The bundled templates each shipped two hidden pages of the
+    vendor's own advertising, and an author could name one as a prototype."""
 
     def line(self) -> str:
         parts = [f"[{self.number}]"]
+        if self.hidden:
+            parts.append("hidden in the file, not for building on")
         if self.role:
             parts.append(f"the template's {self.role}")
         if self.heading:
             parts.append(f"“{self.heading}”")
         parts.append(f"layout {self.layout!r}")
+        if self.arrangement:
+            parts.append(self.arrangement + (f" ({self.slots} slots)" if self.slots else ""))
         holds = [
             f"{self.text_blocks} text" if self.text_blocks else "",
             f"{self.pictures} picture" if self.pictures else "",
@@ -79,6 +109,9 @@ class PageEntry:
         return " — ".join(parts)
 
 
+_MENUS: dict[tuple, tuple[PageEntry, ...]] = {}
+
+
 def menu(path: Path, unwritable: dict[int, tuple[str, ...]] | None = None) -> tuple[PageEntry, ...]:
     """Every example page of this template, one entry each.
 
@@ -87,6 +120,29 @@ def menu(path: Path, unwritable: dict[int, tuple[str, ...]] | None = None) -> tu
     than recomputed because decompiling thirteen pages to build a menu would cost
     more than the menu saves.
     """
+    # Read once per template file: a measurement pass asks for this menu nine times
+    # for one build, 0.36s each on a 13MB template, and the file does not change
+    # between them.
+    try:
+        stat = Path(path).stat()
+        key = (str(Path(path).resolve()), stat.st_mtime_ns, stat.st_size, _frozen(unwritable))
+    except OSError:
+        key = None
+    if key is not None and key in _MENUS:
+        return _MENUS[key]
+    entries = _menu(path, unwritable)
+    if key is not None:
+        if len(_MENUS) >= 8:
+            _MENUS.pop(next(iter(_MENUS)))
+        _MENUS[key] = entries
+    return entries
+
+
+def _frozen(unwritable: dict[int, tuple[str, ...]] | None) -> tuple:
+    return tuple(sorted((number, tuple(what)) for number, what in (unwritable or {}).items()))
+
+
+def _menu(path: Path, unwritable: dict[int, tuple[str, ...]] | None = None) -> tuple[PageEntry, ...]:
     try:
         from pptx import Presentation
     except ImportError:  # pragma: no cover -- python-pptx ships with the extra
@@ -96,6 +152,7 @@ def menu(path: Path, unwritable: dict[int, tuple[str, ...]] | None = None) -> tu
     except Exception:  # noqa: BLE001 -- a malformed file is simply not a template
         return ()
     named = unwritable or {}
+    canvas_h = (presentation.slide_height or 0) / EMU_PER_INCH
     entries: list[PageEntry] = []
     for number, slide in enumerate(presentation.slides, start=1):
         shapes = list(iter_shapes(slide.shapes))
@@ -108,8 +165,11 @@ def menu(path: Path, unwritable: dict[int, tuple[str, ...]] | None = None) -> tu
                 text_blocks=len(texts),
                 pictures=sum(1 for s in shapes if getattr(s, "shape_type", None) == PICTURE),
                 tables=sum(1 for s in shapes if getattr(s, "has_table", False)),
-                shapes=sum(1 for s in shapes if is_panel(s) and s not in texts),
+                shapes=sum(1 for s in shapes if is_filled(s) and s not in texts),
+                arrangement=page_signature(slide, canvas_h) or "",
+                slots=_slots(slide),
                 clone_only=number in named,
+                hidden=slide.element.get("show") == "0",
                 unwritable=tuple(named.get(number, ())),
                 role=_role(
                     number,
@@ -147,6 +207,17 @@ def _role(number: int, layout: str, heading: str, blocks: int = 0, longest: int 
     if blocks and blocks <= _SECTION_BLOCKS and longest and longest <= _SECTION_CHARS:
         return SECTION
     return ""
+
+
+def _slots(slide: Any) -> int:
+    """How many units the page's longest run repeats, or 0 when nothing repeats."""
+    from raven_ppt.services.template.compose import units
+
+    try:
+        runs = units(slide)
+    except Exception:  # noqa: BLE001 -- a page python-pptx cannot walk has no slots to name
+        return 0
+    return max((len(run) for run in runs), default=0)
 
 
 def roles(entries: tuple[PageEntry, ...]) -> dict[str, int]:
