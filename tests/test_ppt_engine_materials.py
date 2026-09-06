@@ -248,3 +248,18 @@ def test_a_name_that_does_not_exist_does_not_hide_the_next_one(tmp_path):
     real.write_text("facts", encoding="utf-8")
 
     assert materials.materials_from_prompt(f"{tmp_path / 'ghost.md'}\u3001{real}") == [str(real)]
+
+
+def test_with_a_publish_record_only_a_recorded_deck_verifies(tmp_path):
+    """A copy the model made under out/ is a valid deck newer than the turn; with the
+    publish step's digests in hand it is not a candidate, and is named as unpublished."""
+    import hashlib
+
+    out = tmp_path / "out"
+    published = _pptx(out / "published.pptx", slides=3)
+    copied = _pptx(out / "copied.pptx", slides=4)
+    digests = {hashlib.sha256(published.read_bytes()).hexdigest()}
+
+    assert materials.verified_deck(out, f"MEDIA: {copied}", {}, digests) == (published, 3)
+    assert materials.verified_deck(out, f"MEDIA: {copied}", {}, set()) == (None, 0)
+    assert materials.unpublished_decks(out, {}, digests) == [copied]

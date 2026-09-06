@@ -57,7 +57,6 @@ KNOWN_EVENT_TYPES = frozenset(
         "episode.start",
         "dag.run_started",
         "dag.node_updated",
-        "dag.run_replanned",
         "dag.run_completed",
         "cron.delivered",
         "cron.missed",
@@ -229,7 +228,7 @@ def translate(event: Any, *, cwd: str | None = None) -> Translated:
     # update saying so would be a second one. turn.started's ``delegated`` block
     # names a sub-agent turn, which this surface reports through the tool call
     # that delegated it rather than as a turn of its own. episode.start is a TUI collapsing
-    # boundary with no ACP counterpart. The dag.* events would map to `plan`, but
+    # boundary with no ACP counterpart. The dag.* trio would map to `plan`, but
     # ``PlanEntry.priority`` is required and raven has no source for it, so a
     # plan would have to be invented. cron.* belongs to a turn nobody in this
     # session asked for.

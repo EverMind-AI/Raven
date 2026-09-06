@@ -1947,24 +1947,13 @@ judgement (a turn's completion, an Attempt's pass/fail) made by a different
 subsystem; this one judges a single DAG node's output against its own prompt.
 
 **exception** (node status) -- a DAG node that did not accomplish its task and is
-waiting for the main agent to decide whether to continue, abandon, or replan it.
-Reached by two routes: the backend raised, or the backend returned and the
-verdict said the task was not accomplished. Non-terminal: its dependents stay
-`pending` rather than cascading to `skipped`.
+waiting for the main agent to decide whether to continue or abandon it. Reached by
+two routes: the backend raised, or the backend returned and the verdict said the
+task was not accomplished. Non-terminal: its dependents stay `pending` rather than
+cascading to `skipped`.
 _Avoid_: it is not a synonym for a Python exception. A raised exception is only one
 of the two routes into this status, and `status[node.id] = "exception"` sits next to
 `except Exception as exc` in `_run_node` for that reason.
-
-**replan** (adjudication decision; `raven/agent/subagent/dag_adjudication.py`) -- the answer
-to an exception report that replaces the plan instead of the node: the agent hands
-`resolve_dag_node` a new node list, the answered run stops where it is and finalizes, and a
-new run starts from that list. Chained rather than spliced -- the successor is a separate
-run with its own id and dir, and the old run's `graph.json` carries a reserved `replan` key
-naming it. A completed node of the old run is reused by reference (`depends_on` plus
-`{{ <id>.output }}`); no id it claimed can be re-declared, so a replan gives up on the
-adjudicated node and no attempt budget crosses the boundary.
-_Avoid_: "reorchestrate" -- orchestration is what the main agent does with graphs generally;
-this names one decision about one graph.
 
 **outbox** (`raven/agent/subagent/dag_adjudication.py`) -- a foreground DAG run's tray of
 events: its nodes' exception reports and its final result, waiting for the tool call

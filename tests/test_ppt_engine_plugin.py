@@ -196,7 +196,7 @@ def test_the_wrappers_schema_and_budget_are_the_fork_tools_own(tmp_path: Path) -
 
     assert review.timeout_seconds == PptReviewTool.timeout_seconds
     assert review.description == PptReviewTool.description
-    assert set(review.parameters["properties"]) == {"project", "pages"}
+    assert set(review.parameters["properties"]) == {"project", "pages", "dismiss"}
 
 
 def _pptx(path: Path, slides: int = 2) -> Path:
@@ -205,6 +205,19 @@ def _pptx(path: Path, slides: int = 2) -> Path:
         for index in range(1, slides + 1):
             archive.writestr(f"ppt/slides/slide{index}.xml", "<sld/>")
     return path
+
+
+def _published(own: Path, deck: Path) -> None:
+    """Record `deck` the way the publish step does, so the hook can tell it from a copy."""
+    import hashlib
+    import json
+
+    state = own / "deck" / "state"
+    state.mkdir(parents=True, exist_ok=True)
+    (state / "published.json").write_text(
+        json.dumps({"published": [{"path": str(deck), "sha256": hashlib.sha256(deck.read_bytes()).hexdigest()}]}),
+        encoding="utf-8",
+    )
 
 
 def test_the_hook_stages_rewrites_and_announces(tmp_path: Path) -> None:
@@ -220,15 +233,19 @@ def test_the_hook_stages_rewrites_and_announces(tmp_path: Path) -> None:
     async def run() -> tuple:
         with workdir.bind(wd):
             inbound = await hook.before_user_inbound(ctx)
-            deck = _pptx(wd / "out" / "deck.pptx", slides=3)
+            # The turn now runs in this session's own folder under the bound directory.
+            own = Path(workdir.current())
+            deck = _pptx(own / "out" / "deck.pptx", slides=3)
+            _published(own, deck)
             ctx.outbound_content = f"done\nMEDIA: {deck}"
             outbound = await hook.after_send(ctx)
-        return inbound, outbound, deck
+        return inbound, outbound, deck, own
 
-    inbound, outbound, deck = asyncio.run(run())
+    inbound, outbound, deck, own = asyncio.run(run())
+    assert own == wd / "decks" / "s1"
     assert "# Material staged for this run" in inbound.modified_content
-    assert f"Compile the deck under {wd / 'out'}/" in inbound.modified_content
-    assert (wd / "materials" / "notes.md").read_text(encoding="utf-8") == "facts"
+    assert f"Compile the deck under {own / 'out'}/" in inbound.modified_content
+    assert (own / "materials" / "notes.md").read_text(encoding="utf-8") == "facts"
     assert f"Published a 3-slide deck.\nDeck: {deck}\nMEDIA: {deck}" in outbound.modified_content
 
 
@@ -434,3 +451,213 @@ async def test_a_cancelled_turn_keeps_the_users_words_not_the_staging_block(tmp_
     session = loop.sessions.get_or_create("cli:c")
     users = [m for m in session.messages if m.get("role") == "user"]
     assert users and users[-1]["content"] == "build a deck about penguins"
+
+
+def test_two_sessions_on_one_channel_directory_get_decks_of_their_own(tmp_path: Path) -> None:
+    """The web gateway gives every session on a channel one directory, and the engine
+    fences one deck per directory: measured, the third deck request in a channel built
+    on the first's template with the second's sources. The hook repoints each turn to
+    <workdir>/decks/<session>/ before staging, and the same session comes back to it."""
+    hook = plugin_module.make_hook(_ctx(dict(ENABLED), tmp_path / "ws"))
+    channel_dir = tmp_path / "tui"
+    channel_dir.mkdir()
+
+    async def turn(session_key: str) -> Path:
+        with workdir.bind(channel_dir):
+            await hook.before_user_inbound(AgentHookContext(session_key=session_key, inbound_content="make a deck"))
+            return Path(workdir.current())
+
+    first = asyncio.run(turn("acp:20260903_084606_58248d"))
+    second = asyncio.run(turn("acp:20260903_084931_67fd0d"))
+    again = asyncio.run(turn("acp:20260903_084606_58248d"))
+
+    assert first == channel_dir / "decks" / "20260903_084606_58248d" and first.is_dir()
+    assert second == channel_dir / "decks" / "20260903_084931_67fd0d" and second != first
+    assert again == first, "a resumed session lands in the folder it started in"
+    assert workdir.current() is None, "the bind's reset still clears the turn's repoint"
+
+
+def test_the_per_session_deck_can_be_switched_off(tmp_path: Path) -> None:
+    hook = plugin_module.make_hook(_ctx({**ENABLED, "deckPerSession": False}, tmp_path / "ws"))
+    channel_dir = tmp_path / "tui"
+    channel_dir.mkdir()
+
+    async def turn() -> Path:
+        with workdir.bind(channel_dir):
+            await hook.before_user_inbound(AgentHookContext(session_key="acp:x", inbound_content="make a deck"))
+            return Path(workdir.current())
+
+    assert asyncio.run(turn()) == channel_dir
+
+
+def test_a_deck_the_model_copied_into_out_is_not_announced_as_published(tmp_path: Path) -> None:
+    """Two live runs answered a refused build with `cp deck/build/deck.pptx out/...` and told
+    the user the deck was delivered; the hook confirmed it, knowing only "a valid deck under
+    out/, newer than the turn". The publish step's record is what a deck has to be on."""
+    hook = plugin_module.make_hook(_ctx(dict(ENABLED), tmp_path / "ws"))
+    wd = tmp_path / "session"
+    wd.mkdir()
+    ctx = AgentHookContext(session_key="s1", inbound_content="make the deck")
+
+    async def run():
+        with workdir.bind(wd):
+            await hook.before_user_inbound(ctx)
+            own = Path(workdir.current())
+            copied = _pptx(own / "out" / "成都夜间市集项目提案.pptx", slides=20)
+            ctx.outbound_content = f"发布完成。\nMEDIA: {copied}"
+            return await hook.after_send(ctx)
+
+    decision = asyncio.run(run())
+    assert "No deck was published this turn" in decision.modified_content
+    assert (
+        "成都夜间市集项目提案.pptx" in decision.modified_content
+        and "not written by ppt_build" in decision.modified_content
+    )
+    assert "Published a" not in decision.modified_content
+
+
+def test_the_announcement_carries_the_pdf_beside_the_deck(tmp_path: Path) -> None:
+    """A .pptx is a download and nothing more on the web surface; the PDF the build wrote
+    beside it is the same deck as pages, and the announcement hands both over."""
+    hook = plugin_module.make_hook(_ctx(dict(ENABLED), tmp_path / "ws"))
+    wd = tmp_path / "session"
+    wd.mkdir()
+    ctx = AgentHookContext(session_key="s1", inbound_content="make the deck")
+
+    async def run():
+        with workdir.bind(wd):
+            await hook.before_user_inbound(ctx)
+            own = Path(workdir.current())
+            deck = _pptx(own / "out" / "deck.pptx", slides=3)
+            _published(own, deck)
+            deck.with_suffix(".pdf").write_bytes(b"%PDF-1.4")
+            ctx.outbound_content = "done"
+            return await hook.after_send(ctx), deck
+
+    decision, deck = asyncio.run(run())
+    assert f"Deck: {deck}\nMEDIA: {deck}" in decision.modified_content
+    assert f"{deck.with_suffix('.pdf')}\nMEDIA: {deck.with_suffix('.pdf')}" in decision.modified_content
+
+
+def _reply(text: str, tool_calls=()):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(content=text, tool_calls=list(tool_calls))
+
+
+def test_a_reply_that_ends_the_turn_without_a_deck_is_rolled_back_with_a_nudge(tmp_path: Path) -> None:
+    """A live run answered its own ingest with "append needs real content -- re-ingest
+    after..." and the loop, seeing no tool call, ended the turn with the deck unbuilt;
+    the delegating agent had to spawn it again. The directory says the turn is not done,
+    so the iteration is sent back -- twice at most, then the turn may end."""
+    from raven_ppt.plugin.hook import UNFINISHED_NUDGE
+
+    hook = plugin_module.make_hook(_ctx(dict(ENABLED), tmp_path / "ws"))
+    wd = tmp_path / "session"
+    wd.mkdir()
+    ctx = AgentHookContext(session_key="s1", inbound_content="make the deck", metadata={})
+
+    async def run():
+        with workdir.bind(wd):
+            await hook.before_user_inbound(ctx)
+            own = Path(workdir.current())
+            (own / "deck" / "state").mkdir(parents=True)
+            ctx.response = _reply("append 需要实际内容——补上 PDF 后半部分核实到的运营痛点与标准，再重新 ingest。")
+            first = await hook.after_iteration(ctx)
+            second = await hook.after_iteration(ctx)
+            third = await hook.after_iteration(ctx)
+            ctx.response = _reply("材料里没有上海案例的入住率数据，请提供来源或允许我标注为估计值？")
+            question = await hook.after_iteration(ctx)
+            ctx.response = _reply("正在构建", tool_calls=[{"name": "ppt_build"}])
+            working = await hook.after_iteration(ctx)
+        return first, second, third, question, working
+
+    first, second, third, question, working = asyncio.run(run())
+    assert first.rollback and first.rollback_inject == [{"role": "user", "content": UNFINISHED_NUDGE}]
+    assert second.rollback
+    assert not third.rollback and third.rollback_inject is None, "two nudges, then the turn may end"
+    assert not question.rollback, "a question to the user is a legitimate end"
+    assert not working.rollback, "an iteration with tool calls is not an ending"
+
+
+def test_a_turn_that_published_its_deck_ends_once_its_reply_names_the_deck(tmp_path: Path) -> None:
+    """On a live run the model's last act after publishing was a `cp` of the deck that the
+    exec policy refused, and its reply was the refusal -- "would you like me to continue?"
+    -- so the delegating agent was asked a question about a deck it was never told
+    existed. The path is in the directory; the reply is sent back once to carry it."""
+    from raven_ppt.plugin.hook import DELIVERED_NUDGE
+
+    hook = plugin_module.make_hook(_ctx(dict(ENABLED), tmp_path / "ws"))
+    wd = tmp_path / "session"
+    wd.mkdir()
+    ctx = AgentHookContext(session_key="s1", inbound_content="make the deck", metadata={})
+
+    async def run():
+        with workdir.bind(wd):
+            await hook.before_user_inbound(ctx)
+            own = Path(workdir.current())
+            deck = _pptx(own / "out" / "deck.pptx", slides=3)
+            _published(own, deck)
+            ctx.response = _reply("The operation was not completed. Would you like me to continue with the task?")
+            unnamed = await hook.after_iteration(ctx)
+            ctx.response = _reply(f"Delivered: {deck} -- 3 pages on the plan.")
+            named = await hook.after_iteration(ctx)
+            ctx.response = _reply("done.")
+            again = await hook.after_iteration(ctx)
+        return deck, unnamed, named, again
+
+    deck, unnamed, named, again = asyncio.run(run())
+    assert unnamed.rollback
+    assert unnamed.rollback_inject == [{"role": "user", "content": DELIVERED_NUDGE.format(paths=str(deck))}]
+    assert not named.rollback, "a reply that names the delivered deck is the end of the turn"
+    assert not again.rollback, "one nudge per turn; after it the turn may end however it likes"
+
+
+def test_a_turn_with_no_deck_in_progress_is_left_alone(tmp_path: Path) -> None:
+    """A question answered in prose -- which templates exist, what the outline says --
+    starts no deck, and ending it is not an unfinished deck."""
+    hook = plugin_module.make_hook(_ctx(dict(ENABLED), tmp_path / "ws"))
+    wd = tmp_path / "session"
+    wd.mkdir()
+    ctx = AgentHookContext(session_key="s1", inbound_content="which templates do you have?", metadata={})
+
+    async def run():
+        with workdir.bind(wd):
+            await hook.before_user_inbound(ctx)
+            ctx.response = _reply("Eight bundled templates: amber, beige, ...")
+            return await hook.after_iteration(ctx)
+
+    assert not asyncio.run(run()).rollback
+
+
+def test_a_preview_from_an_earlier_deck_is_not_announced_as_this_one(tmp_path: Path) -> None:
+    """`_pdf_beside` returns None when the build could not render a PDF, and the older
+    file it leaves in place is a picture of a deck that no longer exists. Announced as
+    "the same deck" it is worse than no preview, so the announcement takes only a
+    preview at least as new as the deck it stands for."""
+    import os
+    import time
+
+    hook = plugin_module.make_hook(_ctx(dict(ENABLED), tmp_path / "ws"))
+    wd = tmp_path / "session"
+    wd.mkdir()
+    ctx = AgentHookContext(session_key="s1", inbound_content="make the deck")
+
+    async def run():
+        with workdir.bind(wd):
+            await hook.before_user_inbound(ctx)
+            own = Path(workdir.current())
+            stale = own / "out" / "deck.pdf"
+            stale.parent.mkdir(parents=True, exist_ok=True)
+            stale.write_bytes(b"%PDF-1.4 an earlier deck")
+            older = time.time() - 60
+            os.utime(stale, (older, older))
+            deck = _pptx(own / "out" / "deck.pptx", slides=3)
+            _published(own, deck)
+            ctx.outbound_content = "done"
+            return await hook.after_send(ctx), deck, stale
+
+    decision, deck, stale = asyncio.run(run())
+    assert f"Deck: {deck}" in decision.modified_content
+    assert str(stale) not in decision.modified_content
+    assert "Preview" not in decision.modified_content

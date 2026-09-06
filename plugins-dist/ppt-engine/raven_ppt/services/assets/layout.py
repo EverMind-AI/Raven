@@ -3514,6 +3514,8 @@ def formula(slide, box, text, theme, *, size=BODY_PT, align="left", anchor="top"
     """
     theme = _with_faces(theme, font, cjk_font)
     face = theme.get("font_family")
+    if _is_tex(text):
+        return _formula_picture(slide, box, text, theme, size, align, anchor)
     lines = _paragraphs(text)
     if any(_is_runs(line) for line in lines):
         raise ValueError(
@@ -3569,9 +3571,109 @@ def formula_type_size(text, width, *, size=BODY_PT, font=None):
     It steps down from `size` until the line fits and then, at the floor, splits the
     expression at its own separators -- and where it stopped was visible only in the
     render. Ask first and the answer is a number: one that comes back at
-    `BODY_FLOOR_PT` wants a wider column or fewer symbols, not another build.
+    `BODY_FLOOR_PT` wants a wider column or fewer symbols, not another build. A TeX
+    expression answers with the size its picture is scaled to in that width.
     """
+    if _is_tex(text):
+        width_in, _height_in = _tex_extent(text, size)
+        room = max(0.5, width - 0.12)
+        return round(size * min(1.0, room / width_in), 1) if width_in > 0 else size
     return _formula_size(_paragraphs(text), width, size, font)[0]
+
+
+# Why an expression may be a picture at all, when every other helper here writes text
+# python-pptx can measure: a text box has one baseline per line. A fraction, a root, a
+# sum with its limits -- anything that stacks -- has no spelling in it, and a delivered
+# page set the attention formula as `softmax(QK^T / sqrt(d_k)) V`, a slash for the bar
+# and a stray radical sign, then broke it at the equals sign. Two-dimensional notation
+# is set by a typesetter and placed as a picture, in the deck's ink at the deck's size.
+_TEX_MARKS = ("\\\\frac", "\\\\sqrt", "\\\\sum", "\\\\prod", "\\\\int", "\\\\left", "\\\\right", "\\\\mathrm", "\\\\mathbf",
+              "\\\\hat", "\\\\bar", "\\\\vec", "\\\\cdot", "\\\\times", "\\\\infty", "\\\\partial", "\\\\nabla",
+              "\\\\alpha", "\\\\beta", "\\\\gamma", "\\\\delta", "\\\\epsilon", "\\\\theta", "\\\\lambda", "\\\\mu", "\\\\pi",
+              "\\\\sigma", "\\\\tau", "\\\\phi", "\\\\omega", "\\\\Delta", "\\\\Sigma", "\\\\Omega", "\\\\log", "\\\\exp",
+              "\\\\min", "\\\\max", "\\\\arg", "\\\\text", "\\\\operatorname", "\\\\le", "\\\\ge", "\\\\ne", "\\\\approx",
+              "\\\\to", "\\\\rightarrow", "\\\\ldots", "\\\\dots")
+_TEX_DPI = 300
+_TEX_CACHE: dict = {}
+
+
+def _is_tex(text):
+    """Whether the expression is written in TeX: wrapped in `$`, or carrying a TeX command."""
+    body = str(text or "").strip()
+    if len(body) >= 2 and body.startswith("$") and body.endswith("$"):
+        return True
+    return any(mark in body for mark in _TEX_MARKS)
+
+
+def _tex_body(text):
+    return str(text).strip().strip("$").strip()
+
+
+def _render_tex(tex, size, colour):
+    """A transparent PNG of the expression, in the deck's ink, at `size` points.
+
+    Rendered by matplotlib's own typesetter (mathtext, no TeX installation), which
+    knows fractions, roots, sums, limits, Greek and the operators a slide's formula
+    uses; a construct it does not know raises, and the message names it.
+    """
+    key = (tex, size, colour)
+    if key in _TEX_CACHE:
+        return _TEX_CACHE[key]
+    import io
+
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    figure = Figure(figsize=(0.1, 0.1))
+    FigureCanvasAgg(figure)
+    figure.text(0, 0, f"${tex}$", fontsize=size, color=colour)
+    buffer = io.BytesIO()
+    try:
+        figure.savefig(buffer, dpi=_TEX_DPI, transparent=True, bbox_inches="tight", pad_inches=0.02, format="png")
+    except ValueError as exc:
+        raise ValueError(
+            f"the expression {tex!r} did not typeset: {exc}. Write it in the TeX mathtext knows -- "
+            "\\\\frac{}{}, \\\\sqrt{}, \\\\sum_{}^{}, \\\\mathrm{} for a word set upright, _{} and ^{} -- "
+            "and keep the prose around it outside the expression"
+        ) from exc
+    _TEX_CACHE[key] = buffer.getvalue()
+    return _TEX_CACHE[key]
+
+
+def _tex_extent(text, size):
+    """(width, height) in inches the expression takes at `size` points."""
+    import io
+
+    from PIL import Image
+
+    png = _render_tex(_tex_body(text), size, "#000000")
+    with Image.open(io.BytesIO(png)) as image:
+        return image.width / _TEX_DPI, image.height / _TEX_DPI
+
+
+def _formula_picture(slide, box, text, theme, size, align, anchor):
+    tex = _tex_body(text)
+    if any("\u4e00" <= character <= "\u9fff" or "\u3000" <= character <= "\u30ff" for character in tex):
+        raise ValueError(
+            "a TeX expression cannot carry CJK text -- the typesetter has no glyphs for it. Keep the words "
+            "outside: `write` the sentence, and give `formula` the expression alone"
+        )
+    colour = theme.get("foreground") or "#000000"
+    png = _render_tex(tex, size, str(colour))
+    width_in, height_in = _tex_extent(tex, size)
+    room_w, room_h = max(0.5, box.w - 2 * _FRAME_SIDE), max(0.2, box.h - 2 * _FRAME_ENDS)
+    scale = min(1.0, room_w / width_in, room_h / height_in) if width_in > 0 and height_in > 0 else 1.0
+    if scale < 1.0:
+        _gave_up("formula size", size, round(size * scale, 1), "the expression was scaled to fit its box")
+    needed = Box.at(0.0, 0.0, w=width_in * scale, h=height_in * scale)
+    horizontal = _named(_ALIGNS, align, "align")
+    vertical = _named(_ANCHORS, anchor, "anchor")
+    placed = _copy_ink(box, needed, horizontal, vertical)
+    import io
+
+    shape = slide.shapes.add_picture(io.BytesIO(png), Inches(placed.x0), Inches(placed.y0), width=Inches(placed.w))
+    shape.name = "formula"
+    return Drawn(shape, placed)
 
 
 # Why the icon is drawn here rather than described: three live decks drew the surface

@@ -13,10 +13,6 @@ written once, in ``_finalize``), so structure and per-node state are read
 separately: structure always from ``graph.json``, state from ``manifest.json``
 when it exists and from the caller's overlay (the instance registry) when it
 does not.
-
-A replanned run also carries a reserved ``replan`` key there, naming the run that
-replaced it; it is not part of ``SubAgentDagSpec`` and must not be, that model being
-``extra="forbid"``. Readers here take the keys they want and ignore it.
 """
 
 from __future__ import annotations

@@ -1862,8 +1862,12 @@ def test_an_irregular_run_is_not_grown(tmp_path: Path) -> None:
     path = _unit_page(tmp_path, "curve.pptx", pill)
     source, out = Presentation(str(path)), Presentation(str(path))
 
-    with pytest.raises(ValueError, match="no row, column or grid"):
+    with pytest.raises(ValueError, match="no row, column or grid") as refused:
         adapt(out, source.slides[0], items=[["甲"], ["乙"], ["丙"], ["丁"], ["戊"]])
+    # The way out is named, with the geometry to take it: two measured runs met this
+    # refusal on a template's diagonal pair and had only "another prototype" to go on.
+    assert "clone_shape(run[-1], (left, top, width, height))" in str(refused.value)
+    assert "(1.00, 4.50, 1.80, 0.50)" in str(refused.value)
 
 
 def test_remove_unit_closes_the_gap_and_clone_shape_lands_at_its_box(tmp_path: Path) -> None:
@@ -2135,3 +2139,272 @@ def test_a_shaped_picture_frame_is_covered_not_shrunk(tmp_path: Path) -> None:
     plain = slide.shapes.add_picture(str(image), Inches(1), Inches(1), Inches(4), Inches(3))
     replace_picture(plain, replacement)
     assert plain.height < Inches(3), "a plain rectangle still gives way to the picture under contain"
+
+
+def _drawing_page(tmp_path: Path):
+    """A page whose illustration is a group of freeforms with a loose star beside it, under a title."""
+    from pptx import Presentation
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.util import Inches
+
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    title = slide.shapes.add_textbox(Inches(1), Inches(0.5), Inches(8), Inches(1))
+    title.text_frame.text = "Where the market sits"
+    cartoon = slide.shapes.add_group_shape()
+    cartoon.shapes.add_shape(MSO_SHAPE.OVAL, Inches(8), Inches(2), Inches(2), Inches(2))
+    cartoon.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(8.5), Inches(4), Inches(1), Inches(2))
+    cartoon.name = "cartoon"
+    star = slide.shapes.add_shape(MSO_SHAPE.STAR_5_POINT, Inches(10.2), Inches(2.2), Inches(1), Inches(1))
+    panel = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(1), Inches(2), Inches(6), Inches(4))
+    panel.text_frame.text = "A panel of copy the picture must not take"
+    return presentation, slide, cartoon, star, panel
+
+
+def test_replace_picture_puts_a_picture_where_a_drawn_illustration_was(tmp_path: Path, image) -> None:
+    """A section page's cartoon is a group of freeforms, not a picture, and `replace_picture`
+    used to refuse it ("no image to replace") -- so the template's illustration stayed on
+    every borrowed page. The picture takes the drawing's box and depth, and the drawing goes."""
+    from pptx import Presentation
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+    from raven_ppt.services.template.compose import replace_picture
+
+    presentation, slide, cartoon, star, panel = _drawing_page(tmp_path)
+    tree = cartoon._element.getparent()
+    depth = tree.index(cartoon._element)
+    where = (cartoon.left, cartoon.top, cartoon.width, cartoon.height)
+    figure = image("cartoon.png", (30, 120, 120))
+
+    picture = replace_picture(cartoon, figure)
+    out = tmp_path / "swapped.pptx"
+    presentation.save(str(out))
+
+    page = Presentation(str(out)).slides[0]
+    kinds = [shape.shape_type for shape in page.shapes]
+    assert MSO_SHAPE_TYPE.GROUP not in kinds, "the drawing is gone"
+    assert kinds.count(MSO_SHAPE_TYPE.PICTURE) == 1
+    assert tree.index(picture._element) == depth, "the picture sits where the drawing sat in the z-order"
+    frame = next(shape for shape in page.shapes if shape.shape_type == MSO_SHAPE_TYPE.PICTURE)
+    assert frame.image.blob == figure.read_bytes()
+    assert frame.left >= where[0] and frame.top >= where[1], "contain keeps the picture inside the drawing's box"
+    assert frame.left + frame.width <= where[0] + where[2] + 1 and frame.top + frame.height <= where[1] + where[3] + 1
+    assert frame.name == "cartoon"
+
+
+def test_replace_picture_takes_a_group_member_with_its_whole_group(tmp_path: Path, image) -> None:
+    """`adapt` numbers a group's members too, so an author points at the oval inside the
+    cartoon; a group is one drawing, and half a cartoon left behind is worse than none."""
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+    from raven_ppt.services.template.compose import replace_picture
+
+    presentation, slide, cartoon, star, panel = _drawing_page(tmp_path)
+    oval = cartoon.shapes[0]
+
+    replace_picture(oval, image("cartoon.png", (30, 120, 120)))
+
+    kinds = [shape.shape_type for shape in slide.shapes]
+    assert MSO_SHAPE_TYPE.GROUP not in kinds and kinds.count(MSO_SHAPE_TYPE.PICTURE) == 1
+    assert any(shape.shape_type == MSO_SHAPE_TYPE.TEXT_BOX for shape in slide.shapes), "the title is untouched"
+
+
+def test_adapt_swaps_a_drawing_and_several_loose_shapes_for_one_picture(tmp_path: Path, image) -> None:
+    """`pictures={n: ...}` on a page whose illustration is drawn used to report the key as
+    missed, so the author fell back to drawing over it. `adapt` numbers a group's members
+    and not the group, so a member stands for its whole cartoon; a tuple of keys names the
+    loose parts of one drawing together, and the picture spans their union."""
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+    from raven_ppt.services.template.compose import _all_shapes, adapt
+
+    presentation, slide, cartoon, star, panel = _drawing_page(tmp_path)
+    every = list(_all_shapes(slide.shapes))
+    oval_index = every.index(cartoon.shapes[0]) + 1
+    star_index = every.index(star) + 1
+    figure = image("scene.png", (200, 120, 40))
+
+    page = adapt(presentation, slide, title="Night market", pictures={(oval_index, star_index): figure})
+
+    kinds = [shape.shape_type for shape in page.shapes]
+    assert MSO_SHAPE_TYPE.GROUP not in kinds and kinds.count(MSO_SHAPE_TYPE.PICTURE) == 1
+    assert not any(shape.name == star.name for shape in page.shapes), "the loose star went with the group"
+    frame = next(shape for shape in page.shapes if shape.shape_type == MSO_SHAPE_TYPE.PICTURE)
+    assert frame.left >= cartoon.left and frame.left + frame.width <= star.left + star.width + 1, (
+        "the picture spans the union of the drawing and the star"
+    )
+    assert any("Night market" in shape.text_frame.text for shape in page.shapes if shape.has_text_frame)
+
+
+def test_adapt_does_not_read_a_text_panel_as_an_illustration(tmp_path: Path, image) -> None:
+    """A shape that holds copy is a miscount, not a drawing: an index landing on the copy
+    panel is refused as before, rather than the panel giving way to a picture."""
+    import pytest
+
+    from raven_ppt.services.template.compose import _all_shapes, adapt
+
+    presentation, slide, cartoon, star, panel = _drawing_page(tmp_path)
+    every = list(_all_shapes(slide.shapes))
+
+    with pytest.raises(KeyError):
+        adapt(presentation, slide, title="Night market", pictures={every.index(panel) + 1: image("x.png", (1, 2, 3))})
+
+
+def test_a_drawing_inside_a_card_takes_only_the_wordless_group_around_it(tmp_path: Path, image) -> None:
+    """Template pages keep everything one group down -- the card, its icon, its copy in one
+    group -- and climbing to the top swapped a whole page's content for one picture (the
+    blue template's four-card page). The icon's own group goes; the card and its words stay."""
+    from pptx import Presentation
+    from pptx.enum.shapes import MSO_SHAPE, MSO_SHAPE_TYPE
+    from pptx.util import Inches
+
+    from raven_ppt.services.template.compose import replace_picture
+
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    content = slide.shapes.add_group_shape()
+    card = content.shapes.add_group_shape()
+    body = card.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(1), Inches(2), Inches(3), Inches(4))
+    body.text_frame.text = "Sales up"
+    icon = card.shapes.add_group_shape()
+    icon.shapes.add_shape(MSO_SHAPE.OVAL, Inches(1.5), Inches(2.5), Inches(1), Inches(1))
+    icon.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(1.8), Inches(2.8), Inches(0.4), Inches(0.4))
+    icon.name = "icon"
+
+    picture = replace_picture(icon.shapes[1], image("icon.png", (10, 10, 200)))
+
+    assert picture.name == "icon"
+    assert [shape.shape_type for shape in card.shapes] == [MSO_SHAPE_TYPE.AUTO_SHAPE, MSO_SHAPE_TYPE.PICTURE]
+    assert card.shapes[0].text_frame.text == "Sales up"
+    assert len(slide.shapes) == 1 and slide.shapes[0].shape_type == MSO_SHAPE_TYPE.GROUP
+
+
+def test_the_menu_lists_picture_filled_shapes_and_drawings_as_picture_slots(tmp_path: Path, image) -> None:
+    """The amber template draws every photograph as a rounded rectangle filled with one and
+    a section page's cartoon as a group of freeforms; counting `p:pic` alone told an author
+    those pages held no picture, and its `pictures={2: ...}` was refused on three pages of
+    one live run. Both are slots now, numbered as `adapt` numbers; a card icon is not."""
+    from lxml import etree
+    from pptx import Presentation
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.util import Inches
+
+    from raven_ppt.services.template.menu import menu
+
+    namespace = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    rels = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    title = slide.shapes.add_textbox(Inches(0.7), Inches(0.3), Inches(8), Inches(1))
+    title.text_frame.text = "Where the market sits"
+    photo = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.7), Inches(1.5), Inches(5.4), Inches(3.6))
+    _, relationship = photo.part.get_or_add_image_part(str(image("photo.png", (90, 90, 90))))
+    fill = etree.SubElement(photo._element.spPr, f"{{{namespace}}}blipFill")
+    etree.SubElement(fill, f"{{{namespace}}}blip").set(f"{{{rels}}}embed", relationship)
+    cartoon = slide.shapes.add_group_shape()
+    cartoon.shapes.add_shape(MSO_SHAPE.OVAL, Inches(7), Inches(2), Inches(2.4), Inches(2.4))
+    cartoon.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(7.5), Inches(4.4), Inches(1.4), Inches(1.1))
+    cartoon.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(8), Inches(4.4), Inches(0.3), Inches(1.1))
+    band = slide.shapes.add_group_shape()
+    band.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0), Inches(6.4), Inches(13.333), Inches(1.1))
+    band.shapes.add_shape(MSO_SHAPE.OVAL, Inches(1), Inches(6.5), Inches(1.5), Inches(1))
+    card = slide.shapes.add_group_shape()
+    body = card.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(10), Inches(2), Inches(2.9), Inches(4))
+    body.text_frame.text = "Sales up"
+    icon = card.shapes.add_group_shape()
+    icon.shapes.add_shape(MSO_SHAPE.OVAL, Inches(10.2), Inches(2.2), Inches(0.7), Inches(0.7))
+    icon.shapes.build_freeform(Inches(10.4), Inches(2.4)).add_line_segments(
+        [(Inches(10.6), Inches(2.4)), (Inches(10.5), Inches(2.7))]
+    ).convert_to_shape()
+    path = tmp_path / "slots.pptx"
+    presentation.save(str(path))
+
+    (entry,) = menu(path)
+
+    assert entry.pictures == 1
+    assert entry.picture_slots == ("[2] 5.4x3.6in photo", "[3] 2.4x3.5in drawing"), (
+        "the photograph, the cartoon by its first member; not the page-wide band, not the card, not its icon"
+    )
+    assert "picture slots [2] 5.4x3.6in photo, [3] 2.4x3.5in drawing" in entry.line()
+
+
+def test_adapt_names_a_drawing_a_picture_may_stand_in_for_when_a_key_misses(tmp_path: Path, image) -> None:
+    """The refusal used to list every wordless shape as `shape`, so an author reading it could
+    not tell the cartoon from a band; it now says which shapes a picture may take over."""
+    import pytest
+
+    from raven_ppt.services.template.compose import adapt
+
+    presentation, slide, cartoon, star, panel = _drawing_page(tmp_path)
+
+    with pytest.raises(KeyError) as caught:
+        adapt(presentation, slide, title="Night market", pictures={99: image("x.png", (1, 2, 3))})
+
+    assert "[2] drawing 2.0x4.0in (a picture may take its place)" in str(caught.value), "a member is named by its whole"
+    assert "name a drawing listed below" in str(caught.value)
+
+
+def test_the_menu_names_a_transparent_illustration_a_cut_out(tmp_path: Path) -> None:
+    """The teal template's cartoons are PNGs two thirds transparent, floating on the page's
+    ground with boxes that run into the title row; the menu called them photos, and an
+    author put a photograph in one -- which hugged the title on the live page."""
+    from PIL import Image
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    from raven_ppt.services.template.menu import menu
+
+    cut = tmp_path / "cartoon.png"
+    canvas = Image.new("RGBA", (400, 300), (0, 0, 0, 0))
+    canvas.paste((30, 120, 120, 255), (100, 60, 300, 240))
+    canvas.save(cut)
+    photo = tmp_path / "photo.png"
+    Image.new("RGB", (400, 300), (90, 90, 90)).save(photo)
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    slide.shapes.add_picture(str(cut), Inches(7.1), Inches(1.0), Inches(5.0), Inches(3.3))
+    slide.shapes.add_picture(str(photo), Inches(0.7), Inches(3.3), Inches(5.7), Inches(3.5))
+    path = tmp_path / "slots.pptx"
+    presentation.save(str(path))
+
+    (entry,) = menu(path)
+
+    assert entry.picture_slots == ("[1] 5.0x3.3in cut-out", "[2] 5.7x3.5in photo")
+
+
+def test_an_opaque_picture_in_a_cut_outs_box_is_warned_about_and_a_cut_out_is_not(tmp_path: Path) -> None:
+    import warnings
+
+    from PIL import Image
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    from raven_ppt.services.template.compose import replace_picture
+
+    cut = tmp_path / "cartoon.png"
+    canvas = Image.new("RGBA", (400, 300), (0, 0, 0, 0))
+    canvas.paste((30, 120, 120, 255), (100, 60, 300, 240))
+    canvas.save(cut)
+    photo = tmp_path / "photo.png"
+    Image.new("RGB", (400, 300), (90, 90, 90)).save(photo)
+    another = tmp_path / "stall.png"
+    canvas.save(another)
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    frame = slide.shapes.add_picture(str(cut), Inches(7.1), Inches(1.0), Inches(5.0), Inches(3.3))
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        replace_picture(frame, photo, "cover")
+    said = [str(w.message) for w in caught if "cut-out" in str(w.message)]
+    assert len(said) == 1 and "5.0x3.3in at 7.10, 1.00" in said[0] and "transparent=true" in said[0]
+
+    frame2 = slide.shapes.add_picture(str(cut), Inches(1), Inches(1), Inches(5.0), Inches(3.3))
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        replace_picture(frame2, another, "contain")
+    assert not [w for w in caught if "cut-out" in str(w.message)], "a cut-out for a cut-out is what the slot wants"

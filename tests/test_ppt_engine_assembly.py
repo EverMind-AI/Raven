@@ -247,6 +247,10 @@ def test_a_view_budget_outside_the_range_is_refused_not_silently_clamped() -> No
     from raven_ppt.plugin.config import EngineConfig
 
     assert EngineConfig.from_slice({"viewsPerCall": 12}).views_per_call == 12
+    assert EngineConfig.from_slice({"readerEffort": "low"}).reader_effort == "low"
+    assert EngineConfig.from_slice({}).reader_effort == "", "empty means the provider's own default"
+    with pytest.raises(ValueError):
+        EngineConfig.from_slice({"readerEffort": 3})
     for bad in (0, -1, 13):
         with pytest.raises(ValueError):
             EngineConfig.from_slice({"viewsPerCall": bad})

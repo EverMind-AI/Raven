@@ -533,6 +533,7 @@ _KIND_PHRASES = {
     "language": "the wrong language",
     "house_style": "not the bound template's",
     "unmapped_page": "cannot map back to",
+    "page_failed": "block raised",
     "unseen_page": "never been shown",
     "unplaced_figure": "promised a figure and that shows no picture",
     "literal_escape": "printing an escape",
@@ -543,6 +544,7 @@ _KIND_PHRASES = {
     "figure": "figure id the catalogue does not hold",
     "borrowed": "naming no bundled template",
     "house_page": "cover, index and closing",
+    "composed_pages": "more than a quarter of its content pages",
     # Reports.
     "covered_shape": "hidden behind an opaque shape",
     "band": "filled colour bar",

@@ -18,11 +18,12 @@ import shutil
 import sys
 from pathlib import Path
 
-from raven_ppt.backends.script.blocks import level_that_separates_pages, page_sources
+from raven_ppt.backends.script.blocks import level_that_separates_pages, page_blocks, page_sources
 from raven_ppt.backends.script.submission import carries_a_program, submission_refusal
 from raven_ppt.backends.script.workspace import (
     HelperSources,
     deck_path,
+    page_failures_path,
     provision,
     script_path,
     slide_lines_path,
@@ -41,23 +42,33 @@ MAX_OUTPUT_CHARS = 20_000
 # from a `# SLIDE n` comment would make annotation the author's job and let a
 # stale number pair one page's render with another page's code; execution knows
 # the answer exactly.
-_RUNNER = """import json, os, runpy, sys
+_RUNNER = """import builtins, json, os, re, runpy, sys, traceback
 
 script = sys.argv[1]
 record = os.environ.get("PPT_SLIDE_LINES")
+blocks = json.loads(os.environ.get("PPT_SLIDE_BLOCKS") or "[]")
 sys.argv = [script]
+target = os.path.realpath(script)
 
 created = []
-if record:
+failed = []
+slides_seen = [None]
+standing_in = [None]
+if record or blocks:
     import inspect
 
     from pptx.slide import Slides
 
     original = Slides.add_slide
-    target = os.path.realpath(script)
 
     def add_slide(self, *args, **kwargs):
         slide = original(self, *args, **kwargs)
+        slides_seen[0] = self
+        if standing_in[0] is not None:
+            # A placeholder stands where a failed block's page would be, so it is
+            # attributed to that block's first line and the mapping still holds.
+            created.append([standing_in[0]])
+            return slide
         # Every frame in the script, outermost first. Which level identifies the
         # page depends on how the script is shaped, so record them all and let
         # the caller pick the level whose lines differ per slide.
@@ -69,18 +80,114 @@ if record:
 
     Slides.add_slide = add_slide
 
+
+def _drop_last(slides, count):
+    listing = slides._sldIdLst
+    for entry in list(listing)[-count:] if count else []:
+        slides.part.drop_rel(entry.rId)
+        listing.remove(entry)
+
+
+def _stand_in(slides, number, error):
+    from pptx.dml.color import RGBColor
+    from pptx.util import Inches, Pt
+
+    prs = slides.part.presentation
+    layouts = prs.slide_layouts
+    layout = layouts[6] if len(layouts) > 6 else layouts[len(layouts) - 1]
+    slide = slides.add_slide(layout)
+    box = slide.shapes.add_textbox(Inches(0.6), Inches(0.6), prs.slide_width - Inches(1.2), prs.slide_height - Inches(1.2))
+    frame = box.text_frame
+    frame.word_wrap = True
+    frame.text = f"Page {number} did not draw"
+    head = frame.paragraphs[0].runs[0].font
+    head.size, head.bold, head.color.rgb = Pt(28), True, RGBColor(0xB0, 0x00, 0x20)
+    body = frame.add_paragraph()
+    body.text = error
+    body.runs[0].font.size = Pt(14)
+    body.runs[0].font.color.rgb = RGBColor(0x40, 0x40, 0x40)
+
+
+def _slides():
+    if slides_seen[0] is not None:
+        return slides_seen[0]
+    from pptx.presentation import Presentation
+
+    for value in list(namespace.values()):
+        if isinstance(value, Presentation):
+            return value.slides
+    return None
+
+
+with open(script, "rb") as handle:
+    body = handle.read()
+lines = body.decode("utf-8", "replace").splitlines(keepends=True)
+namespace = {"__name__": "__main__", "__file__": target, "__builtins__": builtins}
+
+
+def run(start, end):
+    exec(compile("\\n" * start + "".join(lines[start:end]), target, "exec"), namespace)
+
+
 try:
-    runpy.run_path(script, run_name="__main__")
+    if not blocks:
+        runpy.run_path(script, run_name="__main__")
+    else:
+        # One block at a time, so a page that raises is that page's failure and not the
+        # deck's: the slides it managed to add are taken back, a page saying what went
+        # wrong stands in their place, and the pages after it are still drawn.
+        run(0, blocks[0][1])
+        for number, start, end in blocks:
+            before = len(created)
+            try:
+                run(start, end)
+            # `SystemExit` as well as `Exception`, because the helpers an author writes
+            # raise it: a live run's own `sub1` ended `raise SystemExit(f"sub1: nothing
+            # says {prefix!r}")`, which is a BaseException, escaped this catch, unwound
+            # past the save at the end of the file and cost the whole build -- two pages
+            # already drawn and 14.6 minutes of writing, for one page's bad guess at a
+            # placeholder string. A helper saying "this cannot work" is that page's
+            # failure, which is exactly what this branch is for. KeyboardInterrupt is
+            # not caught: that one is the caller stopping the build.
+            except (Exception, SystemExit):
+                text = traceback.format_exc()
+                sys.stderr.write(text)
+                slides = _slides()
+                if slides is None:
+                    raise
+                error = text.strip().splitlines()[-1]
+                _drop_last(slides, len(created) - before)
+                del created[before:]
+                standing_in[0] = start + 1
+                try:
+                    _stand_in(slides, number, error)
+                finally:
+                    standing_in[0] = None
+                failed.append({"page": number, "error": error, "traceback": text[-4000:]})
+        run(blocks[-1][2], len(lines))
 finally:
+    # The pages that were drawn, whatever happened to the rest. `prs.save` is the last
+    # line of the author's file, so anything that escapes the loop above -- a prelude
+    # that raises, a tail that raises, a KeyboardInterrupt -- skips it and the build
+    # reports "wrote no deck" over a deck that was mostly finished. Saving here costs a
+    # file write on a path that already had to be written for the build to succeed.
+    if not os.path.exists(os.environ.get("PPT_OUTPUT", "")):
+        try:
+            from pptx.presentation import Presentation as _Presentation
+
+            for _value in list(namespace.values()):
+                if isinstance(_value, _Presentation) and len(_value.slides):
+                    _value.save(os.environ["PPT_OUTPUT"])
+                    break
+        except Exception:  # noqa: BLE001 -- a rescue that fails leaves the original failure
+            pass
     if record:
         import hashlib
 
-        with open(script, "rb") as handle:
-            digest = hashlib.sha256(handle.read()).hexdigest()
         with open(record, "w", encoding="utf-8") as handle:
             # The digest of the text these line numbers were read from. Edit the
             # script and they point at whatever now sits on those lines.
-            json.dump({"lines": created, "script_sha256": digest}, handle)
+            json.dump({"lines": created, "script_sha256": hashlib.sha256(body).hexdigest(), "failed": failed}, handle)
 """
 
 
@@ -198,6 +305,7 @@ async def run_script(
     from raven_ppt.services.template.defaults import templates_dir
 
     env["PPT_BUNDLED_TEMPLATES"] = str(templates_dir())
+    env["PPT_SLIDE_BLOCKS"] = json.dumps(_isolable_blocks(source))
 
     runner = workdir / "_run_build.py"
     runner.write_text(_RUNNER, encoding="utf-8")
@@ -230,10 +338,20 @@ async def run_script(
     stderr = raw_err.decode("utf-8", "replace")[-MAX_OUTPUT_CHARS:]
 
     if process.returncode != 0:
-        # The line record describes the script that failed, not the deck on disk.
-        _save_failure(project, source, staging, "crash", stdout, stderr or f"exit code {process.returncode}")
+        # The line record describes the script that failed, not the deck on disk, so
+        # neither is kept as this deck's. The pages that were drawn are: the runner
+        # saves them on its way out, and the failure folder keeps that file, so a crash
+        # past the page loop costs the round rather than the writing.
+        kept = _save_failure(project, source, staging, "crash", stdout, stderr or f"exit code {process.returncode}")
+        drawn = (kept / "deck.pptx.building").is_file()
         _discard(staging, lines_map)
-        return BuildOutcome(ok=False, stdout=stdout, stderr=stderr or f"exit code {process.returncode}", note=note)
+        said = stderr or f"exit code {process.returncode}"
+        if drawn:
+            said += (
+                f"\n\nThe pages drawn before this are kept at {_relative(project, kept / 'deck.pptx.building')} -- "
+                "open it to see how far the program got."
+            )
+        return BuildOutcome(ok=False, stdout=stdout, stderr=said, note=note)
     if not staging.is_file():
         # The runner recorded line numbers under this script's hash, but the deck
         # those numbers would be paired with is still the old one -- keeping the
@@ -255,6 +373,15 @@ async def run_script(
     # of those shows up in a render -- see raven_ppt/services/tidy.py.
     for line in tidy(staging):
         log.debug("tidy: %s", line)
+    failed = _failed_pages(lines_map)
+    if failed:
+        _save_failure(project, source, staging, "page", stdout, stderr)
+        page_failures_path(project).parent.mkdir(parents=True, exist_ok=True)
+        page_failures_path(project).write_text(
+            json.dumps({"pages": failed}, ensure_ascii=False, indent=1), encoding="utf-8"
+        )
+    else:
+        page_failures_path(project).unlink(missing_ok=True)
     staging.replace(target)
     sources, digest = _sources(source, lines_map)
     return BuildOutcome(
@@ -267,6 +394,45 @@ async def run_script(
         sources=sources,
         source_digest=digest,
     )
+
+
+def _isolable_blocks(source: Path) -> list[list[int]]:
+    """The `# SLIDE n` blocks the runner may execute one at a time, or nothing.
+
+    Nothing when the banners do not number the pages 1..N in file order: the isolation
+    stands a placeholder page where a failed block's page would be, and that only keeps
+    page and block paired when the blocks come in page order.
+    """
+    try:
+        lines = source.read_text(encoding="utf-8").splitlines(keepends=True)
+    except OSError:
+        return []
+    blocks = page_blocks(lines)
+    ordered = sorted(blocks.items(), key=lambda item: item[1][0])
+    if [number for number, _ in ordered] != list(range(1, len(ordered) + 1)):
+        return []
+    return [[number, start, end] for number, (start, end) in ordered]
+
+
+def _failed_pages(lines_map: Path) -> list[dict]:
+    try:
+        payload = json.loads(lines_map.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    failed = payload.get("failed")
+    return (
+        [entry for entry in failed if isinstance(entry, dict) and "page" in entry] if isinstance(failed, list) else []
+    )
+
+
+def page_failures(project: Project) -> list[dict]:
+    """The pages the last build stood in for, from the record it wrote: page, error, traceback."""
+    try:
+        payload = json.loads(page_failures_path(project).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    pages = payload.get("pages") if isinstance(payload, dict) else None
+    return [entry for entry in pages if isinstance(entry, dict) and "page" in entry] if isinstance(pages, list) else []
 
 
 def _discard(*paths: Path) -> None:

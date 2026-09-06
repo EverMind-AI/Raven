@@ -128,7 +128,9 @@ class PptOutlineTool(Tool):
                                     "deck/build/references/layouts.md -- `P14`. Part 1 of that file is "
                                     "eleven skeletons with every id folded into the one it varies, so "
                                     "the id is the skeleton plus what changed. Leave it empty for a page "
-                                    "cloned from a template example, whose structure is that example's. "
+                                    "cloned from a template example, whose structure is that example's -- "
+                                    "with a template bound that is most pages, and `prototype` is decided "
+                                    "before this. "
                                     "Naming it here is what makes the choice reviewable before any "
                                     "geometry is written -- and reading the column down the deck is where "
                                     "a deck that composed every page the same way shows"
@@ -247,12 +249,14 @@ class PptOutlineTool(Tool):
                             "prototype": {
                                 "type": ["integer", "null"],
                                 "description": (
-                                    "with a template bound: the example page this page starts from, as "
-                                    "ppt_template numbered it. Choose the nearest content example by "
-                                    "information shape. Set it to null only after comparing the examples "
-                                    "and finding that none can carry the page even after deleting, moving "
-                                    "or resizing what is on it, and say what the mismatch was in `needs` -- "
-                                    "a null comes back as a question"
+                                    "with a template bound, the first field to decide for every content "
+                                    "page: the example page this page starts from, as ppt_template numbered "
+                                    "and captioned it beside each render. Choose the nearest content example "
+                                    "by information shape, then adapt it -- replace its words and pictures, "
+                                    "delete spare units, move what needs moving. Set it to null only after "
+                                    "comparing the examples and the borrowable pages and finding that none "
+                                    "can carry the page even so, and say what the mismatch was in `needs`; "
+                                    "more than a quarter of the content pages null is refused"
                                 ),
                             },
                             "borrowed": {
@@ -361,6 +365,7 @@ class PptOutlineTool(Tool):
             + _borrowed_pages(outline, state)
             + _structural(outline)
             + _house_pages(outline, state)
+            + _composed_pages(outline, state)
         )
         budget = _budget(outline, brief)
         if budget:
@@ -388,9 +393,20 @@ class PptOutlineTool(Tool):
         if findings:
             payload["measured"] = _return.grouped(findings)
         unprototyped = [page.page for page in outline.pages if page.prototype is None] if state.template else []
-        asks = _asks(
-            errands, blocking, bool(state.figures), unprototyped, outline, _content_examples(state, unprototyped)
-        )
+        examples_said = _content_examples(state, unprototyped)
+        if unprototyped and state.template is not None:
+            from raven_ppt.services.template.menu import menu
+
+            examples = [entry for entry in menu(state.template.source) if not entry.role and not entry.hidden]
+            suggestions = []
+            for page in outline.pages:
+                if page.prototype is None and not page.borrowed:
+                    fitting = _suggested_examples(page, examples)
+                    if fitting:
+                        suggestions.append(f"page {page.page} -> try {', '.join(str(n) for n in fitting)}")
+            if suggestions:
+                examples_said += "By what each page says it carries: " + "; ".join(suggestions) + ". "
+        asks = _asks(errands, blocking, bool(state.figures), unprototyped, outline, examples_said)
         if reordered:
             asks.insert(
                 0,
@@ -822,21 +838,115 @@ def _content_examples(state: Any, unprototyped: list[int]) -> str:
         return ""
     from raven_ppt.services.template.menu import menu
 
+    examples = [entry for entry in menu(state.template.source) if not entry.role and not entry.hidden]
     said = []
-    for entry in menu(state.template.source):
-        if entry.role:
-            continue  # a structural page; `_house_pages` owns those
-        held = [
-            f"{entry.text_blocks} text blocks" if entry.text_blocks else "",
-            f"{entry.pictures} picture(s)" if entry.pictures else "",
-            f"{entry.tables} table(s)" if entry.tables else "",
-            f"{entry.shapes} drawn shape(s)" if entry.shapes else "",
-        ]
+    for entry in examples:
+        # The same words the bind reply put beside each render, so the two moments
+        # agree; shape counts said nothing a plan could match a page to.
+        shape = entry.arrangement or ", ".join(
+            part
+            for part in (
+                f"{entry.text_blocks} text blocks" if entry.text_blocks else "",
+                f"{entry.pictures} picture(s)" if entry.pictures else "",
+                f"{entry.tables} table(s)" if entry.tables else "",
+            )
+            if part
+        )
         note = " (clone only)" if entry.clone_only else ""
-        said.append(f"page {entry.number}: {', '.join(part for part in held if part)}{note}")
+        said.append(f"page {entry.number}: {shape}" + (f" ({entry.slots} slots)" if entry.slots else "") + note)
     if not said:
         return ""
     return "This template's content examples are " + "; ".join(said) + ". "
+
+
+def _suggested_examples(page: PagePlan, examples: list) -> list[int]:
+    """Example pages whose materials fit what this page says it carries, by number.
+
+    A suggestion and not a decision: a page carrying a figure is offered the examples
+    that show a picture, one carrying a table the examples that hold one, and a page of
+    N points the examples with N or more slots. Offered because the ask that said "pick
+    the nearest example" was acted on by nobody until a page number stood beside each
+    page; the author still chooses, and can still say no example fits.
+    """
+    carries = (page.carries or "").lower()
+    wants_picture = bool(page.figures) or any(word in carries for word in ("figure", "photo", "picture", "image", "图"))
+    wants_table = any(word in carries for word in ("table", "表"))
+    points = len(page.says)
+    fitting = []
+    for entry in examples:
+        if wants_table and entry.tables:
+            fitting.append(entry.number)
+        elif wants_picture and entry.pictures:
+            fitting.append(entry.number)
+        elif not wants_table and not wants_picture:
+            # Slots when the page repeats a unit; otherwise its text blocks less the
+            # heading, which is what a page of plain boxes offers.
+            room = entry.slots or max(entry.text_blocks - 1, 0)
+            if room >= max(points, 2):
+                fitting.append(entry.number)
+    return fitting[:4]
+
+
+# The most of a deck's content pages that may be composed from scratch while a template
+# is bound. Measured on two decks in the same template family: the one a reader called
+# the template's own started 12 of its 20 pages from an example page and composed 4 of
+# its 17 content pages (24%); the one called "nothing but self-drawn layouts" composed
+# 17 of 17, each with a line in `needs` saying an example would have cost more to adapt
+# than to redraw. The ask that listed those pages had been read twice and changed
+# nothing, so the share is a refusal now. A quarter rather than a third: the deck read as
+# the template's composed 3 of 17 (18%); a later one composed 6 of 17 (35%) and its six
+# composed pages -- two tables, a card grid, a flow row, a timeline, a risk grid -- were
+# the pages the reader pointed at as drawn by hand and ugly, and a third would have let
+# that plan through. A quarter still leaves a comparison table and a chart page.
+COMPOSED_SHARE = 1 / 4
+
+
+def _composed_pages(outline: Outline, state: Any) -> list:
+    """Refuse a plan that composes most of its content pages from scratch inside a template.
+
+    Only when a template is bound, and only over the content pages: the cover, index,
+    dividers and closing are `_house_pages`'s business. A page with a `prototype` or a
+    `borrowed` reference page starts from a designed composition; one with neither is
+    composed, and more than COMPOSED_SHARE of them composed is a deck that has stopped
+    being the template's, whatever house style its geometry is measured against. The
+    finding names the template's content examples, because the one thing the earlier
+    ask lacked was a list to choose from.
+    """
+    from math import ceil
+
+    from raven_ppt.contracts import Finding, Severity
+    from raven_ppt.services.template.menu import menu
+
+    if state.template is None or not outline.pages:
+        return []
+    entries = menu(state.template.source)
+    house = {entry.number for entry in entries if entry.role}
+    content = [page for page in outline.pages if not (page.prototype in house and not page.borrowed)]
+    if not content:
+        return []
+    composed = [page.page for page in content if page.prototype is None and not page.borrowed]
+    allowed = ceil(len(content) * COMPOSED_SHARE)
+    if len(composed) <= allowed:
+        return []
+    examples = [entry.number for entry in entries if not entry.role and not entry.hidden]
+    listed = ", ".join(str(number) for number in composed)
+    return [
+        Finding(
+            kind="composed_pages",
+            severity=Severity.BLOCKING,
+            message=(
+                f"{len(composed)} of this deck's {len(content)} content pages ({listed}) plan to be composed from "
+                f"scratch, and at most {allowed} may be while a template is bound: the template offers "
+                f"{len(examples)} content examples (pages {', '.join(str(n) for n in examples)}), and the bundled "
+                "reference pages are borrowable. Give each of the rest a `prototype` -- the nearest example by "
+                "information shape, then replace its text and pictures, delete spare units and move what needs "
+                "moving; a prototype is a starting composition, not a form to fit -- or a `borrowed` page from "
+                "`borrowable_pages`. Keep composing only the pages whose shape no example carries, and say which "
+                "shape that was in `needs`"
+            ),
+            detail={"composed": composed, "allowed": allowed, "content_pages": len(content), "examples": examples},
+        )
+    ]
 
 
 def _house_pages(outline: Outline, state: Any) -> list:

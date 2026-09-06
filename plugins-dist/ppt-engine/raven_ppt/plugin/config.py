@@ -28,6 +28,9 @@ Plugin-only keys, none of which the shipped product config carries:
                       fork's launcher-rendered tools.web.proxy fed
   imageSearch.apiKey  Serper key for ppt_image_search; falls back to
                       $SERPER_API_KEY (the research-flow spelling)
+  deckPerSession      true by default: each session builds its deck in
+                      <workdir>/decks/<session>/ rather than in <workdir>/deck,
+                      so sessions sharing one channel directory do not share a deck
 """
 
 from __future__ import annotations
@@ -74,7 +77,20 @@ class EngineConfig:
     views_per_call: int = 3
     deck_name: str = "deck.pptx"
     web_proxy: str | None = None
+    # One deck directory per session under the bound working directory. The host hands
+    # every session on a channel the same directory (a web page's channel is one folder),
+    # and Project.root fences one deck per directory, so without this a second task in the
+    # same channel inherits the first task's template, sources and plan. Measured on a
+    # web gateway: three deck requests in one channel, the third built on the first's
+    # template with the second's sources. The fork answered the same problem with one
+    # engine per session; here the hook repoints the turn's working directory instead.
+    deck_per_session: bool = True
     image_search_api_key: str | None = None
+    # The second reader's reasoning effort, passed through to the provider as given
+    # ("low", "none", ...). Empty means the provider's own default, which is the
+    # author's setting -- sized for writing a deck, and on one live run 200 seconds
+    # of thinking per page's picture.
+    reader_effort: str = ""
 
     @classmethod
     def from_slice(cls, raw: dict[str, Any] | None) -> "EngineConfig":
@@ -106,5 +122,7 @@ class EngineConfig:
             views_per_call=_count(raw, "viewsPerCall", 3, 1, 12),
             deck_name=_text(raw, "deckName", "deck.pptx") or "deck.pptx",
             web_proxy=_text(raw, "webProxy", "") or None,
+            deck_per_session=_flag(raw, "deckPerSession", True),
             image_search_api_key=key or None,
+            reader_effort=_text(raw, "readerEffort", ""),
         )

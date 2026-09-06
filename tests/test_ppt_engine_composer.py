@@ -111,3 +111,113 @@ async def test_the_tokens_of_both_attempts_are_counted() -> None:
     await composer.ask("sys", [{"type": "text", "text": "q"}], max_tokens=4000)
 
     assert composer.spent == {"input": 20, "output": 40}
+
+
+# -- how an effort reaches the model ---------------------------------------------------
+
+
+class _Routed(_Provider):
+    """A provider with the attributes `thinking` reads and the one it copies."""
+
+    def __init__(self, default_model: str, api_base: str = "") -> None:
+        super().__init__(("said", None))
+        self.default_model = default_model
+        self.api_base = api_base
+        self.extra_body = {"provider": {"order": ["x"]}}
+
+
+class _Lazy:
+    """The host's lazy proxy, in the three respects that matter here.
+
+    It names its model through an accessor rather than an attribute, it carries no
+    `extra_body` of its own, and the provider behind it does not exist -- so
+    `unwrapped` is None -- until its first call has built one.
+    """
+
+    def __init__(self, inner: _Routed) -> None:
+        self._inner = inner
+        self.built = False
+
+    def get_default_model(self) -> str:
+        return self._inner.default_model
+
+    @property
+    def unwrapped(self):
+        return self._inner if self.built else None
+
+    def chat_stream(self, *args: Any, **kwargs: Any):
+        self.built = True
+        return self._inner.chat_stream(*args, **kwargs)
+
+
+def test_an_effort_behind_openrouter_rides_in_the_body_not_the_parameter() -> None:
+    """litellm forwards `reasoning_effort` only for models its table flags as
+    reasoning-capable and drops it for the rest, glm-5.3-flash among them: on the live
+    deck product every effort the config named reached the model as no setting at
+    all. Measured on fifteen pages, the parameter at "low" read a page in 38 to 631s;
+    the gateway's own body object at "low" in 13 to 29s."""
+    from raven_ppt.tools._composer import thinking
+
+    assert thinking(_Routed("openrouter/z-ai/glm-5.3-flash"), "low") == {"extra_body": {"reasoning": {"effort": "low"}}}
+    assert thinking(_Routed("z-ai/glm-5.3-flash", "https://openrouter.ai/api/v1"), "high") == {
+        "extra_body": {"reasoning": {"effort": "high"}}
+    }
+    # This endpoint refuses `enabled: false` ("Reasoning is mandatory"), so off is the floor.
+    assert thinking(_Routed("openrouter/z-ai/glm-5.3-flash"), "none") == {
+        "extra_body": {"reasoning": {"effort": "low"}}
+    }
+
+
+def test_an_effort_elsewhere_stays_the_parameter_and_no_effort_is_nothing() -> None:
+    from raven_ppt.tools._composer import thinking
+
+    assert thinking(_Routed("gpt-5", "https://api.openai.com/v1"), "low") == {"reasoning_effort": "low"}
+    assert thinking(_Routed("openrouter/z-ai/glm-5.3-flash"), None) == {}
+    assert thinking(_Routed("openrouter/z-ai/glm-5.3-flash"), "") == {}
+
+
+def test_a_lazily_built_provider_still_names_its_route() -> None:
+    """The host hands the engine a proxy that keeps its model private and answers
+    `get_default_model()`. Reading only the attribute saw an empty string, so a glm
+    behind OpenRouter was not recognised as being behind a gateway and every effort
+    this engine set went out as the parameter litellm drops for that model: a live run
+    spent 173 seconds on an intake call sized for 14."""
+    from raven_ppt.tools._composer import thinking
+
+    lazy = _Lazy(_Routed("openrouter/z-ai/glm-5.3-flash"))
+    assert not hasattr(lazy, "default_model")
+    assert thinking(lazy, "low") == {"extra_body": {"reasoning": {"effort": "low"}}}
+
+
+def test_body_extras_ride_on_a_copy_of_the_shared_provider() -> None:
+    """The provider is the author's too. Extras for the reader must not change what the
+    loop sends, and must keep what the provider already carried."""
+    shared = _Routed("openrouter/z-ai/glm-5.3-flash")
+    composer = ProviderComposer(provider=shared, extra_body={"reasoning": {"effort": "low"}})
+
+    sending = composer._sending()
+    assert sending is not shared
+    assert sending.extra_body == {"provider": {"order": ["x"]}, "reasoning": {"effort": "low"}}
+    assert shared.extra_body == {"provider": {"order": ["x"]}}
+    assert composer._sending() is sending, "the copy is taken once"
+    assert ProviderComposer(provider=shared)._sending() is shared, "no extras, no copy"
+
+
+@pytest.mark.asyncio
+async def test_the_extras_reach_a_lazily_built_provider_once_it_is_built() -> None:
+    """Where the extras used to be lost. A proxy has no `extra_body` attribute to copy
+    until its first call materialises the provider behind it, so a copy taken when the
+    tools were assembled found nothing and dropped the effort silently. The copy is
+    taken at send time instead, and until one can be taken the call goes out on the
+    proxy -- one call at the model's own effort being worth more than no call."""
+    inner = _Routed("openrouter/z-ai/glm-5.3-flash")
+    lazy = _Lazy(inner)
+    composer = ProviderComposer(provider=lazy, extra_body={"reasoning": {"effort": "low"}})
+
+    assert composer._sending() is lazy, "nothing built yet, so nothing to copy"
+    await composer.ask("sys", [{"type": "text", "text": "q"}], max_tokens=100)
+
+    sending = composer._sending()
+    assert sending is not lazy and sending is not inner
+    assert sending.extra_body == {"provider": {"order": ["x"]}, "reasoning": {"effort": "low"}}
+    assert inner.extra_body == {"provider": {"order": ["x"]}}, "the author's provider is untouched"

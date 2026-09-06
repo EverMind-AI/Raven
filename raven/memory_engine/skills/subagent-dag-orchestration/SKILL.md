@@ -105,7 +105,7 @@ blocked branch waits.
 
 Answer it by calling `resolve_dag_node` through `tool_call`: it is not in your tool list,
 and `tool_call` is the only way to name it. The report you receive spells the exact
-arguments; the three shapes are
+arguments; the two shapes are
 
 - `tool_call` with name `resolve_dag_node` and arguments
   `{"run_id": ..., "node_id": ..., "decision": "continue", "message": "<what to try next>"}`
@@ -113,19 +113,11 @@ arguments; the three shapes are
   it has already done.
 - the same with `"decision": "abandon"` gives up on that node. Its dependents are skipped;
   the other branches finish normally.
-- the same with `"decision": "replan"`, plus a `nodes` list, replaces what is left of the
-  graph: this run stops and a new one starts from your nodes. Nodes this run completed are
-  referenced (`depends_on` plus `{{ <id>.output }}`), never re-declared; every other node
-  needs a new id, including a redo of the node that failed.
 
-**Choosing between them:** when you can supply what the report says is missing, `continue` --
-and if only the user can supply it -- a credential, a decision, a fact about what they want --
-ask them first and then continue the node with their answer, because that is the case this
-whole mechanism exists for and abandoning instead throws away work one sentence could have
-unblocked. When what is missing is the plan itself, `replan`. `abandon` is for work that turns
-out not to be needed. Replanning because a node is hard is how a graph loops without
-progressing -- each replan starts its nodes on a fresh attempt budget, and the only thing that
-stops the loop is the session's hourly dispatch limit.
+Pick `continue` whenever you can supply what the report says is missing. **If only the user
+can supply it -- a credential, a decision, a fact about what they want -- ask them first,
+then continue the node with their answer.** That is the case this whole mechanism exists
+for, and abandoning instead throws away work the user could have unblocked in one sentence.
 
 Two limits worth knowing. A node gets a small number of continuations before it fails for
 good, so a message that does not actually change anything wastes one. And the run does not
@@ -140,8 +132,7 @@ missing. If you end your turn with a report unanswered, the run carries on as a 
 run: the report is re-sent to you as a message and the usual deadline starts.
 
 To stop the whole run rather than one node, call `cancel_dag` the same way, through
-`tool_call`. That discards the run outright and starts nothing in its place -- it is not
-`replan`, which keeps the completed work and chains a successor.
+`tool_call`. Re-planning means `cancel_dag` followed by a fresh graph.
 
 Each run costs one unit of the same per-hour budget `spawn` draws on
 (`max_subagent_spawns_per_hour`), whatever its node count. Submitting graphs in a loop

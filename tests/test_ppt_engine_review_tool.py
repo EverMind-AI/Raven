@@ -804,3 +804,291 @@ async def test_a_decks_readings_add_up_in_the_record(tmp_path) -> None:
 
     await tool.execute(project="ws")
     assert module.reading_seconds_spent(deck) >= first, "rounds accumulate rather than replace"
+
+
+def test_a_round_that_read_nothing_still_charges_the_decks_reading_budget(tmp_path: Path) -> None:
+    """A reader too slow for its budget read 0 of 3 pages in 240s twice on one live deck and
+    the 900s deck budget never noticed: rounds that read nothing were not recorded at all.
+    The seconds are charged; no page is marked and no reading is counted, so a quick
+    total failure still costs only its seconds."""
+    from raven_ppt.contracts import Project
+    from raven_ppt.tools.build import _pages_read
+    from raven_ppt.tools.review import _charge, reading_seconds_spent, readings_taken
+
+    deck = Project(workspace=tmp_path, slug="talk")
+
+    _charge(deck, 240.0)
+    _charge(deck, 240.0)
+
+    assert reading_seconds_spent(deck) == 480.0
+    assert readings_taken(deck) == 0 and _pages_read(deck) == set()
+
+
+# -- the ledger: what the reader said and nobody answered, kept across readings ------------
+
+
+_FIGURE = (
+    '{"reads": "the copy runs under the picture", "problems": [{"kind": "figure", '
+    '"where": "the right column", "what": "an illustration laid over the last line", "fix": "move it"}]}'
+)
+
+
+def _build_renders(deck: Project, pages: dict[int, bytes]) -> None:
+    """The build's own page renders, which are the versions a reading is recorded at."""
+    deck.review_dir.mkdir(parents=True, exist_ok=True)
+    for number, raw in pages.items():
+        (deck.review_dir / f"page-{number:03d}.png").write_bytes(raw)
+
+
+@pytest.mark.asyncio
+async def test_a_finding_stays_open_until_a_re_reading_of_its_page_no_longer_sees_it(tmp_path) -> None:
+    """A live run delivered a deck with a paragraph the reader had reported buried three
+    builds earlier: the reply that named it had scrolled past and nothing else held it.
+    """
+    from raven_ppt.services import review_ledger
+
+    deck = _deck(tmp_path, pages=2)
+    _build_renders(deck, {1: b"\x89PNG one", 2: b"\x89PNG two"})
+    tool = PptReviewTool(tmp_path, Views(2), composer=Composer({1: _FIGURE, 2: '{"problems": []}'}))
+
+    first = _payload(await tool.execute(project="ws"))
+    held = review_ledger.open_findings(deck)
+
+    assert first["ledger"] == {"opened": 1, "kept": 0, "fixed": 0, "open": 1, "dismissed_now": 0}
+    assert first["open_findings"]["count"] == 1 and list(first["open_findings"]["pages"]) == ["1"]
+    assert len(held) == 1 and held[0]["kind"] == "figure" and held[0]["id"].startswith("p1-")
+    assert "still open on page(s) 1" in first["next_step"]
+
+    # The page is redrawn and read again, and the reader no longer sees it: fixed.
+    _build_renders(deck, {1: b"\x89PNG one, redrawn"})
+    tool.composer = Composer('{"problems": []}')
+    second = _payload(await tool.execute(project="ws", pages=[1]))
+    entry = review_ledger.load_ledger(deck)["findings"][0]
+
+    assert second["ledger"]["fixed"] == 1 and second["ledger"]["open"] == 0
+    assert "open_findings" not in second
+    assert entry["status"] == "fixed" and entry["render_changed"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_page_that_was_not_read_keeps_its_open_findings(tmp_path) -> None:
+    """Only a reading of the page itself can close what was found on it: a round that
+    read page 2 and not page 1 says nothing about page 1.
+    """
+    from raven_ppt.services import review_ledger
+
+    deck = _deck(tmp_path, pages=2)
+    tool = PptReviewTool(tmp_path, Views(2), composer=Composer({1: _FIGURE, 2: '{"problems": []}'}))
+    await tool.execute(project="ws")
+
+    tool.composer = Composer('{"problems": []}')
+    await tool.execute(project="ws", pages=[2])
+
+    assert [entry["page"] for entry in review_ledger.open_findings(deck)] == [1]
+
+
+@pytest.mark.asyncio
+async def test_a_finding_reported_again_in_other_words_keeps_its_id_and_is_counted(tmp_path) -> None:
+    """The reader is a model and never says the same thing twice. The same illustration
+    over the same paragraph came back on three readings of one live deck, each time as
+    a fresh entry, so the author never learned it was the same unanswered one.
+    """
+    from raven_ppt.services import review_ledger
+
+    deck = _deck(tmp_path, pages=1)
+    tool = PptReviewTool(tmp_path, Views(1), composer=Composer(_FIGURE))
+    first = _payload(await tool.execute(project="ws"))
+    ident = first["open_findings"]["pages"]["1"][0]["id"]
+
+    tool.composer = Composer(
+        '{"reads": "still buried", "problems": [{"kind": "figure", "where": "right column, under the heading", '
+        '"what": "clip art covers the paragraph last line", "fix": "drop it"}]}'
+    )
+    second = _payload(await tool.execute(project="ws"))
+    held = review_ledger.open_findings(deck)
+
+    assert second["ledger"] == {"opened": 0, "kept": 1, "fixed": 0, "open": 1, "dismissed_now": 0}
+    assert [entry["id"] for entry in held] == [ident] and held[0]["times_seen"] == 2
+    assert second["open_findings"]["pages"]["1"][0]["seen"] == 2
+    assert "reported on more than one reading" in second["next_step"]
+
+
+@pytest.mark.asyncio
+async def test_a_dismissal_closes_the_entry_with_the_authors_reason_and_reads_nothing(tmp_path) -> None:
+    """The other way an entry closes: the author looked and says why it stays. A verdict
+    call is not a reading -- the pictures were already looked at.
+    """
+    from raven_ppt.services import review_ledger
+
+    deck = _deck(tmp_path, pages=1)
+    composer = Composer(_FIGURE)
+    tool = PptReviewTool(tmp_path, Views(1), composer=composer)
+    ident = _payload(await tool.execute(project="ws"))["open_findings"]["pages"]["1"][0]["id"]
+    asked_before = len(composer.shown)
+
+    verdict = _payload(await tool.execute(project="ws", dismiss=[{"id": ident, "reason": "the panel is the design"}]))
+    entry = review_ledger.load_ledger(deck)["findings"][0]
+
+    assert len(composer.shown) == asked_before, "a verdict call reads no page"
+    assert verdict["dismissed"] == [ident] and verdict["open_findings"]["count"] == 0
+    assert entry["status"] == "dismissed" and entry["reason"] == "the panel is the design"
+    assert "nothing from the second reader is open" in verdict["next_step"]
+
+
+@pytest.mark.asyncio
+async def test_a_dismissal_without_a_reason_or_of_nothing_is_refused_or_named(tmp_path) -> None:
+    deck = _deck(tmp_path, pages=1)
+    tool = PptReviewTool(tmp_path, Views(1), composer=Composer(_FIGURE))
+    ident = _payload(await tool.execute(project="ws"))["open_findings"]["pages"]["1"][0]["id"]
+
+    refused = _payload(await tool.execute(project="ws", dismiss=[{"id": ident, "reason": ""}]))
+    assert refused["ok"] is False and "needs a reason" in refused["error"]
+
+    unknown = _payload(await tool.execute(project="ws", dismiss=[{"id": "p9-nothing", "reason": "looked"}]))
+    assert unknown["dismissed"] == [] and "p9-nothing" in unknown["next_step"]
+    assert unknown["open_findings"]["count"] == 1, "the real entry is untouched"
+    assert deck.review_dir.is_dir()
+
+
+@pytest.mark.asyncio
+async def test_the_reviewer_is_told_what_the_user_ruled_out(tmp_path) -> None:
+    """Three readings of one live deck asked for the template's illustrations to go,
+    after the user had asked for the template's own style to stay: seven entries the
+    author could only leave, each costing a page of the reply.
+    """
+    deck = _deck(tmp_path, pages=1)
+    (deck.state_dir / "brief.json").write_text(
+        json.dumps(
+            {
+                "language": "Chinese",
+                "audience": "a board",
+                "length": 1,
+                "purpose": "to decide",
+                "forbidden": ["redesigning away from the template's own illustrations"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    composer = Composer(_ONE)
+    tool = PptReviewTool(tmp_path, Views(1), composer=composer)
+
+    await tool.execute(project="ws")
+
+    assert "redesigning away from the template's own illustrations" in composer.shown[0]
+    assert "a fix that needs one of them is not a fix" in composer.shown[0]
+
+
+@pytest.mark.asyncio
+async def test_named_pages_are_read_in_the_order_they_were_named(tmp_path) -> None:
+    """The build names the pages it just drew first. A reading that sorted them by number
+    read the backlog and let the page the author was waiting on time out.
+    """
+    _deck(tmp_path, pages=3)
+    composer = Composer(_ONE)
+    tool = PptReviewTool(tmp_path, Views(3), composer=composer)
+
+    await tool.execute(project="ws", pages=[3, 1])
+
+    assert [said.splitlines()[0] for said in composer.shown] == ["Page 3.", "Page 1."]
+
+
+@pytest.mark.asyncio
+async def test_one_page_that_never_answers_does_not_hold_the_round(tmp_path, monkeypatch) -> None:
+    """Replayed on a live deck: fourteen pages answered in 13 to 40 seconds and one request
+    never answered, so the round lasted its whole 240s budget for a page that came back
+    unread anyway. A page past its own budget is unread; the rest are not late for it.
+    """
+    from raven_ppt.tools import review as module
+
+    class Stalls(Composer):
+        async def ask(self, system, parts, *, max_tokens):
+            said = "\n".join(part.get("text", "") for part in parts if isinstance(part, dict))
+            if said.startswith("Page 2."):
+                await asyncio.sleep(30)
+            return await super().ask(system, parts, max_tokens=max_tokens)
+
+    monkeypatch.setattr(module, "PAGE_BUDGET_S", 0.05)
+    _deck(tmp_path, pages=3)
+    tool = PptReviewTool(tmp_path, Views(3), composer=Stalls(_ONE))
+
+    started = asyncio.get_event_loop().time()
+    payload = _payload(await tool.execute(project="ws"))
+
+    assert asyncio.get_event_loop().time() - started < 5
+    assert payload["pages_reviewed"] == 2
+    assert payload["could_not_be_read"] == [2]
+
+
+def test_the_reply_presses_only_what_costs_a_reader_something_and_what_repeats() -> None:
+    """Replayed on a 15-page deck, the ledger held 43 open entries after two readings, most
+    of them oversized_shape and listed. Pressing all of them trades the finish-line
+    problem for a never-finishing one."""
+    from raven_ppt.services import review_ledger
+
+    def entry(page, kind, seen=1, ident=None):
+        return {
+            "id": ident or f"p{page}-{kind}",
+            "page": page,
+            "kind": kind,
+            "where": "w",
+            "what": "x",
+            "times_seen": seen,
+        }
+
+    held = [
+        entry(2, "oversized_shape"),
+        entry(2, "listed", seen=2),
+        entry(14, "figure"),
+        entry(14, "claim"),
+        entry(14, "marks"),
+        entry(14, "table"),
+        entry(9, "alignment"),
+    ]
+    pressed = review_ledger.pressing(held)
+    said = review_ledger.summary(held)
+
+    assert [e["id"] for e in pressed] == ["p2-listed", "p14-claim", "p14-figure", "p14-marks"]
+    assert said["count"] == 7 and said["shown"] == 4 and "3 more" in said["rest"]
+    assert said["others"] == {
+        "2": ["p2-oversized_shape (oversized_shape)"],
+        "14": ["p14-table (table)"],
+        "9": ["p9-alignment (alignment)"],
+    }
+    assert list(said["pages"]) == ["2", "14"]
+    assert "7 finding(s)" in review_ledger.ask(held) and "4 of them pressing" in review_ledger.ask(held)
+    assert "page(s) 2, 14" in review_ledger.ask(held)
+
+
+@pytest.mark.asyncio
+async def test_a_figure_dismissed_for_being_the_templates_own_is_refused(tmp_path) -> None:
+    """A live run kept a whiteboard-meeting illustration on eight of fifteen pages of an
+    elderly-care deck and dismissed every entry about it as "the template's own". Whose
+    picture it is says nothing about whether it depicts the page."""
+    from raven_ppt.services import review_ledger
+
+    deck = _deck(tmp_path, pages=1)
+    tool = PptReviewTool(tmp_path, Views(1), composer=Composer(_FIGURE))
+    ident = _payload(await tool.execute(project="ws"))["open_findings"]["pages"]["1"][0]["id"]
+
+    refused = _payload(await tool.execute(project="ws", dismiss=[{"id": ident, "reason": "模板自带插画，保持统一"}]))
+    assert refused["dismissed"] == [] and refused["refused"] == [ident]
+    assert "placeholder" in refused["next_step"] and refused["open_findings"]["count"] == 1
+    assert review_ledger.open_findings(deck)[0]["id"] == ident
+
+    accepted = _payload(
+        await tool.execute(
+            project="ws", dismiss=[{"id": ident, "reason": "画的是社区食堂里老人用餐，与本页助餐主题相关，已核对"}]
+        )
+    )
+    assert accepted["dismissed"] == [ident] and accepted["open_findings"]["count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_the_reviewer_is_told_the_templates_illustrations_are_placeholders(tmp_path) -> None:
+    _deck(tmp_path, pages=1)
+    composer = Composer(_FIGURE)
+    tool = PptReviewTool(tmp_path, Views(1), composer=composer)
+
+    await tool.execute(project="ws")
+
+    assert "placeholders" in composer.shown[0] and "`figure` problem" in composer.shown[0]

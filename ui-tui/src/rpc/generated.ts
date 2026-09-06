@@ -62,7 +62,6 @@ export type TurnEvent =
   | SubagentStatusEvent
   | DagRunStartedEvent
   | DagNodeUpdatedEvent
-  | DagRunReplannedEvent
   | DagRunCompletedEvent
   | CronMissedEvent
   | MediaEvent
@@ -1583,22 +1582,6 @@ export interface DagNodeUpdatedEvent {
     status: DagNodeStatus;
     started_at?: number;
     ended_at?: number;
-  };
-}
-/**
- * A replan decision started a successor run for a node that could not proceed; replan_run_id names the new run.
- *
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "DagRunReplannedEvent".
- */
-export interface DagRunReplannedEvent {
-  type: 'dag.run_replanned';
-  payload: {
-    run_id: string;
-    tool_call_id?: string;
-    replan_run_id: string;
-    from_node: string;
-    reason: string;
   };
 }
 /**

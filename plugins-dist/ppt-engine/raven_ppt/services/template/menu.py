@@ -27,8 +27,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from pptx.enum.shapes import MSO_SHAPE_TYPE
+
 from raven_ppt.services.measure.geometry import EMU_PER_INCH, PICTURE, is_filled, iter_shapes
 from raven_ppt.services.measure.variety import page_signature
+from raven_ppt.services.template.compose import _all_shapes, _blip_fill, _is_cut_out, _is_drawing, _outermost
 
 # What a page is *for*, when the page says so itself. A deck built in someone's
 # template has to open, index and close in their template's own pages -- those three
@@ -81,6 +84,18 @@ class PageEntry:
     role and drew every one of the twelve content pages from primitives, losing the
     template's own timeline, its ring of badges and its figure cards. The run before
     it, whose request happened to list the arrangements in prose, cloned eleven."""
+    picture_slots: tuple[str, ...] = ()
+    """Where a picture of the author's can go, each as `[n] WxHin photo|cut-out|drawing` in
+    the numbering `adapt` takes (`# [n]` over the reference, groups opened). A cut-out is a
+    transparent illustration on the page's own ground; its box runs wherever the drawing
+    does, so a photograph wants a box of its own there, or a cut-out of its own.
+
+    The template's picture placeholders are seldom `p:pic`: the amber template draws
+    every photograph as a rounded rectangle *filled* with one, and a section page's
+    cartoon is a group of freeforms. Counting `p:pic` alone told an author those pages
+    held no picture, and `pictures={2: ...}` against the photograph it could see was
+    refused with "no picture frame at all" on three pages of one live run. What fills a
+    slot is the author's decision; this says which shapes are slots."""
     hidden: bool = False
     """Marked not-for-show in the file. Numbering still counts it, because the
     numbers a page is asked for by are its place in the file; offering it is what
@@ -105,6 +120,8 @@ class PageEntry:
             f"{self.shapes} drawn" if self.shapes else "",
         ]
         parts.append("holds " + ", ".join(part for part in holds if part) if any(holds) else "empty")
+        if self.picture_slots:
+            parts.append("picture slots " + ", ".join(self.picture_slots))
         parts.append("clone it" if self.clone_only else "code can redraw it")
         return " — ".join(parts)
 
@@ -163,7 +180,8 @@ def _menu(path: Path, unwritable: dict[int, tuple[str, ...]] | None = None) -> t
                 layout=slide.slide_layout.name or "unnamed",
                 heading=_heading(texts),
                 text_blocks=len(texts),
-                pictures=sum(1 for s in shapes if getattr(s, "shape_type", None) == PICTURE),
+                pictures=sum(1 for s in shapes if _is_photo(s)),
+                picture_slots=_picture_slots(slide, presentation.slide_width or 0),
                 tables=sum(1 for s in shapes if getattr(s, "has_table", False)),
                 shapes=sum(1 for s in shapes if is_filled(s) and s not in texts),
                 arrangement=page_signature(slide, canvas_h) or "",
@@ -246,3 +264,52 @@ def _heading(texts: list) -> str:
         if line:
             return line if len(line) <= 24 else line[:23] + "…"
     return ""
+
+
+# A drawing smaller than this on either side is an icon, not an illustration: the
+# bundled templates' card icons are 0.73in, their cartoons 2.4in and up.
+ILLUSTRATION_MIN_INCHES = 1.0
+# A drawing at least this share of the page wide is a band or a backdrop, not a slot.
+PAGE_WIDE = 0.9
+FREEFORM = MSO_SHAPE_TYPE.FREEFORM
+
+
+def _is_photo(shape) -> bool:
+    return getattr(shape, "shape_type", None) == PICTURE or _blip_fill(shape) is not None
+
+
+def _picture_slots(slide, page_width: int = 0) -> tuple[str, ...]:
+    """The page's picture placeholders in `adapt`'s numbering: photographs, then drawings.
+
+    A drawing is named by its first member's number with the whole drawing's size, since
+    `adapt` opens groups and a member stands for the wordless group around it.
+    """
+    found: list[str] = []
+    named: list[Any] = []
+    for index, shape in enumerate(_all_shapes(slide.shapes), start=1):
+        if _is_photo(shape):
+            # A cut-out is named as one: an opaque photograph put in its box lands on
+            # whatever the transparent drawing floated over (a live page's title row).
+            found.append(f"[{index}] {_inches(shape)} {'cut-out' if _is_cut_out(shape) else 'photo'}")
+            continue
+        if not _is_drawing(shape):
+            continue
+        whole = _outermost(shape)
+        if any(whole._element is done for done in named):
+            continue
+        if whole is shape and getattr(shape, "shape_type", None) != FREEFORM:
+            # A lone preset shape without words is a panel or a band, not an illustration.
+            continue
+        if min(whole.width or 0, whole.height or 0) / EMU_PER_INCH < ILLUSTRATION_MIN_INCHES:
+            continue
+        if page_width and (whole.width or 0) >= PAGE_WIDE * page_width:
+            # A wave along the foot of the page, a band behind the title: the page's own
+            # design, drawn as a group of freeforms, and not a place for a picture.
+            continue
+        named.append(whole._element)
+        found.append(f"[{index}] {_inches(whole)} drawing")
+    return tuple(found)
+
+
+def _inches(shape) -> str:
+    return f"{(shape.width or 0) / EMU_PER_INCH:.1f}x{(shape.height or 0) / EMU_PER_INCH:.1f}in"

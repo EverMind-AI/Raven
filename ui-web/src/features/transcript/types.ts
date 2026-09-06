@@ -131,11 +131,6 @@ export interface CallData {
   /* Whether the run has an identity, which is what makes a node openable. A node
      that looked like a door before its run_id was known opened nothing. */
   live: boolean
-  /* Set once `dag.run_replanned` names a successor for this card's run -- the
-     graph was not abandoned, a decision swapped its remaining nodes into a
-     fresh run instead. Only that event sets it: a reload's `dag.get` carries
-     no such field, so a card restored from history never has one. */
-  replannedInto?: string
   /* The node whose detail is open inside the card. View state, like `open`, and
      the only thing that decides what the panel shows -- deriving a fallback from
      it gave `null` two meanings, "nobody picked one" and "the reader closed it",

@@ -22,7 +22,7 @@ an exception here would surface from a branch most callers never reach.
 
 from typing import Any
 
-__all__ = ["cancel_run", "live_run_ids", "owning_tool", "resolve_node"]
+__all__ = ["cancel_run", "live_run_ids", "resolve_node"]
 
 
 def _registered_tool(loop: Any) -> Any:
@@ -36,31 +36,6 @@ def _registered_tool(loop: Any) -> Any:
     tools = getattr(loop, "tools", None)
     getter = getattr(tools, "get", None)
     return getter("run_subagent_dag") if getter is not None else None
-
-
-def owning_tool(loop: Any, run_id: str) -> Any:
-    """Whichever graph tool instance currently holds ``run_id`` live.
-
-    A replan control step calls several tool methods in sequence
-    (``prepare_replan``, ``is_foreground``, ``emit_replanned``,
-    ``await_finalized``, ``start_replan``), and each one only answers correctly
-    from the instance whose ``_dispatch`` actually created this run's task,
-    desk and outbox -- the registered tool has none of that bookkeeping for a
-    run the playbook engine's private instance is running. Falling back to
-    ``_registered_tool`` when no instance claims the run any more matches every
-    other helper here: the run has already ended in both, or ``loop`` is a test
-    double with no ``dag_tools``.
-    """
-    getter = getattr(loop, "dag_tools", None)
-    tools = getter() if getter is not None else []
-    for tool in tools:
-        fn = getattr(tool, "active_run_ids", None)
-        try:
-            if fn is not None and run_id in fn():
-                return tool
-        except Exception:  # noqa: BLE001 - liveness is advisory, never fatal
-            continue
-    return _registered_tool(loop)
 
 
 def live_run_ids(loop: Any) -> set[str]:
@@ -91,7 +66,7 @@ def cancel_run(loop: Any, run_id: str) -> bool:
         return False
 
 
-def resolve_node(loop: Any, run_id: str, node_id: str, decision: str, message: str | None, plan: Any = None) -> bool:
+def resolve_node(loop: Any, run_id: str, node_id: str, decision: str, message: str | None) -> bool:
     """Answer one suspended node, whichever graph tool owns its run."""
     fn = getattr(loop, "resolve_dag_node", None)
     if fn is None:
@@ -100,6 +75,6 @@ def resolve_node(loop: Any, run_id: str, node_id: str, decision: str, message: s
         if fn is None:
             return False
     try:
-        return bool(fn(run_id, node_id, decision, message, plan))
+        return bool(fn(run_id, node_id, decision, message))
     except Exception:  # noqa: BLE001 - a failed answer is reported, not raised
         return False

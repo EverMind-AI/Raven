@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 161 methods, 90 component schemas.
+// 161 methods, 89 component schemas.
 
 /* eslint-disable */
 /**
@@ -47,7 +47,6 @@ export type TurnEvent =
   | SubagentStatusEvent
   | DagRunStartedEvent
   | DagNodeUpdatedEvent
-  | DagRunReplannedEvent
   | DagRunCompletedEvent
   | CronMissedEvent
   | MediaEvent
@@ -1235,19 +1234,6 @@ export interface DagNodeUpdatedEvent {
     status: DagNodeStatus;
     started_at?: number;
     ended_at?: number;
-  };
-}
-/**
- * A replan decision started a successor run for a node that could not proceed; replan_run_id names the new run.
- */
-export interface DagRunReplannedEvent {
-  type: 'dag.run_replanned';
-  payload: {
-    run_id: string;
-    tool_call_id?: string;
-    replan_run_id: string;
-    from_node: string;
-    reason: string;
   };
 }
 /**

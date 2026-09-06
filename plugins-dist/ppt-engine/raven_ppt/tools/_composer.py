@@ -17,8 +17,64 @@ guessing.
 from __future__ import annotations
 
 import contextlib
+import copy
 from dataclasses import dataclass
 from typing import Any
+
+# How an effort reaches a model behind OpenRouter: in the body, as the gateway's own
+# `reasoning` object, and not as the `reasoning_effort` parameter. litellm forwards
+# that parameter only for models its own table flags as reasoning-capable and drops
+# it for the rest -- openrouter/z-ai/glm-5.3-flash among them -- so on the live deck
+# product every effort the config named reached the model as no setting at all, and a
+# GLM thinks at its default. Measured on the same fifteen pages: the parameter at
+# "low" read a page in 38 to 631 seconds and 8000 output tokens (indistinguishable
+# from "medium"), the body's `effort: low` in 13 to 29 seconds and 460. `enabled:
+# false` is also the gateway's spelling, but this endpoint answers it with "Reasoning
+# is mandatory for this endpoint and cannot be disabled", so "none" is sent as the
+# lowest effort rather than as off. The host sends the same object for qwen behind
+# OpenRouter (raven.providers.capabilities). Only for that gateway: an OpenAI endpoint
+# refuses a body field it does not know.
+NO_THINKING = "none"
+
+
+def thinking(provider: Any, effort: str | None) -> dict[str, Any]:
+    """`ProviderComposer` keywords that carry ``effort`` to ``provider`` as it understands it.
+
+    On an OpenRouter-routed provider the effort rides in the request body; everywhere
+    else it is the ``reasoning_effort`` parameter, which the provider honours or drops
+    as it does today.
+    """
+    if not effort:
+        return {}
+    if _behind_openrouter(provider):
+        return {"extra_body": {"reasoning": {"effort": "low" if effort == NO_THINKING else effort}}}
+    return {"reasoning_effort": effort}
+
+
+def _behind_openrouter(provider: Any) -> bool:
+    said = f"{_model_of(provider)} {getattr(provider, 'api_base', '') or ''}".lower()
+    return "openrouter" in said
+
+
+def _model_of(provider: Any) -> str:
+    """The model this provider sends to by default, however this one spells it.
+
+    Read through the accessor as well as the attribute, because the host hands the
+    engine a lazy proxy that keeps its model private and answers `get_default_model()`.
+    Reading only the attribute saw an empty string, so the route was never recognised
+    as a gateway and every effort this engine set went out as `reasoning_effort` -- the
+    one spelling the note above says litellm drops for these models.
+    """
+    named = getattr(provider, "default_model", None)
+    if named:
+        return str(named)
+    getter = getattr(provider, "get_default_model", None)
+    if not callable(getter):
+        return ""
+    try:
+        return str(getter() or "")
+    except Exception:  # noqa: BLE001 -- a provider that cannot name its model is not one behind a gateway
+        return ""
 
 
 @dataclass
@@ -29,6 +85,11 @@ class ProviderComposer:
     model: str | None = None
     temperature: float = 0.2
     reasoning_effort: str | None = None
+    #: Merged into the request body of every call this composer makes -- see
+    #: `thinking`. The provider is shared with the author's loop, so the extras ride
+    #: on a shallow copy of it rather than on the instance everyone else calls, and the
+    #: copy is taken at the first call rather than here -- see `_sending`.
+    extra_body: dict[str, Any] | None = None
     #: Whether a reply the model cut for length is asked again at twice the budget.
     #: Right for a page's copy, whose length is the page's; wrong for a reading, where
     #: the budget is already the whole call and the second attempt costs what the
@@ -49,6 +110,39 @@ class ProviderComposer:
     def __post_init__(self) -> None:
         if self.spent is None:
             self.spent = {"input": 0, "output": 0}
+        # Not a field: the copy of the provider that carries `extra_body` is this
+        # instance's own working state, and `dataclasses.replace` must not carry one
+        # composer's sender onto another's provider.
+        self._sender: Any = None
+
+    def _sending(self) -> Any:
+        """The provider this call goes on: the host's, plus this composer's body extras.
+
+        The extras ride on the provider instance because `chat_stream` has no parameter
+        for them, and on a copy because the instance is shared with the author's loop.
+        The copy has to be taken from the provider that will actually send, and the host
+        hands the engine a lazy proxy: it grows no `extra_body` attribute until its own
+        first call materialises the provider behind it, so a copy taken when the tools
+        were assembled found nothing to copy and dropped the extras without a word.
+        Measured on a live run: a reader effort of "low" and the intake call's own low
+        effort both reached a glm behind OpenRouter as no setting at all, and the intake
+        took 173 seconds where the same call at the gateway's low effort takes 14.
+
+        Memoized once it succeeds. Until then every call retries it and sends on the
+        proxy meanwhile, which is the same request without the extras -- right, because
+        one call at the model's own effort is worth more than no call.
+        """
+        if self._sender is not None:
+            return self._sender
+        if not self.extra_body:
+            return self.provider
+        target = getattr(self.provider, "unwrapped", None) or self.provider
+        if not hasattr(target, "extra_body"):
+            return self.provider
+        own = copy.copy(target)
+        own.extra_body = {**(getattr(target, "extra_body", None) or {}), **self.extra_body}
+        self._sender = own
+        return own
 
     async def ask(self, system: str, parts: list[dict[str, Any]], *, max_tokens: int) -> str:
         """The reply text, or "" when two attempts produced nothing usable.
@@ -102,7 +196,7 @@ class ProviderComposer:
         collected: list[str] = []
         finish: str | None = None
         try:
-            stream = self.provider.chat_stream(
+            stream = self._sending().chat_stream(
                 messages,
                 model=self.model,
                 max_tokens=max_tokens,

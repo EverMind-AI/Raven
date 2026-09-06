@@ -1727,10 +1727,6 @@
       "en": "Show the graph",
       "zh": "展开编排图"
     },
-    "gui.dag.replanned_into": {
-      "en": "Replanned into",
-      "zh": "改派至"
-    },
     "gui.deliver.app": {
       "en": "In the app only",
       "zh": "只在应用里"

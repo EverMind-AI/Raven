@@ -4480,3 +4480,51 @@ def _every_shape(slide):
                 yield from walk(shape.shapes)
 
     yield from walk(slide.shapes)
+
+
+def test_a_formula_that_stacks_is_typeset_as_a_picture_in_the_decks_ink(tmp_path) -> None:
+    """The attention formula on a delivered page: `softmax(QK^T / sqrt(d_k)) V`, a slash
+    for the bar and a stray radical, broken at the equals sign. A text box has one
+    baseline per line; what stacks is typeset and placed as a picture, inside the box."""
+    from pptx import Presentation
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+    _, module = _layout(tmp_path)
+    try:
+        from ppt_theme import THEMES
+
+        presentation = Presentation()
+        slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+        box = module.Box(0.7, 2.0, 6.0, 3.2)
+        drawn = module.formula(
+            slide,
+            box,
+            r"\mathrm{Attention}(Q,K,V)=\mathrm{softmax}\left(\frac{QK^{T}}{\sqrt{d_k}}\right)V",
+            THEMES["ink-graphite"],
+            size=20,
+        )
+
+        assert drawn.shape.shape_type == MSO_SHAPE_TYPE.PICTURE
+        assert drawn.box.x0 >= box.x0 - 1e-6 and drawn.box.x1 <= box.x1 + 1e-6, "the picture sits inside its box"
+        assert drawn.box.h < 1.0, "one line of mathematics, not a poster"
+        assert module.formula_type_size(r"\frac{a}{b}", 4.0, size=20) == 20, "a short expression keeps its size"
+        assert module.formula_type_size(r"\frac{QK^{T}}{\sqrt{d_k}} + " * 6 + "V", 2.0, size=20) < 20, (
+            "a wide one is scaled"
+        )
+    finally:
+        _drop(tmp_path)
+
+
+def test_a_tex_expression_carrying_cjk_is_refused_with_the_way_round(tmp_path) -> None:
+    from pptx import Presentation
+
+    _, module = _layout(tmp_path)
+    try:
+        from ppt_theme import THEMES
+
+        presentation = Presentation()
+        slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+        with pytest.raises(ValueError, match="outside"):
+            module.formula(slide, module.Box(0.7, 2.0, 6.0, 1.0), r"\frac{收入}{成本}", THEMES["ink-graphite"])
+    finally:
+        _drop(tmp_path)

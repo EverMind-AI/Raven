@@ -42,12 +42,14 @@ what is reported is the count, and the author reads it and decides.
 
 from __future__ import annotations
 
+import os
+import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from raven_ppt.backends.script import blocks_rejection, page_blocks, script_path
+from raven_ppt.backends.script import blocks_rejection, page_blocks, page_failures, script_path
 from raven_ppt.contracts import (
     BuildOutcome,
     Finding,
@@ -62,6 +64,7 @@ from raven_ppt.services import seen
 from raven_ppt.services.measure.geometry import iter_shapes, open_deck, shows_picture
 from raven_ppt.services.measure.type_size import census, rendered_spans
 from raven_ppt.services.publish import PublishRefusedError, publish, stage
+from raven_ppt.services.publish.deliver import published_digests
 from raven_ppt.services.template import house_style, prepared_path
 
 # Default for `BuildStage.views_per_call`, which is how many page renders one reply
@@ -129,6 +132,7 @@ class BuildStage:
             return StageResult(ok=False, data={"outcome": outcome}, note=outcome.note)
 
         findings = list(await self.measure(project, outcome.pptx_path, outcome, _changed(project, outcome, draft)))
+        findings.extend(_page_failure_findings(project))
         findings.extend(_mapping_findings(project, outcome))
         # After measuring, because measuring is what renders the deck and the record
         # reads that render. Before either exit, because a draft is the state the
@@ -165,6 +169,7 @@ class BuildStage:
         if blocking:
             return StageResult(ok=False, findings=tuple(findings), data=data)
 
+        already = bool(published_digests(project.state_dir))
         try:
             staged = stage(project, outcome.pptx_path, pages=outcome.pages)
             delivered = publish(
@@ -177,6 +182,13 @@ class BuildStage:
         except PublishRefusedError as exc:
             return StageResult(ok=False, findings=tuple(findings), data=data, note=str(exc))
         data["pptx_path"] = str(delivered)
+        if already:
+            # A deck published once already: this is a revision of a delivered deck,
+            # which the reading policy treats differently from a first delivery.
+            data["republished"] = True
+        preview = _pdf_beside(project, outcome.pptx_path, delivered)
+        if preview is not None:
+            data["pdf_path"] = str(preview)
         return StageResult(ok=True, findings=tuple(findings), data=data)
 
     def _showing(self, pages: int, slides: Sequence[int] | None, page_from: int, pending) -> list[int]:
@@ -185,6 +197,30 @@ class BuildStage:
     def _blocking(self, findings: Sequence[Finding]) -> list[Finding]:
         kinds = self.profile.blocking_kinds
         return [f for f in findings if f.severity is Severity.BLOCKING or f.kind in kinds]
+
+
+def _pdf_beside(project: Project, built: Path, delivered: Path) -> Path | None:
+    """Put the render this build was measured from beside the delivered deck, as a PDF.
+
+    A .pptx is a download and nothing else on the web surface, which previews PDFs and
+    images: a user there saw "20 pages delivered" and had no way to look at one. The
+    measurement already rendered the deck to `review_dir/<stem>.pdf`, so the PDF costs
+    nothing more than a copy -- taken only when it is at least as new as the deck it
+    stands for, because a stale render beside a fresh deck is a wrong preview.
+    """
+    import shutil
+
+    rendered = project.review_dir / f"{built.stem}.pdf"
+    try:
+        if not rendered.is_file() or rendered.stat().st_mtime < built.stat().st_mtime:
+            return None
+        target = delivered.with_suffix(".pdf")
+        temporary = target.parent / f".{target.name}.{uuid.uuid4().hex}.tmp"
+        shutil.copy2(rendered, temporary)
+        os.replace(temporary, target)
+        return target
+    except OSError:
+        return None
 
 
 # What a draft is not held to: the length the brief agreed, and the pages the
@@ -486,6 +522,36 @@ def _unseen_findings(project: Project, outcome: BuildOutcome) -> list[Finding]:
             detail={"pages": list(absent)},
         )
     ]
+
+
+def _page_failure_findings(project: Project) -> list[Finding]:
+    """One refusal per page whose block raised and was stood in for by the runner.
+
+    Before the runner isolated blocks, one raise ended the build: the author got that
+    page's traceback and nothing else, and every other page's problems waited for the
+    next build. Measured across four runs, about one build in five died that way. Now
+    the deck is built around the failed page and this is what says so -- blocking,
+    because a placeholder is not the page, and the author fixes it in the same pass
+    as the findings on the pages that did draw.
+    """
+    found = []
+    for entry in page_failures(project):
+        number = int(entry["page"])
+        error = str(entry.get("error") or "the block raised")
+        found.append(
+            Finding(
+                kind="page_failed",
+                severity=Severity.BLOCKING,
+                page=number,
+                message=(
+                    f"page {number}'s block raised and was not drawn: {error}. A page saying so stands in its "
+                    "place so the rest of the deck could be built and shown; fix that block along with whatever "
+                    "the other pages report, then build again"
+                ),
+                detail={"traceback": str(entry.get("traceback") or "")[-3000:]},
+            )
+        )
+    return found
 
 
 def _mapping_findings(project: Project, outcome: BuildOutcome) -> list[Finding]:

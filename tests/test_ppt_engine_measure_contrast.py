@@ -481,3 +481,73 @@ def test_the_far_end_of_one_gradient_is_not_a_second_ground(tmp_path: Path):
     page = _two_grounds(tmp_path / "page-001.png", right=(0xE3, 0xB7, 0x73))
 
     assert contrast_findings(deck, None, pages=[page]) == []
+
+
+def test_a_bold_title_on_a_photograph_is_not_measured_against_its_own_strokes() -> None:
+    """A cover's title fills half its line with glyphs, and on a photograph no colour is
+    common, so the commonest bucket was the ink itself: '#2F2F2F on a ground that renders
+    #2F2F2F, 1.0:1' on a page anyone could read, and the deck was never published."""
+    import numpy as np
+
+    from raven_ppt.services.measure.contrast import _ratio, _worst_ground
+
+    rng = np.random.default_rng(7)
+    crop = rng.integers(150, 250, size=(60, 400, 3), dtype=np.uint8)
+    ink = (0x2F, 0x2F, 0x2F)
+    for left in range(10, 390, 20):
+        crop[8:52, left : left + 11] = ink
+
+    ground = _worst_ground(crop, ink)
+
+    assert ground is not None
+    assert _ratio(ink, ground) > 4, f"the ground is the photograph, not the strokes: {ground}"
+
+
+def test_black_type_on_a_black_panel_is_still_read_as_black_on_black() -> None:
+    """Excluding the ink's bucket must not hide the case the check exists for: when glyphs
+    and panel are one colour the bucket is the whole crop, and it stays the ground."""
+    import numpy as np
+
+    from raven_ppt.services.measure.contrast import _ratio, _worst_ground
+
+    crop = np.full((60, 400, 3), (0x1A, 0x1A, 0x1A), dtype=np.uint8)
+    crop[0:2, :] = (0x20, 0x20, 0x20)
+    ink = (0x1A, 0x1A, 0x1A)
+
+    ground = _worst_ground(crop, ink)
+
+    assert ground is not None and _ratio(ink, ground) < 1.2
+
+
+def test_ink_the_renderer_painted_one_level_off_is_still_the_ink() -> None:
+    """#2F2F2F type comes off LibreOffice as #303030, across a bucket edge; a bucket test
+    took those pixels for the ground and read three legible pages at 1.0:1."""
+    import numpy as np
+
+    from raven_ppt.services.measure.contrast import _ratio, _worst_ground
+
+    crop = np.full((60, 400, 3), (0xF4, 0xE6, 0xD2), dtype=np.uint8)
+    for left in range(10, 390, 20):
+        crop[8:52, left : left + 11] = (0x30, 0x30, 0x30)
+
+    ground = _worst_ground(crop, (0x2F, 0x2F, 0x2F))
+
+    assert ground is not None and _ratio((0x2F, 0x2F, 0x2F), ground) > 8
+
+
+def test_a_dark_photograph_beside_the_words_is_not_read_as_ink() -> None:
+    """A title box that runs on over the photograph next to it: #110D0A photograph pixels
+    shared a bucket with #2F2F2F type, so the span reached into the photograph and the
+    title was judged against it. The ink is what is near the ink's colour, not its bucket."""
+    import numpy as np
+
+    from raven_ppt.services.measure.contrast import _ink_span
+
+    crop = np.full((60, 400, 3), (0xF4, 0xE6, 0xD2), dtype=np.uint8)
+    crop[:, 200:] = (0x11, 0x0D, 0x0A)
+    for left in range(10, 180, 20):
+        crop[8:52, left : left + 11] = (0x2F, 0x2F, 0x2F)
+
+    span = _ink_span(crop, (0x2F, 0x2F, 0x2F))
+
+    assert span is not None and span[1] <= 200, span

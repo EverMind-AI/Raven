@@ -712,19 +712,6 @@ class DagNodeUpdatedEvent(_Strict):
     payload: DagNodeUpdatedPayload
 
 
-class DagRunReplannedPayload(_Strict):
-    run_id: str
-    tool_call_id: str | None = None
-    replan_run_id: str
-    from_node: str
-    reason: str
-
-
-class DagRunReplannedEvent(_Strict):
-    type: Literal["dag.run_replanned"]
-    payload: DagRunReplannedPayload
-
-
 class DagRunSummary(_Strict):
     total: int | None = None
     completed: int | None = None
@@ -996,7 +983,6 @@ TurnEvent = Annotated[
         SubagentStatusEvent,
         DagRunStartedEvent,
         DagNodeUpdatedEvent,
-        DagRunReplannedEvent,
         DagRunCompletedEvent,
         CronMissedEvent,
         MediaEvent,
@@ -4016,8 +4002,6 @@ __all__ = [
     "DagRunStartedPayload",
     "DagNodeUpdatedEvent",
     "DagNodeUpdatedPayload",
-    "DagRunReplannedEvent",
-    "DagRunReplannedPayload",
     "DagRunCompletedEvent",
     "DagRunCompletedPayload",
     "DagGetParams",

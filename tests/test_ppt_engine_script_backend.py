@@ -219,7 +219,9 @@ async def test_a_build_that_dies_leaves_the_last_deck_alone(project: Project) ->
     assert good.ok and good.pptx_path is not None
     before = good.pptx_path.read_bytes()
 
-    broken = await _build(project, DECK.replace('title(two, "Target queries")', "raise RuntimeError('boom')"))
+    # In the prelude, before a deck exists: a raise inside a page's block is that page's
+    # failure now and the deck is rebuilt around it (see the isolation tests below).
+    broken = await _build(project, DECK.replace("prs = Presentation()", "raise RuntimeError('boom')"))
 
     assert not broken.ok
     assert "boom" in broken.stderr
@@ -487,3 +489,214 @@ async def test_a_built_deck_carries_neither_defect_a_render_cannot_show(project:
 
     # And it is idempotent, which is what makes running it on every build safe.
     assert tidy(outcome.pptx_path) == ()
+
+
+FAILING_MIDDLE = textwrap.dedent(
+    """
+    import os
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    prs = Presentation()
+    prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
+
+
+    def new_slide():
+        return prs.slides.add_slide(prs.slide_layouts[6])
+
+
+    def title(slide, text):
+        box = slide.shapes.add_textbox(Inches(0.8), Inches(0.6), Inches(11), Inches(1))
+        box.text_frame.text = text
+
+
+    # SLIDE 1
+    one = new_slide()
+    title(one, "First")
+
+    # SLIDE 2
+    two = new_slide()
+    title(two, "Second")
+    rows = [("a", 1), ("b", 2, 3)]
+    heights = [len(label) for label, count in rows]
+
+    # SLIDE 3
+    three = new_slide()
+    title(three, "Third")
+
+    prs.save(os.environ["PPT_OUTPUT"])
+    """
+).lstrip()
+
+
+@pytest.mark.asyncio
+async def test_a_page_that_raises_loses_only_itself(project: Project) -> None:
+    """Measured across four runs, one build in five died in one page's block and the
+    author got that traceback and nothing else. The block is run on its own: its half
+    page is taken back, a page saying what went wrong stands in its place, and the
+    pages after it are still drawn and still mapped to their code."""
+    from pptx import Presentation
+
+    from raven_ppt.backends.script import page_failures
+
+    outcome = await _build(project, FAILING_MIDDLE)
+
+    assert outcome.ok and outcome.pages == 3
+    assert [source.page for source in outcome.sources] == [1, 2, 3], "the placeholder is page 2 and maps to block 2"
+    deck = Presentation(str(outcome.pptx_path))
+    texts = [" ".join(shape.text_frame.text for shape in slide.shapes if shape.has_text_frame) for slide in deck.slides]
+    assert "First" in texts[0] and "Third" in texts[2]
+    assert "Page 2 did not draw" in texts[1] and "too many values to unpack" in texts[1]
+    assert "Second" not in texts[1], "the half-drawn page was taken back"
+    failed = page_failures(project)
+    assert [entry["page"] for entry in failed] == [2]
+    assert "ValueError: too many values to unpack" in failed[0]["error"]
+    assert 'build.py", line' in failed[0]["traceback"]
+    assert "ValueError" in outcome.stderr
+    kept = project.review_dir / "build_failures" / "failure-001"
+    assert "ValueError" in (kept / "stderr.txt").read_text(encoding="utf-8"), "the failure is on record like any other"
+
+
+HELPER_EXITS = textwrap.dedent(
+    """
+    import os
+
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    prs = Presentation()
+    prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
+
+
+    def sub1(slide, prefix, new):
+        '''the shape of helper an author writes: a loud stop when nothing matches'''
+        found = [s for s in slide.shapes if s.has_text_frame and s.text_frame.text.startswith(prefix)]
+        if not found:
+            raise SystemExit(f"sub1: nothing says {prefix!r}")
+        found[0].text_frame.text = new
+
+
+    def new_slide(text):
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        box = slide.shapes.add_textbox(Inches(0.8), Inches(0.6), Inches(11), Inches(1))
+        box.text_frame.text = text
+        return slide
+
+
+    # SLIDE 1
+    new_slide("First")
+
+    # SLIDE 2
+    two = new_slide("Second")
+    sub1(two, "00%", "22.0%")
+
+    # SLIDE 3
+    new_slide("Third")
+
+    prs.save(os.environ["PPT_OUTPUT"])
+    """
+).lstrip()
+
+
+@pytest.mark.asyncio
+async def test_a_helper_that_exits_loses_only_its_page(project: Project) -> None:
+    """`SystemExit` is a BaseException, so `except Exception` did not hold it, and the
+    helpers authors write raise exactly that: a live run's own `sub1` ended
+    `raise SystemExit(f"sub1: nothing says {prefix!r}")`, guessed a placeholder string
+    the template did not have, and cost the whole build -- two pages already drawn and
+    14.6 minutes of writing thrown away for one page's bad guess.
+
+    A helper saying "this cannot work" is that page's failure, which is what the
+    isolation branch is for."""
+    from pptx import Presentation
+
+    from raven_ppt.backends.script import page_failures
+
+    outcome = await _build(project, HELPER_EXITS)
+
+    assert outcome.ok and outcome.pages == 3
+    deck = Presentation(str(outcome.pptx_path))
+    texts = [" ".join(s.text_frame.text for s in slide.shapes if s.has_text_frame) for slide in deck.slides]
+    assert "First" in texts[0] and "Third" in texts[2]
+    assert "Page 2 did not draw" in texts[1] and "nothing says '00%'" in texts[1]
+    assert [entry["page"] for entry in page_failures(project)] == [2]
+
+
+PRELUDE_RAISES = textwrap.dedent(
+    """
+    import os
+
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    prs = Presentation()
+    prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
+
+
+    def new_slide(text):
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        box = slide.shapes.add_textbox(Inches(0.8), Inches(0.6), Inches(11), Inches(1))
+        box.text_frame.text = text
+        return slide
+
+
+    # SLIDE 1
+    new_slide("First")
+
+    # SLIDE 2
+    new_slide("Second")
+    raise KeyboardInterrupt("the caller stopped it")
+
+    # SLIDE 3
+    new_slide("Third")
+
+    prs.save(os.environ["PPT_OUTPUT"])
+    """
+).lstrip()
+
+
+@pytest.mark.asyncio
+async def test_the_pages_already_drawn_are_saved_even_when_nothing_catches(project: Project) -> None:
+    """`prs.save` is the last line of the author's file, so anything the loop does not
+    catch skips it and a mostly finished deck is reported as "wrote no deck". The runner
+    saves what was drawn on the way out, so the build has pages to show and measure.
+
+    KeyboardInterrupt is used here because it is the one thing the page loop must not
+    swallow -- it is the caller stopping the build -- and it is therefore the sharpest
+    test that the rescue is in `finally` rather than in the catch."""
+    from pptx import Presentation
+
+    outcome = await _build(project, PRELUDE_RAISES)
+
+    assert not outcome.ok, "an interrupted build is not a deck"
+    kept = project.review_dir / "build_failures" / "failure-001" / "deck.pptx.building"
+    assert kept.is_file(), "nothing was saved, so the writing is gone with the round"
+    texts = [
+        " ".join(s.text_frame.text for s in Presentation(str(kept)).slides[n].shapes if s.has_text_frame)
+        for n in range(len(Presentation(str(kept)).slides))
+    ]
+    assert "First" in texts[0] and "Second" in texts[1], "the two pages that were drawn are on disk"
+    assert len(texts) == 2, "and the page after the interruption is not"
+    assert "deck.pptx.building" in outcome.stderr, "and the author is told where to look"
+
+
+@pytest.mark.asyncio
+async def test_a_clean_build_clears_the_failures_of_the_last_one(project: Project) -> None:
+    from raven_ppt.backends.script import page_failures
+
+    await _build(project, FAILING_MIDDLE)
+    assert page_failures(project)
+
+    outcome = await _build(project, DECK)
+
+    assert outcome.ok and outcome.pages == 2
+    assert page_failures(project) == []
+
+
+@pytest.mark.asyncio
+async def test_a_crash_in_the_prelude_is_still_the_whole_builds(project: Project) -> None:
+    """Nothing to isolate: no page has been drawn and there is no deck to stand a page in."""
+    outcome = await _build(project, DECK.replace("prs = Presentation()", "raise RuntimeError('no prs yet')"))
+
+    assert not outcome.ok
+    assert "no prs yet" in outcome.stderr

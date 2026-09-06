@@ -9964,48 +9964,6 @@
           }
         }
       },
-      "DagRunReplannedEvent": {
-        "description": "A replan decision started a successor run for a node that could not proceed; replan_run_id names the new run.",
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "type",
-          "payload"
-        ],
-        "properties": {
-          "type": {
-            "type": "string",
-            "const": "dag.run_replanned"
-          },
-          "payload": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "run_id",
-              "replan_run_id",
-              "from_node",
-              "reason"
-            ],
-            "properties": {
-              "run_id": {
-                "type": "string"
-              },
-              "tool_call_id": {
-                "type": "string"
-              },
-              "replan_run_id": {
-                "type": "string"
-              },
-              "from_node": {
-                "type": "string"
-              },
-              "reason": {
-                "type": "string"
-              }
-            }
-          }
-        }
-      },
       "DagRunCompletedEvent": {
         "description": "The run finished. Terminal node output text is deliberately absent -- it is already in the tool result.",
         "type": "object",
@@ -10194,9 +10152,6 @@
             "$ref": "#/components/schemas/DagNodeUpdatedEvent"
           },
           {
-            "$ref": "#/components/schemas/DagRunReplannedEvent"
-          },
-          {
             "$ref": "#/components/schemas/DagRunCompletedEvent"
           },
           {
@@ -10231,7 +10186,6 @@
             "subagent.status": "#/components/schemas/SubagentStatusEvent",
             "dag.run_started": "#/components/schemas/DagRunStartedEvent",
             "dag.node_updated": "#/components/schemas/DagNodeUpdatedEvent",
-            "dag.run_replanned": "#/components/schemas/DagRunReplannedEvent",
             "dag.run_completed": "#/components/schemas/DagRunCompletedEvent",
             "cron.missed": "#/components/schemas/CronMissedEvent",
             "media": "#/components/schemas/MediaEvent",

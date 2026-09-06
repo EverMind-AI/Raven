@@ -27,6 +27,7 @@ marketing banner and no source words captioned it as an architecture diagram.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import json
 import re
@@ -124,12 +125,16 @@ def _reach_hint(exc: Exception, proxy: str | None) -> dict[str, str]:
     }
 
 
+# How many of a batch's downloads run at once.
+_FETCH_CONCURRENCY = 4
+
+
 class PptFetchTool(Tool):
     name = "ppt_fetch"
     description = (
         "Download a source into this deck's materials: a PDF, an image, a text or HTML page, or a "
         ".pptx to use as the template. Search first with web_search, ppt_image_search for pictures, then "
-        "fetch what you will actually use. A document or an image is ingested on arrival, so its text and "
+        "fetch what you will actually use -- several at once with urls=[...], one call for the whole list. A document or an image is ingested on arrival, so its text and "
         "figures are in the deck's evidence when this returns; a .pptx is bound as the deck's template. "
         "The format is decided by the bytes rather than by the URL or the server's content type. When you "
         "fetch a picture, pass the words the page printed about it as caption -- that is the only way they "
@@ -152,6 +157,15 @@ class PptFetchTool(Tool):
             "properties": {
                 "project": {"type": "string", "description": "the deck project, as given to ppt_prepare"},
                 "url": {"type": "string", "description": "http(s) URL of the source"},
+                "urls": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "several sources in one call, fetched together and ingested once: after a search, "
+                        "list every URL you will use here instead of one call each -- each call is a model "
+                        "round trip, and a live run spent nine of them on fetches alone"
+                    ),
+                },
                 "filename": {
                     "type": "string",
                     "description": (
@@ -171,16 +185,57 @@ class PptFetchTool(Tool):
                     ),
                 },
             },
-            "required": ["project", "url"],
+            "required": ["project"],
         }
 
     async def execute(
         self,
         project: str,
-        url: str,
+        url: str = "",
         filename: str | None = None,
         caption: str | None = None,
+        urls: list[str] | None = None,
         **kwargs: Any,
+    ) -> str:
+        wanted = [str(u).strip() for u in (urls or []) if str(u).strip()]
+        if url and url.strip():
+            wanted.insert(0, url.strip())
+        if not wanted:
+            return _return.failed("nothing to fetch", hint="give url, or urls=[...] for several at once")
+        if len(wanted) == 1:
+            return await self._fetch_one(project, wanted[0], filename, caption, ingest_after=True)
+        try:
+            deck = Project(workspace=self.workspace, slug=project)
+        except ValueError as exc:
+            return _return.failed(str(exc))
+        gate = asyncio.Semaphore(_FETCH_CONCURRENCY)
+        # One name per url, decided before anything is written. Two sources whose paths
+        # end in the same basename -- one.example/image.png and two.example/image.png --
+        # both landed on sources/image.png, and `receive` replaced the manifest row and
+        # the bytes: two successful rows, one source ingested. The url's own digest is
+        # what tells them apart, and it is short enough to stay a name a model can read.
+        names = _batch_names(wanted)
+
+        async def one(target: str) -> dict[str, Any]:
+            async with gate:
+                said = await self._fetch_one(project, target, names[target], None, ingest_after=False)
+            try:
+                return json.loads(said)
+            except ValueError:
+                return {"ok": False, "url": target, "error": said[:200]}
+
+        results = list(await asyncio.gather(*(one(target) for target in wanted)))
+        read = await self._read(deck)
+        failed = [item for item in results if not item.get("ok")]
+        asks = []
+        if failed:
+            asks.append(f"{len(failed)} of {len(results)} fetches failed; the error is on each")
+        if not read:
+            asks.append("run ppt_ingest so these reach the deck's materials and figure catalogue")
+        return _return.done(project=project, results=results, **({"sources_read": read} if read else {}), asks=asks)
+
+    async def _fetch_one(
+        self, project: str, url: str, filename: str | None, caption: str | None, *, ingest_after: bool
     ) -> str:
         from raven.security.network import validate_url_target
 
@@ -230,7 +285,7 @@ class PptFetchTool(Tool):
         source = sources.receive(deck, name, payload, f"{sources.FETCH}{url}", caption=described)
         if source is None:
             return _return.failed(f"nothing here can read a {suffix} file")
-        read = await self._read(deck)
+        read = await self._read(deck) if ingest_after else 0
         figure_id = _figure_id(deck, source.path) if kind == _IMAGE else None
         return _return.done(
             project=project,
@@ -242,7 +297,11 @@ class PptFetchTool(Tool):
             **({"caption": source.caption} if source.caption else {}),
             **({"note": _CAPTION_ON_A_DOCUMENT} if caption and kind != _IMAGE else {}),
             **({"sources_read": read} if read else {}),
-            asks=([] if read else ["run ppt_ingest so this reaches the deck's materials and figure catalogue"]),
+            asks=(
+                []
+                if read or not ingest_after
+                else ["run ppt_ingest so this reaches the deck's materials and figure catalogue"]
+            ),
         )
 
     async def _read(self, deck: Project) -> int:
@@ -477,6 +536,41 @@ def _embedded_caption(payload: bytes) -> str | None:
         if isinstance(candidate, str) and (found := _clean(candidate)) is not None:
             return found
     return None
+
+
+def _batch_names(urls: list[str]) -> dict[str, str | None]:
+    """A requested filename per url, distinct wherever two urls would collide.
+
+    Grouped on the name a destination is written under rather than on the url's own
+    basename: `_safe_name` replaces every run of characters outside its allowlist with
+    a single underscore, so `chart+final.png` and `chart@final.png` are two basenames
+    and one destination. The content type decides the trailing suffix and is not known
+    until the body arrives, so the stem alone can be compared here -- two urls sharing
+    a stem are renamed even where their suffixes would have parted them, which costs a
+    longer name and never a lost source.
+
+    The mark goes before the stem's own extension rather than after it, because
+    `_safe_name` strips whatever it reads as a suffix from the name handed to it: on
+    `image.tar` a trailing mark would have been read as the extension and dropped,
+    putting both urls back on one destination.
+
+    `None` where the stem is already unique in this batch, so a single-source batch
+    keeps the name the url gave it and only a real collision is renamed.
+    """
+    stems: dict[str, list[str]] = {}
+    for url in urls:
+        stems.setdefault(_safe_name(url, None, ""), []).append(url)
+    chosen: dict[str, str | None] = {}
+    for name, sharing in stems.items():
+        if len(sharing) == 1:
+            chosen[sharing[0]] = None
+            continue
+        stem = Path(name).stem or "download"
+        suffix = Path(name).suffix
+        for url in sharing:
+            mark = hashlib.sha256(url.encode("utf-8")).hexdigest()[:8]
+            chosen[url] = f"{stem}-{mark}{suffix}"
+    return chosen
 
 
 def _safe_name(url: str, requested: str | None, suffix: str) -> str:

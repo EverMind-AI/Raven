@@ -84,6 +84,7 @@ class _Shared:
                 views_per_call=cfg.views_per_call,
                 deck_name=cfg.deck_name,
                 web_proxy=cfg.web_proxy,
+                reader_effort=cfg.reader_effort or None,
             )
         }
 
@@ -132,7 +133,9 @@ class _Shared:
             # The locator's workspace is the agent home whose bootstrap seats
             # the host's context builder reads; it is where the first-touch
             # identity seeding lands (see hook.seed_identity).
-            self._hook = PptEngineHook(home=Path(self._ctx.services.workspace))
+            self._hook = PptEngineHook(
+                home=Path(self._ctx.services.workspace), deck_per_session=self.cfg.deck_per_session
+            )
         return self._hook
 
     def deck_capable(self) -> bool:

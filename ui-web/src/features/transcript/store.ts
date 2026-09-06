@@ -569,11 +569,10 @@ function hunkFor(name: string, a: Record<string, unknown>): Hunk | null {
   return null
 }
 
-/* What the four `dag.*` events carry, as one type: the card reads `nodes` off
-   the first, node/status/times off the second, a list of the same off the
-   third, and the successor run id off the fourth. The adapters in
-   features/dag/nodes.ts do the reading -- this only has to be loose enough to
-   hand them. */
+/* What the three `dag.*` events carry, as one type: the card reads `nodes` off
+   the first, node/status/times off the second, and a list of the same off the
+   third. The adapters in features/dag/nodes.ts do the reading -- this only has
+   to be loose enough to hand them. */
 export interface DagFeedPayload {
   run_id?: string
   tool_call_id?: string
@@ -583,7 +582,6 @@ export interface DagFeedPayload {
   ended_at?: number
   files?: Array<{ node?: string; status?: string }>
   nodes?: Array<Record<string, unknown>>
-  replan_run_id?: string
 }
 
 /* The trail's dag card is bound to its run through these.
@@ -1012,14 +1010,6 @@ export function dagFeed(type: string, p: DagFeedPayload | null): void {
     dagLive.delete(String(p.run_id))
     if (call.callId) dagByCall.delete(call.callId)
     openFirstFailure(call)
-    bump(lane, call)
-  } else if (type === 'dag.run_replanned') {
-    /* Always arrives before this run's own `dag.run_completed` -- the backend
-       emits it right after the waiting node's decision is recorded, not once
-       the old run winds down -- so `dagLive` still holds this card by the time
-       it is looked up above; no early-buffer handling is needed here the way
-       `dag.run_started` needs one. */
-    if (p.replan_run_id) call.replannedInto = String(p.replan_run_id)
     bump(lane, call)
   }
 }

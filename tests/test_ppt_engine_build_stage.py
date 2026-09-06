@@ -582,3 +582,63 @@ async def test_a_deck_without_a_mapping_keeps_no_unseen_record(project: Project)
 
     assert result.data["showing"] == [1, 2]
     assert result.data["unseen_after"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_page_the_runner_stood_in_for_refuses_the_deck_and_names_the_error(project: Project) -> None:
+    from raven_ppt.backends.script.workspace import page_failures_path
+
+    page_failures_path(project).parent.mkdir(parents=True, exist_ok=True)
+    page_failures_path(project).write_text(
+        json.dumps(
+            {"pages": [{"page": 2, "error": "NameError: name 'plane' is not defined", "traceback": "Traceback..."}]}
+        ),
+        encoding="utf-8",
+    )
+    stage = _stage(project, outcome=_outcome(project))
+
+    result = await stage.run(project, slides=[1, 2])
+
+    failed = [f for f in result.findings if f.kind == "page_failed"]
+    assert not result.ok
+    assert [f.page for f in failed] == [2]
+    assert "NameError: name 'plane' is not defined" in failed[0].message
+    assert failed[0].detail["traceback"] == "Traceback..."
+
+
+@pytest.mark.asyncio
+async def test_a_delivered_deck_takes_its_render_along_as_a_pdf(project: Project) -> None:
+    """The web surface previews PDFs and not .pptx, so a user there could not look at a
+    delivered deck. The render the measurement made is copied beside the deck; a render
+    older than the deck is not, because it would preview a file that no longer exists."""
+    import os
+    import time
+
+    project.review_dir.mkdir(parents=True, exist_ok=True)
+    outcome = _outcome(project)
+    rendered = project.review_dir / "deck.pdf"
+    rendered.write_bytes(b"%PDF-1.4 render")
+    later = time.time() + 5
+    os.utime(rendered, (later, later))
+
+    result = await _stage(project, outcome=outcome).run(project)
+
+    assert result.ok, result.note
+    pdf = Path(result.data["pptx_path"]).with_suffix(".pdf")
+    assert pdf.is_file() and pdf.read_bytes() == b"%PDF-1.4 render"
+    assert result.data["pdf_path"] == str(pdf)
+
+    stale = time.time() - 600
+    os.utime(rendered, (stale, stale))
+    pdf.unlink()
+    again = await _stage(project, outcome=_outcome(project)).run(project)
+    assert again.ok and "pdf_path" not in again.data and not pdf.exists()
+
+
+@pytest.mark.asyncio
+async def test_a_second_delivery_is_marked_as_a_republish(project: Project) -> None:
+    first = await _stage(project, outcome=_outcome(project)).run(project)
+    assert first.ok and "republished" not in first.data
+
+    again = await _stage(project, outcome=_outcome(project)).run(project)
+    assert again.ok and again.data["republished"] is True

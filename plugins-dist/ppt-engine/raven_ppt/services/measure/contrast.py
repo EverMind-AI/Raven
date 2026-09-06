@@ -86,6 +86,12 @@ from raven_ppt.services.template.decompile import inherited_ink, page_design, ru
 #
 # Under 2:1 nothing is legible and the deck is refused. Above it this file says nothing.
 UNREADABLE_RATIO = 2.0
+# A shape the template drew, holding the template's own colours, is the designer's
+# decision: the bundled beige and mint templates set white numerals on yellow chevrons
+# at 1.4 to 1.9 against 1, and every deck cloning those pages was refused for it. Above
+# this floor a template-drawn block is reported and not refused; under it -- the same
+# colour on the same colour -- nothing was designed and the refusal stands.
+TEMPLATE_OWN_FLOOR = 1.3
 # Below this the crop cannot say what its ground is.
 _MIN_PIXELS = 24
 # A run that is one mark and nothing else. Measured over eight delivered decks, about
@@ -247,10 +253,11 @@ def contrast_findings(
             detail["drawn_by"] = drew
         if prototype is not None:
             detail["prototype"] = prototype
+        designed = drew == _TEMPLATE_DREW and ratio >= TEMPLATE_OWN_FLOOR
         findings.append(
             Finding(
                 kind="unreadable",
-                severity=Severity.BLOCKING,
+                severity=Severity.WARNING if designed else Severity.BLOCKING,
                 page=number,
                 message=(
                     f"'{text[:_HEAD]}' is set in #{ink} on a ground that renders "
@@ -259,6 +266,12 @@ def contrast_findings(
                     f"dark deck the type colour is the theme's `foreground`; `surface` and `background` are "
                     f"what the ground is painted with, and reaching for one of those gives you black on black"
                     + (f". And {clause}" if clause else "")
+                    + (
+                        ". The template's designer set it this way -- a numeral on its own chevron, a label in "
+                        "its own tint -- so this is a report and not a refusal; recolour it or leave it"
+                        if designed
+                        else ""
+                    )
                 ),
                 detail=detail,
             )
@@ -345,16 +358,37 @@ def _keys(arr: Any) -> Any:
     return (banded[..., 0] * _GROUND_LEVELS + banded[..., 1]) * _GROUND_LEVELS + banded[..., 2]
 
 
+# How far a rendered pixel may sit from the declared ink, per channel, and still be
+# the ink. The ground buckets are 16 levels wide with edges at multiples of 16, so a
+# bucket test put #2F2F2F and the #303030 the renderer painted it as in different
+# buckets -- and then took the glyphs' own pixels for the ground, 1.0:1, on three
+# readable pages of measured decks -- while it put #110D0A photograph pixels in the
+# same bucket as #2F2F2F type, and read a title as standing on the photograph beside
+# it. A distance from the colour itself has neither edge.
+_INK_TOLERANCE = 20
+# How close a pixel has to be to the ink to prove type is painted *here*. Glyph interiors
+# come off the renderer within a level or two of the declared colour; a night photograph
+# beside the title holds plenty of pixels within twenty levels of #2F2F2F and almost none
+# within six, so the loose distance says what to keep out of the ground and the tight one
+# says which columns carry words. With one distance the title's span ran into the
+# photograph and the title was judged against it (v13 gold, page 7).
+_INK_EXACT = 6
+
+
+def _ink_mask(arr: Any, ink: tuple[int, int, int], within: int = _INK_TOLERANCE) -> Any:
+    """Which pixels are the ink: within `within` of it on every channel."""
+    diff = np.abs(arr[..., :3].astype(np.int32) - np.asarray(ink, dtype=np.int32))
+    return (diff <= within).all(axis=-1)
+
+
 def _ink_span(arr: Any, ink: tuple[int, int, int]) -> tuple[int, int] | None:
-    """The columns the ink's own bucket lands in, (first, last + 1).
+    """The columns the ink lands in, (first, last + 1).
 
     None where none of them do, which is a block whose glyphs the render did not paint
     in the colour the file states -- an inherited size shrunk to nothing, a run the
     theme overrode. There is no span to read then and the whole crop stands.
     """
-    step = _GROUND_STEP
-    key = ((ink[0] // step) * _GROUND_LEVELS + ink[1] // step) * _GROUND_LEVELS + ink[2] // step
-    columns = np.flatnonzero((_keys(arr) == key).any(axis=0))
+    columns = np.flatnonzero(_ink_mask(arr, ink, _INK_EXACT).any(axis=0))
     if columns.size == 0:
         return None
     return int(columns[0]), int(columns[-1]) + 1
@@ -387,9 +421,12 @@ def _painted_in(crop: Any, ink: tuple[int, int, int]) -> bool:
     arr = np.asarray(crop, dtype=np.uint8)
     if arr.ndim != 3 or arr.shape[0] * arr.shape[1] < _MIN_PIXELS:
         return False
-    step = _GROUND_STEP
-    key = ((ink[0] // step) * _GROUND_LEVELS + ink[1] // step) * _GROUND_LEVELS + ink[2] // step
-    return bool(((_keys(arr) == key).mean(axis=0) >= _COLUMN_INK_MIN).any())
+    if bool((_ink_mask(arr, ink, _INK_EXACT).mean(axis=0) >= _COLUMN_INK_MIN).any()):
+        return True
+    # Nothing exactly the ink anywhere, but nearly the whole crop is near it: black type
+    # on a black panel paints no glyph the renderer can tell from its ground, and that
+    # is the page this check exists for, not a page with no type on it.
+    return bool(_ink_mask(arr, ink).mean() >= _INK_IS_GROUND_SHARE)
 
 
 def _worst_ground(crop: Any, ink: tuple[int, int, int]) -> tuple[int, int, int] | None:
@@ -412,7 +449,7 @@ def _worst_ground(crop: Any, ink: tuple[int, int, int]) -> tuple[int, int, int] 
     arr = np.asarray(crop, dtype=np.uint8)
     if arr.ndim != 3 or arr.shape[0] * arr.shape[1] < _MIN_PIXELS:
         return None
-    whole = _ground(arr)
+    whole = _ground(arr, ink)
     span = _ink_span(arr, _rgb_of(ink))
     has_ink = span is not None
     if span is not None and span[1] - span[0] >= 1:
@@ -427,12 +464,11 @@ def _worst_ground(crop: Any, ink: tuple[int, int, int]) -> tuple[int, int, int] 
     worst, held = whole, _ratio(ink, whole)
     keys = _keys(arr)
     step = _GROUND_STEP
-    ink_key = ((ink[0] // step) * _GROUND_LEVELS + ink[1] // step) * _GROUND_LEVELS + ink[2] // step
     for start in range(0, columns, width):
         part = arr[:, start : min(start + width, columns)]
         if part.shape[0] * part.shape[1] < _MIN_PIXELS:
             continue
-        band = _ground(part)
+        band = _ground(part, ink)
         step = _GROUND_STEP
         key = ((band[0] // step) * _GROUND_LEVELS + band[1] // step) * _GROUND_LEVELS + band[2] // step
         window = keys[:, start : min(start + width, columns)]
@@ -443,7 +479,7 @@ def _worst_ground(crop: Any, ink: tuple[int, int, int]) -> tuple[int, int, int] 
         # bucket is a photograph or a filled shape the box reaches over, not words on
         # a ground: a dark title's declared box ran into the dark photograph beside
         # it and the photograph was read as its ground at 1.4:1.
-        painted = int((window == ink_key).sum()) / pixels
+        painted = float(_ink_mask(part, ink, _INK_EXACT).mean())
         if painted > _SLICE_INK_MAX:
             continue
         # And a slice with no glyph in it has no text to read: a title's declared
@@ -471,13 +507,29 @@ _GROUND_LEVELS = 16
 _GROUND_STEP = 256 // _GROUND_LEVELS
 
 
-def _ground(arr: Any) -> tuple[int, int, int]:
+# The share of a crop the ink may cover before it is read as the ground rather than as
+# type standing on one. A bold title fills a third to a half of its line with glyphs, so
+# on a photograph -- no bucket of which is common -- the commonest bucket was the ink
+# itself, and a cover's title measured 1.0:1 against its own strokes on a page anyone
+# could read (v21, page 1, refused and never published). Black type on a black panel is
+# different in exactly one way: the ink is then nearly the whole crop, glyphs and ground
+# alike.
+_INK_IS_GROUND_SHARE = 0.75
+
+
+def _ground(arr: Any, ink: tuple[int, int, int] | None = None) -> tuple[int, int, int]:
     """The ground these pixels are, as the mean of the commonest band of them.
 
     Bucketed rather than counted outright, and then averaged inside the winning bucket
     so the answer is a colour the crop really holds rather than the corner of a bucket.
+    With `ink` given, the pixels that are the ink are not candidates unless they are
+    most of the crop: the glyphs are what sits *on* the ground, not the ground.
     """
     flat = arr.reshape(-1, arr.shape[-1])[:, :3]
+    if ink is not None:
+        painted = _ink_mask(flat, _rgb_of(ink))
+        if 0 < int(painted.sum()) < _INK_IS_GROUND_SHARE * painted.size:
+            flat = flat[~painted]
     codes = _keys(flat.reshape(1, -1, 3)).reshape(-1)
     counts = np.bincount(codes, minlength=_GROUND_LEVELS**3)
     top = int(counts.max())

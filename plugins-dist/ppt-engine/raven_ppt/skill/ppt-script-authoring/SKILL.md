@@ -398,7 +398,9 @@ the median page draws seven, and every page that draws exactly one draws a pictu
 paragraph's box-for-its-own-sake -- it is the difference between three groups a reader
 can see and three paragraphs a reader has to sort.
 
-**A composed page takes its shape from the catalogue.** Open
+**With a template bound, a page takes its shape from an example page first** (§8): the
+outline names the example each content page starts from, and composing is for the page no
+example or borrowable page can carry. **A composed page takes its shape from the catalogue.** Open
 [deck/build/references/layouts.md](deck/build/references/layouts.md) while deciding. Its
 Part 1 is eleven skeletons -- every id folded into the one it varies, with the share of
 the body each division measured on the pages that were drawn -- and the outline names
@@ -482,9 +484,10 @@ the whole file to change part of it.
 
 **Write it in pieces, not in one call -- and in few pieces.** `write_file` for the setup
 and the first five pages, then `mode="append"` for five pages at a time, with
-`ppt_build(draft=true)` after each append: a draft builds what exists, measures it and hands
-back the renders without holding a part-written deck to the agreed length and without
-publishing. Four appends and four drafts is a twenty-page deck; a measured run that
+`ppt_build(draft=true)` in the same reply as each append -- the calls in one reply run in
+the order you list them, so the write and the build together are one turn: a draft builds
+what exists, measures it and hands back the renders without holding a part-written deck to
+the agreed length and without publishing. Four appends and four drafts is a twenty-page deck; a measured run that
 appended two pages at a time through thirty `exec` heredocs spent thirty-seven minutes of
 model time on the appending alone. Use `write_file`, not `exec`, to write the program. Drop `draft` when the deck is whole and you want the gates. A twenty-page
 program sent in one call is cut before it arrives, and a draft shows you a page while
@@ -503,6 +506,9 @@ out of (`tpl = Presentation(os.environ['PPT_TEMPLATE_SOURCE'])`). Handing `proto
 deck you build into raises `this template ships 0 pages`.
 `PPT_BUNDLED_TEMPLATES` is the folder the bundled templates ship in; `bundled(name)` reads it,
 so a page borrowed from another template (§8) needs no path in the program.
+`PPT_SLIDE_BLOCKS` and `PPT_SLIDE_LINES` are the build's own bookkeeping -- the `# SLIDE n`
+spans it runs one at a time (§4) and the record of which line drew which page -- and
+nothing in the program reads them.
 
 **One block per page, opened with a `# SLIDE <n>` banner.** Shared helpers above the
 blocks; the page's own composition inside the page's own block. Two shapes are refused: a
@@ -776,7 +782,7 @@ use, by their DrawingML names, and the two layouts built on them. Signatures in
 | `shape_saying(container, prefix)` | one shape by the copy it starts with |
 | `page_position(shape)` | `(left, top)` in inches on the page, groups resolved |
 | `raise_type(slide, floor=BODY_FLOOR_PT, min_chars=COPY_CHARS)` | lift copy the template states under the readability floor (`BODY_FLOOR_PT` is 14pt) and let its box grow to hold it |
-| `replace_text(target, text, new=None)`, `replace_picture(shape, image, fit="contain", *, anchor="centre", trim=None, zoom=1.0, alpha=None)` | in place, keeping how the template set it; `alpha` washes the new picture the way `backdrop` does, for the frame that is the page |
+| `replace_text(target, text, new=None)`, `replace_picture(shape, image, fit="contain", *, anchor="centre", trim=None, zoom=1.0, alpha=None, box=None)` | in place, keeping how the template set it; `alpha` washes the new picture the way `backdrop` does, for the frame that is the page. `shape` may be a drawing rather than a frame -- a group of freeforms, a cartoon -- or a list of shapes making one: the picture takes its box and its depth and the drawing goes |
 | `backdrop(slide, image, *, alpha=0.22, box=None, anchor="centre", trim=None, zoom=1.0)` | a picture behind everything on the page, cover-cropped to the canvas (or `box`) and washed to `alpha` -- 0.2 under copy, 0.35 at most where copy sits over it; returns the picture |
 | `layout_pictures(slide)` | the photographs a page inherits from its layout, largest first; `replace_picture(layout_pictures(slide)[0], image, "cover", alpha=0.25)` changes them for every page on that layout |
 | `wash(shape, alpha)` | set any picture's transparency -- a frame the template drew, one `pictures=` filled, one you placed -- to the same share `backdrop` takes; a photograph a title has to read over is `wash(shape, 0.3)` |
@@ -852,6 +858,16 @@ replace_text(shape, [Run("访客中约 "), Run("84%", bold=True, colour=ACCENT_I
 - `replace_picture(shape, image, fit)` — `"contain"` shrinks the frame to the picture's
   own proportions; `"cover"` crops the picture to fill the frame as it stands. Either way
   it refuses a landscape figure in a portrait frame rather than squashing it.
+  The template's illustration is not always a picture: on a section page it is as often
+  a cartoon drawn as a group of freeforms, with no image to swap. Hand that group (or a
+  member of it, or a list of the loose shapes that make the drawing) to `replace_picture`
+  and a picture takes the drawing's box and its place in the z-order, the drawing gone --
+  a member stands for the wordless group around it, so the cartoon goes whole and the
+  card it sits in stays;
+  `adapt(pictures={7: path})` does the same when shape 7 is drawn, and
+  `pictures={(5, 6, 7): path}` gives several loose shapes way to one picture. An
+  illustration meant to sit on the template's ground is asked for with
+  `ppt_generate_image(..., transparent=true)`, which has it drawn on a green screen and keys the green out.
   Three arguments decide *which* pixels a cover keeps, and none of them writes a file:
   `anchor` is the side the crop keeps — `"centre"`, `"top"`, `"bottom"`, `"left"`,
   `"right"` — so a photograph whose subject runs along the top survives at
@@ -867,7 +883,12 @@ replace_text(shape, [Run("访客中约 "), Run("84%", bold=True, colour=ACCENT_I
 - `units(container)` returns runs of repeating sibling groups — a card row, an agenda list.
 - `arrangement(run)` returns `("row"|"column"|"grid"|"irregular", rows, cols)`. Nothing
   **moves** the survivors for you: closing the hole four units leave on a 2x4 grid is a
-  design decision, and `place` is how you make it.
+  design decision, and `place` is how you make it. The same holds for growing: `add_unit`
+  extends a row, a column or a grid at its own pitch and refuses an irregular run -- two
+  cards set diagonally, pills on a curve -- because where the next one goes is yours to
+  say. Say it with `clone_shape(run[-1], (left, top, width, height))` and put the copy
+  where the design wants it (the refusal prints where the existing units sit); then
+  `fill(run + [copy], items)` treats it as a slot.
 - `fill(run, items)` writes items into a run's units and removes the ones left over, group
   and all: `fill(units(slide)[1], [["03", "本文", "小标题"]])`. Reach for it where
   `adapt(items=...)` was not enough, which is the two-run page below.
@@ -1482,7 +1503,19 @@ is not the template's is refused (§12).
 start from the nearest example by information shape: replace its text and pictures, delete
 spare repeated units, and move or resize the surviving regions when the content needs it
 -- a prototype is a starting composition, not an immutable form. Where no example carries
-the page's information shape, compose the page instead (below).
+the page's information shape, compose the page instead (below) -- for at most a quarter of
+the content pages: the outline refuses a plan that composes more than that, because a
+deck that redraws its pages inside a template has stopped being the template's however
+carefully it measures the house style. Measured: 3 of 17 composed read as the template's
+own; 6 of 17 read as "drawn by hand and ugly", and the six were exactly the composed ones;
+17 of 17 read as "nothing but self-drawn layouts".
+
+**Even a page you compose starts on the template's page.** Clone the nearest example,
+`drop=` the units the page does not need, and draw into the region that frees -- the
+header row, the panels, the marks and the ground stay the template's, and only the body
+is yours. A page drawn from primitives alone carries none of them, and on a live deck the
+six pages a reader singled out as drawn by hand were exactly the six composed that way.
+`ppt_template(pages=[n])` gives the example's real geometry to draw against.
 
 **`ppt_template(project=..., pages=[4, 5])` reads an example page back as the python-pptx
 that would draw it** — up to six pages a call, and as many of them as fit one reply; the ones
@@ -1722,7 +1755,10 @@ than refuses (§12).
 
 ## 9. Formulas
 
-**Never set an expression with `write`.** A formula in a text box is prose: it wraps where
+**Never set an expression with `write`, and never fake a fraction or a root.** A
+fraction, a root, a sum with limits is TeX -- `formula(slide, box, r"\frac{QK^{T}}{\sqrt{d_k}}", T)`
+sets it as a typeset picture in the deck's ink; a slash and a `√` character read as
+code. A formula in a text box is prose: it wraps where
 the box runs out, and where it runs out is the middle of a symbol — and every subscript in
 it is flat, so the one thing the notation carried is gone (`flat_formula`, §12).
 `formula()` sets it as one unbreakable line, steps down the ramp until it fits, and splits
@@ -1761,10 +1797,23 @@ different page or the same page with different words.
 The reply names how many pages it did not show and how to ask for them: **a named subset
 is not the deck** (§11).
 
-**Fix everything a build reported before you build again.** A build's reply lists every
-finding on every page it showed; answer all of them -- one edit pass over each page
-named -- and then build once. One build per finding was the measured shape of a slow run:
-twenty-three builds of forty seconds for one deck, most of them to see a single fix land.
+**A page that raises no longer stops the deck.** The build runs your `# SLIDE n` blocks
+one at a time: a block that raises loses only its own page -- a page saying what went
+wrong stands in its place -- and every other page is still drawn, measured and shown.
+The failure comes back as a `page_failed` refusal with the traceback, beside the
+findings on the pages that did draw, so fix it in the same edit pass as those rather
+than building once per crash. Keep the shape that makes this work: shared helpers in
+the prelude above the first block, one slide per block, nothing a later block needs
+defined inside an earlier one.
+
+**Fix everything a build reported before you build again, and send the edits and the
+build in one reply.** A build's reply lists every finding on every page it showed; answer
+all of them -- one `edit_file` per page named -- and then `ppt_build`, all in the same
+reply: tool calls run in the order listed, so the edits and the build cost one turn where a
+reply per call costs two. One build per finding was the measured shape of a slow run:
+twenty-three builds of forty seconds for one deck, most of them to see a single fix land;
+and a run that sent every edit and every build as its own reply spent 32 of its 72
+iterations on that alternation alone.
 
 **Name the pages you changed when a page is wrong.** `ppt_build(slides=[7])` rebuilds and
 hands back page 7 alone: edit that page's block, look at it, fix it, look again. A sweep tells you twelve pages have something wrong; a short loop tells you what.
@@ -1797,6 +1846,23 @@ entry names the answer as well as the defect.
 It refuses nothing, publishes nothing and edits no file. Every entry is yours to judge on
 the same terms as a warning: look at the page it names, fix what you agree with, leave
 what you have looked at and disagree with -- and say why.
+
+Saying why is a call, not a sentence in your reply. Every entry goes into a ledger with an
+id (`p14-a1b2c3`), and every build reply lists what is still open under `open_findings`
+until it is answered one of two ways: a re-reading of that page no longer sees it, or you
+look at the page and dismiss it -- `ppt_review(project, dismiss=[{"id": "p14-a1b2c3",
+"reason": "the illustration is the template's design"}])`, which reads nothing and returns
+the list as it stands. An entry reported again on a later reading keeps its id and shows
+how many times it has been seen. A deck delivered with open entries is a deck whose reader
+was never answered, and the reply says so on every build.
+
+One reason is refused: "it is the template's own illustration". The template's stock
+pictures and drawings are placeholders, and keeping the template's style means its
+layouts and colours, not a whiteboard meeting on a page about elderly care. A `figure`
+entry about one of them is answered by replacing the picture -- `ppt_generate_image` in
+the template's own style, or a real photograph from `ppt_image_search` -- or by saying
+what the picture depicts and why that is this page. A dismissal that only says whose
+picture it is comes back as `refused`, and the entry stays open.
 
 **One page at a time, and a verdict on a kind is not a judgement.** The entries already
 carry their kind; what makes the list worth having is that each one names a page. "Most of
@@ -1842,7 +1908,7 @@ whole-file read is the most expensive thing in the deck.
 
 ## 12. What the build refuses, and what it only reports
 
-**Refused**, with the page named. Four land at the outline, before a line of the program
+**Refused**, with the page named. Five land at the outline, before a line of the program
 is written:
 
 | Refused at the outline | The move |
@@ -1851,6 +1917,7 @@ is written:
 | a **layout id the catalogue does not carry** -- `P1` to `P41` are page structures, `M1` to `M26` modifier layers, not zero-padded | open [deck/build/references/layouts.md](deck/build/references/layouts.md); an id not in it can only come from not having opened it |
 | with a template bound, an outline whose **cover, index and closing** do not name the template's own pages | name them |
 | when ingest extracted no figures at all, a **cited page nobody opened** | `web_fetch` each URL the materials cite and take its image links, then `ppt_fetch` what you will use -- or the PDF behind an abstract, so `ppt_ingest` extracts its figures |
+| with a template bound, a plan **composing more than a quarter of its content pages** from scratch -- neither a `prototype` nor a `borrowed` page | give the rest the nearest example by information shape and adapt it; keep composing only the pages whose shape no example carries, and say which in `needs` |
 | a **`borrowed` naming no bundled template, or a page of one that is not a content page** | take the template and page from `borrowable_pages` in the `ppt_template` reply; the bound template's own pages take `prototype` alone |
 
 For each URL that holds nothing usable, or will not load, say so in `ppt_outline`'s
@@ -1864,6 +1931,9 @@ The rest land on the built deck:
 - a **length the brief did not agree**, or **the wrong language**;
 - a theme that is **not the bound template's**;
 - a page the build **cannot map back to** a block of your code;
+- a page whose **block raised** while the build ran it on its own (§4): a page saying so
+  stands in its place and the rest of the deck was still drawn, so fix that block in the
+  same pass as the other findings;
 - a page you have **never been shown**;
 - a page whose plan **promised a figure and that shows no picture** -- place it, or
   plan the page again without it;

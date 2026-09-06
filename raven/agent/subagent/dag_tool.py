@@ -35,8 +35,6 @@ CustomEvent the web UI's DAG graph already renders.
 from __future__ import annotations
 
 import asyncio
-import json
-import time
 from collections.abc import Awaitable, Callable, Mapping
 from contextvars import ContextVar
 from copy import deepcopy
@@ -48,23 +46,14 @@ from loguru import logger
 
 from raven.agent import workdir
 from raven.agent.subagent.backends.base import IN_SUBAGENT_RUN
-from raven.agent.subagent.dag_adjudication import AdjudicationDesk, Final, Outbox, ReplanPlan, Report, Stopped
+from raven.agent.subagent.dag_adjudication import AdjudicationDesk, Final, Outbox, Report, Stopped
 from raven.agent.subagent.dag_capabilities import AgentCapabilities, validate_capabilities
 from raven.agent.subagent.dag_graph import DagNodeSpec, SubAgentDagSpec, parse_dag_spec, validate_and_order
 from raven.agent.subagent.dag_mcp_scope import run_mcp_scope
 from raven.agent.subagent.dag_reader import read_node as _read_node
 from raven.agent.subagent.dag_reader import read_run as _read_run
-from raven.agent.subagent.dag_reader import run_dir_of
-from raven.agent.subagent.dag_runner import DagRunResult, ExceptionAnnouncer, ProgressPublisher, run_dag
-from raven.agent.subagent.dag_store import (
-    RUNNING,
-    DagRunStore,
-    SessionNodes,
-    index_guard,
-    make_run_id,
-    read_index,
-    read_session_nodes,
-)
+from raven.agent.subagent.dag_runner import ExceptionAnnouncer, ProgressPublisher, run_dag
+from raven.agent.subagent.dag_store import SessionNodes, index_guard, make_run_id, read_index, read_session_nodes
 from raven.agent.subagent.dag_verdict import Verdict, describe_failure, judge, tail
 from raven.agent.subagent.history import dag_root, session_history_root
 from raven.agent.subagent.instances import mint_handle
@@ -184,26 +173,6 @@ class _DispatchBackend:
         if self.mcp_grant is not None:
             kwargs["mcp_grant"] = self.mcp_grant
         return await self.backend.run(*args, **kwargs)
-
-
-@dataclass
-class Preflight:
-    """What the pre-dispatch checks settled, for the two callers that dispatch from it.
-
-    ``capabilities`` rides along because it is one snapshot of a hot-appliable table:
-    ``_execute`` needs it again below this phase, and taking it twice would straddle
-    this phase's awaits.
-
-    ``spec`` is handed back rather than left to the caller because the phase is
-    allowed to amend it, not because it currently does -- the one amendment it had,
-    stamping each node with the machine its work was bound for, went away with the
-    host-side machine checks.
-    """
-
-    spec: SubAgentDagSpec
-    backends: dict[str, Any]
-    notices: list[str]
-    capabilities: dict[str, AgentCapabilities]
 
 
 # How long a terminal event may take when a run ends without a manifest. It is
@@ -518,12 +487,10 @@ class SubAgentDagTool(Tool):
         event.set()
         return True
 
-    def resolve_node(
-        self, run_id: str, node_id: str, decision: str, message: str | None, plan: "ReplanPlan | None" = None
-    ) -> bool:
+    def resolve_node(self, run_id: str, node_id: str, decision: str, message: str | None) -> bool:
         """Answer one suspended node. False when nothing was waiting on it."""
         desk = self._desks.get(run_id)
-        if desk is None or not desk.resolve(node_id, decision, message, plan):
+        if desk is None or not desk.resolve(node_id, decision, message):
             return False
         # The outbox owes a re-send for every report it handed over and nobody
         # decided; this is the decision, so that debt is settled.
@@ -841,15 +808,6 @@ class SubAgentDagTool(Tool):
             schema["properties"]["subagent"]["enum"] = names
         return schema
 
-    def node_schema(self) -> dict[str, Any]:
-        """This tool's node schema, for a caller that accepts a graph on its behalf.
-
-        Public so ``resolve_dag_node`` advertises the same node shape rather than a
-        copy of it: the ``subagent`` enum is built from the hot-appliable agent
-        table, and a second copy would drift from ``run_subagent_dag``'s.
-        """
-        return self._node_schema()
-
     def _resolve_node(self, node: DagNodeSpec) -> Any:
         """The backend one node dispatches to, or ``None`` if its agent is unknown.
 
@@ -970,6 +928,7 @@ class SubAgentDagTool(Tool):
                 "Error: delegation is paused. The user paused sub-agent spawning; "
                 "do the work in this turn instead, or ask them to resume."
             )
+        capabilities = self._capability_map()
         # Validation is a distinct phase, ahead of the run, in both modes: a
         # graph that fails any check costs zero sub-agent dispatches and is
         # rejected in the caller's own turn, so a rejection is always cheap
@@ -978,8 +937,43 @@ class SubAgentDagTool(Tool):
         try:
             spec = parse_dag_spec({"task_summary": task_summary, "nodes": nodes, "confirm": confirm})
             validate_and_order(spec, self._reference_roots(), await self._session_nodes())
-            pre = await self._preflight(spec)
-            spec, dispatch_backends, notices, capabilities = pre.spec, pre.backends, pre.notices, pre.capabilities
+            notices = validate_capabilities(spec, capabilities)
+            dispatch_backends: dict[str, Any] = {}
+            # ``run_dag`` checks the table too, but it does so inside the run --
+            # which a backgrounded call has already returned from. Checked here
+            # as well so a misspelled name is still a refusal the model can fix
+            # in the same turn, not an announcement a turn later.
+            for node in spec.nodes:
+                if self._registry.get(node.subagent) is None:
+                    raise DagValidationError(f"node '{node.id}' names unknown sub-agent '{node.subagent}'")
+                if not self._registry.get(node.subagent).enabled:  # type: ignore[union-attr]
+                    raise DagValidationError(
+                        f"node '{node.id}' names agent '{node.subagent}', which is turned off on this "
+                        f"machine -- enable it in the agents settings, or point the node at another agent"
+                    )
+                row = self._registry.get(node.subagent)
+                backend = self._resolve_node(node)
+                resolver = getattr(backend, "resolve_mcp_grant", None)
+                if row is not None and row.injectable.mcps and resolver is not None:
+                    # The async form when there is one: see
+                    # SubagentManager._preflight_mcp for why the acp backend must
+                    # not capture the adapter's login shell on this thread.
+                    async_resolver = getattr(backend, "resolve_mcp_grant_async", None)
+                    grant = await async_resolver(node.mcps) if async_resolver is not None else resolver(node.mcps)
+                    # A notice, never a refusal, whichever backend it is. MCP is a
+                    # capability a node asked for on top of the work, so a server
+                    # that could not be resolved costs the node its tools and must
+                    # not cost the graph its run: refusing here throws away every
+                    # other node too, over an optional attachment. The caller is
+                    # told which node lost what, and the node's own reply carries
+                    # the same sentence.
+                    if note := grant.note_text():
+                        notices.append(f"node '{node.id}': {note}")
+                    if getattr(backend, "kind", None) != "raven-loop":
+                        backend = _DispatchBackend(backend, mcp_grant=grant)
+                elif node.mcps is not None:
+                    backend = _DispatchBackend(backend, drop_mcps=True)
+                dispatch_backends[node.id] = backend
         except DagValidationError as exc:
             return self._validation_error(exc)
 
@@ -1007,30 +1001,6 @@ class SubAgentDagTool(Tool):
         # After validation so a rejected graph mints nothing, and before either
         # mode starts so the foreground and background paths share one site.
         spec, auto_instances = self._mint_missing_instances(spec, capabilities)
-        return _with_notices(
-            await self._dispatch(spec, run_id, dirs, dispatch_backends, auto_instances, origin, call_id, background),
-            notices,
-        )
-
-    async def _dispatch(
-        self,
-        spec: SubAgentDagSpec,
-        run_id: str,
-        dirs: _RunDirs,
-        backends: dict[str, Any],
-        auto_instances: frozenset[str],
-        origin: _DagOrigin,
-        call_id: str | None,
-        background: bool,
-    ) -> str | ToolResult:
-        """Start a validated, minted spec running and return its first result.
-
-        The shared tail of `_execute` and `_submit_replan`: both have already
-        validated, preflighted, and minted instances by the time they call this,
-        and what is left -- creating the cancel event, the outbox, the task, and
-        either parking on the first event or building the background message --
-        is identical between a fresh submission and an applied replan.
-        """
         cancel = asyncio.Event()
         self._cancels[run_id] = cancel
 
@@ -1044,7 +1014,7 @@ class SubAgentDagTool(Tool):
             self._outboxes[run_id] = outbox
 
         task = asyncio.create_task(
-            self._run_detached(spec, run_id, cancel, origin, dirs, call_id, auto_instances, backends, outbox)
+            self._run_detached(spec, run_id, cancel, origin, dirs, call_id, auto_instances, dispatch_backends, outbox)
         )
         self._runs[run_id] = task
 
@@ -1092,7 +1062,7 @@ class SubAgentDagTool(Tool):
                 # instant this call returns, as a finished run with no suspension does,
                 # must not see a task that is done in every sense but bookkeeping.
                 _retire(task)
-            return self.render_event(run_id, event)
+            return _with_notices(self.render_event(run_id, event), notices)
         if self._control_reachable is None:
             reachable = True
         else:
@@ -1115,252 +1085,17 @@ class SubAgentDagTool(Tool):
             if reachable
             else ""
         )
-        return ToolResult(
-            model_text=(
-                f"DAG run {run_id} started in the background ({len(spec.nodes)} nodes). "
-                + controls
-                + "I'll report the result when it finishes -- keep working, and do not submit this graph again."
+        return _with_notices(
+            ToolResult(
+                model_text=(
+                    f"DAG run {run_id} started in the background ({len(spec.nodes)} nodes). "
+                    + controls
+                    + "I'll report the result when it finishes -- keep working, and do not submit this graph again."
+                ),
+                display_text=f"DAG {run_id}: {len(spec.nodes)} nodes started",
             ),
-            display_text=f"DAG {run_id}: {len(spec.nodes)} nodes started",
+            notices,
         )
-
-    async def _submit_replan(self, plan: "ReplanPlan", *, bound: bool) -> "str | ToolResult":
-        """`_execute`'s post-validation half, replayed for an already-validated plan.
-
-        A second, cheap check regardless: the old run's id and its nodes' ids only
-        became free again once `await_finalized` returned, and a fresh submission
-        could have raced into one of them during that wait. Session nodes are read
-        plain here, with no overlay -- the old run has finalized by now, so its own
-        index entry already carries real statuses. Raises `DagValidationError`
-        rather than returning a refusal string, so `start_replan` can tell "the
-        link never started" apart from every other refusal shape and record it
-        that way.
-        """
-        spec = parse_dag_spec({"task_summary": plan.task_summary, "nodes": list(plan.nodes), "confirm": plan.confirm})
-        validate_and_order(spec, self._reference_roots(), await self._session_nodes())
-        origin = self._origin.get() or self._default_origin
-        session_dir = self._session_dir_for(self._turn_conversation())
-        dirs = _RunDirs(
-            workdir=str(workdir.current() or self._workspace),
-            run_root=str(dag_root(session_dir)),
-            subagents_root=str(session_history_root(session_dir)),
-        )
-        call_id = self._tool_call_id.get()
-        return await self._dispatch(
-            spec, plan.run_id, dirs, plan.backends, plan.auto_instances, origin, call_id, background=not bound
-        )
-
-    async def prepare_replan(
-        self, run_id: str, from_node: str, nodes: list[dict], reason: str, session_key: str | None, live: dict
-    ) -> "ReplanPlan | str":
-        """Validate a replacement graph and charge for it. The plan, or a refusal.
-
-        Runs the same phases a submitted graph runs, in the same order and for the
-        same reasons (see ``_execute``): a refused graph must cost zero dispatches
-        and be refused in the caller's own turn.
-
-        The successor's run id is minted here, before the decision is handed over,
-        because the wind-down names it in every node reason it writes.
-
-        ``live`` is passed in rather than read here: reconciling a run needs
-        loop-wide liveness (``dag_live.live_run_ids``) and this tool holds no
-        reference to the agent loop -- the control tool does, and its own
-        ``_read_live`` already asks exactly that question with the right source.
-        """
-        if self._is_paused is not None and self._is_paused():
-            return (
-                "Error: delegation is paused. The user paused sub-agent spawning; "
-                "do the work in this turn instead, or ask them to resume."
-            )
-        try:
-            raw_graph = json.loads(await self._read_graph_json(run_id, session_key))
-            raw_graph.pop("replan", None)
-            old = parse_dag_spec(raw_graph)
-            spec = parse_dag_spec({"task_summary": old.task_summary, "nodes": nodes, "confirm": old.confirm})
-            validate_and_order(spec, self._reference_roots(), await self._session_nodes_for_replan(run_id, live))
-            pre = await self._preflight(spec)
-        except DagValidationError as exc:
-            return self._validation_error(exc)
-        origin = self._origin.get() or self._default_origin
-        if pre.spec.confirm and not await self._confirmed(pre.spec, origin):
-            return (
-                "The user did not approve this replan, so nothing was run and the old run is "
-                "still running as submitted. Ask them what to change before replanning again."
-            )
-        if self._charge is not None and (refusal := self._charge(origin.conversation)) is not None:
-            return refusal
-        spec, auto = self._mint_missing_instances(pre.spec, pre.capabilities)
-        return ReplanPlan(
-            run_id=make_run_id(),
-            from_node=from_node,
-            reason=reason,
-            nodes=tuple(spec.nodes),
-            backends=pre.backends,
-            auto_instances=auto,
-            notices=tuple(pre.notices),
-            task_summary=spec.task_summary,
-            confirm=spec.confirm,
-        )
-
-    async def _read_graph_json(self, run_id: str, session_key: str | None) -> str:
-        """One run's submitted graph, as text."""
-        root = self._run_root(session_key)
-        path = self._backend.join_path(run_dir_of(self._backend, root, run_id), "graph.json")
-        return (await self._backend.read_file(path)).decode("utf-8", errors="replace")
-
-    async def _session_nodes_for_replan(self, run_id: str, live: dict) -> SessionNodes:
-        """This session's node index, with the replanned run's live state laid over it.
-
-        The run has not finalized when this is asked, so its index entry carries no
-        per-node ``status`` and every one of its nodes reads back ``running`` --
-        neither reusable nor readable. The live read is the more current of the two
-        by construction: it is what the finalize about to happen will write. Without
-        the overlay, a reference to a node that has plainly completed is refused
-        with "that run left it with no output".
-        """
-        known = await self._session_nodes()
-        state = dict(known.state)
-        for entry in live.get("files") or []:
-            state[entry["node"]] = entry.get("status") or state.get(entry["node"], RUNNING)
-        return SessionNodes(owner=dict(known.owner), state=state)
-
-    async def await_finalized(self, run_id: str) -> None:
-        """Wait for one run's task to end, so its per-node outcomes are on disk.
-
-        The successor's validation reads them, and a run whose index entry has no
-        statuses reads back as still running. Returns at once for a run id not in
-        this instance's own ``_runs`` -- true both when it already ended and when
-        it never started here, because a second graph tool instance is running it
-        (see ``dag_live``'s module docstring). Callers must resolve the owning
-        instance first, with ``dag_live.owning_tool``, or this returns instantly
-        without having waited for anything.
-        """
-        task = self._runs.get(run_id)
-        if task is not None and not task.done():
-            await asyncio.wait([task])
-
-    async def _record_link(self, run_id: str, entry: dict[str, Any]) -> None:
-        """Note the replan link on `run_id`'s own graph.json."""
-        store = DagRunStore(self._backend, self._run_root(self._turn_conversation()), run_id)
-        await store.record_replan(entry)
-
-    async def start_replan(self, run_id: str, plan: "ReplanPlan", *, bound: bool = False) -> "str | ToolResult":
-        """Start the successor run and note the link on the run it replaces."""
-        entry: dict[str, Any] = {
-            "run_id": plan.run_id,
-            "from_node": plan.from_node,
-            "reason": plan.reason,
-            "decided_at": int(time.time() * 1000),
-            "started": True,
-        }
-        try:
-            result = await self._submit_replan(plan, bound=bound)
-        except DagValidationError as exc:
-            entry["started"] = False
-            entry["error"] = str(exc)
-            result = self._validation_error(exc)
-        await self._record_link(run_id, entry)
-        return result
-
-    async def record_interrupted_replan(self, run_id: str, plan: "ReplanPlan", reason: str) -> None:
-        """Note an aborted hand-off on ``run_id``'s own graph.json.
-
-        For the stretch between a successful ``resolve_node`` and ``start_replan``:
-        ``emit_replanned`` and ``await_finalized`` run in it, and an interruption
-        there (a ``/stop`` cancelling this call is realistic) would otherwise
-        leave the link unrecorded -- even though the desk already answered and
-        every node's wind-down reason already names ``plan.run_id`` as the
-        successor. Without this, a reader of ``run_id``'s graph.json sees nodes
-        pointing at a run this file never admits was even attempted.
-
-        This narrows that window rather than closing it. ``start_replan`` records
-        the link once ``_submit_replan`` has returned or raised
-        ``DagValidationError``, so a cancellation from inside the submission --
-        a bound dispatch parks on the successor's first event, the longest await
-        in the hand-off -- escapes both guards and still leaves the link
-        unwritten.
-        """
-        entry: dict[str, Any] = {
-            "run_id": plan.run_id,
-            "from_node": plan.from_node,
-            "reason": plan.reason,
-            "decided_at": int(time.time() * 1000),
-            "started": False,
-            "error": reason,
-        }
-        await self._record_link(run_id, entry)
-
-    async def _emit_replanned(self, run_id: str, plan: "ReplanPlan") -> None:
-        origin = self._origin.get() or self._default_origin
-        emit = self._emitter(origin.conversation, self._tool_call_id.get())
-        await emit(
-            "dag_run_replanned",
-            {
-                "run_id": run_id,
-                "replan_run_id": plan.run_id,
-                "from_node": plan.from_node,
-                "reason": plan.reason,
-            },
-        )
-
-    async def emit_replanned(self, run_id: str, plan: "ReplanPlan") -> None:
-        """Tell the wire a replan is under way, before the old run winds down.
-
-        Called by the control tool right after the node hand-off succeeds, and
-        before it waits out the old run's finish -- the web UI's live tracking
-        for a run is keyed by ``run_id`` and is dropped the moment that run's own
-        ``dag_run_completed`` arrives, so this has to land before that happens,
-        not after ``start_replan`` returns.
-        """
-        await self._emit_replanned(run_id, plan)
-
-    async def _preflight(self, spec: SubAgentDagSpec) -> Preflight:
-        """Every pre-dispatch check that needs live registry data.
-
-        Shared by ``_execute`` and the replan path so a replacement graph cannot
-        reach dispatch through checks a submitted graph has to pass. Raises
-        ``DagValidationError`` for a refusal; a capability or MCP gap comes back
-        as a notice instead, on the terms those two already had.
-        """
-        capabilities = self._capability_map()
-        notices = validate_capabilities(spec, capabilities)
-        backends: dict[str, Any] = {}
-        # ``run_dag`` checks the table too, but it does so inside the run --
-        # which a backgrounded call has already returned from. Checked here
-        # as well so a misspelled name is still a refusal the model can fix
-        # in the same turn, not an announcement a turn later.
-        for node in spec.nodes:
-            row = self._registry.get(node.subagent)
-            if row is None:
-                raise DagValidationError(f"node '{node.id}' names unknown sub-agent '{node.subagent}'")
-            if not row.enabled:
-                raise DagValidationError(
-                    f"node '{node.id}' names agent '{node.subagent}', which is turned off on this "
-                    f"machine -- enable it in the agents settings, or point the node at another agent"
-                )
-            backend = self._resolve_node(node)
-            resolver = getattr(backend, "resolve_mcp_grant", None)
-            if row.injectable.mcps and resolver is not None:
-                # The async form when there is one: see
-                # SubagentManager._preflight_mcp for why the acp backend must
-                # not capture the adapter's login shell on this thread.
-                async_resolver = getattr(backend, "resolve_mcp_grant_async", None)
-                grant = await async_resolver(node.mcps) if async_resolver is not None else resolver(node.mcps)
-                # A notice, never a refusal, whichever backend it is. MCP is a
-                # capability a node asked for on top of the work, so a server
-                # that could not be resolved costs the node its tools and must
-                # not cost the graph its run: refusing here throws away every
-                # other node too, over an optional attachment. The caller is
-                # told which node lost what, and the node's own reply carries
-                # the same sentence.
-                if note := grant.note_text():
-                    notices.append(f"node '{node.id}': {note}")
-                if getattr(backend, "kind", None) != "raven-loop":
-                    backend = _DispatchBackend(backend, mcp_grant=grant)
-            elif node.mcps is not None:
-                backend = _DispatchBackend(backend, drop_mcps=True)
-            backends[node.id] = backend
-        return Preflight(spec=spec, backends=backends, notices=notices, capabilities=capabilities)
 
     async def _confirmed(self, spec: SubAgentDagSpec, origin: _DagOrigin) -> bool:
         """Ask the user to approve this graph. True when they did.
@@ -1434,17 +1169,6 @@ class SubAgentDagTool(Tool):
             # takes the same shape and travels the same route.
             logger.opt(exception=True).error("DAG run {} raised outside run_dag: {}", run_id, exc)
             result = f"Error running DAG {run_id}: {exc}"
-        if getattr(result, "replanned_into", None):
-            # Checked before the outbox: a released outbox stays in `_outboxes`
-            # exactly like a bound one, so `put_final` would reach it here too
-            # and announce the raw `DagRunResult` this branch exists to suppress
-            # (`_run` skips rendering one when replanned -- see its docstring).
-            # The resolve call already returned both halves of the decision to
-            # the agent; announcing "3 completed, 1 failed, 2 skipped" here
-            # would narrate what it just decided -- the same reason a cancelled
-            # run stays silent one branch below.
-            logger.info("DAG run {} was replanned into {}; not announcing a result", run_id, result.replanned_into)
-            return
         if outbox is not None:
             await outbox.put_final(result, stopped=cancel.is_set())
             return
@@ -1571,13 +1295,8 @@ class SubAgentDagTool(Tool):
         auto_instances: frozenset[str],
         dispatch_backends: dict[str, Any],
         outbox: Outbox | None = None,
-    ) -> str | ToolResult | DagRunResult:
-        """Execute one validated graph and render its outcome.
-
-        Returns the raw ``DagRunResult`` rather than rendering it when the run
-        was replanned -- there is no outcome of its own left to narrate, and
-        ``_run_detached`` needs ``replanned_into`` on the object it gets back.
-        """
+    ) -> str | ToolResult:
+        """Execute one validated graph and render its outcome."""
         emit = self._emitter(origin.conversation, call_id)
         desk = AdjudicationDesk()
         self._desks[run_id] = desk
@@ -1664,13 +1383,6 @@ class SubAgentDagTool(Tool):
                 },
             },
         )
-
-        if result.replanned_into:
-            # Narrating "N completed, M failed" here would be for a run the agent
-            # itself just decided to end; _run_detached reads this attribute to
-            # skip announcing it, and the resolve call already returned both
-            # halves of the decision to the agent.
-            return result
 
         lines: list[str] = [
             f"DAG run {result.run_id} finished: "

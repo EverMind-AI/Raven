@@ -359,13 +359,6 @@ const dispatch = (
       // gets that a fan-out put new instances in the session.
       scheduleInstanceRefresh()
       return
-    case 'dag.run_replanned':
-      // Links a settled run to the one that replaced it, for the panel alone.
-      // The live-agents strip (applyDagEvent / $dagRuns) has nothing to update:
-      // this event carries no node, and the successor's own `dag.run_started`
-      // is what registers its instances into the session.
-      turnController.recordDagEvent(event)
-      return
 
     case 'cron.missed': {
       if (sys) {
