@@ -905,3 +905,76 @@ async def test_what_the_script_warned_about_reaches_the_author_on_a_successful_b
 
     assert "2.8x apart" in body["warnings"]
     assert body["warnings"] == body["warnings"].strip()
+
+
+@pytest.mark.asyncio
+async def test_a_reply_with_findings_asks_for_the_edits_and_the_build_together(project: Project) -> None:
+    """The shape of the next reply, said where the author reads it: a run spent 32 of
+    72 iterations sending one edit and one build as separate replies."""
+    views = FakeViews(pages=2)
+    body = _body(
+        await _tool(
+            project,
+            _ok(project, findings=[Finding(kind="band", severity=Severity.WARNING, message="a filled bar", page=1)]),
+            views,
+        ).execute(project="tarvis")
+    )
+    assert "in one reply" in body["next_step"]
+
+    clean = _body(await _tool(project, _ok(project), FakeViews(pages=2)).execute(project="tarvis"))
+    assert "in one reply" not in clean["next_step"], "a delivered deck with nothing found has no next edit"
+
+
+async def test_a_republished_decks_small_revision_does_not_rearm_the_reader(project: Project) -> None:
+    """Three republishes of one live deck each re-read the one to three pages just edited,
+    240s apiece, for nine page opinions in twelve minutes. A revision of a deck already
+    delivered reads only when as many pages are unread as a draft asks for; the first
+    delivery still reads whatever is left."""
+    reader = _Reader(deck=project)
+    tool = _tool(project, _ok(project, pages=3, sources=_versioned(project, 3), republished=True))
+    tool.review = reader
+    await tool.execute(project=project.slug)
+    assert reader.asked == [], "three unread pages on a republish are under the floor"
+
+    fresh = _Reader(deck=project)
+    first = _tool(project, _ok(project, pages=3, sources=_versioned(project, 3)))
+    first.review = fresh
+    await first.execute(project=project.slug)
+    assert fresh.asked == [[1, 2, 3]], "a first delivery reads what is left"
+
+
+async def test_what_the_reader_said_and_nobody_answered_rides_on_every_build_reply(project: Project) -> None:
+    """A reading lives in one reply. A live run delivered a deck with a paragraph the
+    reader had reported buried three builds earlier; the ledger is the sentence that
+    says "page 14 is still open" on every build until it is answered.
+    """
+    from raven_ppt.services import review_ledger
+
+    review_ledger.record_reading(
+        project,
+        {2: [{"kind": "figure", "where": "the right column", "what": "an illustration over the copy", "fix": ""}]},
+        {},
+        1,
+    )
+    tool = _tool(project, _ok(project))
+    tool.review = _Reader()
+
+    body = _body(await tool.execute(project=project.slug))
+
+    assert body["open_findings"]["count"] == 1
+    assert body["open_findings"]["pages"]["2"][0]["kind"] == "figure"
+    assert "still open on page(s) 2" in body["next_step"]
+    assert "dismiss" in body["next_step"]
+
+
+async def test_the_pages_a_build_names_are_read_before_the_backlog(project: Project) -> None:
+    """A build of `slides=[4]` on a live deck read the backlog and left page 4 -- the one
+    the author was waiting on -- unread when the budget ran out.
+    """
+    reader = _Reader()
+    tool = _tool(project, _ok(project))
+    tool.review = reader
+
+    await tool.execute(project=project.slug, slides=[2])
+
+    assert reader.asked == [[2, 1]]

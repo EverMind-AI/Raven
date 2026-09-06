@@ -15,7 +15,7 @@ attributed to a page (blocks.broken_page). Each has a module.
 
 from raven_ppt.backends.script.blocks import broken_page, page_blocks, page_sources
 from raven_ppt.backends.script.edit import blocks_rejection
-from raven_ppt.backends.script.runner import ScriptBackend, run_script
+from raven_ppt.backends.script.runner import ScriptBackend, page_failures, run_script
 from raven_ppt.backends.script.submission import carries_a_program, submission_refusal
 from raven_ppt.backends.script.workspace import (
     HelperSources,
@@ -35,6 +35,7 @@ __all__ = [
     "carries_a_program",
     "deck_path",
     "page_blocks",
+    "page_failures",
     "page_sources",
     "provision",
     "run_script",

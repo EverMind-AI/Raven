@@ -33,6 +33,8 @@ from raven.contracts.tool import Tool, ToolResult
 from raven.utils.images import image_block, text_block
 from raven_ppt.backends.script import deck_path
 from raven_ppt.contracts import Project, brief_path, load_brief, load_outline, outline_path
+from raven_ppt.services import review_ledger
+from raven_ppt.services.review_ledger import REFUSED_FIGURE_REASON
 from raven_ppt.stages.build import BATCH_VIEWS
 from raven_ppt.tools import _return
 from raven_ppt.tools._args import ArgumentError, as_ints
@@ -52,11 +54,13 @@ RECORD_FILE = "review.json"
 # review opening as many concurrent streaming requests as the deck has pages -- each
 # carrying an image, against one endpoint -- and not a tuned figure: nothing here has
 # ever been observed to be rate limited, and the bound has a measured cost. Nineteen
-# pages came to 455s at four at a time where eighteen unbounded came to 209s, so a
-# number low enough to be the dominant cost buys protection from something nobody has
-# seen. Eight leaves a deck of the usual length two or three batches deep. If a run is
-# ever actually limited, that is the measurement this should be set from.
-READERS = 8
+# pages came to 455s at four at a time where eighteen unbounded came to 209s. At eight,
+# a fifteen-page deck was two batches deep, and with one page taking 30 to 160 seconds
+# the second batch was what the 240s budget cut: five readings on one live deck read
+# 6, 8, 8, 0 and 1 pages. Sixteen puts a deck of the usual length in one batch, so the
+# reading takes as long as its slowest page and not as long as two of them. If a run
+# is ever actually limited, that is the measurement this should be set from.
+READERS = 16
 # How long one reading may take, all pages together, before the pages still being
 # read are given up and named as unread. Measured on an 88-minute run: six whole-deck
 # builds spent 434, 208, 198, 900, 439 and 423 seconds, 43 of the 88 minutes, and the
@@ -66,6 +70,13 @@ READERS = 8
 # takes four minutes to answer is one the author waits for, one that takes fifteen
 # is a turn lost.
 READING_BUDGET_S = 240.0
+# And how long one page may take before it is given up on its own, without holding
+# the round to the budget above. Replayed on the live deck with the reader at low
+# effort: fourteen pages answered in 13 to 40 seconds and one request never answered
+# at all, so the round lasted the full 240s for a page that came back unread anyway.
+# Three times the slowest answered page; a page past it is unread, the rest are not
+# late for it.
+PAGE_BUDGET_S = 120.0
 # And how long all of a deck's readings may take together before the gates are the
 # only thing reading it. Measured on a 20-page run: 18 whole-deck builds, each one
 # re-reading the pages the last revision touched, 136 of the run's 327 minutes inside
@@ -170,15 +181,72 @@ class PptReviewTool(Tool):
                         "Name pages when you have just changed those and want them read again"
                     ),
                 },
+                "dismiss": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "id": {"type": "string", "description": "the finding's id, as open_findings lists it"},
+                            "reason": {"type": "string", "description": "what you saw on the page that answers it"},
+                        },
+                        "required": ["id", "reason"],
+                    },
+                    "description": (
+                        "open findings you have looked at and are leaving as they are, each with what you saw. "
+                        "Alone, this call reads nothing and returns what is still open; with pages, it dismisses "
+                        "first and reads after"
+                    ),
+                },
             },
             "required": ["project"],
         }
 
-    async def execute(self, project: str, pages: list[int] | None = None, **kwargs: Any) -> str | ToolResult:
+    async def execute(
+        self,
+        project: str,
+        pages: list[int] | None = None,
+        dismiss: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> str | ToolResult:
         try:
             deck = Project(workspace=self.workspace, slug=project)
         except ValueError as exc:
             return _return.failed(str(exc))
+        verdicts = [entry for entry in (dismiss or ()) if isinstance(entry, dict)]
+        if dismiss and not verdicts:
+            return _return.failed(
+                "dismiss takes a list of {id, reason} objects", hint='dismiss=[{"id": "p14-a1b2c3", "reason": "..."}]'
+            )
+        closed: list[str] = []
+        unknown: list[str] = []
+        refused: list[str] = []
+        if verdicts:
+            missing = [entry for entry in verdicts if not str(entry.get("reason") or "").strip()]
+            if missing:
+                return _return.failed(
+                    "every dismissal needs a reason: what you saw on the page that answers the entry",
+                    hint='dismiss=[{"id": "p14-a1b2c3", "reason": "the illustration is the template design"}]',
+                )
+            closed, unknown, refused = review_ledger.dismiss(deck, verdicts)
+            if pages is None:
+                # A verdict call, not a reading: the author looked and answered, and
+                # what it wants back is the list as it stands now.
+                held = review_ledger.open_findings(deck)
+                asks = [review_ledger.ask(held)] if held else ["nothing from the second reader is open"]
+                if unknown:
+                    asks.insert(0, f"{len(unknown)} id(s) are not open findings and were left alone: {unknown}")
+                if refused:
+                    asks.insert(
+                        0, f"{len(refused)} dismissal(s) refused and left open ({refused}): {REFUSED_FIGURE_REASON}"
+                    )
+                return _return.done(
+                    asks=asks,
+                    project=project,
+                    dismissed=closed,
+                    **({"refused": refused} if refused else {}),
+                    open_findings=review_ledger.summary(held),
+                )
         if self.composer is None:
             return _return.failed(
                 "this build has no model configured for a second reading, so ppt_review cannot run",
@@ -213,8 +281,13 @@ class PptReviewTool(Tool):
         # A deck longer than the cap is read across builds rather than truncated: the
         # pages an earlier reading already covered go to the back of the queue, so a
         # 40-page deck is read 30 then 10 instead of 30 then the same 30. An explicit
-        # `pages=` is the caller's own choice and is left in the order it asked for.
-        shown = sorted(renders, key=lambda number: (number in _already_read(deck), number))[:MAX_PAGES]
+        # `pages=` is the caller's own choice and is left in the order it asked for --
+        # the build names the pages it just drew first, and a reading that sorted them
+        # by number read the backlog while the page the author was waiting on timed out.
+        if wanted:
+            shown = [number for number in wanted if number in renders][:MAX_PAGES]
+        else:
+            shown = sorted(renders, key=lambda number: (number in _already_read(deck), number))[:MAX_PAGES]
         read, reads = await self._read(deck, renders, shown)
 
         found = {number: problems for number, problems in read.items() if problems}
@@ -255,6 +328,19 @@ class PptReviewTool(Tool):
         payload["pages_read"] = _marked(deck, read)
         if read:
             _record(deck, payload)
+            # The ledger after the record: `readings` in the record is the number this
+            # reading has, and the ledger stamps its entries with it.
+            moved = review_ledger.record_reading(deck, read, render_by_page(deck), readings_taken(deck))
+            held = review_ledger.open_findings(deck)
+            payload["ledger"] = {**moved, "open": len(held), "dismissed_now": len(closed)}
+            if held:
+                payload["open_findings"] = review_ledger.summary(held)
+        else:
+            # No page was read, so nothing is marked -- but the time was spent. Left
+            # uncharged, a reader too slow for its budget read 0 of 3 pages in 240s
+            # twice on one live deck and the 900s deck budget never noticed: five
+            # rounds, 20 minutes, 23 page opinions. The seconds count; the pages do not.
+            _charge(deck, float(payload.get("reading_seconds") or 0.0))
 
         # With the pictures, and this is the whole difference between a list that gets
         # read and one that gets dismissed. The reply used to be text: 27 entries about
@@ -271,12 +357,20 @@ class PptReviewTool(Tool):
             said += [f"  - [{entry['kind']}] {entry['where']}: {entry['what']}" for entry in found[number]]
             blocks.append(text_block("\n".join(said)))
             blocks.append(image_block(self.views.data_uri(renders[number], label=f"page {number}")))
-        if not blocks:
-            return _return.done(asks=_asks(found, clean, unread), **payload)
+        if unknown:
+            payload["not_dismissed"] = unknown
+        if refused:
+            payload["refused"] = refused
         rest = [number for number in sorted(found) if number not in worst]
         if rest:
             payload["carrying_more_than_shown"] = rest
-        body = _return.done(asks=_asks(found, clean, unread, rest), **payload)
+        asks = _asks(found, clean, unread, rest or None)
+        held = review_ledger.open_findings(deck) if read else []
+        if held:
+            asks.append(review_ledger.ask(held))
+        if not blocks:
+            return _return.done(asks=asks, **payload)
+        body = _return.done(asks=asks, **payload)
         return _return.with_images(body, blocks)
 
     async def _read(
@@ -291,6 +385,7 @@ class PptReviewTool(Tool):
         """
         brief = load_brief(brief_path(deck))
         language = brief.language if brief is not None else "the deck's own language"
+        ruled_out = tuple(brief.forbidden) if brief is not None else ()
         outline = load_outline(outline_path(deck))
         planned = {page.page: page for page in outline.pages} if outline is not None else {}
         asked = BRIEF.format(language=language, requirements=requirements())
@@ -301,14 +396,23 @@ class PptReviewTool(Tool):
         async def one(number: int) -> tuple[int, list[dict[str, str]]] | None:
             async with reading:
                 started = time.monotonic()
-                reply = await self.composer.ask(
-                    asked,
-                    [
-                        text_block(_said(number, planned.get(number))),
-                        image_block(self.views.data_uri(renders[number], label=f"page {number}")),
-                    ],
-                    max_tokens=REPLY_TOKENS,
-                )
+                try:
+                    reply = await asyncio.wait_for(
+                        self.composer.ask(
+                            asked,
+                            [
+                                text_block(_said(number, planned.get(number), ruled_out)),
+                                image_block(self.views.data_uri(renders[number], label=f"page {number}")),
+                            ],
+                            max_tokens=REPLY_TOKENS,
+                        ),
+                        timeout=PAGE_BUDGET_S,
+                    )
+                except asyncio.TimeoutError:
+                    # Unread, like a page the round's budget cut: `could_not_be_read`
+                    # names it and the next build reads it again.
+                    seconds[number] = round(time.monotonic() - started, 1)
+                    return None
                 seconds[number] = round(time.monotonic() - started, 1)
             try:
                 payload = json.loads(reply[reply.index("{") : reply.rindex("}") + 1])
@@ -528,6 +632,28 @@ def readings_taken(deck: Project) -> int:
     return 1 if isinstance(said, dict) and said.get("pages_read") is not None else 0
 
 
+def _charge(deck: Project, seconds: float) -> None:
+    """Add a round's seconds to the deck's reading total without marking any page read.
+
+    A quick total failure (every reply unparsable) costs a few seconds and changes
+    nothing; a round that hit its whole budget and read nothing costs the budget, which
+    is what keeps the next such round from being taken for free.
+    """
+    if seconds <= 0:
+        return
+    try:
+        deck.review_dir.mkdir(parents=True, exist_ok=True)
+        path = deck.review_dir / RECORD_FILE
+        try:
+            held = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            held = {"schema": "raven_ppt.review.v1", "readings": 0}
+        held["reading_seconds_total"] = round(float(held.get("reading_seconds_total") or 0.0) + seconds, 1)
+        path.write_text(json.dumps(held, ensure_ascii=False, indent=1), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def _record(deck: Project, payload: dict[str, Any]) -> None:
     """Leave the list on disk, and never fail the call over it.
 
@@ -555,8 +681,13 @@ def _record(deck: Project, payload: dict[str, Any]) -> None:
         pass
 
 
-def _said(number: int, plan: Any) -> str:
+def _said(number: int, plan: Any, ruled_out: tuple[str, ...] = ()) -> str:
     """What the reviewer is told about the page besides the picture.
+
+    And what the user ruled out, when the brief records any: a reader that does not
+    know the user asked for the template's own illustrations to stay asked, on three
+    readings of one live deck, for the template's illustrations to go -- seven entries
+    the author could only leave, and every one of them cost a page of the reply.
 
     Only what the picture cannot show. It is a model that sees, and handing it what is
     already in front of it dilutes the one thing it is being asked to do -- a version of
@@ -576,6 +707,21 @@ def _said(number: int, plan: Any) -> str:
     the prototype the author named.
     """
     said = [f"Page {number}."]
+    # Said to every reader, whatever the user ruled out: keeping the template's style
+    # is about its layouts and colours, not about its stock illustrations, which are
+    # placeholders. A live run kept a whiteboard-meeting illustration on eight of
+    # fifteen pages of an elderly-care deck and dismissed every entry about it as
+    # "the template's own".
+    said.append(
+        "The template's own illustrations and stock pictures are placeholders. One that does not depict "
+        "what this page is about is a `figure` problem, however well it matches the template's style."
+    )
+    if ruled_out:
+        said.append(
+            "The user ruled these out for the whole deck, so a fix that needs one of them is not a fix: "
+            + "; ".join(ruled_out)
+            + "."
+        )
     if plan is None:
         said.append("No plan was recorded for this page; review the picture alone.")
         return "\n".join(said)

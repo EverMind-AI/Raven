@@ -490,7 +490,8 @@ def replace_picture(
     trim=None,
     zoom: float = 1.0,
     alpha: float | None = None,
-) -> None:
+    box=None,
+):
     """Swap the image behind a picture frame, keeping the frame.
 
     Deleting the frame and adding a new one is the obvious way and it loses what
@@ -535,11 +536,32 @@ def replace_picture(
     picture the size of the canvas on a layout, a soft texture the type reads over,
     and a photograph swapped in at full strength drowns every title on that layout.
     `alpha=0.25` keeps it a background. `None` leaves whatever wash the frame had.
+
+    `box` -- (left, top, width, height) in inches, or a `ppt_layout.Box` -- reshapes the
+    frame first, as `place` would, so the fit is computed against where the figure goes.
+
+    A template's illustration is not always a picture: the cartoon on a section page is
+    as often a group of a dozen freeforms, drawn in PowerPoint, and there is no blip to
+    swap. Handed such a shape -- or a list of shapes that make one drawing -- this puts
+    a picture where the drawing was: the drawing's own box (or `box`), the drawing's
+    place in the z-order, fitted the same way, and the drawing removed. A shape inside a
+    group takes the drawing it is part of with it -- the outermost group around it that
+    holds no text, so a cartoon goes whole and the card it decorates stays. Returns the
+    new picture frame on that route, so the caller can still reach it; `None` when a
+    frame was kept.
     """
+    targets = list(shape) if isinstance(shape, (list, tuple)) else [shape]
+    if not targets:
+        raise ValueError("nothing to replace: `replace_picture` was handed an empty list")
+    if len(targets) > 1 or _blip_fill(targets[0]) is None:
+        return _picture_in_place_of(targets, image, fit, anchor=anchor, trim=trim, zoom=zoom, alpha=alpha, box=box)
+    shape = targets[0]
+    if box is not None:
+        place(shape, box)
+    # Read before the blip is swapped: what the frame held is the whole question.
+    _check_cut_out(shape, image)
     _, relationship = shape.part.get_or_add_image_part(str(image))
     fill = _blip_fill(shape)
-    if fill is None:
-        raise ValueError("that shape has no image to replace")
     blip = fill.find(f"{{{_A}}}blip")
     if blip is None:
         raise ValueError("that shape has no image to replace")
@@ -573,6 +595,89 @@ def replace_picture(
         # figure swapped into a rounded panel comes out distorted, which is visible in
         # any screenshot with type in it.
         _fill_crop(shape, fill, image, anchor, trim, zoom)
+
+
+# What a drawing made of shapes may be, for `adapt(pictures=...)` to put a picture in
+# its place: a group, a hand-drawn outline, a preset shape. A text box or a placeholder
+# is neither -- an index that lands on one is a miscount, not an illustration.
+_DRAWN = frozenset({MSO_SHAPE_TYPE.GROUP, MSO_SHAPE_TYPE.FREEFORM, MSO_SHAPE_TYPE.AUTO_SHAPE, MSO_SHAPE_TYPE.LINE})
+
+
+def _is_drawing(shape) -> bool:
+    """Whether a shape without a blip is an illustration a picture may stand in for."""
+    if getattr(shape, "is_placeholder", False):
+        return False
+    if getattr(shape, "has_text_frame", False) and shape.text_frame.text.strip():
+        return False
+    return getattr(shape, "shape_type", None) in _DRAWN
+
+
+def _outermost(shape):
+    """The whole drawing `shape` is part of: the outermost group around it that holds no text.
+
+    A cartoon is a group of freeforms and a member of it means the cartoon. But on a
+    template page everything sits one group down -- the card, its icon, its heading and
+    its copy in one group, the four cards in another -- and climbing to the top there
+    swapped a whole page's content for one picture. A group with words in it is content
+    the drawing sits in, not the drawing.
+    """
+    element = shape._element
+    while True:
+        parent = element.getparent()
+        if parent is None or parent.tag != f"{{{_P}}}grpSp" or _holds_text(parent):
+            break
+        element = parent
+    if element is shape._element:
+        return shape
+    return _shape_for(shape.part.slide, element)
+
+
+def _holds_text(element) -> bool:
+    """Whether a group carries words, or a text box drawn to carry them."""
+    if any((node.text or "").strip() for node in element.iter(f"{{{_A}}}t")):
+        return True
+    return any(node.get("txBox") == "1" for node in element.iter(f"{{{_P}}}cNvSpPr"))
+
+
+def _picture_in_place_of(targets, image: Path, fit: str, *, anchor, trim, zoom, alpha, box):
+    """A picture where a drawing made of shapes was, fitted into its box at its depth."""
+    owner = getattr(targets[0].part, "slide", None)
+    if owner is None:
+        raise ValueError(
+            "that drawing is on a layout, not on the page; a layout's shapes cannot be swapped for a picture -- "
+            "cover it with `backdrop` or `shapes.add_picture` on the page instead"
+        )
+    whole: list = []
+    for target in targets:
+        top = _outermost(target)
+        if not any(top._element is done._element for done in whole):
+            whole.append(top)
+    tree = whole[0]._element.getparent()
+    if any(shape._element.getparent() is not tree for shape in whole):
+        raise ValueError("those shapes are not on the same page, so one picture cannot stand in for them")
+    left = min(int(shape.left) for shape in whole)
+    top = min(int(shape.top) for shape in whole)
+    right = max(int(shape.left + shape.width) for shape in whole)
+    bottom = max(int(shape.top + shape.height) for shape in whole)
+    if right <= left or bottom <= top:
+        raise ValueError("that drawing has no extent to put a picture into; pass `box`")
+    depth = min(tree.index(shape._element) for shape in whole)
+    picture = owner.shapes.add_picture(str(image), left, top, right - left, bottom - top)
+    picture._element.getparent().remove(picture._element)
+    tree.insert(depth, picture._element)
+    picture.name = getattr(whole[0], "name", "") or "illustration"
+    if box is not None:
+        place(picture, box)
+    if fit not in ("cover", "contain", "stretch"):
+        raise ValueError(f"fit must be cover, contain or stretch, not {fit!r}")
+    _check_shape(picture, image, fit, trim)
+    if fit != "stretch":
+        _fit(picture, image, fit, anchor, trim, zoom)
+    if alpha is not None:
+        _wash(picture._element.blipFill.find(f"{{{_A}}}blip"), alpha)
+    for shape in whole:
+        tree.remove(shape._element)
+    return picture
 
 
 _A = "http://schemas.openxmlformats.org/drawingml/2006/main"
@@ -790,6 +895,69 @@ def _frames_on_page(shape) -> str:
             f"({other.width / other.height:.2f}){mine}"
         )
     return " This page's picture frames: " + ", ".join(lines) + "." if lines else ""
+
+
+# The share of a picture's pixels that are fully transparent before it is a cut-out --
+# an illustration floating on the page's own ground rather than a photograph in a frame.
+# The bundled templates' cartoons measure 0.58 to 0.81; a photograph with a soft vignette
+# stays well under.
+CUT_OUT_SHARE = 0.25
+
+
+def _is_cut_out(shape) -> bool:
+    """Whether a picture frame holds a cut-out: an image mostly transparent, on the page's ground."""
+    if getattr(shape, "shape_type", None) != MSO_SHAPE_TYPE.PICTURE:
+        return False
+    try:
+        blob = shape.image.blob
+    except Exception:  # noqa: BLE001 -- a frame whose image part is missing is not a cut-out
+        return False
+    share = _transparent_share(io.BytesIO(blob))
+    return share is not None and share >= CUT_OUT_SHARE
+
+
+def _transparent_share(source) -> float | None:
+    try:
+        from PIL import Image
+    except ImportError:  # pragma: no cover -- Pillow ships with the route
+        return None
+    try:
+        with Image.open(source) as opened:
+            if opened.mode not in ("RGBA", "LA", "P") and "transparency" not in opened.info:
+                return 0.0
+            alpha = opened.convert("RGBA").getchannel("A")
+            histogram = alpha.histogram()
+            return histogram[0] / float(alpha.width * alpha.height)
+    except Exception:  # noqa: BLE001 -- an unreadable image is the caller's problem
+        return None
+
+
+def _check_cut_out(shape, image: Path) -> None:
+    """Warn when an opaque picture takes a cut-out's box.
+
+    A template's cartoon is a transparent PNG floating on the page's own ground, and its
+    box runs wherever the drawing does -- up into the title row, over the band. Swapping
+    a photograph into that box keeps the box: on a live page a rectangular photograph then
+    hugged the title and sat over the band the cartoon had merely peeked over. The picture
+    is placed as asked; the author is told what the slot was and the two ways out.
+    """
+    if not _is_cut_out(shape):
+        return
+    share = _transparent_share(image)
+    if share is None or share >= CUT_OUT_SHARE:
+        return
+    import warnings
+
+    left, top = (shape.left or 0) / 914400, (shape.top or 0) / 914400
+    warnings.warn(
+        f"{getattr(shape, 'name', 'this frame')!r} held a cut-out illustration on the page's own ground "
+        f"({(shape.width or 0) / 914400:.1f}x{(shape.height or 0) / 914400:.1f}in at {left:.2f}, {top:.2f}), and "
+        f"{image.name} is an opaque picture: in the cut-out's box it lands on whatever the drawing floated over "
+        "-- a title row, a band. Either give the photograph a box of its own, clear of the copy "
+        "(pictures={n: (image, (left, top, width, height))} or place(shape, box)), or fill the slot with a "
+        "cut-out: ppt_generate_image(..., transparent=true).",
+        stacklevel=3,
+    )
 
 
 def _picture_size(image: Path) -> tuple[int, int] | None:
@@ -1193,7 +1361,13 @@ def adapt(presentation, prototype, texts=None, pictures=None, drop=(), keep=(), 
     `pictures` maps the same keys to image paths, or to `(image, box)` to reshape the
     frame first, where the box is `(left, top, width, height)` in inches -- a size, as
     `place` takes, and not the two corners a `ppt_layout.Box` holds, though a Box may be
-    passed and is converted. `drop` names shapes to remove, by the same keys.
+    passed and is converted. The key may name a drawing rather than a picture frame --
+    the cartoon on a section page is often a group of freeforms with no image behind
+    it -- and the picture then takes the drawing's box and its place in the z-order,
+    the drawing removed (a group member takes the wordless group around it, the whole
+    cartoon; see `replace_picture`).
+    A tuple of keys, `pictures={(5, 6, 7): image}`, gives several loose shapes way to
+    one picture together. `drop` names shapes to remove, by the same keys.
 
     **Text this call does not name is emptied, and shapes are otherwise left alone.**
     A shape is the design; the words in it are the template's example copy. Keeping
@@ -1251,7 +1425,9 @@ def adapt(presentation, prototype, texts=None, pictures=None, drop=(), keep=(), 
     every = list(_all_shapes(slide.shapes))
     with_text = [shape for shape in every if getattr(shape, "has_text_frame", False)]
     frames = [shape for shape in with_text if shape.text_frame.text.strip()]
-    images = [shape for shape in every if shape.shape_type == MSO_SHAPE_TYPE.PICTURE]
+    # A template's photograph is as often a rounded rectangle filled with one as a
+    # picture frame, and to an author reading the render both are "the picture".
+    images = [shape for shape in every if shape.shape_type == MSO_SHAPE_TYPE.PICTURE or _blip_fill(shape) is not None]
     missed = []
 
     # Everything is resolved first and written afterwards. Resolving as it wrote meant a
@@ -1284,8 +1460,17 @@ def adapt(presentation, prototype, texts=None, pictures=None, drop=(), keep=(), 
     swaps: list[tuple[Any, Path, tuple[float, float, float, float] | None, str]] = []
     for key, value in (pictures or {}).items():
         image, box, how = _picture_spec(value)
+        if isinstance(key, tuple):
+            # Several shapes that make one drawing -- the dozen freeforms of a cartoon --
+            # give way to one picture together; a key that misses fails the whole tuple.
+            found = [_pick(part, every, images) for part in key]
+            if any(shape is None or not (_blip_fill(shape) is not None or _is_drawing(shape)) for shape in found):
+                missed.append(key)
+                continue
+            swaps.append((found, image, box, how))
+            continue
         shape = _pick(key, every, images)
-        if shape is None or getattr(shape, "shape_type", None) != MSO_SHAPE_TYPE.PICTURE:
+        if shape is None or not (_blip_fill(shape) is not None or _is_drawing(shape)):
             # A page with exactly one picture leaves no room for doubt about which frame
             # was meant, so an index landing elsewhere is read as that one: two models
             # each wrote `pictures={2: ...}` against a page whose picture was shape 3.
@@ -1332,9 +1517,7 @@ def adapt(presentation, prototype, texts=None, pictures=None, drop=(), keep=(), 
         # fitting the picture can even have: contain shrinks the frame to the picture
         # inside the box it was given, so the box is the author's decision about where
         # the figure goes and the fit is arithmetic afterwards.
-        if box is not None:
-            place(shape, box)
-        replace_picture(shape, path, how)
+        replace_picture(shape, path, how, box=box)
     for shape in doomed:
         spoken.append(shape._element)
         drop_shape(shape)
@@ -1984,10 +2167,13 @@ def add_unit(target, count: int = 1):
     shape, _rows, _cols = kind
     n = len(run) + count
     if shape == "irregular":
+        placed = ", ".join(f"({b[0]:.2f}, {b[1]:.2f}, {b[2]:.2f}, {b[3]:.2f})" for b in spots)
         raise ValueError(
             f"this page repeats {len(run)} units along no row, column or grid, so it cannot take {n}: where the "
-            f"next one goes is the design's to say. Pick a prototype with {n} slots -- ppt_template prints each "
-            f"page's slot count -- or split the content over two pages"
+            f"next one goes is the design's to say. Say it: `clone_shape(run[-1], (left, top, width, height))` "
+            f"copies the last unit to a box you choose -- the existing ones sit at {placed} in inches -- and "
+            f"`fill(run + [copy], items)` then writes it like any other slot. Otherwise pick a prototype with "
+            f"{n} slots (ppt_template prints each page's slot count) or split the content over two pages"
         )
     last = run[-1]
     if shape in ("row", "column"):
@@ -2147,8 +2333,9 @@ def _advice(missed, texts, pictures, images, frames):
     said = []
     if pictures and any(key in pictures for key in missed) and not images:
         said.append(
-            " This page holds no picture frame at all, so `pictures` has nowhere to put one -- "
-            "add it after adapt returns with `slide.shapes.add_picture(path, left, top, width=...)`."
+            " This page holds no picture frame at all, so `pictures` has nowhere to put one -- name a drawing "
+            "listed below and the picture takes its place, or add it after adapt returns with "
+            "`slide.shapes.add_picture(path, left, top, width=...)`."
         )
     blanks = sum(1 for value in (texts or {}).values() if isinstance(value, str) and not value.strip())
     if blanks >= 2:
@@ -2162,7 +2349,16 @@ def _advice(missed, texts, pictures, images, frames):
 
 def _describe(shape, limit=26):
     """A shape as the refusal names it: its place, its kind, and its words."""
-    kind = "picture" if getattr(shape, "shape_type", None) == MSO_SHAPE_TYPE.PICTURE else "shape"
+    size = f"{(shape.width or 0) / 914400:.1f}x{(shape.height or 0) / 914400:.1f}in"
+    if getattr(shape, "shape_type", None) == MSO_SHAPE_TYPE.PICTURE or _blip_fill(shape) is not None:
+        kind = f"picture {size}"
+    elif _is_drawing(shape):
+        whole = _outermost(shape)
+        if whole is not shape:
+            size = f"{(whole.width or 0) / 914400:.1f}x{(whole.height or 0) / 914400:.1f}in"
+        kind = f"drawing {size} (a picture may take its place)"
+    else:
+        kind = "shape"
     text = _head(shape, limit) if getattr(shape, "has_text_frame", False) else ""
     return f"{kind} {text!r}" if text else kind
 

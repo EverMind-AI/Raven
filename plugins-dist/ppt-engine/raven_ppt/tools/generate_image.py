@@ -25,6 +25,23 @@ _COMPATIBLE_MODEL = "gpt-image-2"
 # How many pictures are asked for at once when a call carries several.
 _CONCURRENCY = 4
 
+# How a cut-out is asked for: the subject on a green screen, keyed out afterwards. White
+# was tried first and is the wrong ground -- it is inside most subjects (a shirt, a
+# plate, a highlight) and the flood from the border had to stop at every one of them,
+# while a solid #00ff00 is in almost nothing and keys out wherever it is.
+_GREEN_SCREEN = "solid pure green background, hex #00ff00"
+_CUT_OUT_PROMPT = (
+    "Transparent-background production constraint: generate the subject on a "
+    + _GREEN_SCREEN
+    + ". Keep the background flat, evenly lit and shadow-free; do not use green in the subject, its "
+    "reflections, glow or edge details; nothing touches the edges of the image. The green will be removed "
+    "by chroma keying into a real alpha channel."
+)
+# Below this share of keyed pixels the model painted a scene, not a cut-out.
+_CUT_OUT_MIN_SHARE = 0.2
+# How far from a keyed pixel the rim is despilled, in pixels either side.
+_DESPILL_REACH = 5
+
 _SAFE_NAME = re.compile(r"[^a-zA-Z0-9._-]+")
 
 
@@ -76,6 +93,17 @@ class PptGenerateImageTool(Tool):
                     "description": "short file name for the generated PNG, without a directory",
                 },
                 "quality": {"type": "string", "enum": ["low", "medium", "high", "auto"], "default": "high"},
+                "transparent": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "an illustration that sits on the template's own ground, in place of its cartoon: the "
+                        "subject is drawn on a green screen and the green is keyed out to alpha afterwards, so "
+                        "the page's colour shows around it. Then `replace_picture(<that "
+                        "drawing>, path)` or `adapt(pictures={n: path})` puts it where the template's drawing "
+                        "was. Not for a photograph or a scene that fills its frame"
+                    ),
+                },
                 "aspect_ratio": {
                     "type": "string",
                     "enum": ["16:9", "4:3", "3:2", "1:1", "3:4", "9:16"],
@@ -99,6 +127,7 @@ class PptGenerateImageTool(Tool):
                             "prompt": {"type": "string"},
                             "filename": {"type": "string"},
                             "quality": {"type": "string", "enum": ["low", "medium", "high", "auto"]},
+                            "transparent": {"type": "boolean"},
                             "aspect_ratio": {"type": "string", "enum": ["16:9", "4:3", "3:2", "1:1", "3:4", "9:16"]},
                         },
                         "required": ["prompt", "filename"],
@@ -134,6 +163,7 @@ class PptGenerateImageTool(Tool):
         filename: str = "",
         quality: str = "high",
         aspect_ratio: str = "16:9",
+        transparent: bool = False,
         prompts: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> str:
@@ -148,7 +178,16 @@ class PptGenerateImageTool(Tool):
             )
         wanted = list(prompts or [])
         if prompt or filename:
-            wanted.insert(0, {"prompt": prompt, "filename": filename, "quality": quality, "aspect_ratio": aspect_ratio})
+            wanted.insert(
+                0,
+                {
+                    "prompt": prompt,
+                    "filename": filename,
+                    "quality": quality,
+                    "aspect_ratio": aspect_ratio,
+                    "transparent": transparent,
+                },
+            )
         if not wanted:
             return _return.failed(
                 "nothing to generate", hint="give prompt and filename, or prompts=[{prompt, filename}, ...]"
@@ -195,6 +234,12 @@ class PptGenerateImageTool(Tool):
         prompt = str(spec.get("prompt") or "")
         quality = str(spec.get("quality") or "high")
         aspect_ratio = str(spec.get("aspect_ratio") or "16:9")
+        transparent = bool(spec.get("transparent"))
+        if transparent:
+            # The providers reached here take no `background` parameter (OpenRouter's
+            # gpt-image-2 answers "Accepted: auto, opaque", and asked in words it paints a
+            # checkerboard), so a cut-out is asked for on a green screen and keyed.
+            prompt = f"{prompt.rstrip()}\n\n{_CUT_OUT_PROMPT}"
         digest = hashlib.sha256(f"{self.model}\x00{quality}\x00{aspect_ratio}\x00{prompt}".encode("utf-8")).hexdigest()[
             :12
         ]
@@ -217,10 +262,20 @@ class PptGenerateImageTool(Tool):
             return {"filename": name, "error": f"image generation failed: {exc}"}
         except (KeyError, ValueError, TypeError) as exc:
             return {"filename": name, "error": f"image generation returned no usable PNG: {exc}"}
+        made: dict[str, Any] = {"filename": name}
+        if transparent:
+            payload, share = key_out_green(payload)
+            made["transparent_share"] = round(share, 2)
+            if share < _CUT_OUT_MIN_SHARE:
+                made["note"] = (
+                    f"only {share:.0%} of the picture became transparent: the model painted a scene rather than "
+                    "a subject on the green screen, so this is not a cut-out. Ask again with one subject and "
+                    "nothing behind it"
+                )
         source = sources.receive(deck, name, payload, f"generated:{self.model}")
         if source is None:
             return {"filename": name, "error": "the generated image could not be added to this deck"}
-        return {"filename": name, "path": str(source.path), "bytes": len(payload)}
+        return {**made, "path": str(source.path), "bytes": len(payload)}
 
     async def _generate(self, body: dict[str, Any]) -> dict[str, Any]:
         openrouter = "openrouter.ai" in self.api_base
@@ -263,3 +318,56 @@ def _image_bytes(response: dict[str, Any]) -> bytes:
     if not encoded:
         raise ValueError("missing data[0].b64_json")
     return base64.b64decode(encoded, validate=True)
+
+
+def key_out_green(png: bytes) -> tuple[bytes, float]:
+    """Key a generated picture's green screen to alpha; returns the PNG and the share keyed.
+
+    Any pixel that reads as screen green goes -- the same test on every pixel, so the
+    pockets a flood from the border cannot reach (between an arm and a body) go too.
+    The rim a few pixels wide around what was keyed is despilled: an edge pixel that
+    blended with the screen has more green than either of its other channels, and
+    taking that excess off leaves the subject's own colour instead of a green fringe.
+    """
+    import io
+
+    from PIL import Image, ImageFilter
+
+    image = Image.open(io.BytesIO(png)).convert("RGBA")
+    width, height = image.size
+    pixels = image.load()
+    keyed = Image.new("L", image.size, 0)
+    marks = keyed.load()
+    count = 0
+    for y in range(height):
+        for x in range(width):
+            r, g, b, _ = pixels[x, y]
+            if _is_screen_green(r, g, b):
+                marks[x, y] = 255
+                count += 1
+    rim = keyed.filter(ImageFilter.MaxFilter(_DESPILL_REACH))
+    near = rim.load()
+    for y in range(height):
+        for x in range(width):
+            r, g, b, a = pixels[x, y]
+            if marks[x, y]:
+                pixels[x, y] = (r, g, b, 0)
+            elif near[x, y] and g > max(r, b):
+                pixels[x, y] = (r, max(r, b), b, a)
+    out = io.BytesIO()
+    image.save(out, format="PNG")
+    return out.getvalue(), count / float(width * height)
+
+
+def _is_screen_green(r: int, g: int, b: int) -> bool:
+    """Whether a pixel is the green screen: near #00ff00, or a green hue that is bright and saturated."""
+    if g >= 145 and r <= 130 and b <= 130 and g - max(r, b) >= 35:
+        return True
+    top, low = max(r, g, b), min(r, g, b)
+    if top == 0 or g <= r or g <= b:
+        return False
+    spread = top - low
+    if spread == 0:
+        return False
+    hue = 60 * ((b - r) / spread + 2)
+    return 80 <= hue <= 160 and spread / top >= 0.35 and top / 255 >= 0.45

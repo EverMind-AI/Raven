@@ -584,3 +584,90 @@ def test_a_webp_keeps_the_description_it_carried_across_the_conversion() -> None
     payload, _suffix, _kind = _sniff(raw.getvalue())
 
     assert _embedded_caption(payload) == "A red brand mark"
+
+
+@pytest.mark.asyncio
+async def test_several_urls_are_fetched_in_one_call(fetch, tmp_path: Path) -> None:
+    """A live run spent nine model round trips on nine fetches, minutes each on that
+    model; one call with the list fetches them together and ingests once."""
+    tool = fetch(_png())
+
+    body = json.loads(
+        await tool.execute(project="tarvis", urls=["https://example.com/a.png", "https://example.com/b.png"])
+    )
+
+    assert body["ok"] and len(body["results"]) == 2
+    assert all(item["ok"] for item in body["results"])
+    assert {Path(item["path"]).name for item in body["results"]} == {"a.png", "b.png"}
+    assert "urls" not in body
+
+
+@pytest.mark.asyncio
+async def test_two_sources_whose_paths_end_the_same_do_not_overwrite_each_other(fetch, tmp_path: Path) -> None:
+    """`one.example/image.png` and `two.example/image.png` both landed on
+    `sources/image.png`: two rows reported success and `receive` replaced the manifest
+    row and the bytes, so ingestion saw one source. The url's digest tells them apart.
+    """
+    tool = fetch(_png())
+
+    body = json.loads(
+        await tool.execute(project="tarvis", urls=["https://one.example/image.png", "https://two.example/image.png"])
+    )
+
+    assert body["ok"] and len(body["results"]) == 2
+    names = [Path(item["path"]).name for item in body["results"]]
+    assert len(set(names)) == 2, names
+    assert all(name.startswith("image-") and name.endswith(".png") for name in names), names
+    from raven_ppt.contracts import Project
+    from raven_ppt.services.ingest import sources
+
+    held = {source.origin for source in sources.held(Project(workspace=tmp_path, slug="tarvis"))}
+    assert held == {"fetch:https://one.example/image.png", "fetch:https://two.example/image.png"}
+
+
+@pytest.mark.asyncio
+async def test_two_urls_whose_names_normalize_alike_are_told_apart_too(fetch, tmp_path: Path) -> None:
+    """The collision is in the destination, not in the url. `_safe_name` folds every
+    character outside its allowlist into an underscore, so `chart+final.png` and
+    `chart@final.png` are two basenames and one file; grouping on the raw basename saw
+    no collision and let the second overwrite the first."""
+    tool = fetch(_png())
+
+    body = json.loads(
+        await tool.execute(
+            project="tarvis", urls=["https://one.example/chart+final.png", "https://two.example/chart@final.png"]
+        )
+    )
+
+    assert body["ok"] and len(body["results"]) == 2
+    paths = [Path(item["path"]) for item in body["results"]]
+    assert len({path.name for path in paths}) == 2, paths
+    assert all(path.is_file() for path in paths)
+    from raven_ppt.contracts import Project
+    from raven_ppt.services.ingest import sources
+
+    held = {source.origin for source in sources.held(Project(workspace=tmp_path, slug="tarvis"))}
+    assert held == {"fetch:https://one.example/chart+final.png", "fetch:https://two.example/chart@final.png"}
+
+
+def test_a_mark_survives_the_name_it_is_added_to() -> None:
+    """`_safe_name` strips what it reads as an extension from the name it is given, so
+    a mark appended after one -- `image.tar` becoming `image.tar-1a2b3c4d` -- came back
+    as `image`, and the two urls were on one destination again."""
+    from raven_ppt.tools.fetch import _batch_names, _safe_name
+
+    urls = ["https://one.example/image.tar.gz", "https://two.example/image.tar.bz2"]
+    names = _batch_names(urls)
+
+    assert len({_safe_name(url, names[url], ".png") for url in urls}) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_batch_without_a_collision_keeps_the_names_the_urls_gave(fetch, tmp_path: Path) -> None:
+    tool = fetch(_png())
+
+    body = json.loads(
+        await tool.execute(project="tarvis", urls=["https://example.com/a.png", "https://example.com/b.png"])
+    )
+
+    assert {Path(item["path"]).name for item in body["results"]} == {"a.png", "b.png"}
