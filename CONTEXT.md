@@ -653,6 +653,26 @@ never re-collects.
 _Avoid_: confusing it with the Trajectory Report it embeds — the Package wraps
 one and adds the problem metadata envelope.
 
+**Review Item** (`raven/trajectory/review.py`):
+One decision the user must make before a Bug Report Package may ship, built by
+`build_review_items` from the merged redaction signals: a *suspected* item per
+residual-finding token value (adjudicated by value across every file it appears
+in — keep as-is, or replace with `[REDACTED:user-confirmed]`), or the
+*confirmed sensitive* item for a private-key pattern hit (content already
+replaced; the user acknowledges the risk rather than choosing content). Items
+whose token values contain one another are linked and must share one decision.
+_Avoid_: "finding" for the decision unit — a finding is the residual scan's
+raw signal; an item may merge several findings of the same value.
+
+**User Decision** (`raven/trajectory/review.py`, `raven/trajectory/bugreport.py`):
+The recorded outcome of one Review Item — `acknowledged`, `kept`, or
+`redacted` — carried in the `user_decisions` array of `bugreport.json` and
+`record.json` (item id, category, semantic sources with counts, masked
+sample, action) so the recipient can see what a human kept, replaced, or
+acknowledged. `apply_review_decisions` guarantees the array matches the
+delivered bytes: replaced values are verified gone in every spelling variant
+and kept values verified untouched before the export freezes.
+
 **Trajectory Replay** (`raven/trajectory/replay.py`):
 Mock re-run of the harness against a Trajectory Bundle (`raven trajectory replay`):
 recorded model replies (`llm.output`) and tool results (`tool.output`) are fed back
