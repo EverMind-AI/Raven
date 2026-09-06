@@ -304,6 +304,7 @@ class TurnPathMixin:
         always let ``chat_stream``'s own signature defaults stand here. See
         ``generation_kwargs`` for the callers that cannot.
         """
+        limits = getattr(self, "_recovery_limits", None)
         return await stream_llm_call(
             self.provider,
             messages=messages,
@@ -312,6 +313,8 @@ class TurnPathMixin:
             on_token_delta=on_token_delta,
             on_reasoning_delta=on_reasoning_delta,
             max_reconnects=self._MAX_STREAM_RECONNECTS,
+            retry_delays=tuple(getattr(limits, "llm_error_retry_delays", ()) or ()),
+            retry_after_output=bool(getattr(limits, "llm_retry_after_output", False)),
             **generation,
         )
 
@@ -392,6 +395,49 @@ class TurnPathMixin:
             demoted += len(images)
         flush()
         return out, demoted
+
+    @staticmethod
+    def _strip_images(messages: list[dict], *, everything: bool = False) -> tuple[list[dict], int]:
+        """Take images out of the conversation, leaving a note where each one was.
+
+        The newest image-bearing message only, unless `everything`: the picture that
+        just arrived is the one an upstream refused for its size, and the older ones
+        were accepted a call ago. Any role -- a render reaches the model as a user
+        message when the endpoint cannot carry one in a tool result, and it is
+        exactly that message the refusal is about.
+
+        Returns ``(new_messages, num_removed)``; ``0`` means no message carried an
+        image, so the refusal was about something else and the caller should not
+        retry.
+        """
+        bearing = [
+            index
+            for index, message in enumerate(messages)
+            if isinstance(message.get("content"), list) and any(is_image_part(p) for p in message["content"])
+        ]
+        if not bearing:
+            return messages, 0
+        targets = set(bearing) if everything else {bearing[-1]}
+        out: list[dict] = []
+        removed = 0
+        for index, message in enumerate(messages):
+            if index not in targets:
+                out.append(message)
+                continue
+            content = message["content"]
+            kept = [p for p in content if not is_image_part(p)]
+            removed += len(content) - len(kept)
+            kept.append(
+                {
+                    "type": "text",
+                    "text": "[image omitted: the model endpoint refused it as too large; "
+                    "describe the page from the build's findings instead of the render]",
+                }
+            )
+            clean = dict(message)
+            clean["content"] = kept
+            out.append(clean)
+        return out, removed
 
     @classmethod
     def _elide_older_images(cls, messages: list[dict]) -> tuple[list[dict], int]:
@@ -645,6 +691,11 @@ class TurnPathMixin:
         reactive_summary_tried = False
         # Image-demotion recovery: bound per turn, same reason.
         image_demote_retries = 0
+        # Image-size refusals: the picture comes out rather than moving; bounded too.
+        image_strip_retries = 0
+        # Retryable model errors that outlasted the provider's own ladder: how many
+        # of the loop's longer waits this turn has spent.
+        error_waits = 0
         # Tool-failure-loop break: track consecutive hard failures of the
         # same tool *with the same kind of error* across iterations; nudge once
         # per fresh streak, bounded/turn.
@@ -1015,6 +1066,31 @@ class TurnPathMixin:
                     )
                     continue
 
+            # An image refused for its size. Moving it keeps the bytes and the
+            # refusal, waiting does not shrink it, and `unknown` would have spent the
+            # whole error ladder on it -- so the picture comes out, newest first, and
+            # the same ask goes again with a note where it was. Measured twice: a
+            # two-page render sent as pictures, "Downloaded image content cannot
+            # exceed 30MB", and the turn ended on the second attempt both times.
+            if (
+                response.finish_reason == "error"
+                and cls_ is not None
+                and cls_.strip_images
+                and image_strip_retries < self._MAX_IMAGE_STRIP_RETRIES
+            ):
+                stripped_messages, stripped = self._strip_images(messages, everything=image_strip_retries > 0)
+                if stripped > 0:
+                    messages = stripped_messages
+                    image_strip_retries += 1
+                    iteration -= 1  # the refused call did no work; don't bill it
+                    logger.warning(
+                        "Endpoint refused an image for its size; removed {} image(s) and retrying ({}/{})",
+                        stripped,
+                        image_strip_retries,
+                        self._MAX_IMAGE_STRIP_RETRIES,
+                    )
+                    continue
+
             if response.has_tool_calls:
                 if hook_ctx is not None:
                     hook_ctx.messages = messages
@@ -1304,6 +1380,30 @@ class TurnPathMixin:
                 # Don't persist error responses to session history — they can
                 # poison the context and cause permanent 400 loops.
                 if response.finish_reason == "error":
+                    # The provider's ladder is seconds long and has already run. A
+                    # gateway serving error pages for a few minutes outlasts it, and
+                    # ending the turn here threw away an hour of work on a 40-second
+                    # outage. So a retryable failure waits out a longer ladder before
+                    # the turn is given up -- the messages are untouched (nothing was
+                    # appended for the failed call), so asking again is the same ask.
+                    verdict = response.error_classification
+                    if verdict is None and (classify := getattr(self.provider, "classify_error", None)) is not None:
+                        verdict = classify(content=clean or None)
+                    ladder = self._recovery_limits.llm_error_retry_delays
+                    if verdict is not None and verdict.retryable and error_waits < len(ladder):
+                        delay = ladder[error_waits]
+                        error_waits += 1
+                        logger.warning(
+                            "LLM error [{}] outlasted the provider's retries; asking again in {:.0f}s (wait {}/{}): {}",
+                            verdict.category,
+                            delay,
+                            error_waits,
+                            len(ladder),
+                            (clean or "")[:160],
+                        )
+                        iteration -= 1  # the failed call did no work; don't bill it
+                        await asyncio.sleep(delay)
+                        continue
                     logger.error("LLM returned error: {}", (clean or "")[:200])
                     final_content = clean or "Sorry, I encountered an error calling the AI model."
                     status = "error"

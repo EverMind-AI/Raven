@@ -11,9 +11,10 @@ the provider and the two delta callbacks; what it does with them is its own.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import aclosing
 from typing import TYPE_CHECKING, Any
 
@@ -65,6 +66,8 @@ async def stream_llm_call(
     on_token_delta: Callable[[str], Awaitable[None]] | None = None,
     on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
     max_reconnects: int = 1,
+    retry_delays: Sequence[float] = (),
+    retry_after_output: bool = False,
     **stream_kwargs: Any,
 ) -> LLMResponse:
     """Stream an LLM response via ``provider.chat_stream`` + accumulate to LLMResponse.
@@ -81,9 +84,13 @@ async def stream_llm_call(
     A failure that already streamed deltas is not retried -- the caller has
     rendered them, so a second attempt would duplicate its output. Before the
     first delta there is nothing to duplicate, so a retryable error reconnects up
-    to ``max_reconnects`` times. Once the budget is spent the exception
+    to ``max_reconnects`` times at once, then waits out ``retry_delays`` -- the
+    loop's own ladder, seconds to minutes, for a gateway that serves error pages
+    for a while -- asking again after each wait. Once both are spent the exception
     propagates: a mid-turn provider error is the turn's failure (the lane emits
-    TurnFailed), not a text reply about one.
+    TurnFailed), not a text reply about one. The one verdict handed back as an
+    error response instead is ``strip_images``: the recovery for it is a change to
+    the messages, which only the loop can make.
 
     ``stream_kwargs`` reaches ``chat_stream`` unchanged. It exists because that
     signature carries *literal* generation defaults rather than the provider's
@@ -114,7 +121,7 @@ async def stream_llm_call(
     error_classification: ErrorClassification | None = None
     upstream_finish_reason: str | None = None
 
-    for attempt in range(max_reconnects + 1):
+    for attempt in range(max_reconnects + len(retry_delays) + 1):
         # aclosing() guarantees the async generator (and its underlying stream)
         # is closed when an error from the per-chunk idle cap or the provider
         # unwinds the loop, so a stalled or broken stream never hangs or leaks
@@ -185,33 +192,88 @@ async def stream_llm_call(
             break
         except TimeoutError:
             # The idle cap already waited the full timeout; reconnecting would
-            # double an already-long stall, so a stall ends the call.
+            # double an already-long stall, so a stall ends the call. After output
+            # it ends the turn too, unless the caller asked for a retry: handed back
+            # as a retryable response, the loop's own ladder asked again and a
+            # person watching the stream saw the words twice, which is the rule
+            # the branch below holds and this one did not.
+            if (content_buf or reasoning_buf or tool_call_slots) and not retry_after_output:
+                raise
             return LLMResponse(
                 content="".join(content_buf),
                 finish_reason="error",
                 error_classification=provider.classify_error(TimeoutError()),
             )
         except Exception as exc:
-            # Every path out of here is a bare `raise` so the provider's own
-            # exception reaches the caller unchanged: per N-TURNFAILED the turn
+            # Every path out of here but one is a bare `raise` so the provider's
+            # own exception reaches the caller unchanged: per N-TURNFAILED the turn
             # must fail (the lane emits TurnFailed) rather than resolve into a
             # "Sorry" text reply.
-            if bool(content_buf or reasoning_buf or tool_call_slots) or attempt >= max_reconnects:
+            emitted = bool(content_buf or reasoning_buf or tool_call_slots)
+            if emitted and not retry_after_output:
                 raise
             # Duck-typed providers need not implement classify_error; treat a
             # missing classifier as fatal so the real error surfaces instead of
             # an AttributeError raised from inside this handler.
             classify = getattr(provider, "classify_error", None)
             classification = classify(exc) if classify is not None else None
-            if classification is None or not classification.retryable:
+            if classification is None:
                 raise
+            if emitted and classification.retryable:
+                # Asked for by an unattended caller: the words already streamed are
+                # produced again, which its machine client does not mind, against a
+                # turn with hours of work behind it ending on a dropped connection.
+                logger.warning(
+                    "Stream LLM error [{}] after {} chars of output; the caller asked to retry anyway: {}",
+                    classification.category,
+                    sum(len(part) for part in content_buf),
+                    exc,
+                )
+                content_buf.clear()
+                reasoning_buf.clear()
+                tool_call_slots.clear()
+                final_usage = None
+                upstream_finish_reason = None
+            if classification.strip_images:
+                # The one recovery this function cannot make: the picture has to
+                # come out of the messages it only reads. Handed back as the error
+                # response the loop's strip-and-retry acts on; raising ended a
+                # deck build on the first render an endpoint refused for its size,
+                # and waiting would not have shrunk the bytes.
+                return LLMResponse(
+                    content=f"Error calling LLM ({classification.category}): {exc}",
+                    finish_reason="error",
+                    error_classification=classification,
+                )
+            if not classification.retryable:
+                raise
+            if attempt < max_reconnects:
+                logger.warning(
+                    "Stream LLM error [{}] before first delta (attempt {}/{}), reconnecting: {}",
+                    classification.category,
+                    attempt + 1,
+                    max_reconnects + 1,
+                    exc,
+                )
+                continue
+            # The reconnects were spent on a failure that is still transient. The
+            # provider's ladder is seconds long and right for a dropped connection;
+            # a gateway serving error pages for a few minutes outlasts it, and one
+            # measured deck build lost 62 minutes of work to a 40-second outage
+            # here. So the loop's longer ladder is waited out before the turn fails.
+            waited = attempt - max_reconnects
+            if waited >= len(retry_delays):
+                raise
+            delay = retry_delays[waited]
             logger.warning(
-                "Stream LLM error [{}] before first delta (attempt {}/{}), reconnecting: {}",
+                "Stream LLM error [{}] outlasted the reconnects; asking again in {:.0f}s (wait {}/{}): {}",
                 classification.category,
-                attempt + 1,
-                max_reconnects + 1,
+                delay,
+                waited + 1,
+                len(retry_delays),
                 exc,
             )
+            await asyncio.sleep(delay)
 
     if had_error:
         return LLMResponse(
