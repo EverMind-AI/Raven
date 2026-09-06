@@ -37,6 +37,7 @@ from research_flow.tools.web import (  # noqa: E402
     SEARCH_PROVIDERS,
     WebFetchTool,
     WebSearchTool,
+    fetch_fallbacks,
     set_current_session,
 )
 
@@ -756,3 +757,226 @@ async def test_a_fetch_vendor_that_answers_without_a_page_is_an_error_not_an_emp
     answer = json.loads(await WebFetchTool(api_key="K", provider="firecrawl").execute(url="https://example.com/a"))
 
     assert "blocked" in answer["error"] and "text" not in answer
+
+
+# A stub is not an answer: the thin-page rewrite
+# --------------------------------------------------------------------------
+
+
+class _PerUrlTransport(httpx.AsyncBaseTransport):
+    """Reader stub that answers each requested page differently.
+
+    Keyed on the URL behind ``r.jina.ai/``, which is how this tool addresses the reader,
+    so a test states what each address returns rather than counting calls.
+    """
+
+    def __init__(self, pages: dict[str, str], *, status: dict[str, int] | None = None) -> None:
+        self.pages = pages
+        self.status = status or {}
+        self.asked: list[str] = []
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        target = str(request.url).split("r.jina.ai/", 1)[-1]
+        self.asked.append(target)
+        if (code := self.status.get(target)) is not None:
+            return httpx.Response(code, text="nope")
+        return httpx.Response(200, text=self.pages.get(target, ""))
+
+
+def _capture_ledger(monkeypatch) -> list[dict]:
+    rows: list[dict] = []
+    monkeypatch.setattr("research_flow.tools.web._ledger_append", rows.append)
+    return rows
+
+
+@pytest.mark.asyncio
+async def test_a_thin_abstract_page_is_re_read_where_the_paper_lives(monkeypatch):
+    """The defect this exists for: a landing page is a stub by design.
+
+    The run that prompted it read 36 pages at a 2,358-character median and then wrote
+    estimates into a scored table for the numbers those pages did not carry.
+    """
+    paper = "full paper text " * 200
+    transport = _PerUrlTransport(
+        {
+            "https://arxiv.org/abs/2410.04728": "Abstract page shell",
+            "https://arxiv.org/html/2410.04728": paper,
+        }
+    )
+    _patch_client(monkeypatch, transport)
+    rows = _capture_ledger(monkeypatch)
+    set_current_session("t")
+
+    answer = json.loads(await WebFetchTool().execute(url="https://arxiv.org/abs/2410.04728"))
+
+    assert answer["text"] == paper
+    assert answer["served_url"] == "https://arxiv.org/html/2410.04728"
+    assert answer["requested_chars"] == len("Abstract page shell")
+    assert answer["fallbacks_tried"] == ["https://arxiv.org/html/2410.04728"]
+    # The PDF is never asked for: the HTML answered, so the budget is not spent.
+    assert transport.asked == ["https://arxiv.org/abs/2410.04728", "https://arxiv.org/html/2410.04728"]
+
+
+@pytest.mark.asyncio
+async def test_both_addresses_are_recorded_so_either_citation_resolves(monkeypatch):
+    """The grounding check reads the ledger, and the answer may cite either address.
+
+    The stub is recorded at its own length, under the URL that was asked for; the text
+    that was actually read is recorded under the URL that served it.
+    """
+    paper = "full paper text " * 200
+    _patch_client(
+        monkeypatch,
+        _PerUrlTransport(
+            {
+                "https://arxiv.org/abs/2410.04728": "shell",
+                "https://arxiv.org/html/2410.04728": paper,
+            }
+        ),
+    )
+    rows = _capture_ledger(monkeypatch)
+    set_current_session("t")
+
+    await WebFetchTool().execute(url="https://arxiv.org/abs/2410.04728")
+
+    by_url = {r["url"]: r for r in rows if r["op"] == "fetch"}
+    assert set(by_url) == {"https://arxiv.org/abs/2410.04728", "https://arxiv.org/html/2410.04728"}
+    assert by_url["https://arxiv.org/abs/2410.04728"]["chars"] == len("shell")
+    assert by_url["https://arxiv.org/abs/2410.04728"]["served_url"] == "https://arxiv.org/html/2410.04728"
+    assert by_url["https://arxiv.org/html/2410.04728"]["chars"] == len(paper)
+    assert by_url["https://arxiv.org/html/2410.04728"]["fallback_for"] == "https://arxiv.org/abs/2410.04728"
+
+
+@pytest.mark.asyncio
+async def test_a_page_that_answered_is_never_re_read(monkeypatch):
+    transport = _PerUrlTransport({"https://arxiv.org/abs/2410.04728": "a real page " * 100})
+    _patch_client(monkeypatch, transport)
+    _capture_ledger(monkeypatch)
+    set_current_session("t")
+
+    answer = json.loads(await WebFetchTool().execute(url="https://arxiv.org/abs/2410.04728"))
+
+    assert "served_url" not in answer and "fallbacks_tried" not in answer
+    assert transport.asked == ["https://arxiv.org/abs/2410.04728"]
+
+
+@pytest.mark.asyncio
+async def test_a_thin_page_with_nowhere_else_to_look_is_returned_as_it_is(monkeypatch):
+    transport = _PerUrlTransport({"https://example.com/paper": "stub"})
+    _patch_client(monkeypatch, transport)
+    _capture_ledger(monkeypatch)
+    set_current_session("t")
+
+    answer = json.loads(await WebFetchTool().execute(url="https://example.com/paper"))
+
+    assert answer["text"] == "stub"
+    assert "served_url" not in answer
+    assert transport.asked == ["https://example.com/paper"]
+
+
+@pytest.mark.asyncio
+async def test_the_largest_read_wins_rather_than_the_first(monkeypatch):
+    """A rewrite that is also thin must not replace a stub with a smaller stub."""
+    transport = _PerUrlTransport(
+        {
+            "https://arxiv.org/abs/2410.04728": "a" * 300,
+            "https://arxiv.org/html/2410.04728": "b" * 50,
+            "https://arxiv.org/pdf/2410.04728": "c" * 200,
+        }
+    )
+    _patch_client(monkeypatch, transport)
+    _capture_ledger(monkeypatch)
+    set_current_session("t")
+
+    answer = json.loads(await WebFetchTool().execute(url="https://arxiv.org/abs/2410.04728"))
+
+    assert answer["text"] == "a" * 300, "the requested page was still the best read"
+    assert "served_url" not in answer, "nothing else served it, so nothing else is named"
+    assert answer["fallbacks_tried"] == [
+        "https://arxiv.org/html/2410.04728",
+        "https://arxiv.org/pdf/2410.04728",
+    ]
+    assert len(transport.asked) == 3, "the budget is two rewrites, and both were spent"
+
+
+@pytest.mark.asyncio
+async def test_a_rewrite_that_fails_does_not_fail_the_fetch(monkeypatch):
+    paper = "full paper text " * 200
+    transport = _PerUrlTransport(
+        {
+            "https://openreview.net/forum?id=JFygzwx8SJ": "client shell",
+            "https://openreview.net/pdf?id=JFygzwx8SJ": paper,
+        },
+        status={"https://openreview.net/pdf?id=JFygzwx8SJ": 403},
+    )
+    _patch_client(monkeypatch, transport)
+    rows = _capture_ledger(monkeypatch)
+    set_current_session("t")
+
+    answer = json.loads(await WebFetchTool().execute(url="https://openreview.net/forum?id=JFygzwx8SJ"))
+
+    assert answer["text"] == "client shell", "the stub is still returned"
+    assert "error" not in answer
+    failed = [r for r in rows if r.get("outcome") == "fallback_error"]
+    assert len(failed) == 1 and failed[0]["url"] == "https://openreview.net/pdf?id=JFygzwx8SJ"
+
+
+@pytest.mark.asyncio
+async def test_a_thin_dataset_card_falls_back_to_the_metadata_the_table_needs(monkeypatch):
+    """The size, split and licence a benchmark table asks for live on the API, not the card."""
+    meta = json.dumps({"id": "allenai/qasper", "cardData": {"license": "cc-by-4.0"}, "downloads": 1}) * 20
+    transport = _PerUrlTransport(
+        {
+            "https://huggingface.co/datasets/allenai/qasper": "Dataset card",
+            "https://huggingface.co/api/datasets/allenai/qasper": meta,
+        }
+    )
+    _patch_client(monkeypatch, transport)
+    _capture_ledger(monkeypatch)
+    set_current_session("t")
+
+    answer = json.loads(await WebFetchTool().execute(url="https://huggingface.co/datasets/allenai/qasper"))
+
+    assert answer["served_url"] == "https://huggingface.co/api/datasets/allenai/qasper"
+    assert "cc-by-4.0" in answer["text"]
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        (
+            "https://arxiv.org/abs/2410.04728",
+            ["https://arxiv.org/html/2410.04728", "https://arxiv.org/pdf/2410.04728"],
+        ),
+        # A version suffix names the same paper, and the rewrites drop it: the unversioned
+        # address is the one that always resolves.
+        (
+            "https://arxiv.org/abs/2510.08907v4",
+            ["https://arxiv.org/html/2510.08907", "https://arxiv.org/pdf/2510.08907"],
+        ),
+        (
+            "https://arxiv.org/html/2606.09659v1",
+            ["https://arxiv.org/pdf/2606.09659", "https://arxiv.org/abs/2606.09659"],
+        ),
+        ("https://arxiv.org/pdf/2601.17668", ["https://arxiv.org/abs/2601.17668"]),
+        ("https://openreview.net/forum?id=JFygzwx8SJ", ["https://openreview.net/pdf?id=JFygzwx8SJ"]),
+        ("https://aclanthology.org/2025.acl-long.1219", ["https://aclanthology.org/2025.acl-long.1219.pdf"]),
+        (
+            "https://huggingface.co/datasets/allenai/qasper",
+            ["https://huggingface.co/api/datasets/allenai/qasper"],
+        ),
+        (
+            "https://github.com/Future-House/litqa",
+            [
+                "https://raw.githubusercontent.com/Future-House/litqa/HEAD/README.md",
+                "https://api.github.com/repos/Future-House/litqa",
+            ],
+        ),
+        # Nowhere else to look: an unknown host, and a repository page that is already
+        # deeper than its front page.
+        ("https://example.com/paper", []),
+        ("https://github.com/Future-House/litqa/tree/main/src", []),
+    ],
+)
+def test_each_rewrite_names_the_same_document_at_an_address_that_carries_it(url, expected):
+    assert fetch_fallbacks(url) == expected

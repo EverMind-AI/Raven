@@ -40,6 +40,7 @@ for its one session at the top of every turn. The hook calls it on turn start.
 import asyncio
 import json
 import os
+import re
 import time
 import zlib
 from collections.abc import Awaitable, Callable
@@ -1308,6 +1309,87 @@ def fetch_result_ok(out: object) -> bool:
     return "error" not in payload
 
 
+#: Below this a read brought back a stub rather than a page - a redirect notice, an empty
+#: shell, a cookie wall. The same number the appendix calls a thin page, deliberately: a
+#: read this tool decided to retry and a read the trail reports as "returned almost
+#: nothing" should not be able to disagree.
+_THIN_PAGE_CHARS = 400
+
+#: How many rewrites one fetch may try. The chains below are two deep at most, and a
+#: budget states the cost in the file rather than leaving it to the length of a table.
+_FALLBACK_LIMIT = 2
+
+#: Where a thin read is worth trying again, by the shape of the address rather than by the
+#: host alone. Each entry rewrites one URL into the addresses of the same document that
+#: carry its body: the landing page of a paper is a stub by design, and the run that
+#: prompted this read 36 pages at a 2,358-character median - abstracts and repository
+#: front pages - and then wrote "(est.)" into a scored table for the numbers it had not
+#: found. A rewrite is not a guess at a different document; each one below is the same
+#: work at a URL the publisher also serves.
+_FALLBACK_RULES: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] = (
+    # arXiv: the abstract page is a stub, the HTML rendering carries the paper, and the
+    # PDF carries it when the HTML build failed (which is what a 2026 paper on the
+    # earlier run returned - an SVG shell with no text).
+    (
+        re.compile(r"^https?://(?:www\.)?arxiv\.org/abs/(?P<id>[\w.\-/]+?)(?:v\d+)?/?$", re.I),
+        ("https://arxiv.org/html/{id}", "https://arxiv.org/pdf/{id}"),
+    ),
+    (
+        re.compile(r"^https?://(?:www\.)?arxiv\.org/html/(?P<id>[\w.\-/]+?)(?:v\d+)?/?$", re.I),
+        ("https://arxiv.org/pdf/{id}", "https://arxiv.org/abs/{id}"),
+    ),
+    (
+        re.compile(r"^https?://(?:www\.)?arxiv\.org/pdf/(?P<id>[\w.\-/]+?)(?:v\d+)?(?:\.pdf)?/?$", re.I),
+        ("https://arxiv.org/abs/{id}",),
+    ),
+    # OpenReview: the forum page is rendered by a client-side app, so a reader gets the
+    # shell. Measured at 440 characters on the run that prompted this.
+    (
+        re.compile(r"^https?://openreview\.net/forum\?id=(?P<id>[\w.\-]+)", re.I),
+        ("https://openreview.net/pdf?id={id}",),
+    ),
+    # ACL Anthology: the landing page carries an abstract, the PDF carries the paper.
+    (
+        re.compile(r"^https?://aclanthology\.org/(?P<id>[\w.\-]+?)/?$", re.I),
+        ("https://aclanthology.org/{id}.pdf",),
+    ),
+    # Hugging Face: a dataset card can be a one-line README, while the API answers with
+    # the split sizes, the licence and the configs - which is what a benchmark table
+    # needs and what the run had to estimate.
+    (
+        re.compile(r"^https?://huggingface\.co/datasets/(?P<id>[\w.\-]+/[\w.\-]+)/?$", re.I),
+        ("https://huggingface.co/api/datasets/{id}",),
+    ),
+    # A repository front page that renders thin still has its README as a file.
+    (
+        re.compile(r"^https?://github\.com/(?P<id>[\w.\-]+/[\w.\-]+)/?$", re.I),
+        (
+            "https://raw.githubusercontent.com/{id}/HEAD/README.md",
+            "https://api.github.com/repos/{id}",
+        ),
+    ),
+)
+
+
+def fetch_fallbacks(url: str) -> list[str]:
+    """The addresses of the same document to try when a read comes back thin.
+
+    Ordered, deduplicated, and never containing the URL that was asked for: a rewrite that
+    resolved to its own input would spend the budget re-reading the stub.
+    """
+    out: list[str] = []
+    for pattern, templates in _FALLBACK_RULES:
+        match = pattern.match(url.strip())
+        if match is None:
+            continue
+        for template in templates:
+            candidate = template.format(**match.groupdict())
+            if candidate != url and candidate not in out:
+                out.append(candidate)
+        break
+    return out
+
+
 _ENCODING_LOST_WARNING = (
     "the source lost its text encoding upstream; non-ASCII characters on this "
     "page are unreliable - do not quote them, prefer another source"
@@ -1538,6 +1620,11 @@ class WebFetchTool(Tool):
         # measurement column, not a label, so it stays on the row even though this
         # build has one backend.
         for key, out_key in (
+            # ``requested_chars`` is present only on a recovered fetch, and it is what the
+            # requested URL itself returned. It wins over ``length`` for this row so the
+            # stub is recorded as the stub it was: the recovered text has its own row,
+            # written under the address that served it.
+            ("requested_chars", "chars"),
             ("length", "chars"),
             ("source_chars", "source_chars"),
             ("digested", "digested"),
@@ -1546,8 +1633,10 @@ class WebFetchTool(Tool):
             ("error", "error"),
             ("encoding_lost", "encoding_lost"),
             ("extractor", "extractor"),
+            ("served_url", "served_url"),
+            ("fallbacks_tried", "fallbacks_tried"),
         ):
-            if key in payload:
+            if key in payload and out_key not in record:
                 record[out_key] = payload[key]
         return record
 
@@ -1627,8 +1716,23 @@ class WebFetchTool(Tool):
             logger.error("WebFetch error for {}: {}", url, e)
             return json.dumps({"error": str(e), "url": url}, ensure_ascii=False)
 
+        # A stub is not an answer. The reader returns 200 with a redirect notice, an empty
+        # client-side shell or a licence banner, and the turn then reasons from a page it
+        # never really read - on the run that prompted this, 21 of 33 listed pages came
+        # back under 3,000 characters and the report estimated what it could not find.
+        served_url, fallbacks_tried, requested_chars = url, [], len(text)
+        if len(text) < _THIN_PAGE_CHARS:
+            text, status, served_url, fallbacks_tried = await self._recover_thin(url, text, status)
+
         encoding_lost = _encoding_lost(text)
         source_chars = len(text)
+
+        recovery: dict[str, Any] = {}
+        if fallbacks_tried:
+            recovery["fallbacks_tried"] = fallbacks_tried
+            recovery["requested_chars"] = requested_chars
+            if served_url != url:
+                recovery["served_url"] = served_url
 
         # A page that lost its encoding is not worth a digest call: the
         # model would distill replacement characters.
@@ -1646,6 +1750,7 @@ class WebFetchTool(Tool):
                     "source_chars": source_chars,
                     "length": len(extracted),
                     "text": extracted,
+                    **recovery,
                 },
                 ensure_ascii=False,
             )
@@ -1663,11 +1768,67 @@ class WebFetchTool(Tool):
             "truncated": truncated,
             "length": len(text),
             "text": text,
+            **recovery,
         }
         if encoding_lost:
             payload["encoding_lost"] = True
             payload["warning"] = _ENCODING_LOST_WARNING
         return json.dumps(payload, ensure_ascii=False)
+
+    async def _recover_thin(self, url: str, text: str, status: int) -> tuple[str, int, str, list[str]]:
+        """Re-read a stub at the addresses that carry its body.
+
+        Returns ``(text, status, served_url, tried)``. The best read wins rather than the
+        first: a rewrite that also comes back thin must not replace a stub with a smaller
+        stub, and the caller needs to know what was attempted either way.
+
+        Every attempt that produced a page gets its own ledger line here, under the URL it
+        actually read. That is what keeps the grounding check honest in both directions:
+        the answer may cite the address it asked for or the one that served the text, and
+        both were opened, so neither reads as fabricated. It also keeps the trail's page
+        lengths true - the stub is recorded as the stub it was.
+        """
+        best_text, best_status, served = text, status, url
+        tried: list[str] = []
+        for candidate in fetch_fallbacks(url)[:_FALLBACK_LIMIT]:
+            is_valid, _error = await asyncio.to_thread(_judge_fetch_target, candidate)
+            if not is_valid:
+                continue
+            tried.append(candidate)
+            try:
+                alt_text, alt_status = await self._read_page(candidate)
+            except Exception as e:  # noqa: BLE001 - a failed rewrite is not a failed fetch
+                logger.debug("WebFetch fallback {} did not answer: {}", candidate, e)
+                _ledger_append(
+                    {
+                        "ts": time.time(),
+                        "op": "fetch",
+                        "url": candidate,
+                        "source": "web",
+                        "ok": False,
+                        "outcome": "fallback_error",
+                        "chars": 0,
+                        "fallback_for": url,
+                    }
+                )
+                continue
+            _ledger_append(
+                {
+                    "ts": time.time(),
+                    "op": "fetch",
+                    "url": candidate,
+                    "source": "web",
+                    "ok": True,
+                    "chars": len(alt_text),
+                    "status": alt_status,
+                    "fallback_for": url,
+                }
+            )
+            if len(alt_text) > len(best_text):
+                best_text, best_status, served = alt_text, alt_status, candidate
+            if len(best_text) >= _THIN_PAGE_CHARS:
+                break
+        return best_text, best_status, served, tried
 
     async def _read_page(self, url: str) -> tuple[str, int]:
         """One page, read the way the selected backend serves it.
