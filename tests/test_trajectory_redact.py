@@ -241,9 +241,7 @@ def test_residual_scan_exempts_provider_call_ids(tmp_path):
     call_id = "call_9Q7zXp2LmV4wRb8KsD3fT6yH"
     hyphenated = "call-9Q7zXp2LmV4wRb8KsD3fT6yH"
     prefixed = "Xcall_9Q7zXp2LmV4wRb8KsD3fT6yH"
-    bundle = _make_bundle(
-        tmp_path, spans_text=f"{call_id}\n{hyphenated}\n{prefixed}", artifact_text="clean"
-    )
+    bundle = _make_bundle(tmp_path, spans_text=f"{call_id}\n{hyphenated}\n{prefixed}", artifact_text="clean")
 
     report = tredact.redact_bundle(bundle, tmp_path / "red", secrets=[])
 

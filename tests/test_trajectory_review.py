@@ -280,9 +280,7 @@ def test_apply_kept_token_with_checksum_context_occurrence(tmp_path):
     items = treview.build_review_items([report])
     assert items[0].occurrences[0]["line_no"] == 1 and len(items[0].occurrences) == 1
 
-    treview.apply_review_decisions(
-        items, _decisions(items, **{TOKEN_A: treview.ACTION_KEPT}), reports=[report]
-    )
+    treview.apply_review_decisions(items, _decisions(items, **{TOKEN_A: treview.ACTION_KEPT}), reports=[report])
 
     assert (tree / "spans.jsonl").read_text(encoding="utf-8").count(TOKEN_A) == 2
 

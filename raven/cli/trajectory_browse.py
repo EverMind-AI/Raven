@@ -63,12 +63,14 @@ from typing import Any
 import typer
 from rich.console import Console
 from rich.markup import escape
+from rich.text import Text
 
 from raven.cli import trajectory_commands as tcmd
 from raven.cli._theme import POINTER, QMARK
 from raven.session.manager import SessionManager
 from raven.tracing import config as tracing_config
 from raven.trajectory import bugreport as breport
+from raven.trajectory import review as treview
 from raven.trajectory import store as tstore
 from raven.trajectory.bundle import _default_workspace, collect_bundle
 from raven.trajectory.cassette import minimize_bundle
@@ -881,25 +883,128 @@ def _print_packaging_failure(report_id: str, reason: str, *, retryable: bool) ->
         console.print("  entry — retrying will not re-collect the trajectory.")
 
 
-def _print_blocked(trigger: str) -> None:
-    if trigger == "trajectory":
-        console.print("[red]✗ Cannot create a bug report from this attempt.[/red]", highlight=False)
+# Reasons whose content the review screen already presents as items (the
+# remaining reasons are the warning lines the screen must still show).
+_REVIEW_ITEM_REASON_PREFIXES = ("residual scan flagged", "the original trajectory contained")
+
+_REVIEW_CONTEXT_WINDOW = 80
+_REVIEW_OCCURRENCE_LIMIT = 5
+
+
+def _review_warnings(reasons: list[str]) -> list[str]:
+    return [reason for reason in reasons if not reason.startswith(_REVIEW_ITEM_REASON_PREFIXES)]
+
+
+def _print_review_occurrence(occurrence: dict[str, Any]) -> None:
+    line, start, end = occurrence["line"], occurrence["start"], occurrence["end"]
+    lo = max(0, start - _REVIEW_CONTEXT_WINDOW)
+    hi = min(len(line), end + _REVIEW_CONTEXT_WINDOW)
+    text = Text("  ")
+    if lo:
+        text.append("...")
+    text.append(line[lo:start])
+    text.append(line[start:end], style="bold red")
+    text.append(line[end:hi])
+    if hi < len(line):
+        text.append("...")
+    console.print(text)
+
+
+def _print_review_item(item: Any, index: int, total: int, index_by_id: dict[str, int]) -> None:
+    console.print()
+    title = (
+        "Confirmed sensitive: private key block (already replaced)"
+        if item.kind == treview.KIND_CONFIRMED
+        else f"Suspected: {item.category} token"
+    )
+    console.print(escape(f"[{index}/{total}] {title}"), highlight=False)
+    for source in item.sources:
+        count = f" ({source['count']})" if source["count"] > 1 else ""
+        console.print(f"  Source: {escape(source['label'])}{count}", highlight=False)
+    for occurrence in item.occurrences[:_REVIEW_OCCURRENCE_LIMIT]:
+        _print_review_occurrence(occurrence)
+    if len(item.occurrences) > _REVIEW_OCCURRENCE_LIMIT:
         console.print(
-            "  The original trajectory contains a private key block. Even though the copy\n"
-            "  was redacted, this material is not allowed to leave the machine as a bug\n"
-            "  report package.\n"
-            "  Remove the key from the source data and retry, or use the expert command\n"
-            "  `raven trajectory report` at your own risk.",
-            highlight=False,
+            f"  ... and {len(item.occurrences) - _REVIEW_OCCURRENCE_LIMIT} more occurrence(s)", highlight=False
         )
+    if item.linked:
+        linked = ", ".join(f"#{index_by_id[other]}" for other in item.linked)
+        console.print(f"  Linked with item {linked} (overlapping values) — decisions must match.", highlight=False)
+
+
+_REVIEW_CANCEL = "__cancel_report__"
+
+
+def _ask_review_item(
+    item: Any, index: int, total: int, index_by_id: dict[str, int], questionary: Any, style: Any
+) -> str:
+    _print_review_item(item, index, total, index_by_id)
+    # questionary.Choice falls back to the title when value is None, so the
+    # cancel row needs an explicit sentinel value.
+    if item.kind == treview.KIND_CONFIRMED:
+        choices = [
+            questionary.Choice("Acknowledge and continue", value=treview.ACTION_ACKNOWLEDGED),
+            questionary.Choice("Cancel the report", value=_REVIEW_CANCEL),
+        ]
     else:
-        console.print("[red]✗ Cannot create a bug report with these details.[/red]", highlight=False)
-        console.print(
-            "  The problem details you entered contain a private key block. This material\n"
-            "  is not allowed to leave the machine as a bug report package.\n"
-            "  Start over and describe the problem without pasting the key itself.",
-            highlight=False,
-        )
+        choices = [
+            questionary.Choice("Keep (harmless, ship as-is)", value=treview.ACTION_KEPT),
+            questionary.Choice("Replace with [REDACTED:user-confirmed]", value=treview.ACTION_REDACTED),
+            questionary.Choice("Cancel the report", value=_REVIEW_CANCEL),
+        ]
+    action = _ask_action(
+        questionary.select("Decision:", choices=choices, style=style, qmark=QMARK, pointer=POINTER, instruction=" ")
+    )
+    if action == _REVIEW_CANCEL:
+        raise treview.ReviewCancelledError("the report was cancelled from the review screen")
+    return action
+
+
+def _conflicted_review_items(items: list[Any], actions: dict[str, str]) -> list[Any]:
+    by_id = {item.id: item for item in items}
+    conflicted: list[Any] = []
+    seen: set[str] = set()
+    for item in items:
+        for other_id in item.linked:
+            if actions[item.id] != actions[other_id]:
+                for item_id in (item.id, other_id):
+                    if item_id not in seen:
+                        seen.add(item_id)
+                        conflicted.append(by_id[item_id])
+    return conflicted
+
+
+def make_review_decider(questionary: Any, style: Any) -> Any:
+    """The interactive ``decide`` callback for :func:`breport.freeze_export`.
+
+    Validates before returning and re-asks only the conflicting linked group,
+    so the pipeline never sees an inconsistent decision set (and nothing is
+    applied until the set is legal). Shared by the browser and the CLI's TTY
+    path.
+    """
+
+    def _decide(items: list[Any], reasons: list[str]) -> list[Any]:
+        console.print()
+        console.print(f"Redaction review — {len(items)} item(s) need your decision", highlight=False)
+        for warning in _review_warnings(reasons):
+            console.print(f"  [yellow]! {escape(warning)}[/yellow]", highlight=False)
+        index_by_id = {item.id: index for index, item in enumerate(items, 1)}
+        actions: dict[str, str] = {}
+        for index, item in enumerate(items, 1):
+            actions[item.id] = _ask_review_item(item, index, len(items), index_by_id, questionary, style)
+        while True:
+            decisions = [treview.ReviewDecision(item.id, actions[item.id]) for item in items]
+            try:
+                treview.validate_review_decisions(items, decisions)
+                return decisions
+            except treview.ReviewConflictError as exc:
+                console.print(f"[red]{escape(str(exc))}[/red]", highlight=False)
+                for item in _conflicted_review_items(items, actions):
+                    actions[item.id] = _ask_review_item(
+                        item, index_by_id[item.id], len(items), index_by_id, questionary, style
+                    )
+
+    return _decide
 
 
 def _ask_problem_fields(questionary: Any, style: Any) -> dict[str, str]:
@@ -979,15 +1084,20 @@ def _print_bug_summary(session_row: SessionRow, index: int, row: AttemptRow, pre
     counts = f"{exact} known-value + {patterns} pattern replacement(s)"
     if prep.classification == breport.CLASSIFICATION_NEEDS_REVIEW:
         _summary_line("Redaction", f"{counts} · NEEDS REVIEW")
-        findings = redaction["residual_findings"]
+        for notice in redaction.get("security_notices") or []:
+            console.print(f"    [yellow]! {escape(notice)}[/yellow]", highlight=False)
         for reason in prep.reasons:
-            console.print(f"    - {escape(reason)}{':' if reason.startswith('residual') and findings else ''}")
-            if reason.startswith("residual"):
-                for finding in findings[:5]:
-                    sample = _collapse_text(f"{finding['file']}: {finding['sample']}") or ""
-                    console.print(f"        {escape(sample)}", highlight=False)
-                if len(findings) > 5:
-                    console.print(f"        ... and {len(findings) - 5} more (see redaction.json)")
+            console.print(f"    - {escape(reason)}", highlight=False)
+        decisions = redaction.get("user_decisions") or []
+        if decisions:
+            _summary_line("Decisions", f"{len(decisions)} review decision(s)")
+            for entry in decisions:
+                sources = ", ".join(
+                    entry_source["source"] + (f" x{entry_source['count']}" if entry_source["count"] > 1 else "")
+                    for entry_source in entry["sources"]
+                )
+                line = _collapse_text(f"{entry['action']:<12} {entry['masked_sample']} — {sources}") or ""
+                console.print(f"    - {escape(line)}", highlight=False)
     else:
         _summary_line("Redaction", f"{counts} · residual scan: clean")
     console.print(_PII_NOTE, highlight=False)
@@ -996,21 +1106,21 @@ def _print_bug_summary(session_row: SessionRow, index: int, row: AttemptRow, pre
 
 
 def _confirm_create(questionary: Any, style: Any, prep: Any) -> bool:
-    ok = _ask_action(questionary.confirm("Create the bug report?", default=True, style=style, qmark=QMARK))
-    if not ok:
-        return False
+    """One confirmation: the review variant carries the risk authorization.
+
+    The per-item adjudication already happened during the freeze, so a review
+    report needs exactly one risk-worded consent (listing was printed by the
+    summary) instead of the old create-then-review double prompt.
+    """
     if prep.classification == breport.CLASSIFICATION_NEEDS_REVIEW:
         return bool(
             _ask_action(
                 questionary.confirm(
-                    "The redaction needs review: flagged content may include real secrets. Ship the package anyway?",
-                    default=False,
-                    style=style,
-                    qmark=QMARK,
+                    "Ship the package with the risks listed above?", default=False, style=style, qmark=QMARK
                 )
             )
         )
-    return True
+    return bool(_ask_action(questionary.confirm("Create the bug report?", default=True, style=style, qmark=QMARK)))
 
 
 def _bug_report_action(
@@ -1040,19 +1150,13 @@ def _bug_report_action(
         return
 
     try:
-        if prep.classification == breport.CLASSIFICATION_BLOCKED:
-            _print_blocked("trajectory")
-            return
         fields = _ask_problem_fields(questionary, style)
         try:
-            prep = breport.freeze_export(prep, **fields)
+            prep = breport.freeze_export(prep, **fields, decide=make_review_decider(questionary, style))
         except breport.PreparationError as exc:
             console.print(
                 f"[red]✗ Could not prepare the trajectory snapshot: {escape(str(exc))}[/red]", highlight=False
             )
-            return
-        if prep.classification == breport.CLASSIFICATION_BLOCKED:
-            _print_blocked("problem")
             return
         _print_bug_summary(session_row, index, row, prep)
         if not _confirm_create(questionary, style, prep):
@@ -1072,7 +1176,7 @@ def _bug_report_action(
             _print_packaging_failure(prep.report_id, str(exc), retryable=exc.retryable)
             return
         _print_report_ready(record)
-    except _ActionCancelledError:
+    except (_ActionCancelledError, treview.ReviewCancelledError):
         console.print(_CANCELLED_MESSAGE)
     finally:
         # A no-op after the record landed (the staging directory was renamed
@@ -1091,6 +1195,8 @@ def _print_report_details(record: dict[str, Any]) -> None:
     if reasons:
         status_text += f" ({len(reasons)} reason(s))"
     console.print(f"  Completeness: {escape(status_text)}", highlight=False)
+    for notice in (record.get("redaction") or {}).get("security_notices") or []:
+        console.print(f"  [yellow]! {escape(notice)}[/yellow]", highlight=False)
     if record["status"] == breport.STATUS_LOCAL_READY:
         console.print(f"  Package:  [cyan]{escape(record['package']['path'])}[/cyan]", highlight=False)
         console.print("  Not uploaded — hand the package file to a developer yourself.")
