@@ -1503,6 +1503,108 @@ async def test_one_spawns_output_reaches_the_next_through_the_real_dispatch_path
     assert "completed successfully" not in deck
 
 
+class _ModeRecordingBackend:
+    """Keeps the `mode` kwarg each dispatch was handed."""
+
+    def __init__(self, seen: list[str | None]) -> None:
+        self._seen = seen
+
+    async def run(self, task: str, **kwargs: Any) -> str:
+        self._seen.append(kwargs.get("mode"))
+        return "done"
+
+
+async def test_a_spawn_carries_the_session_tier_without_the_model_naming_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The tool has no `mode` argument, so this is the only way a spawn gets one.
+
+    Driven through the real dispatch path -- tool, manager, background task,
+    backend -- because the tier is resolved inside `_run_subagent_inner`, well
+    past where a stub manager would stop.
+    """
+    from raven.agent.subagent.spawn_tool import SpawnTool
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+    from raven.session.manager import SessionManager
+
+    seen: list[str | None] = []
+    home = tmp_path / "home"
+    mgr = SubagentManager(
+        provider=_StubProvider(),
+        workspace=home,
+        session_dir=lambda key: SessionManager(home).session_dir(key),
+        max_concurrent=2,
+        agents=[ThirdPartyCliSubagentConfig(name="Researcher", command="cat")],
+        session_tier=lambda _key: "medium",
+    )
+    mgr.set_submit(lambda _msg: None)
+    mgr.registry._backends["Researcher"] = _ModeRecordingBackend(seen)
+    monkeypatch.setattr(
+        mgr, "agent_modes", lambda agent: tuple(SimpleNamespace(id=r) for r in ("medium", "high", "max"))
+    )
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _DummyExecutor())
+
+    tool = SpawnTool(manager=mgr)
+    tool.set_context("cli", "direct", "cli:direct")
+
+    assert "mode" not in tool.parameters["properties"], "the model cannot name one"
+    await tool.execute(task_summary="Look it up", task="Find them.", subagent="Researcher")
+
+    for _ in range(400):
+        await asyncio.sleep(0.01)
+        if seen:
+            break
+    assert seen == ["medium"], f"the dispatch ran at the session tier, saw {seen}"
+
+
+async def test_a_spawn_started_inside_a_turn_keeps_that_turns_tier(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A spawn is a background task, and a task copies the context that made it.
+
+    So the tier a turn froze travels into the task and survives the turn ending
+    -- which matters because a spawn deliberately outlives the turn that started
+    it. Without that, an async spawn would resolve its tier against whatever the
+    session held whenever it happened to reach the backend.
+    """
+    from raven.agent.subagent.mode_tiers import turn_tier
+    from raven.agent.subagent.spawn_tool import SpawnTool
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+    from raven.session.manager import SessionManager
+
+    seen: list[str | None] = []
+    live = {"tier": "medium"}
+    home = tmp_path / "home"
+    mgr = SubagentManager(
+        provider=_StubProvider(),
+        workspace=home,
+        session_dir=lambda key: SessionManager(home).session_dir(key),
+        max_concurrent=2,
+        agents=[ThirdPartyCliSubagentConfig(name="Researcher", command="cat")],
+        session_tier=lambda _key: live["tier"],
+    )
+    mgr.set_submit(lambda _msg: None)
+    mgr.registry._backends["Researcher"] = _ModeRecordingBackend(seen)
+    monkeypatch.setattr(
+        mgr, "agent_modes", lambda agent: tuple(SimpleNamespace(id=r) for r in ("medium", "high", "max"))
+    )
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _DummyExecutor())
+
+    tool = SpawnTool(manager=mgr)
+    tool.set_context("cli", "direct", "cli:direct")
+
+    with turn_tier("medium"):
+        await tool.execute(task_summary="Look it up", task="Find them.", subagent="Researcher")
+    # The turn is over and the session has moved on; the spawn it started has not.
+    live["tier"] = "max"
+
+    for _ in range(400):
+        await asyncio.sleep(0.01)
+        if seen:
+            break
+    assert seen == ["medium"], f"the spawn kept the tier of the turn that started it, saw {seen}"
+
+
 class _ToolThenAnswerProvider(LLMProvider):
     """One tool call, then a final answer -- the shape a real run has."""
 

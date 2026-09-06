@@ -41,6 +41,7 @@ from raven.rpc.methods.session import (
     session_most_recent,
     session_pin,
     session_resume,
+    session_set_mode,
     session_title,
 )
 from raven.session.manager import SessionManager
@@ -2453,3 +2454,75 @@ from raven.rpc.errors import SessionTitleTooLongError, TurnInProgressError
 from raven.rpc.methods import session as session_module
 from raven.rpc.models import METHOD_MODELS
 from raven.utils.tokens import estimate_prompt_tokens
+
+# ---------------------------------------------------------------------------
+# session.set_mode: this session's own sub-agent tier
+# ---------------------------------------------------------------------------
+
+
+class _Loop:
+    def __init__(self) -> None:
+        self.policies: dict[str, str] = {}
+        self.iterations: dict[str, int | None] = {}
+
+    def set_session_policy(self, key, *, max_iterations=None, mode="", mode_overlay=None):
+        self.policies[key] = mode
+        self.iterations[key] = max_iterations
+
+    def session_policy(self, key):
+        from raven.agent.loop._shared import SessionPolicy
+
+        return SessionPolicy(mode=self.policies.get(key, ""))
+
+
+async def test_a_read_reports_the_default_and_the_whole_menu():
+    loop = _Loop()
+    result = await session_set_mode({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert result["mode"] == "high"
+    assert [m["id"] for m in result["availableModes"]] == ["medium", "high", "max"]
+
+
+async def test_a_set_lands_on_the_loop_policy():
+    loop = _Loop()
+    result = await session_set_mode({"session_key": "tui:1", "mode": "max"}, agent_loop_factory=lambda: loop)
+    assert result["mode"] == "max"
+    assert loop.policies["tui:1"] == "max"
+
+
+async def test_a_clear_returns_to_the_catalogue_default():
+    loop = _Loop()
+    await session_set_mode({"session_key": "tui:1", "mode": "medium"}, agent_loop_factory=lambda: loop)
+    result = await session_set_mode({"session_key": "tui:1", "clear": True}, agent_loop_factory=lambda: loop)
+    assert result["mode"] == "high"
+    assert loop.policies["tui:1"] == "high"
+
+
+async def test_an_unknown_tier_is_refused_naming_what_is_on_offer():
+    from raven.rpc.errors import ConfigValidationError
+
+    loop = _Loop()
+    with pytest.raises(ConfigValidationError) as exc:
+        await session_set_mode({"session_key": "tui:1", "mode": "turbo"}, agent_loop_factory=lambda: loop)
+    assert "medium" in str(exc.value) and "high" in str(exc.value) and "max" in str(exc.value)
+    assert loop.policies == {}, "a refused set must not half-land"
+
+
+async def test_a_set_forwards_the_tiers_iteration_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    from raven.config.schema import AcpConfig, AcpModeConfig
+
+    cfg = load_config()
+    cfg.acp = AcpConfig(modes={"careful": AcpModeConfig(name="Careful", max_tool_iterations=7)}, default_mode="careful")
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+    loop = _Loop()
+    result = await session_set_mode({"session_key": "tui:1", "mode": "careful"}, agent_loop_factory=lambda: loop)
+    assert result["mode"] == "careful"
+    assert loop.iterations["tui:1"] == 7
+
+
+async def test_a_clear_wins_over_a_mode_given_alongside_it():
+    loop = _Loop()
+    result = await session_set_mode(
+        {"session_key": "tui:1", "mode": "max", "clear": True}, agent_loop_factory=lambda: loop
+    )
+    assert result["mode"] == "high"
+    assert loop.policies["tui:1"] == "high"

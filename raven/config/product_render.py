@@ -363,9 +363,11 @@ def mode_catalogue(
     ``ctx.max_iterations``). ``resolve(overlay)`` is the product's half: it
     returns the
     mode's iteration cap and the diff the plugin should see -- both sides of
-    vocabulary the trunk must not learn. An empty dict when the product
-    ships no modes directory, which leaves the rendered config without
-    ``acp.modes`` and ``session/set_mode`` method-not-found.
+    vocabulary the trunk must not learn. An empty dict when the product ships
+    no modes directory, which leaves ``acp.modes`` unset in the rendered
+    config rather than absent from the schema: raven defaults an unset
+    ``acp.modes`` to its own three built-in tiers, so ``session/set_mode``
+    answers with those instead of method-not-found.
     """
     if not modes_dir.is_dir():
         return {}

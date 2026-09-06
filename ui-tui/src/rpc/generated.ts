@@ -2780,7 +2780,35 @@ export interface SubagentsInstanceSetModeParams {
  */
 export interface SubagentsInstanceSetModeResult {
   /**
-   * The mode now in force, or null when the agent's own default is. Null is the ordinary answer to a read with no override set and to every clear, not an error.
+   * This instance's own override, or null when it has none. Null is the ordinary answer to a read with no override set and to every clear, not an error.
+   */
+  mode?: string | null;
+  /**
+   * What a dispatch runs at when there is no override: this session's tier, clamped to what the agent offers. Null when nothing is inherited and the agent's own default is what runs.
+   */
+  inherited?: string | null;
+  availableModes?: {
+    id: string;
+    name?: string;
+    description?: string;
+  }[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionSetModeParams".
+ */
+export interface SessionSetModeParams {
+  session_key: string;
+  mode?: string;
+  clear?: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionSetModeResult".
+ */
+export interface SessionSetModeResult {
+  /**
+   * The tier now in force.
    */
   mode?: string | null;
   availableModes?: {

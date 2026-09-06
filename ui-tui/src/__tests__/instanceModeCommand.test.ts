@@ -28,6 +28,12 @@ const MODES = [
   { id: 'deep', name: 'Deep', description: 'searches longer' }
 ]
 
+const TIERS = [
+  { id: 'medium', name: 'Medium', description: 'sub-agents run at their medium tier' },
+  { id: 'high', name: 'High', description: 'sub-agents run at their high tier' },
+  { id: 'max', name: 'Max', description: 'sub-agents run at their max tier' }
+]
+
 // The stub `sys` routes by view, because the real one does: `useMainApp` hands
 // the slash context a wrapper that writes into the open instance's transcript
 // (`slashSys`). A stub that always pushed to `main` would score a line the user
@@ -82,12 +88,15 @@ beforeEach(() => {
 })
 
 describe('/mode', () => {
-  it('says where it applies when the user is on the main conversation', () => {
+  it('sets this conversation tier instead of refusing, now that it has one', async () => {
+    // The refusal this test used to check for is gone: the main conversation
+    // has its own tier now, set through the same command.
     leaveDirect()
     const h = run('deep')
+    await settle()
 
-    expect(h.main[0]).toContain('/mode applies to a sub-agent chat')
-    expect(h.rpc).not.toHaveBeenCalled()
+    expect(h.rpc).toHaveBeenCalledWith('session.set_mode', { mode: 'deep', session_key: 's1' }, { quiet: true })
+    expect(h.main.join('\n')).toContain('is now on')
   })
 
   it('reports without changing anything when given no argument', async () => {
@@ -171,6 +180,59 @@ describe('/mode', () => {
     )
   })
 
+  it('names the tier it inherits, rather than claiming the agent default runs', async () => {
+    // `mode: null` used to print "its own default is in force". Once a session
+    // tier can reach the dispatch, that sentence tells the operator a different
+    // mode from the one that will actually run.
+    enterDirect('Researcher', 'h1')
+    const h = run(
+      '',
+      vi.fn(() => Promise.resolve({ availableModes: MODES, inherited: 'deep', mode: null }))
+    )
+    await settle()
+
+    const out = h.direct('Researcher', 'h1').join('\n')
+    expect(out).toContain('inheriting')
+    expect(out).toContain('deep')
+    expect(out).not.toContain('its own default is in force')
+  })
+
+  it('still says the agent default runs when nothing is inherited either', async () => {
+    enterDirect('Researcher', 'h1')
+    const h = run(
+      '',
+      vi.fn(() => Promise.resolve({ availableModes: MODES, inherited: null, mode: null }))
+    )
+    await settle()
+
+    expect(h.direct('Researcher', 'h1').join('\n')).toContain('its own default is in force')
+  })
+
+  it('states the scope of the control once, not on every rung', async () => {
+    // The rungs used to carry "Raven's own effort is the same in every mode."
+    // each, so a three-row menu printed one fact three times. The rows now say
+    // only what differs between them and this surface states the scope once.
+    const h = run(
+      '',
+      vi.fn(() =>
+        Promise.resolve({
+          availableModes: [
+            { description: 'The least effort a sub-agent is asked for.', id: 'medium', name: 'Medium' },
+            { description: 'The middle rung, and where every session starts.', id: 'high', name: 'High' },
+            { description: 'The most effort a sub-agent is asked for.', id: 'max', name: 'Max' }
+          ],
+          mode: 'high'
+        })
+      )
+    )
+    await settle()
+
+    const out = h.main.join('\n')
+    expect(out.match(/Raven's own effort/g) ?? []).toHaveLength(1)
+    expect(out).toContain('The least effort a sub-agent is asked for.')
+  })
+
+
   it('says so for an agent that offers none, instead of printing an empty menu', async () => {
     enterDirect('Coder', 'h1')
     const h = run(
@@ -203,5 +265,43 @@ describe('/mode', () => {
 
     expect(h.direct('Researcher', 'h1')).toEqual(['no active session'])
     expect(h.rpc).not.toHaveBeenCalled()
+  })
+})
+
+describe('/mode in the main conversation', () => {
+  beforeEach(() => {
+    resetDirectChat()
+  })
+
+  it('reports the tier and the menu with no argument', async () => {
+    const rpc = vi.fn(() => Promise.resolve({ availableModes: TIERS, mode: 'high' }))
+    const h = run('', rpc)
+    await settle()
+    expect(rpc).toHaveBeenCalledWith('session.set_mode', { session_key: 's1' }, { quiet: true })
+    expect(h.main.join('\n')).toContain('high')
+  })
+
+  it('sets the tier and says it lands next turn', async () => {
+    const rpc = vi.fn(() => Promise.resolve({ availableModes: TIERS, mode: 'max' }))
+    const h = run('max', rpc)
+    await settle()
+    expect(rpc).toHaveBeenCalledWith('session.set_mode', { mode: 'max', session_key: 's1' }, { quiet: true })
+    // Exact match, not a substring: 'sub-agents in this conversation is now on
+    // max' would still contain 'is now on' and would still pass a loose check.
+    expect(h.main.join('\n').split('\n')[0]).toBe('this conversation is now on max')
+    expect(h.main.join('\n')).toContain('next message')
+  })
+
+  it('sends clear for a reset word', async () => {
+    const rpc = vi.fn(() => Promise.resolve({ availableModes: TIERS, mode: 'high' }))
+    const h = run('default', rpc)
+    await settle()
+    expect(rpc).toHaveBeenCalledWith('session.set_mode', { clear: true, session_key: 's1' }, { quiet: true })
+  })
+
+  it('no longer refuses outside a sub-agent chat', async () => {
+    const h = run('', vi.fn(() => Promise.resolve({ availableModes: TIERS, mode: 'high' })))
+    await settle()
+    expect(h.main.join('\n')).not.toContain('applies to a sub-agent chat')
   })
 })
