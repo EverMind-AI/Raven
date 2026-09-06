@@ -119,6 +119,7 @@ _SEEDED_DIRECT_PROVIDERS = [
     "zai",
     "dashscope",
     "groq",
+    "minimax",
     "minimax_global",
     "minimax_cn",
 ]

@@ -82,6 +82,10 @@ COMMON_MODELS: dict[str, list[str]] = {
         "deepseek/deepseek-v4-flash",
         "deepseek/deepseek-v4-pro",
     ],
+    "minimax": [
+        "minimax/MiniMax-M3",
+        "minimax/MiniMax-M2.7",
+    ],
     "minimax_global": [
         "minimax-global/MiniMax-M3",
         "minimax-global/MiniMax-M2.7",

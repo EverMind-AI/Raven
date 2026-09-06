@@ -356,6 +356,19 @@ def test_a_litellm_mapped_window_comes_from_litellm_with_no_network(monkeypatch)
     assert counter["calls"] == 0
 
 
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("minimax/MiniMax-M3", 1_000_000),
+        ("minimax/MiniMax-M2.7", 204_800),
+        ("minimax-global/MiniMax-M3", 1_000_000),
+        ("minimax-cn/MiniMax-M2.7", 204_800),
+    ],
+)
+def test_minimax_current_windows_come_from_the_provider_registry(model: str, expected: int) -> None:
+    assert resolve_context_window(model, allow_fetch=False) == expected
+
+
 def test_an_openrouter_window_falls_back_to_the_live_table(monkeypatch):
     _patch_litellm_info(monkeypatch, _litellm_miss)
     _patch_openrouter(monkeypatch, lambda req: _models_response(_DEEPSEEK_MODELS))
