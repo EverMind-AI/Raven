@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import asyncio
 import weakref
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from typing import Any
 
@@ -101,6 +103,35 @@ def question_lock(conversation_id: str) -> asyncio.Lock:
     return lock
 
 
+@asynccontextmanager
+async def held_question(conversation_id: str, timeout_s: float) -> AsyncIterator[bool]:
+    """Hold the conversation's question lock for the block, or give up after ``timeout_s``.
+
+    Yields whether the lock was had. A ``False`` means the body still runs --
+    the caller decides what "the conversation stayed busy" means for it, which
+    is always some form of "no answer" -- but nothing is held, so the caller
+    must not put a question to the broker on that branch.
+
+    Bounded rather than waited out for the same reason the broker's own
+    fail-safe is bounded: a wait that never gives up only moves the stall from
+    the broker to here. The lock is not re-entrant, so code that already holds
+    it for the conversation (an ACP responder holding it across a whole form or
+    round trip) must reach the broker through a primitive that does not take it
+    again -- ``AskUserTool.ask_direct`` is that primitive.
+    """
+    lock = question_lock(conversation_id)
+    try:
+        async with asyncio.timeout(timeout_s):
+            await lock.acquire()
+    except TimeoutError:
+        yield False
+        return
+    try:
+        yield True
+    finally:
+        lock.release()
+
+
 def attribute(agent: str, instance: str, message: str) -> str:
     """Name the sub-agent a question came from, in front of the question.
 
@@ -119,6 +150,7 @@ __all__ = [
     "attribute",
     "current_ask",
     "current_autofill",
+    "held_question",
     "question_lock",
     "start_ask_turn",
 ]

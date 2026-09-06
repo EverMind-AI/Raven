@@ -26,8 +26,19 @@ PLUGIN_DIR = REPO / "agents" / "raven-research" / "plugins" / "research-flow"
 sys.path.insert(0, str(PLUGIN_DIR))
 
 from research_flow.plugin import make_ask_user, make_hook, make_web_fetch, make_web_search  # noqa: E402
+from research_flow.support import ledger as ledger_mod  # noqa: E402
+from research_flow.support.search_saturation import SearchSaturation  # noqa: E402
+from research_flow.tools import web as web_mod  # noqa: E402
 from research_flow.tools.ask_user import DRAskUserTool  # noqa: E402
-from research_flow.tools.web import _UNRESOLVED_REFUSAL, WebFetchTool, WebSearchTool, set_current_session  # noqa: E402
+from research_flow.tools.web import (  # noqa: E402
+    _UNRESOLVED_REFUSAL,
+    DEFAULT_FETCH_PROVIDER,
+    FETCH_PROVIDERS,
+    SEARCH_PROVIDERS,
+    WebFetchTool,
+    WebSearchTool,
+    set_current_session,
+)
 
 from raven.agent.tools.params import cast_params, validate_params  # noqa: E402
 from raven.plugins.context import PluginContext, ServiceLocator  # noqa: E402
@@ -140,12 +151,153 @@ def test_the_fetch_tool_takes_its_key_from_the_plugin_slice(tmp_path, monkeypatc
     assert isinstance(tool, WebFetchTool) and tool.api_key == "jina-key"
 
 
+@pytest.mark.parametrize("vendor", sorted(v for v, s in FETCH_PROVIDERS.items() if s.needs_key))
+def test_a_reader_selected_without_a_key_is_built_as_the_default_reader(tmp_path, monkeypatch, vendor):
+    """The kernel's ``web_fetch`` degrades a keyless keyed backend to Jina, and
+    this tool REPLACES the kernel's: without the same rule a research run is the
+    one place where that config answers every fetch with a refusal, while a
+    plain raven on it reads the page.
+
+    Registration is not the gate on this half. Jina needs no key, so the tool is
+    always offered and it is the backend underneath that has to move.
+    """
+    monkeypatch.delenv(FETCH_PROVIDERS[vendor].env_var, raising=False)
+    slice_ = {"enabled": True, "fetch": {"provider": vendor}, **_NO_LLM_GATES}
+
+    tool = make_web_fetch(_ctx(tmp_path, slice_))
+
+    assert isinstance(tool, WebFetchTool) and tool.provider == DEFAULT_FETCH_PROVIDER
+
+
+@pytest.mark.parametrize("where", ["slice", "env"])
+def test_a_reader_whose_key_resolves_is_left_on_the_backend_it_names(tmp_path, monkeypatch, where):
+    """Either source counts, because the tool reads both at call time: degrading
+    on an empty slice alone would move a deploy that only exports the var."""
+    slice_: dict = {"enabled": True, "fetch": {"provider": "tavily"}, **_NO_LLM_GATES}
+    if where == "slice":
+        monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+        slice_["fetch"]["apiKey"] = "tavily-key"
+    else:
+        monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
+
+    tool = make_web_fetch(_ctx(tmp_path, slice_))
+
+    assert tool is not None and tool.provider == "tavily"
+
+
+def test_the_reader_it_degrades_to_is_built_with_that_reader_s_own_key(tmp_path, monkeypatch):
+    """The key follows the provider, as it does at the kernel's own build.
+
+    A host that configured a Jina key gets authenticated Jina from raven's
+    built-in reader, so a research run that quietly dropped to anonymous Jina
+    would spend the deployment's configured quota on one path and not the
+    other -- on the very fallback this rule exists to match.
+    """
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.delenv("JINA_API_KEY", raising=False)
+    slice_ = {
+        "enabled": True,
+        "fetch": {"provider": "tavily", "fallbackApiKey": "jina-key"},
+        **_NO_LLM_GATES,
+    }
+
+    tool = make_web_fetch(_ctx(tmp_path, slice_))
+
+    assert tool is not None and tool.provider == DEFAULT_FETCH_PROVIDER
+    assert tool.api_key == "jina-key"
+
+
+def test_a_reader_that_keeps_its_vendor_ignores_the_fallback_key(tmp_path, monkeypatch):
+    """The other branch: the fallback key must not reach the vendor that did
+    resolve one, which would send Jina's credential to Tavily's endpoint."""
+    monkeypatch.delenv("JINA_API_KEY", raising=False)
+    slice_ = {
+        "enabled": True,
+        "fetch": {"provider": "tavily", "apiKey": "tavily-key", "fallbackApiKey": "jina-key"},
+        **_NO_LLM_GATES,
+    }
+
+    tool = make_web_fetch(_ctx(tmp_path, slice_))
+
+    assert tool is not None and tool.provider == "tavily"
+    assert tool.api_key == "tavily-key"
+
+
+def test_the_degradation_rule_takes_an_unknown_name_the_way_the_constructor_does(monkeypatch):
+    """Two doors into the same tool, one normalisation: a caller must not get
+    a KeyError from the rule and a degraded tool from the constructor."""
+    monkeypatch.delenv("JINA_API_KEY", raising=False)
+
+    assert WebFetchTool.effective_provider("bogus", None) == DEFAULT_FETCH_PROVIDER
+    assert WebFetchTool(provider="bogus").provider == DEFAULT_FETCH_PROVIDER
+
+
+def test_the_plugin_degrades_a_keyless_reader_exactly_as_the_kernel_does(monkeypatch):
+    """One rule, two implementations - the seam this plugin is built on.
+
+    Pinned per vendor rather than by reading both: the two tables are separate
+    objects, and a backend added to one with a different ``needs_key`` is the
+    drift that puts the two ``web_fetch`` tools on different backends for one
+    config, which is the bug this rule was added to close.
+    """
+    from raven.agent.tools.web import FETCH_PROVIDERS as KERNEL_PROVIDERS
+    from raven.agent.tools.web import WebFetchTool as KernelFetchTool
+
+    assert set(FETCH_PROVIDERS) == set(KERNEL_PROVIDERS)
+    for vendor in sorted(FETCH_PROVIDERS):
+        monkeypatch.delenv(FETCH_PROVIDERS[vendor].env_var, raising=False)
+        assert WebFetchTool.effective_provider(vendor, None) == KernelFetchTool.effective_provider(vendor, None)
+        assert WebFetchTool.effective_provider(vendor, "k") == KernelFetchTool.effective_provider(vendor, "k")
+
+
 def test_the_proxy_reaches_both_tools(tmp_path):
     slice_ = {"enabled": True, "search": {"apiKey": "k"}, "proxy": "http://127.0.0.1:7890", **_NO_LLM_GATES}
     ctx = _ctx(tmp_path, slice_)
 
     assert make_web_search(ctx).proxy == "http://127.0.0.1:7890"
     assert make_web_fetch(ctx).proxy == "http://127.0.0.1:7890"
+
+
+def test_the_digest_follows_the_sessions_mode_not_the_base_config(tmp_path):
+    """web_fetch is built once from the base config while the chain is rebuilt
+    per (session, mode). A deep session whose overlay moves digest.model must
+    digest with that model, so the tool reads the knob off the session's gear at
+    call time; a call outside any geared session keeps the base value."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from research_flow.flow import SessionGear
+    from research_flow.plugin import _shared_for
+
+    seen: list[str | None] = []
+
+    class _Provider:
+        async def chat_with_retry(self, **kwargs):
+            seen.append(kwargs.get("model"))
+            return SimpleNamespace(content="the extracted facts")
+
+    # verbatimHeadChars is pinned rather than inherited: the assertion is about
+    # which model digested, and a moved default would rewrite the digest text.
+    slice_ = {
+        "enabled": True,
+        "digest": {"enabled": True, "model": "base/cheap", "verbatimHeadChars": 0},
+        **_NO_LLM_GATES,
+    }
+    ctx = _ctx(tmp_path, slice_, provider=_Provider())
+    tool = make_web_fetch(ctx)
+    page = "x" * (tool.digest_threshold_chars + 1)
+
+    async def run():
+        set_current_session("s-deep")
+        _shared_for(ctx).session_gear["s-deep"] = SessionGear(digest_model="deep/strong", digest_verbatim_head_chars=0)
+        deep = await tool._try_digest(page, "the founding date", "https://a.example/one")
+        set_current_session("s-ungeared")
+        base = await tool._try_digest(page, "the founding date", "https://a.example/two")
+        return deep, base
+
+    deep, base = asyncio.run(run())
+    assert deep == "the extracted facts" and base == "the extracted facts"
+    assert seen == ["deep/strong", "base/cheap"]
 
 
 def test_a_keyless_search_tool_is_not_contributed(tmp_path, monkeypatch):
@@ -319,3 +471,288 @@ def test_the_schema_the_model_reads_still_demands_a_question():
     items = DRAskUserTool(delivery="tool").parameters["properties"]["questions"]["items"]
 
     assert items["required"] == ["question"]
+
+
+# --------------------------------------------------------------------------
+# The provider: which vendor each half calls, and what the rule is told
+# --------------------------------------------------------------------------
+
+
+class _CaptureTransport(httpx.AsyncBaseTransport):
+    """Records every request and answers with a canned body."""
+
+    def __init__(self, payload: object = None, *, text: str | None = None) -> None:
+        self.seen: list[httpx.Request] = []
+        self._payload = payload
+        self._text = text
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        await request.aread()
+        self.seen.append(request)
+        if self._text is not None:
+            return httpx.Response(200, text=self._text, request=request)
+        return httpx.Response(200, json=self._payload if self._payload is not None else {}, request=request)
+
+
+#: One live-shaped response per search vendor, and the single organic row it
+#: must normalise into. Written from each vendor's own field names, because the
+#: render path reads exactly three keys and a vendor that spells them
+#: differently is the whole reason the normaliser exists.
+_SEARCH_PAYLOADS: dict[str, tuple[dict, dict]] = {
+    "serper": (
+        {"organic": [{"title": "T", "link": "https://e.com/a", "snippet": "S"}]},
+        {"title": "T", "link": "https://e.com/a", "snippet": "S"},
+    ),
+    "serpapi": (
+        {"organic_results": [{"title": "T", "link": "https://e.com/a", "snippet": "S"}]},
+        {"title": "T", "link": "https://e.com/a", "snippet": "S"},
+    ),
+    "tavily": (
+        {"results": [{"title": "T", "url": "https://e.com/a", "content": "S"}]},
+        {"title": "T", "link": "https://e.com/a", "snippet": "S"},
+    ),
+    "exa": (
+        {"results": [{"title": "T", "url": "https://e.com/a", "highlights": ["S"]}]},
+        {"title": "T", "link": "https://e.com/a", "snippet": "S"},
+    ),
+    "brave": (
+        {"web": {"results": [{"title": "T", "url": "https://e.com/a", "description": "S"}]}},
+        {"title": "T", "link": "https://e.com/a", "snippet": "S"},
+    ),
+    "firecrawl": (
+        {"success": True, "data": [{"title": "T", "url": "https://e.com/a", "description": "S"}]},
+        {"title": "T", "link": "https://e.com/a", "snippet": "S"},
+    ),
+    "anysearch": (
+        {"data": {"results": [{"title": "T", "url": "https://e.com/a", "snippet": "S"}]}},
+        {"title": "T", "link": "https://e.com/a", "snippet": "S"},
+    ),
+}
+
+
+def test_the_search_provider_reaches_the_tool_from_the_plugin_slice(tmp_path, monkeypatch):
+    """The fourth question the seam answers, beside key, proxy and registration."""
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    monkeypatch.setenv("TAVILY_API_KEY", "tavily-env-key")
+    slice_ = {"enabled": True, "search": {"provider": "tavily"}, **_NO_LLM_GATES}
+
+    tool = make_web_search(_ctx(tmp_path, slice_))
+
+    # Not vacuous: the key follows the vendor, so a tool pointed at Tavily that
+    # kept reading SERPER_API_KEY would be registered and fail every call.
+    assert isinstance(tool, WebSearchTool)
+    assert tool.provider == "tavily" and tool.api_key == "tavily-env-key"
+
+
+def test_the_fetch_provider_reaches_the_tool_from_the_plugin_slice(tmp_path, monkeypatch):
+    monkeypatch.delenv("JINA_API_KEY", raising=False)
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-env-key")
+    slice_ = {"enabled": True, "search": {"apiKey": "k"}, "fetch": {"provider": "firecrawl"}, **_NO_LLM_GATES}
+
+    tool = make_web_fetch(_ctx(tmp_path, slice_))
+
+    assert tool.provider == "firecrawl" and tool.api_key == "fc-env-key"
+
+
+def test_an_unknown_provider_degrades_to_the_default_and_says_so(tmp_path, monkeypatch, caplog):
+    """A plain config slice has no schema to reject a typo, so the fallback has
+    to be audible. A silent one is the symptomless failure this pair keeps
+    warning about."""
+    monkeypatch.setenv("SERPER_API_KEY", "serper-env-key")
+    slice_ = {"enabled": True, "search": {"provider": "sepr"}, **_NO_LLM_GATES}
+
+    tool = make_web_search(_ctx(tmp_path, slice_))
+
+    assert tool.provider == "serper" and tool.api_key == "serper-env-key"
+
+
+@pytest.mark.parametrize("vendor", sorted(SEARCH_PROVIDERS))
+@pytest.mark.asyncio
+async def test_each_search_vendor_is_called_on_its_own_endpoint(monkeypatch, vendor):
+    payload, _ = _SEARCH_PAYLOADS[vendor]
+    transport = _CaptureTransport(payload)
+    _patch_client(monkeypatch, transport)
+    set_current_session("t")
+
+    await WebSearchTool(api_key="K", provider=vendor).execute(query="q", count=3)
+
+    assert len(transport.seen) == 1, "one search is one request"
+    sent = transport.seen[0]
+    # The key must be on the request somewhere, or the vendor would 401 in
+    # production while this test passed on a request that carried no auth.
+    carried = "K" in str(sent.url) or "K" in " ".join(sent.headers.values())
+    assert carried, f"{vendor} request carries no credential"
+
+
+@pytest.mark.parametrize("vendor", sorted(SEARCH_PROVIDERS))
+@pytest.mark.asyncio
+async def test_each_search_vendor_normalises_into_the_render_shape(monkeypatch, vendor):
+    """The render path reads ``organic`` rows of ``title``/``link``/``snippet``
+    and nothing else, so a vendor's own spelling has to be translated before it
+    reaches the reader -- and a row whose ``link`` is empty is dropped by the
+    dedup, which reads as a dry search rather than as a parse failure."""
+    payload, expected = _SEARCH_PAYLOADS[vendor]
+    _patch_client(monkeypatch, _CaptureTransport(payload))
+    set_current_session("t")
+    tool = WebSearchTool(api_key="K", provider=vendor)
+    seen: list[list[str]] = []
+    monkeypatch.setattr(
+        type(tool),
+        "_log_search",
+        lambda self, state, query, n, urls, rendered, shaping, **kw: seen.append(list(urls)),
+    )
+
+    rendered = await tool.execute(query="q", count=3)
+
+    assert seen == [[expected["link"]]], f"{vendor} row did not reach the ledger"
+    assert expected["title"] in rendered and expected["link"] in rendered
+
+
+@pytest.mark.parametrize("vendor", sorted(SEARCH_PROVIDERS))
+def test_a_vendor_that_serves_no_offset_tells_the_saturation_rule(vendor):
+    """``paginates`` is the load-bearing field. A rule left on ``paginate``
+    against a vendor with no offset escalates into requests that come back
+    identical: the rung is reached, unanswerable, and leaves no symptom."""
+    set_current_session(f"sat-{vendor}")
+    tool = WebSearchTool(api_key="K", provider=vendor, saturation_factory=SearchSaturation)
+
+    rule = tool._state().saturation
+
+    assert rule is not None
+    assert rule.paginates is SEARCH_PROVIDERS[vendor].paginates
+
+
+@pytest.mark.asyncio
+async def test_the_serper_request_body_is_the_one_this_pair_always_sent(monkeypatch):
+    """The default distribution's wire traffic, pinned against a literal: every
+    published number came off this body, so a refactor that "tidies" Serper into
+    the other branches has to fail here rather than in a later comparison."""
+    transport = _CaptureTransport(_SEARCH_PAYLOADS["serper"][0])
+    _patch_client(monkeypatch, transport)
+    set_current_session("t")
+    tool = WebSearchTool(api_key="K", provider="serper")
+
+    await tool.execute(query="q", count=3)
+
+    sent = transport.seen[0]
+    assert str(sent.url) == "https://google.serper.dev/search"
+    assert json.loads(sent.content) == {"q": "q", "num": 3}
+    assert sent.headers["X-API-KEY"] == "K"
+
+
+@pytest.mark.asyncio
+async def test_a_paginating_vendor_sends_its_own_offset_parameter(monkeypatch):
+    """Page N is not one parameter: Serper takes a page index, SerpApi an offset
+    in results, Brave a page index under a third name. One page number, three
+    encodings, and sending the wrong one reads as a duplicate first page."""
+    seen: dict[str, httpx.Request] = {}
+    for vendor in ("serper", "serpapi", "brave"):
+        transport = _CaptureTransport(_SEARCH_PAYLOADS[vendor][0])
+        # One patch per vendor, undone before the next: patching the already
+        # patched factory would pass ``transport`` twice and the request would
+        # never be sent.
+        with monkeypatch.context() as m:
+            _patch_client(m, transport)
+            set_current_session(f"pg-{vendor}")
+            tool = WebSearchTool(api_key="K", provider=vendor)
+            await tool._search(tool._state(), "q", 3, page=2)
+        assert transport.seen, f"{vendor} sent no request"
+        seen[vendor] = transport.seen[0]
+
+    assert json.loads(seen["serper"].content)["page"] == 2
+    # An offset in results, so page 2 starts one whole page in.
+    assert seen["serpapi"].url.params["start"] == "3"
+    # A page index, unlike SerpApi's result count.
+    assert seen["brave"].url.params["offset"] == "1"
+
+
+@pytest.mark.parametrize("status", [401, 429])
+@pytest.mark.asyncio
+async def test_a_serpapi_status_error_does_not_leak_the_key_it_puts_in_the_query(monkeypatch, tmp_path, status):
+    """SerpApi is the vendor the sibling test called "one edit away": it
+    authenticates by query parameter, and httpx puts the whole request URL in a
+    status error's text. The rendering reaches the model and the ledger lands on
+    disk.
+
+    Both statuses, because a failure leaves by one of two doors. One outside
+    ``_RETRY_ON_STATUS`` re-raises to the handler that shapes it; a retryable one
+    is caught inside ``_send_with_retry``, which writes a row of its own -- and
+    that was the row still carrying the URL.
+
+    Read off the file rather than a captured shaping dict: the retry rows never
+    pass through ``_log_search``, so a test watching that seam asserts the door
+    the key does not leave by.
+    """
+    # One retry, no waiting: the leak needs a row written, not a real backoff.
+    monkeypatch.setattr(web_mod, "_RETRY_BACKOFF_S", (0.0,))
+    _patch_client(monkeypatch, _StatusTransport(status))
+    set_current_session("t")
+    ledger_mod.set_ledger_dir(tmp_path)
+    path = Path(ledger_mod.open_product_ledger("t"))
+    try:
+        rendered = await WebSearchTool(api_key="SECRET-KEY-123", provider="serpapi").execute(query="q1", count=3)
+        written = path.read_text(encoding="utf-8")
+    finally:
+        ledger_mod.close_product_ledger()
+        ledger_mod.set_ledger_dir(None)
+
+    assert rendered == f"Error: SerpApi answered HTTP {status}"
+    assert "SECRET-KEY-123" not in rendered and "serpapi.com" not in rendered
+    assert "SECRET-KEY-123" not in written and "serpapi.com" not in written
+    # Not vacuous: the rows exist, a retryable status really did take the second
+    # door, and what is left of the error still names the status.
+    rows = [json.loads(ln) for ln in written.splitlines() if ln.strip()]
+    assert [r["op"] for r in rows] == (["search"] if status == 401 else ["search_retry", "search"])
+    assert all(r["status"] == status and str(status) in r["error"] for r in rows if r["op"] == "search_retry")
+
+
+@pytest.mark.parametrize("vendor", sorted(v for v, s in FETCH_PROVIDERS.items() if s.needs_key))
+@pytest.mark.asyncio
+async def test_a_fetch_backend_with_no_anonymous_tier_refuses_before_the_request(monkeypatch, vendor):
+    """``needs_key`` decides whether the tool can run at all. Jina reads pages
+    unauthenticated; the others answer nothing without a key, and a tool that
+    is advertised and fails every call is worse than one that is absent."""
+    monkeypatch.delenv(FETCH_PROVIDERS[vendor].env_var, raising=False)
+    transport = _CaptureTransport(text="page body")
+    _patch_client(monkeypatch, transport)
+    set_current_session("t")
+
+    answer = await WebFetchTool(provider=vendor).execute(url="https://example.com/a")
+
+    assert FETCH_PROVIDERS[vendor].label in json.loads(answer)["error"]
+    assert FETCH_PROVIDERS[vendor].env_var in json.loads(answer)["error"]
+    assert transport.seen == [], "the refusal must not spend a request"
+
+
+@pytest.mark.parametrize(
+    ("vendor", "payload"),
+    [
+        ("tavily", {"results": [{"raw_content": "page body"}]}),
+        ("exa", {"results": [{"text": "page body"}]}),
+        ("firecrawl", {"success": True, "data": {"markdown": "page body"}}),
+        ("anysearch", {"code": 0, "data": {"content": "page body"}}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_each_fetch_vendor_reads_a_page_its_own_way(monkeypatch, vendor, payload):
+    _patch_client(monkeypatch, _CaptureTransport(payload))
+    set_current_session("t")
+
+    answer = json.loads(await WebFetchTool(api_key="K", provider=vendor).execute(url="https://example.com/a"))
+
+    assert answer["text"] == "page body"
+    # The extractor column is an instrument, not a label: the backends are not
+    # interchangeable, so a row must say which one served the page.
+    assert answer["extractor"] == FETCH_PROVIDERS[vendor].extractor
+
+
+@pytest.mark.asyncio
+async def test_a_fetch_vendor_that_answers_without_a_page_is_an_error_not_an_empty_page(monkeypatch):
+    """A 200 whose envelope reports the failure. Rendered as an error, because an
+    empty page would be indistinguishable from a real one that had no text."""
+    _patch_client(monkeypatch, _CaptureTransport({"success": False, "error": "blocked"}))
+    set_current_session("t")
+
+    answer = json.loads(await WebFetchTool(api_key="K", provider="firecrawl").execute(url="https://example.com/a"))
+
+    assert "blocked" in answer["error"] and "text" not in answer

@@ -427,7 +427,7 @@ index 2942c7b..0000000
 -- `idSource: provisioned` 在 acp kind 下是否仍被读取（不在 `_ACP_FIELDS` 内）—— Phase 3 确认。
 -- workspace 级资源盘点结果（§3 workspace 一条）—— Phase 0 产出。
 diff --git a/raven/agent/process_appendix.py b/raven/agent/process_appendix.py
-index 94629fd..8ec3acd 100644
+index 94629fd..6c8bb8e 100644
 --- a/raven/agent/process_appendix.py
 +++ b/raven/agent/process_appendix.py
 @@ -48,6 +48,7 @@ from collections.abc import Iterable
@@ -578,10 +578,14 @@ index 94629fd..8ec3acd 100644
  @dataclass
  class ResearchTrail:
      """What the ledger says happened, plus the one integrity check."""
-@@ -155,6 +247,11 @@ class ResearchTrail:
+@@ -155,6 +247,15 @@ class ResearchTrail:
      zero_hit: int = 0
      pages: list[tuple[str, int, bool]] = field(default_factory=list)  # url, chars, ok
      verify_outcome: str | None = None
++    verify_model: str | None = None
++    """Which model reviewed, off the verify rows. A mode may move the reviewer per
++    session, so the trail names it: a reader comparing two runs' verdicts needs
++    to know whether the same reviewer gave them."""
 +    salvaged: bool = False
 +    """The shipped answer is a salvage synthesis, which the reviewer never sees
 +    (observer order, ``dr.py``). Rendered so an unreviewed answer does not wear
@@ -590,7 +594,7 @@ index 94629fd..8ec3acd 100644
      unsupported: list[str] = field(default_factory=list)
      cited: list[str] = field(default_factory=list)
      cited_not_opened: list[str] = field(default_factory=list)
-@@ -211,6 +308,20 @@ class ResearchTrail:
+@@ -211,6 +312,20 @@ class ResearchTrail:
      "no links were cited" line a cause, so a formatting problem in the answer
      stops looking like an answer that cited nothing."""
  
@@ -611,7 +615,7 @@ index 94629fd..8ec3acd 100644
      opened_earlier: int = 0
      """How many URLs the grounding check accepted on an earlier turn's authority.
  
-@@ -295,12 +406,14 @@ class ResearchTrail:
+@@ -295,12 +410,15 @@ class ResearchTrail:
              # turn is noise that invites false comparison between runs.
              "research_seconds": None if self.span_seconds is None else round(self.span_seconds),
              "cited_schemeless": len(self.cited_schemeless),
@@ -621,16 +625,19 @@ index 94629fd..8ec3acd 100644
              # are not comparable on the rate, so the scope travels with it.
              "opened_earlier": self.opened_earlier,
              "verify_outcome": self.verify_outcome,
++            "verify_model": self.verify_model,
              "verify_open_points": len(self.unsupported),
 +            "salvaged": self.salvaged,
          }
  
      def render(self) -> str:
-@@ -332,7 +445,32 @@ class ResearchTrail:
+@@ -332,7 +450,34 @@ class ResearchTrail:
              if self.unsupported:
                  head += f" ({len(self.unsupported)} open point"
                  head += "s)" if len(self.unsupported) > 1 else ")"
 -        lines = ["", "---", "", f"**Research trail** — {head}", ""]
++            if self.verify_model:
++                head += f" via {self.verify_model}"
 +            if self.salvaged:
 +                # The common salvage path runs THROUGH a verdict: reject ->
 +                # revision -> empty visible answer -> salvage. The verdict was
@@ -660,7 +667,7 @@ index 94629fd..8ec3acd 100644
  
          # The grounding line, stated in both directions. Until dr@3.3 only the
          # failing direction was rendered, so a reader saw a warning when something
-@@ -354,6 +492,17 @@ class ResearchTrail:
+@@ -354,6 +499,17 @@ class ResearchTrail:
              # second was observed writing 43 references and reading 49 pages, and the
              # reader was told there was nothing to check. Naming the cause is the
              # whole fix; the rate itself stays undefined either way.
@@ -678,7 +685,7 @@ index 94629fd..8ec3acd 100644
              if self.cited_schemeless:
                  lines.append(
                      f"> ⚠️ No links were cited in a checkable form, but the answer "
-@@ -361,13 +510,14 @@ class ResearchTrail:
+@@ -361,13 +517,14 @@ class ResearchTrail:
                      f"scheme (e.g. `{self.cited_schemeless[0]}`), so the grounding "
                      "check could not read them. Nothing above was verified."
                  )
@@ -700,7 +707,7 @@ index 94629fd..8ec3acd 100644
              lines.append("")
          elif self.cited_not_opened:
              # Stated first and in plain words: it is the one line here that says
-@@ -397,14 +547,26 @@ class ResearchTrail:
+@@ -397,14 +554,26 @@ class ResearchTrail:
              )
              lines.append("")
  
@@ -729,7 +736,11 @@ index 94629fd..8ec3acd 100644
              )
              lines.append("")
  
-@@ -527,36 +689,57 @@ def build_trail(
+@@ -524,39 +693,61 @@ def build_trail(
+         elif op == "verify":
+             # Last verdict wins: the turn's outcome is the one it ended on.
+             t.verify_outcome = r.get("outcome") or t.verify_outcome
++            t.verify_model = r.get("model") or t.verify_model
              claims = r.get("unsupported_claims")
              if isinstance(claims, list):
                  t.unsupported = [str(c) for c in claims]
@@ -801,7 +812,7 @@ index 94629fd..8ec3acd 100644
      # ★ 20260901 (Framework). Disclosure pass, deliberately last and deliberately
      # read-only with respect to everything above: ``cited``, ``cited_not_opened``,
      # ``cited_never_surfaced`` and the rate derived from them are already final at
-@@ -565,7 +748,7 @@ def build_trail(
+@@ -565,7 +756,7 @@ def build_trail(
      # Anything ``_URL_RE`` already claimed is excluded under the same normalisation
      # the rest of the module uses, so a scheme-ful citation is never counted twice
      # and a run that cites properly reports zero here.
@@ -810,7 +821,7 @@ index 94629fd..8ec3acd 100644
      seen_bare: set[str] = set()
      for m in _SCHEMELESS_RE.finditer(answer or ""):
          u = _clean(m.group(1))
-@@ -574,6 +757,17 @@ def build_trail(
+@@ -574,6 +765,17 @@ def build_trail(
              continue
          seen_bare.add(k)
          t.cited_schemeless.append(u)
@@ -865,7 +876,7 @@ index f7f6cc3..777a552 100644
  
  def resolve_mode(style: str, *, is_terminal: bool, logs: bool) -> str:
 diff --git a/tests/test_agent_process_appendix.py b/tests/test_agent_process_appendix.py
-index ac25925..94c6804 100644
+index ac25925..91435bd 100644
 --- a/tests/test_agent_process_appendix.py
 +++ b/tests/test_agent_process_appendix.py
 @@ -98,6 +98,27 @@ def test_the_warning_separates_a_fabricated_link_from_one_merely_left_unopened()
@@ -896,7 +907,7 @@ index ac25925..94c6804 100644
  def test_trailing_punctuation_does_not_manufacture_a_fabricated_citation():
      """A URL ending a sentence is the common case; treating the period as part of
      it would report a correctly-read page as invented - a false alarm on the one
-@@ -372,6 +393,111 @@ def test_a_chinese_answer_can_still_be_caught_fabricating():
+@@ -372,6 +393,129 @@ def test_a_chinese_answer_can_still_be_caught_fabricating():
      assert t.counters()["citation_grounding_rate"] == 0.0
  
  
@@ -990,6 +1001,24 @@ index ac25925..94c6804 100644
 +    assert "skipped" not in t.render()
 +
 +
++def test_the_trail_names_the_reviewer_when_the_rows_do():
++    """A mode may move the reviewer per session, so a verdict without its
++    reviewer cannot be compared with another's. Named off the last verify row,
++    counted for the exporter, and silent when the rows predate the field."""
++    rows = list(LEDGER) + [
++        {"op": "verify", "outcome": "rejected", "unsupported_claims": ["c1"], "model": "judge/cheap"},
++        {"op": "verify", "outcome": "pass", "unsupported_claims": [], "model": "judge/cheap"},
++    ]
++    t = build_trail(rows, "x")
++    assert t.verify_model == "judge/cheap"
++    assert t.counters()["verify_model"] == "judge/cheap"
++    assert "reviewer: pass via judge/cheap" in t.render()
++
++    legacy = build_trail(list(LEDGER), "x")
++    assert legacy.verify_model is None and legacy.counters()["verify_model"] is None
++    assert " via " not in legacy.render()
++
++
 +def test_a_salvage_after_a_rejection_does_not_hide_behind_the_verdict():
 +    """The common salvage path runs THROUGH a verdict: reject -> revision ->
 +    empty visible answer -> salvage. The verdict was about a draft that never
@@ -1008,7 +1037,7 @@ index ac25925..94c6804 100644
  # ── dr@3.3: the grounding line is rendered in every direction ─────────
  #
  # Before dr@3.3 only the failing direction reached the page. A check that is
-@@ -548,3 +674,232 @@ def test_scope_note_is_absent_when_nothing_was_cited():
+@@ -548,3 +692,232 @@ def test_scope_note_is_absent_when_nothing_was_cited():
      t = build_trail(LEDGER, "no links")
      t.opened_earlier = 3
      assert "earlier turn" not in t.render()

@@ -69,10 +69,12 @@ class SearchSaturation:
     paginates: bool = True
     """Whether the caller's endpoint can actually serve a page beyond the first.
 
-    False on the fixed-corpus path, whose service takes a width but no offset. A
-    corpus arm configured to paginate would otherwise behave exactly like a
-    stopping one while the config said otherwise - the failure mode where a
-    capability is on, its activation site is unreachable, and there is no symptom.
+    False for a search vendor that publishes no result offset, which the tool
+    declares from ``SearchProviderSpec.paginates`` when it builds a session's
+    slot. An arm configured to paginate against such a vendor would otherwise
+    behave exactly like a stopping one while the config said otherwise - the
+    failure mode where a capability is on, its activation site is unreachable,
+    and there is no symptom.
     """
 
     _seen: set[str] = field(default_factory=set, repr=False)

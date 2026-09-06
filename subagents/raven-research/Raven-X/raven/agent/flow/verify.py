@@ -192,6 +192,7 @@ class DraftReviewerGate(AgentHook):
             "op": _LEDGER_OP_GATE,
             "event": "installed",
             "max_revisions": max_revisions,
+            "model": self._effective_model(),
             "strict_reject_only": strict_reject_only,
             "fail_open_on_elided_evidence": fail_open_on_elided_evidence,
             "constraint_rubric": constraint_rubric,
@@ -208,8 +209,25 @@ class DraftReviewerGate(AgentHook):
     def name(self) -> str:
         return "DraftReviewerGate"
 
-    @staticmethod
+    def _effective_model(self) -> str | None:
+        """The model the reviewer actually runs on, for the ledger.
+
+        Pinned, or the provider's default when the config left ``model`` null.
+        Recorded on every row because a mode overlay can move the pin per
+        session, and the appendix and the observers exporter read it off the
+        rows -- a reading whose reviewer is unknown cannot be compared with one
+        whose reviewer is known. ``None`` only when the provider cannot say.
+        """
+        if self._model:
+            return self._model
+        default = getattr(self._provider, "get_default_model", None)
+        try:
+            return default() if callable(default) else None
+        except Exception:  # noqa: BLE001 - a ledger field must never take the review down
+            return None
+
     def _record(
+        self,
         state: dict,
         outcome: str,
         *,
@@ -230,6 +248,7 @@ class DraftReviewerGate(AgentHook):
             "ts": time.time(),
             "op": _LEDGER_OP,
             "outcome": outcome,
+            "model": self._effective_model(),
             "reviewed": reviewed,
             "review": state.get("reviews", 0) if reviewed else None,
             "reviewer_pass": None if verdict is None else bool(verdict.get("pass", True)),

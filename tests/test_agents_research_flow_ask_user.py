@@ -407,6 +407,79 @@ def test_a_later_iteration_withholds_the_tool() -> None:
     assert ctx.metadata["ask_user"]["withheld_reason"] == "not_first_iteration"
 
 
+def test_a_rollback_re_sample_withholds_the_tool_and_revokes_the_grant() -> None:
+    """A reviewer reject rolls the loop back to the SAME iteration number, so the
+    first-iteration test alone re-offers the tool on a turn that already drafted.
+    The loop counts honoured rollbacks in ``ctx.metadata["hook_rollbacks"]``; any
+    count is past the boundary. And the grant written on the first sampling must
+    go with the schema entry, or a named call still clears ``before_execute_tools``.
+    """
+    gate = _gate()
+    ctx = _ctx()
+
+    async def run():
+        first = await gate.before_iteration(ctx)
+        ctx.metadata["hook_rollbacks"] = 1
+        second = await gate.before_iteration(ctx)
+        # The model names the tool anyway on the re-sample.
+        ctx.response = _ask(questions=[_q("which entity?")])
+        third = await gate.before_execute_tools(ctx)
+        return first, second, third
+
+    first, second, third = _scenario(run)
+    assert first.modified_tools is None
+    assert _withheld(second, ctx)
+    state = ctx.metadata["ask_user"]
+    assert state["withheld_reason"] == "after_rollback"
+    assert "allowed_at" not in state
+    assert third.short_circuit_result is None
+    assert state["called_when_withheld"] is True
+    assert state["asked"] is False
+
+
+def test_the_rollback_reason_outranks_the_iteration_reason() -> None:
+    """Only the first reason is recorded, and after a rollback the informative one
+    is the rollback, not the iteration number it happens to share."""
+    ctx = _ctx(iteration=2)
+    ctx.metadata["hook_rollbacks"] = 1
+    decision = asyncio.run(_gate().before_iteration(ctx))
+    assert _withheld(decision, ctx)
+    assert ctx.metadata["ask_user"]["withheld_reason"] == "after_rollback"
+
+
+def test_a_plain_first_iteration_carries_no_rollback_count() -> None:
+    """The control: with no rollback recorded the tool stays on offer exactly as
+    before, so the new reason cannot fire on the turn shape it exists to protect."""
+    ctx = _ctx()
+    assert "hook_rollbacks" not in ctx.metadata
+    decision = asyncio.run(_gate().before_iteration(ctx))
+    assert decision.modified_tools is None
+    assert ctx.metadata["ask_user"]["allowed_at"] == 1
+
+
+def test_a_rollback_with_the_iteration_flag_off_leaves_the_tool_to_the_search_rule() -> None:
+    """``firstIterationOnly: false`` drops the boundary a re-sample would slip
+    past, so a rollback alone changes nothing there: the tool stays on offer
+    until a search, and a search withholds it for its own reason."""
+    ctx = _ctx()
+    ctx.metadata["hook_rollbacks"] = 1
+    decision = asyncio.run(_gate(first_iteration_only=False).before_iteration(ctx))
+    assert decision.modified_tools is None
+    assert "withheld_reason" not in ctx.metadata["ask_user"]
+
+    searched = _ctx(
+        messages=[
+            {"role": "user", "content": "q"},
+            {"role": "assistant", "tool_calls": [{"function": {"name": "web_search"}}]},
+            {"role": "tool", "name": "web_search", "content": "results"},
+        ]
+    )
+    searched.metadata["hook_rollbacks"] = 1
+    decision = asyncio.run(_gate(first_iteration_only=False).before_iteration(searched))
+    assert _withheld(decision, searched)
+    assert searched.metadata["ask_user"]["withheld_reason"] == "searched"
+
+
 def test_a_search_this_turn_withholds_it_even_with_the_iteration_flag_off() -> None:
     """This is what makes the clause honest under ``firstIterationOnly: false``:
     it tells the model "after your first search it is gone", and without this
@@ -1094,6 +1167,32 @@ def test_the_withdrawal_after_a_round_trip_is_not_counted_as_withheld() -> None:
     assert state["withdrawn_after_ask"] is True
     assert state["withheld"] == 0
     assert "withheld_reason" not in state
+
+
+def test_a_repeated_question_is_asked_once_rather_than_rejected_whole() -> None:
+    """Same parity reason as the single-option fold: the trunk tool rejects a
+    duplicate question text for the whole call, and the grant this call spends is
+    the turn's only one. The first copy is asked; the second was the same question.
+    """
+    broker = _FakeBroker()
+    tool = _tool_delivery_tool(broker)
+
+    async def run():
+        tool.grant_round_trip()
+        return await tool.execute(questions=[_q("which entity?"), _q("which entity?"), _q("which year?")])
+
+    result = _scenario(run)
+    assert [call[1] for call in broker.calls] == ["which entity?", "which year?"]
+    assert "rejected" not in str(result.model_text)
+
+
+def test_a_repeated_question_does_not_crowd_out_a_distinct_one() -> None:
+    """Dedup runs before the cap, in ``clean_questions`` itself: [a, a, b, c] under a
+    cap of three asks a, b and c. Deduping after the cap asked a and b and lost c."""
+    from research_flow.gates.ask_user import clean_questions
+
+    cleaned = clean_questions([_q("a"), _q("a"), _q("b"), _q("c")], max_questions=3)
+    assert [q["question"] for q in cleaned] == ["a", "b", "c"]
 
 
 def test_a_single_option_question_folds_to_free_form_and_still_reaches_the_broker() -> None:

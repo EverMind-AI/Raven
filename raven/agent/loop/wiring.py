@@ -4,8 +4,10 @@ workdir and sinks.
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
+from raven.acp_client.asker import held_question
 from raven.agent.loop._shared import (
     Any,
     AskUserTool,
@@ -35,6 +37,7 @@ from raven.agent.loop._shared import (
     resolve_vendor_key,
     workdir,
 )
+from raven.agent.tools.ask_user import DEFAULT_TIMEOUT_S
 
 if TYPE_CHECKING:
     from raven.agent.tools.deliverables import DeliverableStore
@@ -826,12 +829,25 @@ class WiringMixin:
         Resolved per call, never at mint: the ask broker is injected by the
         transport after this loop is built, so a mint-time snapshot would
         forever answer None on those hosts. Answers None when no asking
-        transport is bound, exactly as the graph-confirm flow experiences it.
+        transport is bound, exactly as the graph-confirm flow experiences it,
+        and also when the conversation is still busy with another question at
+        the deadline: a plugin gate asks from inside a tool call, and a
+        foreground graph runs several of those at once, so two gates (or a
+        gate and a relayed sub-agent) would otherwise evict each other from
+        the broker's single pending slot. None sends the gate down its
+        no-channel path, which is fail-closed. One deadline covers the wait
+        and the question, as ``execute`` and the confirm gate do.
         """
         tool = self.tools.get("ask_user")
         if not isinstance(tool, AskUserTool):
             return None
-        return await tool.ask_direct(prompt, choices, conversation_id, timeout_s)
+        budget = timeout_s if timeout_s is not None else DEFAULT_TIMEOUT_S
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + budget
+        async with held_question(conversation_id, budget) as held:
+            if not held:
+                return None
+            return await tool.ask_direct(prompt, choices, conversation_id, max(0.0, deadline - loop.time()))
 
     def _rebind_workdir(self, session_key: str, target: "str | Path") -> Path:
         """Repoint one session's working directory, now and from now on
@@ -1077,7 +1093,21 @@ class WiringMixin:
         tool = self.tools.get("ask_user")
         if not isinstance(tool, AskUserTool):
             return True
-        answer = await tool.ask_direct(question, ["Run it", "Not now"], conversation_id)
+        # Under the conversation's question lock, like every other route to the
+        # broker: ``ask_direct`` itself takes none (the relayed sub-agent routes
+        # call it already holding it), and an unserialized question here would
+        # evict a sub-agent's pending one from the slot. A conversation still
+        # busy at the deadline is a "Not now": the graph does not run unseen.
+        # One deadline for the wait and the question together, as ``execute``
+        # does: a lock had late must not buy the question a fresh full budget.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + DEFAULT_TIMEOUT_S
+        async with held_question(conversation_id, DEFAULT_TIMEOUT_S) as held:
+            if not held:
+                return False
+            answer = await tool.ask_direct(
+                question, ["Run it", "Not now"], conversation_id, max(0.0, deadline - loop.time())
+            )
         if answer is None:
             return True
         return answer.strip().lower() in {"run it", "run", "yes", "y", "ok", "go", "sure"}

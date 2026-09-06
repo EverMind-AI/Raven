@@ -2053,16 +2053,46 @@ class SubagentsInstanceSetModeParams(_Strict):
     handle: str
     mode: str | None = Field(None, description="The mode id to switch to. Omit it to report without changing.")
     clear: bool = Field(
-        False, description="Drop the override and go back to the agent's own default. Ignored when mode is given."
+        False,
+        description=(
+            "Drop this instance's override. The session's tier is then what the next dispatch runs at, "
+            "clamped to what the agent offers; the agent's own default runs only where there is no tier "
+            "to inherit. Ignored when mode is given."
+        ),
     )
 
 
 class SubagentsInstanceSetModeResult(_Strict):
-    mode: str | None = Field(None, description="The mode now in force, or null when the agent's default is.")
+    mode: str | None = Field(None, description="This instance's own override, or null when it has none.")
+    inherited: str | None = Field(
+        None,
+        description=(
+            "What a dispatch runs at when there is no override: this session's tier, clamped to what "
+            "the agent offers. Null when nothing is inherited and the agent's own default is what runs."
+        ),
+    )
     available_modes: list[SubagentMode] = Field(
         default_factory=list,
         alias="availableModes",
         description="Everything this agent offers, so one reply is enough to draw the control.",
+    )
+
+
+class SessionSetModeParams(_Strict):
+    session_key: str
+    mode: str | None = Field(None, description="The tier id to switch to. Omit it to report without changing.")
+    clear: bool = Field(
+        False,
+        description="Drop the override and go back to the configured default. Wins over mode when both are given.",
+    )
+
+
+class SessionSetModeResult(_Strict):
+    mode: str | None = Field(None, description="The tier now in force.")
+    available_modes: list[SubagentMode] = Field(
+        default_factory=list,
+        alias="availableModes",
+        description="Every tier this build offers, so one reply is enough to draw the control.",
     )
 
 
@@ -3776,6 +3806,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "session.branch": (SessionBranchParams, SessionBranchResult),
     "session.compress": (SessionCompressParams, SessionCompressResult),
     "session.status": (SessionStatusParams, SessionStatusResult),
+    "session.set_mode": (SessionSetModeParams, SessionSetModeResult),
     # ext.list / cron.* / settings.* / channels.status / fs.* -- the console
     "ext.list": (ExtListParams, ExtListResult),
     "cron.list": (CronListParams, CronListResult),

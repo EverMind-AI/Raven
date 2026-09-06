@@ -11,9 +11,10 @@ What one product directory carries:
   `python -m raven acp --config <rendered>` on the installed raven.
 - `config.json` -- the baseline profile.
 - `modes/*.json` -- optional per-session overlays, surfaced as `acp.modes`
-  for a client's mode picker. A product with no mode picker ships no
-  `modes/` (every product but `research` today): its render carries no `acp`
-  block, so `session/set_mode` stays method-not-found.
+  for a client's mode picker. A product that ships no `modes/` (every product
+  but `research` today) renders no `acp` block, and the raven it execs then
+  falls back to its own three built-in tiers -- so `session/set_mode` answers
+  with those rather than method-not-found.
 - `subagent.json` -- the roster row template `install.py` registers through
   `raven.config.update_subagents` (the same pinned surface the vendored
   installers use).

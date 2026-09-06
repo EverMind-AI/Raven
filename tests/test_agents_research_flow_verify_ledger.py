@@ -101,6 +101,8 @@ async def test_installed_line_separates_never_fired_from_never_installed(tmp_pat
     assert installed[0]["event"] == "installed"
     assert installed[0]["strict_reject_only"] is True
     assert installed[0]["max_revisions"] == 1
+    # The reviewer is named on the row: a stub provider has no default, so null here.
+    assert "model" in installed[0] and installed[0]["model"] is None
 
     # A turn that still has tool calls is not a review; it must not add a line, or every
     # tool-calling turn would enter the ledger as an event.
@@ -129,6 +131,29 @@ async def test_elision_carveout_lands_its_trigger_count(tmp_path):
     # The whole point: the number the carve-out keyed on is now on disk.
     assert row["elided_in_context"] == 1
     assert row["reviewed"] is True
+
+
+@pytest.mark.asyncio
+async def test_every_row_names_the_model_that_reviewed(tmp_path):
+    """A mode overlay can move the reviewer per session, and the appendix and the
+    observers exporter read the model off these rows; a pin lands as written, and
+    a null pin resolves to the provider's default rather than to nothing."""
+    ledger = _open_ledger(tmp_path)
+
+    class _PasserWithDefault(_Passer):
+        def get_default_model(self):
+            return "main/model"
+
+    pinned = DraftReviewerGate(_Rejecter(), model="judge/cheap")
+    await pinned.after_iteration(_ctx())
+    rows = _read(ledger)
+    assert [r["model"] for r in rows if r["op"] == "verify_gate"][-1] == "judge/cheap"
+    assert [r["model"] for r in rows if r["op"] == "verify"][-1] == "judge/cheap"
+
+    inherited = DraftReviewerGate(_PasserWithDefault())
+    await inherited.after_iteration(_ctx())
+    rows = _read(ledger)
+    assert [r["model"] for r in rows if r["op"] == "verify"][-1] == "main/model"
 
 
 @pytest.mark.asyncio

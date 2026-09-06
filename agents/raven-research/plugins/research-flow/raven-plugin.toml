@@ -10,8 +10,12 @@
 # truncationWrapup, reactiveClamp - see config.py's _RETIRED_KEYS), plus the
 # plugin-only keys:
 #
-#   search.apiKey   Serper key for web_search; falls back to $SERPER_API_KEY
-#   fetch.apiKey    Jina reader key for web_fetch; falls back to $JINA_API_KEY
+#   search.provider the search vendor web_search calls; defaults to serper
+#   search.apiKey   that vendor's key; falls back to its own env var
+#   fetch.provider  the reader web_fetch calls; defaults to jina
+#   fetch.apiKey    that vendor's key; falls back to its own env var
+#   fetch.fallbackApiKey  the default reader's key, for when a keyed reader
+#                   selected without one degrades back to it
 #   proxy           optional HTTP(S) proxy URL for both web tools
 #   stateRoot       session-store root; defaults to <workspace>/research_flow
 #
@@ -32,11 +36,12 @@ factory = "research_flow.plugin:make_hook"
 # The three tools replace the kernel built-ins of the same names (the registry
 # overwrites by name; plugin tools register after the defaults). A factory
 # declines by returning None, and each has its own reason to: ask_user unless
-# askUser.enabled and conversation.enabled are both on, web_search when no
-# Serper key resolves, and all three (plus the hook) when the flow cannot be
-# installed at all. A registered tool the contract never asks for, or one whose
-# every call is an error string, is the mismatch the prompt clause exists to
-# prevent; declining leaves the kernel's own built-in serving in its place.
+# askUser.enabled and conversation.enabled are both on, web_search when no key
+# resolves for the SELECTED search vendor, and all three (plus the hook) when
+# the flow cannot be installed at all. A registered tool the contract never
+# asks for, or one whose every call is an error string, is the mismatch the
+# prompt clause exists to prevent; declining leaves the kernel's own built-in
+# serving in its place.
 
 [[plugin.contributes.tools]]
 name = "web_search"
