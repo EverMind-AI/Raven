@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from raven.trajectory import bugreport as breport
+from raven.trajectory import review as treview
 from raven.trajectory import sanitize as tsan
 from raven.trajectory import store as tstore
 from raven.trajectory.redact import KnownSecret, RedactionReport, ResidualFinding
@@ -76,8 +77,26 @@ def _prepared(state, workspace, attrs=None, **prepare_kw):
 
 def _full_flow(state, workspace, description="the agent replied wrongly", attrs=None, **fields):
     prep = _prepared(state, workspace, attrs)
+    # keep-all by default: incidental findings (e.g. a long pytest tmp-dir
+    # segment) must not force every flow test to script the review screen.
+    fields.setdefault("decide", _decide_all())
     prep = breport.freeze_export(prep, description=description, **fields)
     return breport.confirm_and_package(prep, state_dir=state)
+
+
+def _decide_all(suspected_action=treview.ACTION_KEPT):
+    """A scripted decide callback: acknowledge confirmed items, one action for the rest."""
+
+    def _decide(items, _reasons):
+        return [
+            treview.ReviewDecision(
+                item.id,
+                treview.ACTION_ACKNOWLEDGED if item.kind == treview.KIND_CONFIRMED else suspected_action,
+            )
+            for item in items
+        ]
+
+    return _decide
 
 
 # ── path parser / sanitizer ────────────────────────────────────────────
@@ -202,12 +221,13 @@ def _report(**kw):
     return RedactionReport(**defaults)
 
 
-def test_classify_blocked_on_original_private_key_hit():
+def test_classify_private_key_hit_is_a_review_reason():
     classification, reasons = breport.classify_redaction(_report(patterns={"private-key-block": 1}))
-    assert classification == "blocked"
-    assert reasons == ["the original trajectory contains a private key block"]
-    classification, _ = breport.classify_redaction(_report(), _report(patterns={"private-key-block": 2}))
-    assert classification == "blocked"
+    assert classification == "needs_review"
+    assert reasons == ["the original trajectory contained 1 private key block(s), replaced before export"]
+    classification, reasons = breport.classify_redaction(_report(), _report(patterns={"private-key-block": 2}))
+    assert classification == "needs_review"
+    assert reasons == ["the original trajectory contained 2 private key block(s), replaced before export"]
 
 
 def test_classify_needs_review_reasons_merge_both_sides():
@@ -333,6 +353,26 @@ def _damage(payload, spec):
         payload["redaction"]["classification"] = "blocked"
     elif spec == "unreviewed":
         payload["redaction"]["reviewed_by_user"] = False
+    elif spec == "bad-security-notices":
+        payload["redaction"]["security_notices"] = ["ok", 3]
+    elif spec == "decision-bad-action":
+        payload["redaction"]["user_decisions"] = [
+            {"id": "abc123abc123", "category": "high-entropy", "masked_sample": "x", "action": "shipped", "sources": []}
+        ]
+    elif spec == "decision-missing-id":
+        payload["redaction"]["user_decisions"] = [
+            {"category": "high-entropy", "masked_sample": "x", "action": "kept", "sources": []}
+        ]
+    elif spec == "decision-bad-source-count":
+        payload["redaction"]["user_decisions"] = [
+            {
+                "id": "abc123abc123",
+                "category": "high-entropy",
+                "masked_sample": "x",
+                "action": "kept",
+                "sources": [{"source": "the span log", "count": -1}],
+            }
+        ]
     return payload
 
 
@@ -363,6 +403,10 @@ _DAMAGE_SPECS = [
     "traces-unsorted",
     "blocked-classification",
     "unreviewed",
+    "bad-security-notices",
+    "decision-bad-action",
+    "decision-missing-id",
+    "decision-bad-source-count",
 ]
 
 
@@ -457,24 +501,34 @@ def test_problem_token_redacted_but_clean(state, workspace):
 
 def test_problem_entropy_needs_review_with_problem_file(state, workspace):
     prep = _prepared(state, workspace)
-    prep = breport.freeze_export(prep, description=f"weird token {_ENTROPY_TOKEN} appeared")
+    prep = breport.freeze_export(prep, description=f"weird token {_ENTROPY_TOKEN} appeared", decide=_decide_all())
     assert prep.classification == "needs_review"
     findings = prep.package_metadata["redaction"]["residual_findings"]
     assert any(f["file"] == "problem.description" for f in findings)
     prep.cleanup()
 
 
-def test_problem_private_key_blocks_before_export(state, workspace):
+def test_problem_private_key_becomes_a_review_item(state, workspace):
     prep = _prepared(state, workspace)
-    prep = breport.freeze_export(prep, description=f"look: {_PEM}")
-    assert prep.classification == "blocked"
-    assert not prep.export_dir.exists()
+    seen: list = []
+
+    def _decide(items, reasons):
+        seen.extend(items)
+        return _decide_all()(items, reasons)
+
+    prep = breport.freeze_export(prep, description=f"look: {_PEM}", decide=_decide)
+    assert prep.classification == "needs_review"
+    assert prep.export_dir.exists()
+    assert [item.kind for item in seen] == ["confirmed"]
+    assert prep.security_notices == ["the original trajectory contained 1 private key block(s), replaced before export"]
+    assert _PEM not in json.dumps(prep.package_metadata)
     prep.cleanup()
 
 
-def test_trajectory_private_key_blocks_before_input(state, workspace):
+def test_trajectory_private_key_preclassifies_as_review(state, workspace):
     prep = _prepared(state, workspace, attrs={"llm.output": _PEM})
-    assert prep.classification == "blocked"
+    assert prep.classification == "needs_review"
+    assert prep.reasons == ["the original trajectory contained 1 private key block(s), replaced before export"]
     prep.cleanup()
 
 
@@ -493,7 +547,7 @@ def test_description_paths_are_sanitized(state, workspace):
 
 def test_residual_sample_paths_are_sanitized(state, workspace):
     prep = _prepared(state, workspace, attrs={"llm.output": f"token {_ENTROPY_TOKEN} at /tmp/leak/x.json"})
-    prep = breport.freeze_export(prep, description="it broke")
+    prep = breport.freeze_export(prep, description="it broke", decide=_decide_all())
     findings = prep.package_metadata["redaction"]["residual_findings"]
     assert findings, "the injected token must flag"
     assert all("/tmp/leak" not in f["sample"] for f in findings)
@@ -906,17 +960,20 @@ def test_policy_hook_upgrades_clean_to_needs_review(state, workspace, monkeypatc
 def test_policy_hook_reason_coexists_with_other_review_reasons(state, workspace, monkeypatch):
     monkeypatch.setenv("RAVEN_BUGREPORT_REQUIRE_REVIEW", "true")
     prep = _prepared(state, workspace, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
-    prep = breport.freeze_export(prep, description="it broke")
+    prep = breport.freeze_export(prep, description="it broke", decide=_decide_all())
     assert prep.classification == "needs_review"
     assert any(r.startswith("residual scan flagged") for r in prep.reasons)
     assert "organization policy requires manual review" in prep.reasons
     prep.cleanup()
 
 
-def test_policy_hook_never_outranks_blocked(state, workspace, monkeypatch):
+def test_policy_hook_reason_coexists_with_private_key_reason(state, workspace, monkeypatch):
     monkeypatch.setenv("RAVEN_BUGREPORT_REQUIRE_REVIEW", "1")
     prep = _prepared(state, workspace, attrs={"llm.output": _PEM})
-    assert prep.classification == "blocked"
+    prep = breport.freeze_export(prep, description="it broke", decide=_decide_all())
+    assert prep.classification == "needs_review"
+    assert any(r.startswith("the original trajectory contained") for r in prep.reasons)
+    assert "organization policy requires manual review" in prep.reasons
     prep.cleanup()
 
 
@@ -926,6 +983,149 @@ def test_policy_hook_off_keeps_clean(state, workspace, monkeypatch):
     prep = breport.freeze_export(prep, description="it broke")
     assert prep.classification == "clean"
     prep.cleanup()
+
+
+# ── review flow through the pipeline ───────────────────────────────────
+
+
+def test_freeze_without_decide_fails_when_items_exist(state, workspace):
+    prep = _prepared(state, workspace, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
+    with pytest.raises(breport.BugReportError, match="decide"):
+        breport.freeze_export(prep, description="it broke")
+    assert not prep.export_dir.exists()
+    prep.cleanup()
+
+
+def test_review_cancel_leaves_nothing(state, workspace):
+    prep = _prepared(state, workspace, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
+
+    def _cancel(_items, _reasons):
+        raise treview.ReviewCancelledError("cancelled from the review screen")
+
+    with pytest.raises(treview.ReviewCancelledError):
+        breport.freeze_export(prep, description="it broke", decide=_cancel)
+    prep.cleanup()
+    assert not prep.staging_dir.exists()
+    root = breport.bugreports_root(state)
+    assert [p.name for p in root.iterdir() if p.name != breport.STAGING_DIR] == []
+
+
+def test_private_key_flow_packages_with_notices(state, workspace):
+    record_dir, record = _full_flow(state, workspace, attrs={"llm.output": f"before {_PEM} after"})
+    assert record["status"] == "local_ready"
+    assert record["redaction"]["classification"] == "needs_review"
+    notices = ["the original trajectory contained 1 private key block(s), replaced before export"]
+    assert record["redaction"]["security_notices"] == notices
+    decisions = record["redaction"]["user_decisions"]
+    assert [entry["action"] for entry in decisions] == ["acknowledged"]
+    assert decisions[0]["category"] == "private-key-block"
+    with tarfile.open(record["package"]["path"]) as tar:
+        meta = json.loads(tar.extractfile(f"{record['report_id']}/bugreport.json").read().decode("utf-8"))
+    assert meta["redaction"]["security_notices"] == notices
+    assert meta["redaction"]["user_decisions"] == decisions
+    assert meta["redaction"]["risk_accepted"] is True
+    assert record_dir.name == record["report_id"]
+
+
+def test_mixed_decisions_recorded_and_replaced_token_scrubbed(state, workspace, tmp_path):
+    """Adjacent kept/redacted tokens: the kept finding's summary window covers
+    the redacted neighbor, so the package metadata must carry the filtered
+    spelling everywhere (the review-verified reintroduction trap)."""
+    keep = "qW3eR5tY7uI9oP1aS2dF4gH6"
+    drop = "zX8cV6bN4mL2kJ9hG7fD5sQ3"
+
+    def _decide(items, _reasons):
+        return [
+            treview.ReviewDecision(item.id, treview.ACTION_REDACTED if item.token == drop else treview.ACTION_KEPT)
+            for item in items
+        ]
+
+    _record_dir, record = _full_flow(state, workspace, attrs={"llm.output": f"keep {keep} drop {drop}"}, decide=_decide)
+    assert record["status"] == "local_ready"
+    actions = sorted(entry["action"] for entry in record["redaction"]["user_decisions"])
+    assert actions == ["kept", "redacted"]
+    assert drop not in json.dumps(record)
+    rid = record["report_id"]
+    with tarfile.open(record["package"]["path"]) as tar:
+        meta_text = tar.extractfile(f"{rid}/bugreport.json").read().decode("utf-8")
+        inner = tar.extractfile(f"{rid}/trajectory/trace-1.tar.gz").read()
+    assert drop not in meta_text
+    assert "[REDACTED:user-confirmed]" in meta_text
+    inner_tar = tmp_path / "inner.tar.gz"
+    inner_tar.write_bytes(inner)
+    extract_dir = tmp_path / "inner"
+    with tarfile.open(inner_tar) as tar:
+        tar.extractall(extract_dir, filter="data")
+    for path in extract_dir.rglob("*"):
+        if path.is_file():
+            text = path.read_text(encoding="utf-8", errors="replace")
+            assert drop not in text, path
+    spans = (extract_dir / "trace-1" / "spans.jsonl").read_text(encoding="utf-8")
+    assert keep in spans and "[REDACTED:user-confirmed]" in spans
+
+
+def test_all_findings_replaced_still_needs_review(state, workspace):
+    prep = _prepared(state, workspace, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
+    prep = breport.freeze_export(prep, description="it broke", decide=_decide_all(treview.ACTION_REDACTED))
+    assert prep.classification == "needs_review"
+    assert any("replaced at your direction" in reason for reason in prep.reasons)
+    assert prep.package_metadata["redaction"]["risk_accepted"] is True
+    assert prep.package_metadata["redaction"]["residual_findings"] == []
+    prep.cleanup()
+
+
+def test_zero_item_policy_report_skips_decide_but_stays_review(state, workspace, monkeypatch):
+    monkeypatch.setenv("RAVEN_BUGREPORT_REQUIRE_REVIEW", "1")
+    calls: list = []
+
+    def _decide(items, _reasons):
+        calls.append(items)
+        return []
+
+    prep = _prepared(state, workspace)
+    prep = breport.freeze_export(prep, description="it broke", decide=_decide)
+    assert calls == []
+    assert prep.classification == "needs_review"
+    assert prep.package_metadata["redaction"]["risk_accepted"] is True
+    assert prep.package_metadata["redaction"]["user_decisions"] == []
+    prep.cleanup()
+
+
+def test_completeness_probe_runs_on_the_post_decision_tree(state, workspace, monkeypatch):
+    seen: dict = {}
+
+    def _probe(redacted_dir, _report):
+        seen["spans"] = (redacted_dir / "spans.jsonl").read_text(encoding="utf-8")
+        return "complete", []
+
+    monkeypatch.setattr("raven.trajectory.completeness.evaluate_completeness", _probe)
+    prep = _prepared(state, workspace, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
+    prep = breport.freeze_export(prep, description="it broke", decide=_decide_all(treview.ACTION_REDACTED))
+    assert _ENTROPY_TOKEN not in seen["spans"]
+    assert "[REDACTED:user-confirmed]" in seen["spans"]
+    prep.cleanup()
+
+
+def test_completeness_reasons_inherit_user_redactions(state, workspace, monkeypatch):
+    def _probe(_redacted_dir, _report):
+        return "degraded", [f"probe saw {_ENTROPY_TOKEN}"]
+
+    monkeypatch.setattr("raven.trajectory.completeness.evaluate_completeness", _probe)
+    prep = _prepared(state, workspace, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
+    prep = breport.freeze_export(prep, description="it broke", decide=_decide_all(treview.ACTION_REDACTED))
+    assert prep.completeness == ("degraded", ["probe saw [REDACTED:user-confirmed]"])
+    prep.cleanup()
+
+
+def test_new_record_without_review_fields_still_validates(state, workspace):
+    """The review fields are additive: a record stripped back to the old shape
+    (what pre-review writers produced) must still pass validation."""
+    record_dir, record = _full_flow(state, workspace, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
+    payload = json.loads((record_dir / breport.RECORD_FILE).read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 1
+    payload["redaction"].pop("security_notices")
+    payload["redaction"].pop("user_decisions")
+    breport._validate_record(payload, record_dir.name)
 
 
 def test_completeness_evaluation_failure_degrades_to_unknown(state, workspace, monkeypatch):
@@ -967,7 +1167,7 @@ def test_deliverable_probe_missing_llm_input_end_to_end(state, workspace, tmp_pa
         ],
     )
     prep = breport.prepare_trajectory("trace-1", workspace=workspace, state_dir=state)
-    prep = breport.freeze_export(prep, description="it broke")
+    prep = breport.freeze_export(prep, description="it broke", decide=_decide_all())
     record_dir, record = breport.confirm_and_package(prep, state_dir=state)
 
     assert record["completeness"]["status"] == "degraded"
@@ -1027,7 +1227,7 @@ def test_deliverable_probe_missing_tool_input_end_to_end(state, workspace, tmp_p
         ],
     )
     prep = breport.prepare_trajectory("trace-1", workspace=workspace, state_dir=state)
-    prep = breport.freeze_export(prep, description="it broke")
+    prep = breport.freeze_export(prep, description="it broke", decide=_decide_all())
     _record_dir, record = breport.confirm_and_package(prep, state_dir=state)
 
     assert record["completeness"]["status"] == "degraded"

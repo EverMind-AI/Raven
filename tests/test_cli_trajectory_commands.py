@@ -1151,16 +1151,20 @@ def test_report_bug_accept_risk_ships_needs_review(state, _no_machine_secrets):
     assert record["status"] == "local_ready"
 
 
-def test_report_bug_blocked_cannot_be_forced(state, _no_machine_secrets):
+def test_report_bug_private_key_ships_with_accept_risk(state, _no_machine_secrets):
     from raven.trajectory import bugreport as breport
 
     _simple_log(state, attrs={"llm.output": _PEM})
     r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "it broke", "--yes", "--accept-risk"])
 
-    assert r.exit_code == 1
-    assert "private key block" in r.output
-    assert breport.list_reports(state) == []
-    assert _staging_entries(state) == []
+    assert r.exit_code == 0, r.output
+    ((_dir, record),) = breport.list_reports(state)
+    assert record["status"] == "local_ready"
+    assert record["redaction"]["security_notices"] == [
+        "the original trajectory contained 1 private key block(s), replaced before export"
+    ]
+    assert [entry["action"] for entry in record["redaction"]["user_decisions"]] == ["acknowledged"]
+    assert _PEM not in json.dumps(record)
 
 
 def test_report_bug_rejects_bogus_severity(state, _no_machine_secrets):
@@ -1225,26 +1229,30 @@ def test_report_bug_blank_description_fails_before_side_effects(state, _no_machi
     assert tstore_module.pins(state) == {}
 
 
-def test_report_bug_blocked_by_description_has_problem_wording(state, _no_machine_secrets):
+def test_report_bug_private_key_in_description_requires_accept_risk(state, _no_machine_secrets):
     from raven.trajectory import bugreport as breport
 
     _simple_log(state)
     r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", f"look: {_PEM}", "--yes"])
 
     assert r.exit_code == 1
-    assert "Cannot create a bug report with these details." in r.output
-    assert "without pasting the key itself" in r.output
+    assert "--accept-risk" in r.output
+    assert "private key block(s)" in r.output
     assert breport.list_reports(state) == []
     assert _staging_entries(state) == []
 
 
-def test_report_bug_blocked_by_trajectory_has_source_wording(state, _no_machine_secrets):
+def test_report_bug_private_key_in_trajectory_requires_accept_risk(state, _no_machine_secrets):
+    from raven.trajectory import bugreport as breport
+
     _simple_log(state, attrs={"llm.output": _PEM})
     r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes"])
 
     assert r.exit_code == 1
-    assert "Cannot create a bug report from this attempt." in r.output
-    assert "raven trajectory report" in r.output
+    assert "--accept-risk" in r.output
+    assert "private key block(s)" in r.output
+    assert breport.list_reports(state) == []
+    assert _staging_entries(state) == []
 
 
 def test_report_bug_tty_confirmation_shows_canonical_summary(state, _no_machine_secrets, monkeypatch):
@@ -1312,17 +1320,32 @@ def test_report_bug_summary_shows_session_and_trajectory_context(state, _no_mach
     assert "session record" in r.output
 
 
-def test_report_bug_needs_review_shows_sanitized_samples(state, _no_machine_secrets, monkeypatch):
-    """The independent authorization is judged on the bounded sample block."""
+def test_report_bug_summary_shows_semantic_decisions(state, _no_machine_secrets, monkeypatch):
+    """The confirmation summary lists every decision with its semantic source."""
     from raven.cli import trajectory_commands as tcmd
+    from raven.trajectory import bugreport as breport
 
     _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
 
     r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes", "--accept-risk"])
     assert r.exit_code == 0, r.output
     assert "residual scan flagged" in r.output
-    assert "spans.jsonl:" in r.output
+    assert "review decision(s)" in r.output
+    assert "the span log" in r.output
+    assert _ENTROPY_TOKEN not in r.output
 
+    # TTY path: the interactive decider is stubbed to keep-all; declining the
+    # single risk confirmation must leave nothing behind.
+    import raven.cli.trajectory_browse as tbrowse
+    from raven.trajectory import review as treview
+
+    def _keep_all(_questionary, _style):
+        def _decide(items, _reasons):
+            return [treview.ReviewDecision(item.id, treview.ACTION_KEPT) for item in items]
+
+        return _decide
+
+    monkeypatch.setattr(tbrowse, "make_review_decider", _keep_all)
     monkeypatch.setattr(tcmd, "_stdin_is_tty", lambda: True)
     confirms: list[str] = []
 
@@ -1334,4 +1357,7 @@ def test_report_bug_needs_review_shows_sanitized_samples(state, _no_machine_secr
     _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
     r2 = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x"])
     assert r2.exit_code == 1
-    assert "spans.jsonl:" in r2.output
+    assert "the span log" in r2.output
+    assert confirms == ["Ship the package with the risks listed above?"]
+    assert len(breport.list_reports(state)) == 1  # only the first run's report
+    assert _staging_entries(state) == []

@@ -47,14 +47,17 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Mapping
 
 from raven import __version__
 from raven.tracing import config as tracing_config
 from raven.trajectory.bundle import BUNDLE_FORMAT_VERSION, collect_bundle
-from raven.trajectory.redact import KnownSecret, RedactionReport, collect_known_secrets, redact_bundle
+from raven.trajectory.redact import KnownSecret, RedactionReport, _variants, collect_known_secrets, redact_bundle
 from raven.trajectory.sanitize import sanitize_export_tree, sanitize_text, scan_absolute_paths, tree_digest
 from raven.trajectory.store import member_traces
+
+if TYPE_CHECKING:
+    from raven.trajectory.review import ReviewDecision, ReviewItem
 
 _log = logging.getLogger("raven.trajectory.bugreport")
 
@@ -68,7 +71,6 @@ SCHEMA_VERSION = 1
 
 CLASSIFICATION_CLEAN = "clean"
 CLASSIFICATION_NEEDS_REVIEW = "needs_review"
-CLASSIFICATION_BLOCKED = "blocked"
 
 STATUS_DRAFT = "draft"
 STATUS_LOCAL_READY = "local_ready"
@@ -168,18 +170,18 @@ def new_report_id(root: Path) -> str:
 def classify_redaction(*reports: RedactionReport, require_review: bool = False) -> tuple[str, list[str]]:
     """The single classification rule, over the merged signals of ``reports``.
 
-    ``blocked`` keys off the **original-content** private-key hit
-    (``patterns``), not the residual scan — a trajectory that ever held a full
-    private key is not fit to leave the machine even after replacement.
-    ``require_review`` is the organization-policy signal (read by the caller,
-    keeping this function pure): it adds its reason unconditionally — even
-    alongside other review reasons, the reviewer must see the policy applied —
-    but never outranks ``blocked``.
+    The private-key reason keys off the **original-content** pattern counts
+    (``patterns``), not the residual scan — the content is already replaced,
+    but the reporter must acknowledge the hit and the recipient must see it
+    (a review reason, no longer a hard stop). ``require_review`` is the
+    organization-policy signal (read by the caller, keeping this function
+    pure): it adds its reason unconditionally — even alongside other review
+    reasons, the reviewer must see the policy applied.
     """
+    reasons: list[str] = []
     key_hits = sum(r.patterns.get("private-key-block", 0) for r in reports)
     if key_hits:
-        return CLASSIFICATION_BLOCKED, ["the original trajectory contains a private key block"]
-    reasons: list[str] = []
+        reasons.append(f"the original trajectory contained {key_hits} private key block(s), replaced before export")
     finding_count = sum(len(r.findings) for r in reports)
     if finding_count:
         reasons.append(f"residual scan flagged {finding_count} suspicious token(s)")
@@ -416,11 +418,27 @@ def _validate_record(payload: dict[str, Any], dir_name: str) -> None:
     _check(_is_str_list(completeness.get("reasons")), "completeness reasons")
     redaction = payload.get("redaction")
     _check(isinstance(redaction, dict), "redaction")
-    # A blocked or unreviewed record cannot legally land: blocked never
-    # creates a record, and landing itself is the user's confirmation.
+    # An unreviewed record cannot legally land: landing itself is the user's
+    # confirmation (with review items, their adjudication came first).
     _check(redaction.get("classification") in (CLASSIFICATION_CLEAN, CLASSIFICATION_NEEDS_REVIEW), "classification")
     _check(_is_str_list(redaction.get("reasons")), "redaction reasons")
     _check(redaction.get("reviewed_by_user") is True, "reviewed flag")
+    # Absent on records written before the review flow existed; validated
+    # when present so a damaged writer cannot land malformed entries.
+    _check(_is_str_list(redaction.get("security_notices", [])), "security notices")
+    decisions = redaction.get("user_decisions", [])
+    _check(isinstance(decisions, list), "user decisions")
+    for entry in decisions:
+        _check(isinstance(entry, dict), "user decision")
+        _check(isinstance(entry.get("id"), str) and entry["id"], "user decision id")
+        _check(isinstance(entry.get("category"), str) and entry["category"], "user decision category")
+        _check(isinstance(entry.get("masked_sample"), str), "user decision sample")
+        _check(entry.get("action") in ("acknowledged", "kept", "redacted"), "user decision action")
+        sources = entry.get("sources")
+        _check(isinstance(sources, list), "user decision sources")
+        for source in sources:
+            _check(isinstance(source, dict) and isinstance(source.get("source"), str), "user decision source")
+            _check(_is_int(source.get("count")) and source["count"] >= 0, "user decision source count")
     upload = payload.get("upload")
     _check(isinstance(upload, dict), "upload")
     for key in ("state", "issue_url", "receipt"):
@@ -495,6 +513,8 @@ class ExportPreparation:
     problem_report: RedactionReport | None = None
     environment: dict[str, str] = field(default_factory=dict)
     completeness: tuple[str, list[str]] = ("unknown", [])
+    security_notices: list[str] = field(default_factory=list)
+    user_decisions: list[dict[str, Any]] = field(default_factory=list)
     package_metadata: dict[str, Any] | None = None
     source_digest: str = ""
     export_digest: str = ""
@@ -525,8 +545,8 @@ def prepare_trajectory(
     ``expected_traces`` is the member set the user saw when picking the row;
     a snapshot resolving to a different set means the attempt changed under
     them (``StaleAttemptError``). The returned preparation carries the
-    trajectory-only classification — ``blocked`` here means the flow must stop
-    before asking for a description.
+    trajectory-only pre-classification; the authoritative one is computed in
+    :func:`freeze_export` once the problem fields joined the same pipeline.
     """
     resolved_state = (state_dir or tracing_config.state_dir()).resolve()
     root = bugreports_root(resolved_state)
@@ -605,16 +625,21 @@ def freeze_export(
     severity: str = "",
     steps: str = "",
     reporter: str = "",
+    decide: Callable[[list["ReviewItem"], list[str]], list["ReviewDecision"]] | None = None,
 ) -> ExportPreparation:
     """Freeze the complete deliverable under ``snapshot/export/``.
 
     The user fields go through the same redaction as the trajectory (written
     as ``problem.<field>`` files and redacted with the same known secrets, so
-    residual findings carry that name), then path sanitization; the merged
-    classification decides the flow. On anything but ``blocked`` the embedded
-    tarball and the canonical ``bugreport.json`` are produced, asserted clean,
-    and digested — the confirmation screen and every later packaging run use
-    exactly these bytes.
+    residual findings carry that name). When the merged findings yield review
+    items, ``decide`` is called with them (plus the current reasons, for the
+    warning lines) and its decisions are applied to the redacted trees before
+    anything downstream reads them — a caller without a ``decide`` cannot
+    freeze such a report (silent shipping is not a fallback). Then path
+    sanitization, the completeness probe (over the post-decision tree), the
+    embedded tarball, and the canonical ``bugreport.json`` are produced,
+    asserted clean, and digested — the confirmation screen and every later
+    packaging run use exactly these bytes.
     """
     description = description.strip()
     if not description:
@@ -644,6 +669,33 @@ def freeze_export(
         problem_report.config_loaded = prep.config_loaded
         prep.problem_report = problem_report
 
+        # Pre-classification carries the reasons the review screen shows as
+        # warning lines; the authoritative classification is recomputed below
+        # once the completeness reasons have been through the same pipeline.
+        require_review = _policy_review_enabled()
+        classification, reasons = classify_redaction(
+            prep.trajectory_report, problem_report, require_review=require_review
+        )
+        prep.classification = classification
+        prep.reasons = reasons
+
+        from raven.trajectory import review as _review
+
+        items = _review.build_review_items([prep.trajectory_report, problem_report])
+        if items:
+            if decide is None:
+                raise BugReportError("this report carries review items but no decide callback was provided")
+            decisions = decide(list(items), list(reasons))
+            # The interactive callers validate before returning (re-asking on
+            # conflicts); a defect that slips through here is a caller bug.
+            _review.validate_review_decisions(items, decisions)
+            outcome = _review.apply_review_decisions(items, decisions, reports=[prep.trajectory_report, problem_report])
+            prep.secrets = list(prep.secrets) + outcome.user_secrets
+            prep.security_notices = outcome.security_notices
+            prep.user_decisions = outcome.user_decisions
+
+        # Read after the decisions are applied: these strings land in the
+        # package metadata, so they must carry the user-redacted spellings.
         def _redacted_value(name: str, written: bool) -> str:
             source = prep.snapshot_dir / "problem_redacted" / name
             text = source.read_text(encoding="utf-8") if written and source.is_file() else ""
@@ -651,20 +703,8 @@ def freeze_export(
 
         redacted_fields = {name: _redacted_value(f"problem.{name}", bool(value)) for name, value in raw_fields.items()}
         prep.environment = {key: _redacted_value(f"environment.{key}", True) for key in environment}
-
-        # Pre-classification gates the blocked flows before any export work;
-        # the authoritative classification is recomputed below once the
-        # completeness reasons have been through the same pipeline.
-        require_review = _policy_review_enabled()
-        classification, reasons = classify_redaction(
-            prep.trajectory_report, problem_report, require_review=require_review
-        )
-        prep.classification = classification
-        prep.reasons = reasons
         prep.reporter = redacted_fields.pop("reporter")
         prep.problem = redacted_fields
-        if classification == CLASSIFICATION_BLOCKED:
-            return prep
 
         redacted_dir = prep.snapshot_dir / "redacted" / prep.attempt_id
         sanitize_export_tree(redacted_dir, prep.roots)
@@ -677,10 +717,15 @@ def freeze_export(
 
         reports = [prep.trajectory_report, problem_report] + ([meta_report] if meta_report else [])
         classification, reasons = classify_redaction(*reports, require_review=require_review)
+        if items:
+            replaced = sum(1 for entry in prep.user_decisions if entry["action"] == "redacted")
+            if replaced:
+                reasons.append(f"{replaced} suspicious token(s) were replaced at your direction")
+            # Adjudication happened, so risk_accepted must be truthful even
+            # when replacing every finding emptied the residual signals.
+            classification = CLASSIFICATION_NEEDS_REVIEW
         prep.classification = classification
         prep.reasons = reasons
-        if classification == CLASSIFICATION_BLOCKED:
-            return prep
 
         prep.source_digest = tree_digest(prep.snapshot_dir / "bundle" / prep.attempt_id)
 
@@ -766,6 +811,8 @@ def _build_package_metadata(
             "classification": prep.classification,
             "reasons": list(prep.reasons),
             "risk_accepted": prep.classification == CLASSIFICATION_NEEDS_REVIEW,
+            "security_notices": list(prep.security_notices),
+            "user_decisions": [dict(entry) for entry in prep.user_decisions],
             **merged,
         },
         "environment": {
@@ -813,6 +860,15 @@ def _assert_export_ready(prep: ExportPreparation, metadata: dict[str, Any]) -> N
     hits = _metadata_leaks(metadata_text, prep.roots)
     if hits:
         raise ExportLeakError(f"absolute path leaked into the export: {PACKAGE_METADATA_FILE}: {hits[0]}")
+    # The record's redaction/problem/completeness fields come from the same
+    # prep values this metadata serializes, so this one gate covers both
+    # landing surfaces.
+    for secret in prep.secrets:
+        if secret.label != "user-confirmed":
+            continue
+        for variant in _variants(secret.value):
+            if variant and variant in metadata_text:
+                raise ExportLeakError(f"user-redacted content leaked into the export: {PACKAGE_METADATA_FILE}")
 
 
 def _metadata_leaks(text: str, roots: list[str]) -> list[str]:
@@ -858,6 +914,8 @@ def _new_record_payload(prep: ExportPreparation) -> dict[str, Any]:
             "classification": prep.classification,
             "reasons": list(prep.reasons),
             "reviewed_by_user": True,
+            "security_notices": list(prep.security_notices),
+            "user_decisions": [dict(entry) for entry in prep.user_decisions],
         },
         "upload": {"state": "", "issue_url": "", "receipt": ""},
         "links": {"issue": "", "pr": "", "regression_case": ""},
@@ -1060,7 +1118,6 @@ def cleanup_stale_staging(state_dir: Path | None = None, *, max_age_seconds: flo
 __all__ = [
     "BUGREPORTS_DIR",
     "BugReportError",
-    "CLASSIFICATION_BLOCKED",
     "CLASSIFICATION_CLEAN",
     "CLASSIFICATION_NEEDS_REVIEW",
     "ExportLeakError",

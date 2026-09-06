@@ -179,7 +179,7 @@ def _source_label(rel: str, artifact_labels: dict[str, str]) -> str:
     if rel in _PROBLEM_LABELS:
         return _PROBLEM_LABELS[rel]
     if rel.startswith(_ENVIRONMENT_PREFIX):
-        return f"environment summary ({rel[len(_ENVIRONMENT_PREFIX):]})"
+        return f"environment summary ({rel[len(_ENVIRONMENT_PREFIX) :]})"
     return rel
 
 
@@ -256,7 +256,9 @@ def build_review_items(reports: Sequence[RedactionReport]) -> list[ReviewItem]:
     order: list[str] = []
     for index, (report, labels) in enumerate(zip(reports, labels_by_report)):
         for finding in report.findings:
-            occurrences = [{**occ, "label": _source_label(occ["file"], labels), "report": index} for occ in finding.occurrences]
+            occurrences = [
+                {**occ, "label": _source_label(occ["file"], labels), "report": index} for occ in finding.occurrences
+            ]
             item = by_token.get(finding.token)
             if item is None:
                 item = ReviewItem(
@@ -415,9 +417,7 @@ def apply_review_decisions(
                     raise PreparationError(f"user-redacted content survived in the export: {rel}")
             for path in summary_files:
                 if variant in path.read_text(encoding="utf-8"):
-                    raise PreparationError(
-                        f"user-redacted content survived in the export: {path.name}"
-                    )
+                    raise PreparationError(f"user-redacted content survived in the export: {path.name}")
     for token, pattern in kept_patterns.items():
         count = 0
         for path, _rel in files:
@@ -438,9 +438,7 @@ def apply_review_decisions(
         {
             "id": item.id,
             "category": item.category,
-            "sources": [
-                {"source": _filter(source["label"]), "count": source["count"]} for source in item.sources
-            ],
+            "sources": [{"source": _filter(source["label"]), "count": source["count"]} for source in item.sources],
             "masked_sample": _filter(item.masked_sample),
             "action": actions[item.id],
         }
