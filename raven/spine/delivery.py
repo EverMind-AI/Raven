@@ -39,14 +39,14 @@ class Capabilities:
     """
 
     interactive_login: bool = False  # QR / scan login (weixin, whatsapp); read by CLI `channel login`
-    streaming: bool = False  # SupportsStreaming slot; activated in B
+    streaming: bool = False  # SupportsStreaming slot; gates stream-chunk routing in the delivery hub
     file_attachments: bool = False  # Native outbound file upload; consumed by ChannelOutletAdapter
 
 
 @runtime_checkable
 class SupportsStreaming(Protocol):
-    """Opt-in incremental delivery (edit-in-place). Inert until the agent loop
-    is wired to produce stream chunks (scope B)."""
+    """Opt-in incremental delivery (edit-in-place). Chunks reach only an outlet
+    that also declares ``Capabilities.streaming``."""
 
     async def send_stream_chunk(self, chat_id: str, stream_id: str, delta: str, *, done: bool = False) -> None: ...
 

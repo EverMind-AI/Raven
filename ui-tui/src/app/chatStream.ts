@@ -2,7 +2,7 @@
 // Copyright (c) 2026 EverMind.
 // See NOTICES.md.
 //
-// chatStream — typed chat path scaffold (Phase 6, per design.md §D7).
+// chatStream — typed chat path scaffold.
 //
 // Bridges `RpcClient.subscribe<TurnEvent>('turn.subscribe', ...)` notifications
 // onto the existing `turnController` so UI state updates without going through
@@ -13,8 +13,7 @@
 //
 // This file does NOT replace the legacy event handler in
 // `createGatewayEventHandler.ts` — that path stays alive for the 169 existing
-// .tsx consumers per the adapter-retirement plan
-// (`docs/RepoMem/persist/memory/cross-language-rpc-adapter-pattern.md` §三).
+// .tsx consumers per the adapter-retirement plan.
 // Once the Python `turn.*` handlers land and `prompt.submit` is removed, the
 // legacy chat-event branch in createGatewayEventHandler becomes dead code
 // and is deleted alongside the gateway-compat shim.
@@ -456,8 +455,8 @@ const onMessageComplete = (
   appendMessage?: (msg: Msg) => void
 ): void => {
   state.turns.delete(MAIN_VIEW_KEY)
-  // The typed message.complete carries `{turn_id, usage}` per CAP-CHAT-1
-  // wire shape (B1 fix); the assistant content is reconstructed from the
+  // The typed message.complete carries `{turn_id, usage}` on the wire; the
+  // assistant content is reconstructed from the
   // `bufRef` accumulated via token.delta. recordMessageComplete reads bufRef
   // when payload.text is omitted and returns the final message list that
   // the caller must commit into history — without this the streamed tokens

@@ -530,7 +530,7 @@ def test_a_folder_with_no_modes_directory_declares_none(
     mod, searchable, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The degradation path: no catalogue in the rendered config, which leaves
-    the agent's session/set_mode method-not-found."""
+    the agent on the three built-in tiers trunk raven falls back to."""
     monkeypatch.setenv("RESEARCH_API_KEY", "k-llm")
 
     rendered = mod.render_config(_source(tmp_path))
@@ -621,9 +621,11 @@ def test_the_manifest_registers_the_acp_transport() -> None:
 
 def test_the_choice_guidance_travels_with_the_modes_that_offer_it() -> None:
     """One predicate behind the route and the advertisement. The launcher's mode
-    blurbs reach the model through the spawn schema's `mode` property, which is
-    built only from modes the probe actually measured -- so guidance written here
-    cannot outlive the argument it tells the model to pass.
+    blurbs reach a reader through the menu `subagents.instance.set_mode` answers
+    with, and the clamp that fits a session tier onto this agent -- both built
+    only from modes the probe actually measured, so guidance written here cannot
+    outlive the rungs it describes. (The model is no longer among its readers:
+    the spawn tool offers no mode.)
 
     Asserted on the rendered catalogue rather than on the source text: the block
     `mode_catalogue` emits is what lands in `acp.modes`, what the agent then

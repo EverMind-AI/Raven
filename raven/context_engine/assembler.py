@@ -169,7 +169,7 @@ class ContextAssembler(ContextEngine):
                 ctx = replace(ctx, scent_text=scent.text)
                 # Under pull no SkillsSegmentBuilder runs, so the menu is the
                 # only writer of this key: the after-turn backend feedback
-                # (FB-1) keeps receiving the skills the model was offered.
+                # keeps receiving the skills the model was offered.
                 meta |= {"injected_skill_ids": list(scent.skill_ids)}
         user_msg = self._build_user(ctx)
 

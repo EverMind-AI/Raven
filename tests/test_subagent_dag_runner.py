@@ -1,4 +1,4 @@
-"""DAG runner + native run_subagent_dag tool (req4/P3)."""
+"""DAG runner + native run_subagent_dag tool."""
 
 from __future__ import annotations
 
@@ -6721,6 +6721,47 @@ async def test_a_resolve_through_the_control_tool_is_handed_the_run_it_completes
         assert "will run again with your message" not in text, (
             "that is the answer given when the run had nowhere left to deliver its result"
         )
+
+
+async def test_a_stopped_run_tells_the_waiting_call_that_it_was_stopped(tmp_path: Path) -> None:
+    """The one sentence a hard-cancelled run gives the call that was waiting on it.
+
+    `stop()` is how a hard cancel reaches the outbox, and it wakes every parked
+    taker with `Stopped` rather than leaving it hanging. That event has exactly one
+    rendering and it is all the model gets -- no result, no report, no error -- so
+    if it rendered as nothing the blocking call would return nothing and the turn
+    would read as a graph that simply produced no answer.
+
+    Driven through the blocking call itself: `await_run` refuses a run that is
+    already stopped, because it is no longer bound, so a `Stopped` only ever
+    reaches a caller that was parked before the stop.
+    """
+
+    class _Sleeper:
+        kind = "raven-loop"
+
+        async def run(self, task: str, **_kwargs: Any) -> str:
+            await asyncio.sleep(60)
+            return "never"
+
+    async with draining_dag_runs():
+        tool = _foreground_tool(tmp_path, [])
+        tool._resolve_node = lambda node: _Sleeper()  # type: ignore[method-assign]
+        call = asyncio.create_task(tool.execute(task_summary="fg", nodes=_SOLO, background=False))
+        for _ in range(300):
+            await asyncio.sleep(0.01)
+            run_id = next(iter(tool._outboxes), None)
+            if run_id is not None and tool._outboxes[run_id]._takers:
+                break
+        run_id = next(iter(tool._outboxes))
+        assert tool._outboxes[run_id]._takers, "the blocking call never parked, so this is not the state under test"
+
+        tool._outboxes[run_id].stop()
+        out = await asyncio.wait_for(call, timeout=10)
+
+        text = getattr(out, "model_text", out)
+        assert run_id in text, f"the answer has to name the run it is about, got {text!r}"
+        assert "stopped" in text, f"and say what happened to it, got {text!r}"
 
 
 async def test_release_touches_only_the_named_conversation(tmp_path: Path) -> None:

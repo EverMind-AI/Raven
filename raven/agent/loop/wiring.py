@@ -591,7 +591,7 @@ class WiringMixin:
             self.tools.register(DeepResearchOfferTool())
         self.tools.register(MessageTool())
         self.tools.register(SpawnTool(manager=self.subagents))
-        # Sub-agent DAG orchestration (req4). Registered unconditionally now that
+        # Sub-agent DAG orchestration. Registered unconditionally now that
         # the agent table always holds the package's built-in rows: the tool used
         # to be gated on an enabled third-party entry existing, because without one
         # its roster was empty and a node had nothing to name. A graph over

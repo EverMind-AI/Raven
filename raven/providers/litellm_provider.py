@@ -198,7 +198,6 @@ class LiteLLMProvider(LLMProvider):
         if self._gateway and self._gateway.name == "openrouter":
             self.extra_headers = {**_OPENROUTER_ATTRIBUTION, **self.extra_headers}
 
-        # Configure environment variables
         if api_key:
             self._setup_env(api_key, api_base, default_model)
 

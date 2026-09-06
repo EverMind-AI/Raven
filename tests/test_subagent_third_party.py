@@ -1,4 +1,4 @@
-"""Third-party subagent backends + manager wiring + spawn tool (req5, P3b)."""
+"""Third-party subagent backends + manager wiring + spawn tool."""
 
 from __future__ import annotations
 
@@ -3899,56 +3899,6 @@ def _acp_with_modes(tmp_path: Path, monkeypatch, modes) -> SpawnTool:
     return SpawnTool(manager=_mgr(tmp_path, [acp]))
 
 
-def test_the_mode_enum_is_what_the_probe_measured(tmp_path: Path, monkeypatch) -> None:
-    """Measured, never declared on the row: the menu the model picks from has to
-    be the one the agent serves, or it names a mode the agent then refuses."""
-    from raven.acp_client.capabilities import AcpMode
-
-    tool = _acp_with_modes(
-        tmp_path, monkeypatch, [AcpMode("fast", "Fast", "converges early"), AcpMode("deep", "Deep", "searches longer")]
-    )
-    params = tool.parameters
-
-    assert params["properties"]["mode"]["enum"] == ["deep", "fast"]
-    # The descriptions ride along: an enum of bare ids invites a choice made on
-    # the name, which is how a mode gets picked for a difference it does not have.
-    assert "deep - searches longer" in params["properties"]["mode"]["description"]
-    assert "Researcher:" in params["properties"]["mode"]["description"]
-    # Optional: omitting it has to stay the normal call.
-    assert "mode" not in params["required"]
-
-
-def test_no_agent_with_modes_means_no_mode_parameter(tmp_path: Path) -> None:
-    """A property whose enum is empty is one the model can only get wrong."""
-    cli = ThirdPartyCliSubagentConfig(name="claude_code", command="claude -p {prompt}")
-    assert "mode" not in SpawnTool(manager=_mgr(tmp_path, [cli])).parameters["properties"]
-
-
-async def test_a_mode_aimed_at_an_agent_without_it_is_refused_with_the_real_list(tmp_path: Path, monkeypatch) -> None:
-    """The schema's enum is the union over every agent (one property cannot
-    depend on another's value), so the per-agent check is the tool's own."""
-    from raven.acp_client.capabilities import AcpMode
-
-    tool = _acp_with_modes(tmp_path, monkeypatch, [AcpMode("fast", "Fast", "")])
-
-    out = await tool.execute("t", prompt_template="do it", subagent="Researcher", mode="ultra")
-
-    assert out.startswith("Error:")
-    assert "no mode `ultra`" in out and "fast" in out
-
-
-async def test_a_mode_aimed_at_an_agent_with_none_says_so(tmp_path: Path) -> None:
-    cli = ThirdPartyCliSubagentConfig(name="claude_code", command="claude -p {prompt}")
-    tool = SpawnTool(manager=_mgr(tmp_path, [cli]))
-
-    out = await tool.execute("t", prompt_template="do it", subagent="claude_code", mode="deep")
-
-    assert out.startswith("Error:") and "offers no modes" in out
-
-
-# --- direct-chat instance modes -----------------------------------------
-
-
 def _moded_manager(tmp_path: Path, monkeypatch) -> SubagentManager:
     from raven.acp_client.capabilities import AcpMode, CapabilitySnapshot
     from raven.agent.subagent import backends as backends_mod
@@ -4022,15 +3972,6 @@ def test_a_dispatch_that_names_no_mode_inherits_the_instances(tmp_path: Path, mo
     assert mgr.resolve_mode("s", "Researcher", "h2") is None
 
 
-def test_a_dispatch_that_names_a_mode_keeps_it(tmp_path: Path, monkeypatch) -> None:
-    """The more specific statement wins: the caller named a mode for this one
-    dispatch, which says more than a standing setting on the instance."""
-    mgr = _moded_manager(tmp_path, monkeypatch)
-    mgr.set_instance_mode("s", "Researcher", "h1", "deep")
-
-    assert mgr.resolve_mode("s", "Researcher", "h1", "fast") == "fast"
-
-
 def test_a_dispatch_that_names_no_instance_never_inherits(tmp_path: Path, monkeypatch) -> None:
     """A spawn or node that names no instance falls back to a fresh task or node
     id for its handle. Looking an override up against that asks about a
@@ -4039,16 +3980,47 @@ def test_a_dispatch_that_names_no_instance_never_inherits(tmp_path: Path, monkey
     mgr.set_instance_mode("s", "Researcher", "task-42", "deep")
 
     assert mgr.resolve_mode("s", "Researcher", None) is None
-    # What the caller asked for still applies -- the gate is on inheriting, not
-    # on the mode itself.
-    assert mgr.resolve_mode("s", "Researcher", None, "fast") == "fast"
 
 
-def test_resolving_for_an_agent_with_no_override_and_no_request_is_its_default(tmp_path: Path, monkeypatch) -> None:
+def test_resolving_for_an_agent_with_no_override_is_its_default(tmp_path: Path, monkeypatch) -> None:
     mgr = _moded_manager(tmp_path, monkeypatch)
 
     assert mgr.resolve_mode("s", "claude_code", "h1") is None
     assert mgr.resolve_mode(None, None, "h1") is None
+
+
+def test_the_spawn_schema_offers_no_mode_at_all(tmp_path: Path, monkeypatch) -> None:
+    """A sub-agent's effort is the session's to set, not this call's.
+
+    The tier reaches every dispatch through `resolve_mode`, so a per-call `mode`
+    would be a second and higher-priority way to say the same thing -- named by
+    the one party that cannot know what the operator chose.
+    """
+    from raven.acp_client.capabilities import AcpMode
+
+    tool = _acp_with_modes(
+        tmp_path, monkeypatch, [AcpMode("medium", "Medium", "cheaper"), AcpMode("high", "High", "the default")]
+    )
+    params = tool.parameters
+
+    assert "mode" not in params["properties"], "the model must not be offered a per-call mode"
+    assert "mode" not in params.get("required", [])
+    assert "how much effort the agent spends" not in json.dumps(params), "and its wording is gone"
+
+
+def test_the_menu_the_tier_is_clamped_against_is_what_the_probe_measured(tmp_path: Path, monkeypatch) -> None:
+    """Measured, never declared on the row. The model no longer picks from this
+    menu, but two things still read it: the clamp that fits a session tier onto
+    one agent, and the list `subagents.instance.set_mode` answers with."""
+    from raven.acp_client.capabilities import AcpMode
+
+    tool = _acp_with_modes(
+        tmp_path, monkeypatch, [AcpMode("fast", "Fast", "converges early"), AcpMode("deep", "Deep", "searches longer")]
+    )
+
+    offered = tool._manager.agent_modes("Researcher")
+    assert sorted(m.id for m in offered) == ["deep", "fast"]
+    assert {m.id: m.description for m in offered}["deep"] == "searches longer"
 
 
 def test_the_modes_a_manager_reports_are_the_probes(tmp_path: Path, monkeypatch) -> None:

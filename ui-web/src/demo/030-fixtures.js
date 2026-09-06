@@ -280,7 +280,7 @@ const RUNS = {
     key: 'gtm', title: 'GTM agent 市场调研',
     ask: '调研一下市场上做 GTM agent 的产品',
     use: { calls: 4, in: 14226, out: 3180, cost: 0.021, wall: 41000 },
-    /* 网页搜索未配置：搜索失败，降级为直接抓官网 */
+    /* Web search unconfigured: searches fail; fall back to fetching official sites directly */
     ev: [
       { t:'ep' },
       { t:'think', d:900, s:7, x:'用户想了解 GTM（Go-To-Market）agent 赛道。要覆盖四块：代表性公司、产品能力、融资、趋势判断。先并行搜几路关键词，再抓官网补细节，最后交叉核对。' },
@@ -311,7 +311,7 @@ const RUNS = {
 本轮**网页搜索未启用**，以上只基于三家官网的公开信息，融资数字可能滞后。在「能力」里配好网页搜索后，我可以再跑一轮交叉验证。` },
       { t:'end' }
     ],
-    /* 网页搜索已配置：搜得到，覆盖面更宽，结论可交叉验证 */
+    /* Web search configured: searches succeed, coverage is wider, findings can be cross-checked */
     evOk: [
       { t:'ep' },
       { t:'think', d:900, s:7, x:'GTM agent 赛道。先并行搜三路关键词拿到候选名单，再挑代表性的抓官网核对细节，最后交叉验证融资数字。' },

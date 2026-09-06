@@ -1,3 +1,5 @@
+"""The spine delivery contract: Capabilities, the Outlet protocols, and hub dispatch."""
+
 import asyncio
 import dataclasses
 

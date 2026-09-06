@@ -1,3 +1,5 @@
+"""Prompt-token estimation counts tool calls and reasoning fields for consolidation triggers."""
+
 from __future__ import annotations
 
 import asyncio

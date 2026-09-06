@@ -1,20 +1,21 @@
-"""Onboard's sub-agent step: register the agents that ship in this checkout.
+"""Onboard's sub-agent step: set up the agent products that ship with raven.
 
-``subagents/`` holds one folder per vendored agent - its own raven checkout, a
-``config.json`` pinning the LLM it is tuned for, a ``subagent.json`` manifest,
-and an ``install.py``.
+``agents/`` holds one folder per product - a launcher (``run.py``) over the
+installed raven, a ``config.json`` pinning the LLM it is tuned for, and a
+``subagent.json`` manifest.
 
-**Getting on the roster is no longer this step's job.**
+**Getting on the roster is not this step's job.**
 :mod:`raven.agent.subagent.vendored_agents` discovers the tree and materializes a
 row per folder on every table build, so an agent appears without being written
 anywhere and disappears when its folder is deleted. What is left here is the part
-that needs a human: building a folder's venv (minutes of downloads) and choosing
-whether it runs on its own key or inherits the host's. Until the venv is built the
-discovered row is listed and disabled, which is why this step offers to build it
-rather than only mentioning that it is unbuilt.
+that needs a human: choosing whether each product runs on its own key or inherits
+the host's. A product whose readiness verdict says it cannot start (its launcher
+file gone, its engine wheel not installed) has nothing this step can fix - the
+reason is printed and the product skipped, because a key written for an agent
+that cannot list would read as this step having broken something.
 
-The tree is not a checkout-only thing any more either: every wheel carries it,
-and it is installed out to the raven home on first use so the venvs survive an
+The tree is not a checkout-only thing: every wheel carries it, and it is
+installed out to the raven home on first use so a product's ``.env`` survives an
 upgrade. An install genuinely without it finds nothing and the step says so.
 
 The choice offered per folder is not "working or not". An agent with no key of
@@ -42,7 +43,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import time
 from pathlib import Path
 from typing import Any, NamedTuple, Optional
@@ -50,15 +50,12 @@ from typing import Any, NamedTuple, Optional
 import typer
 
 from raven.agent.subagent.vendored_agents import (
-    api_key_var as _env_var,
-)
-from raven.agent.subagent.vendored_agents import (
-    checkout_of as _checkout_of,
-)
-from raven.agent.subagent.vendored_agents import (
+    agents_root,
     host_can_lend_a_key,
-    subagents_root,
-    venv_ready,
+    product_state,
+)
+from raven.agent.subagent.vendored_agents import (
+    api_key_var as _env_var,
 )
 from raven.config.loader import ConfigReadError, get_config_path, read_raw_or_raise
 from raven.config.update_subagents import remove_agent
@@ -66,7 +63,7 @@ from raven.i18n import t
 
 
 class SubagentFolder(NamedTuple):
-    """One installable folder under ``subagents/``."""
+    """One product folder under ``agents/``."""
 
     path: Path
     name: str
@@ -74,7 +71,6 @@ class SubagentFolder(NamedTuple):
     recommended_model: str
     api_base: str
     env_var: str
-    checkout: Optional[Path]
 
     @property
     def on_openrouter(self) -> bool:
@@ -85,18 +81,6 @@ class SubagentFolder(NamedTuple):
         nothing about which gateway answers.
         """
         return "openrouter.ai" in self.api_base
-
-    @property
-    def venv_ready(self) -> bool:
-        """Whether the checkout's venv is built.
-
-        Registering an agent that cannot start puts a name in the roster the
-        dispatching model will pick and then fail on, so this gates the offer.
-        Delegated to the agent layer, which decides the same fact for the rows it
-        discovers -- an installer that called a folder ready while the registry
-        refused to advertise it would be one question with two answers.
-        """
-        return venv_ready(self.checkout)
 
 
 def host_openrouter_key() -> str:
@@ -135,21 +119,29 @@ def host_model() -> str:
 
 
 def discover(root: Path) -> list[SubagentFolder]:
-    """Every folder shipping both a manifest and an installer, name-sorted.
+    """Every folder shipping a manifest, name-sorted.
 
-    Discovery rather than a hard-coded list, so adding a folder is adding a
-    folder.
+    Discovery rather than a hard-coded list, so adding a product is adding a
+    folder. The same marker the agent layer's scan uses -- a wizard that
+    required more would set up fewer agents than the roster lists.
     """
     folders: list[SubagentFolder] = []
     for manifest in sorted(root.glob("*/subagent.json")):
         folder = manifest.parent
-        if not (folder / "install.py").is_file():
-            continue
         try:
             entry = json.loads(manifest.read_text(encoding="utf-8"))
-            config = json.loads((folder / "config.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
+        if not isinstance(entry, dict):
+            # The same guard as the agent layer's scan: a manifest holding a
+            # list parses fine and then breaks every field read below.
+            continue
+        try:
+            config = json.loads((folder / "config.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            # The baseline profile only refines the answer (which model actually
+            # runs); a product without one is still offered on its manifest.
+            config = {}
         recommended = entry.get("recommendedLlm") or {}
         defaults = (config.get("agents") or {}).get("defaults") or {}
         section = ((config.get("providers") or {}).get(defaults.get("provider") or "")) or {}
@@ -162,7 +154,6 @@ def discover(root: Path) -> list[SubagentFolder]:
                 recommended_model=defaults.get("model") or recommended.get("model") or "",
                 api_base=section.get("apiBase") or recommended.get("apiBase") or "",
                 env_var=_env_var(folder.name),
-                checkout=_checkout_of(folder),
             )
         )
     return folders
@@ -306,78 +297,19 @@ def _prune_shadowing_rows(
     return removed
 
 
-def _offer_to_build(folder: SubagentFolder, root: Path, q: Any, warnings: list[str]) -> bool:
-    """Offer to build this folder's venv now. True once it is built.
-
-    Asked rather than done, and asked rather than only mentioned. Only mentioning
-    it -- which is what this used to do -- leaves the agent on the table and out
-    of the roster indefinitely, because the reader has to find a shell, find the
-    tree, and come back; most never do, and the agents read as broken rather
-    than as unbuilt. Doing it silently is the other failure: ``uv sync`` on a raven
-    checkout is a minutes-long download, and a first-run wizard that stalls with
-    no explanation is worse than one that asks.
-
-    Delegated to ``subagents/install.sh`` for the single folder rather than
-    calling ``uv sync`` here: that script knows which optional-dependency extra
-    each folder needs, and a second implementation of that mapping would build a
-    venv missing exactly the extra the agent's job depends on.
-    """
-    from raven.cli._styles import RAVEN_STYLE
-    from raven.cli.onboard_commands import _QMARK, console
-
-    installer = root / "install.sh"
-    if not installer.is_file():
-        console.print(
-            t(
-                "  [yellow]⚠[/yellow] Not built yet, and {installer} is missing - cannot build it here.",
-                installer=installer,
-            )
-        )
-        return False
-
-    if not q.confirm(
-        t("  Not built yet. Build it now? (a few minutes of downloads)"),
-        default=True,
-        qmark=_QMARK,
-        style=RAVEN_STYLE,
-    ).ask():
-        console.print(
-            t("  [dim]Skipped. Run {installer} later, then `raven onboard` again.[/dim]", installer=installer)
-        )
-        return False
-
-    console.print(t("  Building..."))
-    proc = subprocess.run(  # noqa: S603 - argv is built here
-        ["bash", str(installer), folder.path.name],  # noqa: S607 - bash off PATH, as `register` does with the interpreter
-        cwd=root,
-        capture_output=True,
-        text=True,
-    )
-    # Re-read the fact rather than trusting the exit status: the script builds and
-    # scaffolds several things per folder, and "it returned 0" is not the same
-    # claim as "this checkout now has a launcher raven can start".
-    if venv_ready(folder.checkout):
-        console.print(t("  [green]Built.[/green]"))
-        return True
-    detail = (proc.stderr or proc.stdout or "").strip().splitlines()
-    warnings.append(f"{folder.name}: build failed ({detail[-1] if detail else 'install.sh failed'})")
-    console.print(t("  [yellow]⚠[/yellow] Build failed; run {installer} by hand to see why.", installer=installer))
-    return False
-
-
 def configure_subagents(*, non_interactive: bool = False, warnings: Optional[list[str]] = None) -> int:
-    """Set up each discovered folder: build its venv, choose whose LLM it runs on.
+    """Set up each discovered product: choose whose LLM it runs on.
 
-    Returns how many are ready after this run. **Registration is not part of it
-    any more** -- ``vendored_agents`` materializes a row per folder on every table
-    build, so the folder being there is what puts it on the table. This step used
-    to end by running the folder's ``install.py`` to write a config row, and that
-    row is now worse than nothing: it bakes in the folder's absolute path, it
-    outranks the discovered row, and an upgrade that moves the tree turns it into
-    a launcher that no longer exists.
+    Returns how many are set up after this run. **Registration is not part of
+    it** -- ``vendored_agents`` materializes a row per folder on every table
+    build, so the folder being there is what puts it on the table. A written
+    config row would be worse than nothing: it bakes in the folder's absolute
+    path, it outranks the discovered row, and an upgrade that moves the tree
+    turns it into a launcher that no longer exists.
 
-    What is left is the part that needs a person. Both answers are things no
-    default can supply: minutes of downloads, and whose credit the agent spends.
+    What is left is the part that needs a person: whose credit the agent
+    spends. An unready product (launcher gone, engine wheel not installed) is
+    reported and skipped -- neither is something a wizard prompt can fix.
 
     Non-interactive skips the whole step, so an unattended install leaves every
     folder discovered-and-disabled rather than half-configured.
@@ -386,11 +318,11 @@ def configure_subagents(*, non_interactive: bool = False, warnings: Optional[lis
     from raven.cli._styles import RAVEN_STYLE
     from raven.cli.onboard_commands import _QMARK, _require_questionary, console
 
-    root = subagents_root()
+    root = agents_root()
     if root is None:
         console.print(
             t(
-                "  [dim]No sub-agent tree in this installation. A release wheel carries one; "
+                "  [dim]No agent products in this installation. A release wheel carries them; "
                 "reinstall from a release, or run from a source checkout.[/dim]"
             )
         )
@@ -398,11 +330,11 @@ def configure_subagents(*, non_interactive: bool = False, warnings: Optional[lis
 
     folders = discover(root)
     if not folders:
-        console.print(t("  [dim]No sub-agent folders found.[/dim]"))
+        console.print(t("  [dim]No agent product folders found.[/dim]"))
         return 0
 
     if non_interactive:
-        warnings.append(f"sub-agents: skipped (non-interactive; run {root}/install.sh, then raven onboard)")
+        warnings.append("sub-agents: skipped (non-interactive; run `raven onboard` to set up their keys)")
         return 0
 
     # Offering an option the launcher cannot honour is the failure this step
@@ -418,10 +350,16 @@ def configure_subagents(*, non_interactive: bool = False, warnings: Optional[lis
 
     q = _require_questionary()
     _prune_shadowing_rows(folders, root, console, q, warnings)
+    # One verdict per folder, from the same scan the roster reads: a wizard
+    # that judged readiness its own way would offer to set up an agent the
+    # registry then refuses to advertise.
+    unready = product_state(root)
     set_up = 0
     for folder in folders:
         console.print(f"\n[bold]{folder.name}[/bold] [dim]{folder.description[:100]}[/dim]")
-        if not folder.venv_ready and not _offer_to_build(folder, root, q, warnings):
+        verdict = unready.get(folder.name)
+        if verdict is not None and not verdict.ready:
+            console.print(t("  [yellow]Not ready[/yellow]: {a0}", a0=verdict.detail))
             continue
 
         # The recommended model goes first: it is what the folder was tuned for,

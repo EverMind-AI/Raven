@@ -450,3 +450,33 @@ def test_the_persist_stamp_never_crosses_the_turn_base_into_filed_history():
 
     assert "observers" not in prior_assistant, "filed history must not be rewritten in place"
     assert not any("observers" in m for m in messages), "an answerless turn stamps nothing"
+
+
+@pytest.mark.asyncio
+async def test_the_turns_subagent_tier_is_frozen_at_its_start(tmp_path):
+    """A tier switched between two iterations lands on the next turn.
+
+    The sibling of the iteration cap above: both are read from the policy the
+    turn snapshotted, so a `session/set_mode` arriving while the turn runs cannot
+    make two sub-agent dispatches in one turn run at different efforts.
+    """
+    from raven.agent.subagent.mode_tiers import turn_tier_in_force
+
+    seen: list[str | None] = []
+    held: dict = {}
+
+    class SwitchMidTurn(AgentHook):
+        async def before_iteration(self, ctx):
+            seen.append(turn_tier_in_force())
+            held["loop"].set_session_policy("cli:c", mode="max")
+            return HookDecision()
+
+    provider = _ScriptedProvider([_tool_call("list_dir", {"path": "."}), _text("done")])
+    loop = _loop(tmp_path, provider, [SwitchMidTurn()])
+    held["loop"] = loop
+    loop.set_session_policy("cli:c", mode="medium")
+
+    await loop._process_message(_req())
+
+    assert seen and set(seen) == {"medium"}, f"the turn kept the tier it started on, saw {seen}"
+    assert loop.session_policy("cli:c").mode == "max", "the switch did land, for the next turn"

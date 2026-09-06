@@ -740,7 +740,7 @@ async def test_run_slash_emits_text_not_streamed(tmp_path):
 
 async def test_run_short_circuit_emits_media_before_text(tmp_path):
     # MediaOut category: a hook short-circuit returns media + content. MediaOut is
-    # independent of the stream and precedes Text (G-MEDIA-2(a) order).
+    # independent of the stream and precedes Text.
     async def _decision(req: TurnRequest):
         return _Reply(
             channel=req.source.channel,
@@ -855,7 +855,7 @@ async def test_run_message_tool_media_is_not_dropped(tmp_path):
     assert outcome.explicit_reply is True
 
 
-# ── stream=False (REPL assembly, canon Q2-D): reply is one Text, no ChatDelta ──
+# ── stream=False (REPL assembly): reply is one Text, no ChatDelta ──
 
 
 async def test_run_stream_false_main_reply_is_one_text(tmp_path):
