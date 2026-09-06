@@ -2142,6 +2142,40 @@ def test_bug_report_review_lists_every_item(state, workspace, monkeypatch, capsy
     assert len(record["redaction"]["user_decisions"]) == 6
 
 
+def test_bug_report_review_suspected_item_has_no_default(state, workspace, monkeypatch, capsys, _no_machine_secrets):
+    """A bare Enter lands on the placeholder and records nothing; the item is
+    re-asked until a real action is chosen."""
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1", session_key="cli:a", attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})],
+    )
+
+    answers = ["it broke", False, ("pick", "(select a decision)"), ("pick", "Keep"), True, _CANCEL]
+    fake = _bug_flow(monkeypatch, workspace, answers)
+
+    out = capsys.readouterr().out
+    assert "This item has no default" in out
+    assert sum(1 for _k, msg, _t in fake.prompts if msg == "Decision:") == 2
+    decision_prompts = [titles for _k, msg, titles in fake.prompts if msg == "Decision:"]
+    assert decision_prompts[0][0] == "(select a decision)"
+    _record_dir, record = _single_report(state)
+    assert [entry["action"] for entry in record["redaction"]["user_decisions"]] == ["kept"]
+
+
+def test_bug_report_private_key_default_stays_acknowledge(state, workspace, monkeypatch, capsys, _no_machine_secrets):
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1", session_key="cli:a", attrs={"llm.output": _PEM})],
+    )
+
+    fake = _bug_flow(monkeypatch, workspace, ["it broke", False, ("pick", "Acknowledge"), True, _CANCEL])
+
+    decision_prompts = [titles for _k, msg, titles in fake.prompts if msg == "Decision:"]
+    assert decision_prompts[0][0] == "Acknowledge and continue"
+    _record_dir, record = _single_report(state)
+    assert [entry["action"] for entry in record["redaction"]["user_decisions"]] == ["acknowledged"]
+
+
 def test_bug_report_review_mixed_decisions(state, workspace, monkeypatch, capsys, _no_machine_secrets):
     keep = "qW3eR5tY7uI9oP1aS2dF4gH6"
     drop = "zX8cV6bN4mL2kJ9hG7fD5sQ3"

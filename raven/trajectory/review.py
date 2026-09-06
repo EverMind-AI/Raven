@@ -329,14 +329,14 @@ def _token_pattern(token: str) -> re.Pattern[str]:
     return re.compile("|".join(re.escape(v) for v in variants))
 
 
-def _body_files(reports: Sequence[RedactionReport]) -> list[tuple[Path, str]]:
-    files: list[tuple[Path, str]] = []
+def _body_files(reports: Sequence[RedactionReport]) -> list[tuple[Path, Path, str]]:
+    files: list[tuple[Path, Path, str]] = []
     for report in reports:
         root = report.redacted_dir
         for path in sorted(p for p in root.rglob("*") if p.is_file()):
             rel = str(path.relative_to(root))
             if rel != REDACTION_METADATA_FILE:
-                files.append((path, rel))
+                files.append((root, path, rel))
     return files
 
 
@@ -356,8 +356,10 @@ def apply_review_decisions(
 
     Order is load-bearing: the kept-token baseline is counted before any
     change (finding counts use a different scan scope and would misfire);
-    body text is replaced before the summaries are rewritten (a summary built
-    from unfiltered findings would reintroduce replaced plaintext); and every
+    body text is replaced, then export paths carrying a redacted value are
+    renamed with the same replacement (member names ship in the tar exactly
+    like content), and only then are the summaries rewritten (a summary built
+    from unfiltered findings would reintroduce replaced plaintext); every
     string headed for serialization is filtered through the user-confirmed
     replacements. Verification failures raise ``PreparationError`` — a
     decision record that does not match the delivered bytes must never ship.
@@ -372,7 +374,7 @@ def apply_review_decisions(
     files = _body_files(reports)
     kept_patterns = {token: _token_pattern(token) for token in kept_tokens}
     baseline: dict[str, int] = {token: 0 for token in kept_tokens}
-    for path, _rel in files:
+    for _root, path, _rel in files:
         text = path.read_text(encoding="utf-8")
         for token, pattern in kept_patterns.items():
             baseline[token] += sum(1 for _ in pattern.finditer(text))
@@ -381,8 +383,8 @@ def apply_review_decisions(
         for report in reports:
             counts: dict[str, int] = {}
             root = report.redacted_dir
-            for path, _rel in files:
-                if root not in path.parents:
+            for file_root, path, _rel in files:
+                if file_root != root:
                     continue
                 text = path.read_text(encoding="utf-8")
                 replaced = _apply_exact(text, user_secrets, counts)
@@ -396,6 +398,28 @@ def apply_review_decisions(
     def _filter(text: str) -> str:
         return _apply_exact(text, user_secrets, {}) if user_secrets else text
 
+    if user_secrets:
+        # Export paths can carry a redacted value too (artifact files are
+        # named after payload-derived basenames, and tar member names come
+        # from the tree). Rename them with the exact replacement the content
+        # got, so the already-rewritten references keep resolving and no
+        # member name ships the original.
+        renamed: list[tuple[Path, Path, str]] = []
+        planned: set[Path] = set()
+        for root, path, rel in files:
+            new_rel = _filter(rel)
+            if new_rel == rel:
+                renamed.append((root, path, rel))
+                continue
+            target = root / new_rel
+            if target in planned or target.exists():
+                raise PreparationError(f"renaming a redacted export path collides with another file: {rel}")
+            planned.add(target)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            path.rename(target)
+            renamed.append((root, target, new_rel))
+        files = renamed
+
     redacted_set = set(redacted_tokens)
     for report in reports:
         pruned: list[ResidualFinding] = []
@@ -403,8 +427,10 @@ def apply_review_decisions(
             if finding.token in redacted_set:
                 continue
             finding.sample = _filter(finding.sample)
+            finding.file = _filter(finding.file)
             pruned.append(finding)
         report.findings = pruned
+        report.skipped_binaries = [_filter(entry) for entry in report.skipped_binaries]
         _write_metadata(report)
 
     summary_files = [report.redacted_dir / REDACTION_METADATA_FILE for report in reports]
@@ -412,7 +438,9 @@ def apply_review_decisions(
         for variant in _variants(token):
             if not variant:
                 continue
-            for path, rel in files:
+            for _root, path, rel in files:
+                if variant in rel:
+                    raise PreparationError(f"user-redacted content survived in an export path: {rel}")
                 if variant in path.read_text(encoding="utf-8"):
                     raise PreparationError(f"user-redacted content survived in the export: {rel}")
             for path in summary_files:
@@ -420,7 +448,7 @@ def apply_review_decisions(
                     raise PreparationError(f"user-redacted content survived in the export: {path.name}")
     for token, pattern in kept_patterns.items():
         count = 0
-        for path, _rel in files:
+        for _root, path, _rel in files:
             count += sum(1 for _ in pattern.finditer(path.read_text(encoding="utf-8")))
         if count != baseline[token]:
             raise PreparationError(
