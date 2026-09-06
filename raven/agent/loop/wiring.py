@@ -1283,9 +1283,9 @@ class WiringMixin:
         """Stop one in-flight run, whichever instance owns it."""
         return any(tool.request_cancel(run_id) for tool in self.dag_tools())
 
-    def resolve_dag_node(self, run_id: str, node_id: str, decision: str, message: str | None) -> bool:
+    def resolve_dag_node(self, run_id: str, node_id: str, decision: str, message: str | None, plan: Any = None) -> bool:
         """Answer one suspended node, whichever instance owns its run."""
-        return any(tool.resolve_node(run_id, node_id, decision, message) for tool in self.dag_tools())
+        return any(tool.resolve_node(run_id, node_id, decision, message, plan) for tool in self.dag_tools())
 
     def dag_control_reachable(self) -> bool:
         """Whether the schema-hidden dag control tools have a call path.

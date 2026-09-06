@@ -6806,3 +6806,334 @@ async def test_release_turn_survives_a_raising_outbox_and_still_releases_the_res
         await tool.release_turn("web:fg", flush=True)
 
         assert second_outbox.released.is_set(), "the second outbox still releases after the first one raises"
+
+
+def _replan_plan(run_id: str = "run-new", from_node: str = "a", reason: str = "the plan was wrong"):
+    from raven.agent.subagent.dag_adjudication import ReplanPlan
+
+    return ReplanPlan(
+        run_id=run_id,
+        from_node=from_node,
+        reason=reason,
+        nodes=(),
+        backends={},
+        auto_instances=frozenset(),
+        notices=(),
+    )
+
+
+async def _run_replanned_dag(
+    tmp_path,
+    *,
+    extra_nodes: list[dict],
+    slow: set[str] = frozenset(),
+    crash: set[str] = frozenset(),
+    resolve_with=None,
+):
+    """`a` fails its verdict; `extra_nodes` run beside it, independent of `a`.
+
+    Independent on purpose: a node that depends on `a` is still `pending` when `a`
+    suspends, so a chain cannot express "in flight" at all.
+    """
+    from raven.agent.subagent.dag_adjudication import REPLAN, AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    started = asyncio.Event()
+    crashed_first = asyncio.Event()
+
+    class _Backend:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def run(self, prompt: str, **_kw: Any) -> str:
+            self.calls.append(prompt)
+            if any(nid in prompt for nid in crash):
+                crashed_first.set()
+                raise RuntimeError("boom failed on its own merit")
+            if any(nid in prompt for nid in slow):
+                started.set()
+                await asyncio.sleep(30)
+            return "did it"
+
+    backend = _Backend()
+
+    async def _judge(*, node, store, output, error, crashed):
+        return Verdict(accomplished=node.id != "a", what_is_missing="the wrong tool was used")
+
+    async def _announce(run_id, node_id, text, origin, *, awaiting_decision):
+        if slow:
+            await started.wait()
+        if crash:
+            # The crashing node's backend sets this and raises with no await in
+            # between, so `_run_node`'s except-handler has already recorded it as
+            # failed by the time this wait returns -- a real happens-before, the
+            # same way `started`/`slow` above pin the in-flight case, not
+            # scheduling-order luck.
+            await crashed_first.wait()
+        desk.resolve(node_id, REPLAN, "the plan was wrong", plan=resolve_with or _replan_plan(from_node=node_id))
+
+    spec = parse_dag_spec(
+        {
+            "task_summary": "replan me",
+            "nodes": [
+                {"id": "a", "subagent": "x", "node_summary": "first", "prompt_template": "do a"},
+                *extra_nodes,
+            ],
+        }
+    )
+    return await run_dag(
+        spec,
+        resolve=lambda node: backend,
+        backend=LocalFileBackend(),
+        workdir=str(tmp_path),
+        run_root=str(tmp_path / "runs"),
+        desk=desk,
+        judge_node=_judge,
+        announce_exception=_announce,
+        origin=_TEST_ORIGIN,
+        adjudication_timeout_s=5,
+    )
+
+
+async def test_a_replan_cancels_a_node_in_flight_rather_than_draining_it(tmp_path) -> None:
+    """Cancel, not drain: chosen over waiting in the design. A slow node is cut off."""
+    result = await _run_replanned_dag(
+        tmp_path,
+        extra_nodes=[{"id": "slowpoke", "subagent": "x", "node_summary": "slow", "prompt_template": "do slowpoke"}],
+        slow={"slowpoke"},
+    )
+
+    statuses = {entry["node"]: entry["status"] for entry in result.files}
+    assert statuses["a"] == "failed", "the adjudicated node is given up on, not cancelled"
+    assert statuses["slowpoke"] == "cancelled", "the in-flight node was cut off, not drained"
+    assert result.replanned_into == "run-new"
+
+
+async def test_the_wind_down_reason_names_the_new_run(tmp_path) -> None:
+    result = await _run_replanned_dag(tmp_path, extra_nodes=[])
+
+    error = next(e for e in result.files if e["node"] == "a")["error"] or ""
+    assert "run-new" in error
+    assert "the plan was wrong" in error
+
+
+async def test_a_pending_node_is_skipped_not_failed(tmp_path) -> None:
+    result = await _run_replanned_dag(
+        tmp_path,
+        extra_nodes=[
+            {
+                "id": "never_ran",
+                "subagent": "x",
+                "node_summary": "downstream",
+                "prompt_template": "do never_ran",
+                "depends_on": ["a"],
+            }
+        ],
+    )
+
+    statuses = {entry["node"]: entry["status"] for entry in result.files}
+    assert statuses["never_ran"] == "skipped"
+
+
+async def test_a_completed_node_survives_a_replan_with_its_output(tmp_path) -> None:
+    result = await _run_replanned_dag(
+        tmp_path,
+        extra_nodes=[{"id": "done", "subagent": "x", "node_summary": "fine", "prompt_template": "do done"}],
+    )
+
+    entry = next(e for e in result.files if e["node"] == "done")
+    assert entry["status"] == "completed"
+    assert entry["output_file"], "its output must stay referenceable by the new run"
+    assert not entry["error"], "a completed node is untouched by the wind-down"
+
+
+async def test_a_replan_does_not_overwrite_a_pre_existing_failure_or_its_cascade(tmp_path) -> None:
+    """`_apply_replan` must leave a node terminal on its own merit alone.
+
+    `boom` crashes on its own and is judged accomplished regardless, so
+    `_apply_verdict` never touches its failure. `blocked` is cascaded to
+    `skipped` off `boom` at the top of the next loop iteration -- one round
+    before the replan is even discovered there, since `_cascade_failures` runs
+    first every iteration. `a` is the node that actually suspends and triggers
+    the replan. None of `boom` or `blocked`'s outcome is the replan's doing,
+    and overwriting either would erase the real reason it ended.
+    """
+    result = await _run_replanned_dag(
+        tmp_path,
+        extra_nodes=[
+            {"id": "boom", "subagent": "x", "node_summary": "crashes", "prompt_template": "do boom"},
+            {
+                "id": "blocked",
+                "subagent": "x",
+                "node_summary": "cascaded off boom",
+                "prompt_template": "do blocked",
+                "depends_on": ["boom"],
+            },
+        ],
+        crash={"boom"},
+    )
+
+    files_by_node = {entry["node"]: entry for entry in result.files}
+    assert files_by_node["boom"]["status"] == "failed"
+    assert files_by_node["boom"]["error"] == "boom failed on its own merit"
+    assert files_by_node["blocked"]["status"] == "skipped"
+    assert not files_by_node["blocked"]["error"], "a cascaded skip has no reason of its own to overwrite"
+    assert files_by_node["a"]["status"] == "failed"
+    assert result.replanned_into == "run-new"
+
+
+async def test_a_run_that_was_not_replanned_reports_no_successor(tmp_path) -> None:
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+
+    async def _judge(*, node, store, output, error, crashed):
+        return Verdict(accomplished=True)
+
+    async def _announce(*_a, **_kw):
+        return None
+
+    result = await _run_two_node_dag(tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce)
+
+    assert result.replanned_into is None
+
+
+async def test_a_replan_answer_that_lands_while_the_runner_is_parked_leaves_the_node_open() -> None:
+    """The REPLAN branch inside `_await_adjudications` itself, not the round-interrupt shortcut.
+
+    Every `_run_replanned_dag`-based test resolves the desk synchronously inside
+    `announce_exception`, which runs from within the same round that opened the
+    node -- so `desk.replanned` is already set by the time that round's loop next
+    checks it, and this function's own per-node REPLAN handling never runs at all.
+    A production resolve arrives from a separate turn's tool call, an arbitrary
+    wall-clock time later; a background task racing the wait is the only way to
+    reproduce that ordering rather than the shortcut.
+    """
+    from raven.agent.subagent.dag_adjudication import REPLAN, AdjudicationDesk
+    from raven.agent.subagent.dag_runner import _apply_replan, _await_adjudications
+
+    desk = AdjudicationDesk()
+    desk.open("n0")
+    status = {"n0": "exception"}
+    errors: dict[str, str] = {}
+
+    async def _decide() -> None:
+        await asyncio.sleep(0.05)
+        desk.resolve("n0", REPLAN, "the plan was wrong", plan=_replan_plan(run_id="run-new", from_node="n0"))
+
+    driver = asyncio.create_task(_decide())
+    try:
+        await _await_adjudications(desk, status, errors, {}, timeout_s=5, cancel=None)
+    finally:
+        await driver
+
+    # Left at "exception", not "failed": `_apply_replan` is the run's single writer of
+    # a replanned node's terminal status and reason. Marking it "failed" here, with no
+    # mention of the successor, would also make `_apply_replan`'s own terminal-node
+    # guard skip this node on the next loop pass, since it only converts
+    # "running"/"exception"/"pending" and this node would already look resolved.
+    assert status["n0"] == "exception"
+    assert errors == {}
+
+    await _apply_replan(
+        _replan_plan(run_id="run-new", from_node="n0"),
+        status=status,
+        errors=errors,
+        published_terminal=set(),
+        node_started_at={},
+        node_ended_at={},
+        by_id={"n0": _node_spec("n0")},
+        session_key=None,
+        run_id="run-old",
+        progress_publisher=None,
+    )
+
+    assert status["n0"] == "failed"
+    assert "run-new" in errors["n0"]
+    assert "the plan was wrong" in errors["n0"]
+
+
+async def test_a_replan_ends_the_wait_for_the_siblings_it_never_answered() -> None:
+    """Two nodes suspend together; replanning one must not leave the round waiting
+    on the other.
+
+    The deadlock this guards is mutual and unbounded on a bound foreground run,
+    where `released` is unset and the wait therefore carries no deadline at all:
+    `resolve_dag_node` is itself parked in `await_finalized`, which waits on this
+    run's task with no timeout of its own, so the one lane that could answer `n1`
+    is the lane blocked on the run that is waiting for `n1`.
+
+    `asyncio.timeout` rather than a bare await, so a regression here fails as this
+    assertion instead of hanging the suite -- there is no deadline in the code
+    under test to end it.
+    """
+    from raven.agent.subagent.dag_adjudication import REPLAN, AdjudicationDesk
+    from raven.agent.subagent.dag_runner import _await_adjudications
+
+    desk = AdjudicationDesk()
+    desk.open("n0")
+    desk.open("n1")
+    status = {"n0": "exception", "n1": "exception"}
+    errors: dict[str, str] = {}
+    released = asyncio.Event()
+
+    async def _decide() -> None:
+        await asyncio.sleep(0.05)
+        desk.resolve("n0", REPLAN, "the plan was wrong", plan=_replan_plan(run_id="run-new", from_node="n0"))
+
+    driver = asyncio.create_task(_decide())
+    try:
+        async with asyncio.timeout(5):
+            await _await_adjudications(desk, status, errors, {}, timeout_s=600, cancel=None, released=released)
+    finally:
+        await driver
+
+    # Both left for `_apply_replan`: `n1` was never asked, so calling it a timeout
+    # would blame the agent for a silence its own replan is what ended.
+    assert status == {"n0": "exception", "n1": "exception"}
+    assert errors == {}
+
+
+def _node_spec(node_id: str) -> DagNodeSpec:
+    return DagNodeSpec(id=node_id, subagent="x", node_summary="a step", prompt_template="do it")
+
+
+def test_the_report_offers_all_three_decisions() -> None:
+    from raven.agent.subagent.dag_runner import _exception_report
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    report = _exception_report(
+        run_id="r1",
+        node=_node_spec("a"),
+        verdict=Verdict(accomplished=False, what_is_missing="the wrong tool was used"),
+        attempt=1,
+        remaining=2,
+        blocked=["b"],
+        timeout_s=600.0,
+    )
+
+    assert '"decision": "continue"' in report
+    assert '"decision": "abandon"' in report
+    assert '"decision": "replan"' in report
+    assert '"nodes"' in report, "a replan is useless without the argument that carries the graph"
+
+
+def test_a_report_with_no_continuations_left_does_not_offer_replan_yet() -> None:
+    """The exhausted path is unchanged by this plan. See the open question below."""
+    from raven.agent.subagent.dag_runner import _exception_report
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    report = _exception_report(
+        run_id="r1",
+        node=_node_spec("a"),
+        verdict=Verdict(accomplished=False, what_is_missing="x"),
+        attempt=3,
+        remaining=0,
+        blocked=[],
+        timeout_s=600.0,
+    )
+
+    assert '"decision": "replan"' not in report
+    assert "the continuation limit is reached" in report
