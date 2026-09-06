@@ -41,6 +41,7 @@ from raven.agent.tools.media_gen import (
     ImageGenerateTool,
     SpeechGenerateTool,
     VideoGenerateTool,
+    VoiceCloneTool,
 )
 from raven.agent.tools.message import MessageTool
 from raven.agent.tools.registry import ToolRegistry
@@ -861,14 +862,16 @@ class AgentLoop:
         # web_fetch is unconditional by contrast: it works without a key, and the
         # Jina one only upgrades the extraction.
         self.tools.register(WebFetchTool(api_key=self.jina_api_key, proxy=self.web_proxy))
-        # Media tools (image/speech/video) are opt-in: a tool is registered only
-        # when the user configured it (a model or apiKey under tools.media.<tool>),
-        # which Config.effective_media_config() surfaces as a resolved key/model.
-        # An OpenRouter key set for chat alone never enables them.
+        # Media tools (image/speech/voice_clone/video) are opt-in: a tool is
+        # registered only when the user configured it (a model or apiKey under
+        # tools.media.<tool>), which Config.effective_media_config() surfaces as
+        # a resolved key/model. An OpenRouter key set for chat alone never
+        # enables them.
         media = self.media_config
         media_tools = (
             (ImageGenerateTool, media.image),
             (SpeechGenerateTool, media.speech),
+            (VoiceCloneTool, media.voice_clone),
             (VideoGenerateTool, media.video),
         )
         for cls, tool_cfg in media_tools:

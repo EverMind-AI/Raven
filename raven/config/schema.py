@@ -784,6 +784,7 @@ class MediaGenConfig(Base):
 
     image: MediaToolConfig = Field(default_factory=MediaToolConfig)
     speech: MediaToolConfig = Field(default_factory=MediaToolConfig)
+    voice_clone: MediaToolConfig = Field(default_factory=MediaToolConfig)
     video: MediaToolConfig = Field(default_factory=MediaToolConfig)
     proxy: str | None = None  # HTTP/SOCKS proxy for media API calls
     output_subdir: str = "generated"  # where generated files are written under workspace
@@ -886,10 +887,11 @@ class Config(BaseSettings):
     def effective_media_config(self) -> MediaGenConfig:
         """Media config resolved for registration and auth.
 
-        A media tool (image/speech/video) counts as configured only when the
-        user set its ``model`` or ``apiKey`` under ``tools.media.<tool>``. For
-        each configured tool we default a missing key to
-        ``providers.openrouter.apiKey`` so the chat key can be reused without
+        A media tool (image/speech/voice_clone/video) counts as configured only
+        when the user set its ``model`` or ``apiKey`` under
+        ``tools.media.<tool>``. For each configured tool we default a missing
+        key to ``providers.openrouter.apiKey`` (``providers.minimax.apiKey`` for
+        ``voice_clone``) so the chat key can be reused without
         re-declaring it. Tools the user did not configure are left untouched
         (no key, no model) — ``AgentLoop`` registers a media tool only when it
         has a key or model, so an OpenRouter key set for chat alone never
@@ -903,6 +905,16 @@ class Config(BaseSettings):
             configured = bool(tool.api_key or tool.model)
             if configured and or_key and not tool.api_key:
                 tool.api_key = or_key
+
+        voice_clone = media.voice_clone
+        # Same rule as the tools above and as AgentLoop registration: an
+        # ``apiBase`` alone does not switch the tool on, it only redirects a
+        # tool that a key or model already configured (e.g. to the cn_zh host).
+        voice_clone_configured = bool(voice_clone.api_key or voice_clone.model)
+        if voice_clone_configured and not voice_clone.api_key:
+            provider = self.providers.get("minimax")
+            if provider and provider.api_key:
+                voice_clone.api_key = provider.api_key
         return media
 
     def _match_provider(self, model: str | None = None) -> tuple["ProviderConfig | None", str | None]:
