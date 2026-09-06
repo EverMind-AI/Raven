@@ -123,10 +123,11 @@ def row_problems(row: dict[str, Any]) -> list[Problem]:
     if not rid:
         out.append(Problem("a machine here has no id", blocking=True))
     elif raw_id != rid:
-        # Every consumer normalises differently: `get` compares the row's raw
-        # id and `shown` hands the raw one on, while whoever asks for a machine
-        # by name has usually stripped it. A padded id therefore reads as usable
-        # and is then unselectable. Refused at the row instead of taught to
+        # Consumers normalise differently: `shown` hands the raw id on, while
+        # whoever asks for a machine by name has usually stripped it, and
+        # `usable` collects its duplicate set on stripped ids, so two spellings
+        # of one id are seen as one. A padded id would otherwise read as usable
+        # and then be unselectable. Refused at the row instead of taught to
         # every reader.
         out.append(Problem(f"{label}: id has leading or trailing whitespace", blocking=True))
     elif not _ID.match(rid):
@@ -170,9 +171,10 @@ def usable(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """The machines that can actually be run on. What a caller refuses over.
 
     A duplicated id takes every row that carries it out, not just the later
-    one: the id is what a campaign stores and what :func:`get` looks up, so two
-    rows behind one id make the reference ambiguous -- which row answers
-    depends on file order, and "the first one" is an accident, not an answer.
+    one: the id is what a campaign stores and what anything asking for a
+    machine by name looks up, so two rows behind one id make the reference
+    ambiguous -- which row answers depends on file order, and "the first one"
+    is an accident, not an answer.
     Judged here rather than only in :func:`problems` because this is the list
     the readers and the doctor's exit code key on; a blocking
     diagnostic that leaves the registry usable is a warning nobody refuses
