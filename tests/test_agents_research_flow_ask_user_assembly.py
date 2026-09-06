@@ -310,21 +310,13 @@ def test_the_four_on_state_shas_are_pinned() -> None:
     [port] The same four values the fork stamped. The port is a text move, so a
     sha that moved would mean the text moved with it - which is the one thing the
     port may not do.
-
-    Re-stamped 2026-09-04 to the fork's current values. The fork's 2026-09-03
-    revendor added one sentence to both report templates - the `web_fetch #...`
-    fence tag is data, not a citation - and moved these four; the twin kept the
-    pre-move text while both product configs went on claiming one label, which is
-    the drift this pin exists to catch and did not. It caught it late rather than
-    never because nothing compares the two files: the pin is a constant here and a
-    constant there, so a fork edit reddens nothing until someone re-derives it.
     """
     # mode x outline. ``when_needed`` keeps the bytes it had before the mode knob
     # existed, which is what makes it the byte-identical way back from the default.
-    assert _sha(_seg(ask_user=True, ask_user_outline=True, ask_user_mode="when_needed")) == "316a491fa459f783"
-    assert _sha(_seg(ask_user=True, ask_user_outline=False, ask_user_mode="when_needed")) == "b73b3e5e14ae5d40"
-    assert _sha(_seg(ask_user=True, ask_user_outline=True, ask_user_mode="first_turn")) == "693fdafe6b8d6c8b"
-    assert _sha(_seg(ask_user=True, ask_user_outline=False, ask_user_mode="first_turn")) == "afb17ee272b826c2"
+    assert _sha(_seg(ask_user=True, ask_user_outline=True, ask_user_mode="when_needed")) == "f5ffda547fb5cff5"
+    assert _sha(_seg(ask_user=True, ask_user_outline=False, ask_user_mode="when_needed")) == "1e45c78cb003dfa7"
+    assert _sha(_seg(ask_user=True, ask_user_outline=True, ask_user_mode="first_turn")) == "2434cb68b0262b88"
+    assert _sha(_seg(ask_user=True, ask_user_outline=False, ask_user_mode="first_turn")) == "49e85c6acad4460b"
 
 
 def test_the_outline_ask_is_the_only_difference_between_the_two_on_states() -> None:

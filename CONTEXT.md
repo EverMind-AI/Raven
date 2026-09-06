@@ -105,44 +105,12 @@ _Avoid_: "callback" or "middleware" — neither captures the phase-specific, cha
 
 **Session Mode** (`acp/modes.py`; declared under `acp.modes` in config):
 A named per-session operating profile a client switches over ACP `session/set_mode`; every
-session response carries the `SessionModeState`. A mode's own two knobs are the iteration
-cap the loop enforces and an `overlay` the loop hands the hook chain as
+session response carries the `SessionModeState`. Two things move with a mode: the iteration
+cap the loop enforces, and an `overlay` the loop hands the hook chain as
 `ctx.metadata["mode_overlay"]` without interpreting -- a product's own hooks read their own
-knobs from it. The shipped built-in catalogue (see **Session Tier**) leaves both knobs at
-their defaults on all three of its modes; a deployment that declares its own catalogue is
-what actually moves them. Session state, not transcript state; a switch lands on the
-session's next turn.
+knobs from it. Session state, not transcript state; a switch lands on the session's next turn.
 _Avoid_: re-spelling a mode as a `session/set_config_option` entry -- modes are first-class in
 the stable schema.
-
-**Session Tier** (`medium`/`high`/`max`; `TIER_LADDER` in `config/schema.py`):
-What the shipped built-in Session Mode catalogue moves in place of an iteration cap or an
-overlay: a session's current mode id (`session_policy(key).mode`, falling through to the
-catalogue's default) is offered to every sub-agent that session dispatches, as the effort
-level to run it at. `clamp_tier` (`agent/subagent/mode_tiers.py`) is the clamp that lands
-it on one sub-agent: the nearest rung at or below on that agent's own probed menu, or
-`None` -- leave the agent on its own default -- in three cases. A tier outside the ladder
-(another vocabulary, "nearest" undefined); a menu sharing no rung with it at all; and a menu
-carrying a rung the ladder cannot rank at the point where raising the effort is the only
-move left, since the cheapest rung the ladder can *see* may not be the cheapest the agent
-has. An agent that converges on the ladder plus an id of its own still clamps on the real
-overlap, and an exact hit is honoured in any vocabulary that spells the rung the same way.
-Exactly one thing outranks it, and a person sets it: a standing override on a named instance
-(`subagents.instance.set_mode`). There is no per-dispatch mode -- the model composing a
-`spawn` cannot know what the operator chose, so `resolve_mode` takes no such argument and
-the spawn schema offers none.
-The three built-in descriptions are `raven.i18n` message ids resolved in
-`build_mode_catalogue`, not where they are declared: a pydantic `default_factory` runs
-before an entrance calls `set_language`, so declaring them translated would bake in
-English. A catalogue a deployment declared is passed through untouched --
-`AcpConfig.uses_builtin_modes` is the line between the rows raven owns and the rows it
-merely carries.
-_Avoid_: assuming a deployment's own Session Mode catalogue carries a tier too --
-`clamp_tier` only ever recognizes `TIER_LADDER`'s three names, so a renamed catalogue is
-exactly what it declines to guess at.
-_Avoid_: putting the scope of the control on the rungs. Each row says only what
-distinguishes it; that raven's own effort is unchanged is stated once by whichever surface
-draws the control.
 
 **Subagent** (`agent/subagent/`):
 A background agent task spawned by `SubagentManager`. Runs with its own tool set; its result
@@ -1961,11 +1929,8 @@ events: its nodes' exception reports and its final result, waiting for the tool 
 that is awaiting the run. One per foreground run, in memory beside the run's
 adjudication desk. The desk carries decisions from the main agent to the run; the
 outbox carries reports from the run to the main agent. While the run is bound the
-outbox hands or buffers a question and drops a notification -- the blocking call is
-still there and the run's summary is what it will be handed, so announcing the same
-news again would put an unanswerable question beside it -- and never announces; once
-released it re-sends what is unanswered and announces later events as turns, both
-kinds.
+outbox hands or buffers and never announces; once released it re-sends the buffer and
+announces later events as turns.
 _Avoid_: "mailbox" -- the lane's inject mailbox is a different object with a different
 reader.
 

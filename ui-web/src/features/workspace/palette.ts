@@ -108,24 +108,12 @@ function write_(all: Kept): void {
   }
 }
 
-/* What the reader SAID about this screen, or null when they have said nothing.
- *
- * Three answers rather than two, and the third is the point. A boolean forced a
- * default to be chosen here, where the only thing knowable is what was stored --
- * and the default it chose, open, was right for a conversation the reader comes
- * back to and wrong for one that is one second old. Both are "a conversation
- * with no stored answer" from in here; what tells them apart is whether the
- * desk has anything in it, which only the desk knows. So this stops guessing
- * and the caller supplies the fallback.
- *
- * The draft screen keeps its own two-valued answer: it has no id to file under,
- * and `draft` already distinguishes "said nothing" as null. */
-export function stated(key: string | null): boolean | null {
-  if (!key) return draft
+export function read(key: string | null): boolean {
+  if (!key) return draft ?? false
   const heard = said.get(key)
   if (heard !== undefined) return heard
   const row = read_()[key]
-  return row ? row.open === true : null
+  return row ? row.open === true : true
 }
 
 export function write(key: string | null, open: boolean): void {
@@ -139,19 +127,13 @@ export function write(key: string | null, open: boolean): void {
   write_(all)
 }
 
-/* A draft that becomes a conversation takes the draft screen's answer with it.
+/* A draft that becomes a conversation takes its own answer with it.
  *
  * The first message turns the draft into a session in place -- same screen,
- * same composer, an id where there was none -- and without this the desk would
- * open in their face the moment they hit send, because the new conversation has
- * no answer of its own and a conversation's default is open. Only when it has
- * none, and only once.
- *
- * Only a STATED answer. A reader who never touched the desk on the new-task
- * screen has stated nothing, and writing an implicit answer for them here would
- * file it as a preference -- the conversation would then stay however it looked
- * one second in, for the rest of its life and across reloads. What to do when
- * nobody has stated anything is not this module's question; see `stated`.
+ * same composer, an id where there was none -- and without this the desk the
+ * reader had just put away would open in their face the moment they hit send,
+ * because the new conversation has no answer of its own and a conversation's
+ * default is open. Only when it has none, and only once.
  *
  * Called from the page that performs that transition (deskStore.claimDraft),
  * never inferred from the pointer: "the draft became this session" and "the

@@ -39,22 +39,7 @@ function wire(): void {
   sessionReset()
   setCurrent('s1')
   document.body.innerHTML = '<div id="split" data-open="false"></div>'
-  deliveries.restore([])
   desk._resetForTests()
-}
-
-/* One thing on the desk, so this is a conversation where it earns its place.
-   The open default waits for that now: a palette over nothing written,
-   delivered or delegated is the three empty lists `palette.ts` says a draft
-   must not show, and a conversation one second old is that same screen. Tests
-   about the palette's MEMORY need the precondition its subject assumes. */
-function delivered(): void {
-  deliveries.record(deliveries.SESSION, 1,
-    { raven_delivery: { files: [{ path: '/w/a.md', name: 'a.md' }] } })
-  /* And settle the desk on it, the way the page does when a conversation comes
-     on screen. `initialState` deliberately does not weigh the tabs -- it runs
-     at module load, before there is anything to weigh. */
-  desk.sync()
 }
 
 const split = (): HTMLElement => document.getElementById('split') as HTMLElement
@@ -412,113 +397,9 @@ describe('what a reload finds on the desk', () => {
   })
 
   describe('the palette a conversation is opened with', () => {
-    /* The rule this whole thing turns on, and the two halves have to be pinned
-       together or either one alone passes with the other broken. */
-    it('waits for the desk to have something before it opens', () => {
-      setCurrent('s-empty')
-      desk.sync()
-      expect(desk.getState().paletteOpen).toBe(false)
-
-      delivered()
-
-      expect(desk.getState().paletteOpen).toBe(true)
-    })
-
-    it('comes up when the desk stops being empty, and only upward', () => {
-      /* `sync` cannot answer this: it runs on a session switch, and the desk is
-         empty then -- torn down on the way out, refilled by the replay after. A
-         conversation the reader returns to reaches the open answer through the
-         news, or not at all. */
-      setCurrent('s-empty')
-      desk.sync()
-      expect(desk.getState().paletteOpen).toBe(false)
-
-      deliveries.record(deliveries.SESSION, 1,
-        { raven_delivery: { files: [{ path: '/w/late.md', name: 'late.md' }] } })
-      desk.notifyDesk()
-
-      expect(desk.getState().paletteOpen).toBe(true)
-
-      /* One direction: the desk emptying is not a reason to take it away from a
-         reader who is looking at it. */
-      deliveries.restore([])
-      desk.notifyDesk()
-
-      expect(desk.getState().paletteOpen).toBe(true)
-    })
-
-    it('does not pull the desk back over a window when news arrives', () => {
-      /* The desk stands down for a window, and the reader's own answer is open.
-         Weighing that answer here would take the window they just opened and put
-         the desk over it -- so the fallback's path asks the contents, not the
-         answer. */
-      delivered()
-      expect(desk.getState().paletteOpen).toBe(true)
-      desk.openDeskFile('/workspace/a.ts')
-      expect(desk.getState().paletteOpen).toBe(false)
-
-      deliveries.record(deliveries.SESSION, 3,
-        { raven_delivery: { files: [{ path: '/w/x.md', name: 'x.md' }] } })
-      desk.notifyDesk()
-
-      expect(desk.getState().paletteOpen).toBe(false)
-    })
-
-    it('comes up for a delegated row too, which arrives on its own timer', async () => {
-      /* The three tabs are three sources and only two of them send news. File
-         changes and deliveries reach `notifyDesk` through the workspace; agent
-         rows are polled by the desk itself (`DeskApp`, every few seconds) and
-         land in the subagents store, which re-renders the palette without ever
-         telling this one. A background playbook that spawns an instance and
-         writes nothing is a conversation whose only desk content arrives that
-         way. */
-      setCurrent('s-empty')
-      desk.sync()
-      expect(desk.getState().paletteOpen).toBe(false)
-
-      agentRows = [{ sessionKey: 's-empty', agent: 'Raven', handle: 'h1', kind: 'cli' }]
-      await agents.refreshInstances(true)
-
-      expect(agents.instances()).toHaveLength(1)
-      expect(desk.getState().paletteOpen).toBe(true)
-    })
-
-    it('leaves a stated answer alone when news arrives', () => {
-      delivered()
-      desk.toggleDesk()
-      expect(desk.getState().paletteOpen).toBe(false)
-
-      deliveries.record(deliveries.SESSION, 2,
-        { raven_delivery: { files: [{ path: '/w/more.md', name: 'more.md' }] } })
-      desk.notifyDesk()
-
-      expect(desk.getState().paletteOpen).toBe(false)
-    })
-
-    /* And it is a fallback, never an override: a reader who shut the desk on a
-       conversation that has plenty in it keeps it shut. */
-    it('lets the reader outrank what is on the desk, either way', () => {
-      delivered()
-      expect(desk.getState().paletteOpen).toBe(true)
-      desk.toggleDesk()
-      desk.sync()
-      expect(desk.getState().paletteOpen).toBe(false)
-
-      /* Emptied by hand: the registry is not keyed by conversation here, where
-         the page clears it on a switch. */
-      deliveries.restore([])
-      setCurrent('s-empty')
-      desk.sync()
-      expect(desk.getState().paletteOpen).toBe(false)
-      desk.toggleDesk()
-      desk.sync()
-      expect(desk.getState().paletteOpen).toBe(true)
-    })
-
     /* The default is the screen, not the last thing the reader did somewhere
        else: a conversation shows the desk, the new-task screen does not. */
     it('opens on a conversation and stays shut on a draft', () => {
-      delivered()
       setCurrent(null)
       desk.sync()
       expect(desk.getState().paletteOpen).toBe(false)
@@ -529,7 +410,6 @@ describe('what a reload finds on the desk', () => {
     })
 
     it('comes back collapsed to the conversation it was collapsed in', () => {
-      delivered()
       desk.sync()
       desk.toggleDesk()
       expect(desk.getState().paletteOpen).toBe(false)
@@ -552,7 +432,6 @@ describe('what a reload finds on the desk', () => {
        palette there and opening it again a moment later is a flicker with no
        information in it. */
     it('leaves the palette where it is until the pointer moves', () => {
-      delivered()
       desk.sync()
       expect(desk.getState().paletteOpen).toBe(true)
 
@@ -606,7 +485,6 @@ describe('what a reload finds on the desk', () => {
        they left it -- which is only sayable because the transition is
        announced rather than guessed from the pointer. */
     it("does not carry the draft's answer into a conversation it opens instead", () => {
-      delivered()
       setCurrent(null)
       desk.sync()
       /* Twice: the draft starts shut, so putting it away deliberately is an
@@ -649,7 +527,6 @@ describe('what a reload finds on the desk', () => {
        answer that outlived the draft that gave it still only reaches a
        conversation started FROM that screen. */
     it('spends an older draft answer on the conversation a later draft becomes', () => {
-      delivered()
       setCurrent(null)
       desk.sync()
       desk.toggleDesk()
@@ -676,7 +553,6 @@ describe('what a reload finds on the desk', () => {
        them apart from a draft's first message either. Neither is the reader's
        draft becoming a session, and neither says so. */
     it('does not carry it into a new conversation an action opened', () => {
-      delivered()
       setCurrent(null)
       desk.sync()
       desk.toggleDesk()
@@ -788,14 +664,7 @@ describe('what is new', () => {
 
   /* A conversation's desk defaults to open (palette.ts); every case here is
      about what is counted while it is not. */
-  /* Down because the READER put it down, which is what these blocks are about.
-     Stated rather than poked into the state: an unstated down with content on
-     the desk is the case the open fallback exists to correct, so news arriving
-     would lift it back up mid-test. */
-  beforeEach(() => {
-    desk.update({ paletteOpen: true })
-    desk.toggleDesk()
-  })
+  beforeEach(() => { desk.update({ paletteOpen: false }) })
 
   afterEach(() => {
     deliveries.restore([])
@@ -912,14 +781,7 @@ describe('choosing a tab on the way up', () => {
   const open = (): string => { desk.toggleDesk(); return desk.getState().tab }
   const shut = (): void => { desk.toggleDesk() }
 
-  /* Down because the READER put it down, which is what these blocks are about.
-     Stated rather than poked into the state: an unstated down with content on
-     the desk is the case the open fallback exists to correct, so news arriving
-     would lift it back up mid-test. */
-  beforeEach(() => {
-    desk.update({ paletteOpen: true })
-    desk.toggleDesk()
-  })
+  beforeEach(() => { desk.update({ paletteOpen: false }) })
 
   afterEach(() => {
     deliveries.restore([])
@@ -1007,7 +869,6 @@ describe('the desk standing down for a window', () => {
   /* The default for a conversation is open (palette.ts), which is the state
      these start from unless they say otherwise. */
   it('puts the desk down when a window opens and hands it back with the last one', () => {
-    delivered()
     expect(desk.getState().paletteOpen).toBe(true)
 
     desk.openDeskFile('/workspace/a.ts')
@@ -1028,7 +889,6 @@ describe('the desk standing down for a window', () => {
      `addPane` wrote the palette note, every reader would come back to a
      collapsed desk in every conversation they had ever opened a file in. */
   it('does not record standing down as the reader collapsing the desk', () => {
-    delivered()
     desk.openDeskFile('/workspace/a.ts')
     expect(desk.getState().paletteOpen).toBe(false)
 
@@ -1046,7 +906,6 @@ describe('the desk standing down for a window', () => {
      desk does not reappear over a conversation they put it away in just
      because they opened and closed a file. */
   it('hands back a collapsed desk still collapsed', () => {
-    delivered()
     desk.toggleDesk()
     expect(desk.getState().paletteOpen).toBe(false)
 
@@ -1114,7 +973,6 @@ describe('when storage refuses the reader answer', () => {
   }
 
   it('hands back a collapse it could not store', () => {
-    delivered()
     refusing(() => {
       desk.toggleDesk()
       expect(desk.getState().paletteOpen).toBe(false)
@@ -1131,7 +989,6 @@ describe('when storage refuses the reader answer', () => {
   /* The same answer a session switch reads, so the fix has to hold there too
      -- this half was already broken before the desk started standing down. */
   it('keeps it across a session switch away and back', () => {
-    delivered()
     refusing(() => {
       desk.toggleDesk()
 

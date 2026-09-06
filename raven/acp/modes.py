@@ -19,16 +19,21 @@ Two decisions visible from the wire:
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any
 
 from loguru import logger
 
-from raven.config.mode_catalogue import ModeProfile, build_mode_catalogue
 
-# The profile shape itself is inner: the loop needs the default tier and the RPC
-# surface serves the catalogue, and neither may import this surface to reach it.
-# The ACP spelling stays as the name this package and its tests already use.
-AcpModeProfile = ModeProfile
+@dataclass(frozen=True)
+class AcpModeProfile:
+    """One resolved mode: what the loop enforces and what the hooks read."""
+
+    id: str
+    name: str
+    description: str
+    max_iterations: int | None
+    overlay: dict[str, Any] = field(default_factory=dict)
 
 
 class SessionModes:
@@ -49,9 +54,6 @@ class SessionModes:
 
     def ids(self) -> tuple[str, ...]:
         return tuple(self._profiles)
-
-    def profiles(self) -> tuple[AcpModeProfile, ...]:
-        return tuple(self._profiles.values())
 
     def current(self, session_id: str) -> str:
         """Answers for a session it has never seen: the default."""
@@ -82,9 +84,20 @@ class SessionModes:
 
 
 def build_session_modes(config: Any) -> SessionModes:
-    """The declared catalogue, wrapped in the per-session choice tracker."""
-    catalogue = build_mode_catalogue(config)
-    return SessionModes(catalogue.profiles, default=catalogue.default)
+    """Resolve ``config.acp.modes`` once at startup."""
+    acp = getattr(config, "acp", None)
+    declared = getattr(acp, "modes", None) or {}
+    profiles = {
+        mode_id: AcpModeProfile(
+            id=mode_id,
+            name=declaration.name,
+            description=declaration.description,
+            max_iterations=declaration.max_tool_iterations,
+            overlay=dict(declaration.overlay),
+        )
+        for mode_id, declaration in declared.items()
+    }
+    return SessionModes(profiles, default=getattr(acp, "default_mode", None))
 
 
 __all__ = ["AcpModeProfile", "SessionModes", "build_session_modes"]
