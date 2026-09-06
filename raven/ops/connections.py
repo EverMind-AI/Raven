@@ -91,9 +91,9 @@ class Problem:
     """One thing wrong with a row. ``blocking`` means the machine cannot be used.
 
     The two levels are not decoration. A blocking problem is the ground a caller
-    refuses on -- the host's graph check asks exactly this before dispatching an
-    on-call node -- while the rest is worth telling the owner and worth nobody's
-    refusal. Folding them together would mean a registry that predates a field
+    refuses on -- an agent reading this list to pick a machine has nowhere to put
+    the work without one -- while the rest is worth telling the owner and worth
+    nobody's refusal. Folding them together would mean a registry that predates a field
     reads as broken, and a check that condemns working machines gets turned off.
     """
 
@@ -118,11 +118,11 @@ def row_problems(row: dict[str, Any]) -> list[Problem]:
     if not rid:
         out.append(Problem("a machine here has no id", blocking=True))
     elif raw_id != rid:
-        # Every consumer normalises differently: `named` strips the id a DAG
-        # node asks for, `Verdict.machine` compares the row's raw one, and
-        # `shown` hands the raw one on. A padded id therefore reads as usable
+        # Every consumer normalises differently: `get` compares the row's raw
+        # id and `shown` hands the raw one on, while whoever asks for a machine
+        # by name has usually stripped it. A padded id therefore reads as usable
         # and is then unselectable. Refused at the row instead of taught to
-        # four readers.
+        # every reader.
         out.append(Problem(f"{label}: id has leading or trailing whitespace", blocking=True))
     elif not _ID.match(rid):
         out.append(Problem(f"{label}: id must be lowercase letters, digits, '-' or '_'", blocking=True))
@@ -165,11 +165,11 @@ def usable(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """The machines that can actually be run on. What a caller refuses over.
 
     A duplicated id takes every row that carries it out, not just the later
-    one: the id is what a campaign stores and what ``Verdict.machine`` looks
-    up, so two rows behind one id make the reference ambiguous -- which row
-    answers depends on file order, and "the first one" is an accident, not an
-    answer. Judged here rather than only in :func:`problems` because this is
-    the list the dispatch gates and the doctor's exit code key on; a blocking
+    one: the id is what a campaign stores and what :func:`get` looks up, so two
+    rows behind one id make the reference ambiguous -- which row answers
+    depends on file order, and "the first one" is an accident, not an answer.
+    Judged here rather than only in :func:`problems` because this is the list
+    the readers and the doctor's exit code key on; a blocking
     diagnostic that leaves the registry usable is a warning nobody refuses
     over (measured: two valid rows sharing an id kept usable=2 and doctor
     exit 0 while problems() reported a blocking defect).

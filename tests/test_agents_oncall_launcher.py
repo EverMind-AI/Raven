@@ -164,7 +164,7 @@ def test_the_roster_row_identity_is_the_vendored_twins():
     for field in (
         "name",
         "kind",
-        "runsOnMachines",
+        "ownsWatchedWork",
         "description",
         "owns",
         "command",
