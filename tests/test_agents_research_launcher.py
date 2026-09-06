@@ -104,10 +104,10 @@ def test_the_render_boards_the_flow_plugin_and_the_modes(grounded, tmp_path):
     assert flow["stateRoot"] == str(tmp_path / "state" / "research_flow")
     assert data["context"]["dropSegments"] == ["identity", "memory", "active_skills", "skills"]
     modes = data["acp"]["modes"]
-    assert list(modes) == ["fast", "deep", "ultra"] and data["acp"]["defaultMode"] == "fast"
-    assert modes["fast"]["overlay"]["drFlow"] == {}
-    assert modes["deep"]["overlay"]["drFlow"]["maxIterations"] == 30
-    assert modes["ultra"]["overlay"]["drFlow"]["sufficiency"] == {"enabled": False}
+    assert list(modes) == ["medium", "high", "max"] and data["acp"]["defaultMode"] == "medium"
+    assert modes["medium"]["overlay"]["drFlow"] == {}
+    assert modes["high"]["overlay"]["drFlow"]["maxIterations"] == 30
+    assert modes["max"]["overlay"]["drFlow"]["sufficiency"] == {"enabled": False}
 
 
 def test_every_mode_ships_one_iteration_budget_the_loop_and_the_flow_share(grounded):
@@ -117,7 +117,7 @@ def test_every_mode_ships_one_iteration_budget_the_loop_and_the_flow_share(groun
     (``self.max_iterations = self._dr_flow.max_iterations``), so a single number
     bounded the ReAct loop AND was the denominator the budget note and the spin
     breaker divided by. Here the loop reads ``acp.modes[*].maxToolIterations``
-    and the flow reads its own knob, and nothing joined them: fast told the
+    and the flow reads its own knob, and nothing joined them: medium told the
     model ``iteration N/20`` on a turn the loop would let run to 40, and the
     breaker's ``minBudgetRatio: 0.5`` tripped at iteration 10 of 40 instead of
     20 of 20. The launcher resolves the twin's rule once and ships it to the
@@ -128,17 +128,17 @@ def test_every_mode_ships_one_iteration_budget_the_loop_and_the_flow_share(groun
     data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
     modes = data["acp"]["modes"]
     assert {name: entry["maxToolIterations"] for name, entry in modes.items()} == {
-        "fast": 20,
-        "deep": 30,
-        "ultra": 150,
+        "medium": 20,
+        "high": 30,
+        "max": 150,
     }
     for name, entry in modes.items():
         assert "maxToolIterations" not in entry["overlay"], (
             f"{name}: the cap reaches hooks as ctx.max_iterations, not as an overlay copy"
         )
-    # ``ultra`` is the mode that declines the override (``maxIterations: null``),
+    # ``max`` is the mode that declines the override (``maxIterations: null``),
     # so its budget is its own ``maxToolIterations`` rather than the baseline 20.
-    assert modes["ultra"]["overlay"]["drFlow"]["maxIterations"] is None
+    assert modes["max"]["overlay"]["drFlow"]["maxIterations"] is None
 
 
 def test_the_resolved_context_window_reaches_the_plugin_slice(grounded):
@@ -175,7 +175,7 @@ def test_the_shipped_config_claims_no_tool_fence_it_does_not_own(grounded):
 def test_the_modes_are_the_vendored_twins_overlays(tmp_path):
     ours = RUN_PY.parent / "modes"
     theirs = REPO / "subagents" / "raven-research" / "modes"
-    for name in ("deep.json", "ultra.json"):
+    for name in ("high.json", "max.json"):
         assert json.loads((ours / name).read_text()) == json.loads((theirs / name).read_text())
 
 
@@ -459,7 +459,7 @@ def test_the_budget_the_launcher_ships_is_the_one_both_observers_divide_by(groun
         context_window_tokens=cfg.context_window_tokens or 0,
     )
 
-    for name, expected in (("fast", 20), ("deep", 30), ("ultra", 150)):
+    for name, expected in (("medium", 20), ("high", 30), ("max", 150)):
         entry = data["acp"]["modes"][name]
         slot = hook._resolve(
             AgentHookContext(
@@ -480,6 +480,23 @@ def test_the_budget_the_launcher_ships_is_the_one_both_observers_divide_by(groun
         assert (note._context_window_tokens, breaker._context_window_tokens) == (65536, 65536), name
 
 
+def test_a_typo_in_a_mode_overlay_refuses_to_launch(grounded, tmp_path, monkeypatch):
+    """The vendored twin fails at startup naming the mode; the plugin's base slice
+    ignores unknown keys, so without this door a mis-typed high.json would render,
+    launch, and run the base value under the high label."""
+    modes = tmp_path / "modes"
+    modes.mkdir()
+    for name in ("high.json", "max.json"):
+        modes.joinpath(name).write_text((RUN_PY.parent / "modes" / name).read_text())
+    bad = json.loads((modes / "high.json").read_text())
+    bad["drFlow"].setdefault("budgetNote", {})["enabledd"] = True
+    (modes / "high.json").write_text(json.dumps(bad))
+    monkeypatch.setattr(grounded, "MODES_DIR", modes)
+
+    with pytest.raises(SystemExit, match=r"high\.json.*budgetNote\.enabledd"):
+        grounded.render_config(RUN_PY.parent / "config.json")
+
+
 def test_no_shipped_mode_overlay_touches_ask_user():
     """[latent] DRAskUserTool is built once from the base config while the gates
     are rebuilt per (session, mode): a mode overlay that changed askUser would
@@ -494,3 +511,182 @@ def test_no_shipped_mode_overlay_touches_ask_user():
             f"{overlay_file.name} touches askUser: make the tool consult the per-mode "
             "config the gates already resolve before shipping this overlay"
         )
+
+
+# --------------------------------------------------------------------------
+# The web vendor: which backend, whose key, and the two staying in step
+# --------------------------------------------------------------------------
+
+
+def test_a_vendor_with_no_leaf_of_its_own_takes_the_products_env(grounded, monkeypatch):
+    """The six vendors the vendor table added have no pre-vendor leaf, so their
+    key lands in the vendor slot trunk raven reads first."""
+    monkeypatch.setenv("RESEARCH_TAVILY_API_KEY", "tavily-key")
+
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+
+    assert data["tools"]["web"]["providers"]["tavily"]["apiKey"] == "tavily-key"
+
+
+def test_a_vendor_key_the_product_leaves_unset_is_inherited_from_the_host(grounded, tmp_path, monkeypatch):
+    """The point of the slot table: a deployment configures a vendor once in the
+    host raven instead of pasting the key into every product folder."""
+    monkeypatch.delenv("RESEARCH_EXA_API_KEY", raising=False)
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(
+        json.dumps({"tools": {"web": {"providers": {"exa": {"apiKey": "host-exa-key"}}}}})
+    )
+
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+
+    assert data["tools"]["web"]["providers"]["exa"]["apiKey"] == "host-exa-key"
+
+
+def test_a_host_that_wrote_the_default_vendor_to_the_vendor_slot_is_inherited(grounded, tmp_path, monkeypatch):
+    """Serper and Jina keep their pre-vendor leaf, but a host configured after
+    the vendor table landed writes to the vendor slot -- and the leaf is the
+    only path the slot table inherits for them. Without the vendor-slot read a
+    deployment that configured Serper centrally on a current raven launches
+    keyless, which ``require_search`` then refuses."""
+    monkeypatch.delenv("RESEARCH_SERPER_API_KEY", raising=False)
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(
+        json.dumps({"tools": {"web": {"providers": {"serper": {"apiKey": "host-serper-key"}}}}})
+    )
+
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+
+    assert data["tools"]["web"]["providers"]["serper"]["apiKey"] == "host-serper-key"
+    # And it reaches the tool the model actually calls, not just the built-in.
+    assert data["plugins"]["config"]["research-flow"]["search"]["apiKey"] == "host-serper-key"
+
+
+def test_the_selected_vendor_and_its_key_reach_the_slice_together(grounded, monkeypatch):
+    """The slice has no vendor table to consult, so the pair must already agree.
+
+    Mirroring a fixed path would hand a Tavily-configured run the leftover
+    Serper key to send to Tavily's endpoint: the launch succeeds, the tool is
+    advertised, and every search comes back unauthorized -- which reads like a
+    dead key rather than a wiring fault.
+    """
+    monkeypatch.setenv("RESEARCH_WEB_SEARCH_PROVIDER", "tavily")
+    monkeypatch.setenv("RESEARCH_TAVILY_API_KEY", "tavily-key")
+
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    flow = data["plugins"]["config"]["research-flow"]
+
+    assert flow["search"]["provider"] == "tavily"
+    assert flow["search"]["apiKey"] == "tavily-key"
+    # Not vacuous: the Serper key is configured on this render and must not be
+    # the one that travels.
+    assert data["tools"]["web"]["search"]["apiKey"] == "serper-key"
+
+
+def test_the_default_readers_key_travels_beside_a_keyed_fetch_vendor(grounded, monkeypatch):
+    """A keyed reader with no key is replaced by the default one, and that
+    replacement has to arrive with its own credential.
+
+    The slice carries one key per role, so unless the fallback's key is put
+    there too the plugin has nothing to hand the reader it degraded to: the
+    host's configured Jina quota serves raven's built-in fetch and not this
+    one. Mirrored whenever the selection is not already the default rather than
+    only when the fallback will fire -- the rule that decides that lives in
+    ``WebFetchTool.effective_provider``, not here.
+    """
+    monkeypatch.setenv("RESEARCH_WEB_FETCH_PROVIDER", "tavily")
+    monkeypatch.setenv("RESEARCH_TAVILY_API_KEY", "tavily-key")
+    monkeypatch.setenv("RESEARCH_JINA_API_KEY", "jina-key")
+
+    fetch = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())["plugins"]["config"][
+        "research-flow"
+    ]["fetch"]
+
+    assert fetch["provider"] == "tavily"
+    assert fetch["apiKey"] == "tavily-key"
+    assert fetch["fallbackApiKey"] == "jina-key"
+
+
+def test_the_default_fetch_vendor_carries_no_fallback_of_its_own(grounded, monkeypatch):
+    """It IS the fallback, so a second copy of its key would be one more place
+    for the pair to disagree."""
+    monkeypatch.delenv("RESEARCH_WEB_FETCH_PROVIDER", raising=False)
+    monkeypatch.setenv("RESEARCH_JINA_API_KEY", "jina-key")
+
+    fetch = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())["plugins"]["config"][
+        "research-flow"
+    ]["fetch"]
+
+    assert fetch["provider"] == "jina"
+    assert fetch["apiKey"] == "jina-key"
+    assert "fallbackApiKey" not in fetch
+
+
+def test_the_provider_choice_falls_back_to_the_host_config(grounded, tmp_path, monkeypatch):
+    monkeypatch.delenv("RESEARCH_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.setenv("RESEARCH_BRAVE_API_KEY", "brave-key")
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(json.dumps({"tools": {"web": {"search": {"provider": "brave"}}}}))
+
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+
+    assert data["tools"]["web"]["search"]["provider"] == "brave"
+    assert data["plugins"]["config"]["research-flow"]["search"]["apiKey"] == "brave-key"
+
+
+def test_search_refuses_to_launch_when_the_SELECTED_vendor_has_no_key(grounded, monkeypatch):
+    """``require_search`` follows the selection, not the default. A configured
+    Serper key does not make a Brave-selected run able to search, and search is
+    what this agent is for: withheld, a run answers from the model's memory and
+    reads as an ordinary run."""
+    monkeypatch.setenv("RESEARCH_WEB_SEARCH_PROVIDER", "brave")
+    monkeypatch.delenv("RESEARCH_BRAVE_API_KEY", raising=False)
+    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+
+    with pytest.raises(SystemExit) as caught:
+        grounded.render_config(RUN_PY.parent / "config.json")
+
+    assert "brave" in str(caught.value) and "BRAVE_API_KEY" in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("env", "typo", "meant"),
+    [("RESEARCH_WEB_SEARCH_PROVIDER", "sepper", "serper"), ("RESEARCH_WEB_FETCH_PROVIDER", "jinaa", "jina")],
+)
+def test_a_typo_in_a_vendor_name_refuses_to_launch_naming_the_name(grounded, monkeypatch, env, typo, meant):
+    """The plugin degrades an unknown vendor to its default, which is right for
+    a slice nothing validates. Carried through the launcher, the same typo had
+    ``require_search`` demand a key for a vendor that does not exist while the
+    working Serper key sat in the config -- a refusal that sent the operator to
+    set a credential they already had. The launcher can say what is wrong."""
+    monkeypatch.setenv(env, typo)
+
+    with pytest.raises(SystemExit) as caught:
+        grounded.render_config(RUN_PY.parent / "config.json")
+
+    message = str(caught.value)
+    assert typo in message and meant in message
+    assert "no key" not in message
+
+
+def test_the_vendor_slots_are_the_trunks_own_vendors(launcher):
+    """Every vendor trunk raven serves has a slot here, and no slot names a
+    vendor it does not: a product that offers a backend the kernel cannot route
+    advertises a choice that fails at the first call."""
+    from raven.agent.tools.web import FETCH_PROVIDERS, SEARCH_PROVIDERS
+
+    trunk = set(SEARCH_PROVIDERS) | set(FETCH_PROVIDERS)
+    slotted = {
+        path[3]
+        for path in launcher.SECRET_SLOTS.values()
+        if len(path) == 5 and path[:3] == ("tools", "web", "providers")
+    }
+
+    assert slotted | set(launcher.LEGACY_VENDOR_SLOTS) == trunk
+    # And the names the launcher lets through are exactly the ones the kernel
+    # routes: accepting one the tool table lacks advertises a vendor that
+    # fails at the first call, refusing one it has withholds a working one.
+    assert launcher.SEARCH_VENDORS == set(SEARCH_PROVIDERS)
+    assert launcher.FETCH_VENDORS == set(FETCH_PROVIDERS)

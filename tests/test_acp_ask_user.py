@@ -540,6 +540,28 @@ async def test_an_answered_question_never_takes_the_conversation_lock() -> None:
     assert answer == "feat/x"
 
 
+async def test_held_question_holds_or_reports_the_deadline() -> None:
+    """The one bounded hold every unrelayed route shares: it yields True and holds
+    the lock for the block, or yields False at the deadline without holding it,
+    so the body still runs and can answer "busy" rather than block forever."""
+    from raven.acp_client.asker import held_question, question_lock
+
+    lock = question_lock("tui:c1")
+    async with held_question("tui:c1", 1.0) as held:
+        assert held is True
+        assert lock.locked()
+    assert not lock.locked()
+
+    await lock.acquire()
+    try:
+        async with held_question("tui:c1", 0.05) as held:
+            assert held is False
+    finally:
+        lock.release()
+    # The give-up branch released nothing it did not hold.
+    assert not lock.locked()
+
+
 async def test_an_answered_question_does_not_answer_for_a_run_that_ended() -> None:
     """An answered question still has to notice its run is gone.
 
