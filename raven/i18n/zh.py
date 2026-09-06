@@ -6,9 +6,6 @@ boundary test keeps every other module free of CJK text.
 
 MESSAGES: dict[str, str] = {
     "OpenRouter (recommended - one key, many models)": "OpenRouter(推荐 · 一个 Key 调用多家模型)",
-    "The least effort a sub-agent is asked for.": "子代理被要求付出的最少努力。",
-    "The middle amount of effort, between the other two.": "居中的投入，介于另外两档之间。",
-    "The most effort a sub-agent is asked for.": "子代理被要求付出的最多努力。",
     "MiniMax (open-source partner)": "MiniMax(开源合作伙伴)",
     "Z.ai (Zhipu)": "Z.ai(智谱)",
     "DashScope": "阿里云百炼",

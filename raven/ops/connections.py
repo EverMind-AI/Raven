@@ -27,7 +27,12 @@ one means a keychain or a master password, and neither is worth building before
 something asks for it.
 
 Read-only here: the file is written by hand or by
-``raven ops connection add`` (``raven/cli/ops_connection_commands.py``).
+``raven ops connection add`` (``raven/cli/ops_connection_commands.py``). What an
+agent is *shown*, and how a campaign is given a way onto the machine it names,
+belong to that agent's own installation and are not rendered here; what this
+module offers a caller is the store behind the owner's command, the faults that
+make a row unusable, and the projection (:func:`shown`) that keeps an address
+out of whatever gets handed on.
 """
 
 from __future__ import annotations
@@ -195,15 +200,6 @@ def usable(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # narrows.
 _SHOWN = ("kind", "device", "cores", "memory", "software", "budget_unit", "concurrency", "note")
 
-# What the backend needs and the agent does not. ``transport`` is in here rather
-# than in _SHOWN on purpose: whether a machine is reached over ssh or is simply
-# this one changes nothing about which machine the work calls for, and a field
-# the agent can see is a field it can reason about wrongly -- here, by deciding
-# it may skip naming the machine at all, which loses the record of where a
-# command ran.
-_TRANSPORT = ("host", "port", "user", "key", "transport")
-
-
 # Points this instance at a registry that is not beside its own config. Set by
 # a launcher that hosts raven inside another raven: the machines belong to the
 # owner, not to whichever sub-agent is asking, and every copy taken to keep an
@@ -236,9 +232,9 @@ class Read:
     The state is separate from the rows because "there are no machines" and "the
     machine list could not be read" are different facts and were being reported
     as one. A hand-edited file with a stray comma parsed as ``ValueError``,
-    became ``[]``, and ``describe`` then told the loop that the owner had set no
-    machine up -- so a typo silently took the whole on-call surface out, and the
-    one thing the loop was told about it was false.
+    became ``[]``, and the listing built on it then told the loop that the owner
+    had set no machine up -- so a typo silently took the whole on-call surface
+    out, and the one thing the loop was told about it was false.
     """
 
     rows: list[dict[str, Any]]
@@ -297,150 +293,20 @@ def problems() -> list[Problem]:
     return out
 
 
-def get(conn_id: str) -> dict[str, Any] | None:
-    """One connection by its id, or None. The id is internal and never renamed.
-
-    Names are the owner's and change; a campaign that stored the name would have
-    to be rewritten every time someone tidied their list.
-    """
-    if not conn_id:
-        return None
-    for row in load():
-        if str(row.get("id")) == str(conn_id):
-            return row
-    return None
-
-
-def resolve_into(meta: dict[str, Any]) -> dict[str, Any]:
-    """``meta`` with its connection's transport filled in, or unchanged.
-
-    A campaign that names a connection does not repeat its address. One that
-    does not -- every campaign written before this existed -- is left exactly as
-    it is, so nothing has to be migrated to keep running.
-
-    Values already in the meta win, so a campaign can still override one field
-    of a connection without describing the whole machine again.
-    """
-    conn_id = str(meta.get("connection") or "").strip()
-    if not conn_id:
-        return meta
-    row = get(conn_id)
-    if row is None:
-        return meta
-    merged = dict(meta)
-    for k in _TRANSPORT:
-        if k in row and not merged.get(k):
-            merged[k] = row[k]
-    return merged
-
-
-# What the owner has to be asked for, when there is nobody to ask it of here. The
-# loop cannot fill any of it in: the address and the key are deliberately outside
-# what it can see, and the rest -- what is installed, how the budget is metered,
-# which directories are the owner's -- is not on the machine to be discovered
-# before there is a way onto the machine.
-_REQUEST = """\
-Hand this to the owner as it stands. Ask them to run `raven ops connection add`,
-which asks for, and checks:
-  - what they call this machine
-  - whether it is reached over ssh or is this very computer
-  - for ssh: address, port, username, and the path to the private key
-  - what is installed on it, with paths -- "CalculiX 2.17 (/opt/calculix)"
-  - whether its budget is counted in minutes, core-minutes or gpu-minutes
-  - how many jobs it will run at once
-  - which directories on it hold the owner's work
-
-Until one exists there is no machine to run on. Do not submit anything,
-and do not look for a way in with exec or ssh."""
-
-
 def shown(row: dict[str, Any]) -> dict[str, Any]:
     """One machine as anything outside may see it: no address, no credential.
 
-    The same projection ``describe`` renders, handed over as data so a caller in
-    another process can put it in front of whoever needs it. The split is the
-    point of the function: what a machine *is* travels, and the way onto it does
-    not -- a field the reader cannot use is one more thing to reason about
-    wrongly, and here the reader may be a node writing a training script.
+    Handed over as data so a caller in another process can put it in front of
+    whoever needs it. The split is the point of the function: what a machine
+    *is* travels, and the way onto it does not -- a field the reader cannot use
+    is one more thing to reason about wrongly, and the reader here is whatever
+    an agent's own installation shows the model.
     """
     out = {"id": str(row.get("id") or ""), "display_name": str(row.get("display_name") or row.get("id") or "")}
     out.update({k: row[k] for k in _SHOWN if row.get(k) not in (None, "")})
     if isinstance(row.get("paths"), list):
         out["paths"] = [str(x) for x in row["paths"]]
     return out
-
-
-def describe() -> str:
-    """The list as the agent sees it: names and what each machine is, no secrets."""
-    found = read()
-    if found.state == UNREADABLE:
-        # Deliberately not folded into "there are none". There may well be
-        # machines in that file, and saying otherwise sends the loop off to find
-        # its own way onto a box the owner has already described.
-        return (
-            f"The machine registry for this instance cannot be read.\n{found.detail}\n\n"
-            "This is NOT the same as having no machines: the file may well list "
-            "several, and this instance cannot see any of them. Say exactly this "
-            "to the owner -- the file needs fixing, or rewriting with "
-            "`raven ops connection add`. Do not submit anything and do not look "
-            "for a way in yourself."
-        )
-    rows = load()
-    if not rows:
-        where = "is empty" if found.state == OK else "does not exist"
-        return f"No machine is set up in this instance ({store_path()} {where}).\n\n" + _REQUEST
-    # Only what makes a machine unusable. The rest is the owner's to fix and
-    # `raven ops connection doctor` is where they read it: a line that appears on
-    # every listing is read as noise and then not read at all, which is the same
-    # reason a shallow path claim is not honoured below.
-    faults = [f for f in problems() if f.blocking]
-    lines = []
-    for row in rows:
-        bits = [f"{row.get('display_name') or row['id']}   (id {row['id']})"]
-        bits += [f"{k} {row[k]}" for k in _SHOWN if row.get(k) not in (None, "")]
-        lines.append("  " + "   ".join(bits))
-    trouble = (
-        "\n\nOne or more of these cannot be used as written, and picking it will "
-        "fail:\n  "
-        + "\n  ".join(str(f) for f in faults)
-        + "\nSay this to the owner; `raven ops connection doctor` reports the same."
-        if faults
-        else ""
-    )
-    return (
-        f"{len(rows)} connection(s) this instance can run on:\n" + "\n".join(lines) + trouble +
-        # The id has to be told where to go. Measured 2026-08-19: a loop reached
-        # this listing, picked the right machine, wrote "that one is this laptop, I
-        # will just run it here", and hand-ran five trials. It held an id with no
-        # destination, so it fell back to what it already knew how to do. Naming
-        # the next call is the whole difference: the run before this one skipped
-        # the listing, was handed ops_declare directly, and used it.
-        "\nPick the one the task calls for and hand its id to ops_declare as "
-        "'connection' -- that is the one thing a campaign cannot be given later, "
-        "and declaring costs nothing and runs nothing. Say which you picked and "
-        "why. A machine that happens to be the computer you are on is still that "
-        "machine's work: what you would be giving up by running it by hand is the "
-        "ledger, the budget and the per-round directory, not distance. If none of "
-        "them fits, ask the owner rather than looking for a way in yourself."
-        # And what to declare it AS. This listing is the first stop for anything
-        # that needs a machine, so the fork belongs here rather than in a document
-        # -- measured twice on 2026-08-21, a watch task came through here, picked
-        # the right machine off this very text, and then went and built its own
-        # monitor out of write_file and cron. Nothing on the way had said that a
-        # campaign can be a watch: every sign said case, trial, round.
-         + "\nWhat kind of target it is goes with it, and there are three. "
-        "objective_kind='optimize' when one number the run reports has to go as "
-        "far as it will go. 'complete' when it has to run to its own end and the "
-        "result has to hold up, with no number ranking the rounds. 'condition' "
-        "when nothing is being run at all and something outside has to become "
-        "true -- a price, a disk filling, a queue, somebody else's job. That last "
-        "one is still a campaign: give it a readings table (what to read, and "
-        "whether to read it every wake or after each round), and its starting "
-        "value is taken as you declare it, which is the one thing a later wake "
-        "cannot reconstruct. Its budget can be counted in looks rather than in "
-        "machine time, and coming back is ops_check_later. A cron job and a file "
-        "of your own do the same arithmetic with none of the record."
-    )
 
 
 # A claim shallower than this is a whole filesystem, not a case: "/", "/opt",

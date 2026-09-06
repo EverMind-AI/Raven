@@ -2324,7 +2324,7 @@
     },
     {
       "name": "subagents.instance.set_mode",
-      "summary": "Report, set or clear the operating mode of one direct-chat instance. Neither field reports; clear=true drops the instance override, after which the session's tier (clamped to this agent's menu) is what the next dispatch runs at, and the agent's own default runs only where there is no tier to inherit; mode=<id> switches from the next turn on. Always answers with the override, what is inherited, and the whole menu, so one reply is enough to draw the control.",
+      "summary": "Report, set or clear the operating mode of one direct-chat instance. Neither field reports; clear=true restores the agent's own default; mode=<id> switches from the next turn on. Always answers with the mode in force and the whole menu, so one reply is enough to draw the control.",
       "params": [
         {
           "name": "session_key",
@@ -2361,60 +2361,7 @@
           "properties": {
             "mode": {
               "type": ["string", "null"],
-              "description": "This instance's own override, or null when it has none. Null is the ordinary answer to a read with no override set and to every clear, not an error."
-            },
-            "inherited": {
-              "type": ["string", "null"],
-              "description": "What a dispatch runs at when there is no override: this session's tier, clamped to what the agent offers. Null when nothing is inherited and the agent's own default is what runs."
-            },
-            "availableModes": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["id"],
-                "properties": {
-                  "id": { "type": "string" },
-                  "name": { "type": "string" },
-                  "description": { "type": "string" }
-                }
-              }
-            }
-          }
-        }
-      },
-      "errors": []
-    },
-    {
-      "name": "session.set_mode",
-      "summary": "Report, set or clear the sub-agent tier this session dispatches at. Neither field reports; clear=true returns to the configured default; mode=<id> switches from the next turn on. Raven's own effort is the same in every tier.",
-      "params": [
-        {
-          "name": "session_key",
-          "required": true,
-          "schema": { "type": "string" }
-        },
-        {
-          "name": "mode",
-          "required": false,
-          "schema": { "type": "string" }
-        },
-        {
-          "name": "clear",
-          "required": false,
-          "schema": { "type": "boolean" }
-        }
-      ],
-      "result": {
-        "name": "SessionSetModeResult",
-        "schema": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [],
-          "properties": {
-            "mode": {
-              "type": ["string", "null"],
-              "description": "The tier now in force."
+              "description": "The mode now in force, or null when the agent's own default is. Null is the ordinary answer to a read with no override set and to every clear, not an error."
             },
             "availableModes": {
               "type": "array",

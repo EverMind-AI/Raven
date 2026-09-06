@@ -23,7 +23,6 @@ import pytest
 from raven.acp import protocol
 from raven.acp.methods import MAX_IMAGE_BYTES, AcpMethods
 from raven.acp.updates import UpdateTranslator
-from raven.config.schema import AcpConfig
 from raven.rpc.dispatcher import Dispatcher
 from tests.acp_schema import validate_def, validate_outbound
 
@@ -125,28 +124,6 @@ def rig(tmp_path, monkeypatch):
     # it: the shared session manager. ``manager_for`` builds a throwaway one
     # when handed None, so a test that passed None would assert nothing about
     # where the working directory ends up.
-    engine = SimpleRig(sessions=SessionManager(tmp_path / "ws"))
-    methods = AcpMethods(dispatcher=stack.dispatcher, translator=translator, emit=written.append, agent_loop=engine)
-    return SimpleRig(
-        methods=methods, stack=stack, translator=translator, written=written, tmp_path=tmp_path, engine=engine
-    )
-
-
-@pytest.fixture
-def rig_with_empty_acp(tmp_path, monkeypatch):
-    """A rig where ACP modes are explicitly empty (no surface)."""
-    from raven.config import load_config
-
-    config = load_config()
-    config.acp = AcpConfig(modes={})
-    monkeypatch.setattr(type(config), "workspace_path", property(lambda self: tmp_path / "ws"))
-    monkeypatch.setattr("raven.acp.methods.load_config", lambda: config, raising=False)
-
-    from raven.session.manager import SessionManager
-
-    stack = _Stack()
-    written: list[dict] = []
-    translator = UpdateTranslator(emit=written.append)
     engine = SimpleRig(sessions=SessionManager(tmp_path / "ws"))
     methods = AcpMethods(dispatcher=stack.dispatcher, translator=translator, emit=written.append, agent_loop=engine)
     return SimpleRig(
@@ -299,10 +276,10 @@ class TestHandshakeGate:
         assert response["error"]["code"] == protocol.INVALID_PARAMS
         assert response["error"]["data"] == {"authMethods": []}
 
-    async def test_the_unbuilt_stable_methods_answer_method_not_found(self, rig_with_empty_acp):
-        await rig_with_empty_acp.handshake()
+    async def test_the_unbuilt_stable_methods_answer_method_not_found(self, rig):
+        await rig.handshake()
         for method in ("session/set_mode", "logout"):
-            response = await rig_with_empty_acp.call(method, {})
+            response = await rig.call(method, {})
 
             assert response["error"]["code"] == protocol.METHOD_NOT_FOUND, method
 
@@ -431,9 +408,7 @@ class TestSessionLoad:
             {"sessionId": "acp:old", "cwd": str(rig.tmp_path / "project"), "mcpServers": []},
         )
 
-        assert "modes" in response["result"]
-        assert response["result"]["modes"]["currentModeId"] == "high"
-        assert len(response["result"]["modes"]["availableModes"]) == 3
+        assert response["result"] == {}
         kinds = [u["sessionUpdate"] for u in rig.updates()]
         assert kinds == ["user_message_chunk", "agent_message_chunk", "available_commands_update"]
         for frame in rig.written:
@@ -557,9 +532,7 @@ class TestSessionResume:
 
         response = await rig.call("session/resume", {"sessionId": "acp:old", "cwd": str(rig.tmp_path / "project")})
 
-        assert "modes" in response["result"]
-        assert response["result"]["modes"]["currentModeId"] == "high"
-        assert len(response["result"]["modes"]["availableModes"]) == 3
+        assert response["result"] == {}
         content = [u for u in rig.updates() if u.get("sessionUpdate") != "available_commands_update"]
         assert content == [], "resume must not repaint a transcript the client already has"
         for frame in rig.written:
