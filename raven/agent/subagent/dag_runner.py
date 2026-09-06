@@ -1168,8 +1168,10 @@ async def _run_node(
             )
             # The effort level, on the same terms. The `instance` goes in rather
             # than the handle this node dispatches under: a node that names none
-            # runs at the agent's own default, which the resolver answers for it
-            # rather than each lane deciding again.
+            # has no override to find, so the resolver answers with the session's
+            # tier -- clamped to this agent's menu, and falling through to the
+            # agent's own default only when there is no tier to inherit -- rather
+            # than each lane deciding again.
             node_mode = mode_for(session_key or "", node.subagent, node.instance) if mode_for is not None else None
             # Collected around the dispatch, exactly as a spawn does it: the
             # backend publishes into whatever is open, so a node gets the same
