@@ -197,10 +197,10 @@ def test_the_roster_row_identity_is_the_vendored_twins():
         "recommendedLlm",
     ):
         assert ours[field] == theirs[field], field
-    # This product has no machine routing; mirroring the fork's absence is
-    # what keeps the oncall routing red flag inapplicable here.
-    assert "runsOnMachines" not in ours
-    assert "runsOnMachines" not in theirs
+    # This product does not own run-and-watch work; mirroring the fork's
+    # absence is what keeps the oncall steering inapplicable here.
+    assert "ownsWatchedWork" not in ours
+    assert "ownsWatchedWork" not in theirs
 
 
 def test_the_everos_identity_agrees_in_all_three_places():

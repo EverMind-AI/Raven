@@ -640,11 +640,11 @@ def test_the_mode_the_turn_ran_in_governs_its_exit_and_is_recorded(tmp_path):
     _, record = _run_turn(
         hook,
         "survey the field",
-        mode="high",
+        mode="deep",
         overlay={"drFlow": {"finalShape": {"record": False}}},
     )
 
-    assert record.mode == "high", "the profile the turn ran under, not the empty one after_send is handed"
+    assert record.mode == "deep", "the profile the turn ran under, not the empty one after_send is handed"
     assert "final_shape" not in record.observers, "the mode turned recording off and the exit obeyed it"
     assert list(hook.session_gear) == ["s"], "the turn must not discard its own session's tool gear"
 

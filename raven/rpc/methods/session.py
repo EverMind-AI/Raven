@@ -1051,65 +1051,12 @@ async def session_export(
     return {"exported": True, "path": str(written)}
 
 
-async def session_set_mode(
-    params: dict,
-    *,
-    agent_loop_factory: "AgentLoopFactory | None" = None,
-) -> dict:
-    """``session.set_mode`` -- report, set or clear this session's sub-agent tier.
-
-    The same switch ``session/set_mode`` serves over ACP, resolved against the
-    same catalogue and landing on the same per-session policy, so the two
-    surfaces cannot accept different words. Three calls, told apart by which
-    fields are present rather than by a sentinel id.
-
-    A tier moves what raven asks of the sub-agents it dispatches. Raven's own
-    effort is the same in every tier.
-
-    Does not call ``SessionModes.set``: it logs its own "switched from X to
-    Y" line by reading ``self.current(session_id)``, which answers with the
-    catalogue default for a session it has never seen -- and every call here
-    builds a fresh, throwaway ``SessionModes``, so it would always report
-    switching from the default. The loop's session policy is the durable
-    state; this handler reads the real previous tier from there, writes
-    through ``AgentLoop.set_session_policy``, and logs the transition itself.
-    """
-    from raven.config.mode_catalogue import build_mode_catalogue
-
-    modes = build_mode_catalogue(load_config())
-    profiles = tuple(modes.profiles.values())
-    menu = [{"id": p.id, "name": p.name, "description": p.description} for p in profiles]
-    session_key = str(params.get("session_key") or "")
-    raw = params.get("mode")
-    wanted = str(raw) if isinstance(raw, str) and raw else None
-    loop = _safe_invoke_factory(agent_loop_factory)
-
-    def _current() -> str | None:
-        if loop is None:
-            return modes.default or None
-        return getattr(loop.session_policy(session_key), "mode", "") or modes.default or None
-
-    if wanted is None and not params.get("clear"):
-        return {"mode": _current(), "availableModes": menu}
-    if loop is None:
-        raise ConfigValidationError("no agent loop, so this session has no tier to set")
-    tier = modes.default if params.get("clear") else wanted
-    if tier not in modes.ids():
-        raise ConfigValidationError(f"no mode {tier!r}; this build offers {', '.join(modes.ids()) or 'none'}")
-    previous = getattr(loop.session_policy(session_key), "mode", "")
-    profile = {p.id: p for p in profiles}[tier]
-    loop.set_session_policy(session_key, mode=tier, mode_overlay=profile.overlay, max_iterations=profile.max_iterations)
-    if previous != tier:
-        logger.info("session {} sub-agent tier {} -> {}", session_key, previous or "<unset>", tier)
-    return {"mode": tier, "availableModes": menu}
-
-
 def register_session_methods(
     dispatcher: "Dispatcher",
     *,
     agent_loop_factory: "AgentLoopFactory | None" = None,
 ) -> None:
-    """Register the 15 session handlers on a dispatcher.
+    """Register the 12 session handlers on a dispatcher.
 
     Mirrors :func:`raven.rpc.methods.turn.register_turn_methods` —
     wraps the module-level handlers in single-argument closures that pre-bind
@@ -1159,9 +1106,6 @@ def register_session_methods(
     async def _export(params: dict) -> dict:
         return await session_export(params, agent_loop_factory=agent_loop_factory)
 
-    async def _set_mode(params: dict) -> dict:
-        return await session_set_mode(params, agent_loop_factory=agent_loop_factory)
-
     dispatcher.register("session.create", _create)
     dispatcher.register("session.close", _close)
     dispatcher.register("session.resume", _resume)
@@ -1176,7 +1120,6 @@ def register_session_methods(
     dispatcher.register("session.compress", _compress)
     dispatcher.register("session.branch", _branch)
     dispatcher.register("session.export", _export)
-    dispatcher.register("session.set_mode", _set_mode)
 
 
 __all__ = [
@@ -1195,6 +1138,5 @@ __all__ = [
     "session_compress",
     "session_branch",
     "session_export",
-    "session_set_mode",
     "register_session_methods",
 ]

@@ -559,10 +559,9 @@ class AcpMethods:
         profile it started with and lands on the next one, because the loop
         reads its per-session policy once, at a turn's start. The session is
         looked up first, so an unknown session is -32002 rather than a mode
-        error about a session that does not exist. Method-not-found is now only
-        for a deployment that turns the catalogue off on purpose (``"modes": {}``):
-        declaring nothing no longer earns it, because raven defaults the catalogue
-        to its three built-in tiers.
+        error about a session that does not exist; a deployment with no modes
+        declared keeps answering method-not-found, the same as before the
+        surface existed.
         """
         modes = self._session_modes()
         if not modes.enabled:

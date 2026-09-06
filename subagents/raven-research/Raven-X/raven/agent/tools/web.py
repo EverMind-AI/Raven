@@ -79,23 +79,6 @@ _NO_SHAPING = {"answer_box_chars": 0, "knowledge_chars": 0,
                "snippet_repeat_marks": 0}
 
 
-def _error_text(exc: Exception) -> str:
-    """How an exception is named in a ledger row, which lands on disk.
-
-    A status error's own text repeats the request URL, and SerpApi carries its
-    key as a query parameter: the status alone is what makes the row
-    diagnosable, so the row gets that and nothing of the URL.
-
-    One function rather than the rule spelled at each writer. There are two -
-    the ``search``/``fetch`` row and the ``*_retry`` rows beside it in the same
-    file - and the second was added carrying ``str(exc)``, which is exactly the
-    way a rule written twice fails.
-    """
-    if isinstance(exc, httpx.HTTPStatusError):
-        return f"HTTPStatusError: HTTP {getattr(exc.response, 'status_code', None)}"
-    return f"{type(exc).__name__}: {exc}"[:500]
-
-
 def _error_shaping(exc: Exception) -> dict:
     """Shaping payload for a search that died in transport.
 
@@ -107,7 +90,13 @@ def _error_shaping(exc: Exception) -> dict:
     """
     shaping = dict(_NO_SHAPING)
     status = getattr(getattr(exc, "response", None), "status_code", None)
-    shaping["error"] = _error_text(exc)
+    # A status error's own text repeats the request URL, and SerpApi carries
+    # its key as a query parameter: the ledger is written to disk, so the row
+    # gets the status and nothing of the URL.
+    if isinstance(exc, httpx.HTTPStatusError):
+        shaping["error"] = f"HTTPStatusError: HTTP {status}"
+    else:
+        shaping["error"] = f"{type(exc).__name__}: {exc}"[:500]
     shaping["status"] = int(status) if status is not None else None
     shaping["quota_err"] = status in (401, 402, 403)
     return shaping
@@ -420,7 +409,7 @@ async def _send_with_retry(
             "key": key,
             "attempt": attempt + 1,
             "status": status,
-            "error": _error_text(last),
+            "error": str(last),
         })
         await asyncio.sleep(_retry_delay(backoff, status, retry_after, key))
     raise AssertionError("unreachable: the final backoff slot re-raises")

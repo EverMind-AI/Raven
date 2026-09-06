@@ -509,37 +509,6 @@ class _InjectingRollbackHook(AgentHook):
         )
 
 
-class _CountingBounceHook(AgentHook):
-    """Rolls back once and records what before_iteration could read each time."""
-
-    def __init__(self) -> None:
-        self.seen: list[tuple[int | None, int]] = []
-
-    async def before_iteration(self, ctx):
-        self.seen.append((ctx.iteration, ctx.metadata.get("hook_rollbacks", 0)))
-        return HookDecision()
-
-    async def after_iteration(self, ctx):
-        if ctx.metadata.get("rolled"):
-            return HookDecision()
-        ctx.metadata["rolled"] = True
-        return HookDecision(rollback=True)
-
-
-@pytest.mark.asyncio
-async def test_an_honoured_rollback_is_counted_where_the_next_iteration_can_read_it(workspace):
-    """The re-sample carries the same iteration number, so a hook scoped to the
-    turn boundary (``AskUserGate``) cannot tell it from the first sampling by
-    ``ctx.iteration`` alone. The loop records the honoured count beside
-    ``rollbacks_refused``."""
-    hook = _CountingBounceHook()
-    agent = _make_agent(_ConstantProvider(), workspace, hook, max_iterations=3)
-
-    await agent._run_agent_loop([{"role": "user", "content": "go"}])
-
-    assert hook.seen == [(1, 0), (1, 1)]
-
-
 @pytest.mark.asyncio
 async def test_injected_user_turns_are_marked_flow_synthetic(workspace):
     """A hook rollback is the harness re-prompting itself.

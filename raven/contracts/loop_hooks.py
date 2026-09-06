@@ -176,11 +176,7 @@ class HookDecision:
       (tool side effects, if any ran, stand -- only the history is popped).
       Bounded per turn by the loop's rollback cap; past the cap the decision
       degrades to pass-through and the refusal is counted in
-      ``ctx.metadata["rollbacks_refused"]``. Every honoured rollback is
-      counted in ``ctx.metadata["hook_rollbacks"]``, so a later hook can tell
-      a re-sampled iteration from the first sampling of that number (the
-      counter is what makes "this is the turn boundary" decidable after a
-      rollback to iteration 1). ``rollback_overrides`` carries
+      ``ctx.metadata["rollbacks_refused"]``. ``rollback_overrides`` carries
       generation-parameter overrides for the re-sample call only (keys
       outside the loop's allowlist are dropped); ``rollback_inject`` carries
       messages appended after the pop, so the re-sample sees them -- they

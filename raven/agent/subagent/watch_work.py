@@ -203,20 +203,23 @@ def asked_for(messages: list[dict]) -> str:
     return ""
 
 
-async def oncall_agent(names: list[str]) -> str | None:
-    """The first agent on this roster that runs work on machines, or None.
+def oncall_agent(agents: list) -> str | None:
+    """The first row on this roster that owns run-and-watch work, or None.
 
-    Answered by the manifest flag the DAG check keys on (``runsOnMachines``),
-    not by the registry's contents: an empty registry still names the agent --
-    the spawn-side check is what refuses it, and that refusal is how the owner
-    gets asked for a machine at all. None means no such agent, or nothing could
-    be established, which must change nothing.
+    Read off the dispensed agent table, never re-derived. The declaration is
+    settled once at admission, where the schema honours every spelling a roster
+    row or a folder manifest has ever carried; a second reader opening config
+    and a manifest for itself answers differently the moment those two disagree,
+    and a legacy manifest is exactly where they did.
+
+    Answered by the declaration rather than by anything about where the work
+    would run: which machine a job lands on is the sub-agent's own business, and
+    this question is only which agent the request belongs with. None means no
+    such agent, which must change nothing.
     """
-    from raven.agent.subagent.dag_machines import runs_on_machines
-
-    for name in dict.fromkeys(names):
-        if runs_on_machines(name):
-            return name
+    for agent in agents:
+        if getattr(agent, "owns_watched_work", False):
+            return str(getattr(agent, "name", "") or "") or None
     return None
 
 
@@ -241,32 +244,6 @@ def nudge(agent: str) -> str:
     )
 
 
-def machineless_nudge(agent: str) -> str:
-    """The line after a spawn was refused for having no machine.
-
-    Sharper than :func:`nudge` on purpose, and it exists because the plain one
-    went quiet at the wrong moment: the first live run (2026-08-27) spawned, was
-    refused, and went straight to running trials by hand -- reading the owner's
-    "I may be slow to answer, don't sit idle" as licence to skip the asking
-    altogether. Slow-to-answer is about waiting, not about whether to ask: the
-    question costs one message, and running anyway spends the budget on trials
-    that leave no record and pre-empts the machine choice the refusal exists to
-    put in front of the owner.
-    """
-    return (
-        "\n\nSTOP running this by hand. Your spawn of the on-call specialist was refused "
-        "because no machine is registered -- that refusal is the owner's own rule, and "
-        "it applies to hand-run trials exactly as much as to dispatched ones. The next "
-        "step is a message to the owner, now, asking for the machine: what they call it, "
-        "ssh or this very computer, address/port/user/key if ssh, what is installed with "
-        "paths, budget unit, and how many jobs at once. Then "
-        "`raven ops connection add` records it and the spawn goes through. Send that "
-        f"message and end your turn; do not run trials while `{agent}` has nowhere to "
-        'record them. "The owner may be slow to answer" is about waiting, not asking '
-        "-- ask first, report what you are blocked on, and stop."
-    )
-
-
 @dataclass
 class TurnWatch:
     """One turn's watch state, owned by the turn and never by the loop object.
@@ -280,7 +257,6 @@ class TurnWatch:
 
     verdict: Verdict | None = None
     dispatched: bool = False
-    machineless: bool = False
 
 
 def handed_over(name: str, args: dict, result: str, agent: str) -> bool:
@@ -288,8 +264,8 @@ def handed_over(name: str, args: dict, result: str, agent: str) -> bool:
 
     Only a real hand-off may silence the turn's nudges. The first cut treated
     every spawn as one: an unrelated spawn of another agent silenced the next
-    path nudge, and every refusal shape except the machineless one -- delegation
-    paused, a DAG validation error, a declined graph -- read as success. Judged
+    path nudge, and every refusal shape -- delegation paused, a DAG validation
+    error, a declined graph -- read as success. Judged
     on the acceptance line the manager actually returns, and on the on-call
     agent being the one dispatched; anything unrecognised keeps the nudges
     alive, which is the affordable direction.
@@ -297,7 +273,7 @@ def handed_over(name: str, args: dict, result: str, agent: str) -> bool:
     from raven.agent.subagent.manager import SPAWN_REFUSED_PREFIX
 
     text = str(result)
-    if "Nothing was dispatched" in text or text.startswith(SPAWN_REFUSED_PREFIX) or text.lstrip().startswith("Error"):
+    if text.startswith(SPAWN_REFUSED_PREFIX) or text.lstrip().startswith("Error"):
         return False
     if name == "spawn":
         return str(args.get("subagent") or "") == agent and "started (id:" in text

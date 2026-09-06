@@ -5,7 +5,7 @@ ships to the arm that produced published numbers. The config the deployed
 launcher actually serves is not one of them: ``subagents/raven-research/run.py``
 defaults to the parent folder's ``config.json``, and the fork's ``acp.modes``
 compose the ``modes/*.json`` overlays over it per session. That is the product's
-medium baseline plus its two deeper modes, and until this file none of the three
+fast baseline plus its two deeper modes, and until this file none of the three
 was under any parity guard - the fork's suite cannot see its caller, and this
 trunk's CI does not run the fork's suite.
 
@@ -84,24 +84,24 @@ PRODUCT: dict[str, str] = {
         "the first-round sufficiency gate is this checkout's own patch "
         "(dr_sufficiency_gate); the measured arm predates it. It appends a note the "
         "model may disregard and removes no tools. Its floors and timeouts move with "
-        "each mode's budget, and max switches it off, where they are inert"
+        "each mode's budget, and ultra switches it off, where they are inert"
     ),
 }
 
 #: Knobs one mode legitimately moves. Every mode the launcher catalogues must have
 #: an entry, empty or not, so a new mode is covered the day it ships.
 PER_MODE: dict[str, dict[str, str]] = {
-    "medium": {
+    "fast": {
         "max_iterations": (
-            "the medium baseline caps a turn so a default question answers in minutes. "
+            "the fast baseline caps a turn so a default question answers in minutes. "
             "NOT behaviour-inert: a question still researching at the cap ends on the "
             "exhaustion path (the turn is marked interrupted and synthesized on "
             "exhaustion) where the measured arm, uncapped at this level, ran on. "
-            "Accepted as the medium mode's promise, with the window named; high raises "
-            "the cap and max removes it"
+            "Accepted as the fast mode's promise, with the window named; deep raises "
+            "the cap and ultra removes it"
         ),
         "budget_note.warn_ratio": (
-            "the medium mode's depth knob, paired with its cap: the converge push lands "
+            "the fast mode's depth knob, paired with its cap: the converge push lands "
             "early in the turn instead of near its end"
         ),
         # Two LEAVES, not the ``verify.`` prefix: the reason below permits a shorter
@@ -109,20 +109,20 @@ PER_MODE: dict[str, dict[str, str]] = {
         # reviewer or its measured rubrics off, and a reviewer's mutant showed the
         # guard staying green through exactly that.
         "verify.timeout_seconds": (
-            "medium mode shortens the reviewer's budget. NOT inert: a review that times "
+            "fast mode shortens the reviewer's budget. NOT inert: a review that times "
             "out fails open as 'unavailable', and the answer ships unreviewed wearing "
-            "the banner. Accepted as the medium mode's latency promise; high and max "
+            "the banner. Accepted as the fast mode's latency promise; deep and ultra "
             "restore the measured budgets"
         ),
         "verify.attempt_timeout_seconds": ("the per-attempt half of the same shortened budget, same window as above"),
     },
-    "high": {
+    "deep": {
         "max_iterations": (
-            "high raises the medium cap rather than removing it. The same exhaustion "
-            "window as medium, named rather than excused"
+            "deep raises the fast cap rather than removing it. The same exhaustion "
+            "window as fast, named rather than excused"
         ),
     },
-    "max": {},
+    "ultra": {},
 }
 
 #: Runs inside the fork's checkout. Prints one JSON object: the measured arm, each
@@ -241,19 +241,19 @@ def test_every_mode_the_launcher_serves_is_the_measured_flow_or_says_why(probe):
 
 
 def test_losing_the_reviewer_is_not_a_shorter_budget(probe):
-    """The medium excuses permit a shorter verify budget and nothing else.
+    """The fast excuses permit a shorter verify budget and nothing else.
 
     A reviewer switched off, or either measured rubric dropped, is a research
-    behaviour change on the medium path, and the guard has to say so even though
+    behaviour change on the fast path, and the guard has to say so even though
     the two timeout leaves beside those fields are excused. Mutated on the
-    served medium flow, the way the reviewer who found the hole did it.
+    served fast flow, the way the reviewer who found the hole did it.
     """
-    medium = dict(probe["modes"]["medium"])
+    fast = dict(probe["modes"]["fast"])
     reference = probe["reference"]
     for field in ("verify.enabled", "verify.constraint_rubric", "verify.strict_reject_only"):
-        assert medium[field] == reference[field] is True, field
-        medium[field] = False
-    drift = _drift(medium, reference, "medium", probe)
+        assert fast[field] == reference[field] is True, field
+        fast[field] = False
+    drift = _drift(fast, reference, "fast", probe)
     assert sorted(line.split(":")[0] for line in drift) == [
         "verify.constraint_rubric",
         "verify.enabled",
@@ -268,7 +268,7 @@ def test_the_check_can_actually_fail(probe):
     nothing; without the second it would redden on everything, which is as
     useless as reddening on nothing.
     """
-    drift = _drift(probe["broken"], probe["reference"], "medium", probe)
+    drift = _drift(probe["broken"], probe["reference"], "fast", probe)
     assert any(line.startswith("spin_breaker.enabled:") for line in drift), drift
     assert any(line.startswith("digest.verbatim_head_chars:") for line in drift), drift
     assert not any(line.startswith("final_shape.") for line in drift), drift

@@ -576,7 +576,7 @@ index 0000000..6b3c02a
 +
 +__all__ = ["SufficiencyGate"]
 diff --git a/raven/agent/flow/verify.py b/raven/agent/flow/verify.py
-index 5c5112f..99fe18a 100644
+index 5c5112f..40ec191 100644
 --- a/raven/agent/flow/verify.py
 +++ b/raven/agent/flow/verify.py
 @@ -143,11 +143,13 @@ class DraftReviewerGate(AgentHook):
@@ -618,50 +618,7 @@ index 5c5112f..99fe18a 100644
          self._strict_reject_only = strict_reject_only
          self._fail_open_on_elided_evidence = fail_open_on_elided_evidence
          self._evidence_round = evidence_round
-@@ -177,6 +192,7 @@ class DraftReviewerGate(AgentHook):
-             "op": _LEDGER_OP_GATE,
-             "event": "installed",
-             "max_revisions": max_revisions,
-+            "model": self._effective_model(),
-             "strict_reject_only": strict_reject_only,
-             "fail_open_on_elided_evidence": fail_open_on_elided_evidence,
-             "constraint_rubric": constraint_rubric,
-@@ -193,8 +209,25 @@ class DraftReviewerGate(AgentHook):
-     def name(self) -> str:
-         return "DraftReviewerGate"
- 
--    @staticmethod
-+    def _effective_model(self) -> str | None:
-+        """The model the reviewer actually runs on, for the ledger.
-+
-+        Pinned, or the provider's default when the config left ``model`` null.
-+        Recorded on every row because a mode overlay can move the pin per
-+        session, and the appendix and the observers exporter read it off the
-+        rows -- a reading whose reviewer is unknown cannot be compared with one
-+        whose reviewer is known. ``None`` only when the provider cannot say.
-+        """
-+        if self._model:
-+            return self._model
-+        default = getattr(self._provider, "get_default_model", None)
-+        try:
-+            return default() if callable(default) else None
-+        except Exception:  # noqa: BLE001 - a ledger field must never take the review down
-+            return None
-+
-     def _record(
-+        self,
-         state: dict,
-         outcome: str,
-         *,
-@@ -215,6 +248,7 @@ class DraftReviewerGate(AgentHook):
-             "ts": time.time(),
-             "op": _LEDGER_OP,
-             "outcome": outcome,
-+            "model": self._effective_model(),
-             "reviewed": reviewed,
-             "review": state.get("reviews", 0) if reviewed else None,
-             "reviewer_pass": None if verdict is None else bool(verdict.get("pass", True)),
-@@ -380,10 +414,37 @@ class DraftReviewerGate(AgentHook):
+@@ -380,10 +395,37 @@ class DraftReviewerGate(AgentHook):
              if elided_skipped:
                  state["evidence_elided_skipped"] = state.get("evidence_elided_skipped", 0) + elided_skipped
          user = f"Task:\n{task}\n\nDraft answer:\n{draft}\n\nEvidence:\n{evidence or '(no tool evidence was gathered)'}"
@@ -699,7 +656,7 @@ index 5c5112f..99fe18a 100644
          while True:
              remaining = deadline - asyncio.get_event_loop().time()
              if remaining <= 0:
-@@ -391,6 +452,7 @@ class DraftReviewerGate(AgentHook):
+@@ -391,6 +433,7 @@ class DraftReviewerGate(AgentHook):
                      "verify-gate: reviewer timed out after %.0fs budget; fail-open", self._timeout_seconds
                  )
                  return None
@@ -707,7 +664,7 @@ index 5c5112f..99fe18a 100644
              try:
                  response = await asyncio.wait_for(
                      self._provider.chat_with_retry(
-@@ -401,36 +463,60 @@ class DraftReviewerGate(AgentHook):
+@@ -401,36 +444,60 @@ class DraftReviewerGate(AgentHook):
                          model=self._model,
                          max_tokens=self._max_tokens,
                          temperature=0.0,
@@ -1450,50 +1407,10 @@ index 0000000..49742ae
 +    assert gate._reasoning_effort is None
 +    assert gate._attempt_http_timeout_seconds is None
 diff --git a/tests/test_agent_flow_verify_ledger.py b/tests/test_agent_flow_verify_ledger.py
-index b27c9a8..4a23c6b 100644
+index b27c9a8..4e57e97 100644
 --- a/tests/test_agent_flow_verify_ledger.py
 +++ b/tests/test_agent_flow_verify_ledger.py
-@@ -80,6 +80,8 @@ async def test_installed_line_separates_never_fired_from_never_installed(monkeyp
-     assert installed[0]["event"] == "installed"
-     assert installed[0]["strict_reject_only"] is True
-     assert installed[0]["max_revisions"] == 1
-+    # The reviewer is named on the row: a stub provider has no default, so null here.
-+    assert "model" in installed[0] and installed[0]["model"] is None
- 
-     # A turn that still has tool calls is not a review; it must not add a line, or every
-     # tool-calling turn would enter the ledger as an event.
-@@ -111,6 +113,30 @@ async def test_elision_carveout_lands_its_trigger_count(monkeypatch, tmp_path):
-     assert row["reviewed"] is True
- 
- 
-+@pytest.mark.asyncio
-+async def test_every_row_names_the_model_that_reviewed(monkeypatch, tmp_path):
-+    """A mode overlay can move the reviewer per session, and the appendix and the
-+    observers exporter read the model off these rows; a pin lands as written, and
-+    a null pin resolves to the provider's default rather than to nothing."""
-+    ledger = tmp_path / "l.jsonl"
-+    monkeypatch.setenv("RAVEN_WEB_LEDGER", str(ledger))
-+
-+    class _PasserWithDefault(_Passer):
-+        def get_default_model(self):
-+            return "main/model"
-+
-+    pinned = DraftReviewerGate(_Rejecter(), model="judge/cheap")
-+    await pinned.after_iteration(_ctx())
-+    rows = _read(ledger)
-+    assert [r["model"] for r in rows if r["op"] == "verify_gate"][-1] == "judge/cheap"
-+    assert [r["model"] for r in rows if r["op"] == "verify"][-1] == "judge/cheap"
-+
-+    inherited = DraftReviewerGate(_PasserWithDefault())
-+    await inherited.after_iteration(_ctx())
-+    rows = _read(ledger)
-+    assert [r["model"] for r in rows if r["op"] == "verify"][-1] == "main/model"
-+
-+
- @pytest.mark.asyncio
- async def test_a_plain_reject_is_recorded_as_reject(monkeypatch, tmp_path):
-     ledger = tmp_path / "l.jsonl"
-@@ -262,3 +288,28 @@ async def test_the_knob_off_leaves_the_landed_behaviour_byte_identical(monkeypat
+@@ -262,3 +262,28 @@ async def test_the_knob_off_leaves_the_landed_behaviour_byte_identical(monkeypat
      rows = [r for r in _read(ledger) if r["op"] == "verify"]
      assert [r["outcome"] for r in rows] == ["budget_spent"]
      assert rows[0]["reviewed"] is False

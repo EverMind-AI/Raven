@@ -151,8 +151,8 @@ def test_doctor_passes_a_registry_that_predates_a_field(store):
 
 
 def test_doctor_json_says_what_a_caller_has_to_branch_on(store):
-    """The host's graph check reads this: an on-call node with no machine to run
-    on should be refused before a single sub-agent is dispatched."""
+    """An agent picking a machine reads this: a row it cannot run on has to be
+    distinguishable from one it can, without parsing prose."""
     store.write_text(
         json.dumps(
             {

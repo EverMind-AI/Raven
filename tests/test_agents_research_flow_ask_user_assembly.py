@@ -757,16 +757,17 @@ def test_unknown_config_keys_warn_and_declared_wiring_stays_silent():
         assert silent not in text, f"{silent} is declared wiring or a real knob, not a typo"
 
 
-def test_a_mode_overlay_typo_is_refused_with_its_path():
-    """A stricter door than the base slice's: an overlay carries knobs and nothing
-    else, so a key the flow does not read is a typo that would run the base value
-    under a mode label promising otherwise. Refused, naming the path, the way the
-    vendored twin's ``extra="forbid"`` refuses at startup."""
+def test_a_mode_overlay_typo_warns_with_its_path():
+    """Same door, other entrance: an overlay is held to the same schema as the
+    base slice, so its typos get the same voice."""
+    from loguru import logger as _logger
     from research_flow.config import FlowConfig
 
     cfg = FlowConfig.from_slice({"enabled": True})
-    with pytest.raises(ValueError, match="budgetNote.enabledd"):
+    records: list[str] = []
+    sink = _logger.add(lambda m: records.append(str(m)), level="WARNING")
+    try:
         cfg.with_overlay({"budgetNote": {"enabledd": True}})
-    # A real knob still merges, and null still means "back to the default".
-    merged = cfg.with_overlay({"verify": {"model": None}, "budgetNote": {"enabled": False}})
-    assert merged.verify.model is None and merged.budget_note.enabled is False
+    finally:
+        _logger.remove(sink)
+    assert "budgetNote.enabledd" in "\n".join(records)

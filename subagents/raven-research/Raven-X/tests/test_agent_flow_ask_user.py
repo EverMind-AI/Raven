@@ -769,18 +769,6 @@ def _q(text="which entity?", options=()):
 # ---------------------------------------------------------------------------
 
 
-def test_parse_asks_a_repeated_question_once() -> None:
-    """The same text twice is one question: a handoff would render it twice and
-    the trunk's blocking tool rejects the whole call for it. The cap counts
-    distinct questions, so a duplicate does not crowd out a real third one."""
-    payload = parse_ask_user_args(
-        {"questions": [_q("a"), _q("a"), _q("b"), _q("c")]},
-        max_questions=3,
-        max_outline_items=2,
-    )
-    assert [q["question"] for q in payload.questions] == ["a", "b", "c"]
-
-
 def test_parse_caps_both_lists_and_drops_empty_entries() -> None:
     payload = parse_ask_user_args(
         {
@@ -1245,79 +1233,6 @@ def test_a_later_iteration_withholds_the_tool() -> None:
     decision = asyncio.run(_gate().before_iteration(ctx))
     assert _withheld(decision, ctx)
     assert ctx.metadata["ask_user"]["withheld_reason"] == "not_first_iteration"
-
-
-def test_a_rollback_re_sample_withholds_the_tool_and_revokes_the_grant() -> None:
-    """A reviewer reject rolls the loop back to the SAME iteration number, so the
-    first-iteration test alone re-offers the tool on a turn that already drafted.
-    The loop counts honoured rollbacks in ``ctx.metadata["hook_rollbacks"]``; any
-    count is past the boundary. And the grant written on the first sampling must
-    go with the schema entry, or a named call still clears ``before_execute_tools``.
-    """
-    gate = _gate()
-    ctx = _ctx()
-
-    async def run():
-        first = await gate.before_iteration(ctx)
-        ctx.metadata["hook_rollbacks"] = 1
-        second = await gate.before_iteration(ctx)
-        # The model names the tool anyway on the re-sample.
-        ctx.response = _ask(questions=[_q("which entity?")])
-        third = await gate.before_execute_tools(ctx)
-        return first, second, third
-
-    first, second, third = _scenario(run)
-    assert first.modified_tools is None
-    assert _withheld(second, ctx)
-    state = ctx.metadata["ask_user"]
-    assert state["withheld_reason"] == "after_rollback"
-    assert "allowed_at" not in state
-    assert third.short_circuit_result is None
-    assert state["called_when_withheld"] is True
-    assert state["asked"] is False
-
-
-def test_the_rollback_reason_outranks_the_iteration_reason() -> None:
-    """Only the first reason is recorded, and after a rollback the informative one
-    is the rollback, not the iteration number it happens to share."""
-    ctx = _ctx(iteration=2)
-    ctx.metadata["hook_rollbacks"] = 1
-    decision = asyncio.run(_gate().before_iteration(ctx))
-    assert _withheld(decision, ctx)
-    assert ctx.metadata["ask_user"]["withheld_reason"] == "after_rollback"
-
-
-def test_a_plain_first_iteration_carries_no_rollback_count() -> None:
-    """The control: with no rollback recorded the tool stays on offer exactly as
-    before, so the new reason cannot fire on the turn shape it exists to protect."""
-    ctx = _ctx()
-    assert "hook_rollbacks" not in ctx.metadata
-    decision = asyncio.run(_gate().before_iteration(ctx))
-    assert decision.modified_tools is None
-    assert ctx.metadata["ask_user"]["allowed_at"] == 1
-
-
-def test_a_rollback_with_the_iteration_flag_off_leaves_the_tool_to_the_search_rule() -> None:
-    """``firstIterationOnly: false`` drops the boundary a re-sample would slip
-    past, so a rollback alone changes nothing there: the tool stays on offer
-    until a search, and a search withholds it for its own reason."""
-    ctx = _ctx()
-    ctx.metadata["hook_rollbacks"] = 1
-    decision = asyncio.run(_gate(first_iteration_only=False).before_iteration(ctx))
-    assert decision.modified_tools is None
-    assert "withheld_reason" not in ctx.metadata["ask_user"]
-
-    searched = _ctx(
-        messages=[
-            {"role": "user", "content": "q"},
-            {"role": "assistant", "tool_calls": [{"function": {"name": "web_search"}}]},
-            {"role": "tool", "name": "web_search", "content": "results"},
-        ]
-    )
-    searched.metadata["hook_rollbacks"] = 1
-    decision = asyncio.run(_gate(first_iteration_only=False).before_iteration(searched))
-    assert _withheld(decision, searched)
-    assert searched.metadata["ask_user"]["withheld_reason"] == "searched"
 
 
 def test_a_search_this_turn_withholds_it_even_with_the_iteration_flag_off() -> None:

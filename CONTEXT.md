@@ -105,44 +105,12 @@ _Avoid_: "callback" or "middleware" — neither captures the phase-specific, cha
 
 **Session Mode** (`acp/modes.py`; declared under `acp.modes` in config):
 A named per-session operating profile a client switches over ACP `session/set_mode`; every
-session response carries the `SessionModeState`. A mode's own two knobs are the iteration
-cap the loop enforces and an `overlay` the loop hands the hook chain as
+session response carries the `SessionModeState`. Two things move with a mode: the iteration
+cap the loop enforces, and an `overlay` the loop hands the hook chain as
 `ctx.metadata["mode_overlay"]` without interpreting -- a product's own hooks read their own
-knobs from it. The shipped built-in catalogue (see **Session Tier**) leaves both knobs at
-their defaults on all three of its modes; a deployment that declares its own catalogue is
-what actually moves them. Session state, not transcript state; a switch lands on the
-session's next turn.
+knobs from it. Session state, not transcript state; a switch lands on the session's next turn.
 _Avoid_: re-spelling a mode as a `session/set_config_option` entry -- modes are first-class in
 the stable schema.
-
-**Session Tier** (`medium`/`high`/`max`; `TIER_LADDER` in `config/schema.py`):
-What the shipped built-in Session Mode catalogue moves in place of an iteration cap or an
-overlay: a session's current mode id (`session_policy(key).mode`, falling through to the
-catalogue's default) is offered to every sub-agent that session dispatches, as the effort
-level to run it at. `clamp_tier` (`agent/subagent/mode_tiers.py`) is the clamp that lands
-it on one sub-agent: the nearest rung at or below on that agent's own probed menu, or
-`None` -- leave the agent on its own default -- in three cases. A tier outside the ladder
-(another vocabulary, "nearest" undefined); a menu sharing no rung with it at all; and a menu
-carrying a rung the ladder cannot rank at the point where raising the effort is the only
-move left, since the cheapest rung the ladder can *see* may not be the cheapest the agent
-has. An agent that converges on the ladder plus an id of its own still clamps on the real
-overlap, and an exact hit is honoured in any vocabulary that spells the rung the same way.
-Exactly one thing outranks it, and a person sets it: a standing override on a named instance
-(`subagents.instance.set_mode`). There is no per-dispatch mode -- the model composing a
-`spawn` cannot know what the operator chose, so `resolve_mode` takes no such argument and
-the spawn schema offers none.
-The three built-in descriptions are `raven.i18n` message ids resolved in
-`build_mode_catalogue`, not where they are declared: a pydantic `default_factory` runs
-before an entrance calls `set_language`, so declaring them translated would bake in
-English. A catalogue a deployment declared is passed through untouched --
-`AcpConfig.uses_builtin_modes` is the line between the rows raven owns and the rows it
-merely carries.
-_Avoid_: assuming a deployment's own Session Mode catalogue carries a tier too --
-`clamp_tier` only ever recognizes `TIER_LADDER`'s three names, so a renamed catalogue is
-exactly what it declines to guess at.
-_Avoid_: putting the scope of the control on the rungs. Each row says only what
-distinguishes it; that raven's own effort is unchanged is stated once by whichever surface
-draws the control.
 
 **Subagent** (`agent/subagent/`):
 A background agent task spawned by `SubagentManager`. Runs with its own tool set; its result
@@ -158,7 +126,11 @@ A row is a name plus a `kind` (`builtin` / `cli` / `acp` / `openai`) plus that k
 connection fields; the `kind` set is closed -- a new kind is a new backend module plus a
 branch in `agent/subagent/backends/__init__.py:build_third_party_backend`, and no plugin
 door for subagent kinds exists (recorded, not promised); `AgentCaps` and `Injectable` are *derived* from it, and are what a
-consumer branches on so that nothing has to switch on the transport.
+consumer branches on so that nothing has to switch on the transport. A declaration a row
+carries (`owns`, `owns_watched_work`) is read once here, where the schema resolves every
+spelling it has ever accepted, and travels on the row and its `AgentMeta`; a consumer that
+re-opened config or a folder manifest for itself would be a second reader free to disagree
+with the table being dispatched against.
 Three sources compose it, weakest first: **Product agent** rows discovered on the
 filesystem, then `builtin` package seeds, then config. `builtin` rows are package seeds
 (`agent/subagent/builtin_agents.py`): they exist whether or not config mentions them, and a
@@ -195,22 +167,17 @@ carried venv and credential readiness; "third-party agent" — these are raven's
 products, and nobody registered them; "builtin" — that is the in-process row, which has
 no subprocess and no launcher.
 
-**Machine** (`raven/agent/subagent/dag_machines.py`):
-A compute host the owner registered with a machine-running agent's Raven install
-via `raven ops connection add`, reported by that agent's
-`raven ops connection doctor --json` as a `{name, usable}` row. An
-on-call-style agent runs outside the dispatching Raven process — on a GPU
-box, a lab workstation, another machine entirely — so the DAG gate consults
-the agent before dispatching a graph that names it and refuses the run with
-an explicit `raven ops connection add` prompt if no usable machine is
-registered. A graph whose nodes would land on more machines than the agent
-lists is refused under the same gate with the missing ones named; once
-settled the chosen machine is injected into every node's prompt so the
-writing and reporting halves of the graph agree on where the numbers came
-from. The check is silent — returning no `Verdict` rather than a blocking
-one — for graphs that name no machine-running agent, for installs
-that have not wired one up, and for agent installs where the doctor cannot
-be run at all; in those cases the graph dispatches exactly as it used to.
+**Machine** (`raven/ops/connections.py`):
+A compute host the owner registered with `raven ops connection add`, held in
+`connections.json` beside the config or wherever `RAVEN_CONNECTIONS` points.
+An on-call-style agent runs its work outside the dispatching Raven
+process — on a GPU box, a lab workstation, another machine entirely — and the
+host's whole part in that is keeping the registry and handing it over: a
+launcher points the agent's `RAVEN_CONNECTIONS` at the owner's store rather
+than copying rows into the agent's own home. Which machine a job lands on,
+and whether it can run at all, is settled inside the agent that runs it.
+Nothing on the dispatch path reads the registry, so no graph and no spawn is
+ever refused over the state of it.
 _Avoid_: "host" / "server" / "node" (too broad, no link to the
 `ops connection` registry that supplies the rows); "GPU box" (only some are
 GPU hosts, and the term covers any registered compute destination);

@@ -127,12 +127,6 @@ class SessionGear:
 
     evidence_round: EvidenceRound | None = None
     saturation: SearchSaturation | None = None
-    # The digest knobs a mode may move. ``web_fetch`` is built once from the
-    # base config while the chain is rebuilt per (session, mode), so the tool
-    # reads these off the session's gear at call time; ``None`` for the model
-    # means the provider's default, exactly as ``DigestConfig.model`` does.
-    digest_model: str | None = None
-    digest_verbatim_head_chars: int = 0
 
 
 def evidence_round_for(config: FlowConfig) -> EvidenceRound | None:
@@ -726,12 +720,7 @@ class ResearchFlowHook(AgentHook):
             try:
                 cfg = self.cfg.with_overlay(dr_diff)
             except Exception as e:  # noqa: BLE001 - a bad overlay must not kill the turn
-                # Unreachable for a shipped overlay: the launcher validates every
-                # mode at render time and refuses to start on this. What can still
-                # arrive here is a hand-edited rendered config, and a turn that
-                # runs is still better than one that dies -- but at error level,
-                # because the session now runs a profile its mode label denies.
-                logger.error(
+                logger.warning(
                     "research-flow: mode {!r} overlay rejected ({}); running the base config",
                     mode,
                     e,
@@ -749,12 +738,7 @@ class ResearchFlowHook(AgentHook):
                 window = ctx.context_window_tokens
             er = evidence_round_for(cfg)
             sat = saturation_for(cfg)
-            self.session_gear[key] = SessionGear(
-                evidence_round=er,
-                saturation=sat,
-                digest_model=cfg.digest.model,
-                digest_verbatim_head_chars=cfg.digest.verbatim_head_chars,
-            )
+            self.session_gear[key] = SessionGear(evidence_round=er, saturation=sat)
             observers = build_chain(
                 cfg,
                 self.provider,

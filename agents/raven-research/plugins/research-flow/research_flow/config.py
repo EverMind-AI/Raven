@@ -286,34 +286,21 @@ _PASSTHROUGH_KEYS = {
     "fetch",
     "search.apiKey",
     "search.api_key",
-    "search.provider",
     "fetch.apiKey",
     "fetch.api_key",
-    "fetch.provider",
 }
 
 
 def _warn_unknown(raw: dict[str, Any], model: type[BaseModel], prefix: str = "") -> None:
-    """Unknown keys in the BASE slice stay ignored but never silent.
+    """Unknown keys stay ignored but never silent.
 
     A typo'd knob (``maxIterationz``, ``finalShape.reportStructur``) that
     validates clean is a config that lies to its operator. Same manner as the
     trunk's admission door: a warning naming the keys, never a refusal --
     ``extra="ignore"`` still governs what the models keep. The wiring keys the
     tools read raw stay silent, and the retired knobs keep their own, more
-    specific message. A mode overlay is held to a stricter door, see
-    :meth:`FlowConfig.with_overlay`.
+    specific message.
     """
-    unknown = unknown_keys(raw, model, prefix)
-    if unknown:
-        logger.warning(
-            "research-flow: config keys {} are not knobs this flow reads; ignoring them",
-            ", ".join(unknown),
-        )
-
-
-def unknown_keys(raw: dict[str, Any], model: type[BaseModel], prefix: str = "") -> list[str]:
-    """Dotted paths in ``raw`` that no field of ``model`` (or its nested models) reads."""
     retired = set(_RETIRED_KEYS) | {snake for snake, _owner in _RETIRED_KEYS.values()}
     unknown: list[str] = []
     for key, value in raw.items():
@@ -332,8 +319,12 @@ def unknown_keys(raw: dict[str, Any], model: type[BaseModel], prefix: str = "") 
             continue
         ann = field.annotation
         if isinstance(value, dict) and isinstance(ann, type) and issubclass(ann, BaseModel):
-            unknown.extend(unknown_keys(value, ann, prefix=f"{dotted}."))
-    return sorted(unknown)
+            _warn_unknown(value, ann, prefix=f"{dotted}.")
+    if unknown:
+        logger.warning(
+            "research-flow: config keys {} are not knobs this flow reads; ignoring them",
+            ", ".join(sorted(unknown)),
+        )
 
 
 def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
@@ -428,20 +419,12 @@ class FlowConfig(_Base):
         """This config with a mode's ``drFlow`` diff deep-merged over it.
 
         The merge happens on the dict form and the result is re-validated, so an
-        overlay is held to the same schema as the base slice -- and to a stricter
-        door: an unknown key raises instead of warning. The base slice tolerates
-        one because it also carries the wiring keys the tools read raw; an overlay
-        carries knobs and nothing else, so a key the flow does not read can only
-        be a typo, and a typo that merges clean runs the base value under a mode
-        label that promises otherwise. The vendored twin refuses the same way at
-        startup (``acp/modes.py``, ``extra="forbid"``).
+        overlay is held to exactly the same schema as the base slice.
         """
         if not overlay:
             return self
         _warn_retired(overlay)
-        unknown = unknown_keys(overlay, type(self))
-        if unknown:
-            raise ValueError(f"mode overlay names drFlow key(s) this flow does not read: {', '.join(unknown)}")
+        _warn_unknown(overlay, type(self))
         base = self.model_dump(by_alias=True)
         return type(self).model_validate(_deep_merge(base, overlay))
 
@@ -449,7 +432,6 @@ class FlowConfig(_Base):
 __all__ = [
     "SUPERSEDED_PROFILES",
     "SUPERSEDED_VERSIONS",
-    "unknown_keys",
     "AskUserConfig",
     "BudgetNoteConfig",
     "ConversationConfig",

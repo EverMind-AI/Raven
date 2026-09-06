@@ -428,21 +428,6 @@ def test_the_default_fetch_provider_needs_no_key(mod, searchable, tmp_path: Path
     assert mod.render_config(_source(tmp_path)).exists()
 
 
-def _judge_source(tmp_path: Path, provider: str) -> Path:
-    config = {
-        "providers": {provider: {"apiBase": "https://example.invalid/v1"}},
-        "agents": {"defaults": {"provider": provider, "model": "own-model", "maxToolIterations": 40}},
-        "drFlow": {
-            "sufficiency": {"model": "openai/cheap-judge"},
-            "verify": {"model": "openai/cheap-judge"},
-            "digest": {"model": "openai/cheap-judge", "verbatimHeadChars": 800},
-        },
-    }
-    source = tmp_path / "config.json"
-    source.write_text(json.dumps(config), encoding="utf-8")
-    return source
-
-
 def test_the_modes_are_declared_for_the_agent_to_compose(
     mod, searchable, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -463,40 +448,40 @@ def test_the_modes_are_declared_for_the_agent_to_compose(
         encoding="utf-8",
     )
     mod.MODES_DIR.mkdir()
-    (mod.MODES_DIR / "high.json").write_text(
+    (mod.MODES_DIR / "deep.json").write_text(
         json.dumps({"agents": {"defaults": {"maxToolIterations": 80}}, "drFlow": {"maxIterations": 40}}),
         encoding="utf-8",
     )
-    (mod.MODES_DIR / "max.json").write_text(json.dumps({"drFlow": {"maxIterations": None}}), encoding="utf-8")
+    (mod.MODES_DIR / "ultra.json").write_text(json.dumps({"drFlow": {"maxIterations": None}}), encoding="utf-8")
 
-    rendered = mod.render_config(source, mode="high")
+    rendered = mod.render_config(source, mode="deep")
 
     data = json.loads(rendered.read_text(encoding="utf-8"))
-    assert data["acp"]["defaultMode"] == "high"
-    assert set(data["acp"]["modes"]) == {"medium", "high", "max"}
-    assert data["acp"]["modes"]["high"]["drFlow"] == {"maxIterations": 40}
-    assert data["acp"]["modes"]["high"]["maxToolIterations"] == 80
-    # The baseline is untouched, and IS the medium entry - which is why medium needs
+    assert data["acp"]["defaultMode"] == "deep"
+    assert set(data["acp"]["modes"]) == {"fast", "deep", "ultra"}
+    assert data["acp"]["modes"]["deep"]["drFlow"] == {"maxIterations": 40}
+    assert data["acp"]["modes"]["deep"]["maxToolIterations"] == 80
+    # The baseline is untouched, and IS the fast entry - which is why fast needs
     # no overlay file and carries an empty diff.
     assert data["drFlow"]["maxIterations"] == 20
     assert data["agents"]["defaults"]["maxToolIterations"] == 40
-    assert data["acp"]["modes"]["medium"]["drFlow"] == {}
+    assert data["acp"]["modes"]["fast"]["drFlow"] == {}
 
 
 def test_an_explicit_null_in_an_overlay_survives_into_the_catalogue(
     mod, searchable, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Max clears the baseline's iteration cap by writing null, which the
+    """Ultra clears the baseline's iteration cap by writing null, which the
     schema reads as "back to the built-in default" - so the null has to reach
     the agent rather than be dropped as an absent key on the way."""
     monkeypatch.setenv("RESEARCH_API_KEY", "k-llm")
     mod.MODES_DIR.mkdir()
-    (mod.MODES_DIR / "max.json").write_text(json.dumps({"drFlow": {"maxIterations": None}}), encoding="utf-8")
+    (mod.MODES_DIR / "ultra.json").write_text(json.dumps({"drFlow": {"maxIterations": None}}), encoding="utf-8")
 
-    rendered = mod.render_config(_source(tmp_path), mode="max")
+    rendered = mod.render_config(_source(tmp_path), mode="ultra")
 
-    overlay = json.loads(rendered.read_text(encoding="utf-8"))["acp"]["modes"]["max"]["drFlow"]
-    assert "maxIterations" in overlay and overlay["maxIterations"] is None
+    ultra = json.loads(rendered.read_text(encoding="utf-8"))["acp"]["modes"]["ultra"]["drFlow"]
+    assert "maxIterations" in ultra and ultra["maxIterations"] is None
 
 
 def test_the_identity_prompt_is_written_once_however_many_modes_there_are(
@@ -518,7 +503,7 @@ def test_the_identity_prompt_is_written_once_however_many_modes_there_are(
         encoding="utf-8",
     )
     mod.MODES_DIR.mkdir()
-    for name in ("high", "max"):
+    for name in ("deep", "ultra"):
         (mod.MODES_DIR / f"{name}.json").write_text(json.dumps({"drFlow": {"maxIterations": 40}}), encoding="utf-8")
 
     rendered = mod.render_config(source, mode=None)
@@ -530,7 +515,7 @@ def test_a_folder_with_no_modes_directory_declares_none(
     mod, searchable, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The degradation path: no catalogue in the rendered config, which leaves
-    the agent on the three built-in tiers trunk raven falls back to."""
+    the agent's session/set_mode method-not-found."""
     monkeypatch.setenv("RESEARCH_API_KEY", "k-llm")
 
     rendered = mod.render_config(_source(tmp_path))
@@ -541,14 +526,14 @@ def test_a_folder_with_no_modes_directory_declares_none(
 def test_a_mode_without_an_overlay_file_refuses_to_launch(mod, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RESEARCH_API_KEY", "k-llm")
     with pytest.raises(SystemExit, match="no overlay for mode"):
-        mod.render_config(_source(tmp_path), mode="high")
+        mod.render_config(_source(tmp_path), mode="deep")
 
 
 def test_the_shipped_overlays_carry_only_budget_knobs() -> None:
     """The real modes/ files must stay diffs: an overlay that re-declares the
     identity prompt or the provider block forks the agent, which is the drift
     the overlay design exists to prevent."""
-    for name in ("high", "max"):
+    for name in ("deep", "ultra"):
         overlay = json.loads((_LAUNCHER.parent / "modes" / f"{name}.json").read_text(encoding="utf-8"))
         assert set(overlay) <= {"agents", "drFlow"}, name
         assert "identityOverride" not in overlay.get("drFlow", {}), name
@@ -558,12 +543,12 @@ def test_the_shipped_overlays_carry_only_budget_knobs() -> None:
 def test_the_report_template_is_the_baseline_s_and_no_overlay_moves_it() -> None:
     """`finalShape.reportDepth` selects the report the product ships, so it
     belongs to the baseline every mode inherits. An overlay that set it would
-    make the high entry differ from the default in the shape of its report
+    make the deep entry differ from the default in the shape of its report
     rather than in how hard it looks for evidence - and the routing text sells
     the modes on the latter."""
     baseline = json.loads((_LAUNCHER.parent / "config.json").read_text(encoding="utf-8"))
     assert baseline["drFlow"]["finalShape"]["reportDepth"] is True
-    for name in ("high", "max"):
+    for name in ("deep", "ultra"):
         overlay = json.loads((_LAUNCHER.parent / "modes" / f"{name}.json").read_text(encoding="utf-8"))
         assert "reportDepth" not in overlay.get("drFlow", {}).get("finalShape", {}), name
 
@@ -614,18 +599,15 @@ def test_the_manifest_registers_the_acp_transport() -> None:
     # exactly the edit that could empty it.
     assert manifest["owns"].startswith("owns research:")
     assert "Do not research it yourself" in manifest["owns"]
-    for row in ("Raven-Research-Deep", "Raven-Research-High", "Raven-Research-Max"):
-        assert row not in manifest["owns"], row
+    assert "Raven-Research-Deep" not in manifest["owns"]
     assert "mode=" not in manifest["owns"] and "`mode`" not in manifest["owns"]
 
 
 def test_the_choice_guidance_travels_with_the_modes_that_offer_it() -> None:
     """One predicate behind the route and the advertisement. The launcher's mode
-    blurbs reach a reader through the menu `subagents.instance.set_mode` answers
-    with, and the clamp that fits a session tier onto this agent -- both built
-    only from modes the probe actually measured, so guidance written here cannot
-    outlive the rungs it describes. (The model is no longer among its readers:
-    the spawn tool offers no mode.)
+    blurbs reach the model through the spawn schema's `mode` property, which is
+    built only from modes the probe actually measured -- so guidance written here
+    cannot outlive the argument it tells the model to pass.
 
     Asserted on the rendered catalogue rather than on the source text: the block
     `mode_catalogue` emits is what lands in `acp.modes`, what the agent then
@@ -642,12 +624,12 @@ def test_the_choice_guidance_travels_with_the_modes_that_offer_it() -> None:
 
     catalogue = launcher.mode_catalogue()
 
-    assert set(catalogue) == {"medium", "high", "max"}
+    assert set(catalogue) == {"fast", "deep", "ultra"}
     blurbs = {mode: entry["description"] for mode, entry in catalogue.items()}
     # Each mode has to say when it is the right pick, not only what it does.
-    assert "default" in blurbs["medium"].lower()
-    assert "multi-faceted" in blurbs["high"]
-    assert "explicitly asked" in blurbs["max"]
+    assert "default" in blurbs["fast"].lower()
+    assert "multi-faceted" in blurbs["deep"]
+    assert "explicitly asked" in blurbs["ultra"]
 
 
 def test_the_folder_ships_exactly_one_roster_manifest() -> None:

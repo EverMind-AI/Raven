@@ -6,15 +6,13 @@ makes raven's on-call capability reproducible without anyone's dev machine:
   1. You paste a task naming a solver case, a budget, and a shared machine.
   2. The host recognises it as **work to run and watch** and steers itself to
      spawn the on-call agent instead of hand-running trials.
-  3. The spawn is **refused** -- the machine registry is empty -- and the
-     refusal lists exactly what to ask you.
-  4. Raven registers your laptop (`raven ops connection add --transport local`,
-     which probes the machine and records what it found) -- asking you first,
-     or, since everything about this very computer is knowable locally,
-     writing the row itself and telling you what it wrote. A remote machine
-     it must always ask you about.
-  5. It re-spawns, and the
-     on-call agent runs a real campaign: multiple trials, a ledger, budget
+  3. The on-call agent starts, reads the machine registry before anything
+     else, and finds it **empty** -- so its first move is to hand you the list
+     of what a machine needs, rather than to look for a way onto one.
+  4. You register your laptop (`raven ops connection add --transport local`,
+     which probes the machine and records what it found). A remote machine
+     needs the address and key, which nothing but you can supply.
+  5. The on-call agent runs a real campaign: multiple trials, a ledger, budget
      metering, mid-run readings, and a conclusion with the best configuration.
 
 No CalculiX, no GROMACS, no remote box. The case is a 2D heat equation in
@@ -62,24 +60,21 @@ empty, and your real `~/.raven` is not touched. Then paste the task from
 
 ## What success looks like
 
-The shape below is from a live run of this demo (2026-08-28); trial values
-vary run to run.
+The shape below is the chain this demo exercises; trial values vary run to
+run, and the cold-start half has not been re-recorded live since the host
+stopped gating the spawn on the registry.
 
 ```
 Tool call: read_file(arena/run_heat.sh)          <- looks at the case
   ... tool result gains a line steering to the on-call specialist
 Tool call: spawn(subagent="Raven-Oncall", ...)
-  -> "'Raven-Oncall' runs work on the owner's machines, and this
-      installation has none it can use. Nothing was dispatched. Ask the
-      owner for a machine before running any of this ..."
-Tool call: exec(raven ops connection add --non-interactive --transport local ...)
-  -> probed the machine, wrote the registry row
-  (for this very computer raven may register without asking -- everything the
-   refusal asks for is knowable locally -- and reports what it wrote down; for
-   a remote machine it MUST come back and ask you, since the address and key
-   are outside anything it can see)
-Tool call: spawn(subagent="Raven-Oncall", ...)
   -> "Subagent [...] started"
+  ... the on-call agent's first call is ops_connections, which answers
+      "No machine is set up in this instance ... Hand this to the owner as
+       it stands. Ask them to run `raven ops connection add`" and lists the
+       seven things that command asks for
+$ raven ops connection add --transport local        <- you, once
+  -> probed the machine, wrote the registry row
   ... the on-call agent declares a campaign, submits trials, takes readings,
       and concludes with the best stable configuration and its L2 error
 ```

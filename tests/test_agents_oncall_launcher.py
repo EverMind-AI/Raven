@@ -164,7 +164,7 @@ def test_the_roster_row_identity_is_the_vendored_twins():
     for field in (
         "name",
         "kind",
-        "runsOnMachines",
+        "ownsWatchedWork",
         "description",
         "owns",
         "command",
@@ -213,7 +213,7 @@ def test_the_render_merges_secrets_pins_workspace_and_boards_the_plugin(grounded
 def test_the_fork_schema_key_never_reaches_trunks_loader(grounded):
     data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
     assert "oncall" not in data["tools"], "the gate arms via the plugin slice, not tools.oncall"
-    assert "acp" not in data, "oncall ships no modes, so its render carries no catalogue of its own"
+    assert "acp" not in data, "oncall ships no modes; session/set_mode stays method-not-found"
 
 
 def test_optional_keys_fall_back_per_slot_to_the_host_config(grounded, tmp_path):

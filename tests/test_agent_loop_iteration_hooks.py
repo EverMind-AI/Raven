@@ -152,38 +152,6 @@ async def test_after_iteration_short_circuit_replaces_the_draft_without_persisti
 
 
 @pytest.mark.asyncio
-async def test_an_honoured_rollback_is_counted_where_the_next_iteration_can_read_it(tmp_path):
-    """The re-sample carries the same iteration number, so a hook scoped to the
-    turn boundary cannot tell it from the first sampling by ``ctx.iteration``
-    alone. The loop records the honoured count beside the refused one."""
-
-    class BounceOnce(AgentHook):
-        def __init__(self) -> None:
-            self.seen: list[tuple[int | None, int]] = []
-
-        async def before_iteration(self, ctx):
-            self.seen.append((ctx.iteration, ctx.metadata.get("hook_rollbacks", 0)))
-            return HookDecision()
-
-        async def after_iteration(self, ctx):
-            if ctx.metadata.get("bounced"):
-                return HookDecision()
-            ctx.metadata["bounced"] = True
-            return HookDecision(rollback=True)
-
-    hook = BounceOnce()
-    provider = _ScriptedProvider([_text("draft"), _text("final")])
-    loop = _loop(tmp_path, provider, [hook], max_iterations=3)
-
-    out = await loop._process_message(_req())
-
-    assert out is not None
-    # Iteration 1 twice: the first sampling with no rollback on record, the
-    # re-sample with exactly one.
-    assert hook.seen == [(1, 0), (1, 1)]
-
-
-@pytest.mark.asyncio
 async def test_the_rollback_cap_degrades_to_pass_through_and_is_counted(tmp_path):
     class AlwaysBounce(AgentHook):
         def __init__(self) -> None:
@@ -450,33 +418,3 @@ def test_the_persist_stamp_never_crosses_the_turn_base_into_filed_history():
 
     assert "observers" not in prior_assistant, "filed history must not be rewritten in place"
     assert not any("observers" in m for m in messages), "an answerless turn stamps nothing"
-
-
-@pytest.mark.asyncio
-async def test_the_turns_subagent_tier_is_frozen_at_its_start(tmp_path):
-    """A tier switched between two iterations lands on the next turn.
-
-    The sibling of the iteration cap above: both are read from the policy the
-    turn snapshotted, so a `session/set_mode` arriving while the turn runs cannot
-    make two sub-agent dispatches in one turn run at different efforts.
-    """
-    from raven.agent.subagent.mode_tiers import turn_tier_in_force
-
-    seen: list[str | None] = []
-    held: dict = {}
-
-    class SwitchMidTurn(AgentHook):
-        async def before_iteration(self, ctx):
-            seen.append(turn_tier_in_force())
-            held["loop"].set_session_policy("cli:c", mode="max")
-            return HookDecision()
-
-    provider = _ScriptedProvider([_tool_call("list_dir", {"path": "."}), _text("done")])
-    loop = _loop(tmp_path, provider, [SwitchMidTurn()])
-    held["loop"] = loop
-    loop.set_session_policy("cli:c", mode="medium")
-
-    await loop._process_message(_req())
-
-    assert seen and set(seen) == {"medium"}, f"the turn kept the tier it started on, saw {seen}"
-    assert loop.session_policy("cli:c").mode == "max", "the switch did land, for the next turn"

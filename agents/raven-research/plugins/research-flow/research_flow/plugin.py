@@ -10,17 +10,13 @@ per-session gear map the hook writes).
 
 Config slice (``plugins.config["research-flow"]``): the product's ``drFlow``
 block verbatim (camelCase keys, validated by :class:`FlowConfig`), plus the
-plugin-only keys ``search.provider`` / ``fetch.provider`` (a vendor from
-``SEARCH_PROVIDERS`` / ``FETCH_PROVIDERS``; an unknown name degrades to the
-default, out loud), ``search.apiKey`` / ``fetch.apiKey`` (each falling back to
-the SELECTED vendor's own env var), ``fetch.fallbackApiKey`` (the default
-reader's key, for when a keyed reader selected without one degrades back to
-it), ``proxy``, and ``stateRoot`` (defaults to ``<workspace>/research_flow``).
+plugin-only keys ``search.apiKey`` (falls back to ``SERPER_API_KEY``),
+``fetch.apiKey`` (falls back to ``JINA_API_KEY``), ``proxy``, and ``stateRoot``
+(defaults to ``<workspace>/research_flow``).
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -33,15 +29,7 @@ from research_flow.state import SessionStore
 from research_flow.support.answer_text import visible_answer
 from research_flow.support.ledger import set_ledger_dir
 from research_flow.tools.ask_user import DRAskUserTool
-from research_flow.tools.web import (
-    DEFAULT_FETCH_PROVIDER,
-    SEARCH_PROVIDERS,
-    WebFetchTool,
-    WebSearchTool,
-    current_session,
-    resolve_fetch_provider,
-    resolve_search_provider,
-)
+from research_flow.tools.web import WebFetchTool, WebSearchTool, current_session
 
 if TYPE_CHECKING:
     from raven.contracts.llm_provider import LLMProvider
@@ -55,25 +43,10 @@ if TYPE_CHECKING:
 _DEFAULT_MAX_ITERATIONS = 40
 
 
-def _make_digest_fn(
-    provider: "LLMProvider",
-    model: str | None,
-    verbatim_head_chars: int = 0,
-    *,
-    resolve: "Callable[[], tuple[str | None, int]] | None" = None,
-):
-    """The fork's digest closure: targeted extraction for web_fetch.
-
-    ``resolve`` is what makes the digest follow the session's mode. The fetch
-    tool is built once from the base config, but a mode overlay may move
-    ``digest.model`` / ``digest.verbatimHeadChars``; when given, ``resolve()`` is
-    consulted per call and returns the pair in force for the current session,
-    falling back to the base values handed in here. The threshold and timeout
-    stay the tool's constructor arguments and therefore the base config's.
-    """
+def _make_digest_fn(provider: "LLMProvider", model: str | None, verbatim_head_chars: int = 0):
+    """The fork's digest closure, verbatim: targeted extraction for web_fetch."""
 
     async def digest(text: str, info_to_extract: str) -> str:
-        use_model, use_head = (model, verbatim_head_chars) if resolve is None else resolve()
         response = await provider.chat_with_retry(
             messages=[
                 {"role": "system", "content": _DIGEST_SYSTEM},
@@ -84,7 +57,7 @@ def _make_digest_fn(
                     ),
                 },
             ],
-            model=use_model,
+            model=model,
             temperature=0.1,
         )
         # visible_answer, not a paired-tag regex: the digest model is the same served
@@ -93,8 +66,8 @@ def _make_digest_fn(
         # there and the whole chain of thought was being appended to the tool result and
         # persisted into the trajectory.
         digested = visible_answer(getattr(response, "content", None))
-        if digested and use_head > 0:
-            digested = f"{digested}\n\n[page head, verbatim]\n{text[:use_head]}"
+        if digested and verbatim_head_chars > 0:
+            digested = f"{digested}\n\n[page head, verbatim]\n{text[:verbatim_head_chars]}"
         return digested
 
     return digest
@@ -107,20 +80,8 @@ class _Shared:
         self._ctx = ctx
         raw = dict(ctx.config or {})
         self.cfg = FlowConfig.from_slice(raw)
-        search_slice = raw.get("search") if isinstance(raw.get("search"), dict) else {}
-        fetch_slice = raw.get("fetch") if isinstance(raw.get("fetch"), dict) else {}
-        self.search_api_key = search_slice.get("apiKey")
-        self.fetch_api_key = fetch_slice.get("apiKey")
-        # The default reader's key, for the build below. The slice carries one
-        # key per role, so the vendor table the kernel looks a provider up in
-        # has no counterpart here; this is the only other vendor the fetch half
-        # can end up on.
-        self.fetch_fallback_api_key = fetch_slice.get("fallbackApiKey")
-        # Degraded rather than refused: an unknown vendor name in the slice is a
-        # typo the launcher cannot catch, and falling back to the default keeps
-        # the pair serving instead of taking the whole flow down with it.
-        self.search_provider = resolve_search_provider(search_slice.get("provider"))
-        self.fetch_provider = resolve_fetch_provider(fetch_slice.get("provider"))
+        self.search_api_key = (raw.get("search") or {}).get("apiKey") if isinstance(raw.get("search"), dict) else None
+        self.fetch_api_key = (raw.get("fetch") or {}).get("apiKey") if isinstance(raw.get("fetch"), dict) else None
         self.proxy = raw.get("proxy")
         state_root = raw.get("stateRoot")
         root = Path(state_root) if state_root else Path(ctx.services.workspace) / "research_flow"
@@ -181,9 +142,8 @@ class _Shared:
         advertise a tool whose every call is an error string, and the contract
         this flow renders tells the model its tools are exactly these. Ask the
         built tool rather than the config slice: it resolves the key at call
-        time from the slice or from the selected vendor's env var, and gating
-        on the slice alone would withdraw the tool from a deploy that only
-        exports the var.
+        time from the slice or from ``SERPER_API_KEY``, and gating on the slice
+        alone would withdraw the tool from a deploy that only exports the var.
         """
         if not self._search_built:
             self._search_built = True
@@ -211,7 +171,6 @@ class _Shared:
                 api_key=self.search_api_key,
                 max_results=cfg.search.rendered_width,
                 proxy=self.proxy,
-                provider=self.search_provider,
                 include_answer_box=cfg.search.include_answer_box,
                 include_knowledge_graph=cfg.search.include_knowledge_graph,
                 include_snippets=cfg.search.include_snippets,
@@ -225,12 +184,9 @@ class _Shared:
             if tool.api_key:
                 self._web_search = tool
             else:
-                spec = SEARCH_PROVIDERS[self.search_provider]
                 logger.warning(
-                    "research-flow: web_search is not registered -- no {} key in "
-                    "plugins.config['research-flow'].search.apiKey and no {}",
-                    spec.label,
-                    spec.env_var,
+                    "research-flow: web_search is not registered -- no Serper key in "
+                    "plugins.config['research-flow'].search.apiKey and no SERPER_API_KEY"
                 )
         return self._web_search
 
@@ -246,55 +202,18 @@ class _Shared:
                         "plugin; web_fetch falls back to plain truncation"
                     )
                 else:
-                    gear = self.session_gear
-
-                    # Same shape as the search tool's gear factories: the chain
-                    # registers the session's (mode-resolved) digest knobs and
-                    # the tool reads them at call time, so a deep session's
-                    # digest model is deep's and not the base config's. The
-                    # base-config fallback covers a call outside any geared
-                    # session (a direct caller, a test).
-                    def digest_knobs() -> tuple[str | None, int]:
-                        slot = gear.get(current_session())
-                        if slot is not None:
-                            return slot.digest_model, slot.digest_verbatim_head_chars
-                        return cfg.digest.model, cfg.digest.verbatim_head_chars
-
                     kwargs.update(
                         digest_fn=_make_digest_fn(
                             provider,
                             cfg.digest.model,
                             verbatim_head_chars=cfg.digest.verbatim_head_chars,
-                            resolve=digest_knobs,
                         ),
                         digest_threshold_chars=cfg.digest.threshold_chars,
                         digest_timeout_s=cfg.digest.timeout_seconds,
                     )
-            # Resolved here, at the build, exactly where the kernel resolves it:
-            # a keyed backend with no key would be advertised and refuse every
-            # call, and this tool replaces the kernel's, so declining to degrade
-            # makes a research run the one place that config cannot read a page.
-            #
-            # The key follows the provider, as it does at the kernel's own build
-            # (``wiring`` looks the key up a second time, under the EFFECTIVE
-            # provider). Passing the selected vendor's key to the reader that
-            # replaced it would run the fallback anonymously while the host had
-            # a key configured for exactly that reader.
-            #
-            # A lookup keyed by destination rather than a "did it change" test:
-            # a credential must never come to rest against an endpoint it was
-            # not issued for, so a provider neither of these keys belongs to
-            # gets none. The selection is written second because it wins when it
-            # IS the default reader, whose own key is then ``fetch.apiKey``.
-            fetch_provider = WebFetchTool.effective_provider(self.fetch_provider, self.fetch_api_key)
-            fetch_keys = {
-                DEFAULT_FETCH_PROVIDER: self.fetch_fallback_api_key,
-                self.fetch_provider: self.fetch_api_key,
-            }
             self._web_fetch = WebFetchTool(
-                api_key=fetch_keys.get(fetch_provider),
+                api_key=self.fetch_api_key,
                 proxy=self.proxy,
-                provider=fetch_provider,
                 **kwargs,
             )
         return self._web_fetch

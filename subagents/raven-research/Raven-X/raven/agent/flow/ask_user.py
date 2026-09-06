@@ -373,10 +373,6 @@ def clean_questions(
             text = item.strip()
         if not text:
             continue
-        if any(q["question"] == text for q in out):
-            # The same question twice is one question: a handoff would render it
-            # twice, and the trunk's blocking tool rejects the whole call for it.
-            continue
         out.append({"question": text, "options": options})
         if max_questions is not None and len(out) >= max(1, max_questions):
             break
@@ -746,17 +742,6 @@ class AskUserGate(AgentHook):
         reason = None
         if not is_research_turn():
             reason = "non_research_turn"
-        elif self._first_iteration_only and ctx.metadata.get("hook_rollbacks"):
-            # A harness re-prompt (a reviewer rejection, a force-finalize, a
-            # report bounce) re-samples the SAME iteration number, so the
-            # first-iteration test below cannot see it. The loop counts every
-            # honoured rollback; any count means this turn is past its
-            # boundary. Checked before ``not_first_iteration`` because only the
-            # first reason is recorded, and this is the informative one. Tied to
-            # the flag because the boundary a re-sample slips past IS the
-            # first-iteration rule; with it off, a re-sample is bound by the
-            # search rule below like any other iteration.
-            reason = "after_rollback"
         elif self._first_iteration_only and (ctx.iteration or 1) > 1:
             reason = "not_first_iteration"
         elif self._searched(ctx):
@@ -771,12 +756,6 @@ class AskUserGate(AgentHook):
             state["allowed_at"] = ctx.iteration or 1
             return HookDecision()
 
-        # Revoke the standing grant as well as withholding the schema entry.
-        # ``before_execute_tools`` compares ``allowed_at`` by iteration number
-        # alone, and a rollback keeps the number: a grant written on the first
-        # sampling of iteration 1 would still clear a named call on the
-        # re-sample the tool was just withheld from.
-        state.pop("allowed_at", None)
         state["withheld"] = int(state.get("withheld") or 0) + 1
         # FIRST reason wins, not the last. Observed on the first live two-turn run:
         # iteration 1 was withheld as ``chain_exhausted`` - the one informative

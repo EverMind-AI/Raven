@@ -68,14 +68,14 @@ def test_the_roster_row_is_the_vendored_twins_modulo_the_engine_declaration():
     ``engine`` declaration product discovery probes readiness with (the fork
     twin's venv gate has no counterpart here, so the wheel probe is what keeps
     an engineless install listed-but-disabled instead of failing at dispatch).
-    Everything the host router reads stays the twin's: runsOnMachines stays
+    Everything the host router reads stays the twin's: ownsWatchedWork stays
     absent on both sides, and recommendedLlm.provider keeps the load-bearing
     name ``ppt`` (C2: gateway detection and prompt caching key on it)."""
     ours = json.loads((RUN_PY.parent / "subagent.json").read_text(encoding="utf-8"))
     theirs = json.loads((FORK / "subagent.json").read_text(encoding="utf-8"))
     assert ours.pop("engine") == {"package": "raven_ppt", "wheel": "ppt-engine"}
     assert ours == theirs
-    assert "runsOnMachines" not in ours
+    assert "ownsWatchedWork" not in ours
     assert ours["recommendedLlm"]["provider"] == "ppt"
 
 

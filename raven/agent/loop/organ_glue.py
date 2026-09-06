@@ -538,23 +538,20 @@ class OrganGlueMixin:
         # of the turn. The first cut treated every spawn as one and silenced the
         # nudges on refusal too -- at exactly the moment the model chose to run
         # trials by hand -- and an unrelated spawn of another agent silenced
-        # them just as well. A machineless refusal instead arms the sharper
-        # line; anything unrecognised keeps the nudges alive.
+        # them just as well. Anything unrecognised keeps the nudges alive.
         if name in ("spawn", "run_subagent_dag"):
             from raven.agent.subagent import watch_work
 
             try:
                 spawn_tool = self.tools.get("spawn")
                 agents = getattr(spawn_tool, "_agents", lambda: [])()
-                agent = await watch_work.oncall_agent([a.name for a in agents]) if agents else None
+                agent = watch_work.oncall_agent(agents) if agents else None
             except Exception:  # noqa: BLE001 -- an unreadable roster attributes nothing
                 agent = None
             if agent is None:
                 return result
             try:
-                if "Nothing was dispatched" in str(result):
-                    state.machineless = True
-                elif watch_work.handed_over(name, args, str(result), agent):
+                if watch_work.handed_over(name, args, str(result), agent):
                     state.dispatched = True
             except Exception:  # noqa: BLE001 -- a dispatch must not fail over a judgement
                 logger.debug("watch-work hand-off judgement skipped", exc_info=True)
@@ -577,7 +574,7 @@ class OrganGlueMixin:
                 return result
             from raven.agent.subagent import watch_work
 
-            agent = await watch_work.oncall_agent([a.name for a in agents])
+            agent = watch_work.oncall_agent(agents)
             if not agent:
                 return result
             verdict = state.verdict
@@ -602,8 +599,6 @@ class OrganGlueMixin:
             else:
                 hits = [subject]
             if any(verdict.claims(h) for h in hits):
-                if state.machineless:
-                    return result + watch_work.machineless_nudge(agent)
                 return result + watch_work.nudge(agent)
         except Exception:  # noqa: BLE001 -- a look must not fail over a judgement
             logger.debug("watch-work judgement skipped", exc_info=True)

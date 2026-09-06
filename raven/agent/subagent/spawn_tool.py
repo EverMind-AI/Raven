@@ -185,6 +185,27 @@ class SpawnTool(Tool):
                 "enum": names,
                 "description": "Which agent runs this task. Required: pick one from the list.",
             }
+        # One enum over every agent's modes, because the schema has one `subagent`
+        # property and JSON Schema cannot make one property's enum depend on
+        # another's value. Which ids belong to which agent is therefore said in
+        # the description, and a mode aimed at an agent that does not have it is
+        # refused at dispatch rather than by the schema.
+        by_agent = [(a.name, a.modes) for a in agents if a.modes]
+        if by_agent:
+            props["mode"] = {
+                "type": "string",
+                "enum": sorted({m.id for _name, modes in by_agent for m in modes}),
+                "description": (
+                    "Optional: how much effort the agent spends. Omit it and the agent's own "
+                    "default is used, which is the right choice unless the request says otherwise. "
+                    + " ".join(
+                        f"{name}: "
+                        + "; ".join(f"{m.id} - {(m.description or m.name or m.id).rstrip('.')}" for m in modes)
+                        + "."
+                        for name, modes in by_agent
+                    )
+                ),
+            }
         stateful_names = sorted(a.name for a in agents if a.stateful)
         props["instance"] = {
             "type": "string",
@@ -208,6 +229,26 @@ class SpawnTool(Tool):
                 ["task_summary", "prompt_template", "subagent"] if names else ["task_summary", "prompt_template"]
             ),
         }
+
+    def _mode_refusal(self, agent: str | None, mode: str | None) -> str:
+        """Why this agent cannot be run in ``mode``, or ``""`` when it can.
+
+        The schema's enum is the union over every agent's modes (one property
+        cannot depend on another's value), so the per-agent check is here. Said
+        as a refusal the model can act on rather than passed down to fail at the
+        agent: a mode it will not accept is a fact this side already knows.
+        """
+        if not mode:
+            return ""
+        meta = next((a for a in self._agents() if a.name == agent), None)
+        if meta is None:
+            return ""
+        offered = [m.id for m in meta.modes]
+        if mode in offered:
+            return ""
+        if not offered:
+            return f"Error: `{agent}` offers no modes. Call spawn again without `mode`."
+        return f"Error: `{agent}` has no mode `{mode}`. Its modes are: {', '.join(offered)}."
 
     def _is_stateful(self, agent: str | None) -> bool:
         """Whether this target can continue a handle handed back to it.
@@ -319,6 +360,7 @@ class SpawnTool(Tool):
         subagent: str | None = None,
         instance: str | None = None,
         inputs: dict[str, Any] | None = None,
+        mode: str | None = None,
         **kwargs: Any,
     ) -> str:
         """Spawn a subagent to execute the given task.
@@ -342,37 +384,6 @@ class SpawnTool(Tool):
             return "Error: `prompt_template` is required -- it is the task the sub-agent runs."
         if (refusal := self._reject_useless_instance(subagent, instance)) is not None:
             return refusal
-        # The same pre-dispatch question the DAG runner asks (dag_tool.py, "Last
-        # of the pre-dispatch checks"): an agent that runs work on the owner's
-        # machines is asked whether it has one, and a task whose work has
-        # nowhere to go is refused while the owner is still here to be asked.
-        # It was only on the DAG path, and the failure that bought this line was
-        # a single spawn: the on-call agent booted, found the registry empty,
-        # and the owner learned it minutes in, one sub-agent run too late.
-        # Silent when nothing could be established -- see dag_machines.
-        if subagent:
-            from raven.agent.subagent.dag_machines import refusal as machines_refusal
-            from raven.agent.subagent.dag_machines import verdict_for_async
-
-            if (verdict := await verdict_for_async([subagent])) and verdict.usable == 0:
-                # Registration has to be one runnable line. Measured 2026-08-27,
-                # before `ops connection` was lifted into this install: the model
-                # collected every answer from the owner, found no command to put
-                # them in, and hand-ran the work over ssh instead.
-                return machines_refusal(verdict) + (
-                    "\n\nOnce the owner has answered, register the machine yourself "
-                    "and spawn again:\n"
-                    "  raven ops connection add --non-interactive --id <id> "
-                    "--name <name> --transport ssh --host <addr> --port <port> "
-                    "--user <user> --key <keypath> --software '<installed, with paths>' "
-                    "--budget-unit minute --concurrency 1\n"
-                    "When the machine is this very computer, use --transport local with "
-                    "no host/port/user/key -- everything it asks is knowable here, so "
-                    "you may register without waiting for the owner, but tell them in "
-                    "your reply what you wrote down (name, budget unit, jobs at once): "
-                    "the registry is theirs, and this row is what every later campaign "
-                    "reads as fact."
-                )
         if inputs is not None and not isinstance(inputs, dict):
             return (
                 "Error: `inputs` must be an object keyed by input name -- "
@@ -395,9 +406,12 @@ class SpawnTool(Tool):
         minted = not instance and self._is_stateful(subagent)
         if minted:
             instance = mint_handle(task_summary, fallback=subagent or GENERIC_AGENT)
+        if refusal := self._mode_refusal(subagent, mode):
+            return refusal
         result = await self._manager.spawn(
             task=task,
             task_summary=task_summary,
+            mode=mode,
             origin_channel=org.channel,
             origin_chat_id=org.chat_id,
             session_key=org.session_key,
