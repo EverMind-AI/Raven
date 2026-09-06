@@ -958,9 +958,7 @@ def _ask_review_item(
         ]
     while True:
         action = _ask_action(
-            questionary.select(
-                "Decision:", choices=choices, style=style, qmark=QMARK, pointer=POINTER, instruction=" "
-            )
+            questionary.select("Decision:", choices=choices, style=style, qmark=QMARK, pointer=POINTER, instruction=" ")
         )
         if action == _REVIEW_CANCEL:
             raise treview.ReviewCancelledError("the report was cancelled from the review screen")
