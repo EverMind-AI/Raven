@@ -1803,24 +1803,30 @@ class TurnPathMixin:
             if on_episode_start is not None:
                 await on_episode_start(index)
 
+        from raven.agent.subagent.mode_tiers import turn_tier
+
         try:
-            final_content, _, all_msgs, outcome = await self._run_agent_loop(
-                initial_messages,
-                on_progress=on_progress,
-                session_key=key,
-                model=routed_model,
-                fallback_models=fallback_models,
-                injected_skill_ids=self._collect_injected_skill_ids(selected_skills),
-                on_token_delta=_tap_token if on_token_delta is not None else None,
-                on_reasoning_delta=_tap_reasoning if on_reasoning_delta is not None else None,
-                on_tool_event=on_tool_event,
-                on_episode_start=_tap_episode,
-                on_notice=on_notice,
-                usage_sink=usage_sink,
-                drain=drain,
-                hook_metadata=turn_hook_meta,
-                session_history=session.messages,
-            )
+            # The tier this turn dispatches sub-agents at, frozen here for the
+            # same reason the iteration cap is read once: a switch arriving mid-turn
+            # lands on the next turn, not on a sub-agent this one has yet to call.
+            with turn_tier(self.session_policy(key or "").mode or self._default_tier):
+                final_content, _, all_msgs, outcome = await self._run_agent_loop(
+                    initial_messages,
+                    on_progress=on_progress,
+                    session_key=key,
+                    model=routed_model,
+                    fallback_models=fallback_models,
+                    injected_skill_ids=self._collect_injected_skill_ids(selected_skills),
+                    on_token_delta=_tap_token if on_token_delta is not None else None,
+                    on_reasoning_delta=_tap_reasoning if on_reasoning_delta is not None else None,
+                    on_tool_event=on_tool_event,
+                    on_episode_start=_tap_episode,
+                    on_notice=on_notice,
+                    usage_sink=usage_sink,
+                    drain=drain,
+                    hook_metadata=turn_hook_meta,
+                    session_history=session.messages,
+                )
         except asyncio.CancelledError:
             # A stop is not a failure, but it is also not amnesia: what already
             # streamed is work the reader saw, so it lands in the session with a

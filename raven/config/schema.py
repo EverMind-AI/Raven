@@ -627,6 +627,35 @@ class GatewayPageConfig(Base):
     port: int = 18792
 
 
+TIER_LADDER: tuple[str, ...] = ("medium", "high", "max")
+"""The built-in tiers, cheapest first. The order is what makes a clamp possible,
+so it is a constant here rather than something read back off the catalogue."""
+
+DEFAULT_TIER = "high"
+"""Which built-in tier a session starts on. Applies to the built-in catalogue
+only -- a deployment bringing its own modes and naming no default degrades to
+its first entry instead."""
+
+_TIER_TEXTS: dict[str, str] = {
+    "medium": "The least effort a sub-agent is asked for.",
+    "high": "The middle amount of effort, between the other two.",
+    "max": "The most effort a sub-agent is asked for.",
+}
+"""One sentence per rung, saying only what differs between them.
+
+Position is that difference and the whole of it: the built-in rungs carry no
+per-tier behaviour beyond their order and the per-agent clamp. Which rung a
+session *starts* on is not among the things a row may say -- `defaultMode` can
+move it while these rows still stand, and the menu already marks the current one. The scope of the
+control -- that raven's own effort is unchanged -- is stated once by whichever
+surface draws it, not repeated on every row.
+
+English is the message id (see :mod:`raven.i18n`); the translation happens where
+the catalogue is resolved, not here, so a language chosen after this module is
+imported still takes effect.
+"""
+
+
 class AcpModeConfig(Base):
     """One operating profile a client may switch a session to over ACP.
 
@@ -646,13 +675,56 @@ class AcpModeConfig(Base):
     overlay: dict[str, Any] = Field(default_factory=dict)
 
 
-class AcpConfig(Base):
-    """The ACP surface's session modes: none declared means the surface is
-    absent from the wire, exactly as before."""
+def _builtin_modes() -> dict[str, "AcpModeConfig"]:
+    return {tier: AcpModeConfig(name=tier.capitalize(), description=_TIER_TEXTS[tier]) for tier in TIER_LADDER}
 
-    modes: dict[str, AcpModeConfig] = Field(default_factory=dict)
+
+class AcpConfig(Base):
+    """The ACP surface's session modes.
+
+    The three built-in tiers move what raven asks of its SUB-AGENTS, not what
+    raven does: every one leaves ``maxToolIterations`` inherited and ``overlay``
+    empty. A deployment that declares its own catalogue replaces this one whole;
+    one that writes ``"modes": {}`` turns the surface off entirely.
+    """
+
+    modes: dict[str, AcpModeConfig] = Field(default_factory=_builtin_modes)
     default_mode: str | None = None
-    """Which mode a new session starts in; the first declared one when unset."""
+    """Which mode a new session starts in. Deliberately unvalidated: a product
+    that declares its own catalogue without naming a default must degrade to its
+    first entry (``build_mode_catalogue``), not be failed at startup by a value
+    it never chose."""
+
+    @property
+    def uses_builtin_modes(self) -> bool:
+        """Whether this catalogue is raven's own three rungs rather than a declared one.
+
+        The same signal `effective_default_mode` reads, and it answers the same
+        kind of question: which of these rows does raven own? It owns the text of
+        its own rungs and translates them; a deployment's descriptions are its
+        author's, in whatever language they wrote, and are passed through
+        untouched.
+        """
+        return "modes" not in self.model_fields_set
+
+    @property
+    def effective_default_mode(self) -> str | None:
+        """The default to start sessions on: ``high`` for the built-in tiers only.
+
+        One field cannot say both "the built-in default" and "nobody chose", so
+        the distinction is drawn from whether the catalogue itself was declared.
+        Carrying it as a plain field default instead was silently wrong for any
+        deployment whose own vocabulary happened to contain a rung called
+        ``high``: it was accepted as a named default, and their catalogue started
+        on it rather than on the first entry they wrote.
+
+        Derived rather than written back onto ``default_mode`` in a validator:
+        that would put the field in ``model_fields_set``, so a config nobody
+        wrote a default into would serialise one under ``exclude_unset``.
+        """
+        if self.default_mode is not None:
+            return self.default_mode
+        return None if "modes" in self.model_fields_set else DEFAULT_TIER
 
 
 class TuiConfig(Base):

@@ -1552,6 +1552,13 @@ class _ModedManager(_FakeManager):
     def instance_mode(self, session_key, agent, handle):
         return self.held.get((session_key or "", agent, handle))
 
+    def resolve_mode(self, session_key, agent, instance, requested=None):
+        """The real signature. This fake carries no session tier, so an absent
+        override resolves to nothing -- which is what the pre-tier world did."""
+        if requested:
+            return requested
+        return self.instance_mode(session_key, agent, instance) if instance else None
+
     def set_instance_mode(self, session_key, agent, handle, mode):
         if mode is not None and mode not in [m.id for m in self.agent_modes(agent)]:
             raise ValueError(f"{agent!r} has no mode {mode!r}; it offers fast, deep")
@@ -1638,7 +1645,11 @@ async def test_a_write_without_a_manager_is_an_error_not_a_silent_no_op(_isolate
     await _isolated_registry.upsert_spawn("tui:s1", "Researcher", "h1", "completed")
     key = {"session_key": "tui:s1", "agent": "Researcher", "handle": "h1"}
 
-    assert await instances_set_mode(dict(key), agent_loop_factory=None) == {"mode": None, "availableModes": []}
+    assert await instances_set_mode(dict(key), agent_loop_factory=None) == {
+        "mode": None,
+        "inherited": None,
+        "availableModes": [],
+    }
 
     with pytest.raises(ConfigValidationError):
         await instances_set_mode({**key, "mode": "deep"}, agent_loop_factory=None)
@@ -1667,7 +1678,7 @@ async def test_an_agent_with_no_modes_reports_an_empty_menu(_isolated_registry: 
 
     out = await instances_set_mode(params, agent_loop_factory=lambda: _FakeLoop(manager))
 
-    assert out == {"mode": None, "availableModes": []}
+    assert out == {"mode": None, "inherited": None, "availableModes": []}
 
 
 async def test_every_set_mode_answer_satisfies_the_published_result_schema(_isolated_registry: Any) -> None:
@@ -1704,3 +1715,86 @@ async def test_every_set_mode_answer_satisfies_the_published_result_schema(_isol
     assert [a["mode"] for a in answers.values()] == [None, "deep", "deep", None, None]
     for label, answer in answers.items():
         assert not list(validator.iter_errors(answer)), f"{label}: {[e.message for e in validator.iter_errors(answer)]}"
+
+
+async def test_a_read_with_no_override_names_the_tier_it_will_actually_inherit(_isolated_registry: Any) -> None:
+    """`mode: null` used to be the whole answer, and the TUI read it as "the
+    agent's own default is in force". Once a session tier exists that is a lie:
+    the next dispatch comes through `resolve_mode` and receives the clamped tier.
+    Driven against the real SubagentManager, because a fake's `resolve_mode`
+    would only prove the fake agrees with itself.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.manager import SubagentManager
+
+    real = SubagentManager.__new__(SubagentManager)
+    real._instance_modes = {}
+    real._session_tier = lambda _key: "medium"
+    real.agent_modes = lambda agent: tuple(
+        SimpleNamespace(id=r, name=r.capitalize(), description="") for r in ("medium", "high", "max")
+    )
+
+    await _isolated_registry.upsert_spawn("tui:s1", "Researcher", "h1", "completed")
+    key = {"session_key": "tui:s1", "agent": "Researcher", "handle": "h1"}
+    out = await instances_set_mode(dict(key), agent_loop_factory=lambda: _FakeLoop(real))
+
+    assert out["mode"] is None, "no override is still no override"
+    assert out["inherited"] == "medium", "and this is what the next dispatch will actually run at"
+
+
+async def test_a_clear_answers_with_the_tier_the_next_dispatch_will_inherit(_isolated_registry: Any) -> None:
+    """The case the published contract described wrongly: clearing an override does
+    not hand the instance back to the agent's own default while a session tier is in
+    force -- the tier is what the next dispatch runs at."""
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.manager import SubagentManager
+
+    real = SubagentManager.__new__(SubagentManager)
+    real._instance_modes = {}
+    real._session_tier = lambda _key: "medium"
+    real.agent_modes = lambda agent: tuple(
+        SimpleNamespace(id=r, name=r.capitalize(), description="") for r in ("medium", "high", "max")
+    )
+
+    await _isolated_registry.upsert_spawn("tui:s1", "Researcher", "h1", "completed")
+    key = {"session_key": "tui:s1", "agent": "Researcher", "handle": "h1"}
+    loop = lambda: _FakeLoop(real)  # noqa: E731
+
+    await instances_set_mode({**key, "mode": "max"}, agent_loop_factory=loop)
+    out = await instances_set_mode({**key, "clear": True}, agent_loop_factory=loop)
+
+    assert out["mode"] is None, "the override is gone"
+    assert out["inherited"] == "medium", "and this, not the agent's default, is what runs next"
+
+
+def test_the_published_clear_contract_does_not_promise_the_agent_default() -> None:
+    """Pinned against the rendered schema text, not the source line, so a rewrap
+    cannot void it silently.
+
+    The withdrawn claim, in three homes that a schema consumer or a generated
+    client reads: the OpenRPC summary, the Pydantic param description, and the
+    handler docstring. All three said clearing restores the agent's own default,
+    which stopped being true once a cleared instance inherits the session tier.
+    """
+    import inspect
+
+    from raven.rpc.models import SubagentsInstanceSetModeParams
+
+    schema = json.loads((Path(__file__).resolve().parent.parent / "rpc-schema" / "openrpc.json").read_text())
+    method = next(m for m in schema["methods"] if m["name"] == "subagents.instance.set_mode")
+
+    withdrawn = "restores the agent's own default"
+    rendered = " ".join(method.get("summary", "").split())
+    assert withdrawn not in rendered, "the OpenRPC summary still promises it"
+    assert "inherited" in rendered, "and it has to say what does happen"
+
+    clear_desc = " ".join(SubagentsInstanceSetModeParams.model_fields["clear"].description.split())
+    assert "go back to the agent's own default" not in clear_desc
+    assert "tier" in clear_desc
+
+    doc = " ".join((instances_set_mode.__doc__ or "").split())
+    assert "back to the agent's own default" not in doc
+    assert "no tier to inherit" in doc
+    assert inspect.iscoroutinefunction(instances_set_mode)

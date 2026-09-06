@@ -30,6 +30,7 @@ from raven.agent.subagent.direct_chat import (
 from raven.agent.subagent.history import SpawnRecord, session_history_root
 from raven.agent.subagent.instance_state import InstanceState, instance_state_path
 from raven.agent.subagent.instances import get_registry, hold_handle, mint_handle
+from raven.agent.subagent.mode_tiers import clamp_tier, turn_tier_in_force
 from raven.agent.subagent.registry import AgentRegistry, AgentRow
 from raven.agent.subagent_memory import (
     TRACE_BUDGET_S,
@@ -39,7 +40,7 @@ from raven.agent.subagent_memory import (
     record_memories,
     trace_session_id,
 )
-from raven.config.schema import ExecToolConfig
+from raven.config.schema import TIER_LADDER, ExecToolConfig
 from raven.contracts.llm_provider import LLMProvider
 from raven.core.plugin_stack import everos_plugin_installed, everos_plugin_missing_note
 from raven.observability import semconv
@@ -68,6 +69,10 @@ _CANCEL_DRAIN_TIMEOUT_S = 5.0
 # refusals below open with this, and the spawn tool tests for it before publishing
 # anything that presumes the run exists.
 SPAWN_REFUSED_PREFIX = "Spawn refused: "
+# Tier mismatches already reported, so a busy session logs one line per agent
+# rather than one per dispatch. Same shape and reason as `_STALE_SNAPSHOT_SEEN`
+# in raven/agent/subagent/backends/__init__.py.
+_TIER_MISS_SEEN: set[tuple[str, str, str | None]] = set()
 
 
 async def _drain_cancelled(tasks: list[asyncio.Task], what: str) -> None:
@@ -180,6 +185,7 @@ class SubagentManager:
         max_spawns_per_hour: int = 30,
         agents: list | None = None,
         session_dir: "Callable[[str], Path] | None" = None,
+        session_tier: "Callable[[str | None], str] | None" = None,
     ):
         from raven.config.schema import ExecToolConfig
 
@@ -191,6 +197,10 @@ class SubagentManager:
         # whose group only the manager can resolve (raven/agent/subagent/history.py).
         self.session_dir = session_dir
         self._fallback_sessions: Any = None
+        # Reads the session's standing tier off the loop's SessionPolicy. Injected
+        # rather than reached for: the manager has no loop reference, and a test
+        # rig that passes none keeps the pre-tier behaviour exactly.
+        self._session_tier = session_tier
         # Spine submit, late-bound (the scheduler pins its home loop at
         # construction and is built inside each entry point's run loop; this
         # manager is built in AgentLoop.__init__ in the sync prologue). Wired via
@@ -620,14 +630,8 @@ class SubagentManager:
         workspace: Path | None = None,
         authored_task: str | None = None,
         tool_call_id: str | None = None,
-        mode: str | None = None,
     ) -> str:
         """Spawn a subagent to execute a task in the background.
-
-        ``mode`` is the operating profile to run this task under, for a
-        transport that has them (acp). Carried in ``origin`` rather than as a
-        parameter of the background task, for the same reason the workspace is:
-        it is decided by the calling turn and read long after that turn returned.
 
         ``tool_call_id`` is the call that dispatched this run, when the host
         correlates the two; it rides ``origin`` so every ``subagent.status``
@@ -705,7 +709,6 @@ class SubagentManager:
             "workspace": effective_workspace,
             "authored_task": authored_task,
             "tool_call_id": tool_call_id,
-            "mode": mode,
         }
         instance_key = (quota_key, agent, handle)
 
@@ -973,9 +976,8 @@ class SubagentManager:
         session_key: str | None,
         agent: str | None,
         instance: str | None,
-        requested: str | None = None,
     ) -> str | None:
-        """The mode one dispatch runs under: what it asked for, else the instance's.
+        """The mode one dispatch runs under: the instance's override, else the session's tier.
 
         The single implementation every dispatch lane resolves through -- a spawn,
         a direct chat, and a DAG node. Resolving it per lane is what produced the
@@ -983,20 +985,53 @@ class SubagentManager:
         so a user who set a mode on an instance had it silently ignored the moment
         the main agent spawned onto that same handle.
 
-        ``requested`` wins because it is the more specific statement: the caller
-        named a mode for this one dispatch. Absent that, the instance's standing
-        override applies, and absent both the agent runs on its own default.
+        There is deliberately no per-call argument. A sub-agent's effort is the
+        operator's setting, made once for the conversation and inherited by every
+        dispatch in it; the model composing a spawn is the one party that cannot
+        know what was chosen, so a mode it named would have overridden the person
+        who set one. What remains is a standing override on a named instance --
+        addressed to a conversation the operator can see, and set by them.
 
         ``instance``, not the dispatch's handle: a call that names no instance
         falls back to a fresh task or node id, which nobody could have set a mode
         against and which is not this conversation's name. The same gate its
         ``instance_state`` sibling takes, for the same reason.
         """
-        if requested:
-            return requested
-        if not instance:
+        if instance:
+            override = self.instance_mode(session_key, agent or "", instance)
+            if override:
+                return override
+        return self._tier_for(session_key, agent or "")
+
+    def _tier_for(self, session_key: str | None, agent: str) -> str | None:
+        """The session's standing tier as this agent can take it, or ``None``.
+
+        Runs whether or not a handle was named: a spawn that names no instance is
+        the common case, and it is the one a fleet-wide tier exists for.
+        """
+        # The turn's own snapshot first: a switch that arrives mid-turn must not
+        # reach a dispatch this turn makes. Outside a turn there is no snapshot
+        # and the live policy is all there is.
+        tier = turn_tier_in_force()
+        if tier is None:
+            if self._session_tier is None:
+                return None
+            tier = self._session_tier(session_key)
+        if not tier:
             return None
-        return self.instance_mode(session_key, agent or "", instance)
+        offered = tuple(getattr(mode, "id", "") for mode in self.agent_modes(agent))
+        landed = clamp_tier(tier, offered)
+        seen = (agent, tier, landed)
+        if landed is None:
+            if seen not in _TIER_MISS_SEEN:
+                _TIER_MISS_SEEN.add(seen)
+                logger.info(
+                    "sub-agent {}: offers no tier from {}; running on its own default", agent, "/".join(TIER_LADDER)
+                )
+        elif landed != tier and seen not in _TIER_MISS_SEEN:
+            _TIER_MISS_SEEN.add(seen)
+            logger.info("sub-agent {}: tier {!r} not offered; running at {!r}", agent, tier, landed)
+        return landed
 
     def set_instance_mode(self, session_key: str | None, agent: str, handle: str, mode: str | None) -> str | None:
         """Put one direct-chat instance in ``mode`` from its next turn on.
@@ -1301,7 +1336,7 @@ class SubagentManager:
                         instance=origin.get("instance"),
                         provider=provider,
                         model=model,
-                        mode=self.resolve_mode(session_key, agent, origin.get("instance"), origin.get("mode")),
+                        mode=self.resolve_mode(session_key, agent, origin.get("instance")),
                         **({"mcp_grant": mcp_grant} if mcp_grant is not None else {}),
                         **state_kwargs,
                     )
