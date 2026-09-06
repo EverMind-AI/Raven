@@ -20,7 +20,7 @@ def test_cron_delivered_event_pydantic_validates() -> None:
     """``CronDeliveredEvent`` SHALL be a member of the ``TurnEvent``
     discriminated union with payload {job_id, name, text, fired_at}.
     """
-    from raven.tui_rpc.models import CronDeliveredEvent
+    from raven.rpc.models import CronDeliveredEvent
 
     event = CronDeliveredEvent(
         type="cron.delivered",
@@ -44,7 +44,7 @@ def test_cron_delivered_event_in_turn_event_union() -> None:
     """
     from pydantic import TypeAdapter
 
-    from raven.tui_rpc.models import CronDeliveredEvent, TurnEvent
+    from raven.rpc.models import CronDeliveredEvent, TurnEvent
 
     adapter = TypeAdapter(TurnEvent)
     parsed = adapter.validate_python(
@@ -168,7 +168,7 @@ async def test_cron_callback_spine_fans_out_reply(emitter_spy: MagicMock) -> Non
 def test_cron_missed_event_pydantic_validates() -> None:
     """``CronMissedEvent`` SHALL be a member of the ``TurnEvent`` discriminated
     union with payload {count, items: [{name, scheduled_at, message}]}."""
-    from raven.tui_rpc.models import CronMissedEvent
+    from raven.rpc.models import CronMissedEvent
 
     event = CronMissedEvent(
         type="cron.missed",
@@ -190,7 +190,7 @@ def test_cron_missed_event_pydantic_validates() -> None:
 def test_cron_missed_event_in_turn_event_union() -> None:
     from pydantic import TypeAdapter
 
-    from raven.tui_rpc.models import CronMissedEvent, TurnEvent
+    from raven.rpc.models import CronMissedEvent, TurnEvent
 
     adapter = TypeAdapter(TurnEvent)
     parsed = adapter.validate_python(

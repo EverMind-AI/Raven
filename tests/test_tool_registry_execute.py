@@ -467,3 +467,70 @@ def test_a_tool_that_speaks_to_one_case_speaks_to_both() -> None:
     mismatched = [type(t).__name__ for t in tools if bool(t.truncation_hint) != bool(t.incomplete_hint)]
 
     assert not mismatched, "these answer one case and not the other: " + ", ".join(mismatched)
+
+
+class _Publishes(Tool):
+    """A tool that publishes the two client-only fields alongside its text."""
+
+    def __init__(self, model_text: str) -> None:
+        self._model_text = model_text
+
+    @property
+    def name(self) -> str:
+        return "publishes"
+
+    @property
+    def description(self) -> str:
+        return "returns metadata and a diff"
+
+    @property
+    def parameters(self) -> dict:
+        return {"type": "object", "properties": {}, "required": []}
+
+    async def execute(self, **kwargs) -> ToolResult:
+        return ToolResult(
+            model_text=self._model_text,
+            metadata={"files": ["a.txt"]},
+            diff="--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n",
+        )
+
+
+async def test_metadata_and_diff_survive_the_boundary() -> None:
+    """They ride on the ToolOutput because only the agent loop wants them: every
+    other consumer of this boundary needs a plain str."""
+    registry = ToolRegistry()
+    registry.register(_Publishes("edited a.txt"))
+
+    out = await registry.execute("publishes", {})
+
+    assert isinstance(out, ToolOutput)
+    assert str(out) == "edited a.txt"
+    assert out.metadata == {"files": ["a.txt"]}
+    assert out.diff is not None and "+new" in out.diff
+
+
+async def test_a_failed_call_publishes_neither() -> None:
+    """An error replaces the result, exactly as it does for ``blocks``: a diff of
+    a write that did not happen, or a manifest of files that were not delivered,
+    describes something that never reached disk."""
+    registry = ToolRegistry()
+    registry.register(_Publishes("Error: permission denied"))
+
+    out = await registry.execute("publishes", {})
+
+    assert isinstance(out, ToolOutput)
+    assert str(out).startswith("Error: permission denied")
+    assert out.metadata is None
+    assert out.diff is None
+
+
+async def test_a_bare_string_result_has_both_fields_as_none() -> None:
+    """The loop reads them off every result, so the wrapper has to define them
+    even for the tools -- most of them -- that return only text."""
+    registry = ToolRegistry()
+    registry.register(_Split("model text", None))
+
+    out = await registry.execute("split", {})
+
+    assert out.metadata is None
+    assert out.diff is None

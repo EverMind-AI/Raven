@@ -135,3 +135,26 @@ def test_the_truncation_hint_does_not_assume_the_file_is_empty() -> None:
     assert "the first with mode=overwrite" not in hint, "an unconditional restart"
     assert "mode=overwrite to start a file" in hint, "the fresh-file case is named as a choice"
     assert "mode=append to continue one you have already begun" in hint, "and so is the other"
+
+
+def test_a_rewrite_too_large_to_render_carries_no_diff(tmp_path) -> None:
+    """Dropped whole rather than truncated. Half a diff reads as a smaller change
+    than the one that happened, which is worse than no diff at all -- and the
+    structured change beside it still carries the whole file both ways, so
+    nothing is actually lost to a client that can use it.
+    """
+    import asyncio
+
+    from raven.agent.tools.filesystem import WriteFileTool
+
+    target = tmp_path / "big.txt"
+    target.write_text("\n".join(f"old {i}" for i in range(500)), encoding="utf-8")
+    tool = WriteFileTool(workspace=tmp_path)
+
+    result = asyncio.run(
+        tool.execute(path=str(target), content="\n".join(f"new {i}" for i in range(500)), mode="overwrite")
+    )
+
+    assert result.diff is None, "a diff this large is dropped, not cut in half"
+    assert result.file_change is not None and result.file_change.before is not None
+    assert result.file_change.after.startswith("new 0")

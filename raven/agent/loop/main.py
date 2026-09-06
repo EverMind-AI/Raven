@@ -77,6 +77,44 @@ _STORE_MAX_INFLIGHT: int = 4
 # Teardown's total budget for letting those writes finish.
 _STORE_DRAIN_BUDGET_S: float = 15.0
 
+
+_FILE_CHANGE_MAX_CHARS = 512 * 1024
+
+
+def _file_change_payload(change: Any) -> dict[str, Any] | None:
+    """One write as a plain mapping, or ``None`` when there is nothing to send.
+
+    Flattened here rather than passed as the dataclass: ``spine.events`` is
+    deliberately free of the tools package, and a mapping is also what goes on
+    the wire two hops later.
+
+    ``before`` is preserved as ``None`` when the file did not exist, because a
+    client renders a creation differently from a rewrite -- so this cannot use a
+    "falsy means absent" shortcut, an empty file having the same emptiness.
+    """
+    if change is None:
+        return None
+    after = getattr(change, "after", None)
+    path = getattr(change, "path", None)
+    if not isinstance(after, str) or not isinstance(path, str) or not path:
+        return None
+    before = getattr(change, "before", None)
+    if len(after) + len(before or "") > _FILE_CHANGE_MAX_CHARS:
+        return None
+    payload: dict[str, Any] = {"path": path, "after": after}
+    if before is not None:
+        payload["before"] = before
+    return payload
+
+
+def _first_line(text: str) -> str:
+    """The one line of a tool error worth putting in front of a person."""
+    for line in str(text or "").splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
+
+
 _ABORTED_ACTION_REPLY = (
     "The operation was not completed, and no alternative method will be attempted. "
     "Would you like me to continue with the remaining parts of the task that do not "
@@ -106,13 +144,14 @@ if TYPE_CHECKING:
     from raven.proactive_engine.schedulers.cron.service import CronService
     from raven.providers.pool import ProviderPool
     from raven.routing.router import ModelRouter
+    from raven.rpc.question_broker import QuestionBroker
     from raven.sandbox.debug_server import SandboxDebugServer
     from raven.skill_hub import SkillHubClient
+    from raven.spine.events import NoticeKind
     from raven.spine.runner import Drain, Emit, TurnOutcome
     from raven.spine.turn import TurnRequest
     from raven.token_wise.base import UsageSnapshot
     from raven.token_wise.registry import StrategyRegistry
-    from raven.tui_rpc.question_broker import QuestionBroker
 
 
 @dataclass
@@ -2079,6 +2118,7 @@ class AgentLoop:
         on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
         on_tool_event: Callable[[str, dict], Awaitable[None]] | None = None,
         on_episode_start: Callable[[int], Awaitable[None]] | None = None,
+        on_notice: Callable[[NoticeKind, str], Awaitable[None]] | None = None,
         usage_sink: dict[str, Any] | None = None,
         drain: Drain | None = None,
     ) -> tuple[str | None, list[str], list[dict], TurnOutcome]:
@@ -2270,6 +2310,7 @@ class AgentLoop:
 
             if response.has_tool_calls:
                 abort_action = False
+                abort_reason = ""
                 if on_progress:
                     thought = self._strip_think(response.content)
                     if thought:
@@ -2316,6 +2357,12 @@ class AgentLoop:
                                 "arguments": tool_call.arguments,
                                 # Tool-authored call label; None -> UI derives one.
                                 "display": _tool.display_call(tool_call.arguments) if _tool else None,
+                                # The same flag the registry reads to skip its
+                                # timeout: this call waits on a human, so it has
+                                # no deadline and may emit nothing while it runs.
+                                # A client that clocks the stream needs to know
+                                # before the wait, not after it.
+                                "blocking": bool(_tool.blocking_interaction) if _tool else False,
                             },
                         )
                     if tool_call.name == "exec":
@@ -2348,6 +2395,16 @@ class AgentLoop:
                                 "tool_call_id": tool_call.id,
                                 "result_preview": preview,
                                 "truncated": len(display_src) > 200,
+                                # Client-only, straight off the ToolOutput the
+                                # registry built: never shown to the model, and
+                                # ``getattr`` because a tool may still return a
+                                # bare str, which the registry wraps without any
+                                # of these three.
+                                "metadata": getattr(result, "metadata", None),
+                                "diff": getattr(result, "diff", None),
+                                # Alongside the diff, for a surface that renders
+                                # the change itself rather than a unified form.
+                                "file_change": _file_change_payload(getattr(result, "file_change", None)),
                             },
                         )
                     model_text, blocks, attach_blocks = self._route_result_images(
@@ -2365,6 +2422,11 @@ class AgentLoop:
                         pending_images.extend(attach_blocks)
                     if getattr(result, "abort_action", False):
                         abort_action = True
+                        # The blocking tool's own words, kept for the reader: the
+                        # canned reply below says an operation stopped but never
+                        # which one, so without this the user is told a thing
+                        # happened and given no way to find out what.
+                        abort_reason = _first_line(model_text)
                         # A single assistant message may contain several parallel
                         # tool calls (for example ``rm`` followed by a Python
                         # fallback). Once policy terminates the action, none of
@@ -2400,11 +2462,22 @@ class AgentLoop:
                     # the rejected operation into an equivalent interpreter,
                     # script, or tool call. Finish the turn in runtime code and
                     # expose only the non-destructive continuation question.
-                    # Streaming callers need the explicit callback because no
-                    # final model response exists to generate token deltas.
+                    # The model must read this, so it goes into the history as an
+                    # assistant message -- but it goes to the CLIENT as a notice.
+                    # Pushed down the token stream instead, it arrived as the
+                    # model's own prose: glued to whatever the model had just
+                    # narrated (nothing separates two segments in one buffer),
+                    # dressed in the answer's copy and branch actions, and always
+                    # in English no matter what language the turn was in.
+                    from raven.spine.events import NoticeKind as _NoticeKind
+
                     messages = self.context.add_assistant_message(messages, _ABORTED_ACTION_REPLY)
                     final_content = _ABORTED_ACTION_REPLY
-                    if on_token_delta is not None:
+                    if on_notice is not None:
+                        await on_notice(_NoticeKind.ACTION_BLOCKED, abort_reason)
+                    elif on_token_delta is not None:
+                        # A channel with no notice outlet still has to say
+                        # something, and silence is the worse failure.
                         await on_token_delta(_ABORTED_ACTION_REPLY)
                     break
 
@@ -2634,6 +2707,7 @@ class AgentLoop:
         on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
         on_tool_event: Callable[[str, dict], Awaitable[None]] | None = None,
         on_episode_start: Callable[[int], Awaitable[None]] | None = None,
+        on_notice: Callable[[NoticeKind, str], Awaitable[None]] | None = None,
         usage_sink: dict[str, Any] | None = None,
         origin: Origin | None = None,
         drain: Drain | None = None,
@@ -2878,6 +2952,7 @@ class AgentLoop:
             on_reasoning_delta=on_reasoning_delta,
             on_tool_event=on_tool_event,
             on_episode_start=on_episode_start,
+            on_notice=on_notice,
             usage_sink=usage_sink,
             drain=drain,
         )
@@ -3133,6 +3208,13 @@ class AgentLoop:
             )
 
         streamed = False
+        # ACTION_BLOCKED does not accompany the answer, it *is* the answer (see
+        # NoticeKind): the runtime sentence reaches the client as the notice
+        # detail, while _process_message still returns it as the reply. Without
+        # this flag the boundary below emits the same sentence a second time as
+        # Text -- which TuiOutlet maps to token.delta, so it arrives dressed as
+        # the model's own prose, exactly what routing it as a notice avoided.
+        replaced_by_notice = False
 
         async def on_token(text: str) -> None:
             nonlocal streamed
@@ -3156,6 +3238,7 @@ class AgentLoop:
                         tool_call_id=info["tool_call_id"],
                         name=info["name"],
                         arguments=info["arguments"],
+                        blocking=bool(info.get("blocking")),
                         display=info.get("display"),
                     )
                 )
@@ -3166,8 +3249,16 @@ class AgentLoop:
                         tool_call_id=info["tool_call_id"],
                         result_preview=info["result_preview"],
                         truncated=info["truncated"],
+                        metadata=info.get("metadata"),
+                        diff=info.get("diff"),
                     )
                 )
+
+        async def on_notice(kind: NoticeKind, detail: str) -> None:
+            nonlocal replaced_by_notice
+            if kind is NoticeKind.ACTION_BLOCKED:
+                replaced_by_notice = True
+            await emit(Notice(kind=kind, detail=detail or None))
 
         async def on_progress(text: str, tool_hint: bool = False) -> None:
             # Keep the progress/tool-hint distinction so an outlet can gate each on
@@ -3260,6 +3351,7 @@ class AgentLoop:
                 on_reasoning_delta=on_reasoning if stream else None,
                 on_tool_event=on_tool,
                 on_episode_start=on_episode if stream else None,
+                on_notice=on_notice,
                 usage_sink=usage_sink,
                 origin=req.origin,
                 drain=drain,
@@ -3277,7 +3369,7 @@ class AgentLoop:
             reply_content, reply_media = out
             if reply_media:
                 await _emit_media(reply_media)
-            if not streamed and reply_content:
+            if not streamed and not replaced_by_notice and reply_content:
                 await emit(Text(content=reply_content))
             if text_sink is not None and reply_content:
                 text_sink["text"] = reply_content

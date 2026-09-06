@@ -205,7 +205,7 @@ def test_both_write_paths_store_the_same_id(spec: ProviderSpec) -> None:
     the list twice.
     """
     from raven.cli.onboard_commands import _format_model_for_provider
-    from raven.tui_rpc.methods.model import _stored_spelling
+    from raven.rpc.methods.model import _stored_spelling
 
     assert _stored_spelling(spec.name, PLAIN) == _format_model_for_provider(spec.name, spec, PLAIN)
 

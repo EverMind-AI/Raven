@@ -352,7 +352,7 @@ def test_description_states_the_cap_the_code_enforces():
 async def test_round_trip_through_the_real_broker():
     """Every other test here drives a stand-in, which cannot catch the tool and
     the broker disagreeing about the keyword names they pass between them."""
-    from raven.tui_rpc.question_broker import QuestionBroker
+    from raven.rpc.question_broker import QuestionBroker
 
     frames: list[dict] = []
 
@@ -384,9 +384,9 @@ async def test_registry_dispatch_and_the_real_clarify_respond_route():
     have accepted -- the schema validator runs in between.
     """
     from raven.agent.tools.registry import ToolRegistry
-    from raven.tui_rpc.dispatcher import Dispatcher
-    from raven.tui_rpc.methods.question import register_question_methods
-    from raven.tui_rpc.question_broker import QuestionBroker
+    from raven.rpc.dispatcher import Dispatcher
+    from raven.rpc.methods.question import register_question_methods
+    from raven.rpc.question_broker import QuestionBroker
 
     dispatcher = Dispatcher()
 

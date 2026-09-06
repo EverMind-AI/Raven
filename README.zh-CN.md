@@ -249,7 +249,7 @@ raven/proactive_engine/  sentinel、scheduling 和 nudges
 raven/providers/         model providers 和 routing
 raven/skill_hub/         external skill retrieval
 raven/tracing/           instrumentation、storage 和 viewer
-raven/tui_rpc/           typed runtime-to-TUI boundary
+raven/rpc/           typed runtime-to-TUI boundary
 ui-tui/                  React/Ink terminal interface
 ```
 

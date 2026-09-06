@@ -263,7 +263,7 @@ def rpc_server_deps(monkeypatch: pytest.MonkeyPatch):
     # without a real socket transport.
     fake_dispatcher = MagicMock()
     fake_dispatcher.register = MagicMock()
-    monkeypatch.setattr("raven.tui_rpc.dispatcher.Dispatcher", lambda: fake_dispatcher)
+    monkeypatch.setattr("raven.rpc.dispatcher.Dispatcher", lambda: fake_dispatcher)
 
     async def _fake_serve_forever():
         await asyncio.sleep(0)
@@ -272,49 +272,49 @@ def rpc_server_deps(monkeypatch: pytest.MonkeyPatch):
     fake_server.send_frame = AsyncMock()
     fake_server.serve_forever = _fake_serve_forever
     monkeypatch.setattr(
-        "raven.tui_rpc.server.RpcServer",
+        "raven.rpc.server.RpcServer",
         lambda **kw: fake_server,
     )
 
     fake_emitter = MagicMock()
     monkeypatch.setattr(
-        "raven.tui_rpc.subscriptions.SubscriptionEmitter",
+        "raven.rpc.subscriptions.SubscriptionEmitter",
         lambda **kw: fake_emitter,
     )
 
     # Load the lazily imported module before patching its attributes; otherwise
     # this fixture can depend on test order through Python's import cache.
-    from raven.tui_rpc.methods import system as _system_module
+    from raven.rpc.methods import system as _system_module
 
     assert _system_module is not None
     fake_confirm_broker = MagicMock()
     fake_confirm_broker.cancel_all = MagicMock()
     monkeypatch.setattr(
-        "raven.tui_rpc.confirm_broker.ConfirmBroker",
+        "raven.rpc.confirm_broker.ConfirmBroker",
         lambda **kw: fake_confirm_broker,
     )
 
     fake_approval_broker = MagicMock()
     fake_approval_broker.cancel_all = MagicMock()
     monkeypatch.setattr(
-        "raven.tui_rpc.approval_broker.ApprovalBroker",
+        "raven.rpc.approval_broker.ApprovalBroker",
         lambda **kw: fake_approval_broker,
     )
 
     fake_question_broker = MagicMock()
     monkeypatch.setattr(
-        "raven.tui_rpc.question_broker.QuestionBroker",
+        "raven.rpc.question_broker.QuestionBroker",
         lambda **kw: fake_question_broker,
     )
 
     async def _fake_system_hello(params):
         return {"version": "0.0.0"}
 
-    monkeypatch.setattr("raven.tui_rpc.methods.system.system_hello", _fake_system_hello)
-    monkeypatch.setattr("raven.tui_rpc.methods.system.system_ping", AsyncMock())
-    monkeypatch.setattr("raven.tui_rpc.methods.system.system_version", AsyncMock())
+    monkeypatch.setattr("raven.rpc.methods.system.system_hello", _fake_system_hello)
+    monkeypatch.setattr("raven.rpc.methods.system.system_ping", AsyncMock())
+    monkeypatch.setattr("raven.rpc.methods.system.system_version", AsyncMock())
     monkeypatch.setattr(
-        "raven.tui_rpc.methods.register_aligned_methods_except_system",
+        "raven.rpc.methods.register_aligned_methods_except_system",
         MagicMock(),
     )
 
@@ -326,10 +326,10 @@ def rpc_server_deps(monkeypatch: pytest.MonkeyPatch):
         pass
 
     fake_build_tui = MagicMock(return_value=(fake_turn_scheduler, fake_turn_hub, fake_turn_ids, _fake_turn_teardown))
-    monkeypatch.setattr("raven.tui_rpc.spine.build_tui", fake_build_tui)
+    monkeypatch.setattr("raven.rpc.spine.build_tui", fake_build_tui)
 
     monkeypatch.setattr("raven.cli._cron_handler.make_on_cron_job", MagicMock())
-    monkeypatch.setattr("raven.tui_rpc.methods.turn.clear_active", MagicMock())
+    monkeypatch.setattr("raven.rpc.methods.turn.clear_active", MagicMock())
 
     ctx["fake_server"] = fake_server
     ctx["fake_confirm_broker"] = fake_confirm_broker
@@ -396,7 +396,7 @@ async def test_rpc_runner_wires_and_cancels_approval_broker(rpc_server_deps, mon
 
     approval_broker = rpc_server_deps["fake_approval_broker"]
     assert rpc_server_deps["fake_build_tui"].call_args.kwargs["approval_responder"] is approval_broker
-    registration = __import__("raven.tui_rpc.methods", fromlist=["register"])
+    registration = __import__("raven.rpc.methods", fromlist=["register"])
     register_mock = registration.register_aligned_methods_except_system
     assert register_mock.call_args.kwargs["approval_broker"] is approval_broker
     approval_broker.cancel_all.assert_called_once_with()

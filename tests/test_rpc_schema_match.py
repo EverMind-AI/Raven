@@ -1,4 +1,4 @@
-"""Schema-match test: Pydantic models (raven.tui_rpc.models) ↔ OpenRPC schema.
+"""Schema-match test: Pydantic models (raven.rpc.models) ↔ OpenRPC schema.
 
 This test is the CI guardrail that catches drift between the single source of
 truth (``ui-tui/rpc-schema/openrpc.json``) and the Python-side Pydantic models.
@@ -34,7 +34,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from raven.tui_rpc.models import METHOD_MODELS
+from raven.rpc.models import METHOD_MODELS
 
 SCHEMA_PATH = Path(__file__).resolve().parent.parent / "ui-tui" / "rpc-schema" / "openrpc.json"
 
@@ -357,7 +357,7 @@ def test_schema_match_turn_event_discriminated_union(schema: dict[str, Any]) -> 
     """
     from pydantic import TypeAdapter
 
-    from raven.tui_rpc.models import TurnEvent
+    from raven.rpc.models import TurnEvent
 
     oas = schema["components"]["schemas"]["TurnEvent"]
     assert oas.get("discriminator", {}).get("propertyName") == "type"
@@ -374,6 +374,44 @@ def test_schema_match_turn_event_discriminated_union(schema: dict[str, Any]) -> 
     oas_normal = {k: v.split("/")[-1] for k, v in oas_mapping.items()}
     pyd_normal = {k: v.split("/")[-1] for k, v in pyd_mapping.items()}
     assert oas_normal == pyd_normal, f"TurnEvent discriminator mapping drift: schema={oas_normal} vs pyd={pyd_normal}"
+
+
+def test_schema_match_turn_event_payload_fields(schema: dict[str, Any]) -> None:
+    """Every variant's payload must declare the same fields on both sides.
+
+    The union test above compares only the *set of variants*, so a field added to
+    one side alone passes it. That is not a cosmetic drift: both sides declare
+    ``additionalProperties: false`` / ``extra="forbid"``, so a consumer
+    validating against the schema rejects the *whole event* rather than the
+    unknown field, and a client loses the tool result entirely.
+
+    Compares names only. Types are left to the per-method sweep: an event payload
+    reuses the same component schemas, and a name mismatch is the failure this
+    contract actually suffers.
+    """
+    from pydantic import TypeAdapter
+
+    from raven.rpc.models import TurnEvent
+
+    components = schema["components"]["schemas"]
+    oas_mapping = components["TurnEvent"]["discriminator"]["mapping"]
+    pyd = TypeAdapter(TurnEvent).json_schema()
+    pyd_defs = pyd["$defs"]
+
+    def properties(node: dict[str, Any], defs: dict[str, Any]) -> set[str]:
+        payload = node["properties"].get("payload", {})
+        if "$ref" in payload:
+            payload = defs[payload["$ref"].split("/")[-1]]
+        return set(payload.get("properties", {}))
+
+    drift: dict[str, tuple[list[str], list[str]]] = {}
+    for literal, ref in pyd["discriminator"]["mapping"].items():
+        pyd_fields = properties(pyd_defs[ref.split("/")[-1]], pyd_defs)
+        oas_fields = properties(components[oas_mapping[literal].split("/")[-1]], components)
+        if pyd_fields != oas_fields:
+            drift[literal] = (sorted(pyd_fields - oas_fields), sorted(oas_fields - pyd_fields))
+
+    assert not drift, "payload field drift (pydantic-only, schema-only): " + repr(drift)
 
 
 # Parametrized full-suite sweep — one test instance per method.  This is the

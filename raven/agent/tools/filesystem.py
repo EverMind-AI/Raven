@@ -5,8 +5,34 @@ import mimetypes
 from pathlib import Path
 from typing import Any
 
-from raven.agent.tools.base import Tool, ToolResult
+from raven.agent.tools.base import FileChange, Tool, ToolResult
 from raven.utils.helpers import detect_image_mime
+
+_DIFF_MAX_LINES = 400
+
+
+def _unified(before: str, after: str, name: str) -> str | None:
+    """Unified diff of one write, or None when there is nothing useful to show.
+
+    A UI cannot reconstruct this later: by the time the call is reported, the
+    content it replaced is already overwritten. A rewrite too large to render is
+    dropped whole rather than truncated -- half a diff reads as a smaller change
+    than the one that happened.
+    """
+    if before == after:
+        return None
+    out = list(
+        difflib.unified_diff(
+            before.splitlines(),
+            after.splitlines(),
+            fromfile=name,
+            tofile=name,
+            lineterm="",
+        )
+    )
+    if not out or len(out) > _DIFF_MAX_LINES:
+        return None
+    return "\n".join(out)
 
 
 def _resolve_path(path: str, workspace: Path | None = None, allowed_dir: Path | None = None) -> Path:
@@ -237,13 +263,41 @@ class WriteFileTool(_FsTool):
             return "Error: write_file with mode=append needs content; refusing to append nothing."
         try:
             fp = self._resolve(path)
+            # Read before writing: a whole-file write carries no record of what
+            # it replaced, so a panel handed only the arguments draws every line
+            # of an overwrite as an addition.
+            before = ""
+            # Three states, not two, and the third is why this is a separate
+            # flag: absent, present and readable, present and not decodable as
+            # text. Only the first is a new file, and reporting the third as one
+            # would tell a client every line is an addition to a file that was
+            # already there.
+            previous: str | None = None
+            unreadable = False
+            if fp.is_file():
+                try:
+                    before = previous = fp.read_text(encoding="utf-8")
+                except (UnicodeDecodeError, OSError):
+                    before = ""
+                    previous = None
+                    unreadable = True
             fp.parent.mkdir(parents=True, exist_ok=True)
             if mode == "append":
                 with fp.open("a", encoding="utf-8") as handle:
                     handle.write(content)
                 return f"Successfully appended {len(content)} bytes to {fp}"
             fp.write_text(content, encoding="utf-8")
-            return f"Successfully wrote {len(content)} bytes to {fp}"
+            return ToolResult(
+                f"Successfully wrote {len(content)} bytes to {fp}",
+                diff=_unified(before, content, str(fp)),
+                # Beside the rendered diff, not instead of it: the unified form is
+                # what a text surface shows, and this is what a surface with its
+                # own diff view needs. Both come from strings already in hand, so
+                # neither costs a second read. Withheld entirely for a file that
+                # existed and could not be read, because there is no ``before``
+                # to give and every way of faking one misinforms the reader.
+                file_change=None if unreadable else FileChange(path=str(fp), after=content, before=previous),
+            )
         except PermissionError as e:
             return f"Error: {e}"
         except Exception as e:
@@ -344,7 +398,18 @@ class EditFileTool(_FsTool):
                 new_content = new_content.replace("\n", "\r\n")
 
             fp.write_bytes(new_content.encode("utf-8"))
-            return f"Successfully edited {fp}"
+            normalised = new_content.replace("\r\n", "\n")
+            return ToolResult(
+                f"Successfully edited {fp}",
+                # Compared line-for-line rather than passing the two snippets:
+                # ``replace_all`` can change several places at once, and the
+                # arguments alone do not say where.
+                diff=_unified(content, normalised, str(fp)),
+                # The whole file both ways. An edit's arguments carry only the
+                # replaced fragment, so a surface handed those would render a
+                # fragment as though it were the file.
+                file_change=FileChange(path=str(fp), after=normalised, before=content),
+            )
         except PermissionError as e:
             return f"Error: {e}"
         except Exception as e:
