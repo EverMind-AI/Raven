@@ -12,9 +12,10 @@ known_hosts and believed it, then read raven's own campaign directory for the
 number -- a dozen rounds, no job submitted. It had no way to reach a machine
 except to guess at one.
 
-These pin the three things that stop that: the list is the way in, the id is
-what a campaign stores (names are the owner's and change), and a campaign
-without a connection is untouched so nothing has to be migrated.
+These pin what stops that: the id is what a campaign stores rather than an
+address (names are the owner's and change), a row nothing can be run on is
+told apart from one that is merely thin, and what leaves this module carries
+what decides a machine without carrying the way onto it.
 """
 
 from __future__ import annotations
@@ -79,6 +80,66 @@ def test_what_travels_never_carries_the_way_in(store):
         projected = connections.shown(row)
         assert {"host", "port", "user", "key", "transport"}.isdisjoint(projected)
         assert "id_rsa" not in str(projected) and "root" not in str(projected)
+
+
+def test_what_travels_carries_what_decides_the_machine():
+    """The positive half of the projection, and it names the fields rather than
+    looping over ``_SHOWN``: an assertion derived from that tuple moves with it,
+    so dropping a key would delete its own check in the same edit.
+
+    ``software`` is the deciding one and was not obvious -- measured 2026-08-17
+    on the real pair, CalculiX runs only on the box with the A800s, because the
+    binary needs a glibc the 32-core box does not have. A rule like "a CPU-only
+    solver belongs on the CPU box" would pick the one machine that cannot run
+    it. What a machine has installed decides; what it is made of only narrows.
+    """
+    projected = connections.shown(
+        {
+            "id": "conn_gpu",
+            "display_name": "the GPU machine",
+            "kind": "gpu",
+            "device": "4 x A100 80G",
+            "cores": 32,
+            "memory": "463 GB",
+            "software": "CalculiX 2.21, PyTorch + CUDA",
+            "budget_unit": "gpu-minute",
+            "concurrency": 2,
+            "note": "shared with the lab",
+            "host": "14.103.100.27",
+            "port": 64101,
+            "user": "root",
+            "key": "~/.ssh/id_rsa",
+        }
+    )
+
+    assert projected["software"] == "CalculiX 2.21, PyTorch + CUDA"
+    assert projected["kind"] == "gpu"
+    assert projected["device"] == "4 x A100 80G"
+    assert projected["cores"] == 32
+    assert projected["memory"] == "463 GB"
+    assert projected["budget_unit"] == "gpu-minute"
+    assert projected["concurrency"] == 2
+    assert projected["note"] == "shared with the lab"
+
+
+def test_ids_that_differ_only_in_padding_name_one_machine_twice(store):
+    """``problems`` strips ids before duplicate detection, and ``usable`` has to
+    collect its duplicate set the same way -- otherwise ``cpu-box`` and
+    `` cpu-box `` are two ids there, the padded row is dropped for its own
+    blocking fault, and the clean one stays usable while the registry reports a
+    blocking duplicate. Reproduced in review; the test that pinned it went with
+    the module it was written for.
+
+    The collection side is the whole of it. ``usable`` strips again when it
+    filters, and that second call cannot be reached while ``row_problems``
+    blocks every padded id outright -- dropping it alone changes nothing here,
+    so no case can show a need for it and this test does not claim one.
+    """
+    row = {"id": "cpu-box", "display_name": "CPU box", "transport": "local"}
+    store([row, {**row, "id": " cpu-box ", "display_name": "same id, other box"}])
+
+    assert connections.usable(connections.load()) == []
+    assert any(f.blocking for f in connections.problems())
 
 
 def test_two_machines_at_one_address_are_told_apart_by_id(store):
@@ -222,9 +283,9 @@ def test_clearing_the_env_var_gives_the_instance_its_own_registry_back(tmp_path,
 
 
 def test_a_padded_id_is_blocking_rather_than_healthy_but_unselectable():
-    """`named` strips the id a DAG node asks for while `Verdict.machine` and
-    `shown` carry the raw one, so a padded id read as usable and then could not
-    be selected. Refused at the row instead (reproduced in review)."""
+    """A padded id read as usable and then could not be selected, because the
+    readers disagreed about stripping. Refused at the row instead of taught to
+    each of them (reproduced in review)."""
     from raven.ops.connections import row_problems
 
     faults = row_problems(
