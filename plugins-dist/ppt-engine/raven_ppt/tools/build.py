@@ -37,7 +37,7 @@ from raven_ppt.contracts import (
     load_plan,
     outline_path,
 )
-from raven_ppt.services import regress
+from raven_ppt.services import regress, review_ledger
 from raven_ppt.services.regress import Regression
 from raven_ppt.stages.build import BuildStage
 from raven_ppt.tools import _return
@@ -95,7 +95,10 @@ class PptBuildTool(Tool):
         "ppt_outline has recorded what each page argues; and it refuses to publish a deck holding a page "
         "whose current code has never been rendered back to you, which is answered by building again and "
         "looking rather than by editing. "
-        "Iterate: read the render, edit the file, run again."
+        "Iterate: read the render, edit the file, run again -- and put the edits and this call in one "
+        "reply. A reply's tool calls run in the order they are listed, so edit_file (or the write that "
+        "appends a block) followed by ppt_build in the same reply is one turn, where a reply per call is "
+        "two; a measured run spent half its iterations alternating one edit and one build."
     )
     timeout_seconds = 900.0
 
@@ -278,6 +281,10 @@ class PptBuildTool(Tool):
                 payload["consequences_folded"] = folded
         if "pptx_path" in result.data:
             payload["pptx_path"] = result.data["pptx_path"]
+        if "pdf_path" in result.data:
+            payload["pdf_path"] = result.data["pdf_path"]
+        if result.data.get("republished"):
+            payload["republished"] = True
 
         shown = list(result.data.get("showing") or [])
         outline = load_outline(outline_path(deck))
@@ -333,7 +340,12 @@ class PptBuildTool(Tool):
         if refused:
             # A refusal here is not a finding to weigh: nothing was written, so there is
             # nothing to look at and nothing to accept. Say what stopped it and stop.
-            asks.insert(0, f"nothing was published: {refused}. Fix that and build again")
+            asks.insert(
+                0,
+                f"nothing was published: {refused}. Fix that and build again. The user receives only what "
+                "this tool publishes: copying deck.pptx anywhere yourself hands the user nothing, and a reply "
+                "claiming otherwise would be false",
+            )
         elif not blocking and "pptx_path" in payload:
             # The reply used to end at "look at every page", which is not a next step for a
             # model that has already looked: one run rebuilt the same finished deck eight
@@ -369,7 +381,21 @@ class PptBuildTool(Tool):
         if regressed:
             payload["regressed"] = _regressed(regressed)
             asks.insert(0, _regression_ask(regressed))
-        read = await self._first_reading(deck, project, draft, blocking, payload)
+        # Last in the list because it is about the shape of the next reply, not about
+        # the deck: the calls in one reply run in order, and a run that sent each edit
+        # and each build as its own reply spent 32 of 72 iterations on that alternation.
+        if findings or draft:
+            asks.append(_SAME_REPLY)
+        read = await self._first_reading(deck, project, draft, blocking, payload, first=shown)
+        # What the reader said and nobody answered, every build until it is answered.
+        # The reading itself lives in one reply; a live run delivered a deck with a
+        # paragraph the reader had reported buried three builds earlier, because the
+        # reply that named it had scrolled past. Listed after the reading so a fresh
+        # entry is in the ledger before the ledger is read.
+        held = review_ledger.open_findings(deck) if self.review is not None else []
+        if held:
+            payload["open_findings"] = review_ledger.summary(held)
+            asks.append(review_ledger.ask(held))
         if read is not None:
             payload["first_reading"] = read.payload
             # Said out loud, because a budget the author cannot see is a budget it
@@ -397,7 +423,13 @@ class PptBuildTool(Tool):
         return await self._with_views(deck, outcome, body, findings, shown)
 
     async def _first_reading(
-        self, deck: Project, project: str, draft: bool, blocking: Sequence[Finding], payload: dict[str, Any]
+        self,
+        deck: Project,
+        project: str,
+        draft: bool,
+        blocking: Sequence[Finding],
+        payload: dict[str, Any],
+        first: Sequence[int] = (),
     ) -> Reading | None:
         """The second reader, whenever enough of the deck is unread to be worth one.
 
@@ -441,9 +473,23 @@ class PptBuildTool(Tool):
             )
             return None
         unread = sorted(set(range(1, built_pages + 1)) - _pages_read(deck))
-        floor = UNREAD_PAGES_BEFORE_READING * max(1, taken * REREADING_COSTS) if draft else 1
+        if draft:
+            floor = UNREAD_PAGES_BEFORE_READING * max(1, taken * REREADING_COSTS)
+        elif payload.get("republished"):
+            # A revision of a deck already delivered: the author is polishing one or
+            # two pages against the gates, and a 240s reading of each republish is
+            # more than those pages are worth -- three republishes of one live deck
+            # read 9 pages in 12 minutes. The first delivery still reads what is left.
+            floor = UNREAD_PAGES_BEFORE_READING
+        else:
+            floor = 1
         if len(unread) < floor:
             return None
+        # The pages this build drew first, the backlog after: the reader takes the list
+        # in order and its budget cuts the tail, and a build of `slides=[4]` that read
+        # the backlog left page 4 -- the one the author was waiting on -- unread.
+        named = [number for number in first if number in unread]
+        unread = named + [number for number in unread if number not in named]
         try:
             reply = await self.review.execute(project=project, pages=unread)
         except Exception:  # noqa: BLE001 -- a reading that failed must not cost the delivery
@@ -598,10 +644,16 @@ def _asks(findings: list[Finding], blocking: list[Finding]) -> list[str]:
     return asks
 
 
+_SAME_REPLY = (
+    "send the edits and the next ppt_build in one reply: tool calls run in the order listed, so "
+    "edit_file for every page named and then ppt_build together cost one turn, not two"
+)
+
 _ASK = {
     "citation": "fix {count} page(s) citing one figure while showing another",
     "band": "consider {count} filled colour bar(s), which carry nothing",
     "unmapped_page": "give each slide its own block in build.py",
+    "page_failed": "fix the {count} page(s) whose block raised -- the traceback is in each finding's detail, and a page saying so stands where each should be",
     "unseen_page": "look at the {count} page(s) you have not been shown: build again without slides and they come back first",
     "evidence": "put something on the pages that are all prose: a figure, a diagram, cards led by icons, a chart -- a table only where a reader compares figures down a column",
     "wide_table": "narrow {count} table(s) or split them",

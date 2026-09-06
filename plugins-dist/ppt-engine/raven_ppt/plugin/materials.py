@@ -373,8 +373,16 @@ def deck_mtimes(out_dir: Path) -> dict[Path, float]:
     return found
 
 
-def verified_deck(out_dir: Path, reply: str, before: dict[Path, float]) -> tuple[Path | None, int]:
+def verified_deck(
+    out_dir: Path, reply: str, before: dict[Path, float], published: set[str] | None = None
+) -> tuple[Path | None, int]:
     """The deck this turn published, or ``(None, 0)``.
+
+    ``published`` is the set of sha256 digests the publish step recorded; given, a
+    candidate has to be one of them. A file the model copied into ``out/`` itself is a
+    valid deck newer than the turn started and used to verify -- two live runs did
+    exactly that after a refused build, and the reply then told the user the deck was
+    delivered. Passing ``None`` keeps the older reading for a caller with no record.
 
     Every valid deck this turn wrote or rewrote is a candidate; the announcement
     only chooses between them, and the newest wins when it names none of them.
@@ -390,6 +398,8 @@ def verified_deck(out_dir: Path, reply: str, before: dict[Path, float]) -> tuple
         for path, mtime in sorted(deck_mtimes(out_dir).items())
         if mtime > before.get(path, -1.0) and (count := slide_count(path))
     ]
+    if published is not None:
+        candidates = [(path, count) for path, count in candidates if _digest(path) in published]
     if not candidates:
         return None, 0
 
@@ -404,6 +414,24 @@ def verified_deck(out_dir: Path, reply: str, before: dict[Path, float]) -> tuple
     return max(candidates, key=lambda item: item[0].stat().st_mtime)
 
 
+def _digest(path: Path) -> str:
+    import hashlib
+
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
+def unpublished_decks(out_dir: Path, before: dict[Path, float], published: set[str]) -> list[Path]:
+    """Decks this turn wrote under ``out/`` that the publish step never recorded."""
+    return [
+        path
+        for path, mtime in sorted(deck_mtimes(out_dir).items())
+        if mtime > before.get(path, -1.0) and slide_count(path) and _digest(path) not in published
+    ]
+
+
 __all__ = [
     "MATERIAL_SUFFIXES",
     "StagingError",
@@ -414,6 +442,7 @@ __all__ = [
     "rehydrate",
     "slide_count",
     "stage",
+    "unpublished_decks",
     "unique_sources",
     "unstaged",
     "verified_deck",

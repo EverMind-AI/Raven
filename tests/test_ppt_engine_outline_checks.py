@@ -1089,3 +1089,105 @@ def test_a_borrowed_page_outside_the_curated_reference_list_is_refused() -> None
     assert [(f.kind, f.severity.value, f.page) for f in found] == [("borrowed", "blocking", 1)]
     assert "verified to carry" in found[0].message
     assert str(curated[0]) in found[0].message, "the reply names the pages that are offered"
+
+
+def _content_template(path):
+    """A template with a real content example: cover, agenda, one page of four points, closing."""
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    for heading in ("A deck about something", "Agenda", "Four findings", "谢谢观看"):
+        page = presentation.slides.add_slide(presentation.slide_layouts[6])
+        page.shapes.add_textbox(Inches(1), Inches(1), Inches(6), Inches(1)).text_frame.text = heading
+        if heading == "Four findings":
+            for index in range(4):
+                box = page.shapes.add_textbox(Inches(1 + 3 * index), Inches(3), Inches(2.6), Inches(2))
+                box.text_frame.text = (
+                    f"Finding {index + 1}: a sentence long enough to be copy rather than a label on it."
+                )
+    presentation.save(str(path))
+    return path
+
+
+def test_a_plan_composing_most_of_its_content_pages_inside_a_template_is_refused(tmp_path) -> None:
+    """Two decks in one template family: 4 of 17 content pages composed read as the
+    template's own, 17 of 17 read as nothing but self-drawn layouts, and the ask that
+    listed the pages had been read twice. The share is a refusal, with the examples."""
+    from raven_ppt.tools.outline import COMPOSED_SHARE, _composed_pages
+
+    template = _content_template(tmp_path / "house.pptx")
+    pages = (_page(1, prototype=1), _page(2), _page(3), _page(4), _page(5), _page(6, prototype=4))
+
+    findings = _composed_pages(Outline(takeaway="t", pages=pages), _Bound(template))
+
+    assert COMPOSED_SHARE == 1 / 4
+    assert [f.kind for f in findings] == ["composed_pages"]
+    assert findings[0].detail == {"composed": [2, 3, 4, 5], "allowed": 1, "content_pages": 4, "examples": [3]}
+    assert "pages 3" in findings[0].message and "at most 1" in findings[0].message
+
+
+def test_a_quarter_of_the_content_pages_may_still_be_composed(tmp_path) -> None:
+    from raven_ppt.tools.outline import _composed_pages
+
+    template = _content_template(tmp_path / "house.pptx")
+    pages = (
+        _page(1, prototype=1),
+        _page(2, prototype=3),
+        _page(3, prototype=3),
+        _page(4, prototype=3),
+        _page(5),
+        _page(6, prototype=4),
+    )
+
+    assert _composed_pages(Outline(takeaway="t", pages=pages), _Bound(template)) == []
+
+
+def test_a_borrowed_page_counts_as_a_designed_start(tmp_path) -> None:
+    from dataclasses import replace
+
+    from raven_ppt.tools.outline import _composed_pages
+
+    template = _content_template(tmp_path / "house.pptx")
+    borrowed = replace(_page(2), borrowed="gold_panel_year_end_summary", prototype=5)
+    pages = (
+        _page(1, prototype=1),
+        borrowed,
+        _page(3, prototype=3),
+        _page(4),
+        _page(5, prototype=3),
+        _page(6, prototype=4),
+    )
+    # Four content pages, one composed: within the quarter only because the borrowed
+    # page counts as a designed start.
+
+    assert _composed_pages(Outline(takeaway="t", pages=pages), _Bound(template)) == []
+
+
+def test_without_a_template_nothing_is_asked_to_start_from_one() -> None:
+    from raven_ppt.tools.outline import _composed_pages
+
+    class _Free:
+        template = None
+        figures = ()
+
+    assert _composed_pages(Outline(takeaway="t", pages=(_page(1), _page(2), _page(3))), _Free()) == []
+
+
+def test_a_page_without_a_prototype_is_offered_the_examples_that_fit_what_it_carries(tmp_path) -> None:
+    """The ask that said "pick the nearest example" was acted on by nobody until a page
+    number stood beside each page; the suggestion is by materials, and it stays a
+    suggestion."""
+    from dataclasses import replace
+
+    from raven_ppt.services.template.menu import menu
+    from raven_ppt.tools.outline import _suggested_examples
+
+    template = _content_template(tmp_path / "house.pptx")
+    examples = [entry for entry in menu(template) if not entry.role and not entry.hidden]
+    four_points = replace(_page(2, says=4), carries="four cards")
+    a_table = replace(_page(3), carries="a table")
+
+    assert _suggested_examples(four_points, examples) == [3], "four slots carry four points"
+    assert _suggested_examples(a_table, examples) == [], "no example holds a table, so nothing is pretended to"

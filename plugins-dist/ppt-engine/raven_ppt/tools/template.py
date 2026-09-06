@@ -534,8 +534,9 @@ class PptTemplateTool(Tool):
         body = _return.done(asks=asks, **payload)
         blocks: list[Any] = []
         by_number = {number: role for role, number in named.items()}
+        entries = {entry.number: entry for entry in listing}
         for number in sorted(renders):
-            blocks.append(text_block(f"Template page {number} -- the template's {by_number.get(number, 'page')}"))
+            blocks.append(text_block(_render_label(number, by_number.get(number), entries.get(number))))
             blocks.append(image_block(self.views.data_uri(renders[number])))
         return _return.with_images(body, blocks)
 
@@ -645,6 +646,45 @@ def _cut(block: str, budget: int) -> tuple[str, dict[str, int]]:
     if not kept:
         kept = [lines[0][:budget]]
     return "".join(kept).rstrip("\n"), {"lines_shown": len(kept), "lines_withheld": len(lines) - len(kept)}
+
+
+def _render_label(number: int, role: str | None, entry: Any) -> str:
+    """The line above a template page's render: what the page is, and how to start from it.
+
+    The shape sits beside the picture on purpose. The bind reply used to name the
+    arrangements in one list and show the renders under bare numbers, and the plan
+    that followed was written many turns later from memory of the pictures; a live
+    run then composed seventeen of seventeen content pages inside a template with
+    eleven content examples. What a reader decides from is the picture, so the words
+    that make it a choice -- its shape, its slots, the call that takes it -- go next
+    to the picture.
+    """
+    if role:
+        return f"Template page {number} -- the template's {role}"
+    shape = getattr(entry, "arrangement", "") if entry is not None else ""
+    slots = getattr(entry, "slots", 0) if entry is not None else 0
+    said = f"Template page {number} -- a content example"
+    if shape:
+        said += f": {shape}" + (f", {slots} slots" if slots else "")
+    places = tuple(getattr(entry, "picture_slots", ()) or ()) if entry is not None else ()
+    if places:
+        said += (
+            f". Picture slots: {', '.join(places)} -- what goes in each is yours to decide: a figure from the "
+            "sources, a photograph, or `ppt_generate_image(..., transparent=true)` for an illustration that "
+            "sits on the page's own ground; `pictures={n: FIGURES/'x.png'}` puts it there"
+        )
+        if any(" cut-out" in place for place in places):
+            said += (
+                ". A cut-out slot is a transparent drawing floating on the ground, and its box runs wherever "
+                "the drawing does -- into the title row, over a band; a photograph there wants a box of its "
+                "own clear of the copy, `pictures={n: (image, (left, top, width, height))}`, or a cut-out of "
+                "its own from `ppt_generate_image(..., transparent=true)`"
+            )
+    return said + (
+        f". A page of this information shape starts here: `adapt(prs, prototype(tpl, {number}), title=..., "
+        f"texts={{...}}{', items=[...]' if slots else ''}{', pictures={...}' if places else ''})`, and record "
+        f"`prototype: {number}` on it in the plan"
+    )
 
 
 def _unwritable_pages(source: Path, count: int) -> dict[int, tuple[str, ...]]:

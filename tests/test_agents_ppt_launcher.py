@@ -133,6 +133,13 @@ TRUNK_ONLY_DEFAULTS = {
 TRUNK_OVERRIDDEN_DEFAULTS = {"llmCallTimeout": (600, 1800)}
 
 
+# Engine-slice keys the fork's tools.ppt schema never had. The second reader's own
+# reasoning effort: the fork read every page at the author's setting, which litellm
+# dropped for this model anyway, so a GLM thought at its default for 100 to 350 seconds
+# a page; the gateway's own low effort reads one in 13 to 29.
+TRUNK_ONLY_SLICE = {"readerEffort": "low"}
+
+
 def test_the_config_is_the_forks_modulo_the_swap_ledger():
     """Every delta against the sealed fork wrapper's config is a ledgered row:
     the engine slice carries the retired tools.ppt knobs verbatim (D4),
@@ -144,6 +151,8 @@ def test_the_config_is_the_forks_modulo_the_swap_ledger():
     ours = json.loads((RUN_PY.parent / "config.json").read_text())
     theirs = json.loads((FORK / "config.json").read_text())
     slice_ = ours["plugins"]["config"].pop("ppt-engine")
+    for key, value in TRUNK_ONLY_SLICE.items():
+        assert slice_.pop(key) == value
     assert slice_ == theirs["tools"]["ppt"]
     fork_tools = dict(theirs["tools"])
     retired = fork_tools.pop("ppt")

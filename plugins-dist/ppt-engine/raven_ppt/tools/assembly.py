@@ -29,7 +29,7 @@ from raven_ppt.stages._measure import DeckMeasurer
 from raven_ppt.stages._views import DeckViews
 from raven_ppt.stages.build import BATCH_VIEWS, BuildStage
 from raven_ppt.stages.prepare import PrepareStage
-from raven_ppt.tools._composer import ProviderComposer
+from raven_ppt.tools._composer import ProviderComposer, thinking
 from raven_ppt.tools.brief import PptBriefTool
 from raven_ppt.tools.build import PptBuildTool
 from raven_ppt.tools.fetch import PptFetchTool
@@ -57,6 +57,7 @@ def build_ppt_tools(
     web_proxy: str | None = None,
     image_config: Any | None = None,
     media_proxy: str | None = None,
+    reader_effort: str | None = None,
 ) -> list[Tool]:
     """The tools for one route, or [] when python-pptx is not importable.
 
@@ -105,10 +106,21 @@ def build_ppt_tools(
     # Built first: the build tool runs it while enough of the deck is unread, and the
     # model can call it on its own besides. One instance, so both routes share the
     # record that says which page-versions have already been read.
+    # The reader's thinking is its own knob, not the author's: a page's list is a
+    # reading of a picture, and the author's reasoning setting was sized for writing
+    # a deck. `retry_on_length` off for the same reason the tool's REPLY_TOKENS says
+    # -- a reading's second attempt costs what the first did.
     review = PptReviewTool(
         workspace,
         views,
-        composer=ProviderComposer(provider=provider, model=composer_model or None) if provider is not None else None,
+        composer=ProviderComposer(
+            provider=provider,
+            model=composer_model or None,
+            retry_on_length=False,
+            **thinking(provider, reader_effort),
+        )
+        if provider is not None
+        else None,
     )
     tools: list[Tool] = [
         PptPrepareTool(workspace, _prepare(provider), provision=provision_script_workspace),

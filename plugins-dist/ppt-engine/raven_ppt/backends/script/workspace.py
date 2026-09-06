@@ -47,6 +47,11 @@ def slide_lines_path(project: Project) -> Path:
     return project.build_dir / ".slide_lines.json"
 
 
+def page_failures_path(project: Project) -> Path:
+    """Where a build records the pages whose block raised and were stood in for."""
+    return project.state_dir / "page_failures.json"
+
+
 # The name the author imports the template operations under, so the reference a
 # page carries -- "clone it with ppt_template.clone_page" -- is a line that runs.
 TEMPLATE_HELPER = "ppt_template.py"

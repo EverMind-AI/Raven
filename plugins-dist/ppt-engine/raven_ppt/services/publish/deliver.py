@@ -88,7 +88,44 @@ def publish(
         raise PublishRefusedError(f"could not write the deck to {resolved}: {exc}") from exc
     finally:
         temporary.unlink(missing_ok=True)
+    record_published(project, resolved, staged.digest, staged.pages)
     return resolved
+
+
+PUBLISHED_RECORD = "published.json"
+
+
+def record_published(project, path: Path, digest: str, pages: int) -> None:
+    """Note what this route published, so the harness can tell it from a copy.
+
+    Two live runs answered a refused build by `cp deck/build/deck.pptx out/...` and
+    told the user the deck was delivered; the hook, which only knew "a valid deck under
+    out/ newer than the turn started", confirmed it. What was published is what went
+    through the gates, and this is the list of that.
+    """
+    import json
+
+    target = project.state_dir / PUBLISHED_RECORD
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        held = json.loads(target.read_text(encoding="utf-8")) if target.is_file() else {}
+    except (OSError, ValueError):
+        held = {}
+    entries = [e for e in held.get("published", []) if isinstance(e, dict) and e.get("path") != str(path)]
+    entries.append({"path": str(path), "sha256": digest, "pages": pages})
+    target.write_text(json.dumps({"published": entries}, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def published_digests(state_dir: Path) -> set[str]:
+    """The sha256 of every deck this project has published; empty when none has been."""
+    import json
+
+    target = state_dir / PUBLISHED_RECORD
+    try:
+        held = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    return {str(e.get("sha256")) for e in held.get("published", []) if isinstance(e, dict) and e.get("sha256")}
 
 
 def _inside_workspace(project, destination: Path) -> Path:

@@ -120,7 +120,8 @@ async def test_all_example_pages_come_back_as_pictures(workspace: Path, house: P
     assert isinstance(result, ToolResult)
     assert [block["type"] for block in result.blocks] == ["text", "image_url", "text", "image_url"]
     assert "Template page 1 -- the template's cover" in result.blocks[0]["text"]
-    assert "Template page 2 -- the template's page" in result.blocks[2]["text"]
+    assert result.blocks[2]["text"].startswith("Template page 2 -- a content example")
+    assert "prototype(tpl, 2)" in result.blocks[2]["text"], "the call that takes the page sits beside its picture"
     body = _body(result)
     assert body["house_pages"] == {"cover": 1}
     assert len(body["template_pages"]) == 2
@@ -312,3 +313,27 @@ async def test_rebinding_drops_the_band_grid_read_off_the_previous_template(work
 
     assert body["ok"]
     assert not bands_path(project).exists(), "the grid goes with the template it was read from"
+
+
+def test_the_render_caption_names_the_picture_slots_and_leaves_the_fill_to_the_author() -> None:
+    """A template page's photograph and cartoon are placeholders; the caption says where
+    they are in `adapt`'s numbering and what may go there, and the starter call carries
+    `pictures={...}`, so the choice of picture is made at the render, not after a refusal."""
+    from types import SimpleNamespace
+
+    from raven_ppt.tools.template import _render_label
+
+    entry = SimpleNamespace(
+        arrangement="a photograph beside three cards",
+        slots=3,
+        picture_slots=("[2] 5.4x3.6in photo", "[7] 2.4x2.5in drawing"),
+    )
+
+    said = _render_label(9, None, entry)
+
+    assert "Picture slots: [2] 5.4x3.6in photo, [7] 2.4x2.5in drawing" in said
+    assert "transparent=true" in said and "yours to decide" in said
+    assert "items=[...], pictures={...})" in said
+
+    bare = _render_label(4, None, SimpleNamespace(arrangement="two columns", slots=0, picture_slots=()))
+    assert "Picture slots" not in bare and "pictures={...}" not in bare
