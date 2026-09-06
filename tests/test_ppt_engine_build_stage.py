@@ -63,7 +63,7 @@ def _outcome(project: Project, pages: int = 2, mapped: bool = True) -> BuildOutc
 
 
 def _measure(findings):
-    async def measure(_project: Project, _pptx: Path, _outcome=None, _changed: str = "delivery") -> list[Finding]:
+    async def measure(_project: Project, _pptx: Path, _outcome=None) -> list[Finding]:
         return list(findings)
 
     return measure
@@ -142,7 +142,7 @@ async def test_the_deck_is_measured_once(project: Project) -> None:
     async def backend(_project: Project, _script: str | None) -> BuildOutcome:
         return _outcome(_project)
 
-    async def measure(_p: Project, _pptx: Path, _outcome=None, _changed: str = "delivery") -> list[Finding]:
+    async def measure(_p: Project, _pptx: Path, _outcome=None) -> list[Finding]:
         seen.append(1)
         return []
 
@@ -511,74 +511,3 @@ async def test_a_render_that_did_not_happen_is_not_a_page_seen(project: Project)
     await stage.run(project, slides=[1, 2, 3], draft=True)
 
     assert not seen.seen_path(project).exists()
-
-
-@pytest.mark.asyncio
-async def test_a_build_without_slides_shows_the_unseen_pages_first(project: Project) -> None:
-    """The tail this removes: a run reached twenty pages and then spent ten builds on
-    nothing but looking, because seven pages had changed since they were shown and a
-    walk from page 1 handed back three at a time, seen pages included. The pages that
-    refuse publication are the ones a plain build comes back with, and more of them
-    than a walk carries."""
-    from raven_ppt.stages.build import CATCH_UP_VIEWS
-
-    outcome = _ten_pages(project)
-    stage = _stage(project, outcome=outcome)
-    await stage.run(project, slides=[1, 2, 3], draft=True)
-
-    result = await stage.run(project)
-
-    assert result.data["showing"] == [4, 5, 6, 7, 8, 9], "the unseen pages, up to the catch-up batch"
-    assert CATCH_UP_VIEWS == 6
-    unseen = [f for f in result.findings if f.kind == "unseen_page"]
-    assert unseen[0].detail["pages"] == [10] == result.data["unseen_after"]
-    assert "without `slides`" in unseen[0].message
-
-    delivered = await stage.run(project)
-    assert delivered.data["showing"] == [10]
-    assert delivered.ok and delivered.data["unseen_after"] == []
-
-
-@pytest.mark.asyncio
-async def test_page_from_says_where_the_catch_up_starts(project: Project) -> None:
-    """A number past every unseen page does not lose them: the batch wraps to the first."""
-    stage = _stage(project, outcome=_ten_pages(project))
-
-    late = await stage.run(project, page_from=8, draft=True)
-    assert late.data["showing"] == [8, 9, 10]
-
-    wrapped = await stage.run(project, page_from=11, draft=True)
-    assert wrapped.data["showing"] == [1, 2, 3, 4, 5, 6]
-
-
-@pytest.mark.asyncio
-async def test_a_deck_that_has_been_seen_whole_is_walked_by_number(project: Project) -> None:
-    """Once nothing is unseen the plain build is the old walk: three from page_from."""
-    stage = _stage(project, outcome=_ten_pages(project))
-    await stage.run(project, page_from=1, draft=True)
-    await stage.run(project, page_from=7, draft=True)
-
-    result = await stage.run(project, page_from=4)
-
-    assert result.data["showing"] == [4, 5, 6]
-    assert result.ok
-
-
-@pytest.mark.asyncio
-async def test_a_named_page_is_still_the_one_that_comes_back(project: Project) -> None:
-    stage = _stage(project, outcome=_ten_pages(project))
-
-    result = await stage.run(project, slides=[7])
-
-    assert result.data["showing"] == [7]
-    assert result.data["unseen_after"] == [1, 2, 3, 4, 5, 6, 8, 9, 10]
-
-
-@pytest.mark.asyncio
-async def test_a_deck_without_a_mapping_keeps_no_unseen_record(project: Project) -> None:
-    stage = _stage(project, outcome=_outcome(project, mapped=False))
-
-    result = await stage.run(project)
-
-    assert result.data["showing"] == [1, 2]
-    assert result.data["unseen_after"] is None

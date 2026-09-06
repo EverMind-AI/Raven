@@ -18,7 +18,7 @@ from pathlib import Path
 from raven_ppt.contracts.findings import Finding, Severity
 from raven_ppt.services.measure.geometry import (
     EMU_PER_INCH,
-    is_filled,
+    is_panel,
     iter_shapes,
     iter_text_frames,
     open_deck,
@@ -154,7 +154,7 @@ def evidence_coverage(pptx_path: Path, structural: Sequence[int] = ()) -> list[F
             shows_picture(shape) or getattr(shape, "has_table", False) or getattr(shape, "has_chart", False)
             for shape in shapes
         )
-        drawn = sum(1 for shape in shapes if is_filled(shape) and not _carries_text(shape))
+        drawn = sum(1 for shape in shapes if is_panel(shape) and not _carries_text(shape))
         if shown or drawn >= DIAGRAM_SHAPES:
             carrying += 1
     if carrying / len(judged) >= EVIDENCE_SHARE:

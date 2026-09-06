@@ -13,13 +13,18 @@ import type {
   DagNodeStatus,
   DagNodeUpdatedEvent,
   DagRunCompletedEvent,
+  DagRunReplannedEvent,
   DagRunSnapshot,
   DagRunStartedEvent
 } from '../rpc/index.js'
 import type { Msg } from '../types.js'
 
-/** Any of the three progress events a DAG run emits. */
-export type DagEvent = DagNodeUpdatedEvent | DagRunCompletedEvent | DagRunStartedEvent
+/** Any of the four progress events a DAG run emits. */
+export type DagEvent =
+  | DagNodeUpdatedEvent
+  | DagRunCompletedEvent
+  | DagRunReplannedEvent
+  | DagRunStartedEvent
 
 /** The wire vocabulary plus `interrupted`, which the client infers rather than
  * receives: the runner only ever reports the four terminal states, so a node
@@ -64,6 +69,10 @@ export interface DagRunState {
   /** Where the run wrote its per-node outputs; known once it completes. */
   dir?: string
   summary?: DagRunSummary
+  /** The run that replaced this one, when the agent replanned it. Arrives the
+   * moment the desk accepts the decision, before this run's own `done` --
+   * the successor is named a moment before it exists. */
+  replannedInto?: string
 }
 
 const fromStart = (payload: DagRunStartedEvent['payload'], promptTemplates?: Record<string, string>): DagRunState => ({
@@ -186,6 +195,13 @@ export const foldDagEvent = (
 
   if (prev === null || prev.runId !== event.payload.run_id) {
     return prev
+  }
+
+  // Arrives the moment the desk accepts the decision -- before this run's
+  // own `dag.run_completed`, and before the successor even starts -- so this
+  // must leave `done` and the nodes alone rather than treat it as the run ending.
+  if (event.type === 'dag.run_replanned') {
+    return { ...prev, replannedInto: event.payload.replan_run_id }
   }
 
   if (event.type === 'dag.run_completed') {

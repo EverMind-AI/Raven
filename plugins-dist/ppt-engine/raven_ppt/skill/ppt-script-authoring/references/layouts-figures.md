@@ -14,14 +14,6 @@ skill's §6.5). Not for a run something else already spreads into the whole body
 `card_group(..., down=True)` given the body puts the leftover between its own cards, and a
 body cut to the sum of their heights first leaves them touching.
 
-A passage whose figures carry a caption asks for the page's foot as well --
-`frame = page(footer=True)` -- because the caption goes on one line in `footer()`'s `note`,
-joined with `；` where the page has more than one figure, and never under the picture
-(`M6`); the height that frees goes back to the figure. The strip's room comes out of the
-body, so a citing page has 1.53-6.20in of it and not 1.53-6.78in: a run measured against
-the taller one is refused by `take` at its last band, and `P1` and `P2` below are what
-0.58in less body looks like.
-
 They also assume the seven picture helpers from
 [deck/build/references/layouts-primitives.md](deck/build/references/layouts-primitives.md)
 -- `cover`, `scrim`, `vignette`, `clip`, `fade`, `duotone`, `lift`. Open that file first;
@@ -30,29 +22,31 @@ nothing here redefines them.
 ### P1 -- Figure left, copy right
 
 Cut the figure's column to the figure before writing beside it: `picture_fit` centres
-what is left of a band, so a column left uncut starts the figure half the leftover below
-the copy's first line instead of level with it.
+what is left of a band, so a column cut by eye is a strip of white over the figure and
+the caption stranded at the bottom.
 
 `card_size` levels the three cards beside it, so none is padded out to the lane, and the
 `stack`'s gutter spends the lane's leftover height as the air between them rather than
 leaving it in a heap at the bottom -- floored at `GUTTER`, so a lane with little slack
-keeps the deck's own gap instead of closing below it. Three one-line cards need 4.49in of
-the citing page's 4.67in body, so nothing labels them: a label over three cards whose own
-titles already name them is the least of what this column holds.
+keeps the deck's own gap instead of closing below it.
 
 ```python
+caption = "图 1：四阶段流水线（论文原图）"
 figure, said = frame.body.split_left(0.58)
-tall = picture_size(f"{FIGURES}/fig1.png", figure).h
-picture_fit(slide, f"{FIGURES}/fig1.png", Box(figure.x0, figure.y0, figure.x1, figure.y0 + tall), T)
+tall = picture_size(f"{FIGURES}/fig1.png", figure, caption=caption).h
+picture_fit(slide, f"{FIGURES}/fig1.png", Box(figure.x0, figure.y0, figure.x1, figure.y0 + tall),
+            T, caption=caption)
 notes = [("layers", "共享权重", "四个阶段共用一套权重，只换输入。"),
          ("target", "唯一监督", "第三阶段是唯一带监督的一步。"),
          ("stopwatch", "下一步", "端到端 42ms，第二阶段占 61%。")]
-tall = max(card_size(said.w, icon=i, title=h, body=b, font=FACE).h for i, h, b in notes)
-down = stack(said).spread(*[tall] * len(notes))
+beside = stack(said)
+write(slide, beside.take(0.42), "读法", size=LEAD_PT, bold=True, colour=INK, font=FACE, cjk_font=HAN)
+beside.skip(0.10)
+lane = beside.rest()
+tall = max(card_size(lane.w, icon=i, title=h, body=b, font=FACE).h for i, h, b in notes)
+down = stack(lane).spread(*[tall] * len(notes))
 for icon, head, body in notes:
     card(slide, down.take(tall), T, icon=icon, title=head, body=body, font=FACE, cjk_font=HAN)
-footer(slide, frame.footer, T, note="来源：论文 Figure 1 原图；图 1 四阶段流水线",
-       font=FACE, cjk_font=HAN)
 ```
 
 ### P2 -- Figure right, copy left
@@ -63,13 +57,15 @@ reach for when the argument leads and the figure corroborates.
 Which is why the blocks here are not level, where `P1`'s are: an `accent_soft` band
 (`M3`) at `LEAD_PT` outweighs the two cards under it, so the eye lands on it first and on
 them second. A level set of three would say all three weigh the same, which on this page
-they do not. The figure on this side is as wide as its column allows and its own aspect
-caps its height there, so what the caption gave up is air under it rather than a taller
-figure -- the copy column is the one that sets where this page ends.
+they do not.
 
 ```python
+caption = "图 2：验证集曲线"
 said, figure = frame.body.split_left(0.42)
 down = stack(said)
+write(slide, down.take(0.42), "为什么是这条曲线", size=LEAD_PT, bold=True, colour=INK,
+      font=FACE, cjk_font=HAN)
+down.skip(0.10)
 lead = down.take(1.30)
 plane(slide, lead, T, tint="accent_soft", radius=True)
 write(slide, lead.inset(PAD + 0.08), "第 9 个 epoch 起验证集与训练集分离，早停点就在这里。",
@@ -82,10 +78,9 @@ tall = max(card_size(rest.w, icon=i, title=h, body=b, font=FACE).h for i, h, b i
 beside = stack(rest).spread(*[tall] * len(notes))
 for icon, head, body in notes:
     card(slide, beside.take(tall), T, icon=icon, title=head, body=body, font=FACE, cjk_font=HAN)
-tall = picture_size(f"{FIGURES}/fig2.png", figure).h
-picture_fit(slide, f"{FIGURES}/fig2.png", Box(figure.x0, figure.y0, figure.x1, figure.y0 + tall), T)
-footer(slide, frame.footer, T, note="来源：论文 Figure 3；图 2 验证集与训练集的准确率曲线",
-       font=FACE, cjk_font=HAN)
+tall = picture_size(f"{FIGURES}/fig2.png", figure, caption=caption).h
+picture_fit(slide, f"{FIGURES}/fig2.png", Box(figure.x0, figure.y0, figure.x1, figure.y0 + tall),
+            T, caption=caption)
 ```
 
 ### P3 -- Figure band across the top, copy in columns under it
@@ -97,8 +92,8 @@ region and `rest()` refuses with nothing left.
 ```python
 down = stack(frame.body)
 allowed = Box(down.x0, down.y0, down.x1, down.y0 + down.left * 0.62)
-band = down.take(picture_size(f"{FIGURES}/fig3.png", allowed).h)
-picture_fit(slide, f"{FIGURES}/fig3.png", band, T)
+band = down.take(picture_size(f"{FIGURES}/fig3.png", allowed, caption="图 3：系统全貌").h)
+picture_fit(slide, f"{FIGURES}/fig3.png", band, T, caption="图 3：系统全貌")
 down.skip(GUTTER)
 for box, (head, body) in zip(down.rest().columns(3), [
     ("采集", "四路信号，10Hz 对齐后入库。"),
@@ -106,7 +101,6 @@ for box, (head, body) in zip(down.rest().columns(3), [
     ("下发", "结果写回工单，平均 42ms。"),
 ]):
     write(slide, box, [head, body], size=BODY_PT, colour=INK, font=FACE, cjk_font=HAN)
-footer(slide, frame.footer, T, note="来源：内部架构评审材料；图 3 系统全貌", font=FACE, cjk_font=HAN)
 ```
 
 ### P4 -- One line of copy, the figure under it
@@ -120,8 +114,7 @@ said = "把任务定义搬进输入，网络本身就与任务无关：同一组
 write(slide, down.take(text_size(said, frame.body.w, size=LEAD_PT, font=FACE).h), said,
       size=LEAD_PT, colour=INK, font=FACE, cjk_font=HAN)
 down.skip(GUTTER)
-picture_fit(slide, f"{FIGURES}/fig4.png", down.rest(), T)
-footer(slide, frame.footer, T, note="来源：论文 Figure 2 原图；图 4 查询拼装", font=FACE, cjk_font=HAN)
+picture_fit(slide, f"{FIGURES}/fig4.png", down.rest(), T, caption="图 4：查询拼装（论文原图）")
 ```
 
 ### P27 -- Serpentine: three rows, the figure changing side
@@ -171,17 +164,12 @@ for box, (icon, head, body) in zip(lane.columns(2, gutter=GUTTER), notes):
 ### P6 -- Numbered hotspots on the figure, the legend down the side
 
 The hotspots go on fractions of the box `picture_fit` hands back, which is the figure's
-real extent and not the region it was given -- a fraction of the region puts the marks in
-the white space around it, and with the caption gone `picture_fit` centres the figure in
-the whole column, so that difference is vertical as well as horizontal.
-
-These numbers are drawn *on* the figure, so they are not what the foot's note replaces:
-they stay where they are, and the note accounts for the figure and says what the numbers
-answer to.
+real extent and not the region it was given -- a fraction of the region puts the marks
+in the white space beside it.
 
 ```python
 figure, legend = frame.body.split_left(0.62)
-shown = picture_fit(slide, f"{FIGURES}/fig5.png", figure, T)
+shown = picture_fit(slide, f"{FIGURES}/fig5.png", figure, T, caption="图 5：标注了三处的流水线")
 for index, (fx, fy) in enumerate([(0.20, 0.42), (0.46, 0.30), (0.72, 0.42)], start=1):
     dot = Box.at(shown.box.x0 + shown.box.w * fx, shown.box.y0 + shown.box.h * fy, w=0.34, h=0.34)
     preset(slide, dot, T, "ellipse", tint="accent")
@@ -201,8 +189,6 @@ for index, said in enumerate([
     write(slide, Box(band.x0 + 0.46, band.y0, band.x1, band.y1), said,
           size=BODY_PT, colour=INK, font=FACE, cjk_font=HAN)
     down.skip(0.14)
-footer(slide, frame.footer, T, note="来源：论文 Figure 1 改绘；图 5 标注了三处的流水线，编号对应右侧图例",
-       font=FACE, cjk_font=HAN)
 ```
 
 ### P7 -- One thing at the centre, leader lines out to what it reaches

@@ -20,13 +20,7 @@ from lxml import etree
 from pptx import Presentation
 from pptx.util import Inches
 
-from raven_ppt.services.measure.geometry import (
-    EMU_PER_INCH,
-    is_panel,
-    is_rectangular,
-    page_box,
-    shape_rect_emu,
-)
+from raven_ppt.services.measure.geometry import EMU_PER_INCH, page_box, shape_rect_emu
 
 _A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
 _P = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
@@ -217,89 +211,3 @@ def test_a_table_inside_a_group_lands_where_the_group_puts_it() -> None:
     assert round(boxes["left"].x0) == round(2.0 * 72)
     assert round(boxes["left"].width) == round(2.0 * 72)
     assert round(boxes["right"].x0) == round(4.0 * 72)
-
-
-def test_a_shape_filled_through_its_own_style_is_a_panel(tmp_path: Path) -> None:
-    """PowerPoint's default shape carries no fill in its `spPr`.
-
-    The colour comes from a `p:style` whose `a:fillRef` names one of the theme's fill
-    styles, and the renderer resolves it. Two of the four cards on a bundled template's
-    page are drawn that way: reading `spPr` alone called them bare frames, so every
-    check built on `is_panel` -- `cards`, `sparse_containers`, `crowded_panels` -- saw
-    two cards where a reader sees four, and a page of grouped cards was reported as a
-    page of copy with no edges around it.
-    """
-    presentation = Presentation()
-    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
-    shape = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(3), Inches(2))
-
-    # Nothing in `spPr`, and the `p:style` python-pptx stamps names fill style 1.
-    assert shape.fill.type is None
-    assert is_panel(shape)
-
-
-def test_a_style_that_names_no_fill_is_still_not_a_panel(tmp_path: Path) -> None:
-    """Two ways of saying nothing is painted, and the fallback must answer both.
-
-    `a:noFill` in the shape's own `spPr` is an author's decision, and `a:fillRef
-    idx="0"` is the index that means no fill -- so the style fallback must not turn
-    every shape python-pptx draws into a panel.
-    """
-    presentation = Presentation()
-    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
-
-    bare = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(3), Inches(2))
-    bare.fill.background()
-    assert not is_panel(bare), "an explicit noFill is the author saying no fill"
-
-    outlined = slide.shapes.add_shape(1, Inches(1), Inches(4), Inches(3), Inches(2))
-    for existing in outlined._element.findall(f"{_P}style"):
-        outlined._element.remove(existing)
-    styled = etree.SubElement(outlined._element, f"{_P}style")
-    etree.SubElement(styled, f"{_A}fillRef", {"idx": "0"})
-
-    assert not is_panel(outlined)
-
-
-def test_only_the_rectangle_family_reads_as_rectangular() -> None:
-    """What the fill checks may ask "how full is it" about.
-
-    The presets are the ones measured across the twelve bundled templates and two built
-    decks: 211 rectangles against 117 shapes whose drawn area is a fraction of the box
-    a check would read copy against.
-    """
-    from pptx.enum.shapes import MSO_SHAPE
-
-    presentation = Presentation()
-    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
-
-    def drawn(preset):
-        return slide.shapes.add_shape(preset, Inches(1), Inches(1), Inches(3), Inches(2))
-
-    for preset in (MSO_SHAPE.RECTANGLE, MSO_SHAPE.ROUNDED_RECTANGLE, MSO_SHAPE.SNIP_1_RECTANGLE):
-        assert is_rectangular(drawn(preset)), preset
-
-    for preset in (MSO_SHAPE.OVAL, MSO_SHAPE.DONUT, MSO_SHAPE.ISOSCELES_TRIANGLE, MSO_SHAPE.PARALLELOGRAM):
-        assert not is_rectangular(drawn(preset)), preset
-
-
-def test_a_freeform_mask_is_not_rectangular_and_a_picture_frame_is(tmp_path: Path) -> None:
-    """The 85 shapes a bundled template draws its diagonals and wedges with are
-    `custGeom` freeforms, and every one of them was being judged as a panel."""
-    from PIL import Image
-
-    presentation = Presentation()
-    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
-
-    wedge = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(3), Inches(2))
-    properties = wedge._element.find(f"{_P}spPr")
-    properties.remove(properties.find(f"{_A}prstGeom"))
-    etree.SubElement(properties, f"{_A}custGeom")
-
-    assert not is_rectangular(wedge)
-
-    path = tmp_path / "frame.png"
-    Image.new("RGB", (400, 300), (30, 30, 30)).save(path)
-    picture = slide.shapes.add_picture(str(path), Inches(5), Inches(1), Inches(3), Inches(2))
-
-    assert is_rectangular(picture), "a picture frame is a rectangle whatever it states"

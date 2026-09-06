@@ -217,22 +217,6 @@ def test_copy_that_paints_off_the_page_is_reported(deck) -> None:
     assert "off the edge of the page" in findings[0].message
 
 
-def test_copy_whose_size_the_master_sets_is_still_measured(deck) -> None:
-    """A cloned page states no size on its runs; the master does. Skipping the block
-    for having 'no size' is how two unwrapped titles spilled off a measured page
-    unreported. Resolved through the master, the same spill is reported."""
-    from pptx.util import Inches
-
-    page = deck.page()
-    box = page.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(3.0), Inches(0.8))
-    box.text_frame.word_wrap = False
-    box.text_frame.text = "TarViS：把四类视频分割统一成一个模型的完整技术评审与后续工程建议，再加一段让它更长的说明文字"
-
-    findings = spilled_copy(deck.save())
-    assert [f.kind for f in findings] == ["spilled_copy"]
-    assert findings[0].detail["off_page"] is True
-
-
 def test_a_label_centred_in_its_own_anchor_box_is_not(deck) -> None:
     """The idiom this check must not touch: 'VIS' in a 0.12in box inside a coloured
     circle, rendered dead centre and perfectly legible. Across six real decks 38 lines

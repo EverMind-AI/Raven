@@ -76,16 +76,6 @@ from raven_ppt.services.template import house_style, prepared_path
 # why a measured run spent 147 iterations.
 BATCH_VIEWS = 3
 
-# How many renders one reply carries when it is showing the pages the author has not
-# been shown since their code was written, which is the batch a build without `slides`
-# selects first. Larger than BATCH_VIEWS because of what the smaller number cost once
-# the deck was written: a measured run reached twenty pages and then spent ten more
-# builds on nothing but looking -- seven pages had changed since they were shown, so at
-# three a call the unseen_page refusal came back three times with the deck otherwise
-# finished. Six is under the twelve that read as a batch to skim, and turns that tail
-# into two builds.
-CATCH_UP_VIEWS = 6
-
 # A plurality of pages is not a majority of them, and the difference is where this
 # measurement goes wrong. `_rows` answers for every page, so pages with no title in
 # the band still vote and their answers cluster: on one deck three of six named a
@@ -113,7 +103,6 @@ class BuildStage:
     # drifted: `ppt_build` bounds `slides` by this and the unseen record is written from
     # what it selects, so the two cannot be allowed to hold different numbers.
     views_per_call: int = BATCH_VIEWS
-    catch_up_views: int = CATCH_UP_VIEWS
 
     async def run(
         self,
@@ -128,14 +117,13 @@ class BuildStage:
         if not outcome.ok:
             return StageResult(ok=False, data={"outcome": outcome}, note=outcome.note)
 
-        findings = list(await self.measure(project, outcome.pptx_path, outcome, _changed(project, outcome, draft)))
+        findings = list(await self.measure(project, outcome.pptx_path, outcome))
         findings.extend(_mapping_findings(project, outcome))
         # After measuring, because measuring is what renders the deck and the record
         # reads that render. Before either exit, because a draft is the state the
         # record is worth most in: half the program is written and the rest of it is
         # about to be.
         outcome = _with_deck_house(project, outcome)
-        pending = _unseen_pages(project, outcome)
         if draft:
             # A program still being written is an accepted intermediate state, and the
             # previous engine learned this the same way: requiring a whole deck in one
@@ -145,23 +133,21 @@ class BuildStage:
             # length and what was agreed are not asked of a draft. Everything else is
             # measured, and nothing is published.
             findings = [finding for finding in findings if finding.kind not in _DRAFT_EXEMPT]
-            showing = self._showing(outcome.pages, slides, page_from, pending)
+            showing = _showing(outcome.pages, slides, page_from, self.views_per_call)
             # A draft render is a page put in front of the author, so it counts as
             # seen. See `_record_shown` for what recording it only on publication
             # cost one measured run.
             _record_shown(project, outcome, showing, findings)
             data: dict[str, Any] = {"outcome": outcome, "findings": findings, "showing": showing, "draft": True}
-            data["unseen_after"] = _unseen_pages(project, outcome)
             return StageResult(ok=True, findings=tuple(findings), data=data, note="draft: not published")
 
-        showing = self._showing(outcome.pages, slides, page_from, pending)
+        showing = _showing(outcome.pages, slides, page_from, self.views_per_call)
         findings.extend(_unplaced_figure_findings(project, outcome))
         _record_shown(project, outcome, showing, findings)
         findings.extend(_unseen_findings(project, outcome))
 
         blocking = self._blocking(findings)
         data: dict[str, Any] = {"outcome": outcome, "findings": findings, "showing": showing}
-        data["unseen_after"] = _unseen_pages(project, outcome)
         if blocking:
             return StageResult(ok=False, findings=tuple(findings), data=data)
 
@@ -179,9 +165,6 @@ class BuildStage:
         data["pptx_path"] = str(delivered)
         return StageResult(ok=True, findings=tuple(findings), data=data)
 
-    def _showing(self, pages: int, slides: Sequence[int] | None, page_from: int, pending) -> list[int]:
-        return _showing(pages, slides, page_from, self.views_per_call, unseen=pending, catch_up=self.catch_up_views)
-
     def _blocking(self, findings: Sequence[Finding]) -> list[Finding]:
         kinds = self.profile.blocking_kinds
         return [f for f in findings if f.severity is Severity.BLOCKING or f.kind in kinds]
@@ -190,40 +173,6 @@ class BuildStage:
 # What a draft is not held to: the length the brief agreed, and the pages the
 # outline mapped. Both are statements about a finished deck, and a draft is not one.
 _DRAFT_EXEMPT = frozenset({"page_budget", "page_mapping", "unseen_page"})
-
-
-def _changed(project: Project, outcome: BuildOutcome, draft: bool) -> str:
-    """What this build altered, in the terms `grading.checks_for` reads.
-
-    Read off the record rather than asked of the author: the page fingerprints the
-    seen record already keeps are the same notion of "this page's code" the author
-    edits, so the classification costs nothing and cannot be misreported. Publishing
-    is never classified -- it runs the full pass, which is what fail-closed means.
-    """
-    if not draft:
-        return "delivery"
-    kept = {int(page): block for page, block in seen.recorded(project).items()}
-    if not kept:
-        return "deck_shape"  # nothing to compare against, so spend the wider pass
-    fresh = _page_blocks(project, outcome)
-    if fresh is None:
-        return "pages"
-    if len(fresh) != len(kept):
-        return "deck_shape"
-    if fresh == kept:
-        return "nothing"
-    return "pages"
-
-
-def _page_blocks(project: Project, outcome: BuildOutcome) -> dict[int, str] | None:
-    """This build's per-page fingerprints, or None when the program cannot be read."""
-    from raven_ppt.backends.script.workspace import script_path
-
-    try:
-        script = script_path(project).read_text(encoding="utf-8")
-    except (OSError, AttributeError):
-        return None
-    return seen.blocks_of(script, outcome.sources) or None
 
 
 def _with_deck_house(project: Project, outcome: BuildOutcome) -> BuildOutcome:
@@ -335,48 +284,17 @@ def _render_of(project: Project, pptx: Path) -> Path | None:
         return None
 
 
-def _showing(
-    pages: int,
-    slides: Sequence[int] | None,
-    page_from: int,
-    views: int = BATCH_VIEWS,
-    *,
-    unseen: Sequence[int] | None = None,
-    catch_up: int = CATCH_UP_VIEWS,
-) -> list[int]:
-    """The pages this call will render back: the ones asked for, else the ones the
-    author has not been shown, else the next batch of the walk.
+def _showing(pages: int, slides: Sequence[int] | None, page_from: int, views: int = BATCH_VIEWS) -> list[int]:
+    """The pages this call will render back: the ones asked for, or the next batch.
 
     `views` is passed rather than read off the module so one build's budget is one
     value: `ppt_build` publishes the same number as its `slides` cap, and the unseen
     record below is written from what this returns.
-
-    The unseen pages come first because they are the only ones the build will refuse
-    to publish over, and a walk from `page_from` reached them last: it showed the
-    pages that were already seen on its way. `page_from` still says where to start,
-    within the unseen pages when there are any past it, and the walk of the whole deck
-    is what a build gets once every page has been shown.
     """
     if slides:
         return sorted(set(slides))[:views]
-    if unseen:
-        pending = [page for page in unseen if page >= page_from] or list(unseen)
-        return pending[:catch_up]
     first = max(1, min(page_from, pages or 1))
     return list(range(first, min(pages, first + views - 1) + 1))
-
-
-def _unseen_pages(project: Project, outcome: BuildOutcome) -> list[int] | None:
-    """The pages whose current code has not been rendered back, or None when the
-    deck has no page-to-code mapping to keep such a record by."""
-    try:
-        script = script_path(project).read_text(encoding="utf-8")
-    except OSError:
-        return None
-    blocks = seen.blocks_of(script, outcome.sources)
-    if not blocks:
-        return None
-    return list(seen.unseen(project, blocks))
 
 
 def _unplaced_figure_findings(project: Project, outcome: BuildOutcome) -> list[Finding]:
@@ -469,7 +387,14 @@ def _unseen_findings(project: Project, outcome: BuildOutcome) -> list[Finding]:
     check the tool ran afterwards would be a check on a file already delivered. The
     recording half is `_record_shown`, which both paths call.
     """
-    absent = _unseen_pages(project, outcome)
+    try:
+        script = script_path(project).read_text(encoding="utf-8")
+    except OSError:
+        return []
+    blocks = seen.blocks_of(script, outcome.sources)
+    if not blocks:
+        return []
+    absent = seen.unseen(project, blocks)
     if not absent:
         return []
     listed = ", ".join(str(page) for page in absent[:12]) + ("…" if len(absent) > 12 else "")
@@ -479,8 +404,8 @@ def _unseen_findings(project: Project, outcome: BuildOutcome) -> list[Finding]:
             severity=Severity.BLOCKING,
             message=(
                 f"{len(absent)} page(s) have never been rendered back to you since the code that draws them "
-                f"was written: {listed}. Run ppt_build again without `slides` -- these pages come back first "
-                "-- and look at them. A page you have not looked at is a page you have not checked, and "
+                f"was written: {listed}. Run ppt_build again -- omit `slides` and pass `page_from` to walk the "
+                "rest -- and look at them. A page you have not looked at is a page you have not checked, and "
                 "this is the one finding you cannot answer by editing the deck"
             ),
             detail={"pages": list(absent)},

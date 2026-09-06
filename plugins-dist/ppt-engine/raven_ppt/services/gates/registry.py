@@ -23,7 +23,6 @@ from typing import Any
 from raven_ppt.contracts.brief import DeckBrief
 from raven_ppt.contracts.build import BuildOutcome
 from raven_ppt.contracts.findings import Finding, Severity
-from raven_ppt.contracts.masters import Bands
 from raven_ppt.services.assets.text_metrics import measurer as _font_measurer
 from raven_ppt.services.gates.bands import band_findings
 from raven_ppt.services.gates.brief import language_findings, page_budget_findings
@@ -36,13 +35,11 @@ from raven_ppt.services.gates.coverage import (
 from raven_ppt.services.gates.house_style import house_style_findings, title_row_findings
 from raven_ppt.services.gates.mapping import mapping_findings
 from raven_ppt.services.measure.adherence import (
-    layout_photographs,
     placeholder_copy,
     prototype_kept,
     template_adherence,
     template_pictures,
 )
-from raven_ppt.services.measure.alignment import flush_drift
 from raven_ppt.services.measure.captions import caption_findings
 from raven_ppt.services.measure.content import (
     banded_tables,
@@ -54,20 +51,11 @@ from raven_ppt.services.measure.content import (
     wide_tables,
 )
 from raven_ppt.services.measure.contrast import contrast_findings
-from raven_ppt.services.measure.density import (
-    sparse_containers,
-    thin_copy,
-    unanchored_pages,
-    undivided_bodies,
-)
-from raven_ppt.services.measure.figures import figure_findings
 from raven_ppt.services.measure.fit import overset_copy
-from raven_ppt.services.measure.furniture import footer_findings, grid_findings
 from raven_ppt.services.measure.geometry import slide_count
 from raven_ppt.services.measure.inherited import over_layout_art
 from raven_ppt.services.measure.layout import off_page_shapes, spilled_copy, wrapped_labels
 from raven_ppt.services.measure.overlap import overlap_findings
-from raven_ppt.services.measure.quotas import equal_card_habit, repeated_layout, symmetry_habit
 from raven_ppt.services.measure.rendered import (
     box_overflows,
     card_overflows,
@@ -92,7 +80,6 @@ from raven_ppt.services.measure.type_size import (
 from raven_ppt.services.measure.variety import layout_variety
 from raven_ppt.services.measure.width import WidthMeasurer
 from raven_ppt.services.measure.words import WordBox, words_from_pdf
-from raven_ppt.services.template.bands import bands_of
 
 # What every check is allowed to conclude, as a table rather than as a habit.
 #
@@ -195,73 +182,10 @@ DISPATCH: Mapping[str, Severity] = {
     # and the move it wants -- a wider box -- costs the page nothing.
     "word_collision": Severity.BLOCKING,
     # The quiet half of the same thing: content nothing collides with because it is
-    # simply behind something. Reported rather than refused, unlike `word_collision`,
-    # because the two halves do not stand on the same evidence. Its loud half reads the
-    # render and refuses what a reader can be shown not to see; this one infers from the
-    # file's z-order that a later shape is opaque and covers three fifths of an earlier
-    # one, and that inference has already refused work that was correct: a grouped-shape
-    # coordinate bug gave five refusals on one sound contents page (D15), and over
-    # twenty real decks it fires on three, one of which is a bundled template whose page
-    # renders exactly as designed while the finding says its card is wholly hidden.
-    # Its own message says "Nothing on this page collides" -- the render disagrees with
-    # it, and the refusal was the inference winning that argument. A refusal has to be
-    # right the first time; this one is not yet. The reading stays.
-    "covered_shape": Severity.WARNING,
-    # A container holding far less than the room it took, or with a hole between the
-    # things it does hold. Reported: how full a card should be is the author's call and
-    # a page can be deliberately airy, but a card whose copy stops an inch short of its
-    # own footnote is a card nobody finished.
-    "sparse_container": Severity.WARNING,
-    # A page offering the eye nowhere to land -- no display figure and no picture with
-    # any weight. Reported, because what carries a page is a judgement.
-    "no_anchor": Severity.WARNING,
-    # Several blocks of copy in the body with nothing drawn between them. Reported and
-    # not refused: one device is enough and a page may earn its plainness, but a body
-    # whose grouping is only implied by where the boxes were put is a grid the reader
-    # has to infer. 104 of the 105 content pages the bundled templates ship draw one.
-    "undivided_body": Severity.WARNING,
-    # A page carrying less copy than its kind of page needs to say anything.
-    "thin_copy": Severity.WARNING,
-    # A picture stretched: the box's shape and the shape of the part of the file it
-    # shows disagree. Reported rather than refused because the reading is new and the
-    # crop and cover paths took three passes to read correctly.
-    "figure_distortion": Severity.WARNING,
-    # A frame that keeps less than half of its image: the crop, not the picture, is
-    # what the reader sees. Reported, since the fix is a picture of another shape.
-    "figure_crop": Severity.WARNING,
-    # A picture too small for the job its size says it is doing.
-    "figure_undersized": Severity.WARNING,
-    # A mark that sits somewhere different on each page it appears on.
-    "figure_mark_drift": Severity.WARNING,
-    # A small picture parked in the title band, which is the deck's own furniture.
-    "title_band_figure": Severity.WARNING,
-    # Two lines the file gives the same left edge and the render does not. The file's
-    # own numbers say the author meant them flush, so the drift is a slip rather than
-    # an indent -- the inset a text box carries is not visible in the geometry the
-    # author wrote. Reported: it is a slip worth naming, not a page worth refusing.
-    "flush_drift": Severity.WARNING,
-    # The layout budgets, read off the built pages rather than off the plan that named
-    # a layout: a page next to a page of the same shape, a deck that keeps reaching for
-    # a row of equal cards, and a deck that divides every body into equal parts. All
-    # three report -- repeating a shape can be the argument, and "varied enough" is not
-    # a property a page has -- but the reading is what nobody had.
-    "repeated_layout": Severity.WARNING,
-    "equal_card_habit": Severity.WARNING,
-    "symmetry_habit": Severity.WARNING,
-    # Whether a page says which page it is. Every bundled template defines a page-number
-    # placeholder on its master and puts one on no page, and python-pptx does not clone
-    # a footer placeholder onto a slide -- so twelve of twelve templates and the decks
-    # built from them shipped with none, and nothing measured it.
-    "no_footer": Severity.WARNING,
-    "unnumbered_pages": Severity.WARNING,
-    # Groups of copy with nothing drawn around them. Everything on the page may pass --
-    # nothing overflows, nothing collides, nothing is thin -- and a reader still cannot
-    # see where one group ends, which is what a delivered deck was called out for.
-    # Two column grids on one page. `flush_drift` asks whether the render kept boxes that
-    # declare the same edge; this asks about edges declared 0.12in apart, which no reader
-    # reads as a decision -- and where the grids' steps differ the miss grows across the
-    # page.
-    "grid_drift": Severity.WARNING,
+    # simply behind something. Refused for the reason `word_collision` is -- a figure
+    # three fifths under a card is not answerable by making the page smaller, and a page
+    # citing evidence it does not show is not a matter of taste.
+    "covered_shape": Severity.BLOCKING,
     # Copy the file states and the render does not show, which is what a shape narrower
     # than its own words does: it clips instead of wrapping, and every other check
     # passes. A warning, because the render's text layer is one source of truth about
@@ -349,8 +273,6 @@ DISPATCH: Mapping[str, Severity] = {
     # decorative graphic and a placeholder photograph both arrive as a PNG, and
     # deleting the first damages the page.
     "template_picture": Severity.WARNING,
-    # The same photograph, on the layout every page inherits rather than on the page.
-    "layout_picture": Severity.WARNING,
     # And the mechanism that produces those: the template's page cloned for its
     # background with new text boxes laid over it. Refused for the same reason -- the
     # page shows two designs at once, and the fix is in the author's program.
@@ -426,30 +348,10 @@ class DeckUnderReview:
     # fonts are missing.
     measurer: WidthMeasurer = field(default_factory=_font_measurer)
 
-    band_grid: Bands | None = None
-    """The template's own three bands, when the caller already measured them.
-
-    Handed over rather than derived for the same reason as the render: the checks
-    that need a coordinate system must be able to state one in a test."""
-
     type_spans: Sequence[Span] | None = None
     """The render's type, when the caller already has it. Handed over rather than read
     for the same reason `words` is: a test can state what the renderer did without a
     LibreOffice and a PyMuPDF on the box."""
-
-    @cached_property
-    def bands(self) -> Bands | None:
-        """The bands to judge against: given, else measured off the template, else None.
-
-        None is an answer, not a gap: without the grid the checks that speak in
-        shares of the body have no denominator, and they report nothing rather
-        than inventing one.
-        """
-        if self.band_grid is not None:
-            return self.band_grid
-        if self.prototypes is None or not Path(self.prototypes).is_file():
-            return None
-        return bands_of(Path(self.prototypes), self.pdf_path)
 
     @cached_property
     def rendered_type(self) -> Sequence[Span] | None:
@@ -494,9 +396,9 @@ def checks() -> dict[str, Callable[[DeckUnderReview], list[Finding]]]:
         "page_mapping": lambda deck: mapping_findings(deck.outcome),
         "page_budget": lambda deck: page_budget_findings(slide_count(deck.pptx_path), deck.brief),
         "house_style": lambda deck: house_style_findings(deck.pptx_path, deck.template),
-        "title_row": lambda deck: title_row_findings(deck.pptx_path, deck.prototypes, _layout_structural(deck.outline)),
+        "title_row": lambda deck: title_row_findings(deck.pptx_path, deck.prototypes, deck.outline),
         "language": lambda deck: language_findings(deck.pptx_path, deck.brief),
-        "evidence": lambda deck: evidence_coverage(deck.pptx_path, _structural(deck.outline, deck.prototypes)),
+        "evidence": lambda deck: evidence_coverage(deck.pptx_path, _structural(deck.outline)),
         "wide_table": lambda deck: wide_tables(deck.pptx_path),
         "native_table": lambda deck: native_tables(deck.pptx_path),
         "banded_table": lambda deck: banded_tables(deck.pptx_path),
@@ -515,13 +417,12 @@ def checks() -> dict[str, Callable[[DeckUnderReview], list[Finding]]]:
         "type_scale": lambda deck: scale_findings(deck.pptx_path, deck.prototypes),
         "off_page": lambda deck: off_page_shapes(deck.pptx_path),
         "spilled_copy": lambda deck: spilled_copy(deck.pptx_path, deck.measurer),
-        "over_layout_art": lambda deck: over_layout_art(deck.pptx_path, deck.prototypes),
+        "over_layout_art": lambda deck: over_layout_art(deck.pptx_path),
         "template_adherence": lambda deck: [
             f for f in template_adherence(deck.pptx_path, deck.prototypes) if f.kind == "template_adherence"
         ],
-        "placeholder_copy": lambda deck: placeholder_copy(deck.pptx_path, deck.prototypes, _borrowed(deck.outline)),
-        "template_picture": lambda deck: template_pictures(deck.pptx_path, deck.prototypes, _borrowed(deck.outline)),
-        "layout_picture": lambda deck: layout_photographs(deck.pptx_path, deck.prototypes),
+        "placeholder_copy": lambda deck: placeholder_copy(deck.pptx_path, deck.prototypes),
+        "template_picture": lambda deck: template_pictures(deck.pptx_path, deck.prototypes),
         "prototype_kept": lambda deck: prototype_kept(deck.pptx_path, deck.prototypes, deck.outline),
         # `prototypes` so the refusal can name who drew the shape: "the template drew
         # it" is what a live author answered a contrast finding with, about six chevrons
@@ -550,36 +451,6 @@ def checks() -> dict[str, Callable[[DeckUnderReview], list[Finding]]]:
         "unrendered": unrendered,
         "word_collision": lambda deck: _rendered(deck, word_collisions),
         "covered_shape": lambda deck: overlap_findings(deck.pptx_path),
-        "sparse_container": lambda deck: sparse_containers(
-            deck.pptx_path, deck.rendered_words, _structural(deck.outline, deck.prototypes)
-        ),
-        "no_anchor": lambda deck: unanchored_pages(
-            deck.pptx_path, deck.rendered_type, deck.bands, _structural(deck.outline, deck.prototypes)
-        ),
-        "undivided_body": lambda deck: undivided_bodies(
-            deck.pptx_path, deck.bands, _structural(deck.outline, deck.prototypes)
-        ),
-        "thin_copy": lambda deck: thin_copy(deck.pptx_path, deck.outline, deck.prototypes),
-        "figure_distortion": lambda deck: _of_kind(figure_findings(deck.pptx_path, deck.bands), "figure_distortion"),
-        "figure_crop": lambda deck: _of_kind(figure_findings(deck.pptx_path, deck.bands), "figure_crop"),
-        "figure_undersized": lambda deck: _of_kind(figure_findings(deck.pptx_path, deck.bands), "figure_undersized"),
-        "figure_mark_drift": lambda deck: _of_kind(figure_findings(deck.pptx_path, deck.bands), "figure_mark_drift"),
-        "title_band_figure": lambda deck: _of_kind(figure_findings(deck.pptx_path, deck.bands), "title_band_figure"),
-        # Only the flush reading is dispatched. Its sibling, which compares the insides
-        # of a row of cards, found nothing true and nothing false over five real decks:
-        # it has unit tests and no sample, and a check with no sample is a check whose
-        # first report will be its first test.
-        "flush_drift": lambda deck: _rendered(deck, lambda words: flush_drift(deck.pptx_path, words)),
-        "no_footer": lambda deck: _of_kind(
-            footer_findings(deck.pptx_path, _layout_structural(deck.outline), deck.prototypes), "no_footer"
-        ),
-        "unnumbered_pages": lambda deck: _of_kind(
-            footer_findings(deck.pptx_path, _layout_structural(deck.outline), deck.prototypes), "unnumbered_pages"
-        ),
-        "grid_drift": lambda deck: grid_findings(deck.pptx_path, _layout_structural(deck.outline)),
-        "repeated_layout": lambda deck: repeated_layout(deck.pptx_path, _layout_structural(deck.outline)),
-        "equal_card_habit": lambda deck: equal_card_habit(deck.pptx_path, _layout_structural(deck.outline)),
-        "symmetry_habit": lambda deck: symmetry_habit(deck.pptx_path, _layout_structural(deck.outline)),
         "clipped_copy": lambda deck: _rendered(deck, lambda words: clipped_copy(deck.pptx_path, words)),
         "rule_strike": lambda deck: _rendered(deck, lambda words: rule_strikes(hairline_rules(deck.pptx_path), words)),
         "card_overflow": lambda deck: _rendered(
@@ -597,45 +468,15 @@ def checks() -> dict[str, Callable[[DeckUnderReview], list[Finding]]]:
     }
 
 
-def _structural(outline: Any | None, prototypes: Path | None = None) -> list[int]:
-    """The deck's pages that are the template's own furniture.
+def _structural(outline: Any | None) -> list[int]:
+    """The deck's pages that are the template's own, from the plan that said so.
 
     A cover and a closing page cannot show a figure, a table or a chart, so counting
     them among the pages that failed to is two pages of every deck's share spent on
     pages the check is not about.
-
-    Naming a prototype does not make a page furniture: since content pages default to
-    building on one, `prototype is not None` came to mean every page, and this check
-    stopped judging any of them. What the prototype does say is which template page a
-    deck page clones, and that page's own role is the answer.
     """
     pages = getattr(outline, "pages", ()) if outline is not None else ()
-    named: dict[int, str] = {}
-    if prototypes is not None and Path(prototypes).is_file():
-        from raven_ppt.services.template.menu import menu
-
-        named = {entry.number: entry.role for entry in menu(Path(prototypes))}
-    furniture = [
-        page.page
-        for page in pages
-        # A borrowed prototype is numbered in another file, so the bound template's
-        # roles say nothing about it -- and a borrowed page is a content page by
-        # construction, since only content pages are offered for borrowing.
-        if not getattr(page, "borrowed", "") and named.get(getattr(page, "prototype", None) or 0, "")
-    ]
-    return sorted(set(furniture) | set(_layout_structural(outline)))
-
-
-def _borrowed(outline: Any | None) -> list[Path]:
-    """The bundled templates this deck borrowed pages from, as files, in plan order."""
-    from raven_ppt.services.template.defaults import bundled_path
-
-    found: list[Path] = []
-    for page in getattr(outline, "pages", ()) if outline is not None else ():
-        path = bundled_path(getattr(page, "borrowed", ""))
-        if path is not None and path not in found:
-            found.append(path)
-    return found
+    return [page.page for page in pages if getattr(page, "prototype", None) is not None]
 
 
 def _layout_structural(outline: Any | None) -> list[int]:
@@ -647,11 +488,6 @@ def _layout_structural(outline: Any | None) -> list[int]:
         "分隔",
         "收尾",
         "封底",
-        # The words a Chinese deck actually ends on. Without them the fallback --
-        # now the only path when no template is bound -- misses every closing page.
-        "结束",
-        "尾页",
-        "谢谢",
         "cover",
         "agenda",
         "contents",
@@ -660,13 +496,7 @@ def _layout_structural(outline: Any | None) -> list[int]:
     )
     structural: list[int] = []
     for page in pages:
-        # What this page carries, and its section only where it carries nothing. A
-        # section names the movement a run of pages belongs to -- the contract's own
-        # example list includes "closing and disclaimers" -- so reading the two together
-        # made every page of such a movement structural: a chart page and a table page
-        # inside it were exempted from checks that exist for content pages.
-        carries = str(getattr(page, "carries", "") or "").casefold()
-        role = carries or str(getattr(page, "section", "") or "").casefold()
+        role = f"{getattr(page, 'carries', '')} {getattr(page, 'section', '')}".casefold()
         if any(marker in role for marker in markers):
             structural.append(page.page)
     return structural
@@ -776,16 +606,6 @@ def by_page(findings: Iterable[Finding]) -> dict[int, list[Finding]]:
         if finding.page is not None:
             grouped.setdefault(finding.page, []).append(finding)
     return grouped
-
-
-def _of_kind(findings: list[Finding], kind: str) -> list[Finding]:
-    """One reading out of a measurement that answers several at once.
-
-    The four figure readings come from one pass over the pictures, and the registry
-    hands each out under its own name so a caller can run one alone. The pass is cheap
-    beside opening the deck, which every check does anyway.
-    """
-    return [finding for finding in findings if finding.kind == kind]
 
 
 def _rendered(deck: DeckUnderReview, check: Callable[[Sequence[WordBox]], list[Finding]]) -> list[Finding]:

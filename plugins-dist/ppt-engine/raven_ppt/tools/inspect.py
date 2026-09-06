@@ -274,11 +274,7 @@ class PptFigureInspectTool(Tool):
             reply, failure = await self.composer.ask_with_failure(
                 _brief(language, wants_review=owes_review, wants_caption=owes_caption),
                 [text_block(_label(name, entry)), image_block(self.views.data_uri(shown))],
-                # Shared with the model's thinking -- see `stages/prepare.py`, where
-                # the same ceiling set for the answer alone cut three live intakes in
-                # half. A caption and a one-line reading are short; the reasoning in
-                # front of them is not.
-                max_tokens=6000,
+                max_tokens=1200,
             )
             try:
                 payload = json.loads(reply[reply.index("{") : reply.rindex("}") + 1])

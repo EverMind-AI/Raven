@@ -22,9 +22,6 @@ if TYPE_CHECKING:
 _OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 _OPENROUTER_MODEL = "openai/gpt-image-2"
 _COMPATIBLE_MODEL = "gpt-image-2"
-# How many pictures are asked for at once when a call carries several.
-_CONCURRENCY = 4
-
 _SAFE_NAME = re.compile(r"[^a-zA-Z0-9._-]+")
 
 
@@ -33,11 +30,7 @@ class PptGenerateImageTool(Tool):
     description = (
         "Generate a new raster visual for a page with GPT Image 2. Use this for an illustration or visual "
         "that does not already exist; use ppt_image_search and ppt_fetch for a real logo, product "
-        "screen, published plot or other existing evidence. Say the style in the prompt, and let the "
-        "subject choose it before the template does: a real place, street, market, crowd, product or "
-        "building is photographic (natural light, no illustration) with the template's palette only in "
-        "the grade; a concept with no face takes the template's own manner. Keep one manner per kind "
-        "across the deck. The generated PNG is added to this deck's "
+        "screen, published plot or other existing evidence. The generated PNG is added to this deck's "
         "sources, ingested immediately, and returned with its figure id so the build can place it."
     )
     timeout_seconds = 360.0
@@ -63,9 +56,7 @@ class PptGenerateImageTool(Tool):
                 "prompt": {
                     "type": "string",
                     "description": (
-                        "a background or decorative visual for the page: subject, scene, composition, then the "
-                        "style -- photographic for a real place, street, market, crowd, product or building, the "
-                        "template's own illustration manner only for a concept with no face. "
+                        "a background or decorative visual for the page, including composition and style. "
                         "Do not use this for a product screenshot, logo, published chart, paper figure or "
                         "factual architecture. Do not put prose, labels or numbers into the image; slide "
                         "text stays editable in PowerPoint"
@@ -80,32 +71,9 @@ class PptGenerateImageTool(Tool):
                     "type": "string",
                     "enum": ["16:9", "4:3", "3:2", "1:1", "3:4", "9:16"],
                     "default": "16:9",
-                    "description": (
-                        "the shape of the frame the picture will fill: cover-fitting crops whatever does not "
-                        "match, so a 16:9 picture in a portrait column keeps a sliver. Pick the nearest ratio "
-                        "to the frame and put the subject where the crop keeps it"
-                    ),
-                },
-                "prompts": {
-                    "type": "array",
-                    "description": (
-                        "several pictures in one call, generated at the same time and ingested once: plan every "
-                        "picture the deck needs, then ask for them together instead of one call each"
-                    ),
-                    "items": {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "properties": {
-                            "prompt": {"type": "string"},
-                            "filename": {"type": "string"},
-                            "quality": {"type": "string", "enum": ["low", "medium", "high", "auto"]},
-                            "aspect_ratio": {"type": "string", "enum": ["16:9", "4:3", "3:2", "1:1", "3:4", "9:16"]},
-                        },
-                        "required": ["prompt", "filename"],
-                    },
                 },
             },
-            "required": ["project"],
+            "required": ["project", "prompt", "filename"],
         }
 
     @property
@@ -130,11 +98,10 @@ class PptGenerateImageTool(Tool):
     async def execute(
         self,
         project: str,
-        prompt: str = "",
-        filename: str = "",
+        prompt: str,
+        filename: str,
         quality: str = "high",
         aspect_ratio: str = "16:9",
-        prompts: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> str:
         try:
@@ -143,65 +110,26 @@ class PptGenerateImageTool(Tool):
             return _return.failed(str(exc))
         if not self.api_key:
             return _return.failed(
-                "no image API key is configured",
+                "GPT Image 2 is not configured",
                 hint="set tools.media.image.apiKey and optionally apiBase/model, or export OPENROUTER_API_KEY",
             )
-        wanted = list(prompts or [])
-        if prompt or filename:
-            wanted.insert(0, {"prompt": prompt, "filename": filename, "quality": quality, "aspect_ratio": aspect_ratio})
-        if not wanted:
-            return _return.failed(
-                "nothing to generate", hint="give prompt and filename, or prompts=[{prompt, filename}, ...]"
-            )
-        for spec in wanted:
-            if not str(spec.get("prompt") or "").strip() or not str(spec.get("filename") or "").strip():
-                return _return.failed(
-                    "every picture needs a prompt and a filename", hint='prompts=[{"prompt": ..., "filename": ...}]'
-                )
-        # Generated together and ingested once: nine pictures made one at a time cost a
-        # measured deck 16 minutes of waiting, and the ingest that follows each is a
-        # rewrite of the same catalogue, which is not something to run nine ways at once.
-        gate = asyncio.Semaphore(_CONCURRENCY)
-
-        async def one(spec: dict[str, Any]) -> dict[str, Any]:
-            async with gate:
-                return await self._one(deck, spec)
-
-        made = await asyncio.gather(*(one(spec) for spec in wanted))
-        if any(item.get("path") for item in made):
-            try:
-                outcome = await asyncio.to_thread(ingest_materials, deck.sources_dir, deck.ingest_dir)
-            except (OSError, ValueError, FileNotFoundError) as exc:
-                return _return.failed(f"the images were generated but ingest failed: {exc}", results=made)
-            by_name = {entry.source_file: getattr(entry, "asset_id", None) for entry in outcome.assets}
-            for item in made:
-                if item.get("path"):
-                    item["figure_id"] = by_name.get(Path(item["path"]).name)
-        asks = ["inspect the returned figure id with ppt_figure_inspect, then place it with picture_fit"]
-        if len(made) == 1:
-            item = made[0]
-            if item.get("error"):
-                return _return.failed(item["error"])
-            return _return.done(
-                project=project, model=self.model, asks=asks, **{k: v for k, v in item.items() if k != "error"}
-            )
-        failed = [item for item in made if item.get("error")]
-        if failed:
-            asks.insert(0, f"{len(failed)} of {len(made)} pictures failed; the error is on each")
-        return _return.done(project=project, model=self.model, results=made, asks=asks)
-
-    async def _one(self, deck: Project, spec: dict[str, Any]) -> dict[str, Any]:
-        """Generate one picture into the deck's sources; the figure id is filled in after ingest."""
-        prompt = str(spec.get("prompt") or "")
-        quality = str(spec.get("quality") or "high")
-        aspect_ratio = str(spec.get("aspect_ratio") or "16:9")
         digest = hashlib.sha256(f"{self.model}\x00{quality}\x00{aspect_ratio}\x00{prompt}".encode("utf-8")).hexdigest()[
             :12
         ]
-        name = _filename(str(spec.get("filename") or ""), digest)
+        name = _filename(filename, digest)
         existing = deck.sources_dir / name
         if existing.is_file() and existing.stat().st_size > 0:
-            return {"filename": name, "path": str(existing), "bytes": existing.stat().st_size, "cached": True}
+            outcome = await asyncio.to_thread(ingest_materials, deck.sources_dir, deck.ingest_dir)
+            asset = next((entry for entry in outcome.assets if entry.source_file == name), None)
+            return _return.done(
+                project=project,
+                model=self.model,
+                path=str(existing),
+                figure_id=getattr(asset, "asset_id", None),
+                bytes=existing.stat().st_size,
+                cached=True,
+                asks=["inspect the returned figure id with ppt_figure_inspect, then place it with picture_fit"],
+            )
         body = {
             "model": self.model,
             "prompt": prompt,
@@ -214,13 +142,26 @@ class PptGenerateImageTool(Tool):
             response = await self._generate(body)
             payload = _image_bytes(response)
         except httpx.HTTPError as exc:
-            return {"filename": name, "error": f"image generation failed: {exc}"}
+            return _return.failed(f"image generation failed: {exc}")
         except (KeyError, ValueError, TypeError) as exc:
-            return {"filename": name, "error": f"image generation returned no usable PNG: {exc}"}
+            return _return.failed(f"image generation returned no usable PNG: {exc}")
+
         source = sources.receive(deck, name, payload, f"generated:{self.model}")
         if source is None:
-            return {"filename": name, "error": "the generated image could not be added to this deck"}
-        return {"filename": name, "path": str(source.path), "bytes": len(payload)}
+            return _return.failed("the generated image could not be added to this deck")
+        try:
+            outcome = await asyncio.to_thread(ingest_materials, deck.sources_dir, deck.ingest_dir)
+        except (OSError, ValueError, FileNotFoundError) as exc:
+            return _return.failed(f"the image was generated but ingest failed: {exc}", path=str(source.path))
+        asset = next((entry for entry in outcome.assets if entry.source_file == source.name), None)
+        return _return.done(
+            project=project,
+            model=self.model,
+            path=str(source.path),
+            figure_id=getattr(asset, "asset_id", None),
+            bytes=len(payload),
+            asks=["inspect the returned figure id with ppt_figure_inspect, then place it with picture_fit"],
+        )
 
     async def _generate(self, body: dict[str, Any]) -> dict[str, Any]:
         openrouter = "openrouter.ai" in self.api_base

@@ -46,26 +46,6 @@ def blocks_of(script: str, sources) -> dict[int, str]:
     return fingerprints
 
 
-def shared_digest(script: str, sources) -> str:
-    """A fingerprint of everything the script holds outside its page spans.
-
-    The prelude: imports, the theme and template binding, the helper constants and
-    functions every page runs. It draws no page of its own and belongs to all of them,
-    so a cache keyed only by page spans validates stale pixels after an `ACCENT` line
-    changes -- reproduced on this branch: one constant edited above page 1, and the
-    render cache handed every pixel gate the previous PNGs.
-    """
-    lines = script.splitlines(keepends=True)
-    spans = sorted((source.first_line, source.last_line) for source in sources or ())
-    kept: list[str] = []
-    cursor = 0
-    for first, last in spans:
-        kept.extend(lines[cursor:first])
-        cursor = max(cursor, last)
-    kept.extend(lines[cursor:])
-    return hashlib.sha256("".join(kept).encode("utf-8")).hexdigest()[:16]
-
-
 def record(project, shown: dict[int, str]) -> None:
     """Remember that these pages were handed over, as they were then."""
     if not shown:
@@ -88,16 +68,6 @@ def unseen(project, blocks: dict[int, str]) -> tuple[int, ...]:
 
 def forget(project) -> None:
     seen_path(project).unlink(missing_ok=True)
-
-
-def recorded(project) -> dict[str, str]:
-    """The fingerprints last written down, page number as text -> block digest.
-
-    Public because the build stage classifies what a rebuild changed by comparing
-    against them, and reaching into `_load` for that would make the record's shape a
-    private detail two modules depend on.
-    """
-    return _load(project)
 
 
 def _load(project) -> dict[str, str]:

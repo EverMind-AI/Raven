@@ -29,11 +29,6 @@ class ProviderComposer:
     model: str | None = None
     temperature: float = 0.2
     reasoning_effort: str | None = None
-    #: Whether a reply the model cut for length is asked again at twice the budget.
-    #: Right for a page's copy, whose length is the page's; wrong for a reading, where
-    #: the budget is already the whole call and the second attempt costs what the
-    #: first did -- a 20-page run paid that on every page a reasoning model ran long on.
-    retry_on_length: bool = True
     spent: dict[str, int] = None  # type: ignore[assignment]
     failure: str = ""
     """Why the *last* `ask` came back empty, when it was the transport rather than
@@ -80,7 +75,7 @@ class ProviderComposer:
         # the author a fresh call at about eighty seconds. Reasoning models are why
         # the cut lands in different places: their thinking is spent from the same
         # budget as the answer, so what is left for the JSON varies per call.
-        if text.strip() and (reason != "length" or not self.retry_on_length):
+        if text.strip() and reason != "length":
             self.failure = ""
             return text, ""
         # One retry. Doubled budget when the reply was cut off mid-sentence,

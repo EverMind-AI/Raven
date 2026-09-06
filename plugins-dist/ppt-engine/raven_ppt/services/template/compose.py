@@ -34,7 +34,6 @@ from __future__ import annotations
 import copy
 import io
 import re
-import warnings
 from pathlib import Path
 from typing import Any
 
@@ -70,7 +69,7 @@ _REL_ATTRS = (
 )
 
 
-def clone_page(presentation, prototype, *rest):
+def clone_page(presentation, prototype):
     """A new slide at the end of `presentation`, holding a copy of `prototype`.
 
     The prototype may come from the same presentation or another one; either way
@@ -83,16 +82,6 @@ def clone_page(presentation, prototype, *rest):
     the page reads "单击此处添加长一点的副标题" under your own text.
     `placeholder_copy` and `template_underlay` refuse that at the gate.
     """
-    if rest:
-        # Python's own "takes 2 positional arguments but 3 were given" says nothing
-        # about the third, and the third is always the same mistake: the page number,
-        # which belongs to `prototype`. A live build spent a round finding that and
-        # then corrected six call sites at once.
-        given = ", ".join(repr(one) for one in rest)
-        raise TypeError(
-            f"clone_page(presentation, prototype) takes no page number; got {given} as well. "
-            f"The page belongs to the prototype: clone_page(presentation, prototype(source, {rest[0]!r}))"
-        )
     slide = presentation.slides.add_slide(_layout_in(presentation, prototype))
     for existing in list(slide.shapes):
         existing._element.getparent().remove(existing._element)
@@ -106,35 +95,6 @@ def clone_page(presentation, prototype, *rest):
         _repoint(copied, prototype.part, slide.part)
         tree.append(copied)
     return slide
-
-
-def bundled(name: str):
-    """A bundled template by its file name without `.pptx`, example pages intact.
-
-    For borrowing a page the bound template has no equivalent of: `prototype(bundled(
-    "gold_panel_year_end_summary"), 13)` is the S-curve of pills, whichever template the
-    deck is built in. The clone lands on the deck's own layout of the same name and its
-    theme colours resolve to the deck's, so what comes across is the arrangement and not
-    the source's look -- measured on four such clones rendered beside their sources.
-    Record it in the plan as `borrowed` beside `prototype`, so the checks that read the
-    plan know which file the page came from.
-    """
-    import os
-
-    folder = os.environ.get("PPT_BUNDLED_TEMPLATES", "")
-    if not folder or not Path(folder).is_dir():
-        raise RuntimeError(
-            "PPT_BUNDLED_TEMPLATES is not set, so no bundled template can be opened here; "
-            "this program is meant to run under ppt_build, which sets it"
-        )
-    stem = str(name or "").strip().removesuffix(".pptx")
-    path = Path(folder) / f"{stem}.pptx"
-    if not path.is_file():
-        shipped = ", ".join(sorted(p.stem for p in Path(folder).glob("*.pptx")))
-        raise FileNotFoundError(f"no bundled template is called {stem!r}; the ones that ship are {shipped}")
-    from pptx import Presentation
-
-    return Presentation(str(path))
 
 
 def prototype(template, number: int):
@@ -183,237 +143,6 @@ def shape_at(slide, number: int):
             + "; ".join(f"[{index}] {_describe(shape)}" for index, shape in enumerate(every, start=1))
         )
     return every[number - 1]
-
-
-def page_position(shape) -> tuple[float, float]:
-    """Where `shape` sits on the page, in inches, with its groups resolved.
-
-    A shape inside a group states its position in the *group's* coordinate space, and
-    a group states an offset and an extent against a child offset and child extent it
-    may scale by. So `shape.left` is not where the shape is, and comparing it against
-    a number read off the template's own render finds nothing.
-
-    Four authors wrote a walker for this in their own build scripts; one worked the
-    transform out and three compared `shape.left` directly, which is four of their
-    twenty build failures -- `no shape near (1.56, 2.47)` against a shape that was
-    exactly there on the page.
-    """
-    left = top = 0.0
-    scale_x = scale_y = 1.0
-    for parent, child in _group_chain(shape):
-        offset, extent = parent
-        child_offset, child_extent = child
-        step_x = extent[0] / child_extent[0] if child_extent[0] else 1.0
-        step_y = extent[1] / child_extent[1] if child_extent[1] else 1.0
-        left += (offset[0] - child_offset[0] * step_x) * scale_x
-        top += (offset[1] - child_offset[1] * step_y) * scale_y
-        scale_x *= step_x
-        scale_y *= step_y
-    return (
-        left + (shape.left or 0) / EMU_PER_INCH * scale_x,
-        top + (shape.top or 0) / EMU_PER_INCH * scale_y,
-    )
-
-
-def shape_near(container, left: float, top: float, tol: float = 0.08, *, with_text: bool = False):
-    """The shape whose top-left corner is within `tol` inches of (`left`, `top`).
-
-    The other half of `page_position`: the numbers an author has are the ones the
-    template reference prints, which are positions on the page, and this is what turns
-    one of those back into a handle. `with_text=True` skips the panels and pictures a
-    text box sits on, which is the reading an author usually wants at a coordinate.
-
-    A companion to `shape_at`, which takes the same page's shapes by number. Both
-    exist because a template page is a starting point rather than a form.
-    """
-    every = list(_all_shapes(container.shapes))
-    unplaceable = 0
-    for shape in every:
-        if with_text and not (getattr(shape, "has_text_frame", False) and shape.text_frame.text.strip()):
-            continue
-        at = _where(shape)
-        if at is None:
-            unplaceable += 1
-            continue
-        if abs(at[0] - left) <= tol and abs(at[1] - top) <= tol:
-            return shape
-    raise KeyError(
-        f"no shape within {tol:g}in of ({left:g}, {top:g}) on this page"
-        + (" carrying text" if with_text else "")
-        + ". Positions are on the page, groups resolved -- `shape.left` inside a group is not one. "
-        + (
-            f"{unplaceable} of them sit in a group the template flipped or rotated and have no position "
-            "to compare against; take those by their copy with `shape_saying`. "
-            if unplaceable
-            else ""
-        )
-        + "The page holds: "
-        + "; ".join(_listed(index, shape) for index, shape in enumerate(every, start=1))
-    )
-
-
-def _where(shape) -> tuple[float, float] | None:
-    """`page_position`, or None where the shape has no position to compare against."""
-    try:
-        return page_position(shape)
-    except ValueError:
-        return None
-
-
-def _listed(index: int, shape) -> str:
-    at = _where(shape)
-    where = f"({at[0]:.2f}, {at[1]:.2f})" if at is not None else "inside a flipped or rotated group"
-    return f"[{index}] {_describe(shape)} at {where}"
-
-
-def shape_saying(container, prefix: str):
-    """The first shape whose copy starts with `prefix`, groups walked into.
-
-    `adapt(texts={...})` matches the same way for a whole page at once; this is the
-    single handle for the adjustment that comes after. Its refusal lists the copy the
-    page actually holds, because the string an author is matching against is usually
-    the template's and usually not quite what it remembered.
-    """
-    said = []
-    for shape in _all_shapes(container.shapes):
-        if not getattr(shape, "has_text_frame", False):
-            continue
-        text = shape.text_frame.text.strip()
-        if not text:
-            continue
-        if text.startswith(prefix):
-            return shape
-        said.append(text[:40])
-    raise KeyError(
-        f"no shape on this page starts with {prefix!r}. Its copy reads: " + "; ".join(repr(one) for one in said)
-    )
-
-
-# The size the readability floor is set at, which `measure.type_size` refuses under.
-# Stated here rather than imported: this module is projected beside the author's
-# script and runs without the package around it.
-BODY_FLOOR_PT = 14.0
-# And the length of copy the floor applies to. `measure.type_size` holds a caption, a
-# kicker or a chart mark to 10.8pt instead, so lifting everything from twelve characters
-# up flattened 53 runs across the bundled templates that the check already accepts --
-# which is the size ladder `type_drift` and `type_scale` measure.
-COPY_CHARS = 20
-
-
-def raise_type(slide, floor: float = BODY_FLOOR_PT, min_chars: int = COPY_CHARS) -> int:
-    """Lift a cloned page's small copy to the readability floor, and give it the room.
-
-    A template sets its demo copy at whatever suits the demo, and cloning brings that
-    size along: three of four live decks shipped body copy at 10.8 to 12pt and were
-    told so by `type_floor`, per box, page after page. Two of their authors wrote this
-    function for themselves under the same name with the same 14pt default, and only
-    one of them did the second half -- type raised in a box sized for the smaller type
-    overflows it, which is why `type_floor`'s own message asks for both.
-
-    Returns how many boxes it touched. Runs of fewer than `min_chars` are left alone:
-    a number, a unit or a two-character label is set small on purpose, and lifting
-    those is what turns a designed size ladder into one flat size.
-
-    **It cannot fix the other half of `type_floor`.** That check reads the size off the
-    render, and copy comes out under the floor two ways: stated small, which this
-    lifts, or stated at the floor and shrunk to fit by the box's own autofit, which
-    this does not touch because nothing in that box is under the floor to raise. Measured across
-    two live decks: one page had six boxes of the first kind and another had none of it
-    and one of the second. The second needs a bigger box rather than a bigger size --
-    `ppt_layout.fits` and `text_size` are what say how much bigger.
-    """
-    from pptx.enum.text import MSO_AUTO_SIZE
-    from pptx.util import Pt
-
-    touched = 0
-    for shape in _all_shapes(slide.shapes):
-        if not getattr(shape, "has_text_frame", False):
-            continue
-        frame = shape.text_frame
-        if len(frame.text.strip()) < min_chars:
-            continue
-        listed = _list_size(frame)
-        lifted = False
-        for para in frame.paragraphs:
-            bare = 0
-            for run in para.runs:
-                size = run.font.size
-                if size is None:
-                    bare += 1
-                elif size.pt < floor:
-                    run.font.size = Pt(floor)
-                    lifted = True
-            if not bare:
-                continue
-            # A run that states no size takes one from its paragraph or from the body's
-            # own list style, and the check this answers to reads the size off the render
-            # -- so a size the file never writes on a run is still a size it reports.
-            # 106 runs across the twelve bundled templates inherit theirs this way, and
-            # reading only the run level left every one of them where it was.
-            stated = para.font.size
-            inherited = stated.pt if stated is not None else listed
-            if inherited is not None and inherited < floor:
-                para.font.size = Pt(floor)
-                lifted = True
-        if not lifted:
-            continue
-        # The template's own autofit is what shrank the copy in the first place, and
-        # merely turning it off leaves the lifted type running out of a box drawn for
-        # the smaller size -- measured 0.48in past the bottom of a 1.2in box, with
-        # nothing in the file to say so. Growing the shape is the half `type_floor`'s
-        # message asks for and the only one reachable without font metrics: a box that
-        # then meets its neighbour is a collision the render-side checks report, which
-        # copy running out of its box is not. `word_wrap` is left as the template set
-        # it -- a one-line label it set `wrap="none"` on is a label, not a paragraph.
-        frame.auto_size = MSO_AUTO_SIZE.SHAPE_TO_FIT_TEXT
-        touched += 1
-    return touched
-
-
-def _list_size(frame) -> float | None:
-    """The size this body's own list style states, in points, or None if it states none."""
-    level = frame._txBody.find(f"{{{_A}}}lstStyle/{{{_A}}}lvl1pPr/{{{_A}}}defRPr")
-    size = level.get("sz") if level is not None else None
-    return int(size) / 100.0 if size else None
-
-
-def _group_chain(shape):
-    """(parent offset+extent, child offset+extent) for each group above `shape`, outermost first."""
-    chain = []
-    element = shape._element.getparent()
-    while element is not None and element.tag == f"{{{_P}}}grpSp":
-        frame = element.find(f"{{{_P}}}grpSpPr/{{{_A}}}xfrm")
-        if frame is None:
-            break
-        if frame.get("rot") or frame.get("flipH") == "1" or frame.get("flipV") == "1":
-            raise ValueError(
-                "this shape sits inside a group the template flipped or rotated, so where it is drawn is "
-                "not what its offsets say -- measured 1.25in out on a flipped group, fifteen times the "
-                "tolerance a search runs at. Take the handle by its copy instead: shape_saying(container, "
-                "prefix) reads the text, which a flip does not move"
-            )
-        offset, extent = frame.find(f"{{{_A}}}off"), frame.find(f"{{{_A}}}ext")
-        child_offset, child_extent = frame.find(f"{{{_A}}}chOff"), frame.find(f"{{{_A}}}chExt")
-        if None in (offset, extent, child_offset, child_extent):
-            break
-        chain.append(
-            (
-                (
-                    (int(offset.get("x")) / EMU_PER_INCH, int(offset.get("y")) / EMU_PER_INCH),
-                    (int(extent.get("cx")) / EMU_PER_INCH, int(extent.get("cy")) / EMU_PER_INCH),
-                ),
-                (
-                    (int(child_offset.get("x")) / EMU_PER_INCH, int(child_offset.get("y")) / EMU_PER_INCH),
-                    (int(child_extent.get("cx")) / EMU_PER_INCH, int(child_extent.get("cy")) / EMU_PER_INCH),
-                ),
-            )
-        )
-        element = element.getparent()
-    chain.reverse()
-    return chain
-
-
-EMU_PER_INCH = 914400.0
 
 
 def _layout_in(presentation, prototype):
@@ -481,16 +210,7 @@ def _carried(related, target_part) -> str:
     return target_part.relate_to(related.target_part, related.reltype)
 
 
-def replace_picture(
-    shape,
-    image: Path,
-    fit: str = "contain",
-    *,
-    anchor: str = "centre",
-    trim=None,
-    zoom: float = 1.0,
-    alpha: float | None = None,
-) -> None:
+def replace_picture(shape, image: Path, fit: str = "contain") -> None:
     """Swap the image behind a picture frame, keeping the frame.
 
     Deleting the frame and adding a new one is the obvious way and it loses what
@@ -512,29 +232,6 @@ def replace_picture(
     Contain is the default because on this route the pictures come from the sources --
     plots, tables, qualitative grids -- and losing part of one is a provenance problem, not
     a layout one. Reach for cover when the picture is decoration.
-
-    Three arguments decide *which* pixels a cover fit keeps, and without them an author
-    wrote its own swap: thirty lines of PIL and hand-edited XML, past the checks here.
-
-    * `anchor` is the side the crop keeps -- "centre" (the default), "top", "bottom",
-      "left" or "right". A photograph whose subject is along the top loses it to a
-      centred crop: `anchor="top"` keeps the lettering on the archway.
-    * `trim` cuts shares off the source's own edges *before* the fit, as
-      (left, right, top, bottom). A screenshot with a progress bar along the bottom is
-      `trim=(0, 0, 0, 0.08)`, and nothing has to be written to a file to do it.
-    * `zoom` is a multiple of the scale that just covers the frame, so `zoom=1.6`
-      shows 1/1.6 of what the fit would -- a detail made legible at the size the frame
-      has. Under 1 is refused: a cover that does not cover is `fit="contain"`.
-
-    `trim` applies to contain as well, where it cuts the source and the frame then
-    gives way to what is left. `anchor` and `zoom` are cover's own and are ignored
-    there -- contain shows the whole picture, so there is no window to place.
-
-    `alpha` washes the new picture to a share of itself, the way `backdrop` does. It
-    is for the frame that is the page: six of the eight bundled templates keep a
-    picture the size of the canvas on a layout, a soft texture the type reads over,
-    and a photograph swapped in at full strength drowns every title on that layout.
-    `alpha=0.25` keeps it a background. `None` leaves whatever wash the frame had.
     """
     _, relationship = shape.part.get_or_add_image_part(str(image))
     fill = _blip_fill(shape)
@@ -544,27 +241,11 @@ def replace_picture(
     if blip is None:
         raise ValueError("that shape has no image to replace")
     blip.set(f"{{{_R}}}embed", relationship)
-    if alpha is not None:
-        _wash(blip, alpha)
     if fit not in ("cover", "contain"):
         return
-    if fit == "contain" and shape.shape_type == MSO_SHAPE_TYPE.PICTURE and _clipped(shape):
-        # A frame cut to a curve, an arc or a slant is the page's design, and contain
-        # shrinks it to the picture's proportions: a 13.35in wave-edged frame on a gold
-        # section page came back 7.56in wide, off its swoosh, with the photograph
-        # sitting in a plain rectangle beside the panel it was drawn to complete.
-        # Cover keeps the frame and crops the picture into it, which is what a shaped
-        # frame asks for; an author who wants contain there says so and gets it.
-        warnings.warn(
-            f"{getattr(shape, 'name', 'this frame')!r} is a shaped picture frame ({_geometry(shape)}), so the "
-            f"picture was fitted with cover: the frame keeps its shape and the picture is cropped into it. "
-            'Pass fit="cover" to say so, or anchor/trim/zoom to choose which part shows.',
-            stacklevel=2,
-        )
-        fit = "cover"
-    _check_shape(shape, image, fit, trim)
+    _check_shape(shape, image, fit)
     if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
-        _fit(shape, image, fit, anchor, trim, zoom)
+        _fit(shape, image, fit)
     else:
         # A shape *filled* with a picture crops through the fill's source rectangle
         # rather than through a picture frame's crop attributes, and it has no frame to
@@ -572,26 +253,12 @@ def replace_picture(
         # the same cover crop. Without this the template's own stretch survives and a
         # figure swapped into a rounded panel comes out distorted, which is visible in
         # any screenshot with type in it.
-        _fill_crop(shape, fill, image, anchor, trim, zoom)
+        _fill_crop(shape, fill, image)
 
 
 _A = "http://schemas.openxmlformats.org/drawingml/2006/main"
 _R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 _P = "http://schemas.openxmlformats.org/presentationml/2006/main"
-
-
-def _geometry(shape) -> str:
-    """The preset a shape's geometry names, or `custom` for a hand-drawn outline."""
-    element = shape._element
-    if element.find(f".//{{{_A}}}custGeom") is not None:
-        return "custom"
-    preset = element.find(f".//{{{_A}}}prstGeom")
-    return str(preset.get("prst")) if preset is not None else "rect"
-
-
-def _clipped(shape) -> bool:
-    """Whether a picture frame is cut to anything but a plain rectangle."""
-    return _geometry(shape) not in ("rect",)
 
 
 def _blip_fill(shape):
@@ -611,160 +278,58 @@ def _blip_fill(shape):
     return None if properties is None else properties.find(f"{{{_A}}}blipFill")
 
 
-# Where a cover crop keeps its window when the picture and the frame disagree.
-# Centre is the only reading this had, and a live author wrote thirty lines of PIL and
-# XML to get the other one: a night-market photograph whose archway lettering is along
-# the top came out with the lettering cut, so the program pre-cropped the file itself
-# with a `top_bias` of its own and swapped the blip by hand -- past `_check_shape`,
-# past the stale-`fillRect` cleanup, and past every measurement this module makes.
-_PICTURE_ANCHORS = {
-    "centre": (0.5, 0.5),
-    "top": (0.5, 0.0),
-    "bottom": (0.5, 1.0),
-    "left": (0.0, 0.5),
-    "right": (1.0, 0.5),
-}
-
-
-def _trimmed(trim) -> tuple[float, float, float, float]:
-    """`trim` as four shares of the source's own edges, refusing what cannot be cut."""
-    if trim is None:
-        return (0.0, 0.0, 0.0, 0.0)
-    try:
-        left, right, top, bottom = (float(share) for share in trim)
-    except (TypeError, ValueError):
-        raise ValueError(
-            f"trim is four shares of the source's edges -- (left, right, top, bottom) -- not {trim!r}. "
-            "A screenshot with a progress bar along the bottom is trim=(0, 0, 0, 0.08)"
-        ) from None
-    if min(left, right, top, bottom) < 0 or left + right >= 1 or top + bottom >= 1:
-        raise ValueError(
-            f"trim=({left:g}, {right:g}, {top:g}, {bottom:g}) leaves no picture: each is a share of the "
-            "source's own width or height, and the two on an axis have to come to less than 1"
-        )
-    return (left, right, top, bottom)
-
-
-def _cover_crop(frame: float, size: tuple[int, int], anchor: str, trim, zoom: float):
-    """The four crop shares a cover fit needs, against the source's own edges.
-
-    One function for both crop paths -- a picture frame's `crop_*` attributes and a
-    fill's `srcRect` -- because they were two copies of the same arithmetic and only
-    one of them ever got a fix.
-
-    Every share returned is of the *original* source, which is what both paths take
-    and what makes `trim` and the fit's own crop add rather than compose: they are
-    cuts off the same rectangle.
-
-    `zoom` is a multiple of the scale that just covers the frame. 1.0 is the largest
-    window that still fills it, which is the fit itself; 1.6 shows 1/1.6 of that
-    window, which is how a detail in a photograph is made legible at the size the
-    frame has. Under 1.0 there is no cover, so it is refused rather than letterboxed
-    silently.
-    """
-    if anchor not in _PICTURE_ANCHORS:
-        raise ValueError(f"anchor is one of {', '.join(sorted(_PICTURE_ANCHORS))}, not {anchor!r}")
-    if not zoom or zoom <= 0:
-        raise ValueError(f"zoom is a multiple of the fit, so {zoom!r} is not one")
-    if zoom < 1:
-        raise ValueError(
-            f"zoom={zoom:g} would leave the frame part empty, which a cover fit cannot do. Either "
-            'fit="contain", which shrinks the frame to the picture, or hand a smaller box'
-        )
-    left0, right0, top0, bottom0 = _trimmed(trim)
-    width, height = size
-    across, down = 1 - left0 - right0, 1 - top0 - bottom0
-    picture = (width * across) / (height * down)
-    keep_w, keep_h = (frame / picture, 1.0) if picture > frame else (1.0, picture / frame)
-    keep_w, keep_h = keep_w / zoom, keep_h / zoom
-    if keep_w > 1 or keep_h > 1:
-        raise ValueError(f"zoom={zoom:g} asks for more picture than there is at this crop")
-    share_x, share_y = _PICTURE_ANCHORS[anchor]
-    off_x, off_y = (1 - keep_w) * share_x, (1 - keep_h) * share_y
-    return (
-        left0 + off_x * across,
-        1 - (left0 + (off_x + keep_w) * across),
-        top0 + off_y * down,
-        1 - (top0 + (off_y + keep_h) * down),
-    )
-
-
-def _fill_crop(shape, fill, image: Path, anchor: str = "centre", trim=None, zoom: float = 1.0) -> None:
-    """Crop the fill's source to the shape's proportions, so nothing stretches.
-
-    The crop is stated against the frame, so any inset the template fitted its own
-    photograph with has to go with the image it was cut for. Left behind, the fill
-    states its fit twice and the two disagree: a live template photograph came out with
-    a 23.9% crop for the frame and a -32% `fillRect` for a box half again as wide, and
-    `figure_distortion` read the pair as a 1.64x stretch that no renderer put on the
-    page.
-    """
+def _fill_crop(shape, fill, image: Path) -> None:
+    """Crop the fill's source to the shape's proportions, so nothing stretches."""
     size = _picture_size(image)
     if size is None or not shape.width or not shape.height:
         return
+    width, height = size
+    frame = shape.width / shape.height
+    picture = width / height
     from lxml import etree
 
     for stale in fill.findall(f"{{{_A}}}srcRect"):
         fill.remove(stale)
-    stretch = fill.find(f"{{{_A}}}stretch")
-    if stretch is not None:
-        for stale in stretch.findall(f"{{{_A}}}fillRect"):
-            stretch.remove(stale)
-    left, right, top, bottom = _cover_crop(shape.width / shape.height, size, anchor, trim, zoom)
+    if picture > frame:  # wider than the shape: take the middle of its width
+        trim = (1 - frame / picture) / 2
+        sides = {"l": trim, "r": trim}
+    else:  # taller: take the middle of its height
+        trim = (1 - picture / frame) / 2
+        sides = {"t": trim, "b": trim}
     rect = etree.SubElement(fill, f"{{{_A}}}srcRect")
-    for side, share in (("l", left), ("r", right), ("t", top), ("b", bottom)):
-        if share > 0:
-            rect.set(side, str(int(round(share * 100000))))
+    for side, share in sides.items():
+        rect.set(side, str(int(round(share * 100000))))
     fill.insert(list(fill).index(fill.find(f"{{{_A}}}blip")) + 1, rect)
 
 
-def _check_shape(shape, image: Path, how: str, trim=None) -> None:
-    """Warn about a picture whose proportions the frame cannot hold either way.
+def _check_shape(shape, image: Path, how: str) -> None:
+    """Refuse a picture whose proportions the frame cannot hold either way.
 
     A portrait slot and a landscape figure is a layout decision, not a fitting one:
     contained, the figure is a strip in the middle of an empty frame; covered, most of it
-    is cropped away. So the numbers are stated -- `place(shape, (left, top, width,
-    height))` reshapes the frame, another prototype may have a landscape slot, and
-    `drop` plus a shape of your own is always available.
-
-    Stated as a warning, not raised. Raising stopped the whole build for one picture:
-    three of the ten script crashes across two measured runs were this refusal, each
-    costing a round and hiding every later page's failure behind it -- and one was a 1.5
-    photograph aimed at a page-wide banner, which is a crop a designer makes on purpose.
-    The picture is placed the way the caller asked; the warning reaches the author as
-    the build's `warnings`, and the render shows what the crop did.
+    is cropped away. So the numbers are stated and the choice goes
+    back -- `place(shape, (left, top, width, height))` reshapes the frame, another
+    prototype may have a landscape slot, and `drop` plus a shape of your own is always
+    available.
     """
     size = _picture_size(image)
     if size is None or not shape.width or not shape.height:
         return
     width, height = size
     frame = shape.width / shape.height
-    # The trimmed picture, because that is the one being fitted. A landscape screenshot
-    # trimmed to its portrait panel is the shape of the panel, and judging the file
-    # would refuse the very cut that made it fit.
-    left, right, top, bottom = _trimmed(trim)
-    picture = (width * (1 - left - right)) / (height * (1 - top - bottom))
+    picture = width / height
     off = max(frame / picture, picture / frame)
     if off <= FIT_RATIO_LIMIT:
         return
-    import warnings
-
-    what = (
-        "sits as a strip in an otherwise empty frame"
-        if how == "contain"
-        else f"loses about {1 - 1 / off:.0%} of the figure to the crop"
-    )
-    warnings.warn(
-        f"{Path(image).name} is {width}x{height}"
-        + (f", trimmed to {picture:.2f}" if any((left, right, top, bottom)) else "")
-        + f" ({picture:.2f} wide-to-tall) and this frame is "
+    raise ValueError(
+        f"{Path(image).name} is {width}x{height} ({picture:.2f} wide-to-tall) and this frame is "
         f"{shape.width / 914400:.2f}x{shape.height / 914400:.2f}in ({frame:.2f}) -- {off:.1f}x apart. "
-        f"{'Contained' if how == 'contain' else 'Cropped'}, it {what}. Placed as asked; look at the render. "
-        "If the figure matters, give the frame the box it needs -- pictures={n: (image, (left, top, width, "
-        "height))} in inches, or place(shape_at(slide, n), box) after adapt returns -- or adapt a prototype "
-        "whose picture slot runs the other way, or drop this frame and add a picture of your own."
-        + _frames_on_page(shape),
-        stacklevel=3,
+        f"{'Contained' if how == 'contain' else 'Cropped'} it would "
+        f"{'sit as a strip in an otherwise empty frame' if how == 'contain' else 'lose most of the figure'}."
+        + _frames_on_page(shape)
+        + " Give the frame the box the figure needs -- pictures={n: (image, (left, top, width, height))} in"
+        " inches, or place(shape_at(slide, n), box) after adapt returns -- or adapt a prototype whose picture"
+        " slot runs the other way, or drop this frame and add a picture of your own"
     )
 
 
@@ -804,7 +369,7 @@ def _picture_size(image: Path) -> tuple[int, int] | None:
         return None
 
 
-def _fit(shape, image: Path, how: str, anchor: str = "centre", trim=None, zoom: float = 1.0) -> None:
+def _fit(shape, image: Path, how: str) -> None:
     """Crop the frame's content ("cover") or shrink the frame to the picture ("contain")."""
     size = _picture_size(image)
     if size is None:
@@ -814,18 +379,17 @@ def _fit(shape, image: Path, how: str, anchor: str = "centre", trim=None, zoom: 
         return
     shape.crop_left = shape.crop_right = shape.crop_top = shape.crop_bottom = 0
     frame = shape.width / shape.height
-    cut = _trimmed(trim)
+    picture = width / height
     if how == "cover":
-        left, right, top, bottom = _cover_crop(frame, size, anchor, trim, zoom)
-        shape.crop_left, shape.crop_right = left, right
-        shape.crop_top, shape.crop_bottom = top, bottom
+        if picture > frame:  # wider than the slot: take the middle of its width
+            share = (1 - frame / picture) / 2
+            shape.crop_left = shape.crop_right = share
+        elif picture < frame:  # taller: take the middle of its height
+            share = (1 - picture / frame) / 2
+            shape.crop_top = shape.crop_bottom = share
         return
     # contain: the frame gives way, and it gives way about its own centre so the
-    # composition around it does not shift. What was trimmed off the source is cut
-    # first, and the frame then gives way to what is left rather than to the file.
-    if any(cut):
-        shape.crop_left, shape.crop_right, shape.crop_top, shape.crop_bottom = cut
-    picture = (width * (1 - cut[0] - cut[1])) / (height * (1 - cut[2] - cut[3]))
+    # composition around it does not shift.
     if picture > frame:
         tall = int(shape.width / picture)
         shape.top = int(shape.top + (shape.height - tall) / 2)
@@ -834,139 +398,6 @@ def _fit(shape, image: Path, how: str, anchor: str = "centre", trim=None, zoom: 
         wide = int(shape.height * picture)
         shape.left = int(shape.left + (shape.width - wide) / 2)
         shape.width = wide
-
-
-def layout_pictures(slide) -> list:
-    """The pictures a page inherits from its layout, largest first.
-
-    A template's photograph is not always on the page: several bundled templates carry
-    the cover's, the section page's and the closing page's on the *layout*, so every
-    page built on it shows the same picture and nothing on the page itself can be
-    handed to `replace_picture` -- `pictures={...}` on the cloned page never reaches
-    it, and a live deck shipped with the template's photographs on every section page
-    for that reason. These are those shapes. `replace_picture(layout_pictures(slide)[0],
-    image, "cover", alpha=0.25)` changes the picture for every page on that layout at
-    once, which is what a house photograph should do; the wash is for the picture that is
-    the size of the page, which is the page's background and has type over it.
-    """
-    found = [shape for shape in _every_shape(slide.slide_layout.shapes) if _blip_fill(shape) is not None]
-    found.sort(key=lambda shape: -((shape.width or 0) * (shape.height or 0)))
-    return found
-
-
-# Where a backdrop's picture may sit between invisible and opaque. Under 0.05 nothing
-# shows and the call was a mistake; 1.0 is the photograph as it is, which is a figure and
-# not a backdrop, but an author who wants a full-bleed picture behind a title over a dark
-# wash of its own is allowed it.
-BACKDROP_ALPHA_MIN = 0.05
-
-
-def backdrop(slide, image, *, alpha: float = 0.22, box=None, anchor: str = "centre", trim=None, zoom: float = 1.0):
-    """A picture behind everything on the page, washed to `alpha`.
-
-    The one generated picture that never poses as evidence: a cover, a section page or a
-    closing page wants atmosphere more than a figure, and the templates' own photographs
-    are placeholders. Full-bleed by default, or into `box` -- (left, top, width, height)
-    in inches, or a `ppt_layout.Box` -- and cover-cropped to it, so a 4:3 render behind a
-    16:9 page loses its top and bottom rather than stretching; `anchor`, `trim` and
-    `zoom` place the window the way `replace_picture` does.
-
-    `alpha` is the picture's share of itself: 0.2 is a wash the template's ground and
-    type stay legible over, 0.35 is as far as copy over it can go, 1 is the photograph
-    as it is. The wash is the picture's own (`alphaModFix`), not a plane laid over it,
-    so the page's own colour shows through and nothing is added to the z-order but the
-    one picture -- first in it, behind the layout's furniture's own layer and every
-    shape already on the page.
-
-    Returns the picture shape. The contrast reading (§10) is taken off the pixels, so a
-    wash that buries the title comes back as unreadable type, not as a wash: look at the
-    render.
-    """
-    from pptx.util import Inches
-
-    path = Path(image)
-    if not path.is_file():
-        raise ValueError(f"backdrop wants a picture file, and {image!r} is not one")
-    share = _alpha_share(alpha)
-    if box is None:
-        left, top = 0.0, 0.0
-        width, height = _canvas_of(slide)
-    else:
-        left, top, width, height = _as_size(box, "a box for backdrop")
-    picture = slide.shapes.add_picture(str(path), Inches(left), Inches(top), Inches(width), Inches(height))
-    picture.name = "backdrop"
-    _fit(picture, path, "cover", anchor, trim, zoom)
-    _wash(picture._element.find(f"{{{_P}}}blipFill/{{{_A}}}blip"), share)
-    # Behind everything: the two bookkeeping children of the shape tree come first, and
-    # the first drawn shape after them is the lowest on the page.
-    tree = picture._element.getparent()
-    tree.remove(picture._element)
-    tree.insert(2, picture._element)
-    return picture
-
-
-def wash(shape, alpha: float):
-    """Set a picture's transparency: `alpha` is the picture's share of itself.
-
-    Any picture on the page -- a frame the template drew, one `adapt(pictures=...)`
-    filled, one `add_picture` placed, a rounded panel filled with a photograph -- and
-    the same share `backdrop` and `replace_picture(alpha=...)` take: 0.2 is a wash
-    under copy, 0.35 as far as copy over it can go, 1 the picture as it is. Written
-    into the blip's own `alphaModFix`, replacing whatever wash the picture carried, so
-    nothing is added to the page and the frame keeps its crop, border and place. Returns
-    the shape. A shape with no picture in it is refused: a solid fill has its own
-    transparency and this is not it.
-    """
-    fill = _blip_fill(shape)
-    blip = fill.find(f"{{{_A}}}blip") if fill is not None else None
-    if blip is None:
-        raise ValueError(
-            f"wash wants a picture, and {getattr(shape, 'name', shape)!r} shows none -- it takes a picture frame "
-            "or a shape filled with one; a solid fill is not washed this way"
-        )
-    _wash(blip, alpha)
-    return shape
-
-
-def _alpha_share(alpha) -> float:
-    """`alpha` as a share of the picture, refusing what is not a wash."""
-    try:
-        share = float(alpha)
-    except (TypeError, ValueError):
-        raise ValueError(f"alpha is the picture's share of itself, between 0 and 1, not {alpha!r}") from None
-    if not (BACKDROP_ALPHA_MIN <= share <= 1.0):
-        raise ValueError(
-            f"alpha={share:g} is outside {BACKDROP_ALPHA_MIN:g}..1: 0.2 is a wash under copy, 0.35 is as far as "
-            "copy over it can go, 1 is the photograph as it is"
-        )
-    return share
-
-
-def _wash(blip, alpha) -> None:
-    """Set a blip's transparency (`alphaModFix`), replacing any it carried."""
-    from lxml import etree
-
-    share = _alpha_share(alpha)
-    for stale in blip.findall(f"{{{_A}}}alphaModFix"):
-        blip.remove(stale)
-    fix = etree.Element(f"{{{_A}}}alphaModFix")
-    fix.set("amt", str(int(round(share * 100000))))
-    # `alphaModFix` precedes `extLst` in a blip's children; anything else already
-    # there is an effect the author did not ask for.
-    extension = blip.find(f"{{{_A}}}extLst")
-    if extension is not None:
-        extension.addprevious(fix)
-    else:
-        blip.append(fix)
-
-
-def _canvas_of(slide) -> tuple[float, float]:
-    """The page's (width, height) in inches, off the presentation the slide belongs to."""
-    try:
-        presentation = slide.part.package.presentation_part.presentation
-        return (presentation.slide_width / 914400, presentation.slide_height / 914400)
-    except Exception:  # noqa: BLE001 -- a slide outside a package answers the default canvas
-        return (13.333, 7.5)
 
 
 def replace_text(target, text: str, new: str | None = None) -> None:
@@ -985,17 +416,6 @@ def replace_text(target, text: str, new: str | None = None) -> None:
     Assigning to `.text` drops every run property, so a heading returns at body size in
     body colour -- the page keeps its geometry and loses its typography, which reads as
     a worse bug than a missing page because it looks deliberate.
-
-    **One word in the accent, on a cloned page.** `text` may be a sequence of
-    `ppt_layout.Run` instead of a string, and then each piece is set as its own run:
-
-        replace_text(shape, [Run("\u8bbf\u5ba2\u4e2d\u7ea6 "), Run("84%", bold=True, colour=ACCENT_INK), Run(" \u5230\u8bbf\u8fc7")])
-
-    Whatever a piece does not state is the template's, because every piece is a copy of
-    the run the template put there -- so the line keeps its face, its size and its
-    colour and one word of it does not. Without this a cloned page could not emphasise
-    anything: the plain-string path puts the whole line in run 0 and deletes the rest,
-    and one run carries one colour. Pass a list of sequences for several paragraphs.
     """
     shape = target
     if new is not None:
@@ -1015,10 +435,7 @@ def replace_text(target, text: str, new: str | None = None) -> None:
     # and what an author writes after reading one. Passed through, XML cannot carry it
     # and python-pptx spells it -- a delivered cover printed "EverMind AI_x000B_给 AI
     # 智能体" at title size.
-    # A run sequence is one paragraph by construction: the breaks a string carries are
-    # what splits it, and a sequence of runs states its pieces instead. A caller wanting
-    # two emphasised paragraphs calls this twice, or passes a list of sequences.
-    lines = _paragraphs_of(text)
+    lines = text.replace("\x0b", "\n").split("\n")
     paragraphs = frame.paragraphs
     for index, line in enumerate(lines):
         if index < len(paragraphs):
@@ -1033,99 +450,7 @@ def replace_text(target, text: str, new: str | None = None) -> None:
         extra._p.getparent().remove(extra._p)
 
 
-def _paragraphs_of(text):
-    """`text` as the paragraphs to write: strings split on breaks, sequences kept.
-
-    Three shapes arrive here and all three are what an author means by "these
-    lines": a string with breaks in it; a list of strings, one per paragraph; a list
-    of run sequences, one emphasised paragraph each. A live program wrote
-    `[["选址评估"], ["六维模型"]]` -- two paragraphs, each a list holding one plain
-    string -- and the old dispatch, which knew only strings and `Run` sequences, fell
-    through to `str.replace` on a list and crashed the build. A sequence of plain
-    strings inside a paragraph is that paragraph's text, joined.
-    """
-    if isinstance(text, str):
-        return text.replace("\x0b", "\n").split("\n")
-    if _emphasis(text) is not None:
-        return [text]
-    try:
-        items = list(text)
-    except TypeError:
-        raise TypeError(
-            f"replace_text takes a string, a list of strings (one per paragraph) or a list of Run sequences, "
-            f"not {type(text).__name__}"
-        ) from None
-    lines = []
-    for item in items:
-        if isinstance(item, str):
-            lines.extend(item.replace("\x0b", "\n").split("\n"))
-        elif _emphasis(item) is not None:
-            lines.append(item)
-        elif isinstance(item, (list, tuple)) and all(isinstance(piece, str) for piece in item):
-            lines.append("".join(item))
-        else:
-            raise TypeError(
-                f"replace_text got {item!r} inside the list: each paragraph is a string, a list of strings, "
-                f"or a sequence of Run"
-            )
-    return lines or [""]
-
-
-def _emphasis(line):
-    """`line` as the runs to set, or None when it is a plain string.
-
-    A cloned page could not emphasise a word. `_write` puts the whole line into run 0
-    and deletes the rest, so a paragraph coming out of `replace_text` holds exactly one
-    run and one run carries one colour -- and twelve of one fifteen-page deck's pages
-    were clones. The author had written `colour=ACCENT_INK` in five places and none of
-    it reached the page.
-
-    The pairs are `ppt_layout.Run`'s fields by name rather than by import: this module
-    is projected as its own source beside the author's program and may not import a
-    sibling projection, and duck-typing the four names is cheaper than a third spelling
-    of the same tuple.
-    """
-    if isinstance(line, str):
-        return None
-    try:
-        pieces = list(line)
-    except TypeError:
-        return None
-    if not pieces or any(not hasattr(piece, "text") for piece in pieces):
-        return None
-    return pieces
-
-
-def _restyle(run, piece, colour_of) -> None:
-    """`piece`'s own size, weight and colour over whatever the template set.
-
-    Only what the piece states. Everything else is the template's, which is the whole
-    point: the page keeps its typography and gains one emphasised word.
-    """
-    from pptx.util import Pt
-
-    if getattr(piece, "size", None) is not None:
-        run.font.size = Pt(float(piece.size))
-    if getattr(piece, "bold", None) is not None:
-        run.font.bold = bool(piece.bold)
-    stated = getattr(piece, "colour", None)
-    if stated is not None:
-        run.font.color.rgb = colour_of(stated)
-
-
-def _rgb_of(value):
-    """A colour as python-pptx wants it, from the spelling the reference uses."""
-    from pptx.dml.color import RGBColor
-
-    if isinstance(value, RGBColor):
-        return value
-    text = str(value).lstrip("#")
-    if len(text) != 6:
-        raise ValueError(f"a colour is #RRGGBB, not {value!r}")
-    return RGBColor(int(text[0:2], 16), int(text[2:4], 16), int(text[4:6], 16))
-
-
-def _write(paragraph, line) -> None:
+def _write(paragraph, line: str) -> None:
     """One paragraph's words replaced, and nothing of the old line left behind.
 
     A template's soft breaks belong to its placeholder, not to what replaces it. The
@@ -1138,38 +463,12 @@ def _write(paragraph, line) -> None:
     for brk in paragraph._p.findall(f"{{{_A}}}br"):
         paragraph._p.remove(brk)
     runs = paragraph.runs
-    pieces = _emphasis(line)
     if not runs:
-        if pieces is None:
-            paragraph.text = line
-            return
-        paragraph.text = "".join(str(piece.text) for piece in pieces)
-        runs = paragraph.runs
-        if runs:
-            _restyle(runs[0], pieces[0], _rgb_of)
+        paragraph.text = line
         return
-    if pieces is None:
-        runs[0].text = line
-        for extra in runs[1:]:
-            extra._r.getparent().remove(extra._r)
-        return
-    # Run 0 is the template's carrier, so every piece is a copy of it with only what
-    # the piece states overridden. Copied rather than added bare: a run python-pptx
-    # adds has no properties at all, and the line would come back at body size in body
-    # colour -- the page keeping its geometry and losing its typography, which is the
-    # failure `replace_text` was written to avoid in the first place.
-    carrier = runs[0]._r
-    made = []
-    for piece in pieces:
-        fresh = copy.deepcopy(carrier)
-        carrier.addprevious(fresh)
-        made.append(fresh)
-    for stale in list(paragraph.runs):
-        if stale._r not in made:
-            stale._r.getparent().remove(stale._r)
-    for run, piece in zip(paragraph.runs, pieces):
-        run.text = str(piece.text)
-        _restyle(run, piece, _rgb_of)
+    runs[0].text = line
+    for extra in runs[1:]:
+        extra._r.getparent().remove(extra._r)
 
 
 def drop_shape(shape) -> None:
@@ -1477,12 +776,7 @@ def units(container):
     runs = []
 
     def signature(group):
-        # What the group holds, not the order it holds it in. A template's fourth
-        # row is drawn with the same four shapes as the three above it and saved with
-        # the icon before the label instead of after -- ordered, that row is not a
-        # sibling, its texts are emptied with everyone else's and its icon is left
-        # standing beside nothing. Two of the user's reference pages are built that way.
-        return tuple(sorted(str(shape.shape_type) for shape in group.shapes))
+        return tuple(str(shape.shape_type) for shape in group.shapes)
 
     def walk(shapes):
         groups = [shape for shape in shapes if shape.shape_type == MSO_SHAPE_TYPE.GROUP]
@@ -1603,32 +897,9 @@ def place(unit, box):
     from pptx.util import Inches
 
     left, top, width, height = _as_size(box, "a box for place")
-    # A shape inside a group keeps its numbers in the group's child space, which is
-    # the page's only when the group was never resized. Written straight in, a page
-    # box lands wherever the group's mapping sends it: a live program found `place`
-    # "equivalent to assigning .top directly", measured the offset itself and wrote
-    # its own conversion helper -- three rounds, and every later move went through
-    # it. The box an author gives is on the page, so it is converted here.
-    left, top, width, height = _to_child_space(unit, left, top, width, height)
     unit.left, unit.top = Inches(left), Inches(top)
     unit.width, unit.height = Inches(width), Inches(height)
     return unit
-
-
-def _to_child_space(shape, left: float, top: float, width: float, height: float):
-    """Page inches to the coordinate space `shape`'s own numbers are read in.
-
-    The inverse of the walk `page_position` makes: each enclosing group maps its
-    child extent onto its own, outermost first, so going in means undoing them
-    outermost first as well. A shape at the top level comes back unchanged.
-    """
-    for (offset, extent), (child_offset, child_extent) in _group_chain(shape):
-        sx = child_extent[0] / extent[0] if extent[0] else 1.0
-        sy = child_extent[1] / extent[1] if extent[1] else 1.0
-        left = child_offset[0] + (left - offset[0]) * sx
-        top = child_offset[1] + (top - offset[1]) * sy
-        width, height = width * sx, height * sy
-    return left, top, width, height
 
 
 def fill(run, items):
@@ -1657,23 +928,12 @@ def fill(run, items):
     """
     written = []
     if len(items) > len(run):
-        # Grown rather than refused. Ten builds across the measured runs died on this
-        # refusal, nine of them one or two items over; the authors then wrote their own
-        # `clone_panel` -- deepcopy the element, hang it on the tree, set a box -- which is
-        # `add_unit` without the re-flow. A run that follows no grid still refuses, with
-        # the slot counts the template menu now prints as the way out.
-        run = list(run) + add_unit(run, len(items) - len(run))
-    # In the order a reader meets them, not the order the file stores them. The author
-    # counts items off the render -- top row first, left to right -- and the file's
-    # order is whatever the designer drew last. Measured on one reference page: the
-    # unit's number box is stored third of three, after the heading and the body, so
-    # a positional item ["72%", "heading", "body"] put the body in the 60pt number box
-    # and the number in the heading slot. The same applies to which unit is first.
-    spots = boxes(run)
-    kind = arrangement(run)
-    run = _reading_order(run)
+        raise ValueError(
+            f"this page repeats {len(run)} units and {len(items)} items were given. "
+            f"Use a prototype with more slots, split the content over two pages, or say less"
+        )
     for position, (unit, item) in enumerate(zip(run, items), start=1):
-        frames = _reading_order([s for s in _all_shapes(unit.shapes) if getattr(s, "has_text_frame", False)])
+        frames = [s for s in _all_shapes(unit.shapes) if getattr(s, "has_text_frame", False)]
         if not isinstance(item, dict):
             # A frame the prototype left empty is not a slot: it is an icon's box or a
             # spacer, invisible on the page and uncountable from it. Counting it put a
@@ -1705,15 +965,6 @@ def fill(run, items):
                 written.append(shape)
             continue
         if len(item) > len(frames):
-            # An empty string is a value with nothing in it -- the placeholder an author
-            # writes for a number tile it means to leave alone -- and a list that outruns
-            # the unit only by those is the unit's own list. Measured: `["", title, sub]`
-            # against a two-frame unit ended a build on the refusal below, over a value
-            # that would have written nothing.
-            spare = [value for value in item if value != ""]
-            if len(spare) < len(item) and len(spare) <= len(frames):
-                item = spare
-        if len(item) > len(frames):
             # Neither joining the extras onto the last slot nor cloning a slot for them is
             # this function's call to make: the first sets body copy at heading size, the
             # second guesses where the new shape goes, and both were tried and made the
@@ -1726,38 +977,14 @@ def fill(run, items):
                 + ". Give one value per shape (None keeps one as it is), pick a prototype whose units hold "
                 "more, or add your own shape to the slide after adapt returns"
             )
-        # A list as long as the unit addresses every shape, one to one. A shorter list
-        # is read against the shapes that are not the unit's number: the number sits
-        # first in reading order on most units, and `["甲"]` handed to `[01, label]`
-        # otherwise writes 甲 over the 01 and empties the label -- the one outcome no
-        # author means. So a number frame that meets a value which is not itself a
-        # number is restated for its position and the value moves on to the next shape.
-        # An author who wants their own numbering writes the full list, or the dict.
-        values = list(item)
-        addressed = len(values) == len(frames)
-        cursor = 0
-        for shape in frames:
+        for index, shape in enumerate(frames):
             # Short of the unit's shapes means "I have nothing to say about the rest",
             # not "empty them". The zip that used to be here stopped at the shorter
             # list and left the remainder unclaimed, so the pass that empties unnamed
             # text emptied them: a real template's agenda unit holds a title box, the
             # folder shape and its number, an author gave two values, and all eight
             # numbers came off the page.
-            ordinal = _renumbered(shape.text_frame.text, position)
-            value = values[cursor] if cursor < len(values) else None
-            index = cursor
-            if (
-                not addressed
-                and ordinal is not None
-                and cursor < len(values)
-                and value is not None
-                and str(value).strip()
-                and _renumbered(str(value), position) is None
-            ):
-                replace_text(shape, ordinal)
-                written.append(shape)
-                continue
-            cursor += 1
+            value = item[index] if index < len(item) else None
             if value is None:
                 # Claimed even though nothing is written: `adapt` empties every text
                 # it was not told about, so a shape left out of `written` is a shape
@@ -1774,307 +1001,21 @@ def fill(run, items):
                 # number is the exception the agenda case is about, and it is already
                 # recognisable: `_renumbered` answers for a shape that holds one, which
                 # is the same line `placeholder_copy` draws when it skips pure digits.
-                if index >= len(values) and ordinal is None:
+                if index >= len(item) and _renumbered(shape.text_frame.text, position) is None:
                     continue
-                if index >= len(values):
-                    replace_text(shape, ordinal)
                 written.append(shape)
                 continue
-            if not str(value).strip() and ordinal is not None:
-                replace_text(shape, ordinal)
-                written.append(shape)
-                continue
+            if not str(value).strip():
+                restated = _renumbered(shape.text_frame.text, position)
+                if restated is not None:
+                    replace_text(shape, restated)
+                    written.append(shape)
+                    continue
             replace_text(shape, value)
             written.append(shape)
     for spare in run[len(items) :]:
         drop_shape(spare)
-    if len(items) < len(run):
-        _reflow(run[: len(items)], spots, kind)
     return written
-
-
-def _reading_order(shapes):
-    """`shapes` as a reader meets them: row by row from the top, left to right in a row.
-
-    Two shapes share a row when their vertical extents overlap by more than half of
-    the shorter one -- a number in a circle and the heading beside it are a row even
-    though their tops differ by a tenth of an inch, and a heading over its body is two
-    rows even though they nearly touch.
-    """
-    placed = [s for s in shapes if getattr(s, "top", None) is not None and getattr(s, "left", None) is not None]
-    rest = [s for s in shapes if s not in placed]
-    rows: list[list] = []
-    for shape in sorted(placed, key=lambda s: (s.top, s.left)):
-        top, bottom = shape.top, shape.top + (shape.height or 0)
-        for row in rows:
-            r_top = min(s.top for s in row)
-            r_bottom = max(s.top + (s.height or 0) for s in row)
-            overlap = min(bottom, r_bottom) - max(top, r_top)
-            shorter = max(1, min(bottom - top, r_bottom - r_top))
-            if overlap > shorter / 2:
-                row.append(shape)
-                break
-        else:
-            rows.append([shape])
-    ordered = []
-    for row in sorted(rows, key=lambda row: min(s.top for s in row)):
-        ordered.extend(sorted(row, key=lambda s: s.left))
-    return ordered + rest
-
-
-# A unit narrower than this cannot carry a heading and a line of copy, so a row is not
-# grown past it: measured on the bundled templates' card rows, the narrowest unit that
-# holds copy is 1.42in wide.
-UNIT_MIN_IN = 1.2
-# And the shortest a column's unit may become: a badge beside two lines of copy is
-# 0.75in tall on the templates' agenda pages, and the reference page this was measured
-# on runs four such rows in 4.66in.
-UNIT_MIN_TALL_IN = 0.6
-# The gutter a grown row closes up to before its units start shrinking.
-GAP_MIN_IN = 0.1
-# What a grid keeps clear of the page's bottom edge when it gains a row.
-CANVAS_MARGIN_IN = 0.35
-
-
-def _reflow(survivors, spots, kind):
-    """Lay the run out again, where the arrangement says how.
-
-    `arrangement` reports and this used to stop there, leaving three cards of four
-    left-aligned with a card-sized hole on the right -- which every author then had to
-    close by hand with `place`, or shipped. On a row or a column there is one answer:
-    the units share the run's original extent with equal gaps. Fewer units keep their
-    size; more units first close the gutters to `GAP_MIN_IN` and then shrink, uniformly
-    so a circle stays a circle, until they fit. On a grid they fill it row-major at the
-    grid's own pitches, a new row below the last when they overflow it, and the last,
-    partial row is centred. On an irregular run -- fanned, staggered, around a circle --
-    nothing moves, because any move is a guess at the design.
-    """
-    from pptx.util import Emu, Inches
-
-    shape, *_ = kind
-    if shape == "irregular" or not spots or not survivors:
-        return
-    left0 = min(box[0] for box in spots)
-    right0 = max(box[0] + box[2] for box in spots)
-    top0 = min(box[1] for box in spots)
-    bottom0 = max(box[1] + box[3] for box in spots)
-    n = len(survivors)
-    if shape in ("row", "column"):
-        along = 0 if shape == "row" else 1
-        extent = (right0 - left0) if along == 0 else (bottom0 - top0)
-        sizes = [(unit.width / 914400, unit.height / 914400) for unit in survivors]
-        total = sum(size[along] for size in sizes)
-        gap = (extent - total) / (n - 1) if n > 1 else 0.0
-        floor = min(_original_gap(spots, along), GAP_MIN_IN) if n > 1 else 0.0
-        if n > 1 and gap < floor:
-            scale = (extent - floor * (n - 1)) / total
-            for unit in survivors:
-                unit.width = Emu(int(unit.width * scale))
-                unit.height = Emu(int(unit.height * scale))
-            sizes = [(unit.width / 914400, unit.height / 914400) for unit in survivors]
-            total = sum(size[along] for size in sizes)
-            gap = (extent - total) / (n - 1)
-        start = (
-            (left0 if along == 0 else top0)
-            if n > 1
-            else ((left0 + right0 - total) / 2 if along == 0 else (top0 + bottom0 - total) / 2)
-        )
-        cursor = start
-        for unit, size in zip(survivors, sizes):
-            if along == 0:
-                unit.left = Inches(cursor)
-            else:
-                unit.top = Inches(cursor)
-            cursor += size[along] + gap
-        return
-    xs = sorted({round(box[0], 2) for box in spots})
-    ys = sorted({round(box[1], 2) for box in spots})
-    cols = len(xs)
-    pitch_x = (xs[1] - xs[0]) if cols > 1 else 0.0
-    pitch_y = (ys[1] - ys[0]) if len(ys) > 1 else (spots[0][3] + GAP_MIN_IN)
-    for index, unit in enumerate(survivors):
-        row, col = divmod(index, cols)
-        in_last_row = row == (n - 1) // cols
-        short_by = cols - (n - row * cols) if in_last_row else 0
-        unit.left = Inches(xs[col] + short_by * pitch_x / 2)
-        unit.top = Inches(ys[row] if row < len(ys) else ys[-1] + pitch_y * (row - len(ys) + 1))
-
-
-def _original_gap(spots, along: int) -> float:
-    """The gutter the template drew between neighbours along one axis, or 0."""
-    edges = sorted((box[along], box[along] + box[along + 2]) for box in spots)
-    gaps = [nxt[0] - prev[1] for prev, nxt in zip(edges, edges[1:])]
-    gaps = sorted(gap for gap in gaps if gap > 0)
-    return gaps[len(gaps) // 2] if gaps else 0.0
-
-
-def _slide_of(shape):
-    return shape.part.slide
-
-
-def _canvas_in(shape) -> tuple[float, float]:
-    """The page's (width, height) in inches, off the presentation the shape belongs to."""
-    try:
-        presentation = shape.part.package.presentation_part.presentation
-        return (presentation.slide_width / 914400, presentation.slide_height / 914400)
-    except Exception:  # noqa: BLE001 -- a shape outside a package answers the default canvas
-        return (13.333, 7.5)
-
-
-def _every_shape(shapes):
-    """Every shape on the page including the groups themselves, outermost first."""
-    for shape in shapes:
-        yield shape
-        if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
-            yield from _every_shape(shape.shapes)
-
-
-def _fresh_ids(element, slide) -> None:
-    """Give every shape in a copied element an id the page does not hold yet.
-
-    A copy carries the original's `cNvPr id`; two shapes sharing one is a file
-    PowerPoint offers to repair.
-    """
-    taken = [int(node.get("id")) for node in slide._element.iter(f"{{{_P}}}cNvPr") if str(node.get("id", "")).isdigit()]
-    next_id = max(taken, default=1) + 1
-    for node in element.iter(f"{{{_P}}}cNvPr"):
-        node.set("id", str(next_id))
-        next_id += 1
-
-
-def _shape_for(slide, element):
-    for shape in _every_shape(slide.shapes):
-        if shape._element is element:
-            return shape
-    raise LookupError("the copied shape is not on the page it was added to")
-
-
-def _run_holding(slide, unit):
-    for run in units(slide):
-        if any(other._element is unit._element for other in run):
-            return run
-    return None
-
-
-def add_unit(target, count: int = 1):
-    """Grow a page's repeating run by `count` units, copied from its last one.
-
-    `target` is a run from `units(slide)`, or the slide itself for its longest run. The
-    copies are the last unit again -- its shapes, its words, its icon -- inserted after
-    it in the same container, so `fill` and `adapt(items=...)` treat them as slots like
-    any other. The run is then laid out again (`_reflow`): a row closes its gutters and
-    then shrinks its units uniformly to fit the width it had, a grid gains a row at its
-    own pitch, and a run that follows no grid refuses, because where a seventh pill on
-    an S-curve goes is a design decision.
-
-    Refused when the grown units would fall under {UNIT_MIN_IN}in on the axis they share,
-    or a grid's new row would run off the page: the way out is a prototype with more
-    slots -- `ppt_template` prints each page's -- or a second page.
-
-    Returns the new units, in the order they were added.
-    """
-    run = list(target) if isinstance(target, (list, tuple)) else max(units(target), key=len, default=[])
-    if not run:
-        raise ValueError("nothing repeats on this page, so there is no unit to add another of")
-    if count < 1:
-        return []
-    run = _reading_order(run)
-    spots = boxes(run)
-    kind = arrangement(run)
-    shape, _rows, _cols = kind
-    n = len(run) + count
-    if shape == "irregular":
-        raise ValueError(
-            f"this page repeats {len(run)} units along no row, column or grid, so it cannot take {n}: where the "
-            f"next one goes is the design's to say. Pick a prototype with {n} slots -- ppt_template prints each "
-            f"page's slot count -- or split the content over two pages"
-        )
-    last = run[-1]
-    if shape in ("row", "column"):
-        along = 0 if shape == "row" else 1
-        extent = (
-            (max(b[0] + b[2] for b in spots) - min(b[0] for b in spots))
-            if along == 0
-            else (max(b[1] + b[3] for b in spots) - min(b[1] for b in spots))
-        )
-        size = (last.width if along == 0 else last.height) / 914400
-        total = sum((u.width if along == 0 else u.height) / 914400 for u in run) + count * size
-        floor = min(_original_gap(spots, along), GAP_MIN_IN)
-        scale = min(1.0, (extent - floor * (n - 1)) / total) if total else 1.0
-        least = UNIT_MIN_IN if along == 0 else UNIT_MIN_TALL_IN
-        # Only a shrink is refused: a template whose units are already under the floor
-        # drew them that way, and growing it without shrinking changes nothing about them.
-        if scale < 1.0 and size * scale < least:
-            raise ValueError(
-                f"{n} units across this run's {extent:.2f}in would be {size * scale:.2f}in each, under the "
-                f"{least}in a unit needs to carry copy. Pick a prototype with {n} slots -- ppt_template "
-                f"prints each page's -- or split the content over two pages"
-            )
-    else:
-        xs = sorted({round(b[0], 2) for b in spots})
-        ys = sorted({round(b[1], 2) for b in spots})
-        rows_needed = -(-n // len(xs))
-        pitch_y = (ys[1] - ys[0]) if len(ys) > 1 else (spots[0][3] + GAP_MIN_IN)
-        bottom = ys[0] + (rows_needed - 1) * pitch_y + spots[0][3]
-        if bottom > _canvas_in(last)[1] - CANVAS_MARGIN_IN:
-            raise ValueError(
-                f"{n} units on this {len(ys)}x{len(xs)} grid need {rows_needed} rows, and the last would end "
-                f"{bottom:.2f}in down a {_canvas_in(last)[1]:.2f}in page. Pick a prototype with {n} slots -- "
-                f"ppt_template prints each page's -- or split the content over two pages"
-            )
-    slide = _slide_of(last)
-    anchor = last._element
-    copies = []
-    for _ in range(count):
-        element = copy.deepcopy(last._element)
-        _fresh_ids(element, slide)
-        anchor.addnext(element)
-        anchor = element
-        copies.append(element)
-    added = [_shape_for(slide, element) for element in copies]
-    _reflow(run + added, spots, kind)
-    return added
-
-
-def remove_unit(unit) -> None:
-    """Take one unit out of its run and close the gap it leaves.
-
-    `drop_shape` removes and leaves the hole; this is the call for a slot the content
-    does not fill when `adapt(items=...)` was not the way the page was written. The
-    survivors are laid out again the way `add_unit` and `fill` lay theirs out; a unit
-    that repeats along no grid is removed and nothing else moves.
-    """
-    slide = _slide_of(unit)
-    run = _run_holding(slide, unit)
-    if run is None:
-        drop_shape(unit)
-        return
-    run = _reading_order(run)
-    spots = boxes(run)
-    kind = arrangement(run)
-    drop_shape(unit)
-    _reflow([other for other in run if other._element is not unit._element], spots, kind)
-
-
-def clone_shape(shape, box=None):
-    """A copy of `shape` on the same page, at `box` when one is given.
-
-    What five measured builds wrote for themselves as `clone_panel`: deepcopy the
-    element, hang it on the tree, set a box -- and two of the five hung it on the page
-    rather than in the shape's own group, because `place` did not then convert a page
-    box into a group's space. The copy sits beside the original in the same container,
-    with ids the page does not already hold, and `box` is (left, top, width, height) in
-    inches on the page whichever group it lands in. Returns the new shape, ready for
-    `replace_text` and `replace_picture`.
-    """
-    slide = _slide_of(shape)
-    element = copy.deepcopy(shape._element)
-    _fresh_ids(element, slide)
-    shape._element.addnext(element)
-    new = _shape_for(slide, element)
-    if box is not None:
-        place(new, box)
-    return new
 
 
 # A unit's number: one or two digits and nothing else. Narrow on purpose -- "3.1" is

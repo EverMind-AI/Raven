@@ -45,7 +45,7 @@ from raven_ppt.services.measure.geometry import (
     PICTURE,
     Rect,
     has_text,
-    is_filled,
+    is_panel,
     open_deck,
     shape_rect_emu,
     text_boxes_emu,
@@ -96,7 +96,7 @@ def band_findings(pptx_path: Path) -> list[Finding]:
         bars = [
             shape
             for shape in slide.shapes
-            if getattr(shape, "shape_type", None) != PICTURE and is_filled(shape) and not has_text(shape)
+            if getattr(shape, "shape_type", None) != PICTURE and is_panel(shape) and not has_text(shape)
         ]
         titles = text_boxes_emu(slide)
         marks = data_mark_ids(bars)

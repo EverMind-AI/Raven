@@ -17,10 +17,9 @@ behind indirection is worth less than the render beside it.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 EMU_PER_INCH = 914400
 _A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
@@ -80,15 +79,9 @@ class PageSource:
     picture_files: tuple[str, ...] = ()
     unredrawable: tuple[str, ...] = ()
 
-    def summary(self, *, imports: bool = True) -> str:
-        """The page as a block an author reads: its header, then its code.
-
-        `imports=False` leaves the import lines to a caller that states them once
-        for several pages, instead of once per page.
-        """
+    def summary(self) -> str:
         head = [f"# page {self.index} of the template, layout {self.layout!r}"]
-        if imports:
-            head += [f"# {line}" for line in _needed_imports(self.source)]
+        head += [f"# {line}" for line in _needed_imports(self.source)]
         if self.unredrawable:
             head.append("# " + _CLONE_INSTEAD.format(what=", ".join(self.unredrawable)))
         return "\n".join((*head, self.source))
@@ -152,31 +145,16 @@ def decompile(path: Path, index: int, *, images_dir: Path | None = None) -> Page
     # `texts={15: ...}` against a page whose fifteenth shape `adapt` did not agree on
     # -- it was numbering text frames and the reference was numbering shapes. One
     # numbering, stated where it is read.
-    # Consecutive custom-drawn shapes are said once. A Bauhaus page carries a
-    # hundred of them as pattern, and two lines each put one page at 12,800
-    # characters -- most of a reply -- for shapes no code here can draw anyway.
-    run: list[tuple[int, str]] = []
-
-    def flush() -> None:
-        if run:
-            lines.append(_folded(run))
-            run.clear()
-
     for ordinal, shape in enumerate(_flatten(slide.shapes), start=1):
         emitted = _shape_source(shape, images_dir, len(pictures), design)
-        if emitted.decoration:
-            run.append((ordinal, _box(shape)))
+        if emitted.source:
+            lines.append(f"# [{ordinal}]")
+            lines.append(emitted.source)
         else:
-            flush()
-            if emitted.source:
-                lines.append(f"# [{ordinal}]")
-                lines.append(emitted.source)
-            else:
-                lines.append(f"# [{ordinal}] kept by cloning -- python-pptx cannot draw it")
+            lines.append(f"# [{ordinal}] kept by cloning -- python-pptx cannot draw it")
         if emitted.picture:
             pictures.append(emitted.picture)
         lost.extend(emitted.lost)
-    flush()
     return PageSource(
         index=index,
         layout=_layout_name(slide),
@@ -223,44 +201,6 @@ class _Design:
         neither rung reported every heading in every template as having no type.
         """
         return _declared(self.inherited(shape)) + self.master.get(_family(shape), ())
-
-
-def page_design(presentation, slide) -> _Design:
-    """What this page's shapes inherit from: theme palette, colour map, layout placeholders, master styles."""
-    return _Design(
-        palette=_palette(presentation),
-        mapping=_colour_map(presentation),
-        placeholders=_layout_placeholders(slide),
-        master=_master_styles(slide),
-    )
-
-
-def run_ink(run, design: _Design) -> str | None:
-    """The colour one run states, srgb or resolved through the theme, as RRGGBB; None when it states none."""
-    properties = run._r.find(f"{_A}rPr")
-    if properties is None:
-        return None
-    solid = properties.find(f"{_A}solidFill")
-    if solid is None:
-        return None
-    found = _colour_of(solid, design, _A)
-    return found[0].upper() if found and found[0] else None
-
-
-def inherited_ink(shape, design: _Design) -> str | None:
-    """The colour a shape's text gets from the layout or the master when its runs state none.
-
-    The measurements read the file for the ink they judge, and a cloned template page
-    states almost nothing on the page itself -- twelve of thirteen blocks on one
-    measured page -- so a 1.09:1 body line went unjudged. This is the rung the
-    reference already walks; the checks walk it too.
-    """
-    return _declared_colour(design.stated(shape), design)
-
-
-def inherited_size(shape, design: _Design) -> float | None:
-    """The point size a shape's text gets from the layout or the master when its runs state none."""
-    return _declared_size(design.stated(shape))
 
 
 def _layout_placeholders(slide) -> dict[int, Any]:
@@ -340,27 +280,6 @@ def _layout_decoration(slide) -> int:
 def _needed_imports(source: str) -> tuple[str, ...]:
     """The import lines this page's code needs, in a stable order."""
     return tuple(dict.fromkeys(line for name, line in _IMPORTS if name in source))
-
-
-def needed_imports(sources: Iterable[str]) -> tuple[str, ...]:
-    """The import lines several pages' code needs between them, stated once."""
-    return tuple(dict.fromkeys(line for source in sources for line in _needed_imports(source)))
-
-
-def _folded(run: list[tuple[int, str]]) -> str:
-    """One line for a run of custom-drawn shapes: their ordinals and the box they span."""
-    if len(run) == 1:
-        ordinal, box = run[0]
-        return f"# [{ordinal}]\n# a custom-drawn shape at {box}"
-    boxes = [[float(v) for v in re.findall(r"Inches\(([-0-9.]+)\)", box)] for _o, box in run]
-    x0 = min(b[0] for b in boxes if len(b) == 4)
-    y0 = min(b[1] for b in boxes if len(b) == 4)
-    x1 = max(b[0] + b[2] for b in boxes if len(b) == 4)
-    y1 = max(b[1] + b[3] for b in boxes if len(b) == 4)
-    return (
-        f"# [{run[0][0]}]-[{run[-1][0]}] {len(run)} custom-drawn shapes between "
-        f"Inches({x0:g}), Inches({y0:g}) and Inches({x1:g}), Inches({y1:g}) -- decoration, kept by cloning"
-    )
 
 
 def _flatten(shapes, transform: "_Transform | None" = None):
@@ -482,8 +401,6 @@ class _Emitted:
     source: str = ""
     picture: str | None = None
     lost: tuple[str, ...] = ()
-    # A shape that is only named, never drawn: a run of them folds into one line.
-    decoration: bool = False
 
 
 def _shape_source(shape, images_dir: Path | None, ordinal: int, design: _Design) -> _Emitted:
@@ -513,7 +430,7 @@ def _shape_source(shape, images_dir: Path | None, ordinal: int, design: _Design)
         # cut corners and blobs a design is recognisable by. A page that quietly
         # replaced each of them with a rectangle would read as a bug in the deck
         # rather than as a limit of the reference.
-        return _Emitted(f"# a custom-drawn shape at {box}", lost=lost, decoration=True)
+        return _Emitted(f"# a custom-drawn shape at {box}", lost=lost)
     return _Emitted(lost=lost)
 
 
@@ -588,7 +505,7 @@ def _connector_source(shape) -> str:
 def _text_source(shape, box: str, design: _Design) -> str:
     inherited = design.inherited(shape)
     frame = shape.text_frame
-    lines = [f"box = slide.shapes.add_textbox({box}); frame = box.text_frame"]
+    lines = [f"box = slide.shapes.add_textbox({box})", "frame = box.text_frame"]
     if frame.word_wrap is not None:
         lines.append(f"frame.word_wrap = {bool(frame.word_wrap)}")
     anchor = _anchor(shape) or (_anchor(inherited) if inherited is not None else None)
@@ -629,19 +546,18 @@ def _text_source(shape, box: str, design: _Design) -> str:
         properties = []
         size = _first_size(paragraph) or _declared_size(stated)
         if size:
-            properties.append(f"font.size = Pt({size:g})")
+            properties.append(f"para.runs[0].font.size = Pt({size:g})")
         colour = _run_colour(paragraph, design) or _declared_colour(stated, design)
         if colour:
-            properties.append(f'font.color.rgb = RGBColor.from_string("{colour}")')
+            properties.append(f'para.runs[0].font.color.rgb = RGBColor.from_string("{colour}")')
         if _first_bold(paragraph) or _declared_bold(stated):
-            properties.append("font.bold = True")
+            properties.append("para.runs[0].font.bold = True")
         name = _first_font(paragraph) or _declared_font(stated)
         if name:
-            properties.append(f"font.name = {name!r}")
-        # One line, not a block: a page of a dozen text boxes read as sixty lines of
-        # run properties, and a six-page reference outran the reply it was read in.
+            properties.append(f"para.runs[0].font.name = {name!r}")
         if properties:
-            lines.append("if para.runs: font = para.runs[0].font; " + "; ".join(properties))
+            lines.append("if para.runs:")
+            lines.extend(f"    {line}" for line in properties)
     return "\n".join(lines)
 
 

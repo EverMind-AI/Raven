@@ -42,7 +42,6 @@ from raven_ppt.services.regress import Regression
 from raven_ppt.stages.build import BuildStage
 from raven_ppt.tools import _return
 from raven_ppt.tools._args import ArgumentError, as_ints
-from raven_ppt.tools.review import READING_DECK_BUDGET_S, reading_seconds_spent, readings_taken
 from raven_ppt.tools.review import _already_read as _pages_read
 
 # How many unread pages fire the second reading on a draft. What it trades is findings
@@ -50,22 +49,6 @@ from raven_ppt.tools.review import _already_read as _pages_read
 # of seconds: a reading of a finished deck arrives when acting on it means redoing every
 # page, and one taken five pages in changes the pattern the rest of the deck repeats.
 UNREAD_PAGES_BEFORE_READING = 5
-# How many readings a draft may have before the author is on its own with the gates.
-#
-# The loop had no end. A page counts as unread once the code that drew it changes, a
-# revision batch changes five to seven pages, and the floor above is five -- so acting
-# on a reading re-armed it, every time. Measured on a fifteen-page run: two readings,
-# about thirty reader calls (one per page, each carrying that page's render), opinions
-# on eleven of fifteen pages, fifty edits after the first build, and 72 percent of a
-# 63-minute run spent with the model writing. Two is what the reading is worth: the
-# first sets the deck's pattern, which is the argument for reading a draft at all, and
-# the second checks the pattern took. The delivered build always reads what is left.
-READINGS_IN_DRAFT = 2
-# And each one costs more than the last. A re-reading is worth less than a first
-# reading -- the pattern is already set -- so the nth wants n times the pages unread.
-# On the run above the second reading fired on seven unread pages; at this floor it
-# would have wanted ten and stayed quiet, which is the whole difference.
-REREADING_COSTS = 2
 
 
 @dataclass(frozen=True)
@@ -146,20 +129,18 @@ class PptBuildTool(Tool):
                     "maxItems": self.views_per_call,
                     "description": (
                         f"up to {self.views_per_call} page(s) to render back, when you want those pages "
-                        "rather than the ones you have not been shown -- the pages you just edited, usually. "
-                        "Omit it and a build shows the pages whose code changed since you last saw them, "
-                        f"up to {self.stage.catch_up_views} at a time, so a build without slides is how you "
-                        "look at what you wrote"
+                        "rather than the batch page_from starts at -- the pages you just edited, usually. "
+                        "Look at every page before deciding it is done, and name a page again after "
+                        "editing it"
                     ),
                 },
                 "page_from": {
                     "type": "integer",
                     "minimum": 1,
                     "description": (
-                        "where the batch that comes back as renders starts. Without slides, a build shows "
-                        f"the pages you have not been shown since their code was written, up to "
-                        f"{self.stage.catch_up_views} of them, and once every page has been shown it walks "
-                        f"the deck {self.views_per_call} at a time from here; omit it to start at page 1"
+                        "the first page of the batch that comes back as renders, up to "
+                        f"{self.views_per_call} of them; omit to start at page 1 and pass the number the "
+                        "previous reply named to see the next batch"
                     ),
                 },
                 "draft": {
@@ -264,13 +245,6 @@ class PptBuildTool(Tool):
             payload["not_delivered"] = refused
         if outcome.stdout:
             payload["stdout"] = outcome.stdout
-        # What the projected modules warned about while the script ran -- a picture
-        # cropped past what its frame can hold, and whatever else stopped being a crash.
-        # A warning nobody reads is a crash with worse manners, so it comes back beside
-        # the findings rather than staying in a stderr only a failure used to show.
-        stderr = (getattr(outcome, "stderr", "") or "").strip()
-        if stderr:
-            payload["warnings"] = stderr[-3000:]
         if findings:
             shown_findings, folded = _folded(findings)
             payload["measured"] = _return.grouped(shown_findings)
@@ -283,18 +257,9 @@ class PptBuildTool(Tool):
         outline = load_outline(outline_path(deck))
         if outline is not None:
             payload["planned_pages"] = [page.as_dict() for page in outline.pages if page.page in set(shown)]
-        # What the stage still holds unseen is the count that matters: those are the pages
-        # a build without `slides` comes back with, and the only ones publication waits on.
-        # A deck with no page-to-code mapping keeps no such record, and is walked by number.
-        left = result.data.get("unseen_after")
-        if left is not None:
-            remaining = len(left)
-        else:
-            remaining = (
-                max(outcome.pages - len(set(shown)), 0)
-                if wanted
-                else max(outcome.pages - (shown[-1] if shown else 0), 0)
-            )
+        remaining = (
+            max(outcome.pages - len(set(shown)), 0) if wanted else max(outcome.pages - (shown[-1] if shown else 0), 0)
+        )
         # Blocking is decided on everything measured, before any folding: what refuses
         # publication cannot depend on how the reply is arranged.
         blocking = _return.blocking_of(findings, self.profile.blocking_kinds)
@@ -314,19 +279,15 @@ class PptBuildTool(Tool):
         if remaining:
             payload["pages_shown"] = ", ".join(str(number) for number in shown) if shown else "none"
             payload["pages_not_shown"] = remaining
-            if left is not None:
-                listed = ", ".join(str(page) for page in left[:12]) + ("..." if len(left) > 12 else "")
-                payload["pages_not_yet_shown"] = list(left)
-                more = f"call ppt_build again without slides and page {listed} come(s) back first"
-            elif wanted:
-                more = f"name it in slides, or omit slides and pass page_from={shown[-1] + 1}"
-            else:
-                more = f"call ppt_build again with page_from={shown[-1] + 1}"
+            more = (
+                f"name it in slides, or omit slides and pass page_from={shown[-1] + 1}"
+                if wanted
+                else f"call ppt_build again with page_from={shown[-1] + 1}"
+            )
             asks.insert(
                 0,
-                f"look at the {len(shown)} page(s) below; {remaining} of this deck's {outcome.pages} "
-                f"{'have not been shown to you since their code was written' if left is not None else 'are not here'} "
-                f"-- {more} -- because a page you have not looked at is a page you have not checked",
+                f"look at the {len(shown)} page(s) below; {remaining} of this deck's {outcome.pages} are not "
+                f"here -- {more} -- because a page you have not looked at is a page you have not checked",
             )
         elif not blocking:
             asks.insert(0, "look at every page below")
@@ -372,22 +333,6 @@ class PptBuildTool(Tool):
         read = await self._first_reading(deck, project, draft, blocking, payload)
         if read is not None:
             payload["first_reading"] = read.payload
-            # Said out loud, because a budget the author cannot see is a budget it
-            # spends as though it were endless: it answered a reading page by page
-            # knowing another one would come, and another one came. Only on a draft --
-            # the delivered build reads what is left whatever the count says, so a
-            # budget quoted there would be a number about nothing.
-            if draft:
-                left = max(0, READINGS_IN_DRAFT - readings_taken(deck))
-                payload["readings_left_in_draft"] = left
-                asks.insert(
-                    0,
-                    f"{left} more automatic reading(s) of this draft, and then the gates are the only "
-                    "thing reading it: answer what you agree with in one pass rather than a page at a time"
-                    if left
-                    else "that was the last automatic reading of this draft -- from here the gates are "
-                    "the only thing reading it, until you build without `draft`, which reads what is left",
-                )
             asks[0:0] = read.asks
             body = _return.done(blocking=blocking, asks=asks, **payload)
             # The reviewer's pages rather than this call's batch: those are the ones
@@ -428,21 +373,8 @@ class PptBuildTool(Tool):
         built_pages = payload.get("slides")
         if not isinstance(built_pages, int) or built_pages <= 0:
             return None
-        taken = readings_taken(deck)
-        if draft and taken >= READINGS_IN_DRAFT:
-            return None
-        spent = reading_seconds_spent(deck)
-        if spent >= READING_DECK_BUDGET_S:
-            # Said once per build, because a reading that silently stops looks like a
-            # deck that came back clean.
-            payload["reading_budget"] = (
-                f"this deck's readings have taken {spent:.0f}s together, past the {READING_DECK_BUDGET_S:.0f}s a deck "
-                "gets; the gates and the renders in this reply are what reads it from here"
-            )
-            return None
         unread = sorted(set(range(1, built_pages + 1)) - _pages_read(deck))
-        floor = UNREAD_PAGES_BEFORE_READING * max(1, taken * REREADING_COSTS) if draft else 1
-        if len(unread) < floor:
+        if len(unread) < (UNREAD_PAGES_BEFORE_READING if draft else 1):
             return None
         try:
             reply = await self.review.execute(project=project, pages=unread)
@@ -504,25 +436,10 @@ class PptBuildTool(Tool):
         for number in sorted(renders):
             said = [f"Page {number} of {outcome.pages}"]
             plan = planned.get(number)
-            # A clean page carries its claim on the label line and nothing more. The
-            # whole plan rode with every page on every build, and twenty-three builds
-            # of one deck repeated the same twenty plans -- 47k characters of a
-            # transcript the author never needed to read twice.
-            if plan is not None and not by_page.get(number):
-                said = [f"Page {number} of {outcome.pages}: {plan.claim}"]
-            elif plan is not None:
+            if plan is not None:
                 said.append(f"Planned claim: {plan.claim}")
                 if plan.carries:
-                    said.append(f"Planned visual: {plan.carries}")
-                # The structure and the way it goes wrong, next to the render of it. Both
-                # were written by the plan and read by nothing: a page declared `P14 + M4
-                # + M11` and the author drawing it was never told, so the declaration
-                # changed what the outline said and not what the page became.
-                if plan.layout:
-                    stacked = " + ".join((plan.layout, *plan.layers))
-                    said.append(f"Planned structure: {stacked}")
-                if plan.anti_pattern:
-                    said.append(f"Must not have become: {plan.anti_pattern}")
+                    said.append(f"Planned visual/layout: {plan.carries}")
                 if plan.says:
                     said.append("Planned supporting points:\n" + "\n".join(f"  - {point}" for point in plan.says))
                 if plan.figures:
@@ -602,8 +519,8 @@ _ASK = {
     "citation": "fix {count} page(s) citing one figure while showing another",
     "band": "consider {count} filled colour bar(s), which carry nothing",
     "unmapped_page": "give each slide its own block in build.py",
-    "unseen_page": "look at the {count} page(s) you have not been shown: build again without slides and they come back first",
-    "evidence": "put something on the pages that are all prose: a figure, a diagram, cards led by icons, a chart -- a table only where a reader compares figures down a column",
+    "unseen_page": "look at the {count} page(s) you have not been shown, by running the build again",
+    "evidence": "put something on the pages that are all prose: a figure, a table, a diagram",
     "wide_table": "narrow {count} table(s) or split them",
 }
 

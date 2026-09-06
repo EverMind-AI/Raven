@@ -37,7 +37,7 @@ from raven_ppt.contracts import (
     write_plan,
 )
 from raven_ppt.profiles import registry
-from raven_ppt.stages.build import BATCH_VIEWS, CATCH_UP_VIEWS, _showing
+from raven_ppt.stages.build import BATCH_VIEWS, _showing
 from raven_ppt.tools.build import PptBuildTool
 from raven_ppt.tools.review import RECORD_FILE, _already_read, _marked
 from tests._ppt_engine_fixtures import deck, image, noise_image, noise_png, product_page, template_file  # noqa: F401
@@ -79,7 +79,6 @@ class FakeStage:
         # selects `showing` with. A fake holding its own copy of that rule is the drift
         # this fixture exists to catch, so it delegates to `_showing`.
         self.views_per_call = views_per_call
-        self.catch_up_views = CATCH_UP_VIEWS
 
     async def run(
         self,
@@ -143,21 +142,7 @@ def project(tmp_path: Path) -> Project:
         brief_path(deck),
     )
     write_plan(IntakePlan(topic="a deck", digest="x"), intake_path(deck))
-    write_outline(
-        Outline(
-            takeaway="it works",
-            pages=(
-                PagePlan(
-                    page=1,
-                    claim="It works",
-                    layout="P14",
-                    layers=("M4", "M11"),
-                    anti_pattern="a lane that would read the same with the chart removed",
-                ),
-            ),
-        ),
-        outline_path(deck),
-    )
+    write_outline(Outline(takeaway="it works", pages=(PagePlan(page=1, claim="It works"),)), outline_path(deck))
     return deck
 
 
@@ -205,29 +190,9 @@ async def test_each_render_is_preceded_by_the_line_that_names_its_page(project: 
     # One label per render and strictly alternating, which is what keeps a label with
     # its picture on a transport that moves the images to a following message.
     assert [block["type"] for block in blocks] == ["text", "image_url", "text", "image_url"]
-    # A clean page carries its claim on the label line and nothing more: the whole
-    # plan used to ride with every page on every build, and twenty-three builds of
-    # one deck repeated the same twenty plans into the transcript.
-    assert blocks[0]["text"] == "Page 1 of 2: It works"
-    assert "Page 2 of 2" in blocks[2]["text"]
-
-
-@pytest.mark.asyncio
-async def test_a_page_with_something_to_fix_gets_its_whole_plan_back(project: Project) -> None:
-    """The structure and the way it goes wrong travel with the render of a page that
-    has a finding. Both were written by the plan and read by nothing, so a page could
-    declare `P14 + M4 + M11` and the author looking at it be told only what the page
-    claims."""
-    finding = Finding(kind="card_overflow", severity=Severity.WARNING, message="a card runs past its edge", page=1)
-    reply = await _tool(project, _ok(project, [finding])).execute(project="tarvis", slides=[1, 2])
-
-    assert isinstance(reply, ToolResult)
-    blocks = reply.blocks or []
+    assert "Page 1 of 2" in blocks[0]["text"]
     assert "Planned claim: It works" in blocks[0]["text"]
-    assert "Planned structure: P14 + M4 + M11" in blocks[0]["text"]
-    assert "Must not have become: a lane that would read the same" in blocks[0]["text"]
-    assert "a card runs past its edge" in blocks[0]["text"]
-    assert blocks[2]["text"] == "Page 2 of 2", "a page the outline does not plan keeps the bare label"
+    assert "Page 2 of 2" in blocks[2]["text"]
 
 
 @pytest.mark.asyncio
@@ -554,9 +519,7 @@ def _real_stage(pages: int, views_per_call: int) -> Any:
             source_digest="x",
         )
 
-    async def measure(
-        _project: Project, _pptx: Path, _outcome: Any = None, _changed: str = "delivery"
-    ) -> list[Finding]:
+    async def measure(_project: Project, _pptx: Path, _outcome: Any = None) -> list[Finding]:
         return []
 
     return BuildStage(
@@ -578,9 +541,8 @@ async def test_the_unseen_gate_records_exactly_the_pages_the_reply_rendered(proj
     editing the deck.
 
     Both halves are asserted, because only one of them is about the drift: that the two
-    agree, and that they agree on the whole batch the stage selects -- the unseen pages,
-    up to the catch-up number -- rather than on the single page the tool's own cap used
-    to force.
+    agree, and that they agree on the whole batch the budget allows rather than on the
+    single page the tool's own cap used to force.
     """
     from raven_ppt.services import seen
 
@@ -591,18 +553,16 @@ async def test_the_unseen_gate_records_exactly_the_pages_the_reply_rendered(proj
     body = _body(await tool.execute(project="tarvis"))
     recorded = set(json.loads(seen.seen_path(project).read_text())["pages"])
 
-    assert views.asked == [[1, 2, 3, 4, 5, 6]], "the unseen pages, as many as the catch-up batch carries"
-    assert recorded == {"1", "2", "3", "4", "5", "6"}, "the gate records what was shown, and all of it"
+    assert views.asked == [[1, 2, 3]], "the batch the budget allows"
+    assert recorded == {"1", "2", "3"}, "the gate records what was shown, and all of it"
     assert body["ok"] is False and "unseen_page" in body["error"]
     unseen = [f for f in body["measured"]["for_you"] if f["kind"] == "unseen_page"]
-    assert unseen[0]["detail"]["pages"] == [7, 8, 9, 10], "the four it did not show"
-    assert body["pages_not_yet_shown"] == [7, 8, 9, 10] and body["pages_not_shown"] == 4
-    assert "without slides" in body["next_step"]
+    assert unseen[0]["detail"]["pages"] == [4, 5, 6, 7, 8, 9, 10], "the seven it did not show"
 
-    # And the second build keeps them equal: it comes back with exactly the unseen rest.
+    # And the walk keeps them equal: the second batch adds exactly its own pages.
     await tool.execute(project="tarvis", page_from=4)
-    assert views.asked[-1] == [7, 8, 9, 10]
-    assert set(json.loads(seen.seen_path(project).read_text())["pages"]) == {str(n) for n in range(1, 11)}
+    assert views.asked[-1] == [4, 5, 6]
+    assert set(json.loads(seen.seen_path(project).read_text())["pages"]) == {str(n) for n in range(1, 7)}
 
 
 def _body(reply) -> dict:
@@ -662,11 +622,6 @@ def _versioned(project: Project, pages: int, *, rewritten: int | None = None) ->
     path = script_path(project)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(lines), encoding="utf-8")
-    # The reading's version is what the build rendered: a page's pixels stand in for
-    # its line here, so `rewritten=4` changes page 4's render and nobody else's.
-    project.review_dir.mkdir(parents=True, exist_ok=True)
-    for number, line in enumerate(lines, start=1):
-        (project.review_dir / f"page-{number:03d}.png").write_bytes(b"\x89PNG" + line.encode("utf-8"))
     return tuple(PageSource(page=number, first_line=number - 1, last_line=number) for number in range(1, pages + 1))
 
 
@@ -879,29 +834,3 @@ async def test_without_a_reviewer_the_build_is_what_it_always_was(project: Proje
 
     assert "first_reading" not in body
     assert body["pptx_path"]
-
-
-@pytest.mark.asyncio
-async def test_what_the_script_warned_about_reaches_the_author_on_a_successful_build(project: Project) -> None:
-    """A picture cropped past what its frame can hold used to crash the build; now it
-    warns. A warning nobody reads is a crash with worse manners, so the script's stderr
-    comes back beside the findings when the build succeeded, not only when it failed."""
-    deck = project.build_dir / "deck.pptx"
-    deck.parent.mkdir(parents=True, exist_ok=True)
-    deck.write_bytes(b"PK")
-    result = StageResult(
-        ok=True,
-        data={
-            "outcome": BuildOutcome(
-                ok=True,
-                pptx_path=deck,
-                pages=1,
-                stderr="build.py:12: UserWarning: banner.jpg is 1400x932 (1.50) and this frame is 13.33x3.23in -- 2.8x apart.\n",
-            )
-        },
-    )
-
-    body = _body(await _tool(project, result).execute(project="tarvis"))
-
-    assert "2.8x apart" in body["warnings"]
-    assert body["warnings"] == body["warnings"].strip()

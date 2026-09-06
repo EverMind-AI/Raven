@@ -67,18 +67,6 @@ Product vocabulary:
   absent (`seed_once()` in `raven/config/product_render.py`), so a user's
   later edits survive relaunches.
 
-Product notes:
-
-- `raven-ppt` (the deck product) needs the eight bundled templates the
-  `ppt-engine` plugin offers. They are not in git: they are a generic package
-  in this project's GitLab package registry, pinned by sha256 in
-  `plugins-dist/ppt-engine/templates.manifest.json`. After cloning, run
-  `make fetch-templates` with `GITLAB_TOKEN` set to a token that can read the
-  repository (CI uses `CI_JOB_TOKEN`); it fills the gitignored
-  `plugins-dist/ppt-engine/raven_ppt/assets/templates/`, which the editable
-  install serves and the ppt-engine wheel bundles. Without it the engine's
-  template catalogue is empty and a deck task has to bring its own template.
-
 Ground rules:
 
 - `subagents/` is frozen and is the A side of the comparison; nothing here

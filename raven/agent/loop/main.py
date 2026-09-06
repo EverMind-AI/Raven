@@ -90,12 +90,6 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
     # would mean the failure was never about images.
     _MAX_IMAGE_DEMOTE_RETRIES = 1
 
-    # Max times an image the endpoint refused for its size is taken out of the
-    # conversation before the refusal is final. Two: the newest picture first, which
-    # is the one that just arrived; then every picture, in case the limit is on the
-    # request as a whole.
-    _MAX_IMAGE_STRIP_RETRIES = 2
-
     # Most recent tool results kept intact when emergency-shrinking; older ones
     # are elided (their bodies are the bulk of mid-turn context growth).
     _SHRINK_KEEP_RECENT_TOOL_RESULTS = 3

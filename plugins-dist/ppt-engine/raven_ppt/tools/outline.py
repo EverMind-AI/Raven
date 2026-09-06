@@ -36,7 +36,6 @@ from raven_ppt.contracts import (
     outline_path,
     write_outline,
 )
-from raven_ppt.contracts.outline import layout_fields
 from raven_ppt.services import citations
 from raven_ppt.services import state as deck_state
 from raven_ppt.services.gates import material_findings
@@ -122,35 +121,14 @@ class PptOutlineTool(Tool):
                             },
                             "layout": {
                                 "type": "string",
-                                "enum": _structure_enum(),
                                 "description": (
-                                    "which page structure this page is composed on, as one id from "
-                                    "deck/build/references/layouts.md -- `P14`. Part 1 of that file is "
-                                    "eleven skeletons with every id folded into the one it varies, so "
-                                    "the id is the skeleton plus what changed. Leave it empty for a page "
-                                    "cloned from a template example, whose structure is that example's. "
-                                    "Naming it here is what makes the choice reviewable before any "
-                                    "geometry is written -- and reading the column down the deck is where "
-                                    "a deck that composed every page the same way shows"
-                                ),
-                            },
-                            "layers": {
-                                "type": "array",
-                                "items": {"type": "string", "enum": _layer_enum()},
-                                "description": (
-                                    "the modifier layers stacked on that structure, by id from Part 2 of "
-                                    'the same file -- `["M4", "M11"]`. The requirement is more than '
-                                    "one layer on the region that carries the claim; a page whose only "
-                                    "entry is a structure is one tinted rectangle and three points"
-                                ),
-                            },
-                            "anti_pattern": {
-                                "type": "string",
-                                "description": (
-                                    "what this page must not turn into, in a line -- the way this "
-                                    "structure goes wrong on this page's content. Part 1's third column "
-                                    "carries one per skeleton; write the page's own, before the geometry, "
-                                    "because by the time the render shows it the page has been drawn"
+                                    "how this page is composed, as ids from "
+                                    "deck/build/references/layouts.md: one or more page structures and "
+                                    "the modifier layers stacked on them, `P14 + M4 + M11`. Leave it out "
+                                    "for a page cloned from a template example, whose structure is that "
+                                    "example's. Naming it here is what makes the choice reviewable "
+                                    "before any geometry is written -- and reading the column down the "
+                                    "deck is where a deck that composed every page the same way shows"
                                 ),
                             },
                             "figures": {
@@ -255,16 +233,6 @@ class PptOutlineTool(Tool):
                                     "a null comes back as a question"
                                 ),
                             },
-                            "borrowed": {
-                                "type": ["string", "null"],
-                                "description": (
-                                    "the bundled template `prototype` is numbered in, when the page borrows "
-                                    "one of the reference pages ppt_template listed under `borrowable_pages` "
-                                    "instead of an example of the bound template -- its file name without "
-                                    ".pptx, e.g. gold_panel_year_end_summary. Leave it out for the bound "
-                                    "template's own pages"
-                                ),
-                            },
                         },
                         "required": ["page", "claim"],
                     },
@@ -343,25 +311,13 @@ class PptOutlineTool(Tool):
         citations.record(deck, looked)
 
         outline = Outline(takeaway=takeaway.strip(), pages=tuple(_plan(entry) for entry in planned))
-        # Pages that arrived numbered 1..n but listed out of order are sorted rather than
-        # refused: a refusal cost a measured run a two-minute model call to resend the
-        # same twenty pages in the order their numbers already stated.
-        numbers = [page.page for page in outline.pages]
-        reordered = sorted(numbers) == list(range(1, len(numbers) + 1)) and numbers != sorted(numbers)
-        if reordered:
-            outline = Outline(takeaway=outline.takeaway, pages=tuple(sorted(outline.pages, key=lambda page: page.page)))
         declared = _declared_roles(planned)
         state = deck_state.read(deck)
         refusal = _numbering(outline)
         if refusal:
             return _return.failed(refusal, hint="number the pages 1..n in the order they are presented")
 
-        findings = (
-            _missing_figures(outline, state)
-            + _borrowed_pages(outline, state)
-            + _structural(outline)
-            + _house_pages(outline, state)
-        )
+        findings = _missing_figures(outline, state) + _structural(outline) + _house_pages(outline, state)
         budget = _budget(outline, brief)
         if budget:
             findings.append(budget)
@@ -388,15 +344,13 @@ class PptOutlineTool(Tool):
         if findings:
             payload["measured"] = _return.grouped(findings)
         unprototyped = [page.page for page in outline.pages if page.prototype is None] if state.template else []
-        asks = _asks(
-            errands, blocking, bool(state.figures), unprototyped, outline, _content_examples(state, unprototyped)
+        return _return.done(
+            blocking=blocking,
+            asks=_asks(
+                errands, blocking, bool(state.figures), unprototyped, outline, _content_examples(state, unprototyped)
+            ),
+            **payload,
         )
-        if reordered:
-            asks.insert(
-                0,
-                f"the pages arrived listed as {numbers} and were sorted by their numbers; check that order is the one you meant",
-            )
-        return _return.done(blocking=blocking, asks=asks, **payload)
 
 
 def _said_by_page(reply: str) -> dict[int, tuple[str, ...]]:
@@ -456,13 +410,12 @@ def _plan(entry: dict[str, Any]) -> PagePlan:
         page=int(entry.get("page", 0)),
         claim=str(entry.get("claim", "")).strip(),
         carries=str(entry.get("carries") or "").strip(),
-        **layout_fields(entry),
+        layout=str(entry.get("layout") or "").strip(),
         figures=tuple(str(figure) for figure in entry.get("figures") or ()),
         says=tuple(str(said) for said in entry.get("says") or () if str(said).strip()),
         section=str(entry.get("section") or "").strip(),
         needs=str(entry.get("needs") or "").strip(),
         prototype=int(entry["prototype"]) if str(entry.get("prototype") or "").strip().isdigit() else None,
-        borrowed=str(entry.get("borrowed") or "").strip().removesuffix(".pptx"),
     )
 
 
@@ -568,11 +521,7 @@ def _thin_pages(outline: Outline, state: Any) -> list:
 
     findings = []
     for page in outline.pages:
-        if (
-            page.figures
-            or page.needs.strip()
-            or (page.prototype in structural and page.prototype is not None and not page.borrowed)
-        ):
+        if page.figures or page.needs.strip() or (page.prototype in structural and page.prototype is not None):
             continue
         if len(page.says) > 1:
             continue
@@ -622,77 +571,6 @@ def _thin(deck: Project, brief: Any) -> list:
     gets it once more as advice about the twelve pages now in front of them.
     """
     return material_findings(_stated_chars(deck), brief)
-
-
-def _borrowed_pages(outline: Outline, state: Any) -> list:
-    """Borrowed prototypes that name no bundled template, or no content page of one.
-
-    Refused at the plan, like a figure id the catalogue does not hold: a program written
-    against `bundled('gold')` learns the name is wrong one build later, and a plan that
-    borrows a cover borrows a page whose one line is the deck's title.
-    """
-    from raven_ppt.contracts import Finding, Severity
-    from raven_ppt.services.template.defaults import bundled_path, reference_pages
-    from raven_ppt.services.template.menu import menu
-
-    bound = Path(state.template.source).stem if state.template is not None else ""
-    offered = reference_pages(except_stem=bound)
-    stems = sorted({stem for stem, _ in offered})
-    menus: dict[str, dict[int, Any]] = {}
-    findings = []
-    for page in outline.pages:
-        if not page.borrowed:
-            continue
-        stem = page.borrowed
-        path = bundled_path(stem)
-        if path is None or stem == bound:
-            what = (
-                f"`borrowed: {stem!r}` is the template this deck is built in; its own pages are `prototype` alone"
-                if stem == bound
-                else f"no bundled template is called {stem!r}; the ones that ship are {', '.join(stems)}"
-            )
-            findings.append(
-                Finding(
-                    kind="borrowed", severity=Severity.BLOCKING, page=page.page, message=what, detail={"borrowed": stem}
-                )
-            )
-            continue
-        if stem not in menus:
-            menus[stem] = {entry.number: entry for entry in menu(path)}
-        entry = menus[stem].get(page.prototype or 0)
-        pages = ", ".join(str(number) for s, number in offered if s == stem)
-        if page.prototype is None:
-            what = f"`borrowed: {stem!r}` names a template and no `prototype` names the page; its reference pages are {pages}"
-        elif entry is None:
-            what = f"{stem} has no page {page.prototype}; its reference pages are {pages}"
-        elif entry.role or entry.hidden:
-            what = (
-                f"{stem} page {page.prototype} is that template's {entry.role or 'hidden'} page, not a content "
-                f"page: the deck's own cover, index and closing come from the bound template. Its reference "
-                f"pages are {pages}"
-            )
-        elif (stem, page.prototype) not in offered:
-            # The curated list, not "any content page": `reference_pages` holds the pages
-            # measured to carry into another template's theme and master. A content page
-            # outside it may look fine in its own deck and arrive here with source-specific
-            # styling -- the very thing the list was cut to exclude -- so a plan that names
-            # one is refused at the plan rather than one build later.
-            what = (
-                f"{stem} page {page.prototype} is one of that template's own pages and not one of the "
-                f"reference pages verified to carry into another template; its reference pages are {pages}"
-            )
-        else:
-            continue
-        findings.append(
-            Finding(
-                kind="borrowed",
-                severity=Severity.BLOCKING,
-                page=page.page,
-                message=what,
-                detail={"borrowed": stem, "prototype": page.prototype},
-            )
-        )
-    return findings
 
 
 def _missing_figures(outline: Outline, state: Any) -> list:
@@ -957,7 +835,7 @@ def _invented_layouts(outline: Outline) -> list:
         # them. A looser reading refuses what it was never about: `P11 grid 2x2` was
         # refused over `x2`, and `p14` over its case, both while naming a structure the
         # catalogue carries.
-        claimed = _LAYOUT_ID_RE.findall(page.layout) + list(page.layers)
+        claimed = _LAYOUT_ID_RE.findall(page.layout)
         unknown = [token for token in claimed if token.upper() not in upper]
         if unknown:
             invented[page.page] = unknown
@@ -996,33 +874,6 @@ def _composition(layout: str) -> str:
     """
     claimed = {token.upper() for token in _LAYOUT_ID_RE.findall(layout)}
     return " + ".join(sorted(claimed, key=lambda token: (token[0] != "P", int(token[1:]))))
-
-
-def _structure_enum() -> list[str]:
-    """Part 1's ids, plus the empty string a template clone writes.
-
-    An enum rather than free text because free text is what the field had when a live
-    run filled it with `P01`, `P04`, `P07` -- zero-padded, so not one of them was an id,
-    and the deck read down the column as if it had a range of structures in it. Built
-    off the catalogue the refusal already reads, so the list the caller may pick from and
-    the list it is checked against cannot come apart. Empty when the reference documents
-    are not in the checkout, and an empty enum would refuse every outline, so the field
-    falls back to free text there and `_invented_layouts` says the same thing it always
-    did.
-    """
-    return _enum_of("P")
-
-
-def _layer_enum() -> list[str]:
-    return _enum_of("M")
-
-
-def _enum_of(family: str) -> list[str]:
-    known = sorted(
-        (one for one in catalogue_ids() if one.startswith(family)),
-        key=lambda one: int(one[1:]),
-    )
-    return ([""] + known) if family == "P" and known else known
 
 
 def _layout_spread(outline: Outline, declared: dict[int, str]) -> list:
@@ -1126,16 +977,14 @@ def _structural(outline: Outline) -> list:
     if not outline.pages:
         return []
     reused = {
-        source
-        for source, count in Counter(
-            (page.borrowed, page.prototype) for page in outline.pages if page.prototype is not None
-        ).items()
+        prototype
+        for prototype, count in Counter(page.prototype for page in outline.pages if page.prototype is not None).items()
         if count >= SAME_PROTOTYPE_IS_STRUCTURAL
     }
     furniture = [
         page.page
         for page in outline.pages
-        if ((page.borrowed, page.prototype) in reused if page.prototype is not None else False)
+        if (page.prototype in reused if page.prototype is not None else False)
         or (len(page.says) <= 1 and not page.figures)
     ]
     if len(furniture) / len(outline.pages) < STRUCTURAL_SHARE:

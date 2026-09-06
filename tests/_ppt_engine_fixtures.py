@@ -126,12 +126,6 @@ class DeckBuilder:
         if filled:
             shape.fill.solid()
             shape.fill.fore_color.rgb = RGBColor(*colour)
-        else:
-            # Stated, not left alone: `add_shape` stamps a `p:style` whose `a:fillRef`
-            # names a theme fill, and a shape nobody touched renders in it -- sampled at
-            # (112, 160, 229) against a white page. So "unfilled" has to say so, or the
-            # fixture and the render disagree about the one thing it is testing.
-            shape.fill.background()
         if text:
             run = shape.text_frame.paragraphs[0].add_run()
             run.text = text
@@ -317,25 +311,3 @@ def template_file(tmp_path: Path, image) -> Callable[..., Path]:
         return path
 
     return build
-
-
-def layout_picture(layout, image: Path, left: float, top: float, width: float, height: float):
-    """Put a picture on a *layout*, which python-pptx's `LayoutShapes` cannot do itself.
-
-    The bundled templates carry their cover, section and closing photographs there, so a
-    test about those pictures needs one; the element is the same `p:pic` a slide gets,
-    related to the layout part's own image.
-    """
-    from pptx.oxml.shapes.picture import CT_Picture
-    from pptx.util import Inches
-
-    _, relationship = layout.part.get_or_add_image_part(str(image))
-    tree = layout.shapes._spTree
-    taken = [int(node.get("id")) for node in tree.iter() if node.tag.endswith("}cNvPr") and node.get("id")]
-    shape_id = max(taken, default=1) + 1
-    tree.append(
-        CT_Picture.new_pic(
-            shape_id, f"Picture {shape_id}", "", relationship, Inches(left), Inches(top), Inches(width), Inches(height)
-        )
-    )
-    return list(layout.shapes)[-1]

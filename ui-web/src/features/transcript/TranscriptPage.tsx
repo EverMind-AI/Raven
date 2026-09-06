@@ -745,9 +745,16 @@ const DagCard = memo(function DagCard({ lane, seg, c }: { lane: Lane; seg: StepD
      cell reads as a broken render rather than as an absent number. */
   if (cost) kv('cost', t('gui.deleg.d_cost'), cost)
   /* The run's own id, which is what `dag.get` is keyed by, what a node's record
-     lives under and what a later graph names to depend on this one. Last,
-     because it is the one field here nobody reads unless they went looking. */
+     lives under and what a later graph names to depend on this one. Near the
+     end, because it is the one field here nobody reads unless they went looking. */
   if (c.runId) kv('run', t('gui.dag.run_id'), <span className="nid">{c.runId}</span>)
+  /* Set only once `dag.run_replanned` names a successor -- a decision swapped
+     this run's remaining nodes into a fresh run rather than abandoning it, so
+     the row can appear even while `state` above still reads unfinished: this
+     run's own outcome and where its remaining work went are different facts. */
+  if (c.replannedInto) {
+    kv('replanned', t('gui.dag.replanned_into'), <span className="nid">{c.replannedInto}</span>)
+  }
   return (
     <>
       <div ref={rowRef} className={'wrow' + (c.done ? '' : ' run') + ' tog' + (c.done && !c.ok ? ' bad' : '') + (c.open ? ' open' : '')}

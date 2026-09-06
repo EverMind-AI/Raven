@@ -19,10 +19,11 @@ import json
 from contextvars import ContextVar
 from typing import Any
 
-from raven.agent.subagent.dag_adjudication import ABANDON, CONTINUE, DECISIONS
-from raven.agent.subagent.dag_live import cancel_run, live_run_ids, resolve_node
+from raven.agent.subagent.dag_adjudication import ABANDON, CONTINUE, DECISIONS, REPLAN
+from raven.agent.subagent.dag_live import cancel_run, live_run_ids, owning_tool, resolve_node
 from raven.agent.subagent.dag_reader import DagReadError
 from raven.agent.subagent.dag_resume import read_run_reconciled
+from raven.agent.subagent.dag_tool import _with_notices
 from raven.contracts.tool import Tool, ToolResult
 
 _PROMPT_LINE_LIMIT = 10
@@ -147,8 +148,8 @@ class CancelDagTool(_ControlTool):
 
 
 class ResolveDagNodeTool(_ControlTool):
-    """Answer a suspended node: continue it with a message, or abandon it. On a
-    bound foreground run, then wait for the next report or the final result."""
+    """Answer a suspended node: continue it with a message, abandon it, or replan with a new graph.
+    On a bound foreground run, then wait for the next report or the final result."""
 
     @property
     def name(self) -> str:
@@ -158,13 +159,17 @@ class ResolveDagNodeTool(_ControlTool):
     def description(self) -> str:
         return (
             "Decide what happens to a DAG node that reported it could not accomplish its "
-            "task: continue it with a message, or abandon it and skip its dependents. On a "
-            "run started with background=false this call also waits, and returns the next "
-            "report or the run's final result."
+            "task: continue it with a message, abandon it and skip its dependents, or "
+            "replan -- hand over a new node list, which stops this run and starts a new one "
+            "from that list. On a run started with background=false this call also waits, "
+            "and returns the next report or the run's final result."
         )
 
     @property
     def parameters(self) -> dict[str, Any]:
+        tool = _registered_tool(self._loop)
+        getter = getattr(tool, "node_schema", None)
+        schema = getter() if callable(getter) else {"type": "object"}
         return {
             "type": "object",
             "properties": {
@@ -172,11 +177,13 @@ class ResolveDagNodeTool(_ControlTool):
                 "node_id": {"type": "string", "description": "The node that reported the exception."},
                 "decision": {
                     "type": "string",
-                    "enum": [CONTINUE, ABANDON],
+                    "enum": [CONTINUE, ABANDON, REPLAN],
                     "description": (
                         "'continue' sends your message to the node and lets it try again. "
                         "'abandon' fails the node and skips its dependents; the rest of the "
-                        'graph carries on. To stop the whole run instead, use tool_call name "cancel_dag".'
+                        "graph carries on. 'replan' replaces what is left of the graph with "
+                        "the `nodes` you supply: this run stops, and a new run starts from "
+                        'your list. To stop everything instead, use tool_call name "cancel_dag".'
                     ),
                 },
                 "message": {
@@ -184,6 +191,15 @@ class ResolveDagNodeTool(_ControlTool):
                     "description": (
                         "What to tell the node, required when continuing. Supply what it said "
                         "was missing. Ask the user first if only they can provide it."
+                    ),
+                },
+                "nodes": {
+                    "type": "array",
+                    "items": schema,
+                    "description": (
+                        "The replacement graph, required when replanning. Nodes this run "
+                        "already completed are NOT re-declared -- name one in depends_on and "
+                        "read it with {{ <id>.output }}. Every other node needs a new id."
                     ),
                 },
             },
@@ -196,20 +212,39 @@ class ResolveDagNodeTool(_ControlTool):
         The registry consults this to decide whether to put a ceiling on the
         call, and the turn stream reports it as the call's blocking flag; both
         must say "may go silent" for exactly the calls that will wait on the
-        graph and for no others.
+        graph and for no others. A background replan also waits for the answered
+        run's wind-down, but that wait is bounded and short by construction: the
+        replan event cancels the round in flight, and only status marking and a
+        manifest write remain. If a background replan is ever observed to hang,
+        this predicate is the first thing to revisit.
         """
         tool = _registered_tool(self._loop)
         is_foreground = getattr(tool, "is_foreground", None)
         run_id = params.get("run_id")
         return bool(is_foreground is not None and isinstance(run_id, str) and is_foreground(run_id))
 
-    async def execute(self, run_id: str, node_id: str, decision: str, message: str | None = None) -> "str | ToolResult":
+    async def execute(
+        self,
+        run_id: str,
+        node_id: str,
+        decision: str,
+        message: str | None = None,
+        nodes: list[dict] | None = None,
+    ) -> "str | ToolResult":
         if decision not in DECISIONS:
-            return f"Error: decision must be '{CONTINUE}' or '{ABANDON}', not {decision!r}."
-        if decision == CONTINUE and not (message or "").strip():
+            return f"Error: decision must be '{CONTINUE}', '{ABANDON}' or '{REPLAN}', not {decision!r}."
+        if decision in (CONTINUE, REPLAN) and not (message or "").strip():
+            what = (
+                "telling it what to do differently" if decision == CONTINUE else "saying why the plan is being changed"
+            )
             return (
-                f"Error: continuing node '{node_id}' needs a message telling it what to do "
-                "differently. Supply what the report said was missing."
+                f"Error: {decision} on node '{node_id}' needs a message {what}. "
+                "Supply what the report said was missing."
+            )
+        if decision == REPLAN and not nodes:
+            return (
+                f"Error: replanning run {run_id} needs a `nodes` list -- the graph to run "
+                "instead, and no decision was recorded, so the node is still waiting."
             )
         tool = _registered_tool(self._loop)
         if tool is None:
@@ -232,6 +267,57 @@ class ResolveDagNodeTool(_ControlTool):
                 f"No DAG run {run_id} in this conversation: a run id must resolve under this "
                 "conversation's run history before its nodes can be resolved."
             )
+        if decision == REPLAN:
+            # The live read happens here, not in prepare_replan: reconciling a run
+            # needs loop-wide liveness and only this tool holds the loop. _read_live
+            # is the same call dag_status makes, so the two cannot disagree.
+            try:
+                live = await self._read_live(run_id)
+            except DagReadError as exc:
+                return (
+                    f"Cannot replan run {run_id}: its state could not be read ({exc}), so no "
+                    "decision was recorded and the node is still waiting."
+                )
+            # Two tool instances can be dispatching runs at once (see
+            # AgentLoop.dag_tools): the registered one answers "not found" for
+            # a run the playbook engine's private instance is running, so every
+            # replan-specific call below needs whichever instance actually holds
+            # this run's task, desk and outbox.
+            owner = owning_tool(self._loop, run_id)
+            plan = await owner.prepare_replan(
+                run_id, node_id, nodes or [], (message or "").strip(), self._session.get(), live
+            )
+            if isinstance(plan, str):
+                return plan
+            # Read before the hand-off: `_retire` drops the old run's outbox as
+            # soon as its task ends, so by `start_replan` the lane it was asked
+            # for is no longer discoverable.
+            was_bound = bool(getattr(owner, "is_foreground", lambda _r: False)(run_id))
+            if not resolve_node(self._loop, run_id, node_id, decision, message, plan):
+                return (
+                    f"Node '{node_id}' of run {run_id} is no longer waiting for a decision, so the "
+                    "replan was not applied and the old run is still running as submitted. "
+                    'tool_call name "dag_status" shows where every node stands.'
+                )
+            # Emitted here, not in start_replan: resolve_node returning False above
+            # (an answer for a node nothing is waiting on any more) must announce
+            # nothing, and start_replan only runs after await_finalized, by which
+            # point the old run may already be gone from the web UI's live tracking.
+            # start_replan records the link for anything it returns from or
+            # refuses as invalid, which leaves this stretch uncovered -- the desk
+            # already answered, so an interruption here (a `/stop` cancelling this
+            # call is realistic) must not leave the link missing.
+            # CancelledError still has to propagate, so this records and re-raises
+            # rather than swallowing it.
+            try:
+                await owner.emit_replanned(run_id, plan)
+                await owner.await_finalized(run_id)
+            except BaseException:
+                await owner.record_interrupted_replan(
+                    run_id, plan, "Interrupted between the node hand-off and starting the replan."
+                )
+                raise
+            return _with_notices(await owner.start_replan(run_id, plan, bound=was_bound), list(plan.notices))
         if not resolve_node(self._loop, run_id, node_id, decision, message):
             return (
                 f"Node '{node_id}' of run {run_id} is no longer waiting for a decision: it timed "

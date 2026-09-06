@@ -34,7 +34,6 @@ from raven_ppt.services.measure.geometry import (
 from raven_ppt.services.measure.width import WidthMeasurer
 from raven_ppt.services.measure.words import by_page as _by_page
 from raven_ppt.services.measure.words import rect as _rect
-from raven_ppt.services.template.decompile import inherited_size, page_design
 
 # Half a point, in EMU: a rule drawn exactly on the margin rounds either way.
 EDGE_SLACK_EMU = 6350
@@ -85,7 +84,6 @@ def spilled_copy(pptx_path: Path, measurer: WidthMeasurer | None = None) -> list
     presentation = open_deck(pptx_path)
     canvas = (presentation.slide_width or 0) / EMU_PER_POINT
     for number, slide in enumerate(presentation.slides, start=1):
-        design = None
         for shape in iter_shapes(slide.shapes):
             if not getattr(shape, "has_text_frame", False) or int(shape.width or 0) <= 0:
                 continue
@@ -101,14 +99,6 @@ def spilled_copy(pptx_path: Path, measurer: WidthMeasurer | None = None) -> list
                     continue
                 sizes = [run.font.size or para.font.size for run in para.runs]
                 size = max((value.pt for value in sizes if value is not None), default=None)
-                if size is None:
-                    # Not stated on the page: the layout or the master says, and a
-                    # cloned page states nothing itself. Resolved the way the reference
-                    # resolves it, so the two unwrapped blocks that spilled on a
-                    # measured page are measured rather than skipped.
-                    if design is None:
-                        design = page_design(presentation, slide)
-                    size = inherited_size(shape, design)
                 if size is None:
                     continue
                 bold = any(run.font.bold for run in para.runs)

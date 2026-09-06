@@ -416,36 +416,12 @@ async def test_without_a_model_the_materials_are_still_prepared(project: Project
 
 
 async def test_a_reply_that_does_not_parse_is_reported_rather_than_guessed(project: Project, materials: Path):
-    stage, _ = _stage("I think the materials look fine!", "still not a plan")
+    stage, _ = _stage("I think the materials look fine!")
 
     result = await stage.run(project, "make a deck")
 
     assert not result.ok
     assert "did not parse" in (result.note or "")
-
-
-async def test_a_reply_cut_short_is_asked_again_with_room_for_the_thinking(project: Project, materials: Path):
-    """Three live runs failed this call and succeeded on the author's own retry.
-
-    The gateway sends no `finish_reason`, so `_composer`'s own doubling never fired
-    and a truncated reply looked finished. What the caller knows is that the reply
-    had to be JSON, so a non-empty one that is not is a reply that stopped early.
-    """
-    budgets: list[int] = []
-
-    class Recording(FakeComposer):
-        async def ask(self, system: str, parts: list[dict[str, Any]], *, max_tokens: int) -> str:
-            budgets.append(max_tokens)
-            return await super().ask(system, parts, max_tokens=max_tokens)
-
-    composer = Recording('{"topic": "a deck", "sta', _plan())
-    stage = PrepareStage(composer=composer, ingest=ingest_materials)
-
-    result = await stage.run(project, "make a deck")
-
-    assert result.ok, result.note
-    assert result.data["plan"].topic == "video segmentation"
-    assert budgets == [stage.max_tokens, stage.max_tokens * 2], "the same budget truncates in the same place"
 
 
 # --- the reply ------------------------------------------------------------

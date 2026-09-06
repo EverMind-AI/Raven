@@ -18,32 +18,17 @@ body cut to the sum of their heights first leaves them touching.
 
 `timeline` hands back a `Track`; each stop carries `box` under the spine and `above`
 over it, which is where the label and the date go. Fill the rest of the page -- a spine
-alone is a third of a page of content. Every band here is measured before it is drawn, so
-the frame is cut to the run with `holding` and the room the page was given and nothing
-asked for goes above and below it rather than into a band over the footer's line.
-
-The row of copy under the spine takes its columns from the stops as well:
-`Box.at(stop.box.x0, row.y0, w=stop.box.w, h=row.h)`, the stop's own x range at the
-row's y. `columns(5)` over the same band is a second grid -- `timeline` divides its
-region into n cells with nothing between them, `columns` puts a `GUTTER` between them,
-so the two steps differ by 0.06in and the miss grows to 0.22in by the fifth column.
-That is what `grid_drift` reports, and what a reader sees as copy that does not line up
-with the stop it belongs to.
+alone is a third of a page of content.
 
 Where the numbers came from is a source note, and the page has a strip for it:
-`page(footer=True)` gives up the foot of the body, `frame.footer` is the box it hands
-back, and `footer()` is what draws in it -- the hairline across the foot, the note
-directly under it, and the page number as a real `slidenum` field. A bare `write` into
-that box gets the note alone, set from the top of the strip where the line belongs.
+`page(footer=True)` gives up the foot of the body, and `frame.footer` is the box it hands
+back.
 
 ```python
 stops = ("立项", "试点", "灰度", "全量", "复盘")
 dates = ("01-08", "03-02", "05-19", "07-30", "09-15")
 said = ("四人两周", "两条产线", "10% 流量", "全部产线", "口径归档")
-reading = "灰度到全量之间隔了两个月，是等一条产线的检修窗口，不是技术原因。"
 frame = page(footer=True)
-tall = text_size(reading, frame.body.w, size=BODY_PT).h
-frame = frame.holding(1.70, GUTTER, 0.40, GUTTER, tall)
 down = stack(frame.body)
 track = timeline(slide, down.take(1.70), T, stops)
 for stop, name, when in zip(track.stops, stops, dates):
@@ -52,38 +37,35 @@ for stop, name, when in zip(track.stops, stops, dates):
     write(slide, stop.box, name, size=BODY_PT, bold=True, colour=INK, font=FACE, cjk_font=HAN,
           align="center")
 down.skip(GUTTER)
-row = down.take(0.40)
-for stop, one in zip(track.stops, said):
-    write(slide, Box.at(stop.box.x0, row.y0, w=stop.box.w, h=row.h), one, size=LABEL_PT,
-          colour=MUTED, font=FACE, cjk_font=HAN, align="center")
+for box, one in zip(down.take(0.40).columns(5), said):
+    write(slide, box, one, size=LABEL_PT, colour=MUTED, font=FACE, cjk_font=HAN, align="center")
 down.skip(GUTTER)
-write(slide, down.rest(), reading, size=BODY_PT, colour=INK, font=FACE, cjk_font=HAN)
-footer(slide, frame.footer, T, note="来源：五个节点按同一批日志统计，口径与附录 A 一致。",
-       font=FACE, cjk_font=HAN)
+write(slide, down.rest(), "灰度到全量之间隔了两个月，是等一条产线的检修窗口，不是技术原因。",
+      size=BODY_PT, colour=INK, font=FACE, cjk_font=HAN)
+write(slide, frame.footer, "来源：五个节点按同一批日志统计，口径与附录 A 一致。",
+      size=LABEL_PT, colour=MUTED, font=FACE, cjk_font=HAN)
 ```
 
-### P17 -- A process row
+### P17 -- A chevron process row
 
-Five rectangles with gaps between them is a list; a spine with five stops on it is a
-process. `the_largest_step_this_copy_takes` per stop, then the `min`, or a two-character
-label sits at a fifth the height of the region naming it. The copy row comes off the
-stops, as in `P16`, and for the same reason.
+Five rectangles with gaps between them is a list; five chevrons that interlock is a
+process. `the_largest_step_this_copy_takes` per step, then the `min`, or a two-character
+label sits at a fifth the height of the shape naming it.
 [deck/build/references/shapes.md](deck/build/references/shapes.md) has the rest.
 
 ```python
 labels = ("采集", "清洗", "标注", "训练", "评测")
-down = stack(frame.body).spread(1.30, 2.20)
-track = timeline(slide, down.take(1.30), T, labels)
-size = min(the_largest_step_this_copy_takes(name, one.above, font=FACE) for one, name in zip(track.stops, labels))
-for one, name in zip(track.stops, labels):
-    write(slide, one.above, name, size=size, colour=T["foreground"], font=FACE, cjk_font=HAN,
-          align="center")
-row = down.take(2.20)
-for stop, said in zip(track.stops, (
+down = stack(frame.body)
+steps = chevron_row(slide, down.take(1.30), T, labels)
+size = min(the_largest_step_this_copy_takes(name, one.box, font=FACE) for one, name in zip(steps, labels))
+for one, name in zip(steps, labels):
+    write(slide, one.box, name, size=size, colour=T["background"], font=FACE, cjk_font=HAN,
+          align="center", anchor="middle")
+down.skip(GUTTER)
+for box, said in zip(down.rest().columns(5), (
     "四路信号", "对齐到 10Hz", "双人标注", "同一套权重", "四类任务一起跑",
 )):
-    write(slide, Box.at(stop.box.x0, row.y0, w=stop.box.w, h=row.h), said, size=LABEL_PT,
-          colour=MUTED, font=FACE, cjk_font=HAN, align="center")
+    write(slide, box, said, size=LABEL_PT, colour=MUTED, font=FACE, cjk_font=HAN, align="center")
 ```
 
 ### P19 -- The number at display size
@@ -126,9 +108,7 @@ in them.
 the four numbers share, and the band under the tiles is left to their reading.
 
 ```python
-reading = "显存下降来自权重合并，不是量化：精度同期还高了 0.2。"
 frame = page(footer=True)
-frame = frame.holding(1.90, GUTTER, text_size(reading, frame.body.w, size=BODY_PT).h)
 down = stack(frame.body)
 band = down.take(1.90)
 for box, (value, name, icon) in zip(band.columns(4), [
@@ -143,9 +123,10 @@ for box, (value, name, icon) in zip(band.columns(4), [
     write(slide, inner.take(0.90), value, size=NUMBER_PT, bold=True, colour=INK, font=FACE)
     write(slide, inner.rest(), name, size=LABEL_PT, colour=MUTED, font=FACE, cjk_font=HAN)
 down.skip(GUTTER)
-write(slide, down.rest(), reading, size=BODY_PT, colour=INK, font=FACE, cjk_font=HAN)
-footer(slide, frame.footer, T, note="来源：2 月至 3 月线上日志，四个数字同一批，口径见附录 A。",
-       font=FACE, cjk_font=HAN)
+write(slide, down.rest(), "显存下降来自权重合并，不是量化：精度同期还高了 0.2。",
+      size=BODY_PT, colour=INK, font=FACE, cjk_font=HAN)
+write(slide, frame.footer, "来源：2 月至 3 月线上日志，四个数字同一批，口径见附录 A。",
+      size=LABEL_PT, colour=MUTED, font=FACE, cjk_font=HAN)
 ```
 
 ### P18 -- Negative space dominant

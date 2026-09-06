@@ -38,8 +38,6 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
 from raven_ppt.contracts.findings import Finding, Severity
 
 # Who drew a shape is `adherence`'s question and `adherence`'s answer: a cloned page
@@ -50,13 +48,12 @@ from raven_ppt.contracts.findings import Finding, Severity
 from raven_ppt.services.measure.adherence import MIN_SHAPES, _matches, _nearest, _pages
 from raven_ppt.services.measure.geometry import (
     EMU_PER_INCH,
-    ink_box,
     iter_shapes,
     open_deck,
+    page_box,
     shape_rect_pt,
 )
 from raven_ppt.services.measure.type_size import _inches, _template_boxes
-from raven_ppt.services.template.decompile import inherited_ink, page_design, run_ink
 
 # WCAG AA asks 4.5:1 for body copy and 3:1 for large text, and 3:1 applied to everything
 # is where this started. It refused a deck for its own template's design: the agenda page
@@ -93,19 +90,12 @@ _MIN_PIXELS = 24
 # bullet at 1.8:1 -- which refused the whole deck. A dim bullet is not worth refusing a
 # deck over, and it is the same shape as the failure this file was already rewritten once
 # for, when quantile segmentation reported every comma.
-_A_NS = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
 _A_MARK = frozenset("\u2022\u00b7\u25cf\u25aa\u2013\u2014-\u2192\u2713\u2715\u00d7|/\\.,;:!?")
 
 
 def _is_copy(text: str) -> bool:
-    """Whether the run that measured badly is copy rather than one mark.
-
-    One character is a mark whatever it is: the numerals a template sets beside a list
-    in its accent colour read at 1.8:1 by design, and measuring them as copy called
-    four of one template's own pages unreadable.
-    """
-    stripped = str(text).strip()
-    return len(stripped) > 1 and bool(set(stripped) - _A_MARK)
+    """Whether the run that measured badly is copy rather than one mark."""
+    return bool(set(str(text).strip()) - _A_MARK)
 
 
 _TEMPLATE_DREW = "template"
@@ -217,9 +207,8 @@ def contrast_findings(
             image = opened.convert("RGB")
             worst: tuple[float, str, str, tuple[int, int, int], Any] | None = None
             count = 0
-            design = page_design(presentation, slide)
             for shape in iter_shapes(slide.shapes):
-                measured = _measure(shape, image, canvas_w, canvas_h, design)
+                measured = _measure(shape, image, canvas_w, canvas_h)
                 if measured is None:
                     continue
                 ratio, text, ink, ground = measured
@@ -266,34 +255,19 @@ def contrast_findings(
     return findings
 
 
-def _measure(shape: Any, image: Any, canvas_w: float, canvas_h: float, design: Any = None):
+def _measure(shape: Any, image: Any, canvas_w: float, canvas_h: float):
     """(ratio, text, ink hex, ground rgb) for one text block, or None when it cannot say."""
     if not getattr(shape, "has_text_frame", False):
         return None
     text = " ".join(shape.text_frame.text.split())
     if not text:
         return None
-    stated_rgb = _declared(shape.text_frame)
-    ink = stated_rgb or _declared(shape.text_frame, design)
-    if ink is None and _states_a_fill(shape.text_frame):
-        # A gradient or picture fill on the type: stated on the page, so the master's
-        # colour is not what the reader sees, and there is no one colour to judge.
-        return None
-    if ink is None and design is not None:
-        # Stated nowhere on the page: the layout's placeholder or the master says what
-        # the type is, and that is what the reader sees. Resolved the way the reference
-        # resolves it -- a cloned page states almost nothing itself, and skipping it
-        # left a 1.09:1 body line unjudged on a measured deck.
-        ink = inherited_ink(shape, design)
+    ink = _declared(shape.text_frame)
     if ink is None:
-        return None
-    # Through the groups above it and through its own rotation, or the crop lands
-    # somewhere else on the page and the ground this reads is not the ground the words
-    # sit on. A 90-degree heading declares a tall narrow box and sets a wide short line,
-    # so the declared box crops straight across the words: on one bundled template that
-    # put the gold pill under the type at 17% of the strip and the white page under it at
-    # 18%, and called seven of the template's own pages unreadable at 1.0:1.
-    where = ink_box(shape)
+        return None  # inherited from the theme or the layout: not stated here, not judged here
+    # Through the groups above it, or the crop lands somewhere else on the page and
+    # the ground this reads is not the ground the words sit on.
+    where = page_box(shape)
     if where is None:
         return None
     left = int(where.x0 / canvas_w * image.width)
@@ -303,243 +277,32 @@ def _measure(shape: Any, image: Any, canvas_w: float, canvas_h: float, design: A
     crop = image.crop((max(left, 0), max(top, 0), min(right, image.width), min(bottom, image.height)))
     if crop.width < 2 or crop.height < 2:
         return None
-    if stated_rgb is None and not _painted_in(crop, _rgb(ink)):
-        # The ink was resolved rather than read, and the render holds no glyph in
-        # it: a theme colour with a lightness modifier, or a chain this reader walked
-        # wrong. Judging the page on a colour it does not show is the one thing a
-        # resolved ink must not do.
+    pixels = list(crop.getdata())
+    if len(pixels) < _MIN_PIXELS:
         return None
-    ground = _worst_ground(crop, _rgb(ink))
-    if ground is None:
-        return None
+    ground = Counter(pixels).most_common(1)[0][0]
     return _ratio(_rgb(ink), ground), text, ink, ground
 
 
-# How wide a slice of a block gets its own ground reading, in the crop's own pixels
-# scaled off its height: a block straddling two grounds is judged on the majority one,
-# so the part of it on the other ground is judged against a colour it does not sit on.
-# Measured on a live page: a chart's label declared #F8F8F8 reads 3.43:1 against the
-# panel it mostly covers and 1.08:1 against the cream wedge its last five characters
-# actually sit on, and 1.08 is the reading a reader gets. Its neighbour on the same page,
-# same size, same declared ink, reads 3.43:1 in every slice -- so this separates the two
-# rather than reporting both.
-_SLICE_SHARE = 1.5
-# What a slice's commonest band has to hold to be that slice's ground rather than the
-# glyphs standing in it. Type never covers half of its own line box, and a slice whose
-# winner holds less than this has no ground to read: reporting one there is how a
-# quantile split came to call every comma unreadable.
-_SLICE_GROUND_SHARE = 0.35
-# The most of a slice the ink's own bucket may hold and still be type standing on a
-# ground rather than something painted in that colour.
-_SLICE_INK_MAX = 0.5
-# The least of a slice the ink's bucket has to hold for the slice to carry any type.
-_SLICE_INK_MIN = 0.02
-# The least of one column a resolved ink's bucket has to hold somewhere in the crop
-# for the render to be showing type in that colour at all.
-_COLUMN_INK_MIN = 0.05
-
-
-def _keys(arr: Any) -> Any:
-    """Each pixel's ground bucket as one integer, shape (H, W)."""
-    banded = (arr[..., :3] // _GROUND_STEP).astype(np.int32)
-    return (banded[..., 0] * _GROUND_LEVELS + banded[..., 1]) * _GROUND_LEVELS + banded[..., 2]
-
-
-def _ink_span(arr: Any, ink: tuple[int, int, int]) -> tuple[int, int] | None:
-    """The columns the ink's own bucket lands in, (first, last + 1).
-
-    None where none of them do, which is a block whose glyphs the render did not paint
-    in the colour the file states -- an inherited size shrunk to nothing, a run the
-    theme overrode. There is no span to read then and the whole crop stands.
-    """
-    step = _GROUND_STEP
-    key = ((ink[0] // step) * _GROUND_LEVELS + ink[1] // step) * _GROUND_LEVELS + ink[2] // step
-    columns = np.flatnonzero((_keys(arr) == key).any(axis=0))
-    if columns.size == 0:
-        return None
-    return int(columns[0]), int(columns[-1]) + 1
-
-
-def _rgb_of(ink: Any) -> tuple[int, int, int]:
-    """`ink` as a colour triple, whichever way the caller holds it."""
-    return ink if isinstance(ink, tuple) else _rgb(ink)
-
-
-def _second_ground(here: tuple[int, int, int], dominant: tuple[int, int, int]) -> bool:
-    """Whether a slice sits on a second ground rather than further along one fill.
-
-    A gradient pill with white type across it has a light end, and a slice there reads
-    low against white without anything being wrong: the fill is one ground and the type
-    spans it. Measured over the bundled templates, that is a large class -- four pages
-    on two templates, all four readable, all four reported once slices were read at all.
-    The two readings separate cleanly on how far apart the grounds are: a gradient's
-    ends measure 1.26 to 1.77 against each other and a genuine second ground measured
-    3.18, so the line is the one this module already draws for whether a reader can tell
-    two colours apart. The margin is not wide: the closest real pair in the calibration
-    set reads 1.96 against `UNREADABLE_RATIO`'s 2.0, so a wider gradient than any yet
-    measured would be taken for a second ground.
-    """
-    return _ratio(here, dominant) >= UNREADABLE_RATIO
-
-
-def _painted_in(crop: Any, ink: tuple[int, int, int]) -> bool:
-    """Whether some column of the crop holds enough of the ink's bucket to be glyphs in it."""
-    arr = np.asarray(crop, dtype=np.uint8)
-    if arr.ndim != 3 or arr.shape[0] * arr.shape[1] < _MIN_PIXELS:
-        return False
-    step = _GROUND_STEP
-    key = ((ink[0] // step) * _GROUND_LEVELS + ink[1] // step) * _GROUND_LEVELS + ink[2] // step
-    return bool(((_keys(arr) == key).mean(axis=0) >= _COLUMN_INK_MIN).any())
-
-
-def _worst_ground(crop: Any, ink: tuple[int, int, int]) -> tuple[int, int, int] | None:
-    """The ground this block sits worst against, or None when it cannot be read.
-
-    Sliced across rather than taken whole -- see `_SLICE_SHARE`. A block whose slices
-    all agree gets the same answer as one ground for the whole crop, which is every
-    block that sits on one colour.
-
-    Sliced across the ink and not across the box. The crop is the block's declared
-    rectangle, which is as wide as the author drew it and not as wide as the words came
-    out: a 3.0in label whose copy fills 1.8in leaves 1.2in of whatever the page is
-    painted with, and read as a slice that is a second ground the type never sits on.
-    That is how the reading this replaces refused a page over a box whose empty tail
-    hung off the edge of its panel -- and refusing is what `unreadable` does, so the
-    cost is a deck rejected over a box with nothing wrong with it. The same argument
-    the module docstring gives against a quantile split applies here: a ratio taken
-    where no glyph landed means "no glyph here", not "unreadable".
-    """
-    arr = np.asarray(crop, dtype=np.uint8)
-    if arr.ndim != 3 or arr.shape[0] * arr.shape[1] < _MIN_PIXELS:
-        return None
-    whole = _ground(arr)
-    span = _ink_span(arr, _rgb_of(ink))
-    has_ink = span is not None
-    if span is not None and span[1] - span[0] >= 1:
-        narrowed = arr[:, span[0] : span[1]]
-        if narrowed.shape[0] * narrowed.shape[1] < _MIN_PIXELS:
-            return whole
-        arr = narrowed
-    height, columns = arr.shape[:2]
-    width = max(1, int(round(height * _SLICE_SHARE)))
-    if columns <= width:
-        return whole
-    worst, held = whole, _ratio(ink, whole)
-    keys = _keys(arr)
-    step = _GROUND_STEP
-    ink_key = ((ink[0] // step) * _GROUND_LEVELS + ink[1] // step) * _GROUND_LEVELS + ink[2] // step
-    for start in range(0, columns, width):
-        part = arr[:, start : min(start + width, columns)]
-        if part.shape[0] * part.shape[1] < _MIN_PIXELS:
-            continue
-        band = _ground(part)
-        step = _GROUND_STEP
-        key = ((band[0] // step) * _GROUND_LEVELS + band[1] // step) * _GROUND_LEVELS + band[2] // step
-        window = keys[:, start : min(start + width, columns)]
-        pixels = part.shape[0] * part.shape[1]
-        if int((window == key).sum()) / pixels < _SLICE_GROUND_SHARE:
-            continue
-        # Type never covers half of its own line box. A slice mostly in the ink's own
-        # bucket is a photograph or a filled shape the box reaches over, not words on
-        # a ground: a dark title's declared box ran into the dark photograph beside
-        # it and the photograph was read as its ground at 1.4:1.
-        painted = int((window == ink_key).sum()) / pixels
-        if painted > _SLICE_INK_MAX:
-            continue
-        # And a slice with no glyph in it has no text to read: a title's declared
-        # box ran across the photograph beside it, and the photograph -- distinct
-        # from the ink, distinct from the page -- was read as the title's ground.
-        if has_ink and painted < _SLICE_INK_MIN:
-            continue
-        if not _second_ground(band, whole):
-            continue
-        ratio = _ratio(ink, band)
-        if ratio < held:
-            worst, held = band, ratio
-    return worst
-
-
-# How coarsely the ground's pixels are bucketed before the commonest one is taken. A
-# gradient's every pixel is a slightly different colour, so the raw mode is whatever
-# small flat area the crop happens to include: a bundled template's gold pill came out
-# 4% per shade against 10% for the white the rounded corners left in the crop, so the
-# mode was white and the reading called the page unreadable at 1.0:1 with white type on
-# gold. Sixteen levels a channel holds a gradient together and still separates the
-# grounds a page actually paints -- `surface` and `background` in every bundled theme
-# are further apart than one level.
-_GROUND_LEVELS = 16
-_GROUND_STEP = 256 // _GROUND_LEVELS
-
-
-def _ground(arr: Any) -> tuple[int, int, int]:
-    """The ground these pixels are, as the mean of the commonest band of them.
-
-    Bucketed rather than counted outright, and then averaged inside the winning bucket
-    so the answer is a colour the crop really holds rather than the corner of a bucket.
-    """
-    flat = arr.reshape(-1, arr.shape[-1])[:, :3]
-    codes = _keys(flat.reshape(1, -1, 3)).reshape(-1)
-    counts = np.bincount(codes, minlength=_GROUND_LEVELS**3)
-    top = int(counts.max())
-    candidates = np.flatnonzero(counts == top)
-    # The commonest bucket; on a tie, the one seen first, as a Counter's most_common
-    # answers -- the reading this replaces was calibrated on that order.
-    winner = (
-        int(candidates[0])
-        if candidates.size == 1
-        else int(min(candidates, key=lambda code: int(np.argmax(codes == code))))
-    )
-    held = flat[codes == winner].astype(np.float64)
-    return tuple(int(round(float(value))) for value in held.sum(axis=0) / held.shape[0])
-
-
-def _states_a_fill(frame: Any) -> bool:
-    """Whether any run states a fill this check cannot read as one colour."""
-    for para in frame.paragraphs:
-        for run in para.runs:
-            properties = run._r.find(f"{_A_NS}rPr")
-            if properties is None:
-                continue
-            if any(properties.find(f"{_A_NS}{tag}") is not None for tag in ("gradFill", "blipFill", "pattFill")):
-                return True
-    return False
-
-
-def _declared(frame: Any, design: Any = None) -> str | None:
+def _declared(frame: Any) -> str | None:
     """The colour the file states for this text, or None when it inherits one.
 
     The largest run wins where a block mixes them: a heading with one accented word is
-    judged on the heading. Largest of the block, though, and not largest of whichever
-    runs happen to state one: a bundled template has a body block of seventeen
-    characters where sixteen inherit their colour and one states #F8F8F8, and judging the
-    block on that character read white type on the white page under dark copy and called
-    the page unreadable. A block most of which inherits is a block whose colour is not
-    stated here, which is the same answer as one that states none at all.
+    judged on the heading.
     """
     weighed: Counter = Counter()
-    held = 0
     for para in frame.paragraphs:
         for run in para.runs:
             if not run.text.strip():
                 continue
-            held += len(run.text)
-            stated = None
             colour = run.font.color
             try:
-                if colour is not None and colour.type is not None and colour.rgb is not None:
-                    stated = str(colour.rgb).upper()
+                if colour is None or colour.type is None or colour.rgb is None:
+                    continue
+                weighed[str(colour.rgb).upper()] += len(run.text)
             except (AttributeError, TypeError, ValueError):
-                stated = None
-            if stated is None and design is not None:
-                # A theme colour: `rgb` has nothing to say about it, the palette does.
-                try:
-                    stated = run_ink(run, design)
-                except (AttributeError, TypeError, ValueError):
-                    stated = None
-            if stated is None:
                 continue
-            weighed[stated] += len(run.text)
-    if not weighed or sum(weighed.values()) * 2 < held:
+    if not weighed:
         return None
     return weighed.most_common(1)[0][0]
 

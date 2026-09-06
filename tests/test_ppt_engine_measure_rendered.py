@@ -19,8 +19,6 @@ from raven_ppt.services.measure.rendered import (
     CARD_SLOP_PT,
     COLLISION_SHARE,
     COLLISIONS_PER_PAGE,
-    GROUND_HEIGHT_SHARE,
-    GROUND_WIDTH_SHARE,
     OUTSIDE_LINE_SHARE,
     OVERFLOWS_PER_PAGE,
     RULE_BOTTOM_SPARE,
@@ -197,30 +195,9 @@ def test_a_rule_is_reported_once_however_many_words_it_crosses() -> None:
 
 def test_rules_are_reported_a_few_per_page() -> None:
     assert RULES_PER_PAGE == 3
-    rules = [Rect(60, 144 + step * 40, 600, 145 + step * 40) for step in range(5)]
-    words = [_word("struck", 80, 138 + step * 40, 160, 152 + step * 40) for step in range(5)]
+    rules = [Rect(60, 144, 600, 145) for _ in range(5)]
 
-    assert len(rule_strikes({1: rules}, words)) == RULES_PER_PAGE
-
-
-def test_the_pieces_of_one_divider_spend_one_of_the_page_budget() -> None:
-    """A rule cut into pieces by what was drawn over it is still one rule.
-
-    `hairline_rules` returns a rule as the spans of it that survive being painted over,
-    so a divider with three icons on it arrives as several rects at the same height. A
-    budget counted per rect would name that one line three times and never reach the
-    other dividers on the page.
-    """
-    pieces = [Rect(60, 144, 200, 145), Rect(240, 144, 380, 145), Rect(420, 144, 600, 145)]
-    others = [Rect(60, 244, 600, 245), Rect(60, 344, 600, 345), Rect(60, 444, 600, 445)]
-    words = [_word("struck", 80, 138, 560, 152)] + [
-        _word("also", 80, 238 + step * 100, 560, 252 + step * 100) for step in range(3)
-    ]
-
-    findings = rule_strikes({1: pieces + others}, words)
-
-    assert len(findings) == RULES_PER_PAGE
-    assert [finding.detail["rule_y_pt"] for finding in findings] == [144.5, 244.5, 344.5]
+    assert len(rule_strikes({1: rules}, [_word("struck", 80, 138, 160, 152)])) == RULES_PER_PAGE
 
 
 def test_a_hairline_is_thin_and_long(deck: DeckBuilder) -> None:
@@ -229,37 +206,12 @@ def test_a_hairline_is_thin_and_long(deck: DeckBuilder) -> None:
 
     assert (RULE_MAX_HEIGHT_PT, RULE_MIN_WIDTH_PT) == (4.5, 36.0)
     page = deck.page()
-    # Spread down the page rather than stacked at the origin: an opaque shape drawn
-    # over a rule hides it, so three at one spot would have measured the covering
-    # rather than the sizes this is about.
-    for index, (height_pt, width_pt) in enumerate(((4.5, 36.0), (4.6, 36.0), (4.5, 35.0))):
+    for height_pt, width_pt in ((4.5, 36.0), (4.6, 36.0), (4.5, 35.0)):
         shape = deck.panel(page, left=1.0, top=1.0, width=1.0, height=1.0)
         shape.height, shape.width = Pt(height_pt), Pt(width_pt)
-        shape.top, shape.left = Pt(72.0 * index), Emu(0)
+        shape.top, shape.left = Emu(0), Emu(0)
 
     assert len(hairline_rules(deck.save())[1]) == 1
-
-
-def test_a_rule_a_later_shape_paints_over_is_not_read_across_it(deck: DeckBuilder) -> None:
-    """`v4_bluephoto` page 9: a spoke runs the width of a hub-and-spoke diagram and
-    the hub is painted over its middle, with the hub's own label on the disc. Read
-    whole, that line crossed the label across 100 percent of its width."""
-    from pptx.util import Pt
-
-    page = deck.page()
-    spoke = deck.panel(page, left=1.0, top=1.0, width=1.0, height=1.0)
-    spoke.height, spoke.width, spoke.top, spoke.left = Pt(1.0), Pt(216.0), Pt(286.0), Pt(371.0)
-    deck.panel(page, left=5.3, top=2.6, width=2.7, height=2.7, text="the hub")
-
-    rules = hairline_rules(deck.save())[1]
-
-    # The stubs on either side of the hub are still ink on the page, so what is asserted
-    # is that none of them reaches across it -- not that the line stopped existing. A
-    # width floor applied to the pieces would drop both, and a word struck by one of
-    # them would then be unreportable.
-    assert rules, "the spoke is still drawn on either side of the hub"
-    assert all(piece.x1 <= 550 or piece.x0 >= 550 for piece in rules), "nothing spans the hub"
-    assert rule_strikes({1: rules}, [_word("the hub", 408, 350, 552, 366)]) == []
 
 
 def test_a_rule_carrying_text_is_not_a_rule(deck: DeckBuilder) -> None:
@@ -937,42 +889,3 @@ def test_a_visible_gap_is_not(tmp_path: Path) -> None:
     ]
 
     assert unseparated_blocks(deck, words) == []
-
-
-def test_the_page_ground_is_not_one_of_the_cards(tmp_path: Path) -> None:
-    """A rectangle covering the canvas is what the page is painted on.
-
-    Three readings are built on `cards`, and each says something false about the
-    ground: copy cannot escape it without leaving the page, its bottom rim is the
-    page's own edge, and its fill share is how full the page is rather than whether
-    a container was filled. A dark closing page came back as "a 7.50in-high panel
-    using 42% of its height", which is a description of the design.
-    """
-    builder = DeckBuilder(tmp_path)
-    page = builder.page()
-    builder.panel(page, left=0.0, top=0.0, width=13.333, height=7.5, colour=(0x26, 0x20, 0x19))
-    builder.panel(page, left=3.5, top=3.0, width=6.4, height=1.66)
-    path = builder.save("grounded.pptx")
-
-    held = cards(path)[1]
-
-    assert [(round(box.width / 72, 2), round(box.height / 72, 2)) for box in held] == [(6.4, 1.66)]
-
-
-def test_a_band_the_full_width_of_the_page_is_still_a_card(tmp_path: Path) -> None:
-    """The ground test above must not take the wide bands with it.
-
-    A band spanning the page and a fraction of its height is a panel, it does hold
-    copy, and copy does escape it -- which is why both shares have to be met and why
-    the height one is strict.
-    """
-    builder = DeckBuilder(tmp_path)
-    page = builder.page()
-    builder.panel(page, left=0.0, top=2.4, width=13.333, height=1.2)
-    path = builder.save("banded-wide.pptx")
-
-    held = cards(path)[1]
-
-    assert len(held) == 1
-    assert held[0].width / 72 >= 13.333 * GROUND_WIDTH_SHARE
-    assert held[0].height / 72 < 7.5 * GROUND_HEIGHT_SHARE

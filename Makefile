@@ -30,7 +30,6 @@ help:
 	@echo "  check-source-language Validate PR-added lines stay English outside the exemption zones"
 	@echo "  check-core-wheel  Build the raven-core wheel and smoke it in a clean venv"
 	@echo "  check-vendored-invariants Validate vendored subagents carry this trunk's fixes"
-	@echo "  fetch-templates Pull the deck engine's eight bundled templates from the package registry (needs GITLAB_TOKEN)"
 	@echo "  beta           Build this checkout and publish it to the beta channel"
 	@echo "  ci             Run the local CI gate"
 	@echo "  clean          Remove generated caches and build output"
@@ -142,9 +141,6 @@ clean:
 	rm -rf bridge/dist
 	rm -rf ui-web/dist
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +
-
-fetch-templates:
-	python3 plugins-dist/ppt-engine/fetch_templates.py
 
 check-vendored-subagents:
 	@python3 scripts/check_vendored_subagents.py

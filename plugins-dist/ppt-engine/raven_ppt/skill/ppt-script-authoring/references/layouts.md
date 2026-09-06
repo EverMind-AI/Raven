@@ -5,45 +5,73 @@ job is to make the list you choose from wider than the one you would have though
 The failure it answers is not that a composed page comes out *wrong* -- it is that every
 composed page in a deck comes out the *same*.
 
-**This is a registry and not a tutorial.** No worked code and no decision tables: Part 1
-is the **page structures**, eleven skeletons with every id folded into the one it is a
-variant of, and Part 2 the **modifier layers**, which stack on any structure. The two
-tables are the whole list -- there is no count to carry and no entry hiding further down.
-A page is one structure plus any number of modifiers, and `ppt_outline` is where you write
-down which: `layout` takes the structure id and `layers` the modifiers. The ids are stable
-names and not an order.
+**This is a registry and not a tutorial.** One line per entry, no worked code, no decision
+tables: Part 1 is the **page structures**, the bones of a page, and Part 2 the **modifier
+layers**, which stack on any structure. The two tables are the whole list -- there is no
+count to carry and no entry hiding further down. A page is one or more structures plus any
+number of modifiers, and `ppt_outline`'s `layout` field is where you write down which --
+`"P14 + M4 + M11"`. The ids are stable names and not an order.
 
 **The code lives in five passage files**, one per family, each loadable on its own: every
-id has a passage, run and its render looked at, and a page opens the one file it needs
-rather than nine hundred lines it does not. [The passages](#the-passages) at the foot of
-this page lists every id under its file, so a passage is found by the id `layout` names.
+entry has a passage, run and its render looked at, and a page opens the one file it needs
+rather than nine hundred lines it does not. The family rows below name the file, and
+[the passages](#the-passages) at the foot of this page lists every id under its own.
 
 ## Part 1 -- page structures
 
-**Eleven skeletons, and the forty-one ids are which one plus what changed.** Measured off
-the forty-one pages themselves, drawn and rendered: `P1`, `P14`, `P21` and `P19` are one
-division with a chart, a table or a number where the figure goes, and `P9`, `P15` and `P40`
-are one. So the list to choose from is this table's eleven rows, and the id you write in
-`layout` is the row plus the variant -- `P14` says "the two-column division, and the visual
-is a chart", which is a sentence about the page and not a lookup.
-
-The numbers are what the pages measured, not a house style: a share of the body's width or
-height, so they hold at any canvas. Where a row gives a range, the range is what the drawn
-pages spanned.
-
-| the skeleton, and every id that is it | the bones, with the numbers | must not become |
+| id | the page's bones | how, and what goes wrong |
 |---|---|---|
-| **a visual and its reading, in two columns** -- `P1` figure left; `P2` figure right; `P26` the figure bleeding to the page's edge; `P6` hotspots on the figure, the legend in the reading column; `P14` the visual a chart; `P21` a table; `P19` a number at display size; `P33` the reading column's cards staggered; `P34` the visual column two bands, an ambient one over an evidence one | two shares, and which one depends on what the visual is *for*. Evidence to be read -- a figure, a chart, a table -- takes **0.55-0.64** of the body's width and the reading the rest. A visual that is a mark rather than evidence takes **0.37-0.42** and the reading takes the larger share: `P19`'s number measured 0.37 against 0.61 of reasoning, `P33`'s hero 0.42. `GUTTER` between, and a mirror is the complement (`split_left(0.42)` puts the visual right at 0.58). The reading's bands `spread` to the visual's own bottom edge, so both columns end on one line -- measured level to 0.000in on all nine. Cut the visual's column to the visual with `picture_size`/`table_size`/`chart_size` **before** writing beside it | a picture in one column and unrelated bullets in the other. The reading has to name what the visual shows; a lane that would read the same with the visual removed is a caption, and the page is `P22` with a decoration |
-| **bands across the page** -- `P3` a figure band over copy columns; `P4` one line at lead size over the figure | a statement band is **0.17-0.23** of the body's height and what it heads takes **0.53-0.77**; the row under it is 2-4 blocks at **0.32w** (three) or **0.23w** (four). `frame.laying(lead_h, figure_h)` spends the leftover between them | three bands of equal height. One band is the page's sentence and the rest serve it -- equal thirds say the page has three unrelated things on it |
-| **two comparable things on one baseline** -- `P9` two columns of evidence; `P15` two charts on one scale; `P40` a table and a chart of the same numbers | **0.48-0.51** each, both cut to the taller of the two, `accent_soft` on exactly the side that carries the answer. Same row labels down both, same order, and one `axis_max` where they are charts | two panels whose rows are in different orders or whose labels differ. Then the reader is matching sentences by eye, which is the one thing this shape exists to remove |
-| **an equal grid of cells** -- `P11` all cells the same kind; `P12` one cell given to copy instead; `P8` one row, one framing, small multiples; `P32` each cell a picture card; `P38` each cell a row of a table; `P20` each cell a number and its label | three columns are **0.32w** each and four are **0.23w**, two rows **0.41-0.47h**, `GUTTER` between -- which is `box.grid(cols, rows)`, row-major. `card_group` per band, or `card_size`, so a row levels itself; without it every cell is as tall as the region and two lines sit in a void | filling every slot because there is a grid. Six cells means the page had six things to say; `P12` gives one back to copy, and that missing tile is what makes a grid a composition instead of a contact sheet |
-| **one dominant visual, subordinates with it** -- `P10` the small ones beside it; `P28` over its corner; `P29` one inset in it; `P30` the same asset again, cropped to the part under discussion | the dominant takes **0.53-0.61** of the body's width, the subordinates the rest, stacked. Any overlap stays well under **0.60** of what is under it or `covered_shape` refuses the deck; an inset's own label goes **above** it, where the wide shot is not behind the words | regions of equal weight. The unequal division is the argument -- it says which figure is the evidence and which corroborate. Three equal figures is `P8`, and it says something else |
-| **a visual as the page's ground, type floated on it** -- `P23` the whole canvas; `P5` notes laid over it; `P25` a strip beside a display title; `P24` a belt edge to edge, copy above and below; `P31` a montage under one band of type; `P35` two of unequal weight over an oversized section number | the whole canvas (**0.62-0.83** of its height, and `P23` is the upper end), or a belt **0.19-0.24** of the canvas height, or a strip **0.23** of its width. `P35`'s two are **0.68** and **0.32** of the width at one height, and `P31`'s tiles **0.33** wide with the band **0.24** of the height over them. Place with `cover` to a box that *ends at* the edge -- never past it, `off_page` reports every crossing and the render is identical. The type sits wholly inside a scrim's opaque end (`M15`) or on a flat plate (`M14`) | type laid straight onto a gradient. The ground under a text box is read off the render's modal pixel, so a transition makes every ground pixel different, the type's own colour becomes the mode, and the page comes back `unreadable` at 1.0:1 -- blocking, on a page that looks fine |
-| **a rail down one side** -- `P13` | the rail is **0.22-0.28** of the body's width and its full height, and it carries the page's header -- so this page builds its own `Frame` rather than calling `page()`. The cells beside it are an ordinary grid (**0.32w** for three) | a different header on every page. A deck may hand one page its own frame; what it may not do is stop having a house |
-| **a spine with stops on it** -- `P16` a timeline; `P17` a process row; `P27` serpentine, the stops alternating side | 4-6 stops. The spine band takes **0.44-0.65** of the body's height and what it explains goes under it -- a spine alone is a third of a page of content. The stops need not be equal: `P17`'s five sit at **0.16-0.21w** on purpose, because the steps are not the same size | five rectangles with gaps between them. The spine is what makes them a sequence; without it they are `P11` with arrows drawn on |
-| **a hub with spokes out to what it reaches** -- `P7` | the hub centred at **0.32w**, three to five spokes, `connect` picking its own edges from where the two boxes sit -- so a hub needs no coordinate. Spokes in `MUTED`; in `grid` they disappear | spokes to regions that do not answer the hub. Two spokes is a `P9`; a spoke per noun in the title is a diagram of the title |
-| **the table as the page** -- `P41` groups, indented detail, totals under a rule; `P36` a conclusion band over it; `P37` a two-axis matrix whose cells are marks; `P39` a grouped header spanning columns | the table spans the box it is handed, in its columns' own proportions, and spreads its rows into it from five rows up -- so hand it `frame.body` and it runs margin to margin. Six rows or more for the whole page; four that need explaining is the two-column division with a lane | a table given the body with `weights` guessed to make up a difference the box already settles. And `P37`'s cells are *empty* -- `marks` fills them, because a row of ticks is read across far faster than a row of the words for them |
-| **one statement, the rest air** -- `P18` content under 40% of the canvas; `P22` the sentence at display size with one quiet line under it | content under **0.40** of the canvas, the run centred with `frame.holding(*heights)` rather than left at the body's top. `excessive_whitespace` exists to catch this happening by accident | a page that ran out. This is the page a reader remembers and there is about one of them in a deck -- spend it where the argument turns, never as a way of stopping early |
+| | ***a figure and copy, divided*** | passages: [deck/build/references/layouts-figures.md](deck/build/references/layouts-figures.md) |
+| `P1` | figure left, copy right | cut the figure's column to the figure with `picture_size` before writing beside it; a column cut by eye is a strip of white over the figure with the caption stranded under it |
+| `P2` | figure right, copy left | the mirror, and not the same page: the eye lands left first, so this is the one for when the argument leads and the figure corroborates |
+| `P3` | a figure band across the top, copy in columns under it | for a figure that is wide and short. Give the band a share of the region and cut it to the figure inside that share, or the figure takes the region and `rest()` refuses with nothing left |
+| `P4` | one sentence at lead size, the figure under it | the page where the figure *is* the argument |
+| `P27` | serpentine: three rows, the figure changing side | the zigzag is the reading order. `picture_fit` per row, so the rows are deliberately not level -- cover-cropping figures to level them throws evidence away |
+| | ***a figure as the page's surface, native shapes on top*** | the family that opens the most room and the one most likely to be skipped: the figure carries the world, and the cards, badges, leader lines and labels drawn over it carry the information, stay editable and take the deck's palette -- passages: [deck/build/references/layouts-figures.md](deck/build/references/layouts-figures.md) |
+| `P5` | the figure as the page's ground, notes laid over it | put the notes in the figure's calm region and size them with `card_size`, not with a fraction of the page: two cards stretched to half the height read as one panel |
+| `P6` | numbered hotspots on the figure, the legend down the side | the hotspots go on fractions of the box `picture_fit` hands back, which is the figure's real extent -- a fraction of the region puts them in the white space beside it |
+| `P7` | one thing at the centre, leader lines out to what it reaches | `connect` picks its own edges from where the two boxes sit, so a hub needs no coordinate. Spokes in `MUTED`; in `grid` they disappear |
+| | ***a photograph as the page*** | passages: [deck/build/references/layouts-figures.md](deck/build/references/layouts-figures.md) |
+| `P23` | a photograph as the whole page, the title floated on it | `cover` (`M12`) to the canvas, a two-stop scrim (`M15`), the title stack wholly inside the scrim's opaque end. A cover, a section opener, a closing page |
+| `P24` | an image belt across the middle, copy above and below | the belt runs edge to edge; fade both its long edges into the page (`M24`) or the seam reads as a rule someone drew |
+| `P25` | a narrow full-height image strip beside a display-size title | under a quarter of the width. The strip carries the page's tone, not its information |
+| `P26` | a figure running to the canvas edge, the copy in the clear | `cover` to a box that *ends at* the edge. Do not extend the shape past it -- `off_page` reports every shape that crosses one, and the reading is identical |
+| `P35` | a chapter banner: two images of unequal weight over an oversized section number | for a divider page. The number is a graphic element and still measured type; the passage says what each tint costs |
+| | ***more than one figure*** | passages: [deck/build/references/layouts-multiples.md](deck/build/references/layouts-multiples.md) |
+| `P8` | small multiples: one row, one framing, one caption block each | not a grid of unrelated pictures. The identical framing is the message -- the reader compares because nothing but the content differs |
+| `P9` | two columns on one baseline | before and after, ours and theirs. Both sides carry the same row labels, so the reader compares across at a fixed height instead of matching sentences by eye. Cut both panels to the taller of the two, and give the side carrying the answer `accent_soft` (`M3`) |
+| `P10` | one dominant figure, the supporting ones beside it | unequal on purpose. A page where every region carries the same weight has argued nothing |
+| `P28` | an asymmetric collage: one dominant figure, smaller ones over its corner | `M21` and `M18` are what make it a stack of prints rather than a mistake. Keep each overlap well under 60% of what is under it, or `covered_shape` refuses the deck |
+| `P29` | picture in picture: the detail inset over the wide shot | the inset's own label goes above it, where the wide shot is not behind the words |
+| `P30` | the same figure twice: the whole of it, and a zoom on the part under discussion | a second copy of the same file cropped to the region, `M22` on the original, `connect` between the two. No second asset, and nothing cropped out of the evidence |
+| `P31` | a montage of figures under one band of type | one translucent band across the whole montage, the type in `background`. The band is the page's sentence and the tiles are what it is about |
+| | ***grids, rails and cards*** | passages: [deck/build/references/layouts-multiples.md](deck/build/references/layouts-multiples.md) |
+| `P11` | an equal grid of cells | `box.grid(cols, rows)` is row-major. `card_group` per band levels its own row, or `card_size` for cells that are not cards -- otherwise every card is as tall as the region and two lines of copy sit in a void |
+| `P12` | a grid with one cell given to copy | the missing tile is what makes the grid a composition instead of a contact sheet. Do not fill every slot because there is a grid |
+| `P13` | a full-height rail down one side | the rail carries the header, so this page builds its own `Frame`. A deck may do that; what it may not do is give each page a different header |
+| `P32` | image navigation cards: a contents page whose entries are pictures | one card per section, a flat plate at the foot of each for the type (`M14`) and a short gradient above the plate to lose its edge |
+| `P33` | a side hero image with staggered evidence cards opposite | stagger the cards' left edge. A rigid column beside a hero is two grids on one page |
+| `P34` | an ambient banner over an evidence figure, the copy in a panel beside | the banner gives the page a place, the figure gives it a number, the panel holds the conclusion. Useful when one image sets the scene and another proves the claim |
+| | ***charts as the page's bones*** | passages: [deck/build/references/layouts-data.md](deck/build/references/layouts-data.md) |
+| `P14` | a chart with its reading in a lane beside it | a chart alone states numbers; the lane says what to conclude. Pair it with `M11` and accent the item the lane is about |
+| `P15` | two charts read against one scale | `axis_max` on both, or the reader compares two pictures that are not comparable |
+| | ***tables as the page's bones*** | passages: [deck/build/references/layouts-data.md](deck/build/references/layouts-data.md) |
+| `P21` | a table with its reading beside it | `table_size` says where the table ends before a cell is drawn, so the lane starts in the right place. [deck/build/references/tables.md](deck/build/references/tables.md) has the rest |
+| `P36` | the table as the whole page, the conclusion set over it | for six rows or more, where the numbers *are* the argument. `table_size(rows, T, box=room)` before a cell is drawn, because the row count is what picks the type size; the conclusion on one line above it, and `emphasize_rows` on what that line names. Skip it for four rows that need explaining -- `P21`'s lane has the room to say why, and this page has none |
+| `P37` | a two-axis matrix, the cell being the answer | rows are the options, columns the criteria, and the cells are *empty*: `marks` fills them with a tick, a cross or a half-dot, and a row of those is read across far faster than a row of the words for them. Wants `weights`, or the matrix sizes itself off its labels and sits in half the page, and a stated legend. Skip it when both axes are continuous -- that is `matrix_2x2` in [deck/build/references/charts.md](deck/build/references/charts.md) -- or when the comparison is one number per row, which is `P21` |
+| `P38` | the rows dealt out as cards in a grid | five options across three attributes, one card each, the header becoming the field order every card repeats -- which is the whole difference from `P11`, whose cells are unrelated. Level them with `card_size`. Skip it past four attributes, and skip it when the values are figures meant to be compared down a column: a grid cannot be scanned that way and `P36` can |
+| `P39` | a grouped header spanning columns, sub-labels under it | two levels of header, for when the same field names repeat under two groups. `table()` has no column spans, so the cells are drawn -- `columns(n, gutter=0.0, weights=)` for the grid, a `stack` for the bands -- and `rule` is capped at 1.05in, so the full-width rules are thin `plane`s. Skip it if one level of header will do: drawing by hand gives up every dial `table()` has |
+| `P40` | a table and a chart of the same numbers, on one scale | the table is the reading and the bars are the shape: `axis_max` fixed on the chart, one order, the same item accented in both. They will not line up -- a chart lays out its own rows -- so pair them by order and draw no rule implying more. Skip it when the exact figures do not matter (`P14`), or when one bar per cell will do (`M25`) |
+| `P41` | a statement: groups, indented detail, totals under a rule | `group_rows` for the section bands, `indent_rows` for the detail under them, `total_rows` for the added-up row, `align` because a column of figures that is not right-aligned cannot be totted up down its length. The one shape where a total is structural. Skip it where nothing is summed -- the bands then divide rows that were never a group |
+| | ***sequence*** | passages: [deck/build/references/layouts-type.md](deck/build/references/layouts-type.md) |
+| `P16` | a timeline spine | `timeline` hands back a `Track` whose stops carry `box` under the spine and `above` over it. Fill the rest of the page: a spine alone is a third of a page of content |
+| `P17` | a chevron process row | five rectangles with gaps between them is a list; five chevrons that interlock is a process. [deck/build/references/shapes.md](deck/build/references/shapes.md) has the rest |
+| | ***pages that are mostly not there*** | passages: [deck/build/references/layouts-type.md](deck/build/references/layouts-type.md) |
+| `P18` | negative space dominant | content under 40% of the canvas and the air is the design. `excessive_whitespace` exists to catch this happening by accident, so spend it on a page with one thing to say and never as a way of stopping early |
+| `P22` | a typographic page | no panel, no card, no figure: the sentence at display size and one quiet line under it. One of these, where the argument turns, is the page a reader remembers |
+| | ***numbers as the page*** | passages: [deck/build/references/layouts-type.md](deck/build/references/layouts-type.md) |
+| `P19` | the number at display size | with the reasoning beside it rather than under it. `NUMBER_PT` is the ramp's step for this and a display number may go above it |
+| `P20` | a metric row across one band | three to five numbers on one line, each with its own label and icon, and the band's own reading under it. The icons are the difference between this and four boxes with numbers in them |
 
 ## Part 2 -- modifier layers
 
@@ -59,7 +87,7 @@ these is decoration: each says something the boxes alone do not.
 | `M3` | `accent_soft` on the one region that carries the answer | the same `plane`, one tint up, on exactly one region of the page. Two of them and neither is the answer |
 | `M4` | a hairline under a heading or beside a number | `rule` -- 0.06in below the box it underlines and at most 1.05in long, and horizontal: a vertical divider is a narrow `plane`. Not under every title |
 | `M5` | a numbered badge | `preset(slide, dot, T, "ellipse", tint="accent")` with the numeral written on it in `T["background"]`. What turns a list into an ordered one a reader can point at |
-| `M6` | a figure's caption, in the page's foot | `footer(slide, frame.footer, T, note="来源：xxx；图 1 主街三段式动线")` -- the source and the figure notes on one line, joined with `；`, and the height that frees goes back to the figure. Every placed figure is accounted for and each says what is shown rather than a claim the pixels do not prove. **Not** `picture_fit(..., caption=)`: a line of small type under every picture puts a second row of furniture in the middle of the body, and on a page with two figures it puts two. A number or a label *on* the figure is not a caption and stays where it is |
+| `M6` | a caption under a figure | `picture_fit(..., caption=)`. Every placed figure carries one, and it says what is shown rather than a claim the pixels do not prove |
 | `M7` | a leader line from a note to the thing it annotates | `connect`, whose `kind` is "straight", "elbow" or "curved" -- it picks its own edges from where the two boxes sit, and either end may be an `(x, y)` point, for the arrow that goes to a place rather than to a region |
 | `M8` | a mark: a rating, a delta, a share, a verdict | `mark(slide, box, T, "progress", "0.62")` and its six other kinds. A length compares at a glance where a number has to be read. [deck/build/references/tables.md](deck/build/references/tables.md) |
 | `M9` | a kicker over a region | one line at `KICKER_PT` in `MUTED`, naming what the region below it is. `page()` gives the page's own; a band inside the page can have its own too |
@@ -94,8 +122,8 @@ leaves most of this registry unused.
 
 **The failure this file exists for is the opposite of overreach.** It is a deck whose
 composed pages all resolve to a bare `P1` or `P9` with no modifier at all -- one tinted
-rectangle and three points, page after page. If your pages' `layout` column reads like
-that, or their `layers` are empty, not one of the entries above was chosen.
+rectangle and three points, page after page. If your pages' `layout` fields read like
+that, not one of the entries above was chosen.
 
 **Type on a picture is measured, so treat it as a build step and not a finish.** The
 ground under a text box is read off the render's modal pixel: a flat plate (`M14`) or the
@@ -105,13 +133,10 @@ different, the type's own colour becomes the mode, and the page comes back `unre
 at 1.0:1 -- blocking, on a page that looks fine. Keep the whole text block inside the
 plateau, never in the transition.
 
-**Declare what you used.** `ppt_outline` takes three fields per page: `layout`, **one**
-structure id from Part 1 (`"P14"`); `layers`, the modifier ids stacked on it
-(`["M4", "M11"]`), one for every band the page divides into (§3.5); and `anti_pattern`,
-the way this page would go wrong, in a line. Both id fields are closed lists -- a run
-that wrote `P01`, `P04`, `P07` into the free-text field it used to be named nothing at
-all, and its pages came out as nine variations on a card grid. That declaration is what
-makes the choice reviewable before anything is drawn. It is also measured: a deck whose composed pages concentrate on one or two
+**Declare what you used.** `ppt_outline` takes a `layout` per page -- the structure ids
+and the modifier ids, `"P14 + M4 + M11"`, one id for every band the page divides into
+(§3.5) -- and that declaration is what makes the choice reviewable before anything is
+drawn. It is also measured: a deck whose composed pages concentrate on one or two
 structures comes back as `layout_variety`, counted off the built file's own shapes, so a
 declaration cannot answer for a page drawn some other way.
 
@@ -202,7 +227,7 @@ No figure and no grid -- a spine, a process row, a number at display size, a met
 band, and the two pages that are mostly air.
 
 #### P16 -- A timeline spine
-#### P17 -- A process row
+#### P17 -- A chevron process row
 #### P19 -- The number at display size
 #### P20 -- A metric row across one band
 #### P18 -- Negative space dominant

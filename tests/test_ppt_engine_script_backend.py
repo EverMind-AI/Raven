@@ -144,7 +144,7 @@ def test_the_real_assets_land_as_modules_the_author_can_import(project: Project,
     probe.write_text(
         "from ppt_theme import THEMES, rgb\n"
         "from ppt_icons import ICON_NAMES, add_icon\n"
-        "from ppt_shapes import PRESET_NAMES, timeline\n"
+        "from ppt_shapes import PRESET_NAMES, chevron_row\n"
         "print(len(THEMES), len(ICON_NAMES), len(PRESET_NAMES), rgb('#FFFFFF') is not None)\n",
         encoding="utf-8",
     )

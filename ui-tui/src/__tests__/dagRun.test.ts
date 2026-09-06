@@ -182,6 +182,57 @@ describe('foldDagEvent', () => {
     expect(run?.nodes[0]!.promptTemplate).toBe('read the file')
     expect(run?.nodes[1]!.promptTemplate).toBeUndefined()
   })
+
+  it('records the successor run on the run it replaced', () => {
+    const run = foldDagEvent(null, started(CHAIN))
+
+    const folded = foldDagEvent(run, {
+      type: 'dag.run_replanned',
+      payload: { run_id: 'dag-1', replan_run_id: 'dag-2', from_node: 'a', reason: 'the plan was wrong' }
+    })
+
+    expect(folded?.replannedInto).toBe('dag-2')
+  })
+
+  it('records the successor even after the run has settled', () => {
+    // This normally arrives before the run's own `dag.run_completed` (the event
+    // fires the moment the desk accepts the decision, not once the successor has
+    // started), but the TUI pins run state permanently and must absorb the link
+    // whenever it arrives, including after the run has already settled.
+    const completed: DagRunCompletedEvent = {
+      type: 'dag.run_completed',
+      payload: {
+        run_id: 'dag-1',
+        dir: '/w/mas_dag/dag-1',
+        summary: { total: 2, completed: 2, failed: 0, skipped: 0 },
+        files: [
+          { node: 'a', status: 'completed' },
+          { node: 'b', status: 'completed' }
+        ]
+      }
+    }
+    const done = foldDagEvent(foldDagEvent(null, started(CHAIN)), completed)
+
+    const folded = foldDagEvent(done, {
+      type: 'dag.run_replanned',
+      payload: { run_id: 'dag-1', replan_run_id: 'dag-2', from_node: 'a', reason: 'wrong' }
+    })
+
+    expect(folded?.replannedInto).toBe('dag-2')
+    expect(folded?.done).toBe(true)
+    expect(folded?.nodes.map(n => n.status)).toEqual(['completed', 'completed'])
+  })
+
+  it('ignores a replanned event for another run', () => {
+    const run = foldDagEvent(null, started(CHAIN))
+
+    const folded = foldDagEvent(run, {
+      type: 'dag.run_replanned',
+      payload: { run_id: 'other', replan_run_id: 'dag-2', from_node: 'a', reason: 'wrong' }
+    })
+
+    expect(folded).toBe(run)
+  })
 })
 
 describe('foldDagSnapshot', () => {

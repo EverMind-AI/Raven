@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
-"""Fetch the pinned deck templates into the engine's gitignored assets directory.
+"""Pull and verify the ppt engine's bundled deck templates.
 
-The .pptx payload never enters git (the destination directory's .gitignore fences it);
-``templates.manifest.json`` pins every file by sha256 and names the endpoint that
-serves them -- a generic package in the project's GitLab package registry. The
-project is private, so the request carries ``PRIVATE-TOKEN`` from ``$GITLAB_TOKEN``
-(any token that can read the repository) or ``JOB-TOKEN`` from ``$CI_JOB_TOKEN``
-inside CI. ``--from <dir>`` copies from a local directory instead, and ``--verify``
-checks what is already in place. Whatever fails its pin is removed, never kept: a
-wheel built over the destination must not package a byte the manifest did not sign.
+The 12 template .pptx (70.53 MiB, 11 over the repo's 1 MiB cap) never enter
+git: ``templates.manifest.json`` beside this file is the tracked truth --
+one sha256 pin per file -- and this tool is the only way payload reaches the
+gitignored destination directory. CI runs it before building the ppt-engine
+wheel, the same conditional-payload discipline the trunk wheel already
+applies to ui-tui/dist; a source checkout that never runs it degrades soft
+at runtime (the engine offers an empty catalogue, its own shipped behavior).
 
-A manifest whose endpoint is still a ``stub://`` placeholder is refused with the owner
-card rather than guessed at.
+The manifest's endpoint is a deliberate stub: the physical hosting point for
+the payload is a ruling still owed by its owners (verdict C4), and this tool
+refuses to guess -- a pull against the stub stops with the owner card, not a
+request. Until the endpoint is named, ``--from`` pulls out of the vendored
+fork tree, which is where the pinned bytes live today.
+
+Standard-library only, like the launchers: CI and a bare python3 both run it.
 
 Exit codes: 0 verified; 1 payload missing or failing its pin; 2 endpoint
 still un-named (the owner card was printed).
@@ -22,7 +26,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import shutil
 import sys
 import urllib.request
@@ -73,7 +76,7 @@ def check_one(target: Path, entry: dict) -> str | None:
 
 
 def verify(dest: Path, manifest: dict) -> list[str]:
-    """Every complaint against the destination, empty when every pin holds."""
+    """Every complaint against the destination, empty when all 12 pins hold."""
     return [complaint for entry in manifest["files"] if (complaint := check_one(dest / entry["name"], entry))]
 
 
@@ -86,20 +89,6 @@ def refuse_unnamed(endpoint: dict) -> int:
     log(f"  ruling: {endpoint.get('ruling')}")
     log(f"  today:  {sys.executable} {Path(__file__).name} --from <dir holding the pinned .pptx>")
     return EXIT_UNNAMED
-
-
-def auth_headers(environ: dict[str, str] | None = None) -> dict[str, str]:
-    """The header a private registry wants, from whichever token the environment holds.
-
-    A personal or project token first (``GITLAB_TOKEN``, the one that clones the repo),
-    the CI job token when only that is present, nothing for a public host.
-    """
-    env = os.environ if environ is None else environ
-    if token := env.get("GITLAB_TOKEN") or env.get("PPT_TEMPLATES_TOKEN"):
-        return {"PRIVATE-TOKEN": token}
-    if job := env.get("CI_JOB_TOKEN"):
-        return {"JOB-TOKEN": job}
-    return {}
 
 
 def pull(source: str, dest: Path, manifest: dict) -> list[str]:
@@ -122,8 +111,7 @@ def pull(source: str, dest: Path, manifest: dict) -> list[str]:
                 continue
             shutil.copyfile(candidate, target)
         else:
-            request = urllib.request.Request(f"{source.rstrip('/')}/{name}", headers=auth_headers())  # noqa: S310 -- scheme gated in main()
-            with urllib.request.urlopen(request) as response:  # noqa: S310
+            with urllib.request.urlopen(f"{source.rstrip('/')}/{name}") as response:  # noqa: S310 -- scheme gated in main()
                 target.write_bytes(response.read())
         if complaint := check_one(target, entry):
             target.unlink(missing_ok=True)

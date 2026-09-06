@@ -66,18 +66,6 @@ class RecoveryLimits:
     post_tool_empty_max_nudges: int = 1
     thinking_prefill_max_retries: int = 2
     empty_content_max_retries: int = 3
-    #: How long the loop waits, and how many times, when a model call comes back as
-    #: a retryable error after the provider's own ladder gave up. The provider's
-    #: ladder is seconds long -- right for a dropped connection, and too short for
-    #: a gateway that serves error pages for a few minutes. One measured run had 62
-    #: minutes and 23.8M tokens of work behind it when a 40-second outage ended it.
-    llm_error_retry_delays: tuple[float, ...] = (15.0, 30.0, 60.0)
-    #: Whether a streamed call that failed after it had already produced output is
-    #: asked again. Off, the turn fails (N-TURNFAILED): a person watching the stream
-    #: has seen the words and would see them twice. On, for an unattended agent whose
-    #: client is a machine: one measured deck build had two hours behind it when a
-    #: mid-stream "Network connection lost" ended the turn with nothing published.
-    llm_retry_after_output: bool = False
 
 
 def limits_from_defaults(defaults: object) -> RecoveryLimits:
@@ -91,20 +79,7 @@ def limits_from_defaults(defaults: object) -> RecoveryLimits:
         post_tool_empty_max_nudges=getattr(defaults, "post_tool_empty_max_nudges", 1),
         thinking_prefill_max_retries=getattr(defaults, "thinking_prefill_max_retries", 2),
         empty_content_max_retries=getattr(defaults, "empty_content_max_retries", 3),
-        llm_error_retry_delays=_ladder(getattr(defaults, "llm_error_retry_delays", None)),
-        llm_retry_after_output=bool(getattr(defaults, "llm_retry_after_output", False)),
     )
-
-
-def _ladder(configured: object) -> tuple[float, ...]:
-    """The outer retry ladder as configured, where an explicit `[]` means none.
-
-    Only an absent setting takes the default: `[]` is the documented way to turn
-    the ladder off, and `or` read it as absent and put the 105 seconds back.
-    """
-    if configured is None:
-        return (15.0, 30.0, 60.0)
-    return tuple(float(delay) for delay in configured)
 
 
 def strip_think_blocks(text: str) -> str:

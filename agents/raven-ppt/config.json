@@ -2,10 +2,10 @@
   "language": "en",
   "agents": {
     "defaults": {
-      "model": "z-ai/glm-5.3-flash",
+      "model": "anthropic/claude-sonnet-5",
       "provider": "ppt",
       "contextWindowTokens": 1000000,
-      "llmCallTimeout": 1800,
+      "llmCallTimeout": 600,
       "maxToolIterations": 600,
       "maxConcurrentSubagents": 2,
       "reasoningEffort": "medium",
@@ -20,25 +20,14 @@
             }
           }
         }
-      },
-      "llmErrorRetryDelays": [
-        30,
-        60,
-        120,
-        240,
-        300,
-        300,
-        300,
-        300
-      ],
-      "llmRetryAfterOutput": true
+      }
     }
   },
   "providers": {
     "ppt": {
       "apiBase": "https://openrouter.ai/api/v1",
       "models": [
-        "z-ai/glm-5.3-flash"
+        "anthropic/claude-sonnet-5"
       ]
     }
   },

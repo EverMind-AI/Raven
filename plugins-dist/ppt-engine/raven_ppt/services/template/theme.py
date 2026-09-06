@@ -130,15 +130,13 @@ def theme_of(inventory: TemplateInventory, stated: dict[str, object] | None = No
             entry[role] = said[role]
 
     ground, ink, accent = str(entry["background"]), str(entry["foreground"]), str(entry["accent"])
-    entry["surface"] = _visible(str(said.get("surface") or _plane(accent, ground)), accent, ground)
+    entry["surface"] = said.get("surface") or _plane(accent, ground)
     surface = str(entry["surface"])
     receded = _receded(ink, ground, surface)
     entry["muted"] = (
         said.get("muted") or _stated_muted(_slot(palette, mapping, "tx2"), ground, surface, receded) or receded
     )
-    entry["accent_soft"] = _louder(
-        str(said.get("accent_soft") or _mixed(accent, ground, _SOFT_MIX)), surface, accent, ground
-    )
+    entry["accent_soft"] = said.get("accent_soft") or _mixed(accent, ground, _SOFT_MIX)
     entry["accent_ink"] = said.get("accent_ink") or _readable(accent, str(entry["accent_soft"]), ink)
     entry["grid"] = said.get("grid") or _mixed(ink, ground, _GRID_MIX)
 
@@ -335,56 +333,6 @@ def _plane(accent: str, ground: str) -> str:
     return _mixed(accent, ground, 1 - (1 - _SOFT_MIX) / 2)
 
 
-# The least a plane may stand off its ground and still be a plane. Measured on the
-# beige template: its pages paint a #F2E3CB ground, the plane derived from a
-# terracotta accent landed at #FAF1E2, 1.10 against it, and every card on two live
-# pages was a card only to the file -- the render showed copy floating on beige.
-PLANE_FLOOR = 8.0
-_TILE_LEAD = 4.0
-
-
-def _visible(plane: str, accent: str, ground: str) -> str:
-    """`plane`, or the nearest tint of the accent that stands off the ground.
-
-    Stood off in CIE76 colour difference and not in luminance contrast: the beige
-    template's plane sat at 1.13:1 against its ground, which is the ratio a blue
-    plane reads perfectly well at on white, and two live pages' cards were cards
-    only to the file -- the two tints differed by a dE of 7 where the blue's is 9.
-    So the floor is a dE, and a plane under it is walked from its own mix towards
-    the accent in small steps until it clears. One already clear is returned exactly
-    as it was, so a stated plane keeps its value.
-    """
-    if _distance(plane, ground) >= PLANE_FLOOR:
-        return plane
-    towards = 1 - (1 - _SOFT_MIX) / 2
-    while towards > 0.0:
-        candidate = _mixed(accent, ground, towards)
-        if _distance(candidate, ground) >= PLANE_FLOOR:
-            return candidate
-        towards -= 0.04
-    return accent
-
-
-def _louder(tile: str, plane: str, accent: str, ground: str) -> str:
-    """`tile`, or the mix of the accent that stands further off the ground than `plane`.
-
-    The plane is the quiet zone and the tile carries the answer, and a plane walked
-    off its ground by `_visible` can walk past a pale accent's tile. So the tile is
-    asked to lead the plane by `_TILE_LEAD` of dE and by luminance contrast both,
-    and is deepened towards the accent until it does.
-    """
-    lead = _distance(plane, ground) + _TILE_LEAD
-    if _distance(tile, ground) >= lead and _contrast(tile, ground) > _contrast(plane, ground):
-        return tile
-    towards = _SOFT_MIX
-    while towards > 0.0:
-        candidate = _mixed(accent, ground, towards)
-        if _distance(candidate, ground) >= lead and _contrast(candidate, ground) > _contrast(plane, ground):
-            return candidate
-        towards -= 0.04
-    return accent
-
-
 def _stated_muted(stated: str | None, ground: str, surface: str, receded: str) -> str | None:
     """`tx2` when it is the receded ink, or None to keep the mix.
 
@@ -468,28 +416,6 @@ def _luminance(colour: str) -> float:
         share = value / 255
         channels.append(share / 12.92 if share <= 0.03928 else ((share + 0.055) / 1.055) ** 2.4)
     return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
-
-
-def _distance(one: str, two: str) -> float:
-    """CIE76 colour difference, which tells two tints apart where a luminance ratio cannot."""
-    first, second = _lab(one), _lab(two)
-    return sum((a - b) ** 2 for a, b in zip(first, second, strict=True)) ** 0.5
-
-
-def _lab(colour: str) -> tuple[float, float, float]:
-    parts = _rgb(colour)
-    if parts is None:
-        return (0.0, 0.0, 0.0)
-    linear = []
-    for value in parts:
-        share = value / 255
-        linear.append(share / 12.92 if share <= 0.04045 else ((share + 0.055) / 1.055) ** 2.4)
-    red, green, blue = linear
-    x = (0.4124 * red + 0.3576 * green + 0.1805 * blue) / 0.95047
-    y = 0.2126 * red + 0.7152 * green + 0.0722 * blue
-    z = (0.0193 * red + 0.1192 * green + 0.9505 * blue) / 1.08883
-    fx, fy, fz = (t ** (1 / 3) if t > 0.008856 else 7.787 * t + 16 / 116 for t in (x, y, z))
-    return (116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz))
 
 
 def _mixed(colour: str, ground: str, towards: float) -> str:

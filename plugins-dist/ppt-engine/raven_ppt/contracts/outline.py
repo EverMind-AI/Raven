@@ -24,7 +24,6 @@ into a search. This is the moment when what the deck is missing is actually know
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -38,31 +37,6 @@ def outline_path(project: Project) -> Path:
     return project.state_dir / OUTLINE_FILE
 
 
-_ID = re.compile(r"\b([PM])(\d+)\b", re.IGNORECASE)
-
-
-def layout_fields(entry: dict) -> dict[str, object]:
-    """`layout`, `layers` and `anti_pattern` off one entry, old shape or new.
-
-    The old shape wrote every id into `layout` as `"P14 + M4 + M11"`, and outlines in
-    that shape are on disk. Read here rather than at the tool's edge so a plan loaded
-    from a file and a plan just submitted come out the same, which is the property the
-    section field lost by being written and never read back.
-    """
-    written = str(entry.get("layout") or "").strip()
-    found = [(kind.upper(), number) for kind, number in _ID.findall(written)]
-    structure = next((f"P{number}" for kind, number in found if kind == "P"), written if not found else "")
-    layers = [f"M{number}" for kind, number in found if kind == "M"]
-    layers += [str(one).strip().upper() for one in entry.get("layers") or () if str(one).strip()]
-    return {
-        "layout": structure,
-        # Deduplicated in the order they were named: the same modifier written into both
-        # halves of a half-migrated entry is one layer on the page, not two.
-        "layers": tuple(dict.fromkeys(layers)),
-        "anti_pattern": str(entry.get("anti_pattern") or "").strip(),
-    }
-
-
 @dataclass(frozen=True)
 class PagePlan:
     """One page, as an argument rather than as a layout."""
@@ -74,33 +48,14 @@ class PagePlan:
     carries: str = ""
     """What carries it: a figure id, a table, a chart, a number, a diagram."""
     layout: str = ""
-    """Which page structure this page is composed on, as one id.
+    """Which page structure and modifier layers this page is composed of, by id.
 
-    `"P14"`, from `references/layouts.md`, whose Part 1 is eleven skeletons with every id
-    folded into the one it varies. One id and not a sum: the structure is the page's
-    bones and the modifiers stack on it, so they are `layers` and reading this column
-    down the deck is what says whether a range of structures was used. Structured because
-    a page's shape was decided while its geometry was being typed, and what came of that
-    is measurable -- one delivered deck drew its own layout on eleven pages, four of
-    which are the same eight lines (a table, one rounded plane, three points).
-
-    Empty says "this page is a template clone, or I have not decided"; an id the
-    catalogue does not carry is refused, because it says something false for free."""
-    layers: tuple[str, ...] = field(default_factory=tuple)
-    """The modifier layers stacked on that structure, by id: `("M4", "M11")`.
-
-    Its own field because it was written into `layout` as `"P14 + M4 + M11"` and a
-    string of ids cannot be a closed list -- so the one field that decides a page's shape
-    took free text, and a live run filled it with `P01`, `P04`, `P07`, none of which is
-    an id. Split, both halves are enumerable at the tool's edge."""
-    anti_pattern: str = ""
-    """What this page must not turn into, in a line.
-
-    The structure says what the page is; this says which way it goes wrong -- "two
-    columns of unrelated bullets with a picture in one of them", "six cells filled
-    because there are six cells". Part 1's third column carries one per skeleton and
-    this is where the page's own goes, written before the geometry, because by the time
-    the render shows it the page has been drawn."""
+    `"P14 + M4 + M11"`, from `references/layouts.md`. Structured because a page's shape
+    was decided while its geometry was being typed, and
+    what came of that is measurable -- one delivered deck drew its own layout on eleven
+    pages, four of which are the same eight lines (a table, one rounded plane, three
+    points). Declared here, the choice is reviewable before anything is drawn, and the
+    deck's spread of structures is legible by reading down the column."""
     figures: tuple[str, ...] = field(default_factory=tuple)
     says: tuple[str, ...] = field(default_factory=tuple)
     """The supporting points, in the deck's language.
@@ -136,15 +91,6 @@ class PagePlan:
 
     `None` means drawn from scratch, which is a legitimate answer for a page the
     template has no page for; `needs` is where the reason goes."""
-    borrowed: str = ""
-    """The bundled template `prototype` is numbered in, when it is not the bound one.
-
-    Empty for a page built on the bound template's own example. A stem such as
-    `gold_panel_year_end_summary` says the page was cloned out of that template with
-    `prototype(bundled(stem), n)`: its colours and master follow the deck, so what
-    it borrows is the arrangement. Recorded so the checks that read the plan --
-    which file a page promised, whose placeholder copy and photographs to look for,
-    which pages are furniture -- open the right file."""
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -152,23 +98,18 @@ class PagePlan:
             "claim": self.claim,
             "carries": self.carries,
             "layout": self.layout,
-            "layers": list(self.layers),
-            "anti_pattern": self.anti_pattern,
             "figures": list(self.figures),
             "says": list(self.says),
             "section": self.section,
             "needs": self.needs,
             "prototype": self.prototype,
-            "borrowed": self.borrowed,
         }
 
     def summary(self) -> str:
         said = f"{self.page}. {self.claim}"
         if self.carries:
             said += f"  [{self.carries}]"
-        if self.prototype is not None and self.borrowed:
-            said += f"  (from {self.borrowed} page {self.prototype})"
-        elif self.prototype is not None:
+        if self.prototype is not None:
             said += f"  (from template page {self.prototype})"
         return said
 
@@ -219,7 +160,7 @@ def load_outline(path: Path) -> Outline | None:
                     page=int(entry.get("page", 0)),
                     claim=str(entry.get("claim", "")),
                     carries=str(entry.get("carries") or ""),
-                    **layout_fields(entry),
+                    layout=str(entry.get("layout") or ""),
                     figures=tuple(str(f) for f in entry.get("figures") or ()),
                     says=tuple(str(s) for s in entry.get("says") or ()),
                     needs=str(entry.get("needs") or ""),
@@ -230,7 +171,6 @@ def load_outline(path: Path) -> Outline | None:
                     # the same way silently.
                     section=str(entry.get("section") or ""),
                     prototype=int(entry["prototype"]) if entry.get("prototype") is not None else None,
-                    borrowed=str(entry.get("borrowed") or "").strip(),
                 )
             )
         except (TypeError, ValueError):

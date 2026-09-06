@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import posixpath
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -24,6 +25,10 @@ from raven.agent.subagent.prompt_capabilities import AgentCapabilities
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.subagent.prompt_paths import check_confined, split_reference
 from raven.agent.subagent.prompt_placeholders import parse_placeholders
+from raven.config.schema import ThirdPartyCliSubagentConfig
+
+if TYPE_CHECKING:
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
 
 # --- graph ---------------------------------------------------------------
 
@@ -577,9 +582,9 @@ async def test_store_roundtrip() -> None:
 # --- reader ---------------------------------------------------------------
 
 
-def _seed_run(be: "_FakeBackend", run_id: str, *, finalized: bool) -> None:
+def _seed_run(be: "_FakeBackend", run_id: str, *, finalized: bool, root: str = "/hist/mas_dag") -> None:
     """Write a two-node run dir the way DagRunStore/_finalize would."""
-    rdir = f"/hist/mas_dag/{run_id}"
+    rdir = f"{root}/{run_id}"
     graph = {
         "task_summary": "the whole graph",
         "nodes": [
@@ -730,6 +735,390 @@ async def test_read_node_of_a_node_that_never_ran_is_empty_not_an_error() -> Non
     assert node["prompt"] is None
     assert node["output"] is None
     assert node["output_chars"] == 0
+
+
+# --- replan ----------------------------------------------------------------
+
+# A real, well-formed run id: _check_run_id runs the moment prepare_replan
+# reads the old graph, well before anything this suite is actually about.
+_OLD_RUN_ID = "20260904T000000Z-00000001"
+
+
+def _node(node_id: str, *, depends_on: list[str] | None = None, prompt: str = "do it") -> dict:
+    """A minimal, schema-valid replan node dict, matching `_seed_run`'s own nodes."""
+    return {
+        "id": node_id,
+        "subagent": "x",
+        "node_summary": "a replan node",
+        "prompt_template": prompt,
+        "depends_on": depends_on or [],
+    }
+
+
+def _set_seeded_confirm(tool: "SubAgentDagTool", run_id: str, value: bool) -> None:
+    """Rewrite the seeded graph.json with a top-level `confirm` key.
+
+    `_seed_run` writes none, which parses as False; a replan inherits the
+    confirmation gate from the old run's own spec, so exercising the declined
+    path needs it set on the seeded graph explicitly.
+    """
+    path = f"{tool._run_root(None)}/{run_id}/graph.json"
+    graph = json.loads(tool._backend.files[path].decode())
+    graph["confirm"] = value
+    tool._backend.files[path] = json.dumps(graph).encode()
+
+
+def _claim_the_id_from_under_it(tool: "SubAgentDagTool", run_id: str, node_id: str) -> None:
+    """Record `node_id` as already claimed by `run_id` in this session's index.
+
+    A fresh run's own dispatch claims its node ids into the same index; seeding
+    a claim here ahead of time is what makes that claim collide.
+    """
+    path = f"{tool._run_root(None)}/index.json"
+    entries = json.loads(tool._backend.files[path].decode()) if path in tool._backend.files else []
+    entries.append({"run_id": run_id, "nodes": [node_id]})
+    tool._backend.files[path] = json.dumps(entries).encode()
+
+
+def _recording_announce(sink: list) -> Any:
+    """An announcer of the shape `_final_announcer` awaits.
+
+    A plain lambda satisfies the constructor but blows up on the `await` inside
+    the announcer, so a test that means to assert "nothing was announced" fails
+    with a TypeError instead of showing what got announced.
+    """
+
+    async def _announce(run_id: str, _text: str, _origin: dict) -> None:
+        sink.append(run_id)
+
+    return _announce
+
+
+async def _replannable_tool(tmp_path, **kw) -> tuple["SubAgentDagTool", dict]:
+    """A real graph tool over a seeded, still-unfinalized old run.
+
+    `finalized=False` on purpose: that is the state a replan is decided in, and it
+    is what makes the overlay load-bearing -- an unfinalized run's index entry
+    carries no per-node status, so every node of it reads back `running`.
+
+    `_seed_run`'s own literal `/hist/mas_dag` prefix is a convention shared with
+    the direct, root-as-argument reader calls around it. A real `SubAgentDagTool`
+    resolves its own root through `SessionManager` instead
+    (`<workspace>/sessions/<channel>/<chat>/subagents/mas_dag`), so the seed is
+    written there -- computed from the same tool, after `set_context`, before
+    `prepare_replan`'s own graph.json read ever runs -- rather than at the
+    literal prefix the low-level reader tests use.
+
+    That same `_run_root` call is what makes `SessionManager` create this
+    workspace's `sessions/` directory for real, which is what lets
+    `_session_nodes` consult the backend at all instead of short-circuiting to
+    empty. What it reads from there is still the fake backend's own
+    `index.json`, seeded here as the old run claiming both seeded nodes with
+    no per-node status -- again, a run that has not finalized.
+
+    `agents=` registers "x" for real: `prepare_replan` runs the replacement
+    graph through the same `_preflight` a submitted one would, which refuses
+    an unregistered sub-agent name -- unlike the graph/render/store tests
+    elsewhere in this file, this is the one path in it that actually checks.
+    """
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+
+    be = _FakeBackend()
+    tool = SubAgentDagTool(
+        workspace=tmp_path,
+        agents=[ThirdPartyCliSubagentConfig(name="x", command="true")],
+        **kw,
+    )
+    tool.set_context("cli", "direct", None)
+    root = tool._run_root(None)
+    _seed_run(be, _OLD_RUN_ID, finalized=False, root=root)
+    be.files[f"{root}/index.json"] = json.dumps([{"run_id": _OLD_RUN_ID, "nodes": ["a", "b"]}]).encode()
+    tool._backend = be
+    live = {"files": [{"node": "a", "status": "exception"}, {"node": "b", "status": "completed"}]}
+    return tool, live
+
+
+async def test_replanning_refuses_a_redeclared_id(tmp_path) -> None:
+    """`b` belongs to the old run forever, whatever became of it."""
+    tool, live = await _replannable_tool(tmp_path)
+
+    out = await tool.prepare_replan(_OLD_RUN_ID, "a", [_node("b")], "the plan was wrong", None, live)
+
+    assert isinstance(out, str)
+    assert f"already used by run '{_OLD_RUN_ID}'" in out
+    assert "depends_on" in out, "the refusal has to say how to reuse it instead"
+
+
+async def test_replanning_allows_a_reference_to_a_completed_node_before_the_index_is_written(tmp_path) -> None:
+    """The old run has not finalized, so is_readable is False for every node of it.
+
+    This is the test the overlay exists for: without it, `b` reads back `running`
+    from the index and a reference to a plainly-completed node is refused.
+    """
+    tool, live = await _replannable_tool(tmp_path)
+
+    plan = await tool.prepare_replan(
+        _OLD_RUN_ID,
+        "a",
+        [_node("fresh", depends_on=["b"], prompt="use {{ b.output }}")],
+        "the plan was wrong",
+        None,
+        live,
+    )
+
+    assert not isinstance(plan, str), plan
+    assert [n.id for n in plan.nodes] == ["fresh"]
+    assert plan.from_node == "a"
+    assert plan.run_id and plan.run_id != _OLD_RUN_ID, "the successor id is minted up front"
+
+
+async def test_replanning_refuses_a_reference_to_a_node_that_did_not_complete(tmp_path) -> None:
+    tool, live = await _replannable_tool(tmp_path)
+    live = {"files": [{"node": "a", "status": "exception"}, {"node": "b", "status": "running"}]}
+
+    out = await tool.prepare_replan(_OLD_RUN_ID, "a", [_node("fresh", depends_on=["b"])], "wrong", None, live)
+
+    assert isinstance(out, str)
+    assert "b" in out
+
+
+async def test_replanning_refuses_while_delegation_is_paused(tmp_path) -> None:
+    tool, live = await _replannable_tool(tmp_path, is_paused=lambda: True)
+
+    out = await tool.prepare_replan(_OLD_RUN_ID, "a", [_node("fresh")], "wrong", None, live)
+
+    assert isinstance(out, str)
+    assert "delegation is paused" in out
+
+
+async def test_replanning_charges_the_dispatch_quota(tmp_path) -> None:
+    charged: list[str | None] = []
+
+    def _charge(key: str | None) -> None:
+        charged.append(key)
+        return None
+
+    tool, live = await _replannable_tool(tmp_path, charge=_charge)
+
+    await tool.prepare_replan(_OLD_RUN_ID, "a", [_node("fresh")], "wrong", None, live)
+
+    assert len(charged) == 1, "a replan submits a new graph, which is the unit this quota counts"
+
+
+async def test_a_spent_quota_refuses_the_replan(tmp_path) -> None:
+    tool, live = await _replannable_tool(tmp_path, charge=lambda key: "Error: rate limit")
+
+    out = await tool.prepare_replan(_OLD_RUN_ID, "a", [_node("fresh")], "wrong", None, live)
+
+    assert out == "Error: rate limit"
+
+
+async def test_a_declined_confirmation_refuses_the_replan(tmp_path) -> None:
+    async def _ask(conversation: str, question: str) -> bool:
+        return False
+
+    tool, live = await _replannable_tool(tmp_path, ask=_ask)
+    # The gate is inherited from the old run's spec, so the seeded graph has to
+    # carry it -- `_seed_run` writes no `confirm` key, which parses as False.
+    _set_seeded_confirm(tool, _OLD_RUN_ID, True)
+
+    out = await tool.prepare_replan(_OLD_RUN_ID, "a", [_node("fresh")], "wrong", None, live)
+
+    assert isinstance(out, str)
+    assert "did not approve" in out
+    # Pin the corrected wording: the old run is still going, not already stopped.
+    assert "still running as submitted" in out
+    assert "already stopped" not in out
+
+
+async def test_the_link_is_recorded_on_the_old_runs_graph_json(tmp_path) -> None:
+    tool, live = await _replannable_tool(tmp_path)
+    plan = await tool.prepare_replan(_OLD_RUN_ID, "a", [_node("fresh")], "the plan was wrong", None, live)
+
+    await tool.start_replan(_OLD_RUN_ID, plan)
+
+    graph = json.loads(tool._backend.files[f"{tool._run_root(None)}/{_OLD_RUN_ID}/graph.json"].decode())
+    assert graph["replan"]["run_id"] == plan.run_id
+    assert graph["replan"]["from_node"] == "a"
+    assert graph["replan"]["reason"] == "the plan was wrong"
+    assert graph["replan"]["started"] is True
+    assert graph["replan"]["decided_at"] > 0
+    assert graph["nodes"], "the original graph is still there; the key is added beside it"
+
+
+async def test_the_successors_spec_inherits_task_summary_and_confirm_from_the_old_run(tmp_path) -> None:
+    """`_submit_replan` builds the successor's spec from the plan's own
+    `task_summary`/`confirm`, not from the plan's `reason` string and a bare
+    `False` standing in for fields nobody asked the old run about.
+    """
+    captured: dict[str, object] = {}
+
+    tool, live = await _replannable_tool(tmp_path)
+    plan = await tool.prepare_replan(_OLD_RUN_ID, "a", [_node("fresh")], "the plan was wrong", None, live)
+
+    async def _fake_run(spec, *_args, **_kwargs):
+        from raven.agent.subagent.dag_runner import DagRunResult
+
+        captured["task_summary"] = spec.task_summary
+        captured["confirm"] = spec.confirm
+        return DagRunResult(run_id=plan.run_id, dir="/d")
+
+    tool._run = _fake_run
+
+    await tool.start_replan(_OLD_RUN_ID, plan)
+    task = tool._runs.get(plan.run_id)
+    assert task is not None, "the successor must have been dispatched as its own task"
+    await task
+
+    assert captured["task_summary"] == "the whole graph", "the old run's task_summary, not its replan reason"
+    assert captured["confirm"] is False, "the old run's own confirm gate, not a hardcoded False"
+
+
+async def test_prepare_replan_tolerates_a_graph_already_carrying_a_replan_link(tmp_path) -> None:
+    """A second replan attempt on the same run must still parse its graph.json,
+    which by now carries the first attempt's `replan` key -- a key `parse_dag_spec`
+    rejects as unknown unless it is stripped before parsing.
+
+    The first `start_replan` is only here to seed that key, so its successor is
+    stubbed out and awaited: a real one dispatches a live background run that
+    outlives the test and parks the event loop's teardown.
+    """
+    from raven.agent.subagent.dag_adjudication import ReplanPlan
+    from raven.agent.subagent.dag_runner import DagRunResult
+
+    tool, live = await _replannable_tool(tmp_path)
+    first = await tool.prepare_replan(_OLD_RUN_ID, "a", [_node("fresh")], "first try", None, live)
+
+    async def _fake_run(*_args, **_kwargs):
+        return DagRunResult(run_id=first.run_id, dir="/d")
+
+    tool._run = _fake_run
+    await tool.start_replan(_OLD_RUN_ID, first)
+    await tool._runs[first.run_id]
+
+    graph = json.loads(tool._backend.files[f"{tool._run_root(None)}/{_OLD_RUN_ID}/graph.json"].decode())
+    assert "replan" in graph, "the seed for this test: a link must already be on the graph"
+
+    second = await tool.prepare_replan(_OLD_RUN_ID, "a", [_node("again")], "second try", None, live)
+
+    assert isinstance(second, ReplanPlan), "must parse past the stray `replan` key rather than raising"
+
+
+async def test_a_refused_submission_still_records_the_link_as_unstarted(tmp_path) -> None:
+    """A dangling reason is worse than a record saying the successor never ran."""
+    tool, live = await _replannable_tool(tmp_path)
+    plan = await tool.prepare_replan(_OLD_RUN_ID, "a", [_node("fresh")], "wrong", None, live)
+    _claim_the_id_from_under_it(tool, plan.run_id, "fresh")
+
+    out = await tool.start_replan(_OLD_RUN_ID, plan)
+
+    graph = json.loads(tool._backend.files[f"{tool._run_root(None)}/{_OLD_RUN_ID}/graph.json"].decode())
+    assert graph["replan"]["started"] is False
+    assert graph["replan"]["error"]
+    assert "Error" in str(getattr(out, "model_text", out))
+
+
+async def test_a_bound_foreground_replan_returns_the_successors_first_event(tmp_path) -> None:
+    tool, live = await _replannable_tool(tmp_path)
+    plan = await tool.prepare_replan(_OLD_RUN_ID, "a", [_node("fresh")], "wrong", None, live)
+
+    out = await tool.start_replan(_OLD_RUN_ID, plan, bound=True)
+
+    assert plan.run_id in str(getattr(out, "model_text", out))
+    assert "started in the background" not in str(getattr(out, "model_text", out))
+
+
+async def test_a_replanned_run_does_not_announce_its_own_outcome(tmp_path) -> None:
+    """`_run_detached` is the announce site. There is no seam to hand it a
+    `DagRunResult` directly, so `_run` is stubbed to hand one back instead --
+    driving the real branch rather than adding a production-only test hook.
+    """
+    import asyncio
+
+    from raven.agent.subagent.dag_runner import DagRunResult
+
+    announced: list[str] = []
+    tool, live = await _replannable_tool(tmp_path, announce=_recording_announce(announced))
+
+    async def _fake_run(*_args, **_kwargs):
+        return DagRunResult(run_id="r1", dir="/d", replanned_into="run-new")
+
+    tool._run = _fake_run
+    await tool._run_detached(object(), "r1", asyncio.Event(), object(), object(), None, frozenset(), {}, None)
+
+    assert announced == [], "the resolve call already told the agent; a second telling is narration"
+
+
+async def test_a_replanned_run_stays_silent_through_a_released_outbox_too(tmp_path) -> None:
+    """The suppression above must win over the outbox branch, not just the
+    `outbox is None` half of it that the sibling test exercises -- a released
+    outbox stays in `_outboxes` exactly like a bound one, so `put_final` would
+    reach it here too and announce the raw `DagRunResult` were the check
+    ordered the other way around.
+    """
+    import asyncio
+
+    from raven.agent.subagent.dag_adjudication import Outbox
+    from raven.agent.subagent.dag_runner import DagRunResult
+
+    announced: list[str] = []
+    tool, live = await _replannable_tool(tmp_path, announce=_recording_announce(announced))
+
+    async def _fake_run(*_args, **_kwargs):
+        return DagRunResult(run_id="r1", dir="/d", replanned_into="run-new")
+
+    tool._run = _fake_run
+    outbox = Outbox(
+        conversation="cli:direct",
+        announce_report=tool._report_announcer("r1", tool._default_origin),
+        announce_final=tool._final_announcer("r1", tool._default_origin),
+    )
+    await outbox.release(flush=True)
+    assert not outbox.bound, "the released lane this test means to cover"
+
+    await tool._run_detached(object(), "r1", asyncio.Event(), object(), object(), None, frozenset(), {}, outbox)
+
+    assert announced == [], "released is still an outbox in `_outboxes`; a replan must silence it too"
+
+
+async def test_emit_replanned_sends_the_wire_event(tmp_path) -> None:
+    """The control tool's own entry point, once resolve_node has succeeded."""
+    published: list[tuple[str, dict]] = []
+
+    async def _publish(name: str, value: dict) -> None:
+        published.append((name, value))
+
+    tool, live = await _replannable_tool(tmp_path, progress_publisher=_publish)
+    plan = await tool.prepare_replan(_OLD_RUN_ID, "a", [_node("fresh")], "the plan was wrong", None, live)
+
+    await tool.emit_replanned(_OLD_RUN_ID, plan)
+
+    assert published == [
+        (
+            "dag_run_replanned",
+            {
+                "run_id": _OLD_RUN_ID,
+                "replan_run_id": plan.run_id,
+                "from_node": "a",
+                "reason": "the plan was wrong",
+            },
+        )
+    ]
+
+
+async def test_start_replan_no_longer_sends_the_wire_event(tmp_path) -> None:
+    """Emitting moved to the control tool; this call only dispatches and records."""
+    published: list[tuple[str, dict]] = []
+
+    async def _publish(name: str, value: dict) -> None:
+        published.append((name, value))
+
+    tool, live = await _replannable_tool(tmp_path, progress_publisher=_publish)
+    plan = await tool.prepare_replan(_OLD_RUN_ID, "a", [_node("fresh")], "the plan was wrong", None, live)
+
+    await tool.start_replan(_OLD_RUN_ID, plan)
+
+    assert published == []
 
 
 # --- reference roots -----------------------------------------------------

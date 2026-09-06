@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.agent.tools.filesystem import EditFileTool, ReadFileTool, WriteFileTool
+from raven.agent.tools.filesystem import EditFileTool, WriteFileTool
 from raven.agent.tools.registry import ToolRegistry
 from raven.contracts.tool import ToolOutput, ToolResult
 
@@ -101,49 +101,3 @@ async def test_the_registry_carries_the_diff_to_the_agent_loop(tmp_path: Path):
     assert out.diff is not None and "+after" in out.diff
     # It rides beside the model text, never inside it.
     assert "after" not in str(out).replace(str(target), "")
-
-
-@pytest.mark.asyncio
-async def test_a_url_is_refused_by_naming_the_tool_that_can_reach_it(tmp_path: Path):
-    """ "File not found" describes the wrong problem for a URL.
-
-    The file is not missing; the argument belongs to another tool. Reported as a
-    missing file it reads as a misspelling, so the caller tries the same URL again
-    with the workspace prefixed, percent-decoded, a directory up -- none of which
-    can work, and the search that produced the URL stalls there.
-    """
-    read = ReadFileTool(workspace=tmp_path)
-
-    for url in ("https://example.com/paper.pdf", "http://example.com/paper.pdf"):
-        answer = await read.execute(path=url)
-        assert isinstance(answer, str)
-        assert "web_fetch" in answer, answer
-        assert "File not found" not in answer, answer
-
-
-@pytest.mark.asyncio
-async def test_a_file_url_is_answered_with_the_path_it_means(tmp_path: Path):
-    """A file:// URL does name a local file, so the next step is the path, not a fetch."""
-    target = tmp_path / "notes.md"
-    target.write_text("facts", encoding="utf-8")
-
-    answer = await ReadFileTool(workspace=tmp_path).execute(path=f"file://{target}")
-
-    assert isinstance(answer, str)
-    assert str(target) in answer
-    assert "web_fetch" not in answer
-
-
-@pytest.mark.asyncio
-async def test_a_path_that_is_merely_missing_still_says_so(tmp_path: Path):
-    """The URL wording is an extra branch, not a replacement.
-
-    A relative path with a directory in it must not read as a host name.
-    """
-    read = ReadFileTool(workspace=tmp_path)
-
-    for missing in ("ghost.md", "docs/readme.md"):
-        answer = await read.execute(path=missing)
-        assert isinstance(answer, str)
-        assert answer.startswith("Error: File not found:")
-        assert "web_fetch" not in answer

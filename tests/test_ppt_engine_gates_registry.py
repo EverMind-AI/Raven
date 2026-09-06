@@ -393,231 +393,24 @@ def test_every_check_produces_the_severity_it_declares(sample: Sample, tmp_path:
     a check that quietly starts refusing a deck fails here instead of stalling a
     run.
 
-    Eight decks and not one, because the rows fire on conditions that cannot all be true
-    of one file. The loaded deck trips every per-page check there is; the bare one has
-    no index, no labels, no brief and no render, so what fires there is the four that
-    report which checks could not run; the third is a whole deck of one composition,
-    which is the only shape `layout_variety` has an opinion about -- a four-page sample
-    cannot be a deck whose pages are all alike; the fourth is one banded table, which is
-    a pattern down a table and not a property of any page; the fifth carries the
-    readings measured off a render; the sixth gives every page a foot and no page a
-    number -- the one state `unnumbered_pages` is about and one no deck tripping
-    `no_footer` can be in -- and puts a row of panels over a row of copy on a second
-    grid, which is the one state `grid_drift` is about; the seventh divides its body
-    with nothing, which every other fixture here does with a panel or a picture; and the
-    eighth sits on a layout that carries the template's photograph, which is on no page
-    and so on no other fixture.
+    Four decks and not one, because the rows fire on conditions that cannot all be
+    true of one file. The loaded deck trips every per-page check there is; the bare one
+    has no index, no labels, no brief and no render, so what fires there is the four
+    that report which checks could not run; the third is a whole deck of one
+    composition, which is the only shape `layout_variety` has an opinion about -- a
+    four-page sample cannot be a deck whose pages are all alike; and the fourth is one
+    banded table, which is a pattern down a table and not a property of any page.
+    Between them they have to cover the table.
     """
     loaded = check_deck(sample.deck)
     bare = check_deck(DeckUnderReview(pptx_path=sample.deck.pptx_path))
     alike = check_deck(DeckUnderReview(pptx_path=_one_composition(tmp_path)))
     banded = check_deck(DeckUnderReview(pptx_path=_a_banded_table(tmp_path)))
-    fresh_path, grid, plan, painted = _a_deck_the_new_readings_are_for(tmp_path)
-    fresh = check_deck(
-        DeckUnderReview(pptx_path=fresh_path, prototypes=None, band_grid=grid, outline=plan, words=painted)
-    )
-    footed = check_deck(DeckUnderReview(pptx_path=_a_deck_with_feet_and_no_numbers(tmp_path)))
-    plain_path, plain_grid = _a_body_nobody_divided(tmp_path)
-    plain = check_deck(DeckUnderReview(pptx_path=plain_path, band_grid=plain_grid))
-    inherited_path, inherited_template = _a_layout_carrying_the_templates_photograph(tmp_path)
-    inherited = check_deck(DeckUnderReview(pptx_path=inherited_path, prototypes=inherited_template))
-    # The ninth keeps under half of one picture, which is the state `figure_crop` is
-    # about and one every other fixture's pictures, fitted or trimmed, are not in.
-    cropped = check_deck(DeckUnderReview(pptx_path=_a_picture_mostly_cropped_away(tmp_path)))
 
-    every = (*loaded, *bare, *alike, *banded, *fresh, *footed, *plain, *inherited, *cropped)
+    every = (*loaded, *bare, *alike, *banded)
     assert {finding.kind for finding in every} == set(DISPATCH), "a row nothing produced"
     for finding in every:
         assert finding.severity == DISPATCH[finding.kind], finding.kind
-
-
-def _a_deck_with_feet_and_no_numbers(tmp_path: Path) -> Path:
-    """Six pages that each end in a source line and none of which says which page it is.
-
-    The state `unnumbered_pages` is for, and the one state a deck tripping `no_footer`
-    cannot be in -- so it needs a file of its own rather than a page added to another
-    fixture.
-    """
-    builder = DeckBuilder(tmp_path)
-    for number in range(6):
-        page = builder.page()
-        builder.text(
-            page,
-            (f"第 {number + 1} 页的正文，写得足够长以算作一段而不是一个标签。", 16.0),
-            left=0.7,
-            top=1.3,
-            width=11.9,
-            height=4.6,
-            wrap=True,
-        )
-        builder.text(page, ("来源：公开报道整理", 12.0), left=0.7, top=6.9, width=6.0, height=0.3)
-        # The copy row of the two grids below, at its own pitch.
-        for slot in range(3):
-            builder.text(
-                page,
-                (f"第 {slot + 1} 栏的说明文字，长到算作一段。", 14.0),
-                left=0.84 + slot * 3.96,
-                top=5.4,
-                width=3.7,
-                height=1.0,
-                wrap=True,
-            )
-        # A row of panels on a second grid over the copy's: the delivered page's own
-        # numbers, panels every 3.84in against the copy's 3.96in, so the miss grows 0.12,
-        # 0.24, 0.36 across the row. That growing miss is what `grid_drift` is about and
-        # no other fixture is in it -- two rows at one pitch with one of them moved is an
-        # indent, which five of the twelve bundled templates have on purpose.
-        for slot in range(3):
-            builder.panel(page, left=0.72 + slot * 3.84, top=2.2, width=3.5, height=1.4)
-    return builder.save("footed.pptx")
-
-
-def _a_body_nobody_divided(tmp_path: Path) -> tuple[Path, object]:
-    """Three paragraphs across the body with nothing drawn between them.
-
-    The state `undivided_body` is about, and one no other fixture here is in: every
-    other deck either paints a panel, places a picture, or puts fewer than three blocks
-    of copy between the title and the footer.
-    """
-    from raven_ppt.contracts.masters import Bands
-
-    builder = DeckBuilder(tmp_path)
-    page = builder.page()
-    for slot in range(3):
-        builder.text(
-            page,
-            (f"第 {slot + 1} 段的正文，写得足够长以算作一段而不是一个标签。", 14.0),
-            left=0.7 + slot * 4.1,
-            top=1.6,
-            width=3.8,
-            height=2.2,
-            wrap=True,
-        )
-    grid = Bands(title_top=0.0, title_bottom=1.2, body_bottom=6.6, footer_bottom=7.5, canvas_w=13.333, canvas_h=7.5)
-    return builder.save("undivided.pptx"), grid
-
-
-def _a_picture_mostly_cropped_away(tmp_path: Path) -> Path:
-    """A 16:9 image cover-fitted into a band a sixth as tall as it is wide: 28% shown."""
-    from PIL import Image
-
-    image = tmp_path / "wide_generation.png"
-    Image.new("RGB", (1536, 864), (120, 90, 60)).save(image)
-    builder = DeckBuilder(tmp_path)
-    page = builder.page()
-    band = builder.picture(page, image, left=0.72, top=1.6, width=11.88, height=1.88)
-    band.crop_top = band.crop_bottom = 0.3589
-    return builder.save("cropped.pptx")
-
-
-def _a_layout_carrying_the_templates_photograph(tmp_path: Path) -> tuple[Path, Path]:
-    """One page on a layout that holds a picture, and the template it came from.
-
-    The state `layout_picture` is about: the picture is on no page, so no other fixture
-    here can be in it, and `template_pictures` cannot see it either.
-    """
-    from PIL import Image
-    from pptx import Presentation
-    from pptx.util import Inches
-
-    from tests._ppt_engine_fixtures import layout_picture
-
-    image = tmp_path / "house-photo.png"
-    Image.new("RGB", (800, 600), (90, 90, 90)).save(image)
-    presentation = Presentation()
-    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
-    layout = presentation.slide_layouts[6]
-    layout_picture(layout, image, 0, 0, 6.4, 4.7)
-    presentation.slides.add_slide(layout)
-    template = tmp_path / "inherited-template.pptx"
-    presentation.save(str(template))
-    deck = tmp_path / "inherited.pptx"
-    presentation.save(str(deck))
-    return deck, template
-
-
-def _a_deck_the_new_readings_are_for(tmp_path: Path) -> tuple[Path, object, object, list]:
-    """One deck carrying a live example of each reading added with the band grid.
-
-    Every row of the table has to be produced by something, and these eight cannot be
-    true of the decks already here: they need a grid to speak in shares of the body, a
-    plan to know what kind of page it is, and a render whose left edges disagree with
-    the file's.
-    """
-    from raven_ppt.contracts.masters import Bands
-    from raven_ppt.contracts.outline import Outline, PagePlan
-    from raven_ppt.services.measure.words import WordBox
-
-    builder = DeckBuilder(tmp_path)
-    bands = Bands(title_top=0.0, title_bottom=1.2, body_bottom=6.6, footer_bottom=7.5, canvas_w=13.333, canvas_h=7.5)
-    wide = _an_image(tmp_path / "wide.png", 1600, 400)
-    small = _an_image(tmp_path / "small.png", 300, 300)
-
-    # A panel using a tenth of its height, and a page with nothing for the eye.
-    page = builder.page()
-    builder.panel(page, left=0.7, top=1.4, width=5.6, height=4.8)
-    builder.text(page, ("一行。", 14.0), left=1.0, top=1.7, width=4.8, height=0.3)
-    # A picture whose box is nothing like the shape of the file it shows.
-    builder.picture(page, wide, left=7.0, top=1.4, width=2.0, height=4.0)
-    # A mark parked in the title band, and parked in the same place on every page, so
-    # it is the band it sits in that is wrong and not its wandering.
-    # On this page alone: a picture the deck repeats across three pages is furniture,
-    # and the reading exempts it. A one-off beside the heading is the filler it is for.
-    parked = _an_image(tmp_path / "parked.png", 240, 240)
-    builder.picture(page, parked, left=11.6, top=0.2, width=0.7, height=0.7)
-    # And one that does wander, so the two readings are told apart by which is which.
-    builder.picture(page, small, left=3.0, top=5.9, width=0.7, height=0.7)
-
-    # A second page so the mark has somewhere else to sit, and sits differently.
-    second = builder.page()
-    builder.text(second, ("这一页的正文短得撑不起一页内容页。", 14.0), left=0.7, top=1.4, width=6.0, height=0.4)
-    builder.picture(second, small, left=0.8, top=5.8, width=0.7, height=0.7)
-    # A support-sized picture -- above the share that makes it a mark -- narrower than
-    # the smallest a support may be.
-    builder.picture(second, small, left=7.2, top=1.4, width=1.90, height=1.95)
-
-    third = builder.page()
-    builder.text(third, ("第三页也短。", 14.0), left=0.7, top=1.4, width=6.0, height=0.4)
-    builder.picture(third, small, left=6.0, top=3.0, width=0.7, height=0.7)
-
-    plan = Outline(
-        takeaway="one claim",
-        pages=(
-            PagePlan(page=1, claim="a panel and a picture", carries="three cards"),
-            PagePlan(page=2, claim="a thin page", carries="one line"),
-            PagePlan(page=3, claim="another thin page", carries="one line"),
-        ),
-    )
-    # Two lines the file gives the same left edge; the render puts one 7pt to its right,
-    # which is the inset a hand-rolled text box carries and the geometry cannot show.
-    for index in range(3):
-        builder.text(
-            page,
-            (f"本该对齐的第 {index + 1} 行。", 14.0),
-            left=1.0,
-            top=3.0 + index * 0.4,
-            width=4.8,
-            height=0.3,
-            # A frame with wrapping off is placed by the renderer, and the reading
-            # declines to read one -- so these have to wrap, as the author's own would.
-            wrap=True,
-        )
-    # In points, as `words_from_pdf` reads them. The third line sits 7.2pt to the right
-    # of two the file declares flush with it, which is the inset a hand-rolled box
-    # carries and the only place it becomes visible.
-    words = [
-        WordBox(page=1, text="本该对齐的第 1 行。", x0=73.4, y0=217.4, x1=230.0, y1=231.8),
-        WordBox(page=1, text="本该对齐的第 2 行。", x0=73.4, y0=246.2, x1=230.0, y1=260.6),
-        WordBox(page=1, text="本该对齐的第 3 行。", x0=80.6, y0=275.0, x1=237.0, y1=289.4),
-    ]
-    return builder.save("new_readings.pptx"), bands, plan, words
-
-
-def _an_image(path: Path, width: int, height: int) -> Path:
-    from PIL import Image
-
-    Image.new("RGB", (width, height), (0x88, 0x88, 0x88)).save(path)
-    return path
 
 
 def _a_banded_table(tmp_path: Path) -> Path:
@@ -651,22 +444,6 @@ def _one_composition(tmp_path: Path) -> Path:
             width=5.6,
             height=4.6,
         )
-        # A row of three equal cards under it on most of them: one page of that shape
-        # is a comparison and this many is the shape the deck reaches for, which is the
-        # budget `equal_card_habit` keeps. It sits here rather than in a deck of its
-        # own because a deck of one repeated composition is exactly where the habit
-        # shows up.
-        if number < 5:
-            for slot in range(3):
-                builder.panel(page, left=0.7 + slot * 4.1, top=6.1, width=3.8, height=1.0)
-                builder.text(
-                    page,
-                    (f"第 {slot + 1} 张卡的说明文字，长到算作一段。", 12.0),
-                    left=0.9 + slot * 4.1,
-                    top=6.2,
-                    width=3.4,
-                    height=0.8,
-                )
     return builder.save("alike.pptx")
 
 
@@ -736,16 +513,10 @@ def test_only_provenance_comprehension_and_what_was_agreed_refuse_a_deck(sample:
         "template_underlay",
         "unreadable",
         "word_collision",
+        "covered_shape",
         "literal_escape",
     }
     assert {finding.kind for finding in warnings(findings)} == {
-        # Content behind something, inferred from the file's z-order rather than read
-        # off the render. Reported and not refused: the inference has refused correct
-        # work before, and its own message says nothing on the page collides.
-        "covered_shape",
-        # This deck has a template, so the band grid is there to be measured off it, and
-        # a page of this one offers the eye nothing big enough to land on.
-        "no_anchor",
         # A caption written by looking at a figure, naming something the materials
         # never mention. A warning: the name may well be printed in the pixels, and
         # the answer is one sentence rather than a rebuilt page.
@@ -780,8 +551,8 @@ def test_only_provenance_comprehension_and_what_was_agreed_refuse_a_deck(sample:
         "prototype_kept",
         "page_mapping",
         # This sample has no render, so the four render-truth checks did not run
-        # and the coverage check says so. The other coverage kinds stay quiet
-        # because the sample has labels and a brief.
+        # and the coverage check says so. The other two coverage kinds stay
+        # quiet because the sample has labels and a brief.
         "unrendered",
     }
 
@@ -802,17 +573,11 @@ def test_the_contrast_row_refuses_the_unreadable_and_says_nothing_about_an_accen
     """
     findings = check_deck(sample.deck, only=["unreadable"])
 
-    # Page 3 joins page 4 now that inherited type is judged: this sample renders its
-    # pages as a near-black image, so every block that leaves its colour to the master
-    # (black) is unreadable on that render, and the check says so. The white-on-orange
-    # label is still not what either page is reported for.
     assert [(finding.page, finding.kind, finding.severity) for finding in findings] == [
-        (3, "unreadable", Severity.BLOCKING),
-        (4, "unreadable", Severity.BLOCKING),
+        (4, "unreadable", Severity.BLOCKING)
     ]
-    assert all(finding.detail["ink"] != "FFFFFF" for finding in findings), "the 2.5:1 band stays unreported"
-    assert findings[1].detail["drawn_by"] == "authored"
-    assert "sits nowhere any of the template's own pages puts one" in findings[1].message
+    assert findings[0].detail["drawn_by"] == "authored"
+    assert "sits nowhere any of the template's own pages puts one" in findings[0].message
 
 
 def test_a_caller_can_ask_for_one_check_alone(sample: Sample) -> None:
@@ -1075,73 +840,3 @@ def test_a_repeated_cause_and_a_per_page_one_in_the_same_run(sample: Sample, mon
         ("overset_copy", 2),
         ("overset_copy", 3),
     ]
-
-
-def test_naming_a_prototype_does_not_excuse_a_page_from_the_evidence_check() -> None:
-    """Every content page names a prototype now, and the check read that as furniture.
-
-    `_structural` fed the evidence check the pages it must not judge. While the field
-    meant "this page is the template's own cover or closing" that was right; once
-    content pages defaulted to naming one, it named the whole deck and the check
-    returned nothing for every deck built the way the skill asks for.
-    """
-    from raven_ppt.contracts.outline import Outline, PagePlan
-    from raven_ppt.services.gates.registry import _structural
-
-    plan = Outline(
-        takeaway="one claim",
-        pages=tuple(PagePlan(page=n, claim=f"page {n}", prototype=n) for n in range(1, 6)),
-    )
-
-    assert _structural(plan, None) == []
-
-
-def test_a_page_whose_plan_says_it_is_furniture_is_still_excused() -> None:
-    """The words in the plan are the fallback when no template is on hand."""
-    from raven_ppt.contracts.outline import Outline, PagePlan
-    from raven_ppt.services.gates.registry import _structural
-
-    plan = Outline(
-        takeaway="one claim",
-        pages=(
-            PagePlan(page=1, claim="the title", carries="封面", prototype=1),
-            PagePlan(page=2, claim="a real content page", carries="three cards", prototype=2),
-            PagePlan(page=3, claim="the ask", carries="结束页", prototype=3),
-        ),
-    )
-
-    assert _structural(plan, None) == [1, 3]
-
-
-def test_a_borrowed_prototype_is_not_the_bound_template_s_furniture(tmp_path: Path) -> None:
-    """`_structural` reads a prototype's role off the bound template's menu; a borrowed
-    prototype is numbered in another file, and page 1 there is not this deck's cover."""
-    from pptx import Presentation
-    from pptx.util import Inches
-
-    from raven_ppt.contracts.outline import Outline, PagePlan
-    from raven_ppt.services.gates.registry import _structural
-
-    built = Presentation()
-    built.slide_width, built.slide_height = Inches(13.333), Inches(7.5)
-    cover = built.slides.add_slide(built.slide_layouts[0])
-    cover.shapes.title.text = "封面"
-    body = built.slides.add_slide(built.slide_layouts[5])
-    body.shapes.title.text = "内容页"
-    built.save(str(tmp_path / "bound.pptx"))
-    from raven_ppt.services.template.menu import menu
-
-    roles = {entry.number: entry.role for entry in menu(tmp_path / "bound.pptx")}
-    cover_page = next((number for number, role in roles.items() if role == "cover"), None)
-    if cover_page is None:
-        pytest.skip("this python-pptx default does not read as a cover")
-
-    plan = Outline(
-        takeaway="t",
-        pages=(
-            PagePlan(page=1, claim="own cover", prototype=cover_page),
-            PagePlan(page=2, claim="borrowed", prototype=cover_page, borrowed="some_other_template"),
-        ),
-    )
-
-    assert _structural(plan, tmp_path / "bound.pptx") == [1]

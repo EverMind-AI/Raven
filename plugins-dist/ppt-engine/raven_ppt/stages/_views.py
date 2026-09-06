@@ -69,15 +69,6 @@ class DeckViews:
         LibreOffice is absent would make an optional dependency a required one.
         """
         out_dir.mkdir(parents=True, exist_ok=True)
-        # The PDF already made from this very file is the PDF. A build converted the
-        # deck once to measure it and once more to show its pages, 5s each on a 25MB
-        # deck; the second is the same file, told apart by the pptx being older.
-        made = out_dir / f"{pptx.stem}.pdf"
-        try:
-            if made.is_file() and made.stat().st_mtime_ns > pptx.stat().st_mtime_ns and made.stat().st_size > 0:
-                return made
-        except OSError:
-            pass
         async with self._gate:
             try:
                 return await asyncio.to_thread(self.renderer.to_pdf, pptx, out_dir)

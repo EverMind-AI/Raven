@@ -405,20 +405,6 @@ class LLMProvider(_LLMProviderPaper):
         ):
             return ErrorClassification("context_overflow", should_compress=True)
 
-        # An image the upstream will not take for its size. Deterministic: neither a
-        # retry nor another placement changes the bytes, so the only recovery is to
-        # take the picture out. Before the rate-limit and server buckets because the
-        # gateway wraps it as a generic APIError that otherwise reads as `unknown`,
-        # which is retryable -- and eight waits over half an hour on a refusal that
-        # will never lift is the failure the retry ladder was built to avoid.
-        if has(
-            "image content cannot exceed",
-            "image exceeds the maximum",
-            "image too large",
-            "image size exceeds",
-        ):
-            return ErrorClassification("image_too_large", strip_images=True)
-
         # Rate limit → wait and retry; a different provider may not be throttled.
         if (
             status == 429
@@ -532,61 +518,11 @@ class LLMProvider(_LLMProviderPaper):
         ) and has(*_TOOL_IMAGE_REJECTION_PATTERNS):
             return ErrorClassification("tool_image_unsupported", should_drop_tool_images=True)
 
-        # A model with no eyes: the request carried a picture and the endpoint takes
-        # none. Deterministic, like image_too_large -- another message does not help
-        # and neither does waiting -- so the pictures come out and the same ask goes
-        # again. Measured on a vLLM endpoint serving a text-only model: "At most 0
-        # image(s) may be provided in one prompt", wrapped as the 400 the bucket
-        # below would have called fatal, and it ended the turn.
-        if has(
-            "image(s) may be provided",
-            "does not support image",
-            "image input is not supported",
-            "images are not supported",
-            "does not support vision",
-        ):
-            return ErrorClassification("images_unsupported", strip_images=True)
-
         # Generic bad request (non-context 400) → fatal; no model swap helps.
         if status == 400 or "badrequesterror" in names or has("invalid request", "invalid_request"):
             return ErrorClassification("invalid_request")
 
-        # A gateway saying only that the host behind it failed, and nothing above
-        # recognising the failure. Last rather than in the server bucket, because
-        # this is the *outer* wrapper OpenRouter puts on anything an upstream host
-        # returns: the same phrase heads a permanent 400 whose real cause is buried
-        # in `metadata.raw` (see the tool-image branch above, which reads that inner
-        # text), so every branch that can name a cause has to be given the message
-        # first. What is left here is a gateway failure with no cause stated, and
-        # `unknown` made that fatal: one measured run died on it at iteration 72
-        # after 82 minutes and 15.5M input tokens, while three earlier upstream
-        # failures in the same run were retried and recovered on the first attempt
-        # because they had arrived worded as "service unavailable".
-        if has("provider returned error"):
-            return ErrorClassification("server", retryable=True, should_fallback=True)
-
-        # A response body that is not JSON at all. The gateway served an error page,
-        # a truncated stream or a throttle notice where a completion was expected, and
-        # the client's parser is what failed -- so the message names a character offset
-        # rather than a cause. Transient by construction: the same request a moment
-        # later gets a real body. Named as its own category because the ladder that
-        # recovers it should be visible in telemetry rather than hidden under `unknown`.
-        if has(
-            "unable to get json response",
-            "expecting value: line",
-            "jsondecodeerror",
-        ):
-            return ErrorClassification("unparsable_response", retryable=True, should_fallback=True)
-
-        # Nothing above named it, and `unknown` used to be fatal. Two measured runs
-        # died that way -- one at iteration 72 after 82 minutes and 15.5M input tokens,
-        # one at iteration 104 after 62 minutes and 23.8M -- each on a wording no branch
-        # recognised, and each time the fix was to add the phrase. The third wording was
-        # always going to arrive, so the default is what changed: the ladder costs seven
-        # seconds and three calls when the failure really is permanent, against an hour
-        # of work when a transient one is called fatal. No fallback, because a cause
-        # nobody could name is not evidence that another model would do better.
-        return ErrorClassification("unknown", retryable=True)
+        return ErrorClassification("unknown")
 
     @staticmethod
     def _jittered(delay: float) -> float:

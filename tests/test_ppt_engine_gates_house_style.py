@@ -287,36 +287,6 @@ def test_copy_laid_across_the_layouts_artwork_is_reported(deck):
     assert "the template kept that part of the page clear" in findings[0].message
 
 
-def test_a_clone_of_the_templates_own_page_is_not_reported(deck):
-    """A cloned page's copy is the template's copy, and it is not in a placeholder.
-
-    `clone` copies the prototype's own text boxes, so the layout has nothing to offer
-    and every block reads as laid over the art. Measured on the designers' own files:
-    four of the twelve bundled templates reported on themselves, 36 findings over 217
-    pages, and `gold_panel_year_end_summary`'s 21 became 17 in the deck built in it.
-    """
-    deck.layout_art(left=7.0, width=6.3)
-    deck.text(deck.page(), ("44 FPS on one A100", 40.0), left=8.0, top=3.0, width=4.0, height=1.0)
-    built = deck.save()
-
-    assert len(over_layout_art(built)) == 1, "the template it was built in is what excuses it"
-    assert over_layout_art(built, built) == []
-
-
-def test_copy_somewhere_no_page_of_the_template_puts_any_is_still_reported(deck):
-    """The licence is per box, not per template: a page of its own making gets no cover."""
-    deck.layout_art(left=7.0, width=6.3)
-    deck.text(deck.page(), ("the template's own line", 40.0), left=8.0, top=0.4, width=4.0, height=1.0)
-    prototype = deck.save("prototype.pptx")
-
-    deck.text(deck.page(), ("a line of its own", 40.0), left=8.0, top=5.2, width=4.0, height=1.0)
-    built = deck.save("built.pptx")
-
-    found = over_layout_art(built, prototype)
-
-    assert [one.detail["text"] for one in found] == ["a line of its own"]
-
-
 def test_copy_in_the_clear_half_is_not(deck):
     deck.layout_art(left=7.0, width=6.3)
     deck.text(deck.page(), ("44 FPS on one A100", 40.0), left=0.8, top=3.0, width=4.0, height=1.0)

@@ -34,7 +34,6 @@ from raven_ppt.services.template import (
     bind,
     bound,
     decompile,
-    needed_imports,
     write_palette,
 )
 from raven_ppt.services.template.house import house_style
@@ -59,10 +58,6 @@ RENDER_DPI = 96
 # page runs to fifty lines and this is read, not scrolled -- and the count is
 # stated in the reply rather than silently applied.
 MAX_SOURCE_PAGES = 6
-# How much source one reply carries. The host cuts a tool result at 16,000 characters
-# and marks the cut, and a five-page reference measured 16,016: the author saw two and
-# a half pages and asked again for the rest. Pages that do not fit are named instead.
-SOURCE_BUDGET_CHARS = 13_000
 
 
 class PptTemplateTool(Tool):
@@ -290,57 +285,13 @@ class PptTemplateTool(Tool):
             write_ground(template_dir(deck), colour)
         return colour
 
-    @staticmethod
-    def _layout_pictures(source: Path) -> list[str]:
-        """The layouts of this template that carry a picture, each with its example pages.
-
-        Said here because nothing else says it: the page renders show the photograph, the
-        page's own shapes do not carry it, and an author told to replace the template's
-        pictures looked for them on the page and found nothing to replace.
-        """
-        from raven_ppt.services.measure.adherence import layouts_with_photographs
-
-        return [
-            f"layout '{layout}' carries {len(sizes)} picture(s) ({', '.join(sizes)}), under example page(s) "
-            + ", ".join(str(page) for page in pages)
-            + " -- on the page you build from one of those: `replace_picture(layout_pictures(slide)[0], "
-            + f"FIGURES / 'x.png', 'cover'{', alpha=0.25' if _page_sized(sizes) else ''})`"
-            for layout, (pages, sizes) in layouts_with_photographs(source).items()
-        ]
-
-    @staticmethod
-    def _borrowable(source: Path) -> list[str]:
-        """The reference pages of the other bundled templates, each named by its arrangement.
-
-        Measured before this existed: an author whose template had no timeline drew one
-        from `stack` and `plane`, while three other bundled templates shipped one. A
-        page named by template, number and arrangement is an offer the way the bound
-        template's own pages are; "the other templates have pages too" is not.
-        """
-        from raven_ppt.services.template.defaults import bundled_path, reference_pages
-
-        said: list[str] = []
-        menus: dict[str, dict[int, Any]] = {}
-        for stem, number in reference_pages(except_stem=Path(source).stem):
-            if stem not in menus:
-                path = bundled_path(stem)
-                menus[stem] = {entry.number: entry for entry in menu(path)} if path else {}
-            entry = menus[stem].get(number)
-            if entry is None or entry.role or entry.hidden:
-                continue
-            what = entry.arrangement or f"{entry.text_blocks} text, {entry.shapes} drawn"
-            slots = f" ({entry.slots} slots)" if entry.slots else ""
-            said.append(f"{stem} page {number} is {what}{slots}")
-        return said
-
     async def _as_renders(self, deck: Project, template: Any, payload: dict[str, Any]) -> str | ToolResult:
         """Every example page as pictures, plus the measured house style."""
         folder = deck.review_dir / "template"
         listing = menu(template.source, _unwritable_pages(template.source, template.example_pages))
         named = roles(listing)
         pdf = await self.thumbnails.pdf(template.source, folder)
-        shown = {entry.number for entry in listing if not entry.hidden}
-        wanted = [number for number in range(1, template.example_pages + 1) if number in shown]
+        wanted = list(range(1, template.example_pages + 1))
         renders = await self.thumbnails.pages_of(pdf, folder, wanted) if pdf is not None and wanted else {}
         # The render is read twice: once as pictures for the author, once as type sizes
         # for the house style. A template's title placeholder usually declares no size
@@ -353,39 +304,14 @@ class PptTemplateTool(Tool):
             payload["house_pages"] = {role: number for role, number in named.items()}
         if house is not None:
             payload["house_style"] = house.brief()
-        examples_named: list[str] = []
         if listing:
             payload["structural_pages_are"] = [entry.line() for entry in listing if entry.role]
             payload["template_pages"] = [entry.line() for entry in listing]
-            # Named page by page, and by the arrangement each one is, because the reply
-            # that named only the structural pages got exactly the structural pages
-            # cloned. Measured on one live run against an eighteen-page template: five
-            # `prototype` calls, all five of them the pages this reply named by role,
-            # and twelve content pages drawn from `stack`/`plane`/`write` instead --
-            # which is how a deck comes out with three tables and no timeline. The run
-            # before it, whose request happened to list the arrangements in prose,
-            # cloned eleven of twelve. Prose about "adaptable prototypes" is not the
-            # same offer as a page number beside the shape it holds.
-            examples = [entry for entry in listing if not entry.role and not entry.hidden]
-            examples_named = [
-                f"page {entry.number} is {entry.arrangement}" + (f" ({entry.slots} slots)" if entry.slots else "")
-                for entry in examples
-                if entry.arrangement
-            ]
-            shapes = "; ".join(examples_named)
             payload["content_pages"] = (
-                f"{len(examples)} of the template's pages are content examples"
-                # A page too sparse to read a signature off has no arrangement to name,
-                # and the sentence still has to end somewhere: without this the reply
-                # came out as "already draws: . Clone the one ...".
-                + (f", each an arrangement this template already draws: {shapes}" if shapes else "")
-                + ". Clone the one whose arrangement matches the page's information shape -- "
-                "`adapt(prs, prototype(tpl, N), title='...', texts={...})` -- and prefer that to drawing "
-                "the page yourself: a page composed from `plane`, `write` and `stack` has those and "
-                "nothing else, while whatever this template draws that they cannot -- a timeline, a ring "
-                "of badges, a numbered pill, a figure card -- exists on these pages and nowhere else. "
-                "Use `adapt(items=...)` to fill the repeated units and remove the spares. Compose inside "
-                "the measured house style only for a page no example can carry."
+                f"{len(house.content_pages) if house else 0} of the template's pages are content examples. "
+                "They are adaptable prototypes: replace example text and pictures, use adapt(items=...) "
+                "to fill the actual repeated units and remove spares, or compose inside the measured house "
+                "style when the example cannot carry the argument."
             )
         asks = []
         if named:
@@ -405,48 +331,6 @@ class PptTemplateTool(Tool):
         # out and left the other two as prose, so the template's placeholder photograph and
         # its icons shipped untouched. The same run imported `drop_shape` and never called
         # it. A capability described is a capability declined.
-        # Named page by page in the *ask*, because the ask is what becomes `next_step` and
-        # `next_step` is what the program acts on. The same list went into the payload as
-        # `content_pages` first and moved a live run from five prototypes out of fifteen
-        # pages to six: the reply that names the structural pages concretely, and leaves
-        # the content pages to a sentence about "any listed example page", gets the
-        # structural pages cloned and the rest drawn from primitives. A page number
-        # beside the shape it holds is a different offer from a category.
-        if examples_named:
-            asks.append(
-                "give every content page a prototype from this list, by the arrangement it holds: "
-                + "; ".join(examples_named)
-                + " -- record the page number you picked in the plan's `prototype` field and clone it with "
-                "`adapt(prs, prototype(tpl, N), ...)`. A page you compose instead has `plane`, `write` and "
-                "`stack` and nothing else, and whatever this template draws that those cannot -- a timeline, "
-                "a ring of badges, a numbered pill, a figure card -- is on these pages and nowhere else. "
-                "Compose from scratch only for a page no arrangement here can carry, and say which"
-            )
-        carried = self._layout_pictures(template.source)
-        if carried:
-            payload["layout_pictures"] = carried
-            asks.append(
-                "this template keeps some of its photographs on its layouts, where every page on the layout "
-                "inherits them and `pictures={...}` on a cloned page never reaches them: "
-                + "; ".join(carried)
-                + ". Change one for every page at once with `replace_picture(layout_pictures(slide)[0], "
-                "FIGURES/'x.png', 'cover', alpha=0.25)` after `from ppt_template import layout_pictures` -- a "
-                "picture generated in the deck's own style (`ppt_generate_image`) is the usual replacement, and "
-                "one the size of the page is the page's background, so it takes the `alpha` or every title on "
-                "that layout drowns; `backdrop` does the same for a page whose layout carries none -- or keep it "
-                "if it is the design rather than a stock photograph"
-            )
-        borrowable = self._borrowable(template.source)
-        if borrowable:
-            payload["borrowable_pages"] = borrowable
-            asks.append(
-                "for a page no example above can carry, borrow one of these pages from another bundled "
-                "template -- its colours and master become this deck's, only the arrangement comes across: "
-                + "; ".join(borrowable)
-                + ". Clone it with `adapt(prs, prototype(bundled('<template>'), N), ...)` after "
-                "`from ppt_template import bundled`, and record both `borrowed: '<template>'` and "
-                "`prototype: N` on that page of the plan"
-            )
         asks.append(
             "any listed example page may be a content prototype when its composition is close to the "
             "page's information shape: `adapt(prs, prototype(tpl, N), title='page title', "
@@ -490,12 +374,7 @@ class PptTemplateTool(Tool):
             "render shows more repeated cards than you passed items for, the page holds a second run, "
             "and `fill(units(slide)[1], [['03', 'third heading', 'its body']])` after `adapt` returns "
             "fills that one -- positionally, because `adapt` has already emptied its words; both come "
-            "from `from ppt_template import adapt, prototype, fill, units, shape_at, drop_shape`. To adjust one "
-            "shape after `adapt`, take a handle on it -- `shape_at(slide, 5)` by the number printed above, "
-            "`shape_near(slide, 1.56, 2.47)` by where the page shows it, `shape_saying(slide, 'Method')` by the "
-            "copy it starts with -- and never by `shape.left`, which inside a group is the group's own "
-            "coordinate and not a position on the page. `raise_type(slide)` lifts copy the template states "
-            "under the readability floor. A prototype "
+            "from `from ppt_template import adapt, prototype, fill, units, shape_at, drop_shape`. A prototype "
             "is a starting composition, not an immutable form; if its capacity or picture geometry is "
             "wrong, choose another page or compose inside the house style"
         )
@@ -560,35 +439,11 @@ class PptTemplateTool(Tool):
                 hint=f"the template ships {template.example_pages} example pages, numbered from 1",
             )
         asked = [number for number in asked if number not in beyond]
-        sources = []
-        texts: list[str] = []
-        unread: list[int] = []
-        cut: dict[str, dict[str, int]] = {}
-        carried = 0
-        for number in asked:
-            page = decompile(template.source, number - 1, images_dir=deck.build_dir)
-            if page is None:
-                continue
-            block = page.summary(imports=False)
-            if sources and (len(sources) >= MAX_SOURCE_PAGES or carried + len(block) > SOURCE_BUDGET_CHARS):
-                unread.append(number)
-                continue
-            if len(block) > SOURCE_BUDGET_CHARS:
-                # One page larger than the whole budget is still bounded here, not by
-                # the host: cut at the host's mark, the reply ended mid-line and read as
-                # a complete page. A page this size is a page to clone, and the note
-                # says so where the code stops.
-                note = (
-                    f"\n# -- cut: {{withheld}} more line(s) of page {number} did not fit the "
-                    f"{SOURCE_BUDGET_CHARS}-character reply. A page too large to read as code is one to clone: "
-                    "`from ppt_template import clone_page, replace_text, replace_picture, drop_shape`"
-                )
-                block, withheld = _cut(block, SOURCE_BUDGET_CHARS - len(note) - 4)
-                cut[str(number)] = withheld
-                block += note.format(withheld=withheld["lines_withheld"])
-            sources.append(page)
-            texts.append(block)
-            carried += len(block)
+        sources = [
+            page
+            for number in asked[:MAX_SOURCE_PAGES]
+            if (page := decompile(template.source, number - 1, images_dir=deck.build_dir))
+        ]
         if not sources:
             return _return.failed(
                 f"none of pages {sorted(set(pages))} could be read out of {template.source.name}",
@@ -610,41 +465,12 @@ class PptTemplateTool(Tool):
                 "drop_shape` and edit the copy instead"
             )
         payload["pages_read"] = [page.index + 1 for page in sources]
-        if cut:
-            payload["pages_cut"] = cut
-            asks.append(
-                "page(s) " + ", ".join(cut) + " were larger than one reply and stop where the `# -- cut` line "
-                "says; clone those pages rather than reading the rest"
-            )
-        if unread:
+        if len(asked) > MAX_SOURCE_PAGES:
             # Said rather than silently applied: a truncated list that reads as the
             # whole list is how an author concludes a page has nothing on it.
-            payload["pages_not_read"] = unread
-            asks.append(
-                "pages " + ", ".join(str(number) for number in unread) + " did not fit this reply; ask for them "
-                "in a second call"
-            )
+            payload["pages_not_read"] = asked[MAX_SOURCE_PAGES:]
         body = _return.done(asks=asks, **payload)
-        # The imports once, ahead of the first page, rather than once per page.
-        imports = needed_imports(page.source for page in sources)
-        if imports:
-            texts[0] = "\n".join(f"# {line}" for line in imports) + "\n" + texts[0]
-        return _return.with_images(body, [text_block(text) for text in texts])
-
-
-def _cut(block: str, budget: int) -> tuple[str, dict[str, int]]:
-    """The first whole lines of ``block`` that fit ``budget``, and how many were withheld."""
-    lines = block.splitlines(keepends=True)
-    kept: list[str] = []
-    size = 0
-    for line in lines:
-        if size + len(line) > budget:
-            break
-        kept.append(line)
-        size += len(line)
-    if not kept:
-        kept = [lines[0][:budget]]
-    return "".join(kept).rstrip("\n"), {"lines_shown": len(kept), "lines_withheld": len(lines) - len(kept)}
+        return _return.with_images(body, [text_block(page.summary()) for page in sources])
 
 
 def _unwritable_pages(source: Path, count: int) -> dict[int, tuple[str, ...]]:
@@ -666,15 +492,3 @@ def _unwritable_pages(source: Path, count: int) -> dict[int, tuple[str, ...]]:
 def _inside(workspace: Path, path: Path) -> bool:
     root = workspace.resolve()
     return path == root or root in path.parents
-
-
-def _page_sized(sizes: list[str]) -> bool:
-    """Whether any of these "WxHin" pictures is most of the page, which is a background."""
-    for size in sizes:
-        try:
-            width, height = (float(part) for part in size.rstrip("in").split("x"))
-        except ValueError:
-            continue
-        if width * height >= 0.55 * 13.333 * 7.5:
-            return True
-    return False

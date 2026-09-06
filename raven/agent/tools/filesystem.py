@@ -2,7 +2,6 @@
 
 import difflib
 import mimetypes
-import re
 from pathlib import Path
 from typing import Any
 
@@ -77,38 +76,6 @@ def _with_current_root(allowed_dirs: tuple[Path, ...], bound: Path | None) -> tu
     if not allowed_dirs or bound is None:
         return allowed_dirs
     return (bound, *allowed_dirs)
-
-
-_URL_SCHEME_RE = re.compile(r"^(?P<scheme>[A-Za-z][A-Za-z0-9+.\-]*)://")
-_HOST_LIKE_RE = re.compile(r"^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/")
-
-
-def _missing(path: str) -> str:
-    """The refusal for a path that is not there, naming the tool that can reach it.
-
-    A URL resolves to a path that cannot exist, and "File not found" describes the
-    wrong problem: the file is not missing, the argument belongs to another tool.
-    Reported as a missing file it reads as a misspelling, so the caller tries the
-    same URL again with the workspace prefixed, percent-decoded, a directory up --
-    none of which can work, and the search that produced the URL stalls there.
-
-    Only the message changes: this answers inside the branch that has already found
-    nothing on disk, so a path that does resolve never reaches it.
-    """
-    raw = path.strip()
-    if match := _URL_SCHEME_RE.match(raw):
-        if match.group("scheme").lower() == "file":
-            return f"Error: {path} is a file:// URL; read_file takes a plain path -- try {raw[7:] or '/'}"
-        return (
-            f"Error: {path} is a URL, not a path on this machine. read_file only reads the "
-            "filesystem; fetch it with web_fetch, which returns the page as text."
-        )
-    if _HOST_LIKE_RE.match(raw):
-        return (
-            f"Error: File not found: {path} -- which reads as a URL rather than a path. "
-            "If it is one, fetch it with web_fetch; read_file only reads the filesystem."
-        )
-    return f"Error: File not found: {path}"
 
 
 class _FsTool(Tool):
@@ -209,7 +176,7 @@ class ReadFileTool(_FsTool):
         try:
             fp = self._resolve(path)
             if not fp.exists():
-                return _missing(path)
+                return f"Error: File not found: {path}"
             if not fp.is_file():
                 return f"Error: Not a file: {path}"
 

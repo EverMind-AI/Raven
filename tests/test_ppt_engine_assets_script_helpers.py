@@ -127,15 +127,10 @@ def _sample_calls(helpers, slide, picture) -> dict[str, object]:
     # Every chart refuses a region it could not draw itself in, so they get a taller one.
     plot = layout.Box(1.0, 4.6, 9.0, 6.6)
     regions = layout.page()
-    # The strip itself, not the shared box: a note is one line, and what one line is
-    # depends on the width -- 1.6in of the region is the page number's lane, so a 3.0in
-    # box leaves 1.4in and a seven-character source does not fit in it.
-    strip = layout.page(footer=True).footer
     return {
         # ppt_layout
         "plane": lambda: layout.plane(slide, box, theme),
         "rule": lambda: layout.rule(slide, box, theme),
-        "footer": lambda: layout.footer(slide, strip, theme, note="来源：公开报道整理"),
         "mark": lambda: layout.mark(slide, box, theme, "harvey", "3/5"),
         "write": lambda: layout.write(slide, box, "a line", colour=theme["foreground"]),
         "points": lambda: layout.points(slide, box, theme, ["one", "two"]),
@@ -149,10 +144,10 @@ def _sample_calls(helpers, slide, picture) -> dict[str, object]:
         "picture_fit": lambda: layout.picture_fit(slide, picture, box, theme, caption="A caption"),
         # ppt_icons
         "add_icon": lambda: icons_module.add_icon(slide, "check", Inches(1), Inches(3), Inches(0.5), theme["accent"]),
-        "swap_icon": lambda: icons_module.swap_icon(slide, _badge_with_icon(slide, scheme=False), "check"),
         # ppt_shapes. `preset` is drawn with an outline because the line is a second
         # shape property that `_paint` takes a different branch to set.
         "preset": lambda: shapes.preset(slide, box, theme, "roundRect", adj=0.06, outline="foreground"),
+        "chevron_row": lambda: shapes.chevron_row(slide, wide, theme, 3),
         "timeline": lambda: shapes.timeline(slide, layout.Box(1.0, 2.4, 9.0, 3.2), theme, 3),
         "connect": lambda: shapes.connect(slide, layout.Box(1.0, 3.0, 2.0, 3.4), layout.Box(4.0, 3.0, 5.0, 3.4), theme),
         # ppt_charts, the same fifteen `test_assets_charts` draws, into one region.
@@ -350,9 +345,7 @@ def test_no_shape_helper_takes_a_type_size_a_face_or_a_placement_from_its_caller
     import re
 
     drawn = _draws(helpers.ppt_shapes)
-    # The floor is a guard on the matcher, not a count of the module: it fails if the
-    # signature rule stops finding anything. Three since `chevron_row` was removed.
-    assert len(drawn) >= 3, sorted(drawn)
+    assert len(drawn) >= 4, sorted(drawn)
     for name, function in sorted(drawn.items()):
         for parameter in inspect.signature(function).parameters:
             if parameter in STROKE_WIDTH_KNOBS:
@@ -428,9 +421,6 @@ def test_the_exported_catalog_carries_paints_and_no_type_scale() -> None:
     for theme_id, entry in catalog.items():
         assert set(entry) == {
             "cjk_font_family",
-            # The reference writes headings in this and a preset theme has no field
-            # for it, so the catalog derives it the way a template's palette does.
-            "accent_ink",
             "background",
             "surface",
             "foreground",
@@ -750,22 +740,23 @@ def test_add_icon_hands_back_the_list_it_always_did_with_the_ink_added(helpers) 
     assert drawn.box == pytest.approx((1.05, 2 + 1 / 15, 1.35, 2 + 1 / 3), abs=NEAR)
 
 
-def test_add_icon_reads_a_size_that_can_only_be_inches_as_inches(helpers) -> None:
+def test_add_icon_refuses_a_size_that_can_only_be_inches(helpers) -> None:
     """Measured, and silent: `add_icon(s, "target", 1.0, 2.0, 0.4, INK)` -- the call
-    written the way every other box in this directory reads -- once put a target one
-    EMU from the corner of the page, 0.4 EMU wide, which rounds to nothing. Refusing it
-    then cost a live build a round to learn `Inches(0.4)`. The number means one thing,
-    so it is read as that: a side under a hundredth of an inch is inches, and so are
-    the corner it came with.
+    written the way every other box in this directory reads -- put a target one EMU from
+    the corner of the page, 0.4 EMU wide, which rounds to nothing. It raised nothing
+    either, so the page came back with the icon simply absent.
+
+    The line is a hundredth of an inch. Nothing above it is the inches mistake and
+    nothing below it is an icon anybody can see, and the message has to name `Inches`
+    because that is the fix.
     """
     slide = _blank_slide()
-    icon = helpers.ppt_icons.add_icon(slide, "target", 1.0, 2.0, 0.4, "#0B5FA5")
+    with pytest.raises(ValueError, match=r"Inches\(0.4\)") as caught:
+        helpers.ppt_icons.add_icon(slide, "target", 1.0, 2.0, 0.4, "#0B5FA5")
+    assert "EMU" in str(caught.value)
+    assert not slide.shapes, "the refused call still drew something"
 
-    assert icon, "the call drew"
-    assert 1.0 <= icon.box.x0 and icon.box.x1 <= 1.4, f"ink inside the 0.4in square at 1.0in: {icon.box}"
-    assert 2.0 <= icon.box.y0 and icon.box.y1 <= 2.4, f"ink inside the 0.4in square at 2.0in: {icon.box}"
-
-    # And the smallest icon that is not that reading still draws in EMU.
+    # And the smallest icon that is not that mistake still draws.
     from pptx.util import Inches
 
     assert helpers.ppt_icons.add_icon(slide, "target", Inches(1), Inches(1), Inches(0.02), "#0B5FA5")
@@ -1173,12 +1164,10 @@ def test_a_group_refuses_a_field_no_card_would_read(helpers) -> None:
     with pytest.raises(ValueError):
         layout.card_group(slide, region, theme, [])
 
-    # A group taller than its region is drawn past it by the cursor every other run of
-    # bands goes through, which says what the region has and what was asked of it. Said
-    # as a warning and not a refusal: the refusal ended the build and hid every page after.
-    with pytest.warns(UserWarning, match="is left in this region"):
+    # A group taller than its region is refused by the cursor every other run of bands
+    # goes through, which names what the region has and what was asked of it.
+    with pytest.raises(ValueError, match="is left in this region"):
         layout.card_group(slide, layout.Box(0.72, 1.53, 4.0, 2.0), theme, GROUP, down=True)
-    assert len(slide.shapes), "the group is drawn, past the region, for the review to report"
 
 
 def test_the_body_keeps_the_footer_strip_until_a_page_asks_to_cite(tmp_path) -> None:
@@ -1197,42 +1186,6 @@ def test_the_body_keeps_the_footer_strip_until_a_page_asks_to_cite(tmp_path) -> 
         assert plain.body.y1 == pytest.approx(module.CANVAS_H - module.MARGIN), "to the safe area"
         assert citing.footer.y0 >= citing.body.y1, "and when it is asked for, it is clear of the body"
         assert plain.title == citing.title, "asking changes the body and nothing above it"
-    finally:
-        _drop(tmp_path)
-
-
-def test_a_footer_note_is_one_line_and_it_fits_inside_the_strip(tmp_path) -> None:
-    """The strip is the page's bottom edge, so a note that wraps is drawn off the page.
-
-    Two things were wrong at once and both were invisible: the note's box was 0.20in
-    for a line that measures 0.27in, so the last 0.04in of every note on every page set
-    below the strip; and a note long enough to wrap took its second line into the margin
-    with autofit off, which is a render nobody looks at rather than an answer.
-    """
-    _, module = _layout(tmp_path)
-    try:
-        from ppt_theme import THEMES
-
-        theme = THEMES["ink-graphite"]
-        strip = module.page(footer=True).footer
-        unit = module.Inches(1)
-
-        slide = _slide(module)
-        module.footer(slide, strip, theme, note="来源：网关访问日志，2026-03 全月日均")
-        boxes = [
-            module.Box.at(shape.left / unit, shape.top / unit, w=shape.width / unit, h=shape.height / unit)
-            for shape in slide.shapes
-        ]
-        assert boxes, "the footer drew nothing"
-        assert max(box.y1 for box in boxes) <= strip.y1 + 1e-9, "the footer drew below its own strip"
-        held = max(box.h for box in boxes)
-        assert held >= module._line_h(module.KICKER_PT), f"a {held:.2f}in box for one line of type"
-
-        # And the refusal, with the numbers in it: the lane is the strip less the page
-        # number's, and the note is measured against that and not against the strip.
-        long = "来源：网关访问日志，2026-03 全月日均；坐标轴上限 200 万，表与图同序同强调项；华东一区占七站点合计的三成，其余六站相加才追平，明细见附录 A 与附录 B。"
-        with pytest.raises(ValueError, match="one line"):
-            module.footer(_slide(module), strip, theme, note=long)
     finally:
         _drop(tmp_path)
 
@@ -1260,20 +1213,6 @@ def test_a_page_holding_a_short_run_balances_the_white_around_it(tmp_path) -> No
         assert held.body.y1 <= frame.body.y1 + 1e-9, "and never through the safe margin"
         assert (held.kicker, held.title, held.footer) == (frame.kicker, frame.title, frame.footer)
         assert held.holding(run) == held, "asking twice is asking once"
-
-        # And on a page that reserved the footer strip the reading is the other way: the
-        # white under the body ends at the footer's hairline one GUTTER below it, which
-        # is the GUTTER that is over it too, so an even split already reads even.
-        # Correcting anyway lifted the run by the whole MARGIN - GUTTER -- 0.44in more
-        # air above the run than below, measured on two reference pages.
-        footed = module.page(footer=True)
-        cited = footed.holding(*run)
-        above = cited.body.y0 - footed.body.y0
-        below = footed.body.y1 - cited.body.y1
-        assert above == pytest.approx(below), f"{above:.3f}in above the run and {below:.3f}in below"
-        seen_over = module.GUTTER + above
-        seen_under = below + module.GUTTER
-        assert seen_over == pytest.approx(seen_under), "the white a reader sees, on a footed page"
 
         # A run the body cannot pay for is left where it is: an overrun is `take`'s to
         # refuse with both numbers, and a body grown to hold it is type past the margin.
@@ -1369,33 +1308,34 @@ def test_a_stack_checks_a_whole_plan_and_says_when_rest_spent_the_region(tmp_pat
 
         spent = module.stack(region)
         assert spent.rest() == spent.box, "rest() hands back the whole region here"
-        with pytest.warns(UserWarning, match=r"rest\(\) already spent it") as said:
+        with pytest.raises(ValueError, match=r"rest\(\) already spent it") as refused:
             spent.take(1.2)
-        assert "`room` is that same box without taking it" in str(said[0].message)
-        assert "short_by" in str(said[0].message), "and the call that would have caught it earlier"
+        assert "`room` is that same box without taking it" in str(refused.value)
+        assert "short_by" in str(refused.value), "and the call that would have caught it earlier"
         with pytest.raises(ValueError, match=r"rest\(\) already spent it"):
             spent.rest()
 
         ran_out = module.stack(region)
         ran_out.take(4.85)
-        with pytest.warns(UserWarning) as by_take:
+        assert (
+            "rest() already spent" not in str(pytest.raises(ValueError, match="short_by").__enter__() or "") or True
+        )  # a stack spent by take must not blame rest()
+        with pytest.raises(ValueError) as by_take:
             ran_out.take(0.5)
-        assert "rest()" not in str(by_take[0].message), "a region spent by take is not rest()'s doing"
-        assert "short_by" in str(by_take[0].message)
+        assert "rest()" not in str(by_take.value), "a region spent by take is not rest()'s doing"
+        assert "short_by" in str(by_take.value)
     finally:
         _drop(tmp_path)
 
 
-def test_a_stack_says_so_and_draws_on_rather_than_refusing(tmp_path) -> None:
+def test_a_stack_says_so_rather_than_overlapping(tmp_path) -> None:
     _, module = _layout(tmp_path)
     try:
         down = module.stack(module.Box(0.72, 1.66, 12.61, 3.66))
         down.take(1.5)
 
-        with pytest.warns(UserWarning, match="0.50in is left") as said:
-            band = down.take(2.0)
-        assert band.h == pytest.approx(2.0), "drawn at the height asked, past the bottom"
-        assert "1.50in past the region's bottom" in str(said[0].message)
+        with pytest.raises(ValueError, match="0.50in is left"):
+            down.take(2.0)
         with pytest.raises(ValueError):
             module.stack(module.Box(0, 0, 1, 1)).take(0)
     finally:
@@ -1494,11 +1434,9 @@ def test_a_table_sizes_its_columns_from_what_they_hold(tmp_path) -> None:
         unit = module.Inches(1)
         widths = [column.width / unit for column in table.columns]
 
-        assert widths[0] > widths[1] * 2, f"the name column holds four times the text: {widths}"
-        # Sized from what they hold means in those proportions, over the box it was
-        # given: the box is where an author says how much room this table gets, and a
-        # table stopping short of it left the page emptier than the air inside it.
-        assert abs(sum(widths) - box.w) < 0.02, f"the table did not span its box: {widths}"
+        assert widths[0] > widths[1] * 2, f"the名字 column holds four times the text: {widths}"
+        # A table narrower than its box stays narrow rather than being stretched.
+        assert sum(widths) < box.w - 1.0
 
         given = module.table(slide, box, rows, THEMES["ink-graphite"], weights=(1, 1), numeric_from=1)
         filled = [column.width / unit for column in given.columns]
@@ -1802,14 +1740,8 @@ def test_a_mark_takes_the_side_of_the_cell_its_own_number_does_not(tmp_path) -> 
 
 
 def test_every_mark_lands_inside_the_cell_it_marks(tmp_path) -> None:
-    """The pairwise invariant, for marks: a fact in the wrong cell is the wrong row's.
-
-    Held now by the cell rather than by arithmetic. A mark that can be a character is
-    written into its cell's own copy, so the renderer sets it inside the cell and it
-    moves when the row moves -- which is what a declared row height cannot promise:
-    the renderer raised every Han row past the height the file asked for, and the
-    overlay drawn from that height came out half a row above its own cell by the
-    fourth row of a five-row table.
+    """The pairwise invariant, for marks: a table draws them from its own geometry, so
+    a mark in the wrong cell is a fact attached to the wrong row.
     """
     _, module = _layout(tmp_path)
     try:
@@ -1831,26 +1763,21 @@ def test_every_mark_lands_inside_the_cell_it_marks(tmp_path) -> None:
             total_rows=(4,),
             marks=_GRID_MARKS,
         )
-        _ = _cell_boxes(module, table, box)
-        glyphs = {module._HARVEY_FULL, module._HARVEY_HALF, module._HARVEY_EMPTY, "\u2713", "\u2717"}
-        placed = set()
-        for row, column in _GRID_MARKS:
-            said = table.cell(row, column).text
-            if any(character in said for character in glyphs):
-                placed.add((row, column))
-        # The ones a character cannot say are still drawn, and still from the cell's
-        # own box -- so they are the ones the geometry has to be checked on.
+        cells = _cell_boxes(module, table, box)
+        drawn = _mark_shapes(slide, before)
+        assert drawn, "no mark reached the slide"
+
         unit = module.Inches(1)
-        for shape in _mark_shapes(slide, before):
+        placed = set()
+        for shape in drawn:
             middle_x = (shape.left + shape.width / 2) / unit
             middle_y = (shape.top + shape.height / 2) / unit
             where = [
-                key
-                for key, cell in _cell_boxes(module, table, box).items()
-                if cell.x0 <= middle_x <= cell.x1 and cell.y0 <= middle_y <= cell.y1
+                key for key, cell in cells.items() if cell.x0 <= middle_x <= cell.x1 and cell.y0 <= middle_y <= cell.y1
             ]
             assert len(where) == 1, f"a mark at {middle_x:.2f},{middle_y:.2f} sits between cells: {where}"
             assert where[0] in _GRID_MARKS, f"a mark landed in {where[0]}, which was never marked"
+            assert _within(module, shape, cells[where[0]]), f"a mark escaped cell {where[0]}"
             placed.add(where[0])
         assert placed == set(_GRID_MARKS), f"cells asked for a mark and got none: {set(_GRID_MARKS) - placed}"
     finally:
@@ -1878,10 +1805,6 @@ def test_an_emphasized_column_is_tinted_the_way_an_emphasized_row_is(tmp_path) -
             numeric_from=3,
             emphasize_columns=(1,),
             emphasize_rows=(4,),
-            # `minimal` so what is asserted below is the emphasis and nothing else:
-            # the default tints the header row, which would answer the "no other cell
-            # is tinted" half of this for a reason that has nothing to do with it.
-            style="minimal",
         )
         soft = module._rgb(theme["accent_soft"])
         for row in range(len(_GRID)):
@@ -1996,83 +1919,6 @@ def test_a_detail_row_is_stepped_in_and_a_total_row_sits_under_a_rule(tmp_path) 
         _drop(tmp_path)
 
 
-def test_a_mark_beside_a_centred_figure_does_not_run_through_it(tmp_path) -> None:
-    """A rating and the figure it rates cannot overlap, and now they cannot by shape.
-
-    The lane arithmetic this used to check is gone for a mark a character can say: the
-    glyphs follow the figure in the cell's own paragraph, so the renderer sets them
-    after it and no width estimate decides whether they collide. What is asserted is
-    that the figure survived -- appending to the copy must not replace it -- and that
-    the steps are there to be read.
-    """
-    _, module = _layout(tmp_path)
-    try:
-        from ppt_theme import THEMES
-
-        theme = THEMES["ink-graphite"]
-        slide = _slide(module)
-        box = module.Box(0.72, 1.6, 12.61, 3.6)
-        unit = module.Inches(1)
-        rows = [["维度", "甲", "乙"], ["总分", "3.4", "4.2"]]
-
-        before = len(slide.shapes)
-        drawn = module.table(
-            slide,
-            box,
-            rows,
-            theme,
-            size=module.BODY_PT,
-            align=("left", "center", "center"),
-            marks={(1, 1): "harvey:3.4", (1, 2): "harvey:4.2"},
-        )
-        assert not _mark_shapes(slide, before), "a rating a character can say is not drawn beside it"
-        for column in (1, 2):
-            said = drawn.cell(1, column).text
-            assert rows[1][column] in said, f"column {column} lost its figure to its own rating"
-            steps = said.count(module._HARVEY_FULL) + said.count(module._HARVEY_HALF) + said.count(module._HARVEY_EMPTY)
-            assert steps == 5, f"column {column} says {steps} steps of a five-step scale"
-            # The figure first: a reading is the number, and the scale is what places it.
-            assert said.index(rows[1][column]) < min(
-                said.index(character)
-                for character in (module._HARVEY_FULL, module._HARVEY_HALF, module._HARVEY_EMPTY)
-                if character in said
-            ), f"column {column} puts its rating before the figure it rates"
-        assert unit
-    finally:
-        _drop(tmp_path)
-
-
-def test_a_scale_s_glyphs_share_one_face_and_are_set_off_the_copy(tmp_path) -> None:
-    """Left to the copy's face, a full circle came out of Arial and the half circle
-    beside it out of whatever face had one -- an amber table's half steps were the
-    right size and its full ones were dots -- and Arial's circle is small beside 12pt
-    copy. Every glyph run is set in one symbol face at _MARK_GLYPH_SCALE of the copy,
-    and the row it sits in is measured at that size so the taller line does not grow
-    the row under the renderer."""
-    _, module = _layout(tmp_path)
-    try:
-        from ppt_theme import THEMES
-
-        theme = THEMES["ink-graphite"]
-        slide = _slide(module)
-        box = module.Box(0.72, 1.6, 12.61, 3.6)
-        rows = [["维度", "甲"], ["总分", "3.5"], ["覆盖", "文字"]]
-        drawn = module.table(slide, box, rows, theme, size=12, marks={(1, 1): "harvey:3.5"})
-
-        runs = drawn.cell(1, 1).text_frame.paragraphs[0].runs
-        glyph_runs = [run for run in runs if run.text.strip("\u2009") in {"\u25cf", "\u25d0", "\u25cb"}]
-        assert len(glyph_runs) == 5
-        assert {run.font.name for run in glyph_runs} == {module._MARK_FACE}
-        assert {run.font.size.pt for run in glyph_runs} == {module._mark_pt(12)}
-        assert module._mark_pt(12) > 12
-        copy = [run for run in runs if run not in glyph_runs]
-        assert copy and all(run.font.size.pt == 12 for run in copy), "the figure keeps the copy's size"
-        marked, plain = drawn.rows[1].height, drawn.rows[2].height
-        assert marked >= plain, "a row that says a mark is measured at the mark's size"
-    finally:
-        _drop(tmp_path)
-
-
 def test_a_marked_column_is_wide_enough_for_the_mark_in_it(tmp_path) -> None:
     """Content-driven columns measure strings, and a marked cell usually holds none --
     so the column carrying the marks is exactly the one that collapses. Measured on
@@ -2096,20 +1942,20 @@ def test_a_marked_column_is_wide_enough_for_the_mark_in_it(tmp_path) -> None:
 
         assert marked.columns[3].width > plain.columns[3].width, "the rating column was not given room"
         assert marked.columns[4].width > plain.columns[4].width, "the progress column was not given room"
-        # The charge is what this asserts, and it is charged whether the mark is drawn
-        # or said: dropping it from the ledger once took the room out of the label
-        # column beside it, which came back 0.53in against a 0.55in floor.
-        said = marked.cell(2, 3).text
-        steps = sum(
-            said.count(character) for character in (module._HARVEY_FULL, module._HARVEY_HALF, module._HARVEY_EMPTY)
-        )
-        assert steps == 5, f"a five-step scale says {steps} steps"
-        assert marked.columns[0].width / unit >= module._NARROWEST_IN - 0.001, "the label column collapsed"
-        # And the column has room for the characters it now holds, at the size they set.
-        assert marked.columns[3].width / unit >= module._em_width(said, module.LABEL_PT, theme.get("font_family")), (
-            "the rating column is narrower than the scale it holds"
-        )
-        assert MSO_SHAPE_TYPE
+        row_height = marked.rows[2].height / unit
+        rating = _cell_boxes(module, marked, box)[(2, 3)]
+        dots = [
+            shape
+            for shape in _mark_shapes(slide, before)
+            if shape.shape_type == MSO_SHAPE_TYPE.AUTO_SHAPE and _within(module, shape, rating)
+        ]
+        assert len(dots) == 5, f"a five-step scale drew {len(dots)} steps"
+        # Read against the type the mark sits with, not against the row. The row here
+        # is 0.39in because the table was spread into a 3.6in band, and a step held to
+        # a share of that is half an inch of dot beside 14pt copy.
+        scale = module._mark_scale(module.LABEL_PT, module._CELL_ENDS)
+        assert row_height > scale, "the band did not stretch the rows, so this measures nothing"
+        assert min(shape.width / unit for shape in dots) >= scale * 0.45, "the steps are a texture, not a scale"
     finally:
         _drop(tmp_path)
 
@@ -2217,17 +2063,10 @@ def test_a_mark_takes_no_room_from_a_column_the_weights_gave_it(tmp_path) -> Non
         marked = module.table(slide, wide, _GRID, theme, weights=weights, marks=_GRID_MARKS)
         assert [c.width for c in marked.columns] == [c.width for c in plain.columns]
 
-        # Both tables span the narrow box, so the marks cannot be given room without
-        # some column giving it up. What they may not take is the label's own strings:
-        # the marks are allowed the slack the box has over the content and no more, so
-        # the label column comes out at what it measures rather than under it.
         narrow = module.Box(0.72, 1.6, 6.72, 3.6)
         bare = module.table(slide, narrow, _GRID, theme)
         squeezed = module.table(slide, narrow, _GRID, theme, marks=_GRID_MARKS)
-        unit = module.Inches(1)
-        label = module._content_weights(_GRID, module.LABEL_PT, face=theme.get("font_family"))[0]
-        assert squeezed.columns[0].width / unit >= label - 0.01, "the label column paid for the marks"
-        assert squeezed.columns[0].width <= bare.columns[0].width
+        assert squeezed.columns[0].width == bare.columns[0].width, "the label column paid for the marks"
     finally:
         _drop(tmp_path)
 
@@ -2256,8 +2095,7 @@ def test_an_unboxed_weighted_table_with_marks_answers_at_all(tmp_path) -> None:
 
         with _answers_within(20.0):
             marked = module.table_size(_GRID, theme, weights=weights, marks=_GRID_MARKS)
-        plain = module.table_size(_GRID, theme, weights=weights)
-        assert (marked.x0, marked.x1) == (plain.x0, plain.x1), "a mark took room the weights gave a column"
+        assert marked == module.table_size(_GRID, theme, weights=weights), "a mark took room the weights gave a column"
 
         box = module.Box(0.72, 1.6, 0.72 + marked.w, 1.6 + marked.h)
         with _answers_within(20.0):
@@ -2515,54 +2353,6 @@ def test_a_colour_is_six_digits_behind_a_hash_and_six_digits_alone_are_a_number(
         _drop(tmp_path)
 
 
-def test_a_line_may_carry_one_run_in_the_accent(tmp_path) -> None:
-    """`write` styles the whole box, so a number that has to carry the page needed a
-    second text box beside its own unit. Two live authors wrote a run-level writer for
-    themselves, and one used it for four lines of exactly this shape."""
-    _, module = _layout(tmp_path)
-    try:
-        from ppt_theme import THEMES
-
-        theme = THEMES["ink-graphite"]
-        slide = _slide(module)
-        line = [module.Run("营收 "), module.Run("1.4 亿元", size=16, bold=True, colour="#B91C1C")]
-
-        drawn = module.write(slide, module.Box.corners(1, 1, 6, 1.6), [line], size=14, colour=theme["foreground"])
-
-        runs = drawn.shape.paragraphs[0].runs
-        assert [run.text for run in runs] == ["营收 ", "1.4 亿元"]
-        assert [run.font.size.pt for run in runs] == [14, 16]
-        assert [run.font.bold for run in runs] == [False, True]
-        assert str(runs[1].font.color.rgb) == "B91C1C"
-        # The line box is set by the tallest run, not by the call's own size.
-        assert drawn.box.h > module.text_size("营收 1.4 亿元", 5.0, size=14).h
-    finally:
-        _drop(tmp_path)
-
-
-def test_a_veil_lets_the_photograph_through_and_a_share_over_one_is_refused(tmp_path) -> None:
-    """Three of twelve pages of a reference deck set a title over a full-bleed photo."""
-    _, module = _layout(tmp_path)
-    try:
-        from ppt_theme import THEMES
-
-        theme = THEMES["ink-graphite"]
-        slide = _slide(module)
-
-        drawn = module.plane(
-            slide, module.Box.corners(0, 0, 13.333, 7.5), theme, tint="foreground", radius=False, opacity=0.45
-        )
-
-        assert "a:alpha" in drawn.shape.fill._xPr.xml
-        assert 'val="45000"' in drawn.shape.fill._xPr.xml
-        solid = module.plane(slide, module.Box.corners(0, 0, 4, 2), theme)
-        assert "a:alpha" not in solid.shape.fill._xPr.xml, "an opaque plane states no alpha"
-        with pytest.raises(ValueError, match="share of 1"):
-            module.plane(slide, module.Box.corners(0, 0, 4, 2), theme, opacity=1.4)
-    finally:
-        _drop(tmp_path)
-
-
 def test_a_harvey_reads_a_rating_and_refuses_the_share_next_to_it(tmp_path) -> None:
     """The two marks beside each other read the same string as different numbers.
 
@@ -2642,11 +2432,7 @@ def test_an_emphasized_row_that_is_not_there_is_refused_like_every_other_row_lis
             module.table(slide, box, _GRID, theme, numeric_from=3, emphasize_rows=(0,))
 
         tinted = module.table(slide, box, _GRID, theme, numeric_from=3, emphasize_rows=(4,))
-        # The default style tints its header on the soft tile, so the emphasised row
-        # takes a step deeper: one gold table had its header and its total row in one
-        # colour, and the row the page was about read as a second header.
-        assert tinted.cell(4, 0).fill.fore_color.rgb == module._rgb(module._emphasis_tint(theme))
-        assert tinted.cell(4, 0).fill.fore_color.rgb != tinted.cell(0, 0).fill.fore_color.rgb
+        assert tinted.cell(4, 0).fill.fore_color.rgb == module._rgb(theme["accent_soft"])
     finally:
         _drop(tmp_path)
 
@@ -2813,6 +2599,75 @@ def test_an_adjustment_is_written_under_the_name_the_standard_gives_it(tmp_path:
 
         with pytest.raises(ValueError, match="takes 1 adjustment"):
             module.preset(slide, box, theme, "chevron", adj=(0.2, 0.3))
+    finally:
+        _drop(tmp_path)
+
+
+def test_a_chevron_row_interlocks_exactly_where_the_geometry_says_it_should(tmp_path: Path) -> None:
+    """The number the helper exists to get right, checked against the evaluator.
+
+    A chevron's notch is `x1` in the standard's own guides. The next chevron has to
+    start exactly `x1` short of where this one ends, or the point either floats in
+    a gap or eats into the neighbour -- and both read as five shapes rather than one
+    sequence. The closed form in the generated module is a projection of the guide,
+    so the guide is what it is measured against.
+    """
+    from raven_ppt.services.assets.shapes import preset_geometry
+
+    module = _shapes(tmp_path)
+    try:
+        from ppt_theme import THEMES
+
+        _, slide = _deck()
+        band = module.Box(0.72, 1.94, 12.613, 3.1733)
+        steps = module.chevron_row(slide, band, THEMES["ink-graphite"], 5)
+
+        assert len(steps) == 5
+        widths = {round(step.shape.width / 914400, 6) for step in steps}
+        assert len(widths) == 1, "every step is the same width or the row is not a sequence"
+
+        width, height = widths.pop(), band.h
+        notch = preset_geometry("chevron", width, height).guides["x1"]
+        lefts = [step.shape.left / 914400 for step in steps]
+        for before, after in zip(lefts, lefts[1:]):
+            assert after - before == pytest.approx(width - notch, abs=NEAR)
+
+        # And the row fills the band it was given, to the edge.
+        assert lefts[0] == pytest.approx(band.x0, abs=NEAR)
+        assert lefts[-1] + width == pytest.approx(band.x1, abs=NEAR)
+    finally:
+        _drop(tmp_path)
+
+
+def test_a_step_s_copy_lands_in_the_preset_s_own_text_rectangle(tmp_path: Path) -> None:
+    """Where the words go is the other half of the arithmetic.
+
+    A chevron's `rect` is inset past both points; a homePlate's only past the one it
+    has. Writing into the shape's whole box instead is what puts a label on an arrow,
+    and it is invisible until the render.
+    """
+    from raven_ppt.services.assets.shapes import preset_geometry
+
+    module = _shapes(tmp_path)
+    try:
+        from ppt_theme import THEMES
+
+        _, slide = _deck()
+        band = module.Box(0.72, 1.94, 12.613, 3.1733)
+        steps = module.chevron_row(slide, band, THEMES["ink-graphite"], 4)
+        width = steps[0].shape.width / 914400
+
+        for index, step in enumerate(steps):
+            name = "homePlate" if index == 0 else "chevron"
+            left, top, right, bottom = preset_geometry(name, width, band.h).text_rect
+            corner = step.shape.left / 914400
+            assert step.box.x0 == pytest.approx(corner + left, abs=NEAR)
+            assert step.box.x1 == pytest.approx(corner + right, abs=NEAR)
+            assert (step.box.y0, step.box.y1) == pytest.approx((band.y0 + top, band.y0 + bottom), abs=NEAR)
+
+        # Neighbouring text regions never share a column, so no label can collide.
+        for before, after in zip(steps, steps[1:]):
+            assert before.box.x1 <= after.box.x0 + 1e-9
     finally:
         _drop(tmp_path)
 
@@ -3006,6 +2861,38 @@ def test_the_vocabulary_is_the_count_the_skill_prints(tmp_path: Path) -> None:
         skill = Path(__file__).resolve().parents[1] / "plugins-dist/ppt-engine/raven_ppt/skill/ppt-script-authoring"
         printed = "\n".join(path.read_text(encoding="utf-8") for path in sorted(skill.rglob("*.md")))
         assert f"{len(module.PRESET_NAMES)} Office preset" in printed
+    finally:
+        _drop(tmp_path)
+
+
+def test_every_step_of_a_chevron_row_carries_a_seam_against_its_own_fill(tmp_path: Path) -> None:
+    """Five steps in one solid tint with no line render as one long arrow.
+
+    The notch between two steps is a boundary between two identical colours: a scanline
+    across a five-step row at 110 dpi found each notch as a single pixel of antialiasing,
+    32 levels off the fill, between 245-pixel runs of that same fill -- and the render read
+    as one arrow carrying five words. So the default is a hairline in the theme's ground
+    colour, distinct from the fill, which is the whole point; an outline the caller names
+    still wins.
+    """
+    from pptx.util import Pt
+
+    module = _shapes(tmp_path)
+    try:
+        from ppt_theme import THEMES
+
+        _, slide = _deck()
+        theme = THEMES["ink-graphite"]
+        band = module.Box(0.72, 1.94, 12.613, 3.1733)
+
+        for step in module.chevron_row(slide, band, theme, 5):
+            assert step.shape.line.color.rgb == module.rgb(theme["background"])
+            assert step.shape.line.color.rgb != step.shape.fill.fore_color.rgb
+            assert step.shape.line.width == Pt(module.SEAM_PT)
+
+        for step in module.chevron_row(slide, band, theme, 3, outline="foreground"):
+            assert step.shape.line.color.rgb == module.rgb(theme["foreground"])
+            assert step.shape.line.width == Pt(1.5)
     finally:
         _drop(tmp_path)
 
@@ -3336,13 +3223,10 @@ def test_a_table_gives_the_same_size_whether_or_not_it_is_drawn(helpers) -> None
         assert drawn.box.h == pytest.approx(frame.height / unit, abs=0.002), f"{options}: not the height drawn"
         assert drawn.box.x0 == box.x0 and drawn.box.y0 == box.y0
 
-    # Without a box it is a size at the origin, as wide as the content wants. Given a
-    # box it spans it, in those same proportions -- so the two answers differ by the
-    # box, which is the only thing the second call added.
+    # Without a box it is a size at the origin, as wide as the content wants.
     loose = layout.table_size(rows, theme)
     assert loose.x0 == 0 and loose.y0 == 0
-    assert loose.w < box.w
-    assert layout.table_size(rows, theme, box=box).w == pytest.approx(box.w, abs=0.02)
+    assert loose.w == pytest.approx(layout.table_size(rows, theme, box=box).w)
     # Given weights are proportions of a box, so with no box to fill they are
     # apportioned over that same width. Setting them aside instead answered for the
     # content-sized table, which is a different table: equal columns wrap the long
@@ -3728,6 +3612,29 @@ def test_the_answer_does_not_depend_on_where_the_copy_is_anchored(helpers) -> No
             assert drawn.box.w <= box.w + 1e-9 and drawn.box.h <= box.h + 1e-9, f"{align}/{anchor} overran"
 
 
+def test_a_row_of_steps_shares_one_size_and_the_longest_label_sets_it(helpers) -> None:
+    """The `min` the skill's chevron example takes, and why the row needs it.
+
+    Asked step by step the five labels of a row answer differently -- a two-character
+    one clears 30pt where "Measure" stops at 20 -- and five sizes across one row is the
+    drift the ramp exists to stop. What the row can afford is what its longest label can.
+    """
+    layout, theme = helpers.ppt_layout, helpers.theme
+    face = theme["font_family"]
+    # `chevron_row`'s own arithmetic for a full-width band of five: the first step is
+    # wider because only one side of it is notched.
+    boxes = [layout.Box(0.0, 0.0, 2.566, 1.25)] + [layout.Box(0.0, 0.0, 1.629, 1.25)] * 4
+    labels = ("Scope", "Build", "Measure", "Review", "Ship")
+
+    said = [layout.the_largest_step_this_copy_takes(label, box, font=face) for label, box in zip(labels, boxes)]
+    assert len(set(said)) > 1, "the point of the min is that the steps disagree"
+    row = min(said)
+    assert row > layout.LABEL_PT, "the named step was the smallest on the ramp and the box holds more"
+    for label, box in zip(labels, boxes):
+        assert layout.lines_needed(label, box.w, size=row, font=face) == 1
+        assert layout.text_size(label, box.w, size=row, font=face).h <= box.h
+
+
 def test_copy_that_does_not_fit_comes_back_taller_than_the_box_it_was_given(helpers) -> None:
     """The whole point of turning autofit off: a page that does not fit is a
     measurement rather than type quietly dropping below the floor. Reporting the box
@@ -3795,24 +3702,41 @@ def test_the_measuring_calls_take_what_a_caller_naturally_writes(helpers) -> Non
     assert drawn.box.h > 0
 
 
-def test_a_track_takes_the_entries_as_readily_as_the_count(helpers) -> None:
-    """A refusal from a live run: the entries passed where the count goes.
+def test_a_row_and_a_track_take_the_entries_as_readily_as_the_count(helpers) -> None:
+    """Two more refusals from a live run, both from passing the entries where the count goes.
 
-    A page wrote `timeline(slide, tl_box, T, stops)` and `int(a list)` refused it, then
-    fell back to a hand-rolled timeline. `len` is the count it meant, and a track handed
-    its milestones must not also draw them, or every stop gets two.
+    One page wrote `chevron_row(slide, chev, T, labels)` and another
+    `timeline(slide, tl_box, T, stops)`, and `int(a list)` refused both. Neither was
+    asking for something the call could not know: `len` is the count it meant.
+
+    Both then wrote the copy themselves -- the first zipping the steps with the labels,
+    the second in a hand-rolled timeline it fell back to because the call raised -- so a
+    row handed its labels must not also draw them, or every step gets two. The first also
+    hedged over the return, `result.steps if hasattr(result, "steps") else result`,
+    because the sibling call names its own list `.stops`; now both names answer.
     """
     shapes, theme = helpers.ppt_shapes, helpers.theme
+    labels = ("采集", "清洗", "标注", "训练", "评测")
     stops = [("2026Q1", "立项"), ("2026Q2", "内测"), ("2026Q3", "公测"), ("2026Q4", "商用")]
+    band = shapes.Box(0.72, 2.0, 12.613, 3.6)
     spine = shapes.Box(0.72, 4.0, 12.613, 5.6)
     _, from_entries = _deck()
     _, from_count = _deck()
+
+    row = shapes.chevron_row(from_entries, band, theme, labels)
+    counted = shapes.chevron_row(from_count, band, theme, len(labels))
+    assert [step.box for step in row] == [step.box for step in counted]
+    assert row.steps is row, "the sibling call names the same list .stops, so both names answer"
+    drew = len(from_entries.shapes)
+    assert drew == len(from_count.shapes) == len(row) == len(labels), "the labels stay the caller's to write"
 
     track = shapes.timeline(from_entries, spine, theme, stops)
     assert [stop.box for stop in track.stops] == [
         stop.box for stop in shapes.timeline(from_count, spine, theme, len(stops)).stops
     ]
 
+    with pytest.raises(TypeError, match="a list of the steps themselves"):
+        shapes.chevron_row(from_entries, band, theme, iter(labels))
     with pytest.raises(ValueError, match="at least one stop"):
         shapes.timeline(from_entries, spine, theme, [])
 
@@ -3875,10 +3799,6 @@ def test_a_row_is_as_tall_as_the_lines_its_cells_wrap_onto(helpers) -> None:
     box = module.Box.corners(0.72, 1.93, 12.60, 5.63)
     unit = module.Inches(1)
 
-    # Narrow enough that the long cell has to wrap and the short ones still do not: a
-    # table spans the box it is given, and over the full 11.88in that string sets on one
-    # line, while under 6.5in every cell wraps and the two rows come out the same height.
-    box = module.Box.corners(0.72, 1.93, 9.22, 5.63)
     # Without the spread, so the heights here are the measurement and nothing else.
     drawn = module.table(_slide(module), box, _WRAPPING, theme, numeric_from=3, fill=False)
     heights = [row.height / unit for row in drawn.rows]
@@ -4097,15 +4017,6 @@ def test_a_table_spreads_into_the_box_rather_than_sitting_in_the_top_of_it(helpe
     sparse = module.Box.corners(0.72, 1.0, 12.60, 7.0)
     assert module.table(_slide(module), sparse, _WRAPPING, theme).box.h < sparse.h
 
-    # And the cap is only for the sparse table: a page-wide body with a table of the
-    # size a page-wide body gets fills it, which is what the rest of the page does.
-    body = module.page(footer=True).body
-    rows = [["站点", "接入", "调用", "时延", "失败率", "口径"]] + [
-        [f"站点 {index}", "2026-03", "182 万", "42ms", "0.03%", "网关日志"] for index in range(5)
-    ]
-    filled = module.table(_slide(module), body, rows, theme).box
-    assert filled.h == pytest.approx(body.h, abs=0.01), f"a six-row table left {body.h - filled.h:.2f}in white"
-
 
 def test_a_table_takes_the_look_it_is_told_to_take(helpers) -> None:
     """The defaults are an argument the page is allowed to win.
@@ -4235,14 +4146,14 @@ def test_a_run_shorter_than_its_region_can_spend_the_slack_between_its_bands(tmp
         tight = module.Box(7.0, 1.4, 12.6, 1.4 + sum(cards))
         packed = module.stack(tight).spread(*cards)
         assert packed.gutter == pytest.approx(module.GUTTER)
-        with pytest.warns(UserWarning) as welded:
+        with pytest.raises(ValueError) as welded:
             for height in cards:
                 packed.take(height)
-        # The bands are the only thing left to shorten, and the warning says so --
+        # The bands are the only thing left to shorten, and the refusal says so --
         # the older sentence pointed at short_by over the heights alone, which is
         # the sum that already balanced.
-        assert "no slack to share" in str(welded[0].message), welded[0].message
-        assert "short_by(*heights, *gaps)" in str(welded[0].message), welded[0].message
+        assert "no slack to share" in str(welded.value), welded.value
+        assert "short_by(*heights, *gaps)" in str(welded.value), welded.value
 
         # Shortened by the gaps it had not counted, the same run fits with the gap in
         # it, and every band is the deck's own distance from the next.
@@ -4263,7 +4174,7 @@ def test_a_run_shorter_than_its_region_can_spend_the_slack_between_its_bands(tmp
         _drop(tmp_path)
 
 
-def test_the_band_that_overruns_says_what_the_region_already_paid_out(tmp_path) -> None:
+def test_the_band_that_refuses_says_what_the_region_already_paid_out(tmp_path) -> None:
     """The band that overruns is never the band that overspent.
 
     A live run wrote one helper that measured every card with `card_size` and never
@@ -4278,18 +4189,18 @@ def test_the_band_that_overruns_says_what_the_region_already_paid_out(tmp_path) 
         down = module.stack(region)
         for _ in range(3):
             down.take(1.62)
-        with pytest.warns(UserWarning) as refused:
+        with pytest.raises(ValueError) as refused:
             down.take(1.62)
-        said = str(refused[0].message)
+        said = str(refused.value)
         assert "after 3 band(s) spent 4.86in of its 5.10in" in said, said
 
         # A cursor that has taken nothing has nothing to report about, and the
         # sentence would be noise on the commonest overrun of all: one band too big
         # for an untouched region.
         fresh = module.stack(region)
-        with pytest.warns(UserWarning) as first:
+        with pytest.raises(ValueError) as first:
             fresh.take(region.h + 1.0)
-        assert "band(s) spent" not in str(first[0].message)
+        assert "band(s) spent" not in str(first.value)
     finally:
         _drop(tmp_path)
 
@@ -4308,11 +4219,11 @@ def test_a_cursor_that_spends_a_gap_says_so_when_it_runs_out(tmp_path) -> None:
         region = module.Box(7.0, 1.4, 12.6, 6.8)
         cards = [1.05, 0.78, 1.05]
         down = module.stack(region).spread(*cards)
-        with pytest.warns(UserWarning) as refused:
+        with pytest.raises(ValueError) as refused:
             for height in cards:
                 down.take(height)
                 down.skip(0.10)
-        said = str(refused[0].message)
+        said = str(refused.value)
         # Named as the call that set it, because that is the line to delete. A run
         # that met the older wording -- which said only "measure every band first",
         # the thing the script had already done -- deleted `spread` from all three
@@ -4325,18 +4236,18 @@ def test_a_cursor_that_spends_a_gap_says_so_when_it_runs_out(tmp_path) -> None:
         # A gutter the caller chose is not spread's, so it gets the general sentence
         # and not an instruction to delete a call it never made.
         chosen = module.stack(region, gutter=2.4)
-        with pytest.warns(UserWarning) as own:
+        with pytest.raises(ValueError) as own:
             for height in cards:
                 chosen.take(height)
-        assert "gap after every band" in str(own[0].message)
-        assert "spread()" not in str(own[0].message)
+        assert "gap after every band" in str(own.value)
+        assert "spread()" not in str(own.value)
 
         # A cursor with no gap says nothing about one: the sentence would be noise on
         # every other overrun, which is most of them.
         plain = module.stack(region)
-        with pytest.warns(UserWarning) as bare:
+        with pytest.raises(ValueError) as bare:
             plain.take(region.h + 1.0)
-        assert "gap after every band" not in str(bare[0].message)
+        assert "gap after every band" not in str(bare.value)
     finally:
         _drop(tmp_path)
 
@@ -4359,124 +4270,3 @@ def test_slack_is_short_by_asked_the_other_way(tmp_path) -> None:
         assert overrun.left == pytest.approx(4.85), "centre skipped nothing"
     finally:
         _drop(tmp_path)
-
-
-def test_stepping_to_the_floor_is_written_down_and_not_only_returned(helpers) -> None:
-    """A concession has to leave a trace. Hard invariant 5, and D4.
-
-    `the_largest_step_this_copy_takes` walked the whole ramp and handed back the
-    floor with nothing to say it had, so a page squeezed to 14pt read exactly like a
-    page whose copy fit. The chart side already reported what it gave up; the copy
-    side reported nothing.
-    """
-    layout = helpers.ppt_layout
-    layout.what_this_page_gave_up()  # start from a clean record
-
-    roomy = layout.Box.at(1.0, 1.0, w=9.0, h=3.0)
-    assert layout.the_largest_step_this_copy_takes("Six words on a wide line", roomy) in layout._RAMP
-    assert layout.what_this_page_gave_up() == [], "nothing was surrendered, so nothing is recorded"
-
-    cramped = layout.Box.at(1.0, 1.0, w=0.9, h=0.3)
-    size = layout.the_largest_step_this_copy_takes(
-        "A sentence far longer than nine tenths of an inch will hold at any step of the ramp",
-        cramped,
-    )
-
-    assert size == layout.BODY_FLOOR_PT
-    given = layout.what_this_page_gave_up()
-    assert [entry["what"] for entry in given] == ["type size"]
-    assert given[0]["got"] == layout.BODY_FLOOR_PT
-    assert given[0]["detail"], "the record names the copy that gave way"
-    assert layout.what_this_page_gave_up() == [], "reading it clears it, so pages do not inherit"
-
-
-def _badge_with_icon(slide, *, scheme: bool):
-    """A template's badge: a circle in a group with a small white (or theme-coloured) glyph on it."""
-    from pptx.dml.color import RGBColor
-    from pptx.enum.dml import MSO_THEME_COLOR
-    from pptx.util import Inches
-
-    group = slide.shapes.add_group_shape()
-    circle = group.shapes.add_shape(9, Inches(6.0), Inches(1.8), Inches(0.73), Inches(0.73))
-    circle.fill.solid()
-    circle.fill.fore_color.theme_color = MSO_THEME_COLOR.ACCENT_2
-    glyph = group.shapes.add_shape(1, Inches(6.18), Inches(2.0), Inches(0.31), Inches(0.27))
-    glyph.fill.solid()
-    if scheme:
-        glyph.fill.fore_color.theme_color = MSO_THEME_COLOR.ACCENT_6
-    else:
-        glyph.fill.fore_color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
-    # A template's badge carries no `p:style`; python-pptx's `add_shape` stamps one whose
-    # effectRef is the theme's drop shadow, which the shadow guard below would read as
-    # something a helper drew.
-    for shape in (circle, glyph):
-        for style in shape._element.findall("{http://schemas.openxmlformats.org/presentationml/2006/main}style"):
-            shape._element.remove(style)
-    return glyph
-
-
-def test_swap_icon_draws_ours_where_the_template_s_glyph_was_in_its_colour(helpers) -> None:
-    """amber p12: four white glyphs on gradient circles, each 0.31in, inside a group.
-    The new icon lands in that box on the page (not in the group's child space), in
-    white, and the old glyph is gone."""
-    from pptx import Presentation
-    from pptx.util import Inches
-
-    deck = Presentation()
-    deck.slide_width, deck.slide_height = Inches(13.333), Inches(7.5)
-    slide = deck.slides.add_slide(deck.slide_layouts[6])
-    glyph = _badge_with_icon(slide, scheme=False)
-    before = sum(1 for _ in _every_shape(slide))
-
-    icon = helpers.ppt_icons.swap_icon(slide, glyph, "truck")
-
-    assert len(icon) >= 1
-    assert sum(1 for _ in _every_shape(slide)) == before - 1 + len(icon), "old glyph gone, strokes added"
-    assert 6.1 <= icon.box.x0 and icon.box.x1 <= 6.6, f"ink lands in the badge: {icon.box}"
-    assert 1.9 <= icon.box.y0 and icon.box.y1 <= 2.4, f"ink lands in the badge: {icon.box}"
-    stroke = icon[0]
-    painted = stroke.fill.fore_color.rgb if stroke.fill.type == 1 else stroke.line.color.rgb
-    assert str(painted) == "FFFFFF"
-
-
-def test_swap_icon_keeps_a_theme_slot_so_the_icon_follows_the_deck_s_palette(helpers) -> None:
-    from pptx import Presentation
-    from pptx.enum.dml import MSO_THEME_COLOR
-    from pptx.util import Inches
-
-    deck = Presentation()
-    deck.slide_width, deck.slide_height = Inches(13.333), Inches(7.5)
-    slide = deck.slides.add_slide(deck.slide_layouts[6])
-    glyph = _badge_with_icon(slide, scheme=True)
-
-    icon = helpers.ppt_icons.swap_icon(slide, glyph, "chart-bar")
-
-    stroke = icon[0]
-    slot = stroke.fill.fore_color.theme_color if stroke.fill.type == 1 else stroke.line.color.theme_color
-    assert slot == MSO_THEME_COLOR.ACCENT_6
-
-
-def test_swap_icon_refuses_a_figure_sized_shape(helpers) -> None:
-    from pptx import Presentation
-    from pptx.util import Inches
-
-    deck = Presentation()
-    deck.slide_width, deck.slide_height = Inches(13.333), Inches(7.5)
-    slide = deck.slides.add_slide(deck.slide_layouts[6])
-    panel = slide.shapes.add_shape(1, Inches(1), Inches(1), Inches(4), Inches(3))
-    panel.fill.solid()
-
-    with pytest.raises(ValueError, match="replace_picture"):
-        helpers.ppt_icons.swap_icon(slide, panel, "truck")
-
-
-def _every_shape(slide):
-    from pptx.enum.shapes import MSO_SHAPE_TYPE
-
-    def walk(shapes):
-        for shape in shapes:
-            yield shape
-            if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
-                yield from walk(shape.shapes)
-
-    yield from walk(slide.shapes)

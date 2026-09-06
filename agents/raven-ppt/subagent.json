@@ -19,7 +19,7 @@
   },
   "recommendedLlm": {
     "provider": "ppt",
-    "model": "z-ai/glm-5.3-flash",
+    "model": "anthropic/claude-sonnet-5",
     "apiBase": "https://openrouter.ai/api/v1"
   }
 }

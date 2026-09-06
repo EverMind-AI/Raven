@@ -536,15 +536,14 @@ _KIND_PHRASES = {
     "unseen_page": "never been shown",
     "unplaced_figure": "promised a figure and that shows no picture",
     "literal_escape": "printing an escape",
+    "covered_shape": "hidden behind an opaque shape",
     "unreadable": "cannot make out",
     "word_collision": "colliding in the render",
     "placeholder_copy": "placeholder text",
     "template_underlay": "new text boxes laid over",
     "figure": "figure id the catalogue does not hold",
-    "borrowed": "naming no bundled template",
     "house_page": "cover, index and closing",
     # Reports.
-    "covered_shape": "hidden behind an opaque shape",
     "band": "filled colour bar",
     "type_floor": "type under the floors",
     "evidence": "too few content pages showing anything",
@@ -760,13 +759,13 @@ ok(
     "the skill names chart_series as the role a stated accent does not move",
 )
 
-# The eight bundled templates and the colour every one of them declares and none of
+# The twelve bundled templates and the colour every one of them declares and none of
 # them paints. Measured here rather than written down, because the count and the value
 # are both claims in the document.
 _bundled = sorted((ROOT / "plugins-dist/ppt-engine/raven_ppt/assets/templates").glob("*.pptx"))
-ok(len(_bundled) == 8, f"the skill says eight bundled templates and {len(_bundled)} ship")
+ok(len(_bundled) == 12, f"the skill says twelve bundled templates and {len(_bundled)} ship")
 ok(
-    "all eight bundled templates declare their second background as `#F0F0F0`" in _flat,
+    "all twelve bundled templates declare their second background as `#F0F0F0`" in _flat,
     "the skill no longer states what every bundled template declares and none of them paints",
 )
 try:
@@ -852,128 +851,6 @@ ok(
     f"`{_modifiers[0]}`\nto `{_modifiers[-1]}`" in skill or f"`{_modifiers[0]}` to `{_modifiers[-1]}`" in _flat,
     f"the skill states a modifier range the catalogue does not carry; it holds {_modifiers[0]}-{_modifiers[-1]}",
 )
-
-# 11e. every call in a fenced python sample binds to the real signature.
-#
-# The signature tables above are compared as text, which says the reference *prints*
-# the right form and nothing about the forms it *uses*. A sample that read
-# `picture_fit(slide, frame.body, PHOTO)` -- two arguments transposed and `theme`
-# missing -- sat three lines under a correct table row and would raise TypeError for
-# any author who copied it, which is what a sample is for.
-#
-# Bound and not executed: a sample draws on a slide and reads a theme that do not
-# exist here. `bind` answers the whole question a copied call fails on -- too few
-# arguments, too many, a keyword the helper does not take.
-import ast
-import importlib
-import inspect
-import os
-import tempfile
-
-# Written out and imported rather than exec'd in place: the projections import each
-# other by name and one of them reads `themes.json` out of its own directory, which
-# is the directory a build program runs in. Laid out that way once, they are the
-# modules an author's script actually gets.
-_PROJECTED = Path(tempfile.mkdtemp(prefix="skill-projection-"))
-for _module, _source in _SIGNATURES.items():
-    (_PROJECTED / f"{_module}.py").write_text(_source)
-for _name, _text in (
-    ("themes.json", script_helpers.theme_catalog_json()),
-    ("shapes.json", script_helpers.shape_catalog_json()),
-    (script_helpers.ICON_DATA_FILENAME, script_helpers.icon_catalog_json()),
-    (script_helpers.ICON_KEYWORD_FILENAME, script_helpers.icon_keyword_json()),
-):
-    (_PROJECTED / _name).write_text(_text, encoding="utf-8")
-sys.path.insert(0, str(_PROJECTED))
-_WAS = Path.cwd()
-os.chdir(_PROJECTED)
-_CALLABLES: dict[str, object] = {}
-_AMBIGUOUS: set[str] = set()
-# Every public name a program can import off a projection, constants included: an
-# example calling GUTTER needs it on an import line exactly as much as one calling
-# `write` does.
-_EXPORTS: set[str] = set()
-try:
-    for _module in _SIGNATURES:
-        for _name, _value in vars(importlib.import_module(_module)).items():
-            if _name.startswith("_"):
-                continue
-            if callable(_value) or _name.isupper():
-                _EXPORTS.add(_name)
-            if not inspect.isfunction(_value):
-                continue
-            if _name in _CALLABLES and _CALLABLES[_name] is not _value:
-                # Two modules offering one name cannot both be meant, and guessing is
-                # how a correct call gets reported against the other one's helper.
-                _AMBIGUOUS.add(_name)
-            _CALLABLES[_name] = _value
-finally:
-    os.chdir(_WAS)
-
-for _page, _text in _PAGES.items():
-    for _block in re.findall(r"```python\n(.*?)```", _text, re.S):
-        try:
-            _tree = ast.parse(_block)
-        except SyntaxError:
-            # A fragment rather than a module -- an argument list on its own, a line
-            # of prose in a fence. There is no call to bind in what does not parse.
-            continue
-        _local = {
-            _node.id for _node in ast.walk(_tree) if isinstance(_node, ast.Name) and isinstance(_node.ctx, ast.Store)
-        }
-        for _node in ast.walk(_tree):
-            if not isinstance(_node, ast.Call) or not isinstance(_node.func, ast.Name):
-                continue
-            _name = _node.func.id
-            if _name in _local or _name in _AMBIGUOUS or _name not in _CALLABLES:
-                continue
-            if any(isinstance(_arg, ast.Starred) for _arg in _node.args):
-                continue
-            if any(_word.arg is None for _word in _node.keywords):
-                continue
-            _args = [None] * len(_node.args)
-            _words = {_word.arg: None for _word in _node.keywords}
-            try:
-                inspect.signature(_CALLABLES[_name]).bind(*_args, **_words)
-            except TypeError as _why:
-                ok(False, f"{_page} samples {_name}(...) which does not bind: {_why}")
-            else:
-                ok(True, "")
-
-# 11f. every projected name an example calls is on an import line somewhere in the skill.
-#
-# A snippet is copied whole, so a name it calls that no import line carries is a name the
-# author cannot reach: `Run` was written into the signature table and into an example and
-# into no import line at all, and a live build spent a round on
-# `NameError: name 'Run' is not defined`. The audit that found it counted twenty-four such
-# names, `footer`, `table`, `picture_fit` and `GUTTER` among them.
-_IMPORTED: set[str] = set()
-# The two spellings, apart. One pattern for both let the single-line form run on past its
-# own newline and swallow the next import, which split into "timeline from ppt_icons
-# import add_icon" and reported three names that were sitting on an import line.
-for _names in re.findall(r"from ppt_\w+ import \(([^)]*)\)", skill):
-    _IMPORTED |= {_part.strip() for _part in _names.replace("\n", " ").split(",") if _part.strip()}
-for _names in re.findall(r"from ppt_\w+ import ([^(\n;]+)", skill):
-    _IMPORTED |= {_part.strip() for _part in _names.split(",") if _part.strip()}
-
-for _page, _text in _PAGES.items():
-    for _block in re.findall(r"```python\n(.*?)```", _text, re.S):
-        try:
-            _tree = ast.parse(_block)
-        except SyntaxError:
-            continue
-        _bound = {
-            _node.id for _node in ast.walk(_tree) if isinstance(_node, ast.Name) and isinstance(_node.ctx, ast.Store)
-        } | {_node.name for _node in ast.walk(_tree) if isinstance(_node, (ast.FunctionDef, ast.ClassDef))}
-        for _node in ast.walk(_tree):
-            if not (isinstance(_node, ast.Name) and isinstance(_node.ctx, ast.Load)):
-                continue
-            if _node.id in _bound or _node.id not in _EXPORTS:
-                continue
-            ok(
-                _node.id in _IMPORTED,
-                f"{_page} calls {_node.id} in an example and no import line in the skill carries it",
-            )
 
 # 12. canvas
 ok("13.3 x 7.5in" in skill, "canvas size claim changed")

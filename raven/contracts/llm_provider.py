@@ -24,8 +24,6 @@ class ErrorClassification:
       - ``should_compress`` → context-window overflow; shrink then retry
       - ``should_drop_tool_images`` → the endpoint refuses an image inside a
         tool result; move it to a user message then retry
-      - ``strip_images``     → the endpoint refuses an image for its size; take
-        the picture out then retry
     ``category`` is for logging/telemetry only.
     """
 
@@ -34,12 +32,6 @@ class ErrorClassification:
     should_fallback: bool = False
     should_compress: bool = False
     should_drop_tool_images: bool = False
-    #: The upstream refused an image for its size, not its placement. Moving it to
-    #: another message keeps the bytes and the refusal; the recovery is to take the
-    #: picture out and ask again, and not to wait -- the same request a minute later
-    #: is refused the same way. Measured twice on OpenRouter after a two-page render
-    #: went to the model as pictures: "Downloaded image content cannot exceed 30MB".
-    strip_images: bool = False
     #: The upstream refused the prompt-cache breakpoints specifically. Decided
     #: here for the same reason the rest of this verdict is: a provider that
     #: swallows the exception into a string loses the response body with it, and
