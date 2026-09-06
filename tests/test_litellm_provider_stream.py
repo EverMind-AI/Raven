@@ -9,6 +9,7 @@ Covers:
 - chat() and chat_stream() both forward the provider's api_key to acompletion
   as an explicit kwarg, rather than relying on it having been exported to the
   environment
+- DeepSeek V4 tool continuations replay an empty reasoning_content field
 
 Mocks patch `raven.providers.litellm_provider.acompletion` because the
 provider module imports `from litellm import acompletion` at top level, so
@@ -268,6 +269,110 @@ async def test_chat_stream_forwards_api_key_to_acompletion(monkeypatch: pytest.M
         pass
 
     assert captured["api_key"] == "k-main"
+
+
+@pytest.mark.parametrize(
+    ("model", "provider_name"),
+    [
+        ("deepseek/deepseek-v4-flash", "deepseek"),
+        ("deepseek/deepseek-v4-pro", "deepseek"),
+        ("openrouter/deepseek/deepseek-v4-pro", "openrouter"),
+    ],
+)
+@pytest.mark.parametrize("declare_tools", [True, False], ids=["declared", "omitted"])
+@pytest.mark.asyncio
+async def test_chat_replays_empty_reasoning_for_deepseek_v4_tool_calls(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    provider_name: str,
+    declare_tools: bool,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    async def fake_acompletion(**kwargs: Any):
+        captured.update(kwargs)
+        return _FakeResponse("ok")
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "probe", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "content": "done", "tool_call_id": "call_1"},
+    ]
+    tools = [{"type": "function", "function": {"name": "probe", "parameters": {}}}] if declare_tools else None
+    provider = LiteLLMProvider(api_key="test-key", provider_name=provider_name, default_model=model)
+
+    await provider.chat(messages=messages, tools=tools)
+
+    assert captured["messages"][0]["reasoning_content"] == ""
+
+
+@pytest.mark.parametrize("declare_tools", [True, False], ids=["declared", "omitted"])
+@pytest.mark.asyncio
+async def test_chat_stream_replays_empty_reasoning_for_deepseek_v4_tool_calls(
+    monkeypatch: pytest.MonkeyPatch,
+    declare_tools: bool,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    async def fake_acompletion(**kwargs: Any):
+        captured.update(kwargs)
+        return _fake_stream([_chunk("ok")])
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
+
+    messages = [{"role": "assistant", "content": "", "tool_calls": [{"id": "call_1"}]}]
+    tools = [{"type": "function", "function": {"name": "probe", "parameters": {}}}] if declare_tools else None
+    provider = LiteLLMProvider(
+        api_key="test-key",
+        provider_name="deepseek",
+        default_model="deepseek/deepseek-v4-flash",
+    )
+
+    async for _ in provider.chat_stream(messages=messages, tools=tools):
+        pass
+
+    assert captured["messages"][0]["reasoning_content"] == ""
+
+
+@pytest.mark.parametrize(
+    ("model", "provider_name"),
+    [
+        ("deepseek/deepseek-chat", "deepseek"),
+        ("openai/gpt-4o", "openai"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_chat_leaves_non_thinking_tool_call_messages_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    provider_name: str,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    async def fake_acompletion(**kwargs: Any):
+        captured.update(kwargs)
+        return _FakeResponse("ok")
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
+
+    messages = [{"role": "assistant", "content": "", "tool_calls": [{"id": "call_1"}]}]
+    tools = [{"type": "function", "function": {"name": "probe", "parameters": {}}}]
+    provider = LiteLLMProvider(api_key="test-key", provider_name=provider_name, default_model=model)
+
+    await provider.chat(messages=messages, tools=tools)
+
+    assert "reasoning_content" not in captured["messages"][0]
 
 
 # --------- generation settings reach the request body (regression) ----------

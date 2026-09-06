@@ -368,7 +368,9 @@ class LiteLLMProvider(LLMProvider):
 
     @staticmethod
     def _sanitize_messages(
-        messages: list[dict[str, Any]], extra_keys: frozenset[str] = frozenset()
+        messages: list[dict[str, Any]],
+        extra_keys: frozenset[str] = frozenset(),
+        ensure_tool_reasoning: bool = False,
     ) -> list[dict[str, Any]]:
         """Strip non-standard keys and ensure assistant messages have a content key."""
         allowed = _ALLOWED_MSG_KEYS | extra_keys
@@ -396,7 +398,17 @@ class LiteLLMProvider(LLMProvider):
 
             if "tool_call_id" in clean and clean["tool_call_id"]:
                 clean["tool_call_id"] = map_id(clean["tool_call_id"])
+            if ensure_tool_reasoning and clean.get("role") == "assistant" and clean.get("tool_calls"):
+                clean.setdefault("reasoning_content", "")
         return sanitized
+
+    def _requires_tool_reasoning_replay(self, original_model: str, resolved_model: str) -> bool:
+        """Return whether the wire model requires reasoning keys on tool continuations."""
+        for model in (original_model, resolved_model):
+            upstream_model = self._strip_gateway_prefix(model).lower()
+            if upstream_model.startswith("deepseek/deepseek-v4-"):
+                return True
+        return False
 
     async def chat(
         self,
@@ -424,6 +436,7 @@ class LiteLLMProvider(LLMProvider):
         original_model = model or self.default_model
         model = self._resolve_model(original_model)
         extra_msg_keys = self._extra_msg_keys(original_model, model)
+        ensure_tool_reasoning = self._requires_tool_reasoning_replay(original_model, model)
 
         if self._supports_cache_control(original_model):
             if not self.disable_auto_cache_control:
@@ -440,7 +453,11 @@ class LiteLLMProvider(LLMProvider):
 
         kwargs: dict[str, Any] = {
             "model": model,
-            "messages": self._sanitize_messages(self._sanitize_empty_content(messages), extra_keys=extra_msg_keys),
+            "messages": self._sanitize_messages(
+                self._sanitize_empty_content(messages),
+                extra_keys=extra_msg_keys,
+                ensure_tool_reasoning=ensure_tool_reasoning,
+            ),
             "temperature": temperature,
             # Per-read httpx cap forwarded to the underlying client. This alone
             # cannot bound a backend that trickles bytes forever (the read timer
@@ -529,6 +546,7 @@ class LiteLLMProvider(LLMProvider):
         original_model = model or self.default_model
         model = self._resolve_model(original_model)
         extra_msg_keys = self._extra_msg_keys(original_model, model)
+        ensure_tool_reasoning = self._requires_tool_reasoning_replay(original_model, model)
 
         if self._supports_cache_control(original_model):
             if not self.disable_auto_cache_control:
@@ -538,7 +556,11 @@ class LiteLLMProvider(LLMProvider):
 
         kwargs: dict[str, Any] = {
             "model": model,
-            "messages": self._sanitize_messages(self._sanitize_empty_content(messages), extra_keys=extra_msg_keys),
+            "messages": self._sanitize_messages(
+                self._sanitize_empty_content(messages),
+                extra_keys=extra_msg_keys,
+                ensure_tool_reasoning=ensure_tool_reasoning,
+            ),
             "temperature": temperature,
             "stream": True,
             # OpenAI-compatible providers only emit the trailing usage chunk
