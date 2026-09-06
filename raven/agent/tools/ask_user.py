@@ -11,6 +11,16 @@ A batch shares one deadline rather than one per question, and a call whose
 shape would waste the user's time -- a single-option question, a repeated
 question, more questions than the cap -- is rejected before anything is
 rendered, with a message that steers the next attempt.
+
+``execute`` is serialized against an ACP-relayed sub-agent's own ``ask_user``
+round trip via ``question_lock`` (shared with ``raven.acp_client.ask_user`` /
+``elicitor``): both routes reach the same broker slot for one conversation_id,
+and without the same lock the later of the two forces the earlier one's pending
+future to its default -- indistinguishable, downstream, from a genuine timeout.
+``ask_direct`` deliberately does not take it: the relayed routes call it while
+already holding that lock across their whole exchange, and the lock is not
+re-entrant, so taking it here again would wait the whole budget out and answer
+empty on every relayed question. Its callers own the serialization.
 """
 
 import asyncio
@@ -19,6 +29,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
+from raven.acp_client.asker import held_question
 from raven.contracts.asking import QuestionResponder
 from raven.contracts.tool import Tool, ToolResult
 
@@ -233,14 +244,22 @@ class AskUserTool(Tool):
 
         For host machinery that must confirm with the user before the model
         is even involved, or on behalf of something that has no tool registry
-        to look in. Two callers: the graph-level confirm gate, which
+        to look in. Three callers: the graph-level confirm gate, which
         ``AgentLoop._confirm_graph`` puts in front of a whole DAG -- asked
-        before the run is billed, so a refusal costs nothing -- and the turn's
-        `Asker`, through which an ACP sub-agent's own question reaches the user.
+        before the run is billed, so a refusal costs nothing -- the loop's
+        ``direct_ask`` grant, through which a plugin tool gate asks from
+        inside a tool call, and the turn's `Asker`, through which an ACP
+        sub-agent's own question reaches the user.
         Returns ``None`` when the round-trip is structurally unavailable (no
         broker, no conversation) -- the caller decides what that means -- and
         otherwise the user's answer, which is ``""`` on timeout or
         cancellation (the broker never raises).
+
+        Takes no ``question_lock``: the `Asker` route holds it already, across
+        a whole form or round trip, and the lock is not re-entrant. A caller
+        that is not under it serializes itself with ``held_question`` (the
+        confirm gate and the ``direct_ask`` grant do) so it cannot evict a
+        relayed sub-agent's pending question from the broker slot.
         """
         if not self._broker or not conversation_id:
             return None
@@ -398,34 +417,41 @@ class AskUserTool(Tool):
         # batch shows which answer belongs to which question. The UI renders each
         # line as its own row.
         picks: list[str] = []
-        for index, item in enumerate(prepared):
-            remaining = deadline - loop.time()
-            # A spent budget stops the batch rather than opening a fresh wait on
-            # every question that is left.
-            answer = (
-                await self._broker.await_question(
-                    cid,
-                    prompt=item.question,
-                    choices=item.options,
-                    timeout_s=remaining,
-                    header=item.header,
-                    recommended=item.recommended,
-                    index=index,
-                    total=len(prepared),
-                    batch=batch,
+        # Held for the whole batch, not per question, so a multi-question call
+        # is never interleaved with an ACP-relayed sub-agent's own question on
+        # the same conversation_id -- see the module docstring. The wait for it
+        # spends this call's own budget, not a budget of its own: a lock still
+        # busy at the deadline leaves ``remaining`` at zero, and every question
+        # in the batch answers empty without ever reaching the broker.
+        async with held_question(cid, budget):
+            for index, item in enumerate(prepared):
+                remaining = deadline - loop.time()
+                # A spent budget stops the batch rather than opening a fresh wait on
+                # every question that is left.
+                answer = (
+                    await self._broker.await_question(
+                        cid,
+                        prompt=item.question,
+                        choices=item.options,
+                        timeout_s=remaining,
+                        header=item.header,
+                        recommended=item.recommended,
+                        index=index,
+                        total=len(prepared),
+                        batch=batch,
+                    )
+                    if remaining > 0
+                    else ""
                 )
-                if remaining > 0
-                else ""
-            )
-            if answer:
-                told.append(f'User answered: "{item.question}" -> "{answer}".')
-                picks.append(f"{item.question} -> {answer}" if len(prepared) > 1 else str(answer))
-            else:
-                # Naming the option the model recommended is what lets it carry on
-                # the way it intended; without it the only signal is "no answer".
-                hint = f' recommended option was "{item.recommended}";' if item.recommended else ""
-                told.append(f'For "{item.question}": (user did not answer;{hint} proceed with best judgment).')
-                picks.append(f"{item.question} -> (no answer)" if len(prepared) > 1 else "(no answer)")
+                if answer:
+                    told.append(f'User answered: "{item.question}" -> "{answer}".')
+                    picks.append(f"{item.question} -> {answer}" if len(prepared) > 1 else str(answer))
+                else:
+                    # Naming the option the model recommended is what lets it carry on
+                    # the way it intended; without it the only signal is "no answer".
+                    hint = f' recommended option was "{item.recommended}";' if item.recommended else ""
+                    told.append(f'For "{item.question}": (user did not answer;{hint} proceed with best judgment).')
+                    picks.append(f"{item.question} -> (no answer)" if len(prepared) > 1 else "(no answer)")
 
         return ToolResult(
             model_text=" ".join(told) + " Continue.",

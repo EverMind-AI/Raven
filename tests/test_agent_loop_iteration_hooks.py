@@ -152,6 +152,38 @@ async def test_after_iteration_short_circuit_replaces_the_draft_without_persisti
 
 
 @pytest.mark.asyncio
+async def test_an_honoured_rollback_is_counted_where_the_next_iteration_can_read_it(tmp_path):
+    """The re-sample carries the same iteration number, so a hook scoped to the
+    turn boundary cannot tell it from the first sampling by ``ctx.iteration``
+    alone. The loop records the honoured count beside the refused one."""
+
+    class BounceOnce(AgentHook):
+        def __init__(self) -> None:
+            self.seen: list[tuple[int | None, int]] = []
+
+        async def before_iteration(self, ctx):
+            self.seen.append((ctx.iteration, ctx.metadata.get("hook_rollbacks", 0)))
+            return HookDecision()
+
+        async def after_iteration(self, ctx):
+            if ctx.metadata.get("bounced"):
+                return HookDecision()
+            ctx.metadata["bounced"] = True
+            return HookDecision(rollback=True)
+
+    hook = BounceOnce()
+    provider = _ScriptedProvider([_text("draft"), _text("final")])
+    loop = _loop(tmp_path, provider, [hook], max_iterations=3)
+
+    out = await loop._process_message(_req())
+
+    assert out is not None
+    # Iteration 1 twice: the first sampling with no rollback on record, the
+    # re-sample with exactly one.
+    assert hook.seen == [(1, 0), (1, 1)]
+
+
+@pytest.mark.asyncio
 async def test_the_rollback_cap_degrades_to_pass_through_and_is_counted(tmp_path):
     class AlwaysBounce(AgentHook):
         def __init__(self) -> None:
