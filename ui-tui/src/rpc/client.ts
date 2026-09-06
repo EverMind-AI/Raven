@@ -7,7 +7,7 @@
 // A unix-socket path is still accepted for legacy setups. Bare FD inheritance
 // (pass_fds=(3,4)) was rejected — Node can't reliably wrap inherited pipe FDs.
 //
-// Framing: newline-delimited UTF-8 JSON. Each frame is
+// Framing: newline-delimited UTF-8 JSON (specs §2.5). Each frame is
 // `JSON.stringify(obj) + '\n'`. Single frame limit: 1 MiB.
 //
 // Writes are serialized through a `writeQueue` (single-writer model) so
@@ -26,7 +26,7 @@ import { rpcErrorFromFrame } from './errors.js'
 import { isJsonRpcError } from './generated.js'
 import { SubscriptionRegistry } from './subscriptions.js'
 
-const MAX_FRAME_BYTES = 1024 * 1024 // 1 MiB, mirroring the Python server's MAX_FRAME_BYTES
+const MAX_FRAME_BYTES = 1024 * 1024 // 1 MiB (specs §2.5)
 
 type Pending = {
   resolve: (value: unknown) => void

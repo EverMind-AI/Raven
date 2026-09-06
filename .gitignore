@@ -47,7 +47,7 @@ logs/
 .vscode/
 tmp.sh
 .work_context/
-# Runtime-discipline shadow checkpoint repo — never commit snapshots
+# Runtime-discipline shadow checkpoint repo (Bug2) — never commit snapshots
 .raven/
 .hermes/
 

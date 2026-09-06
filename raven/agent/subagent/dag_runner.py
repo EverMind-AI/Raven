@@ -3,7 +3,7 @@
 Ported from the RavenX reference ``_dag/_runner.py`` but decoupled from
 AgentScope: node execution goes through a :class:`SubagentBackend`
 (``run(task, *, task_id, workspace, executor) -> str``) — the same adapter layer
-the native subagent uses — instead of an AgentScope tool yielding
+the native subagent uses (req4/req5) — instead of an AgentScope tool yielding
 ``ToolChunk``s, so ``_run_node`` just awaits a string result. Progress events go
 through a plain ``ProgressPublisher`` callback (no spine, no scheduler).
 """
@@ -1168,10 +1168,8 @@ async def _run_node(
             )
             # The effort level, on the same terms. The `instance` goes in rather
             # than the handle this node dispatches under: a node that names none
-            # has no override to find, so the resolver answers with the session's
-            # tier -- clamped to this agent's menu, and falling through to the
-            # agent's own default only when there is no tier to inherit -- rather
-            # than each lane deciding again.
+            # runs at the agent's own default, which the resolver answers for it
+            # rather than each lane deciding again.
             node_mode = mode_for(session_key or "", node.subagent, node.instance) if mode_for is not None else None
             # Collected around the dispatch, exactly as a spawn does it: the
             # backend publishes into whatever is open, so a node gets the same

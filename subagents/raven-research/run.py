@@ -37,7 +37,7 @@ HERE = Path(__file__).resolve().parent
 RAVEN_X = HERE / "Raven-X"
 DEFAULT_CONFIG = HERE / "config.json"
 # Budget overlays over the baseline config. `config.json` is the complete
-# default (fast) profile; each overlay carries only the knobs that differ, so
+# default (medium) profile; each overlay carries only the knobs that differ, so
 # the identity prompt and provider wiring exist in exactly one place.
 MODES_DIR = HERE / "modes"
 
@@ -45,24 +45,24 @@ MODES_DIR = HERE / "modes"
 # the overlay files because they are product copy about the choice, not config
 # the agent reads; the overlay beside each one carries the knobs.
 MODE_LABELS = {
-    "fast": (
-        "Fast",
+    "medium": (
+        "Medium",
         "Bounded budget; converges as soon as the evidence answers the question. "
         "The default, and right for an ordinary question.",
     ),
-    "deep": (
-        "Deep",
+    "high": (
+        "High",
         "Keeps searching for longer before the early-convergence gate is consulted. "
         "For a multi-faceted topic one pass of evidence will not settle.",
     ),
-    "ultra": (
-        "Ultra",
+    "max": (
+        "Max",
         "No early-convergence gate; exhaustive retrieval. "
         "Only when the user has explicitly asked for exhaustive research.",
     ),
 }
-# The baseline IS the fast profile, so it needs no overlay file; the others do.
-BASELINE_MODE = "fast"
+# The baseline IS the medium profile, so it needs no overlay file; the others do.
+BASELINE_MODE = "medium"
 
 
 def env_value(name: str) -> str | None:
@@ -492,10 +492,10 @@ def main() -> int:
     ap.add_argument("--config", default=str(DEFAULT_CONFIG))
     ap.add_argument(
         "--mode",
-        choices=("fast", "deep", "ultra"),
+        choices=("medium", "high", "max"),
         default=None,
         help="Which profile sessions start in; a client may switch a live "
-        "session with session/set_mode. `fast` is the baseline as-is.",
+        "session with session/set_mode. `medium` is the baseline as-is.",
     )
     ap.add_argument("--raven-x", default=str(RAVEN_X))
     args = ap.parse_args()
@@ -507,7 +507,7 @@ def main() -> int:
     if not raven_bin.is_file():
         raise SystemExit(f"error: Raven-X venv missing at {raven_bin}; run `uv sync` in {root}")
 
-    mode = None if args.mode == "fast" else args.mode
+    mode = None if args.mode == BASELINE_MODE else args.mode
     rendered = render_config(Path(args.config).resolve(), mode=mode)
     log(f"[run] exec {raven_bin} acp (config {rendered}, state under {STATE_ROOT})")
     os.chdir(root)

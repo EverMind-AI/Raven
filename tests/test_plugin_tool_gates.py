@@ -420,6 +420,53 @@ class TestLoopCastsGates:
         handles = loop.mint_runtime_handles("plug")
         assert await handles.direct_ask("proceed?", ["Yes", "No"], "conv-1") is None
 
+    @pytest.mark.asyncio
+    async def test_direct_ask_waits_its_turn_on_the_conversation_and_gives_up_at_the_deadline(
+        self, tmp_path: Path
+    ) -> None:
+        """The grant is a third route to the broker's single pending slot, beside the
+        confirm gate and the relayed ``Asker``. Like them it holds the conversation's
+        question lock across the round trip -- ``ask_direct`` takes none itself -- so
+        a gate asking from inside one node's tool call cannot evict the question a
+        sibling node (or a relayed sub-agent) already has pending. A conversation
+        still busy at the deadline answers None, the gate's no-channel path, and the
+        broker never sees the question."""
+        import asyncio
+
+        from raven.acp_client.asker import question_lock
+
+        class _Broker:
+            default_timeout_s = 600.0
+
+            def __init__(self) -> None:
+                self.asked: list[str] = []
+
+            async def await_question(self, cid: str, *, prompt: str, choices: list[str], **kwargs) -> str:
+                self.asked.append(prompt)
+                return "Yes"
+
+        loop = _loop(tmp_path)
+        broker = _Broker()
+        loop.tools.get("ask_user").set_broker(broker)  # type: ignore[union-attr]
+        handles = loop.mint_runtime_handles("plug")
+
+        lock = question_lock("conv-1")
+        await lock.acquire()
+        try:
+            assert await handles.direct_ask("proceed?", ["Yes", "No"], "conv-1", 0.1) is None
+        finally:
+            lock.release()
+        assert broker.asked == []
+
+        async def release_soon() -> None:
+            await asyncio.sleep(0.02)
+            lock.release()
+
+        await lock.acquire()
+        answer, _ = await asyncio.gather(handles.direct_ask("proceed?", ["Yes", "No"], "conv-1", 1.0), release_soon())
+        assert answer == "Yes"
+        assert broker.asked == ["proceed?"]
+
     def test_rebind_workdir_persists_repoints_and_reads_back(self, tmp_path: Path) -> None:
         from raven.agent.workdir import WorkdirPolicy, WorkdirResolver
 

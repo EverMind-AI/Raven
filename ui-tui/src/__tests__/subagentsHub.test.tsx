@@ -1242,8 +1242,8 @@ describe('SubagentsHub form and delete confirm', () => {
   // frame test. It flaked under full-suite load: proving a row moved OUT of a
   // section it started in requires checking that a substring stopped
   // appearing, and this harness's frame() is an append-only concatenation of
-  // every byte ink ever wrote (see the mergeProbeColumns doc comment), so a
-  // transitional or late-flushed byte from the
+  // every byte ink ever wrote (see the mergeProbeColumns doc comment and the
+  // fix-wave-b report), so a transitional or late-flushed byte from the
   // pre-edit frame can still land after any checkpoint under contention. The
   // behaviour itself is exactly a `mergeProbeColumns` rule -- see
   // 'always takes the fresh group for an openai row...' below, which asserts

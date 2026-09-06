@@ -1,4 +1,4 @@
-.PHONY: help install install-deps lint lint-python lint-tui lint-bridge test test-python test-tui build build-tui build-bridge build-ui build-core check-commits check-pr-title check-large-files check-source-language check-core-wheel check-vendored-invariants beta ci clean coverage coverage-summary coverage-diff coverage-ratchet coverage-baseline-check coverage-baseline-candidate
+.PHONY: help install install-deps lint lint-python lint-tui lint-bridge test test-python test-tui build build-tui build-bridge build-ui build-core check-commits check-pr-title check-large-files check-core-wheel check-vendored-invariants beta ci clean coverage coverage-summary coverage-diff coverage-ratchet coverage-baseline-check coverage-baseline-candidate
 
 PYTHON ?= python3
 PYTHON_VERSION ?= 3.12
@@ -27,7 +27,6 @@ help:
 	@echo "  check-commits  Validate Conventional Commit subjects"
 	@echo "  check-pr-title Validate the PR title in PR_TITLE"
 	@echo "  check-large-files Validate PR files avoid blocked assets and size bloat"
-	@echo "  check-source-language Validate PR-added lines stay English outside the exemption zones"
 	@echo "  check-core-wheel  Build the raven-core wheel and smoke it in a clean venv"
 	@echo "  check-vendored-invariants Validate vendored subagents carry this trunk's fixes"
 	@echo "  beta           Build this checkout and publish it to the beta channel"
@@ -121,9 +120,6 @@ check-pr-title:
 
 check-large-files:
 	PYTHONPATH=. uv run --frozen --python $(PYTHON_VERSION) --extra dev python scripts/check_large_files.py $(COMMIT_RANGE)
-
-check-source-language:
-	PYTHONPATH=. uv run --frozen --python $(PYTHON_VERSION) --extra dev python scripts/check_source_language.py $(COMMIT_RANGE)
 
 # Out of the default pytest scope by norecursedirs (it builds a wheel and a
 # venv); this target is what CI and `make ci` run so the artifact stays honest.

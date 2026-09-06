@@ -62,6 +62,7 @@ export class BridgeServer {
     console.log(`🌉 Bridge server listening on ws://127.0.0.1:${this.port}`)
     console.log('🔒 Token authentication enabled')
 
+    // Initialize WhatsApp client
     this.wa = new WhatsAppClient({
       authDir: this.authDir,
       onMessage: msg => this.broadcast({ type: 'message', ...msg }),
@@ -69,6 +70,7 @@ export class BridgeServer {
       onStatus: status => this.broadcast({ type: 'status', status })
     })
 
+    // Handle WebSocket connections
     this.wss.on('connection', ws => {
       // Require auth handshake as first message
       const timeout = setTimeout(() => ws.close(4001, 'Auth timeout'), 5000)
@@ -88,6 +90,7 @@ export class BridgeServer {
       })
     })
 
+    // Connect to WhatsApp
     await this.wa.connect()
   }
 
@@ -138,16 +141,19 @@ export class BridgeServer {
   }
 
   async stop(): Promise<void> {
+    // Close all client connections
     for (const client of this.clients) {
       client.close()
     }
     this.clients.clear()
 
+    // Close WebSocket server
     if (this.wss) {
       this.wss.close()
       this.wss = null
     }
 
+    // Disconnect WhatsApp
     if (this.wa) {
       await this.wa.disconnect()
       this.wa = null

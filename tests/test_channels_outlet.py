@@ -1,5 +1,3 @@
-"""ChannelOutletAdapter as a spine Outlet: text, media fallback, and eaten events."""
-
 from raven.gateway.outlet import ChannelOutletAdapter
 from raven.spine import (
     ChatType,

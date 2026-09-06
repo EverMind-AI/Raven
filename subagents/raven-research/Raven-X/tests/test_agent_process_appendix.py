@@ -483,6 +483,24 @@ def test_a_reviewed_turn_does_not_say_skipped():
     assert "skipped" not in t.render()
 
 
+def test_the_trail_names_the_reviewer_when_the_rows_do():
+    """A mode may move the reviewer per session, so a verdict without its
+    reviewer cannot be compared with another's. Named off the last verify row,
+    counted for the exporter, and silent when the rows predate the field."""
+    rows = list(LEDGER) + [
+        {"op": "verify", "outcome": "rejected", "unsupported_claims": ["c1"], "model": "judge/cheap"},
+        {"op": "verify", "outcome": "pass", "unsupported_claims": [], "model": "judge/cheap"},
+    ]
+    t = build_trail(rows, "x")
+    assert t.verify_model == "judge/cheap"
+    assert t.counters()["verify_model"] == "judge/cheap"
+    assert "reviewer: pass via judge/cheap" in t.render()
+
+    legacy = build_trail(list(LEDGER), "x")
+    assert legacy.verify_model is None and legacy.counters()["verify_model"] is None
+    assert " via " not in legacy.render()
+
+
 def test_a_salvage_after_a_rejection_does_not_hide_behind_the_verdict():
     """The common salvage path runs THROUGH a verdict: reject -> revision ->
     empty visible answer -> salvage. The verdict was about a draft that never

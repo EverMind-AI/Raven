@@ -67,4 +67,4 @@ Creates `~/.raven/config.json` and the workspace directory. Edit the config to a
 uv run pytest tests/
 ```
 
-Requires Python >= 3.12. Test configuration is in `pyproject.toml` (`asyncio_mode = "auto"`).
+Requires Python ≥ 3.11. Test configuration is in `pyproject.toml` (`asyncio_mode = "auto"`).

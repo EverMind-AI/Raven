@@ -2849,6 +2849,11 @@ class AgentLoop:
                     sorted(set(requested) - set(overrides)),
                 )
             hook_rollbacks += 1
+            if hook_ctx is not None:
+                # The honoured count beside the refused one: a gate scoped to the
+                # turn boundary (ask_user) needs to know the iteration number it
+                # sees is a re-sample, and only the loop knows that.
+                hook_ctx.metadata["hook_rollbacks"] = hook_rollbacks
             del messages[iter_msg_base:]
             if journal is not None:
                 journal.rewind(

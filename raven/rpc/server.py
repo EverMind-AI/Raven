@@ -117,7 +117,7 @@ class RpcServer:
         reader = asyncio.StreamReader(limit=MAX_FRAME_BYTES)
         reader_protocol = asyncio.StreamReaderProtocol(reader)
 
-        # The production transport in
+        # P0 fix (2026-05-15): the production transport in
         # ``tui_commands.run_subprocess_with_rpc`` dups the same accepted unix
         # socket fd into ``request_fd`` and ``notify_fd``. CPython's
         # ``connect_write_pipe`` builds a ``_UnixWritePipeTransport`` whose

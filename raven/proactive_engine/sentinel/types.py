@@ -138,7 +138,7 @@ class PlannerDecision:
     action: Action
     reason: str = ""
     priority: Priority = "low"
-    proactivity_score: float = 0.0  # 0-1: confidence that acting proactively now benefits the user
+    proactivity_score: float = 0.0  # 0-1, per §1.2 finding 3 / ContextAgent
     target_session: str | None = None
     nudge_message: str | None = None  # required when action in {nudge, nudge_inject, nudge_defer}
     spawn_task: str | None = None  # required when action=spawn_agent

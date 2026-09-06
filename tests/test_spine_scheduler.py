@@ -1,5 +1,3 @@
-"""The spine Scheduler's submit surface: outcomes, loop affinity, and conversation ids."""
-
 import asyncio
 
 import pytest

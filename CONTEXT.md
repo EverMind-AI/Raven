@@ -105,44 +105,12 @@ _Avoid_: "callback" or "middleware" — neither captures the phase-specific, cha
 
 **Session Mode** (`acp/modes.py`; declared under `acp.modes` in config):
 A named per-session operating profile a client switches over ACP `session/set_mode`; every
-session response carries the `SessionModeState`. A mode's own two knobs are the iteration
-cap the loop enforces and an `overlay` the loop hands the hook chain as
+session response carries the `SessionModeState`. Two things move with a mode: the iteration
+cap the loop enforces, and an `overlay` the loop hands the hook chain as
 `ctx.metadata["mode_overlay"]` without interpreting -- a product's own hooks read their own
-knobs from it. The shipped built-in catalogue (see **Session Tier**) leaves both knobs at
-their defaults on all three of its modes; a deployment that declares its own catalogue is
-what actually moves them. Session state, not transcript state; a switch lands on the
-session's next turn.
+knobs from it. Session state, not transcript state; a switch lands on the session's next turn.
 _Avoid_: re-spelling a mode as a `session/set_config_option` entry -- modes are first-class in
 the stable schema.
-
-**Session Tier** (`medium`/`high`/`max`; `TIER_LADDER` in `config/schema.py`):
-What the shipped built-in Session Mode catalogue moves in place of an iteration cap or an
-overlay: a session's current mode id (`session_policy(key).mode`, falling through to the
-catalogue's default) is offered to every sub-agent that session dispatches, as the effort
-level to run it at. `clamp_tier` (`agent/subagent/mode_tiers.py`) is the clamp that lands
-it on one sub-agent: the nearest rung at or below on that agent's own probed menu, or
-`None` -- leave the agent on its own default -- in three cases. A tier outside the ladder
-(another vocabulary, "nearest" undefined); a menu sharing no rung with it at all; and a menu
-carrying a rung the ladder cannot rank at the point where raising the effort is the only
-move left, since the cheapest rung the ladder can *see* may not be the cheapest the agent
-has. An agent that converges on the ladder plus an id of its own still clamps on the real
-overlap, and an exact hit is honoured in any vocabulary that spells the rung the same way.
-Exactly one thing outranks it, and a person sets it: a standing override on a named instance
-(`subagents.instance.set_mode`). There is no per-dispatch mode -- the model composing a
-`spawn` cannot know what the operator chose, so `resolve_mode` takes no such argument and
-the spawn schema offers none.
-The three built-in descriptions are `raven.i18n` message ids resolved in
-`build_mode_catalogue`, not where they are declared: a pydantic `default_factory` runs
-before an entrance calls `set_language`, so declaring them translated would bake in
-English. A catalogue a deployment declared is passed through untouched --
-`AcpConfig.uses_builtin_modes` is the line between the rows raven owns and the rows it
-merely carries.
-_Avoid_: assuming a deployment's own Session Mode catalogue carries a tier too --
-`clamp_tier` only ever recognizes `TIER_LADDER`'s three names, so a renamed catalogue is
-exactly what it declines to guess at.
-_Avoid_: putting the scope of the control on the rungs. Each row says only what
-distinguishes it; that raven's own effort is unchanged is stated once by whichever surface
-draws the control.
 
 **Subagent** (`agent/subagent/`):
 A background agent task spawned by `SubagentManager`. Runs with its own tool set; its result
@@ -159,7 +127,7 @@ connection fields; the `kind` set is closed -- a new kind is a new backend modul
 branch in `agent/subagent/backends/__init__.py:build_third_party_backend`, and no plugin
 door for subagent kinds exists (recorded, not promised); `AgentCaps` and `Injectable` are *derived* from it, and are what a
 consumer branches on so that nothing has to switch on the transport.
-Three sources compose it, weakest first: **Product agent** rows discovered on the
+Three sources compose it, weakest first: **vendored** rows discovered on the
 filesystem, then `builtin` package seeds, then config. `builtin` rows are package seeds
 (`agent/subagent/builtin_agents.py`): they exist whether or not config mentions them, and a
 config row of the same name is a field-level override -- of every field but `enabled`,
@@ -173,32 +141,24 @@ _Avoid_: "third-party registry" — the table holds raven's own agents as well, 
 point of it: `spawn` and a DAG node pick from one roster, so an agent reachable from one
 entry point and not the other is no longer a state that exists.
 
-**Product agent** (`agent/subagent/vendored_agents.py`):
-An agent row discovered under the `agents/` product tree rather than written anywhere —
-one of the shipped products, each a launcher (`run.py`) over the installed raven plus a
-`subagent.json` manifest. Materialized as a row on every table build, so a folder that is
+**Vendored agent** (`agent/subagent/vendored_agents.py`):
+An agent row discovered under `subagents/` rather than written anywhere — one of the
+separate raven builds that ship beside this one, each its own checkout with its own venv
+and manifest. Materialized as a `cli` row on every table build, so a folder that is
 deleted stops being an agent and a manifest that changes is picked up without a stored
-copy to contradict it. The tree resolves through `agents_root()` — the raven home
-(`~/.raven/agents`, installed out of the wheel so a product's `.env` survives upgrades),
-then beside the package in a checkout, then the wheel's own `raven/agents`. Readiness
-(the launcher files its command names on disk, and its manifest-declared engine wheel
-importable where raven runs) decides `enabled`, not whether the row exists: an unready
-folder is listed and disabled with the reason on the row, because a name the dispatching
-model can pick and then fail on is worse than no name, and hiding it would also hide
-"present, not set up" from the operations view. A missing credential is deliberately not
-a readiness reason: the launcher inherits the host's provider block and refuses loudly at
-dispatch when there is truly nothing. Not deletable through config — removing one means
-removing its folder, or setting `"enabled": false` in its own `subagent.json`. On the
-RPC wire the row source is still spelled `vendored`; renaming that is a schema change.
-_Avoid_: "vendored agent" — the retired fork-tree (`subagents/`) meaning, whose rows
-carried venv and credential readiness; "third-party agent" — these are raven's own
-products, and nobody registered them; "builtin" — that is the in-process row, which has
-no subprocess and no launcher.
+copy to contradict it. Readiness (its venv built, and a credential of its own or a host
+provider key to inherit) decides `enabled`, not whether the row exists: an unready folder
+is listed and disabled, because a name the dispatching model can pick and then fail on is
+worse than no name, and hiding it would also hide "present, not set up" from the
+operations view. Not deletable through config — removing one means removing its folder,
+or setting `"enabled": false` in its own `subagent.json`.
+_Avoid_: "third-party agent" — these are raven's own builds, and nobody registered them;
+"builtin" — that is the in-process row, which has no subprocess and no venv.
 
 **Machine** (`raven/agent/subagent/dag_machines.py`):
-A compute host the owner registered with a machine-running agent's Raven install
+A compute host the owner registered with a vendored agent's own Raven install
 via `raven ops connection add`, reported by that agent's
-`raven ops connection doctor --json` as a `{name, usable}` row. An
+`raven ops connection doctor --json` as a `{name, usable}` row. A vendored
 on-call-style agent runs outside the dispatching Raven process — on a GPU
 box, a lab workstation, another machine entirely — so the DAG gate consults
 the agent before dispatching a graph that names it and refuses the run with
@@ -208,8 +168,8 @@ lists is refused under the same gate with the missing ones named; once
 settled the chosen machine is injected into every node's prompt so the
 writing and reporting halves of the graph agree on where the numbers came
 from. The check is silent — returning no `Verdict` rather than a blocking
-one — for graphs that name no machine-running agent, for installs
-that have not wired one up, and for agent installs where the doctor cannot
+one — for graphs that name no machine-running vendored agent, for installs
+that have not wired one up, and for agent checkouts where the doctor cannot
 be run at all; in those cases the graph dispatches exactly as it used to.
 _Avoid_: "host" / "server" / "node" (too broad, no link to the
 `ops connection` registry that supplies the rows); "GPU box" (only some are
@@ -763,21 +723,7 @@ _Avoid_: archive vs Consolidation confusion — Archive loses nothing
 The legacy path's lossy distillation: when the prompt outgrows the window, old
 messages are summarized into memory notes and leave the live history view; the
 originals never return to context.
-_Avoid_: summarize, compact -- three neighbours split this ground: Archive evicts
-losslessly to disk, Consolidation distills across turns into memory notes, Compaction
-(below) squeezes the live prompt inside one turn.
-
-**Compaction** (`agents.defaults.compaction`, `config/schema.py:CompactionConfig`):
-In-turn transcript compaction for long agentic turns, off by default: the loop's only
-in-turn shrink is then the reactive, deterministic elision it has always run on a
-provider's overflow error. Enabled, two layers join it on the same usage readings: a
-proactive layer that, once context crosses the trigger, prunes older tool-result bodies
-first (deterministic, no LLM call) and only then replaces the transcript head with an LLM
-summary while a recent tail stays verbatim; and a reactive completion that lets an
-overflow retry with nothing left to elide take the summary path instead of surfacing a
-fatal error. Summaries always run on the turn's own model and provider. Compaction
-squeezes the live prompt inside one turn and writes no memory notes.
-_Avoid_: compact for Consolidation or Archive -- those are cross-turn; this is not.
+_Avoid_: summarize, compact (ambiguous between this and Archive)
 
 **Manifest**:
 Curator's per-message metadata index for one session (tokens, snippet, relevance,
@@ -802,10 +748,7 @@ and injects into the main agent's system prompt so evicted facts stay present.
 **EverOS** (`plugins-dist/everos-memory/raven_everos/`):
 Raven's default memory-backend plugin (`everos-memory`; ships enabled, works out of
 the box). Its own distribution rather than part of the raven wheel, found through the
-`raven.plugins` entry-point group. (`plugins-dist/ppt-engine/` and
-`plugins-dist/design-engine/` ship the same way -- the group's other two
-distributed members, contributing a deck-building toolchain and a visual-design
-engine rather than memory.) Provides dual-track semantic recall — the user track (episodes/profiles,
+`raven.plugins` entry-point group. Provides dual-track semantic recall — the user track (episodes/profiles,
 injected into the `# Memory` segment) and the agent track (skills/cases, one of
 SkillForge's three sources at RRF weight 0.9). The name refers to the external package
 [EverMind-AI/EverOS](https://github.com/EverMind-AI/EverOS); the in-tree code is only an
@@ -1011,7 +954,7 @@ Moving the endpoint or rotating the key does not make a base stale.
 **Plugin** (`plugins/`):
 A component declared by a `raven-plugin.toml` manifest (`[plugin]`: `id`, `version`, optional
 `bundled` / `enabled_by_default`). It contributes capabilities via
-`[[plugin.contributes.<kind>]]` arrays — currently `memory_backends`, `tools`, `hooks`, `services`, `tool_gates` and `session_observers` —
+`[[plugin.contributes.<kind>]]` arrays — currently `memory_backends`, `tools` and `hooks` —
 each naming a `factory` (`module:callable`). The host passes the user's
 `plugins.config["<id>"]` dict verbatim to the factory as `PluginContext.config`. A `hooks`
 contribution returns an `AgentHook` the assembly root appends to the loop's chain: it is how
@@ -1034,40 +977,6 @@ The `PluginRegistry` discovers manifests, activates those not in `plugins.disabl
 contributions into per-kind tables — deduping plugins by `id` and contributions by `name`
 (`PluginConflictError` on collision). `build_memory_backend()` / `build_tool()` construct a
 contribution with a fresh `PluginContext`.
-
-**Service** (`raven/contracts/services.py`):
-A plugin's background-service contribution (the `services` kind): a resident host runs it
-and owns it, for watching that outlives any turn (an event poller pulling keyed wakes
-forward, a queue drainer). A dumb loop on the B side of the seam: it consumes its
-`PluginContext` and, when it declares `bind_runtime`, the late-bound `RuntimeHandles`
-grants -- and never mutates the host's assembly.
-
-**ToolGate** (`raven/contracts/tool_gate.py`):
-A plugin's per-call tool-adjudication contribution (the `tool_gates` kind). Gates are cast
-over the tool registry at assembly and fixed for the generation; `adjudicate` runs after
-parameters are validated and before dispatch. A non-None verdict replaces that one call's
-result (the call does not execute), None waves it through, and a gate that raises refuses
-the call it was adjudicating -- failing open would make its bugs silent permission grants.
-Gates run in lexicographic (name, contributing plugin id) order; the first non-None
-verdict wins.
-
-**SessionObserver** (`raven/contracts/session_events.py`):
-A plugin's session-retirement contribution (the `session_observers` kind): the session
-store calls `on_session_deleted` synchronously after it has acted on a delete, from
-whichever host surface asked. The store notifies and never waits -- an observer that
-raises is logged and skipped; no veto, no repair. For a plugin keeping per-session state
-outside the session store (an allocation ledger, a provisioned directory).
-
-**Visual Domain Selector** (`plugins-dist/design-engine/raven_design/selector.py`, hook seat `raven_design/plugin/hook.py`):
-The design engine's per-turn domain router, seated on the `hooks` kind
-(`before_user_inbound`): one LLM call per user turn compares the query against
-the full bodies of the fifteen packaged domain Skills and appends a two-tier
-card block (preferred and alternative Skill ids, bodies read on demand via
-`read_skill`) below a separator on the model's view of the inbound -- the
-session record keeps the user's own words on every turn outcome. The call
-rides the conversation's own binding; `plugins.config["design-engine"]
-.visualDomainSelector.enabled` is the off switch, and a selection failure
-degrades to the full description catalog for that turn.
 
 **Admission** (`config/admission.py`, `plugins/registry.py:_admit`, `agent/tools/registry.py:admit_tool`):
 The declare-check-dispense pattern at a boundary: the owner declares its authored members
@@ -1226,9 +1135,7 @@ package for the repo-level `evolver/` tool (outside the wheel) that drives raven
 and a fifth import-linter contract keeps the runtime from importing it back. `agents/` is the
 same kind of non-seat: repo-level product definitions (the A/B pilots against the frozen
 `subagents/`) that consume installed raven over `raven acp`, with a sixth contract keeping
-the runtime out of them — the wheel carries the tree as data (`raven/agents`, mapped by
-`hatch_build.py`) for the roster's file-level discovery, which imports nothing from it;
-the directory name is provisional by ruling. One ruled edge: `trajectory` (L3)
+the runtime out of them; the directory name is provisional by ruling. One ruled edge: `trajectory` (L3)
 reaches `config.admission` for the door vocabulary and builds a loop by hand for replay --
 legal, because it is a harness over recorded runs, not an entrance. One package holds two
 seats: in `agent/`, `agent/loop` is the L2 harness shell every entrance runs, and its
@@ -1446,28 +1353,6 @@ directories (`SessionManager`'s `sessions/<group>/`), the Skill Hub cache (`skil
 _Avoid_: "workspace" unqualified — this term used to cover both agent-wide and per-session
 storage; it now names only the agent-wide tree, so an unqualified "workspace" should be
 Agent home or Session workspace, whichever is meant.
-
-**Product state root** (`raven/config/product_render.py:product_state_root`):
-Where a product served over ACP keeps its WORK -- repos, instance buckets, flow stores,
-rendered configs -- never in the product's own folder: default
-`<raven home>/workspace/subagent_sessions/<product>`, overridden by the product's own
-state-root variable (the `raven-` prefix drops, dashes become underscores, the rest
-upper-cases: `raven-code` answers to `CODE_STATE_ROOT`). The engine's own Agent home is
-deliberately NOT here -- it goes through the Product ACP home (below). Work where the
-work is, the home in the data directory.
-
-**Product ACP home** (`raven/config/product_render.py:product_acp_home`):
-The engine's own Agent home for a product served over ACP -- never inside the host's
-Agent home. The host hands a session's working directory to whatever it dispatches to,
-and a raven engine refuses a working directory that CONTAINS its own home (the per-turn
-checkpoint runs `add -A` over the working directory and would commit its config and
-provider tokens into a shadow repository) -- so homing an engine under the host Agent
-home made every dispatch fail while capability probing still passed. Default
-`<raven home>/subagent_sessions/<product>/acp`, checked against the CONFIGURED host
-Agent home (`agents.defaults.workspace`); when the default lands inside it, the engine
-is homed beside the host home instead, tagged per instance. A placement must also be
-creatable, and a refusal names the product's `*_ACP_HOME` override variable, which wins
-outright. The Product state root is untouched by all of this.
 
 **Subagent history** (`raven/agent/subagent/history.py`):
 The per-session audit trail of every delegation to a Subagent, inside that session's
@@ -1961,11 +1846,8 @@ events: its nodes' exception reports and its final result, waiting for the tool 
 that is awaiting the run. One per foreground run, in memory beside the run's
 adjudication desk. The desk carries decisions from the main agent to the run; the
 outbox carries reports from the run to the main agent. While the run is bound the
-outbox hands or buffers a question and drops a notification -- the blocking call is
-still there and the run's summary is what it will be handed, so announcing the same
-news again would put an unanswerable question beside it -- and never announces; once
-released it re-sends what is unanswered and announces later events as turns, both
-kinds.
+outbox hands or buffers and never announces; once released it re-sends the buffer and
+announces later events as turns.
 _Avoid_: "mailbox" -- the lane's inject mailbox is a different object with a different
 reader.
 

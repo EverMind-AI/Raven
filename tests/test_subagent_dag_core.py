@@ -1,4 +1,4 @@
-"""Ported DAG core: graph validation, placeholders, render, store.
+"""Ported DAG core (req4/P3): graph validation, placeholders, render, store.
 
 Covers the provider-agnostic core of the sub-agent DAG subsystem (no agentscope);
 render/store are exercised over a tiny in-memory duck-typed backend.
@@ -1315,3 +1315,91 @@ def test_agent_loop_passes_its_subagent_dag_config_to_the_registered_tool(tmp_pa
     tool = loop.tools.get("run_subagent_dag")
     assert tool is not None
     assert tool._verdict_config.verdict_model == "cheap-tier"
+
+
+@pytest.mark.asyncio
+async def test_the_host_side_questions_wait_their_turn_on_the_conversation(tmp_path, monkeypatch):
+    """`_direct_ask` and `_confirm_graph` serialize on the conversation's question
+    lock like every other asker, and the wait draws on their own budget.
+
+    A plugin gate asks from inside a tool call and a foreground graph runs
+    several of those at once, so two host-side askers -- or one and a relayed
+    sub-agent holding the lock for its own question -- would otherwise evict
+    each other from the broker's single pending slot. Busy past the deadline
+    reads as no answer: None for the grant, a refusal for the confirm gate, and
+    the broker never sees the question.
+    """
+    import asyncio
+
+    from raven.acp_client.asker import question_lock
+    from raven.agent.loop import AgentLoop
+    from raven.providers.base import LLMProvider, LLMResponse
+    from raven.rpc.question_broker import QuestionBroker
+
+    class _StubProvider(LLMProvider):
+        def __init__(self) -> None:
+            super().__init__(api_key="test")
+
+        async def chat(self, messages, tools=None, model=None, max_tokens=4096, temperature=0.7, **kwargs):
+            return LLMResponse(content="stub", finish_reason="stop")
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+    sent: list[str] = []
+
+    async def send_frame(frame: dict) -> None:
+        sent.append(frame["params"]["question"])
+        if frame["params"]["question"] != "slow node":
+            broker.reply(frame["params"]["conversation_id"], "Continue")
+
+    broker = QuestionBroker(send_frame, timeout_s=5.0)
+    loop = AgentLoop(
+        provider=_StubProvider(),
+        workspace=tmp_path,
+        model="stub",
+        policy=TurnPolicy(max_iterations=2),
+        tools=ToolWiring(restrict_to_workspace=True),
+    )
+    loop.tools.get("ask_user").set_broker(broker)
+
+    # The confirm gate has no per-call budget of its own; it waits the tool's
+    # default, shortened here so the busy branch is observable.
+    monkeypatch.setattr("raven.agent.loop.wiring.DEFAULT_TIMEOUT_S", 0.1)
+    lock = question_lock("web:sess1")
+    await lock.acquire()
+    try:
+        assert await loop._direct_ask("which entity?", None, "web:sess1") is None
+        assert await asyncio.wait_for(loop._confirm_graph("web:sess1", "Run this graph?"), timeout=2.0) is False
+    finally:
+        lock.release()
+    assert sent == []
+
+    assert await loop._direct_ask("which entity?", None, "web:sess1", timeout_s=1.0) == "Continue"
+    assert sent == ["which entity?"]
+
+    # One budget, not two in series: a lock had late leaves the question only
+    # what is left of the round's budget. The lock is held for ~0.3s of a 0.6s
+    # round, so the budget the broker is handed must be what remained, never a
+    # fresh 0.6s. Asserted on the budget itself, not on wall-clock elapsed: a
+    # loaded CI box stretches the hold and would blur any timing window.
+    budgets: list[float] = []
+    real_await = broker.await_question
+
+    async def spy(conversation_id: str, **kwargs):
+        budgets.append(kwargs["timeout_s"])
+        return await real_await(conversation_id, **kwargs)
+
+    monkeypatch.setattr(broker, "await_question", spy)
+
+    async def hold_briefly() -> None:
+        await lock.acquire()
+        await asyncio.sleep(0.3)
+        lock.release()
+
+    holder = asyncio.ensure_future(hold_briefly())
+    await asyncio.sleep(0)
+    answer = await loop._direct_ask("slow node", None, "web:sess1", timeout_s=0.6)
+    await holder
+    assert answer == ""
+    assert len(budgets) == 1 and 0.0 < budgets[0] <= 0.6 - 0.25, budgets

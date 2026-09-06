@@ -1,4 +1,4 @@
-"""Built-in third-party subagent presets.
+"""Built-in third-party subagent presets (req5).
 
 One preset per agent, and each one already carries the transport that agent is
 reached over. That choice is made *here*, in the repo, from a measurement -- not

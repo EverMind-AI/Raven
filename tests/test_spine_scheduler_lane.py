@@ -1,5 +1,3 @@
-"""A scheduler lane's FIFO execution and its emit-guard and stamping rules."""
-
 import asyncio
 
 from loguru import logger

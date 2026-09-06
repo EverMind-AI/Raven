@@ -269,7 +269,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # sync with what we record on persisted messages.
         self._now_fn = now_fn or datetime.now
 
-        # Optional plugin-provided MemoryBackend.
+        # AG-1: optional plugin-provided MemoryBackend.
         # Bootstrap wires this from ``PluginRegistry.build_memory_backend``;
         # legacy callsites pass ``None`` and retain the existing post-turn
         # pipeline unchanged. See ``_dispatch_backend_store`` for the call
@@ -400,7 +400,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 provider_pool=provider_pool,
             )
 
-        # Checkpointing is configured under ``runtime.checkpoint``;
+        # Runtime discipline (5th pillar). Bug2 uses ``runtime.checkpoint``;
         # gated by (policy, interactive) — see ``_checkpoint_active``. When
         # the gate is closed the loop is byte-identical to baseline.
         if runtime_config is None:
@@ -422,17 +422,6 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
 
         self._sandbox_config = sandbox_config
         self._owned_ids: set[str] = set()
-        # The catalogue's default stands in for a session that never set a tier:
-        # `_apply_mode` stamps a policy only on the ACP turn path, so a terminal,
-        # gateway or channel turn would otherwise resolve to no tier at all.
-        try:
-            from raven.config.loader import load_config
-            from raven.config.mode_catalogue import build_mode_catalogue
-
-            self._default_tier = build_mode_catalogue(load_config()).default
-        except Exception as exc:
-            logger.warning("Could not resolve the default sub-agent tier; falling back to none: {}", exc)
-            self._default_tier = ""
         self.subagents = SubagentManager(
             provider=provider,
             workspace=workspace,
@@ -451,7 +440,6 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             max_spawns_per_hour=max_subagent_spawns_per_hour,
             agents=agents,
             session_dir=self.sessions.session_dir,
-            session_tier=lambda key: self.session_policy(key or "").mode or self._default_tier,
         )
         self._direct_handoff = DirectChatHandoff()
         # Kept for hot-applying web config changes and for the operations

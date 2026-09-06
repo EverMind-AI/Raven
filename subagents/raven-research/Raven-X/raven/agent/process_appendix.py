@@ -247,6 +247,10 @@ class ResearchTrail:
     zero_hit: int = 0
     pages: list[tuple[str, int, bool]] = field(default_factory=list)  # url, chars, ok
     verify_outcome: str | None = None
+    verify_model: str | None = None
+    """Which model reviewed, off the verify rows. A mode may move the reviewer per
+    session, so the trail names it: a reader comparing two runs' verdicts needs
+    to know whether the same reviewer gave them."""
     salvaged: bool = False
     """The shipped answer is a salvage synthesis, which the reviewer never sees
     (observer order, ``dr.py``). Rendered so an unreviewed answer does not wear
@@ -412,6 +416,7 @@ class ResearchTrail:
             # are not comparable on the rate, so the scope travels with it.
             "opened_earlier": self.opened_earlier,
             "verify_outcome": self.verify_outcome,
+            "verify_model": self.verify_model,
             "verify_open_points": len(self.unsupported),
             "salvaged": self.salvaged,
         }
@@ -445,6 +450,8 @@ class ResearchTrail:
             if self.unsupported:
                 head += f" ({len(self.unsupported)} open point"
                 head += "s)" if len(self.unsupported) > 1 else ")"
+            if self.verify_model:
+                head += f" via {self.verify_model}"
             if self.salvaged:
                 # The common salvage path runs THROUGH a verdict: reject ->
                 # revision -> empty visible answer -> salvage. The verdict was
@@ -686,6 +693,7 @@ def build_trail(
         elif op == "verify":
             # Last verdict wins: the turn's outcome is the one it ended on.
             t.verify_outcome = r.get("outcome") or t.verify_outcome
+            t.verify_model = r.get("model") or t.verify_model
             claims = r.get("unsupported_claims")
             if isinstance(claims, list):
                 t.unsupported = [str(c) for c in claims]

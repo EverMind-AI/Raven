@@ -1,5 +1,5 @@
 """Third-party OpenAI-compatible HTTP agent backend (mirothinker, …) as a
-spawned sub-agent.
+spawned sub-agent (req5).
 
 Each call is one Chat Completions request. A resumed instance replays its
 prior ``history`` as the leading messages instead of the endpoint holding any

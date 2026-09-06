@@ -14,11 +14,7 @@ import type {
   SessionTitleResponse,
   SessionUndoResponse
 } from '../../../gatewayTypes.js'
-import type {
-  SessionSetModeResult,
-  SubagentsInstanceCreateResult,
-  SubagentsInstanceSetModeResult
-} from '../../../rpc/generated.js'
+import type { SubagentsInstanceCreateResult, SubagentsInstanceSetModeResult } from '../../../rpc/generated.js'
 import type { Msg, PanelSection } from '../../../types.js'
 import type { StatusBarMode } from '../../interfaces.js'
 import type { SlashCommand } from '../types.js'
@@ -264,31 +260,35 @@ export const coreCommands: SlashCommand[] = [
   },
 
   {
-    help: 'show or change the effort tier -- of this conversation, or of the sub-agent you are chatting with',
+    help: 'show or change the effort level of the sub-agent you are chatting with',
     name: 'mode',
-    usage: '/mode [<id> | default]   -- default/reset/clear return to the default',
+    usage: '/mode [<id> | default]   -- default/reset/clear drop the override',
     run: (arg, ctx) => {
       const { active } = getDirectChat()
+
+      // Only meaningful inside a direct chat: a mode belongs to one instance's
+      // conversation, and the main agent picks per call with the spawn tool's
+      // own `mode` instead.
+      if (!active) {
+        return ctx.transcript.sys('/mode applies to a sub-agent chat -- /instance to enter one')
+      }
 
       if (!ctx.sid) {
         return ctx.transcript.sys('no active session')
       }
 
       const want = arg.trim()
-      // `default` / `reset` / `clear` are spent on dropping the override, so a
-      // mode or tier sharing one of those names -- an agent's own, or one of
-      // the session's medium/high/max tiers -- can never be selected by name
-      // here: telling the two apart needs the catalogue in hand before this
-      // call goes out, and the catalogue only arrives in the reply. So the
-      // words stay reserved, and `usage` names them.
+      // `default` / `reset` / `clear` are spent on dropping the override, so an
+      // agent that names one of its own modes after one of them cannot be put
+      // in it from here. Resolving that would need the mode list before the
+      // call, and the list arrives in the reply -- so the word is reserved and
+      // `usage` says so, rather than being resolved wrongly half the time.
       const clearing = RESET_WORDS.has(want.toLowerCase())
-      // One command, two scopes: inside a direct chat it is that instance's
-      // mode, and on the main conversation it is the tier raven dispatches its
-      // sub-agents at. Both read as "the effort of whoever I am talking to".
-      const method = active ? 'subagents.instance.set_mode' : 'session.set_mode'
-      const params: Record<string, unknown> = active
-        ? { agent: active.agent, handle: active.handle, session_key: ctx.sid }
-        : { session_key: ctx.sid }
+      const params: Record<string, unknown> = {
+        agent: active.agent,
+        handle: active.handle,
+        session_key: ctx.sid
+      }
 
       if (clearing) {
         params.clear = true
@@ -297,21 +297,16 @@ export const coreCommands: SlashCommand[] = [
       }
 
       ctx.gateway
-        .rpc<SubagentsInstanceSetModeResult | SessionSetModeResult>(method, params, { quiet: true })
+        .rpc<SubagentsInstanceSetModeResult>('subagents.instance.set_mode', params, { quiet: true })
         .then(
-          ctx.guarded<SubagentsInstanceSetModeResult | SessionSetModeResult>(r => {
+          ctx.guarded<SubagentsInstanceSetModeResult>(r => {
             const offered = r.availableModes ?? []
-            const agentLabel = active ? active.agent : 'this build'
 
             if (offered.length === 0) {
-              return ctx.transcript.sys(`${agentLabel} has no modes to choose from`)
+              return ctx.transcript.sys(`${active.agent} has no modes to choose from`)
             }
 
             const current = r.mode ?? null
-            // Only the instance reply carries this: a conversation's own tier has
-            // nothing above it to inherit from.
-            const inherited = 'inherited' in r ? (r.inherited ?? null) : null
-            const subject = active ? `${active.agent}/${active.handle}` : 'this conversation'
             // The menu whichever call this was: after a change it confirms what
             // landed, and with no argument it is the listing.
             const lines = offered.map(m => {
@@ -323,36 +318,13 @@ export const coreCommands: SlashCommand[] = [
             // change nobody asked for. The no-override case says so in words
             // because there is no `*` for it to be read off.
             const changed = Boolean(want)
-            // `no override` and `the agent's own default runs` stopped being the
-            // same statement once a session tier could reach the dispatch: with one
-            // in force, saying the default runs names a mode that will not.
-            const inheriting = `inheriting this conversation's ${inherited} tier`
             const first = changed
-              ? current
-                ? `${subject} is now on ${current}`
-                : inherited
-                  ? `${subject} has no override now -- ${inheriting}`
-                  : `${subject} is now on its own default`
+              ? `${active.agent}/${active.handle} is now on ${current ?? 'its own default'}`
               : current
-                ? `${subject} is on ${current}`
-                : inherited
-                  ? `${subject} has no override -- ${inheriting}`
-                  : `${agentLabel} modes -- no override set, so its own default is in force`
+                ? `${active.agent}/${active.handle} is on ${current}`
+                : `${active.agent} modes -- no override set, so its own default is in force`
 
-            // Once, here, rather than on every rung: each row says only what
-            // distinguishes it, so the scope of the control belongs to whichever
-            // surface draws the control -- this one.
-            const scope = active
-              ? null
-              : "Raven's own effort is the same in every tier; this is what it asks of its sub-agents."
-            ctx.transcript.sys(
-              [
-                first,
-                ...lines,
-                ...(scope ? [scope] : []),
-                ...(changed ? ['takes effect on the next message'] : [])
-              ].join('\n')
-            )
+            ctx.transcript.sys([first, ...lines, ...(changed ? ['takes effect on the next message'] : [])].join('\n'))
           })
         )
         .catch(ctx.guardedErr)

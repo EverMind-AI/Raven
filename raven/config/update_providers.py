@@ -3,7 +3,7 @@
 This module is the ONLY write path for provider configuration. All entry
 points (CLI commands, future wizard, future REPL slash) must call
 functions defined here. Direct ``load_config`` / ``save_config`` on the
-providers section is forbidden.
+providers section is forbidden -- see plan rule.
 
 OAuth providers have a separate auth path via
 ``provider_commands._LOGIN_HANDLERS`` and keep their credentials in files under

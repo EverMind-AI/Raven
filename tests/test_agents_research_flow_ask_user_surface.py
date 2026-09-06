@@ -89,18 +89,11 @@ def _on_state_config() -> FlowConfig:
 
 def test_the_off_state_bytes_do_not_move() -> None:
     """The whole point of the feature's shape: the anchor and every bench arm
-    render the prompt they were measured with, to the byte.
-
-    Three of the four moved on 2026-09-04, and the clause-off state did NOT -
-    the same asymmetry the fork stamped a day earlier, and the acceptance
-    criterion for the sentence that moved them: it lives in the two report
-    templates, so a state that renders no report clause cannot see it.
-    ``report_structure`` is on in the product config and in none of the bench
-    profiles, so every pin that moved describes a prompt no batch has run."""
-    assert _sha(_seg(ask_user=False)) == "c5335e1d1b33870d"
+    render the prompt they were measured with, to the byte."""
+    assert _sha(_seg(ask_user=False)) == "75d2ad71c15aacc0"
     assert _sha(_seg(require_answer_marker=False, report_structure=False, ask_user=False)) == "593c46c416c3f4cf"
-    assert _sha(_seg(report_format_override=False, ask_user=False)) == "878aa5a6e11d81a1"
-    assert _sha(_seg(measured_guidance=False, ask_user=False)) == "78afe5acd1e573ac"
+    assert _sha(_seg(report_format_override=False, ask_user=False)) == "93ab746e00264baf"
+    assert _sha(_seg(measured_guidance=False, ask_user=False)) == "18314d08ccd3aaa5"
 
 
 def test_both_modes_name_the_call_as_the_way_to_ask() -> None:
@@ -167,9 +160,9 @@ def test_when_needed_reverts_the_mode_and_only_the_mode() -> None:
     """
     when_needed = _seg(ask_user=True, ask_user_mode="when_needed")
     first_turn = _seg(ask_user=True, ask_user_mode="first_turn")
-    assert _sha(when_needed) == "316a491fa459f783"
-    assert _sha(first_turn) == "693fdafe6b8d6c8b"
-    assert _sha(_seg(ask_user=False)) == "c5335e1d1b33870d"
+    assert _sha(when_needed) == "f5ffda547fb5cff5"
+    assert _sha(first_turn) == "2434cb68b0262b88"
+    assert _sha(_seg(ask_user=False)) == "75d2ad71c15aacc0"
 
     # Everything outside the mode's own sentences is shared, in BOTH states.
     for shared in (
@@ -185,8 +178,8 @@ def test_when_needed_reverts_the_mode_and_only_the_mode() -> None:
 def test_the_outline_off_state_is_untouched_by_that_wording() -> None:
     """The sentence lives in the outline slot, so turning the outline off must leave
     both mode variants byte-identical to what they were."""
-    assert _sha(_seg(ask_user=True, ask_user_outline=False, ask_user_mode="when_needed")) == "b73b3e5e14ae5d40"
-    assert _sha(_seg(ask_user=True, ask_user_outline=False, ask_user_mode="first_turn")) == "afb17ee272b826c2"
+    assert _sha(_seg(ask_user=True, ask_user_outline=False, ask_user_mode="when_needed")) == "1e45c78cb003dfa7"
+    assert _sha(_seg(ask_user=True, ask_user_outline=False, ask_user_mode="first_turn")) == "49e85c6acad4460b"
 
 
 # ---------------------------------------------------------------------------

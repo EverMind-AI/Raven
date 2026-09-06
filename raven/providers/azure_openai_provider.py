@@ -51,11 +51,13 @@ class AzureOpenAIProvider(LLMProvider):
         self.deployment = deployment
         self.api_version = api_version
 
+        # Validate required parameters
         if not api_key:
             raise ValueError("Azure OpenAI api_key is required")
         if not api_base:
             raise ValueError("Azure OpenAI api_base is required")
 
+        # Ensure api_base ends with /
         if not api_base.endswith("/"):
             api_base += "/"
         self.api_base = api_base

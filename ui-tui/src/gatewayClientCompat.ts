@@ -60,7 +60,7 @@ export class GatewayClientCompat extends EventEmitter {
   // (`createChatStream` / `useChatStream`) can subscribe to `turn.*` events
   // directly without going through the EventEmitter adapter surface, while
   // the legacy 169-component bus continues to consume `gw.on('event', ...)`.
-  // The adapter retires
+  // Per `cross-language-rpc-adapter-pattern.md` §三, the adapter retires
   // file-by-file as consumers migrate; sharing this single RpcClient between
   // both paths keeps the socket count at one and avoids handshake races.
   public readonly rpcClient: RpcClient
@@ -95,7 +95,7 @@ export class GatewayClientCompat extends EventEmitter {
 
   /**
    * Boot sequence:
-   *   1. await `system.hello` (5s server-side timeout in the RpcServer).
+   *   1. await `system.hello` (5s server-side timeout per Phase 2 RpcServer).
    *   2. synthesize `gateway.ready` event with an empty skin.
    *   3. buffer (or emit, if `drain()` already called) the event.
    *

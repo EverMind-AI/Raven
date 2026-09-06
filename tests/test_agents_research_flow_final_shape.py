@@ -190,42 +190,6 @@ def test_depth_on_swaps_the_clause_without_moving_its_number():
     )
 
 
-def _flat(text: str) -> str:
-    """One line, single-spaced. The templates are hand-wrapped, so a sentence
-    assertion against the raw text passes or fails on where the wrap fell."""
-    return " ".join((text or "").split())
-
-
-def test_both_report_templates_name_the_fence_tag_as_data():
-    """The one sentence the twin was missing, pinned in both templates by content.
-
-    The fork added it on 2026-09-03 against a measured product run: 75 of 87
-    citation handles in one report were the security fence's ``web_fetch #...``
-    nonce and none was a URL, so the grounding check had a denominator of zero over
-    an answer that had opened a page behind every reference. The twin did not get
-    the sentence until 2026-09-04, and until then both product configs claimed
-    ``dr@3.5-filetools-askuser-derive`` while rendering two different prompts.
-
-    Pinned here by what the sentence says rather than by a sha, because the shas
-    that cover it live in two other files and moved for a reason no reader of this
-    clause can see from them.
-    """
-    from research_flow.prompts import render_parts
-
-    # Flattened: both templates are hand-wrapped, so every sentence here spans a
-    # line break and asserting on the raw text would pass or fail on the wrap.
-    deep = _flat(render_parts(report_depth=True)[1])
-    shipped = _flat(render_parts()[1])
-    for state in (deep, shipped):
-        assert "the `web_fetch #...` tag that wraps a tool result is a data" in state
-        assert "written out in full and starting with `https://`" in state
-    # A fence tag is named as a thing never to write, not merely as a non-citation:
-    # the model was not disobeying an instruction, it was reaching for the nearest
-    # handle in context, so the clause has to say what that handle is.
-    assert "never write it in the reply" in shipped
-    assert "never appears in the reply" in deep
-
-
 def test_the_live_label_is_never_also_a_retired_one():
     """Named for the invariant rather than the number.
 

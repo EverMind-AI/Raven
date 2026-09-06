@@ -116,8 +116,10 @@ class RuntimeHandles:
     loop itself does (the graph-confirm flow in the loop's wiring calls the
     registered ask_user tool's ``ask_direct`` the same way). An async
     callable ``(prompt, choices, conversation_id, timeout_s) -> str | None``;
-    answers None when no asking transport is bound. A BIG grant: whoever
-    holds it can interrupt the user."""
+    answers None when no asking transport is bound, and when the conversation
+    is still busy with another question at the deadline (one question per
+    conversation at a time; the wait and the question share the budget). A
+    BIG grant: whoever holds it can interrupt the user."""
 
     rebind_workdir: Any = None
     """Repoint one session's working directory: a callable

@@ -279,7 +279,7 @@ class OrganGlueMixin:
         injected_skill_ids: list[str] | None,
         used_skill_ids: list[str] | None = None,
     ) -> None:
-        """Forward source-qualified skill-usage signals to
+        """FB-1: forward source-qualified skill-usage signals to
         :meth:`MemoryBackend.feedback`.
 
         Skill IDs surface with a ``<source>/<native_id>`` prefix
@@ -327,7 +327,7 @@ class OrganGlueMixin:
         session_key: str,
         messages_slice: list[dict],
     ) -> None:
-        """Hand a turn's messages to the plugin :class:`MemoryBackend`.
+        """AG-1: hand a turn's messages to the plugin :class:`MemoryBackend`.
 
         Third peer step in the after-turn pipeline alongside
         ``context_engine.after_turn`` (engine-side bookkeeping) and

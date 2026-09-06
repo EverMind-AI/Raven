@@ -37,7 +37,7 @@ from raven.agent.subagent.backends import (
     session_mcp_effective,
 )
 from raven.agent.subagent.builtin_agents import LEGACY_AGENT_ALIASES, canonical_agent_name, merge_builtin_seeds
-from raven.agent.subagent.vendored_agents import discover_product_rows, merge_product_seeds
+from raven.agent.subagent.vendored_agents import discover_vendored_rows, merge_vendored_seeds
 
 if TYPE_CHECKING:
     from raven.agent.subagent.mcp_grant import McpSource
@@ -187,9 +187,9 @@ class AgentRegistry:
         """(Re)build the whole table from config. The only write path.
 
         Three sources compose here, weakest first: rows discovered from the
-        ``agents/`` product tree (see :func:`discover_product_rows`), then the
-        package seed rows (:func:`merge_builtin_seeds`), then config -- so the
-        built-in and discovered agents are on the table whether or not config mentions them, and
+        ``subagents/`` tree (see :func:`discover_vendored_rows`), then the package
+        seed rows (:func:`merge_builtin_seeds`), then config -- so the built-in and
+        vendored agents are on the table whether or not config mentions them, and
         a config row of the same name is the user's edit of one. One bad entry is
         skipped with a warning rather than sinking the table: a table that fails to
         build takes every agent down, including the ones that were fine.
@@ -201,13 +201,13 @@ class AgentRegistry:
         step and the seventh would be written without it. The cost is that this
         method reads the filesystem, which makes the table depend on whether an
         install has the tree -- the intended behaviour in production, and pinned in
-        tests by the ``no_discovered_products`` fixture so the machine's own tree
+        tests by the ``no_vendored_subagents`` fixture so a developer's built venv
         cannot change what the suite sees.
         """
         rows: dict[str, AgentRow] = {}
         order: list[str] = []
         backends: dict[str, SubagentBackend] = {}
-        merged = merge_product_seeds(list(configs or []), discover_product_rows())
+        merged = merge_vendored_seeds(list(configs or []), discover_vendored_rows())
         for cfg in merge_builtin_seeds(merged):
             name = getattr(cfg, "name", None)
             try:

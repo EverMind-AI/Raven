@@ -40,6 +40,7 @@ from raven.agent.subagent.instances import InstanceRegistry
 from raven.agent.subagent.manager import SubagentManager
 from raven.agent.subagent.probe import probe_one
 from raven.agent.subagent.probe_state import fingerprint
+from raven.agent.subagent.spawn_tool import SpawnTool
 from raven.config.schema import SubagentsConfig, ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
 from raven.config.update_subagents import reject_unsupported_acp_fields
 
@@ -379,9 +380,8 @@ def test_relearning_keeps_the_fingerprint_it_was_measured_under(tmp_path: Path) 
 
 def test_a_response_without_modes_leaves_the_menu_alone(tmp_path: Path) -> None:
     """Read as "this route did not report them", never as "the agent dropped
-    them": an emptied menu leaves the clamp with no rung to land a session tier
-    on and the mode picker with nothing to draw, which is a worse outcome than a
-    stale description."""
+    them": an emptied menu takes `mode` out of the spawn schema altogether,
+    which is a worse outcome than a stale description."""
     cfg = stub_config("a")
     store = SnapshotStore(path=tmp_path / "caps.json")
     stored = _with_modes(cfg, AcpMode(id="fast", description="kept"))
@@ -461,13 +461,12 @@ class _StubProvider:
         return "stub-model"
 
 
-def test_the_relearned_menu_reaches_the_roster_the_clamp_and_picker_read(
+def test_the_relearned_menu_reaches_the_schema_the_model_picks_from(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The read-back that matters: not "was it recorded" but "can the consumer
-    use it". The clamp that fits a session tier onto one agent, and the menu
-    `subagents.instance.set_mode` answers with, are both built from the roster,
-    and a row's capabilities are materialized when the table is applied -- so the
+    use it". The spawn schema's `mode` description is built from the roster, and
+    a row's capabilities are materialized when the table is applied -- so the
     store learning the new wording proves nothing on its own.
     """
     path = tmp_path / "caps.json"
@@ -477,7 +476,8 @@ def test_the_relearned_menu_reaches_the_roster_the_clamp_and_picker_read(
     SnapshotStore(path=path).record(stored)
 
     mgr = SubagentManager(provider=_StubProvider(), workspace=tmp_path, max_concurrent=1, agents=[cfg])
-    assert "what it used to say" in [m.description for m in mgr.agent_modes("a")]
+    tool = SpawnTool(mgr)
+    assert "what it used to say" in tool.parameters["properties"]["mode"]["description"]
 
     updated = relearn_session_modes(
         stored,
@@ -488,9 +488,8 @@ def test_the_relearned_menu_reaches_the_roster_the_clamp_and_picker_read(
     # What the backend's bound listener calls.
     mgr.refresh_agents()
 
-    descriptions = [m.description for m in mgr.agent_modes("a")]
-    assert "what it says now" in descriptions
-    assert "what it used to say" not in descriptions
+    assert "what it says now" in tool.parameters["properties"]["mode"]["description"]
+    assert "what it used to say" not in tool.parameters["properties"]["mode"]["description"]
 
 
 # ---- the roster ------------------------------------------------------------

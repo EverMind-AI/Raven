@@ -87,12 +87,14 @@ _DISPATCH_BLACKLIST: set[tuple[str, ...]] = {
     ("channels", "login", "weixin"),  # QR long-poll loop — terminal-only
     ("channels", "login", "whatsapp"),  # npm subprocess owns the TTY — terminal-only
     ("sandbox", "shell"),  # interactive shell — hijacks stdin
+    # ---- harness-command-catalog-dynamic extensions (5 → 8) ----
     # tui and onboard were unreachable under the old _DISPATCH_WHITELIST.
     # Reflection makes them and the registered upgrade command reachable, so
     # the blacklist hard-rejects all three to preserve safety.
     ("tui",),  # recursive Ink+Node spawn would deadlock + steal stdin
     ("onboard",),  # prompt_toolkit three-step wizard hijacks stdin
     ("upgrade",),  # replacing the active Raven process is terminal-only
+    # ---- audit-artifacts-dedup extension (8 → 9) ----
     # A full store's hash walk can outrun the dispatch timeout
     # (``_DEFAULT_TIMEOUT_S`` here, 20s on the ``slash.exec`` path), and the
     # backing thread is not cancelled on timeout — it would keep running
@@ -329,7 +331,7 @@ async def cli_dispatch(
     exit_code = 0
 
     # When a confirm broker is present, bridge typer.confirm into it and grant
-    # the timeout a confirm grace window. loop is captured here (we are
+    # the timeout a confirm grace window (path B). loop is captured here (we are
     # on the event loop) so the worker thread can run_coroutine_threadsafe back.
     if confirm_broker is not None:
         loop = asyncio.get_running_loop()
@@ -360,7 +362,7 @@ async def cli_dispatch(
                     # _invoke_ec_cli returns the command exit code. Click
                     # under standalone_mode=False catches typer.Exit /
                     # click.exceptions.Exit and returns the exit_code from
-                    # ``app()`` (not as raised exception). Critical:
+                    # ``app()`` (not as raised exception). Critical for B1:
                     # without capturing this return value, all typer.Exit(N)
                     # paths silently report exit_code=0 to the TUI.
                     exit_code = await asyncio.wait_for(
@@ -371,7 +373,7 @@ async def cli_dispatch(
                     err_console.print(f"[red]Usage:[/] {exc.format_message()}")
                     exit_code = 2
                 except click.exceptions.Abort:
-                    # A confirm hit the EOF dispatch stdin (no round-trip
+                    # C1: a confirm hit the EOF dispatch stdin (no round-trip
                     # available). Abort is a RuntimeError subclass, NOT a
                     # ClickException, so without this it falls to the broad
                     # catch below as a useless "Internal error: Abort".

@@ -1,14 +1,18 @@
 """Web tools: ``web_search`` and ``web_fetch`` for the research flow.
 
-These replace the kernel's built-in tools of the same names. Search goes to Serper
-(``POST https://google.serper.dev/search``) and fetch through the Jina reader
-(``GET https://r.jina.ai/{url}``), each a fixed endpoint with its own key in this
-plugin's config slice. The built-ins no longer work that way: they route through
-a vendor the deployment picks, so a host on Tavily or Firecrawl still needs a
-Serper key for this pair. What the pair adds is the research harness around the
-call - the per-turn replay cache and repeat notice, snippet and cross-query
-dedup, the saturation rule, the evidence round, the digest path, a bounded retry
-policy, and a ledger row for every call.
+These replace the kernel's built-in tools of the same names. Both route through a
+vendor the deployment picks, the same seven search and five fetch backends the
+built-ins offer, declared in :data:`SEARCH_PROVIDERS` and
+:data:`FETCH_PROVIDERS`; Serper and Jina remain the defaults and their wire
+traffic is byte-identical to what this pair has always sent. What the pair adds
+over the built-ins is the research harness around the call - the per-turn replay
+cache and repeat notice, snippet and cross-query dedup, the saturation rule, the
+evidence round, the digest path, a bounded retry policy, and a ledger row for
+every call.
+
+A vendor that serves no result offset cannot answer the saturation rule's page-2
+rung, so ``SearchProviderSpec.paginates`` tells the rule up front rather than
+letting it escalate into requests that come back identical.
 
 Per-session state
 -----------------
@@ -40,6 +44,7 @@ import time
 import zlib
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar, Token
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -130,11 +135,189 @@ _NO_SHAPING = {
 }
 
 
-#: What each half of this pair calls out to, for an error line that must name a
-#: vendor without quoting the request. Literals rather than a table: this module
-#: serves one backend per tool, unlike the fork's selectable pair.
-_SEARCH_VENDOR = "Serper"
-_FETCH_VENDOR = "Jina Reader"
+@dataclass(frozen=True)
+class SearchProviderSpec:
+    """One ``web_search`` backend, described where every reader can see it.
+
+    ``paginates`` is the load-bearing field: a provider that serves no offset
+    cannot answer the saturation rule's page-2 rung, and the rule has to be told
+    up front (``SearchSaturation.paginates``) rather than discovering it from a
+    request that comes back identical. A capability whose activation site is
+    unreachable, with no symptom, is the failure this avoids.
+
+    ``label`` is what an error line names when it must identify a vendor without
+    quoting the request.
+    """
+
+    vendor: str
+    label: str
+    env_var: str
+    paginates: bool
+
+
+DEFAULT_SEARCH_PROVIDER = "serper"
+
+SEARCH_PROVIDERS: dict[str, SearchProviderSpec] = {
+    "serper": SearchProviderSpec(
+        vendor="serper",
+        label="Serper",
+        env_var="SERPER_API_KEY",
+        paginates=True,
+    ),
+    "anysearch": SearchProviderSpec(
+        vendor="anysearch",
+        label="AnySearch",
+        env_var="ANYSEARCH_API_KEY",
+        # No offset of any kind, so the ``paginate`` rung is declared unavailable
+        # rather than attempted. ``widen`` is NOT affected and stays useful here:
+        # probed live at max_results 3 and 10, this endpoint returns exactly what
+        # was asked for, where Serper answers 8-10 whatever ``num`` says.
+        paginates=False,
+    ),
+    "serpapi": SearchProviderSpec(
+        vendor="serpapi",
+        label="SerpApi",
+        env_var="SERPAPI_API_KEY",
+        # ``start`` is an offset in results, so page N maps onto start=(N-1)*num.
+        paginates=True,
+    ),
+    "tavily": SearchProviderSpec(
+        vendor="tavily",
+        label="Tavily",
+        env_var="TAVILY_API_KEY",
+        # No documented result-offset parameter; breadth here comes from wider
+        # single-shot queries, not paging, so the rung is declared unavailable
+        # up front like AnySearch.
+        paginates=False,
+    ),
+    "exa": SearchProviderSpec(
+        vendor="exa",
+        label="Exa",
+        env_var="EXA_API_KEY",
+        # Neural search over Exa's own index has no documented page offset.
+        paginates=False,
+    ),
+    "brave": SearchProviderSpec(
+        vendor="brave",
+        label="Brave Search",
+        env_var="BRAVE_API_KEY",
+        # ``offset`` is a page index, not a result offset like SerpApi's
+        # ``start``, documented up to 9 pages past the first.
+        paginates=True,
+    ),
+    "firecrawl": SearchProviderSpec(
+        vendor="firecrawl",
+        label="Firecrawl",
+        env_var="FIRECRAWL_API_KEY",
+        # ``/v1/search`` documents no result-offset parameter.
+        paginates=False,
+    ),
+}
+
+
+@dataclass(frozen=True)
+class FetchProviderSpec:
+    """One ``web_fetch`` backend.
+
+    ``needs_key`` decides whether the tool may be advertised at all: Jina reads
+    pages unauthenticated (at a lower rate limit), the others refuse without a
+    key. A tool that cannot run must not be registered - the model reaches for
+    it, every call fails, and the error text naming a config path is relayed to
+    whoever is on the other end of the channel.
+
+    ``extractor`` is an instrument column, not a label: it is what the fetch
+    ledger records as having served the page, and the backends are not
+    comparable.
+    """
+
+    vendor: str
+    label: str
+    env_var: str
+    extractor: str
+    needs_key: bool
+
+
+DEFAULT_FETCH_PROVIDER = "jina"
+
+FETCH_PROVIDERS: dict[str, FetchProviderSpec] = {
+    "jina": FetchProviderSpec(
+        vendor="jina",
+        label="Jina Reader",
+        env_var="JINA_API_KEY",
+        extractor="jina-reader",
+        # Unauthenticated r.jina.ai works, so an absent key is a degradation
+        # rather than a broken tool. A DEAD key is worse than none - it answers
+        # 402 where no key answers 200 - but that is not something a schema can
+        # tell apart from a live one.
+        needs_key=False,
+    ),
+    "anysearch": FetchProviderSpec(
+        vendor="anysearch",
+        label="AnySearch",
+        env_var="ANYSEARCH_API_KEY",
+        extractor="anysearch-extract",
+        needs_key=True,
+    ),
+    "tavily": FetchProviderSpec(
+        vendor="tavily",
+        label="Tavily",
+        env_var="TAVILY_API_KEY",
+        extractor="tavily-extract",
+        needs_key=True,
+    ),
+    "exa": FetchProviderSpec(
+        vendor="exa",
+        label="Exa",
+        env_var="EXA_API_KEY",
+        extractor="exa-contents",
+        needs_key=True,
+    ),
+    "firecrawl": FetchProviderSpec(
+        vendor="firecrawl",
+        label="Firecrawl",
+        env_var="FIRECRAWL_API_KEY",
+        extractor="firecrawl-scrape",
+        # No anonymous tier.
+        needs_key=True,
+    ),
+}
+
+
+def resolve_search_provider(name: str | None) -> str:
+    """A configured ``web_search`` vendor name, degrading to the default.
+
+    Degraded rather than refused, and logged: an unknown name is a typo no
+    schema catches on a plain config slice, and a silent fallback is the
+    symptomless failure this warning exists to avoid.
+    """
+    if name and name not in SEARCH_PROVIDERS:
+        logger.warning("WebSearch: unknown provider '{}', using {}", name, DEFAULT_SEARCH_PROVIDER)
+    return name if name in SEARCH_PROVIDERS else DEFAULT_SEARCH_PROVIDER
+
+
+def resolve_fetch_provider(name: str | None) -> str:
+    """A configured ``web_fetch`` vendor name, degrading to the default. Warns
+    on an unknown name for the same reason as its search sibling."""
+    if name and name not in FETCH_PROVIDERS:
+        logger.warning("WebFetch: unknown provider '{}', using {}", name, DEFAULT_FETCH_PROVIDER)
+    return name if name in FETCH_PROVIDERS else DEFAULT_FETCH_PROVIDER
+
+
+def _error_text(exc: Exception) -> str:
+    """How an exception is named in a ledger row, which lands on disk.
+
+    A status error's own text repeats the request URL, so the status alone is
+    what makes the row diagnosable: a vendor that authenticates by query
+    parameter would otherwise write its key here.
+
+    One function rather than the rule spelled at each writer. There are two -
+    the ``search``/``fetch`` row and the ``*_retry`` rows beside it in the same
+    file - and the second was added carrying ``str(exc)``, which is exactly the
+    way a rule written twice fails.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"HTTPStatusError: HTTP {getattr(exc.response, 'status_code', None)}"
+    return f"{type(exc).__name__}: {exc}"[:500]
 
 
 def _error_shaping(exc: Exception) -> dict:
@@ -148,13 +331,7 @@ def _error_shaping(exc: Exception) -> dict:
     """
     shaping = dict(_NO_SHAPING)
     status = getattr(getattr(exc, "response", None), "status_code", None)
-    # A status error's own text repeats the request URL, and this row lands on
-    # disk: the status alone is what makes the row diagnosable, and a vendor
-    # that authenticates by query parameter would otherwise write its key here.
-    if isinstance(exc, httpx.HTTPStatusError):
-        shaping["error"] = f"HTTPStatusError: HTTP {status}"
-    else:
-        shaping["error"] = f"{type(exc).__name__}: {exc}"[:500]
+    shaping["error"] = _error_text(exc)
     shaping["status"] = int(status) if status is not None else None
     shaping["quota_err"] = status in (401, 402, 403)
     return shaping
@@ -253,7 +430,7 @@ async def _send_with_retry(
                 "key": key,
                 "attempt": attempt + 1,
                 "status": status,
-                "error": str(last),
+                "error": _error_text(last),
             }
         )
         await asyncio.sleep(_retry_delay(backoff, status, retry_after, key))
@@ -342,7 +519,7 @@ class _SearchTurnState:
 
 
 class WebSearchTool(Tool):
-    """Search the web through Serper."""
+    """Search the web through the configured provider (Serper by default)."""
 
     name = "web_search"
     description = "Search the web. Returns titles, URLs, and snippets."
@@ -367,6 +544,7 @@ class WebSearchTool(Tool):
         api_key: str | None = None,
         max_results: int = 5,
         proxy: str | None = None,
+        provider: str = DEFAULT_SEARCH_PROVIDER,
         include_answer_box: bool = True,
         include_knowledge_graph: bool = True,
         include_snippets: bool = True,
@@ -380,6 +558,7 @@ class WebSearchTool(Tool):
         self._init_api_key = api_key
         self.max_results = max_results
         self.proxy = proxy
+        self.provider = resolve_search_provider(provider)
         # Deep-research profiles disable these: direct answers (answerBox /
         # knowledgeGraph) and snippets let the model answer without ever
         # opening a page, which shallows browse-and-digest behavior.
@@ -404,18 +583,30 @@ class WebSearchTool(Tool):
         self._sessions: dict[str, _SearchTurnState] = {}
 
     @property
+    def spec(self) -> SearchProviderSpec:
+        return SEARCH_PROVIDERS[self.provider]
+
+    @property
     def api_key(self) -> str:
         """Resolve API key at call time so env/config changes are picked up."""
-        return self._init_api_key or os.environ.get("SERPER_API_KEY", "")
+        return self._init_api_key or os.environ.get(self.spec.env_var, "")
 
     def _state(self) -> _SearchTurnState:
         """The current session's slot, built on first use from inside that session's context."""
         key = _SESSION.get()
         state = self._sessions.get(key)
         if state is None:
+            saturation = self._saturation_factory() if self._saturation_factory is not None else None
+            # Declared up front for a provider that serves no offset: ``_escalate``
+            # cannot raise ``page`` once this is False, so the rung is never reached
+            # rather than reached and unanswerable. The ledger still separates the
+            # two outcomes -- ``sat_action`` reports ``stopped_degraded`` here
+            # against ``stopped`` on a real exhaustion.
+            if saturation is not None and not self.spec.paginates:
+                saturation.paginates = False
             state = _SearchTurnState(
                 self._evidence_round_factory() if self._evidence_round_factory is not None else None,
-                self._saturation_factory() if self._saturation_factory is not None else None,
+                saturation,
             )
             self._sessions[key] = state
         return state
@@ -773,9 +964,9 @@ class WebSearchTool(Tool):
         saturation = state.saturation
         if not self.api_key:
             return (
-                "Error: Serper API key not configured. Set it in "
+                f"Error: {self.spec.label} API key not configured. Set it in "
                 '~/.raven/config.json under plugins.config["research-flow"].search.apiKey '
-                "(or export SERPER_API_KEY), then restart the gateway.",
+                f"(or export {self.spec.env_var}), then restart the gateway.",
                 [],
                 dict(_NO_SHAPING),
             )
@@ -810,21 +1001,13 @@ class WebSearchTool(Tool):
             # tax on the arm that searches most.
             async def _send() -> httpx.Response:
                 async with httpx.AsyncClient(proxy=self.proxy) as client:
-                    return await client.post(
-                        "https://google.serper.dev/search",
-                        json=({"q": query, "num": n} if page <= 1 else {"q": query, "num": n, "page": page}),
-                        headers={
-                            "Accept": "application/json",
-                            "Content-Type": "application/json",
-                            "X-API-KEY": self.api_key,
-                        },
-                        timeout=10.0,
-                    )
+                    return await self._provider_request(client, query, n, page)
 
             r = await _send_with_retry(_send, op="search_retry", key=query, budget=state.retry_budget)
             data = r.json()
             if not isinstance(data, dict):
                 data = {}
+            data = self._normalise_response(data)
             organic = data.get("organic", [])
             results, n_skipped = self._select_fresh(state, organic, n, "link")
             if not results:
@@ -886,14 +1069,204 @@ class WebSearchTool(Tool):
             # full request URL in it, so a key carried as a query parameter
             # would reach the model and the log through this line.
             status = e.response.status_code
-            logger.error("WebSearch error: {} answered HTTP {}", _SEARCH_VENDOR, status)
-            return f"Error: {_SEARCH_VENDOR} answered HTTP {status}", [], _error_shaping(e)
+            logger.error("WebSearch error: {} answered HTTP {}", self.spec.label, status)
+            return f"Error: {self.spec.label} answered HTTP {status}", [], _error_shaping(e)
         except httpx.ProxyError as e:
             logger.error("WebSearch proxy error: {}", e)
             return f"Proxy error: {e}", [], _error_shaping(e)
         except Exception as e:
             logger.error("WebSearch error: {}", e)
             return f"Error: {e}", [], _error_shaping(e)
+
+    async def _provider_request(self, client: httpx.AsyncClient, query: str, n: int, page: int) -> httpx.Response:
+        """One search request, built the way the selected provider expects.
+
+        The Serper branch is byte-identical to what this pair has always sent -
+        it is the default distribution's wire traffic. Do not "tidy" it into the
+        others. A vendor whose ``spec.paginates`` is False takes no ``page``
+        here, and the saturation rule was told so when the session's slot was
+        built, so the rung is unreachable rather than silently inert.
+        """
+        if self.provider == "serper":
+            return await client.post(
+                "https://google.serper.dev/search",
+                json=({"q": query, "num": n} if page <= 1 else {"q": query, "num": n, "page": page}),
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "X-API-KEY": self.api_key,
+                },
+                timeout=10.0,
+            )
+        if self.provider == "serpapi":
+            # ``start`` is an offset in results, not a page index, so the rung's
+            # page N is (N-1) whole pages in. Omitted at page 1 so the request an
+            # un-escalated turn sends carries nothing the rule did not ask for.
+            params: dict[str, Any] = {"engine": "google", "q": query, "num": n, "api_key": self.api_key}
+            if page > 1:
+                params["start"] = (page - 1) * n
+            return await client.get(
+                "https://serpapi.com/search",
+                params=params,
+                headers={"Accept": "application/json"},
+                timeout=10.0,
+            )
+        if self.provider == "tavily":
+            return await client.post(
+                "https://api.tavily.com/search",
+                json={"query": query, "max_results": n},
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.api_key}",
+                },
+                timeout=10.0,
+            )
+        if self.provider == "exa":
+            # ``contents.highlights`` asks for a query-scored excerpt, which is
+            # what the render path reads as the snippet. Not ``text``: that is
+            # the whole page, and ``_snippet_line`` renders whatever it is
+            # handed. ``maxCharacters`` is the bound that holds. Highlights are
+            # separately billed, so they are only requested when snippets are
+            # rendered - a deep-research profile sets ``include_snippets=False``
+            # and would discard them unread.
+            body: dict[str, Any] = {"query": query, "numResults": n}
+            if self.include_snippets:
+                body["contents"] = {"highlights": {"maxCharacters": 300}}
+            return await client.post(
+                "https://api.exa.ai/search",
+                json=body,
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "x-api-key": self.api_key,
+                },
+                timeout=10.0,
+            )
+        if self.provider == "brave":
+            # ``offset`` is a page index (unlike SerpApi's result-count
+            # ``start``), so page N maps onto offset=(N-1) directly.
+            params = {"q": query, "count": n}
+            if page > 1:
+                params["offset"] = page - 1
+            return await client.get(
+                "https://api.search.brave.com/res/v1/web/search",
+                params=params,
+                headers={"Accept": "application/json", "X-Subscription-Token": self.api_key},
+                timeout=10.0,
+            )
+        if self.provider == "firecrawl":
+            return await client.post(
+                "https://api.firecrawl.dev/v1/search",
+                json={"query": query, "limit": n},
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.api_key}",
+                },
+                timeout=10.0,
+            )
+        # AnySearch.
+        return await client.post(
+            "https://api.anysearch.com/v1/search",
+            json={"query": query, "max_results": n},
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}",
+            },
+            timeout=10.0,
+        )
+
+    def _normalise_response(self, data: dict[str, Any]) -> dict[str, Any]:
+        """A provider payload in the Serper shape this tool renders from.
+
+        Only the three keys the render path reads are produced. Anything a
+        provider does not carry is absent rather than empty, so a missing
+        answer box and a suppressed one stay distinguishable in the shaping row.
+        """
+        if self.provider == "serper":
+            return data
+        if self.provider == "serpapi":
+            out: dict[str, Any] = {"organic": list(data.get("organic_results") or [])}
+            if box := data.get("answer_box"):
+                out["answerBox"] = box
+            if kg := data.get("knowledge_graph"):
+                out["knowledgeGraph"] = kg
+            return out
+        if self.provider == "tavily":
+            out = {"organic": _rows(data.get("results"), url="url", snippet="content")}
+            # Tavily returns ``answer`` only when the request opts in with
+            # ``include_answer``, which the request above does not send, so this
+            # slot is empty today. Kept on the answerBox path so an opt-in later
+            # renders through the channel a deep-research profile already
+            # switches off.
+            if answer := data.get("answer"):
+                out["answerBox"] = {"answer": answer}
+            return out
+        if self.provider == "exa":
+            organic = []
+            for item in data.get("results") or []:
+                if not isinstance(item, dict):
+                    continue
+                # Highlights only, never ``text``: a page body in this slot is
+                # rendered whole. Whitespace collapsed because a highlight
+                # carries newlines and the snippet line is indented once.
+                highlights = [h for h in (item.get("highlights") or []) if isinstance(h, str) and h]
+                organic.append(
+                    {
+                        "title": str(item.get("title") or ""),
+                        "link": str(item.get("url") or ""),
+                        "snippet": " ".join(" ".join(h.split()) for h in highlights),
+                    }
+                )
+            return {"organic": organic}
+        if self.provider == "brave":
+            web = data.get("web") if isinstance(data.get("web"), dict) else {}
+            return {
+                "organic": _rows(
+                    web.get("results") if isinstance(web, dict) else None, url="url", snippet="description"
+                )
+            }
+        if self.provider == "firecrawl":
+            # Errors normally arrive status-coupled and raise in the retry
+            # helper. This catches an in-envelope refusal inside a 200 so it
+            # renders as an error rather than a dry search: a zero-hit advances
+            # the saturation streak, and "the endpoint refused" must not.
+            if data.get("success") is False:
+                raise ValueError(f"Firecrawl: {data.get('error') or 'search failed'}")
+            return {"organic": _rows(data.get("data"), url="url", snippet="description")}
+        # AnySearch publishes the request shape but not the response. Parse
+        # tolerantly: results may sit at the top level or inside the
+        # ``{code, message, data}`` envelope its auth endpoint uses, and an item
+        # spells the URL ``url`` or ``link`` and the text ``snippet`` or ``content``.
+        body = data.get("data") if isinstance(data.get("data"), dict) else data
+        raw = body.get("results") if isinstance(body, dict) else None
+        organic = []
+        for item in raw if isinstance(raw, list) else []:
+            if not isinstance(item, dict):
+                continue
+            organic.append(
+                {
+                    "title": str(item.get("title") or ""),
+                    "link": str(item.get("url") or item.get("link") or ""),
+                    "snippet": item.get("snippet") or item.get("content") or "",
+                }
+            )
+        return {"organic": organic}
+
+
+def _rows(items: Any, *, url: str, snippet: str) -> list[dict[str, Any]]:
+    """Provider rows in the render path's three-key shape."""
+    return [
+        {
+            "title": str(item.get("title") or ""),
+            "link": str(item.get(url) or ""),
+            "snippet": item.get(snippet) or "",
+        }
+        for item in (items if isinstance(items, list) else [])
+        if isinstance(item, dict)
+    ]
 
 
 def fetch_result_ok(out: object) -> bool:
@@ -988,11 +1361,20 @@ class _FetchTurnState:
         self.retry_budget = _RetryBudget()
 
 
+class _ProviderPageError(Exception):
+    """A fetch backend answered, but with no page.
+
+    Its own type so "this vendor could not serve the page" stays apart from a
+    transport failure, and so neither is confused with a failed URL validation,
+    which is a rule and never reads as a vendor fault.
+    """
+
+
 class WebFetchTool(Tool):
-    """Fetch and extract content from a URL through the Jina reader."""
+    """Fetch and extract content from a URL through the configured provider (Jina by default)."""
 
     name = "web_fetch"
-    description = "Fetch URL and extract readable content via Jina Reader."
+    description = "Fetch URL and extract readable content."
     parameters = {
         "type": "object",
         "properties": {
@@ -1016,6 +1398,7 @@ class WebFetchTool(Tool):
         api_key: str | None = None,
         max_chars: int = 50000,
         proxy: str | None = None,
+        provider: str = DEFAULT_FETCH_PROVIDER,
         digest_fn: DigestFn | None = None,
         digest_threshold_chars: int = 8000,
         digest_timeout_s: float = 30.0,
@@ -1023,6 +1406,7 @@ class WebFetchTool(Tool):
         self._init_api_key = api_key
         self.max_chars = max_chars
         self.proxy = proxy
+        self.provider = resolve_fetch_provider(provider)
         # Targeted-extraction path: long pages are distilled by a cheap model
         # instead of blind truncation. The tool never talks to a provider
         # itself - the flow assembly injects ``digest_fn`` so this module
@@ -1056,10 +1440,45 @@ class WebFetchTool(Tool):
         """
         self._state().retry_budget = _RetryBudget()
 
+    @classmethod
+    def effective_provider(cls, provider: str, api_key: str | None) -> str:
+        """The backend to build: the selected one, or the default reader when it cannot run.
+
+        The kernel's own ``web_fetch`` answers this question the same way, and
+        this one has to agree with it: this tool REPLACES that one, so a
+        research run would otherwise be the single place where a keyless Tavily
+        selection is advertised and refuses every call, while a plain raven on
+        the same config reads the page through Jina.
+
+        ``web_fetch`` is always offered because Jina reads pages without a key.
+        Degraded out loud rather than left to fail per call, and never by
+        handing one vendor's credential to another: the branch is only taken
+        when no key resolves at all.
+
+        Normalised through :func:`resolve_fetch_provider` first, as the
+        constructor does, so a caller handing this an unknown name gets the
+        same degradation the tool itself would apply rather than a KeyError.
+        """
+        provider = resolve_fetch_provider(provider)
+        spec = FETCH_PROVIDERS[provider]
+        if not spec.needs_key or api_key or os.environ.get(spec.env_var):
+            return provider
+        logger.warning(
+            "WebFetch: {} selected but no key resolves ({}); reading pages through {} instead",
+            spec.label,
+            spec.env_var,
+            FETCH_PROVIDERS[DEFAULT_FETCH_PROVIDER].label,
+        )
+        return DEFAULT_FETCH_PROVIDER
+
+    @property
+    def spec(self) -> FetchProviderSpec:
+        return FETCH_PROVIDERS[self.provider]
+
     @property
     def api_key(self) -> str:
         """Resolve API key at call time so env/config changes are picked up."""
-        return self._init_api_key or os.environ.get("JINA_API_KEY", "")
+        return self._init_api_key or os.environ.get(self.spec.env_var, "")
 
     async def execute(
         self,
@@ -1166,6 +1585,21 @@ class WebFetchTool(Tool):
         # context and the elision machinery then spends the turn's budget
         # clawing it back out.
         max_chars = min(maxChars, self.max_chars) if maxChars else self.max_chars
+        # A backend with no anonymous tier cannot serve anything without its key.
+        # Answered before the URL is judged: the fault is the configuration's, and
+        # a well-formed URL would otherwise hide it behind a vendor error.
+        if self.spec.needs_key and not self.api_key:
+            return json.dumps(
+                {
+                    "error": (
+                        f"{self.spec.label} API key not configured. Set it in ~/.raven/config.json "
+                        f'under plugins.config["research-flow"].fetch.apiKey (or export '
+                        f"{self.spec.env_var}), then restart the gateway."
+                    ),
+                    "url": url,
+                },
+                ensure_ascii=False,
+            )
         # Off the event loop: ``socket.getaddrinfo`` is synchronous and can hang for
         # seconds on a slow resolver, and one process serves every session's turn.
         is_valid, error_msg = await asyncio.to_thread(_judge_fetch_target, url)
@@ -1184,8 +1618,8 @@ class WebFetchTool(Tool):
             # Same rule as the search half: the reader and the status, not a
             # message that repeats the request URL.
             status = e.response.status_code
-            logger.error("WebFetch error for {}: {} answered HTTP {}", url, _FETCH_VENDOR, status)
-            return json.dumps({"error": f"{_FETCH_VENDOR} answered HTTP {status}", "url": url}, ensure_ascii=False)
+            logger.error("WebFetch error for {}: {} answered HTTP {}", url, self.spec.label, status)
+            return json.dumps({"error": f"{self.spec.label} answered HTTP {status}", "url": url}, ensure_ascii=False)
         except httpx.ProxyError as e:
             logger.error("WebFetch proxy error for {}: {}", url, e)
             return json.dumps({"error": f"Proxy error: {e}", "url": url}, ensure_ascii=False)
@@ -1205,7 +1639,7 @@ class WebFetchTool(Tool):
                     "url": url,
                     "finalUrl": url,
                     "status": status,
-                    "extractor": "jina-reader+digest",
+                    "extractor": f"{self.spec.extractor}+digest",
                     "extractMode": extractMode,
                     "digested": True,
                     "info_to_extract": info_to_extract,
@@ -1224,7 +1658,7 @@ class WebFetchTool(Tool):
             "url": url,
             "finalUrl": url,
             "status": status,
-            "extractor": "jina-reader",
+            "extractor": self.spec.extractor,
             "extractMode": extractMode,
             "truncated": truncated,
             "length": len(text),
@@ -1236,21 +1670,118 @@ class WebFetchTool(Tool):
         return json.dumps(payload, ensure_ascii=False)
 
     async def _read_page(self, url: str) -> tuple[str, int]:
-        """One page through the reader: the text and the status to report.
+        """One page, read the way the selected backend serves it.
 
-        Raises on anything that did not produce a page. The request is byte-identical
-        to what this tool has always sent - it is the anchor's wire traffic.
+        Raises on anything that did not produce a page. The Jina branch is
+        byte-identical to what this tool has always sent - it is the default
+        distribution's wire traffic. Do not "tidy" it into the others.
+
+        A backend that can report a title separately does not get a slot here:
+        this payload has never carried one, and Jina embeds its own header block
+        in the text, so synthesising a partial imitation of that block would
+        misreport an undated page.
         """
-        headers = {"Accept": "text/plain"}
+        if self.provider == "jina":
+            headers = {"Accept": "text/plain"}
+            if key := self.api_key:
+                headers["Authorization"] = f"Bearer {key}"
+            r = await self._get_with_retry(url, headers)
+            text = r.text
+            if _encoding_lost(text):
+                # A poisoned cached extraction is the common case, and a fresh
+                # render usually comes back clean.
+                r = await self._get_with_retry(url, {**headers, "x-no-cache": "true"})
+                text = r.text
+            return text, r.status_code
+
+        json_headers = {"Accept": "application/json", "Content-Type": "application/json"}
+        budget = self._state().retry_budget
+
+        if self.provider == "tavily":
+            headers = {**json_headers, "Authorization": f"Bearer {self.api_key}"}
+
+            async def _send_tavily() -> httpx.Response:
+                async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
+                    return await client.post("https://api.tavily.com/extract", json={"urls": [url]}, headers=headers)
+
+            r = await _send_with_retry(_send_tavily, op="fetch_retry", key=url, budget=budget)
+            data = r.json()
+            results = data.get("results") if isinstance(data, dict) else None
+            # A single-URL request has at most one hit; Tavily may normalise the
+            # URL (trailing slash, scheme) so this does not match on equality.
+            hit = results[0] if isinstance(results, list) and results and isinstance(results[0], dict) else None
+            if hit is None:
+                failed = data.get("failed_results") if isinstance(data, dict) else None
+                reason = (
+                    failed[0].get("error")
+                    if isinstance(failed, list) and failed and isinstance(failed[0], dict)
+                    else None
+                )
+                raise _ProviderPageError(f"Tavily: {reason or 'extract failed'}")
+            if not (text := str(hit.get("raw_content") or "")):
+                raise _ProviderPageError("Tavily returned no page content")
+            return text, r.status_code
+
+        if self.provider == "exa":
+            headers = {**json_headers, "x-api-key": self.api_key}
+
+            async def _send_exa() -> httpx.Response:
+                async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
+                    return await client.post(
+                        "https://api.exa.ai/contents", json={"urls": [url], "text": True}, headers=headers
+                    )
+
+            r = await _send_with_retry(_send_exa, op="fetch_retry", key=url, budget=budget)
+            data = r.json()
+            results = data.get("results") if isinstance(data, dict) else None
+            hit = results[0] if isinstance(results, list) and results and isinstance(results[0], dict) else None
+            if hit is None or not (text := str(hit.get("text") or "")):
+                raise _ProviderPageError("Exa returned no page content")
+            return text, r.status_code
+
+        if self.provider == "firecrawl":
+            headers = {**json_headers, "Authorization": f"Bearer {self.api_key}"}
+
+            async def _send_fc() -> httpx.Response:
+                async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
+                    return await client.post(
+                        "https://api.firecrawl.dev/v1/scrape",
+                        json={"url": url, "formats": ["markdown"]},
+                        headers=headers,
+                    )
+
+            r = await _send_with_retry(_send_fc, op="fetch_retry", key=url, budget=budget)
+            data = r.json()
+            if not isinstance(data, dict) or not data.get("success"):
+                message = (data.get("error") or "scrape failed") if isinstance(data, dict) else "malformed response"
+                raise _ProviderPageError(f"Firecrawl: {message}")
+            body = data.get("data") if isinstance(data.get("data"), dict) else {}
+            if not (text := str(body.get("markdown") or "")):
+                raise _ProviderPageError("Firecrawl returned no page content")
+            return text, r.status_code
+
+        # AnySearch. No cache-bust header is published, so the garbled-page
+        # re-read above has no counterpart here; the encoding check still runs
+        # on what comes back.
+        headers = dict(json_headers)
         if key := self.api_key:
             headers["Authorization"] = f"Bearer {key}"
-        r = await self._get_with_retry(url, headers)
-        text = r.text
-        if _encoding_lost(text):
-            # A poisoned cached extraction is the common case, and a fresh
-            # render usually comes back clean.
-            r = await self._get_with_retry(url, {**headers, "x-no-cache": "true"})
-            text = r.text
+
+        async def _send_any() -> httpx.Response:
+            async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
+                return await client.post("https://api.anysearch.com/v1/extract", json={"url": url}, headers=headers)
+
+        r = await _send_with_retry(_send_any, op="fetch_retry", key=url, budget=budget)
+        data = r.json()
+        if not isinstance(data, dict):
+            raise _ProviderPageError("AnySearch returned a non-object body")
+        # A transport-level failure already raised in ``_send_with_retry``; this
+        # catches the other shape, a 200 whose envelope reports the failure.
+        if data.get("code") not in (0, None):
+            raise _ProviderPageError(f"AnySearch: {data.get('message') or 'extract failed'}")
+        body = data.get("data") if isinstance(data.get("data"), dict) else {}
+        if not (text := str(body.get("content") or "")):
+            raise _ProviderPageError("AnySearch returned no page content")
         return text, r.status_code
 
     async def _try_digest(self, text: str, info_to_extract: str | None, url: str) -> str | None:
@@ -1281,10 +1812,18 @@ class WebFetchTool(Tool):
 
 
 __all__ = [
+    "DEFAULT_FETCH_PROVIDER",
+    "DEFAULT_SEARCH_PROVIDER",
+    "FETCH_PROVIDERS",
+    "SEARCH_PROVIDERS",
     "DigestFn",
+    "FetchProviderSpec",
+    "SearchProviderSpec",
     "WebFetchTool",
     "WebSearchTool",
     "current_session",
     "fetch_result_ok",
+    "resolve_fetch_provider",
+    "resolve_search_provider",
     "set_current_session",
 ]

@@ -136,16 +136,11 @@ def test_a_running_spawn_already_says_what_it_is_for(tmp_path: Path) -> None:
     finish. Until then every surface fell back to the handle, an id.
     """
     d = _session_dir(tmp_path, "web:abc")
-    meta = {
-        "agent": "coder",
-        "handle": "h1",
-        "session_key": "web:abc",
-        "task_summary": "Build the deck from the research",
-    }
+    meta = {"agent": "coder", "handle": "h1", "session_key": "web:abc", "task_summary": "基于调研制作 PPT"}
 
     SpawnRecord.open(d, task_id="t1", task="ask", meta=meta)
 
-    assert instance_title(d, "coder", "h1") == "Build the deck from the research"
+    assert instance_title(d, "coder", "h1") == "基于调研制作 PPT"
 
 
 def test_an_instance_with_no_dispatch_is_named_by_its_opening_message(tmp_path: Path) -> None:
@@ -157,11 +152,9 @@ def test_an_instance_with_no_dispatch_is_named_by_its_opening_message(tmp_path: 
 
     d = _session_dir(tmp_path, "web:abc")
 
-    DirectChatRecord.open(
-        d, agent="coder", handle="h1", task_id="t1", task="Help me configure serper\nsecond line must not count"
-    )
+    DirectChatRecord.open(d, agent="coder", handle="h1", task_id="t1", task="帮我配置一下 serper\n第二行不算")
 
-    assert instance_title(d, "coder", "h1") == "Help me configure serper"
+    assert instance_title(d, "coder", "h1") == "帮我配置一下 serper"
 
 
 def test_the_instance_log_is_named_even_when_the_record_cannot_be_written(tmp_path: Path) -> None:
@@ -179,10 +172,10 @@ def test_the_instance_log_is_named_even_when_the_record_cannot_be_written(tmp_pa
     (d / "subagents").mkdir(parents=True, exist_ok=True)
     (d / "subagents" / "direct").write_text("not a directory", encoding="utf-8")
 
-    record = DirectChatRecord.open(d, agent="coder", handle="h1", task_id="t1", task="Check the weather for me")
+    record = DirectChatRecord.open(d, agent="coder", handle="h1", task_id="t1", task="帮我看看天气")
 
     assert not record.dir.exists()
-    assert instance_title(d, "coder", "h1") == "Check the weather for me"
+    assert instance_title(d, "coder", "h1") == "帮我看看天气"
 
 
 def test_a_derivation_that_fails_says_so(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -208,7 +201,7 @@ def test_a_derivation_that_fails_says_so(tmp_path: Path, monkeypatch: pytest.Mon
     said: list[str] = []
     sink_id = logger.add(lambda msg: said.append(str(msg)), level="WARNING", format="{message}")
     try:
-        DirectChatRecord.open(d, agent="coder", handle="h1", task_id="t1", task="Help me configure serper")
+        DirectChatRecord.open(d, agent="coder", handle="h1", task_id="t1", task="帮我配置一下 serper")
     finally:
         logger.remove(sink_id)
 
@@ -223,31 +216,29 @@ def test_a_later_message_does_not_rename_the_instance(tmp_path: Path) -> None:
     from raven.agent.subagent.direct_chat import DirectChatRecord
 
     d = _session_dir(tmp_path, "web:abc")
-    first = DirectChatRecord.open(d, agent="coder", handle="h1", task_id="t1", task="the first ask")
-    first.finish(status="completed", output="done")
+    first = DirectChatRecord.open(d, agent="coder", handle="h1", task_id="t1", task="第一句")
+    first.finish(status="completed", output="好")
 
-    DirectChatRecord.open(d, agent="coder", handle="h1", task_id="t2", task="the second ask")
+    DirectChatRecord.open(d, agent="coder", handle="h1", task_id="t2", task="第二句")
 
-    assert instance_title(d, "coder", "h1") == "the first ask"
+    assert instance_title(d, "coder", "h1") == "第一句"
 
 
 def test_a_dispatched_summary_still_wins_over_the_message(tmp_path: Path) -> None:
     """Deriving is the fallback, not the rule: a dispatch that said what the
     instance is for is a better name than the prompt's first line."""
     d = _session_dir(tmp_path, "web:abc")
-    meta = {"agent": "coder", "handle": "h1", "session_key": "web:abc", "task_summary": "Draft a deck"}
+    meta = {"agent": "coder", "handle": "h1", "session_key": "web:abc", "task_summary": "做一版 PPT"}
 
-    SpawnRecord.open(
-        d, task_id="t1", task="Read these materials, research first, then hand me a deck I can present as-is", meta=meta
-    )
+    SpawnRecord.open(d, task_id="t1", task="请你参考这些材料,先调研再动手,最后给我一版可以直接讲的稿子", meta=meta)
 
-    assert instance_title(d, "coder", "h1") == "Draft a deck"
+    assert instance_title(d, "coder", "h1") == "做一版 PPT"
 
 
 def test_a_finished_spawn_is_still_named_once(tmp_path: Path) -> None:
     """Opening now names the instance, so finishing must not name it again."""
     d = _session_dir(tmp_path, "web:abc")
-    meta = {"agent": "coder", "handle": "h1", "session_key": "web:abc", "task_summary": "Draft a deck"}
+    meta = {"agent": "coder", "handle": "h1", "session_key": "web:abc", "task_summary": "做一版 PPT"}
     record = SpawnRecord.open(d, task_id="t1", task="ask", meta=meta)
 
     record.finish(status="completed", output="done")
@@ -258,7 +249,7 @@ def test_a_finished_spawn_is_still_named_once(tmp_path: Path) -> None:
         if line.strip()
     ]
     assert [row.get("_type") for row in written].count("metadata") == 1
-    assert instance_title(d, "coder", "h1") == "Draft a deck"
+    assert instance_title(d, "coder", "h1") == "做一版 PPT"
     assert [row["role"] for row in written if row.get("_type") != "metadata"] == ["user", "assistant"]
 
 

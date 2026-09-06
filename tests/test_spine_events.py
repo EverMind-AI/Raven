@@ -1,5 +1,3 @@
-"""The spine event contracts: closed enums and frozen lifecycle dataclasses."""
-
 import dataclasses
 from typing import get_args
 

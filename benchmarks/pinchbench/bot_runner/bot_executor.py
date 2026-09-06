@@ -195,7 +195,7 @@ async def execute_task(
         session_manager=session_mgr,
         skill_forge_config=skill_forge_cfg,
         runtime_config=getattr(_ec_cfg, "runtime", None),
-        # Benchmarks are non-interactive batch runs — opt out of the
+        # Benchmarks are non-interactive batch runs — opt out of Bug2's
         # per-turn shadow-git checkpoint (no recovery channel to inject
         # into, and we don't want ``.raven/shadow.git`` in task workspaces).
         interactive=False,

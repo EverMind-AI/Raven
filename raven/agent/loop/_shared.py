@@ -200,7 +200,7 @@ class LoopOutcome:
 
     ``status`` distinguishes a normal completion from a max-iteration
     interruption or an LLM error — so the caller never mistakes "ran out of
-    budget" for "done". ``checkpoint_id`` and
+    budget" for "done" (Bug2 / decision B). ``checkpoint_id`` and
     ``edited_files`` carry the shadow-git snapshot info used to build the
     next turn's recovery prompt.
     """
@@ -214,7 +214,7 @@ def _filter_qualified_ids(
     ids: list[str] | None,
     source_prefix: str,
 ) -> list[str]:
-    """Extract native ids from a list of qualified ids
+    """FB-1 helper: extract native ids from a list of qualified ids
     matching ``<source_prefix>/<native>``.
 
     Returns the bare native portion for each match (i.e. strips the

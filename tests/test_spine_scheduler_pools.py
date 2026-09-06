@@ -1,5 +1,3 @@
-"""OriginPools: per-origin pool routing with no cross-pool borrowing."""
-
 import asyncio
 
 import pytest
