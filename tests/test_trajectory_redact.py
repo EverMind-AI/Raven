@@ -204,6 +204,55 @@ def test_residual_scan_reports_never_rewrites(tmp_path):
     assert (report.redacted_dir / "spans.jsonl").read_text(encoding="utf-8") == leftover
 
 
+def test_residual_finding_carries_token_and_occurrences(tmp_path):
+    leftover = "qT7zXp2LmV9wRb4KsD8fGh3J"
+    spans = f"first {leftover} here\nplain line\nagain {leftover}"
+    bundle = _make_bundle(tmp_path, spans_text=spans, artifact_text=f"also {leftover}")
+
+    report = tredact.redact_bundle(bundle, tmp_path / "red", secrets=[])
+
+    assert len(report.findings) == 1
+    finding = report.findings[0]
+    assert finding.token == leftover
+    assert finding.count == 3
+    assert [(o["file"], o["line_no"]) for o in finding.occurrences] == [
+        ("artifacts/tool.output.json", 1),
+        ("spans.jsonl", 1),
+        ("spans.jsonl", 3),
+    ]
+    occurrence = finding.occurrences[1]
+    assert occurrence["line"] == f"first {leftover} here"
+    assert occurrence["line"][occurrence["start"] : occurrence["end"]] == leftover
+
+
+def test_metadata_serializes_no_token_or_occurrences(tmp_path):
+    leftover = "qT7zXp2LmV9wRb4KsD8fGh3J"
+    bundle = _make_bundle(tmp_path, spans_text=f"prefix {leftover} suffix", artifact_text="clean")
+
+    report = tredact.redact_bundle(bundle, tmp_path / "red", secrets=[])
+
+    meta = json.loads((report.redacted_dir / tredact.REDACTION_METADATA_FILE).read_text(encoding="utf-8"))
+    (entry,) = meta["residual_findings"]
+    assert set(entry) == {"category", "sample", "file", "count"}
+    assert leftover not in json.dumps(meta)
+
+
+def test_residual_scan_exempts_provider_call_ids(tmp_path):
+    call_id = "call_9Q7zXp2LmV4wRb8KsD3fT6yH"
+    hyphenated = "call-9Q7zXp2LmV4wRb8KsD3fT6yH"
+    prefixed = "Xcall_9Q7zXp2LmV4wRb8KsD3fT6yH"
+    bundle = _make_bundle(
+        tmp_path, spans_text=f"{call_id}\n{hyphenated}\n{prefixed}", artifact_text="clean"
+    )
+
+    report = tredact.redact_bundle(bundle, tmp_path / "red", secrets=[])
+
+    tokens = {f.token for f in report.findings}
+    assert call_id not in tokens
+    assert hyphenated in tokens
+    assert prefixed in tokens
+
+
 # ── binary policy ─────────────────────────────────────────────────────
 
 
