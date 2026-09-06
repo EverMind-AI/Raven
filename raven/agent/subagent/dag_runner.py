@@ -24,6 +24,7 @@ from loguru import logger
 from raven.agent.subagent import activity
 from raven.agent.subagent.dag_adjudication import (
     CONTINUE,
+    REPLAN,
     REPORT_DELIVERY_ATTEMPTS,
     AdjudicationDesk,
     deliver_report,
@@ -146,6 +147,7 @@ class DagRunResult:
     terminal_outputs: list[dict] = field(default_factory=list)
     files: list[dict] = field(default_factory=list)
     summary: dict = field(default_factory=dict)
+    replanned_into: str | None = None
 
 
 async def run_dag(
@@ -252,6 +254,12 @@ async def run_dag(
     node, so one answer that never arrives fails just that node instead of
     blocking the run forever.
 
+    A ``replan`` answer interrupts the round in flight rather than waiting for
+    it to drain: it gives every unfinished node a terminal status naming the
+    successor run and finalizes this one. The successor itself is submitted
+    by the caller, not here -- this run only reports its id back as
+    ``DagRunResult.replanned_into``.
+
     ``judge_node``, when given, is called after a node completes or fails to
     decide whether it actually accomplished its task; a bad verdict suspends it
     (the same ``exception`` status ``desk`` waits on) rather than letting it
@@ -293,6 +301,7 @@ async def run_dag(
         await store.init(spec.model_dump_json(), [node.id for node in spec.nodes])
 
     published_terminal: set[str] = set()
+    replanned_into: str | None = None
 
     # Built before the `try` below, not inside it: the cancellation handler reads
     # `status`, and a handler that covers the first await has to be able to.
@@ -351,6 +360,24 @@ async def run_dag(
             _cascade_failures(deps, status)
             if cancel is not None and cancel.is_set():
                 _mark_stopped(status)
+            if desk is not None and desk.replanned.is_set():
+                plan = desk.take_plan()
+                if plan is not None:
+                    await _apply_replan(
+                        plan,
+                        status=status,
+                        errors=errors,
+                        published_terminal=published_terminal,
+                        node_started_at=node_started_at,
+                        node_ended_at=node_ended_at,
+                        by_id=by_id,
+                        session_key=session_key,
+                        run_id=store.run_id,
+                        progress_publisher=progress_publisher,
+                    )
+                    replanned_into = plan.run_id
+                desk.replanned.clear()
+                break
             for nid, st in status.items():
                 if st not in ("skipped", "cancelled") or nid in published_terminal:
                     continue
@@ -436,9 +463,10 @@ async def run_dag(
                     for nids in groups.values()
                 ),
                 cancel,
+                interrupt=desk.replanned if desk is not None else None,
             )
 
-        return await _finalize(
+        result = await _finalize(
             spec,
             by_id,
             status,
@@ -453,6 +481,8 @@ async def run_dag(
             session_key,
             auto_instances,
         )
+        result.replanned_into = replanned_into
+        return result
     except asyncio.CancelledError:
         # `/stop` and the shutdown sweep stop a background run by cancelling its
         # task rather than setting `cancel`, so `_finalize` never runs. Without
@@ -473,15 +503,16 @@ async def run_dag(
         raise
 
 
-async def _run_ready_groups(coros: Any, cancel: asyncio.Event | None) -> None:
+async def _run_ready_groups(coros: Any, cancel: asyncio.Event | None, interrupt: asyncio.Event | None = None) -> None:
     """Await one scheduling round's group tasks.
 
-    With no ``cancel`` this is a plain ``asyncio.gather`` (if that gather is
-    itself cancelled from outside, gather cancels every task it is waiting on,
-    same as before this function existed). With a ``cancel``, races the
-    round's group tasks against a ``cancel.wait()`` task so an in-flight node
-    can be cancelled the instant the signal fires, releasing its semaphore
-    slot immediately rather than waiting for it to finish on its own.
+    With no signal to race, this is a plain ``asyncio.gather`` (if that
+    gather is itself cancelled from outside, gather cancels every task it is
+    waiting on, same as before this function existed). With ``cancel``
+    and/or ``interrupt`` given, races the round's group tasks against
+    whichever signals are set, so an in-flight node is cancelled the instant
+    either one fires, releasing its semaphore slot immediately rather than
+    waiting for it to finish on its own.
 
     The reap -- cancelling every not-yet-done task and awaiting all of them --
     lives in a ``finally`` so it still runs even if the race itself is
@@ -496,23 +527,71 @@ async def _run_ready_groups(coros: Any, cancel: asyncio.Event | None) -> None:
     cleanly-cancelled run.
     """
     tasks = [asyncio.ensure_future(c) for c in coros]
-    if cancel is None:
+    signals = [asyncio.ensure_future(e.wait()) for e in (cancel, interrupt) if e is not None]
+    if not signals:
         await asyncio.gather(*tasks)
         return
-    cancel_wait = asyncio.ensure_future(cancel.wait())
     try:
-        pending: set[asyncio.Future] = {*tasks, cancel_wait}
+        pending: set[asyncio.Future] = {*tasks, *signals}
         while True:
             done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-            if cancel_wait in done or all(t.done() for t in tasks):
+            if any(s in done for s in signals) or all(t.done() for t in tasks):
                 break
     finally:
-        if not cancel_wait.done():
-            cancel_wait.cancel()
+        for signal in signals:
+            if not signal.done():
+                signal.cancel()
         for task in tasks:
             if not task.done():
                 task.cancel()
-        await asyncio.gather(cancel_wait, *tasks, return_exceptions=True)
+        await asyncio.gather(*signals, *tasks, return_exceptions=True)
+
+
+async def _apply_replan(
+    plan: Any,
+    *,
+    status: dict[str, str],
+    errors: dict[str, str],
+    published_terminal: set[str],
+    node_started_at: dict[str, int],
+    node_ended_at: dict[str, int],
+    by_id: dict[str, DagNodeSpec],
+    session_key: str | None,
+    run_id: str,
+    progress_publisher: ProgressPublisher | None,
+) -> None:
+    """Give this run's unfinished nodes their outcome, the replan being their cause.
+
+    Publishes each transition here rather than leaving it to the loop's own sweep:
+    that sweep only announces `skipped` and `cancelled`, and widening it to
+    `failed` would double-publish every node that failed on its own merit --
+    `_run_node` already announces those and does not record them as published.
+
+    A node already terminal on its own merit -- completed, failed, or skipped by
+    an unrelated cascade -- is untouched. A completed node's output is what the
+    new run references; a failed or skipped node's status and error are the real
+    reason it ended, and overwriting them with the replan's would erase that.
+    """
+    reason = f"Superseded by replan into run {plan.run_id}: {plan.reason}"
+    now = _now_ms()
+    for nid, st in status.items():
+        # Only the unfinished. A node already terminal on its own merit -- failed, or skipped
+        # by an unrelated cascade -- keeps its status and its reason: overwriting them with
+        # the replan's would erase why it actually ended, which is the one thing someone
+        # reading this run afterwards is looking for. `_mark_stopped` guards the same way.
+        if st not in ("running", "exception", "pending"):
+            continue
+        status[nid] = "skipped" if st == "pending" else ("cancelled" if st == "running" else "failed")
+        errors[nid] = reason
+        published_terminal.add(nid)
+        node_started_at.setdefault(nid, now)
+        node_ended_at[nid] = now
+        await _emit(
+            progress_publisher,
+            "dag_node_updated",
+            {"run_id": run_id, "node": nid, "status": status[nid]},
+        )
+        await _write_node_status(session_key, run_id, nid, by_id[nid].subagent, status[nid])
 
 
 def _tally(status: dict[str, str]) -> dict:
@@ -573,7 +652,8 @@ def _exception_report(
     if remaining <= 0:
         lines.append(
             f"This was attempt {attempt}; the continuation limit is reached, the node has failed and "
-            "no adjudication is being awaited. Its dependents are skipped. Re-plan if this line matters."
+            "no adjudication is being awaited. Its dependents are skipped. This node will not be "
+            "revisited; submit a fresh run_subagent_dag graph for the work if it still matters."
         )
         return "\n".join(lines)
     if not route_available:
@@ -583,7 +663,8 @@ def _exception_report(
         lines.append(
             f"attempt {attempt}; {remaining} continuation(s) left, but there is no route for you to "
             "answer this node (tool_call is not available), so it has failed and its dependents are "
-            "skipped. Re-plan if this line matters."
+            "skipped. This node will not be revisited; submit a fresh run_subagent_dag graph for the "
+            "work if it still matters."
         )
         return "\n".join(lines)
     lines.append(
@@ -601,6 +682,16 @@ def _exception_report(
         "to give up on this node and everything waiting on it. "
         "resolve_dag_node is not in your tool list; tool_call is how you reach it. "
         "Ask the user first if only they can supply what is missing."
+    )
+    lines.append(
+        f'Or replan: tool_call with name "resolve_dag_node" and arguments '
+        f'{{"run_id": "{run_id}", "node_id": "{node.id}", "decision": "replan", '
+        f'"message": "<why the plan is changing>", "nodes": [<the graph to run instead>]}}. '
+        "That stops this run and starts a new one from your nodes. Use it when what is "
+        "missing is the plan rather than something you can hand this node: a step that "
+        "cannot work as wired, a step nothing in the graph performs, work on the wrong "
+        "sub-agent. Nodes this run completed are referenced, not re-declared -- name one in "
+        "depends_on and read it with {{ <id>.output }}; everything else needs a new id."
     )
     return "\n".join(lines)
 
@@ -775,7 +866,8 @@ async def _await_adjudications(
     cancel: asyncio.Event | None,
     released: asyncio.Event | None = None,
 ) -> None:
-    """Block until every suspended node has an answer, or the wait runs out.
+    """Block until every suspended node has an answer, the wait runs out, or one
+    answer replans the graph.
 
     Reached only when nothing else in the graph can run: the report went to the
     main agent the moment the node was suspended, so this wait costs the graph
@@ -805,6 +897,10 @@ async def _await_adjudications(
     of the ready set picks it up like any other node. Abandoned and timed-out
     nodes take the ordinary failure path, which cascades to their dependents.
 
+    A replan ends the round for every node at once, answered or not, because the
+    graph they belong to is being replaced. They stay `exception` and
+    ``_apply_replan`` gives them their outcome on the next pass of the loop.
+
     `status` and the desk are two independent records of what is suspended. A
     node this call was never given a desk entry for (`exception` in `status`
     but not `desk.is_open`) can never be resolved -- nothing will ever call
@@ -823,14 +919,22 @@ async def _await_adjudications(
     node_tasks = {nid: asyncio.create_task(event.wait()) for nid, event in waiters.items()}
     stop = asyncio.create_task(cancel.wait()) if cancel is not None else None
     unbind = asyncio.create_task(released.wait()) if released is not None and not released.is_set() else None
+    # Raced alongside the per-node waiters, because one node's replan ends the
+    # whole round: the graph these nodes belong to is being replaced, so a
+    # sibling's answer can no longer change anything. Waiting for it is not
+    # merely wasted -- on a bound run there is no deadline, and the lane that
+    # would answer the sibling is the same one blocked in `resolve_dag_node`
+    # awaiting this run's task, so the two wait on each other forever.
+    replan = asyncio.create_task(desk.replanned.wait())
     loop = asyncio.get_running_loop()
     deadline: float | None = None if unbind is not None else loop.time() + timeout_s
     cancelled = False
+    replanned = False
     try:
         node_pending = set(node_tasks.values())
         while node_pending:
             budget = None if deadline is None else max(0.0, deadline - loop.time())
-            waiting_on: set[asyncio.Future] = set(node_pending)
+            waiting_on: set[asyncio.Future] = {*node_pending, replan}
             if stop is not None:
                 waiting_on.add(stop)
             if unbind is not None and not unbind.done():
@@ -838,6 +942,9 @@ async def _await_adjudications(
             done, _ = await asyncio.wait(waiting_on, timeout=budget, return_when=asyncio.FIRST_COMPLETED)
             if stop is not None and stop in done:
                 cancelled = True
+                break
+            if replan in done:
+                replanned = True
                 break
             if unbind is not None and unbind in done:
                 deadline = loop.time() + timeout_s
@@ -855,6 +962,13 @@ async def _await_adjudications(
             answer = desk.take(nid) if event.is_set() else None
             if answer is None:
                 desk.close(nid)
+                if replanned:
+                    # Never asked, rather than asked and ignored: left at
+                    # "exception" for `_apply_replan` to name the successor as
+                    # its cause, for the same reason the REPLAN answer below is.
+                    # Calling it a timeout would blame the agent for a silence
+                    # its own replan is what ended.
+                    continue
                 status[nid] = "failed"
                 errors[nid] = f"Nothing was decided for {timeout_s:g}s, so the node timed out."
                 continue
@@ -866,6 +980,14 @@ async def _await_adjudications(
                 errors[nid] = (
                     "The main agent chose to continue but sent no message, so the node failed instead of resuming."
                 )
+            elif answer.decision == REPLAN:
+                # Left at "exception": `_apply_replan`, at the top of the next loop
+                # pass, is the single writer of a replanned node's terminal status
+                # and reason (naming the successor run). Writing "failed" here would
+                # both misname the cause and make `_apply_replan`'s own terminal-node
+                # guard skip this node as already resolved, since it checks this same
+                # `status` dict and only converts "running"/"exception"/"pending".
+                continue
             else:
                 status[nid] = "failed"
                 errors[nid] = "The main agent abandoned this node."
@@ -874,6 +996,8 @@ async def _await_adjudications(
             stop.cancel()
         if unbind is not None and not unbind.done():
             unbind.cancel()
+        if not replan.done():
+            replan.cancel()
         # Reached on every exit, including a hard Task.cancel() on the run
         # itself (as opposed to setting the soft `cancel` Event) raising
         # CancelledError right out of asyncio.wait above: that route skips
@@ -888,6 +1012,7 @@ async def _await_adjudications(
             *node_tasks.values(),
             *([stop] if stop is not None else []),
             *([unbind] if unbind is not None else []),
+            replan,
             return_exceptions=True,
         )
         for nid in open_nodes:

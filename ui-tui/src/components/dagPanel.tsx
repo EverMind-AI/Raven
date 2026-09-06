@@ -438,6 +438,12 @@ export const DagPanel = memo(function DagPanel({
         </Box>
       </Box>
 
+      {run.replannedInto && (
+        <Text color={t.color.muted} dim wrap="truncate-end">
+          {`replanned into ${elideMiddle(run.replannedInto, RUN_ID_CELLS)}`}
+        </Text>
+      )}
+
       <Rule t={t} width={inner} />
 
       {picture && <DagPicture nodes={run.nodes} picture={picture} runId={run.runId} t={t} />}

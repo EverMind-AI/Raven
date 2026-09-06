@@ -253,6 +253,11 @@ function onEvent(ev) {
   } else if (ev.type === 'dag.run_completed') {
     dagFlowFeed(ev.type, p);
     RavenIslands.dag.settle(sheetSession(), p);
+  } else if (ev.type === 'dag.run_replanned') {
+    /* The trail card alone: the sheet shows one run at a time by design, so a
+       replanned run's sheet just keeps showing the old graph until the new
+       run's own dag.run_started arrives and replaces it wholesale. */
+    dagFlowFeed(ev.type, p);
   }
 }
 
