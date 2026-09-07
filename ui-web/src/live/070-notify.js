@@ -5,6 +5,7 @@ const notifyTurn = (owner, event) => {
 };
 
 rpc.notify.event = (params) => {
+  if (DS.terminal && DS.terminal.acceptEvent && DS.terminal.acceptEvent(params)) return;
   if (live.subId && params.subscription_id === live.subId) { onEvent(params.event || {}); return; }
   const sid = subSession[params.subscription_id];
   const pk = sid && parkedTurns.get(sid);

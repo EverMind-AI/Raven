@@ -120,6 +120,10 @@ function onEvent(ev) {
        timer is only a backstop for a server that says neither of these. */
     namingEnded(p.session_id, p.reason);
   } else if (ev.type === 'notice') {
+    if (p.kind === 'terminal_reply') {
+      noteRow(T('gui.notice.terminal_reply'), p.detail || '', { quiet: true });
+      return;
+    }
     killStatus();
     /* Seals the open step first: this ends the turn, so the streamed prose
        above stays where it was said. */

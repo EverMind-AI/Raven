@@ -62,6 +62,7 @@ _DEMO_PARTS = [
     "100-workspace.js",
     "110-subagents.js",
     "112-browser.js",
+    "113-terminal.js",
     "120-capabilities.js",
     "130-settings.js",
     "140-schedule.js",
@@ -98,6 +99,7 @@ _LIVE_PARTS = [
     "200-boot.js",
     "210-update-notice.js",
     "220-browser.js",
+    "225-terminal.js",
     "230-tabs.js",
     "240-external-agents.js",
 ]

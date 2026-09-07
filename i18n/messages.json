@@ -5247,6 +5247,58 @@
       "en": "searched",
       "zh": "搜索"
     },
+    "gui.terminal.surface": {
+      "en": "Task conversations",
+      "zh": "任务对话"
+    },
+    "gui.terminal.tabs": {
+      "en": "Task conversation tabs",
+      "zh": "任务对话标签"
+    },
+    "gui.terminal.transcript": {
+      "en": "Raven transcript",
+      "zh": "Raven 对话记录"
+    },
+    "gui.terminal.provider": {
+      "en": "Provider",
+      "zh": "提供方"
+    },
+    "gui.terminal.canonical_name": {
+      "en": "Canonical name",
+      "zh": "规范名称"
+    },
+    "gui.terminal.instance": {
+      "en": "Instance",
+      "zh": "实例"
+    },
+    "gui.terminal.incarnation": {
+      "en": "Incarnation",
+      "zh": "化身"
+    },
+    "gui.terminal.unknown": {
+      "en": "Unknown",
+      "zh": "未知"
+    },
+    "gui.terminal.waiting": {
+      "en": "Waiting for terminal output...",
+      "zh": "等待终端输出…"
+    },
+    "gui.terminal.delivery": {
+      "en": "Terminal delivery state",
+      "zh": "终端投递状态"
+    },
+    "gui.terminal.delivered": {
+      "en": "Delivered to terminal",
+      "zh": "已投递到终端"
+    },
+    "gui.terminal.acknowledged": {
+      "en": "ACK received",
+      "zh": "已收到 ACK"
+    },
+    "gui.notice.terminal_reply": {
+      "en": "Peer reply",
+      "zh": "对端回复"
+    },
     "tool.ask_user": {
       "en": "Ask you",
       "zh": "反问你"

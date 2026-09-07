@@ -1671,6 +1671,10 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
       return
     }
     if (m.role === 'assistant' && m.notice) {
+      if (m.notice.kind === 'terminal_reply') {
+        note(lane, t('gui.notice.terminal_reply'), m.notice.detail || '', { quiet: true })
+        return
+      }
       sealTools()
       closeTurn(msOf(m.timestamp))
       note(lane, t('gui.notice.' + (m.notice.kind || ''), undefined, m.notice.kind || ''),

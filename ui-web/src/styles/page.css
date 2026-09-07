@@ -701,6 +701,54 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .pop .note { padding: 7px 9px 4px; font-size: 10.5px; line-height: 1.5; color: var(--faint); }
 
 .scroll { flex: 1; overflow-y: auto; overflow-x: hidden; min-height: 0; scroll-behavior: smooth; scrollbar-gutter: stable; }
+
+/* Hosted terminals take the transcript's central stage while preserving the
+   existing task header and floating workspace palette. */
+#terminalHost { flex: none; min-width: 0; min-height: 0; }
+.terminal-surface { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.terminal-tabs {
+  display: flex; align-items: flex-end; gap: 2px; min-width: 0; padding: 0 20px;
+  border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none;
+}
+.terminal-tab {
+  flex: none; max-width: 260px; padding: 8px 12px 7px; border-bottom: 2px solid transparent;
+  color: var(--muted); font-family: var(--mono); font-size: var(--step--1);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.terminal-tab:hover { color: var(--text); background: var(--surface); }
+.terminal-tab.active { color: var(--text); border-bottom-color: var(--amber); }
+.terminal-tab:focus-visible { outline: 1px solid var(--amber); outline-offset: -2px; }
+.terminal-panels, .terminal-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.terminal-panel { background: var(--stage-bg); }
+.terminal-identity {
+  display: flex; align-items: center; gap: 14px; min-width: 0; padding: 8px 20px;
+  border-bottom: 1px solid var(--line-soft); font-family: var(--mono); font-size: 11px;
+}
+.terminal-name { flex: none; font-size: var(--step--1); }
+.terminal-identity-field { display: flex; align-items: baseline; gap: 5px; min-width: 0; color: var(--faint); }
+.terminal-identity-field code { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.terminal-delivery {
+  display: flex; align-items: center; gap: 16px; padding: 7px 20px;
+  border-bottom: 1px solid var(--line-soft); background: var(--surface);
+  font-family: var(--mono); font-size: 11px;
+}
+.terminal-delivery-state { display: inline-flex; align-items: center; gap: 6px; color: var(--faint); }
+.terminal-delivery-state i { width: 6px; height: 6px; border-radius: 50%; background: var(--line); }
+.terminal-delivery-state.active { color: var(--text); }
+.terminal-delivery-state.active i { background: var(--moss); }
+.terminal-stage {
+  position: relative; flex: 1; min-height: 0; padding: 10px 14px;
+  color: var(--faint); background: var(--stage-bg); font-family: var(--mono); font-size: var(--step--1);
+}
+.terminal-waiting { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
+.terminal-xterm { position: relative; z-index: 1; width: 100%; height: 100%; }
+.terminal-xterm .xterm { height: 100%; }
+.chat[data-terminal-active="true"] #terminalHost { flex: 1; }
+.chat[data-terminal-active="true"] .scroll,
+.chat[data-terminal-active="true"] .dock,
+.chat[data-terminal-active="true"] #backpill,
+.chat[data-terminal-active="true"] #brand { display: none; }
+
 /* Bottom inset tracks the floating composer (--lift is the card's height plus
    its offset, published by dockLift), so the last message always clears the
    glass with room to spare -- growing exactly when the textarea does. */

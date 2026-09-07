@@ -372,6 +372,32 @@ describe('transcript island, history', () => {
     expect($$('.tnote')).toHaveLength(1)
   })
 
+  it('draws a stored terminal reply as a quiet peer note', () => {
+    const t0 = Date.now() - 9000
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'delegate the research', timestamp: iso(t0) },
+        {
+          role: 'assistant',
+          notice: { kind: 'terminal_reply', detail: 'The outline is ready.' },
+          timestamp: iso(t0 + 3000),
+        },
+      ])
+    })
+    const note = $('.tnote')
+    expect(note?.classList.contains('bad')).toBe(false)
+    expect(note?.textContent).toContain('en:gui.notice.terminal_reply')
+    expect(note?.textContent).toContain('The outline is ready.')
+  })
+
+  it('does not let a live terminal reply close the current turn', () => {
+    const live = readFileSync('src/live/050-turn.js', 'utf8') as string
+    const branch = live.match(/if \(p\.kind === 'terminal_reply'\) \{([\s\S]*?)\n    \}/)?.[1] || ''
+    expect(branch).toContain("noteRow(T('gui.notice.terminal_reply')")
+    expect(branch).not.toContain('killStatus')
+    expect(branch).not.toContain('.seal')
+  })
+
   /* "The output above is kept" over a bare question is a promise about
      nothing, and the reader reads it as the output having been lost. */
   it('promises nothing was kept when a stop came before any output', () => {

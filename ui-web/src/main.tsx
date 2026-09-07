@@ -33,6 +33,7 @@ import { Skeleton as SkillsSkeleton, SkillsApp } from './features/skills/SkillsP
 import * as skills from './features/skills/store'
 import * as subagents from './features/subagents/mount'
 import * as subagentsStore from './features/subagents/store'
+import * as terminal from './features/terminal/mount'
 import * as transcript from './features/transcript/mount'
 import * as transcriptTail from './features/transcript/tail'
 import { WsApp } from './features/workspace/WorkspacePage'
@@ -177,9 +178,10 @@ window.menuAt = menuWriter.show
 window.sessionCurrent = session.current
 window.sessionSet = session.setCurrent
 
-session.onChange(() => {
+session.onChange((id) => {
   sheets.sync()
   dagSheet.sync()
+  terminal.setTask(id)
   /* The desk palette is open or shut per conversation, and this is the event
      that says which one is on screen -- see deskStore.sync. */
   desk.sync()
@@ -400,6 +402,9 @@ const pbHost = document.getElementById('pbBody')
 if (pbHost) createRoot(pbHost).render(<PlaybooksApp />)
 const connHost = document.getElementById('connBody')
 if (connHost) createRoot(connHost).render(<ConnApp />)
+const terminalHost = document.getElementById('terminalHost')
+if (terminalHost) terminal.mount(terminalHost)
+terminal.setTask(session.current())
 const deskHost = document.createElement('div')
 deskHost.id = 'deskHost'
 document.body.appendChild(deskHost)
