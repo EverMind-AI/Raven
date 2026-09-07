@@ -16,7 +16,6 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-import tempfile
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -320,8 +319,8 @@ async def test_subagent_stops_after_terminal_shell_decision(monkeypatch, tmp_pat
     executor = _RecordingExecutor()
     announcements: list[dict[str, str]] = []
 
-    async def _capture_announcement(task_id, label, task, result, origin, status, record_path=None) -> None:
-        # `record_path` is accepted but not captured: this test asserts the exact
+    async def _capture_announcement(task_id, label, task, result, origin, status, record_dir=None) -> None:
+        # `record_dir` is accepted but not captured: this test asserts the exact
         # announcement dict, and the record path is covered by its own tests.
         announcements.append({"result": result, "status": status})
 
@@ -393,7 +392,7 @@ async def test_a_blocked_call_stops_its_siblings_even_when_the_turn_goes_on(monk
     executor = _RecordingExecutor()
     announcements: list[dict[str, str]] = []
 
-    async def _capture(task_id, label, task, result, origin, status, record_path=None) -> None:
+    async def _capture(task_id, label, task, result, origin, status, record_dir=None) -> None:
         announcements.append({"result": result, "status": status})
 
     monkeypatch.setattr(manager, "_announce_result", _capture)
@@ -796,14 +795,10 @@ def _stub_manager(workspace: Path | None = None, agents: list[Any] | None = None
 
     ``calls`` is what the prompt assertions read: rendering happens in the tool,
     so the rendered text is only observable in the kwargs it hands over here.
-
-    The default root is a fresh temp directory rather than a sentinel that does
-    not exist: the tool claims its node id under the session history root before
-    it dispatches, so something does now write under it. A shared unwritable
-    sentinel would have leaked one test's claims into the next -- and, running
-    as root, would have created the sentinel for real.
+    ``session_dir_for`` returns a path without creating it -- the reference roots
+    are derived from it, and nothing writes under it in these tests.
     """
-    root = workspace or Path(tempfile.mkdtemp(prefix="raven-spawn-stub-"))
+    root = workspace or Path("/nonexistent")
     calls: list[dict[str, Any]] = []
 
     async def spawn(**kwargs: Any) -> str:
@@ -1219,7 +1214,6 @@ async def test_a_file_input_reaches_the_subagent_as_contents(tmp_path: Path) -> 
     tool, mgr = _spawn_tool(tmp_path)
 
     result = await tool.execute(
-        node_id="n0",
         task_summary="Build the deck",
         prompt_template="Make 15 slides from {{ inputs.research }}",
         inputs={"research": {"file": "report.md"}},
@@ -1239,7 +1233,6 @@ async def test_the_authored_task_is_carried_beside_the_rendered_one(tmp_path: Pa
     tool, mgr = _spawn_tool(tmp_path)
 
     await tool.execute(
-        node_id="n1",
         task_summary="Build the deck",
         prompt_template="Make 15 slides from {{ inputs.research }}",
         inputs={"research": {"file": "report.md"}},
@@ -1254,7 +1247,7 @@ async def test_a_spawn_without_inputs_still_carries_its_template(tmp_path: Path)
     text and always worth carrying -- not only when inputs were used."""
     tool, mgr = _spawn_tool(tmp_path)
 
-    await tool.execute(node_id="s1", task_summary="Build the deck", prompt_template="Make 15 slides")
+    await tool.execute(task_summary="Build the deck", prompt_template="Make 15 slides")
 
     assert mgr.authored == ["Make 15 slides"]
 
@@ -1282,7 +1275,7 @@ async def test_the_announcement_falls_back_to_the_task_it_was_given() -> None:
 
 
 async def test_an_earlier_spawns_recorded_output_is_reachable(tmp_path: Path) -> None:
-    """A `Record:` path sits under the sub-agent history, not the workdir,
+    """A `Record:` directory sits under the sub-agent history, not the workdir,
     so that second root is what makes the advertised handoff possible at all."""
     record = tmp_path / "subagents" / "spawn" / "call-1"
     record.mkdir(parents=True)
@@ -1290,7 +1283,6 @@ async def test_an_earlier_spawns_recorded_output_is_reachable(tmp_path: Path) ->
     tool, mgr = _spawn_tool(tmp_path)
 
     result = await tool.execute(
-        node_id="n2",
         task_summary="Build the deck",
         prompt_template="Make 15 slides from {{ inputs.research }}",
         inputs={"research": {"file": str(record / "out.md")}},
@@ -1308,7 +1300,6 @@ async def test_a_file_input_arrives_fenced_as_data(tmp_path: Path) -> None:
     tool, mgr = _spawn_tool(tmp_path)
 
     await tool.execute(
-        node_id="n3",
         task_summary="Build the deck",
         prompt_template="Make 15 slides from {{ inputs.research }}",
         inputs={"research": {"file": "report.md"}},
@@ -1327,7 +1318,6 @@ async def test_a_literal_input_renders_where_its_placeholder_sits(tmp_path: Path
     tool, mgr = _spawn_tool(tmp_path)
 
     await tool.execute(
-        node_id="n4",
         task_summary="Build the deck",
         prompt_template="Brief: {{ inputs.brief }}. Make 15 slides",
         inputs={"brief": "keep it to 15 pages"},
@@ -1339,7 +1329,7 @@ async def test_a_literal_input_renders_where_its_placeholder_sits(tmp_path: Path
 async def test_a_spawn_without_inputs_hands_over_the_task_verbatim(tmp_path: Path) -> None:
     tool, mgr = _spawn_tool(tmp_path)
 
-    await tool.execute(node_id="s2", task_summary="Build the deck", prompt_template="Make 15 slides")
+    await tool.execute(task_summary="Build the deck", prompt_template="Make 15 slides")
 
     assert mgr.tasks == ["Make 15 slides"]
 
@@ -1350,7 +1340,6 @@ async def test_an_unreadable_input_refuses_the_spawn(tmp_path: Path) -> None:
     tool, mgr = _spawn_tool(tmp_path)
 
     result = await tool.execute(
-        node_id="n5",
         task_summary="Build the deck",
         prompt_template="Make 15 slides from {{ inputs.research }}",
         inputs={"research": {"file": "missing.md"}},
@@ -1365,7 +1354,6 @@ async def test_an_input_outside_the_roots_refuses_the_spawn(tmp_path: Path) -> N
     tool, mgr = _spawn_tool(tmp_path)
 
     result = await tool.execute(
-        node_id="n6",
         task_summary="Build the deck",
         prompt_template="Make 15 slides from {{ inputs.secret }}",
         inputs={"secret": {"file": "../secret.md"}},
@@ -1375,381 +1363,32 @@ async def test_an_input_outside_the_roots_refuses_the_spawn(tmp_path: Path) -> N
     assert mgr.tasks == []
 
 
-async def test_a_nodes_prefixed_input_resolves_against_this_conversations_node_history(tmp_path: Path) -> None:
-    """The DAG tool teaches `@nodes/`, and here it resolves rather than being
+async def test_a_runs_prefixed_input_resolves_against_this_conversations_dag_runs(tmp_path: Path) -> None:
+    """The DAG tool teaches `@runs/`, and here it resolves rather than being
     refused: a spawn has no run history of its own, but it is dispatched from a
     conversation that may have one, and that root is inside the sub-agent
     history a reference may already reach. Refusing it would leave a node's
     output addressable from a graph and not from the spawn beside it.
     """
-    node_out = tmp_path / "subagents" / "nodes" / "n1.out.md"
+    node_out = tmp_path / "subagents" / "mas_dag" / "r1" / "n1.out.md"
     node_out.parent.mkdir(parents=True)
     node_out.write_text("what the node concluded", encoding="utf-8")
     tool, mgr = _spawn_tool(tmp_path)
 
     result = await tool.execute(
-        node_id="n7",
         task_summary="Build the deck",
         prompt_template="Make 15 slides from {{ inputs.research }}",
-        inputs={"research": {"file": "@nodes/n1.out.md"}},
+        inputs={"research": {"file": "@runs/r1/n1.out.md"}},
     )
 
     assert not result.startswith("Error:")
     assert "what the node concluded" in mgr.tasks[0]
-
-
-async def test_a_nodes_prefixed_ref_reaches_the_same_output_an_input_does(tmp_path: Path) -> None:
-    """The schema teaches this spelling beside the input form, so both must work.
-
-    A spawn dispatched beside a graph has no node ids to name -- only paths --
-    and `@nodes/` is the one spelling that does not make the caller work out
-    where this conversation's history lives.
-    """
-    node_out = tmp_path / "subagents" / "nodes" / "n1.out.md"
-    node_out.parent.mkdir(parents=True)
-    node_out.write_text("what the node concluded", encoding="utf-8")
-    tool, mgr = _spawn_tool(tmp_path)
-
-    result = await tool.execute(
-        node_id="n8",
-        task_summary="Build the deck",
-        prompt_template="Make 15 slides from {{ ref:@nodes/n1.out.md }}",
-    )
-
-    assert not result.startswith("Error:")
-    assert "what the node concluded" in mgr.tasks[0]
-
-
-async def test_spawn_requires_a_node_id_the_model_chose(tmp_path: Path) -> None:
-    """The id is the handle a later task references this one by, so the model
-    picks it -- a minted call id names nothing anyone would write down."""
-    tool, _mgr = _spawn_tool(tmp_path)
-    props = tool.parameters["properties"]
-
-    assert "node_id" in tool.parameters["required"]
-    assert props["node_id"]["minLength"] == 1
-
-
-async def test_a_blank_node_id_is_refused(tmp_path: Path) -> None:
-    """`minLength` passes a whitespace-only string, so the check is in code."""
-    tool, mgr = _spawn_tool(tmp_path)
-
-    result = await tool.execute(task_summary="t", node_id="   ", prompt_template="do it")
-
-    assert result.startswith("Error:")
-    assert mgr.tasks == []
-
-
-async def test_a_node_id_outside_the_character_set_is_refused(tmp_path: Path) -> None:
-    """The id becomes a path segment under the flat node root, so the set is
-    the DAG surface's own -- not sanitised into something else, which would
-    leave `{{ <id>.output }}` naming a file nothing wrote."""
-    tool, mgr = _spawn_tool(tmp_path)
-
-    result = await tool.execute(task_summary="t", node_id="../escape", prompt_template="do it")
-
-    assert result.startswith("Error:")
-    assert mgr.tasks == []
-
-
-async def test_a_long_node_id_is_accepted(tmp_path: Path) -> None:
-    """No length cap on the DAG surface, so none here."""
-    tool, mgr = _spawn_tool(tmp_path)
-
-    result = await tool.execute(task_summary="t", node_id="a" * 300, prompt_template="do it")
-
-    assert not result.startswith("Error:")
-    assert len(mgr.tasks) == 1
-
-
-async def test_a_spawn_node_id_colliding_only_by_case_is_refused_and_names_the_holder(tmp_path: Path) -> None:
-    """A spawn's artifacts are files named after its id, like a DAG node's.
-
-    So `Plan` and `plan` are one file on macOS and Windows, and taking the
-    second would overwrite the first's output while the registry still reports
-    both. The refusal names the id actually held: a model told "'plan' is
-    already used" while it can see no such node has nothing to act on.
-    """
-    import json
-
-    hist = tmp_path / "subagents"
-    hist.mkdir(parents=True)
-    (hist / "nodes.json").write_text(
-        json.dumps(
-            {
-                "nodes": {"Plan": {"kind": "dag", "run_id": "r1", "status": "completed", "has_output": True}},
-                "runs": [],
-            }
-        ),
-        encoding="utf-8",
-    )
-    tool, mgr = _spawn_tool(tmp_path)
-
-    result = await tool.execute(task_summary="t", node_id="plan", prompt_template="do it")
-
-    assert result.startswith("Error:")
-    assert "already used by run 'r1'" in result
-    assert "as 'Plan'" in result, "the refusal has to name the id actually held"
-    assert mgr.tasks == []
-
-
-async def test_a_spawn_node_id_differing_by_more_than_case_is_free(tmp_path: Path) -> None:
-    """The control: folding must not refuse an id that is genuinely distinct."""
-    import json
-
-    hist = tmp_path / "subagents"
-    hist.mkdir(parents=True)
-    (hist / "nodes.json").write_text(
-        json.dumps({"nodes": {"plan_a": {"kind": "dag", "run_id": "r1", "status": "completed"}}, "runs": []}),
-        encoding="utf-8",
-    )
-    tool, mgr = _spawn_tool(tmp_path)
-
-    result = await tool.execute(task_summary="t", node_id="plan_b", prompt_template="do it")
-
-    assert not result.startswith("Error:"), result
-    assert len(mgr.tasks) == 1
-
-
-async def test_a_node_id_an_earlier_run_claimed_is_refused_in_the_dag_surfaces_words(tmp_path: Path) -> None:
-    """One namespace, one refusal. A second spelling of this rule is the
-    finding this repo's reviewers filed twice on merge request 450.
-    """
-    import json
-
-    hist = tmp_path / "subagents"
-    hist.mkdir(parents=True)
-    (hist / "nodes.json").write_text(
-        json.dumps(
-            {
-                "nodes": {"plan": {"kind": "dag", "run_id": "r1", "status": "completed", "has_output": True}},
-                "runs": [],
-            }
-        ),
-        encoding="utf-8",
-    )
-    tool, mgr = _spawn_tool(tmp_path)
-
-    result = await tool.execute(task_summary="t", node_id="plan", prompt_template="do it")
-
-    assert "already used by run 'r1'" in result
-    assert "ids are unique per conversation" in result
-    assert "reference 'plan' directly" in result
-    assert mgr.tasks == []
-
-
-async def test_a_spawn_claims_its_node_id_before_it_dispatches(tmp_path: Path) -> None:
-    """Claimed at the tool, not in the background task that writes the record:
-    a duplicate has to come back as a refusal the model can fix this turn, and
-    the record is opened long after the tool returned.
-    """
-    import json
-
-    tool, mgr = _spawn_tool(tmp_path)
-
-    result = await tool.execute(task_summary="t", node_id="market_scan", prompt_template="do it")
-
-    assert not result.startswith("Error:")
-    registry = json.loads((tmp_path / "subagents" / "nodes.json").read_text(encoding="utf-8"))
-    entry = registry["nodes"]["market_scan"]
-    assert entry["kind"] == "spawn"
-    assert entry["status"] == "running"
-    assert "run_id" not in entry
-
-
-def _seed_node(
-    tmp_path: Path, node_id: str, *, status: str = "completed", output: str | None = "what it found"
-) -> None:
-    """One finished node in this conversation's history, registry and all."""
-    import json as _json
-
-    nodes = tmp_path / "subagents" / "nodes"
-    nodes.mkdir(parents=True, exist_ok=True)
-    if output is not None:
-        (nodes / f"{node_id}.out.md").write_text(output, encoding="utf-8")
-    registry_path = tmp_path / "subagents" / "nodes.json"
-    registry = _json.loads(registry_path.read_text(encoding="utf-8")) if registry_path.is_file() else {}
-    registry.setdefault("nodes", {})[node_id] = {
-        "kind": "dag",
-        "run_id": "r1",
-        "status": status,
-        "has_output": output is not None,
-    }
-    registry.setdefault("runs", [])
-    registry_path.write_text(_json.dumps(registry), encoding="utf-8")
-
-
-async def test_a_spawn_reads_a_finished_dag_nodes_output_by_id(tmp_path: Path) -> None:
-    """The capability this whole namespace exists for: one id, either surface.
-
-    A path form always worked. What did not was naming the node, which is what
-    a model writes when it does not know where this conversation's history
-    lives -- and it is the same spelling the DAG tool teaches.
-    """
-    _seed_node(tmp_path, "pricing")
-    tool, mgr = _spawn_tool(tmp_path)
-
-    result = await tool.execute(
-        node_id="deck",
-        task_summary="Build the deck",
-        prompt_template="Make 15 slides from {{ pricing.output }}",
-    )
-
-    assert not result.startswith("Error:")
-    assert "what it found" in mgr.tasks[0]
-
-
-async def test_a_spawn_reads_a_finished_node_through_a_node_shaped_input(tmp_path: Path) -> None:
-    """The other id form the DAG surface offers, so both work here too."""
-    _seed_node(tmp_path, "pricing")
-    tool, mgr = _spawn_tool(tmp_path)
-
-    result = await tool.execute(
-        node_id="deck",
-        task_summary="Build the deck",
-        prompt_template="Make 15 slides from {{ inputs.research }}",
-        inputs={"research": {"node": "pricing"}},
-    )
-
-    assert not result.startswith("Error:")
-    assert "what it found" in mgr.tasks[0]
-
-
-async def test_a_spawn_reading_a_failed_node_is_told_why_not_handed_the_leftovers(tmp_path: Path) -> None:
-    """A path form reads a failed node's leftover file without complaint. The
-    id form must not: the registry knows the run wrote nothing usable, and the
-    advice differs per outcome, which a missing file cannot express.
-    """
-    _seed_node(tmp_path, "broken", status="failed", output="half an answer")
-    tool, mgr = _spawn_tool(tmp_path)
-
-    result = await tool.execute(
-        node_id="deck",
-        task_summary="Build the deck",
-        prompt_template="Make 15 slides from {{ broken.output }}",
-    )
-
-    assert "failed in run 'r1'" in result
-    assert mgr.tasks == []
-
-
-async def test_a_spawn_naming_a_node_that_never_ran_is_told_so(tmp_path: Path) -> None:
-    """Distinct from the failed case: nothing to re-do, the name is just wrong."""
-    tool, mgr = _spawn_tool(tmp_path)
-
-    result = await tool.execute(
-        node_id="deck",
-        task_summary="Build the deck",
-        prompt_template="Make 15 slides from {{ ghost.output }}",
-    )
-
-    assert result.startswith("Error:")
-    assert "ghost" in result
-    assert mgr.tasks == []
-
-
-async def test_a_finished_spawn_is_referenceable_by_the_next_one(monkeypatch, tmp_path: Path) -> None:
-    """The whole point of the shared namespace, through the real dispatch path.
-
-    Every earlier test for this seeded the registry by hand, so none of them
-    drove the lane that has to finalize it. Without that, a completed spawn's
-    output sits on disk while the registry still says `running`, and naming it
-    is refused forever.
-    """
-    import json as _json
-
-    class _Answering:
-        streams = False
-
-        async def run(self, task: str, **_: Any) -> str:
-            return "what it found"
-
-    manager = SubagentManager(provider=_StubProvider(), workspace=tmp_path)
-    monkeypatch.setattr(manager, "_resolve_backend", lambda agent: _Answering())
-    manager.set_submit(lambda _s: None)
-
-    await manager._run_subagent_inner(
-        "task-a",
-        "scan the market",
-        "scan",
-        {
-            "channel": "tui",
-            "chat_id": "default",
-            "session_key": "tui:session-a",
-            "agent": "Answering",
-            "node_id": "first_task",
-        },
-        _RecordingExecutor(),
-        manager.provider,
-        manager.model,
-    )
-
-    registry = _json.loads(
-        (manager.session_dir_for("tui:session-a") / "subagents" / "nodes.json").read_text(encoding="utf-8")
-    )
-    entry = registry["nodes"]["first_task"]
-    assert entry["status"] == "completed", "the run reported; the registry has to say so"
-    assert entry["has_output"] is True
-    assert "ended_at_ms" in entry
-
-
-async def test_a_spawn_the_manager_refused_leaves_its_id_free(tmp_path: Path) -> None:
-    """A refusal comes back as a result, not an exception, and it happens after
-    the claim. Left behind, that id is unusable for the rest of the
-    conversation -- for a call that never ran and left no record at all.
-    """
-    import json as _json
-
-    from raven.agent.subagent.manager import SPAWN_REFUSED_PREFIX
-
-    tool, mgr = _spawn_tool(tmp_path)
-
-    async def refusing(**_kw: Any) -> str:
-        return f"{SPAWN_REFUSED_PREFIX}delegation is paused. No sub-agent was run."
-
-    mgr.spawn = refusing  # type: ignore[assignment]
-    refused = await tool.execute(node_id="blocked_task", task_summary="s", prompt_template="do it")
-    assert refused.startswith(SPAWN_REFUSED_PREFIX)
-
-    registry_path = tmp_path / "subagents" / "nodes.json"
-    nodes = _json.loads(registry_path.read_text(encoding="utf-8"))["nodes"] if registry_path.is_file() else {}
-    assert "blocked_task" not in nodes, "a refused dispatch must leave no claim"
-
-
-def test_the_spawn_schema_states_the_input_contract_it_enforces() -> None:
-    """Spawn refuses the same value shapes the DAG surface does, and offers the
-    same three, so the schema is where a caller learns them before the call.
-
-    Read from the rendered parameters with whitespace collapsed: the sentences
-    are wrapped across string literals, so a re-wrap must not be able to void
-    the assertion silently.
-    """
-    from raven.agent.subagent.spawn_tool import SpawnTool
-
-    props = SpawnTool(manager=_stub_manager()).parameters["properties"]
-    inputs = " ".join(props["inputs"]["description"].split())
-    template = " ".join(props["prompt_template"]["description"].split())
-    node_id = " ".join(props["node_id"]["description"].split())
-
-    assert '{"node": <id>} to take a finished task\'s output' in inputs
-    assert "Exactly one of those three and nothing else in the object" in inputs
-    assert "no second key beside file or node" in inputs
-    assert "no empty path or id" in inputs
-    assert "a number, boolean or list is refused" in inputs
-    # The id forms, which this surface refused until the namespace was shared.
-    assert "{{ <node_id>.output }}" in template
-    assert "{{ <node_id>.output_path }}" in template
-    assert "{{ ref:@nodes/<node_id>.out.md }}" in template
-    assert "Every key in `inputs` must be referenced by a placeholder." in template
-    # One namespace across both tools, said on the field that has to carry it.
-    assert "not just this tool" in node_id
 
 
 async def test_an_input_entry_that_names_no_file_is_refused(tmp_path: Path) -> None:
     tool, mgr = _spawn_tool(tmp_path)
 
     result = await tool.execute(
-        node_id="n9",
         task_summary="Build the deck",
         prompt_template="Make 15 slides from {{ inputs.research }}",
         inputs={"research": {"node": "earlier"}},
@@ -1762,9 +1401,7 @@ async def test_an_input_entry_that_names_no_file_is_refused(tmp_path: Path) -> N
 async def test_inputs_that_are_not_an_object_are_refused(tmp_path: Path) -> None:
     tool, mgr = _spawn_tool(tmp_path)
 
-    result = await tool.execute(
-        node_id="s3", task_summary="Build the deck", prompt_template="Make 15 slides", inputs=["report.md"]
-    )
+    result = await tool.execute(task_summary="Build the deck", prompt_template="Make 15 slides", inputs=["report.md"])
 
     assert result.startswith("Error:")
     assert mgr.tasks == []
@@ -1834,18 +1471,17 @@ async def test_one_spawns_output_reaches_the_next_through_the_real_dispatch_path
                 return submitted.pop().text
         raise AssertionError("no announcement arrived")
 
-    await tool.execute(node_id="s4", task_summary="Research the scores", task="Find them.", subagent="Researcher")
+    await tool.execute(task_summary="Research the scores", task="Find them.", subagent="Researcher")
     research = await announced()
 
     # The record path is the handoff's only address, so the announcement has to
     # carry one that resolves -- this is what the model reads it from.
     record = re.search(r"Record: (\S+)", research)
     assert record is not None
-    out_md = Path(record.group(1))
+    out_md = Path(record.group(1)) / "out.md"
     assert out_md.read_text(encoding="utf-8") == report
 
     await tool.execute(
-        node_id="n10",
         task_summary="Build the deck",
         prompt_template="{{ inputs.research_report }}\n\nMake 15 slides.",
         subagent="DeckMaker",
@@ -1912,7 +1548,7 @@ async def test_a_spawn_carries_the_session_tier_without_the_model_naming_one(
     tool.set_context("cli", "direct", "cli:direct")
 
     assert "mode" not in tool.parameters["properties"], "the model cannot name one"
-    await tool.execute(node_id="tier_probe1865", task_summary="Look it up", task="Find them.", subagent="Researcher")
+    await tool.execute(task_summary="Look it up", task="Find them.", subagent="Researcher")
 
     for _ in range(400):
         await asyncio.sleep(0.01)
@@ -1958,9 +1594,7 @@ async def test_a_spawn_started_inside_a_turn_keeps_that_turns_tier(
     tool.set_context("cli", "direct", "cli:direct")
 
     with turn_tier("medium"):
-        await tool.execute(
-            node_id="tier_probe1911", task_summary="Look it up", task="Find them.", subagent="Researcher"
-        )
+        await tool.execute(task_summary="Look it up", task="Find them.", subagent="Researcher")
     # The turn is over and the session has moved on; the spawn it started has not.
     live["tier"] = "max"
 
@@ -2141,10 +1775,10 @@ async def test_a_run_with_nothing_to_say_fails_instead_of_reading_as_done(tmp_pa
 # --- a spawn's memory record has to be findable ------------------------------
 
 
-async def test_a_spawn_announce_names_the_records_output_file() -> None:
-    """Without it the record is unreachable: no agent-facing tool lists spawn
-    history, so the announcement is the only place the path is said. A DAG's
-    summary names its run dir for the same reason."""
+async def test_a_spawn_announce_names_the_record_directory() -> None:
+    """Without it the record is unreachable: the directory carries a timestamp
+    prefix the agent cannot guess, and no agent-facing tool lists spawn history.
+    A DAG's summary names its run dir for the same reason."""
     mgr = _make_manager(max_concurrent=1)
     submitted: list[object] = []
     mgr.set_submit(submitted.append)
@@ -2156,14 +1790,14 @@ async def test_a_spawn_announce_names_the_records_output_file() -> None:
         "done",
         {"channel": "web", "chat_id": "default", "session_key": "web:sess1"},
         "ok",
-        record_path="/hist/web/sess1/subagents/nodes/checkout_audit.out.md",
+        record_dir="/hist/web/sess1/subagents/spawn/20260818T090000Z-t1",
     )
 
     assert len(submitted) == 1
-    assert "/hist/web/sess1/subagents/nodes/checkout_audit.out.md" in submitted[0].text
+    assert "/hist/web/sess1/subagents/spawn/20260818T090000Z-t1" in submitted[0].text
 
 
-async def test_a_spawn_announce_without_a_record_path_says_nothing_about_it() -> None:
+async def test_a_spawn_announce_without_a_record_directory_says_nothing_about_it() -> None:
     mgr = _make_manager(max_concurrent=1)
     submitted: list[object] = []
     mgr.set_submit(submitted.append)
@@ -2176,12 +1810,7 @@ async def test_a_spawn_announce_without_a_record_path_says_nothing_about_it() ->
 
 
 def _read_meta(tmp_path: Path) -> dict[str, Any]:
-    """The one spawn record under this tree.
-
-    Globbed on the suffix rather than the whole name: a node's artifacts are
-    prefixed with its id now, so `meta.json` matches nothing.
-    """
-    (found,) = tmp_path.rglob("*.meta.json")
+    (found,) = tmp_path.rglob("meta.json")
     return json.loads(found.read_text(encoding="utf-8"))
 
 
@@ -2709,10 +2338,9 @@ async def test_a_capped_result_is_announced_as_capped_and_recorded_whole(monkeyp
     announced = submitted[0].text
     assert "[raven] Output truncated" in announced
     assert "of 400 characters" in announced
-    out_md = Path(announced.rsplit("Record: ", 1)[1].splitlines()[0].strip())
-    assert out_md.read_text(encoding="utf-8") == "z" * 400
-    meta = out_md.with_name(out_md.name.replace(".out.md", ".meta.json"))
-    assert json.loads(meta.read_text(encoding="utf-8"))["output_truncated"] is True
+    record_dir = Path(announced.rsplit("Record: ", 1)[1].splitlines()[0].strip())
+    assert (record_dir / "out.md").read_text(encoding="utf-8") == "z" * 400
+    assert json.loads((record_dir / "meta.json").read_text(encoding="utf-8"))["output_truncated"] is True
 
 
 async def test_spawn_requires_prompt_template_and_drops_task() -> None:
@@ -2733,7 +2361,7 @@ async def test_spawn_accepts_the_old_task_spelling() -> None:
     manager = _stub_manager()
     tool = SpawnTool(manager=manager)
 
-    await tool.execute(node_id="s5", task_summary="s", task="do the thing", subagent="raven")
+    await tool.execute(task_summary="s", task="do the thing", subagent="raven")
 
     assert manager.calls[-1]["task"] == "do the thing"
 
@@ -2743,7 +2371,6 @@ async def test_spawn_refuses_a_path_form_for_a_no_local_files_agent() -> None:
 
     tool = SpawnTool(manager=_stub_manager_with_remote_agent())
     result = await tool.execute(
-        node_id="n11",
         task_summary="s",
         prompt_template="{{ ref_path:plan.md }}",
         subagent="remote",
@@ -2766,7 +2393,7 @@ async def test_spawn_reports_a_malformed_placeholder_as_itself() -> None:
     from raven.agent.subagent.spawn_tool import SpawnTool
 
     tool = SpawnTool(manager=_stub_manager_with_remote_agent())
-    result = await tool.execute(node_id="s6", task_summary="s", prompt_template="{{ ref: }}", subagent="remote")
+    result = await tool.execute(task_summary="s", prompt_template="{{ ref: }}", subagent="remote")
 
     assert "empty path" in result
     assert "no-local-files" not in result
@@ -2782,7 +2409,6 @@ async def test_spawn_renders_a_ref_into_the_dispatched_task(tmp_path: Path) -> N
 
     with workdir.bind(tmp_path):
         await tool.execute(
-            node_id="n12",
             task_summary="s",
             prompt_template="follow this: {{ ref:plan.md }}",
             subagent="raven",
@@ -2827,7 +2453,6 @@ async def test_the_announcement_carries_the_template_not_the_inlined_file(tmp_pa
 
     with workdir.bind(tmp_path):
         await tool.execute(
-            node_id="n13",
             task_summary="s",
             prompt_template="read {{ ref:big.md }}",
             subagent="raven",
@@ -2855,36 +2480,32 @@ async def test_a_spawn_that_renders_nothing_announces_its_task(tmp_path: Path) -
     assert "Task: water the plants" in announced[-1]
 
 
-async def test_a_node_path_form_is_now_refused_for_the_capability_it_really_needs() -> None:
-    """The inverse of what this asserted before, and for a reason that changed.
+async def test_a_node_form_is_refused_for_the_graph_it_needs_not_the_files_it_wants() -> None:
+    """The refusal a spawn owes a node reference comes first.
 
-    A node reference used to be refused here first, because a spawn had no
-    graph and so could not resolve one at all -- and the capability gate
-    speaking first pointed the model at `{{ a.output }}`, which this surface
-    then refused too. Both forms resolve now, so the capability is once again
-    the only thing wrong with a `_path` form aimed at a `[no-local-files]`
-    agent, and the advice it gives is advice that works.
+    A `[no-local-files]` sub-agent used to hear about its own capability
+    instead, which pointed the model at `{{ a.output }}` -- a form this surface
+    refuses on the next turn. Two turns to learn one thing, and the first answer
+    was advice that cannot work here.
     """
     from raven.agent.subagent.spawn_tool import SpawnTool
 
     tool = SpawnTool(manager=_stub_manager_with_remote_agent())
 
     result = await tool.execute(
-        node_id="n14",
         task_summary="s",
         prompt_template="{{ a.output_path }}",
         subagent="remote",
     )
 
-    assert "no-local-files" in result
-    assert "{{ a.output }}" in result, "the form it redirects to has to be one this surface accepts"
-    assert "only run_subagent_dag can resolve" not in result
+    assert "only run_subagent_dag can resolve" in result
+    assert "no-local-files" not in result
 
 
 async def test_a_ref_under_the_sub_agent_history_resolves_from_a_spawn(tmp_path: Path) -> None:
     """The second root, and the whole reason the advertised handoff works.
 
-    An earlier call's own output file sits under the session's sub-agent
+    An earlier call's `Record:` directory sits under the session's sub-agent
     history, which no working directory can be aimed at -- so the reference
     resolves only because that root is passed beside the working directory.
     Reverting it leaves the rest of this file green, which is why the assertion
@@ -2902,7 +2523,6 @@ async def test_a_ref_under_the_sub_agent_history_resolves_from_a_spawn(tmp_path:
 
     with workdir.bind(work):
         result = await tool.execute(
-            node_id="n15",
             task_summary="s",
             prompt_template=f"follow up on {{{{ ref:{record / 'out.md'} }}}}",
             subagent="raven",
@@ -2932,7 +2552,6 @@ async def test_a_symlink_out_of_the_roots_refuses_the_spawn(tmp_path: Path) -> N
 
     with workdir.bind(work):
         result = await tool.execute(
-            node_id="n16",
             task_summary="s",
             prompt_template="read {{ ref:notes.md }}",
             subagent="raven",
@@ -2958,10 +2577,9 @@ async def test_a_refused_spawn_does_not_leak_a_prior_uncollected_handle() -> Non
 
     tool = SpawnTool(manager=_stub_manager_with_remote_agent())
 
-    await tool.execute(node_id="s7", task_summary="s", prompt_template="do it", subagent="remote")
+    await tool.execute(task_summary="s", prompt_template="do it", subagent="remote")
 
     result = await tool.execute(
-        node_id="n17",
         task_summary="s",
         prompt_template="{{ ref_path:plan.md }}",
         subagent="remote",

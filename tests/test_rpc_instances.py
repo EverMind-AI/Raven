@@ -278,54 +278,31 @@ async def test_forget_keeps_the_record_directories(tmp_path: Path, _isolated_reg
 
 
 def _spawn(session_dir: Path, *, agent: str, handle: str, task: str, output: str, at_ms: int) -> None:
-    """One finished spawn: its flat artifacts, and the registry entry that
-    marks the id as a spawn's.
+    from raven.agent.subagent.history import SpawnRecord
 
-    Both halves, because the reader needs both -- the files alone cannot say
-    which surface wrote them now that they share one root.
-    """
-    from raven.agent.subagent.dag_store import REGISTRY_FILENAME
-    from raven.agent.subagent.history import SpawnRecord, session_history_root
-
-    node_id = f"t{at_ms}"
-    rec = SpawnRecord.open(session_dir, task_id=node_id, task=task, meta={"agent": agent, "handle": handle})
+    rec = SpawnRecord.open(session_dir, task_id=f"t{at_ms}", task=task, meta={"agent": agent, "handle": handle})
     rec.finish(status="completed", output=output)
-    meta = json.loads(rec.file("meta.json").read_text(encoding="utf-8"))
+    meta = json.loads((rec.dir / "meta.json").read_text(encoding="utf-8"))
     meta.update(started_at_ms=at_ms, ended_at_ms=at_ms + 1)
-    rec.file("meta.json").write_text(json.dumps(meta), encoding="utf-8")
-
-    registry_path = session_history_root(session_dir) / REGISTRY_FILENAME
-    registry = json.loads(registry_path.read_text(encoding="utf-8")) if registry_path.is_file() else {}
-    registry.setdefault("nodes", {})[node_id] = {
-        "kind": "spawn",
-        "status": "completed",
-        "has_output": True,
-        "started_at_ms": at_ms,
-        "ended_at_ms": at_ms + 1,
-    }
-    registry.setdefault("runs", [])
-    registry_path.parent.mkdir(parents=True, exist_ok=True)
-    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    (rec.dir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
 
 
 def _dag_run(session_dir: Path, run_id: str, nodes: dict[str, dict[str, Any]]) -> None:
-    from raven.agent.subagent.history import dag_root, nodes_root
+    from raven.agent.subagent.history import dag_root
 
     run = dag_root(session_dir) / run_id
     run.mkdir(parents=True, exist_ok=True)
-    flat = nodes_root(session_dir)
-    flat.mkdir(parents=True, exist_ok=True)
     manifest: dict[str, Any] = {}
     for node_id, spec in nodes.items():
-        (flat / f"{node_id}.prompt.md").write_text(spec["prompt"], encoding="utf-8")
-        (flat / f"{node_id}.out.md").write_text(spec["out"], encoding="utf-8")
+        (run / f"{node_id}.prompt.md").write_text(spec["prompt"], encoding="utf-8")
+        (run / f"{node_id}.out.md").write_text(spec["out"], encoding="utf-8")
         manifest[node_id] = {
             "subagent": spec["agent"],
             "instance": spec.get("instance"),
             "started_at": spec["at_ms"],
             "ended_at": spec["at_ms"] + 1,
-            "prompt_file": str(flat / f"{node_id}.prompt.md"),
-            "output_file": str(flat / f"{node_id}.out.md"),
+            "prompt_file": str(run / f"{node_id}.prompt.md"),
+            "output_file": str(run / f"{node_id}.out.md"),
             "status": "completed",
         }
     (run / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -334,17 +311,15 @@ def _dag_run(session_dir: Path, run_id: str, nodes: dict[str, dict[str, Any]]) -
 def _dead_dag_run(session_dir: Path, run_id: str, nodes: dict[str, dict[str, Any]]) -> None:
     """A run killed mid-flight: graph.json only, no manifest, and an output
     file only for the nodes that finished before the gateway died."""
-    from raven.agent.subagent.history import dag_root, nodes_root
+    from raven.agent.subagent.history import dag_root
 
     run = dag_root(session_dir) / run_id
     run.mkdir(parents=True, exist_ok=True)
-    flat = nodes_root(session_dir)
-    flat.mkdir(parents=True, exist_ok=True)
     graph: dict[str, Any] = {"task_summary": "t", "nodes": []}
     for node_id, spec in nodes.items():
-        (flat / f"{node_id}.prompt.md").write_text(spec["prompt"], encoding="utf-8")
+        (run / f"{node_id}.prompt.md").write_text(spec["prompt"], encoding="utf-8")
         if "out" in spec:
-            (flat / f"{node_id}.out.md").write_text(spec["out"], encoding="utf-8")
+            (run / f"{node_id}.out.md").write_text(spec["out"], encoding="utf-8")
         graph["nodes"].append({"id": node_id, "subagent": spec["agent"], "instance": spec.get("instance")})
     (run / "graph.json").write_text(json.dumps(graph), encoding="utf-8")
 
@@ -424,92 +399,6 @@ async def test_history_reads_a_run_that_died_unfinalized_off_its_graph(tmp_path:
     finished = await _history(session_dir, "Coder", "site")
     assert [t["content"] for t in finished] == ["build it", "built"]
     assert all("interrupted" not in t for t in finished)
-
-
-def test_dag_exchanges_honours_a_finalized_manifests_recorded_paths(tmp_path: Path) -> None:
-    """A finalized manifest is authoritative, including the files it says are absent.
-
-    The same rule `dag_reader` follows, one reader away. A pre-flattening run
-    records absolute paths under its own directory, and a node that failed
-    before it rendered records an explicit `null`. Deriving `nodes/<id>.out.md`
-    for that null reaches whatever later task took the id back, so a node that
-    provably wrote nothing answers with someone else's output under the old
-    run's identity.
-    """
-    import json
-
-    from raven.agent.subagent.instance_records import dag_exchanges
-
-    dag, nodes = tmp_path / "mas_dag", tmp_path / "nodes"
-    run = dag / "20260730T060242Z-6b0b89a3"
-    run.mkdir(parents=True)
-    nodes.mkdir(parents=True)
-    (run / "plan.prompt.md").write_text("old plan prompt", encoding="utf-8")
-    (run / "plan.out.md").write_text("THE ORIGINAL, OLDER NODE", encoding="utf-8")
-    (run / "draft.prompt.md").write_text("old draft prompt", encoding="utf-8")
-    (run / "manifest.json").write_text(
-        json.dumps(
-            {
-                "plan": {
-                    "subagent": "x",
-                    "instance": "h",
-                    "started_at": 1000,
-                    "ended_at": 2000,
-                    "prompt_file": str(run / "plan.prompt.md"),
-                    "output_file": str(run / "plan.out.md"),
-                },
-                # Failed before it rendered: the run recorded that it has no output.
-                "draft": {
-                    "subagent": "x",
-                    "instance": "h",
-                    "started_at": 3000,
-                    "ended_at": 4000,
-                    "prompt_file": str(run / "draft.prompt.md"),
-                    "output_file": None,
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    # A later task takes both ids back in the flat namespace.
-    (nodes / "plan.out.md").write_text("A DIFFERENT, NEWER NODE", encoding="utf-8")
-    (nodes / "draft.out.md").write_text("A DIFFERENT, NEWER NODE", encoding="utf-8")
-
-    by_node = {
-        turn["call_id"].split("/")[-1]: [t["content"] for t in turns]
-        for _, turns in dag_exchanges(dag, nodes, "x", "h")
-        for turn in turns[:1]
-    }
-
-    assert by_node["plan"] == ["old plan prompt", "THE ORIGINAL, OLDER NODE"], "a named file wins over the flat root"
-    assert by_node["draft"] == ["old draft prompt"], "a recorded null means no output, not 'derive one'"
-
-
-def test_dag_exchanges_reads_an_unfinalized_runs_node_off_the_flat_root(tmp_path: Path) -> None:
-    """``_graph_nodes`` -- the manifest stand-in for a run with no manifest --
-    used to read a node's prompt mtime, and ``dag_exchanges`` used to fall back
-    to reading its prompt/output, off the run directory. Nothing is written
-    there any more: node artifacts live at the flat node root, so a run killed
-    before it finalized reported ``started_at=0`` and a prompt/output nothing
-    could read. Asserted directly against ``dag_exchanges`` rather than through
-    ``instances_history``, so this fails on the reader itself, not on whatever
-    the RPC layer happens to do with a zero timestamp."""
-    from raven.agent.subagent.history import dag_root, nodes_root
-    from raven.agent.subagent.instance_records import dag_exchanges
-
-    session_dir = tmp_path / "sessions" / "s1"
-    _dead_dag_run(
-        session_dir,
-        "run-1",
-        {"code": {"agent": "Coder", "instance": "site", "prompt": "build it", "out": "built"}},
-    )
-
-    exchanges = dag_exchanges(dag_root(session_dir), nodes_root(session_dir), "Coder", "site")
-
-    assert len(exchanges) == 1
-    started, turns = exchanges[0]
-    assert started > 0
-    assert [t["content"] for t in turns] == ["build it", "built"]
 
 
 async def test_a_trailing_prompt_with_nothing_in_flight_is_marked_interrupted(tmp_path: Path) -> None:

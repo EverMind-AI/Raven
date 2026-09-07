@@ -396,7 +396,7 @@ async def test_a_spawn_reaches_the_manager(tmp_path, monkeypatch):
 
     mgr = _Manager(tmp_path)
     tool = SpawnTool(manager=mgr)
-    out = await tool.execute("watch a case", "run the case", subagent="Raven-Oncall", node_id="watch_case")
+    out = await tool.execute("watch a case", "run the case", subagent="Raven-Oncall")
 
     assert mgr.spawned and out == "spawned ok"
 
