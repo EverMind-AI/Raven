@@ -1494,6 +1494,12 @@ class SubagentManager:
         # whole file, and this line is concatenated verbatim with no truncation,
         # so the file would be re-injected into the host's context in full.
         asked = origin.get("authored_task") or task
+        # System voice, with the announce's own instructions and outside the
+        # fence -- the channel measured to change the next move (watch_work's
+        # module docstring carries the measurements).
+        from raven.agent.subagent.watch_work import hoarded_code_note
+
+        hoard_note = hoarded_code_note(result)
         announce_content = f"""[Subagent '{task_summary}' {status_text}]
 
 Task: {asked}
@@ -1501,7 +1507,7 @@ Task: {asked}
 Result:
 {fenced_result}{record_line}
 
-Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not report the task as done merely because this message arrived. Anything the sub-agent stated it could not do -- a missing input, an unmet precondition, a refusal, a gap it flagged -- is part of the outcome: pass it on in full, outside that length budget. Keep technical details like the instance handle and task ids out of what you say to the user -- they stay available for your own later calls."""
+Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not report the task as done merely because this message arrived. Anything the sub-agent stated it could not do -- a missing input, an unmet precondition, a refusal, a gap it flagged -- is part of the outcome: pass it on in full, outside that length budget. Keep technical details like the instance handle and task ids out of what you say to the user -- they stay available for your own later calls.{hoard_note}"""
 
         assert self._submit is not None
         mark = {"kind": "spawn", "label": task_summary, "status": status}

@@ -38,7 +38,6 @@ from raven.agent.loop._shared import (
     Origin,
     RecoveryAction,
     Session,
-    ToolOutput,
     _display_label,
     _file_change_payload,
     _first_line,
@@ -1266,26 +1265,29 @@ class TurnPathMixin:
                     if (setter := getattr(self.tools.get(tool_call.name), "set_tool_call_id", None)) is not None:
                         setter(tool_call.id)
                     tool_t0 = time.monotonic()
-                    result = await self.tools.execute(tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta)
-                    duration_ms = int((time.monotonic() - tool_t0) * 1000)
-                    # Only the model-facing text is annotated. Rebuilt rather
-                    # than replaced because a plain str here would drop the
-                    # transcript row's display string, the multimodal blocks and
-                    # the control flags with it.
-                    noted = await self._note_watch_work(
-                        watch_state, tool_call.name, tool_call.arguments, str(result), watch_request
-                    )
-                    if noted != str(result):
-                        result = ToolOutput(
-                            noted,
-                            getattr(result, "display_text", None),
-                            retryable=getattr(result, "retryable", True),
-                            blocks_call=getattr(result, "blocks_call", False),
-                            continuation=getattr(result, "continuation", Continuation.CONTINUE),
-                            ok=getattr(result, "ok", True),
-                            blocks=getattr(result, "blocks", None),
-                            diff=getattr(result, "diff", None),
-                            file_change=getattr(result, "file_change", None),
+                    preempted = ""
+                    if tool_call.name == "ask_user":
+                        from raven.agent.subagent import watch_work as _ww
+
+                        preempted = _ww.preempt_owner_ask(watch_state, tool_call.arguments)
+                    if preempted:
+                        # The owner registered this answer so they would not be
+                        # asked for it; the question never reaches them, and the
+                        # reply arrives where the model expected the owner's.
+                        result = "This question was not sent to the owner."
+                        watch_note = preempted
+                        duration_ms = int((time.monotonic() - tool_t0) * 1000)
+                    else:
+                        result = await self.tools.execute(
+                            tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta
+                        )
+                        duration_ms = int((time.monotonic() - tool_t0) * 1000)
+                        # The result itself is left alone: the note is the
+                        # system's own line and is placed by add_tool_result AFTER
+                        # the untrusted fence closes, so the model reads it as this
+                        # system speaking rather than as data it must not obey.
+                        watch_note = await self._note_watch_work(
+                            watch_state, tool_call.name, tool_call.arguments, str(result), watch_request
                         )
                     # The registry already unwrapped any ToolResult: `result` is
                     # the model-facing text, with the optional display string
@@ -1346,14 +1348,16 @@ class TurnPathMixin:
                     sources = _image_sources(tool_call.name, result_blocks or [], iteration) if result_blocks else []
                     if blocks:
                         messages = self.context.add_tool_result(
-                            messages, tool_call.id, tool_call.name, model_text, blocks
+                            messages, tool_call.id, tool_call.name, model_text, blocks, trusted_note=watch_note
                         )
                         if sources:
                             messages[-1][_IMAGE_SOURCES_KEY] = sources
                     else:
                         # Keep the long-standing 4-arg call for text results so no
                         # existing caller or test double sees a signature change.
-                        messages = self.context.add_tool_result(messages, tool_call.id, tool_call.name, model_text)
+                        messages = self.context.add_tool_result(
+                            messages, tool_call.id, tool_call.name, model_text, trusted_note=watch_note
+                        )
                     if messages:
                         # Dispatch to result, on the entry that answers the call.
                         # The live tool event was its only carrier, so a restored
