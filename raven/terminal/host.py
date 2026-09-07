@@ -131,6 +131,7 @@ class TerminalState:
     returncode: int | None = None
     closed: bool = False
     composer_dirty: bool = False
+    human_input_pending: bool = False
     blocked_reason: str | None = None
 
 
@@ -304,10 +305,14 @@ class TerminalHost:
         if status == "working" and state.record.status != "working":
             state.working_sequence += 1
             state.composer_dirty = False
+            state.human_input_pending = False
         if status == "permission":
             state.permission_sequence += 1
         if status == "idle":
             state.startup_pending = False
+            if state.human_input_pending:
+                state.composer_dirty = False
+                state.human_input_pending = False
         state.record.status = status
         state.status_seen = True
         state.blocked_reason = blocked_reason if status == "permission" else None
@@ -332,11 +337,12 @@ class TerminalHost:
     async def input(self, handle: str, data: bytes) -> None:
         state = self.state(handle)
         async with state.send_lock:
-            await self.write(handle, data)
+            state.human_input_pending = bool(data) or state.human_input_pending
             if b"\x03" in data or b"\x15" in data:
                 state.composer_dirty = False
             elif any(byte >= 32 or byte in (8, 9, 127) for byte in data):
                 state.composer_dirty = True
+            await self.write(handle, data)
 
     async def resize(self, handle: str, cols: int, rows: int) -> None:
         import fcntl

@@ -45,6 +45,7 @@ def register_agents_methods(
                     binding=binding,
                     role=params.get("role", ""),
                     task_ref=params.get("task_ref", ""),
+                    session_key=params.get("session_key"),
                     description=params.get("description"),
                     aliases=params.get("aliases"),
                 )

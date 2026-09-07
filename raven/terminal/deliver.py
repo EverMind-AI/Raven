@@ -83,6 +83,7 @@ class DeliveryService:
             elif original.reply_terminal is None and original.sender != "raven":
                 continue
             self.pending.pop(nonce)
+            self.host.state(pending.handle).composer_dirty = False
             payload = {
                 "handle": pending.handle,
                 "nonce": reply.nonce if reply else None,
@@ -122,6 +123,7 @@ class DeliveryService:
         require_ack: bool = False,
         *,
         ack_timeout_ms: int = DEFAULT_TIMEOUT_MS,
+        force: bool = False,
     ) -> SendResult:
         state = self.host.state(handle)
         envelope = self._envelope(text)
@@ -132,6 +134,8 @@ class DeliveryService:
             baseline_permission = state.permission_sequence
             incarnation = state.record.incarnation_id
             self._assert_target(state, incarnation, baseline_permission)
+            if force:
+                state.composer_dirty = False
             if state.composer_dirty:
                 raise TerminalError("composer_not_empty", "The composer contains unsubmitted input")
             baseline_working = state.working_sequence
@@ -150,6 +154,7 @@ class DeliveryService:
             try:
                 paste = ("\x1b[200~" + text.replace("\x1b", "<ESC>") + "\x1b[201~").encode("utf-8")
                 state.composer_dirty = True
+                state.human_input_pending = False
                 written = 0
                 for offset in range(0, len(paste), PASTE_CHUNK_BYTES):
                     self._assert_target(state, incarnation, baseline_permission)

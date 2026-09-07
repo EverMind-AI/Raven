@@ -17,9 +17,13 @@ async def test_identity_rpc_register_list_resolve_and_invalid_kind(tmp_path):
     async def rpc(method, params):
         return await dispatcher.dispatch({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
 
-    result = await rpc("agents.register", {"name": "worker-a", "kind": "coder", "terminal": record.handle})
+    result = await rpc(
+        "agents.register",
+        {"name": "worker-a", "kind": "coder", "terminal": record.handle, "session_key": "web:creator"},
+    )
     assert result["jsonrpc"] == "2.0"
     assert result["result"]["agent"]["binding"]["handle"] == record.handle
+    assert result["result"]["agent"]["sessionKey"] == "web:creator"
     assert result["result"]["_meta"]["runtimeId"] == RuntimeInfo().runtime_id
     assert (await rpc("agents.list", {}))["result"]["agents"][0]["agentName"] == "worker-a"
     assert (await rpc("agents.resolve", {"mention": "worker-a"}))["result"]["unique"]

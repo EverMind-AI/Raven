@@ -2248,6 +2248,7 @@ export interface IdentityRecord {
   orphan?: Orphan;
   schemaVersion?: Schemaversion;
   exitedAt?: Exitedat;
+  sessionKey?: string | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -5391,6 +5392,7 @@ export interface TerminalSendParams {
   require_ack?: RequireAck;
   source_handle?: SourceHandle;
   session_id?: SessionId2;
+  force?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -5487,6 +5489,7 @@ export interface AgentsRegisterParams {
   task_ref?: TaskRef;
   description?: Description1;
   aliases?: Aliases1;
+  session_key?: string | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
