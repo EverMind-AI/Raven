@@ -6,13 +6,12 @@ import posixpath
 
 from raven.agent.subagent.prompt_errors import DagValidationError
 
-# Prefix that aims a reference at this session's DAG run history instead of the
-# session working directory. The run dirs sit under the session's metadata
-# directory (raven/agent/subagent/history.py), which is a protected subtree no
-# working directory can ever be aimed at -- so a relative path from the workdir
-# never reaches one, and without this prefix a graph has no short way to name an
-# earlier run's output at all.
-RUNS_PREFIX = "@runs/"
+# Prefix that aims a reference at this session's node artifacts instead of the
+# session working directory. They sit under the session's metadata directory
+# (raven/agent/subagent/history.py), a protected subtree no working directory
+# can ever be aimed at -- so a relative path from the workdir never reaches one,
+# and without this prefix a graph has no short way to name another node's files.
+NODES_PREFIX = "@nodes/"
 
 
 def split_reference(path: str) -> tuple[str, str]:
@@ -24,26 +23,26 @@ def split_reference(path: str) -> tuple[str, str]:
 
     Returns:
         `tuple[str, str]`:
-            ``("runs", <path under the DAG run history>)`` for a
-            ``@runs/``-prefixed reference, else ``("workdir", path)``.
+            ``("nodes", <path under the node root>)`` for a ``@nodes/``-prefixed
+            reference, else ``("workdir", path)``.
     """
-    if path.startswith(RUNS_PREFIX):
-        return "runs", path[len(RUNS_PREFIX) :]
+    if path.startswith(NODES_PREFIX):
+        return "nodes", path[len(NODES_PREFIX) :]
     return "workdir", path
 
 
 def check_confined(path: str, *, what: str, roots: tuple[str, ...] | None = None) -> None:
     """Reject a reference that lands outside every root a node may read.
 
-    A ``@runs/`` reference is always confined to this session's own run history
-    and is checked lexically against that prefix alone -- ``@runs/../..`` is
-    refused exactly like a bare ``../..``.
+    A ``@nodes/`` reference is always confined to this session's own node
+    artifacts and is checked lexically against that prefix alone --
+    ``@nodes/../..`` is refused exactly like a bare ``../..``.
 
     Everything else is checked against ``roots``: the session working directory
     and ``<session_dir>/subagents/``, this conversation's sub-agent history. The
     second one is in the set so a graph can name an earlier run's output by
     absolute path, and reach the ``spawn`` records beside it, rather than only
-    what ``@runs/`` addresses.
+    what ``@nodes/`` addresses.
 
     It stops there rather than at agent home on purpose. Agent home also holds
     ``user_memory/``, ``skills/``, and every *other* conversation's transcript
@@ -84,7 +83,7 @@ def check_confined(path: str, *, what: str, roots: tuple[str, ...] | None = None
     root, relative = split_reference(path)
     if not relative:
         raise DagValidationError(f"{what} path '{path}' is empty")
-    if root == "runs" or not roots:
+    if root == "nodes" or not roots:
         _check_shape(path, relative, what=what, root=root)
         return
 
@@ -106,7 +105,7 @@ def _check_shape(path: str, relative: str, *, what: str, root: str) -> None:
     """Refuse an absolute or base-escaping path without resolving it."""
     normalized = posixpath.normpath(relative)
     if posixpath.isabs(relative) or relative.startswith("\\") or normalized == ".." or normalized.startswith("../"):
-        where = "this session's DAG run history" if root == "runs" else "the session workdir"
+        where = "this session's node artifacts" if root == "nodes" else "the session workdir"
         raise DagValidationError(
             f"{what} path '{path}' must be relative to and within {where}",
         )

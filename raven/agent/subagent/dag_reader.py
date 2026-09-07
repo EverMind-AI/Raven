@@ -1,12 +1,13 @@
-"""Read a finished or in-flight DAG run back out of its on-disk run dir.
+"""Read a finished or in-flight DAG run back out of its run dir and node root.
 
 The live ``dag_*`` progress events are the only thing the web UI sees while a
 run executes, and they exist for exactly one page-session: nothing replays them,
-and a gateway-mode tool result carries no manifest metadata. The run dir written
-by :class:`~raven.agent.subagent.dag_store.DagRunStore` is the durable record,
-so reading it back is what lets a reloaded page show the graph again -- and what
-lets a node's rendered prompt and full output be shown on demand instead of only
-the leaf ``terminal_outputs`` the manifest inlines.
+and a gateway-mode tool result carries no manifest metadata. The run dir and
+flat node root written by :class:`~raven.agent.subagent.dag_store.DagRunStore`
+are the durable record, so reading them back is what lets a reloaded page show
+the graph again -- and what lets a node's rendered prompt and full output be
+shown on demand instead of only the leaf ``terminal_outputs`` the manifest
+inlines.
 
 An in-flight run has a ``graph.json`` but no ``manifest.json`` yet (that is
 written once, in ``_finalize``), so structure and per-node state are read
@@ -25,12 +26,12 @@ import json
 import re
 from typing import Any
 
-from raven.agent.subagent.dag_store import memory_path_in
+from raven.agent.subagent.dag_store import memory_path_in, output_path_in, prompt_path_in
 
 # Both ids are minted by raven itself (``make_run_id`` / the graph schema's
 # ``_ID_PATTERN``), but they arrive here straight off a web request, so they
 # are re-checked before being joined into a path. Without this a crafted id
-# would walk out of the run dir and read arbitrary files.
+# would walk out of the run dir or the flat node root and read arbitrary files.
 # The six optional digits are the microseconds `history_stamp` added so two
 # runs minted in one second keep their order. Both forms are accepted: run
 # dirs written before that change are still on disk and still readable.
@@ -74,6 +75,11 @@ async def _read_text(backend: Any, path: str) -> str | None:
         return None
 
 
+async def _existing_path(backend: Any, path: str) -> str | None:
+    """``path`` if it names a file that actually exists, else ``None``."""
+    return path if await backend.file_exists(path) else None
+
+
 def run_dir_of(backend: Any, root: str, run_id: str) -> str:
     """The run-scoped directory for ``run_id`` under a DAG history ``root``.
 
@@ -84,7 +90,49 @@ def run_dir_of(backend: Any, root: str, run_id: str) -> str:
     return backend.join_path(root, _check_run_id(run_id))
 
 
-async def read_run(backend: Any, root: str, run_id: str) -> dict:
+def _artifact_root(entry: dict, nodes_root: str) -> str:
+    """The directory this node's unrecorded artifacts sit beside.
+
+    The manifest names a node's prompt and output but never its memory or its
+    transcript, so those two are always derived. Derived from wherever the
+    recorded pair actually is, rather than from the flat root unconditionally:
+    for a run written before this session's history flattened, that is the run
+    directory, and a later task holding the same id owns the flat one.
+    """
+    named = entry.get("output_file") or entry.get("prompt_file")
+    if not isinstance(named, str):
+        return nodes_root
+    # Both separators, and the original kept rather than normalised: a manifest
+    # written on Windows carries backslashes, and handing back a mixed-separator
+    # path would be this reader's invention rather than what is on disk.
+    cut = max(named.rfind("/"), named.rfind("\\"))
+    return named[:cut] if cut > 0 else nodes_root
+
+
+async def _artifact_paths(backend: Any, entry: dict, nodes_root: str, node_id: str) -> tuple[str | None, str | None]:
+    """Where one node's prompt and output are, per the manifest or the flat root.
+
+    The manifest is authoritative for any node it records at all -- including a
+    legacy path from before this session's history flattened, and an explicit
+    ``None`` for a node that was skipped or failed before it ever rendered.
+    Only a node it does not carry gets a candidate derived from the flat node
+    root: a node can finish, and its sibling nodes still be running, well before
+    the run as a whole finalizes and writes any of this into the manifest.
+
+    One home for the rule because two readers answer for the same node. Deriving
+    unconditionally in either of them is what let a later task that took the id
+    back serve its prompt and output under the old run's identity and status.
+    """
+    if entry:
+        prompt, output = entry.get("prompt_file"), entry.get("output_file")
+        return (prompt if isinstance(prompt, str) else None, output if isinstance(output, str) else None)
+    return (
+        await _existing_path(backend, prompt_path_in(backend, nodes_root, node_id)),
+        await _existing_path(backend, output_path_in(backend, nodes_root, node_id)),
+    )
+
+
+async def read_run(backend: Any, root: str, run_id: str, nodes_root: str) -> dict:
     """Rebuild one run's manifest-shaped payload from its run dir.
 
     The returned ``files`` list matches the shape the tool's
@@ -96,6 +144,18 @@ async def read_run(backend: Any, root: str, run_id: str) -> dict:
     ``finalized`` says whether ``manifest.json`` was present. When it was not,
     every node reports ``pending`` and the caller is expected to overlay live
     state (the instance registry) on top.
+
+    Args:
+        backend (`BackendBase`):
+            Backend supplying the environment's path semantics.
+        root (`str`):
+            The session's DAG history root, holding ``<run_id>/graph.json``
+            and ``<run_id>/manifest.json``.
+        run_id (`str`):
+            The run to read.
+        nodes_root (`str`):
+            The session's flat node root -- where node artifacts live,
+            addressed by node id alone rather than by this run's directory.
 
     Raises:
         DagReadError: the id is malformed or the run dir holds no ``graph.json``.
@@ -114,8 +174,8 @@ async def read_run(backend: Any, root: str, run_id: str) -> dict:
             continue
         nid = node["id"]
         entry = (manifest or {}).get(nid) or {}
-        mem_path = memory_path_in(backend, root, run_id, nid)
-        mem_path = mem_path if await backend.file_exists(mem_path) else None
+        prompt_file, output_file = await _artifact_paths(backend, entry, nodes_root, nid)
+        mem_path = await _existing_path(backend, memory_path_in(backend, _artifact_root(entry, nodes_root), nid))
         files.append(
             {
                 "node": nid,
@@ -130,8 +190,8 @@ async def read_run(backend: Any, root: str, run_id: str) -> dict:
                 "status": entry.get("status", "pending"),
                 "started_at": entry.get("started_at"),
                 "ended_at": entry.get("ended_at"),
-                "prompt_file": entry.get("prompt_file"),
-                "output_file": entry.get("output_file"),
+                "prompt_file": prompt_file,
+                "output_file": output_file,
                 "memory_file": mem_path,
                 "error": entry.get("error"),
                 "prompt_template": node.get("prompt_template"),
@@ -148,6 +208,7 @@ async def read_run(backend: Any, root: str, run_id: str) -> dict:
     return {
         "run_id": run_id,
         "dir": rdir,
+        "nodes_root": nodes_root,
         "finalized": manifest is not None,
         # What the whole graph was dispatched for, in the model's own words.
         # Only from graph.json: the manifest records what each node did, and no
@@ -173,6 +234,7 @@ async def read_node(
     root: str,
     run_id: str,
     node_id: str,
+    nodes_root: str,
     *,
     max_output_chars: int = 20000,
 ) -> dict:
@@ -193,15 +255,32 @@ async def read_node(
     answered -- the failure, and its reason, were on disk the whole time and
     only the run-level reader ever looked. ``status`` and ``error`` come along
     so one node can account for itself.
+
+    Args:
+        backend (`BackendBase`):
+            Backend supplying the environment's path semantics.
+        root (`str`):
+            The session's DAG history root, holding ``<run_id>/manifest.json``.
+        run_id (`str`):
+            The run this node belongs to.
+        node_id (`str`):
+            The node to read.
+        nodes_root (`str`):
+            The session's flat node root -- where this node's prompt, output,
+            and transcript files live, addressed by node id alone.
     """
     rdir = run_dir_of(backend, root, run_id)
     _check_node_id(node_id)
-    prompt_file = backend.join_path(rdir, f"{node_id}.prompt.md")
-    output_file = backend.join_path(rdir, f"{node_id}.out.md")
-    prompt = await _read_text(backend, prompt_file)
-    output = await _read_text(backend, output_file)
     manifest = await _read_json(backend, backend.join_path(rdir, "manifest.json"))
     entry = manifest.get(node_id) or {} if isinstance(manifest, dict) else {}
+    # Read before the files, not after: the manifest is what says where they are.
+    # Used as resolved, with no `or` behind it: a recorded ``None`` means this
+    # node wrote nothing, and falling back to a derived candidate for it reaches
+    # the flat root exactly like the unrecorded case does -- serving whatever
+    # later task took the id, for a node that provably has no output.
+    prompt_file, output_file = await _artifact_paths(backend, entry, nodes_root, node_id)
+    prompt = await _read_text(backend, prompt_file) if prompt_file else None
+    output = await _read_text(backend, output_file) if output_file else None
     total = len(output) if output is not None else 0
     truncated = total > max_output_chars
     if output is not None and truncated:
@@ -217,7 +296,9 @@ async def read_node(
         "output_truncated": truncated,
         "status": entry.get("status") if isinstance(entry, dict) else None,
         "error": entry.get("error") if isinstance(entry, dict) else None,
-        "transcript": await _read_transcript(backend, backend.join_path(rdir, f"{node_id}.transcript.jsonl")),
+        "transcript": await _read_transcript(
+            backend, backend.join_path(_artifact_root(entry, nodes_root), f"{node_id}.transcript.jsonl")
+        ),
     }
 
 

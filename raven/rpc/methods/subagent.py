@@ -2,9 +2,11 @@
 
 Two reads over what the delegation path already writes. A ``spawn`` records
 itself in the session's own metadata directory (see
-:mod:`raven.agent.subagent.history`): ``subagents/spawn/<call_id>/`` holding
-``prompt.md`` written before dispatch, then ``out.md`` or ``error.md``, beside a
-``meta.json``. Nothing here writes anything. The record is the audit trail the
+:mod:`raven.agent.subagent.history`), under the flat node root it shares with
+graph nodes: ``subagents/nodes/<node_id>.prompt.md`` written before dispatch,
+then ``.out.md`` or ``.error.md``, beside a ``.meta.json``. Which of those ids
+belong to a spawn comes from the registry, since the files no longer say.
+Nothing here writes anything. The record is the audit trail the
 run keeps for itself, and these two methods are the view of it the panel draws.
 
 Graph runs are listed too, one row per node. They were deliberately left out at
@@ -35,6 +37,7 @@ empty panel for a run that is on disk.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -43,7 +46,8 @@ from loguru import logger
 
 from raven.agent.subagent import activity as run_activity
 from raven.agent.subagent.dag_live import live_run_ids
-from raven.agent.subagent.history import dag_root, spawn_root
+from raven.agent.subagent.dag_store import REGISTRY_FILENAME
+from raven.agent.subagent.history import dag_root, nodes_root, session_history_root
 from raven.agent.subagent.instances import get_registry
 from raven.agent.subagent.tool_vocabulary import normalize_row
 from raven.config.loader import load_config
@@ -89,18 +93,54 @@ def _read_json(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _read_meta(directory: Path) -> dict[str, Any]:
-    return _read_json(directory / "meta.json")
+@dataclass(frozen=True)
+class _NodeFiles:
+    """One node's artifacts, wherever the flat namespace put them.
+
+    A node used to own a directory and now owns a filename prefix, so what a
+    reader is handed is no longer a path it can join onto. Every read goes
+    through :meth:`path` for the reason the writer has one namer: the prefix
+    convention lives in one place.
+    """
+
+    root: Path
+    node_id: str
+
+    def path(self, name: str) -> Path:
+        return self.root / f"{self.node_id}.{name}"
 
 
-def _outcome(directory: Path) -> tuple[str | None, bool]:
+def _spawn_node_ids(session_dir: Path) -> list[str]:
+    """Node ids this session's spawns claimed, oldest first.
+
+    Ordered by the registry's own clock rather than by the id: an id the model
+    chose carries no time, where the minted call id it replaced sorted
+    chronologically for free. Sorting the names would shuffle the panel.
+    """
+    registry = _read_json(session_history_root(session_dir) / REGISTRY_FILENAME)
+    nodes = registry.get("nodes")
+    if not isinstance(nodes, dict):
+        return []
+    spawned = [
+        (int(entry.get("started_at_ms") or 0), node_id)
+        for node_id, entry in nodes.items()
+        if isinstance(entry, dict) and entry.get("kind") == "spawn" and isinstance(node_id, str)
+    ]
+    return [node_id for _at, node_id in sorted(spawned)]
+
+
+def _read_meta(files: _NodeFiles) -> dict[str, Any]:
+    return _read_json(files.path("meta.json"))
+
+
+def _outcome(files: _NodeFiles) -> tuple[str | None, bool]:
     """The answer this call produced, and whether it produced one at all.
 
     ``error.md`` and ``out.md`` are written by the same ``finish``, never both,
     so whichever exists is the outcome.
     """
     for name in ("out.md", "error.md"):
-        path = directory / name
+        path = files.path(name)
         try:
             if path.is_file():
                 return path.read_text(encoding="utf-8", errors="replace"), True
@@ -121,18 +161,18 @@ def _tokens(meta: dict[str, Any]) -> int | None:
     return sum(counted) if counted else None
 
 
-def _row(directory: Path) -> dict[str, Any]:
-    meta = _read_meta(directory)
-    _answer, finished = _outcome(directory)
+def _row(files: _NodeFiles) -> dict[str, Any]:
+    meta = _read_meta(files)
+    _answer, finished = _outcome(files)
     # Derived from the files when meta is missing or carries a status this does
-    # not know: a directory that exists is a call that started, and one holding
-    # its answer is a call that ended. Trusting an unreadable meta instead would
+    # not know: a prompt file that exists is a call that started, and one
+    # holding its answer is a call that ended. Trusting an unreadable meta instead would
     # leave a finished run pulsing as live forever.
     status = _WIRE_STATUS.get(str(meta.get("status") or "")) or ("ok" if finished else "run")
-    label = str(meta.get("task_summary") or meta.get("label") or "") or _label_from_prompt(directory)
+    label = str(meta.get("task_summary") or meta.get("label") or "") or _label_from_prompt(files)
     tools = meta.get("tool_calls")
     return {
-        "id": directory.name,
+        "id": files.node_id,
         "kind": "spawn",
         "label": label,
         "status": status,
@@ -149,36 +189,38 @@ def _row(directory: Path) -> dict[str, Any]:
     }
 
 
-def _label_from_prompt(directory: Path) -> str:
+def _label_from_prompt(files: _NodeFiles) -> str:
     """First line of the prompt, for a call whose meta carries no summary.
 
     Read only in that case: one extra file per row would otherwise be paid on
     every poll of a panel that is polling every few seconds.
     """
     try:
-        with (directory / "prompt.md").open(encoding="utf-8", errors="replace") as fh:
+        with files.path("prompt.md").open(encoding="utf-8", errors="replace") as fh:
             return fh.readline().strip()[:80]
     except OSError:
         return ""
 
 
-def _call_dir(root: Path, call_id: str) -> Path | None:
-    """Resolve one call id under ``root``, or None if it does not name one.
+def _call_dir(root: Path, call_id: str) -> _NodeFiles | None:
+    """Resolve one node id under ``root``, or None if it names nothing there.
 
-    ``call_id`` arrives off the wire. It is minted by raven (``make_call_id``),
-    but that is not a reason to join it into a path unchecked: containment is
-    verified after resolution, so a crafted id cannot walk out of the history
-    root and hand back an arbitrary file as a transcript.
+    The id arrives off the wire. It is the id the model chose, checked against
+    a stricter set than the minted call id it replaced, but that is not a
+    reason to join it into a path unchecked: containment is verified after
+    resolution, so a crafted id cannot walk out of the history root and hand
+    back an arbitrary file as a transcript.
     """
     if not call_id or "/" in call_id or "\\" in call_id or call_id in {".", ".."}:
         return None
-    candidate = (root / call_id).resolve()
+    files = _NodeFiles(root, call_id)
+    candidate = files.path("prompt.md").resolve()
     try:
         candidate.relative_to(root.resolve())
     except ValueError:
         logger.warning("subagent.context: refused an id that escapes the history root: {!r}", call_id)
         return None
-    return candidate if candidate.is_dir() else None
+    return files if candidate.is_file() else None
 
 
 def _session_dir(session_id: str, agent_loop_factory: "AgentLoopFactory | None") -> Path:
@@ -188,7 +230,7 @@ def _session_dir(session_id: str, agent_loop_factory: "AgentLoopFactory | None")
 
 
 def _root_for(session_id: str, agent_loop_factory: "AgentLoopFactory | None") -> Path:
-    return spawn_root(_session_dir(session_id, agent_loop_factory))
+    return nodes_root(_session_dir(session_id, agent_loop_factory))
 
 
 # `manifest.json` statuses, on the left, and what a client renders on the right.
@@ -327,19 +369,21 @@ async def subagent_list(
         return {"items": []}
 
     items: list[dict[str, Any]] = []
-    try:
-        root = spawn_root(session_dir)
-        items += [_row(d) for d in sorted((p for p in root.iterdir() if p.is_dir()), reverse=True)]
-    except OSError:
-        # No history directory yet is the ordinary case for a fresh conversation.
-        pass
+    root = nodes_root(session_dir)
+    # From the registry, not the directory: the flat namespace holds both
+    # surfaces' artifacts, and only the registry says which of them a spawn
+    # wrote. Walking the files would draw every graph node as a spawn row.
+    for node_id in _spawn_node_ids(session_dir):
+        items.append(_row(_NodeFiles(root, node_id)))
     items += _dag_rows(dag_root(session_dir), session_id, _live_dag_run_ids(agent_loop_factory))
 
     # Sorted across both kinds, because the reader's question is chronological and
-    # does not distinguish them. `started_at` first; the id is the tie-break and
-    # is itself time-ordered (both a call id and a run id start with a UTC stamp),
-    # which is what keeps a graph's own nodes in a stable order rather than
-    # shuffling on every poll -- they all share one started_at to the second.
+    # does not distinguish them. `started_at` first; the id is the tie-break, and
+    # it no longer carries time -- a spawn's id is the model's word and a graph's
+    # nodes are named by the author. What the tie-break buys now is only
+    # stability: a graph's nodes share one started_at to the second, and without
+    # it they would shuffle on every poll. Chronology among spawns comes from
+    # `_spawn_node_ids`, which reads the registry's own clock.
     items.sort(key=lambda i: (i.get("started_at") or "", i.get("id") or ""), reverse=True)
     return {"items": items}
 
@@ -372,16 +416,16 @@ async def subagent_context(
         raise ConfigValidationError("subagent.context requires params.session_id", data={"field": "session_id"})
 
     try:
-        directory = _call_dir(_root_for(session_id, agent_loop_factory), call_id)
+        files = _call_dir(_root_for(session_id, agent_loop_factory), call_id)
     except OSError:
-        directory = None
-    if directory is None:
+        files = None
+    if files is None:
         # An id from a stale panel, or a call whose record never landed. Empty
         # rather than not-found: the caller is drawing a transcript either way.
         return {"id": call_id, "messages": [], "status": None}
 
-    meta = _read_meta(directory)
-    answer, finished = _outcome(directory)
+    meta = _read_meta(files)
+    answer, finished = _outcome(files)
     stored: list[dict[str, Any]] = []
     # The record keeps two clock reads: when the run started and when it ended.
     # Those ARE the two messages' times -- the prompt went in at the start, the
@@ -390,20 +434,20 @@ async def subagent_context(
     try:
         prompt_msg: dict[str, Any] = {
             "role": "user",
-            "content": (directory / "prompt.md").read_text(encoding="utf-8"),
+            "content": files.path("prompt.md").read_text(encoding="utf-8"),
         }
         if (started := _iso(meta.get("started_at_ms"))) is not None:
             prompt_msg["timestamp"] = started
         stored.append(prompt_msg)
     except OSError:
-        logger.warning("subagent.context: {} has no readable prompt", directory)
+        logger.warning("subagent.context: {} has no readable prompt", files.node_id)
     # The run's own turns, where the transport could see them (acp writes
     # transcript.jsonl; the cli lane has no per-step visibility and leaves no
     # file). Same wire mapping as everything else here, so the client draws a
     # delegated run's tool calls with the renderer it already has.
     transcribed = False
     try:
-        with (directory / "transcript.jsonl").open(encoding="utf-8") as fh:
+        with files.path("transcript.jsonl").open(encoding="utf-8") as fh:
             for line in fh:
                 if not line.strip():
                     continue
@@ -420,7 +464,7 @@ async def subagent_context(
     # collected in this very process, so a watching panel reads that. Copied
     # entry-by-entry because the collector republishes on every update from the
     # agent, and a list mutated mid-iteration is a crash in a read-only path.
-    if not transcribed and (live := run_activity.live(directory.name)) is not None:
+    if not transcribed and (live := run_activity.live(files.node_id)) is not None:
         stored.extend(
             normalize_row(entry) for entry in list(live.transcript) if isinstance(entry, dict) and entry.get("role")
         )
@@ -428,7 +472,7 @@ async def subagent_context(
     # output (a cli agent streams no transcript). Gone once the run finishes:
     # the live index empties with the collecting block, and the record's answer
     # takes over.
-    if (live_run := run_activity.live(directory.name)) is not None and live_run.console:
+    if (live_run := run_activity.live(files.node_id)) is not None and live_run.console:
         stored.append({"role": "console", "content": live_run.console})
     if answer is not None:
         answer_msg: dict[str, Any] = {"role": "assistant", "content": answer}
@@ -441,7 +485,7 @@ async def subagent_context(
         "id": call_id,
         "messages": _map_to_wire(stored, f"subagent:{call_id}"),
         "status": _WIRE_STATUS.get(str(meta.get("status") or "")) or ("ok" if finished else "run"),
-        "label": str(meta.get("task_summary") or meta.get("label") or "") or _label_from_prompt(directory),
+        "label": str(meta.get("task_summary") or meta.get("label") or "") or _label_from_prompt(files),
         "agent": meta.get("agent"),
         "started_at": _iso(meta.get("started_at_ms")),
         "ended_at": _iso(meta.get("ended_at_ms")),

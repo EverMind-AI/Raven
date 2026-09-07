@@ -965,6 +965,9 @@ export interface InstanceRow {
  * via the `definition` "DirectTurn".
  */
 export interface DirectTurn {
+  /**
+   * How this turn is addressed, which depends on which lane wrote it. A spawn turn carries the node id the model chose, and subagent.context reads it. A DAG node turn carries <run_id>/<node_id>, which subagent.context rejects (it refuses any id containing a slash) -- open those through dag.node. A direct-chat turn keeps its minted call id. Still spelled call_id on the wire for every lane.
+   */
   call_id: string;
   role: 'user' | 'assistant' | 'tool';
   content: string;
@@ -1453,7 +1456,7 @@ export interface SubagentStatusEvent {
     label: string;
     status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
     /**
-     * The spawn record id subagent.context reads. Known from 'running' onward; a 'pending' run has not opened its record yet, so there is nothing to read.
+     * The node id subagent.context reads -- the model's own name for the task, shared with run_subagent_dag's node ids. Sent from 'running' onward: the id is settled before dispatch, but a pending run has written no record, and advertising an id whose read comes back empty would draw a transcript that does not exist yet.
      */
     call_id?: string;
     /**
