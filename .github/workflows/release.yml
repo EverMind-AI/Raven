@@ -114,7 +114,7 @@ jobs:
       #     constraints that conflict with the wheel's own metadata; --all-extras
       #     covers the channel SDKs behind raven[channels].
       - name: Export locked constraints
-        run: uv export --locked --all-extras --no-hashes --no-emit-project -o dist/raven-constraints.txt
+        run: uv export --locked --all-extras --no-hashes --no-emit-workspace -o dist/raven-constraints.txt
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
