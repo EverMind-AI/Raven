@@ -116,3 +116,21 @@ async def test_subscription_replays_raw_startup_before_live_output():
     assert seen == [b"\x1b[31mstartup", b"live"]
     unsubscribe()
     assert not state.subscribers
+
+
+async def test_known_codex_native_idle_titles_clear_startup_and_working():
+    from raven.contracts.terminal import TerminalRecord
+    from raven.terminal.host import TerminalHost, TerminalState
+
+    host = TerminalHost()
+    record = TerminalRecord(worktree_id="repo::/tmp/work", worktree_path="/tmp/work")
+    state = TerminalState(record, 123, -1, "token", "worker-a", startup_pending=True)
+    state.provider = "codex"
+    host._terminals[record.handle] = state
+    await host.observe_output(state, b"\x1b]0;work\x07")
+    assert record.status == "idle"
+    assert not state.startup_pending
+    await host.observe_output(state, "\x1b]0;\u280b Reply\x07".encode())
+    assert record.status == "working"
+    await host.observe_output(state, b"\x1b]0;Reply\x07")
+    assert record.status == "idle"
