@@ -2024,7 +2024,7 @@ class TurnPathMixin:
             # The tier this turn dispatches sub-agents at, frozen here for the
             # same reason the iteration cap is read once: a switch arriving mid-turn
             # lands on the next turn, not on a sub-agent this one has yet to call.
-            with turn_tier(self.session_policy(key or "").mode or self._default_tier):
+            with turn_tier(self.session_tier(key)):
                 final_content, _, all_msgs, outcome = await self._run_agent_loop(
                     initial_messages,
                     on_progress=on_progress,

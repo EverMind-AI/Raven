@@ -5,7 +5,8 @@ from __future__ import annotations
 import pytest
 
 from raven.acp.modes import AcpModeProfile, SessionModes, build_session_modes
-from raven.config.schema import AcpConfig, AcpModeConfig, Config
+from raven.config.mode_catalogue import build_mode_catalogue
+from raven.config.schema import _TIER_TEXTS, AcpConfig, AcpModeConfig, Config
 
 
 def _modes() -> SessionModes:
@@ -130,8 +131,7 @@ def test_each_built_in_rung_says_what_distinguishes_it():
     So that is what each says, and the scope sentence is stated once by whichever
     surface draws the control.
     """
-    modes = build_session_modes(Config())
-    described = {p.id: p.description for p in modes.profiles()}
+    described = {p.id: p.description for p in build_mode_catalogue(Config()).profiles.values()}
 
     assert len(set(described.values())) == 3, f"each rung needs its own sentence, got {described}"
     for tier, text in described.items():
@@ -151,14 +151,21 @@ def test_the_built_in_descriptions_are_translated_but_a_deployments_are_not():
     before = i18n.current_language()
     try:
         i18n.set_language("zh")
-        builtin = {p.id: p.description for p in build_session_modes(Config()).profiles()}
+        builtin = {p.id: p.description for p in build_mode_catalogue(Config()).profiles.values()}
         assert all(any("\u4e00" <= ch <= "\u9fff" for ch in text) for text in builtin.values()), (
             f"raven's own rows should be Chinese under zh, got {builtin}"
         )
 
+        # Deliberately one of raven's OWN ids: a string with no zh entry comes back
+        # unchanged whether or not it was translated, so the assertion could not fail.
+        # This one has a translation, so passing it through `t()` would be visible.
+        borrowed = _TIER_TEXTS["medium"]
+        assert i18n.t(borrowed) != borrowed, "the premise: this string does translate"
         own = Config()
-        own.acp = AcpConfig(modes={"turbo": AcpModeConfig(name="Turbo", description="as fast as it goes")})
-        assert [p.description for p in build_session_modes(own).profiles()] == ["as fast as it goes"]
+        own.acp = AcpConfig(modes={"turbo": AcpModeConfig(name="Turbo", description=borrowed)})
+        assert [p.description for p in build_mode_catalogue(own).profiles.values()] == [borrowed], (
+            "a deployment's words are its own, even when raven happens to know that sentence"
+        )
     finally:
         i18n.set_language(before)
 
@@ -172,9 +179,93 @@ def test_no_rung_claims_a_default_the_config_can_move():
     menu. Reported by chandler.zhang against `611bb5f5`.
     """
     moved = Config(acp=AcpConfig(default_mode="medium"))
-    catalogue = build_session_modes(moved)
+    catalogue = build_mode_catalogue(moved)
     assert catalogue.default == "medium", "the premise: a built-in catalogue with a moved default"
 
-    for profile in catalogue.profiles():
+    for profile in catalogue.profiles.values():
         assert "session starts" not in profile.description, f"{profile.id} claims a default it does not hold"
         assert "default" not in profile.description.lower(), f"{profile.id} describes the default rather than the rung"
+
+
+def test_a_named_default_matches_case_insensitively():
+    """`HIGH` is the operator meaning `high`, not a different rung. Config files are
+    hand-written and a shift key is not a decision."""
+    for written in ("high", "HIGH", "High", "hIgH"):
+        assert build_session_modes(Config(acp=AcpConfig(default_mode=written))).default == "high"
+
+
+def test_a_named_default_that_matches_nothing_is_refused_at_load():
+    """The failure this replaces was silent and cheap to cause: an unknown name fell
+    through to the first entry of the catalogue, which for the built-in ladder is the
+    CHEAPEST rung, with nothing logged. A one-character slip downgraded every
+    session's sub-agents and the only symptom was worse answers.
+
+    Refusing follows the sibling this repo already has -- `agents/raven-research/run.py`
+    raises `SystemExit` on an unknown web vendor, arguing that the launcher is the one
+    place that can say what is wrong before anything is served.
+    """
+    import pytest
+
+    for typo in ("hgih", "gpt5-turbo", "  high", "hig h"):
+        with pytest.raises(ValueError) as caught:
+            AcpConfig(default_mode=typo)
+        assert typo in str(caught.value) or repr(typo) in str(caught.value), "the message must quote what was written"
+        assert "medium" in str(caught.value), "and name what is on offer"
+
+
+def test_a_named_default_the_fold_cannot_decide_is_refused_rather_than_ordered():
+    """A catalogue declaring both `High` and `high` gives `HIGH` two answers, and a
+    dict-order tie break hands the same logical config opposite results depending on
+    which entry the operator happened to type first -- which is what this did before:
+
+        {'High': ..., 'high': ...}, default 'HIGH'  ->  'high'
+        {'high': ..., 'High': ...}, default 'HIGH'  ->  'High'
+
+    An exact spelling is still unambiguous however many neighbours fold onto it, so it
+    is taken before the fold is consulted -- refusing it would be the other direction
+    of the same defect, and the message tells the operator to do exactly that.
+    """
+    import pytest
+
+    entries = {"High": AcpModeConfig(name="A"), "high": AcpModeConfig(name="B")}
+    for declared in (("High", "high"), ("high", "High")):
+        modes = {mode_id: entries[mode_id] for mode_id in declared}
+        with pytest.raises(ValueError) as caught:
+            AcpConfig(modes=modes, default_mode="HIGH")
+        assert "more than one" in str(caught.value)
+        assert "High" in str(caught.value) and "high" in str(caught.value), "name both candidates"
+
+        for exact in declared:
+            assert AcpConfig(modes=modes, default_mode=exact).default_mode == exact, (
+                "an exact spelling decides on its own"
+            )
+
+
+def test_omitting_the_default_still_degrades_to_the_first_declared_entry():
+    """The refusal is for a name that matches nothing, not for naming nothing. A
+    declared catalogue with no default keeps degrading to its first entry."""
+    own = Config()
+    own.acp = AcpConfig(modes={"fast": AcpModeConfig(name="Fast"), "high": AcpModeConfig(name="High")})
+    assert build_session_modes(own).default == "fast"
+
+
+def test_the_catalogue_is_not_runtime_writable_which_is_what_makes_three_caches_safe():
+    """The premise behind three different lifetimes, pinned so a change surfaces it.
+
+    `build_mode_catalogue` is called at three places that keep their answers for three
+    different spans: the ACP server caches one per connection, the loop keeps only
+    `.default` for its whole life, and `session.set_mode` rebuilds per request. That is
+    only safe because `config.acp` cannot change while the process runs -- every reader
+    re-reads at startup and there is nothing in between to disagree about. 0xKT flagged
+    the inconsistency; this is why it is not yet a defect.
+
+    If `acp` ever becomes runtime-writable, the two cached readers go stale while the
+    per-request one does not, and this test is the place that says so.
+    """
+    from raven.rpc.methods.config import CONFIG_WRITABLE_KEYS
+
+    writable = [key for key in CONFIG_WRITABLE_KEYS if key == "acp" or key.startswith("acp.")]
+    assert writable == [], (
+        f"acp became runtime-writable ({writable}); the cached catalogue readers in "
+        "raven/acp/methods.py and raven/agent/loop/main.py now need a refresh path"
+    )
