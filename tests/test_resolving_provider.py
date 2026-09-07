@@ -232,3 +232,15 @@ class TestCredentialsAreLiveWithASupplier:
         assert resolver._config.get_provider_name("claude-opus-4-5") == "anthropic", (
             "the dormant routing edit must not ride in on a credentials refresh"
         )
+
+
+def test_the_caching_probe_reaches_the_vendor_adapter():
+    """The gateway's loop asks this router whether a request may carry
+    ``cache_control``; the base default (False) would silently switch the
+    cache optimizer off for every vendor behind it."""
+    cfg = _config("openrouter/claude-opus-5")
+    cfg.providers.openrouter.api_key = "KO"
+    cfg.providers.openrouter.model_protocols = {"openrouter/claude-opus-5": "anthropic"}
+    p = ResolvingProvider(cfg)
+    assert p.supports_prompt_caching("openrouter/claude-opus-5") is True
+    assert p.supports_prompt_caching("deepseek/deepseek-v3") is False
