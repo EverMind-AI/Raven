@@ -11,6 +11,7 @@ import { show as toast } from '../../shell/toast'
 import { open as openConn } from '../connections/store'
 import { count as sessionCount, deleteAll as deleteAllSessions } from '../rail/store'
 import * as store from './store'
+import { ImageModelPicker } from './ImageModelPicker'
 
 import type { SettingsState } from './store'
 import type { EverosSection, ProviderRow, ToolGroup, ToolRow } from './types'
@@ -1444,6 +1445,13 @@ function ToolGroupCard({ g, rows, s }: { g: ToolGroup; rows: ToolRow[]; s: Setti
           return (
             <Fragment key={r.id}>
               <ToolLine row={r} raw={s.snap.raw} s={s} />
+              {r.id === 'image_generate' && s.toolKeyEdit === r.id && (
+                <ImageModelPicker
+                  model={String(V(s.snap.raw, 'tools.media.image.model', ''))}
+                  quality={Vnull(s.snap.raw, 'tools.media.image.quality', undefined) as string | undefined}
+                  say={say}
+                />
+              )}
               {cred && s.toolKeyEdit === r.id && <ToolCredRow id={r.id} path={cred} raw={s.snap.raw} say={say} />}
             </Fragment>
           )

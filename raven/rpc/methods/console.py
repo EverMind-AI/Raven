@@ -574,7 +574,7 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
 
     checker = _SETTINGS_SIMPLE_KEYS.get(key)
     if checker is not None:
-        written = _write_raw_key(key, checker(value))
+        written = _write_raw_key(key, checker(value), merge=key == "tools.media.image")
         if key in MIRRORED_KEYS:
             # cli/acp sub-agents read every web credential from the
             # environment, not from the config, so the ~/.raven/env mirror has
@@ -586,7 +586,7 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
     raise ConfigValidationError(f"key not writable via settings.set: {key}")
 
 
-def _write_raw_key(key: str, value: Any) -> dict:
+def _write_raw_key(key: str, value: Any, *, merge: bool = False) -> dict:
     """Dotted-path read-modify-write into config.json, under the config lock.
 
     The same ``atomic_update`` transaction the ``update.py`` writers run, so a
@@ -609,7 +609,13 @@ def _write_raw_key(key: str, value: Any) -> dict:
             if not isinstance(node, dict):
                 raise ConfigValidationError(f"config path {key} blocked by non-object")
         prev = node.get(parts[-1])
-        node[parts[-1]] = value
+        if merge:
+            if prev is not None and not isinstance(prev, dict):
+                raise ConfigValidationError(f"config path {key} blocked by non-object")
+            node[parts[-1]] = {**(prev or {}), **value}
+            prev = {k: (prev or {}).get(k) for k in value}
+        else:
+            node[parts[-1]] = value
         return json.dumps(raw, indent=2, ensure_ascii=False), prev
 
     prev = atomic_update(path, _apply)
@@ -656,6 +662,12 @@ def _chk_str(key: str, max_len: int = 500):
     return chk
 
 
+def _chk_image_selection(value: Any) -> dict:
+    if not isinstance(value, dict) or set(value) != {"model", "quality"}:
+        raise ConfigValidationError("image selection must contain exactly model and quality")
+    return {k: _SETTINGS_SIMPLE_KEYS[f"tools.media.image.{k}"](v) for k, v in value.items()}
+
+
 # Low-risk hot-writable keys a settings surface may offer. Each entry is a
 # validator that returns the value to store; anything not listed here (or in
 # the special cases above) stays editable only through the config file.
@@ -693,6 +705,9 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
         for vendor in WEB_VENDOR_ENV_VARS
     },
     "tools.media.image.apiKey": _chk_str("tools.media.image.apiKey", 200),
+    "tools.media.image.model": _chk_str("tools.media.image.model"),
+    "tools.media.image.quality": _chk_enum("tools.media.image.quality", "", "low", "medium", "high"),
+    "tools.media.image": _chk_image_selection,
     "tools.deepResearch.apiKey": _chk_str("tools.deepResearch.apiKey", 200),
     "channels.sendProgress": _chk_bool("channels.sendProgress"),
     "channels.sendToolHints": _chk_bool("channels.sendToolHints"),
