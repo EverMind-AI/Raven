@@ -3,7 +3,10 @@ import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { DeskPalette } from './DeskPalette'
-import { DESK_DEFAULT_HEIGHT, DESK_DEFAULT_WIDTH, DESK_GEOMETRY_KEY } from './deskGeometry'
+import {
+  DESK_COLUMN_FLOOR, DESK_DEFAULT_HEIGHT, DESK_DEFAULT_WIDTH, DESK_GEOMETRY_KEY,
+  DESK_LAUNCHER_EDGE, DESK_TEXT_GAP,
+} from './deskGeometry'
 import * as agents from '../subagents/store'
 import * as deliveries from './deliveries'
 import * as desk from './deskStore'
@@ -627,5 +630,160 @@ describe('the size the desk comes up at', () => {
     await shelf()
     expect(palette()?.style.width).toBe('420px')
     expect(palette()?.style.height).toBe('400px')
+  })
+})
+
+/* That the reserve reaches the stylesheet at all.
+ *
+ * `deskGeometry.test.ts` pins what the number is and
+ * `scripts/desk-reserve-css.test.mjs` pins where the stylesheet spends it. This
+ * is the join: the panel is `position: fixed`, so the only thing connecting it
+ * to the layout is this property landing on the root, and neither of those two
+ * tests would notice if it stopped being set.
+ */
+describe('the reserve the palette publishes', () => {
+  /* happy-dom measures everything as zero, and the reserve turns on the chat's
+     width, so the harness has to say how wide the chat is. */
+  const chatIs = (width: number): HTMLElement => {
+    const chat = document.createElement('div')
+    chat.className = 'chat'
+    chat.getBoundingClientRect = (() => ({ width, height: 600, left: 0, top: 0, right: width, bottom: 600 })) as never
+    document.body.append(chat)
+    return chat
+  }
+  const reserve = (): string => document.documentElement.style.getPropertyValue('--desk-reserve')
+  const want = DESK_DEFAULT_WIDTH + DESK_LAUNCHER_EDGE + DESK_TEXT_GAP
+
+  it('sets it on the root while the desk is anchored over the chat', async () => {
+    chatIs(want + DESK_COLUMN_FLOOR + 40)
+    render(<DeskPalette />)
+    await act(async () => { desk.update({ paletteOpen: true }) })
+
+    expect(reserve()).toBe(`${want}px`)
+  })
+
+  it('takes it back when the desk goes down', async () => {
+    /* Removed rather than set to 0: the stylesheet's own `, 0px` fallback is
+       what applies, which is the one path a detached or floor-blocked panel
+       also takes. */
+    chatIs(want + DESK_COLUMN_FLOOR + 40)
+    render(<DeskPalette />)
+    await act(async () => { desk.update({ paletteOpen: true }) })
+    await act(async () => { desk.update({ paletteOpen: false }) })
+
+    expect(reserve()).toBe('')
+  })
+
+  it('takes it back when the palette stops being rendered', async () => {
+    /* Nothing unmounts the palette today -- `DeskApp` renders it once and a
+       module page hides `#deskHost` rather than dropping it. This pins the
+       cleanup anyway, because the property lives outside React and the failure
+       is silent: a transcript left 324px narrow with nothing on screen to
+       explain it. */
+    chatIs(want + DESK_COLUMN_FLOOR + 40)
+    const view = render(<DeskPalette />)
+    await act(async () => { desk.update({ paletteOpen: true }) })
+    expect(reserve()).toBe(`${want}px`)
+
+    await act(async () => { view.unmount() })
+
+    expect(reserve()).toBe('')
+  })
+
+  it('publishes nothing when the chat cannot spare the width', async () => {
+    /* The all-or-nothing floor, through the component rather than the pure
+       function: this is the case where the panel keeps overlapping and the
+       column keeps its width, which is today's behaviour. */
+    chatIs(want + DESK_COLUMN_FLOOR - 1)
+    render(<DeskPalette />)
+    await act(async () => { desk.update({ paletteOpen: true }) })
+
+    expect(reserve()).toBe('')
+  })
+
+  it('re-answers when the chat changes width under it', async () => {
+    /* The chat resizes without this component rendering -- the window, the
+       rail, the workspace column opening beside it -- so the observer is what
+       keeps the answer true rather than merely true at mount. */
+    const chat = chatIs(want + DESK_COLUMN_FLOOR + 40)
+    render(<DeskPalette />)
+    await act(async () => { desk.update({ paletteOpen: true }) })
+    expect(reserve()).toBe(`${want}px`)
+
+    chat.getBoundingClientRect = (() => ({
+      width: want + DESK_COLUMN_FLOOR - 1, height: 600, left: 0, top: 0,
+      right: want + DESK_COLUMN_FLOOR - 1, bottom: 600,
+    })) as never
+    await act(async () => { window.dispatchEvent(new Event('resize')) })
+
+    expect(reserve()).toBe('')
+  })
+})
+
+/* The empty tab saying what the OTHER tab is holding.
+ *
+ * `changed` and `delivered` are two facts, and only the selected tab carries a
+ * label -- so "Nothing delivered yet" sat next to a bubble on an unlabelled
+ * icon, with nothing saying the bubble counted something else. These cases are
+ * the answer, and the one that matters most is the last: an empty tab with nothing anywhere else must NOT
+ * grow a way out, or the fix becomes a permanent nudge to a second empty tab.
+ */
+describe('an empty tab points at the other one', () => {
+  const withChanges = async (...keys: string[]): Promise<void> => {
+    await act(async () => {
+      workspace.shared().changes.push(...keys.map(change))
+      desk.notifyDesk()
+    })
+  }
+
+  it('says how many files changed, when none were delivered', async () => {
+    await shelf()
+    await withChanges('/w/one.py', '/w/two.py')
+
+    expect(screen.getByText('gui.ws.n.dlv_none_kept {"n":"2"}')).toBeTruthy()
+    /* The label is not counted -- "Show what changed" is true of one file and
+       of five, so it takes no `{n}` and the sentence above it carries the
+       number. */
+    expect(document.querySelector('.desk-empty-to')?.textContent).toBe('gui.ws.see_changes')
+  })
+
+  it('says it in the singular for one file, the way phraseOf does', async () => {
+    await shelf()
+    await withChanges('/w/one.py')
+
+    expect(screen.getByText('gui.ws.dlv_none_kept')).toBeTruthy()
+    expect(document.querySelector('.desk-empty-to')?.textContent).toBe('gui.ws.see_changes')
+  })
+
+  it('takes the reader to the tab that has them', async () => {
+    await shelf()
+    await withChanges('/w/one.py')
+
+    await act(async () => { (document.querySelector('.desk-empty-to') as HTMLElement).click() })
+
+    expect(desk.getState().tab).toBe('diff')
+  })
+
+  it('answers the other way round too, from an empty Diff', async () => {
+    /* The same confusion runs backwards: "No changes yet" beside a bubble on
+       the shelf's icon. One mechanism, both directions. */
+    render(<DeskPalette />)
+    await act(async () => { desk.update({ paletteOpen: true, tab: 'diff' }) })
+    await act(async () => {
+      deliveries.record('', 1, manifest([{ path: 'out/report.md', bytes: 12 }]))
+    })
+
+    expect(screen.getByText('gui.ws.no_changes_dlv')).toBeTruthy()
+    await act(async () => { (document.querySelector('.desk-empty-to') as HTMLElement).click() })
+    expect(desk.getState().tab).toBe('deliverables')
+  })
+
+  it('offers no way out when the other tab is empty as well', async () => {
+    /* Both empty is the ordinary state of a fresh conversation, and a link to
+       a second empty tab is worse than the plain sentence it replaced. */
+    await shelf()
+
+    expect(screen.getByText('gui.ws.dlv_none_sub')).toBeTruthy()
+    expect(document.querySelector('.desk-empty-to')).toBeNull()
   })
 })
