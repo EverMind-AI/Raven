@@ -32,6 +32,7 @@ sys.path.insert(0, str(PLUGIN_DIR))
 from oncall_flow import wakes, watched  # noqa: E402
 from oncall_flow.escalation import NOTES_FILE  # noqa: E402
 from oncall_flow.flow import (  # noqa: E402
+    ExecCapKillHook,
     OncallFlowHook,
     TurnCloseHook,
     TurnContextHook,
@@ -398,3 +399,72 @@ def test_the_composed_hook_counts_the_closing_call_before_it_halts(tmp_path: Pat
     stamped = meta["observers"]["oncall_flow"]
     assert stamped["closed_by"] == "ops_check_later"
     assert stamped["calls"] == 1, "accounting runs before the close in the axis order, so the closing call is counted"
+
+
+# ── Axis 4: work killed at the local exec cap ───────────────────────
+
+
+def _killed_exec_turn(command: str = "python train.py", cap: int = 600, *, exit_code: int = -1) -> AgentHookContext:
+    response = LLMResponse(
+        content=None,
+        tool_calls=[ToolCallRequest(id="t1", name="exec", arguments={"command": command})],
+    )
+    text = f"STDERR:\nTimed out after {cap}s\n\nExit code: {exit_code}"
+    messages = [{"role": "tool", "tool_call_id": "t1", "name": "exec", "content": text}]
+    return _iteration({}, response=response, messages=messages)
+
+
+def test_a_cap_kill_earns_the_ops_submit_pointer() -> None:
+    """The fork measured a nine-minute training run killed at the cap and then
+    re-run into the same wall; the kill is a routing signal, and the note names
+    the door this plugin itself contributes."""
+    meta: dict = {}
+    ctx = _killed_exec_turn(cap=600)
+    ctx.metadata = meta
+    decision = asyncio.run(ExecCapKillHook().after_iteration(ctx))
+
+    assert decision.append_note is not None
+    assert "600s exec cap" in decision.append_note
+    assert "ops_submit" in decision.append_note
+    assert "gone with it" in decision.append_note, "the loss is stated, or the retry looks free"
+    assert meta["oncall_turn"]["exec_cap_kill"] == {"cap_s": 600}, (
+        "the kill is on the turn's account, so the send fire stamps it into observers"
+    )
+
+
+def test_an_ordinary_exec_result_earns_no_note() -> None:
+    response = LLMResponse(
+        content=None,
+        tool_calls=[ToolCallRequest(id="t1", name="exec", arguments={"command": "ls"})],
+    )
+    messages = [{"role": "tool", "tool_call_id": "t1", "name": "exec", "content": "a.txt\n\nExit code: 0"}]
+    decision = asyncio.run(ExecCapKillHook().after_iteration(_iteration({}, response=response, messages=messages)))
+
+    assert decision.append_note is None and decision.pass_through
+
+
+def test_the_kill_shape_quoted_by_another_tool_is_not_a_kill() -> None:
+    """A read_file over an old log can contain the exact sentence; only a result
+    answering this iteration's own exec call is the executor speaking."""
+    response = LLMResponse(
+        content=None,
+        tool_calls=[ToolCallRequest(id="t1", name="read_file", arguments={"path": "/tmp/old.log"})],
+    )
+    messages = [
+        {
+            "role": "tool",
+            "tool_call_id": "t1",
+            "name": "read_file",
+            "content": "STDERR:\nTimed out after 600s\n\nExit code: -1",
+        }
+    ]
+    decision = asyncio.run(ExecCapKillHook().after_iteration(_iteration({}, response=response, messages=messages)))
+
+    assert decision.append_note is None
+
+
+def test_a_nonkill_timeout_sentence_without_the_kill_exit_is_ignored() -> None:
+    ctx = _killed_exec_turn(exit_code=0)
+    decision = asyncio.run(ExecCapKillHook().after_iteration(ctx))
+
+    assert decision.append_note is None, "the sentence alone is not the executor's kill report"

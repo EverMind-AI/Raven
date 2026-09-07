@@ -108,3 +108,19 @@ def test_the_deliverable_survives_a_reopen(tmp_path):
         "label": "ndcg",
         "value": 0.362,
     }
+
+
+def test_what_a_job_holds_survives_a_reopen_and_an_old_record_holds_nothing_named(tmp_path: Path) -> None:
+    """The occupancy gate reads this across campaigns; a record written before
+    the field existed reads back as None, which the gate counts as one unit."""
+    path = tmp_path / "ledger.json"
+    led = Ledger(path)
+    led.record("j1", campaign="c", config={"lr": 1}, resources_held={"gpus": 2, "device_ids": ["0", "1"]})
+    led.record("j2", campaign="c", config={"lr": 2})
+
+    again = Ledger(path)
+    assert again.get("j1").resources_held == {"gpus": 2, "device_ids": ["0", "1"]}
+    assert again.get("j2").resources_held is None
+
+    led.record("j2", campaign="c", resources_held={"cores": 8})
+    assert Ledger(path).get("j2").resources_held == {"cores": 8}, "a resubmit may name what an old record holds"
