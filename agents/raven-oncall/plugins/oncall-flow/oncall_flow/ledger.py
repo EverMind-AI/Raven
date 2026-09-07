@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import json
 import os
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -51,18 +50,6 @@ class JobRecord:
     # value was in the run -- by mixing the key with a free-text reference note,
     # and reasoned from that for the rest of the campaign.
     config: dict[str, Any] | None = None
-    # When this record was written, before its job was handed to the backend.
-    # Between `record()` and `set_handle()` the record IS the machine's
-    # reservation: the cross-campaign gate counts a fresh handle-less record as
-    # an occupant, so two submits racing through the same window cannot both
-    # see a free machine. A stale one (older than the grace) is a crash orphan
-    # and is skipped, as every handle-less record used to be.
-    reserved_at: float | None = None
-    # What the job holds on its machine while non-terminal: {"gpus": 2,
-    # "device_ids": ["0", "1"]} or {"cores": 8}, optionally "memory_gb". Read by
-    # the occupancy gate across campaigns; None on a record from before it
-    # existed, which the gate counts as one unit -- what it was billed as.
-    resources_held: dict[str, Any] | None = None
 
     @property
     def is_terminal(self) -> bool:
@@ -91,31 +78,15 @@ class Ledger:
     def by_campaign(self, campaign: str) -> list[JobRecord]:
         return [r for r in self._records.values() if r.campaign == campaign]
 
-    def record(
-        self,
-        idem_key: str,
-        *,
-        campaign: str | None = None,
-        config: dict[str, Any] | None = None,
-        resources_held: dict[str, Any] | None = None,
-    ) -> JobRecord:
+    def record(self, idem_key: str, *, campaign: str | None = None, config: dict[str, Any] | None = None) -> JobRecord:
         rec = self._records.get(idem_key)
         if rec is None:
-            rec = JobRecord(
-                idem_key=idem_key,
-                campaign=campaign,
-                config=config,
-                resources_held=resources_held,
-                reserved_at=time.time(),
-            )
+            rec = JobRecord(idem_key=idem_key, campaign=campaign, config=config)
             self._records[idem_key] = rec
             self._persist()
         elif config and rec.config is None:
             # A record written before configs were kept, met again on a resubmit.
             rec.config = config
-            self._persist()
-        if resources_held and rec.resources_held is None:
-            rec.resources_held = dict(resources_held)
             self._persist()
         return rec
 
@@ -189,8 +160,6 @@ def _record_to_dict(r: JobRecord) -> dict:
         "attempts": r.attempts,
         "escalated": r.escalated,
         "config": r.config,
-        "reserved_at": r.reserved_at,
-        "resources_held": r.resources_held,
     }
 
 
@@ -225,7 +194,5 @@ def _record_from_dict(d: dict) -> JobRecord:
         ),
         attempts=d.get("attempts", 0),
         config=d.get("config"),
-        resources_held=d.get("resources_held") if isinstance(d.get("resources_held"), dict) else None,
         escalated=d.get("escalated", False),
-        reserved_at=d.get("reserved_at"),
     )

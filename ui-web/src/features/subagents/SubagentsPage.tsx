@@ -1,15 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSyncExternalStore } from 'react'
 
-import { ds, t } from '../../shell/bridge'
+import { t } from '../../shell/bridge'
 import { SendGlyph } from '../../shell/ico'
-import { composing, fmtSize } from '../composer/store'
+import { composing } from '../composer/store'
 import { instanceMark, instanceState } from './history'
 import * as store from './store'
 
 import type { AgentsState } from './store'
 import type { AgentRow, InstanceRow, OpenItem, SubagentRow } from './types'
-import type { Attachment, ComposerSource } from '../composer/types'
 import type { JSX } from 'react'
 
 /* Mirrors the glyph the legacy renderer drew with (ICO.up in
@@ -327,39 +326,6 @@ function SpawnDetail({ s, open }: { s: AgentsState; open: Extract<OpenItem, { ki
 /* Carry on the conversation from here. Only for a row the server calls
    resumable: against a stateless agent every turn starts from nothing, so what
    looked like a conversation would be a run of unrelated first turns. */
-/* Where a direct chat's files go up: the same seam the page composer uploads
-   through, and nothing when it is not installed (the demo canvas). Read per
-   render rather than captured, like the composer store's own `canAttach`. */
-function uploader(): ComposerSource['upload'] | undefined {
-  try {
-    return ds<ComposerSource>('composer').upload
-  } catch {
-    return undefined
-  }
-}
-
-function AttachGlyph(): JSX.Element {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-      <path d="M15 7l-6.2 6.2a2.6 2.6 0 0 0 3.7 3.7L19 10a4.4 4.4 0 0 0-6.2-6.2L6 10.5a6.2 6.2 0 0 0 8.8 8.8l3.4-3.4" />
-    </svg>
-  )
-}
-
-/* The chips are the page composer's -- same class names, so the stylesheet
-   dresses both -- minus the lightbox: a pane one size down has no room for it. */
-function InstanceAtt({ a, onRemove }: { a: Attachment; onRemove: () => void }): JSX.Element {
-  const size = a.uploading ? t('gui.att.uploading') : fmtSize(a.size)
-  return (
-    <div className={'att' + (a.uploading ? ' up' : '')}>
-      <span className="nm">{a.name}</span>
-      <span className="sz">{size}</span>
-      <button className="rm" aria-label={t('gui.att.remove', { name: a.name })}
-        onClick={(e) => { e.stopPropagation(); onRemove() }}>✕</button>
-    </div>
-  )
-}
-
 export function InstanceComposer(
   { open, name, fail }: {
     open: Extract<OpenItem, { kind: 'instance' }>
@@ -368,78 +334,22 @@ export function InstanceComposer(
   },
 ): JSX.Element | null {
   const box = useRef<HTMLTextAreaElement>(null)
-  const picker = useRef<HTMLInputElement>(null)
   const [text, setText] = useState('')
-  /* This instance's own tray, not the page composer's: a file dropped here is
-     for the sub-agent the reader is addressing, and the main composer is one
-     panel away with a tray of its own. Kept in a ref as well as in state so an
-     upload landing after a re-render still finds the entry it started. */
-  const [atts, setAtts] = useState<Attachment[]>([])
-  const held = useRef<Attachment[]>([])
-  const [hold, setHold] = useState<string | null>(null)
   const chat = store.directChat(open.agent, open.handle)
   if (!store.canSend()) return null
-  const paintAtts = (next: Attachment[]): void => {
-    held.current = next
-    setAtts(next)
-  }
-  const up = uploader()
-  /* The page composer's `addFiles`, for one instance: bytes go up through the
-     same seam into <workspace>/uploads, and the message carries paths. */
-  const addFiles = (files: ArrayLike<File>): void => {
-    if (!up) return
-    Array.from(files).forEach((file) => {
-      const entry: Attachment = { name: file.name, size: file.size, uploading: true, path: null, url: null }
-      paintAtts(held.current.concat([entry]))
-      const drop = (): void => paintAtts(held.current.filter((a) => a !== entry))
-      const reader = new FileReader()
-      reader.onload = () => {
-        const b64 = String(reader.result).split(',')[1] || ''
-        up({ name: file.name, content_b64: b64 })
-          .then((r) => {
-            entry.path = r.path
-            entry.size = r.size
-            entry.uploading = false
-            paintAtts(held.current.slice())
-          })
-          .catch((e: unknown) => {
-            drop()
-            setHold(t('gui.att.fail', { name: file.name }) + ': ' + ((e as Error)?.message || String(e)))
-          })
-      }
-      reader.onerror = drop
-      reader.readAsDataURL(file)
-    })
-  }
   const send = (): void => {
     const el = box.current
-    const staged = held.current
-    if (!el || (!el.value.trim() && !staged.length)) return
-    if (staged.some((a) => a.uploading)) {
-      /* Before anything is cleared: a send refused for a file still on its way
-         up must not take the typed line or the other files with it. */
-      setHold(t('gui.att.pending'))
-      return
-    }
-    setHold(null)
-    const typed = el.value
-    /* The note the page composer writes, word for word: the live layer reads
-       the paths back out of it into the typed `media` field, and the reader's
-       own bubble renders its chips from it. */
-    const paths = staged.map((a) => String(a.path || '')).filter(Boolean)
-    const said = paths.length
-      ? `${typed.trim()}\n\n${t('gui.att.note')}\n${paths.map((p) => `- ${p}`).join('\n')}`
-      : typed
+    if (!el || !el.value.trim()) return
+    const said = el.value
     /* Emptied once the turn is taken, never before: a send is refused whenever
        this instance is still answering the turn before, and clearing on submit
        threw away the reader's own words on the one outcome where they would
        want to try again. Only if the box still holds what was submitted --
        anything typed while the turn was in flight is not this send's to drop. */
     void store.sendToInstance(open.agent, open.handle, said).then((taken) => {
-      if (taken && el.value === typed) {
+      if (taken && el.value === said) {
         el.value = ''
         setText('')
-        if (held.current === staged) paintAtts([])
       }
     })
   }
@@ -456,14 +366,6 @@ export function InstanceComposer(
             ))}
           </div>
         ) : null}
-        {atts.length ? (
-          <div className="atts instance-atts">
-            {atts.map((a, index) => (
-              <InstanceAtt key={`${index}:${a.name}`} a={a}
-                onRemove={() => paintAtts(held.current.filter((_, i) => i !== index))} />
-            ))}
-          </div>
-        ) : null}
         <div className="field">
       <textarea
         ref={box}
@@ -472,12 +374,6 @@ export function InstanceComposer(
            who they are addressing, and the main composer is one panel away. */
         placeholder={t('gui.ws.instance_say_hint', { name })}
         onInput={(e) => setText(e.currentTarget.value)}
-        onPaste={(e) => {
-          const files = up && e.clipboardData ? [...e.clipboardData.files] : []
-          if (!files.length) return
-          e.preventDefault()
-          addFiles(files)
-        }}
         onKeyDown={(e) => {
           /* The keystroke that confirms an IME candidate is an Enter too, and it
              arrives while the composition is still open. Unguarded it sent the
@@ -497,21 +393,8 @@ export function InstanceComposer(
       />
         </div>
         <div className="under">
-          {up ? (
-            <>
-              <button className="tool-btn instance-attach" data-tip={t('gui.attach')} aria-label={t('gui.attach')}
-                onClick={() => picker.current?.click()}>
-                <AttachGlyph />
-              </button>
-              <input ref={picker} type="file" multiple hidden
-                onChange={(e) => {
-                  if (e.currentTarget.files) addFiles(e.currentTarget.files)
-                  e.currentTarget.value = ''
-                }} />
-            </>
-          ) : null}
-          {fail || hold ? <span className="why">{fail || hold}</span> : <span />}
-          <button className="go" disabled={!text.trim() && !atts.length} onClick={send} aria-label={t('gui.ws.instance_say')}>
+          {fail ? <span className="why">{fail}</span> : <span />}
+          <button className="go" disabled={!text.trim()} onClick={send} aria-label={t('gui.ws.instance_say')}>
             <SendGlyph />
           </button>
           <button className="mini legacy-instance-send" tabIndex={-1} aria-hidden="true" onClick={send} />

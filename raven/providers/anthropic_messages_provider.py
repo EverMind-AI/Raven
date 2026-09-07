@@ -918,14 +918,7 @@ class AnthropicMessagesProvider(LLMProvider):
                                     self._remember_ceiling(body)
                                 continue
                             raise ProviderHTTPError(response.status_code, detail)
-                        # The per-line watchdog runs on the stream-idle budget,
-                        # not the call budget (reviewed 2026-09-07: this adapter
-                        # fed it self.generation.timeout, so streamIdleTimeout
-                        # did nothing on the default Claude path). getattr: a
-                        # GenerationSettings from before the field falls back to
-                        # the call budget.
-                        idle_timeout = getattr(self.generation, "stream_idle_timeout", None) or self.generation.timeout
-                        async for delta in consume_message_stream(response, idle_timeout):
+                        async for delta in consume_message_stream(response, self.generation.timeout):
                             yield delta
                     break
         except asyncio.CancelledError:

@@ -177,10 +177,6 @@ class ChatDelta:
     thinking_blocks: list[dict[str, Any]] | None = None
     finish_reason: str | None = None
     error_classification: ErrorClassification | None = None
-    # True when ``finish_reason`` was supplied by the client library because the
-    # upstream closed the stream without sending one; the consumer then knows
-    # the reply was cut, not finished.
-    finish_synthesized: bool = False
 
 
 @dataclass(frozen=True)
@@ -200,14 +196,6 @@ class GenerationSettings:
     max_tokens: int | None = None
     reasoning_effort: str | None = None
     timeout: float = 600.0
-    #: Streaming only: the longest silence (no new chunk) tolerated before the
-    #: stream is given up. Separate from ``timeout`` on purpose -- that is a
-    #: whole-call budget and must stay wide, while a stream that has gone
-    #: silent is recognisable in minutes (2026-09-01: one hung an agent for 28
-    #: minutes under the wide cap). Every adapter that consumes a stream reads
-    #: it for its per-chunk watchdog; an adapter with no streaming path does
-    #: not read it at all.
-    stream_idle_timeout: float = 180.0
 
 
 class LLMProvider(ABC):

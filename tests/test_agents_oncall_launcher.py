@@ -213,9 +213,7 @@ def test_the_render_merges_secrets_pins_workspace_and_boards_the_plugin(grounded
 def test_the_fork_schema_key_never_reaches_trunks_loader(grounded):
     data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
     assert "oncall" not in data["tools"], "the gate arms via the plugin slice, not tools.oncall"
-    assert set(data["acp"]) == {"modes", "defaultMode"}, (
-        "the acp block carries the modes surface and nothing of the fork's"
-    )
+    assert "acp" not in data, "oncall ships no modes, so its render carries no catalogue of its own"
 
 
 def test_optional_keys_fall_back_per_slot_to_the_host_config(grounded, tmp_path):
@@ -371,22 +369,3 @@ def test_the_products_tool_face_equals_the_forks_config_intent(grounded, tmp_pat
     disabled = set(json.loads((RUN_PY.parent / "config.json").read_text())["tools"]["disabledTools"])
     assert TRUNK_NEW_SIX <= disabled, "the trunk-new six stay disabled by config, not by luck"
     assert {"exec", "message"} & disabled == set(), "the ruled-open pair stays open"
-
-
-def test_the_render_declares_three_felt_profiles_with_high_as_the_shipped_one(grounded, tmp_path):
-    """Owner's naming (2026-09-04): Medium / High / Max. Measured on the on-call
-    model, low/medium/high thinking are indistinguishable, so the three profiles
-    are thinking off, the shipped default, and thinking at max -- one knob the
-    loop applies to the model call. The baseline carries an empty diff; the two
-    others carry exactly the generation key that moves."""
-    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
-
-    modes = data["acp"]["modes"]
-    assert list(modes) == ["medium", "high", "max"]
-    assert data["acp"]["defaultMode"] == "high"
-    assert modes["high"]["overlay"] == {}
-    assert modes["medium"]["overlay"] == {"agents": {"defaults": {"reasoningEffort": "none"}}}
-    assert modes["max"]["overlay"] == {"agents": {"defaults": {"reasoningEffort": "max"}}}
-    assert [modes[m]["name"] for m in modes] == ["Medium", "High", "Max"]
-    shipped_cap = data["agents"]["defaults"]["maxToolIterations"]
-    assert all(modes[m]["maxToolIterations"] == shipped_cap for m in modes), "no profile moves the cap"

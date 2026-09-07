@@ -419,3 +419,39 @@ def test_a_fit_stated_twice_is_counted_once():
 
     assert twice.shown_share == pytest.approx(0.842, abs=0.01)
     assert cropped_figures([twice]) == []
+
+
+def _page_with_picture(tmp_path: Path, alpha: float, *, share: float = 1.0) -> Path:
+    """One 16:9 page with a picture over `share` of it, washed to `alpha`."""
+    from PIL import Image
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    from raven_ppt.services.template.compose import wash
+
+    photo = tmp_path / f"photo-{alpha}-{share}.png"
+    Image.new("RGB", (800, 450), (30, 60, 90)).save(photo)
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    picture = slide.shapes.add_picture(str(photo), 0, 0, Inches(13.333 * share), Inches(7.5))
+    wash(picture, alpha)
+    out = tmp_path / f"deck-{alpha}-{share}.pptx"
+    presentation.save(str(out))
+    return out
+
+
+def test_a_page_sized_picture_washed_between_texture_and_full_strength_reads_as_fog(tmp_path: Path) -> None:
+    """The live cover: a night skyline at 30% on a white page under black type. Texture
+    (0.1) and full strength (1.0, the scrim form) are the two ends that read; a washed
+    picture that is not the page (half of it) is a figure, not a backdrop."""
+    from raven_ppt.services.measure.figures import washed_backdrops
+
+    fog = washed_backdrops(_page_with_picture(tmp_path, 0.3))
+    assert [f.kind for f in fog] == ["washed_backdrop"]
+    assert fog[0].page == 1 and fog[0].severity is Severity.WARNING
+    assert "30%" in fog[0].message and "plane of ink" in fog[0].message
+
+    assert washed_backdrops(_page_with_picture(tmp_path, 0.1)) == []
+    assert washed_backdrops(_page_with_picture(tmp_path, 1.0)) == []
+    assert washed_backdrops(_page_with_picture(tmp_path, 0.3, share=0.5)) == []

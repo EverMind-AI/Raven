@@ -244,19 +244,6 @@ def handle_response(frame) -> None:
 
 def handle_prompt(request_id, params) -> None:
     session_id = params.get("sessionId") or "stub-session-1"
-    if MODE == "echo_blocks":
-        # Answer with what the prompt carried, block by block, so a test can see
-        # the attachments the client put beside the text.
-        seen = [
-            {k: v for k, v in block.items() if k in ("type", "name", "uri", "text")}
-            for block in (params.get("prompt") or [])
-            if isinstance(block, dict)
-        ]
-        update(
-            session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": json.dumps(seen)}}
-        )
-        ok(request_id, {"stopReason": "end_turn"})
-        return
     if MODE == "asks_late":
         _PENDING.append((request_id, session_id))
         if len(_PENDING) < 2:

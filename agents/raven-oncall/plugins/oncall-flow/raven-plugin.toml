@@ -29,11 +29,10 @@ name = "oncall_event_watcher"
 factory = "oncall_flow.watcher:make_event_watcher"
 
 # The turn-frame hook (part 2c): the fork's loop-side glue as ONE contributed
-# hook running five axes in a fixed internal order -- window identity and the
+# hook running four axes in a fixed internal order -- window identity and the
 # faces' turn context (with the owner-instruction capture), turn accounting,
-# the work-to-watch judgement with its provenance nudge, the exec-cap kill
-# note routing over-cap work to ops_submit, and the ops_check_later turn
-# close. One row rather than five because the registry
+# the work-to-watch judgement with its provenance nudge, and the
+# ops_check_later turn close. One row rather than four because the registry
 # serves hook names sorted, and the axis order is part of the flow's
 # contract; the factory declines when the slice leaves the flow off (D6).
 

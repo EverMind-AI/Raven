@@ -5,9 +5,7 @@ live on a network mount, the driver stack belongs to the host, and the job is a
 bare ``python3`` invocation -- containerising it would mean building an image to
 wrap a command that already runs. So this backend launches the command with
 ``nohup``, records its pid, and decides terminality from the pid plus the durable
-``result.json`` the job writes -- or, for a job that exits without writing one
-(an upstream program has never heard of this contract), the one its launcher
-synthesizes from the exit code on the way out.
+``result.json`` the job writes.
 
 Two things it does that a plain launcher would not:
 
@@ -42,7 +40,7 @@ from oncall_flow.backend import (
     JobSpec,
     JobStatus,
 )
-from oncall_flow.budget import ADDITIVE, SHARED, Budget, accumulate
+from oncall_flow.budget import SHARED, Budget, accumulate
 from oncall_flow.budget import from_meta as budget_from_meta
 
 # How long a job script may take to write its result after the pid it advertised
@@ -55,32 +53,6 @@ _GONE_GRACE_SLEEP_S = 3.0
 CommandRunner = Callable[[str], tuple[int, str]]
 
 BUDGET_KEY = "budget_gpu_minutes"
-
-
-def _device_lines(device_ids: str) -> str:
-    """The launcher lines that bind a job to its assigned devices, or "".
-
-    The ids are the gate's choice, exported so the job never picks a card. The
-    check before the start is for the one thing the ledger cannot know: a person
-    on the same machine. A chosen card already holding someone's memory is not
-    started on -- the result says which card and how much, the gate sees a
-    terminal record, and the resubmit gets another id if one is free.
-    """
-    if not device_ids:
-        return ""
-    return (
-        f"export CUDA_VISIBLE_DEVICES={device_ids}\n"
-        "if command -v nvidia-smi >/dev/null 2>&1; then\n"
-        f"  RAVEN_BUSY=$(nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits -i {device_ids} "
-        "2>/dev/null | awk -F', *' '$2+0 > " + str(_FOREIGN_USE_MIB) + ' {printf "%s(%s MiB) ", $1, $2}\')\n'
-        '  if [ -n "$RAVEN_BUSY" ]; then\n'
-        '    printf \'{"status": "failed", "exit_code": 0, "gpu_minutes_used": 0.000, '
-        '"written_by": "launcher", "error": "device(s) %sheld by a process outside the ledger '
-        '-- the machine is shared; nothing was started"}\\n\' "$RAVEN_BUSY" > result.json\n'
-        "    exit 0\n"
-        "  fi\n"
-        "fi\n"
-    )
 
 
 def _num(text: str) -> float | None:
@@ -135,12 +107,6 @@ def _stated_cause(data: dict[str, Any]) -> str:
 # of the case and spun until it was killed by hand, with an empty log. Measured
 # 2026-08-18, the first time a case was staged into a job directory.
 _LAUNCHER = ".raven-launch.sh"
-# What a self-detaching command is told. Written into the synthesized
-# result.json, which is where the next submit reads its reason from.
-_ESCAPE_ERROR = (
-    "the command detached itself (setsid/nohup/&) and left the launcher nothing to wait for; "
-    "ops_submit already runs it detached from your session and waits for it -- run it in the foreground"
-)
 _MARKER = ".raven-started-at"
 # The pid of the whole job, written by the launcher and by nothing else.
 #
@@ -153,24 +119,40 @@ _MARKER = ".raven-started-at"
 # result", because the probe read that pid after the solver had exited and while
 # the script was still tailing a large log to write result.json.
 #
-# The launcher's own pid is not the solver's -- the launcher waits for its child
-# and then does the wrap-up itself (synthesizing result.json when the job wrote
-# none), so it stays live through the wrap-up and goes away only when the job is
-# really over.
+# The launcher's own pid is not the solver's -- exec keeps it across every layer
+# (bash -c, setpriv, the script itself), so it stays live through the wrap-up and
+# goes away only when the job is really over.
 _OWN_PID = ".raven-pid"
 # Which of the case's files a run has been seen to write, per case, remembered on
 # the machine. Not in the campaign's meta.json: that file is the apparatus'
 # declaration and is refused if it changes, while this list grows as rounds run.
 _WRITES_FILE = ".raven-case-writes.json"
-# What the job holds, written at staging: {"width": 2, "device_ids": ["0", "1"]}.
-# Read back by the spend scan so a job is billed as wide as it ran, and on a
-# restart, when nothing in this process remembers what was assigned.
-_RESOURCES = ".raven-resources"
-# Device memory in use above which a card is somebody else's. A resting A800
-# shows 2-5 MiB; a live training run tens of GB. The machine is shared with
-# people, and the ledger only knows its own jobs.
-_FOREIGN_USE_MIB = 1024
-_RESERVED = ("config.json", "result.json", "pid", "job.log", _LAUNCHER, _MARKER, _OWN_PID, _RESOURCES)
+_RESERVED = ("config.json", "result.json", "pid", "job.log", _LAUNCHER, _MARKER, _OWN_PID)
+
+
+_SHELL_OPERATORS = frozenset({"&&", "||", "|", ";", ">", ">>", "<", "&"})
+
+
+def _is_simple(command: str) -> bool:
+    """Whether ``exec`` can take this command as it stands.
+
+    ``exec`` replaces the shell with one program, so an operator between two
+    commands has to be read by a shell first. Quoting decides: ``sh -c 'cd x && y'``
+    IS one command -- the ``&&`` belongs to the argument, not to this line -- and
+    wrapping it again would put a second shell in front of every campaign written
+    that way. So the split is done the way a shell would do it, not by looking for
+    characters.
+
+    A command that cannot be split at all goes to the shell; whatever it is doing
+    with quotes, a shell is the thing that understands it.
+    """
+    import shlex
+
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    return not any(tok in _SHELL_OPERATORS for tok in tokens) and "$" not in command
 
 
 class ProcessExecutor(JobBackend):
@@ -200,7 +182,6 @@ class ProcessExecutor(JobBackend):
         whether the number goes up or down, and a guessed direction names the worst
         checkpoint as confidently as the best.
         """
-        self._declared_width: dict[str, float] = {}
         self._run = run
         self._remote_dir = remote_dir.rstrip("/")
         self._command = command
@@ -322,10 +303,7 @@ class ProcessExecutor(JobBackend):
             'E="-"; M="-"; if [ -f "$d/progress.jsonl" ]; then '
             'E=$(tail -1 "$d/progress.jsonl" | sed -n \'s/.*"elapsed_s": *\\([0-9.]*\\).*/\\1/p\'); '
             'M=$(stat -c %Y "$d/progress.jsonl"); fi; '
-            f'W=1; D=0; if [ -f "$d/{_RESOURCES}" ]; then '
-            f'W=$(sed -n \'s/.*"width": *\\([0-9.]*\\).*/\\1/p\' "$d/{_RESOURCES}" | tail -1); '
-            f'grep -q device_ids "$d/{_RESOURCES}" && D=1; fi; '
-            'printf \'%s|%s|%s|%s|%s|%s|%s|%s\\n\' "$d" "$R" "$A" "$S" "$E" "$M" "$W" "$D"; '
+            'printf \'%s|%s|%s|%s|%s|%s\\n\' "$d" "$R" "$A" "$S" "$E" "$M"; '
             "done; printf 'NOW|%s\\n' \"$(date -u +%s)\""
         )
         rc, out = await self._arun(script)
@@ -336,13 +314,12 @@ class ProcessExecutor(JobBackend):
             parts = line.strip().split("|")
             if len(parts) == 2 and parts[0] == "NOW":
                 now = _num(parts[1])
-            elif len(parts) == 8:
+            elif len(parts) == 6:
                 rows.append(parts)
         unplaced = 0.0
         spans: list[tuple[float, float, float]] = []
-        exclusive_spans: list[tuple[float, float, float]] = []
         self._unmeasured.clear()
-        for key, result_min, alive, started, elapsed, prog_mtime, width, exclusive in rows:
+        for key, result_min, alive, started, elapsed, prog_mtime in rows:
             rm, st, el, pm = _num(result_min), _num(started), _num(elapsed), _num(prog_mtime)
             if rm is not None:
                 minutes = rm
@@ -358,17 +335,11 @@ class ProcessExecutor(JobBackend):
             if st is None:
                 unplaced += minutes
             else:
-                # As wide as the gate admitted it: two devices held for a minute
-                # are two device-minutes. A job staged before widths were written
-                # ran one wide, which is what it was billed as.
-                span = (st, st + minutes * 60.0, max(1.0, _num(width) or 1.0))
-                # A job the gate handed devices to holds them alone; two such jobs
-                # overlapping in time are on different cards and each pays. The
-                # campaign's declared overlap rule is for jobs the template pins
-                # to a device it did not choose, where an overlap really is one
-                # card busy once.
-                (exclusive_spans if exclusive == "1" else spans).append(span)
-        return unplaced + accumulate(spans, overlap=self.budget_overlap) + accumulate(exclusive_spans, overlap=ADDITIVE)
+                # Width one: a training job here has the device to itself, and the
+                # campaign's command template pins which one. A backend whose jobs
+                # are decomposed reports its own width instead.
+                spans.append((st, st + minutes * 60.0, 1.0))
+        return unplaced + accumulate(spans, overlap=self.budget_overlap)
 
     @property
     def budget_overlap(self) -> str:
@@ -457,17 +428,6 @@ class ProcessExecutor(JobBackend):
             config[BUDGET_KEY] = round(allowed, 3)
 
         await self._load_known_writes()
-        labels = dict(getattr(spec, "labels", None) or {})
-        device_ids = ",".join(x.strip() for x in str(labels.get("device_ids") or "").split(",") if x.strip())
-        try:
-            width = max(1.0, float(labels.get("width") or 1.0))
-        except (TypeError, ValueError):
-            width = 1.0
-        self._declared_width[spec.idem_key] = width
-        resources: dict[str, Any] = {"width": width}
-        if device_ids:
-            resources["device_ids"] = device_ids.split(",")
-        device_lines = _device_lines(device_ids)
         cfg_path = f"{job_dir}/config.json"
         cmd = self._command.format(
             job_dir=job_dir, config=cfg_path, staged_case=self._staged_case, remote_dir=self._remote_dir
@@ -476,115 +436,50 @@ class ProcessExecutor(JobBackend):
         # line, for two reasons. Backgrounding with `&` applies to the whole `&&`
         # chain, so writing the pid on the same line runs it before mkdir has
         # finished; and the command carries quotes that would have to survive two
-        # levels of shell.
+        # levels of shell. The script writes its own pid and then execs, so the pid
+        # file holds the job itself rather than a wrapper.
         #
-        # The launcher runs the command as its child and stays for the wrap-up,
-        # because terminality is decided by result.json and only a case script
-        # written for this backend knows to write one. An upstream program does
-        # not: measured 2026-08-31 to 09-01 on the autoresearch campaigns, five
-        # completed train.py runs -- val_bpb printed, summary and all -- were
-        # each recorded "ended from outside before it could record a result",
-        # one agent read that as a compile timeout and re-bought the round, and
-        # the owner was told the baseline had failed twice while its number sat
-        # in job.log. So when the job exits without a result.json, the launcher
-        # writes one itself: status from the exit code, spend from its own
-        # clock. A case that writes its own is left alone.
+        # ``exec`` takes ONE simple command, so a template that chains -- "cd x &&
+        # cp y . && bash run.sh" -- has to be handed to a shell instead. Measured
+        # 2026-08-19: without this the launcher became ``exec cd ... && ...``,
+        # which runs nothing at all and says nothing about it. The pid file was
+        # written, so the job looked started, and it never produced a result. Only
+        # chaining commands pay the extra shell; a single command still execs
+        # directly and keeps the pid pointing at the job.
+        # A compound command needs a shell, and which shell is decided on the
+        # machine, at the moment of running, rather than here. The owner's own
+        # commands are written the way they would be typed there, and that means a
+        # login shell: measured 2026-08-21, an arm declared an OpenFOAM case with
+        # "source .../etc/bashrc && ..." -- correct in bash, and the standard way
+        # to start that solver -- and round 0 died on "sh: 1: source: not found"
+        # because /bin/sh on that box is dash. A whole task was lost to it.
         #
-        # Which shell runs the command is decided on the machine, at the moment
-        # of running, rather than here. The owner's commands are written the way
-        # they would be typed there, and that means a login shell: measured
-        # 2026-08-21, an arm declared an OpenFOAM case with "source
-        # .../etc/bashrc && ..." -- correct in bash, the standard way to start
-        # that solver -- and round 0 died on "sh: 1: source: not found" because
-        # /bin/sh on that box is dash. A whole task was lost to it.
-        quoted = shlex.quote(cmd)
+        # Deciding here would mean probing the host, caching the answer per
+        # connection, and keeping that cache honest. Deciding there costs one line
+        # and is right even on a machine nobody has looked at. It also narrows the
+        # spread rather than widening it: today the effective shell is whatever
+        # /bin/sh happens to point at, which is dash on Debian, bash on RHEL and
+        # ash on Alpine.
+        if _is_simple(cmd):
+            body = f"exec {cmd}"
+        else:
+            quoted = shlex.quote(cmd)
+            body = f"if command -v bash >/dev/null 2>&1; then\n  exec bash -c {quoted}\nelse\n  exec sh -c {quoted}\nfi"
         launcher = (
             "#!/bin/sh\n"
             f"cd {job_dir}\n"
-            # Both, and for different readers: ``pid`` names the job itself for a
-            # cancel to reach (rewritten to the child below; the owner's own
-            # script may overwrite it again with its solver's); _OWN_PID is this
-            # wrapper, which stays alive through the wrap-up -- exactly what the
-            # probe's "ours first" contract wants.
+            # Both, and for different readers: ``pid`` is what a cancel and the
+            # owner's own script use, and either may overwrite it; _OWN_PID is
+            # this process, which exec carries through every layer below.
             "echo $$ > pid\n"
-            f"echo $$ > {_OWN_PID}\n{device_lines}"
-            "RAVEN_T0=$(date -u +%s)\n"
-            # The child runs as its own process group when the machine can do
-            # that. A TERM to one pid reaches one process: measured 2026-09-03,
-            # a cancel killed the `bash -c` wrapper and the python it had forked
-            # ran on to completion -- the ledger said failed at 5.2 minutes while
-            # the log filled with a valid result. Killing the group reaches the
-            # whole tree. `wait` is unaffected: the leader is still our child.
-            "if command -v setsid >/dev/null 2>&1; then RAVEN_SETSID=setsid; else RAVEN_SETSID=; fi\n"
-            # -o pipefail: the synthesized status below reads the pipeline's
-            # exit code, and without it that code is the LAST command's -- a
-            # job written as `python train.py | tee output.log` reports tee's
-            # success no matter how python died. Measured 2026-09-02: three
-            # crashed runs (ModuleNotFoundError, 257-byte logs) were recorded
-            # succeeded with minutes billed, and nothing routed anyone to the
-            # logs because the ledger said there was nothing to look at. Only
-            # the bash branch: dash has no pipefail, and a box without bash
-            # keeps last-command semantics rather than every job dying on an
-            # unknown option.
-            "if command -v bash >/dev/null 2>&1; then\n"
-            f"  $RAVEN_SETSID bash -o pipefail -c {quoted} &\n"
-            "else\n"
-            f"  $RAVEN_SETSID sh -c {quoted} &\n"
-            "fi\n"
-            "RAVEN_JOB=$!\n"
-            'echo "$RAVEN_JOB" > pid\n'
-            # `kill -s TERM -- -pid` is the group form dash and bash both accept
-            # (verified on the GPU host's /bin/sh, dash, 2026-09-03); the plain
-            # pid follows for a machine without setsid, where there is no group
-            # of ours to name.
-            'trap \'kill -s TERM -- -"$RAVEN_JOB" 2>/dev/null; kill -s TERM "$RAVEN_JOB" 2>/dev/null\' TERM INT\n'
-            'wait "$RAVEN_JOB"\n'
-            "RAVEN_RC=$?\n"
-            # A command that detached itself leaves nothing to wait for. Its
-            # tell: `pid` now names a live process that is not our child -- the
-            # owner's script wrote its solver's pid there and then exited, with
-            # the solver still running. That is not the legitimate wrap-up shape
-            # (a script that writes the solver's pid and stays to wrap up is
-            # still our live child, and `wait` has not returned). Measured
-            # 2026-09-03: a `launch_job.sh` doing `setsid nohup ... &` made this
-            # wait return in 0.4 s; four training runs were recorded
-            # succeeded / 0.000 minutes ten seconds after launch, the budget was
-            # never debited and the occupancy gate released the device while the
-            # run was on it. Adopting the orphan is not an answer: a non-child's
-            # exit code cannot be read, so its status would be a guess, and a
-            # guessed failure recreates the ghost this launcher was written
-            # against. The orphan is stopped and the reason is written where the
-            # next submit reads it. A zombie is not alive: on a host whose pid 1
-            # does not reap orphans, kill -0 answers for the dead.
-            "RAVEN_LEFT=$(cat pid 2>/dev/null)\n"
-            "RAVEN_ESCAPED=\n"
-            'if [ -n "$RAVEN_LEFT" ] && [ "$RAVEN_LEFT" != "$RAVEN_JOB" ] && kill -0 "$RAVEN_LEFT" 2>/dev/null '
-            '&& [ "$(ps -o stat= -p "$RAVEN_LEFT" 2>/dev/null | cut -c1)" != "Z" ]; then\n'
-            "  RAVEN_ESCAPED=1\n"
-            '  kill -s TERM -- -"$RAVEN_LEFT" 2>/dev/null; kill -s TERM "$RAVEN_LEFT" 2>/dev/null\n'
-            "  sleep 2\n"
-            '  kill -s KILL -- -"$RAVEN_LEFT" 2>/dev/null; kill -s KILL "$RAVEN_LEFT" 2>/dev/null\n'
-            "fi\n"
-            'if [ -n "$RAVEN_ESCAPED" ] || [ ! -f result.json ]; then\n'
-            '  if [ "$RAVEN_RC" -eq 0 ]; then RAVEN_ST=succeeded; else RAVEN_ST=failed; fi\n'
-            "  RAVEN_T1=$(date -u +%s)\n"
-            '  RAVEN_MIN=$(awk "BEGIN{printf \\"%.3f\\", ($RAVEN_T1-$RAVEN_T0)/60}")\n'
-            '  if [ -n "$RAVEN_ESCAPED" ]; then\n'
-            '    printf \'{"status": "failed", "exit_code": %s, "gpu_minutes_used": %s, "written_by": "launcher", '
-            f'"error": "{_ESCAPE_ERROR}"}}\\n\' "$RAVEN_RC" "$RAVEN_MIN" > result.json\n'
-            "  else\n"
-            '    printf \'{"status": "%s", "exit_code": %s, "gpu_minutes_used": %s, "written_by": "launcher"}\\n\' '
-            '"$RAVEN_ST" "$RAVEN_RC" "$RAVEN_MIN" > result.json\n'
-            "  fi\n"
-            "fi\n"
+            f"echo $$ > {_OWN_PID}\n"
+            f"{body}\n"
         )
         staged = await self._arun(
             f"mkdir -p {job_dir} && "
             f"{self._shadow_tree_cmd(job_dir)}"
             f"echo {shlex.quote(base64.b64encode(json.dumps(config).encode()).decode())}"
             f" | base64 -d > {cfg_path} && "
-            f"echo {shlex.quote(base64.b64encode(json.dumps(resources).encode()).decode())}"
-            f" | base64 -d > {job_dir}/{_RESOURCES} && "
             f"echo {shlex.quote(base64.b64encode(launcher.encode()).decode())}"
             f" | base64 -d > {job_dir}/{_LAUNCHER} && echo staged"
         )
@@ -887,31 +782,12 @@ class ProcessExecutor(JobBackend):
         run_dir = str(data.get("run_dir") or job_dir).rstrip("/")
         return {"ref": f"{run_dir}/step-{step}", "label": metric, "value": value}
 
-    async def cancel(self, handle: JobHandle) -> str | None:
+    async def cancel(self, handle: JobHandle) -> None:
         job_dir = self._job_dir(self._idem(handle))
-        # Looked at before the kill, not after: what the record needs to say is
-        # what was there when the decision landed. Measured 2026-09-03, a job at
-        # 5m11s -- alive, about to evaluate -- was killed on a report that it had
-        # died, and the ledger's "killed early" read like cleanup of a corpse.
-        _, seen = await self._arun(
-            f"if [ -f {job_dir}/pid ] && kill -0 $(cat {job_dir}/pid) 2>/dev/null "
-            f'&& [ "$(ps -o stat= -p $(cat {job_dir}/pid) 2>/dev/null | cut -c1)" != Z ]; then '
-            f"echo alive $(cat {job_dir}/pid) $(( $(date -u +%s) - $(stat -c %Y {job_dir}/{_MARKER} 2>/dev/null "
-            f"|| date -u +%s) )); else echo gone; fi"
-        )
         await self._arun(
             f"if [ -f {job_dir}/pid ]; then p=$(cat {job_dir}/pid); "
-            f"kill -s TERM -- -$p 2>/dev/null; kill -TERM $p 2>/dev/null; sleep 2; "
-            f"kill -s KILL -- -$p 2>/dev/null; kill -9 $p 2>/dev/null; fi; true"
+            f"kill -TERM $p 2>/dev/null; sleep 2; kill -9 $p 2>/dev/null; fi; true"
         )
-        parts = seen.strip().split()
-        if len(parts) == 3 and parts[0] == "alive":
-            try:
-                minutes = max(0.0, float(parts[2]) / 60.0)
-            except ValueError:
-                return f"process was alive (pid {parts[1]}) when killed"
-            return f"process was alive (pid {parts[1]}, running {minutes:.1f} min) when killed"
-        return None
 
     async def fetch_progress(self, handle: JobHandle, tail: int = 5) -> list[dict]:
         rc, out = await self._arun(f"tail -n {int(tail)} {self._job_dir(self._idem(handle))}/progress.jsonl")

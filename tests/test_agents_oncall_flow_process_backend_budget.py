@@ -56,8 +56,6 @@ class _Remote:
             except (ValueError, binascii.Error):
                 continue
             if isinstance(payload, dict):
-                if isinstance(payload, dict) and set(payload) <= {"width", "device_ids"}:
-                    continue  # the staged resources record, not the config
                 self.config = payload
         if "staged" in cmd:
             return 0, "staged"
