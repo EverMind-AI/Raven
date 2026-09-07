@@ -113,6 +113,8 @@ class TerminalState:
     canonical_name: str
     parser: OutputParser = field(default_factory=OutputParser)
     output_tail: str = ""
+    raw_tail: bytes = b""
+    replay_tasks: set[asyncio.Task] = field(default_factory=set)
     agent_title: str = ""
     working_sequence: int = 0
     permission_sequence: int = 0
@@ -269,6 +271,7 @@ class TerminalHost:
             state.changed.set()
 
     async def observe_output(self, state: TerminalState, data: bytes) -> None:
+        state.raw_tail = (state.raw_tail + data)[-256 * 1024 :]
         plain, titles, cursors = state.parser.feed(data)
         state.last_output_monotonic = time.monotonic()
         state.record.last_output_at = int(time.time() * 1000)
@@ -331,10 +334,43 @@ class TerminalHost:
             raise TerminalError("terminal_not_writable", "Terminal is not writable")
         fcntl.ioctl(state.fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
-    def subscribe(self, handle: str, callback: OutputCallback) -> Callable[[], None]:
+    def raw_snapshot(self, handle: str) -> bytes:
+        return self.state(handle).raw_tail
+
+    def subscribe(
+        self, handle: str, callback: OutputCallback, *, replay_callback: OutputCallback | None = None
+    ) -> Callable[[], None]:
         state = self.state(handle)
-        state.subscribers.add(callback)
-        return lambda: state.subscribers.discard(callback)
+        snapshot = state.raw_tail
+        active = True
+
+        async def replay() -> None:
+            if snapshot and active:
+                await (replay_callback or callback)(snapshot)
+
+        task = asyncio.create_task(replay())
+        state.replay_tasks.add(task)
+
+        def settled(done: asyncio.Task) -> None:
+            state.replay_tasks.discard(done)
+            if not done.cancelled() and done.exception() is not None:
+                state.subscribers.discard(live)
+
+        async def live(data: bytes) -> None:
+            await task
+            if active:
+                await callback(data)
+
+        task.add_done_callback(settled)
+        state.subscribers.add(live)
+
+        def unsubscribe() -> None:
+            nonlocal active
+            active = False
+            state.subscribers.discard(live)
+            task.cancel()
+
+        return unsubscribe
 
     async def rename(self, handle: str, title: str) -> TerminalRecord:
         state = self.state(handle)
@@ -382,6 +418,10 @@ class TerminalHost:
         if state.reader is not None:
             state.reader.cancel()
             await asyncio.gather(state.reader, return_exceptions=True)
+        for replay in tuple(state.replay_tasks):
+            replay.cancel()
+        await asyncio.gather(*state.replay_tasks, return_exceptions=True)
+        state.subscribers.clear()
         os.close(state.fd)
         self.topology_revisions[state.record.worktree_id] += 1
         await self._emit("terminal.closed", {"handle": handle})

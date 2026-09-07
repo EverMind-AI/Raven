@@ -93,3 +93,26 @@ async def test_rename_accepts_only_the_existing_canonical_name():
     assert await host.rename(record.handle, "worker-a") == record
     with pytest.raises(TerminalError):
         await host.rename(record.handle, "worker-b")
+
+
+async def test_subscription_replays_raw_startup_before_live_output():
+    import asyncio
+
+    from raven.contracts.terminal import TerminalRecord
+    from raven.terminal.host import TerminalHost, TerminalState
+
+    host = TerminalHost()
+    record = TerminalRecord(worktree_id="repo::/tmp/work", worktree_path="/tmp/work")
+    state = TerminalState(record, 123, -1, "token", "worker-a")
+    host._terminals[record.handle] = state
+    await host.observe_output(state, b"\x1b[31mstartup")
+    seen = []
+    async def callback(data):
+        await asyncio.sleep(0)
+        seen.append(data)
+    unsubscribe = host.subscribe(record.handle, callback)
+    for subscriber in tuple(state.subscribers):
+        await subscriber(b"live")
+    assert seen == [b"\x1b[31mstartup", b"live"]
+    unsubscribe()
+    assert not state.subscribers
