@@ -15,6 +15,7 @@ from raven.terminal.host import OutputParser, detect_title_status
         ("Codex permission", "permission"),
         ("Codex ready", "idle"),
         ("claude agents", None),
+        ("Claude Code", None),
         ("editor running", None),
         ("~/codex/ready", None),
     ],

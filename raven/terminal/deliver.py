@@ -106,9 +106,11 @@ class DeliveryService:
         if current.incarnation_id != incarnation:
             raise TerminalError("terminal_handle_stale", "Terminal incarnation changed during delivery")
         if state.startup_pending:
-            raise TerminalError("agent_prompt_blocked", "Codex startup readiness has not been verified")
+            raise TerminalError(
+                "agent_prompt_blocked", "Agent startup readiness has not been verified", {"reason": "startup_pending"}
+            )
         if current.status == "permission" or state.permission_sequence > permission_sequence:
-            raise TerminalError("agent_prompt_blocked", "Agent permission is required")
+            raise TerminalError("agent_prompt_blocked", "Agent permission is required", {"reason": "permission"})
         if not current.writable:
             raise TerminalError("terminal_not_writable", "Terminal is no longer writable")
 
@@ -206,7 +208,7 @@ class DeliveryService:
                         state="blocked" if exc.code == "agent_prompt_blocked" else "stalled",
                         nonce=envelope.nonce if envelope else None,
                     )
-                    exc.data = failed.model_dump(by_alias=True)
+                    exc.data = {**(exc.data if isinstance(exc.data, dict) else {}), **failed.model_dump(by_alias=True)}
                     await self._emit("a2a.send", {"handle": handle, "state": failed.state, "nonce": failed.nonce})
                 raise
         await self._emit("a2a.send", {"handle": handle, "state": result.state, "nonce": result.nonce})
@@ -248,7 +250,11 @@ class DeliveryService:
                 return WaitResult(handle=handle, satisfied=False, blocked_reason="exited")
             elif state.startup_pending:
                 if self.clock() - state.last_output_monotonic >= UNKNOWN_QUIET_SECONDS:
-                    return WaitResult(handle=handle, satisfied=False, blocked_reason="codex-startup-unverified")
+                    return WaitResult(
+                        handle=handle,
+                        satisfied=False,
+                        blocked_reason=f"{state.provider or 'agent'}-startup-unverified",
+                    )
             elif record.status == "idle" or (
                 not state.status_seen and self.clock() - state.last_output_monotonic >= UNKNOWN_QUIET_SECONDS
             ):

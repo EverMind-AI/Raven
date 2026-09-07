@@ -62,3 +62,27 @@ async def test_real_output_ring_is_bounded_and_exit_is_observed(tmp_path):
         assert len(host.tail(record.handle).splitlines()) <= 2000
     finally:
         await host.shutdown()
+
+
+async def test_claude_startup_dialog_cannot_receive_automated_enter(tmp_path):
+    from raven.terminal.deliver import DeliveryService
+
+    executable = tmp_path / "claude"
+    executable.symlink_to(sys.executable)
+    host = TerminalHost()
+    record = await host.create(
+        f"repo::{tmp_path}", [str(executable), "-c", "import time; print('No, exit', flush=True); time.sleep(60)"]
+    )
+    try:
+        assert host.state(record.handle).provider == "claude"
+        assert host.state(record.handle).startup_pending
+        with pytest.raises(TerminalError) as error:
+            await DeliveryService(host).send(record.handle, "task")
+        assert error.value.code == "agent_prompt_blocked"
+        assert error.value.data["reason"] == "startup_pending"
+        await host.observe_output(host.state(record.handle), b"\x1b]0;Claude Code\x07")
+        assert host.state(record.handle).startup_pending
+        await host.observe_output(host.state(record.handle), "\x1b]0;\u2733 Ready\x07".encode())
+        assert not host.state(record.handle).startup_pending
+    finally:
+        await host.shutdown()
