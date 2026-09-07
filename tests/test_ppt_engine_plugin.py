@@ -249,6 +249,71 @@ def test_the_hook_stages_rewrites_and_announces(tmp_path: Path) -> None:
     assert f"Published a 3-slide deck.\nDeck: {deck}\nMEDIA: {deck}" in outbound.modified_content
 
 
+def test_a_renamed_copy_of_the_published_deck_gets_the_preview_under_its_own_name(tmp_path: Path) -> None:
+    """The PDF follows the deck the reply names, not the stem the publish wrote.
+
+    A live run copied `out/deck.pptx` to a title of its own with `exec` and named the
+    copy: the digest check let it through, but the preview sat beside the original as
+    `deck.pdf`, so the copy went out with none and the web surface had nothing to show.
+    """
+    import shutil
+    import time
+
+    hook = plugin_module.make_hook(_ctx(dict(ENABLED), tmp_path / "ws"))
+    wd = tmp_path / "session"
+    wd.mkdir()
+    ctx = AgentHookContext(session_key="s1", inbound_content="build a deck")
+
+    async def run() -> tuple:
+        with workdir.bind(wd):
+            await hook.before_user_inbound(ctx)
+            own = Path(workdir.current())
+            deck = _pptx(own / "out" / "deck.pptx", slides=3)
+            _published(own, deck)
+            (own / "out" / "deck.pdf").write_bytes(b"%PDF-1.4 rendered")
+            time.sleep(0.01)
+            copy = own / "out" / "The Title.pptx"
+            shutil.copyfile(deck, copy)
+            ctx.outbound_content = f"done\nMEDIA: {copy}"
+            outbound = await hook.after_send(ctx)
+        return outbound, copy
+
+    outbound, copy = asyncio.run(run())
+    preview = copy.with_suffix(".pdf")
+    assert preview.read_bytes() == b"%PDF-1.4 rendered"
+    assert f"Deck: {copy}\nMEDIA: {copy}" in outbound.modified_content
+    assert f"Preview (the same deck as a PDF, for viewing): {preview}\nMEDIA: {preview}" in outbound.modified_content
+
+
+def test_a_turn_that_skipped_the_inbound_phase_is_pointed_at_the_deck_on_its_first_iteration(tmp_path: Path) -> None:
+    """A sub-agent's late result starts a turn the host runs no inbound hook for.
+
+    On a live run that turn worked one level above the deck: three edit_file calls on
+    a path that was not there, a ppt_build that found no brief, and a rebuild from
+    nothing. The first iteration is where every turn passes, so that is where the
+    repoint (and the bookkeeping after_send needs to announce a deck) happens now.
+    """
+    hook = plugin_module.make_hook(_ctx(dict(ENABLED), tmp_path / "ws"))
+    wd = tmp_path / "session"
+    wd.mkdir()
+    ctx = AgentHookContext(session_key="s1", metadata={})
+    ctx.iteration = 1
+
+    async def run() -> tuple:
+        with workdir.bind(wd):
+            await hook.before_iteration(ctx)
+            own = Path(workdir.current())
+            deck = _pptx(own / "out" / "deck.pptx", slides=2)
+            _published(own, deck)
+            ctx.outbound_content = f"folded the research in\nMEDIA: {deck}"
+            outbound = await hook.after_send(ctx)
+        return own, deck, outbound
+
+    own, deck, outbound = asyncio.run(run())
+    assert own == wd / "decks" / "s1"
+    assert f"Published a 2-slide deck.\nDeck: {deck}\nMEDIA: {deck}" in outbound.modified_content
+
+
 def test_a_staging_failure_short_circuits_the_turn_with_the_forks_sentence(tmp_path: Path) -> None:
     hook = plugin_module.make_hook(_ctx(dict(ENABLED), tmp_path / "ws"))
     wd = tmp_path / "session"
@@ -514,6 +579,54 @@ def test_a_deck_the_model_copied_into_out_is_not_announced_as_published(tmp_path
         and "not written by ppt_build" in decision.modified_content
     )
     assert "Published a" not in decision.modified_content
+
+
+def test_a_reply_naming_a_copy_the_publish_step_never_wrote_is_sent_back_with_the_refusal(tmp_path: Path) -> None:
+    """A live run answered a refused build with `cp` to a Chinese-titled copy under out/
+    and a reply that the deck was delivered; the turn ended on it, the delegating agent
+    had to adjudicate, and the run was started again to continue. The refusal is on
+    disk, so the reply is sent back once with the reason in it -- to the author, who can
+    act on it -- and only then to the unfinished nudges."""
+    from types import SimpleNamespace
+
+    from raven_ppt.contracts import Finding, Severity
+    from raven_ppt.plugin.hook import UNFINISHED_NUDGE
+    from raven_ppt.services.publish.deliver import record_refused
+
+    hook = plugin_module.make_hook(_ctx(dict(ENABLED), tmp_path / "ws"))
+    wd = tmp_path / "session"
+    wd.mkdir()
+    ctx = AgentHookContext(session_key="s1", inbound_content="make the deck", metadata={})
+
+    async def run():
+        with workdir.bind(wd):
+            await hook.before_user_inbound(ctx)
+            own = Path(workdir.current())
+            record_refused(
+                SimpleNamespace(state_dir=own / "deck" / "state"),
+                "not published: 1 blocking finding(s) on page(s) 3; fix them and build again",
+                [Finding(kind="overflow", severity=Severity.BLOCKING, message="the body runs past the page", page=3)],
+            )
+            copied = _pptx(own / "out" / "成都夜间市集项目提案.pptx", slides=8)
+            ctx.response = _reply(f"已发布：{copied}，还需要调整吗？")
+            first = await hook.after_iteration(ctx)
+            ctx.response = _reply(f"已发布：{copied}。")
+            second = await hook.after_iteration(ctx)
+            ctx.outbound_content = f"已发布：{copied}"
+            sent = await hook.after_send(ctx)
+        return copied, first, second, sent
+
+    copied, first, second, sent = asyncio.run(run())
+    assert first.rollback, "a copy named as the deliverable is sent back, question or not"
+    told = first.rollback_inject[0]["content"]
+    assert str(copied) in told and "did not publish that file" in told
+    assert "The last build was refused: not published: 1 blocking finding(s) on page(s) 3" in told
+    assert "page 3: overflow -- the body runs past the page" in told
+    assert second.rollback and second.rollback_inject == [{"role": "user", "content": UNFINISHED_NUDGE}], (
+        "once with the reason; after that the unfinished nudges take over"
+    )
+    assert "not written by ppt_build" in sent.modified_content
+    assert "The last build was refused: not published: 1 blocking" in sent.modified_content
 
 
 def test_the_announcement_carries_the_pdf_beside_the_deck(tmp_path: Path) -> None:

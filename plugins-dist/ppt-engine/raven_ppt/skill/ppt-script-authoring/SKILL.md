@@ -32,11 +32,16 @@ argument, merge the page rather than enlarging fragments.
 
 The language, the audience and the length are the user's, and they are asked for
 rather than inferred. `ppt_prepare` reads what the request already states and hands
-back the rest as questions. **Nobody is attached to a deck build to answer them**: the
-run has no `ask_user`, so take the answer you would have marked recommended -- the
-request's own scope, the materials' language, the length its kind of deck usually
-has -- and record it with `ppt_brief` as the assumption it is, so the deck says what it
-assumed. Five measured runs each spent a round asking a question no one could hear.
+back the rest as questions under `ask_user`. **Put them to the user with the `ask_user`
+tool, all of them in one call, each with the option you would recommend marked.** The
+answer comes back through the host: in a direct chat the user answers; in a delegated
+run the host answers what the delegating conversation already settled and puts the rest
+to the user. An answer that is empty, or that says the question was not sent, means
+nobody is attached to this run: then take the option you marked recommended -- the
+request's own scope, the materials' language, the length its kind of deck usually has --
+and record it with `ppt_brief` as the assumption it is, so the deck says what it assumed.
+Ask once: a question nobody answered is not answered by asking it again, and a run that
+asks a question a turn spends a turn on each.
 The length and the language are then measured against the
 finished file and both refuse the deck (§12), so record what the user said rather than
 what you inferred. The audience is not measured; it is the room you judge the deck for
@@ -785,9 +790,9 @@ use, by their DrawingML names, and the two layouts built on them. Signatures in
 | `page_position(shape)` | `(left, top)` in inches on the page, groups resolved |
 | `raise_type(slide, floor=BODY_FLOOR_PT, min_chars=COPY_CHARS)` | lift copy the template states under the readability floor (`BODY_FLOOR_PT` is 14pt) and let its box grow to hold it |
 | `replace_text(target, text, new=None)`, `replace_picture(shape, image, fit="contain", *, anchor="centre", trim=None, zoom=1.0, alpha=None, box=None)` | in place, keeping how the template set it; `alpha` washes the new picture the way `backdrop` does, for the frame that is the page. `shape` may be a drawing rather than a frame -- a group of freeforms, a cartoon -- or a list of shapes making one: the picture takes its box and its depth and the drawing goes |
-| `backdrop(slide, image, *, alpha=0.22, box=None, anchor="centre", trim=None, zoom=1.0)` | a picture behind everything on the page, cover-cropped to the canvas (or `box`) and washed to `alpha` -- 0.2 under copy, 0.35 at most where copy sits over it; returns the picture |
-| `layout_pictures(slide)` | the photographs a page inherits from its layout, largest first; `replace_picture(layout_pictures(slide)[0], image, "cover", alpha=0.25)` changes them for every page on that layout |
-| `wash(shape, alpha)` | set any picture's transparency -- a frame the template drew, one `pictures=` filled, one you placed -- to the same share `backdrop` takes; a photograph a title has to read over is `wash(shape, 0.3)` |
+| `backdrop(slide, image, *, alpha=1.0, scrim=0.62, ink=None, light_type=True, box=None, anchor="centre", trim=None, zoom=1.0)` | a photograph behind everything on the page, cover-cropped to the canvas (or `box`), at full strength under a plane of the theme's ink at `scrim`, with every run of type on the page set light (saturated accents kept) -- the cover form; `scrim=None` with `alpha` at 0.12 or under is the texture form behind a template's own ground; returns the picture |
+| `layout_pictures(slide)` | the photographs a page inherits from its layout, largest first; `replace_picture(layout_pictures(slide)[0], image, "cover")` changes them for every page on that layout; one the size of the page is the page's background -- `alpha=0.1` keeps it the texture the template meant (0.12 to 0.80 is the fog `washed_backdrop` reports), and a photograph meant to be seen goes in at full strength under a plane of ink with light type, as `backdrop` lays them |
+| `wash(shape, alpha)` | set any picture's transparency -- a frame the template drew, one `pictures=` filled, one you placed -- to the same share `backdrop` takes; a picture at full strength again is `wash(shape, 1)`; a photograph a title has to read over wants a plane of ink over it, not a wash to 0.3, which reads as fog |
 | `clone_page(presentation, prototype)` | when `adapt` is more than the page needs |
 | `add_unit(target, count=1)` | one more slot on a page's repeating run -- a run from `units(slide)`, or the slide for its longest -- copied from the last unit and laid out again; `adapt(items=...)` calls it when the items outnumber the slots |
 | `remove_unit(unit)` | one slot fewer, and the row closed up; `drop_shape` removes and leaves the hole |
@@ -1037,12 +1042,26 @@ materials.
 A cover does not need a figure. Its job is the title, who wrote it and where, and a
 paper's Figure 1 pressed into its corner is smaller than the page it will get later.
 
+**The cover and the closing page keep the template's composition.** Their title block,
+chips, marks and rules are the design; the illustration or photograph beside them is the
+placeholder. Put the page's picture into that slot -- `replace_picture(layout_pictures(slide)[0],
+image, "cover")` when the slot is on the layout, `pictures={n: image}` when it is on the page --
+and never drop the layout's art to make room for a full-bleed photograph (`drop_shape` refuses a
+layout shape): a live cover did exactly that and came out as black type on a washed skyline.
+An illustrated template's slot takes a cut-out in its own manner, `ppt_generate_image(...,
+transparent=true)` with the palette and the outline weight named in the prompt, even for a real
+place -- a flat Shanghai skyline in the template's blue, yellow and black sat in one such slot
+as if drawn for it. A slot that holds a photograph takes a photograph. A template whose cover
+*is* a photograph takes `backdrop`.
+
 **A backdrop is the one generated picture that never poses as evidence.** A cover, a
 section page or a closing page wants atmosphere more than a figure, and a template's own
 photograph there is a placeholder. Generate one with `ppt_generate_image` at the page's
 shape (`aspect_ratio="16:9"` for a full page) and lay it behind everything with
-`backdrop(slide, FIGURES / "cover.png", alpha=0.2)`: the wash is the picture's own, so the
-template's ground and type stay as they are over it. Write the prompt as subject, scene,
+`backdrop(slide, FIGURES / "cover.png")`: the photograph at full strength under a plane of the
+theme's ink, with the page's type set light -- the form a reference cover that works uses. A
+photograph washed to 30% on a white page under black type reads as fog, and the build reports
+it (`washed_backdrop`). Write the prompt as subject, scene,
 composition, style, palette and what to leave out (`no text, no logos, no faces`).
 
 **The style is the subject's first and the template's second.** A real place, a street, a
@@ -1055,12 +1074,14 @@ a proposal to a district government reads as a children's book; a photograph of 
 as evidence, which is why the real thing is found first (§2) and generated only when it
 cannot be. Within the deck, one manner per kind: every place photographic, every concept in
 the template's hand -- a photograph on one case page and a flat drawing on the next read as
-two decks. Keep `alpha` at 0.35 or under wherever
-copy sits over it, and look at the render (§10): the contrast reading is taken off the
-pixels, so a wash that buries a title comes back as unreadable type, not as a wash. A body
+two decks. A faint picture behind a template's own ground is the
+texture form, `backdrop(slide, image, alpha=0.1, scrim=None)`, and it stops being texture past
+0.12. Look at the render (§10): the contrast reading is taken off the pixels, so type that does
+not carry over the picture comes back as unreadable type. A body
 page dense with cards does not want one. The same knob exists for a picture already on the
-page: a photograph the template drew or `pictures=` filled that a title has to read over is
-`wash(shape_at(slide, n), 0.3)`, and a picture at full strength again is `wash(shape, 1)`.
+page: a photograph the template drew or `pictures=` filled that a title has to read over wants
+a plane of ink over it and light type, the way `backdrop` lays one -- not `wash(shape_at(slide, n),
+0.3)`, which is fog; a picture at full strength again is `wash(shape, 1)`.
 
 **Tables are for figures, and a deck has few of them.** A table earns its grid when a reader
 compares numbers down a column -- a benchmark, a price list, a scoring matrix. Four labelled
@@ -1071,9 +1092,11 @@ ask of each whether the reader compares figures in it or only reads it.
 
 ## 6. Charts and tables, drawn
 
-There is no chart library here and matplotlib is not a dependency of this route.
 Charts are shapes — rectangles, hairlines, marks and labels — which is what keeps
-them editable and on the deck's palette.
+them editable and on the deck's palette. `matplotlib` imports in the program (the
+engine uses it to typeset formulas) and is not how a chart is drawn here: a plot pasted
+as a picture is off the palette, cannot be edited in the deck, and its labels are pixels
+the type measurements never see.
 
 **`ppt_charts` draws twenty-three of them for you**, and the mapping from a value to a
 length is the half you must not write by hand. Import what the page needs:
@@ -1622,7 +1645,7 @@ layout, so every page built on it inherits the same picture and `pictures={...}`
 cloned page never reaches it -- `template_picture` cannot see it either; `layout_picture`
 names the layout, and `ppt_template` lists them as `layout_pictures`. `layout_pictures(slide)`
 returns those shapes, largest first, and `replace_picture(layout_pictures(slide)[0],
-FIGURES / "cover.png", "cover", alpha=0.25)` changes the picture for every page on that
+FIGURES / "cover.png", "cover")` changes the picture for every page on that
 layout at once, which is what a house photograph should do. A picture the size of the page
 is the page's background: the template's own is a soft texture the type reads over, and a
 photograph swapped in at full strength drowns every title on that layout, so it takes the

@@ -130,6 +130,23 @@ async def test_a_plan_naming_no_roles_reads_as_it_always_did(tmp_path: Path) -> 
     assert not any(" -- " in line for line in body["pages"])
 
 
+async def test_a_page_that_says_no_number_keeps_its_role_at_its_place(tmp_path: Path) -> None:
+    """Omitting `page` is a supported path now -- the plan numbers such a page by its
+    place in the list -- and the roles are read off the same entries. Keyed by the
+    number the entry stated, a cover with no number filed its role under page 0: the
+    reply showed no `-- cover`, and the layout-spread reading counted a structural page
+    as content. The same fallback, so the two readings name the same page."""
+    planned = _pages("cover", None, "closing")
+    for entry in planned:
+        del entry["page"]
+
+    body = await _reply(tmp_path, planned)
+
+    assert body["pages"][0].endswith("  -- cover"), body["pages"]
+    assert " -- " not in body["pages"][1]
+    assert body["pages"][2].endswith("  -- closing"), body["pages"]
+
+
 async def test_the_recorded_plan_is_the_same_file_either_way(tmp_path: Path) -> None:
     """Where the field stops, pinned rather than assumed.
 
@@ -246,6 +263,26 @@ async def test_a_page_saying_null_for_what_it_has_no_answer_to_is_accepted(tmp_p
 
     refused = str(await registry.execute("ppt_outline", {**call, "pages": [{**pages[0], "claim": None}, pages[1]]}))
     assert refused.startswith("Error") and "pages[0].claim should be string" in refused
+
+
+async def test_pages_that_say_no_number_are_numbered_by_their_place_in_the_list(tmp_path: Path) -> None:
+    """The amber run wrote every page without `page` and lost the whole outline to
+    `missing required pages[N].page`; the numbering check demands 1..n in order anyway,
+    so the number says nothing the place in the list does not."""
+    from raven.agent.tools.registry import ToolRegistry
+
+    _deck(tmp_path)
+    pages = _pages("cover", None)
+    for page in pages:
+        page.pop("page", None)
+
+    registry = ToolRegistry()
+    registry.register(PptOutlineTool(tmp_path))
+    body = str(await registry.execute("ppt_outline", {"project": "deck", "takeaway": "one thing", "pages": pages}))
+
+    assert not body.startswith("Error"), body
+    listed = json.loads(body)["pages"]
+    assert [line.split(".")[0] for line in listed] == ["1", "2"]
 
 
 def test_the_declared_schema_takes_null_in_every_optional_page_field_as_json_schema(tmp_path: Path) -> None:

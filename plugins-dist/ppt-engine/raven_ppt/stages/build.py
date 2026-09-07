@@ -65,7 +65,7 @@ from raven_ppt.services import seen
 from raven_ppt.services.measure.geometry import iter_shapes, open_deck, picture_blob, shows_picture
 from raven_ppt.services.measure.type_size import census, rendered_spans
 from raven_ppt.services.publish import PublishRefusedError, publish, stage
-from raven_ppt.services.publish.deliver import published_digests
+from raven_ppt.services.publish.deliver import published_digests, record_refused
 from raven_ppt.services.template import house_style, prepared_path
 
 # Default for `BuildStage.views_per_call`, which is how many page renders one reply
@@ -168,7 +168,11 @@ class BuildStage:
         data: dict[str, Any] = {"outcome": outcome, "findings": findings, "showing": showing}
         data["unseen_after"] = _unseen_pages(project, outcome)
         if blocking:
-            return StageResult(ok=False, findings=tuple(findings), data=data)
+            pages = sorted({f.page for f in blocking if f.page is not None})
+            where = f" on page(s) {', '.join(str(page) for page in pages)}" if pages else ""
+            note = f"not published: {len(blocking)} blocking finding(s){where}; fix them and build again"
+            record_refused(project, note, blocking)
+            return StageResult(ok=False, findings=tuple(findings), data=data, note=note)
 
         already = bool(published_digests(project.state_dir))
         try:
@@ -181,6 +185,7 @@ class BuildStage:
                 blocking_kinds=self.profile.blocking_kinds,
             )
         except PublishRefusedError as exc:
+            record_refused(project, str(exc), blocking)
             return StageResult(ok=False, findings=tuple(findings), data=data, note=str(exc))
         data["pptx_path"] = str(delivered)
         if already:
