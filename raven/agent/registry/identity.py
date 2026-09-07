@@ -26,11 +26,11 @@ class IdentityAlias(IdentityModel):
 
 
 class IdentityBinding(IdentityModel):
-    handle: str
-    incarnation_id: str
-    worktree_id: str
-    tab_id: str
-    leaf_id: str
+    handle: str | None = None
+    incarnation_id: str | None = None
+    worktree_id: str | None = None
+    tab_id: str | None = None
+    leaf_id: str | None = None
 
 
 class IdentityRecord(IdentityModel):
@@ -57,9 +57,10 @@ class IdentityState(BaseModel):
 
 
 def _config_rows() -> list:
+    from raven.agent.subagent.builtin_agents import merge_builtin_seeds
     from raven.config.loader import load_config
 
-    return load_config().subagents.agents
+    return merge_builtin_seeds(load_config().subagents.agents)
 
 
 def _brand(row: dict) -> str:
@@ -144,6 +145,23 @@ class IdentityRegistry:
             state.records.append(record)
             self._save(state)
         return record
+
+    def ensure_host(self, kind_ref: str | None = None) -> IdentityRecord:
+        rows = self._rows()
+        if kind_ref is None:
+            kind_ref = next((name for name, row in rows.items() if row.get("kind") == "builtin"), None)
+        if kind_ref is None or kind_ref not in rows or rows[kind_ref].get("kind") != "builtin":
+            raise TerminalError("invalid_kind_ref", "The native host needs a builtin kind_ref")
+        try:
+            existing = self.show("raven")
+        except TerminalError as exc:
+            if exc.code != "agent_not_found":
+                raise
+        else:
+            if existing.kind_ref == kind_ref and existing.binding is not None and existing.binding.handle is None:
+                return existing
+            raise TerminalError("host_identity_conflict", "The raven identity already has a different binding")
+        return self.register("raven", kind_ref=kind_ref, binding=IdentityBinding(), role="host")
 
     def reconcile(self) -> None:
         if not self.path.exists():

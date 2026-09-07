@@ -85,3 +85,12 @@ def test_exited_generations_archive_after_thirty_days(tmp_path):
     registry.reconcile()
     assert registry.list() == []
     assert len(json.loads(path.read_text())["archive"]) == 1
+
+
+def test_native_host_identity_is_unbound_and_idempotent(tmp_path):
+    registry = IdentityRegistry(tmp_path / "agent_registry.json", config_rows=lambda: [{"name": "generic", "kind": "builtin"}])
+    host = registry.ensure_host()
+    assert host.agent_name == "raven"
+    assert host.kind_ref == "generic"
+    assert host.binding.handle is None
+    assert registry.ensure_host().binding_generation == host.binding_generation
