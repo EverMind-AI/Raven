@@ -237,6 +237,25 @@ def test_metadata_serializes_no_token_or_occurrences(tmp_path):
     assert leftover not in json.dumps(meta)
 
 
+def test_residual_scan_exempts_known_benign_literals(tmp_path):
+    """Provider usage field names are fixed literals; only exact matches skip."""
+    lines = [
+        "completion_tokens_details",
+        "prompt_tokens_details",
+        "Xcompletion_tokens_details",
+        "prompt_tokens_details2",
+    ]
+    bundle = _make_bundle(tmp_path, spans_text="\n".join(lines), artifact_text="clean")
+
+    report = tredact.redact_bundle(bundle, tmp_path / "red", secrets=[])
+
+    tokens = {f.token for f in report.findings}
+    assert "completion_tokens_details" not in tokens
+    assert "prompt_tokens_details" not in tokens
+    assert "Xcompletion_tokens_details" in tokens
+    assert "prompt_tokens_details2" in tokens
+
+
 def test_residual_scan_exempts_provider_call_ids(tmp_path):
     call_id = "call_9Q7zXp2LmV4wRb8KsD3fT6yH"
     hyphenated = "call-9Q7zXp2LmV4wRb8KsD3fT6yH"

@@ -433,6 +433,9 @@ def _validate_record(payload: dict[str, Any], dir_name: str) -> None:
         _check(isinstance(entry.get("id"), str) and entry["id"], "user decision id")
         _check(isinstance(entry.get("category"), str) and entry["category"], "user decision category")
         _check(isinstance(entry.get("masked_sample"), str), "user decision sample")
+        if "masked_token" in entry:
+            # Absent on decisions written before the masked_token field existed.
+            _check(isinstance(entry["masked_token"], str) and entry["masked_token"], "user decision masked token")
         _check(entry.get("action") in ("acknowledged", "kept", "redacted"), "user decision action")
         sources = entry.get("sources")
         _check(isinstance(sources, list), "user decision sources")

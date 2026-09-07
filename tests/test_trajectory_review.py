@@ -226,6 +226,10 @@ def test_apply_mixed_decisions_replace_and_keep(tmp_path):
     items_by_token = {i.token: i for i in items}
     assert actions[items_by_token[TOKEN_A].id] == "kept"
     assert actions[items_by_token[TOKEN_B].id] == "redacted"
+    masked = {d["id"]: d["masked_token"] for d in outcome.user_decisions}
+    assert masked[items_by_token[TOKEN_A].id] == f"{TOKEN_A[:4]}***{TOKEN_A[-4:]}"
+    assert masked[items_by_token[TOKEN_B].id] == f"{TOKEN_B[:4]}***{TOKEN_B[-4:]}"
+    assert TOKEN_B not in json.dumps(outcome.user_decisions)
 
 
 def test_apply_adjacent_kept_and_redacted_do_not_leak_via_summary(tmp_path):
@@ -340,6 +344,7 @@ def test_apply_acknowledges_private_key_and_emits_notice(tmp_path):
     (decision,) = outcome.user_decisions
     assert decision["action"] == "acknowledged"
     assert decision["category"] == "private-key-block"
+    assert decision["masked_token"] == treview.PRIVATE_KEY_PLACEHOLDER
 
 
 def test_apply_renames_paths_carrying_redacted_tokens(tmp_path):

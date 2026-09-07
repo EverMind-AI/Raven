@@ -137,6 +137,10 @@ _TRACING_ID = re.compile(r"(?:trace|span|att)-[0-9a-f]{6,}")
 # tracing-id exemption above. Anchored full match: a credential merely
 # containing ``call_`` does not qualify.
 _CALL_ID = re.compile(r"^call_[A-Za-z0-9]+$")
+# Fixed field names of provider usage blocks: they clear the entropy bar in
+# every trajectory with a model call. Exact literals only — any variation
+# still flags.
+_BENIGN_LITERALS = frozenset({"completion_tokens_details", "prompt_tokens_details"})
 _UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 _PURE_DIGITS = re.compile(r"^[0-9]+$")
@@ -500,6 +504,8 @@ def scan_residuals(root: Path) -> list[ResidualFinding]:
                 if "REDACTED" in token:
                     continue
                 if _TRACING_ID.search(token) or _CALL_ID.match(token) or _UUID.match(token) or _DATE.search(token):
+                    continue
+                if token in _BENIGN_LITERALS:
                     continue
                 if _PURE_DIGITS.match(token):
                     continue

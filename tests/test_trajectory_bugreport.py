@@ -363,6 +363,17 @@ def _damage(payload, spec):
         payload["redaction"]["user_decisions"] = [
             {"category": "high-entropy", "masked_sample": "x", "action": "kept", "sources": []}
         ]
+    elif spec == "decision-bad-masked-token":
+        payload["redaction"]["user_decisions"] = [
+            {
+                "id": "abc123abc123",
+                "category": "high-entropy",
+                "masked_sample": "x",
+                "masked_token": "",
+                "action": "kept",
+                "sources": [],
+            }
+        ]
     elif spec == "decision-bad-source-count":
         payload["redaction"]["user_decisions"] = [
             {
@@ -406,6 +417,7 @@ _DAMAGE_SPECS = [
     "bad-security-notices",
     "decision-bad-action",
     "decision-missing-id",
+    "decision-bad-masked-token",
     "decision-bad-source-count",
 ]
 
@@ -1019,6 +1031,7 @@ def test_private_key_flow_packages_with_notices(state, workspace):
     decisions = record["redaction"]["user_decisions"]
     assert [entry["action"] for entry in decisions] == ["acknowledged"]
     assert decisions[0]["category"] == "private-key-block"
+    assert decisions[0]["masked_token"] == "[REDACTED:pattern.private-key-block]"
     with tarfile.open(record["package"]["path"]) as tar:
         meta = json.loads(tar.extractfile(f"{record['report_id']}/bugreport.json").read().decode("utf-8"))
     assert meta["redaction"]["security_notices"] == notices

@@ -38,6 +38,7 @@ from raven.trajectory.redact import (
     RedactionReport,
     ResidualFinding,
     _apply_exact,
+    _mask,
     _variants,
 )
 
@@ -468,6 +469,7 @@ def apply_review_decisions(
             "category": item.category,
             "sources": [{"source": _filter(source["label"]), "count": source["count"]} for source in item.sources],
             "masked_sample": _filter(item.masked_sample),
+            "masked_token": _filter(_mask(item.token)) if item.token else item.masked_sample,
             "action": actions[item.id],
         }
         for item in items
