@@ -1796,3 +1796,141 @@ describe('the compact roster', () => {
     expect((leaf?.firstElementChild as HTMLElement).dataset.empty).toBe('true')
   })
 })
+
+/* Why an unchanged snapshot must not repaint.
+ *
+ * The renderer holds a running turn's last assistant message provisionally, so
+ * re-feeding the same snapshot rebuilds that row's DOM node -- measured in the
+ * browser against the real renderer: three paints of one snapshot gave three
+ * different nodes for the same sentence. The pane repaints every 2s for as long
+ * as the instance reads `run`, so a turn that stops producing output without
+ * ending leaves its last line rebuilt every two seconds for good. That is the
+ * flicker; these cases are the guard, and the three after the first are the
+ * reasons the guard must not be a blanket one.
+ */
+describe('an instance pane repaints only when something changed', () => {
+  const turn = (over: Partial<DirectTurn> = {}): DirectTurn => ({
+    call_id: 'c1', role: 'assistant', content: 'let me prepare this project', at_ms: 0, live: true, ...over,
+  } as DirectTurn)
+
+  const box = (): HTMLElement => {
+    const el = document.createElement('div')
+    document.getElementById('wsBody')!.appendChild(el)
+    return el
+  }
+
+  it('paints once for a running turn that has stopped changing', async () => {
+    const turns = [turn()]
+    rows([], { instanceHistory: async () => ({ turns }) })
+    const el = box()
+
+    await act(async () => { store.paintInstanceDirect(el, 'Raven-Design', 'h1') })
+    await act(async () => { store.paintInstanceDirect(el, 'Raven-Design', 'h1') })
+    await act(async () => { store.paintInstanceDirect(el, 'Raven-Design', 'h1') })
+
+    expect(paints.length).toBe(1)
+  })
+
+  it('holds the same guard on the standalone panel path', async () => {
+    /* Two paint paths, one rule: the panel reads the same history and feeds the
+       same renderer. A test for only the desk pane would leave the panel free
+       to flicker with every mutation still green. */
+    const turns = [turn()]
+    rows([], { instanceHistory: async () => ({ turns }) })
+    const el = box()
+
+    await act(async () => { store.paintInstance(el, 'Raven-Design', 'h1') })
+    await act(async () => { store.paintInstance(el, 'Raven-Design', 'h1') })
+
+    expect(paints.length).toBe(1)
+  })
+
+  it('repaints over a transient failure, on an identical history', async () => {
+    /* The recovery read is the one the guard would have swallowed: a stalled
+       running turn recovers by answering the SAME history again, and the box
+       holds an error rather than what the print says, so the print has to go
+       when the error goes in. Without that the pane sat on a transient failure
+       until the transcript or status changed. */
+    const turns = [turn()]
+    let fail = false
+    rows([], { instanceHistory: async () => { if (fail) throw new Error('socket closed'); return { turns } } })
+    const el = box()
+
+    await act(async () => { store.paintInstanceDirect(el, 'Raven-Design', 'h1') })
+    expect(paints.length).toBe(1)
+
+    fail = true
+    await act(async () => { store.paintInstanceDirect(el, 'Raven-Design', 'h1') })
+    expect(el.textContent).toContain('socket closed')
+
+    fail = false
+    await act(async () => { store.paintInstanceDirect(el, 'Raven-Design', 'h1') })
+
+    /* The paint happening is the whole assertion. Whether the error text is
+       still in the box afterwards is the fixture's business -- it appends -- and
+       in production `laneIn` starts a fresh lane from an emptied box precisely
+       so an error note is not left pinned above the transcript
+       (`transcript/mount.tsx`). */
+    expect(paints.length).toBe(2)
+  })
+
+  it('repaints over a transient failure on the panel path too', async () => {
+    const turns = [turn()]
+    let fail = false
+    rows([], { instanceHistory: async () => { if (fail) throw new Error('socket closed'); return { turns } } })
+    const el = box()
+
+    await act(async () => { store.paintInstance(el, 'Raven-Design', 'h1') })
+    fail = true
+    await act(async () => { store.paintInstance(el, 'Raven-Design', 'h1') })
+    fail = false
+    await act(async () => { store.paintInstance(el, 'Raven-Design', 'h1') })
+
+    expect(paints.length).toBe(2)
+  })
+
+  it('paints again when the answer grows', async () => {
+    /* The whole point of re-feeding a running turn: while it is still saying
+       things, the row genuinely changes and has to be redrawn. */
+    let turns = [turn()]
+    rows([], { instanceHistory: async () => ({ turns }) })
+    const el = box()
+    await act(async () => { store.paintInstanceDirect(el, 'Raven-Design', 'h1') })
+
+    turns = [turn({ content: 'let me prepare this project. Slide one is ready.' })]
+    await act(async () => { store.paintInstanceDirect(el, 'Raven-Design', 'h1') })
+
+    expect(paints.length).toBe(2)
+  })
+
+  it('paints again when the turn ends, on the same words', async () => {
+    /* `status` decides how much of the snapshot is held rather than committed,
+       so the same messages under a finished turn are a different picture: the
+       held row has to be committed. A print without the status would leave the
+       answer provisional for good. */
+    let turns = [turn()]
+    rows([], { instanceHistory: async () => ({ turns }) })
+    const el = box()
+    await act(async () => { store.paintInstanceDirect(el, 'Raven-Design', 'h1') })
+
+    turns = [turn({ live: false })]
+    await act(async () => { store.paintInstanceDirect(el, 'Raven-Design', 'h1') })
+
+    expect(paints.length).toBe(2)
+    expect((paints[1]!.ctx as { status?: string }).status).not.toBe('run')
+  })
+
+  it('paints when the box is pointed at another instance saying the same thing', async () => {
+    /* Two instances can answer identically, and the print alone would then keep
+       one conversation on screen under the other one's name. The reset is
+       checked first for exactly that. */
+    rows([], { instanceHistory: async () => ({ turns: [turn()] }) })
+    const el = box()
+    await act(async () => { store.paintInstanceDirect(el, 'Raven-Design', 'h1') })
+
+    await act(async () => { store.paintInstanceDirect(el, 'Raven-Design', 'h2') })
+
+    expect(paints.length).toBe(2)
+    expect(paints[1]!.opts?.reset).toBe(true)
+  })
+})
