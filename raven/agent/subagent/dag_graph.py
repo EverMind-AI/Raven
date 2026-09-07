@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 """The sub-agent DAG spec models and structural validation."""
 
-from collections.abc import Callable
-from typing import Annotated
+from collections.abc import Callable, Iterable, Mapping
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pydantic.alias_generators import to_camel
 
-from raven.agent.subagent.dag_store import RUNNING, UNRECORDED, SessionNodes
+from raven.agent.subagent.dag_store import RUNNING, UNRECORDED, SessionNodes, duplicate_node_id, fold_node_id
+from raven.agent.subagent.history import NODE_ID_PATTERN
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.subagent.prompt_paths import check_confined
 from raven.agent.subagent.prompt_placeholders import parse_placeholders
@@ -16,7 +17,7 @@ from raven.agent.subagent.prompt_render import check_input_contract
 # A node id becomes a path component (``<id>.prompt.md``; ``dag_reader.py`` re-checks
 # it with its own copy of this charset before joining a web-supplied id into a
 # path), so it stays a closed set.
-_ID_PATTERN = r"^[A-Za-z0-9_-]+$"
+_ID_PATTERN = NODE_ID_PATTERN
 # An agent name, by contrast, is only ever a table key: looked up in the
 # registry, grouped for the capability check, and echoed into status
 # JSON. It reaches no path and no shell, so it accepts any name the config layer
@@ -219,9 +220,12 @@ def collect_static_graph_errors(
     seen: set[str] = set()
     duplicate_ids: set[str] = set()
     for node_id in ids:
-        if node_id in seen:
+        # Folded (see `fold_node_id`): two ids differing only in case are one
+        # file on a case-folding backend, so the second node's output would
+        # overwrite the first's -- within one graph as much as across runs.
+        if (folded := fold_node_id(node_id)) in seen:
             duplicate_ids.add(node_id)
-        seen.add(node_id)
+        seen.add(folded)
     unique_ids = not duplicate_ids
     if duplicate_ids:
         errors.append(f"duplicate node ids: {sorted(duplicate_ids)}")
@@ -241,15 +245,9 @@ def collect_static_graph_errors(
                 "again with `fills` for that node; otherwise put the values in the graph."
             )
 
-        if (owner := known.owner.get(node.id)) is not None:
-            advice = (
-                f"Rename it, or drop this node and reference '{node.id}' directly (no depends_on needed)"
-                if known.is_readable(node.id)
-                else "Rename it -- that run left it with no output, so there is nothing to reference either"
-            )
-            errors.append(
-                f"node id '{node.id}' is already used by run '{owner}'; ids are unique per conversation. {advice}"
-            )
+        if (claim := known.claimed_by(node.id)) is not None:
+            taken, owner = claim
+            errors.append(duplicate_node_id(node.id, owner, readable=known.is_readable(taken), taken_as=taken))
 
         for dep in node.depends_on:
             if dep not in by_id:
@@ -434,6 +432,50 @@ def _check_output_ref(
     )
 
 
+def check_node_refs(node_id: str, placeholders: Iterable[Any], inputs: Mapping[str, Any], known: SessionNodes) -> None:
+    """Refuse every node reference this conversation cannot answer.
+
+    For a caller with no graph. The DAG surface does the same check while it
+    validates, where it can also accept an id belonging to the run being
+    assembled; here every id must already be readable, because there is no
+    later node to write one.
+
+    Sharing ``_unreadable`` is the point: a failed node, a skipped one, one
+    still running and one nobody ever ran each need a different next move, and
+    a caller that reached this surface deserves the same sentence a graph would
+    have got.
+
+    Args:
+        node_id (`str`):
+            The referencing task, named in the message.
+        placeholders (`Iterable[Placeholder]`):
+            The template's already-parsed placeholders.
+        inputs (`Mapping[str, Any]`):
+            The call's inputs, for the ``{"node": <id>}`` shapes.
+        known (`SessionNodes`):
+            What this conversation's earlier tasks did with each node id.
+
+    Raises:
+        `DagValidationError`:
+            On the first reference that names no readable node.
+    """
+    for ph in placeholders:
+        if ph.kind in ("output", "output_path"):
+            target, what = ph.name, f"'{ph.name}'"
+        else:
+            spec = inputs.get(ph.name) if ph.kind in ("input", "input_path") else None
+            if not isinstance(spec, dict) or "node" not in spec:
+                continue
+            target, what = str(spec["node"]), f"input '{ph.name}'"
+        if known.is_readable(target):
+            continue
+        raise DagValidationError(
+            _unreadable(node_id, what, target, known)
+            or f"'{node_id}' references {what}, which no task in this conversation has run. "
+            f"Check the id, or run that task first"
+        )
+
+
 def _unreadable(node_id: str, what: str, target: str, known: SessionNodes) -> str | None:
     """Explain why a node this session has run cannot be read, if that is why.
 
@@ -478,7 +520,7 @@ def _unreadable(node_id: str, what: str, target: str, known: SessionNodes) -> st
     if state == UNRECORDED:
         return (
             f"node '{node_id}' references {what}: run '{owner}' recorded no outcome for it. Read the file "
-            f"instead: {{{{ ref:@runs/{owner}/{target}.out.md }}}}"
+            f"instead: {{{{ ref:@nodes/{target}.out.md }}}}"
         )
     # The two states a *live* run's nodes can be in that only a replan can present:
     # its overlay reads that run as it stands rather than as it finalized. Nothing
