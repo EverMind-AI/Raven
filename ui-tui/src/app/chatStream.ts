@@ -408,6 +408,13 @@ const dispatch = (
       // "every variant was considered", not "every variant the union happened
       // to list when this was written".
       return
+    case 'terminal.created':
+    case 'terminal.closed':
+    case 'terminal.status':
+    case 'a2a.send':
+    case 'a2a.ack.matched':
+      // Hosted terminals are rendered by the web terminal surface.
+      return
     default: {
       // Exhaustiveness — if a new TurnEvent variant lands the type-checker
       // will complain here, forcing this file to be updated.
