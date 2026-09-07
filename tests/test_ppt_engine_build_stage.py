@@ -12,6 +12,7 @@ from raven_ppt.backends.script import script_path
 from raven_ppt.contracts import BuildOutcome, Finding, PageSource, Project, Severity
 from raven_ppt.profiles import registry
 from raven_ppt.stages.build import BuildStage
+from tests._ppt_engine_fixtures import COMMENT_ABOVE_FIRST_BANNER
 
 SCRIPT = textwrap.dedent(
     """
@@ -43,6 +44,28 @@ def project(tmp_path: Path) -> Project:
     p.state_dir.mkdir(parents=True)
     script_path(p).write_text(SCRIPT, encoding="utf-8")
     return p
+
+
+def test_the_page_mapping_diagnosis_reads_a_marked_file_as_the_unmarked_one(project: Project) -> None:
+    """The one door for build.py is only a door if every reader uses it. This is the reader
+    the review named: a UTF-8 byte-order mark in front of a comment above the first banner
+    put that comment in the prelude instead of page 1's block, and the author was told
+    `# SLIDE 2` creates 0 slides where the unmarked file says `# SLIDE 1` creates 2. Same
+    file, same answer, whichever way an editor saved it."""
+    import codecs
+
+    from raven_ppt.stages.build import _mapping_findings
+
+    project.build_dir.mkdir(parents=True, exist_ok=True)
+    unmapped = BuildOutcome(ok=True, pages=2, sources=())
+
+    script_path(project).write_text(COMMENT_ABOVE_FIRST_BANNER, encoding="utf-8")
+    (plain,) = _mapping_findings(project, unmapped)
+    script_path(project).write_bytes(codecs.BOM_UTF8 + COMMENT_ABOVE_FIRST_BANNER.encode("utf-8"))
+    (marked,) = _mapping_findings(project, unmapped)
+
+    assert plain.kind == "unmapped_page" and "`# SLIDE 1` creates 2 slides" in plain.message
+    assert marked.message == plain.message
 
 
 def _outcome(project: Project, pages: int = 2, mapped: bool = True) -> BuildOutcome:
@@ -239,8 +262,8 @@ def _planned(project: Project, figures: dict[int, list[str]]) -> None:
     )
 
 
-def _deck_with(path: Path, pictures: dict[int, bool]) -> None:
-    """Two slides, each with a picture or without one."""
+def _deck_with(path: Path, pictures: dict[int, bool], layouts: tuple[int, int] = (6, 6)) -> None:
+    """Two slides, each with a picture or without one, and each on the named layout."""
     from pptx import Presentation
     from pptx.util import Inches
 
@@ -253,7 +276,7 @@ def _deck_with(path: Path, pictures: dict[int, bool]) -> None:
     )
     prs = Presentation()
     for n in (1, 2):
-        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        slide = prs.slides.add_slide(prs.slide_layouts[layouts[n - 1]])
         if pictures.get(n):
             slide.shapes.add_picture(str(png), Inches(1), Inches(1), Inches(1), Inches(1))
     prs.save(path)
@@ -270,6 +293,121 @@ def test_a_page_the_plan_gave_a_figure_and_the_build_left_bare_is_reported(proje
 
     assert [f.page for f in found] == [1], "only the page built without one"
     assert "mem0-logo-2afc7b9e29" in found[0].message
+
+
+def _onto_layout(deck: Path, image: Path) -> None:
+    """Put `image` on the layout of the deck's first page, where template cover art lives."""
+    from pptx import Presentation
+    from pptx.oxml.shapes.picture import CT_Picture
+    from pptx.util import Inches
+
+    presentation = Presentation(str(deck))
+    layout = presentation.slides[0].slide_layout
+    _, rId = layout.part.get_or_add_image_part(str(image))
+    pic = CT_Picture.new_pic(2, image.stem, image.name, rId, Inches(1), Inches(1), Inches(2), Inches(2))
+    layout.shapes._spTree.append(pic)
+    presentation.save(str(deck))
+
+
+def test_a_figure_swapped_into_the_layout_counts_as_placed(project: Project) -> None:
+    """Several bundled templates draw their cover art on the layout, and the helper an
+    author writes swaps it there. Reading the slide alone called such a page bare: a
+    live run sat on this finding across several builds while page 1's layout held the
+    ingested cover art byte for byte and the slide held no picture at all."""
+    from raven_ppt.stages.build import _unplaced_figure_findings
+
+    deck = project.build_dir / "deck.pptx"
+    # Each page on its own layout: pages sharing one would share the swap, and the
+    # second page is here to show a page whose layout carries nothing is still bare.
+    _deck_with(deck, {1: False, 2: False}, layouts=(6, 5))
+    figure = project.figures_dir / "cover-2afc7b9e29.png"
+    figure.parent.mkdir(parents=True, exist_ok=True)
+    figure.write_bytes((project.build_dir / "dot.png").read_bytes())
+
+    _onto_layout(deck, figure)
+    _planned(project, {1: ["cover-2afc7b9e29"], 2: ["arch-7979644ab7"]})
+
+    found = _unplaced_figure_findings(project, BuildOutcome(ok=True, pptx_path=deck, pages=2, source_digest="x"))
+
+    assert [f.page for f in found] == [2], "page 1 has its figure, on the shape that draws it"
+
+
+def test_a_template_picture_on_the_layout_does_not_answer_a_promised_figure(project: Project) -> None:
+    """Only the deck's own figures count on a layout. Any layout picture would let a
+    template's own photograph answer every figure a plan promised, which is the check
+    saying nothing at all."""
+    from raven_ppt.stages.build import _unplaced_figure_findings
+
+    deck = project.build_dir / "deck.pptx"
+    _deck_with(deck, {1: False, 2: False})
+    project.figures_dir.mkdir(parents=True, exist_ok=True)
+    (project.figures_dir / "other-9de1a0.png").write_bytes(b"\x89PNG\r\n\x1a\n not the picture on the layout")
+
+    _onto_layout(deck, project.build_dir / "dot.png")
+    _planned(project, {1: ["cover-2afc7b9e29"]})
+
+    found = _unplaced_figure_findings(project, BuildOutcome(ok=True, pptx_path=deck, pages=2, source_digest="x"))
+
+    assert [f.page for f in found] == [1]
+
+
+class _LayoutPicture:
+    """A picture on the page's layout, as `picture_blob` reads one."""
+
+    def __init__(self, blob: bytes) -> None:
+        self.image = type("Image", (), {"blob": blob})()
+
+
+def test_a_figure_swapped_onto_the_layout_counts_as_placed(project: Project, monkeypatch) -> None:
+    """Where this check was a false positive. Several templates keep the cover's, the
+    section page's and the closing page's picture on the *layout*, and `replace_picture`
+    there is then the only place a page can put one -- `pictures={...}` on the cloned
+    page never reaches it. A live run spent six builds on its cover with the layout
+    holding the deck's own cover art byte for byte, while this said the page had been
+    built without a picture on it.
+    """
+    from raven_ppt.stages import build as build_stage
+    from raven_ppt.stages.build import _unplaced_figure_findings
+
+    deck = project.build_dir / "deck.pptx"
+    _deck_with(deck, {1: False, 2: False})
+    _planned(project, {1: ["cover-art-1a2b3c"]})
+    project.figures_dir.mkdir(parents=True, exist_ok=True)
+    mine = b"\x89PNG the cover this deck ingested"
+    (project.figures_dir / "cover-art-1a2b3c.png").write_bytes(mine)
+    outcome = BuildOutcome(ok=True, pptx_path=deck, pages=2, source_digest="x")
+
+    monkeypatch.setattr(build_stage, "_layout_pictures", lambda slide: [_LayoutPicture(mine)])
+
+    assert _unplaced_figure_findings(project, outcome) == [], "the figure is placed, on the only slot there is"
+
+
+def test_a_template_picture_on_the_layout_does_not_answer_for_a_promised_figure(project: Project, monkeypatch):
+    """The other half, and why the first is by bytes. If any layout picture counted, a
+    template's stock photograph would satisfy every figure every page ever promised --
+    which is the failure this check exists to catch. It still refuses, and it now says
+    what the author is looking at, because a render that plainly shows a picture makes
+    "built without a picture on it" read as false."""
+    from raven_ppt.stages import build as build_stage
+    from raven_ppt.stages.build import _unplaced_figure_findings
+
+    deck = project.build_dir / "deck.pptx"
+    _deck_with(deck, {1: False, 2: False})
+    _planned(project, {1: ["cover-art-1a2b3c"]})
+    project.figures_dir.mkdir(parents=True, exist_ok=True)
+    (project.figures_dir / "cover-art-1a2b3c.png").write_bytes(b"\x89PNG the cover this deck ingested")
+    outcome = BuildOutcome(ok=True, pptx_path=deck, pages=2, source_digest="x")
+
+    monkeypatch.setattr(build_stage, "_layout_pictures", lambda slide: [_LayoutPicture(b"the template own photo")])
+    found = _unplaced_figure_findings(project, outcome)
+
+    assert [f.page for f in found] == [1], "a picture that is not this deck's answers for nothing"
+    assert "The picture you can see on it is the template layout's" in found[0].message
+    assert "cover-art-1a2b3c" in found[0].message, "and it still names what was promised"
+
+    monkeypatch.setattr(build_stage, "_layout_pictures", lambda slide: [])
+    bare = _unplaced_figure_findings(project, outcome)
+    assert "the template layout's" not in bare[0].message, "a page showing nothing is not told it shows something"
 
 
 def test_a_plan_that_promises_no_figure_is_not_asked_for_one(project: Project) -> None:

@@ -39,8 +39,8 @@ from raven_ppt.services.template import (
 )
 from raven_ppt.services.template.house import house_style
 from raven_ppt.services.template.inventory import template_dir, write_ground
-from raven_ppt.services.template.menu import menu, roles
-from raven_ppt.services.template.theme import ground_of
+from raven_ppt.services.template.menu import ICON_SLOT_NOTE, menu, roles
+from raven_ppt.services.template.theme import borrow_ink_note, ground_of
 from raven_ppt.tools import _return
 from raven_ppt.tools._args import ArgumentError, as_ints
 
@@ -317,7 +317,7 @@ class PptTemplateTool(Tool):
         page named by template, number and arrangement is an offer the way the bound
         template's own pages are; "the other templates have pages too" is not.
         """
-        from raven_ppt.services.template.defaults import bundled_path, reference_pages
+        from raven_ppt.services.template.defaults import bundled_path, reference_artwork, reference_pages
 
         said: list[str] = []
         menus: dict[str, dict[int, Any]] = {}
@@ -330,7 +330,16 @@ class PptTemplateTool(Tool):
                 continue
             what = entry.arrangement or f"{entry.text_blocks} text, {entry.shapes} drawn"
             slots = f" ({entry.slots} slots)" if entry.slots else ""
-            said.append(f"{stem} page {number} is {what}{slots}")
+            # The one thing on a reference page that does not follow the deck. Said
+            # against the four pages it is true of and no others: a note on a page that
+            # comes across clean is what teaches an author to read past the notes.
+            drawings = reference_artwork(stem, number)
+            carried = (
+                f" -- replace its {drawings} drawing(s), painted in {stem.split('_')[0]}'s own colours"
+                if drawings
+                else ""
+            )
+            said.append(f"{stem} page {number} is {what}{slots}{carried}")
         return said
 
     async def _as_renders(self, deck: Project, template: Any, payload: dict[str, Any]) -> str | ToolResult:
@@ -446,6 +455,7 @@ class PptTemplateTool(Tool):
                 + ". Clone it with `adapt(prs, prototype(bundled('<template>'), N), ...)` after "
                 "`from ppt_template import bundled`, and record both `borrowed: '<template>'` and "
                 "`prototype: N` on that page of the plan"
+                + (f". {ink}" if (ink := borrow_ink_note(template.inventory, template.source)) else "")
             )
         asks.append(
             "any listed example page may be a content prototype when its composition is close to the "
@@ -680,6 +690,8 @@ def _render_label(number: int, role: str | None, entry: Any) -> str:
                 "own clear of the copy, `pictures={n: (image, (left, top, width, height))}`, or a cut-out of "
                 "its own from `ppt_generate_image(..., transparent=true)`"
             )
+        if any(" icon" in place for place in places):
+            said += ". A" + ICON_SLOT_NOTE[1:]
     return said + (
         f". A page of this information shape starts here: `adapt(prs, prototype(tpl, {number}), title=..., "
         f"texts={{...}}{', items=[...]' if slots else ''}{', pictures={...}' if places else ''})`, and record "
