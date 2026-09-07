@@ -2225,6 +2225,29 @@ def test_bug_report_review_same_line_double_hit_keeps_positions(
     assert out.count("Seen at:") == 1
 
 
+def test_grouped_occurrences_keep_every_span_for_identical_windows(tmp_path):
+    """Two hits on a just-over-300 line render the same windowed text; the
+    merged group must keep both highlight spans (review-verified trap)."""
+    from raven.trajectory import redact as tredact
+    from raven.trajectory import review as treview
+
+    token = _ENTROPY_TOKEN
+    line = "a" * 100 + f" {token} " + "b" * 30 + f" {token} " + "c" * 140
+    assert len(line) > tbrowse._REVIEW_WHOLE_LINE_LIMIT
+    tree = tmp_path / "trajectory"
+    tree.mkdir()
+    (tree / "long.json").write_text(line, encoding="utf-8")
+    report = tredact.RedactionReport(bundle_dir=tree, redacted_dir=tree.resolve())
+    report.findings = tredact.scan_residuals(tree)
+    (item,) = treview.build_review_items([report])
+    assert len(item.occurrences) == 2
+
+    (group,) = tbrowse._grouped_occurrences(item)
+
+    assert len(group["occurrences"]) == 2
+    assert sorted(group["spans"]) == [(101, 125), (157, 181)]
+
+
 def test_bug_report_review_long_line_windowed(state, workspace, monkeypatch, capsys, tmp_path, _no_machine_secrets):
     artifact = tmp_path / "long.json"
     artifact.write_text("m" * 400 + f" {_ENTROPY_TOKEN} end", encoding="utf-8")

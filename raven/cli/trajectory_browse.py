@@ -929,18 +929,29 @@ def _grouped_occurrences(item: Any) -> list[dict[str, Any]]:
         text, spans = _occurrence_display(occurrence)
         group = by_text.get(text)
         if group is None:
-            group = {"text": text, "spans": spans, "occurrences": []}
+            group = {"text": text, "spans": [], "occurrences": []}
             by_text[text] = group
             groups.append(group)
+        # Two windows on a long line can render the same text from different
+        # hit positions; every occurrence's spans must survive the merge.
+        for span in spans:
+            if span not in group["spans"]:
+                group["spans"].append(span)
         group["occurrences"].append(occurrence)
     return groups
 
 
 def _print_context_text(group: dict[str, Any]) -> None:
     text = group["text"]
+    merged: list[list[int]] = []
+    for start, end in sorted(group["spans"]):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
     rendered = Text("    ")
     pos = 0
-    for start, end in sorted(group["spans"]):
+    for start, end in merged:
         rendered.append(text[pos:start])
         rendered.append(text[start:end], style="bold red")
         pos = end
