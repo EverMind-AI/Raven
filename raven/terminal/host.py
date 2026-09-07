@@ -23,6 +23,7 @@ from raven.contracts.terminal import TerminalError, TerminalRecord
 
 StatusCallback = Callable[[str, dict], Awaitable[None]]
 OutputCallback = Callable[[bytes], Awaitable[None]]
+_KNOWN_AGENT_BRANDS = frozenset({"claude", "codex", "opencode", "hermes", "openclaw", "raven"})
 _AGENT = re.compile(r"(?<![\w./\\-])(?:codex|claude)(?![\w/\\-])", re.I)
 _IDLE = re.compile(r"(?<![\w./\\-])(?:ready|idle|done)(?![\w-])", re.I)
 _WORKING = re.compile(r"(?<![\w./\\-])(?:working|thinking|running)(?![\w-])", re.I)
@@ -44,7 +45,7 @@ def detect_title_status(title: str) -> str | None:
         return "idle"
     if _WORKING.search(title) or title.startswith(". "):
         return "working"
-    return "idle"
+    return None
 
 
 class OutputParser:
@@ -191,8 +192,9 @@ class TerminalHost:
         record.writable = True
         record.liveness = "live"
         state = TerminalState(record, pid, fd, token, title)
-        if Path(argv[0]).name in {"codex", "codex.exe"}:
-            state.provider = "codex"
+        provider = Path(argv[0]).name.removesuffix(".exe")
+        if provider in _KNOWN_AGENT_BRANDS:
+            state.provider = provider
             state.startup_pending = True
         self._terminals[record.handle] = state
         self.topology_revisions[worktree_id] = self.topology_revisions.get(worktree_id, 0) + 1
