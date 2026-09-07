@@ -19,7 +19,8 @@ from raven.terminal.deliver import DeliveryService, PendingSend
 @pytest.mark.parametrize("matched", [True, False])
 async def test_native_reply_is_a_persisted_note_without_pty_input(tmp_path, matched):
     record = TerminalRecord(worktree_id=f"repo::{tmp_path}", worktree_path=str(tmp_path))
-    host = SimpleNamespace(show=lambda _: record, write=AsyncMock(), input=AsyncMock())
+    state = SimpleNamespace(record=record, composer_dirty=True)
+    host = SimpleNamespace(show=lambda _: record, state=lambda _: state, write=AsyncMock(), input=AsyncMock())
     identity = IdentityRegistry(
         tmp_path / "identities.json", config_rows=lambda: [{"name": "Raven", "kind": "builtin"}]
     )
@@ -56,6 +57,7 @@ async def test_native_reply_is_a_persisted_note_without_pty_input(tmp_path, matc
     assert result["state"] == "delivered_to_host"
     assert result["contentAck"] is matched
     assert future.done() is matched
+    assert state.composer_dirty is not matched
     if matched:
         assert future.result()["ack_for"] == "a2a-123456789abc"
     host.write.assert_not_awaited()
