@@ -4601,6 +4601,17 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   color: var(--faint); font-size: 16px; cursor: pointer; }
 .desk-pane > header button svg { width: 16px; height: 16px; stroke-linecap: round; stroke-linejoin: round; }
 .desk-pane > header .pane-fullscreen svg { width: 14px; height: 14px; }
+/* The instance's own effort. A text chip, so it has to undo the fixed 26px
+   square the icon buttons above take. Two states worth telling apart at a
+   glance: following the conversation is the ordinary one and stays as quiet as
+   the icons beside it, while an instance set apart from the conversation wears
+   a pill -- that is a fact about this pane the reader did not choose to look
+   for, so it should not need a hover to find. */
+.desk-pane > header .pane-imode { width: auto; height: 22px; padding: 0 8px; font-size: 11.5px;
+  border-radius: 999px; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  display: block; line-height: 22px; }
+.desk-pane > header .pane-imode:not(.auto) { color: var(--text); background: var(--raised);
+  box-shadow: inset 0 0 0 1px var(--line-soft); }
 .desk-pane > header button:hover { color: var(--text); background: var(--raised); }
 /* The header is the handle once there is more than one pane to arrange. */
 .desk-grid[data-can-drag="true"] .desk-pane > header { cursor: grab; touch-action: none; user-select: none;

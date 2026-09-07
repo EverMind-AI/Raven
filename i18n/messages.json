@@ -5642,6 +5642,30 @@
     "gui.tier.mode_scope": {
       "en": "The profile in force is not one of the built-in tiers, so it is not offered to sub-agents.",
       "zh": "当前这一档不是内置的三档之一,不会下发给子智能体。"
+    },
+    "gui.imode.title": {
+      "en": "Effort",
+      "zh": "力度"
+    },
+    "gui.imode.auto": {
+      "en": "Auto",
+      "zh": "自动"
+    },
+    "gui.imode.agent_default": {
+      "en": "the agent's own default",
+      "zh": "该子智能体自己的默认"
+    },
+    "gui.imode.auto_tip": {
+      "en": "Following the conversation. Click to give this instance its own effort.",
+      "zh": "跟随会话。点击可为这个实例单独设定力度。"
+    },
+    "gui.imode.set_tip": {
+      "en": "This instance's own effort, set apart from the conversation.",
+      "zh": "这个实例自己的力度,与会话分开设定。"
+    },
+    "gui.imode.failed": {
+      "en": "Could not change this instance's effort",
+      "zh": "改这个实例的力度没有成功"
     }
   }
 }

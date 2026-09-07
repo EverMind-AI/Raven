@@ -68,6 +68,25 @@ export interface InstanceCtx {
   }>
 }
 
+/* One rung an agent advertises, as its own ACP handshake reported it. Its
+   vocabulary is the agent's: the tier ladder's three names are only one
+   catalogue among several, and an agent is free to spell its rungs any way. */
+export interface SubagentMode {
+  id: string
+  name?: string
+  description?: string
+}
+
+/* What `subagents.instance.set_mode` answers for one instance. `mode` and
+   `inherited` are reported apart rather than collapsed into an effective rung:
+   collapsed, clearing an override would be unobservable, because a cleared
+   instance and one explicitly set to the session's tier read identically. */
+export interface InstanceModeReply {
+  mode?: string | null
+  inherited?: string | null
+  availableModes?: SubagentMode[]
+}
+
 export interface AgentsSource {
   roster?(): Promise<SubagentRow[]>
   list(sessionId: string): Promise<AgentRow[]>
@@ -94,6 +113,14 @@ export interface AgentsSource {
      be instantiated -- a stateless one answers each turn from nothing, so a
      handle onto it would name a conversation that does not exist. */
   instanceCreate?(agent: string, sessionKey: string): Promise<InstanceRow>
+  /* This instance's own mode, what it inherits without one, and the rungs this
+     agent offers -- one reply is enough to draw the control. Optional like the
+     rest: a server without sub-agents has no instance to put in a mode. */
+  instanceMode?(agent: string, handle: string): Promise<InstanceModeReply>
+  /* Set the override, or clear it with `null`. Clearing is not "set to the
+     session's tier": it is the absence of an override, which is what lets the
+     tier keep moving underneath. */
+  instanceSetMode?(agent: string, handle: string, mode: string | null): Promise<InstanceModeReply>
   /* The live heartbeat: the source calls back every couple of seconds and
      the island decides whether anything on screen needs asking about. */
   watch?(fn: () => void): void
