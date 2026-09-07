@@ -43,7 +43,9 @@ import sys
 from pathlib import Path
 
 LINE_CEILING = 2_000
-CONTRACTS_LINE_CEILING = 2_500
+# The hosted-terminal paper adds terminal identity and delivery contracts.
+# Reviewed by ra-a2a-suborc on 2026-09-08, subject to Human review.
+CONTRACTS_LINE_CEILING = 2_750
 THIRD_PARTY_ALLOWED = frozenset({"loguru"})
 DEBT_MARKER = re.compile(r"\b(TODO|FIXME|HACK)\b")
 
