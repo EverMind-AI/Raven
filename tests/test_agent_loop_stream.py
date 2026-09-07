@@ -16,7 +16,6 @@ from typing import Any
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.recovery import RecoveryLimits
 from raven.providers.base import ChatDelta, ErrorClassification, LLMProvider, LLMResponse
 from raven.providers.rates import DEFAULT_MAX_OUTPUT_TOKENS
 
@@ -52,7 +51,6 @@ def _bind_helper(provider: _FakeProvider):
     fake_self = SimpleNamespace(
         provider=provider,
         _MAX_STREAM_RECONNECTS=AgentLoop._MAX_STREAM_RECONNECTS,
-        _recovery_limits=RecoveryLimits(),
     )
     return AgentLoop._llm_call_stream.__get__(fake_self)
 
@@ -267,6 +265,8 @@ async def test_llm_call_stream_timeout_after_output_fails_the_turn_unless_asked(
     with pytest.raises(TimeoutError):
         await _bind_helper(_TimeoutStreamProvider())(messages=[], tools=None, model="m", on_token_delta=on_delta)
     assert seen == ["partial"]
+
+    from raven.agent.loop.recovery import RecoveryLimits
 
     fake_self = SimpleNamespace(
         provider=_TimeoutStreamProvider(),
@@ -857,6 +857,8 @@ async def test_a_call_that_never_thought_reports_no_thinking_time() -> None:
 
 def _bind_with_ladder(provider: Any, delays: tuple[float, ...]):
     """Bind the helper to a stand-in that also carries the turn's recovery limits."""
+    from raven.agent.loop.recovery import RecoveryLimits
+
     fake_self = SimpleNamespace(
         provider=provider,
         _MAX_STREAM_RECONNECTS=AgentLoop._MAX_STREAM_RECONNECTS,
@@ -954,6 +956,8 @@ async def test_llm_call_stream_retries_after_output_only_when_asked() -> None:
     through the limits and gets the call asked again: one deck build had two hours
     behind it when a dropped connection ended the turn with nothing published."""
     from types import SimpleNamespace
+
+    from raven.agent.loop.recovery import RecoveryLimits
 
     provider = _DiesMidStream()
     fake_self = SimpleNamespace(

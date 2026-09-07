@@ -1244,31 +1244,15 @@ class SubAgentDagTool(Tool):
         store = DagRunStore(self._backend, self._run_root(self._turn_conversation()), run_id)
         await store.record_replan(entry)
 
-    @staticmethod
-    def _link_entry(plan: "ReplanPlan", *, started: bool, error: str | None = None) -> dict[str, Any]:
-        """The replan link's shape, in the one place that decides it.
-
-        Both writers -- the ordinary hand-off and the interrupted one -- record
-        the same four facts about the decision and differ only in whether the
-        successor started and why not. Written out twice, a field added for one
-        reader silently reaches only half the records that reader will meet.
-        """
+    async def start_replan(self, run_id: str, plan: "ReplanPlan", *, bound: bool = False) -> "str | ToolResult":
+        """Start the successor run and note the link on the run it replaces."""
         entry: dict[str, Any] = {
             "run_id": plan.run_id,
             "from_node": plan.from_node,
             "reason": plan.reason,
             "decided_at": int(time.time() * 1000),
-            "started": started,
+            "started": True,
         }
-        if error is not None:
-            entry["error"] = error
-        return entry
-
-    async def start_replan(self, run_id: str, plan: "ReplanPlan", *, bound: bool = False) -> "str | ToolResult":
-        """Start the successor run and note the link on the run it replaces."""
-        # Built before the submission, so `decided_at` stamps when the decision
-        # was taken rather than when its dispatch happened to return.
-        entry = self._link_entry(plan, started=True)
         try:
             result = await self._submit_replan(plan, bound=bound)
         except DagValidationError as exc:
@@ -1296,7 +1280,15 @@ class SubAgentDagTool(Tool):
         in the hand-off -- escapes both guards and still leaves the link
         unwritten.
         """
-        await self._record_link(run_id, self._link_entry(plan, started=False, error=reason))
+        entry: dict[str, Any] = {
+            "run_id": plan.run_id,
+            "from_node": plan.from_node,
+            "reason": plan.reason,
+            "decided_at": int(time.time() * 1000),
+            "started": False,
+            "error": reason,
+        }
+        await self._record_link(run_id, entry)
 
     async def _emit_replanned(self, run_id: str, plan: "ReplanPlan") -> None:
         origin = self._origin.get() or self._default_origin

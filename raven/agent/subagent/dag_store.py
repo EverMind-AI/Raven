@@ -479,13 +479,11 @@ class DagRunStore:
     async def record_replan(self, entry: dict) -> None:
         """Note on this run's ``graph.json`` that it was replanned, and into what.
 
-        A reserved top-level key beside the spec's own, not a wrapper around it.
-        Four of the five readers of this file take the keys they want out of a raw
-        dict (``dag_reader``, ``instance_records``, and the two rpc methods), so
-        the addition is inert to them. The fifth is not: ``dag_tool``'s
-        ``prepare_replan`` parses the file through ``SubAgentDagSpec``, which is
-        ``extra="forbid"`` and rejects this key outright -- which is why it strips
-        it before parsing, and why the key must stay out of that model.
+        A reserved top-level key beside the spec's own, not a wrapper around it:
+        all four readers of this file take the keys they want out of a raw dict
+        (``dag_reader``, ``instance_records``, and the two rpc methods), so the
+        addition is inert to every one of them. It must stay out of
+        ``SubAgentDagSpec``, which is ``extra="forbid"`` and would reject the file.
         """
         path = self._backend.join_path(self.run_dir, "graph.json")
         graph = json.loads(await self.read_text(path))

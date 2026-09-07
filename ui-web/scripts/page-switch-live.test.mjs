@@ -45,7 +45,6 @@ const NAMES = [
   'goState', 'drawBanner', 'sess', 'markNewCurrent', 'plainTitle', 'parkedTurns',
   'restoreTurn', 'wsSetRoot', 'setCtx', 'renderHistory', 'wsOnHistory', 'RavenIslands',
   'loadProviders',
-  'loadTier',
 ]
 
 function harness({ rows, deferSubscribe } = {}) {
@@ -100,7 +99,6 @@ function harness({ rows, deferSubscribe } = {}) {
     sess: (id) => (rows || []).find((r) => r.id === id),
     markNewCurrent: () => {},
     loadProviders: (sid, gen) => calls.push(['loadProviders', sid, gen]),
-    loadTier: () => calls.push(['loadTier']),
     plainTitle: (s) => String(s),
     parkedTurns: new Map(),
     restoreTurn: () => calls.push(['restoreTurn']),
@@ -118,10 +116,7 @@ function harness({ rows, deferSubscribe } = {}) {
     `const { ${NAMES.join(', ')} } = env;
      ${span('async function subscribe(sessionKey) {', 'function claimStream')}
      ${span('let draft = false;', 'async function openLiveSession')}
-     return { subscribe, startDraft, openLiveSession,
-       /* Test-only reach into the staged tier: it is written from the tier
-          source in 120, which this harness does not compile. */
-       stageTier: (m) => { pendingTier = m }, stagedTier: () => pendingTier };`,
+     return { subscribe, startDraft, openLiveSession };`,
   )
   const api = install(env)
   return {
@@ -334,49 +329,6 @@ describe('the assembled live session switch', () => {
     const refreshed = h.calls.filter((c) => c[0] === 'loadProviders')
     expect(refreshed.map((c) => c[1])).toEqual(['a', null])
     expect(refreshed.at(-1)[2]).toBeTypeOf('number')
-  })
-
-  it('drops a tier staged for a draft that was abandoned', async () => {
-    /* The pick was for the conversation the reader was writing, and they left it
-       without sending. Kept, it is spent by whichever conversation is sent next
-       -- an invisible choice crossing from one conversation to another. Reset on
-       both paths out of a draft, exactly where `pendingModel` is. */
-    const h = harness({ rows: [{ id: 'a' }] })
-
-    h.stageTier('max')
-    h.openLiveSession({ id: 'a', title: 'Alpha' })
-    await h.settle('a')
-    expect(h.stagedTier()).toBeNull()
-
-    h.stageTier('max')
-    h.startDraft()
-    expect(h.stagedTier()).toBeNull()
-  })
-
-  it('re-reads the tier when the same conversation is reopened', async () => {
-    /* The reconnect path reopens the CURRENT id, and the tier used to be read
-       from `session.onChange` -- which `setCurrent` never fires for an id that
-       has not changed. The loop holds session policies in memory with no
-       persistence, so a gateway restart puts every session back on the
-       catalogue default while the chip went on naming the tier from before. */
-    const h = harness({ rows: [{ id: 'a' }] })
-
-    h.openLiveSession({ id: 'a', title: 'Alpha' })
-    await h.settle('a')
-    h.openLiveSession({ id: 'a', title: 'Alpha' })
-    await h.settle('a')
-
-    expect(h.calls.filter((c) => c[0] === 'loadTier')).toHaveLength(2)
-  })
-
-  it('reads the tier back when a conversation is left for a new task', async () => {
-    const h = harness({ rows: [{ id: 'a' }] })
-
-    h.openLiveSession({ id: 'a', title: 'Alpha' })
-    await h.settle('a')
-    h.startDraft()
-
-    expect(h.calls.filter((c) => c[0] === 'loadTier')).toHaveLength(2)
   })
 
   it('refreshes the model for the conversation being opened, not the one left behind', async () => {

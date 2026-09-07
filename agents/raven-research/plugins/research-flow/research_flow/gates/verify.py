@@ -67,7 +67,7 @@ _REVIEWER_SYSTEM = (
     "reply must be EXACTLY one bare JSON object and nothing else - no prose "
     "before or after, no markdown code fences: "
     '{"pass": true|false, "unresolved_claims": <int>, '
-    '"unsupported_claims": ["..."], "estimated_cells": ["..."], "issues": ["..."]}. '
+    '"unsupported_claims": ["..."], "issues": ["..."]}. '
     '"pass" must be a JSON boolean literal (true or false), not a string. '
     "Fail the draft only for substantive problems - unsupported decisive "
     "claims, wrong entities, missing answer - not for style."
@@ -99,35 +99,6 @@ _CONSTRAINT_RUBRIC = (
     "quantities, relationships), check the drafted answer against EACH "
     "constraint one by one against the evidence, and treat any failed "
     "constraint as an unsupported claim."
-)
-
-# The reviewer passed a draft whose scored table carried two order-of-magnitude
-# errors, and it was right to by its own rules: _STRICT_REJECT_ONLY tells it not to
-# reject a claim it "merely cannot verify either way", and a cell the draft has
-# already marked `(est.)` is exactly that shape. So the estimate has to be named as
-# the claim rather than as a gap in the evidence.
-#
-# Unconditional, unlike the two rubrics above. Their knobs exist because a bench arm
-# runs the same reviewer and a measured distribution may not move underneath it; this
-# module serves one product and no arm, so a knob here could only ever be set one way.
-#
-# It reads the DRAFT, not the evidence, which is what keeps the elision carve-out from
-# swallowing it: a number the draft calls an estimate is an estimate whether or not the
-# page it came from is still in the window. Stated in the text as well, because the
-# carve-out claims to override "every rule above" and a reader of the assembled prompt
-# cannot see which rule was written first.
-_NUMERIC_RUBRIC = (
-    " One check reads the draft's own words rather than the evidence: a number the "
-    "draft itself marks as an estimate, a guess or unretrieved - `(est.)`, `approx`, "
-    "`~`, `not obtained` - must not sit in a table column of measurements, in a score, "
-    "or in a ranking the draft then orders by. Where one does, name that cell in "
-    "unsupported_claims AND in estimated_cells: the estimate is the claim, and it was "
-    "summed and ranked as though it were measured. The second field is what tells the "
-    "gate this rejection reads the draft rather than the evidence. This holds whether or "
-    "not the evidence behind the cell is "
-    "still in view, because it is a fact about the draft. A quantity the draft computes "
-    "from numbers it did read, marked as derived and shown with its arithmetic, is a "
-    "measurement and not an estimate."
 )
 
 _STRICT_REJECT_ONLY = (
@@ -233,9 +204,6 @@ class DraftReviewerGate(AgentHook):
             self._reviewer_system += _CONSTRAINT_RUBRIC
         if strict_reject_only:
             self._reviewer_system += _STRICT_REJECT_ONLY
-        # After the reject-only carve-out it narrows, and before the elision one so
-        # that stays the last word. Its own text says the carve-out cannot reach it.
-        self._reviewer_system += _NUMERIC_RUBRIC
         self._reviewer_system += _ELISION_RUBRIC
 
     @property
@@ -370,26 +338,7 @@ class DraftReviewerGate(AgentHook):
         # replaced by the elision placeholder. When the pack had to skip elided
         # bodies, a rejection cannot be told apart from "the evidence was not shown
         # to me", so it is not evidence of an unsupported claim.
-        # dr@3.5-numeric. The carve-out below asks one question - could this rejection be
-        # the pack failing to show the evidence rather than the draft being wrong - and for
-        # a cell the draft ITSELF marks as an estimate the answer is no: the claim is made
-        # of the draft's own words, and no amount of elision can make `(est.)` mean
-        # something else. Degrading it anyway made the rubric inert in exactly the runs it
-        # was written for, since a long research turn is the one that elides. So a verdict
-        # that names estimated cells keeps its rejection, and the carve-out still covers
-        # every evidence-shaped claim beside it.
-        elided = state.get("evidence_elided_in_context")
-        estimated = verdict.get("estimated_cells") or []
-        if self._fail_open_on_elided_evidence and elided and estimated:
-            state["elided_kept_numeric"] = state.get("elided_kept_numeric", 0) + 1
-            logger.info(
-                "verify-gate: reject arrived with %d elided tool results but names %d estimated cell(s); "
-                "kept (elided_kept_numeric=%d)",
-                elided,
-                len(estimated),
-                state["elided_kept_numeric"],
-            )
-        elif self._fail_open_on_elided_evidence and elided:
+        if self._fail_open_on_elided_evidence and state.get("evidence_elided_in_context"):
             state["rejected_on_elided"] = state.get("rejected_on_elided", 0) + 1
             logger.warning(
                 "verify-gate: reject arrived with %d elided tool results in context; "
@@ -576,7 +525,7 @@ class DraftReviewerGate(AgentHook):
         # A count is not a named claim, so it collapses to empty rather than to
         # a fake entry -- that keeps ``strict_reject_only`` honest, since its
         # whole rule is that an unnamed reject degrades to a pass.
-        for key in ("unsupported_claims", "estimated_cells", "issues"):
+        for key in ("unsupported_claims", "issues"):
             value = verdict.get(key)
             if value is None or isinstance(value, list):
                 continue
@@ -626,14 +575,7 @@ class DraftReviewerGate(AgentHook):
     @staticmethod
     def _format_feedback(verdict: dict) -> str:
         lines = []
-        for cell in verdict.get("estimated_cells") or []:
-            # Named first and named as what it is: the fix is to retrieve the number or to
-            # write that it was not obtained, which is a different instruction from the
-            # one an unsupported claim gets.
-            lines.append(f"- estimate in a scored column: {cell}")
         for claim in verdict.get("unsupported_claims") or []:
-            if claim in (verdict.get("estimated_cells") or []):
-                continue
             lines.append(f"- unsupported claim: {claim}")
         for issue in verdict.get("issues") or []:
             lines.append(f"- {issue}")

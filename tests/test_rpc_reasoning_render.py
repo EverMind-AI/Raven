@@ -16,7 +16,6 @@ from types import SimpleNamespace
 from typing import Any
 
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.recovery import RecoveryLimits
 from raven.contracts.llm_provider import ChatDelta
 from raven.providers.litellm_provider import LiteLLMProvider
 
@@ -38,7 +37,6 @@ def _bind_helper(provider: _FakeProvider):
     fake_self = SimpleNamespace(
         provider=provider,
         _MAX_STREAM_RECONNECTS=AgentLoop._MAX_STREAM_RECONNECTS,
-        _recovery_limits=RecoveryLimits(),
     )
     return AgentLoop._llm_call_stream.__get__(fake_self)
 

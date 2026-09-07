@@ -80,11 +80,6 @@ let draft = false;
    forgotten. Cleared on any leave of the draft so a stale pick cannot land on
    the next conversation. */
 let pendingModel = null;
-/* The tier picked before the conversation exists. Declared beside `pendingModel`
-   and reset on exactly the same two paths, because it is the same problem: a
-   draft has no session_key, and writing under the empty one lands on a policy
-   the first turn will not read. Assigned from the tier source in 120. */
-let pendingTier = null;
 
 /* Apply a staged draft pick to the session the first message just minted.
    Awaited before that turn is sent, so the turn runs on the chosen model rather
@@ -106,25 +101,6 @@ async function applyStagedModel(sessionId, gen) {
     toast(`切换失败：${(e && ((e.data && e.data.detail) || e.message)) || e}`);
     void loadProviders(sessionId, gen);
   }
-}
-
-/* The tier picked while this was still a draft, written now that there is a
-   session_key to write it under. Awaited before the turn is sent, for the same
-   reason the model is: the turn dispatches sub-agents, and a tier that lands
-   after it starts is a tier that turn did not run at.
-
-   A failure is said rather than reversed silently, and then re-read: the chip is
-   showing the staged tier as though it were in force, so leaving it there after
-   a refusal is the one outcome worse than the refusal. */
-async function applyStagedTier(sessionId) {
-  const mode = stagedTier();
-  if (!mode) return;
-  try {
-    await rpc.call('session.set_mode', { session_key: sessionId, mode });
-  } catch (e) {
-    toast(`${T('gui.tier.title')}: ${(e && ((e.data && e.data.detail) || e.message)) || e}`);
-  }
-  void loadTier();
 }
 
 /* Which switch the visible page belongs to. `session.resume` is a round trip,
@@ -166,11 +142,6 @@ function startDraft() {
   // default back or the chip keeps claiming the model of the conversation just
   // left. A null session omits the field, which is the default's own answer.
   void loadProviders(null, gen);
-  /* Both halves, for the reason above it: a draft runs the configured default,
-     so leaving a conversation for one has to read that default back -- and a
-     tier staged for a draft that was never sent belongs to nothing, so it goes
-     rather than waiting to be spent by whichever conversation is sent next. */
-  pendingTier = null; void loadTier();
   $('#title').textContent = T('gui.new_task');
   pitch(); sessionDraw(); ta.focus();
 }
@@ -192,13 +163,6 @@ async function openLiveSession(s) {
   // refresh drop itself if a later open overtakes it, since model.options
   // answers off-thread and can land out of order.
   void loadProviders(s.id, gen);
-  /* Read here rather than from `session.onChange`, which is what the tier used
-     and what left it stale: `setCurrent` returns early when the id is unchanged,
-     and the reconnect path reopens the SAME id. The loop holds session policies
-     in memory (`_session_policies`, no persistence), so a gateway restart puts
-     every session back on the catalogue default -- and the chip went on naming
-     the tier from before the gap. */
-  pendingTier = null; void loadTier();
   // Opening it IS reading it. ``s`` can be a bare {id, title} from the
   // reconnect path, so clear the flag on the row in sessionRows(), not on the arg.
   const row = sess(s.id);
@@ -346,7 +310,6 @@ function liveSend(text) {
     // filed under the session that just came into being.
     claimDraft(sessionCurrent());
     await applyStagedModel(s.id, sendGen);
-    await applyStagedTier(s.id);
     beginNaming(text);
     sessionDraw();
     await subscribe(s.id);
