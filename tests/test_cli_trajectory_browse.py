@@ -1951,13 +1951,18 @@ def test_bug_report_review_single_risk_confirm_declined(state, workspace, monkey
         [_span("trace-1", session_key="cli:a", attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})],
     )
 
-    fake = _bug_flow(monkeypatch, workspace, ["it broke", False, ("pick", "Keep"), False, _CANCEL])
+    fake = _bug_flow(monkeypatch, workspace, ["it broke", False, "k", False, _CANCEL])
 
     out = capsys.readouterr().out
     assert "Redaction review — 1 item(s) need your decision" in out
+    assert "Paths are relative to the trajectory snapshot inside the package." in out
     assert "Suspected: high-entropy token" in out
+    assert f"Token: {_ENTROPY_TOKEN}" in out
     assert "the span log" in out
+    assert "spans.jsonl:1" in out
     assert "NEEDS REVIEW" in out
+    assert "Review decisions are complete. Confirm the report contents shown above." in out
+    assert "Reviewed:" in out and "1 kept" in out
     assert "Cancelled — no bug report was created." in out
     assert breport.list_reports(state) == []
     assert any("Ship the package with the risks listed above?" in msg for _k, msg, _t in fake.prompts)
@@ -1973,7 +1978,7 @@ def test_bug_report_review_kept_finding_ships(state, workspace, monkeypatch, cap
         [_span("trace-1", session_key="cli:a", attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})],
     )
 
-    _bug_flow(monkeypatch, workspace, ["it broke", False, ("pick", "Keep"), True, _CANCEL])
+    _bug_flow(monkeypatch, workspace, ["it broke", False, "k", True, _CANCEL])
 
     _record_dir, record = _single_report(state)
     assert record["status"] == "local_ready"
@@ -1991,7 +1996,7 @@ def test_bug_report_private_key_acknowledged_ships(state, workspace, monkeypatch
         [_span("trace-1", session_key="cli:a", attrs={"llm.output": _PEM})],
     )
 
-    _bug_flow(monkeypatch, workspace, ["it broke", False, ("pick", "Acknowledge"), True, _CANCEL])
+    _bug_flow(monkeypatch, workspace, ["it broke", False, "", True, _CANCEL])
 
     out = capsys.readouterr().out
     assert "Confirmed sensitive: private key block (already replaced)" in out
@@ -2008,7 +2013,7 @@ def test_bug_report_review_cancel_keeps_nothing(state, workspace, monkeypatch, c
 
     _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
 
-    fake = _bug_flow(monkeypatch, workspace, [f"look: {_PEM}", False, ("pick", "Cancel the report"), _CANCEL])
+    fake = _bug_flow(monkeypatch, workspace, [f"look: {_PEM}", False, "c", _CANCEL])
 
     out = capsys.readouterr().out
     assert "Cancelled — no bug report was created." in out
@@ -2116,7 +2121,8 @@ def test_bug_report_policy_review_flow(state, workspace, monkeypatch, capsys, _n
     assert breport.list_reports(state) == []
     assert any("Ship the package with the risks listed above?" in msg for _k, msg, _t in fake.prompts)
     assert not any("Create the bug report?" in msg for _k, msg, _t in fake.prompts)
-    assert not any(msg == "Decision:" for _k, msg, _t in fake.prompts)
+    assert not any(str(msg).startswith("Decision") for _k, msg, _t in fake.prompts)
+    assert "Review decisions are complete." not in out
 
     _bug_flow(monkeypatch, workspace, ["it broke", False, True, _CANCEL])
     ((_record_dir, record),) = breport.list_reports(state)
@@ -2131,33 +2137,33 @@ def test_bug_report_review_lists_every_item(state, workspace, monkeypatch, capsy
         [_span("trace-1", session_key="cli:a", attrs={"llm.output": " ".join(tokens)})],
     )
 
-    answers = ["it broke", False] + [("pick", "Keep")] * 6 + [True, _CANCEL]
+    answers = ["it broke", False] + ["k"] * 6 + [True, _CANCEL]
     fake = _bug_flow(monkeypatch, workspace, answers)
 
     out = capsys.readouterr().out
     assert "Redaction review — 6 item(s) need your decision" in out
     assert "[6/6]" in out
-    assert sum(1 for _k, msg, _t in fake.prompts if msg == "Decision:") == 6
+    assert sum(1 for _k, msg, _t in fake.prompts if str(msg).startswith("Decision")) == 6
     _record_dir, record = _single_report(state)
     assert len(record["redaction"]["user_decisions"]) == 6
 
 
 def test_bug_report_review_suspected_item_has_no_default(state, workspace, monkeypatch, capsys, _no_machine_secrets):
-    """A bare Enter lands on the placeholder and records nothing; the item is
-    re-asked until a real action is chosen."""
+    """A bare Enter (or any unknown input) records nothing; the item is
+    re-asked until k, r, or c is typed."""
     _write_log(
         state / "logs" / "audit-spans.log",
         [_span("trace-1", session_key="cli:a", attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})],
     )
 
-    answers = ["it broke", False, ("pick", "(select a decision)"), ("pick", "Keep"), True, _CANCEL]
+    answers = ["it broke", False, "", "x", "k", True, _CANCEL]
     fake = _bug_flow(monkeypatch, workspace, answers)
 
     out = capsys.readouterr().out
-    assert "This item has no default" in out
-    assert sum(1 for _k, msg, _t in fake.prompts if msg == "Decision:") == 2
-    decision_prompts = [titles for _k, msg, titles in fake.prompts if msg == "Decision:"]
-    assert decision_prompts[0][0] == "(select a decision)"
+    assert out.count("Choose k, r, or c — this item has no default.") == 2
+    decision_prompts = [msg for _k, msg, _t in fake.prompts if str(msg).startswith("Decision")]
+    assert len(decision_prompts) == 3
+    assert "[k] keep" in decision_prompts[0]
     _record_dir, record = _single_report(state)
     assert [entry["action"] for entry in record["redaction"]["user_decisions"]] == ["kept"]
 
@@ -2168,12 +2174,71 @@ def test_bug_report_private_key_default_stays_acknowledge(state, workspace, monk
         [_span("trace-1", session_key="cli:a", attrs={"llm.output": _PEM})],
     )
 
-    fake = _bug_flow(monkeypatch, workspace, ["it broke", False, ("pick", "Acknowledge"), True, _CANCEL])
+    fake = _bug_flow(monkeypatch, workspace, ["it broke", False, "", True, _CANCEL])
 
-    decision_prompts = [titles for _k, msg, titles in fake.prompts if msg == "Decision:"]
-    assert decision_prompts[0][0] == "Acknowledge and continue"
+    decision_prompts = [msg for _k, msg, _t in fake.prompts if str(msg).startswith("Decision")]
+    assert "[Enter] acknowledge and continue" in decision_prompts[0]
     _record_dir, record = _single_report(state)
     assert [entry["action"] for entry in record["redaction"]["user_decisions"]] == ["acknowledged"]
+
+
+def test_bug_report_review_locations_survive_context_cap(
+    state, workspace, monkeypatch, capsys, tmp_path, _no_machine_secrets
+):
+    """Only context text is capped: with six distinct contexts across six
+    files, every location stays visible and the extras say so."""
+    attrs = {}
+    for i in range(6):
+        artifact = tmp_path / f"ctx{i}.json"
+        artifact.write_text(f"lead{i} {_ENTROPY_TOKEN} tail{i}", encoding="utf-8")
+        attrs[f"x{i}.artifact_path"] = str(artifact)
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a", attrs=attrs)])
+
+    _bug_flow(monkeypatch, workspace, ["it broke", False, "k", True, _CANCEL])
+
+    out = capsys.readouterr().out
+    assert f"Token: {_ENTROPY_TOKEN} — the same value in 6 place(s)" in out
+    assert "Context 1 of 6" in out
+    assert "... 1 more distinct context(s), locations listed below:" in out
+    assert "(context omitted)" in out
+    for i in range(6):
+        assert f"ctx{i}.json:1" in out
+
+
+def test_bug_report_review_same_line_double_hit_keeps_positions(
+    state, workspace, monkeypatch, capsys, tmp_path, _no_machine_secrets
+):
+    """Two hits of the same value on one short line stay one context group
+    with both positions counted (display-text dedup must not lose them)."""
+    artifact = tmp_path / "double.json"
+    artifact.write_text(f"a {_ENTROPY_TOKEN} b {_ENTROPY_TOKEN} c", encoding="utf-8")
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1", session_key="cli:a", attrs={"x.artifact_path": str(artifact)})],
+    )
+
+    _bug_flow(monkeypatch, workspace, ["it broke", False, "k", True, _CANCEL])
+
+    out = capsys.readouterr().out
+    assert "the same value in 2 place(s)" in out
+    assert "(identical in 2 place(s))" in out
+    assert out.count("Seen at:") == 1
+
+
+def test_bug_report_review_long_line_windowed(state, workspace, monkeypatch, capsys, tmp_path, _no_machine_secrets):
+    artifact = tmp_path / "long.json"
+    artifact.write_text("m" * 400 + f" {_ENTROPY_TOKEN} end", encoding="utf-8")
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1", session_key="cli:a", attrs={"x.artifact_path": str(artifact)})],
+    )
+
+    _bug_flow(monkeypatch, workspace, ["it broke", False, "k", True, _CANCEL])
+
+    flat = "".join(capsys.readouterr().out.split())
+    assert "..." in flat
+    assert "m" * 250 not in flat
+    assert "m" * 100 in flat
 
 
 def test_bug_report_review_mixed_decisions(state, workspace, monkeypatch, capsys, _no_machine_secrets):
@@ -2184,7 +2249,7 @@ def test_bug_report_review_mixed_decisions(state, workspace, monkeypatch, capsys
         [_span("trace-1", session_key="cli:a", attrs={"llm.output": f"keep {keep} drop {drop}"})],
     )
 
-    _bug_flow(monkeypatch, workspace, ["it broke", False, ("pick", "Keep"), ("pick", "Replace"), True, _CANCEL])
+    _bug_flow(monkeypatch, workspace, ["it broke", False, "k", "r", True, _CANCEL])
 
     _record_dir, record = _single_report(state)
     actions = sorted(entry["action"] for entry in record["redaction"]["user_decisions"])
@@ -2200,21 +2265,12 @@ def test_bug_report_review_conflict_reasks_linked_group(state, workspace, monkey
         [_span("trace-1", session_key="cli:a", attrs={"llm.output": f"a {inner} b {outer}"})],
     )
 
-    answers = [
-        "it broke",
-        False,
-        ("pick", "Keep"),
-        ("pick", "Replace"),
-        ("pick", "Replace"),
-        ("pick", "Replace"),
-        True,
-        _CANCEL,
-    ]
+    answers = ["it broke", False, "k", "r", "r", "r", True, _CANCEL]
     fake = _bug_flow(monkeypatch, workspace, answers)
 
     out = capsys.readouterr().out
     assert "must share one decision" in out
-    assert sum(1 for _k, msg, _t in fake.prompts if msg == "Decision:") == 4
+    assert sum(1 for _k, msg, _t in fake.prompts if str(msg).startswith("Decision")) == 4
     _record_dir, record = _single_report(state)
     assert [entry["action"] for entry in record["redaction"]["user_decisions"]] == ["redacted", "redacted"]
     assert inner not in json.dumps(record) and outer not in json.dumps(record)

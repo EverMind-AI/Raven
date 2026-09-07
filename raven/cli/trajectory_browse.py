@@ -55,7 +55,9 @@ Control flow contracts:
 from __future__ import annotations
 
 import logging
+import re
 import shutil
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -887,27 +889,67 @@ def _print_packaging_failure(report_id: str, reason: str, *, retryable: bool) ->
 # remaining reasons are the warning lines the screen must still show).
 _REVIEW_ITEM_REASON_PREFIXES = ("residual scan flagged", "the original trajectory contained")
 
-_REVIEW_CONTEXT_WINDOW = 80
-_REVIEW_OCCURRENCE_LIMIT = 5
+_REVIEW_CONTEXT_WINDOW = 200
+_REVIEW_WHOLE_LINE_LIMIT = 300
+_REVIEW_CONTEXT_GROUP_LIMIT = 5
+_REVIEW_PATHS_NOTE = "Paths are relative to the trajectory snapshot inside the package."
 
 
 def _review_warnings(reasons: list[str]) -> list[str]:
     return [reason for reason in reasons if not reason.startswith(_REVIEW_ITEM_REASON_PREFIXES)]
 
 
-def _print_review_occurrence(occurrence: dict[str, Any]) -> None:
+def _occurrence_display(occurrence: dict[str, Any]) -> tuple[str, list[tuple[int, int]]]:
+    """(rendered context, highlight spans) for one occurrence.
+
+    Short lines render whole with every hit of the value highlighted (two
+    hits on one line must not lose their positions to display-text dedup);
+    long lines get a window centered on this occurrence, so hits at other
+    positions naturally render as distinct texts.
+    """
     line, start, end = occurrence["line"], occurrence["start"], occurrence["end"]
+    token = line[start:end]
+    stripped = line.strip()
+    if len(stripped) <= _REVIEW_WHOLE_LINE_LIMIT:
+        offset = line.find(stripped) if stripped else 0
+        spans = [(m.start(), m.end()) for m in re.finditer(re.escape(token), stripped)] if token else []
+        return stripped, spans or [(max(0, start - offset), max(0, end - offset))]
     lo = max(0, start - _REVIEW_CONTEXT_WINDOW)
     hi = min(len(line), end + _REVIEW_CONTEXT_WINDOW)
-    text = Text("  ")
-    if lo:
-        text.append("...")
-    text.append(line[lo:start])
-    text.append(line[start:end], style="bold red")
-    text.append(line[end:hi])
-    if hi < len(line):
-        text.append("...")
-    console.print(text)
+    prefix = "..." if lo else ""
+    suffix = "..." if hi < len(line) else ""
+    text = prefix + line[lo:hi] + suffix
+    return text, [(len(prefix) + start - lo, len(prefix) + end - lo)]
+
+
+def _grouped_occurrences(item: Any) -> list[dict[str, Any]]:
+    groups: list[dict[str, Any]] = []
+    by_text: dict[str, dict[str, Any]] = {}
+    for occurrence in item.occurrences:
+        text, spans = _occurrence_display(occurrence)
+        group = by_text.get(text)
+        if group is None:
+            group = {"text": text, "spans": spans, "occurrences": []}
+            by_text[text] = group
+            groups.append(group)
+        group["occurrences"].append(occurrence)
+    return groups
+
+
+def _print_context_text(group: dict[str, Any]) -> None:
+    text = group["text"]
+    rendered = Text("    ")
+    pos = 0
+    for start, end in sorted(group["spans"]):
+        rendered.append(text[pos:start])
+        rendered.append(text[start:end], style="bold red")
+        pos = end
+    rendered.append(text[pos:])
+    console.print(rendered)
+
+
+def _occurrence_location(occurrence: dict[str, Any]) -> str:
+    return f"{occurrence['label']} — {occurrence['file']}:{occurrence['line_no']}"
 
 
 def _print_review_item(item: Any, index: int, total: int, index_by_id: dict[str, int]) -> None:
@@ -918,53 +960,74 @@ def _print_review_item(item: Any, index: int, total: int, index_by_id: dict[str,
         else f"Suspected: {item.category} token"
     )
     console.print(escape(f"[{index}/{total}] {title}"), highlight=False)
-    for source in item.sources:
-        count = f" ({source['count']})" if source["count"] > 1 else ""
-        console.print(f"  Source: {escape(source['label'])}{count}", highlight=False)
-    for occurrence in item.occurrences[:_REVIEW_OCCURRENCE_LIMIT]:
-        _print_review_occurrence(occurrence)
-    if len(item.occurrences) > _REVIEW_OCCURRENCE_LIMIT:
-        console.print(
-            f"  ... and {len(item.occurrences) - _REVIEW_OCCURRENCE_LIMIT} more occurrence(s)", highlight=False
-        )
+    places = len(item.occurrences)
+    if item.kind == treview.KIND_CONFIRMED:
+        console.print(f"  Token: {escape(item.masked_sample)} — already replaced, {places} place(s)", highlight=False)
+    else:
+        console.print(f"  Token: {escape(item.token)} — the same value in {places} place(s)", highlight=False)
     if item.linked:
         linked = ", ".join(f"#{index_by_id[other]}" for other in item.linked)
         console.print(f"  Linked with item {linked} (overlapping values) — decisions must match.", highlight=False)
-
-
-_REVIEW_CANCEL = "__cancel_report__"
-_REVIEW_UNDECIDED = "__no_decision__"
+    groups = _grouped_occurrences(item)
+    shown = groups[:_REVIEW_CONTEXT_GROUP_LIMIT]
+    hidden = groups[_REVIEW_CONTEXT_GROUP_LIMIT:]
+    for position, group in enumerate(shown, 1):
+        header = f"  Context {position} of {len(groups)}" if len(groups) > 1 else "  Context"
+        if len(group["occurrences"]) > 1:
+            header += f" (identical in {len(group['occurrences'])} place(s))"
+        console.print(header + ":", highlight=False)
+        _print_context_text(group)
+        console.print("  Seen at:", highlight=False)
+        for occurrence in group["occurrences"]:
+            console.print(f"    - {escape(_occurrence_location(occurrence))}", highlight=False)
+    if hidden:
+        # Context text is the only thing capped: every occurrence's semantic
+        # source and file:line stay visible no matter how many groups exist.
+        console.print(f"  ... {len(hidden)} more distinct context(s), locations listed below:", highlight=False)
+        for group in hidden:
+            for occurrence in group["occurrences"]:
+                console.print(f"    - {escape(_occurrence_location(occurrence))} (context omitted)", highlight=False)
 
 
 def _ask_review_item(
     item: Any, index: int, total: int, index_by_id: dict[str, int], questionary: Any, style: Any
 ) -> str:
     _print_review_item(item, index, total, index_by_id)
-    # questionary.Choice falls back to the title when value is None, so the
-    # cancel/placeholder rows need explicit sentinel values. Suspected items
-    # have no default action: the pointer starts on a placeholder that records
-    # nothing, so a bare Enter cannot silently keep an unknown token.
     if item.kind == treview.KIND_CONFIRMED:
-        choices = [
-            questionary.Choice("Acknowledge and continue", value=treview.ACTION_ACKNOWLEDGED),
-            questionary.Choice("Cancel the report", value=_REVIEW_CANCEL),
-        ]
-    else:
-        choices = [
-            questionary.Choice("(select a decision)", value=_REVIEW_UNDECIDED),
-            questionary.Choice("Keep (harmless, ship as-is)", value=treview.ACTION_KEPT),
-            questionary.Choice("Replace with [REDACTED:user-confirmed]", value=treview.ACTION_REDACTED),
-            questionary.Choice("Cancel the report", value=_REVIEW_CANCEL),
-        ]
+        while True:
+            answer = (
+                _ask_action(
+                    questionary.text(
+                        "Decision — [Enter] acknowledge and continue / [c] cancel:", style=style, qmark=QMARK
+                    )
+                )
+                .strip()
+                .lower()
+            )
+            if answer == "":
+                return treview.ACTION_ACKNOWLEDGED
+            if answer == "c":
+                raise treview.ReviewCancelledError("the report was cancelled from the review screen")
+            console.print("  Press Enter to acknowledge, or c to cancel.", highlight=False)
     while True:
-        action = _ask_action(
-            questionary.select("Decision:", choices=choices, style=style, qmark=QMARK, pointer=POINTER, instruction=" ")
+        answer = (
+            _ask_action(
+                questionary.text(
+                    "Decision — [k] keep / [r] replace with [REDACTED:user-confirmed] / [c] cancel:",
+                    style=style,
+                    qmark=QMARK,
+                )
+            )
+            .strip()
+            .lower()
         )
-        if action == _REVIEW_CANCEL:
+        if answer == "k":
+            return treview.ACTION_KEPT
+        if answer == "r":
+            return treview.ACTION_REDACTED
+        if answer == "c":
             raise treview.ReviewCancelledError("the report was cancelled from the review screen")
-        if action != _REVIEW_UNDECIDED:
-            return action
-        console.print("  This item has no default — choose Keep, Replace, or Cancel.", highlight=False)
+        console.print("  Choose k, r, or c — this item has no default.", highlight=False)
 
 
 def _conflicted_review_items(items: list[Any], actions: dict[str, str]) -> list[Any]:
@@ -993,6 +1056,7 @@ def make_review_decider(questionary: Any, style: Any) -> Any:
     def _decide(items: list[Any], reasons: list[str]) -> list[Any]:
         console.print()
         console.print(f"Redaction review — {len(items)} item(s) need your decision", highlight=False)
+        console.print(f"  {_REVIEW_PATHS_NOTE}", highlight=False)
         for warning in _review_warnings(reasons):
             console.print(f"  [yellow]! {escape(warning)}[/yellow]", highlight=False)
         index_by_id = {item.id: index for index, item in enumerate(items, 1)}
@@ -1055,6 +1119,24 @@ def _ask_problem_fields(questionary: Any, style: Any) -> dict[str, str]:
     return fields
 
 
+def _decision_tally(decisions: list[dict[str, Any]]) -> str:
+    """`N decision(s) complete — X kept, Y redacted, Z acknowledged` (hit kinds only)."""
+    tally = Counter(entry.get("action") for entry in decisions)
+    breakdown = ", ".join(
+        f"{tally[action]} {action}" for action in ("kept", "redacted", "acknowledged") if tally[action]
+    )
+    return f"{len(decisions)} decision(s) complete — {breakdown}"
+
+
+def _decision_line(entry: dict[str, Any]) -> str:
+    """One decision row: action, short masked token, first source (+N more)."""
+    token_label = entry.get("masked_token") or entry.get("masked_sample") or ""
+    sources = entry.get("sources") or []
+    first = sources[0]["source"] if sources else ""
+    more = f" (+{len(sources) - 1} more sources)" if len(sources) > 1 else ""
+    return _collapse_text(f"{entry.get('action', ''):<12} {token_label} — {first}{more}") or ""
+
+
 def _summary_line(label: str, value: str) -> None:
     console.print(f"  {label + ':':<14}{value}", highlight=False)
 
@@ -1097,14 +1179,9 @@ def _print_bug_summary(session_row: SessionRow, index: int, row: AttemptRow, pre
             console.print(f"    - {escape(reason)}", highlight=False)
         decisions = redaction.get("user_decisions") or []
         if decisions:
-            _summary_line("Decisions", f"{len(decisions)} review decision(s)")
+            _summary_line("Reviewed", _decision_tally(decisions))
             for entry in decisions:
-                sources = ", ".join(
-                    entry_source["source"] + (f" x{entry_source['count']}" if entry_source["count"] > 1 else "")
-                    for entry_source in entry["sources"]
-                )
-                line = _collapse_text(f"{entry['action']:<12} {entry['masked_sample']} — {sources}") or ""
-                console.print(f"    - {escape(line)}", highlight=False)
+                console.print(f"    - {escape(_decision_line(entry))}", highlight=False)
     else:
         _summary_line("Redaction", f"{counts} · residual scan: clean")
     console.print(_PII_NOTE, highlight=False)
@@ -1120,6 +1197,8 @@ def _confirm_create(questionary: Any, style: Any, prep: Any) -> bool:
     summary) instead of the old create-then-review double prompt.
     """
     if prep.classification == breport.CLASSIFICATION_NEEDS_REVIEW:
+        if prep.user_decisions:
+            console.print("Review decisions are complete. Confirm the report contents shown above.", highlight=False)
         return bool(
             _ask_action(
                 questionary.confirm(

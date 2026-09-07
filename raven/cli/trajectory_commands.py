@@ -371,6 +371,7 @@ def trajectory_report_bug(
         from raven.cli import trajectory_browse as tbrowse
 
         console.print(f"[red]The redaction needs review; {len(items)} item(s) require your decision:[/red]")
+        console.print(f"  {tbrowse._REVIEW_PATHS_NOTE}", highlight=False)
         for warning in tbrowse._review_warnings(reasons):
             console.print(f"  [yellow]! {escape(warning)}[/yellow]", highlight=False)
         index_by_id = {item.id: index for index, item in enumerate(items, 1)}
@@ -449,6 +450,8 @@ def trajectory_report_bug(
             # The review authorization can only come from --accept-risk or
             # this risk-worded consent; --yes never grants it.
             if interactive:
+                if prep.user_decisions:
+                    console.print("Review decisions are complete. Confirm the report contents shown above.")
                 if not typer.confirm("Ship the package with the risks listed above?", default=False):
                     console.print("Cancelled — no bug report was created.")
                     exit_code = 1
@@ -549,16 +552,11 @@ def _print_bug_cli_summary(prep) -> None:
             console.print(f"    - {escape(reason)}", highlight=False)
         decisions = redaction.get("user_decisions") or []
         if decisions:
-            console.print(f"  Decisions:    {len(decisions)} review decision(s)", highlight=False)
+            from raven.cli.trajectory_browse import _decision_line, _decision_tally
+
+            console.print(f"  Reviewed:     {_decision_tally(decisions)}", highlight=False)
             for entry in decisions:
-                sources = ", ".join(
-                    source["source"] + (f" x{source['count']}" if source["count"] > 1 else "")
-                    for source in entry["sources"]
-                )
-                console.print(
-                    f"    - {escape(f'{entry["action"]:<12} {entry["masked_sample"]} — {sources}')}",
-                    highlight=False,
-                )
+                console.print(f"    - {escape(_decision_line(entry))}", highlight=False)
     else:
         console.print(f"  Redaction:    {counts} · residual scan: clean", highlight=False)
     console.print(

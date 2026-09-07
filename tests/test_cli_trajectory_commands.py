@@ -1134,9 +1134,11 @@ def test_report_bug_suspected_without_flags_lists_items_and_both_flags(state, _n
 
     assert r.exit_code == 1
     assert "1 item(s) require your decision" in r.output
+    assert "Paths are relative to the trajectory snapshot inside the package." in r.output
     assert "Suspected: high-entropy token" in r.output
-    assert "the span log" in r.output
-    assert _ENTROPY_TOKEN in r.output  # the highlighted context (terminal is local)
+    assert f"Token: {_ENTROPY_TOKEN}" in r.output
+    assert "Seen at:" in r.output
+    assert "the span log — spans.jsonl:1" in r.output
     assert "--keep-findings or --redact-findings" in r.output
     assert "--accept-risk" in r.output
     assert breport.list_reports(state) == []
@@ -1516,6 +1518,10 @@ class _FakeReviewQuestionary:
         factory = self._factory
         return type("_Ask", (), {"unsafe_ask": staticmethod(factory)})()
 
+    def text(self, *_a, **_k):
+        factory = self._factory
+        return type("_Ask", (), {"unsafe_ask": staticmethod(factory)})()
+
 
 def _tty_review_setup(state, monkeypatch, attrs):
     from raven.cli import trajectory_commands as tcmd
@@ -1560,12 +1566,11 @@ def test_report_bug_tty_ctrl_c_during_review_cancels(state, _no_machine_secrets,
 def test_report_bug_tty_conflict_then_cancel(state, _no_machine_secrets, monkeypatch):
     import raven.cli.trajectory_browse as tbrowse
     from raven.trajectory import bugreport as breport
-    from raven.trajectory import review as treview
 
     inner = "Hj5tR8uE3iO7pA1sD4fGk9lZ"
     outer = inner + "W6xC2v"
     _tty_review_setup(state, monkeypatch, {"llm.output": f"a {inner} b {outer}"})
-    answers = iter([treview.ACTION_KEPT, treview.ACTION_REDACTED, tbrowse._REVIEW_CANCEL])
+    answers = iter(["k", "r", "c"])
     monkeypatch.setattr(tbrowse, "_require_questionary", lambda: _FakeReviewQuestionary(lambda: next(answers)))
 
     r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x"])
@@ -1587,7 +1592,7 @@ def test_report_bug_summary_shows_semantic_decisions(state, _no_machine_secrets,
     r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes", "--keep-findings", "--accept-risk"])
     assert r.exit_code == 0, r.output
     assert "residual scan flagged" in r.output
-    assert "review decision(s)" in r.output
+    assert "decision(s) complete" in r.output
     assert "the span log" in r.output
     assert _ENTROPY_TOKEN not in r.output
 
