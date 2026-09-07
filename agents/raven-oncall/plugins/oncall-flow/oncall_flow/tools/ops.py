@@ -36,6 +36,75 @@ from oncall_flow.tools.base import ops_home as _tools_home
 from raven.contracts.tool import Tool
 
 
+def _occupancy_lines(meta_path: Path, records: list) -> list[str]:
+    """The machine's capacity, what is held on it across campaigns, and what is free.
+
+    Printed where the budget is, for the same reason: a loop deciding how many
+    configs to submit next used to learn the machine was full only by being
+    refused. A row that hands out nothing countable prints nothing -- the
+    job-count gate has no capacity to state.
+    """
+    import json as _json
+
+    from oncall_flow import connections as _conns
+    from oncall_flow.occupancy import running_on
+
+    try:
+        meta = _json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    conn_id = str(meta.get("connection") or "")
+    row = _conns.get(conn_id) if conn_id else None
+    if not row:
+        return []
+    unit = _conns.resource_unit(row)
+    if not unit:
+        return []
+    cap = _conns.capacity(row)
+    noun = "device(s)" if unit == "gpus" else "core(s)"
+    occupants = running_on(meta_path.parent.parent, conn_id)
+    held = sum(o.units(unit) for o in occupants)
+    name = _conns.display_name(conn_id) or conn_id
+    out = [f"Machine: {name} has {cap[unit]} {noun}; {held} held, {max(0, cap[unit] - held)} free."]
+    mine = {r.idem_key for r in records}
+    for o in occupants:
+        ids = o.held.get("device_ids") or []
+        where = f" on {','.join(map(str, ids))}" if ids else ""
+        owner = "this campaign" if o.idem_key in mine else f"campaign '{o.campaign}'"
+        out.append(f"  {o.idem_key} ({owner}) holds {o.units(unit)} {noun}{where}")
+    return out
+
+
+def _whole_or(value: object, default: int, *, floor: int = 1) -> int:
+    if isinstance(value, bool) or value is None:
+        return default
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return default
+    return n if n >= floor else default
+
+
+def _resource_requests(meta: dict, configs: list, unit: str) -> tuple[list[int], list[int]]:
+    """Per config: units of ``unit`` held, and GB of memory held (0 = undeclared).
+
+    The campaign's declaration (``meta["resources"]``, written by ops_declare) is
+    the default; a config overrides with ``gpus_needed`` / ``cores_needed`` /
+    ``memory_needed_gb``. A campaign declared before resources existed holds one
+    unit per job, which is what it was billed as.
+    """
+    declared = meta.get("resources") if isinstance(meta.get("resources"), dict) else {}
+    default_n = _whole_or(declared.get(f"{unit}_per_job"), 1)
+    default_mem = _whole_or(declared.get("memory_per_job_gb"), 0, floor=0)
+    key = "gpus_needed" if unit == "gpus" else "cores_needed"
+    reqs, mems = [], []
+    for cfg in configs:
+        cfg = cfg if isinstance(cfg, dict) else {}
+        reqs.append(_whole_or(cfg.get(key), default_n))
+        mems.append(_whole_or(cfg.get("memory_needed_gb"), default_mem, floor=0))
+    return reqs, mems
+
+
 def _refuse_foreign_instance(ledger: Path) -> None:
     """Refuse an explicit ledger that lives inside ANOTHER raven instance.
 
@@ -1264,6 +1333,7 @@ class OpsTuneStatusTool(Tool):
                 )
             except (OSError, ValueError):
                 pass
+            lines.extend(_occupancy_lines(meta_path, records))
         # The starting values this campaign recorded, as a campaign-level fact, next
         # to the budget and in the same shape: operands, never a result. No
         # difference, no "below/above", no ordering -- the comparison is the
@@ -2123,6 +2193,25 @@ class OpsSubmitTool(_OpsScheduler):
         ledger_obj = Ledger(ledger)
         submitted = []
         refused = []
+        # The machine, checked across every campaign under this ops home before
+        # anything is bought. Each campaign scheduling from its own ledger alone
+        # is how two of them stacked trials on one device (2026-08-31, CUDA OOM)
+        # -- the contention lives between the ledgers, so it is read there.
+        from oncall_flow import connections as _occ_conns
+        from oncall_flow.occupancy import (
+            admission_refusal,
+            capacity_refusal,
+            duplicate_refusal,
+            free_device_ids,
+            reservation_lock,
+        )
+
+        # The home scanned is this campaign's own parent, not the global ops
+        # home: the two are the same for every campaign that lives where
+        # _resolve_campaign_dir puts them, and the campaign's actual siblings
+        # are the ones it can collide with.
+        _occ_home = led.parent.parent
+        _conn_id = str(meta.get("connection") or "")
         # A trial is its config AND the apparatus it ran against. Named from the
         # config alone, "same config, edited case" reused one job directory: the
         # restart branch keeps system/ so the edits never reached the job, the
@@ -2140,21 +2229,89 @@ class OpsSubmitTool(_OpsScheduler):
             _apparatus = _ap_hash.sha1(
                 "\n".join(f"{k}:{v}" for k, v in sorted(_now["case"].items())).encode()
             ).hexdigest()[:8]
-        for cfg in configs:
-            key_id = config_key(cfg)
-            if _apparatus:
-                key_id = f"{key_id}__{_apparatus}"
-            # A campaign started before the key was shortened holds its records
-            # under the old spelling; recomputing would read them as trials that
-            # never ran and spend the compute again.
-            from oncall_flow.proposer import legacy_config_key
+        # Two passes. The first, under the ops-home lock, reads every sibling
+        # ledger, decides what each config holds, and writes this campaign's
+        # records -- check and reservation as one step, so two submits cannot
+        # both see a free machine (or the same free device ids) between one's
+        # read and the other's write. The second hands the reserved jobs to the
+        # backend outside the lock; the fresh handle-less records left by the
+        # first pass are what the gate counts while those calls are in flight.
+        from oncall_flow.proposer import legacy_config_key
 
-            _known = {r.idem_key for r in ledger_obj.all()}
-            if key_id not in _known and legacy_config_key(cfg) in _known:
-                key_id = legacy_config_key(cfg)
-            ledger_obj.record(key_id, campaign=campaign, config=dict(cfg))
+        _admitted: list[tuple[int, dict, str]] = []
+        with reservation_lock(_occ_home):
+            # What each config will hold, decided before anything is recorded: the
+            # gate admits by free devices or cores (owner's rulings 2026-09-03), and
+            # the ids it hands out ride to the launcher, which exports them. A row
+            # that hands out nothing countable keeps the job-count gate.
+            _held_by_cfg: list[dict[str, Any] | None] = [None] * len(configs)
+            _labels_by_cfg: list[dict[str, str]] = [{} for _ in configs]
+            if _conn_id:
+                _row = _occ_conns.get(_conn_id) or {}
+                _unit = _occ_conns.resource_unit(_row)
+                if _unit:
+                    _capacity = _occ_conns.capacity(_row)
+                    _requests, _mem_requests = _resource_requests(meta, configs, _unit)
+                    _cap = admission_refusal(
+                        _occ_home,
+                        _conn_id,
+                        unit=_unit,
+                        capacity=_capacity[_unit],
+                        requests=_requests,
+                        memory_capacity_gb=_capacity.get("memory_gb"),
+                        memory_requests=_mem_requests,
+                        display=_occ_conns.display_name(_conn_id),
+                    )
+                    if _cap:
+                        log_event(cdir, "capacity_refused", round=round, connection=_conn_id)
+                        return _cap
+                    _free_ids = free_device_ids(_occ_home, _conn_id, _capacity[_unit]) if _unit == "gpus" else []
+                    for _i, (_n, _mem) in enumerate(zip(_requests, _mem_requests)):
+                        _held: dict[str, Any] = {_unit: _n}
+                        if _mem:
+                            _held["memory_gb"] = _mem
+                        if _unit == "gpus":
+                            _ids, _free_ids = _free_ids[:_n], _free_ids[_n:]
+                            _held["device_ids"] = _ids
+                            _labels_by_cfg[_i]["device_ids"] = ",".join(_ids)
+                        _labels_by_cfg[_i]["width"] = str(_n)
+                        _held_by_cfg[_i] = _held
+                else:
+                    _cap = capacity_refusal(
+                        _occ_home,
+                        _conn_id,
+                        incoming=len(configs),
+                        concurrency=_row.get("concurrency"),
+                        display=_occ_conns.display_name(_conn_id),
+                    )
+                    if _cap:
+                        log_event(cdir, "capacity_refused", round=round, connection=_conn_id)
+                        return _cap
+            for _i, cfg in enumerate(configs):
+                key_id = config_key(cfg)
+                if _apparatus:
+                    key_id = f"{key_id}__{_apparatus}"
+                # A campaign started before the key was shortened holds its records
+                # under the old spelling; recomputing would read them as trials that
+                # never ran and spend the compute again.
+                _known = {r.idem_key for r in ledger_obj.all()}
+                if key_id not in _known and legacy_config_key(cfg) in _known:
+                    key_id = legacy_config_key(cfg)
+                # The same trial under another live campaign's name is the same
+                # measurement bought twice (2026-08-31: two campaigns, one idem_key,
+                # double spend). Checked before the record so a refused duplicate
+                # leaves no handle-less orphan in this ledger.
+                _dup = duplicate_refusal(_occ_home, led.parent, key_id)
+                if _dup:
+                    refused.append(_dup)
+                    continue
+                ledger_obj.record(key_id, campaign=campaign, config=dict(cfg), resources_held=_held_by_cfg[_i])
+                _admitted.append((_i, cfg, key_id))
+        for _i, cfg, key_id in _admitted:
             try:
-                handle = await backend.submit(JobSpec(cfg, idem_key=key_id, labels={"campaign": campaign}))
+                handle = await backend.submit(
+                    JobSpec(cfg, idem_key=key_id, labels={"campaign": campaign, **_labels_by_cfg[_i]})
+                )
             except JobBackendError as exc:
                 # Recording before submitting is deliberate -- a crash in between
                 # leaves an orphan a later reconcile can find. But a submit that
@@ -2726,21 +2883,25 @@ class OpsKillTool(Tool):
         meta = _json.loads(meta_path.read_text(encoding="utf-8"))
         backend = backend_from_meta(meta)
         led = Ledger(ledger_path)
-        killed, skipped = [], []
+        killed, skipped, notes = [], [], []
         for key in trials:
             rec = led.get(key)
             if rec is None or rec.is_terminal or rec.handle is None:
                 skipped.append(key)
                 continue
-            await backend.cancel(rec.handle)
-            led.set_result(
-                rec.idem_key, JobResult(JobStatus.FAILED, error=f"killed early: {reason or 'agent decision'}")
-            )
-            log_event(cdir, "kill", trial=key, reason=reason)
+            note = await backend.cancel(rec.handle)
+            said = f"killed early: {reason or 'agent decision'}"
+            if note:
+                said += f" ({note})"
+                notes.append(f"{key}: {note}")
+            led.set_result(rec.idem_key, JobResult(JobStatus.FAILED, error=said))
+            log_event(cdir, "kill", trial=key, reason=reason, found=note or "")
             killed.append(key)
         if killed:
             _record_basis(cdir, basis, "kill")
         out = f"Killed {len(killed)} trial(s): {', '.join(killed) or '-'}."
+        if notes:
+            out += " " + " ".join(notes) + "."
         if skipped:
             out += f" Skipped (not running/unknown): {', '.join(skipped)}."
         return out

@@ -186,3 +186,43 @@ def test_the_listing_of_campaigns_says_which_machine(store, tmp_path, monkeypatc
     tools_base.set_home(home)
     out = asyncio.run(ops.OpsCampaignsTool().execute())
     assert "on my CPU box" in out
+
+
+def test_the_plugin_reader_counts_capacity_the_way_trunk_does():
+    """Aligned by hand (the plugin cannot import trunk at runtime); drift is a
+    parity-ledger entry, so the same cases are pinned on both sides."""
+    from oncall_flow import connections as plugin
+
+    row = {"kind": "gpu", "device": "2 x NVIDIA A800-SXM4-80GB", "cores": 128, "memory": "463 GB", "concurrency": 1}
+    assert plugin.capacity(row) == {"gpus": 2, "cores": 128, "memory_gb": 463}
+    cpu = {"kind": "cpu", "device": "2 x Intel Xeon Platinum", "cores": 64}
+    assert plugin.capacity(cpu) == {"cores": 64}, "the N x reading is a GPU row's; a CPU box hands out cores"
+    assert plugin.resource_unit(cpu) == "cores"
+    uncounted = {"kind": "gpu", "device": "NVIDIA A800 + NVIDIA A800", "cores": 128}
+    assert plugin.resource_unit(uncounted) == "", "a GPU row with no device count is gated by job count, not cores"
+    assert plugin.resource_unit(row) == "gpus"
+    assert plugin.resource_unit({"cores": 32}) == "cores"
+    assert plugin.resource_unit({"concurrency": 1}) == ""
+    assert "gpus" in plugin._SHOWN
+    said = [str(p) for p in plugin.row_problems({"id": "g", "display_name": "G", "transport": "local", "kind": "gpu"})]
+    assert any("kind is gpu but neither" in s for s in said)
+
+
+def test_the_plugin_reader_reports_capacity_problems_the_way_trunk_does():
+    """Parity for the four doctor behaviours the trunk tests pin: the plugin copy
+    cannot import trunk, so each is pinned here too, or a mutation in this copy
+    passes every test (reviewed 2026-09-07)."""
+    from oncall_flow import connections as plugin
+
+    def said(row):
+        return [str(p) for p in plugin.row_problems({"id": "g", "display_name": "G", "transport": "local", **row})]
+
+    assert any("'gpus' must be a whole number of devices" in s for s in said({"gpus": 0}))
+    uncounted = said({"kind": "gpu", "device": "NVIDIA A800 + NVIDIA A800", "cores": 128})
+    assert any("kind is gpu but neither 'gpus' nor a device" in s for s in uncounted)
+    assert any("'concurrency' is not set" in s for s in uncounted), (
+        "an uncounted GPU row is gated by job count, so its missing concurrency is reported"
+    )
+    counted = said({"kind": "gpu", "gpus": 2, "concurrency": 1})
+    assert any("'concurrency' is not read on a row that says gpus" in s for s in counted)
+    assert not any("kind is gpu but neither" in s for s in counted)

@@ -625,3 +625,40 @@ def test_report_dropped_memory_writes_renders_on_the_given_console_only_when_som
     assert buf.getvalue() == ""
     report_dropped_memory_writes(2, out)
     assert "2 turn(s) were not written to long-term memory" in buf.getvalue()
+
+
+# --- generation settings reach the provider the ordinary assembly paths build ---
+
+
+def _config_with_idle(seconds: int):
+    from raven.config.schema import Config
+
+    return Config.model_validate(
+        {
+            "providers": {"openai": {"apiKey": "K-OPENAI"}},
+            "agents": {"defaults": {"model": "openai/gpt-4o-mini", "streamIdleTimeout": seconds}},
+        }
+    )
+
+
+def test_make_provider_carries_the_configured_stream_idle_timeout() -> None:
+    """``LiteLLMProvider`` reads the idle line off its generation object, and the
+    resolving provider set it; the two ordinary assembly paths (CLI/core) did
+    not, so a configured value became the 180 s default. Reviewed 2026-09-04:
+    ``stream_idle_timeout = 7`` in config, ``180.0`` on the provider."""
+    from raven.providers.factory import make_provider
+
+    provider = make_provider(_config_with_idle(7))
+    assert provider.generation.stream_idle_timeout == 7
+    assert provider.generation.timeout == _config_with_idle(7).agents.defaults.llm_call_timeout
+
+
+def test_make_lazy_provider_carries_it_on_both_the_wrapper_and_the_built_provider(monkeypatch) -> None:
+    from raven.providers import factory as factory_mod
+    from raven.providers.lazy import LazyProvider
+
+    # No background import in a unit test: the build is exercised directly.
+    monkeypatch.setattr(LazyProvider, "prewarm", lambda self: None)
+    lazy = factory_mod.make_lazy_provider(_config_with_idle(7))
+    assert lazy.generation.stream_idle_timeout == 7
+    assert lazy._built().generation.stream_idle_timeout == 7

@@ -82,6 +82,23 @@ def _short_tool_id() -> str:
     return "".join(secrets.choice(_ALNUM) for _ in range(9))
 
 
+def _finish_was_made_up(stream: Any) -> bool:
+    """Whether the stream wrapper never received a finish reason from upstream.
+
+    Read off LiteLLM's ``CustomStreamWrapper``, which keeps two records: the reason
+    of a chunk it judged final (``received_finish_reason``) and the last reason any
+    chunk carried (``intermittent_finish_reason``). Both are read, because gemini and
+    vertex_ai chunks arrive stamped ``_hidden_params["is_finished"] = False`` on every
+    chunk, so their terminal "stop" is never recorded as received, only as
+    intermittent -- and reading the first alone stamped every healthy gemini reply as
+    a cut. A wrapper without the attributes (a test stub, another library) is trusted,
+    so only a reason known to be fabricated is reported as such.
+    """
+    if not hasattr(stream, "received_finish_reason") or getattr(stream, "received_finish_reason") is not None:
+        return False
+    return getattr(stream, "intermittent_finish_reason", None) is None
+
+
 def _merge_extra_body(kwargs: dict[str, Any], wire_extra_body: dict[str, Any]) -> None:
     """Merge the provider's built-in extra_body into kwargs instead of overwriting it.
 
@@ -661,7 +678,7 @@ class LiteLLMProvider(LLMProvider):
             return True
 
         async def _open():
-            return (await asyncio.wait_for(acompletion(**kwargs), self.generation.timeout)).__aiter__()
+            return (await asyncio.wait_for(acompletion(**kwargs), self.generation.stream_idle_timeout)).__aiter__()
 
         async def _close(target: Any) -> None:
             aclose = getattr(target, "aclose", None)
@@ -670,7 +687,8 @@ class LiteLLMProvider(LLMProvider):
 
         # Per-chunk idle cap: the timer resets on every chunk, so a long but
         # steadily-progressing generation is fine while a mid-stream stall (no
-        # bytes for `timeout` seconds) raises TimeoutError instead of hanging.
+        # bytes for `stream_idle_timeout` seconds) raises TimeoutError instead
+        # of hanging for the whole-call budget.
         # Everything from the open onward sits inside the one try/finally, so the
         # underlying HTTP stream is closed deterministically on any exit -- a
         # first-chunk timeout included, which is the most likely one there is
@@ -688,7 +706,7 @@ class LiteLLMProvider(LLMProvider):
             # that defers the request until the first pull raises there instead.
             try:
                 stream = await _open()
-                first = await asyncio.wait_for(stream.__anext__(), self.generation.timeout)
+                first = await asyncio.wait_for(stream.__anext__(), self.generation.stream_idle_timeout)
             except StopAsyncIteration:
                 first = done
             except Exception as exc:
@@ -700,7 +718,7 @@ class LiteLLMProvider(LLMProvider):
                 await _close(stream)
                 stream = await _open()
                 try:
-                    first = await asyncio.wait_for(stream.__anext__(), self.generation.timeout)
+                    first = await asyncio.wait_for(stream.__anext__(), self.generation.stream_idle_timeout)
                 except StopAsyncIteration:
                     first = done
 
@@ -708,9 +726,17 @@ class LiteLLMProvider(LLMProvider):
             while chunk is not done:
                 delta = self._normalize_stream_chunk(chunk)
                 if delta is not None:
+                    # LiteLLM's stream wrapper answers an upstream that closed the
+                    # connection without a terminal chunk by making up a final
+                    # chunk with finish_reason "stop", and keeps the reason it
+                    # actually received (None, then) beside it. A consumer cannot
+                    # tell that fabricated stop from a real one otherwise, and a
+                    # reply cut mid-thought must not read as a finished one.
+                    if delta.finish_reason and _finish_was_made_up(stream):
+                        delta.finish_synthesized = True
                     yield delta
                 try:
-                    chunk = await asyncio.wait_for(stream.__anext__(), self.generation.timeout)
+                    chunk = await asyncio.wait_for(stream.__anext__(), self.generation.stream_idle_timeout)
                 except StopAsyncIteration:
                     break
         finally:

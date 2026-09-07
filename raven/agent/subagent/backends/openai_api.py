@@ -13,7 +13,7 @@ through :mod:`raven.agent.subagent.openai_steps`.
 from __future__ import annotations
 
 import json as jsonlib
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -21,9 +21,11 @@ import aiohttp
 from loguru import logger
 
 from raven.agent.subagent import activity
+from raven.agent.subagent.attachments import with_attachment_note
 from raven.agent.subagent.backends import turn_rows
 from raven.agent.subagent.backends.base import bounded_delta, clamp_output
 from raven.agent.subagent.openai_steps import OpenAIStepReader
+from raven.spine.message import Media
 
 if TYPE_CHECKING:
     from raven.contracts.llm_provider import LLMProvider
@@ -187,6 +189,7 @@ class OpenAIApiBackend:
         history: list[dict[str, Any]] | None = None,
         on_messages: Callable[[list[dict[str, Any]]], None] | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
+        media: Sequence[Media] = (),
     ) -> str:
         # The parent's provider/model are accepted and ignored: this backend
         # posts to its own configured endpoint under its own ``self.model``.
@@ -196,7 +199,7 @@ class OpenAIApiBackend:
         messages: list[dict[str, Any]] = list(history) if history else []
         if not messages and self.system_prompt:
             messages.append({"role": "system", "content": self.system_prompt})
-        messages.append({"role": "user", "content": task})
+        messages.append({"role": "user", "content": with_attachment_note(task, media)})
         # Always explicit, never omitted: a provider whose default is SSE
         # (mirothinker) answers an omitted `stream` with text/event-stream, which
         # `resp.json()` cannot read. A spawn asks for false and keeps the single
