@@ -40,20 +40,32 @@ class TerminalServices:
 
     def bind_session(self, handle, session):
         self.host.show(handle)
-        self.conversations[handle] = session
+        self.conversations.setdefault(handle, session)
 
     async def receive_host(self, text, source_handle=None):
         if self.delivery is None:
             raise TerminalError("terminal_unavailable", "Terminal delivery service is unavailable")
         matched = await self.delivery.receive_host(text)
-        handle = matched.get("handle") if matched else source_handle
+        handle = source_handle or (matched.get("handle") if matched else None)
         conversation = self.conversations.get(handle)
-        if conversation is None and len(set(self.conversations.values())) == 1:
-            conversation = next(iter(self.conversations.values()))
+        if conversation is None and handle:
+            record = self.host.show(handle)
+            candidates = {
+                getattr(identity, "session_key", None)
+                for identity in self.identities.list()
+                if identity.binding is not None
+                and identity.binding.handle == handle
+                and identity.binding.incarnation_id == record.incarnation_id
+                and getattr(identity, "session_key", None)
+            }
+            if len(candidates) == 1:
+                conversation = candidates.pop()
         if conversation is None or self.sessions is None:
             raise TerminalError("host_conversation_not_found", "The reply has no originating Raven conversation")
         notice = {"kind": "terminal_reply", "detail": text}
-        session = self.sessions.get_or_create(conversation)
+        session = self.sessions.peek(conversation)
+        if session is None:
+            raise TerminalError("host_conversation_not_found", "The originating Raven session no longer exists")
         session.add_message("assistant", wrap_untrusted(text, source="peer terminal reply"), notice=notice)
         self.sessions.save(session)
         await self.emitter.emit(conversation, {"type": "notice", "payload": notice})

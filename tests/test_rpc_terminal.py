@@ -246,3 +246,28 @@ async def test_unhosted_terminal_method_reports_unavailable_instead_of_missing()
     assert response["error"]["code"] == -32099
     assert response["error"]["message"] == "terminal_unavailable"
     assert (await call_terminal(dispatcher, "resize", cols=90))["result"] == {"ok": True}
+
+
+@pytest.mark.parametrize("force", [False, True])
+async def test_terminal_send_passes_force_without_rebinding_creator(force):
+    from unittest.mock import Mock
+
+    dispatcher = Dispatcher()
+    delivery = SimpleNamespace(send=AsyncMock(return_value={"accepted": True}))
+    bind = Mock()
+    register_terminal_methods(dispatcher, host=object(), delivery=delivery, bind_session=bind)
+    response = await dispatcher.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "terminal.send",
+            "params": {"handle": "term_test", "text": "hello", "force": force, "session_id": "cli-launch-rsi"},
+        }
+    )
+    assert "result" in response
+    assert delivery.send.await_args.kwargs == {
+        "enter": False,
+        "require_ack": False,
+        **({"force": True} if force else {}),
+    }
+    bind.assert_not_called()

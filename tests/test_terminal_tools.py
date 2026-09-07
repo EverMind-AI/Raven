@@ -25,10 +25,12 @@ async def test_create_registers_identity_and_returns_incarnation():
     tool = CreateTerminalTool(
         rpc, lambda provider, unattended=False: ("codex", ["codex"]), lambda task, session: "repo::/tmp/task"
     )
+    tool.set_context("tui", "creator")
     result = json.loads(await tool.execute(provider="codex", name="worker", task="repo::/tmp/task"))
     assert result == {"handle": "term_test", "instance": "worker", "incarnation_id": "incarnation"}
     assert calls[-1][0] == "agents.register"
     assert calls[-1][1]["terminal"] == "term_test"
+    assert calls[-1][1]["session_key"] == "tui:creator"
 
 
 async def test_failed_identity_registration_closes_only_the_created_terminal():
@@ -369,3 +371,20 @@ async def test_send_never_retries_dialog_after_partial_write():
     assert result["error"]["data"]["bytesWritten"] == 128
     assert calls.count("terminal.send") == 1
     assert "terminal.wait" not in calls
+
+
+@pytest.mark.parametrize("force", [False, True])
+async def test_send_only_forces_when_explicitly_requested(force):
+    sent = []
+
+    async def rpc(method, params):
+        if method == "agents.resolve":
+            return {"unique": True, "candidates": [{"agent": candidate()}]}
+        if method == "terminal.show":
+            return {"terminal": {**candidate()["binding"], "connected": True, "writable": True, "orphaned": False}}
+        sent.append(params)
+        return {"send": {"accepted": True}}
+
+    assert json.loads(await SendTerminalTool(rpc).execute(to="worker", text="hello", force=force))["accepted"]
+    assert sent[0].get("force", False) is force
+    assert "human confirms" in SendTerminalTool.parameters["properties"]["force"]["description"]

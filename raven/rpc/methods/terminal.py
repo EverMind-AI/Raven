@@ -212,6 +212,7 @@ class TerminalMethods:
             raise _rpc_error("invalid_argument", "text must be a string", invalid=True)
         enter = _boolean(params, "enter")
         require_ack = _boolean(params, "require_ack")
+        force = _boolean(params, "force")
         if params.get("to") is not None:
             if params.get("handle") is not None or params["to"] != "raven":
                 raise _rpc_error("invalid_argument", "Use one handle or to=raven", invalid=True)
@@ -222,15 +223,12 @@ class TerminalMethods:
         if self.delivery is None:
             raise _rpc_error("terminal_unavailable")
         handle = _text(params, "handle")
-        if "session_id" in params:
-            session = _text(params, "session_id")
-            if self.bind_session is not None:
-                self.bind_session(handle, session)
         result = await self.delivery.send(
             handle,
             text,
             enter=enter,
             require_ack=require_ack,
+            **({"force": True} if force else {}),
         )
         return {"send": terminal_json(result)}
 

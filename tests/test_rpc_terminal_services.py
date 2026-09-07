@@ -32,7 +32,9 @@ async def test_native_reply_is_a_persisted_note_without_pty_input(tmp_path, matc
     emitter = SubscriptionEmitter(AsyncMock())
     service = TerminalServices(emitter, AsyncMock(), host=host, delivery=delivery, identities=identity)
     service.sessions = SessionManager(tmp_path)
+    service.sessions.get_or_create("tui:task")
     service.bind_session(record.handle, "tui:task")
+    service.bind_session(record.handle, "cli-launch-rsi")
     dispatcher = Dispatcher()
     service.register(dispatcher)
     response = await dispatcher.dispatch(
@@ -62,6 +64,7 @@ async def test_native_reply_is_a_persisted_note_without_pty_input(tmp_path, matc
     assert session.messages[-1]["notice"]["kind"] == "terminal_reply"
     assert "UNTRUSTED" in session.messages[-1]["content"]
     assert identity.show("raven").binding.handle is None
+    assert service.sessions.peek("cli-launch-rsi") is None
 
 
 async def test_ambiguous_terminal_target_is_rejected_before_delivery():
@@ -84,3 +87,53 @@ async def test_ambiguous_terminal_target_is_rejected_before_delivery():
     )
     assert response["error"]["code"] == -32602
     receiver.assert_not_awaited()
+
+
+@pytest.mark.parametrize("fallback", ["valid", "stale", "missing", "ambiguous"])
+async def test_host_reply_uses_identity_session_without_creating_sessions(tmp_path, fallback):
+    from raven.contracts.terminal import TerminalError
+
+    record = TerminalRecord(worktree_id=f"repo::{tmp_path}", worktree_path=str(tmp_path))
+    binding = SimpleNamespace(handle=record.handle, incarnation_id=record.incarnation_id)
+    if fallback == "stale":
+        binding.incarnation_id = "old"
+    identities = [SimpleNamespace(binding=binding, session_key="tui:creator")]
+    if fallback == "ambiguous":
+        identities.append(SimpleNamespace(binding=binding, session_key="tui:other"))
+    registry = SimpleNamespace(ensure_host=lambda: None, list=lambda: identities)
+    host = SimpleNamespace(show=lambda _: record)
+    delivery = SimpleNamespace(receive_host=AsyncMock(return_value=None))
+    emitter = SimpleNamespace(emit=AsyncMock())
+    service = TerminalServices(emitter, AsyncMock(), host=host, delivery=delivery, identities=registry)
+    service.sessions = SessionManager(tmp_path)
+    if fallback != "missing":
+        service.sessions.get_or_create("tui:creator")
+    service.conversations["unrelated-terminal"] = "cli-launch-rsi"
+    if fallback == "valid":
+        assert (await service.receive_host("reply", record.handle))["state"] == "delivered_to_host"
+        assert service.sessions.peek("tui:creator").messages[-1]["notice"]["kind"] == "terminal_reply"
+        assert emitter.emit.await_args.args[0] == "tui:creator"
+    else:
+        with pytest.raises(TerminalError) as error:
+            await service.receive_host("reply", record.handle)
+        assert error.value.code == "host_conversation_not_found"
+        emitter.emit.assert_not_awaited()
+    assert service.sessions.peek("cli-launch-rsi") is None
+    if fallback == "missing":
+        assert service.sessions.peek("tui:creator") is None
+
+
+async def test_host_reply_prefers_sender_over_ack_matched_terminal(tmp_path):
+    host = SimpleNamespace(show=lambda handle: None)
+    registry = SimpleNamespace(ensure_host=lambda: None)
+    delivery = SimpleNamespace(receive_host=AsyncMock(return_value={"handle": "other"}))
+    service = TerminalServices(
+        SimpleNamespace(emit=AsyncMock()), AsyncMock(), host=host, delivery=delivery, identities=registry
+    )
+    service.sessions = SessionManager(tmp_path)
+    service.sessions.get_or_create("tui:sender")
+    service.sessions.get_or_create("tui:other")
+    service.conversations.update(sender="tui:sender", other="tui:other")
+    await service.receive_host("reply", "sender")
+    assert service.sessions.peek("tui:sender").messages
+    assert not service.sessions.peek("tui:other").messages
