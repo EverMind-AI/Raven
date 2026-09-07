@@ -230,3 +230,13 @@ def test_the_inherited_list_only_shrinks() -> None:
     declared = {m for m in INHERITED_UNDECLARED if m in METHOD_MODELS}
     assert gone == set(), f"in INHERITED_UNDECLARED but no longer registered: {sorted(gone)}"
     assert declared == set(), f"in INHERITED_UNDECLARED but now declared; remove them: {sorted(declared)}"
+
+
+def test_registration_does_not_initialize_identity_storage(monkeypatch) -> None:
+    from raven.rpc.methods import agents
+
+    def unexpected_registry():
+        raise AssertionError("Registration must not open identity storage")
+
+    monkeypatch.setattr(agents, "IdentityRegistry", unexpected_registry)
+    assert "agents.list" in _registered()
