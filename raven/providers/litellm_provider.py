@@ -82,6 +82,23 @@ def _short_tool_id() -> str:
     return "".join(secrets.choice(_ALNUM) for _ in range(9))
 
 
+def _finish_was_made_up(stream: Any) -> bool:
+    """Whether the stream wrapper never received a finish reason from upstream.
+
+    Read off LiteLLM's ``CustomStreamWrapper``, which keeps two records: the reason
+    of a chunk it judged final (``received_finish_reason``) and the last reason any
+    chunk carried (``intermittent_finish_reason``). Both are read, because gemini and
+    vertex_ai chunks arrive stamped ``_hidden_params["is_finished"] = False`` on every
+    chunk, so their terminal "stop" is never recorded as received, only as
+    intermittent -- and reading the first alone stamped every healthy gemini reply as
+    a cut. A wrapper without the attributes (a test stub, another library) is trusted,
+    so only a reason known to be fabricated is reported as such.
+    """
+    if not hasattr(stream, "received_finish_reason") or getattr(stream, "received_finish_reason") is not None:
+        return False
+    return getattr(stream, "intermittent_finish_reason", None) is None
+
+
 def _merge_extra_body(kwargs: dict[str, Any], wire_extra_body: dict[str, Any]) -> None:
     """Merge the provider's built-in extra_body into kwargs instead of overwriting it.
 
@@ -709,6 +726,14 @@ class LiteLLMProvider(LLMProvider):
             while chunk is not done:
                 delta = self._normalize_stream_chunk(chunk)
                 if delta is not None:
+                    # LiteLLM's stream wrapper answers an upstream that closed the
+                    # connection without a terminal chunk by making up a final
+                    # chunk with finish_reason "stop", and keeps the reason it
+                    # actually received (None, then) beside it. A consumer cannot
+                    # tell that fabricated stop from a real one otherwise, and a
+                    # reply cut mid-thought must not read as a finished one.
+                    if delta.finish_reason and _finish_was_made_up(stream):
+                        delta.finish_synthesized = True
                     yield delta
                 try:
                     chunk = await asyncio.wait_for(stream.__anext__(), self.generation.stream_idle_timeout)
