@@ -172,9 +172,6 @@ class ChatDelta:
     tool_call_delta: dict[str, Any] | None = None
     usage: dict[str, Any] | None = None
     reasoning_content: str | None = None  # Kimi, DeepSeek-R1, qwen, o-series thinking stream
-    # Anthropic extended thinking, signed blocks the next request must replay;
-    # carried on the terminal delta only, like `usage`.
-    thinking_blocks: list[dict[str, Any]] | None = None
     finish_reason: str | None = None
     error_classification: ErrorClassification | None = None
 

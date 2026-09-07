@@ -87,13 +87,6 @@ def child_env() -> dict[str, str]:
     env = os.environ.copy()
     if not env.get(_RAVEN_BIN_ENV) and (entry := own_entry_point()):
         env[_RAVEN_BIN_ENV] = str(entry)
-    # The dist bundle historically chose its react-reconciler build from
-    # NODE_ENV at runtime, and an unset one meant the development build --
-    # whose per-commit performance.measure() entries accumulate on Node's
-    # timeline until the OS kills the session (2026-08-31/09-01). Newer
-    # bundles bake production in at build time; this covers stale ones.
-    # An explicit NODE_ENV is left alone: a developer setting it means it.
-    env.setdefault("NODE_ENV", "production")
 
     return env
 

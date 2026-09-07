@@ -42,16 +42,6 @@ DEFAULT_CONTEXT_WINDOW_TOKENS = 65_536
 # which clamp an over-large value rather than rejecting it.
 DEFAULT_MAX_OUTPUT_TOKENS = 16384
 
-# The claude half of that fallback. Anthropic's Messages API requires
-# ``max_tokens`` on every request, so a claude model the catalogue does not
-# know still needs a number the request can carry -- and 16384 is a guess
-# sized for OpenAI-compatible servers that clamp, not for a vendor that cuts
-# the answer at exactly what was asked. 64000 is the smallest ceiling among
-# the current claude models (Haiku 4.5), so none of them refuses it, and it
-# leaves room for a whole file. Here rather than in the Anthropic transport so
-# the request and the loop's reservation keep reading one number.
-CLAUDE_MAX_OUTPUT_TOKENS = 64000
-
 #: Rate pair: (prompt_cost_per_token, completion_cost_per_token) in USD.
 #: Keep this table small -- it is a fallback for brand-new models that LiteLLM
 #: has not indexed yet. Check LiteLLM first before adding here.
@@ -668,11 +658,7 @@ def resolve_max_output_tokens(model: str | None, *, allow_fetch: bool = True) ->
     """
     if not model:
         return DEFAULT_MAX_OUTPUT_TOKENS
-    return _try_litellm_max_output(model, allow_import=allow_fetch) or _fallback_max_output(model)
-
-
-def _fallback_max_output(model: str) -> int:
-    return CLAUDE_MAX_OUTPUT_TOKENS if "claude" in model.lower() else DEFAULT_MAX_OUTPUT_TOKENS
+    return _try_litellm_max_output(model, allow_import=allow_fetch) or DEFAULT_MAX_OUTPUT_TOKENS
 
 
 def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int | None:

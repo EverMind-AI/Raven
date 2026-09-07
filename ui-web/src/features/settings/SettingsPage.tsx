@@ -180,25 +180,8 @@ function TextField({
   )
 }
 
-function SwiRow({
-  label,
-  hint,
-  k,
-  on,
-  confirm,
-}: {
-  label: string
-  hint?: string
-  k: string
-  on: boolean
-  confirm?: (commit: () => void) => void
-}): JSX.Element {
+function SwiRow({ label, hint, k, on }: { label: string; hint?: string; k: string; on: boolean }): JSX.Element {
   const [nl, say] = useNl()
-  const commit = (): void => {
-    void store.write(k, !on).then((r) => {
-      if (r === 'notlive') say()
-    })
-  }
   return (
     <Crow label={label} hint={hint} nl={nl}>
       <button
@@ -207,8 +190,9 @@ function SwiRow({
         aria-checked={on}
         aria-label={label}
         onClick={() => {
-          if (!on && confirm) confirm(commit)
-          else commit()
+          void store.write(k, !on).then((r) => {
+            if (r === 'notlive') say()
+          })
         }}
       />
     </Crow>
@@ -903,7 +887,9 @@ function ModelPage({ s }: { s: SettingsState }): JSX.Element {
 
 function PermPage({ s }: { s: SettingsState }): JSX.Element {
   const raw = s.snap.raw
-  const sh = shell()
+  /* Read-only on purpose: these two ARE the containment controls, and
+     settings.set is reachable from any RPC client with no confirmation step.
+     Editing the config file is the friction, and it is the point. */
   const sb = String(V(raw, 'tools.sandbox.backend', 'none'))
   const sbName = sb === 'none' ? t('gui.set.prm.sb_none') : sb === 'auto' ? t('gui.set.prm.sb_auto') : sb
   return (
@@ -913,20 +899,6 @@ function PermPage({ s }: { s: SettingsState }): JSX.Element {
           [t('gui.set.prm.workspace'), onoff(V(raw, 'tools.restrictToWorkspace', false) === true)],
           [t('gui.set.prm.sandbox'), sbName, sb === 'none' ? 'unset' : 'ok'],
         ]}
-      />
-      <SwiRow
-        label={t('gui.set.prm.destructive')}
-        hint={t('gui.set.prm.destructive_w')}
-        k="tools.exec.allowDestructiveCommands"
-        on={V(raw, 'tools.exec.allowDestructiveCommands', false) === true}
-        confirm={(commit) =>
-          sh.confirmAsk(
-            t('gui.set.prm.destructive_confirm'),
-            t('gui.set.prm.destructive_body'),
-            t('gui.set.prm.destructive_yes'),
-            commit,
-          )
-        }
       />
       <Srmk configPath={s.snap.configPath} />
     </Scard>

@@ -148,7 +148,6 @@ def render_config(source: Path) -> Path:
         if proxy := (from_host or next((value for name in PROXY_ENV if (value := env_value(name))), "")):
             render.put(config, PROXY_SLOT, proxy)
             log(f"[run] web: proxy={'host' if from_host else 'own'}")
-    render.inherit_exec_policy(config, host)
 
     llm_key = REQUIRED_SECRETS[0]
     if api_key := env_value(llm_key):

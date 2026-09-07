@@ -610,7 +610,6 @@ class AcpMethods:
             max_iterations=profile.max_iterations,
             mode=profile.id,
             mode_overlay=profile.overlay,
-            reasoning_effort=profile.reasoning_effort,
         )
 
     async def _set_config_option(self, params: dict[str, Any]) -> dict[str, Any]:

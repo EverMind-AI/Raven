@@ -1025,52 +1025,6 @@
       "errors": []
     },
     {
-      "name": "model.set_protocol",
-      "summary": "Set or clear the API protocol override for one model.",
-      "params": [
-        {
-          "name": "slug",
-          "required": true,
-          "schema": {
-            "type": "string"
-          }
-        },
-        {
-          "name": "model",
-          "required": true,
-          "schema": {
-            "type": "string"
-          }
-        },
-        {
-          "name": "protocol",
-          "required": true,
-          "schema": {
-            "type": "string",
-            "enum": ["auto", "chat", "responses", "anthropic"]
-          }
-        }
-      ],
-      "result": {
-        "name": "ModelSetProtocolResult",
-        "schema": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["provider"],
-          "properties": {
-            "provider": {
-              "$ref": "#/components/schemas/ModelOptionProvider"
-            }
-          }
-        }
-      },
-      "errors": [
-        {
-          "$ref": "#/components/errors/ConfigValidationError"
-        }
-      ]
-    },
-    {
       "name": "model.save_key",
       "summary": "Store an API key (and optional api_base) for a provider.",
       "params": [
@@ -2395,10 +2349,7 @@
         {
           "name": "clear",
           "required": false,
-          "schema": {
-            "type": "boolean",
-            "description": "Drop this instance's override, after which the session's tier is what the next dispatch runs at. mode wins when both are given: naming one is a statement, clearing is the absence of one. session.set_mode resolves the pair the other way, because there clear selects the configured default."
-          }
+          "schema": { "type": "boolean" }
         }
       ],
       "result": {
@@ -2451,10 +2402,7 @@
         {
           "name": "clear",
           "required": false,
-          "schema": {
-            "type": "boolean",
-            "description": "Drop the session override and go back to the configured default. Wins over mode when both are given, the opposite of subagents.instance.set_mode -- these are different operations: this one selects a tier, that one removes an override."
-          }
+          "schema": { "type": "boolean" }
         }
       ],
       "result": {
@@ -8589,14 +8537,14 @@
       "ModelOptionProvider": {
         "type": "object",
         "additionalProperties": false,
-          "required": [
-            "slug",
-            "name",
-            "authenticated",
-            "is_current",
-            "auth_type",
-            "models",
-            "total_models",
+        "required": [
+          "slug",
+          "name",
+          "authenticated",
+          "is_current",
+          "auth_type",
+          "models",
+          "total_models",
           "needs_api_base",
           "warning"
         ],
@@ -8622,20 +8570,6 @@
           "models": {
             "type": "array",
             "items": {
-              "type": "string"
-            }
-          },
-          "protocols": {
-            "type": "object",
-            "description": "Effective API protocol keyed by model id.",
-            "additionalProperties": {
-              "type": "string"
-            }
-          },
-          "protocol_overrides": {
-            "type": "object",
-            "description": "Explicit user protocol overrides keyed by model id.",
-            "additionalProperties": {
               "type": "string"
             }
           },

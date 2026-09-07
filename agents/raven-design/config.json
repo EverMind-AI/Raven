@@ -91,15 +91,9 @@
           "backend": "direct",
           "defaultPreviewCount": 6,
           "maxPreviewCount": 12,
-          "timeoutSeconds": 240,
-          "rasterDpi": 300,
-          "maxSidePixels": 16384
+          "timeoutSeconds": 240
         }
       }
     }
-  },
-  "gateway": {
-    "userPool": 0,
-    "systemPool": 0
   }
 }

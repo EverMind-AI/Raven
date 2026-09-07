@@ -2465,7 +2465,7 @@ class _Loop:
         self.policies: dict[str, str] = {}
         self.iterations: dict[str, int | None] = {}
 
-    def set_session_policy(self, key, *, max_iterations=None, mode="", mode_overlay=None, reasoning_effort=None):
+    def set_session_policy(self, key, *, max_iterations=None, mode="", mode_overlay=None):
         self.policies[key] = mode
         self.iterations[key] = max_iterations
 
