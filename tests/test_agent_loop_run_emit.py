@@ -20,6 +20,7 @@ from raven.agent.loop.bundles import HostWiring, ToolWiring
 from raven.agent.tools.deep_research import DeepResearchOfferTool
 from raven.config.schema import DeepResearchToolConfig
 from raven.contracts.llm_provider import ChatDelta, LLMResponse, ToolCallRequest
+from raven.contracts.loop_hooks import AgentHook, HookDecision
 from raven.contracts.tool import Tool, ToolResult
 from raven.sandbox import SandboxInitError
 from raven.spine.events import EpisodeStart as EvEpisodeStart
@@ -261,6 +262,78 @@ async def test_run_streams_then_dissolves_main_response(tmp_path):
     assert not any(isinstance(e, EvText) for e in sink.events)  # dissolved, no double
     assert outcome.usage.total_tokens == 5
     assert outcome.explicit_reply is True
+
+
+class _Announce(AgentHook):
+    """An after_send hook of the kind a deck engine installs: it appends to the reply."""
+
+    async def after_send(self, ctx):
+        return HookDecision(modified_content=f"{ctx.outbound_content}\n\nDeck: /out/deck.pptx")
+
+
+async def test_what_after_send_appends_reaches_a_streaming_sink_as_one_more_delta(tmp_path):
+    """The reply left as deltas before the hook ran; the tail is sent after it.
+
+    Measured on five test homes: the deck engine's "Deck: / Preview: / MEDIA:" lines
+    never reached the host over ACP, because a streamed turn's returned text was
+    dropped at the emit boundary and the hook only ever changed that text.
+    """
+    chunks = [ChatDelta(content="Hel"), ChatDelta(content="lo")]
+    loop = AgentLoop(provider=_FakeStreamProvider(chunks), workspace=tmp_path, host=HostWiring(hooks=[_Announce()]))
+    _stub_edges(loop)
+    sink = _EmitCollector()
+
+    await loop.run_turn(_req("hi"), sink, _drain)
+
+    deltas = [e.delta for e in sink.events if isinstance(e, EvStreamDelta)]
+    assert deltas == ["Hel", "lo", "\n\nDeck: /out/deck.pptx"]
+    assert not any(isinstance(e, EvText) for e in sink.events)
+
+
+class _Rewrite(AgentHook):
+    """An after_send hook that replaces the reply wholesale rather than appending to it."""
+
+    async def after_send(self, ctx):
+        return HookDecision(modified_content="Completely different reply")
+
+
+async def test_what_after_send_rewrites_wholesale_is_not_sent_after_a_streamed_reply(tmp_path):
+    """The one branch of `_appended_by_hook` whose failure a user sees: the client has
+    the streamed "Hello" already, and a rewrite forwarded as if it were an append would
+    arrive as one more delta -- two replies on screen. Nothing is sent instead, and the
+    non-streamed path, which has sent nothing yet, carries the rewrite whole."""
+    from raven.agent.loop._shared import _appended_by_hook
+
+    assert _appended_by_hook("Hello", "Hello\n\nDeck: /out/d.pptx") == "\n\nDeck: /out/d.pptx"
+    assert _appended_by_hook("Hello", "Completely different reply") == ""
+    assert _appended_by_hook("Hello", "Hello") == ""
+    assert _appended_by_hook(None, "Deck: /out/d.pptx") == "Deck: /out/d.pptx"
+
+    chunks = [ChatDelta(content="Hel"), ChatDelta(content="lo")]
+    loop = AgentLoop(provider=_FakeStreamProvider(chunks), workspace=tmp_path, host=HostWiring(hooks=[_Rewrite()]))
+    _stub_edges(loop)
+    sink = _EmitCollector()
+
+    await loop.run_turn(_req("hi"), sink, _drain)
+
+    assert [e.delta for e in sink.events if isinstance(e, EvStreamDelta)] == ["Hel", "lo"]
+    assert not any(isinstance(e, EvText) for e in sink.events)
+
+
+async def test_what_after_send_appends_is_not_sent_twice_on_the_non_streamed_path(tmp_path):
+    loop = AgentLoop(
+        provider=_FakeChatProvider([LLMResponse(content="Hello", finish_reason="stop")]),
+        workspace=tmp_path,
+        host=HostWiring(hooks=[_Announce()]),
+    )
+    _stub_edges(loop)
+    sink = _EmitCollector()
+
+    await loop.run_turn(_req("hi"), sink, _drain, stream=False)
+
+    texts = [e.content for e in sink.events if isinstance(e, EvText)]
+    assert texts == ["Hello\n\nDeck: /out/deck.pptx"]
+    assert not any(isinstance(e, EvStreamDelta) for e in sink.events)
 
 
 async def test_run_emits_reasoning_then_stream(tmp_path):
