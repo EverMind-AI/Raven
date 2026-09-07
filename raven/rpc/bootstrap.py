@@ -353,7 +353,9 @@ async def build_rpc_stack(
         terminal_services.sessions = getattr(agent_loop, "sessions", None)
         tools = getattr(agent_loop, "tools", None)
         if terminal_services.sessions is not None and tools is not None:
-            unregister_terminal_tools = register_terminal_tools(tools, dispatcher)
+            unregister_terminal_tools = register_terminal_tools(
+                tools, dispatcher, session_cwd=getattr(agent_loop, "peek_session_workdir", None)
+            )
 
     if owns_loop and agent_loop is not None:
         # A one-time runtime preparation belongs to whoever assembles the engine.

@@ -41,7 +41,12 @@ class CreateTerminalTool(_TerminalTool):
             "name": {"type": "string", "description": "Unique lowercase canonical name with hyphen-separated words"},
             "task": {
                 "type": "string",
-                "description": "Worktree id or absolute checkout path; defaults to this turn's worktree",
+                "description": "Optional worktree id or checkout path; must match the calling session's cwd",
+            },
+            "unattended": {
+                "type": "boolean",
+                "description": "Explicitly bypass provider permission prompts; defaults to false for interactive terminals",
+                "default": False,
             },
         },
         "required": ["provider", "name"],
@@ -53,12 +58,12 @@ class CreateTerminalTool(_TerminalTool):
         self.provider_command = provider_command
         self.task_worktree = task_worktree
 
-    async def execute(self, provider: str, name: str, task: str = "", **kwargs: Any) -> str:
+    async def execute(self, provider: str, name: str, task: str = "", unattended: bool = False, **kwargs: Any) -> str:
         try:
             if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name):
                 raise TerminalError("invalid_agent_name", "Use a lowercase canonical agent name")
-            kind, command = self.provider_command(provider)
-            worktree = self.task_worktree(task)
+            worktree = self.task_worktree(task, self._session_key.get())
+            kind, command = self.provider_command(provider, unattended=unattended)
             existing = await self.rpc("agents.resolve", {"mention": name})
             if existing.get("candidates"):
                 raise TerminalError("agent_name_exists", "The canonical name or alias already exists")

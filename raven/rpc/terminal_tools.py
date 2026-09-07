@@ -7,13 +7,12 @@ import subprocess
 from pathlib import Path
 from uuid import uuid4
 
-from raven.agent import workdir
 from raven.agent.tools.terminal import CreateTerminalTool, ResolveAgentTool, SendTerminalTool
 from raven.contracts.terminal import TerminalError, worktree_id
 from raven.rpc import connection
 
 
-def provider_command(provider: str) -> tuple[str, list[str]]:
+def provider_command(provider: str, unattended: bool = False) -> tuple[str, list[str]]:
     from raven.config.loader import load_config
 
     rows = load_config().subagents.agents
@@ -38,11 +37,20 @@ def provider_command(provider: str) -> tuple[str, list[str]]:
             "provider_not_unique",
             "Multiple matching agent kinds. Open External Agents and keep one matching preset, or use its exact name.",
         )
-    return matches[0]
+    name, command = matches[0]
+    if unattended:
+        command = command + [
+            "--dangerously-skip-permissions" if command[0] == "claude" else "--dangerously-bypass-approvals-and-sandbox"
+        ]
+    return name, command
 
 
 def task_worktree(task: str = "") -> str:
-    path = task or str(workdir.current() or Path.cwd())
+    if not task:
+        raise TerminalError(
+            "session_cwd_missing", "The calling session has no cwd. Select a task with a checkout first."
+        )
+    path = task
     if "::" in path:
         repo, _, directory = path.removeprefix("id:").partition("::")
         if not repo or not Path(directory).is_absolute() or not Path(directory).is_dir():
@@ -60,7 +68,18 @@ def task_worktree(task: str = "") -> str:
         raise TerminalError("invalid_worktree", "Cannot identify this task's Git worktree") from exc
 
 
-def register_terminal_tools(tools, dispatcher):
+def register_terminal_tools(tools, dispatcher, *, session_cwd=None):
+    def calling_worktree(task, session_key):
+        cwd = session_cwd(session_key) if session_cwd is not None and session_key else None
+        if not cwd:
+            raise TerminalError(
+                "session_cwd_missing", "The calling session has no cwd. Select a task with a checkout first."
+            )
+        selected = task_worktree(str(cwd))
+        if task and task_worktree(task) != selected:
+            raise TerminalError("task_worktree_mismatch", "Terminal task must match the calling session's cwd.")
+        return selected
+
     async def rpc(method, params):
         token = connection.bind_connection()
         try:
@@ -79,7 +98,7 @@ def register_terminal_tools(tools, dispatcher):
 
     scope = os.environ.get("RAVEN_ENVIRONMENT", "local") + "/development"
     installed = (
-        CreateTerminalTool(rpc, provider_command, task_worktree),
+        CreateTerminalTool(rpc, provider_command, calling_worktree),
         SendTerminalTool(rpc, scope=scope),
         ResolveAgentTool(rpc),
     )
