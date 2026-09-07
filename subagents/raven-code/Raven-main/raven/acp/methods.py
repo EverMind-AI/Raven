@@ -38,6 +38,7 @@ from loguru import logger
 from raven.acp import protocol, redact
 from raven.acp.capabilities import ClientCapabilities, initialize_result
 from raven.acp.config_options import MODEL_OPTION_ID, model_option, set_model
+from raven.acp.modes import SessionModes
 from raven.acp.replay import replay
 from raven.acp.updates import AcpSession, TurnAlreadyRunningError, UpdateTranslator
 
@@ -45,6 +46,12 @@ from raven.acp.updates import AcpSession, TurnAlreadyRunningError, UpdateTransla
 # method-not-found, which is the same answer an unknown name gets -- the
 # distinction is kept here only so a reader can see the difference between "not
 # in the protocol" and "not built yet".
+#
+# ``session/set_mode`` is in the set and still served: the router answers it
+# before this check whenever the build declares modes (``acp.modes``), so
+# membership here is what a build that declares NONE falls through to. Dropping
+# it from the set would answer that build with "unknown method", which reads as
+# a version mismatch rather than as a surface this deployment did not turn on.
 UNIMPLEMENTED_METHODS = frozenset(
     {
         "session/set_mode",
@@ -136,6 +143,7 @@ class AcpMethods:
         outbound: Any = None,
         questions: Any = None,
         channel: str = "acp",
+        modes: SessionModes | None = None,
     ) -> None:
         self._dispatcher = dispatcher
         self._translator = translator
@@ -144,6 +152,10 @@ class AcpMethods:
         self._outbound = outbound
         self._questions = questions
         self._channel = channel
+        # raven/acp/modes.py. ``None`` (a test) or a catalogue declaring nothing
+        # leaves session/set_mode method-not-found and every session response
+        # without a ``modes`` object -- the pre-modes wire, byte for byte.
+        self._modes = modes
         self._ids = count(1)
         self.initialized = False
         self.client = ClientCapabilities()
@@ -256,6 +268,8 @@ class AcpMethods:
             return await self._session_prompt(params)
         if method == "session/cancel":
             return await self._session_cancel(params)
+        if method == "session/set_mode" and self._modes is not None and self._modes.enabled:
+            return self._session_set_mode(params)
         if method in UNIMPLEMENTED_METHODS:
             raise AcpMethodError(protocol.METHOD_NOT_FOUND, f"{method} is not implemented")
         raise AcpMethodError(protocol.METHOD_NOT_FOUND, f"unknown method {method}")
@@ -309,7 +323,7 @@ class AcpMethods:
         options = await self._config_options()
         if options:
             result["configOptions"] = options
-        return result
+        return self._with_modes(result, session.session_id)
 
     async def _session_load(self, params: dict[str, Any]) -> dict[str, Any]:
         """Reopen a stored session, replaying it as it is loaded.
@@ -363,7 +377,7 @@ class AcpMethods:
             self._emit(protocol.notification("session/update", {"sessionId": session_id, "update": update}))
         logger.info("acp: replayed {} update(s) for {}", len(updates), session_id)
         self._announce_commands(session_id)
-        return {}
+        return self._with_modes({}, session_id)
 
     async def _session_resume(self, params: dict[str, Any]) -> dict[str, Any]:
         """Reopen a stored session for its own state, without replaying it.
@@ -407,7 +421,7 @@ class AcpMethods:
         await self._adopt_per_session_mcp(session_id, servers)
         logger.info("acp: resumed session {}", session_id)
         self._announce_commands(session_id)
-        return {}
+        return self._with_modes({}, session_id)
 
     async def _session_close(self, params: dict[str, Any]) -> dict[str, Any]:
         """Drop one session from this connection.
@@ -427,6 +441,7 @@ class AcpMethods:
                 await self._call("turn.cancel", {"session_key": session.session_key})
         self._translator.release_session(session_id)
         await self._release_per_session_mcp(session.session_key)
+        self._forget_mode(session_id)
         logger.info("acp: closed session {}", session_id)
         return {}
 
@@ -466,6 +481,7 @@ class AcpMethods:
         if manager is not None:
             manager.delete(session_id)
         self._titles.pop(session_id, None)
+        self._forget_mode(session_id)
         # The conversation being gone is what frees the workspace: release the
         # gate's allocation for this session (primary owner dropped; a worktree
         # is removed only when provably empty-handed - work is never deleted).
@@ -576,6 +592,70 @@ class AcpMethods:
         option = await model_option(self._call)
         return [] if option is None else [option]
 
+    def _session_set_mode(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Switch which profile this session's next turn runs on.
+
+        Nothing is interrupted: a switch during a turn -- or after a prompt was
+        accepted but before its turn starts -- leaves that turn on the profile
+        it was submitted under and lands on the next one. The loop reads its
+        session policy once per turn, and the prompt route pins the snapshot at
+        submission. The session is looked up first, so an unknown session is
+        -32002 rather than a mode error about a session that does not exist.
+        Reached only when modes are declared; a build declaring none keeps
+        answering method-not-found.
+        """
+        if self._modes is None or not self._modes.enabled:
+            raise AcpMethodError(protocol.METHOD_NOT_FOUND, "session/set_mode is not implemented")
+        session = self._session_for(params)
+        mode_id = params.get("modeId")
+        if not isinstance(mode_id, str) or not mode_id:
+            raise AcpMethodError(protocol.INVALID_PARAMS, "modeId is required", {"field": "modeId"})
+        try:
+            self._modes.set(session.session_id, mode_id)
+        except KeyError as exc:
+            raise AcpMethodError(
+                protocol.INVALID_PARAMS,
+                f"unknown mode {mode_id!r}",
+                {"field": "modeId", "availableModes": list(self._modes.ids())},
+            ) from exc
+        self._apply_mode(session)
+        return {}
+
+    def _with_modes(self, result: dict[str, Any], session_id: str) -> dict[str, Any]:
+        """Add the session's ``modes`` object to a session response, if any.
+
+        On all three routes in: a client that reconnects to a session it did
+        not open has no other way to learn which mode it is in.
+        """
+        state = self._modes.state(session_id) if self._modes is not None else None
+        if state is not None:
+            result["modes"] = state
+        return result
+
+    def _apply_mode(self, session: AcpSession) -> None:
+        """Hand the session's profile to the engine as its session policy.
+
+        At the switch and again before every turn. The engine enforces it from
+        its next turn on; this layer only says which profile the session is on.
+        An engine without the seam (a test rig) is left alone.
+        """
+        if self._modes is None or not self._modes.enabled:
+            return
+        profile = self._modes.profile(session.session_id)
+        setter = getattr(self._agent_loop, "set_session_policy", None)
+        if profile is None or setter is None:
+            return
+        setter(session.session_key, reasoning_effort=profile.reasoning_effort)
+
+    def _forget_mode(self, session_id: str) -> None:
+        """A closed or deleted session leaves no mode and no policy behind."""
+        if self._modes is None or not self._modes.enabled:
+            return
+        self._modes.forget(session_id)
+        clearer = getattr(self._agent_loop, "clear_session_policy", None)
+        if clearer is not None:
+            clearer(session_id)
+
     async def _session_prompt(self, params: dict[str, Any]) -> dict[str, Any]:
         """Run one turn and answer with its stop reason.
 
@@ -599,6 +679,10 @@ class AcpMethods:
             # a prompt that never answers.
             await self._rebind_subscription(session)
 
+        # The session's current profile, handed over again right before the
+        # turn: the host re-sends the mode on every route into a session, and
+        # the engine must never start a turn on a stale one.
+        self._apply_mode(session)
         try:
             future = self._translator.begin_turn(session.session_id)
         except TurnAlreadyRunningError as exc:
@@ -607,6 +691,12 @@ class AcpMethods:
                 str(exc),
                 {"sessionId": session.session_id},
             ) from exc
+        # Freeze the submitted turn's policy: a session/set_mode landing in the
+        # window between this acceptance and the engine's policy read must not
+        # re-effort the turn that was already submitted -- it lands on the next.
+        pin = getattr(self._agent_loop, "pin_session_policy", None)
+        if pin is not None:
+            pin(session.session_key)
         try:
             try:
                 accepted = await self._call(
@@ -618,7 +708,11 @@ class AcpMethods:
                 # awaiting the future would hang. Say why, then end the turn:
                 # the rule is that a prompt is answered with a stopReason, and
                 # that holds for a turn that was refused as much as for one that
-                # ran.
+                # ran. The pin dies with the refusal: no turn will consume it,
+                # and the next prompt takes its own snapshot.
+                unpin = getattr(self._agent_loop, "unpin_session_policy", None)
+                if unpin is not None:
+                    unpin(session.session_key)
                 self._say(session, f"The turn could not start: {exc.message}")
                 return {"stopReason": "end_turn"}
             # Which turn is this prompt's. The stream also carries turns the
