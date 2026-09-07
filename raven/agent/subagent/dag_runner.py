@@ -41,6 +41,7 @@ from raven.agent.subagent.dag_store import (
 )
 from raven.agent.subagent.dag_verdict import Verdict
 from raven.agent.subagent.instances import get_registry, hold_handle
+from raven.agent.subagent.lineage import child_run
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.subagent_memory import (
     TRACE_BUDGET_S,
@@ -1459,22 +1460,23 @@ async def _run_node(
                         )
                     )
                     try:
-                        result = await agent_backend.run(
-                            prompt,
-                            task_id=node.id,
-                            workspace=Path(workdir),
-                            executor=sandbox,
-                            session_key=session_key,
-                            instance=node.instance,
-                            mode=node_mode,
-                            # The invoking turn's binding, when the tool resolved one:
-                            # a pooled ACP worker otherwise keeps whatever model it
-                            # was first launched with. Only when set, because a node
-                            # backend built for a test may take no such keywords.
-                            **({"provider": provider} if provider is not None else {}),
-                            **({"model": model} if model else {}),
-                            **state_kwargs,
-                        )
+                        with child_run(session_key or store.run_id):
+                            result = await agent_backend.run(
+                                prompt,
+                                task_id=node.id,
+                                workspace=Path(workdir),
+                                executor=sandbox,
+                                session_key=session_key,
+                                instance=node.instance,
+                                mode=node_mode,
+                                # The invoking turn's binding, when the tool resolved one:
+                                # a pooled ACP worker otherwise keeps whatever model it
+                                # was first launched with. Only when set, because a node
+                                # backend built for a test may take no such keywords.
+                                **({"provider": provider} if provider is not None else {}),
+                                **({"model": model} if model else {}),
+                                **state_kwargs,
+                            )
                     finally:
                         stall_watch.cancel()
                         node_activity[node.id] = did.as_meta()

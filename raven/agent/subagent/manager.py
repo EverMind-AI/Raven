@@ -21,6 +21,7 @@ from raven.agent.subagent.backends import (
     SubagentActionAbortedError,
     SubagentBackend,
 )
+from raven.agent.subagent.backends.base import IN_SUBAGENT_RUN
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent.dag_store import ensure_node_claimed, index_guard, record_node_outcome
 from raven.agent.subagent.direct_chat import (
@@ -33,6 +34,7 @@ from raven.agent.subagent.direct_chat import (
 from raven.agent.subagent.history import SpawnRecord, session_history_root
 from raven.agent.subagent.instance_state import InstanceState, instance_state_path
 from raven.agent.subagent.instances import get_registry, hold_handle, mint_handle
+from raven.agent.subagent.lineage import MAX_SPAWN_DEPTH, child_run, current_lineage
 from raven.agent.subagent.mode_tiers import resolve_tier, turn_tier_in_force
 from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.agent.subagent.registry import AgentRegistry, AgentRow
@@ -243,6 +245,7 @@ class SubagentManager:
         # it was built with, and the TUI's spawn HUD needs the cap to render a
         # "widest level / cap" ratio rather than a bare count.
         self.max_concurrent = max_concurrent
+        self.max_spawn_depth = MAX_SPAWN_DEPTH
         # Operator kill switch for delegation, toggled from the TUI's agents
         # overlay. Refuses new spawns while set; running ones are left alone,
         # because pausing is how a user stops a fan-out from growing without
@@ -670,6 +673,8 @@ class SubagentManager:
         context verbatim with no truncation -- showing the rendered text there
         would re-inject the whole file.
         """
+        if current_lineage().depth >= self.max_spawn_depth or IN_SUBAGENT_RUN.get():
+            return f"{SPAWN_REFUSED_PREFIX}maximum spawn depth {self.max_spawn_depth} reached."
         agent = agent or GENERIC_AGENT
         if self._paused:
             logger.info("Spawn refused: delegation is paused")
@@ -898,19 +903,20 @@ class SubagentManager:
                         self._owned_ids,
                         self._home_volume(effective_workspace),
                     )
-                    async with executor:
-                        reply = await backend.run(
-                            text,
-                            task_id=task_id,
-                            workspace=effective_workspace,
-                            executor=executor,
-                            session_key=session_key,
-                            instance=handle,
-                            provider=self.provider,
-                            model=self.model,
-                            mode=self.resolve_mode(session_key, agent, handle),
-                            **kwargs,
-                        )
+                    with child_run(session_key or f"host:{task_id}"):
+                        async with executor:
+                            reply = await backend.run(
+                                text,
+                                task_id=task_id,
+                                workspace=effective_workspace,
+                                executor=executor,
+                                session_key=session_key,
+                                instance=handle,
+                                provider=self.provider,
+                                model=self.model,
+                                mode=self.resolve_mode(session_key, agent, handle),
+                                **kwargs,
+                            )
                 except asyncio.CancelledError:
                     cancelled = True
                     await _write_spawn_status(session_key, agent, handle, "cancelled")
@@ -1206,12 +1212,13 @@ class SubagentManager:
                     self._owned_ids,
                     self._home_volume(effective_workspace),
                 )
-                async with executor:
-                    dispatched = True
-                    kwargs = {"mcp_grant": mcp_grant} if mcp_grant is not None else {}
-                    await self._run_subagent_inner(
-                        task_id, task, task_summary, origin, executor, provider, model, **kwargs
-                    )
+                with child_run(origin.get("session_key") or f"host:{task_id}"):
+                    async with executor:
+                        dispatched = True
+                        kwargs = {"mcp_grant": mcp_grant} if mcp_grant is not None else {}
+                        await self._run_subagent_inner(
+                            task_id, task, task_summary, origin, executor, provider, model, **kwargs
+                        )
         except asyncio.CancelledError:
             if not dispatched:
                 self._emit_status(origin, task_id, task_summary, "cancelled", ended_at=int(time.time() * 1000))

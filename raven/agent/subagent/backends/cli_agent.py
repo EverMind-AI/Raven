@@ -48,6 +48,7 @@ from raven.agent.subagent.backends.transcript import (
     parse_opencode_json,
 )
 from raven.agent.subagent.instances import InstanceRegistry, get_registry, hold_handle
+from raven.agent.subagent.lineage import lineage_env
 from raven.agent.subagent.mcp_grant import (
     McpGrant,
     McpSource,
@@ -432,7 +433,7 @@ class CliAgentBackend:
             # while a sub-agent writing back to "the host's store" writes into
             # ~/.raven. The hand-off lands in a file nobody reads and the wake
             # simply never arrives.
-            env = {**env_base, **host_identity_env(), **(runtime_env or {}), **self.env}
+            env = {**env_base, **host_identity_env(), **(runtime_env or {}), **self.env, **lineage_env()}
             logger.info("Subagent [{}] CLI agent {!r}: {}", task_id, self.name, argv[:1])
             proc = await asyncio.create_subprocess_exec(
                 *argv,

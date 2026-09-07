@@ -68,6 +68,7 @@ from raven.agent.subagent.dag_store import (
 from raven.agent.subagent.dag_verdict import Verdict, describe_failure, judge, tail
 from raven.agent.subagent.history import dag_root, nodes_root, session_history_root
 from raven.agent.subagent.instances import mint_handle
+from raven.agent.subagent.lineage import MAX_SPAWN_DEPTH, current_lineage
 from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.subagent_memory import EverosIdentity
@@ -1013,7 +1014,7 @@ class SubAgentDagTool(Tool):
         # Backstop, not the primary control: no in-process sub-agent backend
         # registers this tool today. It fires only if one ever does, so the
         # failure is a refusal rather than a silent recursive fan-out.
-        if IN_SUBAGENT_RUN.get():
+        if IN_SUBAGENT_RUN.get() or current_lineage().depth >= MAX_SPAWN_DEPTH:
             return (
                 "Error: run_subagent_dag is not available inside a sub-agent run — "
                 "only the main agent orchestrates DAGs. Complete the assigned task directly."

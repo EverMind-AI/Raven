@@ -27,6 +27,7 @@ from raven.rpc.methods.delegation import (
 class _FakeManager:
     def __init__(self, max_concurrent: int = 4) -> None:
         self.max_concurrent = max_concurrent
+        self.max_spawn_depth = MAX_SPAWN_DEPTH
         self._paused = False
         self.cancelled: list[str] = []
         self.live: set[str] = set()
@@ -223,3 +224,10 @@ async def test_cancel_instance_without_the_pair_never_reaches_the_manager() -> N
     result = await subagent_cancel_instance({"session_key": "s"}, agent_loop_factory=_factory(manager))
     assert result == {"found": False, "session_key": "s", "agent": "", "handle": ""}
     assert manager.cancelled == []
+
+
+async def test_status_reads_the_enforced_manager_depth():
+    manager = _FakeManager()
+    manager.max_spawn_depth = 3
+    result = await delegation_status({}, agent_loop_factory=_factory(manager))
+    assert result["max_spawn_depth"] == 3

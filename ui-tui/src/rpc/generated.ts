@@ -68,7 +68,157 @@ export type TurnEvent =
   | CronMissedEvent
   | MediaEvent
   | SessionTitledEvent
-  | SessionNamingEndedEvent;
+  | SessionNamingEndedEvent
+  | TerminalCreatedEvent
+  | TerminalClosedEvent
+  | TerminalStatusEvent
+  | A2ASendEvent
+  | A2AAckMatchedEvent;
+export type Type = 'terminal.created';
+export type Handle = string;
+export type Incarnationid = string;
+export type Ptyid = string;
+export type Tabid = string;
+export type Leafid = string;
+export type Panekey = string;
+export type Worktreeid = string;
+export type Worktreepath = string;
+export type Executionhostid = string;
+export type Title = string;
+export type Status = 'idle' | 'working' | 'permission' | 'unknown';
+export type Liveness = 'live' | 'exited' | 'unverifiable';
+export type Connected = boolean;
+export type Writable = boolean;
+export type Orphaned = boolean;
+export type Visible = boolean;
+export type Owner = string;
+export type Lastoutputat = number | null;
+export type Type1 = 'terminal.closed';
+export type Handle1 = string;
+export type Type2 = 'terminal.status';
+export type Handle2 = string;
+export type Status1 = 'working' | 'idle' | 'permission' | 'unknown';
+export type Liveness1 = 'live' | 'exited' | 'unverifiable';
+export type Type3 = 'a2a.send';
+export type Handle3 = string;
+export type State = 'accepted' | 'queued' | 'blocked' | 'stalled' | 'delivered_to_host';
+export type Nonce = string | null;
+export type Type4 = 'a2a.ack.matched';
+export type Handle4 = string | null;
+export type Nonce1 = string | null;
+export type AckFor = string;
+export type From = string;
+export type To = string;
+export type State1 = 'ready';
+export type Runtimeid = string;
+export type State2 = 'ready';
+export type Environment = string;
+export type Appversion = string;
+export type Capabilities = string[];
+export type Hostids = string[];
+export type Omittedhostids = string[];
+export type Handle5 = string | null;
+export type Accepted = boolean;
+export type Byteswritten = number;
+export type State3 = 'accepted' | 'queued' | 'blocked' | 'stalled' | 'delivered_to_host';
+export type Nonce2 = string | null;
+export type Deduplicated = boolean;
+export type Contentack = boolean | null;
+export type To1 = 'raven' | null;
+export type Handle6 = string;
+export type Satisfied = boolean;
+export type Blockedreason = string | null;
+export type Timedout = boolean;
+export type Handle7 = string;
+export type Closed = boolean;
+export type Handle8 = string;
+export type Byteswritten1 = number;
+export type Handle9 = string;
+export type Enabled = boolean | null;
+export type Seq = number | null;
+export type Ack = number | null;
+export type Ackbytes = number | null;
+export type SubscriptionId = string | null;
+export type Handle10 = string;
+export type Tabid1 = string;
+export type Title1 = string;
+export type Livetitle = string;
+export type Alias = string;
+export type Source = string;
+export type Handle11 = string | null;
+export type Incarnationid1 = string | null;
+export type Worktreeid1 = string | null;
+export type Tabid2 = string | null;
+export type Leafid1 = string | null;
+export type Agentname = string;
+export type Kindref = string;
+export type Brand = string;
+export type Role = string;
+export type Taskref = string;
+export type Description = string;
+export type Aliases = IdentityAlias[];
+export type Bindinggeneration = number;
+export type Firstobservedat = number;
+export type Lastobservedat = number;
+export type Orphan = boolean;
+export type Schemaversion = 1;
+export type Exitedat = number | null;
+export type Runtimeid1 = string;
+export type Reason = 'exact' | 'alias';
+export type Handle12 = string | null;
+export type Cols = number | null;
+export type Rows = number | null;
+/**
+ * Sent by the client; the handler does not read it.
+ */
+export type SessionId = string | null;
+export type Ok = boolean;
+export type WorktreeId = string;
+export type Command = string | string[];
+export type Title2 = string;
+export type Owner1 = string;
+export type SessionId1 = string | null;
+export type WorktreeId1 = string | null;
+export type Limit = number;
+export type IncludeVisualLayouts = boolean;
+export type Terminals = TerminalRecord[];
+export type Truncated = boolean;
+export type Visuallayouts =
+  | {
+      [k: string]: JsonValue;
+    }[]
+  | null;
+export type Handle13 = string;
+export type Handle14 = string | null;
+export type To2 = 'raven' | null;
+export type Text = string;
+export type Enter = boolean;
+export type RequireAck = boolean;
+export type SourceHandle = string | null;
+export type SessionId2 = string | null;
+export type Handle15 = string;
+export type For = 'tui-idle' | 'exit';
+export type TimeoutMs = number;
+export type Handle16 = string;
+export type Handle17 = string;
+export type Data = string;
+export type Handle18 = string;
+export type Enabled1 = boolean;
+export type Ack1 = number | null;
+export type Handle19 = string;
+export type Title3 = string;
+export type Name = string;
+export type Kind = string | null;
+export type Terminal = string | null;
+export type Role1 = string;
+export type TaskRef = string;
+export type Description1 = string | null;
+export type Aliases1 = IdentityAlias[] | null;
+export type Agents = IdentityRecord[];
+export type Name1 = string;
+export type Mention = string;
+export type Candidates = IdentityCandidate[];
+export type Unique = boolean;
 
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -1693,6 +1843,106 @@ export interface MediaEvent {
   };
 }
 /**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalCreatedEvent".
+ */
+export interface TerminalCreatedEvent {
+  type: Type;
+  payload: TerminalRecord;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalRecord".
+ */
+export interface TerminalRecord {
+  handle?: Handle;
+  incarnationId?: Incarnationid;
+  ptyId?: Ptyid;
+  tabId?: Tabid;
+  leafId?: Leafid;
+  paneKey?: Panekey;
+  worktreeId: Worktreeid;
+  worktreePath: Worktreepath;
+  executionHostId?: Executionhostid;
+  title?: Title;
+  status?: Status;
+  liveness?: Liveness;
+  connected?: Connected;
+  writable?: Writable;
+  orphaned?: Orphaned;
+  visible?: Visible;
+  owner?: Owner;
+  lastOutputAt?: Lastoutputat;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalClosedEvent".
+ */
+export interface TerminalClosedEvent {
+  type: Type1;
+  payload: TerminalClosedPayload;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalClosedPayload".
+ */
+export interface TerminalClosedPayload {
+  handle: Handle1;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalStatusEvent".
+ */
+export interface TerminalStatusEvent {
+  type: Type2;
+  payload: TerminalStatusPayload;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalStatusPayload".
+ */
+export interface TerminalStatusPayload {
+  handle: Handle2;
+  status: Status1;
+  liveness: Liveness1;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "A2aSendEvent".
+ */
+export interface A2ASendEvent {
+  type: Type3;
+  payload: A2ASendPayload;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "A2aSendPayload".
+ */
+export interface A2ASendPayload {
+  handle: Handle3;
+  state: State;
+  nonce: Nonce;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "A2aAckMatchedEvent".
+ */
+export interface A2AAckMatchedEvent {
+  type: Type4;
+  payload: A2AAckMatchedPayload;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "A2aAckMatchedPayload".
+ */
+export interface A2AAckMatchedPayload {
+  handle?: Handle4;
+  nonce: Nonce1;
+  ack_for: AckFor;
+  from: From;
+  to: To;
+}
+/**
  * One base as the list view needs it.
  *
  * ``embedding_model`` and ``dimensions`` are the base's own, recorded when it
@@ -1871,6 +2121,148 @@ export interface PlaybookMcpServer {
   enabled?: boolean;
   auth?: 'none' | 'apikey' | 'oauth';
   has_oauth_config?: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RuntimeGraphInfo".
+ */
+export interface RuntimeGraphInfo {
+  state: State1;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RuntimeStatusInfo".
+ */
+export interface RuntimeStatusInfo {
+  runtimeId?: Runtimeid;
+  state: State2;
+  environment: Environment;
+  appVersion: Appversion;
+  capabilities: Capabilities;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "HostScope".
+ */
+export interface HostScope {
+  hostIds?: Hostids;
+  omittedHostIds?: Omittedhostids;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalDeliveryResult".
+ */
+export interface TerminalDeliveryResult {
+  handle?: Handle5;
+  accepted: Accepted;
+  bytesWritten?: Byteswritten;
+  state: State3;
+  nonce?: Nonce2;
+  deduplicated?: Deduplicated;
+  contentAck?: Contentack;
+  to?: To1;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "WaitResult".
+ */
+export interface WaitResult {
+  handle: Handle6;
+  satisfied: Satisfied;
+  blockedReason?: Blockedreason;
+  timedOut?: Timedout;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalClosed".
+ */
+export interface TerminalClosed {
+  handle: Handle7;
+  closed: Closed;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalInput".
+ */
+export interface TerminalInput {
+  handle: Handle8;
+  bytesWritten: Byteswritten1;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalSubscription".
+ */
+export interface TerminalSubscription {
+  handle: Handle9;
+  enabled?: Enabled;
+  seq?: Seq;
+  ack?: Ack;
+  ackBytes?: Ackbytes;
+  subscription_id?: SubscriptionId;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalRename".
+ */
+export interface TerminalRename {
+  handle: Handle10;
+  tabId: Tabid1;
+  title: Title1;
+  liveTitle: Livetitle;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "IdentityAlias".
+ */
+export interface IdentityAlias {
+  alias: Alias;
+  source: Source;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "IdentityBinding".
+ */
+export interface IdentityBinding {
+  handle?: Handle11;
+  incarnationId?: Incarnationid1;
+  worktreeId?: Worktreeid1;
+  tabId?: Tabid2;
+  leafId?: Leafid1;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "IdentityRecord".
+ */
+export interface IdentityRecord {
+  agentName: Agentname;
+  kindRef: Kindref;
+  brand: Brand;
+  role?: Role;
+  taskRef?: Taskref;
+  description?: Description;
+  aliases?: Aliases;
+  binding?: IdentityBinding | null;
+  bindingGeneration: Bindinggeneration;
+  firstObservedAt: Firstobservedat;
+  lastObservedAt: Lastobservedat;
+  orphan?: Orphan;
+  schemaVersion?: Schemaversion;
+  exitedAt?: Exitedat;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RuntimeInfo".
+ */
+export interface RuntimeInfo {
+  runtimeId?: Runtimeid1;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "IdentityCandidate".
+ */
+export interface IdentityCandidate {
+  agent: IdentityRecord;
+  reason: Reason;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -4085,19 +4477,17 @@ export interface CompletePathResult {
  * via the `definition` "TerminalResizeParams".
  */
 export interface TerminalResizeParams {
-  cols?: number;
-  rows?: number;
-  /**
-   * Sent by the client; the handler does not read it.
-   */
-  session_id?: string;
+  handle?: Handle12;
+  cols?: Cols;
+  rows?: Rows;
+  session_id?: SessionId;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "TerminalResizeResult".
  */
 export interface TerminalResizeResult {
-  ok: boolean;
+  ok: Ok;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -4921,8 +5311,243 @@ export interface SubagentCancelInstanceResult {
   agent: string;
   handle: string;
 }
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RuntimeStatusParams".
+ */
+export interface RuntimeStatusParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RuntimeStatusResult".
+ */
+export interface RuntimeStatusResult {
+  runtime: RuntimeStatusInfo;
+  graph: RuntimeGraphInfo;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalCreateParams".
+ */
+export interface TerminalCreateParams {
+  worktree_id: WorktreeId;
+  command: Command;
+  title?: Title2;
+  owner?: Owner1;
+  session_id?: SessionId1;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalCreateResult".
+ */
+export interface TerminalRecordResult {
+  terminal: TerminalRecord;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalListParams".
+ */
+export interface TerminalListParams {
+  worktree_id?: WorktreeId1;
+  limit?: Limit;
+  include_visual_layouts?: IncludeVisualLayouts;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalListResult".
+ */
+export interface TerminalListResult {
+  terminals?: Terminals;
+  truncated?: Truncated;
+  hostScope?: HostScope;
+  topologyRevisions?: Topologyrevisions;
+  visualLayouts?: Visuallayouts;
+}
+export interface Topologyrevisions {
+  [k: string]: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalShowParams".
+ */
+export interface TerminalShowParams {
+  handle: Handle13;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalShowResult".
+ */
+export interface TerminalRecordResult1 {
+  terminal: TerminalRecord;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalSendParams".
+ */
+export interface TerminalSendParams {
+  handle?: Handle14;
+  to?: To2;
+  text: Text;
+  enter?: Enter;
+  require_ack?: RequireAck;
+  source_handle?: SourceHandle;
+  session_id?: SessionId2;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalSendResult".
+ */
+export interface TerminalSendResult {
+  send: TerminalDeliveryResult;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalWaitParams".
+ */
+export interface TerminalWaitParams {
+  handle: Handle15;
+  for?: For;
+  timeout_ms?: TimeoutMs;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalWaitResult".
+ */
+export interface TerminalWaitResult {
+  wait: WaitResult;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalCloseParams".
+ */
+export interface TerminalCloseParams {
+  handle: Handle16;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalCloseResult".
+ */
+export interface TerminalCloseResult {
+  close: TerminalClosed;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalInputParams".
+ */
+export interface TerminalInputParams {
+  handle: Handle17;
+  data: Data;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalInputResult".
+ */
+export interface TerminalInputResult {
+  input: TerminalInput;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalSubscribeParams".
+ */
+export interface TerminalSubscribeParams {
+  handle: Handle18;
+  enabled?: Enabled1;
+  ack?: Ack1;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalSubscribeResult".
+ */
+export interface TerminalSubscribeResult {
+  subscription: TerminalSubscription;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalRenameParams".
+ */
+export interface TerminalRenameParams {
+  handle: Handle19;
+  title: Title3;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalRenameResult".
+ */
+export interface TerminalRenameResult {
+  rename: TerminalRename;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "AgentsRegisterParams".
+ */
+export interface AgentsRegisterParams {
+  name: Name;
+  kind?: Kind;
+  terminal?: Terminal;
+  role?: Role1;
+  task_ref?: TaskRef;
+  description?: Description1;
+  aliases?: Aliases1;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "AgentsRegisterResult".
+ */
+export interface AgentsRecordResult {
+  _meta: RuntimeInfo;
+  agent: IdentityRecord;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "AgentsListParams".
+ */
+export interface AgentsListParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "AgentsListResult".
+ */
+export interface AgentsListResult {
+  _meta: RuntimeInfo;
+  agents: Agents;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "AgentsShowParams".
+ */
+export interface AgentsShowParams {
+  name: Name1;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "AgentsShowResult".
+ */
+export interface AgentsRecordResult1 {
+  _meta: RuntimeInfo;
+  agent: IdentityRecord;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "AgentsResolveParams".
+ */
+export interface AgentsResolveParams {
+  mention: Mention;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "AgentsResolveResult".
+ */
+export interface AgentsResolveResult {
+  _meta: RuntimeInfo;
+  candidates: Candidates;
+  unique: Unique;
+}
 
 // ---- Schema-name aliases for structurally-deduplicated types ----
+export type A2aAckMatchedEvent = A2AAckMatchedEvent;
+export type A2aAckMatchedPayload = A2AAckMatchedPayload;
+export type A2aSendEvent = A2ASendEvent;
+export type A2aSendPayload = A2ASendPayload;
+export type AgentsRegisterResult = AgentsRecordResult;
+export type AgentsShowResult = AgentsRecordResult1;
 export type BrowserManageResult = StubResult;
 export type CliDispatchResult = CliResult;
 export type CommandsCatalogResult = CommandsCatalogResponse;
@@ -4943,6 +5568,8 @@ export type SpawnTreeListResult = StubResult;
 export type SpawnTreeLoadResult = StubResult;
 export type SpawnTreeSaveResult = StubResult;
 export type SudoRespondResult = StubResult;
+export type TerminalCreateResult = TerminalRecordResult;
+export type TerminalShowResult = TerminalRecordResult1;
 export type ToolsConfigureResult = StubResult;
 export type VoiceRecordResult = StubResult;
 export type VoiceToggleResult = StubResult;

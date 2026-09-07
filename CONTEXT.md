@@ -8,6 +8,27 @@ plus the TokenWise efficiency layer.
 
 ### Agent Core
 
+**Terminal** (`contracts/terminal.py`):
+A runtime-owned PTY address and its tab/leaf identity, with independent connection
+and visibility state. Its `handle` identifies the terminal; its owner controls closure.
+
+**Incarnation**:
+One process start within a Terminal, identified by a fresh UUID. A saved binding must
+match both handle and incarnation before it addresses the running process.
+
+**Direct delivery**:
+Submission of a peer envelope to a hosted terminal composer. Acceptance establishes
+terminal submission; it does not establish that the receiving agent understood it.
+
+**Content ACK**:
+An addressed reply carrying `ack_for` equal to the original envelope nonce. Matching
+requires the reversed sender/recipient and the same scope; the claim is not authentication.
+
+**Inbox receipt**:
+A durable receipt for an inbox enqueue operation. Reserved for the future inbox layer;
+V1 terminal delivery produces no Inbox receipt.
+
+
 **Session**:
 The ordered, append-only record of turns for one conversation, identified by a
 session key (`channel:chat_id`). Identity lives in the `chat_id` slot: a TUI/CLI
