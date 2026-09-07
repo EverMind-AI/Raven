@@ -16,6 +16,16 @@ from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from raven.rpc.identity_models import IDENTITY_METHOD_MODELS
+from raven.rpc.terminal_events import (
+    A2aAckMatchedEvent,
+    A2aSendEvent,
+    TerminalClosedEvent,
+    TerminalCreatedEvent,
+    TerminalStatusEvent,
+)
+from raven.rpc.terminal_models import TERMINAL_METHOD_MODELS
+
 # ---------------------------------------------------------------------------
 # Re-usable model config.  ``extra="forbid"`` makes Pydantic emit
 # ``additionalProperties: false`` in the generated JSON Schema, matching the
@@ -1018,6 +1028,11 @@ TurnEvent = Annotated[
         MediaEvent,
         SessionTitledEvent,
         SessionNamingEndedEvent,
+        TerminalCreatedEvent,
+        TerminalClosedEvent,
+        TerminalStatusEvent,
+        A2aSendEvent,
+        A2aAckMatchedEvent,
     ],
     Field(discriminator="type"),
 ]
@@ -3143,6 +3158,7 @@ class SlashExecResult(_Strict):
 
 
 class TerminalResizeParams(_Strict):
+    handle: str | None = None
     cols: int | None = None
     rows: int | None = None
     session_id: str | None = Field(default=None, description="Sent by the client; the handler does not read it.")
@@ -3805,6 +3821,8 @@ class SubagentCancelInstanceResult(_Strict):
 
 
 METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
+    **TERMINAL_METHOD_MODELS,
+    **IDENTITY_METHOD_MODELS,
     # knowledge.* -- bases and their documents, served by the in-process engine
     "knowledge.status": (KnowledgeStatusParams, KnowledgeStatusResult),
     "knowledge.bases.list": (KnowledgeBasesListParams, KnowledgeBasesListResult),

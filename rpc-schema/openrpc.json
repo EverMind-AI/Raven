@@ -5211,40 +5211,85 @@
       "summary": "Record the terminal size reported on SIGWINCH.",
       "params": [
         {
+          "name": "handle",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Handle"
+          }
+        },
+        {
           "name": "cols",
           "required": false,
           "schema": {
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cols"
           }
         },
         {
           "name": "rows",
           "required": false,
           "schema": {
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Rows"
           }
         },
         {
           "name": "session_id",
           "required": false,
           "schema": {
-            "type": "string",
-            "description": "Sent by the client; the handler does not read it."
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Sent by the client; the handler does not read it.",
+            "title": "Session Id"
           }
         }
       ],
       "result": {
-        "name": "TerminalResizeResult",
+        "name": "result",
         "schema": {
           "additionalProperties": false,
           "properties": {
             "ok": {
+              "title": "Ok",
               "type": "boolean"
             }
           },
           "required": [
             "ok"
           ],
+          "title": "TerminalResizeResult",
           "type": "object"
         }
       }
@@ -7053,6 +7098,775 @@
             "agent",
             "handle"
           ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "runtime.status",
+      "params": [],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "runtime": {
+              "$ref": "#/components/schemas/RuntimeStatusInfo"
+            },
+            "graph": {
+              "$ref": "#/components/schemas/RuntimeGraphInfo"
+            }
+          },
+          "required": [
+            "runtime",
+            "graph"
+          ],
+          "title": "RuntimeStatusResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "terminal.create",
+      "params": [
+        {
+          "name": "worktree_id",
+          "required": true,
+          "schema": {
+            "title": "Worktree Id",
+            "type": "string"
+          }
+        },
+        {
+          "name": "command",
+          "required": true,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ],
+            "title": "Command"
+          }
+        },
+        {
+          "name": "title",
+          "required": false,
+          "schema": {
+            "default": "Terminal",
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        {
+          "name": "owner",
+          "required": false,
+          "schema": {
+            "default": "human",
+            "title": "Owner",
+            "type": "string"
+          }
+        },
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "terminal": {
+              "$ref": "#/components/schemas/TerminalRecord"
+            }
+          },
+          "required": [
+            "terminal"
+          ],
+          "title": "TerminalRecordResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "terminal.list",
+      "params": [
+        {
+          "name": "worktree_id",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Worktree Id"
+          }
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "default": 1000,
+            "maximum": 1000000,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        {
+          "name": "include_visual_layouts",
+          "required": false,
+          "schema": {
+            "default": false,
+            "title": "Include Visual Layouts",
+            "type": "boolean"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "properties": {
+            "terminals": {
+              "items": {
+                "$ref": "#/components/schemas/TerminalRecord"
+              },
+              "title": "Terminals",
+              "type": "array"
+            },
+            "truncated": {
+              "default": false,
+              "title": "Truncated",
+              "type": "boolean"
+            },
+            "hostScope": {
+              "$ref": "#/components/schemas/HostScope"
+            },
+            "topologyRevisions": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Topologyrevisions",
+              "type": "object"
+            },
+            "visualLayouts": {
+              "anyOf": [
+                {
+                  "items": {
+                    "additionalProperties": {
+                      "$ref": "#/components/schemas/JsonValue"
+                    },
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Visuallayouts"
+            }
+          },
+          "title": "TerminalListResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "terminal.show",
+      "params": [
+        {
+          "name": "handle",
+          "required": true,
+          "schema": {
+            "title": "Handle",
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "terminal": {
+              "$ref": "#/components/schemas/TerminalRecord"
+            }
+          },
+          "required": [
+            "terminal"
+          ],
+          "title": "TerminalRecordResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "terminal.send",
+      "params": [
+        {
+          "name": "handle",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Handle"
+          }
+        },
+        {
+          "name": "to",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "const": "raven",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "To"
+          }
+        },
+        {
+          "name": "text",
+          "required": true,
+          "schema": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        {
+          "name": "enter",
+          "required": false,
+          "schema": {
+            "default": false,
+            "title": "Enter",
+            "type": "boolean"
+          }
+        },
+        {
+          "name": "require_ack",
+          "required": false,
+          "schema": {
+            "default": false,
+            "title": "Require Ack",
+            "type": "boolean"
+          }
+        },
+        {
+          "name": "source_handle",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source Handle"
+          }
+        },
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "send": {
+              "$ref": "#/components/schemas/TerminalDeliveryResult"
+            }
+          },
+          "required": [
+            "send"
+          ],
+          "title": "TerminalSendResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "terminal.wait",
+      "params": [
+        {
+          "name": "handle",
+          "required": true,
+          "schema": {
+            "title": "Handle",
+            "type": "string"
+          }
+        },
+        {
+          "name": "for",
+          "required": false,
+          "schema": {
+            "default": "tui-idle",
+            "enum": [
+              "tui-idle",
+              "exit"
+            ],
+            "title": "For",
+            "type": "string"
+          }
+        },
+        {
+          "name": "timeout_ms",
+          "required": false,
+          "schema": {
+            "default": 300000,
+            "maximum": 3600000,
+            "minimum": 1,
+            "title": "Timeout Ms",
+            "type": "integer"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "wait": {
+              "$ref": "#/components/schemas/WaitResult"
+            }
+          },
+          "required": [
+            "wait"
+          ],
+          "title": "TerminalWaitResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "terminal.close",
+      "params": [
+        {
+          "name": "handle",
+          "required": true,
+          "schema": {
+            "title": "Handle",
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "close": {
+              "$ref": "#/components/schemas/TerminalClosed"
+            }
+          },
+          "required": [
+            "close"
+          ],
+          "title": "TerminalCloseResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "terminal.input",
+      "params": [
+        {
+          "name": "handle",
+          "required": true,
+          "schema": {
+            "title": "Handle",
+            "type": "string"
+          }
+        },
+        {
+          "name": "data",
+          "required": true,
+          "schema": {
+            "title": "Data",
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "input": {
+              "$ref": "#/components/schemas/TerminalInput"
+            }
+          },
+          "required": [
+            "input"
+          ],
+          "title": "TerminalInputResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "terminal.subscribe",
+      "params": [
+        {
+          "name": "handle",
+          "required": true,
+          "schema": {
+            "title": "Handle",
+            "type": "string"
+          }
+        },
+        {
+          "name": "enabled",
+          "required": false,
+          "schema": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        {
+          "name": "ack",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ack"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "subscription": {
+              "$ref": "#/components/schemas/TerminalSubscription"
+            }
+          },
+          "required": [
+            "subscription"
+          ],
+          "title": "TerminalSubscribeResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "terminal.rename",
+      "params": [
+        {
+          "name": "handle",
+          "required": true,
+          "schema": {
+            "title": "Handle",
+            "type": "string"
+          }
+        },
+        {
+          "name": "title",
+          "required": true,
+          "schema": {
+            "title": "Title",
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "rename": {
+              "$ref": "#/components/schemas/TerminalRename"
+            }
+          },
+          "required": [
+            "rename"
+          ],
+          "title": "TerminalRenameResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "agents.register",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        {
+          "name": "kind",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Kind"
+          }
+        },
+        {
+          "name": "terminal",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Terminal"
+          }
+        },
+        {
+          "name": "role",
+          "required": false,
+          "schema": {
+            "default": "",
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        {
+          "name": "task_ref",
+          "required": false,
+          "schema": {
+            "default": "",
+            "title": "Task Ref",
+            "type": "string"
+          }
+        },
+        {
+          "name": "description",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Description"
+          }
+        },
+        {
+          "name": "aliases",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/IdentityAlias"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Aliases"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "_meta": {
+              "$ref": "#/components/schemas/RuntimeInfo"
+            },
+            "agent": {
+              "$ref": "#/components/schemas/IdentityRecord"
+            }
+          },
+          "required": [
+            "_meta",
+            "agent"
+          ],
+          "title": "AgentsRecordResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "agents.list",
+      "params": [],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "_meta": {
+              "$ref": "#/components/schemas/RuntimeInfo"
+            },
+            "agents": {
+              "items": {
+                "$ref": "#/components/schemas/IdentityRecord"
+              },
+              "title": "Agents",
+              "type": "array"
+            }
+          },
+          "required": [
+            "_meta",
+            "agents"
+          ],
+          "title": "AgentsListResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "agents.show",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "title": "Name",
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "_meta": {
+              "$ref": "#/components/schemas/RuntimeInfo"
+            },
+            "agent": {
+              "$ref": "#/components/schemas/IdentityRecord"
+            }
+          },
+          "required": [
+            "_meta",
+            "agent"
+          ],
+          "title": "AgentsRecordResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "agents.resolve",
+      "params": [
+        {
+          "name": "mention",
+          "required": true,
+          "schema": {
+            "title": "Mention",
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "_meta": {
+              "$ref": "#/components/schemas/RuntimeInfo"
+            },
+            "candidates": {
+              "items": {
+                "$ref": "#/components/schemas/IdentityCandidate"
+              },
+              "title": "Candidates",
+              "type": "array"
+            },
+            "unique": {
+              "title": "Unique",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "_meta",
+            "candidates",
+            "unique"
+          ],
+          "title": "AgentsResolveResult",
           "type": "object"
         }
       }
@@ -10329,6 +11143,21 @@
           },
           {
             "$ref": "#/components/schemas/SessionNamingEndedEvent"
+          },
+          {
+            "$ref": "#/components/schemas/TerminalCreatedEvent"
+          },
+          {
+            "$ref": "#/components/schemas/TerminalClosedEvent"
+          },
+          {
+            "$ref": "#/components/schemas/TerminalStatusEvent"
+          },
+          {
+            "$ref": "#/components/schemas/A2aSendEvent"
+          },
+          {
+            "$ref": "#/components/schemas/A2aAckMatchedEvent"
           }
         ],
         "discriminator": {
@@ -10356,7 +11185,12 @@
             "cron.missed": "#/components/schemas/CronMissedEvent",
             "media": "#/components/schemas/MediaEvent",
             "session.titled": "#/components/schemas/SessionTitledEvent",
-            "session.naming_ended": "#/components/schemas/SessionNamingEndedEvent"
+            "session.naming_ended": "#/components/schemas/SessionNamingEndedEvent",
+            "terminal.created": "#/components/schemas/TerminalCreatedEvent",
+            "terminal.closed": "#/components/schemas/TerminalClosedEvent",
+            "terminal.status": "#/components/schemas/TerminalStatusEvent",
+            "a2a.send": "#/components/schemas/A2aSendEvent",
+            "a2a.ack.matched": "#/components/schemas/A2aAckMatchedEvent"
           }
         }
       },
@@ -10763,6 +11597,892 @@
         },
         "type": "object",
         "description": "One MCP server the playbook itself carries, as the file declares it. Carries every field the runtime reads to decide what the server is and whether it runs. `env` and `headers` are declarations rather than resolved values: a carried server references a credential through `{{ params.X }}` and the run supplies it, so nothing here is ever a secret's value, and `has_oauth_config` says only whether the file declares OAuth endpoints, never what they are."
+      },
+      "RuntimeGraphInfo": {
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "const": "ready",
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "RuntimeGraphInfo",
+        "type": "object"
+      },
+      "RuntimeStatusInfo": {
+        "properties": {
+          "runtimeId": {
+            "title": "Runtimeid",
+            "type": "string"
+          },
+          "state": {
+            "const": "ready",
+            "title": "State",
+            "type": "string"
+          },
+          "environment": {
+            "title": "Environment",
+            "type": "string"
+          },
+          "appVersion": {
+            "title": "Appversion",
+            "type": "string"
+          },
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          }
+        },
+        "required": [
+          "state",
+          "environment",
+          "appVersion",
+          "capabilities"
+        ],
+        "title": "RuntimeStatusInfo",
+        "type": "object"
+      },
+      "TerminalRecord": {
+        "properties": {
+          "handle": {
+            "title": "Handle",
+            "type": "string"
+          },
+          "incarnationId": {
+            "title": "Incarnationid",
+            "type": "string"
+          },
+          "ptyId": {
+            "default": "",
+            "title": "Ptyid",
+            "type": "string"
+          },
+          "tabId": {
+            "title": "Tabid",
+            "type": "string"
+          },
+          "leafId": {
+            "title": "Leafid",
+            "type": "string"
+          },
+          "paneKey": {
+            "default": "",
+            "title": "Panekey",
+            "type": "string"
+          },
+          "worktreeId": {
+            "title": "Worktreeid",
+            "type": "string"
+          },
+          "worktreePath": {
+            "title": "Worktreepath",
+            "type": "string"
+          },
+          "executionHostId": {
+            "default": "local",
+            "title": "Executionhostid",
+            "type": "string"
+          },
+          "title": {
+            "default": "",
+            "title": "Title",
+            "type": "string"
+          },
+          "status": {
+            "default": "unknown",
+            "enum": [
+              "idle",
+              "working",
+              "permission",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "liveness": {
+            "default": "unverifiable",
+            "enum": [
+              "live",
+              "exited",
+              "unverifiable"
+            ],
+            "title": "Liveness",
+            "type": "string"
+          },
+          "connected": {
+            "default": false,
+            "title": "Connected",
+            "type": "boolean"
+          },
+          "writable": {
+            "default": false,
+            "title": "Writable",
+            "type": "boolean"
+          },
+          "orphaned": {
+            "default": false,
+            "title": "Orphaned",
+            "type": "boolean"
+          },
+          "visible": {
+            "default": true,
+            "title": "Visible",
+            "type": "boolean"
+          },
+          "owner": {
+            "default": "human",
+            "title": "Owner",
+            "type": "string"
+          },
+          "lastOutputAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Lastoutputat"
+          }
+        },
+        "required": [
+          "worktreeId",
+          "worktreePath"
+        ],
+        "title": "TerminalRecord",
+        "type": "object"
+      },
+      "HostScope": {
+        "properties": {
+          "hostIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Hostids",
+            "type": "array"
+          },
+          "omittedHostIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Omittedhostids",
+            "type": "array"
+          }
+        },
+        "title": "HostScope",
+        "type": "object"
+      },
+      "TerminalDeliveryResult": {
+        "properties": {
+          "handle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Handle"
+          },
+          "accepted": {
+            "title": "Accepted",
+            "type": "boolean"
+          },
+          "bytesWritten": {
+            "default": 0,
+            "title": "Byteswritten",
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "accepted",
+              "queued",
+              "blocked",
+              "stalled",
+              "delivered_to_host"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "nonce": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Nonce"
+          },
+          "deduplicated": {
+            "default": false,
+            "title": "Deduplicated",
+            "type": "boolean"
+          },
+          "contentAck": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Contentack"
+          },
+          "to": {
+            "anyOf": [
+              {
+                "const": "raven",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "To"
+          }
+        },
+        "required": [
+          "accepted",
+          "state"
+        ],
+        "title": "TerminalDeliveryResult",
+        "type": "object"
+      },
+      "WaitResult": {
+        "properties": {
+          "handle": {
+            "title": "Handle",
+            "type": "string"
+          },
+          "satisfied": {
+            "title": "Satisfied",
+            "type": "boolean"
+          },
+          "blockedReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Blockedreason"
+          },
+          "timedOut": {
+            "default": false,
+            "title": "Timedout",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "handle",
+          "satisfied"
+        ],
+        "title": "WaitResult",
+        "type": "object"
+      },
+      "TerminalClosed": {
+        "additionalProperties": false,
+        "properties": {
+          "handle": {
+            "title": "Handle",
+            "type": "string"
+          },
+          "closed": {
+            "title": "Closed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "handle",
+          "closed"
+        ],
+        "title": "TerminalClosed",
+        "type": "object"
+      },
+      "TerminalInput": {
+        "additionalProperties": false,
+        "properties": {
+          "handle": {
+            "title": "Handle",
+            "type": "string"
+          },
+          "bytesWritten": {
+            "title": "Byteswritten",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "handle",
+          "bytesWritten"
+        ],
+        "title": "TerminalInput",
+        "type": "object"
+      },
+      "TerminalSubscription": {
+        "additionalProperties": false,
+        "properties": {
+          "handle": {
+            "title": "Handle",
+            "type": "string"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Enabled"
+          },
+          "seq": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Seq"
+          },
+          "ack": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ack"
+          },
+          "ackBytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ackbytes"
+          },
+          "subscription_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Subscription Id"
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "title": "TerminalSubscription",
+        "type": "object"
+      },
+      "TerminalRename": {
+        "additionalProperties": false,
+        "properties": {
+          "handle": {
+            "title": "Handle",
+            "type": "string"
+          },
+          "tabId": {
+            "title": "Tabid",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "liveTitle": {
+            "title": "Livetitle",
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle",
+          "tabId",
+          "title",
+          "liveTitle"
+        ],
+        "title": "TerminalRename",
+        "type": "object"
+      },
+      "IdentityAlias": {
+        "properties": {
+          "alias": {
+            "minLength": 1,
+            "title": "Alias",
+            "type": "string"
+          },
+          "source": {
+            "minLength": 1,
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "alias",
+          "source"
+        ],
+        "title": "IdentityAlias",
+        "type": "object"
+      },
+      "IdentityBinding": {
+        "properties": {
+          "handle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Handle"
+          },
+          "incarnationId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Incarnationid"
+          },
+          "worktreeId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Worktreeid"
+          },
+          "tabId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tabid"
+          },
+          "leafId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Leafid"
+          }
+        },
+        "title": "IdentityBinding",
+        "type": "object"
+      },
+      "IdentityRecord": {
+        "properties": {
+          "agentName": {
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "title": "Agentname",
+            "type": "string"
+          },
+          "kindRef": {
+            "title": "Kindref",
+            "type": "string"
+          },
+          "brand": {
+            "title": "Brand",
+            "type": "string"
+          },
+          "role": {
+            "default": "",
+            "title": "Role",
+            "type": "string"
+          },
+          "taskRef": {
+            "default": "",
+            "title": "Taskref",
+            "type": "string"
+          },
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "aliases": {
+            "items": {
+              "$ref": "#/components/schemas/IdentityAlias"
+            },
+            "title": "Aliases",
+            "type": "array"
+          },
+          "binding": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IdentityBinding"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "bindingGeneration": {
+            "minimum": 1,
+            "title": "Bindinggeneration",
+            "type": "integer"
+          },
+          "firstObservedAt": {
+            "title": "Firstobservedat",
+            "type": "number"
+          },
+          "lastObservedAt": {
+            "title": "Lastobservedat",
+            "type": "number"
+          },
+          "orphan": {
+            "default": false,
+            "title": "Orphan",
+            "type": "boolean"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "default": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          },
+          "exitedAt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Exitedat"
+          }
+        },
+        "required": [
+          "agentName",
+          "kindRef",
+          "brand",
+          "bindingGeneration",
+          "firstObservedAt",
+          "lastObservedAt"
+        ],
+        "title": "IdentityRecord",
+        "type": "object"
+      },
+      "RuntimeInfo": {
+        "properties": {
+          "runtimeId": {
+            "title": "Runtimeid",
+            "type": "string"
+          }
+        },
+        "title": "RuntimeInfo",
+        "type": "object"
+      },
+      "IdentityCandidate": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "$ref": "#/components/schemas/IdentityRecord"
+          },
+          "reason": {
+            "enum": [
+              "exact",
+              "alias"
+            ],
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent",
+          "reason"
+        ],
+        "title": "IdentityCandidate",
+        "type": "object"
+      },
+      "TerminalCreatedEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "terminal.created",
+            "title": "Type",
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/TerminalRecord"
+          }
+        },
+        "required": [
+          "type",
+          "payload"
+        ],
+        "title": "TerminalCreatedEvent",
+        "type": "object"
+      },
+      "TerminalClosedPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "handle": {
+            "title": "Handle",
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "title": "TerminalClosedPayload",
+        "type": "object"
+      },
+      "TerminalClosedEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "terminal.closed",
+            "title": "Type",
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/TerminalClosedPayload"
+          }
+        },
+        "required": [
+          "type",
+          "payload"
+        ],
+        "title": "TerminalClosedEvent",
+        "type": "object"
+      },
+      "TerminalStatusPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "handle": {
+            "title": "Handle",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "working",
+              "idle",
+              "permission",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "liveness": {
+            "enum": [
+              "live",
+              "exited",
+              "unverifiable"
+            ],
+            "title": "Liveness",
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle",
+          "status",
+          "liveness"
+        ],
+        "title": "TerminalStatusPayload",
+        "type": "object"
+      },
+      "TerminalStatusEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "terminal.status",
+            "title": "Type",
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/TerminalStatusPayload"
+          }
+        },
+        "required": [
+          "type",
+          "payload"
+        ],
+        "title": "TerminalStatusEvent",
+        "type": "object"
+      },
+      "A2aSendPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "handle": {
+            "title": "Handle",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "accepted",
+              "queued",
+              "blocked",
+              "stalled",
+              "delivered_to_host"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "nonce": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nonce"
+          }
+        },
+        "required": [
+          "handle",
+          "state",
+          "nonce"
+        ],
+        "title": "A2aSendPayload",
+        "type": "object"
+      },
+      "A2aSendEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "a2a.send",
+            "title": "Type",
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/A2aSendPayload"
+          }
+        },
+        "required": [
+          "type",
+          "payload"
+        ],
+        "title": "A2aSendEvent",
+        "type": "object"
+      },
+      "A2aAckMatchedPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "handle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Handle"
+          },
+          "nonce": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nonce"
+          },
+          "ack_for": {
+            "title": "Ack For",
+            "type": "string"
+          },
+          "from": {
+            "title": "From",
+            "type": "string"
+          },
+          "to": {
+            "title": "To",
+            "type": "string"
+          }
+        },
+        "required": [
+          "nonce",
+          "ack_for",
+          "from",
+          "to"
+        ],
+        "title": "A2aAckMatchedPayload",
+        "type": "object"
+      },
+      "A2aAckMatchedEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "a2a.ack.matched",
+            "title": "Type",
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/A2aAckMatchedPayload"
+          }
+        },
+        "required": [
+          "type",
+          "payload"
+        ],
+        "title": "A2aAckMatchedEvent",
+        "type": "object"
       }
     },
     "errors": {

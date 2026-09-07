@@ -99,6 +99,11 @@ def _normalize_oas_type(
     preserved as ``{"object_name": Name, ...expanded...}`` so the test can
     detect when the wrong type is referenced.
     """
+    if "anyOf" in node:
+        branches = node["anyOf"]
+        non_null = [branch for branch in branches if branch.get("type") != "null"]
+        if len(branches) == 2 and len(non_null) == 1:
+            return _normalize_oas_type(non_null[0], schema, _seen)
     if "$ref" in node:
         ref_name = node["$ref"].split("/")[-1]
         if ref_name in _ANY_REFS:
