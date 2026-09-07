@@ -177,6 +177,10 @@ class ChatDelta:
     thinking_blocks: list[dict[str, Any]] | None = None
     finish_reason: str | None = None
     error_classification: ErrorClassification | None = None
+    # True when ``finish_reason`` was supplied by the client library because the
+    # upstream closed the stream without sending one; the consumer then knows
+    # the reply was cut, not finished.
+    finish_synthesized: bool = False
 
 
 @dataclass(frozen=True)

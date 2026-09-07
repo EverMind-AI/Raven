@@ -361,6 +361,46 @@ class RavenLoopBackend:
                     on_token_delta=on_delta,
                     **generation_kwargs(provider),
                 )
+                if response.finish_reason == "error" and not response.has_tool_calls:
+                    # The stream ended before anything deliverable arrived
+                    # (``stream_llm_call`` hands that back as an error reply rather
+                    # than raising, for the loop that owns a ladder). Its text is a
+                    # diagnostic, not the answer. The failed call's tokens were still
+                    # spent -- a cut mid-thought is 11-15k reasoning tokens -- so they
+                    # are billed before the reply is replaced.
+                    activity.note_usage(response.usage)
+                    verdict = response.error_classification
+                    if verdict is None and (classify := getattr(provider, "classify_error", None)) is not None:
+                        verdict = classify(content=response.content or None)
+                    if verdict is None or not verdict.retryable:
+                        # A refusal the repo has already decided not to retry -- an
+                        # oversized or unsupported image -- is refused the same way
+                        # a minute later, so asking the same bytes again is waste and
+                        # calling it transport is wrong. The run fails on it.
+                        raise SubagentNoAnswerError(
+                            "sub-agent's model call failed"
+                            + (f" ({verdict.category})" if verdict is not None else "")
+                            + ": "
+                            + (response.content or "")[:200]
+                        )
+                    # Retryable, and nothing of it was rendered: asking again through
+                    # the waited-for call repeats nothing and gets the retry ladder a
+                    # watched reply gave up.
+                    logger.warning(
+                        "Subagent [{}] streamed reply ended in transport ({}); asking again without the stream",
+                        task_id,
+                        (response.content or "")[:160],
+                    )
+                    response = await provider.chat_with_retry(
+                        messages=messages,
+                        tools=tools.get_definitions(),
+                        model=model,
+                    )
+                    if response.finish_reason == "error" and not response.has_tool_calls:
+                        activity.note_usage(response.usage)
+                        raise SubagentNoAnswerError(
+                            "sub-agent's model call failed in transport twice: " + (response.content or "")[:200]
+                        )
             # Per iteration, because that is how the cost accrues: this loop calls
             # the model once per round and the run's cost is their sum, unlike an
             # ACP agent's one cumulative report for the whole turn. Both arms

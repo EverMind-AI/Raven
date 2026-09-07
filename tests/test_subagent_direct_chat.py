@@ -147,6 +147,89 @@ async def test_raven_loop_replays_injected_history(tmp_path):
     assert captured[-1][-1]["content"] == "done"
 
 
+async def test_a_streamed_reply_cut_in_transport_is_asked_again_without_the_stream(tmp_path, monkeypatch):
+    """A stream the upstream closed before its terminal chunk comes back from
+    ``stream_llm_call`` as an error reply, not an answer. The backend used to take
+    its text as the sub-agent's result and report success; it asks once more through
+    the waited-for call, which keeps the retry ladder, and hands back what that says.
+    The cut call's tokens are billed too: they were spent, and a cut mid-thought is
+    the expensive kind."""
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.contracts.llm_provider import ChatDelta
+
+    class _CutThenAnswers(_RecordingProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.streams = 0
+
+        async def chat_stream(self, *, messages, tools=None, model=None, **_):
+            self.streams += 1
+            yield ChatDelta(content=None, reasoning_content="thinking about it")
+            yield ChatDelta(
+                content=None,
+                finish_reason="stop",
+                finish_synthesized=True,
+                usage={"prompt_tokens": 4000, "completion_tokens": 12000},
+            )
+
+    billed: list[dict] = []
+    monkeypatch.setattr(activity, "note_usage", lambda usage: billed.append(dict(usage or {})))
+    provider = _CutThenAnswers()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path)
+    rendered: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        rendered.append(text)
+
+    answer = await backend.run("hi", task_id="t1", workspace=tmp_path, executor=None, history=[], on_delta=on_delta)
+
+    assert answer == "done"
+    assert provider.streams == 1 and len(provider.seen) == 1, "one stream, then one waited-for call"
+    assert "cut off" not in answer and rendered == [], "the diagnostic never reached the reply"
+    assert billed[0] == {"prompt_tokens": 4000, "completion_tokens": 12000}, "the cut call is billed first"
+    assert len(billed) == 2, "and the waited-for call after it"
+
+
+async def test_a_streamed_refusal_the_repo_does_not_retry_fails_the_run_without_a_second_ask(tmp_path, monkeypatch):
+    """An oversized image is refused the same way a minute later: the classification
+    says ``retryable=False``, so the same bytes are not sent again and the failure is
+    reported as what it is, not as transport."""
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.contracts.llm_provider import ErrorClassification
+    from raven.contracts.subagent_backend import SubagentNoAnswerError
+
+    class _RefusesTheImage(_RecordingProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.streams = 0
+
+        async def chat_stream(self, *, messages, tools=None, model=None, **_):
+            self.streams += 1
+            raise RuntimeError("Error calling LLM (image_too_large): image exceeds 5 MB limit")
+            yield  # unreachable; it makes this an async generator
+
+        @classmethod
+        def classify_error(cls, exc=None, content=None):
+            return ErrorClassification("image_too_large", retryable=False, strip_images=True)
+
+    billed: list[dict] = []
+    monkeypatch.setattr(activity, "note_usage", lambda usage: billed.append(dict(usage or {})))
+    provider = _RefusesTheImage()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path)
+
+    async def on_delta(text: str) -> None:
+        pass
+
+    with pytest.raises(SubagentNoAnswerError, match=r"image_too_large") as caught:
+        await backend.run("hi", task_id="t1", workspace=tmp_path, executor=None, history=[], on_delta=on_delta)
+
+    assert "transport" not in str(caught.value)
+    assert provider.streams == 1 and provider.seen == [], "no identical waited-for ask after a refusal"
+    assert len(billed) == 1, "the refused call is still billed"
+
+
 async def test_empty_history_still_builds_exactly_one_system_prompt(tmp_path):
     """``history=[]`` is what InstanceState.load() returns for a missing file --
     the normal first-turn case, not an edge case. It must still get the built
