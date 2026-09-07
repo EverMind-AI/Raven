@@ -384,7 +384,16 @@ export function startInstance(
   return src
     .instanceCreate(agent, key)
     .catch((e: unknown) => {
-      if (mine()) set({ startFail: { agent, why: (e as Error)?.message || String(e) } })
+      /* `data.detail` first, because `message` is the wire CODE. A refused
+         create carries the reason the reader can act on -- the agent is off, or
+         it is stateless and this belongs in a spawn -- and that sentence rides
+         in the detail; `message` is `config_validation_error`, and before the
+         server typed this refusal it was `internal_error`. Either way the card
+         showed a machine string where the server had a sentence.
+         Still falling back, because not every rejection is typed: a dropped
+         socket has a message and no detail. */
+      const said = e as { data?: { detail?: string }; message?: string } | null
+      if (mine()) set({ startFail: { agent, why: said?.data?.detail || said?.message || String(e) } })
       return null
     })
     .then(async (row) => {
