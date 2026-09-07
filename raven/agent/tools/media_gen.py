@@ -162,8 +162,16 @@ class _OpenRouterMediaTool(Tool):
         cfg_model = getattr(self._config, "model", "") if self._config else ""
         return override or cfg_model or self.default_model
 
-    def _output_path(self, ext: str) -> Path:
-        out_dir = (workdir.current() or self._workspace) / self._output_subdir
+    def _output_path(self, ext: str, output_dir: str | None = None) -> Path:
+        base = workdir.current() or self._workspace
+        out_dir = (base / Path(output_dir).expanduser()).resolve() if output_dir else base / self._output_subdir
+        if output_dir and self._restrict_to_workspace:
+            # The bound session directory may live outside agent home (a
+            # launch-dir policy or an explicit override); a confined turn must
+            # still be able to keep its images inside its own session.
+            roots = {base.resolve(), self._workspace.resolve()}
+            if not any(out_dir == root or root in out_dir.parents for root in roots):
+                raise PermissionError(f"output_dir {output_dir} is outside the workspace")
         out_dir.mkdir(parents=True, exist_ok=True)
         return out_dir / f"{self.name}-{uuid.uuid4().hex[:12]}.{ext}"
 
@@ -274,6 +282,13 @@ class ImageGenerateTool(_OpenRouterMediaTool):
                 "enum": ["low", "medium", "high"],
                 "description": "Rendering quality for gpt-image models (cost rises with it); ignored by chat-routed ones",
             },
+            "output_dir": {
+                "type": "string",
+                "description": (
+                    "Directory to save into, absolute or relative to the working directory "
+                    "(created if missing); defaults to generated/ under the working directory"
+                ),
+            },
         },
         "required": ["prompt"],
     }
@@ -300,6 +315,7 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         images: list[str] | None = None,
         aspect_ratio: str | None = None,
         quality: str | None = None,
+        output_dir: str | None = None,
         **kwargs: Any,
     ) -> str:
         if not self.api_key:
@@ -307,7 +323,7 @@ class ImageGenerateTool(_OpenRouterMediaTool):
 
         model_id = self._model(model)
         if model_id.rsplit("/", 1)[-1].startswith(_IMAGE_API_PREFIXES):
-            return await self._via_images_api(model_id, prompt, images, aspect_ratio, quality)
+            return await self._via_images_api(model_id, prompt, images, aspect_ratio, quality, output_dir)
         if images:
             content: Any = [{"type": "text", "text": prompt}]
             try:
@@ -328,7 +344,7 @@ class ImageGenerateTool(_OpenRouterMediaTool):
             msg = await self._chat(payload)
         except httpx.HTTPStatusError as e:
             if _image_only_refusal(e):
-                return await self._via_images_api(model_id, prompt, images, aspect_ratio, quality)
+                return await self._via_images_api(model_id, prompt, images, aspect_ratio, quality, output_dir)
             return self._format_http_error(e)
         except Exception as e:
             logger.error("image_generate error: {}", e)
@@ -348,7 +364,7 @@ class ImageGenerateTool(_OpenRouterMediaTool):
             if not url.startswith("data:"):
                 continue
             b64 = url.split(",", 1)[1]
-            path = self._output_path("png")
+            path = self._output_path("png", output_dir)
             path.write_bytes(base64.b64decode(b64))
             paths.append(str(path))
 
@@ -365,6 +381,7 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         images: list[str] | None,
         aspect_ratio: str | None,
         quality: str | None,
+        output_dir: str | None = None,
     ) -> str:
         """The Images API: OpenRouter's unified ``/images``, or ``/images/generations``
         and ``/images/edits`` on an OpenAI-compatible base."""
@@ -431,7 +448,7 @@ class ImageGenerateTool(_OpenRouterMediaTool):
             encoded = item.get("b64_json") if isinstance(item, dict) else None
             if not encoded:
                 continue
-            path = self._output_path("png")
+            path = self._output_path("png", output_dir)
             path.write_bytes(base64.b64decode(encoded))
             paths.append(str(path))
         if not paths:
