@@ -4347,6 +4347,44 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
 .desk-ready #wsBtn { visibility: hidden; }
 .desk-ready .split[data-open="true"] #wsBtn { display: grid; }
 
+/* The chat gives up its right edge while the desk is anchored over it, rather
+   than being covered by it. `--desk-reserve` is published by DeskPalette (see
+   deskReserve() for the overlap this answers, measured at four widths); it is
+   absent whenever the panel is down, has been dragged somewhere of the reader's
+   choosing, or would not leave a readable column behind -- and the fallback of
+   zero is then what applies, which is today's behaviour exactly.
+
+   Padding on the two containers rather than a transform on their contents: both
+   centre a fixed-width child with `margin: 0 auto`, so a right inset both slides
+   the column clear AND lets it narrow once there is less than a column's width
+   left. A transform would only ever slide it, off the left edge.
+
+   Native scrollbars are off globally (`* { scrollbar-width: none }`) and the
+   thumbs are drawn in their own fixed layer, so no scroller furniture is
+   stranded out here by the inset.
+
+   Not on `[data-fresh]`. The landing page has no transcript to keep off, and
+   the anchored panel does not reach its composer, which sits mid-screen there.
+   Its composer, wordmark and crows are placed by three rules of their own, so
+   an inset that moves only the composer leaves three different centres on one
+   screen. */
+.chat:not([data-fresh]) .scroll, .chat:not([data-fresh]) .dock {
+  transition: padding-right .19s cubic-bezier(.16, 1, .3, 1); }
+/* The scroller carries no side inset of its own -- `.col` holds the 22px -- so
+   this is the whole of its right padding. The composer's 22px is its own and is
+   kept.
+
+   The composer moves because the column does, not because the panel was on it:
+   the anchored panel ends well above the composer (measured, it does not reach
+   it in a 900px-tall window). But the composer is centred UNDER the column, and
+   a column that slides 162px left over a composer that does not would read as a
+   layout fault. One inset, both containers. */
+.chat:not([data-fresh]) .scroll { padding-right: var(--desk-reserve, 0px); }
+.chat:not([data-fresh]) .dock { padding-right: calc(22px + var(--desk-reserve, 0px)); }
+@media (prefers-reduced-motion: reduce) {
+  .chat:not([data-fresh]) .scroll, .chat:not([data-fresh]) .dock { transition: none; }
+}
+
 #deskHost { --desk-anchor-width: 0px; --desk-launcher-size: 30px; --desk-launcher-edge: 12px;
   --desk-palette-gap: 12px; --desk-launcher-center: 27px;
   position: fixed; inset: 0; z-index: var(--z-desk); pointer-events: none; }
@@ -4482,6 +4520,15 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .desk-empty svg { width: 30px; height: 30px; color: var(--line); stroke-linecap: round; }
 .desk-empty b { color: var(--text); font: 600 12px var(--sans); }
 .desk-empty span { font-size: 11px; }
+/* The way out of an empty tab, when the thing the reader is looking for is on
+   another one. A link rather than a button face: it is a change of view, not an
+   action on anything, and a filled control in the middle of a "nothing here"
+   panel reads as the more important half of the screen. Margin above so it is
+   not mistaken for a third line of the sentence it follows. */
+.desk-empty-to { margin-top: 5px; padding: 3px 7px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--text); font: 600 11px var(--sans); cursor: pointer;
+  text-decoration: underline; text-underline-offset: 2px; text-decoration-color: var(--line); }
+.desk-empty-to:hover { background: var(--surface); text-decoration-color: currentColor; }
 
 /* The deliverables shelf. Two lines per row, because one product out of a turn
    reads as a human title and the file it landed as, and at this width they do

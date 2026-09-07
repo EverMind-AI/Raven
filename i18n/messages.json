@@ -5107,6 +5107,18 @@
       "en": "Files Raven hands over show up here",
       "zh": "Raven 交付的文件会出现在这里"
     },
+    "gui.ws.dlv_none_kept": {
+      "en": "Raven changed a file but did not hand it over.",
+      "zh": "Raven 改动了一个文件，但没有交付。"
+    },
+    "gui.ws.n.dlv_none_kept": {
+      "en": "Raven changed {n} files but handed none over.",
+      "zh": "Raven 改动了 {n} 个文件，但都没有交付。"
+    },
+    "gui.ws.see_changes": {
+      "en": "Show what changed",
+      "zh": "查看改动的文件"
+    },
     "gui.ws.dlv_turn": {
       "en": "turn {n}",
       "zh": "第 {n} 轮"
@@ -5126,6 +5138,18 @@
     "gui.ws.no_changes_sub": {
       "en": "Files this session edits show up here",
       "zh": "这个会话改动的文件会出现在这里"
+    },
+    "gui.ws.no_changes_dlv": {
+      "en": "Nothing was edited, but a file was handed over.",
+      "zh": "没有改动文件，但交付了一个产物。"
+    },
+    "gui.ws.n.no_changes_dlv": {
+      "en": "Nothing was edited, but {n} files were handed over.",
+      "zh": "没有改动文件，但交付了 {n} 个产物。"
+    },
+    "gui.ws.see_delivered": {
+      "en": "Show what was delivered",
+      "zh": "查看交付的产物"
     },
     "gui.ws.no_web": {
       "en": "No pages yet",

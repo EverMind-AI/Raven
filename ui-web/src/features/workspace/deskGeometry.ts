@@ -23,6 +23,62 @@ export const DESK_VIEWPORT_GUTTER = 8
 export const DESK_DEFAULT_WIDTH = 300
 export const DESK_DEFAULT_HEIGHT = 340
 
+/* The launcher's own inset from the chat's right edge, and the gap left between
+   the panel and the text so the two do not touch. The first MUST agree with
+   `--desk-launcher-edge` in the stylesheet, which is what actually places the
+   panel -- the same pairing `anchoredGeometry` keeps with `[data-anchored]`. */
+export const DESK_LAUNCHER_EDGE = 12
+export const DESK_TEXT_GAP = 12
+/* The narrowest transcript the reserve will leave behind. Below it the reserve
+   is not taken at all -- see `deskReserve`, where measuring showed that taking
+   PART of it is worse than taking none. */
+export const DESK_COLUMN_FLOOR = 520
+
+/* How much of the chat's width the anchored panel is asking for.
+ *
+ * The transcript column is centred in the chat and the anchored panel hangs into
+ * it. Measured on the running page in a 900px-tall window with the default 300px
+ * panel, as the intersection of the two rectangles:
+ *
+ *     1920px   nothing
+ *     1600px   13px wide, 330px tall
+ *     1440px   93px wide, 330px tall
+ *     1280px  173px wide, 330px tall
+ *
+ * 330px is the panel's own height, so what it covers is a BAND ACROSS THE TOP of
+ * the column -- which is where a short conversation's whole content sits, and
+ * where any conversation's does once the reader scrolls back up. It does not
+ * reach the composer: the panel ends at y=394 and the composer sits near the
+ * bottom of the window, so the two intersect on the x-axis only.
+ *
+ * So the chat gives the width up instead, and the column re-centres in what is
+ * left. That is what already happens when the workspace column opens (`--wsw`),
+ * which is why it is this shape rather than a nudge holding the column still.
+ *
+ * All of it or none of it, and the floor is why. Giving up as much as fits and
+ * no more sounds gentler and measured WORSE: at 900px it narrowed the column to
+ * the 520px floor and the panel still landed 190px into it, leaving 330px of
+ * readable width where reserving nothing leaves 342px. So under the floor this
+ * answers 0 and the panel overlaps exactly as it does today -- the reserve can
+ * improve on that or stand aside, never undercut it.
+ *
+ * Zero while detached, too: a dragged panel is where the reader put it, and
+ * holding a column of space for one floating over the middle of the window
+ * would be reserving against a position it no longer has.
+ */
+export function deskReserve(desk: {
+  shown: boolean
+  /* Optional to match `DeskGeometry`, where absent means anchored -- the same
+     reading `data-anchored={!geom.detached}` gives it in the markup. */
+  detached?: boolean
+  w: number
+  chatWidth: number
+}): number {
+  if (!desk.shown || desk.detached) return 0
+  const want = desk.w + DESK_LAUNCHER_EDGE + DESK_TEXT_GAP
+  return desk.chatWidth - want >= DESK_COLUMN_FLOOR ? want : 0
+}
+
 const CHAT_MIN_FALLBACK = 430
 const FILE_PANE_INITIAL_WIDTH = 720
 const AGENT_PANE_INITIAL_WIDTH = 440
