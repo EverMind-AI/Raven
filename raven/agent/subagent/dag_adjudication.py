@@ -196,7 +196,9 @@ class AnnounceReport(Protocol):
     caller knows which this is.
     """
 
-    async def __call__(self, node_id: str, text: str, *, awaiting_decision: bool) -> None: ...
+    async def __call__(
+        self, node_id: str, text: str, *, awaiting_decision: bool, informational: bool = False
+    ) -> None: ...
 
 
 AnnounceFinal = Callable[[Any], Awaitable[None]]
@@ -296,22 +298,28 @@ class Outbox:
                 return True
         return False
 
-    async def put_report(self, node_id: str, text: str, *, awaiting_decision: bool) -> None:
+    async def put_report(
+        self, node_id: str, text: str, *, awaiting_decision: bool, informational: bool = False
+    ) -> None:
         """Take one report. Where it goes depends on the lane, which only this object knows.
 
-        Released, both kinds announce: there is no blocking call left for a summary to
+        Released, every kind announces: there is no blocking call left for a summary to
         reach, so dropping a notification here would leave the node's outcome nowhere
         until the whole graph finishes -- which is the one thing a released run is not
-        supposed to do differently from a backgrounded one.
+        supposed to do differently from a backgrounded one. ``informational`` travels
+        with it, so the announcer heads a still-running node's notice as a notice.
 
         Bound, a notification is dropped on purpose. The call is still waiting and the
         run's summary is what it will be handed; announcing would put the same news in
-        two places, one of them a question nobody can answer.
+        two places, one of them a question nobody can answer. A stall notice is dropped
+        here too: the model inside the bound call cannot act on it before the call
+        returns, and the progress event the watcher publishes beside it is what the
+        panel shows meanwhile.
         """
         if self._stopped:
             return
         if self.released.is_set():
-            await self._announce_report(node_id, text, awaiting_decision=awaiting_decision)
+            await self._announce_report(node_id, text, awaiting_decision=awaiting_decision, informational=informational)
             return
         if not awaiting_decision:
             return

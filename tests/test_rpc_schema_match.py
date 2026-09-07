@@ -433,6 +433,34 @@ def test_schema_match_the_boundary_a_suspended_dag_node_emits(schema: dict[str, 
     jsonschema.validate(plain, inline)
     TypeAdapter(TurnEvent).validate_python(plain)
 
+    # And the fourth status: a stall notice about a node that is still running
+    # (`announce_dag_exception(informational=True)`). Emitted as `notice` so a
+    # client never draws a live node as failed; declared on both sides for the
+    # same reason the third one is.
+    notice = {**mark, "status": "notice"}
+    for shape in (
+        {"type": "turn.started", "payload": {"turn_id": "t1", "delegated": {**notice, "content": "..."}}},
+        {"type": "subagent.delivered", "payload": {**notice, "content": "..."}},
+    ):
+        jsonschema.validate(shape, {**schema["components"]["schemas"]["TurnEvent"], "components": schema["components"]})
+        TypeAdapter(TurnEvent).validate_python(shape)
+
+
+def test_schema_match_the_stall_notice_progress_event(schema: dict[str, Any]) -> None:
+    """`dag.node_stalled` is what the stall watcher's progress event becomes on
+    the wire (`raven.rpc.spine._DAG_WIRE_EVENT`); it is the only frame a bound
+    foreground run's panel hears, so it has to be declared on both sides."""
+    import jsonschema
+    from pydantic import TypeAdapter
+
+    from raven.rpc.models import TurnEvent
+    from raven.rpc.spine import _DAG_WIRE_EVENT, _dag_payload
+
+    payload = _dag_payload("dag_node_stalled", {"run_id": "r1", "node": "n", "quiet_ms": 600000})
+    event = {"type": _DAG_WIRE_EVENT["dag_node_stalled"], "payload": payload}
+    jsonschema.validate(event, {**schema["components"]["schemas"]["TurnEvent"], "components": schema["components"]})
+    TypeAdapter(TurnEvent).validate_python(event)
+
 
 def test_schema_match_turn_event_payload_fields(schema: dict[str, Any]) -> None:
     """Every variant's payload must declare the same fields on both sides.

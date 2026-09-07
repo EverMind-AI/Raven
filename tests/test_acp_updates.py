@@ -1023,6 +1023,7 @@ class TestTerminationIsExactlyOnce:
         "dag.run_started": {"nodes": []},
         "dag.node_updated": {"name": "n"},
         "dag.run_replanned": {"replan_run_id": "r2", "from_node": "a", "reason": "wrong"},
+        "dag.node_stalled": {"run_id": "r1", "node": "n", "quiet_ms": 600000},
         "dag.run_completed": {"ok": True},
         "cron.delivered": {"text": "reminder"},
         "cron.missed": {"drops": []},
