@@ -160,7 +160,13 @@ def test_web_search_get_redacts_key(cfg: Path):
 def test_media_set_writes_only_its_own_tool(cfg: Path):
     ut.set_media("image", {"model": "google/gemini-2.5-flash-image"}, config_path=cfg)
     media = _raw(cfg)["tools"]["media"]
-    assert media["image"] == {"apiKey": "", "apiBase": "", "model": "google/gemini-2.5-flash-image"}
+    assert media["image"] == {
+        "apiKey": "",
+        "apiBase": "",
+        "model": "google/gemini-2.5-flash-image",
+        "quality": "",
+        "selectionConfig": "",
+    }
     assert set(media) == {"image"}  # speech/video not materialised by an image write
 
 

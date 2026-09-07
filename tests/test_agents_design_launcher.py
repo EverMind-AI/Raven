@@ -631,3 +631,41 @@ def test_without_an_image_key_the_waterfall_withholds_image_generate(grounded, t
     rendered = grounded.render_config(source)
     visible = _hermetic_build(rendered, tmp_path, monkeypatch)
     assert visible == VENDORED_TOOL_FACE - {"image_generate"}
+
+
+@pytest.mark.parametrize("quality", ["", "low", "medium", "high"])
+@pytest.mark.parametrize("media_key", ["", "host-media-key"])
+def test_image_selection_follows_borrowed_host_credentials(grounded, monkeypatch, quality, media_key):
+    monkeypatch.delenv("DESIGN_IMAGE_API_KEY", raising=False)
+    config = {"tools": {"media": {"image": {"model": "old-model", "quality": "high"}}}}
+    host = {
+        "tools": {"media": {"image": {"apiKey": media_key, "model": "qwen/qwen-image-3", "quality": quality}}},
+        "providers": {"openrouter": {"apiKey": "host-provider-key"}},
+    }
+    grounded.configure_image_generation(config, host)
+    image = config["tools"]["media"]["image"]
+    assert image["model"] == "qwen/qwen-image-3"
+    assert image["quality"] == quality
+    assert image["selectionConfig"] == str(grounded.render.raven_home() / grounded.render.CONFIG_FILENAME)
+    assert image["apiKey"] == (media_key or "host-provider-key")
+
+
+def test_own_image_credentials_keep_own_model_quality(grounded, monkeypatch):
+    monkeypatch.setenv("DESIGN_IMAGE_API_KEY", "own-image-key")
+    config = {"tools": {"media": {"image": {"model": "openai/gpt-image-2", "quality": "low"}}}}
+    host = {"tools": {"media": {"image": {"apiKey": "host", "model": "other", "quality": "high"}}}}
+    grounded.configure_image_generation(config, host)
+    assert config["tools"]["media"]["image"] == {
+        "apiKey": "own-image-key",
+        "model": "openai/gpt-image-2",
+        "quality": "low",
+    }
+
+
+def test_borrowing_host_without_quality_removes_worker_override(grounded, monkeypatch):
+    monkeypatch.delenv("DESIGN_IMAGE_API_KEY", raising=False)
+    config = {"tools": {"media": {"image": {"model": "old-model", "quality": "high"}}}}
+    host = {"tools": {"media": {"image": {"apiKey": "host", "model": "openai/gpt-image-2"}}}}
+    grounded.configure_image_generation(config, host)
+    assert config["tools"]["media"]["image"]["model"] == "openai/gpt-image-2"
+    assert "quality" not in config["tools"]["media"]["image"]

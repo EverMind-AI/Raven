@@ -147,6 +147,7 @@ def configure_image_generation(config: dict, host: dict) -> None:
         borrowed_host_media = True
     if not image_key:
         image_key = host_openrouter_key
+        borrowed_host_media = bool(image_key and (not host_media_base or "openrouter.ai" in host_media_base))
     if not image_key and own_llm_key:
         configured_base = str(
             (((config.get("tools") or {}).get("media") or {}).get("image") or {}).get("apiBase") or ""
@@ -161,10 +162,15 @@ def configure_image_generation(config: dict, host: dict) -> None:
         return
     image["apiKey"] = image_key
     if borrowed_host_media:
+        image["selectionConfig"] = str(render.raven_home() / render.CONFIG_FILENAME)
         if host_media_base:
             image["apiBase"] = host_media_base
         if host_media.get("model"):
             image["model"] = str(host_media["model"])
+        if "quality" in host_media:
+            image["quality"] = str(host_media["quality"] or "")
+        else:
+            image.pop("quality", None)
 
 
 def render_config(source: Path) -> Path:

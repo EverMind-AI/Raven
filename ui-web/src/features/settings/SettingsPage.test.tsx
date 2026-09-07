@@ -768,3 +768,89 @@ describe('settings island', () => {
     expect(live[0]!.querySelector('.nlmsg')).toBeNull()
   })
 })
+
+async function openImageSettings() {
+  await act(async () => { screen.getByText('gui.set.pg.toolset').click() })
+  const row = screen.getByText('draw').closest('.trow')!
+  await act(async () => { row.querySelector<HTMLButtonElement>('.ctl .mini.ghost')!.click() })
+}
+
+describe('image model selection', () => {
+  it('defaults to gpt-image-2 medium and saves one model/quality pair', async () => {
+    const { calls } = install()
+    await mount()
+    await openImageSettings()
+    const picker = screen.getByLabelText('gui.caps.image_model') as HTMLSelectElement
+    expect(picker.value).toBe('1')
+    expect(picker.options).toHaveLength(10)
+    await act(async () => { fireEvent.change(picker, { target: { value: '2' } }) })
+    expect(calls).toEqual([['set', {
+      key: 'tools.media.image', value: { model: 'openai/gpt-image-2', quality: 'high' },
+    }]])
+  })
+
+  it('clears gpt quality when choosing a different preset', async () => {
+    const { calls } = install(snap({ raw: { tools: { media: { image: { model: 'openai/gpt-image-2', quality: 'high' } } } } }))
+    await mount()
+    await openImageSettings()
+    await act(async () => { fireEvent.change(screen.getByLabelText('gui.caps.image_model'), { target: { value: '7' } }) })
+    expect(calls).toEqual([['set', {
+      key: 'tools.media.image', value: { model: 'x-ai/grok-imagine-image-2.0', quality: '' },
+    }]])
+  })
+
+  it('edits a custom id without writing until save, and clears quality', async () => {
+    const { calls } = install()
+    await mount()
+    await openImageSettings()
+    await act(async () => { fireEvent.change(screen.getByLabelText('gui.caps.image_model'), { target: { value: 'custom' } }) })
+    expect(calls).toEqual([])
+    await act(async () => { fireEvent.change(screen.getByLabelText('gui.caps.custom_model'), { target: { value: '  vendor/new-image  ' } }) })
+    await act(async () => { screen.getByText('gui.save').click() })
+    expect(calls).toEqual([['set', {
+      key: 'tools.media.image', value: { model: 'vendor/new-image', quality: '' },
+    }]])
+  })
+
+  it('preserves an existing custom model when opening the editor', async () => {
+    const { calls } = install(snap({ raw: { tools: { media: { image: { model: 'vendor/existing-image', quality: '' } } } } }))
+    await mount()
+    await openImageSettings()
+    expect((screen.getByLabelText('gui.caps.image_model') as HTMLSelectElement).value).toBe('custom')
+    expect((screen.getByLabelText('gui.caps.custom_model') as HTMLInputElement).value).toBe('vendor/existing-image')
+    expect(calls).toEqual([])
+  })
+
+  it('retains the selected preset when saving fails', async () => {
+    install(snap(), { set: async () => { throw new Error('save failed') } })
+    await mount()
+    await openImageSettings()
+    const picker = screen.getByLabelText('gui.caps.image_model') as HTMLSelectElement
+    await act(async () => { fireEvent.change(picker, { target: { value: '2' } }) })
+    const current = screen.getByLabelText('gui.caps.image_model') as HTMLSelectElement
+    expect(current.value).toBe('1')
+    expect(current.disabled).toBe(false)
+  })
+})
+
+it('shows the saved image model after the settings snapshot refreshes', async () => {
+  let data = snap()
+  install(data, { set: async (_key, value) => {
+    data = { ...data, raw: { tools: { media: { image: value } } } }
+    return data
+  } })
+  await mount()
+  await openImageSettings()
+  await act(async () => { fireEvent.change(screen.getByLabelText('gui.caps.image_model'), { target: { value: '4' } }) })
+  expect((screen.getByLabelText('gui.caps.image_model') as HTMLSelectElement).value).toBe('4')
+})
+
+it.each([
+  [{ model: 'openai/gpt-image-2' }, '1'],
+  [{ model: 'openai/gpt-image-2', quality: '' }, 'custom'],
+])('preserves absent versus explicitly empty image quality: %j', async (image, selected) => {
+  install(snap({ raw: { tools: { media: { image } } } }))
+  await mount()
+  await openImageSettings()
+  expect((screen.getByLabelText('gui.caps.image_model') as HTMLSelectElement).value).toBe(selected)
+})

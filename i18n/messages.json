@@ -1003,6 +1003,14 @@
       "en": "Vendor",
       "zh": "供应商"
     },
+    "gui.caps.image_model": {
+      "en": "Image model",
+      "zh": "生图模型"
+    },
+    "gui.caps.custom_model": {
+      "en": "Custom model",
+      "zh": "自定义模型"
+    },
     "gui.caps.disabled_x": {
       "en": "\"{name}\" disabled",
       "zh": "已停用「{name}」"

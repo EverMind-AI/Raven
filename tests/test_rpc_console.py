@@ -52,6 +52,9 @@ def test_the_settings_whitelist_is_exactly_this_set() -> None:
             for vendor in ("serper", "anysearch", "serpapi", "jina", "tavily", "exa", "brave", "firecrawl")
         ),
         "tools.media.image.apiKey",
+        "tools.media.image.model",
+        "tools.media.image.quality",
+        "tools.media.image",
         "tools.deepResearch.apiKey",
         "channels.sendProgress",
         "channels.sendToolHints",
@@ -1560,3 +1563,47 @@ async def test_a_tool_needing_no_credential_stays_reported_available(
     row = (await _ext_rows(loop, monkeypatch))["read_file"]
     assert row["enabled"] is True
     assert row["needs"] is None
+
+
+@pytest.mark.parametrize("quality", ["", "low", "medium", "high"])
+async def test_image_selection_saves_both_fields_and_preserves_credentials(settings_cfg, quality):
+    import json
+
+    image = {"apiKey": "secret", "apiBase": "https://openrouter.ai/api/v1", "model": "old", "quality": "low"}
+    settings_cfg.write_text(json.dumps({"tools": {"media": {"image": image}}}))
+    result = await console_module.settings_set(
+        {
+            "key": "tools.media.image",
+            "value": {"model": "openai/gpt-image-2", "quality": quality},
+        }
+    )
+    actual = json.loads(settings_cfg.read_text())["tools"]["media"]["image"]
+    assert actual == {**image, "model": "openai/gpt-image-2", "quality": quality}
+    assert result == {"applied": True, "previous": {"model": "old", "quality": "low"}}
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("tools.media.image.model", 42),
+        ("tools.media.image.quality", "ultra"),
+        ("tools.media.image.quality", None),
+        ("tools.media.image.quality", []),
+        ("tools.media.image", {"model": "new", "quality": "ultra"}),
+        ("tools.media.image", {"model": "new"}),
+        ("tools.media.image", {"model": "new", "quality": "", "apiBase": "https://other.test"}),
+    ],
+)
+async def test_invalid_image_selection_leaves_config_untouched(settings_cfg, key, value):
+    before = settings_cfg.read_bytes()
+    with pytest.raises(console_module.ConfigValidationError):
+        await console_module.settings_set({"key": key, "value": value})
+    assert settings_cfg.read_bytes() == before
+
+
+@pytest.mark.parametrize("key,value", [("model", "vendor/custom-image"), ("quality", "medium")])
+async def test_image_selection_leaves_are_writable(settings_cfg, key, value):
+    import json
+
+    await console_module.settings_set({"key": f"tools.media.image.{key}", "value": value})
+    assert json.loads(settings_cfg.read_text())["tools"]["media"]["image"][key] == value
