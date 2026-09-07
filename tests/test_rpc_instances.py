@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 
 from raven.agent.subagent import instances as instances_mod
+from raven.rpc.errors import ConfigValidationError
 from raven.rpc.methods.instances import (
     instances_create,
     instances_forget,
@@ -1019,6 +1020,27 @@ def _real_manager(tmp_path: Path) -> Any:
     )
 
 
+def _manager_with(tmp_path: Path, *, agents: list) -> Any:
+    """A real manager whose roster is the given third-party config.
+
+    A CLI row's statefulness comes straight from ``resumeCommand``, so one
+    without it is stateless -- which is what makes the refusal reachable here
+    without a live capability snapshot.
+    """
+    from raven.agent.subagent.manager import SubagentManager
+
+    class _StubProvider:
+        def get_default_model(self) -> str:
+            return "stub"
+
+    return SubagentManager(
+        provider=_StubProvider(),
+        workspace=tmp_path / "home",
+        session_dir=lambda key: tmp_path / "sessions" / key,
+        agents=agents,
+    )
+
+
 def _create_loop(tmp_path: Path) -> Any:
     from raven.agent.subagent.direct_chat import DirectChatHandoff
 
@@ -1039,6 +1061,55 @@ async def test_instance_create_returns_the_row_the_strip_will_draw(tmp_path: Pat
     # next refresh, and a row without `resumable` falls off every surface that
     # filters on it once it stops being the active conversation.
     assert row["resumable"] is True
+
+
+async def test_a_refused_create_says_why_on_the_wire(tmp_path: Path, monkeypatch) -> None:
+    """The refusal a caller can act on has to arrive as one.
+
+    `_require_addressable` writes both of its sentences for the person who
+    pressed the button. Untyped, the dispatcher renders them as
+    `internal_error` with the text buried in a traceback tail, and the panel
+    draws that code -- so the one failure on this path anybody could do
+    something about was the one nobody could read.
+    """
+    from raven.agent.subagent.direct_chat import DirectChatHandoff
+    from raven.agent.subagent.instances import InstanceRegistry
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+
+    registry = InstanceRegistry(tmp_path / "reg.json")
+    monkeypatch.setattr(instances_mod, "_registry", registry)
+    monkeypatch.setattr("raven.agent.subagent.manager.get_registry", lambda: registry)
+    # No `resume_command`, so this row is stateless and cannot hold a chat.
+    manager = _manager_with(tmp_path, agents=[ThirdPartyCliSubagentConfig(name="Oneshot", command="cat")])
+    loop = _FakeLoop(manager, DirectChatHandoff())
+
+    with pytest.raises(ConfigValidationError) as caught:
+        await instances_create({"session_key": "s1", "agent": "Oneshot"}, agent_loop_factory=_factory(loop))
+
+    # The sentence, not the class: what the reader needs is the way out.
+    assert "stateless" in caught.value.detail
+    assert "Spawn it with a task instead" in caught.value.detail
+    # And it rides where the client reads it, rather than only in str(exc).
+    assert caught.value.message == "config_validation_error"
+
+
+async def test_a_create_that_actually_broke_is_still_an_internal_error(tmp_path: Path) -> None:
+    """The narrowing has to stay narrow.
+
+    Only `NotAddressableError` is a refusal. A manager that raises anything
+    else has a fault, and dressing that as a validation error would tell the
+    reader to fix their request when nothing about the request was wrong.
+    """
+    loop = _create_loop(tmp_path)
+
+    async def _boom(**_: Any) -> None:
+        raise RuntimeError("the registry file is a directory")
+
+    loop.subagents.create_instance = _boom
+
+    with pytest.raises(RuntimeError) as caught:
+        await instances_create({"session_key": "s1", "agent": "raven"}, agent_loop_factory=_factory(loop))
+    assert not isinstance(caught.value, ConfigValidationError)
 
 
 async def test_a_created_instance_is_listed_for_that_session(tmp_path: Path) -> None:
@@ -1077,9 +1148,18 @@ async def test_a_creation_is_announced_only_to_its_own_session(tmp_path: Path) -
 
 
 async def test_instance_create_refuses_an_agent_that_is_not_on_the_roster(tmp_path: Path) -> None:
+    """Typed, not a bare `RuntimeError`.
+
+    The type at this boundary changed deliberately: `RpcError` is what the
+    dispatcher renders with its message and detail intact, and anything else it
+    can only render as `internal_error`. The dispatcher is this function's only
+    caller, and it handles `RpcError` first -- which is the whole point -- so
+    the change reaches no other caller. What the assertion pins is the part a
+    reader depends on: the sentence, at the path the client reads it from.
+    """
     loop = _create_loop(tmp_path)
 
-    with pytest.raises(RuntimeError, match="disabled or no longer configured"):
+    with pytest.raises(ConfigValidationError, match="disabled or no longer configured"):
         await instances_create({"session_key": "s1", "agent": "nope"}, agent_loop_factory=_factory(loop))
 
     out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(loop))

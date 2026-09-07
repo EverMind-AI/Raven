@@ -103,19 +103,6 @@ rows the report marks not fetched, shallow fetch depth (median page under 3k cha
 means abstracts and READMEs rather than papers and data cards), citations without a URL
 scheme, fence-tag citations, and an answer that shipped unreviewed.
 
-One more soft finding settles the readability dimension's measurable half.
-`too_many_compared_columns` fires above eight columns that a reader has to compare across,
-and names the last two so the finding says what to move rather than only that something is
-wrong; a column of bare URLs is held out, because the template asks for full addresses and
-the eye goes down a source column rather than along it. Eight is measured rather than
-chosen: over the nine reports of the 2026-09-04 corpus - three vendors, 32 tables - every
-ordinary comparison table sits at eight or below and everything above is the matrix that
-put the rank, the criteria, the total, the venue and the sizes in one grid - ours at ten on
-three separate briefs, a competitor's twice at thirteen. Character width is reported beside the count and
-deliberately not thresholded: it follows how much prose the cells carry, and a five-column
-table of long cells wraps into something still readable while a thirteen-column one does
-not.
-
 One finding withholds a verdict rather than giving one. The appendix lists at most forty
 pages and counts the rest, so on a longer run the character median is a median over
 whichever fetches came first: `fetch_depth_from_a_truncated_list` names the listed share
@@ -171,35 +158,8 @@ Four root causes, in the order they cost us dimensions:
    start and verified before delivery, bouncing once and naming what is missing.
 4. **Citation normalisation** - repository owners case-folded and arXiv forms folded before
    the never-surfaced check, and no identifier written for a source that was never opened.
-5. **Ranking and readability** - a ranked table whose order agrees with its total, with
-   no exception carried in a row, and a column cap on the main table.
+5. **Ranking and readability** - monotonic ranking or a stated reason, and a column cap on
+   the main table.
 
 Full re-runs of both briefs are expensive, so they happen after 1, 2 and 3, and once more
 at the end for the final scoring. Steps 4 and 5 are checked by the audit and the suite.
-
-### What has landed, and what the scoring still needs
-
-All five steps are implemented as of 2026-09-07. Three things about that are worth
-writing down rather than inferring from the git log.
-
-**Step 4's fold is narrower than the sentence above.** "arXiv forms folded" turned out to
-be wrong as stated: a pinned `vN` is a different retrievable document, so bare and pinned
-forms stay distinct and only the four path prefixes and a trailing `.pdf` fold.
-
-**Step 5's ranking rule lost its escape clause, and the sequence above is corrected to
-match.** The in-row reason it first allowed is gone: the audit reads no reason cell and
-`rank_contradicts_total` is a hard finding, so a report that followed that escape exactly
-would still fail `--strict`, and an instruction no report can satisfy is worse than none.
-The template now asks for an order its own total supports and for nothing else - a
-constraint from outside the criteria becomes a criterion so the total carries it, or the
-candidate leaves the main table with its reason in prose beside it. The rule is asked for
-rather than imposed: the audit names the violation after the fact, and neither step
-rewrites a table.
-
-**No brief has been re-run since 2026-09-04, and none can be on the machine this work was
-done on**: there is no Serper key in `agents/raven-research/.env`, in the host config, or
-in the environment. So every claim in this repo about these five changes rests on unit
-tests and on the audit script over stored reports - not on a measured run. The head-to-head
-in the baseline table above is still the 2026-09-04 one, and the final scoring the sequence
-calls for has not happened. Anyone reading a dimension as won or lost should re-run both
-briefs first, with the run conditions above recorded beside each report.

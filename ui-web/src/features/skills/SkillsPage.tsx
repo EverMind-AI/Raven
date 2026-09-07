@@ -92,7 +92,6 @@ export function Skeleton(): JSX.Element {
         <span className="sk" style={{ width: '72%', height: 10 }} />
       </div>
       <div className="foot">
-        <span className="sk" style={{ width: 90, height: 12 }} />
         <span className="sk" style={{ width: 58, height: 22, marginLeft: 'auto', borderRadius: 8 }} />
       </div>
     </div>
@@ -140,22 +139,20 @@ function HubCard({ it, busy }: { it: HubItem; busy: string | null }): JSX.Elemen
         if (e.key === 'Enter') store.openDetail('market', it.id)
       }}
     >
-      {/* `.stars` is `flex: none` in a flex row, so a rating beside the name
-          takes its width off the name and never off itself. */}
       <div className="top">
         <div className="pmhead">
           <Tile name={it.name} />
           <div className="pmid">
             <div className="pmnm">
-              <span title={it.name}>{it.name}</span>
+              <span>{it.name}</span>
             </div>
             {pub ? <div className="pmpub">{pub}</div> : null}
           </div>
         </div>
+        <Stars score={it.quality_score} />
       </div>
       <p className="one">{it.description || ''}</p>
       <div className="foot">
-        <Stars score={it.quality_score} />
         <div className="act">
           {busy === it.id ? (
             <span className="pnote">{t('gui.hub.working')}</span>
@@ -270,7 +267,7 @@ function SkillInstalled(): JSX.Element {
                   <Tile name={c.name} />
                   <div className="pmid">
                     <div className="pmnm">
-                      <span title={c.name}>{c.name}</span>
+                      <span>{c.name}</span>
                     </div>
                     {c.src ? <div className="pmpub">{c.src}</div> : null}
                   </div>
