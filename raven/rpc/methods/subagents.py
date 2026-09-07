@@ -340,6 +340,11 @@ def _hot_apply(agent_loop_factory: "AgentLoopFactory | None") -> None:
     is the durable part, and refusing the whole call would make the TUI's own
     demo mode unable to configure anything.
     """
+    from raven.agent.registry.identity import IdentityRegistry
+
+    identities = IdentityRegistry()
+    if identities.startup_error is not None:
+        logger.warning("Agent identity reconciliation failed: {}", identities.startup_error)
     if agent_loop_factory is None:
         return
     loop = agent_loop_factory()
