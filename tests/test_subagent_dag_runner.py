@@ -22,7 +22,7 @@ from raven.agent.subagent.backends.base import clamp_output
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent.dag_graph import DagNodeSpec, parse_dag_spec
 from raven.agent.subagent.dag_runner import DagRunResult, run_dag
-from raven.agent.subagent.dag_store import DagRunStore, read_session_nodes
+from raven.agent.subagent.dag_store import RUNNING, UNRECORDED, DagRunStore, read_session_nodes
 from raven.agent.subagent.dag_tool import _NODE_SCHEMA, GUIDE_SKILL_ID, SubAgentDagTool
 from raven.agent.subagent.mcp_grant import McpGrant, MissingServer
 from raven.agent.subagent.prompt_backend import LocalFileBackend
@@ -323,6 +323,8 @@ async def test_run_dag_runs_a_sub_agent_whose_name_has_a_space() -> None:
         backend=_InMemBackend(),
         workdir="/w",
         run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
     )
     assert result.summary == {"total": 2, "completed": 2, "failed": 0, "skipped": 0, "cancelled": 0}
     # The name survives into the per-node records the UI and the resume path read.
@@ -359,6 +361,8 @@ async def test_run_dag_hands_each_node_the_invoking_turn_binding() -> None:
         backend=_InMemBackend(),
         workdir="/w",
         run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
         provider=provider,
         model="claude-opus-5",
     )
@@ -424,6 +428,8 @@ async def test_run_dag_passes_output_downstream_and_emits_progress() -> None:
         backend=_InMemBackend(),
         workdir="/w",
         run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
         progress_publisher=pub,
     )
 
@@ -459,6 +465,8 @@ async def test_the_started_event_names_each_node() -> None:
         backend=_InMemBackend(),
         workdir="/w",
         run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
         progress_publisher=pub,
     )
 
@@ -492,6 +500,8 @@ async def test_run_dag_threads_session_key_and_node_instance_to_backend() -> Non
         backend=_InMemBackend(),
         workdir="/w",
         run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
         session_key="web:sess1",
     )
     calls_by_id = {c["task_id"]: c for c in backend.calls}
@@ -555,6 +565,8 @@ async def test_run_dag_preserves_omitted_override_and_explicit_empty_mcps() -> N
         backend=_InMemBackend(),
         workdir="/w",
         run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
     )
 
     calls = {call["task_id"]: call["mcps"] for call in executor.calls}
@@ -585,6 +597,8 @@ async def test_run_dag_failure_cascades_to_skip() -> None:
         backend=_InMemBackend(),
         workdir="/w",
         run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
     )
     assert result.summary["failed"] == 1
     assert result.summary["skipped"] == 1  # b skipped because a failed
@@ -626,6 +640,8 @@ async def test_run_dag_writes_node_status_transitions_to_registry(
         backend=_InMemBackend(),
         workdir="/w",
         run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
         session_key="web:sess1",
     )
 
@@ -671,6 +687,8 @@ async def test_run_dag_records_the_node_an_instance_handle_belongs_to(
         backend=_InMemBackend(),
         workdir="/w",
         run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
         session_key="web:sess1",
         run_id="r1",
     )
@@ -744,6 +762,8 @@ async def test_run_dag_cancel_skips_unfinished_and_reaps_in_flight_task(tmp_path
                 backend=_InMemBackend(),
                 workdir="/w",
                 run_root="/hist/mas_dag",
+                nodes_root="/hist/nodes",
+                history_root="/hist",
                 cancel=cancel,
             ),
             timeout=5,
@@ -821,6 +841,8 @@ async def test_an_injected_semaphore_bounds_concurrent_runs_together() -> None:
                 backend=_InMemBackend(),
                 workdir="/w",
                 run_root="/hist/mas_dag",
+                nodes_root="/hist/nodes",
+                history_root="/hist",
                 semaphore=gate,
             )
             for prefix in ("a", "b")
@@ -864,6 +886,8 @@ async def test_run_dag_writes_skipped_status_to_registry_with_session_key(
         backend=_InMemBackend(),
         workdir="/w",
         run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
         session_key="web:sess1",
     )
 
@@ -893,7 +917,13 @@ async def test_run_dag_without_session_key_writes_nothing_to_registry(
         }
     )
     result = await run_dag(
-        spec, resolve=_by_name({"x": _FakeExec()}), backend=_InMemBackend(), workdir="/w", run_root="/hist/mas_dag"
+        spec,
+        resolve=_by_name({"x": _FakeExec()}),
+        backend=_InMemBackend(),
+        workdir="/w",
+        run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
     )
 
     assert result.summary["completed"] == 1
@@ -1907,6 +1937,18 @@ class TestSubagentEnum:
         assert "Late" in self._subagent_field(tool)["enum"]
 
 
+def test_the_node_schema_teaches_the_nodes_prefix_and_not_the_runs_prefix() -> None:
+    """The prefix the runtime accepts is the only one the schema may name.
+
+    A description that teaches a retired form costs a turn per attempt, and the
+    refusal it earns does not name the replacement.
+    """
+    described = _NODE_SCHEMA["properties"]["prompt_template"]["description"]
+
+    assert "@nodes/" in described
+    assert "@runs/" not in described
+
+
 class TestGuideSkillPointer:
     """The node-wiring rules live in the skill, not in this description, so the
     description has to send the agent there before it guesses a graph shape."""
@@ -2394,11 +2436,12 @@ class TestValidationErrorGuidesRetry:
 
 
 async def test_a_later_run_reads_an_earlier_runs_output() -> None:
-    # The whole point of the @runs/ prefix: run dirs live under the session's
-    # metadata directory, which no relative path from the workdir reaches, so
-    # without it a chain of graphs in one conversation can pass nothing along.
+    # The whole point of the @nodes/ prefix: node artifacts live under the
+    # session's metadata directory, which no relative path from the workdir
+    # reaches, so without it a chain of graphs in one conversation can pass
+    # nothing along.
     backend = _InMemBackend()
-    first = await run_dag(
+    await run_dag(
         parse_dag_spec(
             {
                 "task_summary": "run the graph under test",
@@ -2411,6 +2454,8 @@ async def test_a_later_run_reads_an_earlier_runs_output() -> None:
         backend=backend,
         workdir="/w",
         run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
     )
 
     second = await run_dag(
@@ -2422,7 +2467,7 @@ async def test_a_later_run_reads_an_earlier_runs_output() -> None:
                         "id": "build",
                         "subagent": "x",
                         "node_summary": "build using an earlier run's plan",
-                        "prompt_template": f"earlier: {{{{ ref:@runs/{first.run_id}/plan.out.md }}}}",
+                        "prompt_template": "earlier: {{ ref:@nodes/plan.out.md }}",
                     }
                 ],
             }
@@ -2431,10 +2476,12 @@ async def test_a_later_run_reads_an_earlier_runs_output() -> None:
         backend=backend,
         workdir="/w",
         run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
     )
 
     assert second.summary["completed"] == 1
-    prompt = backend.files[f"/hist/mas_dag/{second.run_id}/build.prompt.md"].decode()
+    prompt = backend.files["/hist/nodes/build.prompt.md"].decode()
     assert "OUT[plan]:draft it" in prompt
 
 
@@ -2457,7 +2504,13 @@ async def test_a_reference_under_the_history_root_needs_the_grant() -> None:
 
     with pytest.raises(DagValidationError, match="outside"):
         await run_dag(
-            spec, resolve=_by_name({"x": _FakeExec()}), backend=backend, workdir="/w", run_root="/hist/mas_dag"
+            spec,
+            resolve=_by_name({"x": _FakeExec()}),
+            backend=backend,
+            workdir="/w",
+            run_root="/hist/mas_dag",
+            nodes_root="/hist/nodes",
+            history_root="/hist",
         )
 
     result = await run_dag(
@@ -2466,10 +2519,12 @@ async def test_a_reference_under_the_history_root_needs_the_grant() -> None:
         backend=backend,
         workdir="/w",
         run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
         subagents_root="/hist",
     )
     assert result.summary["completed"] == 1
-    prompt = backend.files[f"/hist/mas_dag/{result.run_id}/n.prompt.md"].decode()
+    prompt = backend.files["/hist/nodes/n.prompt.md"].decode()
     # Fenced as a file read, which is what it is -- the label follows the kind of
     # reference, not the directory the file turned out to sit in. Asserted
     # structurally, not against a second wrap_untrusted call, since the fence
@@ -2515,6 +2570,8 @@ async def test_the_grant_stops_at_this_conversations_history(path: str) -> None:
             backend=backend,
             workdir="/w",
             run_root="/home/agent/sessions/grp/chat/subagents/mas_dag",
+            nodes_root="/home/agent/sessions/grp/chat/subagents/nodes",
+            history_root="/home/agent/sessions/grp/chat/subagents",
             subagents_root="/home/agent/sessions/grp/chat/subagents",
         )
 
@@ -2556,8 +2613,11 @@ async def test_the_tool_grants_this_conversations_history_and_nothing_wider(tmp_
         )
         assert "1 completed" in ok.model_text
 
-        # Its own run history is the second root, reached by absolute path.
+        # Its own run history is the second root, reached by absolute path. The
+        # node's own output sits under the flat nodes root, not the run dir the
+        # report names -- a sibling of ``mas_dag`` under the same subagents root.
         run_dir = Path(str(ok.model_text).split("Run dir: ")[1].splitlines()[0])
+        node_output = run_dir.parent.parent / "nodes" / "reads_workdir.out.md"
         history = await tool.execute(
             task_summary="run the graph under test",
             nodes=[
@@ -2565,7 +2625,7 @@ async def test_the_tool_grants_this_conversations_history_and_nothing_wider(tmp_
                     "id": "reads_history",
                     "subagent": "echo",
                     "node_summary": "read a file under the history root",
-                    "prompt_template": f"{{{{ ref:{run_dir / 'reads_workdir.out.md'} }}}}",
+                    "prompt_template": f"{{{{ ref:{node_output} }}}}",
                 }
             ],
             background=False,
@@ -2604,13 +2664,15 @@ async def _run(spec_nodes: list[dict], backend, root: str, history: str = "/hist
         backend=backend,
         workdir="/w",
         run_root=root,
+        nodes_root=f"{history}/nodes",
+        history_root=history,
         subagents_root=history,
     )
 
 
 async def test_a_bare_node_id_reaches_an_earlier_run_with_no_depends_on() -> None:
     backend = _InMemBackend()
-    first = await _run(
+    await _run(
         [{"id": "plan", "subagent": "x", "node_summary": "draft the plan", "prompt_template": "draft it"}],
         backend,
         "/hist/mas_dag",
@@ -2630,7 +2692,7 @@ async def test_a_bare_node_id_reaches_an_earlier_run_with_no_depends_on() -> Non
     )
 
     assert second.summary["completed"] == 1
-    prompt = backend.files[f"/hist/mas_dag/{second.run_id}/build.prompt.md"].decode()
+    prompt = backend.files["/hist/nodes/build.prompt.md"].decode()
     # A node's output is sub-agent-authored by construction, so the content
     # form arrives fenced; the path form beside it is unaffected -- a path
     # needs no fence. Asserted structurally, not against a second
@@ -2639,7 +2701,7 @@ async def test_a_bare_node_id_reaches_an_earlier_run_with_no_depends_on() -> Non
     assert lines[0].startswith("text=[BEGIN UNTRUSTED subagent ")
     assert lines[1] == "OUT[plan]:draft it"
     assert lines[2].startswith("[END UNTRUSTED subagent ")
-    assert lines[2].endswith(f"] path=/hist/mas_dag/{first.run_id}/plan.out.md")
+    assert lines[2].endswith("] path=/hist/nodes/plan.out.md")
 
 
 async def test_depends_on_may_name_a_node_an_earlier_run_completed() -> None:
@@ -2647,7 +2709,7 @@ async def test_depends_on_may_name_a_node_an_earlier_run_completed() -> None:
     # reads as a whole either way, and a model that writes the edge defensively
     # should not have its whole graph refused for it.
     backend = _InMemBackend()
-    first = await _run(
+    await _run(
         [{"id": "plan", "subagent": "x", "node_summary": "draft the plan", "prompt_template": "draft it"}],
         backend,
         "/hist/mas_dag",
@@ -2668,7 +2730,7 @@ async def test_depends_on_may_name_a_node_an_earlier_run_completed() -> None:
     )
 
     assert second.summary["completed"] == 1
-    prompt = backend.files[f"/hist/mas_dag/{second.run_id}/build.prompt.md"].decode()
+    prompt = backend.files["/hist/nodes/build.prompt.md"].decode()
     # A node's output is sub-agent-authored by construction, so the content
     # form arrives fenced; the path form beside it is unaffected -- a path
     # needs no fence. Asserted structurally, not against a second
@@ -2677,7 +2739,7 @@ async def test_depends_on_may_name_a_node_an_earlier_run_completed() -> None:
     assert lines[0].startswith("text=[BEGIN UNTRUSTED subagent ")
     assert lines[1] == "OUT[plan]:draft it"
     assert lines[2].startswith("[END UNTRUSTED subagent ")
-    assert lines[2].endswith(f"] path=/hist/mas_dag/{first.run_id}/plan.out.md")
+    assert lines[2].endswith("] path=/hist/nodes/plan.out.md")
 
 
 async def test_a_cross_run_dependency_neither_blocks_nor_unterminals_a_node() -> None:
@@ -2776,6 +2838,8 @@ async def test_a_local_failure_still_cascades_past_a_cross_run_dependency() -> N
         backend=backend,
         workdir="/w",
         run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
         subagents_root="/hist",
     )
 
@@ -2833,9 +2897,10 @@ async def test_depends_on_an_id_no_run_has_produced_is_still_refused() -> None:
 async def test_there_is_no_run_qualifier_on_a_node_reference() -> None:
     # A node id already names one node per conversation, so a run qualifier
     # would only ever restate what the id says -- and could contradict it.
-    # Pinning a run is the ``ref:@runs/`` file form's job. This shape matches
-    # no known placeholder, so it is not resolved as a node reference -- it
-    # passes through into the prompt as ordinary text instead.
+    # Pinning one file by path is a raw absolute path's job now that
+    # ``@runs/`` is retired. This shape matches no known placeholder, so it
+    # is not resolved as a node reference -- it passes through into the
+    # prompt as ordinary text instead.
     backend = _InMemBackend()
     result = await _run(
         [
@@ -2851,7 +2916,7 @@ async def test_there_is_no_run_qualifier_on_a_node_reference() -> None:
     )
 
     assert result.summary["completed"] == 1
-    prompt = backend.files[f"/hist/mas_dag/{result.run_id}/build.prompt.md"].decode()
+    prompt = backend.files["/hist/nodes/build.prompt.md"].decode()
     assert "{{ @runs/some-run/plan.output }}" in prompt
 
 
@@ -2873,20 +2938,39 @@ async def test_a_node_input_rejects_a_run_key() -> None:
 
 
 def _seed_history(backend: _InMemBackend, entries: list[dict]) -> None:
-    """Hand-write a session index plus the output files its entries claim."""
+    """Hand-write a node registry, each entry's run-scoped file, and the flat
+    copy the id form now reads instead of the registry -- last entry wins
+    there, same as the registry's own notion of an id's current owner.
+    """
+    nodes: dict[str, dict] = {}
+    runs: list[dict] = []
     for entry in entries:
+        run_id = entry["run_id"]
+        statuses = entry.get("status") if isinstance(entry.get("status"), dict) else {}
+        absent = UNRECORDED if entry.get("summary") else RUNNING
         for node_id in entry.get("nodes", []):
-            if entry.get("status", {}).get(node_id, "completed") == "completed":
-                backend.files[f"/hist/mas_dag/{entry['run_id']}/{node_id}.out.md"] = (
-                    f"FROM-{entry['run_id'].upper()}".encode()
-                )
-    backend.files["/hist/mas_dag/index.json"] = json.dumps(entries).encode()
+            wrote = statuses.get(node_id, "completed") == "completed"
+            if wrote:
+                content = f"FROM-{run_id.upper()}".encode()
+                backend.files[f"/hist/mas_dag/{run_id}/{node_id}.out.md"] = content
+                backend.files[f"/hist/nodes/{node_id}.out.md"] = content
+            node_entry = {"kind": "dag", "run_id": run_id, "has_output": wrote}
+            if node_id in statuses:
+                node_entry["status"] = statuses[node_id]
+            elif absent == RUNNING:
+                node_entry["status"] = RUNNING
+            nodes[node_id] = node_entry
+        if entry.get("summary"):
+            runs.append({"run_id": run_id, "summary": str(entry["summary"]), "nodes": list(entry.get("nodes", []))})
+    backend.files["/hist/nodes.json"] = json.dumps({"nodes": nodes, "runs": runs}).encode()
 
 
-async def test_the_file_form_pins_a_run_a_bare_id_cannot_reach() -> None:
-    # Ids are unique from now on, but a history written before that rule can
-    # hold the same id twice; the index resolves such an id to its most recent
-    # producer. Reading the older one by path is the way back to it.
+async def test_an_older_runs_output_stays_reachable_by_path_after_id_reuse() -> None:
+    # Ids are unique from now on, but a history seeded as if from before that
+    # rule (see _seed_history) can still hold the same id twice. Neither form
+    # consults an index: the bare id just reads the one flat file, which holds
+    # whichever run wrote it last; the older run's own copy is reachable only
+    # by path.
     backend = _InMemBackend()
     _seed_history(
         backend,
@@ -2908,7 +2992,7 @@ async def test_the_file_form_pins_a_run_a_bare_id_cannot_reach() -> None:
         backend,
         "/hist/mas_dag",
     )
-    assert "FROM-RUNB" in backend.files[f"/hist/mas_dag/{bare.run_id}/n1.prompt.md"].decode()
+    assert "FROM-RUNB" in backend.files["/hist/nodes/n1.prompt.md"].decode()
 
     pinned = await _run(
         [
@@ -2916,13 +3000,13 @@ async def test_the_file_form_pins_a_run_a_bare_id_cannot_reach() -> None:
                 "id": "n2",
                 "subagent": "x",
                 "node_summary": "read the plan's output file from run a",
-                "prompt_template": "{{ ref:@runs/runA/plan.out.md }}",
+                "prompt_template": "{{ ref:/hist/mas_dag/runA/plan.out.md }}",
             }
         ],
         backend,
         "/hist/mas_dag",
     )
-    assert "FROM-RUNA" in backend.files[f"/hist/mas_dag/{pinned.run_id}/n2.prompt.md"].decode()
+    assert "FROM-RUNA" in backend.files["/hist/nodes/n2.prompt.md"].decode()
 
 
 async def test_a_run_that_recorded_no_outcome_is_not_addressable_by_id() -> None:
@@ -2933,7 +3017,7 @@ async def test_a_run_that_recorded_no_outcome_is_not_addressable_by_id() -> None
     backend = _InMemBackend()
     _seed_history(backend, [{"run_id": "runOld", "nodes": ["plan"], "summary": {"completed": 1}}])
 
-    with pytest.raises(DagValidationError, match="recorded no outcome for it"):
+    with pytest.raises(DagValidationError, match=r"recorded no outcome for it.*ref:@nodes/plan\.out\.md"):
         await _run(
             [
                 {
@@ -2959,18 +3043,18 @@ async def test_a_run_that_recorded_no_outcome_is_not_addressable_by_id() -> None
                 "id": "n2",
                 "subagent": "x",
                 "node_summary": "read the old run's plan file",
-                "prompt_template": "{{ ref:@runs/runOld/plan.out.md }}",
+                "prompt_template": "{{ ref:/hist/mas_dag/runOld/plan.out.md }}",
             }
         ],
         backend,
         "/hist/mas_dag",
     )
-    assert "FROM-RUNOLD" in backend.files[f"/hist/mas_dag/{ok.run_id}/n2.prompt.md"].decode()
+    assert "FROM-RUNOLD" in backend.files["/hist/nodes/n2.prompt.md"].decode()
 
 
 async def test_a_node_input_takes_another_runs_output() -> None:
     backend = _InMemBackend()
-    first = await _run(
+    await _run(
         [{"id": "plan", "subagent": "x", "node_summary": "draft the plan", "prompt_template": "draft it"}],
         backend,
         "/hist/mas_dag",
@@ -2989,7 +3073,7 @@ async def test_a_node_input_takes_another_runs_output() -> None:
         backend,
         "/hist/mas_dag",
     )
-    prompt = backend.files[f"/hist/mas_dag/{result.run_id}/build.prompt.md"].decode()
+    prompt = backend.files["/hist/nodes/build.prompt.md"].decode()
     # A node's output is sub-agent-authored by construction, so the content
     # form arrives fenced; the path form beside it is unaffected -- a path
     # needs no fence. Asserted structurally, not against a second
@@ -2998,7 +3082,7 @@ async def test_a_node_input_takes_another_runs_output() -> None:
     assert lines[0].startswith("text=[BEGIN UNTRUSTED subagent ")
     assert lines[1] == "OUT[plan]:draft it"
     assert lines[2].startswith("[END UNTRUSTED subagent ")
-    assert lines[2].endswith(f"] path=/hist/mas_dag/{first.run_id}/plan.out.md")
+    assert lines[2].endswith("] path=/hist/nodes/plan.out.md")
 
 
 async def test_a_node_input_may_also_name_a_dependency_of_this_graph() -> None:
@@ -3019,8 +3103,44 @@ async def test_a_node_input_may_also_name_a_dependency_of_this_graph() -> None:
         "/hist/mas_dag",
     )
     assert result.summary["completed"] == 2
-    prompt = backend.files[f"/hist/mas_dag/{result.run_id}/down.prompt.md"].decode()
+    prompt = backend.files["/hist/nodes/down.prompt.md"].decode()
     assert "OUT[up]:hello" in prompt
+
+
+def test_the_node_schema_states_the_input_contract_it_enforces(tmp_path: Path) -> None:
+    """Every shape the validator refuses is refused before dispatch, so a model
+    that reads only the schema has to be able to get it right first time.
+
+    Read from the rendered parameters with whitespace collapsed: the sentences
+    are wrapped across string literals, so a re-wrap must not be able to void
+    the assertion silently.
+    """
+    tool = SubAgentDagTool(
+        workspace=tmp_path,
+        agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")],
+    )
+    node = tool.parameters["properties"]["nodes"]["items"]["properties"]
+    inputs = " ".join(node["inputs"]["description"].split())
+    template = " ".join(node["prompt_template"]["description"].split())
+
+    assert "Exactly one of those three and nothing else in the object" in inputs
+    assert "no second key beside file or node" in inputs
+    assert "no empty path or id" in inputs
+    assert "a number, boolean or list is refused" in inputs
+    assert "Every key in inputs must be referenced by a placeholder." in template
+    # The other direction of the shared namespace: a graph may name a spawn's
+    # task. Stated once, on the field that owns the id -- the other three ride
+    # in the same payload, so repeating it there costs context every turn.
+    node_id = " ".join(node["id"]["description"].split())
+    assert "not just this tool" in node_id
+    assert "a spawn's node_id share one namespace" in node_id
+    assert "a later task of either kind" in node_id
+    # And what "readable" actually means, which these three overstated: a
+    # terminal task with no output is refused, so the schema must not promise it.
+    depends_on = " ".join(node["depends_on"]["description"].split())
+    assert "completed and left an output" in template
+    assert "completed with an output" in depends_on
+    assert "completed with an output" in inputs
 
 
 async def test_reusing_a_node_id_from_an_earlier_run_is_refused() -> None:
@@ -3073,6 +3193,8 @@ async def test_an_id_is_claimed_at_run_start_so_a_concurrent_graph_cannot_take_i
             backend=backend,
             workdir="/w",
             run_root="/hist/mas_dag",
+            nodes_root="/hist/nodes",
+            history_root="/hist",
         )
     )
     await started.wait()
@@ -3147,6 +3269,8 @@ async def _seeded_outcomes(backend: _InMemBackend) -> None:
         backend=backend,
         workdir="/w",
         run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
     )
 
 
@@ -3208,7 +3332,7 @@ async def test_a_failed_nodes_id_stays_taken() -> None:
 async def test_a_completed_sibling_of_a_failed_node_is_still_readable() -> None:
     backend = _InMemBackend()
     await _seeded_outcomes(backend)
-    result = await _run(
+    await _run(
         [
             {
                 "id": "later",
@@ -3220,7 +3344,7 @@ async def test_a_completed_sibling_of_a_failed_node_is_still_readable() -> None:
         backend,
         "/hist/mas_dag",
     )
-    assert "OUT[ok_node]:fine" in backend.files[f"/hist/mas_dag/{result.run_id}/later.prompt.md"].decode()
+    assert "OUT[ok_node]:fine" in backend.files["/hist/nodes/later.prompt.md"].decode()
 
 
 async def test_referencing_an_in_flight_node_does_not_suggest_re_creating_it() -> None:
@@ -3252,6 +3376,8 @@ async def test_referencing_an_in_flight_node_does_not_suggest_re_creating_it() -
             backend=backend,
             workdir="/w",
             run_root="/hist/mas_dag",
+            nodes_root="/hist/nodes",
+            history_root="/hist",
         )
     )
     await started.wait()
@@ -3289,7 +3415,7 @@ async def test_referencing_an_in_flight_node_does_not_suggest_re_creating_it() -
         release.set()
         await first
 
-    after = await _run(
+    await _run(
         [
             {
                 "id": "later2",
@@ -3301,7 +3427,7 @@ async def test_referencing_an_in_flight_node_does_not_suggest_re_creating_it() -
         backend,
         "/hist/mas_dag",
     )
-    assert "eventually" in backend.files[f"/hist/mas_dag/{after.run_id}/later2.prompt.md"].decode()
+    assert "eventually" in backend.files["/hist/nodes/later2.prompt.md"].decode()
 
 
 @pytest.mark.parametrize(
@@ -3357,6 +3483,8 @@ async def test_a_cancellation_on_the_run_started_publish_is_covered_too() -> Non
             backend=backend,
             workdir="/w",
             run_root="/hist/mas_dag",
+            nodes_root="/hist/nodes",
+            history_root="/hist",
             subagents_root="/hist",
             progress_publisher=publisher,
         )
@@ -3367,9 +3495,9 @@ async def test_a_cancellation_on_the_run_started_publish_is_covered_too() -> Non
         await task
 
     # No node ever ran, so the claim is all there is -- and it has to read as over.
-    nodes = await read_session_nodes(backend, "/hist/mas_dag")
+    nodes = await read_session_nodes(backend, "/hist")
     assert nodes.state["plan"] == "skipped"
-    assert nodes.owner["plan"] == json.loads(backend.files["/hist/mas_dag/index.json"].decode())[-1]["run_id"]
+    assert nodes.owner["plan"] == json.loads(backend.files["/hist/nodes.json"].decode())["nodes"]["plan"]["run_id"]
 
 
 async def test_an_outer_cancellation_still_records_the_run_as_over() -> None:
@@ -3398,6 +3526,8 @@ async def test_an_outer_cancellation_still_records_the_run_as_over() -> None:
             backend=backend,
             workdir="/w",
             run_root="/hist/mas_dag",
+            nodes_root="/hist/nodes",
+            history_root="/hist",
             subagents_root="/hist",
         )
     )
@@ -3406,10 +3536,10 @@ async def test_an_outer_cancellation_still_records_the_run_as_over() -> None:
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    entries = json.loads(backend.files["/hist/mas_dag/index.json"].decode())
-    assert entries[-1]["status"] == {"plan": "cancelled"}, entries[-1]
+    registry = json.loads(backend.files["/hist/nodes.json"].decode())
+    assert registry["nodes"]["plan"]["status"] == "cancelled", registry["nodes"]
 
-    nodes = await read_session_nodes(backend, "/hist/mas_dag")
+    nodes = await read_session_nodes(backend, "/hist")
     assert nodes.state["plan"] == "cancelled"
     assert not nodes.is_readable("plan")
 
@@ -3485,6 +3615,8 @@ async def test_an_outer_cancellation_reaps_this_runs_memory_pollers(monkeypatch:
             backend=backend,
             workdir="/w",
             run_root="/hist/mas_dag",
+            nodes_root="/hist/nodes",
+            history_root="/hist",
             subagents_root="/hist",
             everos_for=lambda name: identity if name == "x" else None,
         )
@@ -3552,6 +3684,8 @@ async def test_concurrent_runs_cannot_both_claim_one_node_id() -> None:
             backend=backend,
             workdir="/w",
             run_root="/hist/mas_dag",
+            nodes_root="/hist/nodes",
+            history_root="/hist",
         )
         for _ in range(4)
     ]
@@ -3589,15 +3723,72 @@ async def test_concurrent_runs_do_not_drop_each_others_index_entries() -> None:
                 backend=backend,
                 workdir="/w",
                 run_root="/hist/mas_dag",
+                nodes_root="/hist/nodes",
+                history_root="/hist",
             )
             for node_id in ids
         ]
     )
-    entries = json.loads(backend.files["/hist/mas_dag/index.json"].decode())
-    assert len(entries) == 8
-    assert {n for e in entries for n in e["nodes"]} == set(ids)
-    # Every entry finished, so every one carries its per-node outcome.
-    assert all("status" in e for e in entries)
+    registry = json.loads(backend.files["/hist/nodes.json"].decode())
+    assert len(registry["runs"]) == 8
+    assert set(registry["nodes"]) == set(ids)
+    # Every run finished, so every node carries its outcome.
+    assert all("status" in registry["nodes"][node_id] for node_id in ids)
+
+
+async def test_the_claim_guard_and_the_registry_read_it_protects_share_one_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two writers guarding roots they each derived would take different locks.
+
+    Check-then-act only holds when every claimer contends on one lock, so the
+    root the guard keys on has to be the registry's, not a per-writer one.
+    Checked directly here: the root ``index_guard`` locks for the claim and the
+    root ``read_session_nodes`` reads inside that guard must be the same root,
+    and it must be the history root rather than the run root.
+    """
+    from raven.agent.subagent import dag_runner as runner_mod
+
+    original_index_guard = runner_mod.index_guard
+    original_read_session_nodes = runner_mod.read_session_nodes
+    guarded_roots: list[str] = []
+    read_roots: list[str] = []
+
+    def recording_index_guard(root: str):
+        guarded_roots.append(root)
+        return original_index_guard(root)
+
+    async def recording_read_session_nodes(backend: Any, root: str):
+        read_roots.append(root)
+        return await original_read_session_nodes(backend, root)
+
+    monkeypatch.setattr(runner_mod, "index_guard", recording_index_guard)
+    monkeypatch.setattr(runner_mod, "read_session_nodes", recording_read_session_nodes)
+
+    backend = _SuspendingBackend()
+    await run_dag(
+        parse_dag_spec(
+            {
+                "task_summary": "run the graph under test",
+                "nodes": [
+                    {"id": "plan", "subagent": "y", "node_summary": "claim the plan id", "prompt_template": "go"}
+                ],
+            }
+        ),
+        resolve=_by_name({"y": _Yielding()}),
+        backend=backend,
+        workdir="/w",
+        run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
+    )
+
+    assert read_roots == ["/hist"], "the claim's read must run against the registry root"
+    # Two claims on the guard for one run: the claim itself (dag_runner.py:278)
+    # and the finalize write (_record_outcome, dag_runner.py:834). Checking
+    # only the first would miss a finalize guard reverted to key on something
+    # other than the registry root.
+    assert guarded_roots == ["/hist", "/hist"], "both the claim and the finalize guard must lock the registry root"
 
 
 async def test_cross_run_reference_works_over_the_real_file_backend(tmp_path: Path) -> None:
@@ -3612,6 +3803,8 @@ async def test_cross_run_reference_works_over_the_real_file_backend(tmp_path: Pa
         "backend": LocalFileBackend(),
         "workdir": str(tmp_path / "wd"),
         "run_root": str(root),
+        "nodes_root": str(tmp_path / "hist" / "nodes"),
+        "history_root": str(tmp_path / "hist"),
         "subagents_root": str(tmp_path / "hist"),
     }
     (tmp_path / "wd").mkdir()
@@ -3632,7 +3825,7 @@ async def test_cross_run_reference_works_over_the_real_file_backend(tmp_path: Pa
         ),
         **common,
     )
-    assert (root / first.run_id / "seed.out.md").is_file()
+    assert (tmp_path / "hist" / "nodes" / "seed.out.md").is_file()
 
     second = await run_dag(
         parse_dag_spec(
@@ -3655,7 +3848,7 @@ async def test_cross_run_reference_works_over_the_real_file_backend(tmp_path: Pa
         ),
         **common,
     )
-    prompt = (root / second.run_id / "consumer.prompt.md").read_text(encoding="utf-8")
+    prompt = (tmp_path / "hist" / "nodes" / "consumer.prompt.md").read_text(encoding="utf-8")
     # `{{ seed.output }}` and `{{ inputs.p }}` are different raw placeholders,
     # so render_prompt resolves -- and fences -- them separately, with
     # unrelated nonces; `seed.output_path` is a path form, so the line between
@@ -3665,16 +3858,16 @@ async def test_cross_run_reference_works_over_the_real_file_backend(tmp_path: Pa
     assert lines[0].startswith("text=[BEGIN UNTRUSTED subagent ")
     assert lines[1] == "OUT[seed]:make it"
     assert lines[2].startswith("[END UNTRUSTED subagent ")
-    assert lines[3] == f"path={root / first.run_id / 'seed.out.md'}"
+    assert lines[3] == f"path={tmp_path / 'hist' / 'nodes' / 'seed.out.md'}"
     assert lines[4].startswith("input=[BEGIN UNTRUSTED subagent ")
     assert lines[5] == "OUT[seed]:make it"
     assert lines[6].startswith("[END UNTRUSTED subagent ")
 
-    # The index on disk carries both runs, with the outcome that makes 'seed'
-    # readable at all.
-    entries = json.loads((root / "index.json").read_text(encoding="utf-8"))
-    assert [e["run_id"] for e in entries] == [first.run_id, second.run_id]
-    assert entries[0]["status"] == {"seed": "completed"}
+    # The registry on disk carries both runs, with the outcome that makes
+    # 'seed' readable at all.
+    registry = json.loads((tmp_path / "hist" / "nodes.json").read_text(encoding="utf-8"))
+    assert [r["run_id"] for r in registry["runs"]] == [first.run_id, second.run_id]
+    assert registry["nodes"]["seed"]["status"] == "completed"
 
     # And the id stays taken on the real backend too.
     with pytest.raises(DagValidationError, match="already used by run"):
@@ -3737,9 +3930,11 @@ async def test_a_node_writes_down_its_own_transcript() -> None:
         backend=backend,
         workdir="/w",
         run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
     )
 
-    written = backend.files[f"/hist/mas_dag/{result.run_id}/a.transcript.jsonl"].decode()
+    written = backend.files["/hist/nodes/a.transcript.jsonl"].decode()
     assert '"name": "read"' in written
 
 
@@ -3769,7 +3964,15 @@ async def test_a_node_in_flight_is_findable_in_the_live_index() -> None:
 
     runner_mod.make_run_id = _mint
     try:
-        await run_dag(spec, resolve=_by_name({"x": exec_}), backend=backend, workdir="/w", run_root="/hist/mas_dag")
+        await run_dag(
+            spec,
+            resolve=_by_name({"x": exec_}),
+            backend=backend,
+            workdir="/w",
+            run_root="/hist/mas_dag",
+            nodes_root="/hist/nodes",
+            history_root="/hist",
+        )
     finally:
         runner_mod.make_run_id = mint
 
@@ -3813,6 +4016,8 @@ async def test_a_node_in_flight_is_findable_by_instance_too() -> None:
         backend=_InMemBackend(),
         workdir="/w",
         run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
         session_key="web:sess1",
     )
 
@@ -3846,6 +4051,8 @@ async def test_a_node_with_no_instance_is_indexed_under_its_node_id() -> None:
         backend=_InMemBackend(),
         workdir="/w",
         run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
         session_key="web:sess1",
     )
 
@@ -3868,6 +4075,8 @@ async def test_the_live_index_does_not_outlive_the_node() -> None:
         backend=_InMemBackend(),
         workdir="/w",
         run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
     )
 
     assert activity.live(node_live_key(result.run_id, "a")) is None
@@ -3922,6 +4131,8 @@ async def test_a_stop_separates_the_node_that_was_running_from_the_one_that_neve
             backend=backend,
             workdir="/w",
             run_root="/hist/mas_dag",
+            nodes_root="/hist/nodes",
+            history_root="/hist",
             subagents_root="/hist",
             cancel=cancel,
             progress_publisher=publisher,
@@ -3952,6 +4163,8 @@ async def test_a_cancelled_node_keeps_the_start_time_its_dispatch_gave_it() -> N
             backend=backend,
             workdir="/w",
             run_root="/hist/mas_dag",
+            nodes_root="/hist/nodes",
+            history_root="/hist",
             subagents_root="/hist",
             cancel=cancel,
         )
@@ -3976,6 +4189,8 @@ async def test_an_outer_cancellation_records_the_running_node_as_cancelled() -> 
             backend=backend,
             workdir="/w",
             run_root="/hist/mas_dag",
+            nodes_root="/hist/nodes",
+            history_root="/hist",
             subagents_root="/hist",
         )
     )
@@ -3984,10 +4199,10 @@ async def test_an_outer_cancellation_records_the_running_node_as_cancelled() -> 
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    entries = json.loads(backend.files["/hist/mas_dag/index.json"].decode())
-    assert entries[-1]["status"] == {"a": "cancelled", "b": "skipped"}, entries[-1]
+    registry = json.loads(backend.files["/hist/nodes.json"].decode())
+    assert {n: registry["nodes"][n]["status"] for n in ("a", "b")} == {"a": "cancelled", "b": "skipped"}
 
-    nodes = await read_session_nodes(backend, "/hist/mas_dag")
+    nodes = await read_session_nodes(backend, "/hist")
     assert nodes.state["a"] == "cancelled"
     assert not nodes.is_readable("a")
 
@@ -4004,6 +4219,8 @@ async def test_the_transcript_label_names_the_cancelled_nodes() -> None:
             backend=backend,
             workdir="/w",
             run_root="/hist/mas_dag",
+            nodes_root="/hist/nodes",
+            history_root="/hist",
             subagents_root="/hist",
             cancel=cancel,
         )
@@ -4034,6 +4251,8 @@ async def test_referencing_a_cancelled_node_says_it_was_stopped_not_skipped() ->
             backend=backend,
             workdir="/w",
             run_root="/hist/mas_dag",
+            nodes_root="/hist/nodes",
+            history_root="/hist",
             subagents_root="/hist",
             cancel=cancel,
         )
@@ -4142,6 +4361,8 @@ async def test_run_dag_records_whether_each_instance_was_minted() -> None:
         backend=_InMemBackend(),
         workdir="/w",
         run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
         auto_instances=frozenset({"b"}),
     )
 
@@ -4314,6 +4535,8 @@ async def test_a_node_naming_an_agent_nothing_resolves_is_refused_before_the_run
             backend=_InMemBackend(),
             workdir="/w",
             run_root="/hist/mas_dag",
+            nodes_root="/hist/nodes",
+            history_root="/hist",
         )
 
 
@@ -4370,6 +4593,8 @@ async def test_a_node_writes_its_question_into_the_instance_log(tmp_path: Path) 
         backend=_InMemBackend(),
         workdir="/w",
         run_root=str(session_dir / "subagents" / "mas_dag"),
+        nodes_root=str(session_dir / "subagents" / "nodes"),
+        history_root=str(session_dir / "subagents"),
         session_key="web:s1",
         subagents_root=str(session_dir / "subagents"),
     )
@@ -4422,6 +4647,8 @@ async def test_a_node_writes_its_answer_into_the_instance_log(tmp_path: Path) ->
         backend=_InMemBackend(),
         workdir="/w",
         run_root=str(session_dir / "subagents" / "mas_dag"),
+        nodes_root=str(session_dir / "subagents" / "nodes"),
+        history_root=str(session_dir / "subagents"),
         session_key="web:s1",
         subagents_root=str(session_dir / "subagents"),
     )
@@ -4459,6 +4686,8 @@ async def test_a_failed_node_writes_the_failure_into_the_instance_log(tmp_path: 
         backend=_InMemBackend(),
         workdir="/w",
         run_root=str(session_dir / "subagents" / "mas_dag"),
+        nodes_root=str(session_dir / "subagents" / "nodes"),
+        history_root=str(session_dir / "subagents"),
         session_key="web:s1",
         subagents_root=str(session_dir / "subagents"),
     )
@@ -4511,6 +4740,8 @@ async def _run_one_node_dag(
         backend=LocalFileBackend(),
         workdir=str(tmp_path / "wd"),
         run_root=str(tmp_path / "hist" / "mas_dag"),
+        nodes_root=str(tmp_path / "hist" / "nodes"),
+        history_root=str(tmp_path / "hist"),
         subagents_root=str(tmp_path / "hist"),
         session_key="web:sess1",
         everos_for=everos_for,
@@ -4544,7 +4775,7 @@ async def test_a_node_leaves_a_memory_record(tmp_path: Path, monkeypatch: pytest
     # semaphore slot; run_dag returns without waiting for it, so drain it
     # explicitly before reading what it wrote.
     await _drain_record_tasks()
-    written = Path(result.dir) / "n1.memory.json"
+    written = tmp_path / "hist" / "nodes" / "n1.memory.json"
     assert json.loads(written.read_text(encoding="utf-8"))["status"] == "settled"
 
 
@@ -4675,6 +4906,8 @@ async def test_a_capped_node_reply_still_lands_whole_in_its_output_file() -> Non
         backend=backend,
         workdir="/w",
         run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
     )
 
     entry = next(e for e in result.files if e["node"] == "a")
@@ -4683,7 +4916,7 @@ async def test_a_capped_node_reply_still_lands_whole_in_its_output_file() -> Non
     # 128000 terminal limit. What it pins is that the main agent now receives the
     # whole answer where it used to receive the node backend's capped 200.
     assert len(result.terminal_outputs[0]["text"]) == 400
-    manifest = json.loads(backend.files[posixpath.join(posixpath.dirname(entry["output_file"]), "manifest.json")])
+    manifest = json.loads(backend.files[posixpath.join(result.dir, "manifest.json")])
     assert manifest["a"]["output_truncated"] is True
     assert manifest["a"]["output_chars_total"] == 400
 
@@ -4991,6 +5224,8 @@ async def _run_two_node_dag(
         backend=LocalFileBackend(),
         workdir=str(tmp_path),
         run_root=str(tmp_path / "runs"),
+        nodes_root=str(tmp_path / "nodes"),
+        history_root=str(tmp_path),
         desk=desk,
         judge_node=judge_node,
         announce_exception=announce_exception,
@@ -5177,7 +5412,13 @@ async def test_a_continued_instance_node_is_sent_only_the_follow_up_and_keeps_it
     assert len(a_calls) == 2
     assert a_calls[1]["prompt"] == "use the staging token"
 
-    store = DagRunStore(backend=LocalFileBackend(), root=str(tmp_path / "runs"), run_id=result.run_id)
+    store = DagRunStore(
+        backend=LocalFileBackend(),
+        root=str(tmp_path / "runs"),
+        run_id=result.run_id,
+        nodes_root=str(tmp_path / "nodes"),
+        registry_root=str(tmp_path),
+    )
     task_prompt = await store.read_text(store.prompt_path("a"))
     assert "use the staging token" not in task_prompt
     attempt_1 = await store.read_text(store.attempt_prompt_path("a", 1))
@@ -5266,7 +5507,13 @@ async def test_every_attempt_is_archived_including_the_first(tmp_path):
 
     result = await _run_two_node_dag(tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce)
 
-    store = DagRunStore(backend=LocalFileBackend(), root=str(tmp_path / "runs"), run_id=result.run_id)
+    store = DagRunStore(
+        backend=LocalFileBackend(),
+        root=str(tmp_path / "runs"),
+        run_id=result.run_id,
+        nodes_root=str(tmp_path / "nodes"),
+        registry_root=str(tmp_path),
+    )
     out_1 = await store.read_text(store.attempt_output_path("a", 1))
     out_2 = await store.read_text(store.attempt_output_path("a", 2))
     prompt_1 = await store.read_text(store.attempt_prompt_path("a", 1))
@@ -5520,7 +5767,13 @@ async def test_each_attempts_transcript_survives_the_next_attempt(tmp_path):
     )
     assert result.summary["completed"] == 2
 
-    store = DagRunStore(backend=LocalFileBackend(), root=str(tmp_path / "runs"), run_id=result.run_id)
+    store = DagRunStore(
+        backend=LocalFileBackend(),
+        root=str(tmp_path / "runs"),
+        run_id=result.run_id,
+        nodes_root=str(tmp_path / "nodes"),
+        registry_root=str(tmp_path),
+    )
     first = await store.read_text(store.attempt_transcript_path("a", 1))
     second = await store.read_text(store.attempt_transcript_path("a", 2))
     latest = await store.read_text(store.transcript_path("a"))
@@ -5557,7 +5810,13 @@ async def test_a_successful_continuation_clears_the_earlier_attempts_error(tmp_p
     result = await _run_two_node_dag(tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce)
     assert result.summary["completed"] == 2
 
-    store = DagRunStore(backend=LocalFileBackend(), root=str(tmp_path / "runs"), run_id=result.run_id)
+    store = DagRunStore(
+        backend=LocalFileBackend(),
+        root=str(tmp_path / "runs"),
+        run_id=result.run_id,
+        nodes_root=str(tmp_path / "nodes"),
+        registry_root=str(tmp_path),
+    )
     manifest = json.loads(await store.read_text(posixpath.join(store.run_dir, "manifest.json")))
     assert manifest["a"]["status"] == "completed"
     assert manifest["a"]["error"] is None
@@ -5836,7 +6095,13 @@ async def test_an_empty_attempt_does_not_inherit_the_previous_transcript(tmp_pat
     )
     assert result.summary["completed"] == 2
 
-    store = DagRunStore(backend=LocalFileBackend(), root=str(tmp_path / "runs"), run_id=result.run_id)
+    store = DagRunStore(
+        backend=LocalFileBackend(),
+        root=str(tmp_path / "runs"),
+        run_id=result.run_id,
+        nodes_root=str(tmp_path / "nodes"),
+        registry_root=str(tmp_path),
+    )
     latest = await store.read_text(store.transcript_path("a"))
     assert latest.strip() == "", "attempt 2 published nothing, so the file the judge reads must say nothing"
     assert "attempt 1" not in latest
@@ -5874,6 +6139,8 @@ async def test_a_node_that_names_an_instance_runs_at_that_instance_s_mode() -> N
         backend=_InMemBackend(),
         workdir="/w",
         run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
         session_key="cli:direct",
         mode_for=lambda skey, agent, instance: {"researcher": "deep"}.get(instance),
     )
@@ -5910,6 +6177,8 @@ async def test_a_runner_with_no_mode_source_dispatches_without_one() -> None:
         backend=_InMemBackend(),
         workdir="/w",
         run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
         session_key="cli:direct",
     )
 
@@ -6956,6 +7225,8 @@ async def _run_replanned_dag(
         backend=LocalFileBackend(),
         workdir=str(tmp_path),
         run_root=str(tmp_path / "runs"),
+        nodes_root=str(tmp_path / "nodes"),
+        history_root=str(tmp_path),
         desk=desk,
         judge_node=_judge,
         announce_exception=_announce,
