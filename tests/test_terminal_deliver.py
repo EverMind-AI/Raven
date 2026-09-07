@@ -186,13 +186,25 @@ async def test_native_host_ack_is_real_content_and_requires_no_pty_write():
     assert events[-1][1]["to"] == "raven"
 
 
-async def test_known_provider_startup_never_uses_the_quiet_composer_fallback():
+@pytest.mark.parametrize("provider", ["codex", "claude", "opencode", "hermes", "openclaw", "raven"])
+async def test_known_provider_startup_never_uses_the_quiet_composer_fallback(provider):
     host, _, delivery = setup()
     host.activity.startup_pending = True
+    host.activity.provider = provider
     result = await delivery.wait(host.record.handle, timeout_ms=5000)
     assert not result.satisfied
-    assert result.blocked_reason == "codex-startup-unverified"
+    assert result.blocked_reason == f"{provider}-startup-unverified"
     with pytest.raises(TerminalError) as error:
         await delivery.send(host.record.handle, "task")
     assert error.value.code == "agent_prompt_blocked"
+    assert error.value.data["reason"] == "startup_pending"
     assert host.writes == []
+
+
+async def test_permission_reason_survives_delivery_failure_result():
+    host, _, delivery = setup()
+    host.permission_after_submit = True
+    with pytest.raises(TerminalError) as error:
+        await delivery.send(host.record.handle, "task")
+    assert error.value.data["reason"] == "permission"
+    assert error.value.data["bytesWritten"] > 0
