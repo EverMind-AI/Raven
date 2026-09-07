@@ -108,6 +108,7 @@ $('#modelChip').onclick = () => {
 };
 
 $('#permChip').onclick = () => togglePerm();
+$('#tierChip').onclick = () => toggleTier();
 
 /* Arrows, not references: live.js swaps openCaps for one that loads real data
    first, and a stored reference would keep calling the demo. */
