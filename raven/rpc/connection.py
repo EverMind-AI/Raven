@@ -75,6 +75,11 @@ def unbind_connection(token: Token) -> None:
     state = _state.get()
     if state is not None:
         _live.discard(id(state))
+        for callback in state.pop("on_disconnect", []):
+            try:
+                callback()
+            except Exception:
+                logger.exception("rpc: connection cleanup failed")
         for key, owner in list(_owners.items()):
             if owner is state:
                 del _owners[key]
