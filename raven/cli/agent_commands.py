@@ -398,9 +398,9 @@ def _register_identity_commands(app: typer.Typer) -> None:
         json_output: bool = typer.Option(False, "--json"),
     ):
         """Register a canonical agent identity with the running runtime."""
-        params = {"agent_name": name}
+        params = {"name": name}
         if kind is not None:
-            params["kind_ref"] = kind
+            params["kind"] = kind
         if terminal is not None:
             params["terminal"] = terminal
         _terminal_rpc.run("agents.register", params, environment=environment, json_output=json_output)
@@ -420,7 +420,7 @@ def _register_identity_commands(app: typer.Typer) -> None:
         json_output: bool = typer.Option(False, "--json"),
     ):
         """Show one canonical agent identity."""
-        _terminal_rpc.run("agents.show", {"agent_name": name}, environment=environment, json_output=json_output)
+        _terminal_rpc.run("agents.show", {"name": name}, environment=environment, json_output=json_output)
 
     @app.command("resolve")
     def resolve_identity(

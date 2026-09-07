@@ -69,7 +69,7 @@ class CreateTerminalTool(_TerminalTool):
             try:
                 await self.rpc(
                     "agents.register",
-                    {"agent_name": name, "kind_ref": kind, "terminal": terminal["handle"], "task_ref": worktree},
+                    {"name": name, "kind": kind, "terminal": terminal["handle"], "task_ref": worktree},
                 )
             except TerminalError as exc:
                 try:

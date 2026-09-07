@@ -26,10 +26,10 @@ runner = CliRunner()
         (
             ["register", "--name", "worker", "--kind", "codex", "--terminal", "term_test"],
             "agents.register",
-            {"agent_name": "worker", "kind_ref": "codex", "terminal": "term_test"},
+            {"name": "worker", "kind": "codex", "terminal": "term_test"},
         ),
         (["list"], "agents.list", {}),
-        (["show", "--name", "worker"], "agents.show", {"agent_name": "worker"}),
+        (["show", "--name", "worker"], "agents.show", {"name": "worker"}),
         (["resolve", "--mention", "worker"], "agents.resolve", {"mention": "worker"}),
     ],
 )
