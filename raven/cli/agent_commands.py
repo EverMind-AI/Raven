@@ -125,9 +125,13 @@ def _print_llm_error(content: str) -> bool:
 
 def register(app: typer.Typer) -> None:
     """Attach the ``agent`` command to ``app``."""
+    agent_app = typer.Typer(invoke_without_command=True)
+    app.add_typer(agent_app, name="agent")
+    _register_identity_commands(agent_app)
 
-    @app.command()
+    @agent_app.callback()
     def agent(
+        ctx: typer.Context,
         message: str = typer.Option(None, "--message", "-m", help="Message to send to the agent"),
         session_id: str | None = typer.Option(
             None,
@@ -166,6 +170,10 @@ def register(app: typer.Typer) -> None:
         ),
     ):
         """Run a one-shot agent turn (requires -m); interactive chat lives in `raven tui`."""
+        if ctx.invoked_subcommand is not None:
+            if message is not None:
+                raise typer.BadParameter("--message cannot be combined with an identity subcommand")
+            return
         if sum((session_id is not None, continue_, resume is not None)) > 1:
             raise typer.BadParameter("--session, --continue and --resume are mutually exclusive")
 
@@ -376,6 +384,52 @@ def register(app: typer.Typer) -> None:
         # when that hazard is live, so this path just returns normally.
         if _ONE_SHOT_EXIT["code"]:
             raise typer.Exit(_ONE_SHOT_EXIT["code"])
+
+
+def _register_identity_commands(app: typer.Typer) -> None:
+    from raven.cli import _terminal_rpc
+
+    @app.command("register")
+    def register_identity(
+        name: str = typer.Option(..., "--name"),
+        kind: str | None = typer.Option(None, "--kind"),
+        terminal: str | None = typer.Option(None, "--terminal"),
+        environment: str | None = typer.Option(None, "--environment"),
+        json_output: bool = typer.Option(False, "--json"),
+    ):
+        """Register a canonical agent identity with the running runtime."""
+        params = {"name": name}
+        if kind is not None:
+            params["kind"] = kind
+        if terminal is not None:
+            params["terminal"] = terminal
+        _terminal_rpc.run("agents.register", params, environment=environment, json_output=json_output)
+
+    @app.command("list")
+    def list_identities(
+        environment: str | None = typer.Option(None, "--environment"),
+        json_output: bool = typer.Option(False, "--json"),
+    ):
+        """List registered agent identities, including orphan records."""
+        _terminal_rpc.run("agents.list", {}, environment=environment, json_output=json_output)
+
+    @app.command("show")
+    def show_identity(
+        name: str = typer.Option(..., "--name"),
+        environment: str | None = typer.Option(None, "--environment"),
+        json_output: bool = typer.Option(False, "--json"),
+    ):
+        """Show one canonical agent identity."""
+        _terminal_rpc.run("agents.show", {"name": name}, environment=environment, json_output=json_output)
+
+    @app.command("resolve")
+    def resolve_identity(
+        mention: str = typer.Option(..., "--mention"),
+        environment: str | None = typer.Option(None, "--environment"),
+        json_output: bool = typer.Option(False, "--json"),
+    ):
+        """Resolve an exact canonical name or alias."""
+        _terminal_rpc.run("agents.resolve", {"mention": mention}, environment=environment, json_output=json_output)
 
 
 __all__ = ["register"]

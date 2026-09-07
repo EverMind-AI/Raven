@@ -56,10 +56,18 @@ class IdentitySegmentBuilder:
         # nowhere else: one resident surface, where the parameter table lives,
         # where it can be narrowed per turn, and where the model is standing
         # when it has to choose. A second listing here would drift against it.
-        return Segment(
-            text=render.identity_text(
-                self._workspace,
-                specialists=self._specialists(),
-                dispatch_tools=render.live_dispatch_tools(self._get_tool_definitions),
-            )
+        text = render.identity_text(
+            self._workspace,
+            specialists=self._specialists(),
+            dispatch_tools=render.live_dispatch_tools(self._get_tool_definitions),
         )
+        tools = set(render.collect_tool_names(self._get_tool_definitions) or [])
+        if {"create_terminal", "send_terminal", "resolve_agent"} <= tools:
+            text += (
+                "\n\nUse create_terminal when the user wants a visible Claude Code or Codex peer in this task. "
+                "Give it a unique canonical name; use resolve_agent to find existing peers and send_terminal "
+                "to deliver plain-text tasks or summaries by name. Plain-text hand-over is the V1 form. "
+                "Terminal acceptance means delivery to the composer; only a matching content ACK confirms "
+                "the peer read the message. Keep ordinary Raven sub-agent work on the existing delegation tools."
+            )
+        return Segment(text=text)

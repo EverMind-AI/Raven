@@ -133,6 +133,10 @@ serve_commands.register(app)
 tracing_commands.register(app)
 upgrade_commands.register(app)
 
+from raven.cli.terminal_commands import terminal_app
+
+app.add_typer(terminal_app, name="terminal")
+
 
 # ============================================================================
 # Subcommand registrations

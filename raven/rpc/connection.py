@@ -51,7 +51,7 @@ _live: set[int] = set()
 # outlive the socket it names.
 _owners: dict[str, dict[str, Any]] = {}
 
-SendFrame = Callable[[dict[str, Any]], Awaitable[None]]
+SendFrame = Callable[[dict[str, Any] | bytes], Awaitable[None]]
 
 # What a declared surface may look like: a short lowercase token ("tui",
 # "page", "shell", "webui"). Bounded so an arbitrary client cannot write
@@ -75,6 +75,11 @@ def unbind_connection(token: Token) -> None:
     state = _state.get()
     if state is not None:
         _live.discard(id(state))
+        for callback in state.pop("on_disconnect", []):
+            try:
+                callback()
+            except Exception:
+                logger.exception("rpc: connection cleanup failed")
         for key, owner in list(_owners.items()):
             if owner is state:
                 del _owners[key]

@@ -18,6 +18,26 @@ from raven.config.loader import set_config_path
 runner = CliRunner()
 
 
+def test_status_json_uses_runtime_identity(monkeypatch):
+    import json
+    from unittest.mock import AsyncMock
+
+    from raven.cli import _terminal_rpc
+
+    envelope = {
+        "id": "status",
+        "ok": True,
+        "result": {"runtime": {"runtimeId": "remote"}},
+        "_meta": {"runtimeId": "remote"},
+    }
+    request = AsyncMock(return_value=envelope)
+    monkeypatch.setattr(_terminal_rpc, "request", request)
+    result = runner.invoke(app, ["status", "--json"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == envelope
+    assert request.await_args.args == ("runtime.status", {})
+
+
 @pytest.fixture
 def tmp_config(tmp_path: Path) -> Path:
     cfg = tmp_path / "config.json"

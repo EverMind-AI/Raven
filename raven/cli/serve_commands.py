@@ -318,7 +318,7 @@ async def _serve_main(port: int, open_browser: bool) -> None:
     # the /oauth/callback route below stays for registrations made under the
     # old scheme, which still point at a gateway port.
 
-    stack = await build_rpc_stack(gateway.broadcast)
+    stack = await build_rpc_stack(gateway.broadcast, enable_terminals=True)
     gateway.dispatcher = stack.dispatcher
 
     app = build_app(
@@ -327,6 +327,8 @@ async def _serve_main(port: int, open_browser: bool) -> None:
         deliverables=stack.deliverables,
         agent_loop_factory=lambda: stack.agent_loop,
     )
+    if stack.terminal_services is not None:
+        stack.terminal_services.attach(app, bound_port)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", bound_port)

@@ -14,8 +14,16 @@ def register(app: typer.Typer) -> None:
     """Attach the ``status`` command to ``app``."""
 
     @app.command()
-    def status():
+    def status(
+        json_output: bool = typer.Option(False, "--json"),
+        environment: str | None = typer.Option(None, "--environment"),
+    ):
         """Show Raven status."""
+        if json_output or environment is not None:
+            from raven.cli import _terminal_rpc
+
+            _terminal_rpc.run("runtime.status", {}, environment=environment, json_output=json_output)
+            return
         from raven.config.loader import (
             ConfigReadError,
             get_config_path,

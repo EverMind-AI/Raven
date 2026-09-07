@@ -108,6 +108,7 @@ class WsGateway:
         self.session_cookie = os.environ.get("RAVEN_SERVE_COOKIE") or secrets.token_urlsafe(32)
         self._nonces: dict[str, float] = {}
         self._sockets: set[web.WebSocketResponse] = set()
+        self._connection_states: dict[web.WebSocketResponse, dict] = {}
         self.dispatcher: Any = None
         self.agent_loop_factory: Any = None
         self.port: int = DEFAULT_PORT
@@ -137,7 +138,16 @@ class WsGateway:
         # bytes go out as a binary WS message: a screencast frame is an image,
         # and base64-inside-JSON costs a third more wire and a decode per frame.
         if isinstance(frame, bytes | bytearray):
+            terminal_handle = None
+            if frame[:4] == b"RVT1":
+                from raven.rpc.terminal_stream import decode_frame
+
+                terminal_handle = decode_frame(frame)[0]["handle"]
             for ws in list(self._sockets):
+                if terminal_handle is not None and terminal_handle not in self._connection_states.get(ws, {}).get(
+                    "terminal_subscriptions", set()
+                ):
+                    continue
                 try:
                     await ws.send_bytes(bytes(frame))
                 except Exception:
@@ -289,6 +299,7 @@ class WsGateway:
         from raven.rpc import connection
 
         conn_token = connection.bind_connection()
+        self._connection_states[ws] = connection.current_state()
         # ...and one way to reach this socket alone, for the frames that
         # interrupt a single conversation rather than stream to whoever is
         # subscribed (see connection.conversation_scoped).
@@ -316,21 +327,28 @@ class WsGateway:
                 task.add_done_callback(pending.discard)
         finally:
             connection.unbind_connection(conn_token)
+            self._connection_states.pop(ws, None)
             self._sockets.discard(ws)
             for task in pending:
                 task.cancel()
             logger.info("serve: ws client disconnected ({} active)", len(self._sockets))
         return ws
 
-    async def _send_one(self, ws: web.WebSocketResponse, frame: dict[str, Any]) -> None:
+    async def _send_one(self, ws: web.WebSocketResponse, frame: dict[str, Any] | bytes) -> None:
         """Send one frame to a single socket. Raises if that socket is gone --
         the caller decides whether to fall back to :meth:`broadcast`."""
         if ws.closed:
             raise ConnectionResetError("socket closed")
+        if isinstance(frame, bytes):
+            await ws.send_bytes(frame)
+            return
         await ws.send_str(json.dumps(frame, ensure_ascii=False))
 
     async def _dispatch_one(self, ws: web.WebSocketResponse, frame: dict[str, Any]) -> None:
+        from raven.contracts.terminal import RuntimeInfo
+
         response = await self.dispatcher.dispatch(frame)
+        response["_meta"] = RuntimeInfo().model_dump(by_alias=True)
         if frame.get("id") is None:
             return
         try:

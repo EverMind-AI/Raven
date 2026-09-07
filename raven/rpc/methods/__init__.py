@@ -122,6 +122,7 @@ def register_aligned_methods_except_system(
     build_error: "RpcError | None" = None,
     send_frame: "Any" = None,
     default_channel: str = "tui",
+    terminal_services: "Any" = None,
 ) -> None:
     """Register every aligned RPC handler EXCEPT system.* on a dispatcher.
 
@@ -143,7 +144,10 @@ def register_aligned_methods_except_system(
     register_instance_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_dag_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_session_methods(dispatcher, agent_loop_factory=agent_loop_factory)
-    register_terminal_methods(dispatcher)
+    if terminal_services is None:
+        register_terminal_methods(dispatcher)
+    else:
+        terminal_services.register(dispatcher)
     register_stub_methods(dispatcher)
     # model.{options,save_key,disconnect,add_model,remove_model,endpoints,
     # add_endpoint,remove_endpoint}: real handlers
