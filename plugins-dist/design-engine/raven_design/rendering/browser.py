@@ -338,8 +338,6 @@ class BrowserAdapter:
                     }
                 )
             _append_suspicious_text_warning(warnings, runtime_probe)
-            _append_image_crop_warning(warnings, runtime_probe)
-            _append_opening_visual_warning(warnings, runtime_probe)
             return _BrowserResult(
                 runtime_snapshot=runtime_snapshot,
                 differences=differences,
@@ -364,8 +362,6 @@ class BrowserAdapter:
         warnings: list[dict[str, Any]],
     ) -> _BrowserResult:
         _append_suspicious_text_warning(warnings, runtime_probe)
-        _append_image_crop_warning(warnings, runtime_probe)
-        _append_opening_visual_warning(warnings, runtime_probe)
         unresponsive = [
             record
             for record in action_records
@@ -509,52 +505,6 @@ class BrowserAdapter:
         return any(
             hostname == allowed.lower().rstrip(".") or hostname.endswith(f".{allowed.lower().rstrip('.')}")
             for allowed in allowlist
-        )
-
-
-def _append_opening_visual_warning(
-    warnings: list[dict[str, Any]],
-    runtime: dict[str, Any],
-) -> None:
-    visual = runtime.get("opening_visual")
-    if not visual:
-        return
-    overlap = visual.get("headline_overlap")
-    region = visual.get("region_under_headline")
-    line = f"opening visual: {visual.get('src')} — {visual.get('viewport_fraction')}% of viewport"
-    if overlap is not None:
-        line += f"; headline overlap {overlap}%"
-    if region:
-        line += f"; region under headline: {region}"
-    warnings.append(
-        {
-            "code": "opening_visual",
-            "message": "Measured facts about the largest visual in the opening viewport.",
-            "details": [line],
-        }
-    )
-
-
-def _append_image_crop_warning(
-    warnings: list[dict[str, Any]],
-    runtime: dict[str, Any],
-) -> None:
-    crops = runtime.get("image_crops") or []
-    if crops:
-        warnings.append(
-            {
-                "code": "image_cropped",
-                "message": (
-                    "Images lose part of their pixels to object-fit: check that the crop is intended, "
-                    "that nothing is cut mid-text, and that width/height attributes are not overriding the CSS box."
-                ),
-                "details": [
-                    f"{crop['src']}: {crop['natural'][0]}x{crop['natural'][1]} shown in a "
-                    f"{crop['box'][0]}x{crop['box'][1]} box with object-fit {crop['object_fit']}, "
-                    f"{round(crop['cropped_fraction'] * 100)}% cropped"
-                    for crop in crops[:10]
-                ],
-            }
         )
 
 

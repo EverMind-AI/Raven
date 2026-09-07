@@ -22,16 +22,14 @@ URL、媒体来源和发布历史不因介质改变。先读 [领域模式](refe
 `$build-polished-visual-frontends`，并完成以下记录；本域不能以内容 authority、框架选择或构建成功
 替代它：
 
-1. 锁定 `identity_route` 与 `layout_route` 并写入 `REFERENCE-CONTRACT`（定义见 `$build-polished-visual-frontends`）；
-   两条路线各自锁定，一条不能代替另一条。保存实际来源画面和 3–6 条可观察关系，
+1. 锁定唯一 `reference_route` 与 `REFERENCE-CONTRACT`。保存实际来源画面和 3–6 条可观察关系，
    至少覆盖宏观结构／阅读顺序、层级／密度、主对象／图像角色；模板、标杆或品牌名称不算证据。
 2. 建立 `VISUAL-THESIS` 与 `MASTER-VISUAL-CONTRACT`。在写页面 DOM、布局 CSS 或改造模板版式前，
    先调用 `image_generate` 产出并查看项目级主视觉母版；已有合法真实资产只有在完成同一语义工作时
    才可替代。每个主要页面族在布局前填写 `page_family / opening_job / visual_role / asset_lineage /
    reason / final_evidence`，`visual_role` 只用 `dominant_background / integrated_visual_field /
    content_first` 并默认第一种。如果最终像素表明大背景妨碍了阅读，调整文字大小或位置，或重新
-   生成背景，而不是放弃大背景；实现便利、资产成本、没有真图、担心可读性或模型偏好不是选择
-   `integrated_visual_field` 或 `content_first` 的理由；`visual_role` 声明须与渲染返回的 `opening_visual` 读数相符。大背景建立页面族开场，不要求每个
+   生成背景，而不是放弃大背景；实现便利、资产成本、没有真图或模型偏好不是理由。大背景建立页面族开场，不要求每个
    后续区块铺图；后续用同源资产、排印、内容结构或交互延续身份，不能退回默认内容块。
 3. 遇到对比、评测或选型任务，先判断读者意图属于
    `decision_support / neutral_comparison / benchmark_report / editorial_analysis`，关键词本身不决定
@@ -45,8 +43,6 @@ URL、媒体来源和发布历史不因介质改变。先读 [领域模式](refe
    专业库或 renderer 负责。所有生成图在 provenance 记录真实性边界；纯氛围背景只记录 provenance，
    不在成品展示制作过程。只有省略说明会造成事实误认时才用内容语境内的短说明消除误认，说明后
    仍会误认则不得使用。不存在手绘 SVG、CSS 装饰或最终占位图降级路线。
-   页头、favicon 与 og 图的标识槽位按 `$visual-artifact-design` 的既有身份盘点：主体已有标识必须用它，没有
-   必须设计出来；简报里"无 logo / 自制标记"之类结论不是证据，自己去出处查看像素。
 5. 代表画面直接使用已经取得的真实／生成资产，并逐条对照参考合同。`generated_visual` 只有在
    成功调用、查看原图、记录 lineage、进入最终文件且被产品代码引用后才算使用；生成失败是能力
    缺口，不授权用 SVG、Canvas 或 CSS 模拟。
@@ -211,7 +207,7 @@ URL、媒体来源和发布历史不因介质改变。先读 [领域模式](refe
 - [ ] 所有 `used` 工具和自定义边界有完整证据。
 - [ ] Web 的唯一参考路线、可观察关系、资产路由、代表帧与终态像素已结账；需要生图时有真实
       API、provenance、最终文件与产品引用证据，主视觉在布局前完成，每个主要页面族都有经任务
-      证明的视觉角色与同源资产关系（与 `opening_visual` 读数一致，`uniform` 已在 `reason` 说明），表现型精致视觉没有用手绘 SVG/CSS/Canvas 兜底，纯氛围图只
+      证明的视觉角色与同源资产关系，表现型精致视觉没有用手绘 SVG/CSS/Canvas 兜底，纯氛围图只
       记录 provenance。
 - [ ] `VISUAL-THESIS`、`MASTER-VISUAL-CONTRACT`、`SURFACE-MANIFEST`、
       `COMPONENT-BEHAVIOR-MAP`、替图测试与模板距离测试均已按最终像素和真实操作回填，不存在

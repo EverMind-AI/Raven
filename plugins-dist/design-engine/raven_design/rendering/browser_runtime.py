@@ -145,7 +145,7 @@ _FRAME_STATE = """
 """
 
 _RUNTIME_METADATA = """
-async () => {
+() => {
   const root = document.documentElement;
   const probe = window.__RAVEN_RENDER_PROBE__ || {};
   const animations = document.getAnimations({ subtree: true });
@@ -173,112 +173,6 @@ async () => {
       if (text.includes("[object Object]")) tokens.push("[object Object]");
       return tokens;
     })(),
-    opening_visual: await (async () => {
-      const vw = window.innerWidth, vh = window.innerHeight;
-      const clip = r => {
-        const x1 = Math.max(0, r.left), y1 = Math.max(0, r.top);
-        const x2 = Math.min(vw, r.right), y2 = Math.min(vh, r.bottom);
-        return x2 > x1 && y2 > y1 ? { x1, y1, x2, y2, area: (x2 - x1) * (y2 - y1) } : null;
-      };
-      const visuals = [];
-      for (const el of document.querySelectorAll("img, video, canvas, svg, picture, *")) {
-        const tag = el.tagName.toLowerCase();
-        let src = null;
-        if (tag === "img") src = el.currentSrc || el.getAttribute("src");
-        else if (tag === "video") src = el.currentSrc || el.getAttribute("poster") || "video";
-        else if (tag === "canvas" || tag === "svg") src = tag;
-        else {
-          const bg = getComputedStyle(el).backgroundImage;
-          const m = bg && bg !== "none" ? bg.match(/url\\(["']?([^"')]+)/) : null;
-          if (m) src = m[1];
-        }
-        if (!src) continue;
-        const box = clip(el.getBoundingClientRect());
-        if (box) visuals.push({ el, url: String(src), src: String(src).split("/").pop().split("?")[0], box });
-      }
-      if (!visuals.length) return null;
-      visuals.sort((a, b) => b.box.area - a.box.area);
-      const top = visuals[0];
-      const headline = [...document.querySelectorAll("h1, h2, [role=heading]")]
-        .map(h => ({ h, box: clip(h.getBoundingClientRect()) }))
-        .filter(x => x.box)
-        .sort((a, b) => parseFloat(getComputedStyle(b.h).fontSize) - parseFloat(getComputedStyle(a.h).fontSize))[0];
-      let overlap = null, region = null;
-      if (headline) {
-        const a = headline.box, b = top.box;
-        const ix = Math.max(0, Math.min(a.x2, b.x2) - Math.max(a.x1, b.x1));
-        const iy = Math.max(0, Math.min(a.y2, b.y2) - Math.max(a.y1, b.y1));
-        overlap = a.area ? Math.round(100 * ix * iy / a.area) : 0;
-        const frac = v => v === "center" ? 0.5 : (v === "left" || v === "top") ? 0
-          : (v === "right" || v === "bottom") ? 1 : /%$/.test(v) ? parseFloat(v) / 100 : null;
-        const bitmap = async () => {
-          const tag = top.el.tagName.toLowerCase();
-          const cs = getComputedStyle(top.el);
-          if (tag === "img") {
-            if (!top.el.naturalWidth || cs.objectFit !== "cover") return null;
-            const p = cs.objectPosition.trim().split(/\\s+/);
-            return { im: top.el, fx: frac(p[0]), fy: frac(p[1] || p[0]) };
-          }
-          if (tag === "video" || tag === "canvas" || tag === "svg") return null;
-          if (cs.backgroundSize !== "cover") return null;
-          const p = cs.backgroundPosition.trim().split(/\\s+/);
-          const im = await new Promise(resolve => {
-            const i = new Image();
-            i.onload = () => resolve(i.naturalWidth ? i : null); i.onerror = () => resolve(null);
-            setTimeout(() => resolve(null), 2000);
-            i.src = top.url;
-          });
-          return im ? { im, fx: frac(p[0]), fy: frac(p[1] || p[0]) } : null;
-        };
-        const hit = overlap > 0 ? await bitmap() : null;
-        if (hit && hit.fx !== null && hit.fy !== null) {
-          try {
-            const img = hit.im, r = top.el.getBoundingClientRect();
-            const scale = Math.max(r.width / img.naturalWidth, r.height / img.naturalHeight);
-            const offX = (img.naturalWidth * scale - r.width) * hit.fx, offY = (img.naturalHeight * scale - r.height) * hit.fy;
-            const c = document.createElement("canvas");
-            const w = 32, hgt = 32; c.width = w; c.height = hgt;
-            const sx = (Math.max(a.x1, b.x1) - r.left + offX) / scale;
-            const sy = (Math.max(a.y1, b.y1) - r.top + offY) / scale;
-            const sw = ix / scale, sh = iy / scale;
-            const ctx = c.getContext("2d");
-            ctx.drawImage(img, sx, sy, Math.max(1, sw), Math.max(1, sh), 0, 0, w, hgt);
-            const d = ctx.getImageData(0, 0, w, hgt).data;
-            let sum = 0, sq = 0, n = 0;
-            for (let i = 0; i < d.length; i += 4) { const l = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]; sum += l; sq += l * l; n++; }
-            const mean = sum / n, std = Math.sqrt(Math.max(0, sq / n - mean * mean));
-            region = std < 6 ? "uniform" : "textured";
-          } catch (e) { region = null; }
-        }
-      }
-      return {
-        src: top.src,
-        viewport_fraction: Math.round(100 * top.box.area / (vw * vh)),
-        headline_overlap: overlap,
-        region_under_headline: region
-      };
-    })(),
-    image_crops: [...document.querySelectorAll("img")].flatMap(img => {
-      const box = img.getBoundingClientRect();
-      const fit = getComputedStyle(img).objectFit;
-      if (!img.naturalWidth || !img.naturalHeight || !box.width || !box.height) return [];
-      if (fit !== "cover" && fit !== "none") return [];
-      if (box.width * box.height >= 0.8 * window.innerWidth * window.innerHeight) return [];
-      const scale = fit === "cover"
-        ? Math.max(box.width / img.naturalWidth, box.height / img.naturalHeight)
-        : 1;
-      const shown = Math.min(box.width, img.naturalWidth * scale) * Math.min(box.height, img.naturalHeight * scale);
-      const full = img.naturalWidth * scale * img.naturalHeight * scale;
-      const cropped = full ? 1 - shown / full : 0;
-      if (cropped < 0.1) return [];
-      return [{
-        src: (img.currentSrc || img.getAttribute("src") || "").split("/").pop(),
-        natural: [img.naturalWidth, img.naturalHeight],
-        box: [Math.round(box.width), Math.round(box.height)],
-        object_fit: fit,
-        cropped_fraction: Math.round(cropped * 100) / 100
-      }];
-    }),
     probe
   };
 }
