@@ -4,7 +4,7 @@ import { current as currentSession } from '../../shell/session'
 import { plainTitle as stripTitle } from '../rail/title'
 import { instanceCtxStatus, toInstanceCtx } from './history'
 
-import type { AgentRow, AgentsSource, InstanceRow, OpenItem, SubagentRow } from './types'
+import type { AgentRow, AgentsSource, InstanceCtx, InstanceRow, OpenItem, SubagentRow } from './types'
 
 /* Page state, outside React on purpose: the legacy shell drives this view
  * imperatively (drawWs mounts and unmounts it per redraw, the dag sheet opens
@@ -697,9 +697,17 @@ function emptyStage(box: HTMLElement, text: string): void {
   box.appendChild(e)
 }
 
+const drawnStage = new WeakMap<HTMLElement, string>()
+
 function failStage(box: HTMLElement, e: unknown): void {
   stageFresh = true
   emptyStage(box, (e as Error)?.message || String(e))
+  /* The box no longer holds what the print says it does -- it holds this error.
+     Left standing, the print would refuse the paint that clears the error: a
+     stalled running turn recovers by answering the SAME history again, so the
+     recovery read is exactly the one the guard would swallow, and the pane would
+     sit on a transient failure until the transcript or the status changed. */
+  drawnStage.delete(box)
 }
 
 export function paintInstance(box: HTMLElement, agent: string, handle: string): void {
@@ -723,11 +731,15 @@ export function paintInstance(box: HTMLElement, agent: string, handle: string): 
       /* Its own empty note, like the dag stage below. Left out, the shared
          renderer falls back to the list's `agents_none` -- "no background
          work yet" -- under the row the reader has just opened. */
+      const key = `in:${agent}:${handle}`
+      const print = stagePrint(key, ctx)
+      if (drawnStage.get(box) === print) return
       src.stagePaint?.(
         box,
         ctx,
-        { key: `in:${agent}:${handle}`, empty: t('gui.ws.instance_empty'), reset: stageFresh },
+        { key, empty: t('gui.ws.instance_empty'), reset: stageFresh },
       )
+      drawnStage.set(box, print)
       stageFresh = false
     })
     .catch((e: unknown) => {
@@ -735,6 +747,32 @@ export function paintInstance(box: HTMLElement, agent: string, handle: string): 
       failStage(box, e)
     })
 }
+
+/* What the last paint of this box actually drew.
+ *
+ * A repaint is not free: the renderer holds a running turn's last assistant
+ * message provisionally, and re-feeding it tears that row's node down and
+ * builds a new one. Measured in the browser against the real renderer -- the
+ * same snapshot painted three times gave three different DOM nodes for the same
+ * sentence.
+ *
+ * That is fine while the answer is growing, because the row genuinely changes.
+ * It is not fine when nothing changed, and the pane repaints every 2s for as
+ * long as the instance reads `run` (`InstanceConversation`'s poll effect). A
+ * turn that stops producing output without ending -- a tool call that failed and
+ * a model that then narrates instead of retrying -- leaves the last thing it
+ * said being rebuilt every two seconds, indefinitely. On screen that is a line
+ * of text flickering.
+ *
+ * So an unchanged snapshot costs no paint. The same rule `refresh` and
+ * `refreshInstances` already apply to their own reads, for the same reason and
+ * with the same shape: a print of what was drawn, compared before drawing it
+ * again. Keyed per box, because two panes can show two instances at once.
+ */
+/* Everything the paint reads, and nothing else. `status` is in it because it
+   decides how much of the snapshot is held rather than committed, so the same
+   messages under a different status must still repaint. */
+const stagePrint = (key: string, ctx: InstanceCtx): string => `${key}|${ctx.status || ''}|${JSON.stringify(ctx.messages)}`
 
 export function paintInstanceDirect(box: HTMLElement, agent: string, handle: string): void {
   const src = source()
@@ -752,7 +790,17 @@ export function paintInstanceDirect(box: HTMLElement, agent: string, handle: str
       const optimistic = chat.pending.filter((text) => !actualUser.has(text))
       if (optimistic.length !== chat.pending.length) setDirect(agent, handle, { ...chat, pending: optimistic })
       ctx.messages.push(...optimistic.map((text) => ({ role: 'user', text })))
-      src.stagePaint?.(box, ctx, { key: `desk:${agent}:${handle}`, reset: box.dataset.instanceKey !== `${agent}:${handle}` })
+      const key = `desk:${agent}:${handle}`
+      const reset = box.dataset.instanceKey !== `${agent}:${handle}`
+      /* The key is in the print, so pointing the box at another instance
+         changes it even when the two say the same words -- no separate reset
+         exception, which measured as dead: `reset` can only be true for a box
+         that is new or held a different handle, and both of those have a
+         different print already. */
+      const print = stagePrint(key, ctx)
+      if (drawnStage.get(box) === print) return
+      src.stagePaint?.(box, ctx, { key, reset })
+      drawnStage.set(box, print)
       box.dataset.instanceKey = `${agent}:${handle}`
     })
     .catch((e: unknown) => {
