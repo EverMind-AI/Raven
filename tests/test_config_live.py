@@ -20,7 +20,12 @@ import os
 from pathlib import Path
 
 from raven.config import live as live_module
-from raven.config.live import LiveConfig, disabled_playbook_names, disabled_tool_names
+from raven.config.live import (
+    LiveConfig,
+    disabled_playbook_names,
+    disabled_tool_names,
+    exec_allow_destructive_commands,
+)
 
 
 def _write(path: Path, payload: dict) -> None:
@@ -263,6 +268,26 @@ class TestExecExtraDenySlice:
 
         live = self._live(tmp_path, {"tools": {"web": {"providers": {"tavily": {"apiKey": "tv"}}}}})
         assert web_provider_key(live, "bing") == ""
+
+
+class TestExecDestructiveSwitch:
+    def test_reads_the_camel_case_setting_and_updates(self, tmp_path):
+        path = tmp_path / "config.json"
+        _write(path, {"tools": {"exec": {"allowDestructiveCommands": True}}})
+        live = LiveConfig(path)
+        assert exec_allow_destructive_commands(live) is True
+
+        _write(path, {"tools": {"exec": {"allowDestructiveCommands": False}}})
+        assert exec_allow_destructive_commands(live) is False
+
+    def test_accepts_the_schema_spelling_and_rejects_invalid_values(self, tmp_path):
+        path = tmp_path / "config.json"
+        _write(path, {"tools": {"exec": {"allow_destructive_commands": True}}})
+        live = LiveConfig(path)
+        assert exec_allow_destructive_commands(live) is True
+
+        _write(path, {"tools": {"exec": {"allow_destructive_commands": "yes"}}})
+        assert exec_allow_destructive_commands(live) is None
 
 
 class TestRejectedCandidatesKeepTheLastAdmittedSlice:

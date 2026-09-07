@@ -755,6 +755,22 @@ async def test_build_rpc_spine_honors_configured_pool_sizes():
         await teardown()
 
 
+async def test_a_pool_sized_zero_lets_every_turn_in_at_once():
+    """A deployment that wants no queuing says 0; the lane holds a gate that
+    never waits, shaped like the semaphore it replaces."""
+    from raven.spine.scheduler import OriginPools
+
+    pools = OriginPools(user=0, system=0)
+    req = TurnRequest(origin=Origin.USER, source=_src("cli", "c"), text="hi")
+    gate = pools.for_request(req)
+    entered = 0
+    async with gate:
+        async with gate:
+            async with gate:
+                entered = 3
+    assert entered == 3 and gate.locked() is False
+
+
 async def test_the_boundary_carries_the_delivery_identity_and_text():
     """The delivery row belongs at the moment the turn actually starts, so the
     boundary that marks that moment has to carry the identity -- and the

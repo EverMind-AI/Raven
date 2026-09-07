@@ -96,7 +96,7 @@ def test_the_schema_offers_a_role_and_never_asks_for_one() -> None:
     role = _schema()["properties"]["role"]
 
     assert "role" not in _schema()["required"]
-    assert role["enum"] == list(PAGE_ROLES)
+    assert role["enum"] == [*PAGE_ROLES, None]
     for word in PAGE_ROLES:
         assert f"`{word}`" in role["description"], f"the schema names no meaning for {word}"
     assert "Leave it out" in role["description"], "nothing tells the author when a page has no role"
@@ -208,6 +208,77 @@ async def test_a_page_naming_a_prototype_survives_the_route_to_the_tool(tmp_path
     assert "unhashable" not in body
     assert not body.startswith("Error")
     assert json.loads(body)["pages"]
+
+
+async def test_a_page_saying_null_for_what_it_has_no_answer_to_is_accepted(tmp_path: Path) -> None:
+    """Every optional page field takes null as it takes an absent key.
+
+    A model with nothing to put in `anti_pattern` writes null as readily as it leaves
+    the key out, and both readers already treat the two alike. Declared `string`
+    alone, one null refused the whole outline through the registry, once per page --
+    three live runs lost an outline round to it (amber twice, a Shanghai deck once),
+    each costing a minutes-long re-plan. The required pair, `page` and `claim`, still
+    refuses null: a page has to be numbered and has to say something.
+    """
+    from raven.agent.tools.registry import ToolRegistry
+
+    _deck(tmp_path)
+    pages = _pages("cover", None)
+    pages[1].update(
+        carries=None,
+        layout=None,
+        layers=None,
+        anti_pattern=None,
+        figures=None,
+        says=None,
+        section=None,
+        role=None,
+        needs=None,
+    )
+
+    registry = ToolRegistry()
+    registry.register(PptOutlineTool(tmp_path))
+    call = {"project": "deck", "takeaway": "the audience must believe this one thing", "pages": pages}
+    body = str(await registry.execute("ppt_outline", call))
+
+    assert not body.startswith("Error"), body
+    assert len(json.loads(body)["pages"]) == 2
+
+    refused = str(await registry.execute("ppt_outline", {**call, "pages": [{**pages[0], "claim": None}, pages[1]]}))
+    assert refused.startswith("Error") and "pages[0].claim should be string" in refused
+
+
+def test_the_declared_schema_takes_null_in_every_optional_page_field_as_json_schema(tmp_path: Path) -> None:
+    """The nullable promise holds under a standards-compliant validator, not only Raven's.
+
+    The parameters reach a provider as JSON Schema, where `type` and `enum` apply
+    together: `["string", "null"]` on `layout` promised nothing while its enum listed
+    only the structure ids, so a provider validating the call refused the null that
+    Raven's own validator had let through.
+    """
+    from jsonschema import Draft202012Validator
+
+    schema = PptOutlineTool(tmp_path).parameters
+    Draft202012Validator.check_schema(schema)
+    validator = Draft202012Validator(schema)
+    page = {
+        "page": 1,
+        "claim": "the audience must believe this one thing",
+        "carries": None,
+        "layout": None,
+        "layers": None,
+        "anti_pattern": None,
+        "figures": None,
+        "says": None,
+        "section": None,
+        "role": None,
+        "needs": None,
+    }
+    call = {"project": "deck", "takeaway": "the audience must believe this one thing", "pages": [page]}
+
+    errors = [error.message for error in validator.iter_errors(call)]
+    assert not errors, errors
+    assert list(validator.iter_errors({**call, "pages": [{**page, "claim": None}]}))
 
 
 def test_a_type_naming_two_kinds_casts_and_validates_as_either() -> None:

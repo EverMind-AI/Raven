@@ -359,6 +359,8 @@ export interface ModelOptionProvider {
   models?: string[]
   name: string
   needs_api_base?: boolean
+  protocol_overrides?: Record<string, string>
+  protocols?: Record<string, string>
   slug: string
   total_models?: number
   warning?: string

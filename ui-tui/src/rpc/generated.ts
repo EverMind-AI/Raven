@@ -869,6 +869,18 @@ export interface ModelOptionProvider {
   auth_type: string;
   key_env?: string;
   models: string[];
+  /**
+   * Effective API protocol keyed by model id.
+   */
+  protocols?: {
+    [k: string]: string;
+  };
+  /**
+   * Explicit user protocol overrides keyed by model id.
+   */
+  protocol_overrides?: {
+    [k: string]: string;
+  };
   total_models: number;
   needs_api_base: boolean;
   warning: string;
@@ -2322,6 +2334,22 @@ export interface ModelOptionsResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ModelSetProtocolParams".
+ */
+export interface ModelSetProtocolParams {
+  slug: string;
+  model: string;
+  protocol: 'auto' | 'chat' | 'responses' | 'anthropic';
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ModelSetProtocolResult".
+ */
+export interface ModelSetProtocolResult {
+  provider: ModelOptionProvider;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "ModelSaveKeyParams".
  */
 export interface ModelSaveKeyParams {
@@ -2789,6 +2817,9 @@ export interface SubagentsInstanceSetModeParams {
   agent: string;
   handle: string;
   mode?: string;
+  /**
+   * Drop this instance's override, after which the session's tier is what the next dispatch runs at. mode wins when both are given: naming one is a statement, clearing is the absence of one. session.set_mode resolves the pair the other way, because there clear selects the configured default.
+   */
   clear?: boolean;
 }
 /**
@@ -2817,6 +2848,9 @@ export interface SubagentsInstanceSetModeResult {
 export interface SessionSetModeParams {
   session_key: string;
   mode?: string;
+  /**
+   * Drop the session override and go back to the configured default. Wins over mode when both are given, the opposite of subagents.instance.set_mode -- these are different operations: this one selects a tier, that one removes an override.
+   */
   clear?: boolean;
 }
 /**

@@ -27,10 +27,10 @@ from loguru import logger
 
 DEFAULT_PORT = 18792
 _PORT_PROBE_SPAN = 20
-# A sign-in nonce is a live credential until redeemed. Long enough for a
-# browser to launch and load, short enough that one left in scrollback is
-# worthless by the time anyone reads it.
-_NONCE_TTL_S = 120.0
+# A sign-in nonce is a live credential until redeemed. The browser may be
+# opened later from another device, while the durable session cookie remains
+# the credential used after the one-time exchange.
+_NONCE_TTL_S = 30 * 60.0
 
 _AUTH_PAGE = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Raven</title></head>
@@ -109,15 +109,15 @@ class WsGateway:
         self._nonces: dict[str, float] = {}
         self._sockets: set[web.WebSocketResponse] = set()
         self.dispatcher: Any = None
+        self.agent_loop_factory: Any = None
         self.port: int = DEFAULT_PORT
 
     def mint_nonce(self) -> str:
         """Issue a one-time sign-in nonce, valid for :data:`_NONCE_TTL_S`.
 
-        The TTL is the point: an unredeemed nonce is a live credential, and one
-        printed to the terminal because no browser opened would otherwise stay
-        redeemable for the life of the process -- recoverable days later from
-        scrollback or a shared screen.
+        The TTL limits the window in which an unredeemed nonce can be used. It
+        is longer than a local browser launch delay, while the exchanged cookie
+        remains the credential used by the page afterward.
         """
         now = time.monotonic()
         self._nonces = {n: exp for n, exp in self._nonces.items() if exp > now}
@@ -242,8 +242,16 @@ class WsGateway:
         if not self._authorized(request):
             raise web.HTTPUnauthorized(reason="missing or invalid session")
         raw = request.query.get("path", "")
+        session_key = request.query.get("session", "")
+        workspace = None
+        if self.agent_loop_factory is not None and session_key:
+            from raven.rpc.methods.console import _safe_loop, _workspace_root
+
+            workspace = _workspace_root(_safe_loop(self.agent_loop_factory), session_key)
+            if raw and not Path(raw).expanduser().is_absolute():
+                raw = str(workspace / raw)
         try:
-            path = resolve_readable(raw)
+            path = resolve_readable(raw, workspace=workspace)
         except ValueError as exc:
             raise web.HTTPBadRequest(reason=str(exc)) from None
         except PermissionError as exc:
@@ -370,9 +378,16 @@ async def handle_oauth_callback(request: web.Request) -> web.Response:
     )
 
 
-def build_app(gateway: WsGateway, static_dir: Path | None, *, deliverables: Any = None) -> web.Application:
+def build_app(
+    gateway: WsGateway,
+    static_dir: Path | None,
+    *,
+    deliverables: Any = None,
+    agent_loop_factory: Any = None,
+) -> web.Application:
     from raven.rpc.transports.deliverables import add_files_routes
 
+    gateway.agent_loop_factory = agent_loop_factory
     app = web.Application()
     app.router.add_get("/health", gateway.handle_health)
     app.router.add_get("/auth", gateway.handle_auth_page)

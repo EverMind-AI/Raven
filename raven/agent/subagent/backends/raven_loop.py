@@ -27,7 +27,7 @@ from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.shell import ExecTool
 from raven.agent.tools.web import WebFetchTool, WebSearchTool, resolve_vendor_key
-from raven.config.live import LiveConfig, exec_extra_deny_patterns
+from raven.config.live import LiveConfig, exec_allow_destructive_commands, exec_extra_deny_patterns
 from raven.config.schema import ExecToolConfig
 from raven.contracts.llm_provider import LLMProvider
 from raven.contracts.subagent_backend import SubagentActionAbortedError, SubagentNoAnswerError
@@ -49,6 +49,11 @@ def _live_exec_extra_deny() -> list[str] | None:
     permission gates a delegated shell the same call it gates a direct one.
     """
     return exec_extra_deny_patterns(_LIVE_CONFIG)
+
+
+def _live_exec_allow_destructive() -> bool | None:
+    """The deletion-safety preference shared by every sub-agent run."""
+    return exec_allow_destructive_commands(_LIVE_CONFIG)
 
 
 def build_subagent_prompt(
@@ -275,12 +280,14 @@ class RavenLoopBackend:
                     timeout=self.exec_config.timeout,
                     restrict_to_workspace=self.restrict_to_workspace,
                     path_append=self.exec_config.path_append,
+                    allow_destructive_commands=self.exec_config.allow_destructive_commands,
                     executor=executor,
                     extra_deny_patterns=self.exec_config.extra_deny_patterns,
                     # The same live deny source the main loop's ExecTool reads:
                     # a tightened permission must gate a delegated shell the
                     # same call it gates a direct one.
                     extra_deny_source=_live_exec_extra_deny,
+                    allow_destructive_source=_live_exec_allow_destructive,
                     extra_allowed_dirs=allowed_dirs,
                     follow_binding=False,
                 )

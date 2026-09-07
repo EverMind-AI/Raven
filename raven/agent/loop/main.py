@@ -474,7 +474,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             max_spawns_per_hour=max_subagent_spawns_per_hour,
             agents=agents,
             session_dir=self.sessions.session_dir,
-            session_tier=lambda key: self.session_policy(key or "").mode or self._default_tier,
+            session_tier=self.session_tier,
         )
         self._direct_handoff = DirectChatHandoff()
         # Kept for hot-applying web config changes and for the operations
