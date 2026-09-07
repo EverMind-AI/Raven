@@ -168,17 +168,9 @@ def _text_block(text: Any, source: dict[str, Any] | None = None) -> dict[str, An
     return block
 
 
-def _content_blocks(content: Any, *, placeholder: bool = True) -> list[dict[str, Any]]:
-    """Convert Raven's OpenAI-shaped content parts to Anthropic blocks.
-
-    ``placeholder=False`` returns an empty list for content that renders to
-    nothing instead of a "(empty)" text block: an assistant turn that only
-    called a tool must render the same whether or not a cache breakpoint was
-    attached to its (empty) text, or the prefix changes when the mark moves on.
-    """
+def _content_blocks(content: Any) -> list[dict[str, Any]]:
+    """Convert Raven's OpenAI-shaped content parts to Anthropic blocks."""
     if isinstance(content, str):
-        if not content and not placeholder:
-            return []
         return [_text_block(content or "(empty)")]
     if isinstance(content, dict):
         content = [content]
@@ -206,9 +198,7 @@ def _content_blocks(content: Any, *, placeholder: bool = True) -> list[dict[str,
             blocks.append(deepcopy(item))
             continue
         blocks.append(_text_block(json.dumps(item, ensure_ascii=False)))
-    if blocks or not placeholder:
-        return blocks
-    return [_text_block("(empty)")]
+    return blocks or [_text_block("(empty)")]
 
 
 def _tool_definitions(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -259,7 +249,7 @@ def _assistant_message(message: dict[str, Any], ids: dict[str, str]) -> dict[str
             blocks.append(deepcopy(block))
     content = message.get("content")
     if content not in (None, "", []):
-        blocks.extend(_content_blocks(content, placeholder=False))
+        blocks.extend(_content_blocks(content))
     for call in message.get("tool_calls") or []:
         if not isinstance(call, dict):
             continue
@@ -294,54 +284,18 @@ def _tool_result_message(message: dict[str, Any], ids: dict[str, str]) -> dict[s
     }
 
 
-def _source_cache_marker(message: dict[str, Any]) -> dict[str, Any] | None:
-    """The breakpoint a Raven message carries, wherever the strategy put it.
-
-    ``CacheOptimizer`` marks the last content block; older callers mark the
-    message itself. Either means "a breakpoint ends here".
-    """
-    marker = message.get("cache_control")
-    content = message.get("content")
-    if not marker and isinstance(content, list):
-        for block in reversed(content):
-            if isinstance(block, dict) and block.get("cache_control"):
-                marker = block["cache_control"]
-                break
-    return deepcopy(marker) if marker else None
-
-
-def _strip_nested_markers(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    cleaned: list[dict[str, Any]] = []
-    for block in blocks:
-        item = {key: value for key, value in block.items() if key != "cache_control"}
-        if block.get("type") == "tool_result" and isinstance(block.get("content"), list):
-            item["content"] = [
-                {key: value for key, value in inner.items() if key != "cache_control"}
-                if isinstance(inner, dict)
-                else inner
-                for inner in block["content"]
-            ]
-        cleaned.append(item)
-    return cleaned
-
-
 def _attach_message_cache_marker(item: dict[str, Any], message: dict[str, Any]) -> dict[str, Any]:
-    """Put the message's breakpoint on the last block Anthropic will see.
-
-    The marked source block does not always survive conversion: an assistant
-    turn that only called a tool has an empty text block, which is dropped, and
-    a tool result is wrapped in a ``tool_result`` block whose nested content is
-    not a breakpoint position. Either way the breakpoint has to end up on the
-    last top-level block, or the whole tail of the conversation goes uncached.
-    """
-    marker = _source_cache_marker(message)
-    content = item.get("content")
-    if not marker or not isinstance(content, list) or not content:
+    """Translate a legacy message-level marker to Anthropic's block level."""
+    marker = message.get("cache_control")
+    if not marker:
         return item
-    updated = _strip_nested_markers(content)
-    if isinstance(updated[-1], dict):
-        updated[-1] = {**updated[-1], "cache_control": marker}
-    return {**item, "content": updated}
+    content = item.get("content")
+    if isinstance(content, list) and content:
+        updated = list(content)
+        if isinstance(updated[-1], dict):
+            updated[-1] = {**updated[-1], "cache_control": deepcopy(marker)}
+            return {**item, "content": updated}
+    return item
 
 
 def convert_messages(messages: list[dict[str, Any]]) -> tuple[str | list[dict[str, Any]] | None, list[dict[str, Any]]]:
@@ -817,21 +771,11 @@ class AnthropicMessagesProvider(LLMProvider):
         learned = self._ceilings.get(body["model"])
         if learned:
             clamp_to_model_limit(body, f"max_tokens: {body.get('max_tokens')} > {learned}")
-        if not self.supports_prompt_caching(model or self.default_model):
-            body = _strip_cache_control(body)
-        return body
-
-    def supports_prompt_caching(self, model: str) -> bool:
-        """See ``LLMProvider.supports_prompt_caching``.
-
-        This transport speaks Anthropic's own wire, so the field always has a
-        place to go; the answer is whether the model's vendor reads it. Without
-        this override the base default (False) told ``CacheOptimizer`` to place
-        no breakpoints, and every request went out uncached.
-        """
         url = messages_url(self.api_base)
         addressed_to = "anthropic" if _is_openrouter(url) or self._provider_name == "anthropic" else self._provider_name
-        return accepts_cache_control(model or self.default_model, addressed_to=addressed_to)
+        if not accepts_cache_control(model or self.default_model, addressed_to=addressed_to):
+            body = _strip_cache_control(body)
+        return body
 
     async def chat(
         self,

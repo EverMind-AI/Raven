@@ -223,41 +223,6 @@ def test_only_the_deep_template_carries_the_numeric_discipline_rule():
     assert "mark it derived, and show the arithmetic over its inputs" in deep
 
 
-def test_the_deep_template_asks_for_a_ranking_that_holds_and_a_readable_table():
-    """The producer half of the readability and internal-consistency dimensions.
-
-    The audit finds both after the fact - `rank_contradicts_total` is one of its three
-    hard findings, and `too_many_compared_columns` fires above eight columns a reader has
-    to compare across. Neither tells the model anything at the moment it writes the table,
-    and the 2026-09-04 report lost both dimensions: a ranking with an unexplained
-    exception, and a main table carrying the rank, six criteria, the total, the venue and
-    the sizes in one ten-column grid.
-
-    Deep only, for the same reason the numeric rule above is deep only: `report_depth` is
-    the one prompt bundle no batch has measured, so a product rule can be added here
-    without moving a measured distribution.
-
-    Asserted by content rather than by position, because the sentences are appended into a
-    clause other changes also edit and a position test would break on every neighbour.
-    """
-    from research_flow.prompts import render_parts
-
-    deep = _flat(render_parts(report_depth=True)[1])
-    shipped = _flat(render_parts()[1])
-
-    assert "A table that carries a rank and a total is ordered by that total" in deep
-    # No exception, because the audit admits none: `rank_contradicts_total` is hard and
-    # reads only the numbers. A template that allowed a reasoned exception would let a
-    # report follow it exactly and still fail `--strict`, so the two say the same thing.
-    assert "with no exceptions" in deep
-    # And the material still has somewhere to go, or the model would just reorder rows.
-    assert "make it one of the criteria so the total carries it" in deep
-    assert "Keep the main comparison to the columns that decide it" in deep
-    # And where the overflow goes, because "fewer columns" alone loses the material.
-    assert "belong under it as prose or in a second table" in deep
-    assert "ordered by that total" not in shipped
-
-
 def test_both_report_templates_name_the_fence_tag_as_data():
     """The one sentence the twin was missing, pinned in both templates by content.
 

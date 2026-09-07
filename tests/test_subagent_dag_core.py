@@ -1081,6 +1081,35 @@ async def _replannable_tool(tmp_path, **kw) -> tuple["SubAgentDagTool", dict]:
     return tool, live
 
 
+async def test_is_awaiting_decision_reads_the_runs_own_desk(tmp_path) -> None:
+    """The predicate the resolve tool consults before it pays for a replan. It has
+    to answer per (run, node) off the live desk, not per run: a graph suspends one
+    node at a time and the answer for a sibling is exactly the mistake this gate
+    exists to make free."""
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+
+    tool = SubAgentDagTool(workspace=tmp_path, agents=[ThirdPartyCliSubagentConfig(name="x", command="true")])
+
+    assert tool.is_awaiting_decision(_OLD_RUN_ID, "a") is False, "no desk means no run to answer for"
+
+    desk = AdjudicationDesk()
+    tool._desks[_OLD_RUN_ID] = desk
+    assert tool.is_awaiting_decision(_OLD_RUN_ID, "a") is False, "a desk with nothing open awaits nothing"
+
+    desk.open("a")
+    assert tool.is_awaiting_decision(_OLD_RUN_ID, "a") is True
+    assert tool.is_awaiting_decision(_OLD_RUN_ID, "b") is False, "one node's suspension is not another's"
+    assert tool.is_awaiting_decision("20260101T000000000000Z-deadbeef", "a") is False
+
+    desk.resolve("a", "replan", "the plan was wrong")
+    assert tool.is_awaiting_decision(_OLD_RUN_ID, "a") is True, (
+        "an answered but unconsumed node is still on the desk; only take/close retires it"
+    )
+    desk.take("a")
+    assert tool.is_awaiting_decision(_OLD_RUN_ID, "a") is False
+
+
 async def test_replanning_refuses_a_redeclared_id(tmp_path) -> None:
     """`b` belongs to the old run forever, whatever became of it."""
     tool, live = await _replannable_tool(tmp_path)

@@ -38,7 +38,6 @@ from raven.agent.loop._shared import (
     Origin,
     RecoveryAction,
     Session,
-    _appended_by_hook,
     _display_label,
     _file_change_payload,
     _first_line,
@@ -1718,17 +1717,13 @@ class TurnPathMixin:
         usage_sink: dict[str, Any] | None = None,
         origin: Origin | None = None,
         drain: Drain | None = None,
-        hook_sink: dict[str, str] | None = None,
     ) -> tuple[str | None, list[str]] | None:
         """Process a single turn request and return its reply.
 
         Returns ``(reply_content, media_paths)`` for a turn that produced an
         outbound reply, or ``None`` for a silent turn (the message tool already
         sent, or a hook short-circuit chose to return None). ``origin`` is the
-        spine TurnRequest's origin. ``hook_sink``, when given, receives under
-        ``"appended"`` whatever the ``after_send`` chain added to the end of the
-        reply: a streamed reply has already left as deltas by then, so the
-        caller has to send that tail itself.
+        spine TurnRequest's origin.
         """
         from raven.agent.hook import AgentHookContext
 
@@ -2106,8 +2101,6 @@ class TurnPathMixin:
             )
             _send_decision = await self.hooks.after_send(_send_ctx)
             if _send_decision.modified_content is not None:
-                if hook_sink is not None:
-                    hook_sink["appended"] = _appended_by_hook(final_content, _send_decision.modified_content)
                 final_content = _send_decision.modified_content
 
         # A hook chain's per-turn observer record files onto the turn's last
@@ -2555,7 +2548,6 @@ class TurnPathMixin:
             req = replace(req, text=f"{handoff}\n\n{req.text}")
 
         streamed = False
-        hook_sink: dict[str, str] = {}
 
         async def on_token(text: str) -> None:
             nonlocal streamed
@@ -2715,7 +2707,6 @@ class TurnPathMixin:
                         usage_sink=usage_sink,
                         origin=req.origin,
                         drain=drain,
-                        hook_sink=hook_sink,
                     )
                 except Exception:
                     # Before the executor goes: the prewarm this turn started is
@@ -2737,13 +2728,6 @@ class TurnPathMixin:
                 await _emit_media(reply_media)
             if not streamed and reply_content:
                 await emit(Text(content=reply_content))
-            elif streamed and hook_sink.get("appended"):
-                # The reply left as deltas before the after_send chain ran, so what a
-                # hook appended -- a deck engine's "Deck: / Preview: / MEDIA:" lines,
-                # a nudge -- reached no streaming surface: not the web page, not the
-                # TUI, not an ACP client. Sent as one more delta, ahead of
-                # message.complete, so the reply the client holds is the reply.
-                await emit(StreamDelta(delta=hook_sink["appended"]))
             if text_sink is not None and reply_content:
                 text_sink["text"] = reply_content
 
