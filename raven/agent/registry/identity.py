@@ -39,6 +39,7 @@ class IdentityRecord(IdentityModel):
     brand: str
     role: str = ""
     task_ref: str = ""
+    session_key: str | None = None
     description: str = ""
     aliases: list[IdentityAlias] = Field(default_factory=list)
     binding: IdentityBinding | None = None
@@ -116,6 +117,7 @@ class IdentityRegistry:
         binding: TerminalRecord | IdentityBinding | dict | None = None,
         role: str = "",
         task_ref: str = "",
+        session_key: str | None = None,
         description: str | None = None,
         aliases: list[dict] | None = None,
     ) -> IdentityRecord:
@@ -135,6 +137,7 @@ class IdentityRegistry:
                 brand=_brand(rows[kind_ref]),
                 role=role,
                 task_ref=task_ref,
+                session_key=session_key if session_key is not None else (last.session_key if last else None),
                 description=description if description is not None else rows[kind_ref].get("description", ""),
                 aliases=aliases if aliases is not None else (last.aliases if last else []),
                 binding=binding,

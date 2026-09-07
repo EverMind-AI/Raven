@@ -15,6 +15,7 @@ class AgentsRegisterParams(TerminalParams):
     terminal: str | None = None
     role: str = ""
     task_ref: str = ""
+    session_key: str | None = None
     description: str | None = None
     aliases: list[IdentityAlias] | None = None
 

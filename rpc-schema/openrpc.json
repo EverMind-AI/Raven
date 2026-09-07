@@ -7411,6 +7411,14 @@
             "default": null,
             "title": "Session Id"
           }
+        },
+        {
+          "name": "force",
+          "required": false,
+          "schema": {
+            "type": "boolean",
+            "default": false
+          }
         }
       ],
       "result": {
@@ -7736,6 +7744,21 @@
             ],
             "default": null,
             "title": "Aliases"
+          }
+        },
+        {
+          "name": "session_key",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         }
       ],
@@ -12156,6 +12179,17 @@
             ],
             "default": null,
             "title": "Exitedat"
+          },
+          "sessionKey": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [
