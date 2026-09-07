@@ -664,6 +664,31 @@ async def test_dispatch_returns_the_agents_answer(tmp_path: Path) -> None:
     assert reply == "pong"
 
 
+async def test_a_dispatch_puts_the_attachments_beside_the_text_as_resource_links(tmp_path: Path) -> None:
+    """The block an editor sends for an @-mentioned file, carrying the absolute path
+    the agent's own tools can open; the text block is the task, unchanged."""
+    import json
+
+    from raven.spine.message import Media
+
+    deck = tmp_path / "house style.pptx"
+    deck.write_bytes(b"pptx")
+    backend = build_third_party_backend(stub_config("a", mode="echo_blocks"))
+
+    reply = await backend.run(
+        "use my template",
+        task_id="t1",
+        workspace=tmp_path,
+        executor=None,
+        media=(Media(path=str(deck), mime="application/octet-stream", kind="file"),),
+    )
+
+    assert json.loads(reply) == [
+        {"type": "text", "text": "use my template"},
+        {"type": "resource_link", "uri": deck.resolve().as_uri(), "name": "house style.pptx"},
+    ]
+
+
 async def test_a_dispatch_relearns_the_menu_the_agent_now_serves(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -2490,6 +2490,7 @@ class TurnPathMixin:
                     agent=agent,
                     handle=handle,
                     text=req.text,
+                    media=req.media,
                     # The session's working directory, the same one this turn's
                     # own tools would get and the same one `spawn` captures. The
                     # binding is not set here -- `workdir.bind` wraps the main
