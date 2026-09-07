@@ -22,7 +22,9 @@ async def test_create_registers_identity_and_returns_incarnation():
             return {"agent": {"agentName": "worker"}}
         raise AssertionError(method)
 
-    tool = CreateTerminalTool(rpc, lambda provider: ("codex", ["codex"]), lambda task: "repo::/tmp/task")
+    tool = CreateTerminalTool(
+        rpc, lambda provider, unattended=False: ("codex", ["codex"]), lambda task, session: "repo::/tmp/task"
+    )
     result = json.loads(await tool.execute(provider="codex", name="worker", task="repo::/tmp/task"))
     assert result == {"handle": "term_test", "instance": "worker", "incarnation_id": "incarnation"}
     assert calls[-1][0] == "agents.register"
@@ -42,7 +44,9 @@ async def test_failed_identity_registration_closes_only_the_created_terminal():
             raise TerminalError("duplicate_name", "Name claimed concurrently")
         return {}
 
-    tool = CreateTerminalTool(rpc, lambda provider: ("codex", ["codex"]), lambda task: "repo::/tmp/task")
+    tool = CreateTerminalTool(
+        rpc, lambda provider, unattended=False: ("codex", ["codex"]), lambda task, session: "repo::/tmp/task"
+    )
     result = json.loads(await tool.execute(provider="codex", name="worker"))
     assert result["error"]["code"] == "duplicate_name"
     assert calls[-1] == ("terminal.close", {"handle": "term_created"})
@@ -191,3 +195,86 @@ def test_provider_command_does_not_launch_unsupported_kind(configured_terminal_k
     with pytest.raises(TerminalError) as error:
         provider_command("custom")
     assert error.value.code == "no_matching_kind"
+
+
+@pytest.mark.parametrize(
+    "provider,preset,command,flag",
+    [
+        ("claude-code", "claude_code", "claude", "--dangerously-skip-permissions"),
+        ("codex-cli", "codex", "codex", "--dangerously-bypass-approvals-and-sandbox"),
+    ],
+)
+def test_hosted_commands_ignore_acp_adapter(configured_terminal_kinds, provider, preset, command, flag):
+    from raven.rpc.terminal_tools import provider_command
+
+    configured_terminal_kinds.append({"name": "worker", "preset": preset, "command": "claude-agent-acp"})
+    assert provider_command(provider) == ("worker", [command])
+    assert provider_command(provider, unattended=True) == ("worker", [command, flag])
+
+
+@pytest.mark.parametrize("task", ["", "/selected/task", "/unrelated/task"])
+async def test_registered_create_uses_calling_session_cwd(monkeypatch, configured_terminal_kinds, task):
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.rpc.dispatcher import Dispatcher
+    from raven.rpc.terminal_tools import register_terminal_tools
+
+    configured_terminal_kinds.append({"name": "claude_code", "preset": "claude_code"})
+    monkeypatch.setattr("raven.rpc.terminal_tools.task_worktree", lambda path: f"repo::{path}")
+    seen = []
+
+    async def resolve(params):
+        return {"candidates": []}
+
+    async def create(params):
+        seen.append(params)
+        return {"terminal": {"handle": "term_new", "incarnationId": "new"}}
+
+    async def register(params):
+        return {}
+
+    dispatcher = Dispatcher()
+    for method, handler in [("agents.resolve", resolve), ("terminal.create", create), ("agents.register", register)]:
+        dispatcher.register(method, handler)
+    registry = ToolRegistry()
+    sessions = {"tui:selected": "/selected/task"}
+    register_terminal_tools(registry, dispatcher, session_cwd=sessions.get)
+    tool = registry.get("create_terminal")
+    tool.set_context("tui", "selected")
+    result = json.loads(await tool.execute(provider="claude-code", name="worker", task=task))
+    if task == "/unrelated/task":
+        assert result["error"]["code"] == "task_worktree_mismatch"
+        assert not seen
+    else:
+        assert result["handle"] == "term_new"
+        assert seen == [
+            {
+                "worktree_id": "repo::/selected/task",
+                "command": ["claude"],
+                "title": "worker",
+                "session_id": "tui:selected",
+            }
+        ]
+
+
+@pytest.mark.parametrize("has_context", [True, False])
+async def test_registered_create_refuses_missing_session_cwd(has_context):
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.rpc.dispatcher import Dispatcher
+    from raven.rpc.terminal_tools import register_terminal_tools
+
+    registry = ToolRegistry()
+    register_terminal_tools(registry, Dispatcher(), session_cwd=lambda session: None)
+    tool = registry.get("create_terminal")
+    if has_context:
+        tool.set_context("tui", "missing")
+    result = json.loads(await tool.execute(provider="claude", name="worker", task="/tmp/invented"))
+    assert result["error"]["code"] == "session_cwd_missing"
+    assert "session has no cwd" in result["error"]["message"]
+
+
+def test_task_worktree_never_falls_back_to_process_cwd():
+    from raven.rpc.terminal_tools import task_worktree
+
+    with pytest.raises(TerminalError) as error:
+        task_worktree()
+    assert error.value.code == "session_cwd_missing"
