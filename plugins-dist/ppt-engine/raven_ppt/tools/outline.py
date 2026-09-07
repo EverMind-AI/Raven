@@ -111,14 +111,7 @@ class PptOutlineTool(Tool):
                         "type": "object",
                         "additionalProperties": False,
                         "properties": {
-                            "page": {
-                                "type": ["integer", "null"],
-                                "minimum": 1,
-                                "description": (
-                                    "this page's number, 1 for the first; left out or null, the page is "
-                                    "numbered by its place in the list"
-                                ),
-                            },
+                            "page": {"type": "integer", "minimum": 1},
                             "claim": {
                                 "type": "string",
                                 "description": (
@@ -285,7 +278,7 @@ class PptOutlineTool(Tool):
                                 ),
                             },
                         },
-                        "required": ["claim"],
+                        "required": ["page", "claim"],
                     },
                 },
                 "swept": {
@@ -361,9 +354,7 @@ class PptOutlineTool(Tool):
             )
         citations.record(deck, looked)
 
-        outline = Outline(
-            takeaway=takeaway.strip(), pages=tuple(_plan(entry, position) for position, entry in enumerate(planned, 1))
-        )
+        outline = Outline(takeaway=takeaway.strip(), pages=tuple(_plan(entry) for entry in planned))
         # Pages that arrived numbered 1..n but listed out of order are sorted rather than
         # refused: a refusal cost a measured run a two-minute model call to resend the
         # same twenty pages in the order their numbers already stated.
@@ -464,11 +455,11 @@ def _said_by_page(reply: str) -> dict[int, tuple[str, ...]]:
     if not isinstance(pages, list):
         return {}
     out: dict[int, tuple[str, ...]] = {}
-    for position, entry in enumerate(pages, 1):
+    for entry in pages:
         if not isinstance(entry, dict):
             continue
         try:
-            number = int(entry.get("page") or position)
+            number = int(entry.get("page"))
         except (TypeError, ValueError):
             continue
         said = tuple(str(line).strip() for line in (entry.get("says") or []) if str(line).strip())
@@ -501,12 +492,9 @@ def _materials(deck: Project) -> str:
 # page has to carry and the render decides whether it fits.
 
 
-def _plan(entry: dict[str, Any], position: int) -> PagePlan:
-    # A page that says no number is the page at that place in the list: the numbering
-    # check demands 1..n in order anyway, so the number carries nothing the place does
-    # not, and a live run wrote every page without one and lost the whole outline.
+def _plan(entry: dict[str, Any]) -> PagePlan:
     return PagePlan(
-        page=int(entry.get("page") or position),
+        page=int(entry.get("page", 0)),
         claim=str(entry.get("claim", "")).strip(),
         carries=str(entry.get("carries") or "").strip(),
         **layout_fields(entry),
@@ -538,14 +526,12 @@ def _declared_roles(entries: Sequence[dict[str, Any]]) -> dict[int, str]:
     runs, so one arriving here came from a caller that skipped that check.
     """
     found: dict[int, str] = {}
-    for position, entry in enumerate(entries, 1):
+    for entry in entries:
         role = str(entry.get("role") or "").strip().casefold()
         if role not in PAGE_ROLES:
             continue
         try:
-            # The same fallback `_plan` takes, so a page that said no number keeps its
-            # role at the place the plan gave it rather than filing it under page 0.
-            found[int(entry.get("page") or position)] = role
+            found[int(entry.get("page", 0))] = role
         except (TypeError, ValueError):
             continue
     return found

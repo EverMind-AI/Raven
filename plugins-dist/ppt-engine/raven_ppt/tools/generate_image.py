@@ -54,10 +54,7 @@ class PptGenerateImageTool(Tool):
         "subject choose it before the template does: a real place, street, market, crowd, product or "
         "building is photographic (natural light, no illustration) with the template's palette only in "
         "the grade; a concept with no face takes the template's own manner. Keep one manner per kind "
-        "across the deck. One exception: the illustration slot of an illustrated template's cover or "
-        "closing page takes a cut-out in the template's own manner (`transparent=true`, its palette and "
-        "outline named in the prompt), even for a real place -- the slot is part of the design, and a "
-        "photograph in it is a hole in the page. The generated PNG is added to this deck's "
+        "across the deck. The generated PNG is added to this deck's "
         "sources, ingested immediately, and returned with its figure id so the build can place it."
     )
     timeout_seconds = 360.0

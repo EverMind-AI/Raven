@@ -535,10 +535,7 @@ def replace_picture(
     is for the frame that is the page: six of the eight bundled templates keep a
     picture the size of the canvas on a layout, a soft texture the type reads over,
     and a photograph swapped in at full strength drowns every title on that layout.
-    `alpha=0.1` keeps it the texture the template meant; the shares between 0.12 and
-    0.80 are the fog `washed_backdrop` reports, and a photograph meant to be seen goes
-    in at full strength under a plane of ink with light type, as `backdrop` lays them.
-    `None` leaves whatever wash the frame had.
+    `alpha=0.25` keeps it a background. `None` leaves whatever wash the frame had.
 
     `box` -- (left, top, width, height) in inches, or a `ppt_layout.Box` -- reshapes the
     frame first, as `place` would, so the fit is computed against where the figure goes.
@@ -1016,11 +1013,9 @@ def layout_pictures(slide) -> list:
     handed to `replace_picture` -- `pictures={...}` on the cloned page never reaches
     it, and a live deck shipped with the template's photographs on every section page
     for that reason. These are those shapes. `replace_picture(layout_pictures(slide)[0],
-    image, "cover")` changes the picture for every page on that layout at once, which
-    is what a house photograph should do. One the size of the page is the page's
-    background with type over it: `alpha=0.1` keeps it a texture, and a photograph meant
-    to be seen wants a plane of ink and light type over it, the way `backdrop` lays them
-    -- a wash between the two, 0.12 to 0.80, is the fog `washed_backdrop` reports.
+    image, "cover", alpha=0.25)` changes the picture for every page on that layout at
+    once, which is what a house photograph should do; the wash is for the picture that is
+    the size of the page, which is the page's background and has type over it.
     """
     found = [shape for shape in _every_shape(slide.slide_layout.shapes) if _blip_fill(shape) is not None]
     found.sort(key=lambda shape: -((shape.width or 0) * (shape.height or 0)))
@@ -1032,25 +1027,10 @@ def layout_pictures(slide) -> list:
 # not a backdrop, but an author who wants a full-bleed picture behind a title over a dark
 # wash of its own is allowed it.
 BACKDROP_ALPHA_MIN = 0.05
-# As far as a wash goes before it stops being texture and starts being fog: under this
-# the page's own ground and type still carry the page.
-BACKDROP_TEXTURE_MAX = 0.12
 
 
-def backdrop(
-    slide,
-    image,
-    *,
-    alpha: float = 1.0,
-    scrim: float | None = 0.62,
-    ink=None,
-    light_type: bool = True,
-    box=None,
-    anchor: str = "centre",
-    trim=None,
-    zoom: float = 1.0,
-):
-    """A photograph behind everything on the page, dimmed under a plane of ink, the type set light.
+def backdrop(slide, image, *, alpha: float = 0.22, box=None, anchor: str = "centre", trim=None, zoom: float = 1.0):
+    """A picture behind everything on the page, washed to `alpha`.
 
     The one generated picture that never poses as evidence: a cover, a section page or a
     closing page wants atmosphere more than a figure, and the templates' own photographs
@@ -1059,24 +1039,15 @@ def backdrop(
     16:9 page loses its top and bottom rather than stretching; `anchor`, `trim` and
     `zoom` place the window the way `replace_picture` does.
 
-    The default is the form that reads: the photograph at full strength, a plane of the
-    theme's ink over it at `scrim` (0.62, measured against a reference cover that works --
-    a night market at full strength under a dark plane, white title), and every run of type the plane covers set
-    to the theme's light colour, except runs already in a saturated accent, which keep it.
-    Type outside a `box` sits on the page's own ground and is left as the template set it. A
-    photograph washed to 30% on a white page under black type reads as fog -- a live
-    cover and a closing page came out that way -- and this is the alternative that does
-    not. `ink` names the plane's colour when the theme's is wrong for the picture.
+    `alpha` is the picture's share of itself: 0.2 is a wash the template's ground and
+    type stay legible over, 0.35 is as far as copy over it can go, 1 is the photograph
+    as it is. The wash is the picture's own (`alphaModFix`), not a plane laid over it,
+    so the page's own colour shows through and nothing is added to the z-order but the
+    one picture -- first in it, behind the layout's furniture's own layer and every
+    shape already on the page.
 
-    `alpha` is the picture's share of itself, and with `scrim=None` (or 0) nothing is
-    laid over it and the type is left alone: that is the texture form, for a faint
-    picture behind a template's own ground, and it wants `alpha` at 0.12 or under. The
-    shares between texture and full strength are the ones the render will report as
-    fog (`washed_backdrop`). The wash is the picture's own (`alphaModFix`), so nothing
-    is added to the z-order but the picture -- and, with a scrim, the one plane above it.
-
-    Returns the picture shape. The contrast reading (§10) is taken off the pixels, so
-    type that does not carry over the picture comes back as unreadable type: look at the
+    Returns the picture shape. The contrast reading (§10) is taken off the pixels, so a
+    wash that buries the title comes back as unreadable type, not as a wash: look at the
     render.
     """
     from pptx.util import Inches
@@ -1085,7 +1056,6 @@ def backdrop(
     if not path.is_file():
         raise ValueError(f"backdrop wants a picture file, and {image!r} is not one")
     share = _alpha_share(alpha)
-    plane_share = _scrim_share(scrim)
     if box is None:
         left, top = 0.0, 0.0
         width, height = _canvas_of(slide)
@@ -1100,197 +1070,7 @@ def backdrop(
     tree = picture._element.getparent()
     tree.remove(picture._element)
     tree.insert(2, picture._element)
-    if plane_share:
-        dark, light = _ink_and_light(slide)
-        plane = _plane(slide, left, top, width, height, ink if ink is not None else dark, plane_share)
-        plane.name = "backdrop scrim"
-        tree.remove(plane._element)
-        tree.insert(3, plane._element)
-        if light_type:
-            _lighten_type(slide, light, keep={picture._element, plane._element}, within=(left, top, width, height))
     return picture
-
-
-def _scrim_share(scrim) -> float:
-    """`scrim` as the plane's share, 0 for none; refusing what is not a share."""
-    if scrim is None:
-        return 0.0
-    try:
-        share = float(scrim)
-    except (TypeError, ValueError):
-        raise ValueError(f"scrim is the plane's share of ink over the picture, 0..1, not {scrim!r}") from None
-    if not (0.0 <= share <= 1.0):
-        raise ValueError(f"scrim={share:g} is outside 0..1")
-    return share
-
-
-def _plane(slide, left: float, top: float, width: float, height: float, colour, share: float):
-    """A rectangle of `colour` at `share` opacity, no outline, no shadow, no text."""
-    from lxml import etree
-    from pptx.enum.shapes import MSO_SHAPE
-    from pptx.util import Inches
-
-    plane = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(left), Inches(top), Inches(width), Inches(height))
-    plane.fill.solid()
-    plane.fill.fore_color.rgb = _rgb_of(colour)
-    plane.line.fill.background()
-    plane.shadow.inherit = False
-    colour_node = plane._element.spPr.find(f"{{{_A}}}solidFill/{{{_A}}}srgbClr")
-    if colour_node is not None and share < 1.0:
-        opacity = etree.SubElement(colour_node, f"{{{_A}}}alpha")
-        opacity.set("val", str(int(round(share * 100000))))
-    if plane.has_text_frame:
-        plane.text_frame.text = ""
-    return plane
-
-
-def _ink_and_light(slide) -> tuple[str, str]:
-    """The theme's dark and light colours (`dk1`, `lt1`), or black and white without a theme."""
-    from raven_ppt.services.template.inventory import _theme_colours, _theme_root
-
-    try:
-        scheme = dict(_theme_colours(_theme_root(slide.part.package.presentation_part.presentation)))
-    except Exception:  # noqa: BLE001 -- a slide outside a package has no theme to read
-        scheme = {}
-    return scheme.get("dk1", "#111111"), scheme.get("lt1", "#FFFFFF")
-
-
-def _lighten_type(slide, colour, *, keep, within=None) -> None:
-    """Every run of type under the plane set to `colour`, except runs in a saturated accent.
-
-    The scrim turns the page dark where it lies, and the template set its type for a
-    light page. A run the author or the template already coloured with an accent -- a
-    kicker, a numeral -- is the one thing the page says with colour, so it stays. `within`
-    is the plane, (left, top, width, height) in inches: a shape that does not reach it
-    sits on the page's own light ground, where light type would vanish -- a boxed
-    photograph across the lower half turned a title at the top white. A grouped
-    shape's frame is in its group's child space, so it is carried to page space
-    through the group's transform before the test (`_into_group`).
-    """
-    from pptx.util import Inches
-
-    light = _rgb_of(colour)
-    plane = None
-    if within is not None:
-        left, top, width, height = within
-        plane = (Inches(left), Inches(top), Inches(left + width), Inches(top + height))
-    pending = [(shape, _PAGE_SPACE) for shape in slide.shapes if shape._element not in keep]
-    while pending:
-        shape, place = pending.pop()
-        if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
-            # Never pruned on its own frame: that frame is the untransformed one, and a
-            # turned group lies somewhere else on the page. Its children are judged
-            # one by one, each carried through the turn; the group carries no type.
-            inside = _into_group(shape, place)
-            pending.extend((child, inside) for child in shape.shapes)
-            continue
-        if plane is not None and not _reaches(shape, plane, place):
-            continue
-        if not getattr(shape, "has_text_frame", False) or not shape.has_text_frame:
-            continue
-        for paragraph in shape.text_frame.paragraphs:
-            for run in paragraph.runs:
-                if not run.text.strip():
-                    continue
-                current = _run_rgb(run)
-                if current is not None and _saturated(current):
-                    continue
-                run.font.color.rgb = light
-
-
-#: Page space itself: a frame read off a top-level shape needs no carrying. An affine
-#: map (a, b, c, d, e, f): (x, y) -> (a*x + b*y + e, c*x + d*y + f).
-_PAGE_SPACE = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
-
-
-def _then(outer, inner):
-    """The affine map that applies `inner` first and `outer` after."""
-    a1, b1, c1, d1, e1, f1 = inner
-    a2, b2, c2, d2, e2, f2 = outer
-    return (
-        a2 * a1 + b2 * c1,
-        a2 * b1 + b2 * d1,
-        c2 * a1 + d2 * c1,
-        c2 * b1 + d2 * d1,
-        a2 * e1 + b2 * f1 + e2,
-        c2 * e1 + d2 * f1 + f2,
-    )
-
-
-def _into_group(group, place):
-    """The map from `group`'s child space to the page, given the map from its own.
-
-    A group draws its children in a space of its own (`a:chOff`/`a:chExt`), places that
-    space in its frame (`a:off`/`a:ext`), then mirrors (`flipH`/`flipV`) and turns
-    (`rot`, in 60000ths of a degree, clockwise) the frame about its centre -- so a
-    child's frame says nothing about the page until all of it is applied. A caption
-    grouped at page (1, 5) read as its child-space numbers and stayed dark over a
-    lower-half scrim; a mirrored group put its text on the other side of the page from
-    where the numbers said. A group without a transform, or with a degenerate child
-    extent, carries its parent's map unchanged.
-    """
-    import math
-
-    try:
-        xfrm = group._element.grpSpPr.xfrm
-        off, ext, choff, chext = xfrm.off, xfrm.ext, xfrm.chOff, xfrm.chExt
-    except AttributeError:
-        return place
-    if None in (off, ext, choff, chext) or not chext.cx or not chext.cy:
-        return place
-    kx, ky = ext.cx / chext.cx, ext.cy / chext.cy
-    local = (kx, 0.0, 0.0, ky, off.x - choff.x * kx, off.y - choff.y * ky)
-    cx, cy = off.x + ext.cx / 2, off.y + ext.cy / 2
-    if xfrm.get("flipH") in ("1", "true"):
-        local = _then((-1.0, 0.0, 0.0, 1.0, 2 * cx, 0.0), local)
-    if xfrm.get("flipV") in ("1", "true"):
-        local = _then((1.0, 0.0, 0.0, -1.0, 0.0, 2 * cy), local)
-    try:
-        turn = int(xfrm.get("rot") or 0)
-    except ValueError:
-        turn = 0
-    if turn:
-        theta = math.radians(turn / 60000)
-        cos, sin = math.cos(theta), math.sin(theta)
-        local = _then((cos, -sin, sin, cos, cx - cx * cos + cy * sin, cy - cx * sin - cy * cos), local)
-    return _then(place, local)
-
-
-def _reaches(shape, plane, place=_PAGE_SPACE) -> bool:
-    """Whether the shape's frame, carried to page space by `place`, overlaps `plane`.
-
-    `plane` is (left, top, right, bottom) in EMU; the frame is the box around its four
-    carried corners, which is what a turned frame occupies. A shape with no frame of
-    its own -- a placeholder the layout never positioned -- is taken to reach it: the
-    page-sized default is the case the reading was made for.
-    """
-    left, top, width, height = (getattr(shape, name, None) for name in ("left", "top", "width", "height"))
-    if None in (left, top, width, height):
-        return True
-    a, b, c, d, e, f = place
-    corners = [
-        (a * x + b * y + e, c * x + d * y + f)
-        for x, y in ((left, top), (left + width, top), (left, top + height), (left + width, top + height))
-    ]
-    xs, ys = [x for x, _ in corners], [y for _, y in corners]
-    return min(xs) < plane[2] and max(xs) > plane[0] and min(ys) < plane[3] and max(ys) > plane[1]
-
-
-def _run_rgb(run):
-    """A run's explicit RGB colour, or None for a theme colour or none at all."""
-    try:
-        colour = run.font.color
-        if colour is None or colour.type is None:
-            return None
-        return colour.rgb
-    except (AttributeError, TypeError):
-        return None
-
-
-def _saturated(rgb) -> bool:
-    """Whether a colour reads as an accent rather than as ink or paper."""
-    channels = (int(str(rgb)[0:2], 16), int(str(rgb)[2:4], 16), int(str(rgb)[4:6], 16))
-    return max(channels) - min(channels) >= 70 and max(channels) >= 110
 
 
 def wash(shape, alpha: float):
@@ -1298,9 +1078,8 @@ def wash(shape, alpha: float):
 
     Any picture on the page -- a frame the template drew, one `adapt(pictures=...)`
     filled, one `add_picture` placed, a rounded panel filled with a photograph -- and
-    the same share `backdrop` and `replace_picture(alpha=...)` take: 1 is the picture as
-    it is (under a scrim, the way a cover carries one), 0.12 or under is texture behind
-    the page's own ground, and the shares between read as fog under type. Written
+    the same share `backdrop` and `replace_picture(alpha=...)` take: 0.2 is a wash
+    under copy, 0.35 as far as copy over it can go, 1 the picture as it is. Written
     into the blip's own `alphaModFix`, replacing whatever wash the picture carried, so
     nothing is added to the page and the frame keeps its crop, border and place. Returns
     the shape. A shape with no picture in it is refused: a solid fill has its own
@@ -1325,8 +1104,8 @@ def _alpha_share(alpha) -> float:
         raise ValueError(f"alpha is the picture's share of itself, between 0 and 1, not {alpha!r}") from None
     if not (BACKDROP_ALPHA_MIN <= share <= 1.0):
         raise ValueError(
-            f"alpha={share:g} is outside {BACKDROP_ALPHA_MIN:g}..1: 1 is the photograph as it is (under a scrim, "
-            f"the way a cover carries one), {BACKDROP_TEXTURE_MAX:g} or under is texture behind the page's own ground"
+            f"alpha={share:g} is outside {BACKDROP_ALPHA_MIN:g}..1: 0.2 is a wash under copy, 0.35 is as far as "
+            "copy over it can go, 1 is the photograph as it is"
         )
     return share
 
@@ -1562,19 +1341,7 @@ def _write(paragraph, line) -> None:
 
 
 def drop_shape(shape) -> None:
-    """Remove an element the page does not need. The commonest edit after text.
-
-    A shape on a layout is refused: it is the template's design, shared by every page
-    on that layout, and a live cover deleted the whole of it to make room for a washed
-    photograph. The picture in it is changed with `replace_picture(layout_pictures(slide)[0], ...)`.
-    """
-    if getattr(shape.part, "slide", None) is None:
-        raise ValueError(
-            f"{getattr(shape, 'name', shape)!r} is on a layout, not on the page: a layout's shapes are the "
-            "template's design and every page on the layout shares them. Change the picture in it with "
-            "`replace_picture(layout_pictures(slide)[0], image, 'cover')`; cover it on one page with a "
-            "shape of the page's own; do not remove it"
-        )
+    """Remove an element the page does not need. The commonest edit after text."""
     shape._element.getparent().remove(shape._element)
 
 

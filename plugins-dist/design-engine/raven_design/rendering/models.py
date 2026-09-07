@@ -179,4 +179,3 @@ class RenderToolOutput(TypedDict):
     dir: str
     warnings: NotRequired[list[str]]
     errors: NotRequired[list[str]]
-    facts: NotRequired[list[str]]

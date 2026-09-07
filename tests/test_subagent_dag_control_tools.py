@@ -26,7 +26,7 @@ from raven.agent.subagent import dag_tool as raven_agent_subagent
 from raven.agent.subagent.dag_adjudication import REPLAN, ReplanPlan
 from raven.agent.subagent.dag_control_tools import CancelDagTool, DagStatusTool, ResolveDagNodeTool
 from raven.agent.subagent.dag_graph import parse_dag_spec
-from raven.agent.subagent.dag_live import awaiting_decision, resolve_node
+from raven.agent.subagent.dag_live import resolve_node
 from raven.agent.subagent.dag_reader import DagReadError
 from raven.agent.subagent.dag_runner import _exception_report
 from raven.agent.subagent.dag_tool import SubAgentDagTool
@@ -278,7 +278,6 @@ class _ResolvableDagTool(_DagTool):
         plan: Any = None,
         raise_on_emit: BaseException | None = None,
         raise_on_finalize: BaseException | None = None,
-        awaiting: bool = True,
     ) -> None:
         super().__init__(_finished_run())
         self._resolves = resolves
@@ -293,13 +292,7 @@ class _ResolvableDagTool(_DagTool):
         self._raise_on_finalize = raise_on_finalize
         self.calls: list[str] = []
         self.is_foreground_calls: list[str] = []
-        self.awaiting_calls: list[tuple[str, str]] = []
-        self._awaiting = awaiting
         self.interrupted: tuple[str, Any, str] | None = None
-
-    def is_awaiting_decision(self, run_id: str, node_id: str) -> bool:
-        self.awaiting_calls.append((run_id, node_id))
-        return self._awaiting
 
     def resolve_node(self, run_id: str, node_id: str, decision: str, message: str | None, plan: Any = None) -> bool:
         # A replan's plan is not folded into `resolved`: every existing caller that
@@ -1009,121 +1002,6 @@ async def test_a_replan_nobody_waits_for_never_emits() -> None:
     assert "no longer waiting for a decision" in out
 
 
-async def test_a_replan_for_a_node_nobody_awaits_is_refused_before_it_costs_anything() -> None:
-    """The cost of a replan is paid inside `prepare_replan` -- the confirm question,
-    the dispatch quota, the minted instances -- and `resolve_node` is only reached
-    afterwards. So a node that is plainly not suspended has to be turned away
-    before that call, or a replan aimed at the wrong id spends a dispatch from the
-    session's hourly budget and dispatches nothing: enough of those and a
-    legitimate replan is refused for a budget the model never got to use.
-
-    Distinct from `test_a_replan_nobody_waits_for_never_emits` above, which is the
-    race -- the node stopped waiting *while* the replacement graph was being
-    validated. That one still has to pay, and still has to refuse.
-    """
-    loop = _LoopWithRun(awaiting=False, plan=_replan_plan())
-    tool = _resolve_tool(loop)
-
-    out = await tool.execute(run_id="r1", node_id="a", decision="replan", message="wrong", nodes=[_node("fresh")])
-
-    assert loop._dag_tool.calls == [], "nothing that costs budget may run for a node nobody is waiting on"
-    assert loop.resolved is None
-    assert "no longer waiting for a decision" in out
-    assert "still running as submitted" in out
-
-
-async def test_the_two_not_waiting_refusals_read_identically() -> None:
-    """One situation, one sentence: the model cannot act differently on "refused
-    before validation" than on "refused after it", and a second wording would only
-    invite it to try to."""
-    early = await _resolve_tool(_LoopWithRun(awaiting=False, plan=_replan_plan())).execute(
-        run_id="r1", node_id="a", decision="replan", message="wrong", nodes=[_node("fresh")]
-    )
-    raced = await _resolve_tool(_LoopWithRun(resolves=False, plan=_replan_plan())).execute(
-        run_id="r1", node_id="a", decision="replan", message="wrong", nodes=[_node("fresh")]
-    )
-
-    assert early == raced
-
-
-async def test_a_graph_tool_that_cannot_say_whether_a_node_waits_still_replans() -> None:
-    """The predicate is advisory, like every other duck-typed hop in this module:
-    a host built before it existed must keep replanning rather than have every
-    replan refused by a missing attribute. `awaiting_decision` answers None there,
-    which is why it is three-valued and why the caller tests `is False`."""
-
-    class _NoPredicate(_ResolvableDagTool):
-        is_awaiting_decision = None
-
-    loop = _Loop(tool=_NoPredicate(plan=_replan_plan()))
-    assert awaiting_decision(loop, "r1", "a") is None
-
-    out = await _resolve_tool(loop).execute(
-        run_id="r1", node_id="a", decision="replan", message="wrong", nodes=[_node("fresh")]
-    )
-
-    assert "replan started" in out
-
-
-async def test_the_pre_check_asks_every_instance_the_hand_off_would() -> None:
-    """The shape dag_live's module docstring describes: the run is held by the
-    playbook engine's private instance, not by the one on the model's table.
-    `WiringMixin.resolve_dag_node` answers from whichever instance holds it, so a
-    pre-check that asked only the registered tool -- or only `owning_tool`, which
-    falls back to it when no instance claims the run -- would refuse a replan the
-    hand-off was going to accept.
-    """
-
-    class _Loop2(_Loop):
-        def __init__(self) -> None:
-            self._registered = _NonOwningDagTool(awaiting=False, plan=_replan_plan())
-            self._owner = _ResolvableDagTool(awaiting=True, plan=_replan_plan())
-            super().__init__(tool=self._registered)
-
-        def dag_tools(self) -> list[Any]:
-            return [self._registered, self._owner]
-
-    loop = _Loop2()
-    assert awaiting_decision(loop, "r1", "a") is True, "one instance saying yes settles it"
-
-    out = await _resolve_tool(loop).execute(
-        run_id="r1", node_id="a", decision="replan", message="wrong", nodes=[_node("fresh")]
-    )
-
-    assert "replan started" in out
-
-
-async def test_an_instance_that_raises_does_not_refuse_the_replan() -> None:
-    """Same contract as every other helper in dag_live: advisory, never fatal. A
-    raising instance must not be read as "not waiting" -- that would turn a broken
-    predicate into a refusal the model cannot act on."""
-
-    class _Raises(_ResolvableDagTool):
-        def is_awaiting_decision(self, run_id: str, node_id: str) -> bool:
-            raise RuntimeError("boom")
-
-    loop = _Loop(tool=_Raises(plan=_replan_plan()))
-    assert awaiting_decision(loop, "r1", "a") is None, "an instance that cannot answer has not answered no"
-
-    out = await _resolve_tool(loop).execute(
-        run_id="r1", node_id="a", decision="replan", message="wrong", nodes=[_node("fresh")]
-    )
-
-    assert "replan started" in out
-
-
-async def test_continue_and_abandon_do_not_consult_the_predicate() -> None:
-    """Neither charges anything, so neither needs the pre-check -- and adding one
-    would turn `resolve_node`'s own False into a second, earlier refusal for a
-    decision that was always free to attempt."""
-    for decision, kwargs in (("continue", {"message": "try again"}), ("abandon", {})):
-        loop = _LoopWithRun(awaiting=False)
-        out = await _resolve_tool(loop).execute(run_id="r1", node_id="a", decision=decision, **kwargs)
-
-        assert loop._dag_tool.awaiting_calls == [], decision
-        assert "no longer waiting" not in out, decision
-
-
 async def test_a_replan_resolves_through_the_owning_tool_not_just_the_registered_one() -> None:
     """dag_live's module docstring: two tool instances can be dispatching runs at
     once, and the registered one only shares the on-disk session index with the
@@ -1200,3 +1078,23 @@ async def test_a_cancelled_await_finalized_still_records_the_link_and_reraises()
         plan,
         "Interrupted between the node hand-off and starting the replan.",
     )
+
+
+async def test_resolve_accepts_action_as_the_name_the_model_reaches_for():
+    # Three runs in a row (2026-09-03/04) the main agent wrote `action` and lost
+    # a call to "missing required decision". The schema keeps `decision`; the
+    # alias is accepted and lands the same resolve.
+    loop = _LoopWithRun()
+    tool = ResolveDagNodeTool(loop=loop)
+    out = await tool.execute(run_id="r1", node_id="a", action="abandon")
+    assert loop.resolved is not None, "the alias must reach resolve_node"
+    assert "abandon" in out
+    assert "decision" not in tool.parameters["required"]
+
+
+async def test_resolve_with_neither_name_says_which_field_is_missing():
+    loop = _LoopWithRun()
+    tool = ResolveDagNodeTool(loop=loop)
+    out = await tool.execute(run_id="r1", node_id="a")
+    assert out == "Error: decision is required: 'continue', 'abandon' or 'replan'."
+    assert loop.resolved is None

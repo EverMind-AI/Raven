@@ -253,7 +253,7 @@ def _capture_body(monkeypatch) -> list[dict]:
     """Run ``chat`` without a network call or a credential, keeping the body."""
     bodies: list[dict] = []
 
-    async def fake_request(url, headers, body, verify, timeout, idle_timeout=None):
+    async def fake_request(url, headers, body, verify, timeout):
         bodies.append(body)
 
         return "", [], "stop"
@@ -412,28 +412,3 @@ async def test_arguments_that_needed_repair_are_reported_as_such():
     assert cut[0].run_meta is not None
     assert cut[0].run_meta.arguments_repaired is True
     assert cut[0].arguments["content"] == "import ran", "repaired, not stuffed into a raw blob"
-
-
-@pytest.mark.asyncio
-async def test_the_codex_sse_watchdog_runs_on_the_stream_idle_budget_not_the_call_budget(monkeypatch):
-    """`streamIdleTimeout` is what a silent stream is given up after; the call
-    budget is what the whole request may take. This adapter fed the call budget
-    to its per-line watchdog, so with llmCallTimeout 600 and streamIdleTimeout
-    180 a silent Codex stream still waited 600 s and the setting did nothing."""
-    from raven.contracts.llm_provider import GenerationSettings, LLMResponse  # noqa: F401
-    from raven.providers import openai_codex_provider as mod
-
-    seen: list[dict] = []
-
-    async def fake_request(url, headers, body, *, verify, timeout, idle_timeout=None):
-        seen.append({"timeout": timeout, "idle_timeout": idle_timeout})
-        return "ok", [], "stop"
-
-    monkeypatch.setattr(mod, "_request_codex", fake_request)
-    monkeypatch.setattr("raven.providers.chatgpt_token.access_token_and_account", lambda: ("tok", "acct"))
-    provider = OpenAICodexProvider(default_model="openai-codex/gpt-5")
-    provider.generation = GenerationSettings(timeout=600, stream_idle_timeout=7)
-
-    await provider.chat([{"role": "user", "content": "hi"}])
-
-    assert seen and seen[0]["timeout"] == 600 and seen[0]["idle_timeout"] == 7

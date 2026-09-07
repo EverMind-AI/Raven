@@ -88,13 +88,9 @@ async def stream_llm_call(
     loop's own ladder, seconds to minutes, for a gateway that serves error pages
     for a while -- asking again after each wait. Once both are spent the exception
     propagates: a mid-turn provider error is the turn's failure (the lane emits
-    TurnFailed), not a text reply about one. Two outcomes come back as an error
-    response (``finish_reason="error"`` with its classification) instead of
-    raising, because their recovery belongs to the caller: a stream the upstream
-    closed before its terminal chunk with nothing rendered, classified as a
-    retryable network failure for the loop to wait out its own ladder on, and
-    ``strip_images``, whose recovery is a change to the messages that only the
-    loop can make.
+    TurnFailed), not a text reply about one. The one verdict handed back as an
+    error response instead is ``strip_images``: the recovery for it is a change to
+    the messages, which only the loop can make.
 
     ``stream_kwargs`` reaches ``chat_stream`` unchanged. It exists because that
     signature carries *literal* generation defaults rather than the provider's
@@ -127,8 +123,6 @@ async def stream_llm_call(
     upstream_finish_reason: str | None = None
 
     for attempt in range(max_reconnects + len(retry_delays) + 1):
-        attempt_t0 = time.monotonic()
-        finish_made_up = False
         # aclosing() guarantees the async generator (and its underlying stream)
         # is closed when an error from the per-chunk idle cap or the provider
         # unwinds the loop, so a stalled or broken stream never hangs or leaks
@@ -154,10 +148,7 @@ async def stream_llm_call(
                         # ``had_error`` answers for the call.
                         continue
                     if delta.finish_reason:
-                        if getattr(delta, "finish_synthesized", False):
-                            finish_made_up = True
-                        else:
-                            upstream_finish_reason = delta.finish_reason
+                        upstream_finish_reason = delta.finish_reason
                     reasoning_delta = getattr(delta, "reasoning_content", None)
                     if reasoning_delta:
                         if think_t0 is None:
@@ -180,35 +171,6 @@ async def stream_llm_call(
                         final_usage = delta.usage
                     if getattr(delta, "thinking_blocks", None):
                         thinking_blocks = delta.thinking_blocks
-            # The upstream closed the stream before its terminal chunk and nothing
-            # deliverable had arrived: a reply cut mid-thought, not a model that
-            # chose silence. Measured on 2026-09-06: nine deck-build calls ended
-            # this way at 307-314 s each with 11-15k reasoning tokens and no
-            # content, and the empty-reply recovery re-sent the same request
-            # five more times because the cut looked like a finished reply. Handed
-            # back as a retryable network error instead, so the loop's error
-            # ladder owns it and the log says what happened. Content that did
-            # arrive is delivered as it is, with the finish reason left unknown.
-            if finish_made_up and not content_buf and not tool_call_slots and not had_error:
-                elapsed = time.monotonic() - attempt_t0
-                reasoning_chars = sum(len(part) for part in reasoning_buf)
-                logger.warning(
-                    "the stream ended without the upstream's terminal chunk after {:.0f}s "
-                    "({} chars of reasoning, no content or tool call); treating it as a transport failure",
-                    elapsed,
-                    reasoning_chars,
-                )
-                stop_thinking()
-                return LLMResponse(
-                    content=(
-                        f"The model's reply was cut off by the connection after {elapsed:.0f}s, before any "
-                        f"content arrived ({reasoning_chars} chars of reasoning were lost)."
-                    ),
-                    finish_reason="error",
-                    error_classification=ErrorClassification("network", retryable=True, should_fallback=True),
-                    usage=final_usage or {},
-                    reasoning_ms=reasoning_ms,
-                )
             # Asked inside the attempt loop so the answer can be acted on. The
             # verdict requires that nothing was emitted, so a second attempt
             # duplicates no rendered output -- the same condition the reconnect

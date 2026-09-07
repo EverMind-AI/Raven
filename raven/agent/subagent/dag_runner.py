@@ -75,8 +75,25 @@ ProgressPublisher = Callable[[str, dict], Awaitable[None]]
 # report the node has already been failed on, and the keyword is required rather
 # than defaulted: the wrong value tells the model to answer a closed desk.
 class ExceptionAnnouncer(Protocol):
+    """How a node's report reaches the main agent as its own turn.
+
+    ``awaiting_decision`` says whether the node is suspended on an answer.
+    ``informational`` says the node is still running and nothing about it has
+    changed: a stall notice. It is a third state, not a flavour of "no decision
+    pending" -- an announcer that reads ``awaiting_decision=False`` alone as
+    "the node has failed" would wake the model with a false state, which is
+    what the stall notice did before this keyword existed.
+    """
+
     async def __call__(
-        self, run_id: str, node_id: str, report: str, origin: dict, *, awaiting_decision: bool
+        self,
+        run_id: str,
+        node_id: str,
+        report: str,
+        origin: dict,
+        *,
+        awaiting_decision: bool,
+        informational: bool = False,
     ) -> None: ...
 
 
@@ -93,6 +110,85 @@ async def _emit(publisher: ProgressPublisher | None, name: str, value: dict) -> 
         await publisher(name, value)
     except Exception:  # noqa: BLE001 - progress must never fail a node
         logger.opt(exception=True).warning("DAG progress publish failed: {}", name)
+
+
+STALL_NOTICE_S = 600.0
+"""How long a running node may go without a sign of life -- a tool call, a step,
+console bytes -- before the main agent is told. A notice, not a timeout: nothing
+is cancelled. Measured 2026-09-01: a coding node sat wedged on one dead LLM call
+for 28 minutes and the only watcher was the owner's own eyes on the TUI; the
+oncall side watches GPU jobs, nobody watched the nodes. Module-level so a test
+can shrink it; per-graph plumbing can follow if one run ever needs another
+value."""
+
+
+async def _watch_stall(
+    did: Any,
+    *,
+    run_id: str,
+    node: DagNodeSpec,
+    origin: dict | None,
+    announce_exception: ExceptionAnnouncer | None,
+    progress_publisher: ProgressPublisher | None,
+    notice_s: float | None = None,
+) -> None:
+    """Tell the main agent when a running node stops showing signs of life.
+
+    Cancelled by the dispatch that started it, so it never outlives its node.
+    One notice per silent stretch: after announcing, it re-arms only once the
+    node moves again, so a node that stays wedged is reported once rather than
+    on every poll. Nothing here may fail the node -- every beat swallows its
+    own errors.
+    """
+    quiet_s = STALL_NOTICE_S if notice_s is None else notice_s
+    announced_for: int | None = None
+    poll_s = max(0.01, min(30.0, quiet_s / 10))
+    while True:
+        await asyncio.sleep(poll_s)
+        try:
+            last = did.last_event_ms or did.started_at_ms
+            if _now_ms() - last < quiet_s * 1000 or announced_for == last:
+                continue
+            announced_for = last
+            minutes = max(1, int((_now_ms() - last) / 60000))
+            await _emit(
+                progress_publisher,
+                "dag_node_stalled",
+                {"run_id": run_id, "node": node.id, "quiet_ms": _now_ms() - last},
+            )
+            if announce_exception is None or origin is None:
+                continue
+            await announce_exception(
+                run_id,
+                node.id,
+                (
+                    f"Stall notice: node '{node.id}' (agent '{node.subagent}') has shown no sign of "
+                    f"life for {minutes} minutes -- no tool call, no step, no output. It has not "
+                    f"failed and nothing is waiting for an answer; this is information, not a "
+                    f"suspension. If the rest of the run is moving, waiting is fine. If the node "
+                    f"looks wedged, cancel the run and re-dispatch -- staged workspaces and instance "
+                    f"handles survive a cancel. No further notice comes unless it moves and stalls "
+                    f"anew."
+                ),
+                origin,
+                # The announcer's contract requires this keyword. Without it the
+                # production announcer raised TypeError, the beat below swallowed
+                # it, and the notice never left this coroutine: the progress event
+                # fired while the main agent heard nothing.
+                awaiting_decision=False,
+                # And the notice is a third state: the node is still running. An
+                # announcer reading "no decision pending" alone would head the
+                # injected turn with "has failed", which is the opposite of what
+                # the report says; a bound foreground call drops it, on purpose,
+                # because the model inside that call cannot act on anything
+                # until the call returns (the progress event above still reaches
+                # the panel).
+                informational=True,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - a notice must never fail the node
+            logger.opt(exception=True).debug("stall watch for node {} skipped a beat", node.id)
 
 
 async def _write_node_status(session_key: str | None, run_id: str, node_id: str, agent: str, status: str) -> None:
@@ -1352,6 +1448,16 @@ async def _run_node(
                     instance=(session_key or "", node.subagent, node.instance or node.id),
                     prompt=prompt,
                 ) as did:
+                    stall_watch = asyncio.create_task(
+                        _watch_stall(
+                            did,
+                            run_id=store.run_id,
+                            node=node,
+                            origin=origin,
+                            announce_exception=announce_exception,
+                            progress_publisher=progress_publisher,
+                        )
+                    )
                     try:
                         result = await agent_backend.run(
                             prompt,
@@ -1370,6 +1476,7 @@ async def _run_node(
                             **state_kwargs,
                         )
                     finally:
+                        stall_watch.cancel()
                         node_activity[node.id] = did.as_meta()
             # The whole answer when the reply cap cut one: the in-context copy of
             # a terminal output is capped again on the way out (see

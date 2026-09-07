@@ -218,7 +218,6 @@ def make_provider(config: Config, model: str | None = None):
         temperature=defaults.temperature,
         reasoning_effort=defaults.reasoning_effort,
         timeout=defaults.llm_call_timeout,
-        stream_idle_timeout=defaults.stream_idle_timeout,
     )
     return provider
 
@@ -245,7 +244,6 @@ def make_lazy_provider(config: Config):
             temperature=defaults.temperature,
             reasoning_effort=defaults.reasoning_effort,
             timeout=defaults.llm_call_timeout,
-            stream_idle_timeout=defaults.stream_idle_timeout,
         ),
         initial_endpoint_label=initial_endpoint_label,
     )

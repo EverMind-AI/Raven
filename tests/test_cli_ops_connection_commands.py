@@ -215,23 +215,3 @@ def test_add_refuses_rather_than_erasing_entries_the_reader_filtered(monkeypatch
         _write({"id": "cpu", "display_name": "CPU box", "transport": "local"})
 
     assert json.loads(path.read_text())["connections"] == [{"display_name": "typo, no id"}]
-
-
-def test_the_probe_counts_the_cards_and_writes_a_device_line_admission_can_read():
-    """The real two-card box probed to a "+"-joined device list and no count, so
-    admission read the row as a 128-core machine (2026-09-07). The count is what
-    `gpus` is for, and matching cards are spelled "N x <card>", the other form the
-    readers infer a count from."""
-    from raven.cli.ops_connection_commands import _parse_probe
-    from raven.ops import connections
-
-    out = "CORES=128\nMEM=463\nGPU=NVIDIA A800-SXM4-80GB, 81920 MiB|NVIDIA A800-SXM4-80GB, 81920 MiB\n"
-    row = _parse_probe(out)
-
-    assert row["kind"] == "gpu" and row["gpus"] == 2
-    assert row["device"] == "2 x NVIDIA A800-SXM4-80GB, 81920 MiB"
-    assert connections.resource_unit(row) == "gpus" and connections.capacity(row)["gpus"] == 2
-
-    mixed = _parse_probe("CORES=64\nGPU=NVIDIA A100|NVIDIA H100\n")
-    assert mixed["gpus"] == 2 and mixed["device"] == "NVIDIA A100 + NVIDIA H100"
-    assert connections.resource_unit(mixed) == "gpus", "an explicit count carries a mixed box too"

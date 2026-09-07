@@ -293,10 +293,11 @@ async def run_script(
     env["PPT_FIGURES_DIR"] = str(project.figures_dir)
     env["PPT_OUTPUT"] = str(staging)
     env["PPT_SLIDE_LINES"] = str(lines_map)
-    # No MPLBACKEND on purpose: matplotlib is here for the formula typesetter
-    # (services/assets/layout), not for the program. Charts on this route are drawn
-    # with python-pptx so they stay editable and on the deck's palette, and a
-    # backend set here would read as an invitation to plot into a picture instead.
+    # No MPLBACKEND: matplotlib is not a dependency of this route. It sat here as a
+    # leftover from the schema route's SVG stack, where it belongs and where
+    # pyproject still declares it -- and on this route the only thing it did was
+    # suggest an import that raises. Charts here are drawn with python-pptx, which
+    # keeps them editable and on the deck's palette.
     if template:
         # Two paths, because they answer different questions. The prepared copy is
         # what the deck is built in -- the template with its example pages removed,

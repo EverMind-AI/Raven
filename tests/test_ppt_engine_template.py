@@ -1920,7 +1920,7 @@ def test_backdrop_sits_behind_the_page_cover_cropped_and_washed(tmp_path: Path) 
     presentation, slide, image = _canvas(tmp_path)
     namespace = "http://schemas.openxmlformats.org/drawingml/2006/main"
 
-    picture = backdrop(slide, image, alpha=0.3, scrim=None)
+    picture = backdrop(slide, image, alpha=0.3)
 
     tree = slide.shapes._spTree
     assert list(tree).index(picture._element) == 2, "behind everything: first drawn shape in the tree"
@@ -1933,56 +1933,6 @@ def test_backdrop_sits_behind_the_page_cover_cropped_and_washed(tmp_path: Path) 
     fix = picture._element.find(f".//{{{namespace}}}blip/{{{namespace}}}alphaModFix")
     assert fix is not None and fix.get("amt") == "30000"
     assert slide.shapes[-1].text_frame.text == "the title", "the page's own shapes are untouched"
-
-
-def test_backdrop_by_default_dims_the_photograph_under_a_plane_of_ink_and_sets_the_type_light(tmp_path: Path) -> None:
-    """The form a reference cover uses: the photograph at full strength, a plane of the
-    theme's ink over it, white type -- against a live cover whose photograph was washed to
-    30% on a white page under black type and read as fog. A run already in a saturated
-    accent keeps its colour: it is the one thing the page says with colour."""
-    from pptx.dml.color import RGBColor
-    from pptx.util import Inches
-
-    from raven_ppt.services.template.compose import backdrop
-
-    presentation, slide, image = _canvas(tmp_path)
-    kicker = slide.shapes.add_textbox(Inches(1), Inches(0.4), Inches(4), Inches(0.5))
-    kicker.text_frame.text = "01 / 06"
-    kicker.text_frame.paragraphs[0].runs[0].font.color.rgb = RGBColor(0xFF, 0x6A, 0x00)
-    namespace = "http://schemas.openxmlformats.org/drawingml/2006/main"
-
-    picture = backdrop(slide, image)
-
-    tree = list(slide.shapes._spTree)
-    assert tree.index(picture._element) == 2
-    fix = picture._element.find(f".//{{{namespace}}}blip/{{{namespace}}}alphaModFix")
-    assert fix is not None and fix.get("amt") == "100000", "the photograph itself is at full strength"
-    plane = slide.shapes[1]
-    assert tree.index(plane._element) == 3 and plane.name == "backdrop scrim"
-    assert (plane.width, plane.height) == (presentation.slide_width, presentation.slide_height)
-    colour = plane._element.spPr.find(f"{{{namespace}}}solidFill/{{{namespace}}}srgbClr")
-    assert colour.get("val") == "000000", "the theme's dk1 is the ink"
-    assert colour.find(f"{{{namespace}}}alpha").get("val") == "62000"
-    assert plane.line.fill.type is None or plane.line.fill.type == 5, "no outline"  # 5 = MSO_FILL.BACKGROUND
-    title_run = slide.shapes[-2].text_frame.paragraphs[0].runs[0]
-    assert str(title_run.font.color.rgb) == "FFFFFF", "the title is set to the theme's lt1"
-    kicker_run = slide.shapes[-1].text_frame.paragraphs[0].runs[0]
-    assert str(kicker_run.font.color.rgb) == "FF6A00", "a saturated accent stays"
-
-
-def test_drop_shape_refuses_a_layout_shape_and_names_the_way_round(tmp_path: Path) -> None:
-    """A live cover deleted the layout's whole design group to make room for a washed
-    photograph; the layout is the template's and shared by every page on it."""
-    from raven_ppt.services.template.compose import drop_shape
-
-    presentation, slide, _ = _canvas(tmp_path)
-    on_layout = presentation.slide_layouts[0].shapes[0]
-
-    with pytest.raises(ValueError, match="on a layout, not on the page"):
-        drop_shape(on_layout)
-    assert len(presentation.slide_layouts[0].shapes) >= 1, "nothing was removed"
-    drop_shape(slide.shapes[-1])
-    assert len(slide.shapes) == 0, "a page's own shape still goes"
 
 
 def test_backdrop_takes_a_box_and_refuses_an_alpha_that_is_not_a_wash(tmp_path: Path) -> None:
@@ -2002,156 +1952,6 @@ def test_backdrop_takes_a_box_and_refuses_an_alpha_that_is_not_a_wash(tmp_path: 
         backdrop(slide, image, alpha=1.5)
     with pytest.raises(ValueError, match="not one"):
         backdrop(slide, image.with_name("missing.png"))
-
-
-def test_backdrop_in_a_box_lightens_only_the_type_the_plane_covers(tmp_path: Path) -> None:
-    """A boxed photograph across the lower half of the page turned a title at y=1 white,
-    with nothing dark behind it: the type on the page's own light ground would vanish.
-    The plane is where the page went dark, and only the type it covers follows."""
-    from pptx.dml.color import RGBColor
-    from pptx.util import Inches
-
-    from raven_ppt.services.template.compose import backdrop
-
-    _, slide, image = _canvas(tmp_path)
-    title = slide.shapes[0]
-    covered = slide.shapes.add_textbox(Inches(1), Inches(5), Inches(6), Inches(1))
-    covered.text_frame.text = "a caption over the photograph"
-    straddling = slide.shapes.add_textbox(Inches(1), Inches(3), Inches(6), Inches(1))
-    straddling.text_frame.text = "a line the plane's edge crosses"
-    kicker = slide.shapes.add_textbox(Inches(1), Inches(6), Inches(4), Inches(0.5))
-    kicker.text_frame.text = "01 / 06"
-    kicker.text_frame.paragraphs[0].runs[0].font.color.rgb = RGBColor(0xFF, 0x6A, 0x00)
-
-    backdrop(slide, image, box=(0, 3.5, 13.333, 4))
-
-    def colour_of(shape):
-        run = shape.text_frame.paragraphs[0].runs[0]
-        return str(run.font.color.rgb) if run.font.color.type is not None else None
-
-    assert colour_of(title) is None, "the title at y=1 is outside the plane and keeps the template's ink"
-    assert colour_of(covered) == "FFFFFF"
-    assert colour_of(straddling) == "FFFFFF", "a shape the plane reaches at all is over the dark part"
-    assert colour_of(kicker) == "FF6A00", "a saturated accent stays"
-
-
-def test_backdrop_in_a_box_reads_grouped_type_in_page_space(tmp_path: Path) -> None:
-    """A group draws its children in a space of its own and places that space on the
-    page, so a child's frame is not where it sits: a caption grouped at page (1, 5)
-    carried child-space numbers off the page and stayed dark over a lower-half scrim,
-    while a grouped title whose child space put it at y=5 sat at y=3 on the page and
-    went white over the light ground. Both frames are carried through the group's
-    transform before the test."""
-    from pptx.util import Inches
-
-    from raven_ppt.services.template.compose import backdrop
-
-    _, slide, image = _canvas(tmp_path)
-    captioned = slide.shapes.add_group_shape()
-    caption = captioned.shapes.add_textbox(Inches(10), Inches(10), Inches(4), Inches(1))
-    caption.text_frame.text = "a grouped caption over the photograph"
-    # python-pptx sizes the group to its children (off == chOff): move the group to
-    # page (1, 5) and leave its child space at (10, 10), where the plane is not.
-    placed = captioned._element.grpSpPr.xfrm
-    placed.off.x, placed.off.y = Inches(1), Inches(5)
-    titled = slide.shapes.add_group_shape()
-    title = titled.shapes.add_textbox(0, Inches(5), Inches(6), Inches(0.4))
-    title.text_frame.text = "a grouped title above the photograph"
-    # The group's frame reaches the plane (page 3..5); its child, at the top of a
-    # child space two inches tall, lands at page 3..3.4, above the plane's 3.5.
-    placed = titled._element.grpSpPr.xfrm
-    placed.off.x, placed.off.y = Inches(1), Inches(3)
-    placed.ext.cy = placed.chExt.cy = Inches(2)
-
-    backdrop(slide, image, box=(0, 3.5, 13.333, 4))
-
-    def colour_of(shape):
-        run = shape.text_frame.paragraphs[0].runs[0]
-        return str(run.font.color.rgb) if run.font.color.type is not None else None
-
-    assert colour_of(caption) == "FFFFFF", "grouped, at page (1, 5): under the plane"
-    assert colour_of(title) is None, "grouped, at page (1, 3): above the plane, on the light ground"
-
-
-def test_backdrop_in_a_box_follows_a_group_that_is_mirrored_or_turned(tmp_path: Path) -> None:
-    """A group mirrors (`flipH`) and turns (`rot`) its frame about its centre after placing
-    its children, so a child's numbers can put it on the other side of the page from
-    where it is drawn -- the beige template groups text this way. A mirrored group
-    spanning x=1..7: its child at local x=0..1 is drawn at x=6..7, under a scrim at
-    x=4..7.5, and its child at local x=5..6 is drawn at x=1..2, on the light ground.
-    A group turned a quarter clockwise: the child along its bottom edge stands up its
-    right side, above the plane; the child at its right edge lies along the bottom,
-    under it."""
-    from pptx.util import Inches
-
-    from raven_ppt.services.template.compose import backdrop
-
-    _, slide, image = _canvas(tmp_path)
-    mirrored = slide.shapes.add_group_shape()
-    drawn_right = mirrored.shapes.add_textbox(0, Inches(5), Inches(1), Inches(1))
-    drawn_right.text_frame.text = "at local x=0, drawn at x=6"
-    drawn_left = mirrored.shapes.add_textbox(Inches(5), Inches(5), Inches(1), Inches(1))
-    drawn_left.text_frame.text = "at local x=5, drawn at x=1"
-    frame = mirrored._element.grpSpPr.xfrm
-    frame.off.x = Inches(1)
-    frame.set("flipH", "1")
-    turned = slide.shapes.add_group_shape()
-    stood_up = turned.shapes.add_textbox(Inches(2), Inches(4.5), Inches(1), Inches(0.5))
-    stood_up.text_frame.text = "along the bottom edge, turned onto the right side"
-    laid_down = turned.shapes.add_textbox(Inches(5), Inches(3), Inches(1), Inches(0.5))
-    laid_down.text_frame.text = "at the right edge, turned onto the bottom"
-    frame = turned._element.grpSpPr.xfrm
-    # The frame page (2, 3) to (6, 5), centre (4, 4), a quarter turn clockwise: a point
-    # (x, y) in it goes to (8 - y, x).
-    frame.off.x, frame.off.y = Inches(2), Inches(3)
-    frame.ext.cx = frame.chExt.cx = Inches(4)
-    frame.ext.cy = frame.chExt.cy = Inches(2)
-    frame.chOff.x, frame.chOff.y = Inches(2), Inches(3)
-    frame.set("rot", str(90 * 60000))
-
-    backdrop(slide, image, box=(4, 3.5, 3.5, 4))
-
-    def colour_of(shape):
-        run = shape.text_frame.paragraphs[0].runs[0]
-        return str(run.font.color.rgb) if run.font.color.type is not None else None
-
-    assert colour_of(drawn_right) == "FFFFFF", "mirrored under the scrim"
-    assert colour_of(drawn_left) is None, "mirrored onto the light ground"
-    assert colour_of(laid_down) == "FFFFFF", "turned onto the bottom, page (4.5..5, 5..6), under the scrim"
-    assert colour_of(stood_up) is None, "turned onto the right side, page (3..3.5, 2..3), above the plane"
-
-
-def test_backdrop_in_a_box_visits_a_turned_group_whose_declared_frame_misses_the_plane(tmp_path: Path) -> None:
-    """A group's declared frame is the untransformed one: turned a quarter, the group
-    lies somewhere else on the page. Pruned on that frame before its turn was applied,
-    a group at x=1..3, y=1..7 missed a scrim at x=3.5..5.5, y=2.5..5.5 and its top-edge
-    child, drawn under the scrim at x=4..5, y=3..5, stayed dark. A group is never
-    pruned on its own frame; its children are judged where the turn puts them."""
-    from pptx.util import Inches
-
-    from raven_ppt.services.template.compose import backdrop
-
-    _, slide, image = _canvas(tmp_path)
-    group = slide.shapes.add_group_shape()
-    top_edge = group.shapes.add_textbox(Inches(1), Inches(1), Inches(2), Inches(1))
-    top_edge.text_frame.text = "along the top edge, turned under the scrim"
-    bottom_edge = group.shapes.add_textbox(Inches(1), Inches(6), Inches(2), Inches(1))
-    bottom_edge.text_frame.text = "along the bottom edge, turned onto the light ground"
-    # The frame page (1, 1) to (3, 7), centre (2, 4), a quarter turn clockwise: a point
-    # (x, y) in it goes to (6 - y, x + 2). The top-edge child lands at x=4..5, y=3..5,
-    # the bottom-edge child at x=-1..0, y=3..5; the frame itself, untransformed, is
-    # x=1..3 and never touches a scrim at x=3.5..5.5.
-    frame = group._element.grpSpPr.xfrm
-    frame.set("rot", str(90 * 60000))
-
-    backdrop(slide, image, box=(3.5, 2.5, 2, 3))
-
-    def colour_of(shape):
-        run = shape.text_frame.paragraphs[0].runs[0]
-        return str(run.font.color.rgb) if run.font.color.type is not None else None
-
-    assert colour_of(top_edge) == "FFFFFF", "turned to x=4..5, y=3..5: under the scrim"
-    assert colour_of(bottom_edge) is None, "turned to x=-1..0, y=3..5: off the plane"
 
 
 def test_layout_pictures_names_the_layouts_photographs_and_replace_picture_swaps_them(tmp_path: Path) -> None:
@@ -2201,7 +2001,7 @@ def test_a_washed_backdrop_renders_as_a_blend_not_a_slab(tmp_path: Path) -> None
     if not available().can_rasterise:
         pytest.skip("needs a PDF rasteriser")
     presentation, slide, image = _canvas(tmp_path, shade=(0, 0, 0))
-    backdrop(slide, image, alpha=0.3, scrim=None)
+    backdrop(slide, image, alpha=0.3)
     deck = tmp_path / "deck.pptx"
     presentation.save(str(deck))
 

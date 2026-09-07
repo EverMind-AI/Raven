@@ -1081,35 +1081,6 @@ async def _replannable_tool(tmp_path, **kw) -> tuple["SubAgentDagTool", dict]:
     return tool, live
 
 
-async def test_is_awaiting_decision_reads_the_runs_own_desk(tmp_path) -> None:
-    """The predicate the resolve tool consults before it pays for a replan. It has
-    to answer per (run, node) off the live desk, not per run: a graph suspends one
-    node at a time and the answer for a sibling is exactly the mistake this gate
-    exists to make free."""
-    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
-    from raven.agent.subagent.dag_tool import SubAgentDagTool
-
-    tool = SubAgentDagTool(workspace=tmp_path, agents=[ThirdPartyCliSubagentConfig(name="x", command="true")])
-
-    assert tool.is_awaiting_decision(_OLD_RUN_ID, "a") is False, "no desk means no run to answer for"
-
-    desk = AdjudicationDesk()
-    tool._desks[_OLD_RUN_ID] = desk
-    assert tool.is_awaiting_decision(_OLD_RUN_ID, "a") is False, "a desk with nothing open awaits nothing"
-
-    desk.open("a")
-    assert tool.is_awaiting_decision(_OLD_RUN_ID, "a") is True
-    assert tool.is_awaiting_decision(_OLD_RUN_ID, "b") is False, "one node's suspension is not another's"
-    assert tool.is_awaiting_decision("20260101T000000000000Z-deadbeef", "a") is False
-
-    desk.resolve("a", "replan", "the plan was wrong")
-    assert tool.is_awaiting_decision(_OLD_RUN_ID, "a") is True, (
-        "an answered but unconsumed node is still on the desk; only take/close retires it"
-    )
-    desk.take("a")
-    assert tool.is_awaiting_decision(_OLD_RUN_ID, "a") is False
-
-
 async def test_replanning_refuses_a_redeclared_id(tmp_path) -> None:
     """`b` belongs to the old run forever, whatever became of it."""
     tool, live = await _replannable_tool(tmp_path)
@@ -2572,3 +2543,44 @@ async def test_a_registry_that_is_not_a_json_object_also_degrades_to_empty() -> 
 
     assert known.owner == {}
     assert known.state == {}
+
+
+def test_an_invented_node_field_gets_the_closed_set_in_one_message() -> None:
+    """pydantic's extra_forbidden names the field but not the set it violated,
+    and the measured recovery was another guess (a node carried 'mode',
+    2026-09-01). The refusal now lists every legal field once."""
+    with pytest.raises(DagValidationError) as exc:
+        parse_dag_spec(
+            {
+                "task_summary": "an invented field is named and answered",
+                "nodes": [
+                    {
+                        "id": "a",
+                        "subagent": "x",
+                        "node_summary": "go",
+                        "prompt_template": "go",
+                        "mode": "acceptEdits",
+                    }
+                ],
+            }
+        )
+    message = str(exc.value)
+    assert "'nodes.0.mode'" in message
+    assert "instance" in message and "depends_on" in message and "inputs" in message
+    assert "task_summary, nodes, confirm" in message
+
+
+def test_the_oversized_graph_hint_names_the_ref_escape_hatch() -> None:
+    """The graph JSON is the one call whose size scales with prose written into
+    it, and the generic "smaller form" advice sent the model toward cutting
+    content (measured 2026-09-02: a graph carrying the task rules verbatim in
+    every node hit the reply cap mid-write). The tool's own hint has to name
+    the escape hatch that already exists."""
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+
+    hint = SubAgentDagTool.incomplete_hint.fget(None)  # type: ignore[union-attr]
+    assert "{{ ref:<path> }}" in hint
+    assert "carries the reference, not the text" in hint
+    assert "Do not shorten prompts by dropping task rules" in hint
+    prompt_doc = _NODE_SCHEMA["properties"]["prompt_template"]["description"]
+    assert "A long prompt belongs in a file" in prompt_doc

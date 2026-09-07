@@ -104,30 +104,6 @@ estimate has none."""
 #: away from sorted, so the question cannot be asked.
 _MIN_RANKED_ROWS = 4
 
-#: The most columns a reader can carry across one row. Past it the cells become slivers
-#: and the row-to-row comparison the table exists for stops working, whatever renderer
-#: shows it. Measured over the 2026-09-04 corpus - nine reports from three vendors, 32
-#: tables - where the count splits the shapes cleanly: every ordinary comparison table
-#: sits at 8 or below, and above it are the matrices that put the rank, every criterion,
-#: the total, the venue and the size in one grid (ours at 10 on three briefs, a
-#: competitor's twice at 13).
-#: Width in characters is reported beside the count and deliberately not thresholded: it
-#: is set by how much prose the cells carry, and a 5-column table of long cells wraps into
-#: something still readable while a 13-column one does not.
-_MAX_COMPARED_COLUMNS = 8
-
-#: An inline markdown link. Collapsed to its own text before a width is measured, because
-#: that is what the reader sees where the destination is hidden behind it.
-_INLINE_LINK_RE = re.compile(r"\[(?P<text>[^\]]*)\]\([^)]*\)")
-
-#: A URL the reader meets at full length, so a link written inline does not count.
-#: A cell that is NOTHING BUT one or more bare URLs. Whole-cell on purpose: the report
-#: template requires every specific number to carry its full source, so a criterion cell
-#: routinely reads "5 https://example.com/source". A test for a URL ANYWHERE in the cell
-#: therefore excused every sourced data column, and a ten-column matrix of sourced
-#: criteria escaped the width check entirely by being properly sourced.
-_URL_ONLY_CELL_RE = re.compile(r"^<?https?://\S+>?(?:\s+<?https?://\S+>?)*$")
-
 #: A header that names a column holding a summed score. Only a hint: the column is found
 #: by arithmetic below, and this decides ties. Deliberately not a table of translations -
 #: a report in a language nobody listed would lose the check that matters most.
@@ -474,70 +450,6 @@ def check_unfetched_cells(tables: list[Table]) -> list[Finding]:
     return findings
 
 
-def _rendered(cell: str) -> str:
-    """The cell at the width a reader meets it: an inline link is its own text."""
-    return _INLINE_LINK_RE.sub(lambda m: m.group("text"), cell).strip()
-
-
-def link_columns(table: Table) -> list[int]:
-    """Column indices whose body cells hold nothing but bare URLs.
-
-    Held out of the count below, and named separately in the finding. A source column is
-    one fixed cost the reader never compares across rows - the eye goes down it, not along
-    it - and the report template asks for full URLs, so counting it would charge a table
-    for being properly sourced.
-
-    The test is whole-cell rather than "contains a URL", and that distinction is the whole
-    exemption. Because the template asks every number to carry its source, a criterion
-    cell reads "5 https://example.com/source"; excusing those excused eight columns of a
-    ten-column matrix, so the widest tables could escape this check by being well sourced.
-    A cell that carries a value AND its source is a compared column: the value is what
-    the reader reads across.
-    """
-    out: list[int] = []
-    for idx in range(table.width):
-        vals = [r[idx] for r in table.rows if idx < len(r) and r[idx].strip()]
-        if not vals:
-            continue
-        if sum(1 for v in vals if _URL_ONLY_CELL_RE.match(_rendered(v))) / len(vals) >= 0.6:
-            out.append(idx)
-    return out
-
-
-def check_table_width(tables: list[Table]) -> list[Finding]:
-    """Tables carrying more compared columns than a row can be read across.
-
-    Soft, and asked of every table rather than of one designated "main" one: which table
-    carries the comparison is a judgement, while how many columns it has is not.
-
-    The last two columns are named because the finding is otherwise a scold. The fix is to
-    move a column into per-candidate prose or a second table, and the ones at the end are
-    where a matrix accretes - the rank and the criteria arrive first, the venue and the
-    sizes get appended.
-    """
-    findings: list[Finding] = []
-    for t in tables:
-        links = set(link_columns(t))
-        compared = [i for i in range(t.width) if i not in links]
-        if len(compared) <= _MAX_COMPARED_COLUMNS:
-            continue
-        widths = [
-            max(len(_rendered(t.header[i])), *(len(_rendered(r[i])) for r in t.rows if i < len(r)), 0) for i in compared
-        ]
-        # Two spaces of padding and one pipe per column, plus the closing pipe.
-        rendered = sum(widths) + 3 * len(compared) + 1
-        trailing = ", ".join(_rendered(t.header[i]) or f"column {i + 1}" for i in compared[-2:])
-        aside = f", {len(links)} link column(s)" if links else ""
-        findings.append(
-            Finding(
-                kind="too_many_compared_columns",
-                detail=f"table@L{t.line_no}: {len(compared)} compared column(s){aside}, "
-                f"{rendered} chars wide; last two: {trailing}",
-            )
-        )
-    return findings
-
-
 def rows_out_of_order(values: list[float]) -> int:
     """How many rows would have to move for the column to be non-increasing.
 
@@ -767,7 +679,6 @@ def audit(path: Path) -> Audit:
                 Finding(kind="ragged_table", detail=f"table@L{t.line_no}: {len(ragged)} row(s) off {t.width} columns")
             )
 
-    result.findings += check_table_width(tables)
     result.findings += check_estimates(tables)
     result.findings += check_ranking(tables)
     result.findings += check_unfetched_cells(tables)

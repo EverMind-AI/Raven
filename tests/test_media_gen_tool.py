@@ -118,44 +118,6 @@ async def test_a_dedicated_image_model_goes_to_the_images_api_with_its_reference
     assert reference["type"] == "image_url" and reference["image_url"]["url"].startswith("data:image/png;base64,")
 
 
-async def test_a_confined_tool_accepts_an_output_dir_inside_the_bound_session(monkeypatch, tmp_path) -> None:
-    """The session directory a turn binds may live outside agent home; the
-    fence has to admit it, or a confined task cannot keep its images in its
-    own folder -- the case output_dir exists for."""
-    from raven.agent import workdir
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
-
-    home, session = tmp_path / "home", tmp_path / "session"
-    home.mkdir()
-    session.mkdir()
-    tool = _image_tool(monkeypatch, handler, model="openai/gpt-image-2", workspace=home)
-    tool._restrict_to_workspace = True
-    with workdir.bind(session):
-        out = json.loads(await tool.execute("a mark", output_dir="assets/generated"))
-        assert Path(out["paths"][0]).parent == (session / "assets/generated").resolve()
-        with pytest.raises(PermissionError):
-            tool._output_path("png", str(tmp_path / "elsewhere"))
-
-
-async def test_output_dir_places_the_image_where_the_caller_asks(monkeypatch, tmp_path) -> None:
-    """A task confined to one folder needs its images inside that folder, not in
-    the workspace-level generated/ scratch; a confined tool still refuses a
-    directory outside the workspace."""
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
-
-    ws = tmp_path / "ws"
-    tool = _image_tool(monkeypatch, handler, model="openai/gpt-image-2", workspace=ws)
-    out = json.loads(await tool.execute("a mark", output_dir="task/assets/generated"))
-    assert Path(out["paths"][0]).parent == (ws / "task/assets/generated").resolve()
-    tool._restrict_to_workspace = True
-    with pytest.raises(PermissionError):
-        tool._output_path("png", str(tmp_path / "elsewhere"))
-
-
 async def test_an_openai_compatible_base_takes_a_size_and_edits_by_multipart(monkeypatch, tmp_path) -> None:
     seen: list[httpx.Request] = []
 

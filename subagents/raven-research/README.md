@@ -176,20 +176,12 @@ through the fork's `build_session_modes`, and compares effective values with
 every difference - the 20 and 30 caps are named as the exhaustion window they
 open, not excused as bounds. The fork's own `tests/test_shipped_flow_parity.py`
 covers the fork's profiles and examples, not this folder's `config.json`, which
-is the config the launcher actually serves. The same file holds the trunk
-twin's **class defaults** and its retired-label tables against this checkout's,
-and since 2026-09-07 the relation is "the twin may lead, never lag", not
-equality: this checkout is kept as the record of upstream `a903a424` and is no
-longer re-vendored, while the twin takes upstream's changes directly (the first
-was `ea19b948`, dr@3.7). Every default the twin has moved past the record is
-named in that file's `TWIN_LEADS` table with the upstream commit and reason; a
-difference with no entry fails, a twin-only field with no entry fails, and an
-entry whose values have stopped differing fails, so the allowance cannot go
-stale. The retired-label check requires every retirement this checkout makes
-to be present in the twin unless its base is one the twin has since retired.
-Intentional differences live in that table; anything else is drift. The slice
-comparison in `tests/test_agents_research_launcher.py` cannot see a default (a
-written value hides it), which is why the class defaults are compared at all.
+is the config the launcher actually serves. The same file pins the trunk twin's
+**class defaults** and its retired-label tables to the fork's, field for field:
+the slice comparison in `tests/test_agents_research_launcher.py` cannot see a
+default (a written value hides it), and a profile that leaves a knob unpinned
+would otherwise get the fork's behaviour on one launcher and the pre-`cdb9c1e`
+behaviour on the other.
 
 `agents.defaults.requestTimeoutSeconds` is deliberately **not** on that list.
 It is the only knob the three profiles used to differ on that a session cannot
@@ -242,12 +234,6 @@ choosing between them rides on each mode's own description (`MODE_LABELS` in
 installed, probe or no probe.
 
 ## Updating to a newer upstream
-
-**As of 2026-09-07 this checkout is not updated.** It is kept as the record of
-upstream `a903a424` plus the seven patches, and upstream's later commits are
-ported into the trunk twin under `agents/raven-research/plugins/research-flow`
-instead (see the parity note above). The procedure below is retained for the
-day that decision is reversed; nothing in it has been exercised since.
 
 The checkout carries **seven local patches**, all under `./patches/`, so an update
 is a replacement of `Raven-X/` followed by re-applying them. Everything else

@@ -68,23 +68,6 @@ class DirectChatCreation(NamedTuple):
     created_at_ms: int
 
 
-class NotAddressableError(RuntimeError):
-    """A direct chat refused because of what the agent IS, not because of a fault.
-
-    Distinct from every other failure on this path because it is the only one a
-    caller can act on: the agent is switched off, or it is stateless and the
-    task belongs in a spawn. Both sentences are written for the person who
-    asked, and a surface that hands them a generic failure instead has thrown
-    away the only useful thing it had.
-
-    A type rather than a message match, because the surface has to make that
-    distinction and ``raven.agent`` cannot import ``raven.rpc`` to make it
-    itself (the "inner layers know no surface" contract). Subclasses
-    ``RuntimeError`` so the callers that already catch that are unchanged --
-    this narrows what a raise MEANS without narrowing what it is.
-    """
-
-
 class DirectChatError(RuntimeError):
     """A failed direct-chat turn, carrying that turn's ``DirectTurnMeta``.
 
@@ -362,7 +345,6 @@ class DirectChatHandoff:
 __all__ = [
     "DirectChatCreation",
     "DirectChatError",
-    "NotAddressableError",
     "DirectChatHandoff",
     "DirectChatRecord",
     "DirectTurnMeta",

@@ -93,7 +93,6 @@ def publish(
 
 
 PUBLISHED_RECORD = "published.json"
-REFUSED_RECORD = "refused.json"
 
 
 def record_published(project, path: Path, digest: str, pages: int) -> None:
@@ -115,32 +114,6 @@ def record_published(project, path: Path, digest: str, pages: int) -> None:
     entries = [e for e in held.get("published", []) if isinstance(e, dict) and e.get("path") != str(path)]
     entries.append({"path": str(path), "sha256": digest, "pages": pages})
     target.write_text(json.dumps({"published": entries}, ensure_ascii=False, indent=2), encoding="utf-8")
-    # What was refused before this publish no longer stands in anyone's way.
-    (project.state_dir / REFUSED_RECORD).unlink(missing_ok=True)
-
-
-def published_original(state_dir: Path, copy: Path) -> Path | None:
-    """The published deck ``copy`` is a byte-for-byte copy of, or None.
-
-    A model that wants the deliverable under a title of its own copies the
-    published deck to that name; the copy passes the digest check, but its
-    preview sat beside the original, under the original's stem.
-    """
-    import hashlib
-    import json
-
-    try:
-        digest = hashlib.sha256(copy.read_bytes()).hexdigest()
-        held = json.loads((state_dir / PUBLISHED_RECORD).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    for entry in held.get("published", []):
-        if not isinstance(entry, dict) or entry.get("sha256") != digest:
-            continue
-        original = Path(str(entry.get("path") or ""))
-        if original.name and original.resolve() != copy.resolve() and original.is_file():
-            return original
-    return None
 
 
 def published_digests(state_dir: Path) -> set[str]:
@@ -153,54 +126,6 @@ def published_digests(state_dir: Path) -> set[str]:
     except (OSError, ValueError):
         return set()
     return {str(e.get("sha256")) for e in held.get("published", []) if isinstance(e, dict) and e.get("sha256")}
-
-
-def record_refused(project, note: str, blocking: Sequence[Finding]) -> None:
-    """Note why this build was not published, for the hook to put back in front of the model.
-
-    The reason reaches the model once, in the build tool's reply. Two live runs
-    answered it with a `cp` of the refused build to a name of their own under `out/`
-    and a reply that the deck was delivered; the hook that sends such a reply back has
-    only the directory to go on, and the stage result the reason was in is gone by
-    then. Kept until the next publish, which clears it.
-    """
-    import json
-
-    target = project.state_dir / REFUSED_RECORD
-    payload = {
-        "note": note,
-        "blocking": [{"page": f.page, "kind": f.kind, "message": f.message} for f in blocking],
-    }
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    except OSError:
-        return
-
-
-def last_refusal(state_dir: Path) -> str | None:
-    """Why the last build was refused, as one passage; None once a build was published since."""
-    import json
-
-    try:
-        held = json.loads((state_dir / REFUSED_RECORD).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    if not isinstance(held, dict):
-        return None
-    note = str(held.get("note") or "").strip().rstrip(".")
-    listed: list[str] = []
-    for row in held.get("blocking", []):
-        if not isinstance(row, dict):
-            continue
-        where = f"page {row['page']}: " if row.get("page") is not None else ""
-        listed.append(f"{where}{row.get('kind', '')} -- {row.get('message', '')}")
-    if not note and not listed:
-        return None
-    if not listed:
-        return note
-    shown = "; ".join(listed[:8]) + (f" (and {len(listed) - 8} more)" if len(listed) > 8 else "")
-    return f"{note}. Standing: {shown}" if note else f"Standing: {shown}"
 
 
 def _inside_workspace(project, destination: Path) -> Path:

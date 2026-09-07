@@ -238,19 +238,9 @@ class OpenFoamExecutor(ProcessExecutor):
             "time_directories": times.split(),
             "cores": self._cores.get(idem, self._default_cores),
         }
-        # The gate admitted the job as wide as it was declared; the machine ran it
-        # as wide as decomposePar produced. Billing follows the measurement (the
-        # box was busy that wide); the disagreement is worth a line, because the
-        # declaration is what every other job's admission trusted.
-        metrics: dict[str, Any] = {}
-        declared = getattr(self, "_declared_width", {}).get(idem)
-        if declared:
-            output["cores_declared"] = int(declared)
-            if int(declared) != int(output["cores"]):
-                metrics = {"cores_declared": int(declared), "cores_measured": int(output["cores"])}
         return JobResult(
             status,
-            metrics=metrics,
+            metrics={},
             output=output,
             error=None if status is JobStatus.SUCCEEDED else _failure_reason(output["log_tail"]),
         )

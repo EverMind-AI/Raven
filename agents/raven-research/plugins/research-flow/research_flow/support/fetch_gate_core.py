@@ -63,42 +63,22 @@ mechanism, because zeroing on a failed fetch would let one dead link reopen
 search for the rest of the turn, i.e. the gate would be satisfiable without ever
 reading anything.
 
-Release valves
---------------
-Two, and they release on different evidence:
+Release valve
+-------------
+The gate opens permanently for the turn once ``release_after_failed_fetches``
+consecutive fetch attempts have failed while it was closed. Without it the gate
+is a threshold that can kill a run, and this project's rule is that any such
+threshold is structurally a zero-score bucket only one arm can fall into.
 
-* ``release_after_failed_fetches`` - consecutive fetch attempts that failed
-  while the gate was closed. The model is trying to comply and the pages are
-  dead; keeping ``web_search`` withheld would punish compliance.
-* ``release_after_closed_iterations`` (dr@3.7) - iterations that went by with
-  the gate closed and no page opened, whatever the model did in them. This is
-  the valve the first one structurally could not be: its counter only advances
-  on a *fetch attempt*, so a model whose reaction to the closed schema is to not
-  fetch at all leaves it at zero for the rest of the run. dr@3.6 measured that
-  reaction on its ON arm: 52 firings, 50 reopened by a real fetch, 0 released by
-  the failed-fetch valve (``gate_failed_fetches_while_closed`` summed to 0 over
-  the whole batch), and 2 items - browsecomp-436 and browsecomp-1012 - whose
-  gate was still closed when the run ended. Both ended as ``no_response_dud``
-  with three empty retries on the very iteration the tool was withheld; 1012 was
-  judged correct on the OFF arm. A valve that needs the model to act cannot see
-  a model that stops acting.
-
-Without a valve that always advances, the gate is a threshold that can kill a
-run, and this project's rule is that any such threshold is structurally a
-zero-score bucket only one arm can fall into. ⚠️ What this second valve does
-**not** fix: the two strandings above were empty responses on the closed
-iteration itself, and no release predicate runs before the loop has given up on
-that iteration. Whether withholding the tool *caused* those duds is not
-decidable on two items; what is decided is that "a turn with no ``web_search``
-simply answers" - the sentence an earlier version of this docstring used to
-argue a third valve away - is false on this backend: it can also fall silent.
-
-The pre-registration also listed a third valve - release when no un-fetched URL
-remains in context - which is still **not** implemented. It is not observable
-from where this rule lives: URL ownership sits in the search tool's identity
-sets and the client ledger, so a hook could only recover it by re-parsing
-rendered tool text, which is the "probe took a different path from the code
-under test" shape that has produced two self-consistent wrong diagnoses here.
+The pre-registration also listed a second valve - release when no un-fetched URL
+remains in context - which is **not** implemented, and that is a decision rather
+than an omission. Two reasons. It is not observable from where this rule lives:
+URL ownership sits in the search tool's identity sets and the client ledger, so
+a hook could only recover it by re-parsing rendered tool text, which is the
+"probe took a different path from the code under test" shape that has produced
+two self-consistent wrong diagnoses here. And it is not needed: a turn with
+nothing left to open and no ``web_search`` simply answers, which ends the loop -
+there is no state in which the absent valve leaves a turn spinning.
 """
 
 from __future__ import annotations
@@ -119,14 +99,6 @@ class FetchGate:
 
     k: int = 15
     release_after_failed_fetches: int = 2
-    release_after_closed_iterations: int = 2
-    """Iterations spent closed without a successful fetch before the gate
-    releases for the rest of the turn. Counts *iterations*, not fetch attempts,
-    so it advances even when the model's answer to the closed schema is to stop
-    fetching (dr@3.6: two runs stranded with the fetch-attempt valve at zero).
-    Default 2 mirrors the failed-fetch valve: of the 25 dr@3.6 firings whose
-    notice survived elision, 24 fetched on the very next iteration and 1 on the
-    second, so 2 leaves every observed compliant response untouched."""
 
     streak: int = 0
     """Searches since the last successful fetch. Zeroed by success only."""
@@ -139,14 +111,6 @@ class FetchGate:
     counting iterations would report a longer stall as a more active rule."""
     streak_at_fire: list[int] = field(default_factory=list)
     failed_fetches_while_closed: int = 0
-    closed_iterations: int = 0
-    """Iterations evaluated while already closed since the last close, without a
-    successful fetch in between. Zeroed on reopen and on release."""
-    released_by: str = ""
-    """Which valve released: ``"failed_fetches"`` / ``"closed_iterations"`` /
-    ``""``. Two valves that both show up as ``gate_released=True`` would be
-    unreadable downstream - dr@3.6's M1 already had to be split once because
-    "reopened" and "released" had been folded into one rate."""
     opened: int = 0
     """Successful fetches that reopened a closed gate - the mechanism check."""
 
@@ -164,8 +128,6 @@ class FetchGate:
         self.fired = 0
         self.streak_at_fire = []
         self.failed_fetches_while_closed = 0
-        self.closed_iterations = 0
-        self.released_by = ""
         self.opened = 0
 
     def observe_search(self) -> None:
@@ -186,19 +148,13 @@ class FetchGate:
             self.streak = 0
             self.closed = False
             self.failed_fetches_while_closed = 0
-            self.closed_iterations = 0
             return
         if not self.closed:
             return
         self.failed_fetches_while_closed += 1
         if self.failed_fetches_while_closed >= self.release_after_failed_fetches:
-            self._release("failed_fetches")
-
-    def _release(self, by: str) -> None:
-        self.released = True
-        self.released_by = by
-        self.closed = False
-        self.closed_iterations = 0
+            self.released = True
+            self.closed = False
 
     def evaluate(self) -> bool:
         """Whether ``web_search`` should be withheld from this iteration.
@@ -209,22 +165,12 @@ class FetchGate:
         """
         if self.released:
             return False
-        if self.closed:
-            # Already closed when this iteration starts and nothing reopened it
-            # in between: one more iteration spent closed. Counted here, not in
-            # ``observe_*``, because an iteration in which the model called no
-            # tool at all is exactly the case this valve exists for - there is
-            # no observation to hang it on.
-            self.closed_iterations += 1
-            if self.closed_iterations >= self.release_after_closed_iterations:
-                self._release("closed_iterations")
-                return False
-            return True
         if self.streak < self.k:
             return False
-        self.closed = True
-        self.fired += 1
-        self.streak_at_fire.append(self.streak)
+        if not self.closed:
+            self.closed = True
+            self.fired += 1
+            self.streak_at_fire.append(self.streak)
         return True
 
     def counters(self) -> dict[str, object]:
@@ -245,8 +191,6 @@ class FetchGate:
             "gate_max_streak": self.max_streak,
             "gate_closed_now": self.closed,
             "gate_failed_fetches_while_closed": self.failed_fetches_while_closed,
-            "gate_closed_iterations": self.closed_iterations,
-            "gate_released_by": self.released_by,
         }
 
 

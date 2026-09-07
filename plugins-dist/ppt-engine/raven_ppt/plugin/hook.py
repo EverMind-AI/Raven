@@ -43,8 +43,6 @@ later turn, or an operator's in-place edit, is never overwritten.
 from __future__ import annotations
 
 import logging
-import os
-import uuid
 from importlib.resources import files as pkg_files
 from pathlib import Path
 
@@ -52,7 +50,7 @@ from raven.agent import workdir
 from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
 from raven.utils.workspace import sync_workspace_templates
 from raven_ppt.plugin import materials
-from raven_ppt.services.publish.deliver import last_refusal, published_digests, published_original
+from raven_ppt.services.publish.deliver import published_digests
 
 MATERIALS_DIRNAME = "materials"
 OUT_DIRNAME = "out"
@@ -88,20 +86,6 @@ DELIVERED_NUDGE = (
     "holds -- how many pages and what they argue -- and end there; a question about continuing, or a "
     "note about a blocked command, is not the answer to a finished deck."
 )
-# And the third: a build the checks refused, copied by the model to a name of its own
-# under out/ and named in the reply as the deliverable. Two live runs ended their turn
-# on exactly that; the correction the announcement appends reached only the delegating
-# agent, which had to adjudicate the turn and start the run again to continue it. The
-# reason the build was refused is on disk, so the reply is sent back once with it, to
-# the one who can act on it.
-COPY_NUDGE = (
-    "The reply names {names}, but ppt_build did not publish that file: it is a copy, made outside the "
-    "publish step, of a build the checks refused, and it is not the deliverable -- the user would receive a "
-    "deck that failed its checks. {reason} Do not end the turn: fix what the build reports, run ppt_build "
-    "until it returns a pptx_path, and reply with that path. If a finding cannot be fixed, say plainly which "
-    "one and why, and end with that."
-)
-REFUSED_UNRECORDED = "Run ppt_build again and read its findings: they are what stands in the way."
 # What a reply that legitimately ends a turn without a deck says: it asks the user
 # something, or it says the work cannot be done. Anything else with no deck behind it
 # is a thought that leaked into the answer slot.
@@ -225,51 +209,6 @@ class PptEngineHook(AgentHook):
             self._books[key] = books
         return books
 
-    def _own_folder(self, bound: Path, session_key: str) -> Path:
-        """Point the turn at this session's own deck folder, and say where that is.
-
-        The host gives every session on a channel the same directory, and the
-        engine fences one deck per directory: a second task in the same channel
-        would build on the first task's template, sources and plan. So the turn is
-        repointed to a folder of this session's own before anything is staged, the
-        way the rebind_workdir grant repoints mid-turn; the enclosing bind still
-        resets it at turn end, and the same session's next turn lands in the same
-        folder. Idempotent: a turn already pointed there is left alone.
-        """
-        if not self._deck_per_session:
-            return bound
-        own = bound / DECKS_DIRNAME / _session_dirname(session_key)
-        if bound.name == own.name and bound.parent.name == DECKS_DIRNAME:
-            return bound
-        own.mkdir(parents=True, exist_ok=True)
-        workdir.repoint(own)
-        return own
-
-    async def before_iteration(self, ctx: AgentHookContext) -> HookDecision:
-        """Point a turn that skipped the inbound phase at the session's deck folder.
-
-        The host runs ``before_user_inbound`` for a user's turn only. A turn a
-        sub-agent's late result starts -- the deck agent's own research coming back
-        after the deck was delivered -- skips it, so the turn ran where the session's
-        directory points, one level above the deck: a live run answered such a return
-        with three ``edit_file`` calls on a path that did not exist there and a
-        ``ppt_build`` that found no brief, and set out to rebuild the deck from
-        nothing. The first iteration is where every turn passes.
-        """
-        if ctx.iteration not in (0, 1):
-            return HookDecision()
-        bound = workdir.current()
-        if bound is None:
-            return HookDecision()
-        root = self._own_folder(Path(bound), ctx.session_key)
-        if ctx.metadata is not None:
-            # What the inbound phase would have taken, so a deck this turn publishes is
-            # still told apart from an earlier turn's and announced.
-            ctx.metadata.setdefault(_METADATA_KEY, {}).setdefault(
-                "deck_mtimes_before", materials.deck_mtimes(root / OUT_DIRNAME)
-            )
-        return HookDecision()
-
     async def before_user_inbound(self, ctx: AgentHookContext) -> HookDecision:
         if not self._seeded:
             # First touch, not construction: the factory runs while the host
@@ -289,7 +228,19 @@ class PptEngineHook(AgentHook):
         text = ctx.inbound_content
         if bound is None or not text or not text.strip():
             return HookDecision()
-        root = self._own_folder(Path(bound), ctx.session_key)
+        if self._deck_per_session:
+            # The host gives every session on a channel the same directory, and the
+            # engine fences one deck per directory: a second task in the same
+            # channel would build on the first task's template, sources and plan.
+            # So the turn is repointed to a folder of this session's own before
+            # anything is staged, the way the rebind_workdir grant repoints
+            # mid-turn; the enclosing bind still resets it at turn end, and the
+            # same session's next turn lands in the same folder.
+            own = Path(bound) / DECKS_DIRNAME / _session_dirname(ctx.session_key)
+            own.mkdir(parents=True, exist_ok=True)
+            workdir.repoint(own)
+            bound = own
+        root = Path(bound)
         staged, taken = self._bookkeeping(root)
         try:
             declared = materials.inputs_from_prompt(text)
@@ -345,24 +296,6 @@ class PptEngineHook(AgentHook):
                 rollback_inject=[{"role": "user", "content": DELIVERED_NUDGE.format(paths=paths)}],
                 notes=["ppt_engine: reply ending a turn without naming the deck it published rolled back (1/1)"],
             )
-        named = [
-            path
-            for path in materials.unpublished_decks(root / OUT_DIRNAME, meta["deck_mtimes_before"], published)
-            if path.name in text
-        ]
-        if named and not meta.get("copy_nudged"):
-            # Before the hands-back test: "delivered, would you like changes?" names the
-            # copy and asks a question in the same breath. Once; a second such reply
-            # falls through to the unfinished nudges below.
-            meta["copy_nudged"] = True
-            nudge = COPY_NUDGE.format(
-                names=", ".join(str(path) for path in named), reason=_refused_because(root / "deck" / "state")
-            )
-            return HookDecision(
-                rollback=True,
-                rollback_inject=[{"role": "user", "content": nudge}],
-                notes=["ppt_engine: reply naming a copy the publish step never wrote rolled back (1/1)"],
-            )
         if _hands_back(text):
             return HookDecision()
         nudged = int(meta.get("unfinished_nudges", 0))
@@ -395,7 +328,7 @@ class PptEngineHook(AgentHook):
                     + (
                         f"\n\nNo deck was published this turn. {names} under {out_dir} was not written by "
                         "ppt_build, so it did not pass the checks and is not the deliverable; the deck is "
-                        f"delivered only when ppt_build publishes it. {_refused_because(Path(bound) / 'deck' / 'state')}"
+                        "delivered only when ppt_build publishes it."
                     )
                 )
             if "MEDIA:" in reply:
@@ -418,36 +351,9 @@ class PptEngineHook(AgentHook):
         # no preview. Newer than the deck it stands for is the one test that holds
         # whether the copy happened this turn or the render was skipped.
         preview = deck.with_suffix(".pdf")
-        if not _preview_of(deck, preview):
-            _preview_beside_copy(Path(bound) / "deck" / "state", deck, preview)
         if _preview_of(deck, preview):
             announced += f"\nPreview (the same deck as a PDF, for viewing): {preview}\nMEDIA: {preview}"
         return HookDecision(modified_content=reply + announced)
-
-
-def _preview_beside_copy(state_dir: Path, deck: Path, preview: Path) -> None:
-    """Give a renamed copy of the published deck the original's PDF, under its own stem.
-
-    The reply named a copy the model made of the published deck -- the digest check
-    let it through -- and the PDF the publish wrote sits beside the original, so the
-    copy would go out with no preview. Copied fresh rather than with its timestamps,
-    because the copy of the deck is newer than the render and `_preview_of` reads the
-    timestamps.
-    """
-    import shutil
-
-    original = published_original(state_dir, deck)
-    if original is None:
-        return
-    rendered = original.with_suffix(".pdf")
-    if not _preview_of(original, rendered):
-        return
-    try:
-        temporary = preview.parent / f".{preview.name}.{uuid.uuid4().hex}.tmp"
-        shutil.copyfile(rendered, temporary)
-        os.replace(temporary, preview)
-    except OSError as exc:
-        logger.warning("ppt-engine: the preview could not be put beside %s: %s", deck.name, exc)
 
 
 def _preview_of(deck: Path, preview: Path) -> bool:
@@ -456,12 +362,6 @@ def _preview_of(deck: Path, preview: Path) -> bool:
         return preview.is_file() and preview.stat().st_mtime_ns >= deck.stat().st_mtime_ns
     except OSError:
         return False
-
-
-def _refused_because(state_dir: Path) -> str:
-    """The last refusal as a sentence for the model, or where to get one."""
-    reason = last_refusal(state_dir)
-    return f"The last build was refused: {reason}." if reason else REFUSED_UNRECORDED
 
 
 def _deck_started(root: Path) -> bool:
@@ -477,7 +377,6 @@ def _hands_back(text: str) -> bool:
 
 
 __all__ = [
-    "COPY_NUDGE",
     "DELIVERED_NUDGE",
     "IDENTITY_SEATS",
     "MATERIALS_DIRNAME",
@@ -486,6 +385,5 @@ __all__ = [
     "UNFINISHED_NUDGES",
     "MisconfiguredEngineHook",
     "PptEngineHook",
-    "REFUSED_UNRECORDED",
     "seed_identity",
 ]

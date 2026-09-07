@@ -90,64 +90,6 @@ def transport_of(row: dict[str, Any]) -> str:
     return LOCAL if str(row.get("transport") or SSH).strip().lower() == LOCAL else SSH
 
 
-# How many devices a ``device`` line written as "2 x NVIDIA A800..." names.
-_DEVICE_COUNT = re.compile(r"^\s*(\d+)\s*[xX]\s")
-# A memory line such as "463 GB" or "1.5 TiB", read only when admission asks.
-_MEMORY = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(TiB|TB|T|GiB|GB|G)\b", re.IGNORECASE)
-
-
-def capacity(row: dict[str, Any]) -> dict[str, int]:
-    """What a row can hand out, in whole units. Empty when it says nothing countable.
-
-    ``gpus`` is read first; absent, a ``device`` written as "N x ..." names the
-    count. ``cores`` is the row's own field. ``memory_gb`` is parsed from the
-    memory text when it parses at all. A row that hands out nothing here is
-    admitted by job count, the way every row was before capacity existed.
-    """
-    out: dict[str, int] = {}
-    g = row.get("gpus")
-    if isinstance(g, int) and not isinstance(g, bool) and g >= 1:
-        out["gpus"] = g
-    elif str(row.get("kind") or "").strip().lower() == "gpu":
-        # The "N x ..." reading is for a GPU row only, as the admission design
-        # says: a CPU box whose device line reads "2 x Intel Xeon" hands out
-        # cores, and reading it as two devices would gate it on GPUs it has not.
-        m = _DEVICE_COUNT.match(str(row.get("device") or ""))
-        if m and int(m.group(1)) >= 1:
-            out["gpus"] = int(m.group(1))
-    c = row.get("cores")
-    if isinstance(c, int) and not isinstance(c, bool) and c >= 1:
-        out["cores"] = c
-    m = _MEMORY.match(str(row.get("memory") or ""))
-    if m:
-        n = float(m.group(1))
-        if m.group(2).lower().startswith("t"):
-            n *= 1024
-        if n >= 1:
-            out["memory_gb"] = int(n)
-    return out
-
-
-def resource_unit(row: dict[str, Any]) -> str:
-    """``gpus``, ``cores``, or "" for a row admitted by job count.
-
-    A GPU machine's cores are not what its jobs contend for, so a row that hands
-    out devices is gated on those alone -- and a GPU row whose device count is
-    unknown is gated by job count, never by its cores (reviewed 2026-09-07: a
-    probed two-card box with no count was admitted by its 128 cores, sixteen
-    jobs deep). The doctor names such a row; `gpus: N` or a "N x ..." device
-    line moves it onto device admission.
-    """
-    cap = capacity(row)
-    if "gpus" in cap:
-        return "gpus"
-    if str(row.get("kind") or "").strip().lower() == "gpu":
-        return ""
-    if "cores" in cap:
-        return "cores"
-    return ""
-
-
 @dataclass(frozen=True)
 class Problem:
     """One thing wrong with a row. ``blocking`` means the machine cannot be used.
@@ -198,8 +140,6 @@ def row_problems(row: dict[str, Any]) -> list[Problem]:
         if field != "id" and row.get(field) in (None, ""):
             out.append(Problem(f"{label}: '{field}' is missing, so there is no way onto it", blocking=True))
     for field in _WANTED:
-        if field == "concurrency" and resource_unit(row):
-            continue
         if row.get(field) in (None, ""):
             out.append(Problem(f"{label}: '{field}' is not set"))
     port = row.get("port")
@@ -210,23 +150,6 @@ def row_problems(row: dict[str, Any]) -> list[Problem]:
     conc = row.get("concurrency")
     if conc not in (None, "") and (isinstance(conc, bool) or not isinstance(conc, int) or conc < 1):
         out.append(Problem(f"{label}: 'concurrency' must be a whole number of jobs, not {conc!r}"))
-    gp = row.get("gpus")
-    if gp not in (None, "") and (isinstance(gp, bool) or not isinstance(gp, int) or gp < 1):
-        out.append(Problem(f"{label}: 'gpus' must be a whole number of devices, not {gp!r}"))
-    held_unit = resource_unit(row)
-    if str(row.get("kind") or "").strip().lower() == "gpu" and held_unit != "gpus":
-        out.append(
-            Problem(
-                f"{label}: kind is gpu but neither 'gpus' nor a device written as 'N x ...' says how many "
-                "devices it hands out; jobs are admitted by job count until it does"
-            )
-        )
-    elif held_unit and conc not in (None, ""):
-        out.append(
-            Problem(
-                f"{label}: 'concurrency' is not read on a row that says {held_unit}; capacity decides how many jobs fit"
-            )
-        )
     unit = row.get("budget_unit")
     if unit not in (None, "") and str(unit) not in _BUDGET_UNITS:
         out.append(Problem(f"{label}: 'budget_unit' should be one of {', '.join(_BUDGET_UNITS)}, not {unit!r}"))
@@ -276,7 +199,7 @@ def usable(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # solver belongs on the CPU box" would therefore pick the one machine that
 # cannot run it. What a machine has installed decides; what it is made of only
 # narrows.
-_SHOWN = ("kind", "device", "gpus", "cores", "memory", "software", "budget_unit", "concurrency", "note")
+_SHOWN = ("kind", "device", "cores", "memory", "software", "budget_unit", "concurrency", "note")
 
 # What the backend needs and the agent does not. ``transport`` is in here rather
 # than in _SHOWN on purpose: whether a machine is reached over ssh or is simply

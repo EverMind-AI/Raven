@@ -100,9 +100,8 @@
 `image_generate`，再以原尺寸查看成图。母版成图先于页面版式，模板图槽不是母版。每个主要页面族
 在布局前填写 `page_family / opening_job / visual_role / asset_lineage / reason / final_evidence`；
 `visual_role` 只用 `dominant_background / integrated_visual_field / content_first`，默认第一种。
-`integrated_visual_field` 与 `content_first` 只对当前页面族成立；文字多、包含事实、没有真图、担心误认或担心可读性
-不能单独构成选择它们的理由，也不能批量取消其他页面族的大背景。如果最终像素表明大背景妨碍了阅读，调整文字大小或
-位置，或重新生成背景，而不是放弃大背景。页面族可复用有意义的裁切或用 image edit 派生，不要求每个内容实体重新生成。
+`content_first` 只对当前页面族成立；文字多、包含事实、没有真图或担心误认不能批量取消其他页面族
+的大背景。页面族可复用有意义的裁切或用 image edit 派生，不要求每个内容实体重新生成。
 
 主视觉必须：
 

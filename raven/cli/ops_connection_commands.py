@@ -111,14 +111,7 @@ def _parse_probe(out: str) -> dict[str, Any]:
     gpu = seen.get("GPU", "")
     if gpu:
         cards = [c.strip() for c in gpu.split("|") if c.strip()]
-        # The count is what admission reads (`gpus`), and the device line is
-        # written as "N x <card>" when the cards match, which is the other
-        # spelling the readers infer a count from. Left as a "+"-joined list,
-        # the row a real two-card box probed to (2026-09-07) had no count at all,
-        # and admission fell back to job count on a machine it could have gated
-        # by device.
-        found["gpus"] = len(cards)
-        found["device"] = f"{len(cards)} x {cards[0]}" if len(set(cards)) == 1 else " + ".join(cards)
+        found["device"] = " + ".join(cards)
         found["kind"] = "gpu"
     elif "cores" in found:
         found["kind"] = "cpu"

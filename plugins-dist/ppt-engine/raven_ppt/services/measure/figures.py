@@ -248,59 +248,6 @@ def figure_findings(pptx_path: Path, bands: Bands | None = None) -> list[Finding
     ]
 
 
-# A picture that is the page, washed to a share between texture and full strength: the
-# page's ground and the picture fight, and type over both reads on fog. A reference cover
-# that works carries its photograph at full strength under a plane of ink; a live cover and
-# closing page washed to 30% under black type did not. Under the texture line the picture is
-# a faint grain behind the page's own ground; at and above the fog line it is the picture.
-WASHED_BACKDROP_PAGE_SHARE = 0.80
-WASH_TEXTURE_MAX = 0.12
-WASH_FOG_MAX = 0.80
-
-
-def washed_backdrops(pptx_path: Path) -> list[Finding]:
-    """Every page whose picture covers it washed to a share that reads as fog."""
-    try:
-        deck = open_deck(pptx_path)
-        canvas = (deck.slide_width or 0) / 914400 * ((deck.slide_height or 0) / 914400)
-    except Exception:  # noqa: BLE001 -- an unreadable deck is not a measurement
-        return []
-    if canvas <= 0:
-        return []
-    found: list[Finding] = []
-    for number, slide in enumerate(deck.slides, start=1):
-        for shape in iter_shapes(slide.shapes):
-            fill = _blip_fill(shape)
-            if fill is None:
-                continue
-            fix = fill.find(f"{{{_A}}}blip/{{{_A}}}alphaModFix")
-            if fix is None:
-                continue
-            try:
-                share = int(fix.get("amt", "100000")) / 100000
-            except ValueError:
-                continue
-            if not (WASH_TEXTURE_MAX < share < WASH_FOG_MAX):
-                continue
-            box = page_box(shape)
-            if box is None or box.width * box.height < WASHED_BACKDROP_PAGE_SHARE * canvas:
-                continue
-            name = str(getattr(shape, "name", "") or "picture")
-            found.append(
-                Finding(
-                    kind="washed_backdrop",
-                    severity=Severity.WARNING,
-                    message=(
-                        f"page {number}: {name} covers the page washed to {share:.0%}, which reads as fog under "
-                        f"the type; show the photograph at full strength under a plane of ink with light type "
-                        f"(backdrop's default), or keep it at {WASH_TEXTURE_MAX:.0%} or under as texture"
-                    ),
-                    page=number,
-                )
-            )
-    return found
-
-
 def read_figures(pptx_path: Path) -> list[Figure]:
     """Every picture in a built deck, however the file spells it.
 

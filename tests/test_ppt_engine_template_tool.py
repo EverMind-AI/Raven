@@ -287,7 +287,7 @@ async def test_the_reply_names_the_layouts_that_carry_pictures(workspace: Path, 
     assert body["layout_pictures"] == [
         f"layout '{layout.name}' carries 1 picture(s) (6.4x4.7in), under example page(s) 1, 2 -- on the page you "
         "build from one of those: `replace_picture(layout_pictures(slide)[0], FIGURES / 'x.png', 'cover')`"
-    ], "a picture short of the page is swapped at full strength; a page-sized one is a background at alpha=0.1"
+    ], "a picture short of the page is swapped at full strength; a page-sized one would carry alpha=0.25"
 
     assert "layout_pictures(slide)[0]" in body["next_step"]
 

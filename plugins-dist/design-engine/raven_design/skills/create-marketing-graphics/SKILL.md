@@ -239,7 +239,7 @@ Noto CJK 出子集），裸用系统默认字体等于没有排版。标题的�
 
 ### 素材层 gate（定调帧开始前）
 
-`assets/generated/` 里至少有一张将作为**主视觉或场景级背景**进入成品的生成图（`image_generate` 传 `output_dir=assets/generated`），附 `prompt.txt`；无缝材质、纸纹、
+`assets/generated/` 里至少有一张将作为**主视觉或场景级背景**进入成品的生成图，附 `prompt.txt`；无缝材质、纸纹、
 噪点不满足本 gate。`POSTER-BRIEF.md` 图像来源清单有对应的 `generated_visual` 行。没有这一层不许开始定调帧，也不许以
 "先排版后补图"跳过。harness 核查两件事：本任务发生过 image API 请求；生成像素在成品里达到主视觉量级（引用面积
 ≥ 画板 35%，且不是平铺纹理）。只有底纹整轮判败，与画面好坏无关。

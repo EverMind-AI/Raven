@@ -83,7 +83,6 @@ TIERS: Mapping[str, Tier] = {
     "figure_undersized": Tier.DECLARED,
     "figure_mark_drift": Tier.DECLARED,
     "title_band_figure": Tier.DECLARED,
-    "washed_backdrop": Tier.DECLARED,
     # The one reading that needs both truths at once: the file to say the lines were
     # meant flush, the render to show they are not. It cannot run without a render.
     "flush_drift": Tier.RENDERED,

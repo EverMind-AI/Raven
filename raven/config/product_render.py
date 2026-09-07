@@ -419,21 +419,12 @@ def mode_catalogue(
                     f"an overlay carries only {', '.join(sorted(overlay_keys))}"
                 )
         cap, entry_overlay = resolve(overlay)
-        entry: dict = {
+        catalogue[mode] = {
             "name": name,
             "description": description,
             "maxToolIterations": cap,
             "overlay": entry_overlay,
         }
-        # A mode's reasoning effort is the trunk's own knob (`AcpModeConfig.
-        # reasoningEffort`: every call a session in that mode makes asks for
-        # it), declared in the same place a product writes its other defaults.
-        # Lifted out of the overlay onto the entry so the trunk dispenses it,
-        # rather than the loop reading a hook bag for it.
-        effort = ((overlay.get("agents") or {}).get("defaults") or {}).get("reasoningEffort")
-        if isinstance(effort, str) and effort.strip():
-            entry["reasoningEffort"] = effort.strip()
-        catalogue[mode] = entry
     return catalogue
 
 

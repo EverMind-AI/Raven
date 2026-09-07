@@ -118,15 +118,8 @@ class JobBackend(ABC):
     async def fetch_result(self, handle: JobHandle) -> JobResult:
         """Return the terminal result. Caller must poll to a terminal status first."""
 
-    async def cancel(self, handle: JobHandle) -> str | None:
-        """Best-effort cancellation. Default: no-op.
-
-        Returns a note about what was found at kill time, or None. A backend
-        that can see the process says when it was alive and for how long, so
-        that killing a healthy job reads as that in the record rather than as
-        cleanup.
-        """
-        return None
+    async def cancel(self, handle: JobHandle) -> None:
+        """Best-effort cancellation. Default: no-op."""
 
     async def fetch_progress(self, handle: JobHandle, tail: int = 5) -> list[dict[str, Any]]:
         """In-flight process-health samples for a RUNNING job (e.g. loss/residual

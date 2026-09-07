@@ -210,13 +210,13 @@ def load_outline(path: Path) -> Outline | None:
     if not isinstance(raw, dict):
         return None
     pages = []
-    for position, entry in enumerate(raw.get("pages") or (), 1):
+    for entry in raw.get("pages") or ():
         if not isinstance(entry, dict):
             continue
         try:
             pages.append(
                 PagePlan(
-                    page=int(entry.get("page") or position),
+                    page=int(entry.get("page", 0)),
                     claim=str(entry.get("claim", "")),
                     carries=str(entry.get("carries") or ""),
                     **layout_fields(entry),

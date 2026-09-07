@@ -252,8 +252,8 @@ def test_the_products_own_label_still_loads_on_this_build():
 def test_the_label_this_product_left_behind_is_refused_and_names_its_successor():
     """A suffix move only means something if the old label stops loading here.
 
-    The mirrored table cannot carry this one: it carries the fork's retirements, and the
-    fork must go on accepting `-derive` because the fork's own distribution did not change. So
+    The mirrored table cannot carry this one: it is held equal to the fork's, and the fork
+    must go on accepting `-derive` because the fork's own distribution did not change. So
     the retirement lives in the product's own table, and without it a config still stamped
     with the old suffix would load clean and run the new distribution under the old name -
     the mislabelling the whole-profile check exists to prevent.
@@ -263,8 +263,7 @@ def test_the_label_this_product_left_behind_is_refused_and_names_its_successor()
 
     retired = "dr@3.5-filetools-askuser-derive"
     assert retired in PRODUCT_SUPERSEDED_PROFILES
-    # And not in the mirrored one, which the parity test holds to the fork's retirements
-    # (the twin may add its own at newer rungs, never drop or rewrite the fork's).
+    # And not in the mirrored one, which the parity test holds equal to the fork's.
     assert retired not in SUPERSEDED_PROFILES
 
     with pytest.raises(ValueError) as excinfo:
@@ -308,8 +307,8 @@ def test_the_shipped_label_moves_when_the_shipped_prompt_does():
     )[1]
     digest = hashlib.sha256(" ".join(segment.split()).encode("utf-8")).hexdigest()[:16]
 
-    assert shipped["version"] == "dr@3.7-filetools-askuser-derive-numeric-cite-rank"
-    assert digest == "baf5019c4141a463", f"the shipped prompt moved; advance the label and re-stamp to {digest}"
+    assert shipped["version"] == "dr@3.5-filetools-askuser-derive-numeric-cite"
+    assert digest == "6b87d0eb203d66b0", f"the shipped prompt moved; advance the label and re-stamp to {digest}"
 
 
 def test_every_retirement_this_product_declares_names_a_label_it_can_load():
