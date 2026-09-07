@@ -11,6 +11,28 @@ const terminalEmptyList = () => ({
   topologyRevisions: {},
 });
 
+const terminalAttachIdentities = (result, terminals, agents) => {
+  const byHandle = new Map();
+  (agents || []).forEach((agent) => {
+    if (agent.binding && agent.binding.handle) byHandle.set(agent.binding.handle, agent);
+  });
+  return {
+    ...result,
+    terminals: terminals.map((terminal) => {
+      const agent = byHandle.get(terminal.handle);
+      if (!agent) return terminal;
+      return {
+        ...terminal,
+        identity: {
+          agentName: agent.agentName,
+          brand: agent.brand,
+          bindingGeneration: agent.bindingGeneration,
+        },
+      };
+    }),
+  };
+};
+
 DS.terminal = {
   list: async () => {
     if (!wsRoot) return terminalEmptyList();
@@ -18,15 +40,19 @@ DS.terminal = {
       terminalScopePath = wsRoot;
       terminalScopeId = '';
     }
-    const result = await rpc.call('terminal.list', {
-      ...(terminalScopeId ? { worktree_id: terminalScopeId } : {}),
-      limit: 1000,
-      include_visual_layouts: true,
-    });
-    if (terminalScopeId) return result;
-    const terminals = (result.terminals || []).filter((row) => row.worktreePath === wsRoot);
+    const [result, identities] = await Promise.all([
+      rpc.call('terminal.list', {
+        ...(terminalScopeId ? { worktree_id: terminalScopeId } : {}),
+        limit: 1000,
+        include_visual_layouts: true,
+      }),
+      rpc.call('agents.list', {}).catch(() => ({ agents: [] })),
+    ]);
+    const terminals = terminalScopeId
+      ? (result.terminals || [])
+      : (result.terminals || []).filter((row) => row.worktreePath === wsRoot);
     if (terminals.length) terminalScopeId = terminals[0].worktreeId;
-    return { ...result, terminals };
+    return terminalAttachIdentities(result, terminals, identities.agents);
   },
   input: (params) => rpc.call('terminal.input', params),
   resize: (params) => rpc.call('terminal.resize', params),
@@ -54,7 +80,7 @@ rpc.binary = (buf) => {
     return;
   }
   const headerLength = new DataView(buf).getUint32(4);
-  if (headerLength > u8.length - 8) return;
+  if (headerLength > 4096 || headerLength > u8.length - 8) return;
   let header;
   try { header = JSON.parse(new TextDecoder().decode(u8.subarray(8, 8 + headerLength))); } catch { return; }
   if (!header.handle || !Number.isSafeInteger(header.seq)) return;
