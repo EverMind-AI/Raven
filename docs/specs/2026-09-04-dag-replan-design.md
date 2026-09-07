@@ -191,6 +191,16 @@ for it: structure from `graph.json` (which holds `spec.model_dump_json()`, so
 `parse_dag_spec` restores real `DagNodeSpec` objects), state from `read_run_reconciled`,
 which `ResolveDagNodeTool._read_live` already calls.
 
+Ahead of all of it, in the resolve call itself: **is that node actually suspended?**
+`dag_live.awaiting_decision` asks every graph tool the hand-off would ask, and a definite
+no refuses there. Everything below costs something a refused replan must not spend -- the
+reconciled read, the confirm question, the quota, the minted instances -- and none of it is
+refunded when the hand-off further down then finds nobody waiting. The predicate is exactly
+the condition `resolve_node` fails on (both read the run's desk), so it refuses nothing the
+hand-off would have accepted; it answers `None` where no instance implements it, which
+proceeds. The hand-off stays the authority for the node that stops waiting *during* the
+validation this skips ahead of.
+
 Checks, in `_execute`'s order and for its stated reasons:
 
 1. `_is_paused` -- a replan dispatches sub-agents, so a paused delegation refuses it.
@@ -279,6 +289,9 @@ for the same reason -- the reader needs somewhere to go -- and the id is minted 
 hand-off precisely so they can. The gate on `resolve_node` is what keeps that promise
 honest: on the path where nobody was waiting, the old run continues as submitted, no
 successor is dispatched, `record_link` never runs, and so nothing is announced either.
+Nothing is charged either, and that one is not the gate's doing -- the pre-check above is,
+since by this point `charge_dag_run` has already run. Reaching this branch at all now means
+the node stopped waiting inside the validation, which is the only case that still pays.
 
 `record_link` stays where it is, after the submission. The event is a live hint and may be
 optimistic; the durable record is an audit and may not.
