@@ -145,7 +145,16 @@ _DR_REPORT_STRUCTURE_CLAUSE_DEEP = """{n}. Write the reply as a research report 
    because an estimate standing among measurements is summed and ranked as
    one of them. A quantity you computed from numbers you did read is not an
    estimate - give it, mark it derived, and show the arithmetic over its
-   inputs. When
+   inputs. A table that carries a rank and a total is ordered by that total,
+   with no exceptions: a rank that disagrees with its own arithmetic reads as
+   a mistake and costs the reader the whole ranking. Where something outside
+   the criteria decides a candidate's place, make it one of the criteria so
+   the total carries it, or move the candidate out of the main table and say
+   why - do not leave the order to argue with its own numbers. Keep the main
+   comparison to the columns that
+   decide it; a candidate's provenance, sizes and caveats belong under it as
+   prose or in a second table, because a row nobody can read across is a list
+   with extra punctuation. When
    independent sources disagree on a fact that decides the answer, show both
    values with their sources and say which one the report uses and why,
    preferring primary or official sources. State established facts plainly;
@@ -156,7 +165,12 @@ _DR_REPORT_STRUCTURE_CLAUSE_DEEP = """{n}. Write the reply as a research report 
    nothing material is missing, say so in one line.
 {format_override}   Add no other `##` headings, and do not close with a list of sources: every
    finding already carries the page it came from, and the reply is followed by
-   the full record of what was searched and opened. Let the report run as long
+   the full record of what was searched and opened. An identifier is not that
+   page: an arXiv number, an `owner/repo` slug or a dataset name stands for a
+   source without pointing at one, and the record cannot tell whether it was
+   read. Write the URL you opened; where you did not open the page, an
+   identifier may appear only in the sentence that already says so. Let the
+   report run as long
    as the evidence needs - never drop evidence, sources, or caveats to make it
    shorter."""
 

@@ -52,6 +52,80 @@ def test_topo_order_and_parse() -> None:
     assert validate_and_order(spec) == ["a", "b"]
 
 
+def test_two_ids_differing_only_by_case_are_one_node_id() -> None:
+    """The registry's key space is case-sensitive; the filesystem's is not.
+
+    A node's artifacts are files named after its id, so on a case-folding
+    backend (APFS by default, and NTFS) `Plan.out.md` and `plan.out.md` are one
+    file and the second node's write destroys the first's output. Refused rather
+    than normalised: two nodes the model named differently must not silently
+    become one.
+    """
+    spec = parse_dag_spec(
+        {
+            "task_summary": "reject ids that collide when folded",
+            "nodes": [
+                {"id": "Plan", "subagent": "x", "node_summary": "first", "prompt_template": "one"},
+                {"id": "plan", "subagent": "x", "node_summary": "second", "prompt_template": "two"},
+            ],
+        }
+    )
+
+    assert "duplicate node ids: ['plan']" in collect_static_graph_errors(spec.nodes)[0]
+
+
+def test_ids_differing_by_more_than_case_stay_separate() -> None:
+    """The control: folding must not collapse ids that are genuinely distinct."""
+    spec = parse_dag_spec(
+        {
+            "task_summary": "keep distinct ids distinct",
+            "nodes": [
+                {"id": "plan_a", "subagent": "x", "node_summary": "first", "prompt_template": "one"},
+                {"id": "plan_b", "subagent": "x", "node_summary": "second", "prompt_template": "two"},
+            ],
+        }
+    )
+
+    assert collect_static_graph_errors(spec.nodes) == []
+
+
+def test_a_spawn_held_id_is_not_reported_as_a_run() -> None:
+    """A spawn has no run, so its claim records the `kind` in the owner slot.
+
+    Dropping that straight into "run '...'" names a run that does not exist and
+    sends the reader looking for it.
+    """
+    from raven.agent.subagent.dag_store import UNRECORDED, duplicate_node_id
+
+    spawn = duplicate_node_id("plan", "spawn", readable=False)
+    assert "an earlier spawn in this conversation" in spawn
+    assert "run 'spawn'" not in spawn
+    assert "that run left it" not in spawn
+
+    unrecorded = duplicate_node_id("plan", UNRECORDED, readable=False)
+    assert f"run '{UNRECORDED}'" not in unrecorded
+
+    assert "used by run 'r1'" in duplicate_node_id("plan", "r1", readable=False), "a real run still reads as one"
+
+
+def test_a_node_id_colliding_by_case_with_a_claimed_one_is_refused() -> None:
+    """`Plan` is taken, so `plan` is taken too -- one file backs both."""
+    spec = parse_dag_spec(
+        {
+            "task_summary": "reuse a claimed id in another case",
+            "nodes": [{"id": "plan", "subagent": "x", "node_summary": "retry", "prompt_template": "retry"}],
+        }
+    )
+    known = SessionNodes(owner={"Plan": "r1"}, state={"Plan": "completed"}, has_output={"Plan": True})
+
+    with pytest.raises(DagValidationError) as exc_info:
+        validate_and_order(spec, session_nodes=known)
+
+    message = str(exc_info.value)
+    assert "already used by run 'r1'" in message
+    assert "'Plan'" in message, "the refusal has to name the id actually taken, not the one asked for"
+
+
 def test_duplicate_node_error_names_the_duplicate_ids() -> None:
     spec = parse_dag_spec(
         {
@@ -497,7 +571,7 @@ class _FakeBackend:
 
 async def test_render_output_and_inputs() -> None:
     be = _FakeBackend()
-    out_path = "/hist/mas_dag/run/a.out.md"
+    out_path = "/hist/nodes/a.out.md"
     be.files[out_path] = b"RESULT_A"
 
     spec = parse_dag_spec(
@@ -515,7 +589,7 @@ async def test_render_output_and_inputs() -> None:
         }
     )
     node = spec.nodes[0]
-    rendered = await render_prompt(node, backend=be, cwd="/w", output_paths={"a": out_path})
+    rendered = await render_prompt(node, backend=be, cwd="/w", nodes_root="/hist/nodes")
     assert "RESULT_A" in rendered
     assert f"path={out_path}" in rendered
     assert "lit=LITERAL" in rendered
@@ -527,7 +601,7 @@ async def test_injected_content_is_fenced_but_the_template_is_not() -> None:
     The template's own words, a literal input and the ``_path`` forms are the
     author's and stay verbatim."""
     be = _FakeBackend()
-    out_path = "/hist/mas_dag/run/a.out.md"
+    out_path = "/hist/nodes/a.out.md"
     be.files[out_path] = b"RESULT_A"
     be.files["/w/notes.md"] = b"FILE_BODY"
 
@@ -548,7 +622,7 @@ async def test_injected_content_is_fenced_but_the_template_is_not() -> None:
             ],
         }
     )
-    rendered = await render_prompt(spec.nodes[0], backend=be, cwd="/w", output_paths={"a": out_path})
+    rendered = await render_prompt(spec.nodes[0], backend=be, cwd="/w", nodes_root="/hist/nodes")
 
     assert "[BEGIN UNTRUSTED subagent" in rendered
     # Once for the bare ref, once for the file input: both inject contents.
@@ -571,12 +645,47 @@ def test_make_run_id_shape() -> None:
 
 async def test_store_roundtrip() -> None:
     be = _FakeBackend()
-    store = DagRunStore(be, "/w", "run123")
+    store = DagRunStore(be, "/w", "run123", nodes_root="/w/nodes", registry_root="/w")
     await store.init('{"nodes": []}')
     p = store.output_path("a")
     await store.write_text(p, "hello out")
     assert await store.read_text(p) == "hello out"
     assert store.run_dir.endswith("run123")
+
+
+def test_a_run_keeps_only_run_scoped_files_in_its_run_dir() -> None:
+    """graph.json and manifest.json describe the run; the node files do not."""
+    from raven.agent.subagent.dag_store import DagRunStore
+
+    be = _FakeBackend()
+    store = DagRunStore(be, "/hist/mas_dag", "run123", nodes_root="/hist/nodes", registry_root="/hist")
+
+    assert store.run_dir == "/hist/mas_dag/run123"
+    assert store.output_path("a") == "/hist/nodes/a.out.md"
+    assert store.prompt_path("a") == "/hist/nodes/a.prompt.md"
+    assert store.memory_path("a") == "/hist/nodes/a.memory.json"
+    assert store.transcript_path("a") == "/hist/nodes/a.transcript.jsonl"
+    assert store.attempt_output_path("a", 2) == "/hist/nodes/a.attempt-2.out.md"
+    assert store.attempt_prompt_path("a", 2) == "/hist/nodes/a.attempt-2.prompt.md"
+    assert store.attempt_transcript_path("a", 2) == "/hist/nodes/a.attempt-2.transcript.jsonl"
+    assert store.registry_root == "/hist"
+
+
+def test_a_node_artifact_path_needs_no_run_id() -> None:
+    """A node id is unique per conversation, so it locates its own files.
+
+    The run id was only ever a directory the id happened to sit in; keeping it
+    in the signature is what forced every resolver to consult the index before
+    it could name a file.
+    """
+    from raven.agent.subagent.dag_store import memory_path_in, output_path_in
+    from raven.agent.subagent.history import nodes_root
+
+    be = _FakeBackend()
+
+    assert output_path_in(be, "/hist/nodes", "market_scan") == "/hist/nodes/market_scan.out.md"
+    assert memory_path_in(be, "/hist/nodes", "market_scan") == "/hist/nodes/market_scan.memory.json"
+    assert nodes_root(Path("/sess")) == Path("/sess/subagents/nodes")
 
 
 # --- reader ---------------------------------------------------------------
@@ -585,6 +694,7 @@ async def test_store_roundtrip() -> None:
 def _seed_run(be: "_FakeBackend", run_id: str, *, finalized: bool, root: str = "/hist/mas_dag") -> None:
     """Write a two-node run dir the way DagRunStore/_finalize would."""
     rdir = f"{root}/{run_id}"
+    ndir = f"{root.rsplit('/', 1)[0]}/nodes"
     graph = {
         "task_summary": "the whole graph",
         "nodes": [
@@ -608,9 +718,9 @@ def _seed_run(be: "_FakeBackend", run_id: str, *, finalized: bool, root: str = "
         ],
     }
     be.files[f"{rdir}/graph.json"] = json.dumps(graph).encode()
-    be.files[f"{rdir}/a.prompt.md"] = b"do LITERAL"
-    be.files[f"{rdir}/a.out.md"] = b"OUTPUT_A"
-    be.files[f"{rdir}/a.memory.json"] = b"{}"
+    be.files[f"{ndir}/a.prompt.md"] = b"do LITERAL"
+    be.files[f"{ndir}/a.out.md"] = b"OUTPUT_A"
+    be.files[f"{ndir}/a.memory.json"] = b"{}"
     if finalized:
         manifest = {
             "a": {
@@ -620,8 +730,8 @@ def _seed_run(be: "_FakeBackend", run_id: str, *, finalized: bool, root: str = "
                 "instance": None,
                 "started_at": 1000,
                 "ended_at": 3000,
-                "prompt_file": f"{rdir}/a.prompt.md",
-                "output_file": f"{rdir}/a.out.md",
+                "prompt_file": f"{ndir}/a.prompt.md",
+                "output_file": f"{ndir}/a.out.md",
                 "error": None,
             },
             "b": {
@@ -643,7 +753,7 @@ async def test_read_run_rebuilds_a_finalized_manifest() -> None:
     be = _FakeBackend()
     _seed_run(be, "20260730T060242Z-6b0b89a3", finalized=True)
 
-    run = await read_run(be, "/hist/mas_dag", "20260730T060242Z-6b0b89a3")
+    run = await read_run(be, "/hist/mas_dag", "20260730T060242Z-6b0b89a3", "/hist/nodes")
 
     assert run["finalized"] is True
     assert run["summary"] == {"total": 2, "completed": 1, "failed": 1, "skipped": 0, "cancelled": 0}
@@ -658,15 +768,19 @@ async def test_read_run_rebuilds_a_finalized_manifest() -> None:
     assert b["depends_on"] == ["a"]
     assert run["task_summary"] == "the whole graph"
     assert (a["node_summary"], b["node_summary"]) == ("do the thing", "then use it")
-    assert a["memory_file"] == "/hist/mas_dag/20260730T060242Z-6b0b89a3/a.memory.json"
+    assert a["memory_file"] == "/hist/nodes/a.memory.json"
     assert b["memory_file"] is None, "a memory file that was never written reads back as absent"
+    assert a["prompt_file"] == "/hist/nodes/a.prompt.md"
+    assert a["output_file"] == "/hist/nodes/a.out.md"
+    assert b["prompt_file"] is None, "a manifest null is trusted, and nothing was derived either"
+    assert b["output_file"] is None
 
 
 async def test_read_run_of_an_unfinalized_run_falls_back_to_the_graph() -> None:
     be = _FakeBackend()
     _seed_run(be, "20260730T060242Z-6b0b89a3", finalized=False)
 
-    run = await read_run(be, "/hist/mas_dag", "20260730T060242Z-6b0b89a3")
+    run = await read_run(be, "/hist/mas_dag", "20260730T060242Z-6b0b89a3", "/hist/nodes")
 
     # Structure survives without manifest.json; state does not, so every node
     # reads back pending and the caller is expected to overlay live state.
@@ -680,17 +794,19 @@ async def test_read_run_of_an_unfinalized_run_falls_back_to_the_graph() -> None:
     assert run["task_summary"] == "the whole graph"
     assert run["files"][0]["node_summary"] == "do the thing"
     assert run["files"][0]["memory_file"] is not None
+    assert run["files"][0]["prompt_file"] is not None
+    assert run["files"][0]["output_file"] is not None
 
 
 async def test_read_run_without_a_run_dir_raises() -> None:
     with pytest.raises(DagReadError):
-        await read_run(_FakeBackend(), "/w", "20260730T060242Z-6b0b89a3")
+        await read_run(_FakeBackend(), "/w", "20260730T060242Z-6b0b89a3", "/w/nodes")
 
 
 @pytest.mark.parametrize("run_id", ["../../etc", "not-a-run-id", "", "20260730T060242Z-ZZZZZZZZ"])
 async def test_read_run_rejects_a_malformed_run_id(run_id: str) -> None:
     with pytest.raises(DagReadError):
-        await read_run(_FakeBackend(), "/w", run_id)
+        await read_run(_FakeBackend(), "/w", run_id, "/w/nodes")
 
 
 @pytest.mark.parametrize("node_id", ["../graph", "a/b", "a.out", ""])
@@ -698,17 +814,19 @@ async def test_read_node_rejects_a_malformed_node_id(node_id: str) -> None:
     be = _FakeBackend()
     _seed_run(be, "20260730T060242Z-6b0b89a3", finalized=True)
     with pytest.raises(DagReadError):
-        await read_node(be, "/hist/mas_dag", "20260730T060242Z-6b0b89a3", node_id)
+        await read_node(be, "/hist/mas_dag", "20260730T060242Z-6b0b89a3", node_id, "/hist/nodes")
 
 
 async def test_read_node_returns_the_rendered_prompt_and_output() -> None:
     be = _FakeBackend()
     _seed_run(be, "20260730T060242Z-6b0b89a3", finalized=True)
 
-    node = await read_node(be, "/hist/mas_dag", "20260730T060242Z-6b0b89a3", "a")
+    node = await read_node(be, "/hist/mas_dag", "20260730T060242Z-6b0b89a3", "a", "/hist/nodes")
 
     assert node["prompt"] == "do LITERAL"
+    assert node["prompt_file"] == "/hist/nodes/a.prompt.md"
     assert node["output"] == "OUTPUT_A"
+    assert node["output_file"] == "/hist/nodes/a.out.md"
     assert node["output_chars"] == 8
     assert node["output_truncated"] is False
 
@@ -717,9 +835,9 @@ async def test_read_node_truncates_a_long_output_and_says_so() -> None:
     be = _FakeBackend()
     run_id = "20260730T060242Z-6b0b89a3"
     _seed_run(be, run_id, finalized=True)
-    be.files[f"/hist/mas_dag/{run_id}/a.out.md"] = b"x" * 5000
+    be.files["/hist/nodes/a.out.md"] = b"x" * 5000
 
-    node = await read_node(be, "/hist/mas_dag", run_id, "a", max_output_chars=100)
+    node = await read_node(be, "/hist/mas_dag", run_id, "a", "/hist/nodes", max_output_chars=100)
 
     assert len(node["output"]) == 100
     assert node["output_chars"] == 5000
@@ -730,11 +848,121 @@ async def test_read_node_of_a_node_that_never_ran_is_empty_not_an_error() -> Non
     be = _FakeBackend()
     _seed_run(be, "20260730T060242Z-6b0b89a3", finalized=True)
 
-    node = await read_node(be, "/hist/mas_dag", "20260730T060242Z-6b0b89a3", "b")
+    node = await read_node(be, "/hist/mas_dag", "20260730T060242Z-6b0b89a3", "b", "/hist/nodes")
 
     assert node["prompt"] is None
     assert node["output"] is None
     assert node["output_chars"] == 0
+
+
+def _seed_legacy_run(be: "_FakeBackend", run_id: str) -> None:
+    """A run written before this session's history flattened.
+
+    Its manifest names each artifact by an absolute path under the run dir --
+    the shape every run on disk has today. Nothing of it lives at the flat node
+    root, which is exactly what makes an id reused there later ambiguous.
+    """
+    rdir = f"/hist/mas_dag/{run_id}"
+    be.files[f"{rdir}/graph.json"] = json.dumps(
+        {"task_summary": "old", "nodes": [{"id": "plan", "subagent": "x", "prompt_template": "p", "depends_on": []}]}
+    ).encode()
+    be.files[f"{rdir}/plan.prompt.md"] = b"OLD RUN'S PROMPT"
+    be.files[f"{rdir}/plan.out.md"] = b"OLD RUN'S ANSWER"
+    be.files[f"{rdir}/manifest.json"] = json.dumps(
+        {
+            "plan": {
+                "status": "completed",
+                "subagent": "x",
+                "depends_on": [],
+                "instance": None,
+                "started_at": 1,
+                "ended_at": 2,
+                "prompt_file": f"{rdir}/plan.prompt.md",
+                "output_file": f"{rdir}/plan.out.md",
+                "error": None,
+            }
+        }
+    ).encode()
+
+
+async def test_read_node_trusts_the_manifests_path_like_read_run_does() -> None:
+    """A legacy run's node must not be served from a newer node holding its id.
+
+    `read_run` trusts an explicitly named file and only derives a candidate when
+    the manifest carries none. `read_node` deriving unconditionally makes the two
+    readers of one `(run_id, node)` disagree, and the one `dag.node` opens serves
+    the newer node's prompt and output under the old run's identity and status.
+    """
+    be = _FakeBackend()
+    _seed_legacy_run(be, "20260730T060242Z-6b0b89a3")
+    be.files["/hist/nodes/plan.out.md"] = b"A DIFFERENT, NEWER NODE"
+    be.files["/hist/nodes/plan.prompt.md"] = b"A DIFFERENT, NEWER PROMPT"
+
+    node = await read_node(be, "/hist/mas_dag", "20260730T060242Z-6b0b89a3", "plan", "/hist/nodes")
+    run = await read_run(be, "/hist/mas_dag", "20260730T060242Z-6b0b89a3", "/hist/nodes")
+
+    assert node["output"] == "OLD RUN'S ANSWER"
+    assert node["prompt"] == "OLD RUN'S PROMPT"
+    entry = next(f for f in run["files"] if f["node"] == "plan")
+    assert node["output_file"] == entry["output_file"], "the two readers must name one file"
+    assert node["prompt_file"] == entry["prompt_file"]
+
+
+async def test_read_node_honours_a_manifest_that_records_the_node_with_no_output() -> None:
+    """The same defect, one branch over: a recorded `None` is an answer too.
+
+    A skipped or failed node's manifest entry carries `"output_file": null`.
+    Treating that as "nothing named, derive one" reaches the flat root exactly
+    like the unrecorded case does, and serves a later node's output under this
+    one's identity -- for a node that provably wrote nothing.
+    """
+    be = _FakeBackend()
+    run_id = "20260730T060242Z-6b0b89a3"
+    rdir = f"/hist/mas_dag/{run_id}"
+    be.files[f"{rdir}/graph.json"] = json.dumps(
+        {"task_summary": "old", "nodes": [{"id": "plan", "subagent": "x", "prompt_template": "p", "depends_on": []}]}
+    ).encode()
+    be.files[f"{rdir}/manifest.json"] = json.dumps(
+        {"plan": {"status": "skipped", "prompt_file": None, "output_file": None, "error": None}}
+    ).encode()
+    be.files["/hist/nodes/plan.out.md"] = b"A DIFFERENT, NEWER NODE"
+
+    node = await read_node(be, "/hist/mas_dag", run_id, "plan", "/hist/nodes")
+
+    assert node["output"] is None
+    assert node["output_file"] is None
+    assert node["status"] == "skipped"
+
+
+async def test_read_node_still_derives_from_the_flat_root_when_the_manifest_names_nothing() -> None:
+    """The control for the test above: deriving is right when nothing was named.
+
+    An unfinalized run has no manifest at all, and a node that has just written
+    its output is readable well before the run finalizes -- so removing the
+    derivation entirely would break the live case this branch added it for.
+    """
+    be = _FakeBackend()
+    _seed_run(be, "20260730T060242Z-6b0b89a3", finalized=False)
+
+    node = await read_node(be, "/hist/mas_dag", "20260730T060242Z-6b0b89a3", "a", "/hist/nodes")
+
+    assert node["output"] == "OUTPUT_A"
+    assert node["output_file"] == "/hist/nodes/a.out.md"
+
+
+async def test_read_node_returns_its_own_transcript() -> None:
+    be = _FakeBackend()
+    _seed_run(be, "20260730T060242Z-6b0b89a3", finalized=True)
+    be.files["/hist/nodes/a.transcript.jsonl"] = (
+        b'{"role": "user", "content": "do LITERAL"}\n{"role": "assistant", "content": "OUTPUT_A"}\n'
+    )
+
+    node = await read_node(be, "/hist/mas_dag", "20260730T060242Z-6b0b89a3", "a", "/hist/nodes")
+
+    assert node["transcript"] == [
+        {"role": "user", "content": "do LITERAL"},
+        {"role": "assistant", "content": "OUTPUT_A"},
+    ]
 
 
 # --- replan ----------------------------------------------------------------
@@ -769,15 +997,16 @@ def _set_seeded_confirm(tool: "SubAgentDagTool", run_id: str, value: bool) -> No
 
 
 def _claim_the_id_from_under_it(tool: "SubAgentDagTool", run_id: str, node_id: str) -> None:
-    """Record `node_id` as already claimed by `run_id` in this session's index.
+    """Record `node_id` as already claimed by `run_id` in this session's registry.
 
-    A fresh run's own dispatch claims its node ids into the same index; seeding
-    a claim here ahead of time is what makes that claim collide.
+    A fresh run's own dispatch claims its node ids into the same registry;
+    seeding a claim here ahead of time is what makes that claim collide.
     """
-    path = f"{tool._run_root(None)}/index.json"
-    entries = json.loads(tool._backend.files[path].decode()) if path in tool._backend.files else []
-    entries.append({"run_id": run_id, "nodes": [node_id]})
-    tool._backend.files[path] = json.dumps(entries).encode()
+    path = f"{tool._run_root(None).rsplit('/', 1)[0]}/nodes.json"
+    registry = json.loads(tool._backend.files[path].decode()) if path in tool._backend.files else {}
+    registry.setdefault("nodes", {})[node_id] = {"run_id": run_id, "status": "running"}
+    registry.setdefault("runs", []).append({"run_id": run_id, "nodes": [node_id]})
+    tool._backend.files[path] = json.dumps(registry).encode()
 
 
 def _recording_announce(sink: list) -> Any:
@@ -831,11 +1060,54 @@ async def _replannable_tool(tmp_path, **kw) -> tuple["SubAgentDagTool", dict]:
     )
     tool.set_context("cli", "direct", None)
     root = tool._run_root(None)
+    history = root.rsplit("/", 1)[0]
     _seed_run(be, _OLD_RUN_ID, finalized=False, root=root)
-    be.files[f"{root}/index.json"] = json.dumps([{"run_id": _OLD_RUN_ID, "nodes": ["a", "b"]}]).encode()
+    be.files[f"{history}/nodes.json"] = json.dumps(
+        {
+            "nodes": {n: {"run_id": _OLD_RUN_ID} for n in ("a", "b")},
+            "runs": [{"run_id": _OLD_RUN_ID, "nodes": ["a", "b"]}],
+        }
+    ).encode()
     tool._backend = be
-    live = {"files": [{"node": "a", "status": "exception"}, {"node": "b", "status": "completed"}]}
+    # `output_file` beside `status`: a real live read is `read_run_reconciled`,
+    # whose entries carry the resolved path (or None). The overlay reads both
+    # halves, because a completed node that wrote nothing is not referenceable.
+    live = {
+        "files": [
+            {"node": "a", "status": "exception", "output_file": None},
+            {"node": "b", "status": "completed", "output_file": f"{history}/nodes/b.out.md"},
+        ]
+    }
     return tool, live
+
+
+async def test_is_awaiting_decision_reads_the_runs_own_desk(tmp_path) -> None:
+    """The predicate the resolve tool consults before it pays for a replan. It has
+    to answer per (run, node) off the live desk, not per run: a graph suspends one
+    node at a time and the answer for a sibling is exactly the mistake this gate
+    exists to make free."""
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+
+    tool = SubAgentDagTool(workspace=tmp_path, agents=[ThirdPartyCliSubagentConfig(name="x", command="true")])
+
+    assert tool.is_awaiting_decision(_OLD_RUN_ID, "a") is False, "no desk means no run to answer for"
+
+    desk = AdjudicationDesk()
+    tool._desks[_OLD_RUN_ID] = desk
+    assert tool.is_awaiting_decision(_OLD_RUN_ID, "a") is False, "a desk with nothing open awaits nothing"
+
+    desk.open("a")
+    assert tool.is_awaiting_decision(_OLD_RUN_ID, "a") is True
+    assert tool.is_awaiting_decision(_OLD_RUN_ID, "b") is False, "one node's suspension is not another's"
+    assert tool.is_awaiting_decision("20260101T000000000000Z-deadbeef", "a") is False
+
+    desk.resolve("a", "replan", "the plan was wrong")
+    assert tool.is_awaiting_decision(_OLD_RUN_ID, "a") is True, (
+        "an answered but unconsumed node is still on the desk; only take/close retires it"
+    )
+    desk.take("a")
+    assert tool.is_awaiting_decision(_OLD_RUN_ID, "a") is False
 
 
 async def test_replanning_refuses_a_redeclared_id(tmp_path) -> None:
@@ -870,6 +1142,25 @@ async def test_replanning_allows_a_reference_to_a_completed_node_before_the_inde
     assert [n.id for n in plan.nodes] == ["fresh"]
     assert plan.from_node == "a"
     assert plan.run_id and plan.run_id != _OLD_RUN_ID, "the successor id is minted up front"
+
+
+async def test_replanning_refuses_a_reference_to_a_live_completed_node_that_wrote_nothing(tmp_path) -> None:
+    """The overlay carries the output half, not just the status half.
+
+    Without it every node the overlay marks completed reads back unreadable and
+    the sibling test above fails; carrying `status` alone instead makes this one
+    pass a node whose output does not exist. Both halves come from the same live
+    entry, which is what the finalize about to happen will write.
+    """
+    tool, _ = await _replannable_tool(tmp_path)
+    live = {"files": [{"node": "b", "status": "completed", "output_file": None}]}
+
+    out = await tool.prepare_replan(
+        _OLD_RUN_ID, "a", [_node("fresh", depends_on=["b"], prompt="use {{ b.output }}")], "wrong", None, live
+    )
+
+    assert isinstance(out, str), out
+    assert "b" in out
 
 
 async def test_replanning_refuses_a_reference_to_a_node_that_did_not_complete(tmp_path) -> None:
@@ -1152,17 +1443,28 @@ def test_without_roots_a_reference_must_stay_relative(path: str) -> None:
         check_confined(path, what="ref")
 
 
-def test_the_runs_prefix_cannot_escape_the_run_history() -> None:
-    check_confined("@runs/r1/a.out.md", what="ref", roots=_ROOTS)
-    with pytest.raises(DagValidationError, match="DAG run history"):
-        check_confined("@runs/../../etc/passwd", what="ref", roots=_ROOTS)
+def test_the_nodes_prefix_cannot_escape_the_node_root() -> None:
+    check_confined("@nodes/a.out.md", what="ref", roots=_ROOTS)
+    with pytest.raises(DagValidationError, match="node artifacts"):
+        check_confined("@nodes/../../etc/passwd", what="ref", roots=_ROOTS)
     with pytest.raises(DagValidationError, match="empty"):
-        check_confined("@runs/", what="ref", roots=_ROOTS)
+        check_confined("@nodes/", what="ref", roots=_ROOTS)
 
 
 def test_split_reference_names_the_root() -> None:
-    assert split_reference("@runs/r1/a.out.md") == ("runs", "r1/a.out.md")
+    assert split_reference("@nodes/a.out.md") == ("nodes", "a.out.md")
     assert split_reference("notes.md") == ("workdir", "notes.md")
+
+
+@pytest.mark.parametrize("path", ["@nodes/../../secret.md", "@nodes/..", "@nodes//etc/passwd"])
+def test_a_nodes_prefixed_reference_cannot_escape_the_node_root(path: str) -> None:
+    """Checked lexically against its own prefix, like the runs prefix was.
+
+    Resolution happens later and against a different root, so a prefix that
+    escaped here would escape before anything compared paths.
+    """
+    with pytest.raises(DagValidationError):
+        check_confined(path, what="ref", roots=None)
 
 
 # --- render across runs --------------------------------------------------
@@ -1177,21 +1479,41 @@ def _one_node(template: str, **extra: object) -> object:
     ).nodes[0]
 
 
-async def test_render_reaches_an_earlier_run_through_the_runs_prefix() -> None:
+async def test_render_reaches_another_node_through_the_nodes_prefix() -> None:
     be = _FakeBackend()
-    be.files["/hist/mas_dag/r1/plan.out.md"] = b"EARLIER"
+    be.files["/hist/nodes/plan.out.md"] = b"EARLIER"
 
-    node = _one_node("text={{ ref:@runs/r1/plan.out.md }} path={{ ref_path:@runs/r1/plan.out.md }}")
-    rendered = await render_prompt(node, backend=be, cwd="/w", output_paths={}, runs_root="/hist/mas_dag")
+    node = _one_node("text={{ ref:@nodes/plan.out.md }} path={{ ref_path:@nodes/plan.out.md }}")
+    rendered = await render_prompt(node, backend=be, cwd="/w", nodes_root="/hist/nodes")
 
     assert "EARLIER" in rendered
-    assert "path=/hist/mas_dag/r1/plan.out.md" in rendered
+    assert "path=/hist/nodes/plan.out.md" in rendered
 
 
-async def test_a_runs_reference_is_refused_when_no_history_root_is_known() -> None:
-    node = _one_node("{{ ref:@runs/r1/plan.out.md }}")
-    with pytest.raises(DagValidationError, match="run history"):
-        await render_prompt(node, backend=_FakeBackend(), cwd="/w", output_paths={})
+async def test_a_nodes_reference_is_refused_when_no_node_root_is_known() -> None:
+    node = _one_node("{{ ref:@nodes/plan.out.md }}")
+    with pytest.raises(DagValidationError, match="node artifacts"):
+        await render_prompt(node, backend=_FakeBackend(), cwd="/w")
+
+
+async def test_an_earlier_runs_output_resolves_without_the_registry() -> None:
+    """Flat, the id is the whole address, so path resolution reads no registry.
+
+    Readability still does -- a failed node is refused at validation. This is
+    only about turning an id into a filename.
+    """
+    be = _FakeBackend()
+    be.files["/hist/nodes/scan.out.md"] = b"WHAT SCAN FOUND"
+    node = _one_node("build on {{ scan.output }}", id="new", depends_on=["scan"])
+
+    rendered = await render_prompt(
+        node,
+        backend=be,
+        cwd="/w",
+        nodes_root="/hist/nodes",
+    )
+
+    assert "WHAT SCAN FOUND" in rendered
 
 
 @pytest.mark.parametrize(
@@ -1204,7 +1526,7 @@ async def test_a_runs_reference_is_refused_when_no_history_root_is_known() -> No
 async def test_a_path_placeholder_naming_a_missing_file_is_refused(template: str, extra: dict) -> None:
     node = _one_node(template, **extra)
     with pytest.raises(DagValidationError, match="is not a file it can read"):
-        await render_prompt(node, backend=_FakeBackend(), cwd="/w", output_paths={})
+        await render_prompt(node, backend=_FakeBackend(), cwd="/w")
 
 
 # --- who may set a shared session's skills -------------------------------
@@ -1441,14 +1763,13 @@ async def test_a_node_is_told_its_upstream_memory_paths() -> None:
         by_id["c"],
         backend=_FakeBackend(),
         cwd="/w",
-        output_paths={},
-        runs_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
         run_id="run1",
         by_id=by_id,
     )
     # Transitive: c depends on b, which depends on a.
-    assert "/hist/mas_dag/run1/b.memory.json" in rendered
-    assert "/hist/mas_dag/run1/a.memory.json" in rendered
+    assert "/hist/nodes/b.memory.json" in rendered
+    assert "/hist/nodes/a.memory.json" in rendered
     # Its own record is not upstream of itself.
     assert "c.memory.json" not in rendered
 
@@ -1460,8 +1781,7 @@ async def test_a_root_node_is_told_nothing() -> None:
         by_id["a"],
         backend=_FakeBackend(),
         cwd="/w",
-        output_paths={},
-        runs_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
         run_id="run1",
         by_id=by_id,
     )
@@ -1475,8 +1795,7 @@ async def test_the_block_says_what_to_do_when_a_record_is_absent() -> None:
         by_id["b"],
         backend=_FakeBackend(),
         cwd="/w",
-        output_paths={},
-        runs_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
         run_id="run1",
         by_id=by_id,
     )
@@ -1493,8 +1812,7 @@ async def test_an_agent_that_cannot_read_local_files_is_told_nothing() -> None:
         by_id["c"],
         backend=_FakeBackend(),
         cwd="/w",
-        output_paths={},
-        runs_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
         run_id="run1",
         by_id=by_id,
         capabilities={"x": AgentCapabilities(reads_local_files=False)},
@@ -1503,20 +1821,18 @@ async def test_an_agent_that_cannot_read_local_files_is_told_nothing() -> None:
     assert "memory.json" not in rendered
 
 
-async def test_a_cross_run_upstream_is_named_with_its_own_run() -> None:
+async def test_a_cross_run_upstream_gets_the_same_memory_path() -> None:
     spec = _memory_spec([{"id": "d", "subagent": "x", "prompt_template": "only", "depends_on": ["earlier"]}])
     by_id = {n.id: n for n in spec.nodes}
     rendered = await render_prompt(
         by_id["d"],
         backend=_FakeBackend(),
         cwd="/w",
-        output_paths={},
-        runs_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
         run_id="run2",
         by_id=by_id,
-        session_nodes=SessionNodes(owner={"earlier": "run1"}, state={"earlier": "completed"}),
     )
-    assert "/hist/mas_dag/run1/earlier.memory.json" in rendered
+    assert "/hist/nodes/earlier.memory.json" in rendered
 
 
 def _node_with_inputs(template: str, inputs: dict[str, object]) -> dict[str, object]:
@@ -1563,7 +1879,7 @@ async def test_the_renderer_refuses_it_too_whoever_called(tmp_path: Path) -> Non
     )
 
     with pytest.raises(DagValidationError, match="declared but never referenced"):
-        await render_prompt(spec.nodes[0], backend=LocalFileBackend(), cwd=str(tmp_path), output_paths={})
+        await render_prompt(spec.nodes[0], backend=LocalFileBackend(), cwd=str(tmp_path))
 
 
 async def test_a_referenced_input_still_renders_where_it_is_named(tmp_path: Path) -> None:
@@ -1575,7 +1891,7 @@ async def test_a_referenced_input_still_renders_where_it_is_named(tmp_path: Path
     )
 
     assert validate_and_order(spec) == ["a"]
-    rendered = await render_prompt(spec.nodes[0], backend=LocalFileBackend(), cwd=str(tmp_path), output_paths={})
+    rendered = await render_prompt(spec.nodes[0], backend=LocalFileBackend(), cwd=str(tmp_path))
     assert rendered == "use keep it short now"
 
 
@@ -1942,3 +2258,317 @@ async def test_await_finalized_returns_at_once_for_a_run_this_instance_never_sta
 
     async with asyncio.timeout(1):
         await tool.await_finalized("a-run-that-was-never-started-here")
+
+
+async def test_a_run_is_listed_from_init_not_from_its_finalize() -> None:
+    """`session_run_ids` has to see a run that is still going.
+
+    It is intersected with the loop's live run set to scope what the control
+    tools may list and cancel, so a run recorded only at finalize is invisible
+    for exactly as long as it is running -- the whole window `dag_status` and
+    `dag_cancel` exist for. The run-keyed index this replaced claimed its entry
+    in `init` for the same reason.
+    """
+    from raven.agent.subagent.dag_store import DagRunStore, read_registry
+
+    be = _FakeBackend()
+    store = DagRunStore(be, "/hist/mas_dag", "run123", nodes_root="/hist/nodes", registry_root="/hist")
+
+    await store.init(json.dumps({"task_summary": "t", "nodes": []}), ["a", "b"])
+
+    registry = await read_registry(be, "/hist")
+    assert [r["run_id"] for r in registry["runs"]] == ["run123"]
+    assert sorted(registry["nodes"]) == ["a", "b"]
+
+
+async def test_finalizing_updates_the_runs_entry_rather_than_adding_a_second() -> None:
+    """The entry claimed at init is the one the summary lands on."""
+    from raven.agent.subagent.dag_store import DagRunStore, read_registry
+
+    be = _FakeBackend()
+    store = DagRunStore(be, "/hist/mas_dag", "run123", nodes_root="/hist/nodes", registry_root="/hist")
+    await store.init(json.dumps({"task_summary": "t", "nodes": []}), ["a", "b"])
+
+    await store.record_outcome({"a": "completed", "b": "failed"}, "1/2 completed")
+
+    registry = await read_registry(be, "/hist")
+    assert len(registry["runs"]) == 1, "one run, one entry"
+    assert registry["runs"][0]["summary"] == "1/2 completed"
+    assert registry["runs"][0]["nodes"] == ["a", "b"]
+
+
+async def test_the_registry_maps_a_node_id_straight_to_its_owner_and_outcome() -> None:
+    """Node-keyed, because every question asked of it is asked about a node.
+
+    The run-keyed shape made every reader walk runs to answer "what became of
+    id x", and two readers walked it differently.
+    """
+    import json
+
+    from raven.agent.subagent.dag_store import read_session_nodes
+
+    be = _FakeBackend()
+    be.files["/hist/nodes.json"] = json.dumps(
+        {
+            "nodes": {
+                "scan": {"kind": "dag", "run_id": "r1", "status": "completed", "has_output": True},
+                "draft": {"kind": "dag", "run_id": "r1", "status": "failed", "has_output": False},
+            },
+            "runs": [{"run_id": "r1", "summary": "1/2 completed", "nodes": ["scan", "draft"]}],
+        }
+    ).encode()
+
+    known = await read_session_nodes(be, "/hist")
+
+    assert known.owner == {"scan": "r1", "draft": "r1"}
+    assert known.state == {"scan": "completed", "draft": "failed"}
+    assert known.is_readable("scan") is True
+    assert known.is_readable("draft") is False
+
+
+async def test_a_node_that_completed_with_no_output_is_not_readable() -> None:
+    """`completed` is the run's verdict; it does not promise a file.
+
+    Overriding a reported `completed` to `failed` would misreport the run, so
+    the writer records what it knows -- whether an output file was written --
+    and the reader asks that second question separately. Measured on one
+    machine: 57 of 85 spawn records have an out.md, and a DAG node that
+    finishes with empty output has the same shape.
+    """
+    import json
+
+    from raven.agent.subagent.dag_store import read_session_nodes
+
+    be = _FakeBackend()
+    be.files["/hist/nodes.json"] = json.dumps(
+        {
+            "nodes": {
+                "loud": {"kind": "dag", "run_id": "r1", "status": "completed", "has_output": True},
+                "quiet": {"kind": "dag", "run_id": "r1", "status": "completed", "has_output": False},
+            },
+            "runs": [],
+        }
+    ).encode()
+
+    known = await read_session_nodes(be, "/hist")
+
+    assert known.state["quiet"] == "completed"
+    assert known.has_output == {"loud": True, "quiet": False}
+    assert known.is_readable("loud") is True
+    assert known.is_readable("quiet") is False
+
+
+async def test_a_runless_node_claims_and_finalizes_in_the_same_registry() -> None:
+    """One registry, two writers.
+
+    A spawn has no run id, so it cannot claim through `DagRunStore`, and a
+    second registry beside this one would let a spawn and a graph each believe
+    it holds the same node id.
+    """
+    from raven.agent.subagent.dag_store import (
+        RUNNING,
+        claim_node,
+        index_guard,
+        read_session_nodes,
+        record_node_outcome,
+    )
+
+    be = _FakeBackend()
+    async with index_guard("/hist"):
+        await claim_node(be, "/hist", "market_scan", kind="spawn", started_at_ms=1000)
+
+    known = await read_session_nodes(be, "/hist")
+    assert known.owner["market_scan"] == "spawn"
+    assert known.state["market_scan"] == RUNNING
+    # Claimed but still running: the id is taken and nothing can be read from
+    # it yet, which is the whole window a spawn sits in after it returns.
+    assert known.is_readable("market_scan") is False
+
+    async with index_guard("/hist"):
+        await record_node_outcome(be, "/hist", "market_scan", status="completed", has_output=True, ended_at_ms=2000)
+
+    known = await read_session_nodes(be, "/hist")
+    assert known.owner["market_scan"] == "spawn"
+    assert known.is_readable("market_scan") is True
+
+
+async def test_the_backstop_claims_an_id_nothing_holds() -> None:
+    """A caller reaching the manager directly leaves no claim of its own.
+
+    Its task would then have no registry row, so no listing draws it and no
+    later task can reference it.
+    """
+    from raven.agent.subagent.dag_store import RUNNING, ensure_node_claimed, index_guard, read_session_nodes
+
+    be = _FakeBackend()
+    async with index_guard("/hist"):
+        await ensure_node_claimed(be, "/hist", "scan", kind="spawn", started_at_ms=1000)
+
+    known = await read_session_nodes(be, "/hist")
+    assert known.owner["scan"] == "spawn"
+    assert known.state["scan"] == RUNNING
+
+
+async def test_the_backstop_leaves_a_finished_claim_exactly_as_it_found_it() -> None:
+    """Its docstring's promise, and the one that costs something to break.
+
+    Overwriting a held id would reset a `completed` node to `running` and to no
+    output -- the node stays on disk and stops being referenceable, with the
+    registry saying a finished task is still going. Case-folded like every other
+    claim check, so a differently-cased id counts as held too.
+    """
+    from raven.agent.subagent.dag_store import (
+        claim_node,
+        ensure_node_claimed,
+        index_guard,
+        read_session_nodes,
+        record_node_outcome,
+    )
+
+    be = _FakeBackend()
+    async with index_guard("/hist"):
+        await claim_node(be, "/hist", "Scan", kind="spawn", started_at_ms=1000)
+        await record_node_outcome(be, "/hist", "Scan", status="completed", has_output=True, ended_at_ms=2000)
+
+    async with index_guard("/hist"):
+        await ensure_node_claimed(be, "/hist", "Scan", kind="spawn", started_at_ms=9999)
+        await ensure_node_claimed(be, "/hist", "scan", kind="spawn", started_at_ms=9999)
+
+    known = await read_session_nodes(be, "/hist")
+    assert known.state == {"Scan": "completed"}, "no second row, and the outcome untouched"
+    assert known.is_readable("Scan") is True
+
+
+async def test_finalizing_a_runless_node_keeps_what_the_claim_wrote() -> None:
+    """The outcome merges into the entry rather than replacing it -- a write
+    that dropped `kind` would make the node's owner read as UNRECORDED, and the
+    duplicate-id refusal names the owner."""
+    from raven.agent.subagent.dag_store import claim_node, index_guard, read_registry, record_node_outcome
+
+    be = _FakeBackend()
+    async with index_guard("/hist"):
+        await claim_node(be, "/hist", "scan", kind="spawn", started_at_ms=1000)
+        await record_node_outcome(be, "/hist", "scan", status="failed", has_output=False, ended_at_ms=2000)
+
+    entry = (await read_registry(be, "/hist"))["nodes"]["scan"]
+    assert entry == {
+        "kind": "spawn",
+        "status": "failed",
+        "has_output": False,
+        "started_at_ms": 1000,
+        "ended_at_ms": 2000,
+    }
+
+
+async def test_two_callers_racing_for_one_node_id_leave_exactly_one_winner() -> None:
+    """The guard is what makes read-then-claim atomic.
+
+    Both tasks read the registry before either writes, which is the interleaving
+    that let two runs pass the uniqueness check and both claim an id. Held, the
+    second read sees the first claim and refuses.
+    """
+    import asyncio
+
+    from raven.agent.subagent.dag_store import claim_node, index_guard, read_session_nodes
+
+    be = _FakeBackend()
+    outcomes: list[str] = []
+
+    async def contender(tag: str, hold: float) -> None:
+        async with index_guard("/hist"):
+            known = await read_session_nodes(be, "/hist")
+            await asyncio.sleep(hold)
+            if "plan" in known.owner:
+                outcomes.append(f"{tag}:refused")
+                return
+            await claim_node(be, "/hist", "plan", kind=tag, started_at_ms=1)
+            outcomes.append(f"{tag}:claimed")
+
+    await asyncio.gather(contender("spawn", 0.02), contender("dag", 0.0))
+
+    assert sorted(outcomes) == ["dag:claimed", "spawn:refused"] or sorted(outcomes) == [
+        "dag:refused",
+        "spawn:claimed",
+    ], outcomes
+    assert len([o for o in outcomes if o.endswith(":claimed")]) == 1
+
+
+async def test_a_damaged_registry_degrades_to_empty_and_logs_why() -> None:
+    """The registry is what keeps node ids unique per conversation, so a
+    corrupt file must not fail the run reading it -- but degrading silently
+    would let that uniqueness guarantee lapse without anyone noticing.
+    """
+    from loguru import logger
+
+    from raven.agent.subagent.dag_store import read_session_nodes
+
+    be = _FakeBackend()
+    be.files["/hist/nodes.json"] = b"{not valid json"
+
+    lines: list[str] = []
+    sink_id = logger.add(lambda m: lines.append(str(m)), level="WARNING")
+    try:
+        known = await read_session_nodes(be, "/hist")
+    finally:
+        logger.remove(sink_id)
+
+    assert known.owner == {}
+    assert known.state == {}
+    assert any("Node registry" in line and "unreadable" in line for line in lines)
+
+
+async def test_a_registry_whose_halves_have_the_wrong_type_degrades_per_half() -> None:
+    """A well-formed object can still carry a `nodes` or `runs` of the wrong shape.
+
+    Both guards survived a mutation sweep of this module, so both are pinned
+    here. Per half rather than wholesale: a damaged `runs` list must not cost
+    the caller the node claims, which are what keep ids unique -- dropping
+    those silently frees every id in the conversation.
+    """
+    import json
+
+    from raven.agent.subagent.dag_store import read_registry, read_session_nodes
+
+    be = _FakeBackend()
+    be.files["/hist/nodes.json"] = json.dumps(
+        {"nodes": {"plan": {"run_id": "r1", "status": "completed", "has_output": True}}, "runs": "not-a-list"}
+    ).encode()
+
+    registry = await read_registry(be, "/hist")
+    assert registry["runs"] == [], "a runs value that is not a list reads as no runs"
+    assert (await read_session_nodes(be, "/hist")).owner == {"plan": "r1"}, "the node claims survive it"
+
+    be.files["/hist/nodes.json"] = json.dumps({"nodes": [{"id": "plan"}], "runs": [{"run_id": "r1"}]}).encode()
+
+    registry = await read_registry(be, "/hist")
+    assert registry["nodes"] == {}, "a nodes value that is not a dict reads as no nodes"
+    assert registry["runs"] == [{"run_id": "r1"}], "the run list survives it"
+
+
+async def test_a_registry_whose_run_entries_are_not_objects_drops_only_those() -> None:
+    """`runs` is a list of dicts; a stray scalar in it must not cost the rest."""
+    import json
+
+    from raven.agent.subagent.dag_store import read_registry
+
+    be = _FakeBackend()
+    be.files["/hist/nodes.json"] = json.dumps({"nodes": {}, "runs": [{"run_id": "r1"}, "junk", 7]}).encode()
+
+    assert (await read_registry(be, "/hist"))["runs"] == [{"run_id": "r1"}]
+
+
+async def test_a_registry_that_is_not_a_json_object_also_degrades_to_empty() -> None:
+    """Valid JSON that isn't an object -- a bare list, here -- is not a shape
+    the registry can be a per-node dict lookup against, so it degrades the
+    same way a corrupt file does. This path has no exception to log from, so
+    unlike the corrupt-file case it degrades without a warning.
+    """
+    from raven.agent.subagent.dag_store import read_session_nodes
+
+    be = _FakeBackend()
+    be.files["/hist/nodes.json"] = b"[1, 2, 3]"
+
+    known = await read_session_nodes(be, "/hist")
+
+    assert known.owner == {}
+    assert known.state == {}

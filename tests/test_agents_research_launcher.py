@@ -8,6 +8,7 @@ the exec targets ``python -m raven acp``. The strongest pin is the loader
 round-trip: what the launcher renders, trunk raven's own loader loads.
 """
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -267,10 +268,47 @@ def test_the_label_this_product_left_behind_is_refused_and_names_its_successor()
 
     with pytest.raises(ValueError) as excinfo:
         FlowConfig(enabled=True, version=retired)
-    assert PRODUCT_SUPERSEDED_PROFILES[retired] in str(excinfo.value)
+    # The END of the chain, not the first hop: this label has been retired past more than
+    # once, and naming a middle label would send an operator somewhere that also refuses.
+    assert FlowConfig._resolve_successor(retired) in str(excinfo.value)
 
     # A disabled flow still loads: the label describes a distribution nothing will run.
     assert FlowConfig(enabled=False, version=retired).version == retired
+
+
+def test_the_shipped_label_moves_when_the_shipped_prompt_does():
+    """The check that would have caught this MR before review did.
+
+    ``FlowConfig.version`` stamps a distribution, and ``finalShape.reportDepth`` is on in
+    the shipped config, so the deep report clause is the model input every shipped run
+    receives. A change to that clause under an unchanged label leaves two distributions
+    answering to one published name, and results from before and after become
+    indistinguishable - which is the whole reason the label exists.
+
+    Nothing can infer intent, so this ties the two together the only way a test can: the
+    label and a digest of the prompt the shipped config renders are pinned side by side.
+    Editing the clause reddens this test, and the fix is to advance the product label,
+    retire the one left behind in ``PRODUCT_SUPERSEDED_PROFILES``, and re-stamp here.
+    That is a deliberate three-line chore, which is the point - it was a silent omission
+    before.
+    """
+    sys.path.insert(0, str(RUN_PY.parent / "plugins" / "research-flow"))
+    from research_flow.prompts import render_parts
+
+    shipped = json.loads((RUN_PY.parent / "config.json").read_text())["plugins"]["config"]["research-flow"]
+    shape = shipped["finalShape"]
+    assert shape["reportDepth"] is True, "if reportDepth ships off, this pin is measuring the wrong clause"
+
+    segment = render_parts(
+        require_answer_marker=shape["requireMarker"],
+        report_structure=shape["reportStructure"],
+        report_format_override=shape["reportFormatOverride"],
+        report_depth=shape["reportDepth"],
+    )[1]
+    digest = hashlib.sha256(" ".join(segment.split()).encode("utf-8")).hexdigest()[:16]
+
+    assert shipped["version"] == "dr@3.5-filetools-askuser-derive-numeric-cite-rank"
+    assert digest == "baf5019c4141a463", f"the shipped prompt moved; advance the label and re-stamp to {digest}"
 
 
 def test_every_retirement_this_product_declares_names_a_label_it_can_load():
@@ -280,7 +318,11 @@ def test_every_retirement_this_product_declares_names_a_label_it_can_load():
 
     for retired, successor in PRODUCT_SUPERSEDED_PROFILES.items():
         assert successor != retired
-        assert FlowConfig(enabled=True, version=successor).version == successor
+        # An intermediate successor may itself be retired - the table has held a chain
+        # since 2026-09-07 - so what must load is where the chain ends.
+        end = FlowConfig._resolve_successor(retired)
+        assert FlowConfig(enabled=True, version=end).version == end
+        assert FlowConfig._resolve_successor(end) is None, "the end of a chain is not itself retired"
 
 
 def test_the_contract_is_seeded_beside_the_identity_once(grounded, tmp_path):
@@ -774,7 +816,11 @@ def test_a_label_two_retirements_old_is_sent_to_the_end_of_the_chain():
     two_hops = [old for old, mid in SUPERSEDED_PROFILES.items() if mid in PRODUCT_SUPERSEDED_PROFILES]
     assert two_hops, "no label is retired twice; this test has nothing to hold"
     for old in two_hops:
-        end = PRODUCT_SUPERSEDED_PROFILES[SUPERSEDED_PROFILES[old]]
+        # Walked rather than indexed twice: the chain has been three hops long since
+        # 2026-09-07, and a test that assumes its length stops testing the resolution.
+        end = SUPERSEDED_PROFILES[old]
+        while end in PRODUCT_SUPERSEDED_PROFILES:
+            end = PRODUCT_SUPERSEDED_PROFILES[end]
         assert FlowConfig._resolve_successor(old) == end
         with pytest.raises(ValueError) as excinfo:
             FlowConfig(enabled=True, version=old)

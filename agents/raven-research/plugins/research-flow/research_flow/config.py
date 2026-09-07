@@ -269,6 +269,16 @@ PRODUCT_SUPERSEDED_PROFILES: dict[str, str] = {
     # numeric-discipline rule. Same base rung, different distribution, and the fork has
     # neither, so it keeps the label this one leaves behind.
     "dr@3.5-filetools-askuser-derive": "dr@3.5-filetools-askuser-derive-numeric",
+    # 2026-09-07: the deep report clause gained the identifier rule, and the appendix's
+    # grounding check folds arXiv and forge addresses before it accuses a citation. The
+    # clause is what every shipped run renders - ``finalShape.reportDepth`` is on in
+    # ``config.json`` - so the model input moved and the label has to move with it, or two
+    # distributions answer to one published name and no result can be attributed.
+    "dr@3.5-filetools-askuser-derive-numeric": "dr@3.5-filetools-askuser-derive-numeric-cite",
+    # 2026-09-07: the deep report clause gained the ranking-order and column rules. Same
+    # reason as the two rows above - the clause is what every shipped run renders - and the
+    # shipped-prompt digest test is what caught the omission before review this time.
+    "dr@3.5-filetools-askuser-derive-numeric-cite": "dr@3.5-filetools-askuser-derive-numeric-cite-rank",
 }
 
 

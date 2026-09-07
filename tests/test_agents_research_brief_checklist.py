@@ -278,3 +278,36 @@ def test_the_next_demand_is_not_swallowed_as_an_excluded_name():
     assert brief.exclusions == ("LongBench",)
     assert brief.artefacts == ("do-not-bother list",)
     assert brief.count == (15, 25)
+
+
+def test_a_contrastive_not_rules_out_the_phrase_it_sits_before():
+    """`include a comparison table, not a comparison matrix` sets one deliverable
+    against another, and both would otherwise be listed as things to deliver. This
+    sentence is the last thing the model reads before it writes, so a deliverable
+    invented there costs a section of the report.
+
+    Matched on adjacency rather than as a cue in the negation list, and that is the whole
+    design. A cue of the form `not` plus a determiner cannot fire, because the determiner
+    is the first token of the noun phrase itself and the lookback ends one character short
+    of it. Adjacency is also what separates this from the two shapes that must stay
+    silent - `benchmarks we have not run` puts a verb after `not`, and `do-not-bother` is
+    hyphenated.
+    """
+    for task, kept in (
+        ("Include a comparison table, not a comparison matrix", ("comparison table",)),
+        ("Include a convention table, not a ranking table.", ("convention table",)),
+        ("Deliver a candidate shortlist, not an evidence appendix.", ("candidate shortlist",)),
+        ("Deliver a candidate shortlist, not the evidence appendix.", ("candidate shortlist",)),
+    ):
+        assert read_brief(task).artefacts == kept, task
+
+
+def test_the_contrastive_rule_leaves_the_two_shapes_a_bare_not_would_break():
+    """The reason a bare `not` is absent from the cue list, as a test rather than a
+    comment, so the next widening of this rule has to argue with it."""
+    survives = read_brief("Shortlist 15-25 benchmarks we have not run, excluding LongBench and LooGLE")
+    assert survives.count == (15, 25)
+    assert survives.exclusions == ("LongBench", "LooGLE")
+
+    assert read_brief("Deliver a do-not-bother list.").artefacts == ("do-not-bother list",)
+    assert read_brief("Not the four we already ran; shortlist 15-25 benchmarks.").count == (15, 25)

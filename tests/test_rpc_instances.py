@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 
 from raven.agent.subagent import instances as instances_mod
+from raven.rpc.errors import ConfigValidationError
 from raven.rpc.methods.instances import (
     instances_create,
     instances_forget,
@@ -278,31 +279,54 @@ async def test_forget_keeps_the_record_directories(tmp_path: Path, _isolated_reg
 
 
 def _spawn(session_dir: Path, *, agent: str, handle: str, task: str, output: str, at_ms: int) -> None:
-    from raven.agent.subagent.history import SpawnRecord
+    """One finished spawn: its flat artifacts, and the registry entry that
+    marks the id as a spawn's.
 
-    rec = SpawnRecord.open(session_dir, task_id=f"t{at_ms}", task=task, meta={"agent": agent, "handle": handle})
+    Both halves, because the reader needs both -- the files alone cannot say
+    which surface wrote them now that they share one root.
+    """
+    from raven.agent.subagent.dag_store import REGISTRY_FILENAME
+    from raven.agent.subagent.history import SpawnRecord, session_history_root
+
+    node_id = f"t{at_ms}"
+    rec = SpawnRecord.open(session_dir, task_id=node_id, task=task, meta={"agent": agent, "handle": handle})
     rec.finish(status="completed", output=output)
-    meta = json.loads((rec.dir / "meta.json").read_text(encoding="utf-8"))
+    meta = json.loads(rec.file("meta.json").read_text(encoding="utf-8"))
     meta.update(started_at_ms=at_ms, ended_at_ms=at_ms + 1)
-    (rec.dir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    rec.file("meta.json").write_text(json.dumps(meta), encoding="utf-8")
+
+    registry_path = session_history_root(session_dir) / REGISTRY_FILENAME
+    registry = json.loads(registry_path.read_text(encoding="utf-8")) if registry_path.is_file() else {}
+    registry.setdefault("nodes", {})[node_id] = {
+        "kind": "spawn",
+        "status": "completed",
+        "has_output": True,
+        "started_at_ms": at_ms,
+        "ended_at_ms": at_ms + 1,
+    }
+    registry.setdefault("runs", [])
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
 
 
 def _dag_run(session_dir: Path, run_id: str, nodes: dict[str, dict[str, Any]]) -> None:
-    from raven.agent.subagent.history import dag_root
+    from raven.agent.subagent.history import dag_root, nodes_root
 
     run = dag_root(session_dir) / run_id
     run.mkdir(parents=True, exist_ok=True)
+    flat = nodes_root(session_dir)
+    flat.mkdir(parents=True, exist_ok=True)
     manifest: dict[str, Any] = {}
     for node_id, spec in nodes.items():
-        (run / f"{node_id}.prompt.md").write_text(spec["prompt"], encoding="utf-8")
-        (run / f"{node_id}.out.md").write_text(spec["out"], encoding="utf-8")
+        (flat / f"{node_id}.prompt.md").write_text(spec["prompt"], encoding="utf-8")
+        (flat / f"{node_id}.out.md").write_text(spec["out"], encoding="utf-8")
         manifest[node_id] = {
             "subagent": spec["agent"],
             "instance": spec.get("instance"),
             "started_at": spec["at_ms"],
             "ended_at": spec["at_ms"] + 1,
-            "prompt_file": str(run / f"{node_id}.prompt.md"),
-            "output_file": str(run / f"{node_id}.out.md"),
+            "prompt_file": str(flat / f"{node_id}.prompt.md"),
+            "output_file": str(flat / f"{node_id}.out.md"),
             "status": "completed",
         }
     (run / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -311,15 +335,17 @@ def _dag_run(session_dir: Path, run_id: str, nodes: dict[str, dict[str, Any]]) -
 def _dead_dag_run(session_dir: Path, run_id: str, nodes: dict[str, dict[str, Any]]) -> None:
     """A run killed mid-flight: graph.json only, no manifest, and an output
     file only for the nodes that finished before the gateway died."""
-    from raven.agent.subagent.history import dag_root
+    from raven.agent.subagent.history import dag_root, nodes_root
 
     run = dag_root(session_dir) / run_id
     run.mkdir(parents=True, exist_ok=True)
+    flat = nodes_root(session_dir)
+    flat.mkdir(parents=True, exist_ok=True)
     graph: dict[str, Any] = {"task_summary": "t", "nodes": []}
     for node_id, spec in nodes.items():
-        (run / f"{node_id}.prompt.md").write_text(spec["prompt"], encoding="utf-8")
+        (flat / f"{node_id}.prompt.md").write_text(spec["prompt"], encoding="utf-8")
         if "out" in spec:
-            (run / f"{node_id}.out.md").write_text(spec["out"], encoding="utf-8")
+            (flat / f"{node_id}.out.md").write_text(spec["out"], encoding="utf-8")
         graph["nodes"].append({"id": node_id, "subagent": spec["agent"], "instance": spec.get("instance")})
     (run / "graph.json").write_text(json.dumps(graph), encoding="utf-8")
 
@@ -399,6 +425,92 @@ async def test_history_reads_a_run_that_died_unfinalized_off_its_graph(tmp_path:
     finished = await _history(session_dir, "Coder", "site")
     assert [t["content"] for t in finished] == ["build it", "built"]
     assert all("interrupted" not in t for t in finished)
+
+
+def test_dag_exchanges_honours_a_finalized_manifests_recorded_paths(tmp_path: Path) -> None:
+    """A finalized manifest is authoritative, including the files it says are absent.
+
+    The same rule `dag_reader` follows, one reader away. A pre-flattening run
+    records absolute paths under its own directory, and a node that failed
+    before it rendered records an explicit `null`. Deriving `nodes/<id>.out.md`
+    for that null reaches whatever later task took the id back, so a node that
+    provably wrote nothing answers with someone else's output under the old
+    run's identity.
+    """
+    import json
+
+    from raven.agent.subagent.instance_records import dag_exchanges
+
+    dag, nodes = tmp_path / "mas_dag", tmp_path / "nodes"
+    run = dag / "20260730T060242Z-6b0b89a3"
+    run.mkdir(parents=True)
+    nodes.mkdir(parents=True)
+    (run / "plan.prompt.md").write_text("old plan prompt", encoding="utf-8")
+    (run / "plan.out.md").write_text("THE ORIGINAL, OLDER NODE", encoding="utf-8")
+    (run / "draft.prompt.md").write_text("old draft prompt", encoding="utf-8")
+    (run / "manifest.json").write_text(
+        json.dumps(
+            {
+                "plan": {
+                    "subagent": "x",
+                    "instance": "h",
+                    "started_at": 1000,
+                    "ended_at": 2000,
+                    "prompt_file": str(run / "plan.prompt.md"),
+                    "output_file": str(run / "plan.out.md"),
+                },
+                # Failed before it rendered: the run recorded that it has no output.
+                "draft": {
+                    "subagent": "x",
+                    "instance": "h",
+                    "started_at": 3000,
+                    "ended_at": 4000,
+                    "prompt_file": str(run / "draft.prompt.md"),
+                    "output_file": None,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    # A later task takes both ids back in the flat namespace.
+    (nodes / "plan.out.md").write_text("A DIFFERENT, NEWER NODE", encoding="utf-8")
+    (nodes / "draft.out.md").write_text("A DIFFERENT, NEWER NODE", encoding="utf-8")
+
+    by_node = {
+        turn["call_id"].split("/")[-1]: [t["content"] for t in turns]
+        for _, turns in dag_exchanges(dag, nodes, "x", "h")
+        for turn in turns[:1]
+    }
+
+    assert by_node["plan"] == ["old plan prompt", "THE ORIGINAL, OLDER NODE"], "a named file wins over the flat root"
+    assert by_node["draft"] == ["old draft prompt"], "a recorded null means no output, not 'derive one'"
+
+
+def test_dag_exchanges_reads_an_unfinalized_runs_node_off_the_flat_root(tmp_path: Path) -> None:
+    """``_graph_nodes`` -- the manifest stand-in for a run with no manifest --
+    used to read a node's prompt mtime, and ``dag_exchanges`` used to fall back
+    to reading its prompt/output, off the run directory. Nothing is written
+    there any more: node artifacts live at the flat node root, so a run killed
+    before it finalized reported ``started_at=0`` and a prompt/output nothing
+    could read. Asserted directly against ``dag_exchanges`` rather than through
+    ``instances_history``, so this fails on the reader itself, not on whatever
+    the RPC layer happens to do with a zero timestamp."""
+    from raven.agent.subagent.history import dag_root, nodes_root
+    from raven.agent.subagent.instance_records import dag_exchanges
+
+    session_dir = tmp_path / "sessions" / "s1"
+    _dead_dag_run(
+        session_dir,
+        "run-1",
+        {"code": {"agent": "Coder", "instance": "site", "prompt": "build it", "out": "built"}},
+    )
+
+    exchanges = dag_exchanges(dag_root(session_dir), nodes_root(session_dir), "Coder", "site")
+
+    assert len(exchanges) == 1
+    started, turns = exchanges[0]
+    assert started > 0
+    assert [t["content"] for t in turns] == ["build it", "built"]
 
 
 async def test_a_trailing_prompt_with_nothing_in_flight_is_marked_interrupted(tmp_path: Path) -> None:
@@ -908,6 +1020,27 @@ def _real_manager(tmp_path: Path) -> Any:
     )
 
 
+def _manager_with(tmp_path: Path, *, agents: list) -> Any:
+    """A real manager whose roster is the given third-party config.
+
+    A CLI row's statefulness comes straight from ``resumeCommand``, so one
+    without it is stateless -- which is what makes the refusal reachable here
+    without a live capability snapshot.
+    """
+    from raven.agent.subagent.manager import SubagentManager
+
+    class _StubProvider:
+        def get_default_model(self) -> str:
+            return "stub"
+
+    return SubagentManager(
+        provider=_StubProvider(),
+        workspace=tmp_path / "home",
+        session_dir=lambda key: tmp_path / "sessions" / key,
+        agents=agents,
+    )
+
+
 def _create_loop(tmp_path: Path) -> Any:
     from raven.agent.subagent.direct_chat import DirectChatHandoff
 
@@ -928,6 +1061,55 @@ async def test_instance_create_returns_the_row_the_strip_will_draw(tmp_path: Pat
     # next refresh, and a row without `resumable` falls off every surface that
     # filters on it once it stops being the active conversation.
     assert row["resumable"] is True
+
+
+async def test_a_refused_create_says_why_on_the_wire(tmp_path: Path, monkeypatch) -> None:
+    """The refusal a caller can act on has to arrive as one.
+
+    `_require_addressable` writes both of its sentences for the person who
+    pressed the button. Untyped, the dispatcher renders them as
+    `internal_error` with the text buried in a traceback tail, and the panel
+    draws that code -- so the one failure on this path anybody could do
+    something about was the one nobody could read.
+    """
+    from raven.agent.subagent.direct_chat import DirectChatHandoff
+    from raven.agent.subagent.instances import InstanceRegistry
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+
+    registry = InstanceRegistry(tmp_path / "reg.json")
+    monkeypatch.setattr(instances_mod, "_registry", registry)
+    monkeypatch.setattr("raven.agent.subagent.manager.get_registry", lambda: registry)
+    # No `resume_command`, so this row is stateless and cannot hold a chat.
+    manager = _manager_with(tmp_path, agents=[ThirdPartyCliSubagentConfig(name="Oneshot", command="cat")])
+    loop = _FakeLoop(manager, DirectChatHandoff())
+
+    with pytest.raises(ConfigValidationError) as caught:
+        await instances_create({"session_key": "s1", "agent": "Oneshot"}, agent_loop_factory=_factory(loop))
+
+    # The sentence, not the class: what the reader needs is the way out.
+    assert "stateless" in caught.value.detail
+    assert "Spawn it with a task instead" in caught.value.detail
+    # And it rides where the client reads it, rather than only in str(exc).
+    assert caught.value.message == "config_validation_error"
+
+
+async def test_a_create_that_actually_broke_is_still_an_internal_error(tmp_path: Path) -> None:
+    """The narrowing has to stay narrow.
+
+    Only `NotAddressableError` is a refusal. A manager that raises anything
+    else has a fault, and dressing that as a validation error would tell the
+    reader to fix their request when nothing about the request was wrong.
+    """
+    loop = _create_loop(tmp_path)
+
+    async def _boom(**_: Any) -> None:
+        raise RuntimeError("the registry file is a directory")
+
+    loop.subagents.create_instance = _boom
+
+    with pytest.raises(RuntimeError) as caught:
+        await instances_create({"session_key": "s1", "agent": "raven"}, agent_loop_factory=_factory(loop))
+    assert not isinstance(caught.value, ConfigValidationError)
 
 
 async def test_a_created_instance_is_listed_for_that_session(tmp_path: Path) -> None:
@@ -966,9 +1148,18 @@ async def test_a_creation_is_announced_only_to_its_own_session(tmp_path: Path) -
 
 
 async def test_instance_create_refuses_an_agent_that_is_not_on_the_roster(tmp_path: Path) -> None:
+    """Typed, not a bare `RuntimeError`.
+
+    The type at this boundary changed deliberately: `RpcError` is what the
+    dispatcher renders with its message and detail intact, and anything else it
+    can only render as `internal_error`. The dispatcher is this function's only
+    caller, and it handles `RpcError` first -- which is the whole point -- so
+    the change reaches no other caller. What the assertion pins is the part a
+    reader depends on: the sentence, at the path the client reads it from.
+    """
     loop = _create_loop(tmp_path)
 
-    with pytest.raises(RuntimeError, match="disabled or no longer configured"):
+    with pytest.raises(ConfigValidationError, match="disabled or no longer configured"):
         await instances_create({"session_key": "s1", "agent": "nope"}, agent_loop_factory=_factory(loop))
 
     out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(loop))

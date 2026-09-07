@@ -173,8 +173,7 @@ class TestStatus:
         """Trusting a missing meta would leave a finished call pulsing as live."""
         await _spawn(workspace)
         row = (await subagent_list({"session_id": SESSION}))["items"][0]
-        directory = _call_dir_on_disk(workspace, row["id"])
-        (directory / "meta.json").unlink()
+        _node_file_on_disk(workspace, row["id"], "meta.json").unlink()
 
         after = (await subagent_list({"session_id": SESSION}))["items"][0]
         assert after["status"] == "ok", "its answer is on disk, so it ended"
@@ -185,8 +184,9 @@ class TestStatus:
     async def test_a_row_prefers_the_task_summary(self, workspace: Path) -> None:
         await _spawn(workspace)
         row = (await subagent_list({"session_id": SESSION}))["items"][0]
-        directory = _call_dir_on_disk(workspace, row["id"])
-        (directory / "meta.json").write_text(json.dumps({"task_summary": "compare the two vendors"}))
+        _node_file_on_disk(workspace, row["id"], "meta.json").write_text(
+            json.dumps({"task_summary": "compare the two vendors"})
+        )
 
         after = (await subagent_list({"session_id": SESSION}))["items"][0]
         assert after["label"] == "compare the two vendors"
@@ -196,8 +196,7 @@ class TestStatus:
         the prompt's first line."""
         await _spawn(workspace)
         row = (await subagent_list({"session_id": SESSION}))["items"][0]
-        directory = _call_dir_on_disk(workspace, row["id"])
-        (directory / "meta.json").write_text(json.dumps({"label": "older spawn"}))
+        _node_file_on_disk(workspace, row["id"], "meta.json").write_text(json.dumps({"label": "older spawn"}))
 
         after = (await subagent_list({"session_id": SESSION}))["items"][0]
         assert after["label"] == "older spawn"
@@ -205,8 +204,7 @@ class TestStatus:
     async def test_a_row_with_neither_falls_back_to_the_prompt(self, workspace: Path) -> None:
         await _spawn(workspace, "first line of the prompt\nsecond line")
         row = (await subagent_list({"session_id": SESSION}))["items"][0]
-        directory = _call_dir_on_disk(workspace, row["id"])
-        (directory / "meta.json").write_text(json.dumps({}))
+        _node_file_on_disk(workspace, row["id"], "meta.json").write_text(json.dumps({}))
 
         after = (await subagent_list({"session_id": SESSION}))["items"][0]
         assert after["label"] == "first line of the prompt"
@@ -274,11 +272,11 @@ def test_both_methods_are_registered(workspace: Path) -> None:
     assert {"subagent.list", "subagent.context"} <= set(dispatcher._handlers)
 
 
-def _call_dir_on_disk(workspace: Path, call_id: str) -> Path:
-    from raven.agent.subagent.history import spawn_root
+def _node_file_on_disk(workspace: Path, node_id: str, name: str) -> Path:
+    from raven.agent.subagent.history import node_file
     from raven.session.manager import SessionManager
 
-    return spawn_root(SessionManager(workspace).session_dir(SESSION)) / call_id
+    return node_file(SessionManager(workspace).session_dir(SESSION), node_id, name)
 
 
 # ---------------------------------------------------------------------------
