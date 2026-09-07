@@ -378,7 +378,7 @@ async def test_tool_result_splits_model_text_from_display_preview(tmp_path):
     recorded: list[tuple[str, str, str]] = []
     original_add = loop.context.add_tool_result
 
-    def _record(messages, tool_call_id, tool_name, result):
+    def _record(messages, tool_call_id, tool_name, result, *, trusted_note=""):
         recorded.append((tool_call_id, tool_name, result))
         return original_add(messages, tool_call_id, tool_name, result)
 
