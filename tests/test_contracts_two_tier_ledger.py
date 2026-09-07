@@ -59,6 +59,19 @@ def check_ledger(pkg_dir: Path, ledger: dict[str, set[str]]) -> list[str]:
 LEDGER = {
     "contract": {
         # Contract tier: the shapes every shelf implements against.
+        "AGENT_PROMPT_BLOCKED",
+        "AGENT_PROMPT_STALLED",
+        "Envelope",
+        "HostScope",
+        "RuntimeInfo",
+        "SendResult",
+        "TerminalError",
+        "TerminalListResult",
+        "TerminalRecord",
+        "WaitResult",
+        "error_envelope",
+        "success_envelope",
+        "worktree_id",
         "ApprovalResponder",
         "Asker",
         "AssembledContext",
@@ -227,7 +240,7 @@ def test_import_guard_bites_machinery_and_spares_type_checking(tmp_path):
 # The contract tier is versioned: its shape moves only with a version bump
 # ---------------------------------------------------------------------------
 
-PINNED_CONTRACT_SURFACE = ("7", "cc1691a74f17f74bb461e5e12b07122d0417bb4b5145bda49d55cdbb2c73af76")
+PINNED_CONTRACT_SURFACE = ("8", "00d338d689a6df786d3d1a114d00c51fbdff52cfa4d502380551b6285fe3befc")
 
 
 def contract_surface_digest(pkg_dir: Path) -> str:
