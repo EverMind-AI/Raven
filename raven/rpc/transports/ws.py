@@ -342,7 +342,10 @@ class WsGateway:
         await ws.send_str(json.dumps(frame, ensure_ascii=False))
 
     async def _dispatch_one(self, ws: web.WebSocketResponse, frame: dict[str, Any]) -> None:
+        from raven.contracts.terminal import RuntimeInfo
+
         response = await self.dispatcher.dispatch(frame)
+        response["_meta"] = RuntimeInfo().model_dump(by_alias=True)
         if frame.get("id") is None:
             return
         try:

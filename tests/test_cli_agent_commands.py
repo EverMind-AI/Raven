@@ -20,6 +20,34 @@ from raven.config.loader import set_config_path
 runner = CliRunner()
 
 
+@pytest.mark.parametrize(
+    "argv,method,params",
+    [
+        (
+            ["register", "--name", "worker", "--kind", "codex", "--terminal", "term_test"],
+            "agents.register",
+            {"agent_name": "worker", "kind_ref": "codex", "terminal": "term_test"},
+        ),
+        (["list"], "agents.list", {}),
+        (["show", "--name", "worker"], "agents.show", {"agent_name": "worker"}),
+        (["resolve", "--mention", "worker"], "agents.resolve", {"mention": "worker"}),
+    ],
+)
+def test_agent_identity_commands_use_runtime(monkeypatch, argv, method, params):
+    import json
+    from unittest.mock import AsyncMock
+
+    from raven.cli import _terminal_rpc
+
+    envelope = {"ok": True, "result": {"unique": True}, "_meta": {"runtimeId": "remote"}}
+    request = AsyncMock(return_value=envelope)
+    monkeypatch.setattr(_terminal_rpc, "request", request)
+    result = runner.invoke(app, ["agent", *argv, "--json"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout) == envelope
+    assert request.await_args.args == (method, params)
+
+
 @pytest.fixture
 def tmp_config(tmp_path: Path) -> Path:
     cfg = tmp_path / "config.json"

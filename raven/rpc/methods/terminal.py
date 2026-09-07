@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from raven.contracts.terminal import TerminalError
+
 if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
 
@@ -58,6 +60,9 @@ async def terminal_resize(params: dict) -> dict:
 
 def register_terminal_methods(dispatcher: "Dispatcher", *, host=None, delivery=None, stream=None):
     """Register hosted terminal operations, retaining the native TUI resize path."""
+    from raven.rpc.methods.runtime import runtime_status
+
+    dispatcher.register("runtime.status", runtime_status)
     if host is None:
         dispatcher.register("terminal.resize", terminal_resize)
         return None
@@ -71,16 +76,6 @@ __all__ = [
     "terminal_resize",
     "register_terminal_methods",
 ]
-
-
-class TerminalRpcError(Exception):
-    """A named terminal failure translated at the JSON-RPC boundary."""
-
-    def __init__(self, code: str, message: str = "", data: dict | None = None):
-        self.code = code
-        self.message = message or code
-        self.data = data
-        super().__init__(self.message)
 
 
 def _rpc_error(code: str, message: str = "", *, invalid: bool = False, data=None):
@@ -118,7 +113,7 @@ def terminal_json(record):
     if isinstance(record, dict):
         values = record
     elif hasattr(record, "model_dump"):
-        values = record.model_dump(mode="json")
+        return record.model_dump(by_alias=True, mode="json")
     else:
         values = vars(record)
     return {
@@ -281,7 +276,7 @@ class TerminalMethods:
                 return await getattr(self, method)(params)
             except KeyError as exc:
                 raise _rpc_error("terminal_not_found", "Terminal handle is not live") from exc
-            except TerminalRpcError as exc:
-                raise _rpc_error(exc.code, exc.message, data=exc.data) from exc
+            except TerminalError as exc:
+                raise _rpc_error(exc.code, str(exc), data=exc.data) from exc
 
         return invoke
