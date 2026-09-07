@@ -51,6 +51,7 @@ class ResolvingProvider(LLMProvider):
             temperature=defaults.temperature,
             reasoning_effort=defaults.reasoning_effort,
             timeout=defaults.llm_call_timeout,
+            stream_idle_timeout=defaults.stream_idle_timeout,
         )
 
     def _refresh_credentials(self) -> None:
