@@ -1,0 +1,7 @@
+{
+  "agents": {
+    "defaults": {
+      "reasoningEffort": "max"
+    }
+  }
+}

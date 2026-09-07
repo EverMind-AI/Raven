@@ -303,9 +303,11 @@ class TurnPathMixin:
         chat drives the same call and must not drift from it. This method stays
         as the loop's own entry point (its span, its reconnect budget).
 
-        Generation parameters are deliberately not passed on: the main loop has
-        always let ``chat_stream``'s own signature defaults stand here. See
-        ``generation_kwargs`` for the callers that cannot.
+        Generation parameters travel only as the turn's ``gen_overrides``: the
+        session's pinned reasoning effort under a hook's rollback override.
+        With none, ``chat_stream``'s own signature defaults stand, as they
+        always have. See ``generation_kwargs`` for the callers that build their
+        own.
         """
         limits = self._recovery_limits
         return await stream_llm_call(

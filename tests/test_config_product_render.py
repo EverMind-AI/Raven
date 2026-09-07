@@ -220,6 +220,24 @@ def test_mode_catalogue_assembles_the_acp_modes_contract(tmp_path):
     }
 
 
+def test_mode_catalogue_lifts_a_modes_reasoning_effort_onto_the_entry(tmp_path):
+    """The effort a mode asks for is the trunk's knob (`AcpModeConfig.reasoningEffort`),
+    so it leaves the overlay and rides the entry, where the trunk dispenses it to
+    every call a session in that mode makes. The overlay itself is untouched."""
+    (tmp_path / "medium.json").write_text(
+        json.dumps({"agents": {"defaults": {"reasoningEffort": "none"}}}), encoding="utf-8"
+    )
+    labels = {"high": ("High", "the baseline"), "medium": ("Medium", "no thinking")}
+
+    catalogue = render.mode_catalogue(
+        tmp_path, labels, baseline="high", overlay_keys=frozenset({"agents"}), resolve=lambda o: (150, o)
+    )
+
+    assert catalogue["medium"]["reasoningEffort"] == "none"
+    assert catalogue["medium"]["overlay"] == {"agents": {"defaults": {"reasoningEffort": "none"}}}
+    assert "reasoningEffort" not in catalogue["high"], "the baseline inherits agents.defaults"
+
+
 def test_mode_catalogue_refuses_an_unknown_overlay_key(tmp_path):
     (tmp_path / "deep.json").write_text(json.dumps({"surprise": 1}), encoding="utf-8")
     labels = {"fast": ("Fast", "d"), "deep": ("Deep", "d")}

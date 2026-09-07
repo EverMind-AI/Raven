@@ -45,6 +45,31 @@ DEFAULT_CONFIG = HERE / "config.json"
 PLUGINS_DIR = HERE / "plugins"
 FLOW_PLUGIN_ID = "oncall-flow"
 GUIDE_SECTION = PLUGINS_DIR / FLOW_PLUGIN_ID / "prompts" / "TOOLS_ONCALL.md"
+MODES_DIR = HERE / "modes"
+# The shipped config.json IS the high profile; modes/ holds the other two as
+# diffs. Measured 2026-09-04 on deepseek-v4-flash over openrouter: the model
+# does not tell low, medium and high apart (200-340 thinking tokens, 6-17 s),
+# so the felt steps are thinking off, thinking on, and thinking at max
+# (2300-3300 tokens, about 70 s a call). Three profiles, one real knob.
+BASELINE_MODE = "high"
+MODE_LABELS = {
+    "medium": (
+        "Medium",
+        "Thinking off: answers in seconds. For routine looks -- reading a status, polling a queue.",
+    ),
+    "high": (
+        "High",
+        "Thinking on, the shipped default: a few seconds to a quarter minute a call.",
+    ),
+    "max": (
+        "Max",
+        "Thinking at maximum effort: about a minute a call, ten times the reasoning. For a judgement that "
+        "decides a round -- what to submit, whether to kill.",
+    ),
+}
+# An overlay may touch the agent's own generation defaults and the flow
+# plugin's slice; anything else is a different file's business.
+OVERLAY_KEYS = frozenset({"agents", "plugins"})
 
 PRODUCT = "raven-oncall"
 
@@ -170,6 +195,27 @@ def render_config(source: Path) -> Path:
     plugins["dirs"] = [str(PLUGINS_DIR)]
     flow_slice = plugins.setdefault("config", {}).setdefault(FLOW_PLUGIN_ID, {})
     flow_slice.setdefault("stateRoot", str(root / "oncall_flow"))
+
+    catalogue = render.mode_catalogue(
+        MODES_DIR,
+        MODE_LABELS,
+        baseline=BASELINE_MODE,
+        overlay_keys=OVERLAY_KEYS,
+        # The loop reads agents.defaults off the overlay itself and the plugin's
+        # hooks read their slice, so the entry carries the whole diff; the cap
+        # is the overlay's when it names one, else the shipped default.
+        resolve=lambda overlay: (
+            ((overlay.get("agents") or {}).get("defaults") or {}).get(
+                "maxToolIterations", defaults.get("maxToolIterations")
+            ),
+            overlay,
+        ),
+    )
+    if catalogue:
+        acp = config.setdefault("acp", {})
+        acp["modes"] = catalogue
+        acp["defaultMode"] = BASELINE_MODE
+        log(f"[run] modes: {', '.join(catalogue)} (default {BASELINE_MODE})")
 
     root.mkdir(parents=True, exist_ok=True)
     seed_guide(workspace)
