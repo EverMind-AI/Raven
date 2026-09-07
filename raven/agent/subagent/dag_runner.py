@@ -34,6 +34,7 @@ from raven.agent.subagent.dag_graph import DagNodeSpec, SubAgentDagSpec, graph_d
 from raven.agent.subagent.dag_render import render_prompt
 from raven.agent.subagent.dag_store import (
     DagRunStore,
+    SessionNodes,
     index_guard,
     make_run_id,
     node_live_key,
@@ -156,8 +157,6 @@ async def run_dag(
     backend: Any,
     workdir: str,
     run_root: str,
-    nodes_root: str,
-    history_root: str,
     subagents_root: str | None = None,
     sandbox: Any = None,
     max_concurrency: int = 5,
@@ -191,38 +190,27 @@ async def run_dag(
     file_exists). ``sandbox`` is an optional executor handed to each node backend
     (third-party CLI/OpenAI backends ignore it; a raven-loop node backend uses it).
 
-    ``workdir``, ``run_root`` and ``nodes_root`` are different places and must
-    not be collapsed into one. ``workdir`` is the session's working directory:
-    it is each node sub-agent's cwd, and what ``{{ ref:<path> }}`` resolves
+    ``workdir`` and ``run_root`` are two different places and must not be
+    collapsed back into one. ``workdir`` is the session's working directory: it
+    is each node sub-agent's cwd, and what ``{{ ref:<path> }}`` resolves
     against, so it has to be where the user's files are. ``run_root`` is this
-    run's own directory, holding only ``graph.json`` and ``manifest.json`` --
-    what describes the run rather than any one node. ``nodes_root`` is where
-    the prompt/output records that describe each node are written instead,
-    flat and keyed by node id rather than nested under a run -- an audit trail
-    that outlives whatever the working directory is pointed at
+    session's DAG history root, where the prompt/output records are written --
+    an audit trail that outlives whatever the working directory is pointed at
     (raven/agent/subagent/history.py).
 
-    They are not equally reachable by reference, though: ``nodes_root`` is a
-    prefix-based reference root -- ``{{ ref:@nodes/<node_id>.out.md }}`` reads
-    a node's file directly, the same file a bare ``{{ <node_id>.output }}``
-    reads the contents of -- because ``sessions/`` is a protected subtree
-    (raven/agent/workdir.py) that no working directory can be aimed at, so no
-    relative path from ``workdir`` ever reaches it. ``run_root`` holds no
-    prefix of its own: a node id already names one node for the whole
-    conversation, so nothing needs to say which run produced it.
+    They are both reference roots, though, not just the one: ``run_root``
+    resolves ``{{ ref:@runs/<run_id>/... }}``, which is the short way for a
+    graph to read an earlier run in the same conversation. It has to be a
+    second root rather than a relative path from ``workdir``, because
+    ``sessions/`` is a protected subtree (raven/agent/workdir.py) that no
+    working directory can be aimed at -- so no relative path from one reaches
+    the other.
 
-    ``subagents_root`` widens what a reference may resolve to by one
-    directory: ``<session_dir>/subagents``, the parent of both ``run_root``
-    and ``nodes_root``, reachable by absolute path rather than through a
-    prefix. That is how a reference still reaches ``run_root``'s
-    ``graph.json``/``manifest.json``, the ``spawn`` records beside it, and any
-    node's artifacts written before this session's history was flattened.
-    Left unset, references are confined to ``workdir`` plus ``@nodes/``.
-
-    ``history_root`` is that same parent directory, ``<session_dir>/subagents``,
-    taken as its own required root rather than derived from ``run_root``: it
-    becomes the store's ``registry_root``, where the session's node registry
-    lives.
+    ``subagents_root`` widens that by one directory: ``<session_dir>/subagents``,
+    the parent of ``run_root``, so a reference may also name this conversation's
+    run history -- and its ``spawn`` records -- by absolute path rather than only
+    through ``@runs/``. Left unset, references are confined to ``workdir`` plus
+    ``@runs/``.
 
     It is deliberately *not* agent home. Agent home also holds ``user_memory/``,
     ``skills/`` and every other conversation's transcript and sub-agent history;
@@ -233,9 +221,9 @@ async def run_dag(
     :func:`raven.agent.subagent.prompt_paths.check_confined`.
 
     Node ids are unique across the session, not just across this graph: the
-    session's node registry is read before validation, so a graph reusing an
-    id an earlier run already took is refused, and one naming a node an
-    earlier run *completed* resolves to that run's output, needing no
+    session index under ``run_root`` is read before validation, so a graph
+    reusing an id an earlier run already took is refused, and one naming a node
+    an earlier run *completed* resolves to that run's output, needing no
     ``depends_on`` entry for it. Such an entry is allowed and satisfied on
     sight; ``dag_graph.graph_deps`` is what keeps it out of the scheduling below,
     which only knows this run's statuses. Those two are separate questions --
@@ -293,11 +281,11 @@ async def run_dag(
         raise DagValidationError("max_concurrency must be >= 1")
     roots = (workdir, subagents_root) if subagents_root else (workdir,)
     # Read, validate and claim under one guard. Splitting them would let two
-    # concurrent runs both read a registry without node 'x', both pass the
+    # concurrent runs both read an index without node 'x', both pass the
     # uniqueness check, and both claim it -- leaving two nodes answering to one
     # name, which is exactly what the id being unique is supposed to rule out.
-    async with index_guard(history_root):
-        session_nodes = await read_session_nodes(backend, history_root)
+    async with index_guard(run_root):
+        session_nodes = await read_session_nodes(backend, run_root)
         validate_and_order(spec, roots, session_nodes)
         by_id: dict[str, DagNodeSpec] = {node.id: node for node in spec.nodes}
         # Resolved once per node, here, rather than per dispatch: a narrowed backend
@@ -311,9 +299,7 @@ async def run_dag(
                 raise DagValidationError(f"node '{node.id}' names unknown sub-agent '{node.subagent}'")
             node_backends[node.id] = resolved
 
-        store = DagRunStore(
-            backend, run_root, run_id or make_run_id(), nodes_root=nodes_root, registry_root=history_root
-        )
+        store = DagRunStore(backend, run_root, run_id or make_run_id())
         await store.init(spec.model_dump_json(), [node.id for node in spec.nodes])
 
     published_terminal: set[str] = set()
@@ -447,6 +433,7 @@ async def run_dag(
                         backend=backend,
                         workdir=workdir,
                         roots=roots,
+                        session_nodes=session_nodes,
                         sandbox=sandbox,
                         output_paths=output_paths,
                         status=status,
@@ -503,7 +490,7 @@ async def run_dag(
     except asyncio.CancelledError:
         # `/stop` and the shutdown sweep stop a background run by cancelling its
         # task rather than setting `cancel`, so `_finalize` never runs. Without
-        # this, the ids claimed at `init` would keep their registry entry with no
+        # this, the ids claimed at `init` would keep their index entry with no
         # `status`, and `read_session_nodes` would report them `running` forever:
         # neither reusable nor readable, for a run that is definitively over --
         # and the two refusals that produces contradict each other.
@@ -819,7 +806,7 @@ async def _apply_verdict(
 
 
 async def _record_outcome(store: DagRunStore, status: dict[str, str], *, cancelled: bool = False) -> None:
-    """Write this run's per-node outcome into the node registry.
+    """Write this run's per-node outcome into the session index.
 
     Per-node status, not just the tally: a later graph may name one of these
     nodes, and whether that reference is legal -- and what to advise when it is
@@ -830,17 +817,16 @@ async def _record_outcome(store: DagRunStore, status: dict[str, str], *, cancell
     Reached from the cancellation path too, where nothing else would record an
     outcome. A failure there must not replace the ``CancelledError`` being
     propagated, so it is logged and swallowed -- the same call is best-effort in
-    both directions, since a wedged registry is never worth losing a stop over.
+    both directions, since a wedged index is never worth losing a stop over.
     """
-    tally = _tally(status)
-    summary = f"{tally['completed']}/{tally['total']} completed"
+    entry = {"run_id": store.run_id, "summary": _tally(status), "status": dict(status)}
     try:
-        async with index_guard(store.registry_root):
-            await store.record_outcome(status, summary)
+        async with index_guard(store.root):
+            await store.upsert_index(entry)
     except Exception:  # noqa: BLE001 - see above
         if not cancelled:
             raise
-        logger.opt(exception=True).warning("DAG registry write failed for cancelled run {}", store.run_id)
+        logger.opt(exception=True).warning("DAG index write failed for cancelled run {}", store.run_id)
 
 
 def _mark_stopped(status: dict[str, str]) -> None:
@@ -1046,6 +1032,7 @@ async def _run_group(
     backend: Any,
     workdir: str,
     roots: tuple[str, ...],
+    session_nodes: SessionNodes,
     sandbox: Any,
     output_paths: dict[str, str],
     status: dict[str, str],
@@ -1086,6 +1073,7 @@ async def _run_group(
             backend=backend,
             workdir=workdir,
             roots=roots,
+            session_nodes=session_nodes,
             sandbox=sandbox,
             output_paths=output_paths,
             status=status,
@@ -1219,6 +1207,7 @@ async def _run_node(
     backend: Any,
     workdir: str,
     roots: tuple[str, ...],
+    session_nodes: SessionNodes,
     sandbox: Any,
     output_paths: dict[str, str],
     status: dict[str, str],
@@ -1274,8 +1263,10 @@ async def _run_node(
                 node,
                 backend=backend,
                 cwd=workdir,
-                nodes_root=store.nodes_root,
+                output_paths=output_paths,
+                runs_root=store.root,
                 roots=roots,
+                session_nodes=session_nodes,
                 run_id=store.run_id,
                 by_id=by_id,
                 capabilities=capabilities,
@@ -1547,7 +1538,7 @@ async def _finalize(
     session_key: str | None = None,
     auto_instances: frozenset[str] = frozenset(),
 ) -> DagRunResult:
-    """Assemble the result, write the manifest, and update the registry.
+    """Assemble the result, write the manifest, and append the index.
 
     Also reconciles every node's registry row to its final status. This is
     the only place that unconditionally re-asserts a status regardless of

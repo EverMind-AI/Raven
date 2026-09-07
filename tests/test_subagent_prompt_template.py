@@ -23,7 +23,7 @@ async def test_render_inlines_a_ref_and_an_input(tmp_path: Path) -> None:
         {"n": {"file": "notes.md"}, "k": "verbatim"},
         backend=LocalFileBackend(),
         cwd=str(tmp_path),
-        nodes_root=None,
+        runs_root=None,
         roots=(str(tmp_path),),
     )
 
@@ -48,7 +48,7 @@ async def test_render_gives_a_path_for_the_path_forms(tmp_path: Path) -> None:
         {},
         backend=LocalFileBackend(),
         cwd=str(tmp_path),
-        nodes_root=None,
+        runs_root=None,
         roots=(str(tmp_path),),
     )
 
@@ -62,7 +62,7 @@ async def test_render_refuses_a_path_form_naming_a_missing_file(tmp_path: Path) 
             {},
             backend=LocalFileBackend(),
             cwd=str(tmp_path),
-            nodes_root=None,
+            runs_root=None,
             roots=(str(tmp_path),),
         )
 
@@ -80,7 +80,7 @@ async def test_a_ref_naming_a_directory_is_refused_rather_than_raised(tmp_path: 
             {},
             backend=LocalFileBackend(),
             cwd=str(tmp_path),
-            nodes_root=None,
+            runs_root=None,
             roots=(str(tmp_path),),
         )
 
@@ -158,22 +158,19 @@ def test_the_grammar_travels_with_the_layer() -> None:
     assert kinds == ["ref", "input", "input_path", "output"]
 
 
-async def test_a_node_reference_with_no_history_is_refused_with_the_file_alternative(tmp_path: Path) -> None:
-    """A node id resolves on both surfaces now, but only against a history.
+async def test_a_node_reference_is_refused_with_the_file_alternative(tmp_path: Path) -> None:
+    """Spec D3: this layer has no graph, so a node reference must not resolve.
 
-    Handed none (`nodes_root=None`), this layer still must not let the
-    reference through as text -- that would send the sub-agent a literal
-    `{{ plan.output }}`. The hazard is the same one this test was written for;
-    only the reason it fires has changed. The refusal names the form to use
-    instead.
+    It must not pass through as text either -- that would send the sub-agent a
+    literal `{{ plan.output }}`. The refusal names the form to use instead.
     """
-    with pytest.raises(DagValidationError, match="no record of earlier tasks"):
+    with pytest.raises(DagValidationError, match="only run_subagent_dag can resolve"):
         await render_template(
             "{{ plan.output }}",
             {},
             backend=LocalFileBackend(),
             cwd=str(tmp_path),
-            nodes_root=None,
+            runs_root=None,
             roots=(str(tmp_path),),
         )
 
@@ -197,14 +194,14 @@ def test_the_gate_takes_parsed_placeholders_so_grammar_is_not_its_job() -> None:
     )
 
 
-async def test_a_node_shaped_input_with_no_history_is_refused_too(tmp_path: Path) -> None:
-    with pytest.raises(DagValidationError, match="no record of earlier tasks"):
+async def test_a_node_shaped_input_is_refused_too(tmp_path: Path) -> None:
+    with pytest.raises(DagValidationError, match="only run_subagent_dag can resolve"):
         await render_template(
             "{{ inputs.up }}",
             {"up": {"node": "plan"}},
             backend=LocalFileBackend(),
             cwd=str(tmp_path),
-            nodes_root=None,
+            runs_root=None,
             roots=(str(tmp_path),),
         )
 
@@ -215,7 +212,7 @@ async def test_an_unknown_brace_body_survives_rendering(tmp_path: Path) -> None:
         {},
         backend=LocalFileBackend(),
         cwd=str(tmp_path),
-        nodes_root=None,
+        runs_root=None,
         roots=(str(tmp_path),),
     )
 
@@ -240,7 +237,7 @@ async def test_a_missing_input_key_is_refused(tmp_path: Path) -> None:
             {},
             backend=LocalFileBackend(),
             cwd=str(tmp_path),
-            nodes_root=None,
+            runs_root=None,
             roots=(str(tmp_path),),
         )
 
@@ -251,7 +248,7 @@ async def test_a_defined_input_key_still_renders_its_literal(tmp_path: Path) -> 
         {"k": "verbatim"},
         backend=LocalFileBackend(),
         cwd=str(tmp_path),
-        nodes_root=None,
+        runs_root=None,
         roots=(str(tmp_path),),
     )
 
@@ -267,7 +264,7 @@ async def test_an_explicitly_null_input_is_refused_too(tmp_path: Path) -> None:
             {"k": None},
             backend=LocalFileBackend(),
             cwd=str(tmp_path),
-            nodes_root=None,
+            runs_root=None,
             roots=(str(tmp_path),),
         )
 
@@ -309,7 +306,7 @@ async def test_a_workspace_file_is_fenced_too(tmp_path: Path) -> None:
         {},
         backend=LocalFileBackend(),
         cwd=str(tmp_path),
-        nodes_root=None,
+        runs_root=None,
         roots=(str(tmp_path),),
     )
 
@@ -333,7 +330,7 @@ async def test_a_declared_input_no_placeholder_names_is_refused(tmp_path: Path) 
             {"n": {"file": "notes.md"}},
             backend=LocalFileBackend(),
             cwd=str(tmp_path),
-            nodes_root=None,
+            runs_root=None,
             roots=(str(tmp_path),),
         )
 
@@ -345,7 +342,7 @@ async def test_the_refusal_names_every_stranded_key(tmp_path: Path) -> None:
             {"a": "x", "b": "y", "c": "z"},
             backend=LocalFileBackend(),
             cwd=str(tmp_path),
-            nodes_root=None,
+            runs_root=None,
             roots=(str(tmp_path),),
         )
 
@@ -359,7 +356,7 @@ async def test_a_path_form_counts_as_referencing_its_key(tmp_path: Path) -> None
         {"n": {"file": "notes.md"}},
         backend=LocalFileBackend(),
         cwd=str(tmp_path),
-        nodes_root=None,
+        runs_root=None,
         roots=(str(tmp_path),),
     )
 
@@ -375,6 +372,6 @@ async def test_an_input_object_naming_neither_a_file_nor_a_node_is_refused(tmp_p
             {"n": {"nope": 1}},
             backend=LocalFileBackend(),
             cwd=str(tmp_path),
-            nodes_root=None,
+            runs_root=None,
             roots=(str(tmp_path),),
         )

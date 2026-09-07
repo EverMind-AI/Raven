@@ -175,105 +175,6 @@ def _clean(url: str) -> str:
     return url.rstrip(_TRAILING)
 
 
-# ── two addresses that are one page ───────────────────────────────────
-# ★ 20260906 (Framework, product feedback). Both folds serve the same check:
-# ``cited_never_surfaced``, the module's heaviest accusation. It fires on a
-# citation the run never saw, so every form of an address the run DID see has to
-# reach it as that address, or the appendix calls a correctly-read page
-# fabricated. The 2026-09-04 run supplied both misses.
-
-# arXiv serves one paper at four path prefixes, so a run that opened the abstract
-# and an answer that cites the PDF - routine now that a thin abstract is re-read
-# at its PDF - differ only in the parts that do not name the paper. A trailing
-# ``.pdf`` comes off with the prefix. The id itself is non-greedy so an old-style
-# ``cs/0501001`` keeps its slash.
-#
-# ★ 20260907 (review). A pinned ``vN`` is KEPT. arXiv's own version documentation
-# says each version stays retrievable and may carry corrections, expanded content,
-# a translation, or content that changed entirely, so ``2401.12345v1`` and
-# ``2401.12345v2`` are two documents rather than two addresses of one. Erasing the
-# version let the grounding check pass a citation to content the run never read,
-# which is the one thing this check may not do. A bare address and a pinned one are
-# distinct for the same reason - see the note above ``_match_form``.
-_ARXIV_PAPER_RE = re.compile(r"^(?:abs|pdf|html|format)/(?P<id>.+?)(?P<version>v\d+)?(?:\.pdf)?$")
-
-# The forges resolve an owner and a repository case-insensitively and redirect to
-# the owner's own casing, so ``github.com/Microsoft/LLMLingua`` and
-# ``github.com/microsoft/llmlingua`` are one page. Only the naming segments fold:
-# a path INSIDE a repository is served case-sensitively, and folding it would let
-# a fabricated ``blob/main/RESULTS.md`` absolve itself against a real
-# ``blob/main/results.md`` - which is the fabrication this check exists to catch.
-_FORGE_NAME_SEGMENTS = {
-    "github.com": 2,
-    "bitbucket.org": 2,
-    "huggingface.co": 2,
-}
-# On the Hub only a model sits at the bare pair; a dataset or a space carries its
-# kind first, so the pair that names the artefact sits one segment deeper.
-_HF_KIND_SEGMENTS = {"datasets", "spaces", "models"}
-
-# ★ 20260907 (review). GitLab is not in the table above because its namespace
-# nests: ``gitlab.com/gitlab-org/quality/testcases`` is one project three segments
-# deep, and folding a fixed two left ``TestCases`` cased and had the check accuse
-# a page the run had opened. GitLab does publish the boundary - everything before
-# ``/-/`` is the project path, everything after is served from inside it - so the
-# separator decides the depth instead of a constant.
-_GITLAB_PROJECT_SEPARATOR = "/-/"
-
-_QUERY_RE = re.compile(r"[?#]")
-
-
-def _fold_gitlab(head: str) -> str:
-    """A GitLab path with its project part folded and the rest left alone.
-
-    With ``/-/`` present the split is exact. Without it the whole path is the
-    project path on current GitLab, so it all folds; that does mis-fold a
-    pre-2019 in-project URL (``/group/project/blob/master/File.txt``), which is
-    the direction that marks a real citation opened rather than accusing one, and
-    those URLs no longer appear in a page this agent can fetch today.
-    """
-    project, separator, inside = head.partition(_GITLAB_PROJECT_SEPARATOR)
-    return project.lower() + separator + inside
-
-
-def _fold_path(host: str, path: str) -> str:
-    """The path with the parts that do not name the document folded away.
-
-    Query and fragment are held out of both folds and reattached unchanged: they
-    carry a document's identity (``?id=2`` is a different page, which is why
-    ``_norm`` keeps them), and lower-casing a value inside one would fold two
-    documents into one on the side that must not fold.
-    """
-    m = _QUERY_RE.search(path)
-    head, tail = (path[: m.start()], path[m.start() :]) if m else (path, "")
-    if host == "arxiv.org":
-        paper = _ARXIV_PAPER_RE.match(head)
-        if paper:
-            return f"abs/{paper.group('id')}{paper.group('version') or ''}" + tail
-        return head + tail
-    if host == "gitlab.com":
-        return _fold_gitlab(head) + tail
-    depth = _FORGE_NAME_SEGMENTS.get(host)
-    if depth is None:
-        return path
-    segments = head.split("/")
-    if host == "huggingface.co" and segments[0].lower() in _HF_KIND_SEGMENTS:
-        depth += 1
-    return "/".join([s.lower() for s in segments[:depth]] + segments[depth:]) + tail
-
-
-# ★ 20260907 (review, second round). There is deliberately NO bare-versus-pinned
-# exception here. A bare arXiv address serves the latest revision, and this ledger
-# records the URL a fetch REQUESTED rather than the revision that address resolved
-# to - so opening ``/abs/X`` while the paper stands at v3 proves nothing about a
-# citation to ``v1``, and opening ``v1`` does not make a bare citation, which sends
-# the reader to v3, the same document. Neither direction establishes identity, so
-# both stay distinct. The equivalence that remains is the one that is provable from
-# the address alone: the four path prefixes and a trailing ``.pdf``, with the
-# version pinned or absent on both sides alike. Re-enabling the match needs the
-# effective revision in the ledger, not a rule about which form is more general.
-
-
 def _norm(url: str) -> str:
     """Fold the differences a reader service introduces, and nothing more.
 
@@ -285,10 +186,6 @@ def _norm(url: str) -> str:
     Decoding does fold ``a%2Fb`` with ``a/b`` (and ``%23`` with ``#``), a known
     tension with keeping query/fragment distinctions; accepted because a false
     fold marks a real citation opened, the harmless direction.
-
-    The path is then handed to ``_fold_path``, which folds the parts of two named
-    hosts' addresses that do not name the document - see it for why those two and
-    why only those parts.
     """
     u = unquote(_clean(url).strip())
     for prefix in ("https://", "http://"):
@@ -296,25 +193,7 @@ def _norm(url: str) -> str:
             u = u[len(prefix) :]
             break
     host, _, rest = u.partition("/")
-    host = host.lower().removeprefix("www.")
-    return f"{host}/{_fold_path(host, rest)}".rstrip("/")
-
-
-_ARXIV_REVISION_SUFFIX_RE = re.compile(r"^v\d+$")
-
-
-def _arxiv_revision_of(cited: str, opened: str) -> bool:
-    """Whether ``opened`` is ``cited`` plus nothing but an arXiv version suffix.
-
-    The unique-prefix rule below exists for a path the model truncated when citing, and
-    a version suffix is not a truncation of a path: ``abs/X`` and ``abs/Xv2`` are two
-    revisions, kept apart deliberately. Without this guard the prefix rule would quietly
-    restore the very match the version rule removes, because ``abs/X`` is a strict string
-    prefix of ``abs/Xv2`` and nothing else about it looks unusual.
-    """
-    if not cited.startswith("arxiv.org/"):
-        return False
-    return _ARXIV_REVISION_SUFFIX_RE.match(opened[len(cited) :]) is not None
+    return f"{host.lower().removeprefix('www.')}/{rest}".rstrip("/")
 
 
 def _match_form(url: str, known: set[str]) -> str | None:
@@ -359,7 +238,7 @@ def _match_form(url: str, known: set[str]) -> str | None:
     # The path floor keeps this out of short-segment territory, where a string
     # prefix is not a path prefix ("/a" would absolve itself against "/about").
     if len(path) >= 8:
-        prefixed = [k for k in known if k.startswith(n) and k != n and not _arxiv_revision_of(n, k)]
+        prefixed = [k for k in known if k.startswith(n) and k != n]
         if len(prefixed) == 1:
             return clipped
     return None

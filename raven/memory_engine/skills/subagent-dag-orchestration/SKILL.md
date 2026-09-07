@@ -27,9 +27,9 @@ time:
   scheduled concurrently, up to the shared sub-agent cap
   (`max_concurrent_subagents` — `spawn` draws on the same allowance).
 - **Handoff** — does a step hand its result to the next one? A node's output is written
-  to a file the downstream node reads, and the graph wires that handoff itself. A `spawn`
-  can hand its result on too — it takes a `node_id` and a later task names it the same way
-  a node does — but only across a turn of yours; a graph needs none.
+  to a file the downstream node reads, and the graph wires that handoff itself. A single
+  `spawn` can pass a result by file too — its `Record:` directory holds an `out.md` a
+  later `{{ ref: }}` reads — but only across a turn of yours; a graph needs none.
 - **Specialism** — do the steps want different sub-agents? The tool's own description
   lists the roster and what each one is for.
 
@@ -56,11 +56,11 @@ exist is still the tool description's answer, not this file's — read the roste
 
 You submit a flat list of `nodes`. A scheduler runs every node whose dependencies are
 met, as soon as they are met. Each node's prompt is rendered from its template,
-dispatched to its sub-agent, and the reply is written to a file of its own, flat and
-keyed by node id rather than nested under the run. Downstream nodes reference upstream
-outputs through template placeholders. When the run finishes you get the terminal-node
-outputs plus every node's output-file path — as a message once the run ends, or as the
-call's own result when you asked for `background: false`.
+dispatched to its sub-agent, and the reply is written to a file under the run
+directory. Downstream nodes reference upstream outputs through template placeholders.
+When the run finishes you get the terminal-node outputs plus every node's output-file
+path — as a message once the run ends, or as the call's own result when you asked for
+`background: false`.
 
 A node also leaves a **memory record**, `<node>.memory.json`, if its sub-agent runs on
 a long-term memory backend: what that sub-agent distilled from the call into its own
@@ -167,8 +167,8 @@ flag (default `true`) is described above.
 | `id` | yes | Node id, unique across the whole conversation (not just this graph). Letters, digits, `_`, `-` only. |
 | `subagent` | yes | Which agent runs this node. Use one of the names listed in the tool's own description — don't invent them. Raven's own in-process agent (`raven`) is on that list too, so a graph needs no third-party agent configured. |
 | `prompt_template` | yes | Template rendered into the node's prompt. May contain the placeholders below. |
-| `depends_on` | no | Upstream node ids that must finish before this node runs. May also name a task this conversation already finished — an earlier run's node, or a `spawn` — which only records the dependency. |
-| `inputs` | no | Object mapping a key to a literal string, to `{"file": "<path>"}`, or to `{"node": "<id>"}` for another node's output — exactly one of the three, with nothing else in the object. |
+| `depends_on` | no | Upstream node ids that must finish before this node runs. May also name a node an earlier run in this conversation completed, which is already finished and so only records the dependency. |
+| `inputs` | no | Object mapping a key to a literal string, to `{"file": "<path>"}`, or to `{"node": "<id>"}` for another node's output. |
 | `instance` | no | A stable handle (e.g. `researcher`). Nodes sharing it run sequentially in id order and reuse one sub-agent session — only on an agent the roster tags `[stateful]`. |
 
 A handle reaches beyond one run: two graphs in the same conversation that name the same
@@ -215,41 +215,31 @@ Rules:
   before its sub-agent is dispatched, rather than handing over a path nothing can open.
 - `{{ inputs.<key> }}` needs `<key>` declared in that node's own `inputs`. The key is
   never a node id; what may name a node is the *value*.
-- And the other direction: every key declared in `inputs` must be referenced by a
-  placeholder. Material reaches the sub-agent only where a placeholder puts it, so a
-  declared key nothing references would not arrive at all — the graph is rejected rather
-  than run with material that silently went nowhere.
 
 ### Node ids are unique across the conversation
 
-**A node id may not repeat an id anything in this conversation already used** — an earlier
-run's node or a `spawn`, which takes its `node_id` out of this same namespace. The graph is
+**A node id may not repeat an id any earlier run in this conversation used.** The graph is
 rejected if it does. That is what makes `{{ <id>.output }}` mean one thing, so pick ids that
 say what the node produced — `pricing_research`, `deck_script_v2` — not `a`, `step1`, or a
 generic `plan` you will want again. Re-doing work needs a new id; the earlier node's output
 stays where it is and stays referenceable.
 
-### Reading a task this conversation already finished
+### Reading an earlier run in this conversation
 
-Because ids are unique, **an earlier task is named by its id alone** — and it does not
-matter which tool ran it:
+Because ids are unique, **an earlier run's node is named by its id alone**:
 
 ```
-{{ pricing_research.output }}        that task's output text, whichever run or spawn produced it
+{{ pricing_research.output }}        that node's output text, whichever run produced it
 {{ pricing_research.output_path }}   its path
 ```
 
-The same works in the other direction: a `spawn` takes a `node_id` and can name a node this
-graph leaves behind, with the same three forms.
-
-That task needs no `depends_on` — there is nothing to order, it has already finished.
+That node needs no `depends_on` — there is nothing to order, it has already finished.
 Listing it anyway is accepted and changes nothing, so write the edge if it makes the graph
 read better. `depends_on` is still *required* for a node of *this* graph, since that edge
 is what makes the upstream node run first.
 
-Only a task that **completed and wrote an output** can be named this way, in a placeholder
-or in `depends_on` alike. One that failed, was cancelled, was skipped, or is still running
-keeps its id — nothing else may take it — but has no output
+Only a node that **completed** can be named this way, in a placeholder or in `depends_on`
+alike. Any other node keeps its id — nothing else may take it — but has no output
 to read, and naming it is refused before any node of your graph is dispatched. The refusal
 says which case it is, because the fix differs: re-do work that failed, was cancelled or
 was skipped under a **new** id; where the run recorded no outcome for the node at all, read
@@ -269,33 +259,28 @@ step *as a node of your own graph* only works for one that does not exist yet �
 taken id in `depends_on` does not re-run anything.
 
 A node id is all you ever need to name a node — there is no run qualifier on these forms,
-because there is nothing left to disambiguate. The id also reaches beyond this tool: a
-`spawn` takes a `node_id` out of the same namespace, so a graph may name a task a spawn
-finished and a spawn may name a node this graph leaves behind. Two other ways to say the
-same thing:
+because there is nothing left to disambiguate. Two other ways to say the same thing:
 
 ```
 inputs: {"prev": {"node": "pricing_research"}}     then {{ inputs.prev }} / {{ inputs.prev.path }}
-{{ ref:@nodes/pricing_research.out.md }}           by file path
+{{ ref:@runs/<run_id>/pricing_research.out.md }}   by file path
 ```
 
 Use the `{"node": ...}` input form when one upstream feeds several placeholders. Use
-`ref:@nodes/<node_id>.<ext>` when you have a path rather than an id — it also reaches a
-node's other files, not just its output (`<node_id>.prompt.md`, `<node_id>.memory.json`).
-`graph.json` and `manifest.json` stay run-scoped rather than moving into `nodes/`, and
-anything written before this conversation's history was flattened stays where it was
-written — both need the full absolute path described below, not a prefix.
+`ref:@runs/<run_id>/...` when you have a path rather than an id — it reads the run
+directory directly, so it also reaches files that are not a node's output
+(`graph.json`, `<node>.prompt.md`) and runs recorded before ids were indexed. `<run_id>` is
+the id reported when that run finished.
 
 ### Where a reference may point
 
 `ref:` / `ref_path:` / `{"file": ...}` paths resolve inside two roots — the **session
 working directory** (what a plain relative path is relative to) and **this conversation's
 sub-agent history**, which may be named by absolute path. Anything outside both is
-rejected, as is a `@nodes/` path that climbs out of this session's node artifacts.
+rejected, as is a `@runs/` path that climbs out of the run history.
 
-The second root is this conversation's own record: every task it has run, from either
-tool, since a `spawn` writes into the same `nodes/` root a graph does and is named the same
-way. It stops there. The user's long-term memory, the installed skills, and every
+The second root is this conversation's own record: its DAG runs, and the `spawn` calls
+beside them. It stops there. The user's long-term memory, the installed skills, and every
 *other* conversation's transcript sit outside it and are refused — so reference an earlier
 run's outputs, or files the user pointed you at.
 
@@ -307,8 +292,8 @@ prompt, listing each **transitive** upstream and the path of that node's record:
 ```
 ## Upstream memory records
 
-- research: <session history>/nodes/research.memory.json
-- audit: <session history>/nodes/audit.memory.json
+- research: <run-dir>/research.memory.json
+- audit: <run-dir>/audit.memory.json
 ```
 
 Three things follow, and getting any of them wrong wastes a node's turn:
@@ -399,9 +384,9 @@ DAG run 20260729T031500Z-1a2b3c4d finished: 3 completed, 0 failed, 0 cancelled, 
 Run dir: <session history>/mas_dag/20260729T031500Z-1a2b3c4d
 
 Node output files:
-- research_web [completed]: <session history>/nodes/research_web.out.md
-- research_papers [completed]: <session history>/nodes/research_papers.out.md
-- synthesize [completed]: <session history>/nodes/synthesize.out.md
+- research_web [completed]: <run-dir>/research_web.out.md
+- research_papers [completed]: <run-dir>/research_papers.out.md
+- synthesize [completed]: <run-dir>/synthesize.out.md
 
 Terminal outputs:
 ### synthesize
@@ -412,15 +397,13 @@ Terminal outputs:
   skipped nodes show `(no output file)` plus an `error:` line).
 - Only terminal-node outputs are inlined. To review any other node's work, `read_file`
   its output path.
-- Each node's `<node>.prompt.md` (the rendered prompt) sits beside its output under
-  `<session history>/nodes/` — useful when a node's answer looks wrong and you need to
-  see what it was actually asked. The run dir itself holds only `graph.json` and
-  `manifest.json`.
-- A node may also leave `<node>.memory.json` in that same location (see `Upstream
-  memory records` below). These are **not** listed in the summary, because a record is
-  written asynchronously after its node finished and so may not exist when the summary
-  is composed. `read_file` one directly if you want to know what a sub-agent took away
-  from its step.
+- The run dir also holds `<node>.prompt.md` (the rendered prompt), `graph.json`, and
+  `manifest.json` — useful when a node's answer looks wrong and you need to see what it
+  was actually asked.
+- It may also hold `<node>.memory.json` per node (see `Upstream memory records` below).
+  These are **not** listed in the summary, because a record is written asynchronously
+  after its node finished and so may not exist when the summary is composed. `read_file`
+  one directly if you want to know what a sub-agent took away from its step.
 
 ## Anti-patterns
 
@@ -434,7 +417,7 @@ Terminal outputs:
 - **Don't** inline large upstream content with `{{ <id>.output }}` when you only need to
   pass it along; use `{{ <id>.output_path }}` — unless the agent is `[no-local-files]`.
 - **Don't** reference a node of *this* graph in a template without listing it in that node's
-  `depends_on` — a task this conversation already finished is the case that needs no edge.
+  `depends_on` — an earlier run's node is the case that needs no edge.
 - **Don't** guess `subagent` names — only names on the roster resolve.
 - **Don't** share an `instance` handle across nodes to "keep them in order" on a
   `[stateless]` agent — order without shared context is what `depends_on` already gives.

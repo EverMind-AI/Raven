@@ -20,28 +20,13 @@ from contextvars import ContextVar
 from typing import Any
 
 from raven.agent.subagent.dag_adjudication import ABANDON, CONTINUE, DECISIONS, REPLAN
-from raven.agent.subagent.dag_live import awaiting_decision, cancel_run, live_run_ids, owning_tool, resolve_node
+from raven.agent.subagent.dag_live import cancel_run, live_run_ids, owning_tool, resolve_node
 from raven.agent.subagent.dag_reader import DagReadError
 from raven.agent.subagent.dag_resume import read_run_reconciled
 from raven.agent.subagent.dag_tool import _with_notices
 from raven.contracts.tool import Tool, ToolResult
 
 _PROMPT_LINE_LIMIT = 10
-
-
-def _not_waiting(run_id: str, node_id: str) -> str:
-    """The refusal for a replan whose node is not suspended.
-
-    Shared by the pre-check and the hand-off below because they are one situation
-    to the model -- it cannot act differently on "refused before the replacement
-    graph was validated" than on "refused after it" -- and a second wording would
-    only invite it to try.
-    """
-    return (
-        f"Node '{node_id}' of run {run_id} is no longer waiting for a decision, so the "
-        "replan was not applied and the old run is still running as submitted. "
-        'tool_call name "dag_status" shows where every node stands.'
-    )
 
 
 def _registered_tool(loop: Any) -> Any:
@@ -283,21 +268,6 @@ class ResolveDagNodeTool(_ControlTool):
                 "conversation's run history before its nodes can be resolved."
             )
         if decision == REPLAN:
-            # Ahead of every step below, because each of them costs something a
-            # refused replan must not spend: the reconciled read, then -- inside
-            # prepare_replan -- the confirm question, the dispatch quota and the
-            # minted instances, none of which is refunded when the hand-off later
-            # finds nobody waiting. An answer for an unwaited node is ordinary
-            # (a decision past the adjudication deadline, a stopped run, a
-            # mistyped id), so without this a handful of them exhausts the
-            # session's hourly budget having dispatched nothing.
-            #
-            # Only when the answer is a definite no: `None` means no instance
-            # here implements the question, and the hand-off below stays the
-            # authority either way -- it is what still catches the node that
-            # stops waiting *during* the validation this skips ahead of.
-            if awaiting_decision(self._loop, run_id, node_id) is False:
-                return _not_waiting(run_id, node_id)
             # The live read happens here, not in prepare_replan: reconciling a run
             # needs loop-wide liveness and only this tool holds the loop. _read_live
             # is the same call dag_status makes, so the two cannot disagree.
@@ -324,7 +294,11 @@ class ResolveDagNodeTool(_ControlTool):
             # for is no longer discoverable.
             was_bound = bool(getattr(owner, "is_foreground", lambda _r: False)(run_id))
             if not resolve_node(self._loop, run_id, node_id, decision, message, plan):
-                return _not_waiting(run_id, node_id)
+                return (
+                    f"Node '{node_id}' of run {run_id} is no longer waiting for a decision, so the "
+                    "replan was not applied and the old run is still running as submitted. "
+                    'tool_call name "dag_status" shows where every node stands.'
+                )
             # Emitted here, not in start_replan: resolve_node returning False above
             # (an answer for a node nothing is waiting on any more) must announce
             # nothing, and start_replan only runs after await_finalized, by which
@@ -437,7 +411,7 @@ def _prompt_lines(entry: dict[str, Any], run: dict[str, Any]) -> str:
     lines = template.splitlines()
     if len(lines) <= _PROMPT_LINE_LIMIT:
         return template
-    path = entry.get("prompt_file") or f"{run['nodes_root']}/{entry['node']}.prompt.md"
+    path = entry.get("prompt_file") or f"{run['dir']}/{entry['node']}.prompt.md"
     head = "\n".join(lines[:_PROMPT_LINE_LIMIT])
     return f"{head}\n... (truncated, {len(lines) - _PROMPT_LINE_LIMIT} more lines; full prompt in {path})"
 

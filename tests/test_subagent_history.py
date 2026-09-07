@@ -15,8 +15,8 @@ from raven.agent.subagent.history import (
     SpawnRecord,
     add_turn_to_instance_log,
     dag_root,
-    nodes_root,
     session_history_root,
+    spawn_root,
 )
 from raven.agent.subagent.instance_log import instance_title
 from raven.session.manager import SessionManager
@@ -35,9 +35,9 @@ def test_history_sits_beside_the_session_transcript(tmp_path: Path) -> None:
     """
     d = _session_dir(tmp_path, "web:abc")
     assert session_history_root(d) == tmp_path / "sessions" / "web" / "abc" / "subagents"
-    assert nodes_root(d).name == "nodes"
+    assert spawn_root(d).name == "spawn"
     assert dag_root(d).name == "mas_dag"
-    assert nodes_root(d).parent == dag_root(d).parent
+    assert spawn_root(d).parent == dag_root(d).parent
 
 
 def test_history_follows_a_pre_grouping_transcript_to_its_old_group(tmp_path: Path) -> None:
@@ -94,22 +94,19 @@ def test_spawn_record_writes_the_prompt_before_the_result(tmp_path: Path) -> Non
     d = _session_dir(tmp_path, "web:abc")
     record = SpawnRecord.open(d, task_id="t1", task="do the thing", meta={"agent": "Coder"})
 
-    assert record.file("prompt.md").read_text(encoding="utf-8") == "do the thing"
-    assert not record.file("out.md").exists()
-    assert json.loads(record.file("meta.json").read_text(encoding="utf-8"))["status"] == "running"
-    assert record.dir == nodes_root(d)
-    # The id is a filename prefix now, not a directory carrying a mint stamp:
-    # every artifact of this call sits beside every other node's in one root.
-    assert record.node_id == "t1"
-    assert record.file("prompt.md").name == "t1.prompt.md"
+    assert (record.dir / "prompt.md").read_text(encoding="utf-8") == "do the thing"
+    assert not (record.dir / "out.md").exists()
+    assert json.loads((record.dir / "meta.json").read_text(encoding="utf-8"))["status"] == "running"
+    assert record.dir.parent == spawn_root(d)
+    assert record.dir.name.endswith("-t1")
 
 
 def test_spawn_record_finish_records_the_output(tmp_path: Path) -> None:
     record = SpawnRecord.open(_session_dir(tmp_path, "web:abc"), task_id="t1", task="ask", meta={"agent": "Coder"})
     record.finish(status="completed", output="the answer")
 
-    assert record.file("out.md").read_text(encoding="utf-8") == "the answer"
-    meta = json.loads(record.file("meta.json").read_text(encoding="utf-8"))
+    assert (record.dir / "out.md").read_text(encoding="utf-8") == "the answer"
+    meta = json.loads((record.dir / "meta.json").read_text(encoding="utf-8"))
     assert meta["status"] == "completed"
     assert meta["agent"] == "Coder"
     assert meta["ended_at_ms"] >= meta["started_at_ms"]
@@ -126,7 +123,7 @@ def test_spawn_record_finish_is_idempotent(tmp_path: Path) -> None:
 
     record.finish(status="cancelled")
 
-    meta = json.loads(record.file("meta.json").read_text(encoding="utf-8"))
+    meta = json.loads((record.dir / "meta.json").read_text(encoding="utf-8"))
     assert meta["status"] == "completed"
     assert len(log.read_text(encoding="utf-8").splitlines()) == lines_after_first
 
@@ -271,9 +268,9 @@ def test_spawn_record_keeps_failures(tmp_path: Path) -> None:
     record = SpawnRecord.open(_session_dir(tmp_path, "web:abc"), task_id="t1", task="ask", meta={})
     record.finish(status="failed", error="Error: CLI agent 'Coder' exited 1: boom")
 
-    assert "boom" in record.file("error.md").read_text(encoding="utf-8")
-    assert not record.file("out.md").exists()
-    assert json.loads(record.file("meta.json").read_text(encoding="utf-8"))["status"] == "failed"
+    assert "boom" in (record.dir / "error.md").read_text(encoding="utf-8")
+    assert not (record.dir / "out.md").exists()
+    assert json.loads((record.dir / "meta.json").read_text(encoding="utf-8"))["status"] == "failed"
 
 
 def test_spawn_record_survives_an_unwritable_root(tmp_path: Path) -> None:
@@ -393,7 +390,7 @@ async def test_a_declared_identity_becomes_a_memory_record(tmp_path, monkeypatch
 
     await manager_mod.write_memory_record_for(
         directory=record.dir,
-        filename=record.file("memory.json").name,
+        filename="memory.json",
         agent="Raven-Code",
         identity=manager_mod.EverosIdentity(
             user_id="raven-code", agent_id=None, base_url="http://everos.test", session_prefix="cli:"
@@ -402,7 +399,7 @@ async def test_a_declared_identity_becomes_a_memory_record(tmp_path, monkeypatch
         budget_s=0.0,
     )
 
-    assert json.loads(record.file("memory.json").read_text(encoding="utf-8"))["agent"] == "Raven-Code"
+    assert json.loads((record.dir / "memory.json").read_text(encoding="utf-8"))["agent"] == "Raven-Code"
     assert calls and calls[0]["agent"] == "Raven-Code"
 
 
@@ -591,8 +588,8 @@ def test_spawn_record_keeps_the_whole_answer_when_the_reply_was_capped(tmp_path:
         delivered = asyncio.run(clamp_output(whole, 200, agent="Coder"))
         record.finish(status="completed", output=delivered, activity=did)
 
-    assert record.file("out.md").read_text(encoding="utf-8") == whole
-    meta = json.loads(record.file("meta.json").read_text(encoding="utf-8"))
+    assert (record.dir / "out.md").read_text(encoding="utf-8") == whole
+    meta = json.loads((record.dir / "meta.json").read_text(encoding="utf-8"))
     assert meta["output_truncated"] is True
     assert meta["output_chars_total"] == 400
     assert meta["output_chars_returned"] + meta["output_chars_discarded"] == 400
@@ -607,8 +604,8 @@ def test_spawn_record_writes_what_it_was_given_when_nothing_was_dropped(tmp_path
     with activity.collecting() as did:
         record.finish(status="completed", output="short answer", activity=did)
 
-    assert record.file("out.md").read_text(encoding="utf-8") == "short answer"
-    assert "output_truncated" not in json.loads(record.file("meta.json").read_text(encoding="utf-8"))
+    assert (record.dir / "out.md").read_text(encoding="utf-8") == "short answer"
+    assert "output_truncated" not in json.loads((record.dir / "meta.json").read_text(encoding="utf-8"))
 
 
 def _logged_answer(tmp_path: Path, output: str | None, run: Any) -> str | None:

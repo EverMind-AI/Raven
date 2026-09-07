@@ -80,16 +80,6 @@ _NEGATION_RE = re.compile(
     re.I,
 )
 
-#: A contrastive ``not`` immediately before a noun phrase: "include a comparison table,
-#: not a comparison matrix" sets one deliverable against another, and both would otherwise
-#: be listed as things to deliver. Matched against the text right BEFORE the phrase rather
-#: than as a cue in ``_NEGATION_RE``, because a cue of the form ``not`` plus a determiner
-#: cannot fire: the determiner is the first token of the phrase itself, so the lookback
-#: ends one character short of it. Adjacency is also what keeps this off the two shapes
-#: that make a bare ``not`` inadmissible - "benchmarks we have not run" puts a verb after
-#: ``not`` and is adjacent to nothing named, and ``do-not-bother`` is hyphenated.
-_CONTRASTIVE_RE = re.compile(r"(?<![\w-])not\s*$", re.I)
-
 #: What makes a range a scale to score ON rather than a number of items to deliver.
 #: Looked for in the clause before the range: "score candidates 1-5 on relevance" and
 #: "shortlist 15-25 benchmarks" are otherwise the same shape, and a request carrying both
@@ -269,12 +259,8 @@ def _ruled_out(task: str, at: int) -> bool:
     out with the same words it uses to rule a name out, and this module already holds that
     vocabulary for the exclusion extractor. Reading it here too is the difference between
     "exclude a comparison table" being honoured and being quoted back as a deliverable.
-
-    A contrastive ``not`` sitting immediately before the phrase counts as well - see
-    ``_CONTRASTIVE_RE`` for why adjacency is the test and a cue in the list is not.
     """
-    clause_from = _clause_start(task, at)
-    if _NEGATION_RE.search(task[clause_from:at]) or _CONTRASTIVE_RE.search(task[clause_from:at]):
+    if _NEGATION_RE.search(task[_clause_start(task, at) : at]):
         return True
     return any(lo <= at < hi for lo, hi in _exclusion_spans(task))
 

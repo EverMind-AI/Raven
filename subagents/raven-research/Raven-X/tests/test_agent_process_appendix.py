@@ -69,16 +69,14 @@ def test_the_warning_separates_a_fabricated_link_from_one_merely_left_unopened()
     is additive by construction (``cited_never_surfaced`` is a strict subset).
     """
     ledger = [
-        {
-            "op": "search",
-            "query": "q",
-            "replay": False,
-            "zero_hit": False,
-            "urls": ["https://a.example/one", "https://listed.example/two"],
-        },
+        {"op": "search", "query": "q", "replay": False, "zero_hit": False,
+         "urls": ["https://a.example/one", "https://listed.example/two"]},
         {"op": "fetch", "url": "https://a.example/one", "chars": 900, "ok": True},
     ]
-    answer = "opened https://a.example/one , listed https://listed.example/two , invented https://ghost.example/three"
+    answer = (
+        "opened https://a.example/one , listed https://listed.example/two , "
+        "invented https://ghost.example/three"
+    )
     t = build_trail(ledger, answer)
 
     assert t.cited_not_opened == ["https://listed.example/two", "https://ghost.example/three"]
@@ -214,7 +212,9 @@ def test_the_appendix_is_gated_on_the_assembly_so_the_anchor_cannot_reach_it():
     assert build_dr_flow(DRFlowConfig(enabled=False), None, 10, 1000) is None
     on = build_dr_flow(DRFlowConfig(enabled=True), None, 10, 1000)
     assert on.process_appendix is True
-    off = build_dr_flow(DRFlowConfig(enabled=True, final_shape={"process_appendix": False}), None, 10, 1000)
+    off = build_dr_flow(
+        DRFlowConfig(enabled=True, final_shape={"process_appendix": False}), None, 10, 1000
+    )
     assert off.process_appendix is False
 
 
@@ -236,8 +236,8 @@ def test_the_appendix_never_reaches_the_model():
     # earlier reference (the turn-scoped ledger is opened at the top of the loop), and a
     # "first occurrence" anchor silently retargets to whichever line mentions it soonest.
     seam = src.index("appendix, trail = build_appendix")
-    tail = src[seam : seam + 1200]
-    assert 'final_content = (final_content or "").rstrip()' in tail
+    tail = src[seam:seam + 1200]
+    assert "final_content = (final_content or \"\").rstrip()" in tail
     assert "add_assistant_message" not in tail, (
         "the appendix must not be persisted as a message - that is the feedback path"
     )
@@ -376,12 +376,13 @@ def test_the_ascii_forms_every_published_reading_was_measured_on_are_unchanged()
     assert build_trail(LEDGER, "see https://a.example/one).").cited == ["https://a.example/one"]
     assert build_trail(LEDGER, "(https://a.example/one)").cited == ["https://a.example/one"]
     assert build_trail(LEDGER, "https://a.example/one, and more").cited == ["https://a.example/one"]
-    assert build_trail(LEDGER, "per https://a.example/one and https://never.example/x it holds").cited == [
-        "https://a.example/one",
-        "https://never.example/x",
-    ]
+    assert build_trail(
+        LEDGER, "per https://a.example/one and https://never.example/x it holds"
+    ).cited == ["https://a.example/one", "https://never.example/x"]
     # Query strings and fragments are part of the link, not sentence punctuation.
-    assert build_trail(LEDGER, "at https://a.example/one?q=1&b=2#frag.").cited == ["https://a.example/one?q=1&b=2#frag"]
+    assert build_trail(LEDGER, "at https://a.example/one?q=1&b=2#frag.").cited == [
+        "https://a.example/one?q=1&b=2#frag"
+    ]
 
 
 def test_a_chinese_answer_can_still_be_caught_fabricating():
@@ -451,7 +452,9 @@ def test_memo_pages_nobody_cited_do_not_inflate_the_scope_count():
 
 def test_the_scope_sentence_counts_cited_links_and_reads_coherently():
     answer = "per https://earlier.example/p2 and https://never.example/x"
-    t = build_trail(LEDGER, answer, ["https://earlier.example/p2", "https://memo.example/unused"])
+    t = build_trail(
+        LEDGER, answer, ["https://earlier.example/p2", "https://memo.example/unused"]
+    )
     assert t.opened_earlier == 1
     assert "1 of the cited links was opened on an earlier turn" in t.render()
 
@@ -565,7 +568,9 @@ def test_reading_pages_and_citing_nothing_is_called_out():
     assert c["read_but_cited_nothing"] is True
     assert c["cited_schemeless"] == 0
     assert c["citation_grounding_rate"] is None
-    assert "1 page(s) were read but the answer cites no link" in build_trail(LEDGER, "no links here at all").render()
+    assert "1 page(s) were read but the answer cites no link" in build_trail(
+        LEDGER, "no links here at all"
+    ).render()
 
 
 def test_a_scheme_less_citation_is_disclosed_without_moving_the_rate():
@@ -627,25 +632,18 @@ def test_research_seconds_spans_the_ledger_not_the_turn():
     one = build_trail([rows[0]], "x")
     assert one.counters()["research_seconds"] is None
     # Rows without a usable ``ts`` do not fabricate a span.
-    assert (
-        build_trail([{"op": "search", "query": "q"}, {"op": "search", "query": "r"}], "x").counters()[
-            "research_seconds"
-        ]
-        is None
-    )
+    assert build_trail(
+        [{"op": "search", "query": "q"}, {"op": "search", "query": "r"}], "x"
+    ).counters()["research_seconds"] is None
 
 
 def test_a_sub_minute_research_span_is_not_rendered():
     """★ 20260901 (Framework). Both directions: half an hour is a fact the reader is
     entitled to, forty seconds is a clause nobody needs."""
-    short = [
-        {"op": "search", "query": "q", "ts": 0.0},
-        {"op": "fetch", "url": "https://a.org/x", "chars": 9000, "ok": True, "ts": 40.0},
-    ]
-    long_ = [
-        {"op": "search", "query": "q", "ts": 0.0},
-        {"op": "fetch", "url": "https://a.org/x", "chars": 9000, "ok": True, "ts": 1815.0},
-    ]
+    short = [{"op": "search", "query": "q", "ts": 0.0},
+             {"op": "fetch", "url": "https://a.org/x", "chars": 9000, "ok": True, "ts": 40.0}]
+    long_ = [{"op": "search", "query": "q", "ts": 0.0},
+             {"op": "fetch", "url": "https://a.org/x", "chars": 9000, "ok": True, "ts": 1815.0}]
     assert "of research" not in build_trail(short, "https://a.org/x").render()
     assert "30m of research" in build_trail(long_, "https://a.org/x").render()
 
@@ -790,7 +788,8 @@ def test_a_fence_tag_citation_is_disclosed_without_moving_the_rate():
     data it does not have. Repeats of one tag are one reference."""
     t = build_trail(
         LEDGER,
-        'halves it ("quote" web_fetch #cd8187b0), again (web_fetch #cd8187b0), listed at (web_search #aa11bb22)',
+        'halves it ("quote" web_fetch #cd8187b0), again (web_fetch #cd8187b0), '
+        "listed at (web_search #aa11bb22)",
     )
     c = t.counters()
 
@@ -846,7 +845,9 @@ def test_an_unreviewed_run_wears_its_banner_before_the_head():
     """``reviewer: budget_spent`` was one word in the head - a reader scanning
     for a verdict reads right past it. The state bounds how much the whole
     answer can be trusted, so it leads the block."""
-    rows = [r for r in LEDGER if r["op"] != "verify"] + [{"op": "verify", "outcome": "budget_spent", "reviewed": False}]
+    rows = [r for r in LEDGER if r["op"] != "verify"] + [
+        {"op": "verify", "outcome": "budget_spent", "reviewed": False}
+    ]
     out = build_trail(rows, "see https://a.example/one").render()
     assert "shipped unreviewed" in out
     assert "revision budget" in out
@@ -854,7 +855,9 @@ def test_an_unreviewed_run_wears_its_banner_before_the_head():
 
 
 def test_a_fail_open_review_banners_too():
-    rows = [r for r in LEDGER if r["op"] != "verify"] + [{"op": "verify", "outcome": "unavailable"}]
+    rows = [r for r in LEDGER if r["op"] != "verify"] + [
+        {"op": "verify", "outcome": "unavailable"}
+    ]
     out = build_trail(rows, "x").render()
     assert "shipped unreviewed" in out and "unavailable" in out
 
@@ -918,227 +921,3 @@ def test_a_reviewed_or_unconfigured_run_has_no_banner():
 
     no_reviewer = [r for r in LEDGER if r["op"] != "verify"]
     assert "shipped unreviewed" not in build_trail(no_reviewer, "x").render()
-
-
-# ── two addresses that are one page ───────────────────────────────────
-# ★ 20260906 (Framework, product feedback). Every test below is about the same
-# accusation - "cited a link that appears nowhere in this run" - and about the
-# two shapes of address the 2026-09-04 run made it wrong on. The negatives carry
-# the weight: a fold that reaches one segment too far absolves the fabrication
-# this check exists to catch, and it does so silently.
-
-_ARXIV_PAPER = "https://arxiv.org/abs/2401.12345"
-
-
-def test_a_paper_opened_at_its_abstract_and_cited_as_a_pdf_is_one_page():
-    """Four prefixes and a version stamp serve one paper, and the run's own
-    thin-page recovery re-reads an abstract at its PDF - so the address the
-    ledger holds and the address the answer carries routinely differ in exactly
-    the parts that do not name the paper."""
-    ledger = [*LEDGER, {"op": "fetch", "url": _ARXIV_PAPER, "chars": 41002, "ok": True}]
-    t = build_trail(ledger, "as https://arxiv.org/pdf/2401.12345 reports, it holds")
-
-    assert t.cited_not_opened == [], t.cited_not_opened
-    assert t.counters()["citation_grounding_rate"] == 1.0
-
-
-def test_the_paper_fold_stops_at_the_identifier():
-    """A neighbouring id is a different paper, and the fold must leave it to be
-    accused. Without this the whole of arxiv.org would read as opened."""
-    ledger = [*LEDGER, {"op": "fetch", "url": _ARXIV_PAPER, "chars": 41002, "ok": True}]
-    t = build_trail(ledger, "as https://arxiv.org/pdf/2401.99999 reports, it holds")
-
-    assert t.cited_never_surfaced == ["https://arxiv.org/pdf/2401.99999"]
-
-
-def test_an_arxiv_form_folds_before_the_never_surfaced_check_too():
-    """The softer accusation and the heavier one are separately reachable, and
-    the fold has to reach the heavier one. A paper a search listed and nobody
-    opened is "listed but never opened" - not "appears nowhere in this run"."""
-    ledger = [*LEDGER, {"op": "search", "query": "compression", "urls": [_ARXIV_PAPER]}]
-    t = build_trail(ledger, "as https://arxiv.org/pdf/2401.12345.pdf reports, it holds")
-
-    assert t.cited_not_opened == ["https://arxiv.org/pdf/2401.12345.pdf"]
-    assert t.cited_never_surfaced == [], "a listed paper cited in another of its forms is not fabricated"
-
-
-def test_a_repository_cited_in_the_owners_other_casing_is_the_same_repository():
-    """The forge redirects to the owner's own casing, so both spellings are one
-    page and a run that opened either read it."""
-    ledger = [*LEDGER, {"op": "fetch", "url": "https://github.com/microsoft/LLMLingua", "chars": 8200, "ok": True}]
-    t = build_trail(ledger, "the code at https://github.com/Microsoft/llmlingua does it")
-
-    assert t.cited_not_opened == [], t.cited_not_opened
-
-
-def test_the_repository_fold_stops_at_the_repository():
-    """A file inside a repository is served case-sensitively. Folding the whole
-    path would let an invented ``RESULTS.md`` absolve itself against a real
-    ``results.md``, which is a fabricated deep link passing silently - the one
-    failure mode this check may not have."""
-    opened = "https://github.com/o/r/blob/main/results.md"
-    ledger = [*LEDGER, {"op": "fetch", "url": opened, "chars": 8200, "ok": True}]
-    t = build_trail(ledger, "the numbers in https://github.com/o/r/blob/main/RESULTS.md say so")
-
-    assert t.cited_never_surfaced == ["https://github.com/o/r/blob/main/RESULTS.md"]
-
-
-def test_a_hub_dataset_folds_at_the_pair_that_names_it():
-    """Only a model sits at the bare owner/name pair; a dataset carries its kind
-    first, so the naming pair is one segment deeper and a fold measured from the
-    root would leave the owner's casing to accuse."""
-    opened = "https://huggingface.co/datasets/THUDM/LongBench"
-    ledger = [*LEDGER, {"op": "fetch", "url": opened, "chars": 6100, "ok": True}]
-    t = build_trail(ledger, "the card at https://huggingface.co/datasets/thudm/longbench lists them")
-
-    assert t.cited_not_opened == [], t.cited_not_opened
-
-
-def test_a_query_value_is_held_out_of_the_fold():
-    """``_norm`` keeps query strings because ``?id=2`` is a different document,
-    and the case fold must not quietly take that back: two configs of one dataset
-    are two pages, and citing the one nobody opened is still a citation to a page
-    nobody opened."""
-    opened = "https://huggingface.co/datasets/o/D?config=Wikitext"
-    ledger = [*LEDGER, {"op": "fetch", "url": opened, "chars": 6100, "ok": True}]
-    t = build_trail(ledger, "see https://huggingface.co/datasets/o/D?config=wikitext for the split")
-
-    assert t.cited_not_opened == ["https://huggingface.co/datasets/o/D?config=wikitext"]
-
-
-def test_an_unlisted_host_keeps_every_character_of_its_path():
-    """Neither fold is a general rule about URLs. Both are claims about what two
-    named services serve, and a host that made no such promise gets the module's
-    original normalisation - scheme, host case, one trailing slash."""
-    opened = "https://c.example/Corpus"
-    ledger = [*LEDGER, {"op": "fetch", "url": opened, "chars": 6100, "ok": True}]
-    t = build_trail(ledger, "see https://c.example/corpus for the split")
-
-    assert t.cited_never_surfaced == ["https://c.example/corpus"]
-
-
-def test_the_fold_decides_whether_a_page_was_read_not_how_often_it_was_cited():
-    """``urls_cited`` still counts the references the answer wrote, so a paper
-    cited at two of its addresses is two.
-
-    Deliberate, and the narrower of the two readings of "normalisation". The
-    counters here have published readings - the 2026-09-04 baseline records 39
-    cited against 10 unopened - and folding the denominator would move every one
-    of them for a reason that has nothing to do with the check this fold was
-    added for. What the fold settles is whether an address was read; how many
-    times the report pointed at it is the report's own doing.
-    """
-    ledger = [*LEDGER, {"op": "fetch", "url": _ARXIV_PAPER, "chars": 41002, "ok": True}]
-    t = build_trail(ledger, f"see {_ARXIV_PAPER} and https://arxiv.org/pdf/2401.12345.pdf for it")
-
-    assert t.counters()["urls_cited"] == 2
-    # Both forms reach the same opened page, so neither is accused.
-    assert t.counters()["citation_grounding_rate"] == 1.0
-
-
-# ── a version is not an address, and a namespace nests ────────────────
-# Both from review. The fold's job is to let one document reach the check under any of
-# its addresses; neither of these was an address of the fetched document.
-
-
-def test_two_pinned_arxiv_versions_are_two_documents():
-    """arXiv keeps every version retrievable, and a later one may carry corrections,
-    expanded content, a translation, or content that changed entirely. Folding the
-    version away let a citation to something the run never read pass the grounding
-    check, which is the one thing this check may not do."""
-    ledger = [*LEDGER, {"op": "fetch", "url": "https://arxiv.org/pdf/2401.12345v1.pdf", "chars": 41002, "ok": True}]
-    t = build_trail(ledger, "as https://arxiv.org/pdf/2401.12345v2.pdf reports, it holds")
-
-    assert t.cited_not_opened == ["https://arxiv.org/pdf/2401.12345v2.pdf"]
-
-
-def test_a_bare_arxiv_address_and_a_pinned_one_stay_distinct():
-    """Neither direction proves the run read what the answer cites.
-
-    A bare address serves the latest revision, and this ledger records the URL a fetch
-    REQUESTED rather than the revision that address resolved to. So opening `/abs/X`
-    while the paper stands at v3 says nothing about a citation to `v1`, and opening `v1`
-    does not make a bare citation - which sends the reader to v3 - the same document.
-
-    An earlier form of this fix matched them whenever at most one side pinned a version,
-    on the reasoning that an unversioned address names the paper rather than a revision
-    of it. That is true of the address and irrelevant to the check: what has to be
-    established is which bytes were read. Re-enabling the match needs the effective
-    revision in the ledger, not a rule about which form is more general.
-    """
-    opened_bare = [*LEDGER, {"op": "fetch", "url": "https://arxiv.org/abs/2401.12345", "chars": 41002, "ok": True}]
-    assert build_trail(opened_bare, "see https://arxiv.org/pdf/2401.12345v1.pdf").cited_not_opened == [
-        "https://arxiv.org/pdf/2401.12345v1.pdf"
-    ]
-
-    opened_pinned = [*LEDGER, {"op": "fetch", "url": "https://arxiv.org/pdf/2401.12345v2", "chars": 41002, "ok": True}]
-    assert build_trail(opened_pinned, "see https://arxiv.org/abs/2401.12345").cited_not_opened == [
-        "https://arxiv.org/abs/2401.12345"
-    ]
-
-
-def test_a_pinned_version_still_folds_across_the_path_prefixes():
-    """The equivalence that is provable from the address alone survives, with the version
-    pinned on both sides just as with it absent on both."""
-    ledger = [*LEDGER, {"op": "fetch", "url": "https://arxiv.org/abs/2401.12345v2", "chars": 41002, "ok": True}]
-
-    assert build_trail(ledger, "see https://arxiv.org/pdf/2401.12345v2.pdf").cited_not_opened == []
-    assert build_trail(ledger, "see https://arxiv.org/html/2401.12345v2").cited_not_opened == []
-
-
-def test_the_prefix_and_extension_equivalence_survives_the_version_rule():
-    """The original fold still holds where no version is pinned on either side."""
-    ledger = [*LEDGER, {"op": "fetch", "url": "https://arxiv.org/abs/2401.12345", "chars": 41002, "ok": True}]
-
-    assert build_trail(ledger, "see https://arxiv.org/pdf/2401.12345.pdf").cited_not_opened == []
-    assert build_trail(ledger, "see https://arxiv.org/html/2401.12345").cited_not_opened == []
-
-
-def test_a_nested_gitlab_namespace_folds_the_whole_project_path():
-    """GitLab groups nest, so the project is not reliably two segments deep.
-    `gitlab-org/quality/testcases` is one project three deep, and a fixed depth of two
-    left `TestCases` cased and had the check accuse a page the run had opened."""
-    opened = "https://gitlab.com/gitlab-org/quality/testcases"
-    ledger = [*LEDGER, {"op": "fetch", "url": opened, "chars": 8200, "ok": True}]
-    t = build_trail(ledger, "the cases at https://gitlab.com/GitLab-Org/Quality/TestCases cover it")
-
-    assert t.cited_not_opened == [], t.cited_not_opened
-
-
-def test_the_gitlab_fold_stops_at_the_projects_own_boundary():
-    """GitLab publishes the boundary: everything before `/-/` is the project path and
-    everything after is served from inside it. So a file inside the project keeps its
-    case, for the same reason it does on the other forges - otherwise a fabricated deep
-    link absolves itself against a real one."""
-    opened = "https://gitlab.com/group/sub/project/-/blob/main/results.md"
-    ledger = [*LEDGER, {"op": "fetch", "url": opened, "chars": 8200, "ok": True}]
-
-    same_project = build_trail(ledger, "see https://gitlab.com/Group/Sub/Project/-/blob/main/results.md")
-    assert same_project.cited_not_opened == [], same_project.cited_not_opened
-
-    invented = build_trail(ledger, "see https://gitlab.com/group/sub/project/-/blob/main/RESULTS.md")
-    assert invented.cited_never_surfaced == ["https://gitlab.com/group/sub/project/-/blob/main/RESULTS.md"]
-
-
-def test_the_prefix_rule_does_not_quietly_restore_the_version_match():
-    """Removing the bare-versus-pinned exception is not enough on its own.
-
-    `_match_form`'s unique-prefix rule matches a cited form that is a strict prefix of
-    exactly one opened page, for a path the model truncated when citing. `abs/X` is a
-    strict prefix of `abs/Xv2` and nothing else about it looks unusual, so that rule
-    silently put the match back after the version rule took it away - found by a test
-    asserting the new behaviour, not by reading the diff.
-    """
-    ledger = [*LEDGER, {"op": "fetch", "url": "https://arxiv.org/abs/2401.12345v2", "chars": 41002, "ok": True}]
-    t = build_trail(ledger, "see https://arxiv.org/abs/2401.12345 for it")
-
-    assert t.cited_not_opened == ["https://arxiv.org/abs/2401.12345"]
-
-
-def test_a_genuinely_truncated_path_still_matches_its_one_opened_page():
-    """And the guard is scoped to arXiv version suffixes, so the rule it sits inside
-    keeps working: a mid-segment truncation is still a truncation."""
-    rows = [{"op": "fetch", "url": "https://ex.example/reports/2026-industry-alpha", "chars": 10, "ok": True}]
-    t = build_trail(rows, "see https://ex.example/reports/2026-industry for it")
-
-    assert t.cited_not_opened == []

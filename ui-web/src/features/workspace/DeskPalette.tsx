@@ -11,7 +11,6 @@ import {
   clampGeometry,
   defaultGeometry,
   DESK_GEOMETRY_KEY,
-  deskReserve,
   magnetGeometry,
 } from './deskGeometry'
 import * as deliveries from './deliveries'
@@ -61,60 +60,20 @@ function DeskTabs({ value, onChange }: { value: DeskTab; onChange: (tab: DeskTab
    where it would come from. They were two designs -- a line of grey text on
    Diff, an illustrated block on the shelf -- and an empty tab is the state a
    reader sees most often, so the two read as two different kinds of nothing. */
-function DeskEmpty({ kind, title, hint, sends }: {
-  kind: DeskTab
-  title: string
-  hint: string
-  sends?: { label: string; to: DeskTab }
-}): JSX.Element {
+function DeskEmpty({ kind, title, hint }: { kind: DeskTab; title: string; hint: string }): JSX.Element {
   return (
     <div className="desk-empty">
       <DeskIcon kind={kind} />
       <b>{title}</b>
       <span>{hint}</span>
-      {sends ? (
-        <button type="button" className="desk-empty-to" onClick={() => desk.update({ tab: sends.to })}>
-          {sends.label}
-        </button>
-      ) : null}
     </div>
   )
 }
 
-/* `sends` is the empty state answering the question the reader actually has.
- *
- * `changed` and `delivered` are two different facts about a turn, and only the
- * SELECTED tab shows its label (`.desk-tabs button .lb { display: none }`): the
- * other two are 34px icons. So a bubble reading 1 sits two squares from
- * "Nothing delivered yet" with nothing on screen to say it counts something
- * else, and the reader is left asking whether anything was delivered or not.
- *
- * Naming the other fact and offering to go there is what makes the pair
- * legible: the reader is told what is not here, what IS here, and that the two
- * are not the same thing. Nothing is renamed -- the distinction is real, and
- * collapsing it would lose the only thing that makes the shelf worth having.
- *
- * One of a singular/plural pair, chosen the way `phraseOf` chooses: the plural
- * lives under the same key with `n.` inserted, which is this catalogue's own
- * convention for it (`gui.act.n.*`). */
-const counted = (key: string, n: number): string =>
-  (n === 1 ? t(key) : t(key.replace('gui.ws.', 'gui.ws.n.'), { n: String(n) }))
-
 function DiffNav(): JSX.Element {
   const changes = workspace.shared().changes
   if (!changes.length) {
-    /* The shelf's own count, so an empty Diff can say what the other bubble is
-       counting. The palette's root already subscribes to the deliveries store,
-       which is why reading it here needs nothing of its own. */
-    const handed = deliveries.list().length
-    return (
-      <DeskEmpty
-        kind="diff"
-        title={t('gui.ws.no_changes')}
-        hint={handed ? counted('gui.ws.no_changes_dlv', handed) : t('gui.ws.no_changes_sub')}
-        sends={handed ? { label: t('gui.ws.see_delivered'), to: 'deliverables' } : undefined}
-      />
-    )
+    return <DeskEmpty kind="diff" title={t('gui.ws.no_changes')} hint={t('gui.ws.no_changes_sub')} />
   }
   return (
     <div className="desk-list">
@@ -174,18 +133,7 @@ function DeliverablesNav(): JSX.Element {
   useSyncExternalStore(deliveries.subscribe, deliveries.getVersion)
   const rows = deliveries.list()
   if (!rows.length) {
-    /* The changed-file count is the fact the reader is holding against this
-       one. Not the unseen count the bubble shows: what they will find on the
-       other tab is everything there, read or not. */
-    const touched = workspace.shared().changes.length
-    return (
-      <DeskEmpty
-        kind="deliverables"
-        title={t('gui.ws.dlv_none')}
-        hint={touched ? counted('gui.ws.dlv_none_kept', touched) : t('gui.ws.dlv_none_sub')}
-        sends={touched ? { label: t('gui.ws.see_changes'), to: 'diff' } : undefined}
-      />
-    )
+    return <DeskEmpty kind="deliverables" title={t('gui.ws.dlv_none')} hint={t('gui.ws.dlv_none_sub')} />
   }
   const now = workspace.currentTurn()
   /* "This turn" is the reader's position in THIS conversation, so only a row the
@@ -305,45 +253,6 @@ export function DeskPalette(): JSX.Element | null {
   useEffect(() => {
     try { localStorage.setItem(DESK_GEOMETRY_KEY, JSON.stringify(geom)) } catch {}
   }, [geom])
-  /* What the chat gives up so the panel is not sitting on the transcript -- see
-     `deskReserve` for the overlap this answers and why it is all-or-nothing.
-
-     On the root because the stylesheet spends it on two elements that are not
-     this one's ancestors, which is the same reason `--wsw` lives there.
-
-     Observed rather than computed once: the answer turns on the chat's width,
-     and that changes without this component rendering -- the window resizes,
-     the rail collapses, the workspace column opens beside it. `#split` is what
-     DeskSurface watches for the same reason; this watches the chat itself,
-     because the chat is what the reserve is taken out of.
-
-     Keyed on `shown` rather than `phase`, so the column travels WITH the panel's
-     190ms animation rather than after it. Cleared on unmount as well as when it
-     reaches zero: a desk that stops being rendered would otherwise leave the
-     transcript narrow with nothing on screen to explain why. */
-  useEffect(() => {
-    const chat = document.querySelector('.chat')
-    const publish = (): void => {
-      const reserve = deskReserve({
-        shown,
-        detached: geom.detached,
-        w: geom.w,
-        chatWidth: chat?.getBoundingClientRect().width ?? window.innerWidth,
-      })
-      const root = document.documentElement.style
-      if (reserve > 0) root.setProperty('--desk-reserve', `${reserve}px`)
-      else root.removeProperty('--desk-reserve')
-    }
-    publish()
-    const observer = chat ? new ResizeObserver(publish) : null
-    if (chat && observer) observer.observe(chat)
-    window.addEventListener('resize', publish)
-    return () => {
-      observer?.disconnect()
-      window.removeEventListener('resize', publish)
-      document.documentElement.style.removeProperty('--desk-reserve')
-    }
-  }, [shown, geom.detached, geom.w])
   useEffect(() => {
     const resize = (): void => setGeom((value) => clampGeometry(value))
     window.addEventListener('resize', resize)

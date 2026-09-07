@@ -8,11 +8,9 @@ this directory is the only evidence it happened:
     |-- messages.json         resume state (raven/agent/subagent/instance_state.py)
     `-- <call_id>/            one turn: prompt.md, out.md, meta.json
 
-A directory per turn, which the delegation surfaces no longer keep: their
-artifacts are flat under ``nodes/``, keyed by an id the model chose. A direct
-chat has no such id -- nobody names a turn to reference it later -- so the
-minted ``call_id`` still does the addressing here, and ``make_call_id`` exists
-for this tree alone.
+Same shape as ``spawn/<call_id>/`` on purpose, so both delegation paths are
+inspectable the same way and the handoff can name a turn's input and output
+file without inventing a second convention.
 
 A file name is never derived from a sub-agent's output, only from ids raven
 mints itself -- the same invariant ``raven/agent/subagent/history.py`` states.
@@ -66,23 +64,6 @@ class DirectChatCreation(NamedTuple):
     agent: str
     handle: str
     created_at_ms: int
-
-
-class NotAddressableError(RuntimeError):
-    """A direct chat refused because of what the agent IS, not because of a fault.
-
-    Distinct from every other failure on this path because it is the only one a
-    caller can act on: the agent is switched off, or it is stateless and the
-    task belongs in a spawn. Both sentences are written for the person who
-    asked, and a surface that hands them a generic failure instead has thrown
-    away the only useful thing it had.
-
-    A type rather than a message match, because the surface has to make that
-    distinction and ``raven.agent`` cannot import ``raven.rpc`` to make it
-    itself (the "inner layers know no surface" contract). Subclasses
-    ``RuntimeError`` so the callers that already catch that are unchanged --
-    this narrows what a raise MEANS without narrowing what it is.
-    """
 
 
 class DirectChatError(RuntimeError):
@@ -362,7 +343,6 @@ class DirectChatHandoff:
 __all__ = [
     "DirectChatCreation",
     "DirectChatError",
-    "NotAddressableError",
     "DirectChatHandoff",
     "DirectChatRecord",
     "DirectTurnMeta",

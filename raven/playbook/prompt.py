@@ -197,10 +197,7 @@ otherwise set it to false. Never put `confirm` on an individual node.
   (content) or {{ <upstreamId>.output_path }} (file path); every referenced
   upstream must be listed in this node's dependsOn.
 - `inputs` is only for literal material, files, or node outputs supplied to this
-  node. Each value is a literal string, {"file": <path>}, or {"node": <id>} --
-  exactly one of those three and nothing else in the object: no second key
-  beside file or node, no empty path or id, and a number, boolean or list is
-  refused. Every declared input must be referenced in `promptTemplate` as
+  node. Every declared input must be referenced in `promptTemplate` as
   {{ inputs.<key> }} or {{ inputs.<key>.path }}. Never duplicate a playbook
   param in `inputs`; use ${params.<key>} directly in the template instead.
 - `dependsOn` is the whole graph language: empty = a start node; several =
@@ -411,9 +408,7 @@ def build_compose_prompt(
         f"Params are already substituted (original param names: "
         f"{', '.join(param_names) if param_names else 'none'}); "
         "no ${params.*} may appear anywhere in the graph. Every declared input "
-        "must be referenced in its node's promptTemplate, and its value is a "
-        'literal string, {"file": <path>} or {"node": <id>} -- exactly one of '
-        "the three, nothing else in the object.\n\n"
+        "must be referenced in its node's promptTemplate.\n\n"
         f"# Available agents\n{_render_agents(agent_profiles)}\n\n"
         f"# Assembly guidance\n{prompts_filled}"
     )

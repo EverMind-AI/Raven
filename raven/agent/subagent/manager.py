@@ -21,19 +21,16 @@ from raven.agent.subagent.backends import (
     SubagentBackend,
 )
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
-from raven.agent.subagent.dag_store import ensure_node_claimed, index_guard, record_node_outcome
 from raven.agent.subagent.direct_chat import (
     DirectChatCreation,
     DirectChatError,
     DirectChatRecord,
     DirectTurnMeta,
-    NotAddressableError,
 )
 from raven.agent.subagent.history import SpawnRecord, session_history_root
 from raven.agent.subagent.instance_state import InstanceState, instance_state_path
 from raven.agent.subagent.instances import get_registry, hold_handle, mint_handle
 from raven.agent.subagent.mode_tiers import resolve_tier, turn_tier_in_force
-from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.agent.subagent.registry import AgentRegistry, AgentRow
 from raven.agent.subagent_memory import (
     TRACE_BUDGET_S,
@@ -624,7 +621,6 @@ class SubagentManager:
         self,
         task: str,
         task_summary: str | None = None,
-        node_id: str | None = None,
         origin_channel: str = "cli",
         origin_chat_id: str = "direct",
         session_key: str | None = None,
@@ -713,9 +709,6 @@ class SubagentManager:
             "workspace": effective_workspace,
             "authored_task": authored_task,
             "tool_call_id": tool_call_id,
-            # Claimed by the caller before this ran, so the record writes its
-            # artifacts under an id a later task can already reference.
-            "node_id": node_id or task_id,
         }
         instance_key = (quota_key, agent, handle)
 
@@ -765,12 +758,12 @@ class SubagentManager:
         """
         row = self.registry.get(agent)
         if row is None or not row.enabled:
-            raise NotAddressableError(
+            raise RuntimeError(
                 f"Cannot {doing}: {agent!r} is disabled or no longer configured, so it cannot "
                 "be addressed. Any records it already has remain on disk."
             )
         if not self.declared_stateful(agent):
-            raise NotAddressableError(
+            raise RuntimeError(
                 f"Cannot {doing}: {agent!r} is stateless, so each turn would start a fresh "
                 "conversation with no memory of this one. Spawn it with a task instead."
             )
@@ -1279,28 +1272,12 @@ class SubagentManager:
         # input on disk. Rooted at the session's metadata directory, not at
         # effective_workspace: the record has to outlive whatever the working
         # directory is pointed at.
-        node_id = str(origin.get("node_id") or task_id)
-        # The tool claims before it dispatches, so a duplicate is a refusal the
-        # model can still act on. This is the backstop for every other caller;
-        # it never refuses and never overwrites a claim already made.
-        session_dir = self.session_dir_for(session_key or "")
-        history_root = str(session_history_root(session_dir))
-        try:
-            async with index_guard(history_root):
-                await ensure_node_claimed(
-                    LocalFileBackend(), history_root, node_id, kind="spawn", started_at_ms=int(time.time() * 1000)
-                )
-        except OSError as exc:
-            # A registry that cannot be written costs this run its listing row,
-            # not the run: history is an audit trail here as it is in the record.
-            logger.warning("Subagent [{}] could not claim node id {}: {}", task_id, node_id, exc)
         record = SpawnRecord.open(
             self.session_dir_for(session_key or ""),
             task_id=task_id,
-            node_id=node_id,
             task=task,
             meta={
-                "call_id": node_id,
+                "call_id": task_id,
                 "session_key": session_key,
                 "agent": agent,
                 "task_summary": task_summary,
@@ -1320,10 +1297,7 @@ class SubagentManager:
         # can: a spawned call is a turn of the same instance a direct chat talks
         # to, and watching it there is the same question.
         cancelled = False
-        # The record's own id, not its directory's name: the artifacts are a
-        # filename prefix in the shared node root now, so the directory names
-        # the namespace rather than the call.
-        call_id = record.node_id
+        call_id = record.dir.name
         with activity.collecting(
             live_key=call_id, instance=(session_key or "", agent or "", handle), prompt=task
         ) as did:
@@ -1379,7 +1353,7 @@ class SubagentManager:
                 )
                 record.finish(status="completed", output=final_result, activity=did)
                 await self._announce_result(
-                    task_id, task_summary, task, final_result, origin, "ok", record_path=str(record.file("out.md"))
+                    task_id, task_summary, task, final_result, origin, "ok", record_dir=str(record.dir)
                 )
             except asyncio.CancelledError:
                 cancelled = True
@@ -1397,13 +1371,7 @@ class SubagentManager:
                 logger.info("Subagent [{}] stopped on a terminal safety decision", task_id)
                 record.finish(status="aborted", output=ABORTED_ACTION_RESULT, activity=did)
                 await self._announce_result(
-                    task_id,
-                    task_summary,
-                    task,
-                    ABORTED_ACTION_RESULT,
-                    origin,
-                    "error",
-                    record_path=str(record.file("out.md")),
+                    task_id, task_summary, task, ABORTED_ACTION_RESULT, origin, "error", record_dir=str(record.dir)
                 )
             except Exception as e:
                 await _write_spawn_status(session_key, agent, handle, "failed")
@@ -1414,16 +1382,9 @@ class SubagentManager:
                 logger.error("Subagent [{}] failed: {}", task_id, e)
                 record.finish(status="failed", error=error_msg, activity=did)
                 await self._announce_result(
-                    task_id, task_summary, task, error_msg, origin, "error", record_path=str(record.file("out.md"))
+                    task_id, task_summary, task, error_msg, origin, "error", record_dir=str(record.dir)
                 )
             finally:
-                # Every terminal outcome, including the cancelled one: an id
-                # left at `running` is one no later task can reference and
-                # nothing can free, so the registry has to be closed on the way
-                # out whichever branch above ran. `finish` is idempotent and has
-                # already written the record by here, so the file it reports is
-                # the one that decides `has_output`.
-                await self._finalize_node_claim(session_key, record)
                 # Not for a cancelled call: this poller would be created after
                 # the cancellation sweep took its snapshot, so nothing could
                 # reap it (see cancel_all / cancel_by_session).
@@ -1434,39 +1395,10 @@ class SubagentManager:
                         handle=handle,
                         session_key=session_key,
                         directory=record.dir,
-                        filename=record.file("memory.json").name,
+                        filename="memory.json",
                         instance=origin.get("instance"),
                         turn=record.turn,
                     )
-
-    async def _finalize_node_claim(self, session_key: str | None, record: "SpawnRecord") -> None:
-        """Close this spawn's registry entry with what its record ended up saying.
-
-        The claim made before dispatch says only that the id is taken. Until
-        this runs it also says the task is still going, so `{{ <id>.output }}`
-        is refused with "has not finished writing" even for a task that
-        finished and wrote its answer.
-
-        Read back from the record rather than passed in: `finish` is what
-        decides both the status and whether there was output worth persisting,
-        and it is called from four branches. Swallowed like the rest of the
-        history writes -- losing the entry costs this task its addressability,
-        and must not take down the run reporting it.
-        """
-        try:
-            meta = record.read_meta()
-            history_root = str(session_history_root(self.session_dir_for(session_key or "")))
-            async with index_guard(history_root):
-                await record_node_outcome(
-                    LocalFileBackend(),
-                    history_root,
-                    record.node_id,
-                    status=str(meta.get("status") or "failed"),
-                    has_output=record.file("out.md").is_file(),
-                    ended_at_ms=int(meta.get("ended_at_ms") or time.time() * 1000),
-                )
-        except (OSError, ValueError) as exc:
-            logger.warning("Subagent node {} could not be finalized in the registry: {}", record.node_id, exc)
 
     def set_submit(self, submit) -> None:
         self._submit = submit
@@ -1533,7 +1465,7 @@ class SubagentManager:
         result: str,
         origin: dict[str, Any],
         status: str,
-        record_path: str | None = None,
+        record_dir: str | None = None,
     ) -> None:
         """Announce the subagent result to the main agent via the spine.
 
@@ -1564,7 +1496,7 @@ class SubagentManager:
             if origin.get("instance")
             else ""
         )
-        record_line = f"\n\nRecord: {record_path}" if record_path else ""
+        record_line = f"\n\nRecord: {record_dir}" if record_dir else ""
         # The template, not the rendered prompt: a rendered `ref` can inline a
         # whole file, and this line is concatenated verbatim with no truncation,
         # so the file would be re-injected into the host's context in full.

@@ -24,7 +24,7 @@ from raven.agent.subagent.dag_live import live_run_ids
 from raven.agent.subagent.dag_reader import DagReadError
 from raven.agent.subagent.dag_resume import read_run_reconciled
 from raven.agent.subagent.dag_store import node_live_key
-from raven.agent.subagent.history import dag_root, nodes_root
+from raven.agent.subagent.history import dag_root
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.subagent.tool_vocabulary import normalize_row
 from raven.rpc.errors import InternalError
@@ -170,10 +170,8 @@ async def _node_off_disk(
     if not session_key:
         raise InternalError("dag.node needs session_key when no run_subagent_dag tool is live")
     try:
-        session_dir = _session_dir(str(session_key), agent_loop_factory)
-        root = str(dag_root(session_dir))
-        node_root = str(nodes_root(session_dir))
-        return await read_node_off(_LocalFiles(), root, run_id, node_id, node_root, max_output_chars=max_chars)
+        root = str(dag_root(_session_dir(str(session_key), agent_loop_factory)))
+        return await read_node_off(_LocalFiles(), root, run_id, node_id, max_output_chars=max_chars)
     except (DagReadError, DagValidationError, OSError) as exc:
         raise InternalError(str(exc)) from exc
 
