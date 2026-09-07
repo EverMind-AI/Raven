@@ -337,26 +337,6 @@ def shows_picture(shape: Any) -> bool:
     return picture_blob(shape) is not None
 
 
-# A picture at most this long on a side is a mark beside one unit of the page rather than
-# a picture of something. Measured over the 62 picture slots of the eight bundled
-# templates: the marks that stand one per unit -- the three seals on red page 4 (1.7in),
-# the badges on beige 21 (1.4-1.5in), mint 13 (1.3in) and red 13 (1.4in) -- all sit at
-# or under 1.7in, and the smallest picture that shows something of its own, a card
-# cartoon on teal 7, starts at 2.0in (two of that page's four cartoons are smaller and
-# take the label too, which costs nothing: they are already one per card). The generated
-# `ppt_icons.swap_icon` refuses anything larger under the same number, so a slot named an
-# icon is one that call accepts.
-ICON_MAX_IN = 1.8
-
-
-def is_icon_sized(shape: Any) -> bool:
-    """Whether this picture is a mark rather than a picture: no longer than ICON_MAX_IN a side."""
-    box = page_box(shape)
-    if box is None:
-        return False
-    return max(box.width, box.height) <= ICON_MAX_IN
-
-
 def picture_opacity(shape: Any) -> float:
     """How much of what is under a picture it keeps out, 0.0 to 1.0.
 

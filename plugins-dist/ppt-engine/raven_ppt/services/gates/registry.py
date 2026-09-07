@@ -41,7 +41,6 @@ from raven_ppt.services.measure.adherence import (
     prototype_kept,
     template_adherence,
     template_pictures,
-    unit_marks,
 )
 from raven_ppt.services.measure.alignment import flush_drift
 from raven_ppt.services.measure.captions import caption_findings
@@ -352,10 +351,6 @@ DISPATCH: Mapping[str, Severity] = {
     "template_picture": Severity.WARNING,
     # The same photograph, on the layout every page inherits rather than on the page.
     "layout_picture": Severity.WARNING,
-    # The marks beside a page's units, read together: still the template's, or one mark
-    # on two things. Under the band `template_picture` reads as content, and reported for
-    # the same reason -- which mark a unit wants is the author's to say.
-    "same_mark": Severity.WARNING,
     # And the mechanism that produces those: the template's page cloned for its
     # background with new text boxes laid over it. Refused for the same reason -- the
     # page shows two designs at once, and the fix is in the author's program.
@@ -527,7 +522,6 @@ def checks() -> dict[str, Callable[[DeckUnderReview], list[Finding]]]:
         "placeholder_copy": lambda deck: placeholder_copy(deck.pptx_path, deck.prototypes, _borrowed(deck.outline)),
         "template_picture": lambda deck: template_pictures(deck.pptx_path, deck.prototypes, _borrowed(deck.outline)),
         "layout_picture": lambda deck: layout_photographs(deck.pptx_path, deck.prototypes),
-        "same_mark": lambda deck: unit_marks(deck.pptx_path, deck.prototypes, _borrowed(deck.outline)),
         "prototype_kept": lambda deck: prototype_kept(deck.pptx_path, deck.prototypes, deck.outline),
         # `prototypes` so the refusal can name who drew the shape: "the template drew
         # it" is what a live author answered a contrast finding with, about six chevrons

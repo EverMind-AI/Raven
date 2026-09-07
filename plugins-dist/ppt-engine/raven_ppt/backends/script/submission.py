@@ -24,8 +24,6 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from raven_ppt.backends.script.workspace import SCRIPT_ENCODING
-
 # A replacement this much smaller than what it replaces is usually a fragment
 # sent by mistake rather than a rewrite.
 _FRAGMENT_RATIO = 5
@@ -66,7 +64,7 @@ def submission_refusal(script: str, source: Path) -> str | None:
             "    # SLIDE 2\n"
             "The build reads those blocks to match a render back to the code that drew it"
         )
-    existing = source.read_text(encoding=SCRIPT_ENCODING) if source.is_file() else ""
+    existing = source.read_text(encoding="utf-8") if source.is_file() else ""
     if existing.strip() and len(script.strip()) * _FRAGMENT_RATIO < len(existing.strip()):
         return (
             f"the submission is {len(script.strip())} characters against the {len(existing.strip())} "

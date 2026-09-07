@@ -6,6 +6,7 @@ import os
 import re
 import secrets
 import string
+import time
 import uuid
 import warnings
 from collections.abc import AsyncIterator
@@ -318,16 +319,31 @@ class LiteLLMProvider(LLMProvider):
             kwargs.update(max(matches, key=lambda item: len(item[0]))[1])
 
     @staticmethod
-    def _extra_msg_keys(original_model: str, resolved_model: str) -> frozenset[str]:
-        """Return provider-specific extra keys to preserve in request messages."""
+    def _is_anthropic_family(original_model: str, resolved_model: str) -> bool:
+        """Whether the request reaches an Anthropic model, directly or routed."""
         spec = find_by_model(original_model) or find_by_model(resolved_model)
-        if (
+        return bool(
             (spec and spec.name == "anthropic")
             or "claude" in original_model.lower()
             or resolved_model.startswith("anthropic/")
-        ):
+        )
+
+    @staticmethod
+    def _extra_msg_keys(original_model: str, resolved_model: str) -> frozenset[str]:
+        """Return provider-specific extra keys to preserve in request messages."""
+        if LiteLLMProvider._is_anthropic_family(original_model, resolved_model):
             return _ANTHROPIC_EXTRA_KEYS
         return frozenset()
+
+    def supports_assistant_prefill(self, model: str | None = None) -> bool:
+        """Anthropic rejects a trailing assistant message while thinking is on.
+
+        Same judgement that puts ``thinking_blocks`` on the wire: the illegal
+        request is exactly those blocks plus an assistant prefill, so both must
+        follow one rule or they drift apart.
+        """
+        original = model or self.default_model
+        return not self._is_anthropic_family(original, self._resolve_model(original))
 
     @staticmethod
     def _normalize_tool_call_id(tool_call_id: Any) -> Any:
@@ -520,9 +536,7 @@ class LiteLLMProvider(LLMProvider):
                 kwargs.pop(dropped)
                 self._deprecated_params.add((kwargs["model"], dropped))
                 try:
-                    response = await asyncio.wait_for(
-                        acompletion(**kwargs), self.generation.timeout
-                    )
+                    response = await asyncio.wait_for(acompletion(**kwargs), self.generation.timeout)
                     return self._parse_response(response)
                 except Exception as retry_exc:
                     e = retry_exc
@@ -571,8 +585,8 @@ class LiteLLMProvider(LLMProvider):
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
         max_tokens: object = LLMProvider._SENTINEL,
-        temperature: float = 0.7,
-        reasoning_effort: str | None = None,
+        temperature: object = LLMProvider._SENTINEL,
+        reasoning_effort: object = LLMProvider._SENTINEL,
         tool_choice: str | dict[str, Any] | None = None,
     ) -> AsyncIterator[StreamDelta]:
         """Streaming counterpart to chat().
@@ -581,6 +595,12 @@ class LiteLLMProvider(LLMProvider):
         so callers can swap providers transparently. The existing chat() is
         NOT modified — non-TUI paths (channels / cron / sentinel / ...)
         continue to use chat() with no behavioral change.
+
+        Generation parameters a caller leaves out resolve from
+        ``self.generation`` exactly as ``chat_with_retry`` resolves them: the
+        streaming path is the one every TUI and ACP turn takes, and plain
+        defaults here meant it sampled at 0.7 and sent no reasoning effort
+        while the config said otherwise.
 
         Provider-specific chunk shapes (e.g. dashscope) are handled inside
         `_normalize_stream_chunk`. The default OpenAI shape extraction lives
@@ -595,6 +615,10 @@ class LiteLLMProvider(LLMProvider):
 
         if max_tokens is self._SENTINEL:
             max_tokens = self.generation.max_tokens
+        if temperature is self._SENTINEL:
+            temperature = self.generation.temperature
+        if reasoning_effort is self._SENTINEL:
+            reasoning_effort = self.generation.reasoning_effort
         max_tokens = max(1, max_tokens)
 
         kwargs: dict[str, Any] = {
@@ -632,17 +656,26 @@ class LiteLLMProvider(LLMProvider):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
 
-        response = await asyncio.wait_for(acompletion(**kwargs), self.generation.timeout)
-        # Per-chunk idle cap: the timer resets on every chunk, so a long but
-        # steadily-progressing generation is fine while a mid-stream stall (no
-        # bytes for `timeout` seconds) raises TimeoutError instead of hanging.
+        # Two caps, two questions. `idle` decides whether the stream is dead --
+        # it resets on every chunk, so a long but steadily-progressing
+        # generation is untouched while one that stops producing bytes fails
+        # here rather than holding the whole budget (0 disables it). The
+        # `remaining` cap decides whether the request is still worth waiting
+        # for: a backend that trickles one token forever never trips `idle`.
         # aclose() in finally closes the underlying HTTP stream deterministically
-        # on that timeout, mirroring the `async with` cleanup on the other paths.
+        # on either timeout, mirroring the `async with` cleanup on the other paths.
+        budget = self.generation.timeout
+        idle = self.generation.stream_idle_timeout or budget
+        started = time.monotonic()
+        response = await asyncio.wait_for(acompletion(**kwargs), min(idle, budget))
         stream = response.__aiter__()
         try:
             while True:
+                remaining = budget - (time.monotonic() - started)
+                if remaining <= 0:
+                    raise TimeoutError(f"stream exceeded the {budget}s request budget")
                 try:
-                    chunk = await asyncio.wait_for(stream.__anext__(), self.generation.timeout)
+                    chunk = await asyncio.wait_for(stream.__anext__(), min(idle, remaining))
                 except StopAsyncIteration:
                     break
                 delta = self._normalize_stream_chunk(chunk)

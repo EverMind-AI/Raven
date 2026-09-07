@@ -6,6 +6,9 @@ Covers:
 - None-content chunks (e.g. final stop chunk) are skipped (return None → no yield)
 - signature parity with chat() (messages/tools/model/max_tokens/temperature/
   reasoning_effort/tool_choice all accepted; stream=True forwarded to acompletion)
+- generation defaults: with no explicit kwargs the provider's configured
+  temperature / max_tokens / reasoning_effort reach the wire, as they do on
+  chat_with_retry -- the streaming path used to hard-code 0.7 and drop effort
 
 Mocks patch `raven.providers.litellm_provider.acompletion` because the
 provider module imports `from litellm import acompletion` at top level, so
@@ -19,7 +22,7 @@ from typing import Any
 
 import pytest
 
-from raven.providers.base import StreamDelta
+from raven.providers.base import GenerationSettings, StreamDelta
 from raven.providers.litellm_provider import LiteLLMProvider
 
 # ---------- Test doubles modelling OpenAI ChatCompletionChunk shape ----------
@@ -180,3 +183,59 @@ async def test_chat_stream_signature_parity_with_chat(monkeypatch: pytest.Monkey
     assert captured["tools"] == tools
     # model should be resolved (openai/gpt-4o-mini already has prefix → stays the same)
     assert "gpt-4o-mini" in captured["model"]
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_defaults_to_the_configured_generation_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No explicit kwargs: the configured generation settings reach the wire.
+
+    ``chat_with_retry`` resolves temperature / max_tokens / reasoning_effort from
+    ``self.generation`` when a caller passes nothing. The streaming path is the
+    one every ACP and TUI turn takes, and it used to hard-code temperature 0.7
+    and send no reasoning effort at all -- so a config saying
+    ``reasoningEffort: high`` ran with thinking off on exactly those surfaces.
+    """
+    captured: dict[str, Any] = {}
+
+    async def fake_acompletion(**kwargs: Any):
+        captured.update(kwargs)
+        return _fake_stream([_chunk("ok")])
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
+
+    provider = _make_provider()
+    provider.generation = GenerationSettings(temperature=1.0, max_tokens=512, reasoning_effort="high")
+    out = [d async for d in provider.chat_stream(messages=[{"role": "user", "content": "hi"}])]
+
+    assert [d.content for d in out] == ["ok"]
+    assert captured["temperature"] == 1.0
+    assert captured["max_tokens"] == 512
+    assert captured["reasoning_effort"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_mirrors_the_configured_effort_for_an_openrouter_gateway(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Behind OpenRouter the configured effort also lands in ``extra_body.reasoning``.
+
+    litellm's ``drop_params`` discards ``reasoning_effort`` for models it cannot
+    map, so the gateway mirror is what actually switches thinking on there. It
+    has to fire for the configured default, not only for an explicit argument.
+    """
+    captured: dict[str, Any] = {}
+
+    async def fake_acompletion(**kwargs: Any):
+        captured.update(kwargs)
+        return _fake_stream([_chunk("ok")])
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
+
+    provider = LiteLLMProvider(
+        api_key="sk-or-test", default_model="anthropic/claude-opus-5", provider_name="openrouter"
+    )
+    provider.generation = GenerationSettings(reasoning_effort="max")
+    _ = [d async for d in provider.chat_stream(messages=[{"role": "user", "content": "hi"}])]
+
+    assert captured["reasoning_effort"] == "max"
+    assert captured["extra_body"]["reasoning"] == {"effort": "max"}

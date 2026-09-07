@@ -337,9 +337,3 @@ def test_the_render_caption_names_the_picture_slots_and_leaves_the_fill_to_the_a
 
     bare = _render_label(4, None, SimpleNamespace(arrangement="two columns", slots=0, picture_slots=()))
     assert "Picture slots" not in bare and "pictures={...}" not in bare
-
-    marked = _render_label(
-        4, None, SimpleNamespace(arrangement="three cards", slots=3, picture_slots=("[10] 1.7x1.7in icon",))
-    )
-    assert "An icon slot" in marked and "one per unit" in marked and "swap_icon(slide, shape_at(slide, n)" in marked
-    assert "An icon slot" not in said, "said beside the page that has one, and nowhere else"

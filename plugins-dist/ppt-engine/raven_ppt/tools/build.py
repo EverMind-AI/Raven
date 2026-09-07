@@ -24,7 +24,7 @@ from typing import Any
 
 from raven.contracts.tool import Tool, ToolResult
 from raven.utils.images import image_block, text_block
-from raven_ppt.backends.script import read_script
+from raven_ppt.backends.script import script_path
 from raven_ppt.contracts import (
     Finding,
     Profile,
@@ -514,7 +514,7 @@ class PptBuildTool(Tool):
         another would report a page as regressed on a finding that never counted.
         """
         try:
-            script = read_script(deck)
+            script = script_path(deck).read_text(encoding="utf-8")
         except OSError:
             return ()
         basis: dict[str, Any] = {

@@ -21,7 +21,6 @@ from pathlib import Path
 from raven_ppt.backends.script.blocks import level_that_separates_pages, page_blocks, page_sources
 from raven_ppt.backends.script.submission import carries_a_program, submission_refusal
 from raven_ppt.backends.script.workspace import (
-    SCRIPT_ENCODING,
     HelperSources,
     deck_path,
     page_failures_path,
@@ -43,7 +42,7 @@ MAX_OUTPUT_CHARS = 20_000
 # from a `# SLIDE n` comment would make annotation the author's job and let a
 # stale number pair one page's render with another page's code; execution knows
 # the answer exactly.
-_RUNNER = """import builtins, json, os, re, sys, traceback
+_RUNNER = """import builtins, json, os, re, runpy, sys, traceback
 
 script = sys.argv[1]
 record = os.environ.get("PPT_SLIDE_LINES")
@@ -122,9 +121,7 @@ def _slides():
 
 with open(script, "rb") as handle:
     body = handle.read()
-# utf-8-sig, as workspace.SCRIPT_ENCODING has it: a byte-order mark the interpreter
-# would skip on `python build.py` is a SyntaxError once the text reaches compile().
-lines = body.decode("utf-8-sig", "replace").splitlines(keepends=True)
+lines = body.decode("utf-8", "replace").splitlines(keepends=True)
 namespace = {"__name__": "__main__", "__file__": target, "__builtins__": builtins}
 
 
@@ -134,12 +131,7 @@ def run(start, end):
 
 try:
     if not blocks:
-        # Through `run` rather than `runpy.run_path`: a script whose pages cannot be
-        # isolated still has its pages, and the rescue below finds a presentation only
-        # in this namespace. runpy builds its own, so a crash on this path threw away
-        # everything drawn -- which is the path a crash takes, since a script the
-        # banners cannot separate is also the one with no page-level catch.
-        run(0, len(lines))
+        runpy.run_path(script, run_name="__main__")
     else:
         # One block at a time, so a page that raises is that page's failure and not the
         # deck's: the slides it managed to add are taken back, a page saying what went
@@ -313,8 +305,7 @@ async def run_script(
     from raven_ppt.services.template.defaults import templates_dir
 
     env["PPT_BUNDLED_TEMPLATES"] = str(templates_dir())
-    isolable = _isolable_blocks(source)
-    env["PPT_SLIDE_BLOCKS"] = json.dumps(isolable)
+    env["PPT_SLIDE_BLOCKS"] = json.dumps(_isolable_blocks(source))
 
     runner = workdir / "_run_build.py"
     runner.write_text(_RUNNER, encoding="utf-8")
@@ -355,17 +346,6 @@ async def run_script(
         drawn = (kept / "deck.pptx.building").is_file()
         _discard(staging, lines_map)
         said = stderr or f"exit code {process.returncode}"
-        if not isolable:
-            # Worth saying on the crash rather than only in the mapping warning a
-            # successful build reports: without the banners nothing was isolated, so
-            # this error cost every page, and the author cannot see that from the
-            # traceback. A live run's rewrite dropped them and the next error took
-            # five drawn pages with it.
-            said += (
-                "\n\nThis script's pages are not separable: `# SLIDE n` banners have to number the "
-                "pages 1..N in file order for a page that raises to fail alone. Without them one "
-                "error costs the whole build, as it did here."
-            )
         if drawn:
             said += (
                 f"\n\nThe pages drawn before this are kept at {_relative(project, kept / 'deck.pptx.building')} -- "
@@ -424,7 +404,7 @@ def _isolable_blocks(source: Path) -> list[list[int]]:
     page and block paired when the blocks come in page order.
     """
     try:
-        lines = source.read_text(encoding=SCRIPT_ENCODING).splitlines(keepends=True)
+        lines = source.read_text(encoding="utf-8").splitlines(keepends=True)
     except OSError:
         return []
     blocks = page_blocks(lines)
@@ -513,7 +493,7 @@ def _sources(source: Path, lines_map: Path):
     created = level_that_separates_pages(chains)
     if not created:
         return (), digest
-    lines = body.decode(SCRIPT_ENCODING, "replace").splitlines(keepends=True)
+    lines = body.decode("utf-8", "replace").splitlines(keepends=True)
     return page_sources(lines, created), digest
 
 

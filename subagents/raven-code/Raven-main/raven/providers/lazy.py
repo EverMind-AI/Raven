@@ -56,6 +56,9 @@ class LazyProvider(LLMProvider):
     def get_default_model(self) -> str:
         return self._default_model
 
+    def supports_assistant_prefill(self, model: str | None = None) -> bool:
+        return self._built().supports_assistant_prefill(model)
+
     async def chat(self, *args: Any, **kwargs: Any) -> LLMResponse:
         return await self._built().chat(*args, **kwargs)
 

@@ -113,14 +113,14 @@ def _drawn_again(project: Project, outcome: BuildOutcome | None) -> set[int] | N
     that moved -- and the caller then rasterises everything, which is the safe way to
     be wrong about a cache.
     """
-    from raven_ppt.backends.script.workspace import read_script
+    from raven_ppt.backends.script.workspace import script_path
     from raven_ppt.services import seen
 
     sources = getattr(outcome, "sources", None)
     if not sources:
         return None
     try:
-        script = read_script(project)
+        script = script_path(project).read_text(encoding="utf-8")
     except (OSError, AttributeError):
         return None
     blocks = seen.blocks_of(script, sources)
