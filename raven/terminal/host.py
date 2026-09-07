@@ -120,6 +120,8 @@ class TerminalState:
     permission_sequence: int = 0
     show_cursor_sequence: int = 0
     status_seen: bool = False
+    startup_pending: bool = False
+    provider: str | None = None
     last_output_monotonic: float = field(default_factory=time.monotonic)
     changed: asyncio.Event = field(default_factory=asyncio.Event)
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -159,7 +161,9 @@ class TerminalHost:
         executable = shutil.which(argv[0])
         if executable is None:
             raise TerminalError("command_not_found", f"Executable not found: {argv[0]}")
-        record = TerminalRecord(worktree_id=worktree_id, worktree_path=path, title=title, owner=owner)
+        record = TerminalRecord(
+            worktree_id=worktree_id, worktree_path=path, title=title, owner=owner, visible=False
+        )
         token = secrets.token_urlsafe(32)
         env = {key: value for key, value in os.environ.items() if not key.startswith("ORCA_")}
         env.update(
@@ -187,6 +191,9 @@ class TerminalHost:
         record.writable = True
         record.liveness = "live"
         state = TerminalState(record, pid, fd, token, title)
+        if Path(argv[0]).name in {"codex", "codex.exe"}:
+            state.provider = "codex"
+            state.startup_pending = True
         self._terminals[record.handle] = state
         self.topology_revisions[worktree_id] = self.topology_revisions.get(worktree_id, 0) + 1
         state.reader = asyncio.create_task(self._read(state))
@@ -280,7 +287,11 @@ class TerminalHost:
         state.output_tail = "".join(combined.splitlines(keepends=True)[-2000:])
         for title in titles:
             state.agent_title = title
-            if status := detect_title_status(title):
+            status = detect_title_status(title)
+            if status is None and state.provider == "codex" and title:
+                if not state.startup_pending or title == Path(state.record.worktree_path).resolve().name:
+                    status = "idle"
+            if status is not None:
                 await self.set_status(state.record.handle, status)
         state.changed.set()
 
@@ -293,6 +304,8 @@ class TerminalHost:
             state.composer_dirty = False
         if status == "permission":
             state.permission_sequence += 1
+        if status == "idle":
+            state.startup_pending = False
         state.record.status = status
         state.status_seen = True
         state.blocked_reason = blocked_reason if status == "permission" else None
