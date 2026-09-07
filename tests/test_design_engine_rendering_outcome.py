@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from raven_design.rendering.models import AdapterResult, Detection, RenderOutcome
 from raven_design.rendering.pipeline import RenderPipeline
 from raven_design.rendering.result import preview_tool_result, render_tool_result
@@ -230,3 +232,155 @@ def test_action_preview_view_reports_status_and_change() -> None:
         "status": "failed: TimeoutError",
         "changed_pixel_ratio": 0.0,
     }
+
+
+def test_a_cropped_image_becomes_a_content_warning() -> None:
+    from raven_design.rendering.browser import _append_image_crop_warning
+
+    warnings: list[dict] = []
+    _append_image_crop_warning(warnings, {"image_crops": []})
+    assert warnings == []
+    _append_image_crop_warning(
+        warnings,
+        {
+            "image_crops": [
+                {
+                    "src": "demo.png",
+                    "natural": [960, 720],
+                    "box": [480, 720],
+                    "object_fit": "cover",
+                    "cropped_fraction": 0.5,
+                }
+            ]
+        },
+    )
+    assert warnings[0]["code"] == "image_cropped"
+    assert warnings[0]["details"] == ["demo.png: 960x720 shown in a 480x720 box with object-fit cover, 50% cropped"]
+
+
+def test_the_browser_reports_images_that_object_fit_crops() -> None:
+    """A height attribute overriding a CSS aspect-ratio turned a 4:3 frame into a
+    2:3 box and object-fit: cover cut half the frame away; the runtime metadata
+    must expose that, and leave a fully shown image alone."""
+    playwright = pytest.importorskip("playwright.sync_api")
+    from raven_design.rendering.browser_runtime import runtime_metadata
+    from raven_design.rendering.models import _discover_chromium
+
+    chrome = _discover_chromium()
+    if not chrome:
+        pytest.skip("no system chromium")
+
+    pixel = (
+        "data:image/svg+xml;utf8,"
+        "<svg xmlns='http://www.w3.org/2000/svg' width='960' height='720'><rect width='960' height='720' fill='red'/></svg>"
+    )
+    html = (
+        "<body style='margin:0'>"
+        "<img id='bg' src=\"{p}\" style='position:fixed;inset:0;width:100vw;height:100vh;object-fit:cover'>"
+        "<img id='cut' src=\"{p}\" width='960' height='720' style='position:relative;width:480px;height:720px;object-fit:cover'>"
+        "<img id='whole' src=\"{p}\" style='position:relative;width:480px;height:360px;object-fit:cover'>"
+        "</body>"
+    ).format(p=pixel)
+    with playwright.sync_playwright() as pw:
+        try:
+            browser = pw.chromium.launch(executable_path=chrome, args=["--no-sandbox"])
+        except Exception as exc:  # pragma: no cover - environment without a browser
+            pytest.skip(f"chromium unavailable: {exc}")
+        page = browser.new_page()
+        page.set_content(html)
+        page.wait_for_function("() => [...document.images].every(i => i.complete && i.naturalWidth > 0)")
+        crops = runtime_metadata(page)["image_crops"]
+        browser.close()
+    # the full-viewport background is cropped by design and stays out of the list
+    assert [c["box"] for c in crops] == [[480, 720]]
+    assert crops[0]["cropped_fraction"] == 0.5
+
+
+def test_the_opening_visual_facts_become_one_detail_line() -> None:
+    from raven_design.rendering.browser import _append_opening_visual_warning
+
+    warnings: list[dict] = []
+    _append_opening_visual_warning(warnings, {"opening_visual": None})
+    assert warnings == []
+    _append_opening_visual_warning(
+        warnings,
+        {
+            "opening_visual": {
+                "src": "hero.png",
+                "viewport_fraction": 48,
+                "headline_overlap": 0,
+                "region_under_headline": None,
+            }
+        },
+    )
+    assert warnings[0]["code"] == "opening_visual"
+    assert warnings[0]["details"] == ["opening visual: hero.png — 48% of viewport; headline overlap 0%"]
+
+
+def test_the_browser_measures_where_the_headline_sits_on_the_opening_visual() -> None:
+    """Text over a full-bleed image reads as overlap 100 with a uniform backdrop
+    for a flat fill; text beside an image reads as overlap 0."""
+    playwright = pytest.importorskip("playwright.sync_api")
+    from raven_design.rendering.browser_runtime import runtime_metadata
+    from raven_design.rendering.models import _discover_chromium
+
+    chrome = _discover_chromium()
+    if not chrome:
+        pytest.skip("no system chromium")
+    fill = (
+        "data:image/svg+xml;utf8,"
+        "<svg xmlns='http://www.w3.org/2000/svg' width='800' height='600'><rect width='800' height='600' fill='red'/></svg>"
+    )
+    over = (
+        "<body style='margin:0'><img src=\"{p}\" style='position:fixed;inset:0;width:100vw;height:100vh;object-fit:cover'>"
+        "<h1 style='position:fixed;left:10vw;top:20vh;margin:0;font-size:48px'>Hello</h1></body>"
+    ).format(p=fill)
+    beside = (
+        "<body style='margin:0;display:grid;grid-template-columns:1fr 1fr;height:100vh'>"
+        "<h1 style='margin:0;font-size:48px'>Hello</h1><img src=\"{p}\" style='width:100%;height:100%;object-fit:cover'></body>"
+    ).format(p=fill)
+    ready = "() => [...document.images].every(i => i.complete && i.naturalWidth > 0)"
+    with playwright.sync_playwright() as pw:
+        browser = pw.chromium.launch(executable_path=chrome, args=["--no-sandbox"])
+        page = browser.new_page(viewport={"width": 1000, "height": 700})
+        page.set_content(over)
+        page.wait_for_function(ready)
+        on_image = runtime_metadata(page)["opening_visual"]
+        page.set_content(beside)
+        page.wait_for_function(ready)
+        next_to = runtime_metadata(page)["opening_visual"]
+        browser.close()
+    assert (on_image["viewport_fraction"], on_image["headline_overlap"], on_image["region_under_headline"]) == (
+        100,
+        100,
+        "uniform",
+    )
+    assert (next_to["viewport_fraction"], next_to["headline_overlap"]) == (50, 0)
+
+
+def test_render_measurements_travel_as_facts_not_errors(tmp_path: Path) -> None:
+    """opening_visual and image_cropped are readings the author checks a
+    declared intent against; a healthy render that carries them must not
+    present as erroneous through the public result."""
+    outcome = _outcome(
+        tmp_path,
+        warnings=[
+            {
+                "code": "opening_visual",
+                "details": ["opening visual: hero.png - 100% of viewport; headline overlap 100%"],
+            },
+            {
+                "code": "image_cropped",
+                "details": ["demo.png: 960x720 shown in a 480x720 box with object-fit cover, 50% cropped"],
+            },
+        ],
+    )
+    result = render_tool_result(outcome)
+    assert "errors" not in result
+    assert result["warnings"] == ["opening_visual", "image_cropped"]
+    assert result["facts"] == [
+        "opening visual: hero.png - 100% of viewport; headline overlap 100%",
+        "demo.png: 960x720 shown in a 480x720 box with object-fit cover, 50% cropped",
+    ]
+    metadata = json.loads(preview_tool_result(outcome, max_inline_bytes=10)[0]["text"])
+    assert "errors" not in metadata and metadata["facts"] == result["facts"]
