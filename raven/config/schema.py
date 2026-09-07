@@ -193,6 +193,19 @@ class AgentDefaults(Base):
     # sub-agents). Bounds a stalled backend that trickles bytes without ever
     # finishing, which an httpx per-read timeout never catches.
     llm_call_timeout: int = 600
+    # Max seconds a STREAMING call may go without one new chunk before the
+    # stream is given up as silent and the error raised for retry. Honoured by
+    # every adapter that consumes a stream: litellm, Codex, OpenAI Responses and
+    # Anthropic Messages (MiniMax inherits the latter, the endpoint rotor passes
+    # it to each inner provider); Azure has no streaming path, so it is not
+    # read there. llm_call_timeout is the whole call's budget and stays wide
+    # (long answers, provider retries); reusing it as the idle line let one
+    # lost connection hang an agent for half an hour (2026-09-01, run5 coding
+    # node: upstream stopped pushing, no bytes for 28 minutes, new calls
+    # answered in 3 seconds the whole time). A healthy stream's inter-chunk gap
+    # is sub-second and its first token tens of seconds; three minutes of
+    # silence is a stream that is not coming back.
+    stream_idle_timeout: int = 180
     max_tool_iterations: int = 40
     # Cap on subagent VMs running at once, counting spawns and DAG nodes
     # together (excess queues). ge=1: a 0/negative cap would deadlock every

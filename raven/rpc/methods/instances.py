@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Any
 
 from raven.agent.subagent import activity as run_activity
 from raven.agent.subagent.dag_live import live_run_ids
-from raven.agent.subagent.direct_chat import NotAddressableError, direct_root
+from raven.agent.subagent.direct_chat import direct_root
 from raven.agent.subagent.history import dag_root, nodes_root
 from raven.agent.subagent.instance_log import instance_title, message_rows
 from raven.agent.subagent.instance_records import stitched_turns
@@ -338,19 +338,7 @@ async def instances_create(
         raise RuntimeError("Cannot create a sub-agent instance: no agent loop in this session.")
 
     session_key = str(params.get("session_key") or "")
-    try:
-        created = await manager.create_instance(session_key=session_key, agent=str(params.get("agent") or ""))
-    except NotAddressableError as exc:
-        # The two refusals in `_require_addressable` are the only failures on
-        # this path a caller can do anything about -- switch the agent back on,
-        # or spawn it with a task instead. Both are written for the person who
-        # pressed the button, and the dispatcher renders anything untyped as
-        # `internal_error` with the sentence buried in a traceback tail, so
-        # without this the one useful failure on the path is the one nobody
-        # reads. Typed here rather than in the manager, which cannot import
-        # this module. The same class the two refusals below use, and for the
-        # same reason: the request is refused, nothing broke.
-        raise ConfigValidationError(str(exc)) from exc
+    created = await manager.create_instance(session_key=session_key, agent=str(params.get("agent") or ""))
 
     row = next(
         (
