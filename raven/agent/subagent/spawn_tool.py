@@ -1,19 +1,29 @@
 """Spawn tool for creating background subagents."""
 
+import re
+import time
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from raven.agent import workdir
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
-from raven.agent.subagent.history import dag_root, session_history_root
+from raven.agent.subagent.dag_graph import check_node_refs
+from raven.agent.subagent.dag_store import (
+    claim_node,
+    duplicate_node_id,
+    index_guard,
+    read_session_nodes,
+    release_node_claim,
+)
+from raven.agent.subagent.history import NODE_ID_PATTERN, nodes_root, session_history_root
 from raven.agent.subagent.instances import mint_handle
 from raven.agent.subagent.manager import SPAWN_REFUSED_PREFIX
 from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.agent.subagent.prompt_capabilities import check_path_placeholders
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.subagent.prompt_placeholders import parse_placeholders
-from raven.agent.subagent.prompt_render import needs_a_graph, node_form_refusal, render_template
+from raven.agent.subagent.prompt_render import render_template
 from raven.contracts.tool import Tool
 
 if TYPE_CHECKING:
@@ -128,14 +138,13 @@ class SpawnTool(Tool):
                 "step's output reaches the next without a turn of yours in between."
             )
             # The result carries this path; without a word here the agent has a
-            # directory it does not know the use of.
+            # path it does not know the use of.
             base += (
-                " The result names a `Record:` directory holding this call's prompt and output. "
-                "Its `out.md` is what to hand a follow-up task -- reference it with "
-                "`{{ ref:<that directory>/out.md }}` instead of restating the result from memory. "
-                "The directory may also hold `memory.json` -- what the sub-agent concluded for "
-                "itself, rather than the answer it gave you -- written after the call, so absence "
-                "is normal."
+                " The result names a `Record:` path -- this call's output file. Hand it to a "
+                "follow-up task with `{{ ref:@nodes/<node_id>.out.md }}`, or name the task by "
+                "its `node_id` directly, instead of restating the result from memory. Beside it "
+                "sits `<node_id>.memory.json` -- what the sub-agent concluded for itself, rather "
+                "than the answer it gave you -- written after the call, so absence is normal."
             )
         return base
 
@@ -152,17 +161,30 @@ class SpawnTool(Tool):
                     "never does, so write it for them -- no ids, no internal shorthand."
                 ),
             },
+            "node_id": {
+                "type": "string",
+                "minLength": 1,
+                "description": (
+                    "Your name for this task (^[A-Za-z0-9_-]+$), unique across this whole "
+                    "conversation -- not just this call, and not just this tool: a "
+                    "run_subagent_dag node id and a spawn node_id share one namespace. It is "
+                    "how a later task of either kind references this one's output, so name it "
+                    "for what the task produces rather than numbering it. A task that fails "
+                    "still owns its id; reusing one is refused. There is no length limit."
+                ),
+            },
             "prompt_template": {
                 "type": "string",
                 "minLength": 1,
                 "description": (
-                    "The task for the subagent. Placeholders: {{ ref:<path> }} / "
-                    "{{ ref_path:<path> }} inject a file's contents / its path; "
-                    "{{ inputs.<k> }} / {{ inputs.<k>.path }} inject an input. Paths resolve "
-                    "under the working directory and this conversation's sub-agent history, so "
-                    "the `Record:` directory of an earlier spawn is readable: hand its "
-                    "`out.md` to the next task with {{ ref:<record dir>/out.md }} rather than "
-                    "restating it. The _path forms need a sub-agent the roster tags "
+                    "The task for the subagent. Placeholders: {{ <node_id>.output }} / "
+                    "{{ <node_id>.output_path }} inject a finished task's output / its path, by "
+                    "the node_id it ran under; {{ ref:<path> }} / {{ ref_path:<path> }} inject a "
+                    "file's contents / its path; {{ inputs.<k> }} / {{ inputs.<k>.path }} inject "
+                    "an input. Name the task rather than restating its result. By path it is "
+                    "{{ ref:@nodes/<node_id>.out.md }}; paths also resolve under the working "
+                    "directory. A task that failed, was skipped or is still running is refused "
+                    "with which of those it was. The _path forms need a sub-agent the roster tags "
                     "[local-files]; for a [no-local-files] one use the contents forms. "
                     "Nothing is added around an injected value -- no heading, no label, no source "
                     "path -- so write in the template itself what the material is and where it "
@@ -172,8 +194,11 @@ class SpawnTool(Tool):
             "inputs": {
                 "type": "object",
                 "description": (
-                    'Per-key literal string or {"file": <path>}. {{ inputs.<k> }} injects the '
-                    "text, {{ inputs.<k>.path }} the file path."
+                    'Per-key literal string, {"file": <path>}, or {"node": <id>} to take a '
+                    "finished task's output. Exactly one of those three and nothing else in the "
+                    "object: no second key beside file or node, no empty path or id, and a "
+                    "number, boolean or list is refused. {{ inputs.<k> }} injects the text, "
+                    "{{ inputs.<k>.path }} the file path."
                 ),
             },
         }
@@ -205,7 +230,9 @@ class SpawnTool(Tool):
             "type": "object",
             "properties": props,
             "required": (
-                ["task_summary", "prompt_template", "subagent"] if names else ["task_summary", "prompt_template"]
+                ["task_summary", "node_id", "prompt_template", "subagent"]
+                if names
+                else ["task_summary", "node_id", "prompt_template"]
             ),
         }
 
@@ -243,7 +270,9 @@ class SpawnTool(Tool):
             f"putting whatever context the run needs into `prompt_template`."
         )
 
-    async def _render(self, template: str, inputs: dict[str, Any], subagent: str | None, session_key: str) -> str:
+    async def _render(
+        self, template: str, inputs: dict[str, Any], subagent: str | None, session_key: str, node_id: str
+    ) -> str:
         """``template`` with its file and input references resolved, as dispatched.
 
         Gates before it renders: a ``_path`` form aimed at a sub-agent the roster
@@ -259,7 +288,7 @@ class SpawnTool(Tool):
 
         References resolve against the turn's working directory and this
         conversation's sub-agent history, the same two roots a DAG node reads, so
-        an earlier spawn's ``Record:`` directory is nameable. Text read from
+        an earlier spawn's own output file is nameable. Text read from
         under the history root was written by a sub-agent, and comes back fenced
         (:func:`~raven.agent.subagent.prompt_render.render_template`).
 
@@ -287,14 +316,6 @@ class SpawnTool(Tool):
         """
         meta = next((a for a in self._agents() if a.name == subagent), None)
         placeholders = parse_placeholders(template)
-        # Ahead of the gate: a spawn has no graph, so a placeholder naming a node
-        # is refused for that rather than for the capability it also happens to
-        # need. The gate speaking first pointed the model at `{{ <id>.output }}`,
-        # which this surface refuses on the next turn -- two turns to learn one
-        # thing, and the first answer was advice that cannot work here.
-        for ph in placeholders:
-            if needs_a_graph(ph, inputs):
-                raise node_form_refusal(ph.raw)
         check_path_placeholders(
             placeholders,
             subagent or GENERIC_AGENT,
@@ -303,19 +324,31 @@ class SpawnTool(Tool):
         sdir = self._manager.session_dir_for(session_key)
         history = str(session_history_root(sdir))
         cwd = str(workdir.current() or self._manager.workspace)
+        backend = LocalFileBackend()
+        known = await read_session_nodes(backend, history)
+        # Checked before anything is read, so an id whose task failed is
+        # answered with why -- the outcome decides whether to re-do the work,
+        # fix an upstream, or wait -- rather than with the leftover file a bare
+        # path would have handed over.
+        check_node_refs(node_id, placeholders, inputs, known)
         return await render_template(
             template,
             inputs,
-            backend=LocalFileBackend(),
+            backend=backend,
             cwd=cwd,
-            runs_root=str(dag_root(sdir)),
+            nodes_root=str(nodes_root(sdir)),
             roots=(cwd, history),
+            known=known,
         )
 
     async def execute(
         self,
         task_summary: str,
         prompt_template: str | None = None,
+        # After `prompt_template`, not beside `task_summary` where the schema
+        # lists it: two callers pass those two positionally, and a new second
+        # parameter would silently bind the template to this instead.
+        node_id: str | None = None,
         subagent: str | None = None,
         instance: str | None = None,
         inputs: dict[str, Any] | None = None,
@@ -340,6 +373,17 @@ class SpawnTool(Tool):
         template = prompt_template or kwargs.pop("task", None)
         if not template:
             return "Error: `prompt_template` is required -- it is the task the sub-agent runs."
+        node_id = (node_id or kwargs.pop("call_id", None) or "").strip()
+        if not node_id:
+            return (
+                "Error: `node_id` is required -- it is the name a later task references this "
+                "one's output by, and only you can choose it."
+            )
+        if not re.match(NODE_ID_PATTERN, node_id):
+            return (
+                f"Error: node id '{node_id}' is not usable -- ids match {NODE_ID_PATTERN} because "
+                "the id is also this task's filename. Rename it."
+            )
         if (refusal := self._reject_useless_instance(subagent, instance)) is not None:
             return refusal
         if inputs is not None and not isinstance(inputs, dict):
@@ -352,7 +396,7 @@ class SpawnTool(Tool):
         # call, and every one of them has to come back as advice rather than as
         # a run that started on a prompt with a hole in it.
         try:
-            task = await self._render(template, inputs or {}, subagent, org.session_key)
+            task = await self._render(template, inputs or {}, subagent, org.session_key, node_id)
         except DagValidationError as exc:
             detail = str(exc).rstrip()
             if detail and detail[-1] not in ".!?":
@@ -364,7 +408,21 @@ class SpawnTool(Tool):
         minted = not instance and self._is_stateful(subagent)
         if minted:
             instance = mint_handle(task_summary, fallback=subagent or GENERIC_AGENT)
+        # Read, check and claim inside one guard: split across two, both a
+        # spawn and a graph pass the uniqueness check and both take the id.
+        # Here rather than where the record is opened, because that happens in
+        # the background task this call has already returned from -- a refusal
+        # raised there could only reach the model a turn later.
+        history_root = str(session_history_root(self._manager.session_dir_for(org.session_key)))
+        backend = LocalFileBackend()
+        async with index_guard(history_root):
+            known = await read_session_nodes(backend, history_root)
+            if (claim := known.claimed_by(node_id)) is not None:
+                taken, owner = claim
+                return "Error: " + duplicate_node_id(node_id, owner, readable=known.is_readable(taken), taken_as=taken)
+            await claim_node(backend, history_root, node_id, kind="spawn", started_at_ms=int(time.time() * 1000))
         result = await self._manager.spawn(
+            node_id=node_id,
             task=task,
             task_summary=task_summary,
             origin_channel=org.channel,
@@ -380,6 +438,15 @@ class SpawnTool(Tool):
             authored_task=template,
             tool_call_id=self._tool_call_id.get(),
         )
+        # Same reason the handle below is withheld: a refusal comes back as the
+        # result, not an exception, and it lands after the id was claimed. The
+        # task never ran and left no record, so holding its id would burn that
+        # name for the rest of the conversation over a paused queue or a full
+        # hourly budget -- and the retry the refusal invites would be refused
+        # again, for the wrong reason.
+        if result.startswith(SPAWN_REFUSED_PREFIX):
+            async with index_guard(history_root):
+                await release_node_claim(backend, history_root, node_id)
         # Published only once the manager has taken the spawn. A refusal (delegation
         # paused, hourly cap) comes back as the result rather than as an exception,
         # and a handle announced for one would draw an instance row and a `new` badge

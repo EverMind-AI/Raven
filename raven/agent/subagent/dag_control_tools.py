@@ -411,7 +411,7 @@ def _prompt_lines(entry: dict[str, Any], run: dict[str, Any]) -> str:
     lines = template.splitlines()
     if len(lines) <= _PROMPT_LINE_LIMIT:
         return template
-    path = entry.get("prompt_file") or f"{run['dir']}/{entry['node']}.prompt.md"
+    path = entry.get("prompt_file") or f"{run['nodes_root']}/{entry['node']}.prompt.md"
     head = "\n".join(lines[:_PROMPT_LINE_LIMIT])
     return f"{head}\n... (truncated, {len(lines) - _PROMPT_LINE_LIMIT} more lines; full prompt in {path})"
 
