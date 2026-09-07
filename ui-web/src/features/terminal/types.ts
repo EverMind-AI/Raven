@@ -44,6 +44,33 @@ export interface TerminalListReply {
   visualLayouts?: Array<Record<string, unknown>>
 }
 
+export interface TerminalOutputFrame {
+  handle: string
+  seq: number
+  replay?: boolean
+  data: Uint8Array
+}
+
+export interface TerminalSubscribeReply {
+  subscription: {
+    handle: string
+    enabled: boolean
+    seq: number
+    ackBytes: number
+    subscription_id?: string
+  }
+}
+
+export interface TerminalSubscribeParams {
+  handle: string
+  enabled?: boolean
+  ack?: number
+}
+
 export interface TerminalSource {
   list(taskId: string): Promise<TerminalListReply>
+  input(params: { handle: string; data: string }): Promise<unknown>
+  resize(params: { handle: string; cols: number; rows: number }): Promise<unknown>
+  subscribe(params: TerminalSubscribeParams): Promise<TerminalSubscribeReply>
+  onOutput: ((frame: TerminalOutputFrame) => void) | null
 }

@@ -4,6 +4,7 @@ import { useEffect, useSyncExternalStore } from 'react'
 
 import { t } from '../../shell/bridge'
 import * as store from './store'
+import { TerminalPane } from './TerminalPane'
 
 import type { TerminalRow } from './types'
 import type { JSX } from 'react'
@@ -25,7 +26,6 @@ export function TerminalApp(): JSX.Element {
     }
   }, [state.activeTab])
 
-  const activeTerminal = state.terminals.find((row) => row.handle === state.activeTab) ?? null
   return (
     <section className="terminal-surface" aria-label={t('gui.terminal.surface')}>
       <div className="terminal-tabs" role="tablist" aria-label={t('gui.terminal.tabs')}>
@@ -34,7 +34,11 @@ export function TerminalApp(): JSX.Element {
           <Tab key={row.handle} id={row.handle} label={canonicalName(row)} active={state.activeTab === row.handle} />
         ))}
       </div>
-      {activeTerminal ? <TerminalPanel terminal={activeTerminal} /> : null}
+      <div className="terminal-panels">
+        {state.terminals.map((terminal) => (
+          <TerminalPanel key={terminal.handle} terminal={terminal} active={state.activeTab === terminal.handle} />
+        ))}
+      </div>
     </section>
   )
 }
@@ -58,17 +62,20 @@ function Tab({ id, label, active }: { id: string; label: string; active: boolean
   )
 }
 
-function TerminalPanel({ terminal }: { terminal: TerminalRow }): JSX.Element {
+function TerminalPanel({ terminal, active }: { terminal: TerminalRow; active: boolean }): JSX.Element {
   const name = canonicalName(terminal)
   return (
-    <div className="terminal-panel" id={`terminal-panel-${terminal.handle}`} role="tabpanel">
+    <div className="terminal-panel" id={`terminal-panel-${terminal.handle}`} role="tabpanel" hidden={!active}>
       <header className="terminal-identity">
         <Identity label={t('gui.terminal.canonical_name')} value={name} valueClass="terminal-name" />
         <Identity label={t('gui.terminal.provider')} value={terminal.identity?.brand || t('gui.terminal.unknown')} />
         <Identity label={t('gui.terminal.instance')} value={terminal.handle} />
         <Identity label={t('gui.terminal.incarnation')} value={terminal.incarnationId} />
       </header>
-      <div className="terminal-stage">{t('gui.terminal.waiting')}</div>
+      <div className="terminal-stage">
+        <span className="terminal-waiting">{t('gui.terminal.waiting')}</span>
+        <TerminalPane terminal={terminal} active={active} />
+      </div>
     </div>
   )
 }

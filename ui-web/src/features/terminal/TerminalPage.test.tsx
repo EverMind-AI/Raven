@@ -4,6 +4,56 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+const xtermHarness = vi.hoisted(() => ({
+  instances: [] as Array<{
+    cols: number
+    rows: number
+    writes: Uint8Array[]
+    disposed: boolean
+    emitData(data: string): void
+  }>,
+  fits: 0,
+}))
+
+vi.mock('@xterm/xterm', () => ({
+  Terminal: class {
+    cols = 100
+    rows = 30
+    writes: Uint8Array[] = []
+    disposed = false
+    private dataListener: ((data: string) => void) | null = null
+
+    constructor() {
+      xtermHarness.instances.push(this)
+    }
+
+    loadAddon() {}
+    open() {}
+    onData(listener: (data: string) => void) {
+      this.dataListener = listener
+      return { dispose: () => (this.dataListener = null) }
+    }
+    emitData(data: string) {
+      this.dataListener?.(data)
+    }
+    write(data: Uint8Array, callback: () => void) {
+      this.writes.push(data)
+      callback()
+    }
+    dispose() {
+      this.disposed = true
+    }
+  },
+}))
+
+vi.mock('@xterm/addon-fit', () => ({
+  FitAddon: class {
+    fit() {
+      xtermHarness.fits += 1
+    }
+  },
+}))
+
 import { TerminalApp } from './TerminalPage'
 import * as store from './store'
 
@@ -51,6 +101,12 @@ function wire(): void {
       hostScope: { hostIds: ['local'], omittedHostIds: [] },
       topologyRevisions: {},
     })),
+    input: vi.fn(async () => ({})),
+    resize: vi.fn(async () => ({})),
+    subscribe: vi.fn(async ({ handle, enabled = true }) => ({
+      subscription: { handle, enabled, seq: 0, ackBytes: 65536, subscription_id: `sub-${handle}` },
+    })),
+    onOutput: null,
   }
   const fakeShell: Shell = {
     T: (key) => key,
@@ -60,6 +116,12 @@ function wire(): void {
   window.RavenShell = fakeShell
   window.DS = { terminal: source }
   document.body.innerHTML = '<div class="chat"><div id="terminalHost"></div></div>'
+  Object.defineProperty(HTMLElement.prototype, 'offsetParent', {
+    configurable: true,
+    get: () => document.body,
+  })
+  xtermHarness.instances.length = 0
+  xtermHarness.fits = 0
 }
 
 async function mount(task = 'task-1') {
@@ -83,6 +145,7 @@ afterEach(() => {
   window.DS = undefined
   vi.useRealTimers()
   vi.restoreAllMocks()
+  Reflect.deleteProperty(HTMLElement.prototype, 'offsetParent')
 })
 
 describe('hosted terminal tabs', () => {
@@ -134,5 +197,36 @@ describe('hosted terminal tabs', () => {
     expect(screen.getAllByRole('tab')).toHaveLength(1)
     expect(screen.getByRole('tab', { name: 'gui.terminal.transcript' }).getAttribute('aria-selected')).toBe('true')
     expect(document.querySelector<HTMLElement>('.chat')?.dataset.terminalActive).toBe('false')
+  })
+
+  it('bridges input, output, resize, acknowledgement and disposal', async () => {
+    rows = [terminal()]
+    await mount()
+    fireEvent.click(screen.getByRole('tab', { name: 'rsi-research-imp' }))
+
+    const xterm = xtermHarness.instances[0]!
+    expect(source.subscribe).toHaveBeenCalledWith({ handle: 'term_claude' })
+    expect(source.resize).toHaveBeenCalledWith({ handle: 'term_claude', cols: 100, rows: 30 })
+
+    xterm.emitData('confirm target\r')
+    expect(source.input).toHaveBeenCalledWith({ handle: 'term_claude', data: 'confirm target\r' })
+
+    const replay = new TextEncoder().encode('buffered output')
+    act(() => source.onOutput?.({ handle: 'term_claude', seq: 65536, replay: true, data: replay }))
+    expect(xterm.writes[0]).toEqual(replay)
+    expect(source.subscribe).not.toHaveBeenCalledWith({ handle: 'term_claude', ack: 65536 })
+
+    const live = new TextEncoder().encode('research output')
+    act(() => source.onOutput?.({ handle: 'term_claude', seq: 131072, data: live }))
+    expect(xterm.writes[1]).toEqual(live)
+    expect(source.subscribe).toHaveBeenCalledWith({ handle: 'term_claude', ack: 131072 })
+
+    rows = []
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000)
+      await Promise.resolve()
+    })
+    expect(xterm.disposed).toBe(true)
+    expect(source.subscribe).toHaveBeenCalledWith({ handle: 'term_claude', enabled: false })
   })
 })

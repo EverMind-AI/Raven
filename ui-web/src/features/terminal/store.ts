@@ -2,7 +2,7 @@
 
 import { ds } from '../../shell/bridge'
 
-import type { TerminalRow, TerminalSource } from './types'
+import type { TerminalOutputFrame, TerminalRow, TerminalSource } from './types'
 
 export const TRANSCRIPT_TAB = 'raven-transcript'
 export const POLL_INTERVAL_MS = 2000
@@ -27,6 +27,7 @@ let state: TerminalState = { ...initial }
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let requestGeneration = 0
 const listeners = new Set<() => void>()
+const outputListeners = new Map<string, Set<(frame: TerminalOutputFrame) => void>>()
 
 export const getState = (): TerminalState => state
 export const source = (): TerminalSource => ds<TerminalSource>('terminal')
@@ -77,15 +78,36 @@ export function selectTab(tab: string): void {
   set({ activeTab: tab })
 }
 
+export function onOutput(handle: string, listener: (frame: TerminalOutputFrame) => void): () => void {
+  let set = outputListeners.get(handle)
+  if (!set) {
+    set = new Set()
+    outputListeners.set(handle, set)
+  }
+  set.add(listener)
+  return () => {
+    set!.delete(listener)
+    if (!set!.size) outputListeners.delete(handle)
+  }
+}
+
+function receiveOutput(frame: TerminalOutputFrame): void {
+  for (const listener of outputListeners.get(frame.handle) ?? []) listener(frame)
+}
+
 export function start(): void {
   if (pollTimer) return
+  source().onOutput = receiveOutput
   pollTimer = setInterval(() => void refresh(), POLL_INTERVAL_MS)
 }
 
 export function stop(): void {
-  if (!pollTimer) return
-  clearInterval(pollTimer)
-  pollTimer = null
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+  const terminalSource = source()
+  if (terminalSource.onOutput === receiveOutput) terminalSource.onOutput = null
 }
 
 export function _resetForTests(): void {
@@ -93,4 +115,5 @@ export function _resetForTests(): void {
   requestGeneration += 1
   state = { ...initial }
   listeners.clear()
+  outputListeners.clear()
 }

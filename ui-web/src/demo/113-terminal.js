@@ -6,4 +6,10 @@ DS.terminal ??= {
     hostScope: { hostIds: ['local'], omittedHostIds: [] },
     topologyRevisions: {},
   }),
+  input: async () => ({}),
+  resize: async () => ({}),
+  subscribe: async ({ handle, enabled = true }) => ({
+    subscription: { handle, enabled, seq: 0, ackBytes: 65536, subscription_id: `demo-${handle}` },
+  }),
+  onOutput: null,
 };

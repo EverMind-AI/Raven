@@ -718,7 +718,8 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .terminal-tab:hover { color: var(--text); background: var(--surface); }
 .terminal-tab.active { color: var(--text); border-bottom-color: var(--amber); }
 .terminal-tab:focus-visible { outline: 1px solid var(--amber); outline-offset: -2px; }
-.terminal-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; background: var(--stage-bg); }
+.terminal-panels, .terminal-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.terminal-panel { background: var(--stage-bg); }
 .terminal-identity {
   display: flex; align-items: center; gap: 14px; min-width: 0; padding: 8px 20px;
   border-bottom: 1px solid var(--line-soft); font-family: var(--mono); font-size: 11px;
@@ -727,9 +728,12 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .terminal-identity-field { display: flex; align-items: baseline; gap: 5px; min-width: 0; color: var(--faint); }
 .terminal-identity-field code { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .terminal-stage {
-  display: grid; place-items: center; flex: 1; min-height: 0; padding: 22px;
+  position: relative; flex: 1; min-height: 0; padding: 10px 14px;
   color: var(--faint); background: var(--stage-bg); font-family: var(--mono); font-size: var(--step--1);
 }
+.terminal-waiting { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
+.terminal-xterm { position: relative; z-index: 1; width: 100%; height: 100%; }
+.terminal-xterm .xterm { height: 100%; }
 .chat[data-terminal-active="true"] #terminalHost { flex: 1; }
 .chat[data-terminal-active="true"] .scroll,
 .chat[data-terminal-active="true"] .dock,
