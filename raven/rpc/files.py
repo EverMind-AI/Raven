@@ -126,7 +126,7 @@ def in_state_dir(resolved: Path, workspace: str | Path) -> bool:
     return False
 
 
-def resolve_readable(raw: str) -> Path:
+def resolve_readable(raw: str, *, workspace: Path | None = None) -> Path:
     """Resolve a viewer request to a real file, or raise.
 
     ``tools.restrict_to_workspace`` decides how far a *file* request may reach,
@@ -150,7 +150,7 @@ def resolve_readable(raw: str) -> Path:
     # `workspace_path`, not the raw config string: one derivation of where the
     # workspace is, so a fence cannot end up pointing somewhere the agent never
     # writes.
-    workspace = cfg.workspace_path
+    workspace = workspace or cfg.workspace_path
     # A tuple of roots, which is what the fence takes since the agent's working
     # directory was split out of agent home. A single path silently became a
     # TypeError *inside* the check, so the viewer answered 500 where it meant 403

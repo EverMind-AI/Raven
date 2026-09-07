@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 from pathlib import Path
 
 from raven.rpc import bootstrap
@@ -135,6 +136,38 @@ async def test_the_owning_stack_drains_queued_writes_before_stopping_the_backend
     await stack.teardown()
 
     assert order == ["drain", "stop"], order
+
+
+async def test_the_stack_sizes_its_turn_pools_from_the_config(monkeypatch) -> None:
+    """serve, the page and every ACP worker build through here and used to get
+    the spine's built-in 1/1 whatever the config said, so a second conversation
+    or a second task on a pooled sub-agent queued behind the first."""
+    loop = _FakeLoop(_FakeCron())
+    import raven.rpc.spine as spine_module
+
+    seen: dict = {}
+    real = spine_module.build_rpc_spine
+
+    def spy(*args, **kwargs):
+        seen.update(kwargs)
+        return real(*args, **kwargs)
+
+    # Imported inside the factory, so the seam is the spine module's own name.
+    monkeypatch.setattr(spine_module, "build_rpc_spine", spy)
+    monkeypatch.setattr(bootstrap, "_turn_pools", lambda: (7, 3))
+    stack = await bootstrap.build_rpc_stack(_sink, agent_loop=loop)
+    try:
+        assert (seen["user_pool"], seen["system_pool"]) == (7, 3)
+    finally:
+        await stack.teardown()
+
+
+def test_the_turn_pools_come_from_the_gateway_section_and_zero_is_allowed(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "config.json"
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    assert bootstrap._turn_pools() == (4, 2), "no file: the schema defaults"
+    path.write_text(json.dumps({"gateway": {"userPool": 0, "systemPool": 0}}))
+    assert bootstrap._turn_pools() == (0, 0)
 
 
 async def test_a_shared_loop_is_used_not_rebuilt(monkeypatch) -> None:

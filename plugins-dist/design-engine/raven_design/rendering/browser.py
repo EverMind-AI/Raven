@@ -198,6 +198,7 @@ class BrowserAdapter:
                 "frame_count": result.frame_count,
                 "duration_seconds": (request.capture_duration_seconds if result.frame_count else 0),
                 "pdf_reference_path": result.pdf_reference_path,
+                "reference_pixels_per_point": request.scale * 96 / 72,
                 "pdf_fidelity": result.pdf_fidelity,
             },
             motion={
@@ -228,7 +229,7 @@ class BrowserAdapter:
         errors: list[str],
         warnings: list[dict[str, Any]],
     ) -> _BrowserResult:
-        context = self._new_context(browser, port, blocked, viewport)
+        context = self._new_context(browser, port, blocked, viewport, request.scale)
         try:
             runtime_snapshot = self._capture_snapshot(
                 context,
@@ -310,6 +311,7 @@ class BrowserAdapter:
                 self.pdf.image_to_pdf(
                     bundle_root / pdf_reference_path,
                     BundlePaths(bundle_root).document,
+                    pixels_per_point=request.scale * 96 / 72,
                 )
                 pdf_fidelity = "raster_snapshot"
                 timeline_mode = "deterministic" if deterministic else "real_time"
@@ -440,9 +442,11 @@ class BrowserAdapter:
         port: int,
         blocked: list[str],
         viewport: tuple[int, int],
+        scale: float = 1.0,
     ) -> BrowserContext:
         context = browser.new_context(
             viewport={"width": viewport[0], "height": viewport[1]},
+            device_scale_factor=scale,
             locale=self.config.locale,
             timezone_id=self.config.timezone,
             color_scheme="light",
@@ -656,7 +660,7 @@ def _validate_capture_budget(
 ) -> None:
     probe_frames = 1 if request.motion_mode == "static" else 8
     timeline_frames = max(2, ceil(request.capture_duration_seconds * config.motion_fps) + 1) if include_timeline else 0
-    pixels = viewport[0] * viewport[1] * (probe_frames + timeline_frames)
+    pixels = int(viewport[0] * viewport[1] * request.scale * request.scale) * (probe_frames + timeline_frames)
     if pixels > config.max_total_pixels:
         raise RenderError(
             "resource_limit_exceeded",

@@ -892,12 +892,9 @@ class AcpAgentBackend:
         mode: str | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> str:
-        # The parent's provider/model are accepted and ignored, as the cli
-        # transport does it: this backend prompts an agent that holds its own
-        # credential and picks its own model. Accepted rather than omitted
-        # because the manager passes the same keyword set to whichever backend
-        # it resolved, and a missing parameter fails the dispatch with a
-        # TypeError before the agent is ever contacted.
+        # The parent binding is forwarded when the pooled ACP worker launches.
+        # Without this, a long-lived worker keeps the provider/model captured
+        # during its first startup even after the WebUI session switches.
         skey = session_key or "default"
         handle = instance or task_id
         # Two directories, deliberately not one. `launch_cwd` is where the server
@@ -925,11 +922,26 @@ class AcpAgentBackend:
                 # slow adapter had `verify` pass at 150s and every dispatch fail at
                 # the module constant.
                 budget = max(1.0, self.ready_timeout_ms / 1000)
+                # Handed to the pool apart from the entry's own env: a binding is
+                # not a config edit. Folded into `env` it changed the launch key, and
+                # the pool answered a second binding by closing the first binding's
+                # connection -- mid-turn, if one was running. Kept separate, each
+                # binding gets a connection of its own and the two coexist.
+                binding: dict[str, str] = {}
+                if model:
+                    binding["RAVEN_PARENT_MODEL"] = model
+                parent_provider = str(getattr(provider, "provider_name", "") or "")
+                if parent_provider:
+                    binding["RAVEN_PARENT_PROVIDER"] = parent_provider
+                parent_protocol = str(getattr(provider, "api_protocol", "") or "")
+                if parent_protocol:
+                    binding["RAVEN_PARENT_PROTOCOL"] = parent_protocol
                 connection = await get_pool().acquire(
                     name=self.name,
                     command=self.command,
                     cwd=launch_cwd,
                     env=dict(self.env),
+                    binding=binding or None,
                     ready_timeout_s=budget,
                 )
                 client = connection.client
@@ -984,6 +996,7 @@ class AcpAgentBackend:
                 # `_Connection.session_lock` for why two prompts cannot share one
                 # session id.
                 async with connection.session_lock(session_id):
+                    connection.router.reserve(session_id)
                     await connection.router.take_over(session_id, collector)
                     # Once per connection, and here because this is where the pieces
                     # it needs are in hand. What it records is what the agent does

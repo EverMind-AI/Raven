@@ -314,7 +314,7 @@ export function newLane(key: string, main: boolean): Lane {
   const lane: Lane = {
     key, main, epoch: 0, listV: 0, scrollReq: 0, segs: [], listeners: new Set(),
     pend: '', pendStep: null, flush: null,
-    agentKey: null, agentDrawn: 0, agentHold: 0, agentTurn: 0, running: false, empty: '',
+    agentKey: null, agentDrawn: 0, agentHold: null, agentTurn: 0, running: false, empty: '',
   }
   lanes.add(lane)
   return lane
@@ -1801,6 +1801,43 @@ export interface AgentCtxLike {
   ended_at?: string
 }
 
+/* What the reader opened on the rows a poll is about to redraw. The provisional
+   rows are thrown away and drawn again from the messages, so a fold opened while
+   its run was still going closed again on the next poll. Read by position and
+   written back by position: the redraw walks the same messages, so an existing
+   row keeps its place and new rows only follow. Only the reader's own choices
+   travel -- a thought's live open/close is the step's, and is left to it. */
+interface FoldToggles { open: boolean; steps: Array<{ think: boolean | null; work: boolean | null; calls: boolean[] }> }
+
+function readToggles(lane: Lane): FoldToggles[] {
+  return lane.segs.flatMap((s) => (s.kind !== 'fold' ? [] : [{
+    open: s.open,
+    steps: s.steps.map((st) => ({
+      think: st.thinkPinned ? st.thinkOpen : null,
+      work: st.wkPinned ? st.wkOpen : null,
+      calls: st.calls.map((c) => c.open),
+    })),
+  }]))
+}
+
+function writeToggles(lane: Lane, saved: FoldToggles[]): void {
+  const folds = lane.segs.filter((s): s is FoldData => s.kind === 'fold')
+  saved.forEach((t, i) => {
+    const f = folds[i]
+    if (!f) return
+    f.open = t.open
+    t.steps.forEach((ts, j) => {
+      const st = f.steps[j]
+      if (!st) return
+      if (ts.think != null) { st.thinkPinned = true; st.thinkOpen = ts.think }
+      if (ts.work != null) { st.wkPinned = true; st.wkOpen = ts.work }
+      ts.calls.forEach((o, k) => { const c = st.calls[k]; if (c) c.open = o })
+      bump(lane, st)
+    })
+    bump(lane, f)
+  })
+}
+
 export function agentPaintLane(lane: Lane, r: AgentCtxLike | null,
   opts?: { key?: string; empty?: string; reset?: boolean } | null): void {
   const msgs = (r && r.messages) || []
@@ -1812,7 +1849,7 @@ export function agentPaintLane(lane: Lane, r: AgentCtxLike | null,
     lane.segs = []
     lane.agentKey = key
     lane.agentDrawn = 0
-    lane.agentHold = 0
+    lane.agentHold = null
     lane.agentTurn = 0
     lane.epoch += 1
   }
@@ -1852,11 +1889,17 @@ export function agentPaintLane(lane: Lane, r: AgentCtxLike | null,
   /* And never behind what is already committed: those rows are on screen, and
      a hold that started before them would draw them a second time. */
   if (commit < lane.agentDrawn) commit = lane.agentDrawn
+  const toggles = lane.agentHold ? readToggles(lane) : null
   /* Whatever the previous paint drew provisionally goes first, so the answer
      grows in place instead of stacking one copy per poll. */
   if (lane.agentHold) {
-    lane.segs = lane.segs.slice(0, lane.agentHold)
-    lane.agentHold = 0
+    lane.segs = lane.agentHold.segs
+    lane.agentHold.folds.forEach(({ fold, steps, time }) => {
+      fold.steps = steps
+      fold.time = time
+      bump(lane, fold)
+    })
+    lane.agentHold = null
   }
   const tail = msgs.slice(lane.agentDrawn, commit)
   const did = fresh && r ? agentFlatCalls(r) : []
@@ -1873,9 +1916,13 @@ export function agentPaintLane(lane: Lane, r: AgentCtxLike | null,
     lane.agentDrawn = commit
   }
   if (commit < msgs.length) {
-    lane.agentHold = lane.segs.length
+    lane.agentHold = {
+      segs: lane.segs.slice(),
+      folds: lane.segs.flatMap((s) => (s.kind === 'fold' ? [{ fold: s, steps: s.steps.slice(), time: s.time }] : [])),
+    }
     history(lane, msgs.slice(commit))
   }
+  if (toggles) writeToggles(lane, toggles)
   lane.running = running
   lane.empty = (opts && opts.empty) || t('gui.ws.agents_none')
   bumpList(lane)

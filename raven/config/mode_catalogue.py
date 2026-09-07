@@ -27,6 +27,7 @@ class ModeProfile:
     description: str
     max_iterations: int | None
     overlay: dict[str, Any] = field(default_factory=dict)
+    reasoning_effort: str | None = None
 
 
 @dataclass(frozen=True)
@@ -78,6 +79,7 @@ def build_mode_catalogue(config: Any) -> ModeCatalogue:
             description=_t(declaration.description) if ours else declaration.description,
             max_iterations=declaration.max_tool_iterations,
             overlay=dict(declaration.overlay),
+            reasoning_effort=getattr(declaration, "reasoning_effort", None),
         )
         for mode_id, declaration in declared.items()
     }

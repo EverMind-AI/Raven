@@ -29,6 +29,7 @@ _OPTION_KEYS = {
     "viewport_height",
     "actions",
 }
+_OPTIONAL_OPTION_KEYS = {"scale"}  # absent in pre-scale requests
 
 
 def run(request_path: Path) -> dict[str, Any]:
@@ -65,6 +66,7 @@ def run(request_path: Path) -> dict[str, Any]:
             viewport_height=options["viewport_height"],
             asset_root=Path(payload["asset_root"]) if payload["asset_root"] else None,
             actions=tuple(options["actions"]) if options.get("actions") else None,
+            scale=options.get("scale", 1.0),
         ),
         preview_limit=payload["preview_limit"],
     )
@@ -91,7 +93,7 @@ def _read_request(path: Path) -> dict[str, Any]:
     config = payload.get("config")
     if (
         not isinstance(options, dict)
-        or set(options) != _OPTION_KEYS
+        or not _OPTION_KEYS <= set(options) <= _OPTION_KEYS | _OPTIONAL_OPTION_KEYS
         or not isinstance(config, dict)
         or set(config) != {field.name for field in fields(RenderConfig)}
     ):

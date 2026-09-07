@@ -357,6 +357,8 @@ def test_every_module_that_writes_the_field_asks_whether_it_may():
     writers = {
         "raven/providers/prompt_cache.py",  # the answer itself
         "raven/providers/litellm_provider.py",
+        # Marks its own system/tool blocks, and asks accepts_cache_control first.
+        "raven/providers/anthropic_messages_provider.py",
         "raven/token_wise/cache_optimizer.py",
         "raven/token_wise/system_and_tail_cache.py",
     }

@@ -996,7 +996,13 @@ class TurnPathMixin:
 
             # TokenWise before-hook: strategies may rewrite messages, tools,
             # or model (e.g. CacheOptimizer marks cache_control blocks).
-            gen_overrides = dict(pending_gen_overrides or {})
+            # The session's pinned effort first, a hook's rollback override on
+            # top: a mode that asks for more thinking sets the turn's default,
+            # and a gate re-sampling one call may still move that one call.
+            gen_overrides = {
+                **({"reasoning_effort": policy.reasoning_effort} if policy.reasoning_effort else {}),
+                **(pending_gen_overrides or {}),
+            }
             pending_gen_overrides = None
             call_messages, call_tools, call_model = await self.strategies.before_llm_call(
                 messages,

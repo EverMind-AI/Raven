@@ -236,8 +236,49 @@ def _split_on_operators(command: str) -> Iterator[str]:
         yield text
 
 
+_HEREDOC = re.compile(r"(?<!<)<<(?!<)(-?)\s*(?:'([^']+)'|\"([^\"]+)\"|\\?([A-Za-z_][A-Za-z0-9_]*))")
+
+
+def _without_heredoc_bodies(command: str) -> str:
+    """The command with its heredoc bodies removed, unless a shell reads them.
+
+    A body is the consumer's input, not shell: Python source, a file's
+    contents, a prompt. Tokenising it as shell is what turned an apostrophe in
+    a comment, or a triple-quoted docstring, into an "unbalanced quote"
+    refusal of a command that was fine -- and the refusal told the model not
+    to try another way, so the install it was doing simply stopped. The
+    ``<<TAG`` operator itself stays, so the line still parses. A body fed to
+    a shell (``bash <<EOF``) IS shell and is kept for the matchers to read.
+    """
+    lines = command.split("\n")
+    out: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        out.append(line)
+        index += 1
+        for match in _HEREDOC.finditer(line):
+            strip_tabs = match.group(1) == "-"
+            delimiter = match.group(2) or match.group(3) or match.group(4)
+            head = re.split(r"&&|\|\||[;|]", line[: match.start()])[-1]
+            shell_reads_it = any(PurePath(token).name in _SHELL_COMMAND_WRAPPERS for token in head.split())
+            end = index
+            while end < len(lines):
+                candidate = lines[end].rstrip("\r")
+                if (candidate.lstrip("\t") if strip_tabs else candidate) == delimiter:
+                    break
+                end += 1
+            if shell_reads_it:
+                out.extend(lines[index:end])
+            if end < len(lines):
+                out.append(lines[end])
+                end += 1
+            index = end
+    return "\n".join(out)
+
+
 def executable_text(command: str) -> str:
-    """The command with its comments removed: what the shell would run.
+    """The command with its comments and heredoc bodies removed: what the shell would run.
 
     Every safety check reads this rather than the raw text, so a comment cannot
     decide the outcome in either direction -- it cannot break the parse of code
@@ -258,7 +299,7 @@ def executable_text(command: str) -> str:
     still refuses it -- a well-formed comment does not license a command that
     cannot be parsed.
     """
-
+    command = _without_heredoc_bodies(command)
     out: list[str] = []
     quote = ""
     index = 0
@@ -926,9 +967,10 @@ sandbox's job, not the classifier's.
 class ShellCommandPolicy:
     """Apply hard-deny and approval rules in their required precedence order."""
 
-    def __init__(self, *, deny_patterns: list[str]) -> None:
+    def __init__(self, *, deny_patterns: list[str], allow_destructive_commands: bool = False) -> None:
         # Compile once because every direct shell execution crosses this policy.
         self._deny_patterns = tuple(re.compile(pattern, re.IGNORECASE) for pattern in deny_patterns)
+        self._allow_destructive_commands = allow_destructive_commands
         # Deletion is built in and marked as contained: a sandbox really does hold
         # it, so a sandboxed turn does not have to ask about it.
         self._approval_matchers: list[tuple[str, ApprovalMatcher, bool]] = [
@@ -951,6 +993,9 @@ class ShellCommandPolicy:
         bad pattern rejects the edit instead of leaving a half-armed policy.
         """
         self._deny_patterns = tuple(re.compile(pattern, re.IGNORECASE) for pattern in deny_patterns)
+
+    def set_allow_destructive_commands(self, allowed: bool) -> None:
+        self._allow_destructive_commands = bool(allowed)
 
     def register_approval_matcher(self, name: str, matcher: ApprovalMatcher, *, escapes_sandbox: bool = True) -> None:
         """Extend approval classification with a named command-family matcher.
@@ -1026,11 +1071,13 @@ class ShellCommandPolicy:
             return PolicyOutcome(CommandDecision.HARD_DENY, "deny_pattern")
         try:
             if not sandboxed:
-                if _matches_recursive_delete(executable):
+                if not self._allow_destructive_commands and _matches_recursive_delete(executable):
                     return PolicyOutcome(CommandDecision.HARD_DENY, "recursive_delete")
                 if _matches_system_power_command(executable):
                     return PolicyOutcome(CommandDecision.HARD_DENY, "system_power")
             for name, matcher, escapes in self._approval_matchers:
+                if self._allow_destructive_commands and name == "delete_command":
+                    continue
                 if sandboxed and not escapes:
                     continue
                 if matcher(executable):
