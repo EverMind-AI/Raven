@@ -1769,6 +1769,7 @@ export interface IdentityRecord {
   orphan?: Orphan;
   schemaVersion?: Schemaversion;
   exitedAt?: Exitedat;
+  sessionKey?: string | null;
 }
 export interface RuntimeInfo {
   runtimeId?: Runtimeid1;
@@ -3939,6 +3940,7 @@ export interface TerminalSendParams {
   require_ack?: RequireAck;
   source_handle?: SourceHandle;
   session_id?: SessionId2;
+  force?: boolean;
 }
 export interface TerminalSendResult {
   send: TerminalDeliveryResult;
@@ -3987,6 +3989,7 @@ export interface AgentsRegisterParams {
   task_ref?: TaskRef;
   description?: Description1;
   aliases?: Aliases1;
+  session_key?: string | null;
 }
 export interface AgentsRegisterResult {
   _meta: RuntimeInfo;
