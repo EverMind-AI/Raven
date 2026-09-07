@@ -191,6 +191,19 @@ TWIN_DRFLOW_EXCEPTIONS = {
     "toolsAllowlist": "tools.disabledTools; the trunk's FlowConfig retires the key",
 }
 
+#: Keys both twins write and deliberately disagree on, with the reason. Unlike the table
+#: above these must be PRESENT in both and UNEQUAL, so an entry cannot outlive the
+#: divergence it records: when the fork catches up, this test reddens and the row goes.
+TWIN_DRFLOW_DIVERGED = {
+    "version": (
+        "the trunk product's flow now carries the numeric-discipline rule in its deep "
+        "report clause and in its reviewer rubric, and the fork's does not. Two "
+        "distributions may not wear one label, so the trunk takes the next suffix; the "
+        "fork's own label stays correct for the fork. Nothing is retired - "
+        "SUPERSEDED_PROFILES is pinned to the fork's table and the fork's label is live"
+    ),
+}
+
 
 def test_the_flow_slice_is_the_vendored_twins_drflow_verbatim():
     """Two launchers, one product: the trunk slice must be the fork's ``drFlow``.
@@ -206,11 +219,68 @@ def test_the_flow_slice_is_the_vendored_twins_drflow_verbatim():
     """
     fork = json.loads((REPO / "subagents" / "raven-research" / "config.json").read_text())["drFlow"]
     twin = json.loads((RUN_PY.parent / "config.json").read_text())["plugins"]["config"]["research-flow"]
-    expected = {k: v for k, v in fork.items() if k not in TWIN_DRFLOW_EXCEPTIONS}
+    skip = set(TWIN_DRFLOW_EXCEPTIONS) | set(TWIN_DRFLOW_DIVERGED)
+    expected = {k: v for k, v in fork.items() if k not in skip}
     for key in TWIN_DRFLOW_EXCEPTIONS:
         assert key in fork, f"{key} left the fork config; drop it from TWIN_DRFLOW_EXCEPTIONS"
         assert key not in twin, f"{key} is carried by {TWIN_DRFLOW_EXCEPTIONS[key]}, not by this slice"
-    assert twin == expected
+    for key, reason in TWIN_DRFLOW_DIVERGED.items():
+        assert key in fork and key in twin, f"{key} is not written by both twins; drop it from the table"
+        assert twin[key] != fork[key], f"{key} agrees again: drop it from TWIN_DRFLOW_DIVERGED ({reason})"
+    assert {k: v for k, v in twin.items() if k not in skip} == expected
+
+
+def test_the_products_own_label_still_loads_on_this_build():
+    """The label the product ships is a live one, not a refused one.
+
+    ``FlowConfig`` rejects a superseded profile by its whole name and a superseded base by
+    its prefix, and the product's label is hand-written in ``config.json`` rather than
+    taken from the field default - so the one thing a suffix move can do is make the
+    product refuse to launch. Read through ``from_slice``, the loader the plugin uses.
+    """
+    sys.path.insert(0, str(RUN_PY.parent / "plugins" / "research-flow"))
+    from research_flow.config import FlowConfig
+
+    slice_ = json.loads((RUN_PY.parent / "config.json").read_text())["plugins"]["config"]["research-flow"]
+    cfg = FlowConfig.from_slice(slice_)
+    assert cfg.version == slice_["version"]
+    assert cfg.version.split("-", 1)[0] not in FlowConfig._SUPERSEDED_VERSIONS
+    assert cfg.version not in FlowConfig._SUPERSEDED_PROFILES
+
+
+def test_the_label_this_product_left_behind_is_refused_and_names_its_successor():
+    """A suffix move only means something if the old label stops loading here.
+
+    The mirrored table cannot carry this one: it is held equal to the fork's, and the fork
+    must go on accepting `-derive` because the fork's own distribution did not change. So
+    the retirement lives in the product's own table, and without it a config still stamped
+    with the old suffix would load clean and run the new distribution under the old name -
+    the mislabelling the whole-profile check exists to prevent.
+    """
+    sys.path.insert(0, str(RUN_PY.parent / "plugins" / "research-flow"))
+    from research_flow.config import PRODUCT_SUPERSEDED_PROFILES, SUPERSEDED_PROFILES, FlowConfig
+
+    retired = "dr@3.5-filetools-askuser-derive"
+    assert retired in PRODUCT_SUPERSEDED_PROFILES
+    # And not in the mirrored one, which the parity test holds equal to the fork's.
+    assert retired not in SUPERSEDED_PROFILES
+
+    with pytest.raises(ValueError) as excinfo:
+        FlowConfig(enabled=True, version=retired)
+    assert PRODUCT_SUPERSEDED_PROFILES[retired] in str(excinfo.value)
+
+    # A disabled flow still loads: the label describes a distribution nothing will run.
+    assert FlowConfig(enabled=False, version=retired).version == retired
+
+
+def test_every_retirement_this_product_declares_names_a_label_it_can_load():
+    """A successor that is itself refused would leave an operator with nowhere to go."""
+    sys.path.insert(0, str(RUN_PY.parent / "plugins" / "research-flow"))
+    from research_flow.config import PRODUCT_SUPERSEDED_PROFILES, FlowConfig
+
+    for retired, successor in PRODUCT_SUPERSEDED_PROFILES.items():
+        assert successor != retired
+        assert FlowConfig(enabled=True, version=successor).version == successor
 
 
 def test_the_contract_is_seeded_beside_the_identity_once(grounded, tmp_path):
@@ -690,3 +760,33 @@ def test_the_vendor_slots_are_the_trunks_own_vendors(launcher):
     # fails at the first call, refusing one it has withholds a working one.
     assert launcher.SEARCH_VENDORS == set(SEARCH_PROVIDERS)
     assert launcher.FETCH_VENDORS == set(FETCH_PROVIDERS)
+
+
+def test_a_label_two_retirements_old_is_sent_to_the_end_of_the_chain():
+    """The fork's table sends `-askuser` to `-derive`; this product sends `-derive` on.
+
+    Naming the first hop would tell an operator to move to a label that also refuses,
+    which is a worse answer than the one they arrived with.
+    """
+    sys.path.insert(0, str(RUN_PY.parent / "plugins" / "research-flow"))
+    from research_flow.config import PRODUCT_SUPERSEDED_PROFILES, SUPERSEDED_PROFILES, FlowConfig
+
+    two_hops = [old for old, mid in SUPERSEDED_PROFILES.items() if mid in PRODUCT_SUPERSEDED_PROFILES]
+    assert two_hops, "no label is retired twice; this test has nothing to hold"
+    for old in two_hops:
+        end = PRODUCT_SUPERSEDED_PROFILES[SUPERSEDED_PROFILES[old]]
+        assert FlowConfig._resolve_successor(old) == end
+        with pytest.raises(ValueError) as excinfo:
+            FlowConfig(enabled=True, version=old)
+        assert end in str(excinfo.value)
+
+
+def test_a_table_that_points_back_at_itself_stops_rather_than_hangs():
+    sys.path.insert(0, str(RUN_PY.parent / "plugins" / "research-flow"))
+    from research_flow.config import FlowConfig
+
+    class _Cyclic(FlowConfig):
+        _SUPERSEDED_PROFILES = {"dr@9.0-a": "dr@9.0-b", "dr@9.0-b": "dr@9.0-a"}
+        _PRODUCT_SUPERSEDED_PROFILES: dict[str, str] = {}
+
+    assert _Cyclic._resolve_successor("dr@9.0-a") == "dr@9.0-b"
