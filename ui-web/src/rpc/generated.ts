@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 161 methods, 90 component schemas.
+// 162 methods, 90 component schemas.
 
 /* eslint-disable */
 /**
@@ -702,6 +702,18 @@ export interface ModelOptionProvider {
   auth_type: string;
   key_env?: string;
   models: string[];
+  /**
+   * Effective API protocol keyed by model id.
+   */
+  protocols?: {
+    [k: string]: string;
+  };
+  /**
+   * Explicit user protocol overrides keyed by model id.
+   */
+  protocol_overrides?: {
+    [k: string]: string;
+  };
   total_models: number;
   needs_api_base: boolean;
   warning: string;
@@ -1740,6 +1752,14 @@ export interface ModelOptionsResult {
   model: string;
   provider: string;
   providers: ModelOptionProvider[];
+}
+export interface ModelSetProtocolParams {
+  slug: string;
+  model: string;
+  protocol: 'auto' | 'chat' | 'responses' | 'anthropic';
+}
+export interface ModelSetProtocolResult {
+  provider: ModelOptionProvider;
 }
 export interface ModelSaveKeyParams {
   slug: string;
@@ -3590,6 +3610,7 @@ export interface RpcMethods {
   'skill.pin': { params: SkillPinParams; result: SkillPinResult };
   'skill.unpin': { params: SkillUnpinParams; result: SkillUnpinResult };
   'model.options': { params: ModelOptionsParams; result: ModelOptionsResult };
+  'model.set_protocol': { params: ModelSetProtocolParams; result: ModelSetProtocolResult };
   'model.save_key': { params: ModelSaveKeyParams; result: ModelSaveKeyResult };
   'model.disconnect': { params: ModelDisconnectParams; result: ModelDisconnectResult };
   'model.add_model': { params: ModelAddModelParams; result: ModelAddModelResult };
@@ -3805,6 +3826,7 @@ export const RPC_METHODS = [
   "model.remove_endpoint",
   "model.remove_model",
   "model.save_key",
+  "model.set_protocol",
   "playbooks.get",
   "playbooks.list",
   "plug.auth",

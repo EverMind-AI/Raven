@@ -42,6 +42,7 @@ def test_the_settings_whitelist_is_exactly_this_set() -> None:
     a line that rode in with something else."""
     assert set(_SETTINGS_SIMPLE_KEYS) == {
         "tools.exec.timeout",
+        "tools.exec.allowDestructiveCommands",
         "tools.web.search.apiKey",
         "tools.web.jinaApiKey",
         "tools.web.search.provider",

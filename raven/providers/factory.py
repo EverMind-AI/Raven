@@ -95,6 +95,7 @@ def make_provider(config: Config, model: str | None = None):
     provider_name = config.get_provider_name(model)
     p = config.get_provider(model)
 
+    from raven.providers.protocol import effective_protocol
     from raven.providers.registry import endpoints_unsupported_reason, find_by_name
 
     spec = find_by_name(provider_name) if provider_name else None
@@ -104,6 +105,8 @@ def make_provider(config: Config, model: str | None = None):
         reason = endpoints_unsupported_reason(provider_name)
         if reason:
             raise MissingCredentialsError(reason, provider=provider_name or "")
+
+    protocol = effective_protocol(p, model)
 
     if client == "codex":
         provider = OpenAICodexProvider(default_model=model)
@@ -121,6 +124,36 @@ def make_provider(config: Config, model: str | None = None):
             default_model=model,
             deployment=getattr(p, "deployment", "") or "",
             api_version=getattr(p, "api_version", "") or "2024-10-21",
+        )
+    elif protocol == "responses":
+        from raven.providers.openai_responses_provider import OpenAIResponsesProvider
+
+        if p and p.endpoints:
+            raise MissingCredentialsError(
+                "protocol overrides do not support provider endpoints yet", provider=provider_name or ""
+            )
+        provider = OpenAIResponsesProvider(
+            api_key=p.effective_api_key if p else None,
+            api_base=config.get_api_base(model),
+            default_model=model,
+            extra_headers=p.extra_headers if p else None,
+            provider_name=provider_name,
+            model_overrides=config.agents.defaults.model_overrides,
+        )
+    elif protocol == "anthropic":
+        from raven.providers.anthropic_messages_provider import AnthropicMessagesProvider
+
+        if p and p.endpoints:
+            raise MissingCredentialsError(
+                "protocol overrides do not support provider endpoints yet", provider=provider_name or ""
+            )
+        provider = AnthropicMessagesProvider(
+            api_key=p.effective_api_key if p else None,
+            api_base=config.get_api_base(model),
+            default_model=model,
+            extra_headers=p.extra_headers if p else None,
+            provider_name=provider_name,
+            model_overrides=config.agents.defaults.model_overrides,
         )
     else:
         from raven.providers.capabilities import wire_overrides

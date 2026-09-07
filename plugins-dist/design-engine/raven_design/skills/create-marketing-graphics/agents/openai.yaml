@@ -1,0 +1,4 @@
+interface:
+  display_name: "海报与营销图形"
+  short_description: "为活动、促销、品牌 campaign 制作以假乱真的海报平面稿与成套系列、社媒多尺寸、展示物"
+  default_prompt: "使用 $create-marketing-graphics 制作海报与营销图形：先在 HTML/CSS 画板上做一张过判据的定调帧，生图只出背景与主视觉素材、文字全部活字，再从母版派生系列与多尺寸，交付成品平面稿与可重出图的母版文件夹。"

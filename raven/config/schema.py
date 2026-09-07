@@ -304,6 +304,10 @@ class ProviderConfig(Base):
 
     api_key: str = ""
     api_base: str | None = None
+    # Optional wire default. When omitted, GPT models use Responses and Claude
+    # models use Anthropic Messages; model_protocols can override either rule.
+    protocol: Literal["chat", "responses", "anthropic"] | None = None
+    model_protocols: dict[str, Literal["chat", "responses", "anthropic"]] = Field(default_factory=dict)
     # Custom headers (e.g. APP-Code for AiHubMix) -- can carry a secret, so
     # display faces redact the values (keys stay visible).
     extra_headers: dict[str, str] | None = Field(default=None, json_schema_extra={"secret": True})
@@ -340,6 +344,22 @@ class ProviderConfig(Base):
     # `models` -- that list already lets a model be added, and what was missing
     # was a way to describe one, so no config has to be rewritten to get it.
     model_overlay: dict[str, ModelOverlay] = Field(default_factory=dict)
+
+    @field_validator("protocol", mode="before")
+    @classmethod
+    def _normalize_protocol(cls, value: Any) -> Any:
+        from raven.providers.protocol import normalize_protocol
+
+        return normalize_protocol(value)
+
+    @field_validator("model_protocols", mode="before")
+    @classmethod
+    def _normalize_model_protocols(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        from raven.providers.protocol import normalize_protocol
+
+        return {str(model): normalize_protocol(protocol) for model, protocol in value.items()}
 
     @property
     def effective_api_key(self) -> str:
@@ -681,6 +701,9 @@ class AcpModeConfig(Base):
     description: str = ""
     max_tool_iterations: int | None = None
     """``None`` inherits ``agents.defaults.maxToolIterations``."""
+    reasoning_effort: str | None = None
+    """``None`` inherits ``agents.defaults.reasoningEffort``; set, every call a
+    session in this mode makes asks the provider for this effort instead."""
     overlay: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -753,8 +776,11 @@ class GatewayConfig(Base):
 
     host: str = "0.0.0.0"
     port: int = 18790
-    user_pool: int = 4
-    system_pool: int = 2
+    user_pool: int = Field(default=4, ge=0)
+    """Concurrent user turns per process; 0 is unbounded. Read by the channel
+    gateway, ``raven serve``, the page and every ACP worker alike."""
+    system_pool: int = Field(default=2, ge=0)
+    """Concurrent proactive turns (cron, sentinel, sub-agent results); 0 is unbounded."""
     send_max_retries: int = 3
     # Seconds an in-flight turn may finish within on shutdown; 0.0 restores
     # cancel-immediately.
@@ -874,6 +900,7 @@ class ExecToolConfig(Base):
 
     timeout: int = 60
     path_append: str = ""
+    allow_destructive_commands: bool = False
     # Extra regex deny-patterns appended to ExecTool's built-in destructive-command
     # defaults. Empty by default. Operators (or eval harnesses running the agent
     # un-sandboxed) can add host-specific blocks, e.g. osascript / `open -a`.

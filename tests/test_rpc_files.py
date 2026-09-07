@@ -57,6 +57,36 @@ async def test_file_serves_a_workspace_file(client: TestClient, tmp_path: Path) 
     assert await r.text() == "# hi\n\n- one\n"
 
 
+async def test_file_relative_path_uses_the_session_workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = load_config()
+    cfg.tools.restrict_to_workspace = False
+    monkeypatch.setattr(files_module, "load_config", lambda: cfg)
+    session_root = tmp_path / "project"
+    session_root.mkdir()
+    (session_root / "notes.md").write_text("# session\n", encoding="utf-8")
+
+    class Loop:
+        def peek_session_workdir(self, session: str) -> Path:
+            assert session == "tui:session"
+            return session_root
+
+    monkeypatch.setenv("RAVEN_SERVE_TOKEN", TOKEN)
+    gateway = WsGateway()
+    server = TestServer(build_app(gateway, None, agent_loop_factory=lambda: Loop()))
+    client = TestClient(server)
+    await client.start_server()
+    try:
+        response = await client.get(
+            "/file",
+            params={"path": "notes.md", "session": "tui:session"},
+            headers=auth(),
+        )
+        assert response.status == 200
+        assert await response.text() == "# session\n"
+    finally:
+        await client.close()
+
+
 async def test_file_response_is_sandboxed(client: TestClient, tmp_path: Path) -> None:
     """HTML and SVG the agent produced must not run with the page's origin.
 

@@ -178,6 +178,8 @@ async def run_dag(
     origin: dict | None = None,
     control_reachable: "Callable[[], bool] | None" = None,
     released: asyncio.Event | None = None,
+    provider: Any = None,
+    model: str | None = None,
 ) -> DagRunResult:
     """Run a validated DAG, passing messages through files.
 
@@ -459,6 +461,8 @@ async def run_dag(
                         dependents=dependents,
                         adjudication_timeout_s=adjudication_timeout_s,
                         control_reachable=control_reachable,
+                        provider=provider,
+                        model=model,
                     )
                     for nids in groups.values()
                 ),
@@ -1056,6 +1060,8 @@ async def _run_group(
     dependents: dict[str, list[str]] | None = None,
     adjudication_timeout_s: float = 600.0,
     control_reachable: "Callable[[], bool] | None" = None,
+    provider: Any = None,
+    model: str | None = None,
 ) -> None:
     """Run one instance-group's nodes sequentially, in id order."""
     for nid in nids:
@@ -1095,6 +1101,8 @@ async def _run_group(
             dependents=dependents,
             adjudication_timeout_s=adjudication_timeout_s,
             control_reachable=control_reachable,
+            provider=provider,
+            model=model,
         )
 
 
@@ -1227,6 +1235,8 @@ async def _run_node(
     dependents: dict[str, list[str]] | None = None,
     adjudication_timeout_s: float = 600.0,
     control_reachable: "Callable[[], bool] | None" = None,
+    provider: Any = None,
+    model: str | None = None,
 ) -> None:
     """Render, dispatch to the node's backend, and record one node."""
     async with semaphore:
@@ -1342,6 +1352,12 @@ async def _run_node(
                             session_key=session_key,
                             instance=node.instance,
                             mode=node_mode,
+                            # The invoking turn's binding, when the tool resolved one:
+                            # a pooled ACP worker otherwise keeps whatever model it
+                            # was first launched with. Only when set, because a node
+                            # backend built for a test may take no such keywords.
+                            **({"provider": provider} if provider is not None else {}),
+                            **({"model": model} if model else {}),
                             **state_kwargs,
                         )
                     finally:

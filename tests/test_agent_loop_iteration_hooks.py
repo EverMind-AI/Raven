@@ -251,6 +251,25 @@ async def test_a_session_policy_caps_iterations_and_reaches_the_hooks(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_a_session_policy_pins_the_reasoning_effort_of_its_calls(tmp_path):
+    """A mode that asks for more thinking sets the effort of every provider call
+    the session's turn makes; a session without one leaves the provider's own."""
+    provider = _ScriptedProvider([_tool_call("list_dir", {"path": "."}), _text("done")])
+    loop = _loop(tmp_path, provider, [])
+    loop.set_session_policy("cli:c", mode="max", reasoning_effort="max")
+
+    await loop._process_message(_req())
+
+    assert len(provider.calls) == 2
+    assert all(call.get("reasoning_effort") == "max" for call in provider.calls)
+
+    other = _ScriptedProvider([_text("plain")])
+    quiet = _loop(tmp_path, other, [])
+    await quiet._process_message(_req())
+    assert "reasoning_effort" not in other.calls[0]
+
+
+@pytest.mark.asyncio
 async def test_an_after_iteration_note_lands_on_the_last_message_before_the_next_call(tmp_path):
     class Nudge(AgentHook):
         async def after_iteration(self, ctx):

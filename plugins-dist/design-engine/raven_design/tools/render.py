@@ -72,6 +72,16 @@ class _RenderTool(Tool):
                 "additionalProperties": False,
             },
             "asset_root": _path_schema("Optional root for local HTML or SVG assets; the source must be inside it."),
+            "scale": {
+                "type": "number",
+                "minimum": 1,
+                "maximum": 4,
+                "default": 1,
+                "description": (
+                    "Device scale factor for HTML/SVG screen captures: 2 doubles the pixel "
+                    "size of preview/ and screen images. The PDF stays vector; scaled viewport must fit max_side_pixels."
+                ),
+            },
             "actions": {
                 "type": "array",
                 "minItems": 1,
@@ -168,6 +178,7 @@ class RenderFileTool(_RenderTool):
         viewport: dict[str, int] | None = None,
         asset_root: str | None = None,
         actions: list[dict[str, Any]] | None = None,
+        scale: float = 1.0,
     ) -> str | ToolResult:
         duration = (
             self.default_capture_duration_seconds if capture_duration_seconds is None else capture_duration_seconds
@@ -187,6 +198,7 @@ class RenderFileTool(_RenderTool):
                     viewport_height=height,
                     asset_root=Path(asset_root) if asset_root else None,
                     actions=tuple(actions) if actions else None,
+                    scale=scale,
                 )
             )
             return json.dumps(result, separators=(",", ":"), ensure_ascii=False)
@@ -242,6 +254,7 @@ class PreviewFileTool(_RenderTool):
         viewport: dict[str, int] | None = None,
         asset_root: str | None = None,
         actions: list[dict[str, Any]] | None = None,
+        scale: float = 1.0,
     ) -> str | ToolResult:
         duration = (
             self.default_capture_duration_seconds if capture_duration_seconds is None else capture_duration_seconds
@@ -259,6 +272,7 @@ class PreviewFileTool(_RenderTool):
                 viewport_height=height,
                 asset_root=Path(asset_root) if asset_root else None,
                 actions=tuple(actions) if actions else None,
+                scale=scale,
             )
             metadata = next(
                 (

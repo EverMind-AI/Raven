@@ -41,6 +41,32 @@ def test_a_refusal_names_the_rule_that_refused_it(command: str, reason: str, pol
     assert outcome.reason_code == reason
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        'cd /w && python3 - <<\'PY\'\n# it\'s a comment, with an apostrophe\ns = """doc"""\nprint(s)\nPY',
+        'cat > tools-subset.py <<\'PY\'\n#!/usr/bin/env python3\n"""Rebuild the font."""\nname = "it\'s"\nPY\npython3 tools-subset.py',
+        "cat > notes.txt <<EOF\nmkfs is a word here, not a command\nEOF",
+    ],
+)
+def test_a_heredoc_body_is_the_consumers_input_not_shell(command: str, policy: ShellCommandPolicy) -> None:
+    """The body of a heredoc is Python, a file, a prompt -- whatever the command
+    reads. Tokenised as shell, an apostrophe in a comment or a triple-quoted
+    docstring was an "unbalanced quote", and a whole class of scripted installs
+    was refused with an instruction not to try another way."""
+    outcome = policy.classify(command)
+
+    assert outcome.decision is CommandDecision.ALLOW, outcome
+
+
+def test_a_heredoc_a_shell_reads_is_still_shell(policy: ShellCommandPolicy) -> None:
+    """`bash <<EOF` hands the body to a shell, so the matchers keep reading it."""
+    outcome = policy.classify("bash <<'EOF'\nrm -rf /tmp/tree\nEOF")
+
+    assert outcome.decision is CommandDecision.HARD_DENY
+    assert outcome.reason_code == "recursive_delete"
+
+
 def test_an_allowed_command_has_no_reason_to_give(policy: ShellCommandPolicy) -> None:
     outcome = policy.classify("ls -la")
 
@@ -102,6 +128,22 @@ async def test_the_refusal_the_user_reads_says_which_rule_fired(command, phrase,
     assert not result.ok
     assert phrase in result.model_text, result.model_text
     assert "policy evaluation failed" not in result.model_text
+
+
+async def test_a_parse_refusal_says_how_to_fix_it_rather_than_to_give_up(tool: ExecTool) -> None:
+    """The stop instruction closes the rm-in-Python loophole; a quote nobody
+    closed is not that loophole, and telling the model not to try another way
+    is what ended installs half-done."""
+    from raven.contracts.tool import Continuation
+
+    result = await tool.execute(command="echo 'unterminated")
+
+    assert not result.ok
+    assert "write the script to a file" in result.model_text
+    assert "Do not retry" not in result.model_text
+    # And the turn goes on: the model gets to fix the command and try again.
+    assert result.continuation is Continuation.CONTINUE
+    assert result.blocks_call is False and result.retryable is True
 
 
 async def test_an_unknown_reason_falls_back_rather_than_guessing(tool: ExecTool, monkeypatch) -> None:

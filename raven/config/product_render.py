@@ -150,7 +150,10 @@ def inherit_llm(config: dict, host: dict) -> str:
             defaults[key] = host_defaults[key]
     if parent_model := os.environ.get("RAVEN_PARENT_MODEL", "").strip():
         defaults["model"] = parent_model
-        defaults["provider"] = ""
+        # Re-derived below when the dispatcher could not name the provider: a
+        # LiteLLM-backed parent carries no ``provider_name``, and an empty
+        # string here launched a child with no provider at all.
+        defaults["provider"] = os.environ.get("RAVEN_PARENT_PROVIDER", "").strip()
     if parent_effort := os.environ.get("RAVEN_PARENT_REASONING_EFFORT", "").strip():
         defaults["reasoningEffort"] = parent_effort
     if not defaults.get("provider"):
@@ -159,10 +162,40 @@ def inherit_llm(config: dict, host: dict) -> str:
             if isinstance(block, dict) and model in (block.get("models") or []):
                 defaults["provider"] = name
                 break
+        else:
+            # A stored model id leads with its provider (``openrouter/x``); a
+            # model listed under none of the blocks still names one that way.
+            # Failing that, the host's own choice beats launching with none.
+            from raven.providers.registry import split_model_id
+
+            head = split_model_id(model)[0]
+            defaults["provider"] = head if head in providers else host_defaults.get("provider", "")
+    if parent_protocol := os.environ.get("RAVEN_PARENT_PROTOCOL", "").strip():
+        provider = providers.get(defaults.get("provider") or "")
+        if isinstance(provider, dict) and parent_model:
+            overrides = provider.setdefault("modelProtocols", {})
+            if isinstance(overrides, dict):
+                overrides[parent_model] = parent_protocol
     return (
         f"provider={defaults.get('provider')} model={defaults.get('model')} "
         f"reasoning_effort={defaults.get('reasoningEffort')}"
     )
+
+
+def inherit_exec_policy(config: dict, host: dict) -> None:
+    """Carry the host's deletion-safety choice into the product's config.
+
+    ``tools.exec.allowDestructiveCommands`` is set at the host (the page's own
+    toggle) by a person who expects every agent on this machine to follow it;
+    without this the design worker kept refusing ``rm -rf`` after the toggle
+    went on. Only a value the host states travels, and never over one the
+    product's own config already states.
+    """
+    host_exec = (host.get("tools") or {}).get("exec") or {}
+    if "allowDestructiveCommands" not in host_exec:
+        return
+    exec_section = config.setdefault("tools", {}).setdefault("exec", {})
+    exec_section.setdefault("allowDestructiveCommands", host_exec["allowDestructiveCommands"])
 
 
 def product_state_root(product: str, *, override: str | None = None) -> Path:
