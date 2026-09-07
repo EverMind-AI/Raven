@@ -32,7 +32,7 @@ moves the result more than any prompt change in this repo:
 | | |
 |---|---|
 | Mode | `fast` / `deep` / `ultra`. Comparing against a competitor's top tier means `ultra`; the default has been `fast` since 2026-08-27 and bounds a run at 20 flow iterations |
-| Flow label | `drFlow.version`, e.g. `dr@3.5-filetools-askuser-derive`. A prompt change moves the suffix, so the label is what makes two runs the same experiment |
+| Flow label | `drFlow.version`, e.g. `dr@3.7-filetools-askuser-derive-numeric-cite-rank`. A prompt change moves the suffix, so the label is what makes two runs the same experiment |
 | Model | the resolved provider and model, not the pinned one: with no key here the agent inherits the host's LLM, and the launcher prints which on stderr |
 | Wall clock | from the trail's own `Nm of research` |
 | Brief | verbatim, including any of our own results handed to the model as input |

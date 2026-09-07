@@ -526,6 +526,7 @@ def build_chain(
                 FetchGate(
                     k=cfg.fetch_gate.k,
                     release_after_failed_fetches=cfg.fetch_gate.release_after_failed_fetches,
+                    release_after_closed_iterations=cfg.fetch_gate.release_after_closed_iterations,
                 )
             )
         )
