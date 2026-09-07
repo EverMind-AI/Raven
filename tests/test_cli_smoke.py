@@ -202,6 +202,7 @@ REGISTERED_COMMAND_NAMES = {
     "sessions",
     "skill",
     "status",
+    "terminal",
     "tracing",
     "trajectory",
     "tui",
