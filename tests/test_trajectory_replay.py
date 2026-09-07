@@ -577,6 +577,25 @@ async def test_run_replay_drives_the_loop_and_executes_nothing(tmp_path, monkeyp
     assert trace.enabled(), "suppression must not outlive the replay"
 
 
+async def test_run_replay_leaves_no_skill_watcher_threads(tmp_path) -> None:
+    """The loop's ContextBuilder starts a skill file watcher; a replay must
+    stop it, or repeated probes leak daemon threads that crash the process at
+    interpreter shutdown (found by PR review on the completeness probe)."""
+    import threading
+
+    bundle = _make_bundle(
+        tmp_path,
+        llm_calls=[(None, _llm_output(content="done"))],
+        turns=[{"content": "go", "channel": "cli", "chat_id": "direct"}],
+    )
+
+    report = await run_replay(bundle, mode="warn")
+
+    assert report.complete
+    watchers = [t for t in threading.enumerate() if t.name == "SkillFileWatcher" and t.is_alive()]
+    assert watchers == [], "a replay must not leave skill watcher threads running"
+
+
 async def test_run_replay_flags_unconsumed_recording(tmp_path) -> None:
     """A harness that never asks for the rest of the recording diverged too:
     strict halts (exit path), warn records a non-fatal divergence."""
@@ -813,6 +832,7 @@ async def test_end_to_end_record_save_replay_with_real_tracer(tmp_path, monkeypa
             max_iterations=5,
             restrict_to_workspace=True,
         )
+        loop.context.skills.stop_file_watcher()
         loop.tools.register(_MarkerTool(marker))
         # Source identity and session key agree, as they do in every real
         # channel turn (the session key defaults to "<channel>:<chat_id>").
@@ -870,6 +890,7 @@ async def test_end_to_end_replay_after_harness_change_diverges(tmp_path, monkeyp
             max_iterations=5,
             restrict_to_workspace=True,
         )
+        loop.context.skills.stop_file_watcher()
         loop.tools.register(_MarkerTool(tmp_path / "marker"))
         await loop._process_message(
             TurnRequest(
@@ -924,6 +945,7 @@ async def test_end_to_end_streamed_recording_replays_through_the_stream_path(tmp
             max_iterations=5,
             restrict_to_workspace=True,
         )
+        loop.context.skills.stop_file_watcher()
         loop.tools.register(_MarkerTool(marker))
         streamed_tokens: list[str] = []
 
@@ -1011,6 +1033,7 @@ async def test_end_to_end_replay_restores_pre_attempt_history(tmp_path, monkeypa
             max_iterations=5,
             restrict_to_workspace=True,
         )
+        loop.context.skills.stop_file_watcher()
         loop.tools.register(_MarkerTool(marker))
 
         def req(text: str) -> TurnRequest:
@@ -1075,6 +1098,7 @@ async def test_end_to_end_replay_restores_history_when_first_input_repeats(tmp_p
             max_iterations=5,
             restrict_to_workspace=True,
         )
+        loop.context.skills.stop_file_watcher()
         loop.tools.register(_MarkerTool(marker))
 
         def req() -> TurnRequest:
