@@ -580,7 +580,8 @@ async def test_run_replay_drives_the_loop_and_executes_nothing(tmp_path, monkeyp
 async def test_run_replay_leaves_no_skill_watcher_threads(tmp_path) -> None:
     """The loop's ContextBuilder starts a skill file watcher; a replay must
     stop it, or repeated probes leak daemon threads that crash the process at
-    interpreter shutdown (found by PR review on the completeness probe)."""
+    interpreter shutdown. Measured as a delta: other suites in the same
+    process may hold their own watcher threads."""
     import threading
 
     bundle = _make_bundle(
@@ -588,12 +589,15 @@ async def test_run_replay_leaves_no_skill_watcher_threads(tmp_path) -> None:
         llm_calls=[(None, _llm_output(content="done"))],
         turns=[{"content": "go", "channel": "cli", "chat_id": "direct"}],
     )
+    before = {t.ident for t in threading.enumerate() if t.name == "SkillFileWatcher"}
 
     report = await run_replay(bundle, mode="warn")
 
     assert report.complete
-    watchers = [t for t in threading.enumerate() if t.name == "SkillFileWatcher" and t.is_alive()]
-    assert watchers == [], "a replay must not leave skill watcher threads running"
+    leaked = [
+        t for t in threading.enumerate() if t.name == "SkillFileWatcher" and t.is_alive() and t.ident not in before
+    ]
+    assert leaked == [], "a replay must not leave new skill watcher threads running"
 
 
 async def test_run_replay_flags_unconsumed_recording(tmp_path) -> None:

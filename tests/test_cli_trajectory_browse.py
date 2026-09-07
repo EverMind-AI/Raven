@@ -2227,7 +2227,7 @@ def test_bug_report_review_same_line_double_hit_keeps_positions(
 
 def test_grouped_occurrences_keep_every_span_for_identical_windows(tmp_path):
     """Two hits on a just-over-300 line render the same windowed text; the
-    merged group must keep both highlight spans (review-verified trap)."""
+    merged group must keep both highlight spans."""
     from raven.trajectory import redact as tredact
     from raven.trajectory import review as treview
 

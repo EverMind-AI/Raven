@@ -1043,7 +1043,7 @@ def test_private_key_flow_packages_with_notices(state, workspace):
 def test_mixed_decisions_recorded_and_replaced_token_scrubbed(state, workspace, tmp_path):
     """Adjacent kept/redacted tokens: the kept finding's summary window covers
     the redacted neighbor, so the package metadata must carry the filtered
-    spelling everywhere (the review-verified reintroduction trap)."""
+    spelling everywhere."""
     keep = "qW3eR5tY7uI9oP1aS2dF4gH6"
     drop = "zX8cV6bN4mL2kJ9hG7fD5sQ3"
 
@@ -1078,7 +1078,7 @@ def test_mixed_decisions_recorded_and_replaced_token_scrubbed(state, workspace, 
 
 
 def test_redacted_value_in_artifact_filename_never_reaches_the_package(state, workspace, tmp_path):
-    """The reviewed-verified leak: replacing a token rewrites its references,
+    """Replacing a token rewrites its references,
     but the artifact file itself would keep the name and ship as a tar member.
     Member names and contents must both be clean after the rename."""
     artifact = tmp_path / f"{_ENTROPY_TOKEN}.json"

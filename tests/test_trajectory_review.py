@@ -233,7 +233,7 @@ def test_apply_mixed_decisions_replace_and_keep(tmp_path):
 
 
 def test_apply_adjacent_kept_and_redacted_do_not_leak_via_summary(tmp_path):
-    """The review-verified trap: samples copy neighbors verbatim, so the
+    """Samples copy neighbors verbatim, so the
     rewritten summary must not carry the redacted neighbor's plaintext."""
     tree = tmp_path / "trajectory"
     _write(tree, "spans.jsonl", f"{TOKEN_A} {TOKEN_B}")
