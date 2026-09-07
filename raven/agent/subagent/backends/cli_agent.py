@@ -24,7 +24,7 @@ import signal
 import tempfile
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable
 from contextlib import nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -32,7 +32,6 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.agent.subagent import activity
-from raven.agent.subagent.attachments import with_attachment_note
 from raven.agent.subagent.backends.base import bounded_delta, clamp_output
 from raven.agent.subagent.backends.env import host_identity_env, login_shell_env
 from raven.agent.subagent.backends.observability import (
@@ -55,7 +54,6 @@ from raven.agent.subagent.mcp_grant import (
     raven_cli_target,
     resolve_grant,
 )
-from raven.spine.message import Media
 
 if TYPE_CHECKING:
     from raven.contracts.llm_provider import LLMProvider
@@ -523,9 +521,7 @@ class CliAgentBackend:
         mcp_grant: McpGrant | None = None,
         mode: str | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
-        media: Sequence[Media] = (),
     ) -> str:
-        task = with_attachment_note(task, media)
         runtime_env: dict[str, str] = {}
         if model:
             runtime_env["RAVEN_PARENT_MODEL"] = model

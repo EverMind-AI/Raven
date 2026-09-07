@@ -247,3 +247,37 @@ async def test_a_campaign_may_declare_that_its_spend_is_occupancy():
     ex, _ = _executor([(0, out)], budget=Budget(unit="node-minute", total=500, overlap=SHARED))
 
     assert await ex.spent_minutes() == pytest.approx(80.0)
+
+
+@pytest.mark.asyncio
+async def test_a_run_wider_than_declared_is_reported_and_billed_as_measured(monkeypatch):
+    """The gate admitted 4 cores; decomposePar produced 8. Billing follows the
+    measurement (the box was busy that wide); the disagreement is worth a line,
+    because the declaration is what every other job's admission trusted."""
+    ex, _ = _executor([(0, ""), (0, "")])
+    ex._declared_width["caseA"] = 4.0
+    ex._cores["caseA"] = 8
+
+    async def _done(idem):
+        return JobStatus.SUCCEEDED
+
+    monkeypatch.setattr(ex, "_status", _done)
+    res = await ex.fetch_result(JobHandle("openfoam", "ops-caseA"))
+
+    assert res.output["cores"] == 8 and res.output["cores_declared"] == 4
+    assert res.metrics == {"cores_declared": 4, "cores_measured": 8}
+
+
+@pytest.mark.asyncio
+async def test_a_run_as_wide_as_declared_reports_no_disagreement(monkeypatch):
+    ex, _ = _executor([(0, ""), (0, "")])
+    ex._declared_width["caseA"] = 8.0
+    ex._cores["caseA"] = 8
+
+    async def _done(idem):
+        return JobStatus.SUCCEEDED
+
+    monkeypatch.setattr(ex, "_status", _done)
+    res = await ex.fetch_result(JobHandle("openfoam", "ops-caseA"))
+
+    assert res.output["cores_declared"] == 8 and res.metrics == {}

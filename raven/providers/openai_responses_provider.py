@@ -119,14 +119,7 @@ class OpenAIResponsesProvider(LLMProvider):
                     if response.status_code >= 400:
                         detail = (await response.aread()).decode("utf-8", "replace")
                         raise RuntimeError(f"HTTP {response.status_code}: {detail[:2000]}")
-                    # The per-event watchdog runs on the stream-idle budget, not
-                    # the call budget: with llmCallTimeout 600 and
-                    # streamIdleTimeout 7 this adapter still waited 600 s on a
-                    # silent stream and the setting did nothing here (reviewed
-                    # 2026-09-07). getattr: a GenerationSettings from before the
-                    # field falls back to the call budget, as it always did.
-                    idle_timeout = getattr(self.generation, "stream_idle_timeout", None) or self.generation.timeout
-                    content, tool_calls, finish_reason = await _consume_sse(response, idle_timeout)
+                    content, tool_calls, finish_reason = await _consume_sse(response, self.generation.timeout)
             return LLMResponse(
                 content=content or None,
                 tool_calls=tool_calls,

@@ -293,3 +293,78 @@ def test_a_padded_id_is_blocking_rather_than_healthy_but_unselectable():
     )
 
     assert any(f.blocking and "whitespace" in f.text for f in faults)
+
+
+# ---- capacity: what a row hands out, read for admission ----
+
+
+def test_capacity_reads_gpus_then_the_device_count_then_cores_and_memory():
+    assert connections.capacity({"gpus": 8}) == {"gpus": 8}
+    assert connections.capacity(
+        {"kind": "gpu", "device": "2 x NVIDIA A800-SXM4-80GB", "cores": 128, "memory": "463 GB"}
+    ) == {
+        "gpus": 2,
+        "cores": 128,
+        "memory_gb": 463,
+    }
+    assert connections.capacity({"gpus": 4, "device": "2 x A800"})["gpus"] == 4, "the explicit field wins"
+    assert connections.capacity({"cores": 32, "memory": "1.5 TiB"}) == {"cores": 32, "memory_gb": 1536}
+    assert connections.capacity({"device": "NVIDIA A800", "memory": "lots"}) == {}, "nothing countable"
+    assert connections.capacity({"gpus": True, "cores": "12"}) == {}, "a bool or a string is not a count"
+
+
+def test_the_admission_unit_is_devices_before_cores_and_empty_for_a_legacy_row():
+    assert connections.resource_unit({"gpus": 2, "cores": 128}) == "gpus", "a GPU box's cores are not contended"
+    assert connections.resource_unit({"cores": 32}) == "cores"
+    assert connections.resource_unit({"concurrency": 1}) == "", "job count until the row says otherwise"
+
+
+def test_a_gpu_row_that_cannot_be_counted_is_told_and_a_bad_gpus_field_is_told():
+    said = [
+        str(p) for p in connections.row_problems({"id": "g", "display_name": "G", "kind": "gpu", "transport": "local"})
+    ]
+    assert any("kind is gpu but neither 'gpus' nor a device" in s for s in said)
+    assert not any(
+        p.blocking
+        for p in connections.row_problems({"id": "g", "display_name": "G", "kind": "gpu", "transport": "local"})
+    ), "a registry that predates the field must stay usable"
+    said = [str(p) for p in connections.row_problems({"id": "g", "display_name": "G", "transport": "local", "gpus": 0})]
+    assert any("'gpus' must be a whole number of devices" in s for s in said)
+
+
+def test_concurrency_beside_a_capacity_is_reported_as_not_read_and_not_as_missing():
+    row = {"id": "g", "display_name": "G", "transport": "local", "kind": "gpu", "gpus": 2, "concurrency": 1}
+    said = [str(p) for p in connections.row_problems(row)]
+    assert any("'concurrency' is not read on a row that says gpus" in s for s in said)
+    without = {"id": "c", "display_name": "C", "transport": "local", "cores": 32}
+    said = [str(p) for p in connections.row_problems(without)]
+    assert not any("'concurrency' is not set" in s for s in said), "cores decide; concurrency is not wanted"
+    legacy = {"id": "l", "display_name": "L", "transport": "local"}
+    assert any("'concurrency' is not set" in str(p) for p in connections.row_problems(legacy))
+
+
+def test_the_model_sees_how_many_devices_a_machine_hands_out():
+    assert "gpus" in connections._SHOWN
+    assert connections.shown({"id": "g", "display_name": "G", "gpus": 2, "key": "~/.ssh/k"}).get("gpus") == 2
+
+
+def test_a_cpu_row_whose_device_line_starts_with_a_count_is_not_a_gpu_machine():
+    """The "N x ..." reading belongs to GPU rows (the admission design limits the
+    fallback to kind gpu). A CPU box described as "2 x Intel Xeon" hands out
+    cores; read as two devices it would be gated on GPUs it does not have."""
+    row = {"kind": "cpu", "device": "2 x Intel Xeon Platinum", "cores": 64}
+    assert connections.capacity(row) == {"cores": 64}
+    assert connections.resource_unit(row) == "cores"
+    assert connections.capacity({"device": "2 x NVIDIA A800"}) == {}, "no kind, no inference"
+
+
+def test_a_gpu_row_with_no_device_count_is_admitted_by_job_count_not_by_cores():
+    """What the spec's migration table, the doctor line and resource_unit's own
+    docstring all say, and what the code did not do: a `kind: gpu` row that
+    cannot say how many devices it hands out falls back to the job-count gate.
+    Reading its cores instead admitted sixteen jobs onto a two-card box."""
+    row = {"kind": "gpu", "device": "NVIDIA A800-SXM4-80GB + NVIDIA A800-SXM4-80GB", "cores": 128, "memory": "463 GB"}
+    assert connections.capacity(row) == {"cores": 128, "memory_gb": 463}
+    assert connections.resource_unit(row) == ""
+    said = [str(p) for p in connections.row_problems({"id": "g", "display_name": "G", "transport": "local", **row})]
+    assert any("admitted by job count" in s for s in said)

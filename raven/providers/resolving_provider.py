@@ -51,7 +51,6 @@ class ResolvingProvider(LLMProvider):
             temperature=defaults.temperature,
             reasoning_effort=defaults.reasoning_effort,
             timeout=defaults.llm_call_timeout,
-            stream_idle_timeout=defaults.stream_idle_timeout,
         )
 
     def _refresh_credentials(self) -> None:
@@ -152,13 +151,6 @@ class ResolvingProvider(LLMProvider):
     ) -> AsyncIterator[ChatDelta]:
         async for delta in self._pick(model).chat_stream(messages, tools, model=model, **kwargs):
             yield delta
-
-    def supports_prompt_caching(self, model: str) -> bool:
-        """Forwarded for the same reason as ``wire_model_id``: only the adapter
-        that sends the request knows whether its wire carries the field, and the
-        base default (False) here would switch the cache optimizer off for every
-        vendor behind this router."""
-        return self._pick(model).supports_prompt_caching(model)
 
     def wire_model_id(self, model: str) -> str:
         """Forwarded: the inner adapter is the one that decides the wire id.

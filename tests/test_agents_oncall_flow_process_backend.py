@@ -43,6 +43,7 @@ class FakeHost:
         self.seen: list[str] = []
         self.case_written: list[str] | None = None
         self.remembered_writes: dict[str, list[str]] = {}
+        self.resources: dict[str, tuple[float, int]] = {}
 
     @staticmethod
     def _key(cmd: str) -> str:
@@ -82,7 +83,8 @@ class FakeHost:
                 prog = job.get("progress") or []
                 elapsed = prog[-1].get("elapsed_s", "-") if prog else "-"
                 mtime = job.get("progress_mtime", "-") if prog else "-"
-                lines.append(f"{key}|{res}|{alive}|{started}|{elapsed}|{mtime}")
+                width, exclusive = self.resources.get(key, (1, 0))
+                lines.append(f"{key}|{res}|{alive}|{started}|{elapsed}|{mtime}|{width}|{exclusive}")
             lines.append(f"NOW|{self.now}")
             return 0, "\n".join(lines)
         if cmd.startswith("if [ -f ") and "result.json ]; then echo done;" in cmd:
@@ -103,6 +105,13 @@ class FakeHost:
             key = self._key(cmd)
             blob = cmd.split("echo ", 1)[1].split(" | base64 -d", 1)[0].strip().strip("'")
             self.configs[key] = json.loads(base64.b64decode(blob))
+            for piece in cmd.split("echo ")[2:]:
+                try:
+                    staged = json.loads(base64.b64decode(piece.split(" | base64 -d", 1)[0].strip().strip("'")))
+                except Exception:  # noqa: BLE001 -- the launcher blob is not JSON
+                    continue
+                if isinstance(staged, dict) and "width" in staged:
+                    self.resources[key] = (staged["width"], 1 if staged.get("device_ids") else 0)
             self.staged.append(key)
             return 0, "staged"
         if cmd.startswith("cd ") and "nohup sh .raven-launch.sh" in cmd:
@@ -118,6 +127,12 @@ class FakeHost:
             if "result" in job:
                 return 0, f"result {job['result'].get('status', 'unknown')}"
             return 0, "alive" if job.get("alive") else "gone"
+        if cmd.startswith("if [ -f ") and "echo alive" in cmd:
+            key = self._key(cmd)
+            job = self.jobs.get(key)
+            if job and job.get("alive"):
+                return 0, f"alive 4242 {int(self.now - job.get('started_at', self.now))}"
+            return 0, "gone"
         if cmd.startswith("if [ -f ") and "kill -TERM" in cmd:
             key = self._key(cmd)
             self.killed.append(key)
@@ -816,28 +831,23 @@ async def test_a_command_may_name_the_case_and_the_round_directory() -> None:
     assert "/root/ops/jobs/k1/config.json" in body
 
 
-def test_exec_only_takes_a_command_it_can_actually_replace_itself_with():
-    """A chained template has to reach a shell, a single one must not.
+@pytest.mark.asyncio
+async def test_the_launcher_synthesizes_a_result_when_the_job_writes_none():
+    """Terminality is decided by result.json, and only a case script written
+    for this backend knows to write one. Measured 2026-08-31 to 09-01: five
+    completed train.py runs were each recorded "ended from outside before it
+    could record a result", one agent re-bought a finished round as a compile
+    timeout, and the owner was told the baseline failed twice while its number
+    sat in job.log. The launcher waits for its child and writes the missing
+    result itself -- status from the exit code, spend from its own clock --
+    and leaves alone a result the job wrote."""
+    body = await _staged_launcher("bash run_fea.sh")
 
-    Measured 2026-08-19: a template of "cd x && cp y . && bash run.sh" became
-    ``exec cd x && ...`` in the launcher, which runs nothing and reports nothing.
-    The pid file was written, so the job looked started, and no result ever came.
-    Quoting is what decides -- ``sh -c 'cd x && y'`` is one command, and wrapping
-    it again would put a second shell in front of every campaign written that way.
-    """
-    from oncall_flow.process_backend import _is_simple
-
-    assert _is_simple("bash run_fea.sh")
-    assert _is_simple("env CUDA_VISIBLE_DEVICES=1 python3 train.py --config c.json")
-    assert _is_simple("sh -c 'cd /work && bash run_fea.sh'"), (
-        "the six campaigns written this way must not gain a second shell"
-    )
-
-    assert not _is_simple("cd /work && bash run.sh")
-    assert not _is_simple("solver > out.log")
-    assert not _is_simple("a | b")
-    assert not _is_simple("echo $HOME")
-    assert not _is_simple("unbalanced 'quote"), "a shell is the thing that understands quotes"
+    assert 'wait "$RAVEN_JOB"' in body
+    assert "[ ! -f result.json ]" in body, "a result the job wrote is left alone"
+    assert "succeeded" in body and "failed" in body
+    assert "gpu_minutes_used" in body, "the synthesized result still carries spend"
+    assert "exec " not in body, "exec would leave nobody to write the result"
 
 
 @pytest.mark.asyncio
@@ -863,7 +873,7 @@ async def test_a_chained_command_reaches_a_shell_in_the_launcher() -> None:
             continue
         if text.startswith("#!"):
             body = text
-    assert "exec sh -c" in body, body
+    assert "$RAVEN_SETSID sh -c" in body, body
     assert "cp /srv/case/run.sh ." in body
 
 
@@ -906,19 +916,37 @@ async def test_a_compound_command_prefers_bash_and_falls_back_to_sh():
     """
     body = await _staged_launcher("source /opt/env && cd x && ./run")
 
-    assert "exec bash -c" in body
-    assert "exec sh -c" in body, "a machine without bash still has to run it"
-    assert body.index("bash") < body.index("exec sh -c"), "bash is the preferred branch"
+    assert "bash -o pipefail -c" in body
+    assert "\n  $RAVEN_SETSID sh -c" in body, "a machine without bash still has to run it"
+    assert body.index("bash -o pipefail -c") < body.index("\n  $RAVEN_SETSID sh -c"), "bash is the preferred branch"
 
 
 @pytest.mark.asyncio
-async def test_a_single_command_still_execs_directly():
-    """No shell in front of it: the pid the launcher advertises has to be the
-    job's own, or cancelling reaches a shell that has already gone."""
+async def test_a_piped_job_reports_the_failing_stage_not_the_tee():
+    """The synthesized status reads the pipeline's exit code, which without
+    pipefail is the LAST command's: measured 2026-09-02, three jobs written as
+    `python train.py | tee output.log` crashed on ModuleNotFoundError, tee
+    returned 0, and each was recorded succeeded with minutes billed -- the
+    Traceback sat in a 257-byte log nothing routed anyone to, because the
+    ledger said there was nothing to look at. Only bash gets the flag: dash
+    has no pipefail, and a box without bash keeps last-command semantics
+    rather than every job dying on an unknown option."""
+    body = await _staged_launcher("python train.py 2>&1 | tee output.log")
+
+    assert "bash -o pipefail -c" in body
+    sh_branch = body.split("\nelse\n", 1)[1]
+    assert "pipefail" not in sh_branch, "sh may not know the option; the flag stays on bash"
+
+
+@pytest.mark.asyncio
+async def test_the_pid_a_cancel_reaches_is_the_jobs_own():
+    """The launcher stays for the wrap-up instead of exec-ing into the job,
+    so ``pid`` is rewritten to the child the moment it exists and a TERM to
+    the launcher is forwarded -- a cancel reaches the job either way."""
     body = await _staged_launcher("bash run_fea.sh")
 
-    assert "exec bash run_fea.sh" in body
-    assert "command -v" not in body
+    assert 'echo "$RAVEN_JOB" > pid' in body
+    assert 'trap \'kill -s TERM -- -"$RAVEN_JOB" 2>/dev/null; kill -s TERM "$RAVEN_JOB" 2>/dev/null\' TERM INT' in body
 
 
 # ---- whose pid decides whether the job is still alive ----
@@ -943,11 +971,237 @@ def test_the_probe_asks_our_own_pid_before_the_shared_one():
 
 @pytest.mark.asyncio
 async def test_the_launcher_writes_both_pids():
-    """One for a cancel to reach the solver through, one that stays live across
-    the wrap-up because exec carries it through every layer."""
+    """One for a cancel to reach the solver through, one that is the launcher
+    itself, staying live through the wrap-up it now performs."""
     from oncall_flow.process_backend import _OWN_PID
 
     body = await _staged_launcher("bash run_fea.sh")
 
     assert "echo $$ > pid" in body
     assert f"echo $$ > {_OWN_PID}" in body
+
+
+# ---- custody: the child is a process group, and a command that detaches itself is refused ----
+
+
+@pytest.mark.asyncio
+async def test_the_child_runs_as_its_own_process_group_when_the_host_can():
+    """A TERM to one pid reaches one process. Measured 2026-09-03: a cancel
+    killed the `bash -c` wrapper, the python it had forked ran on to a valid
+    result, and the ledger said failed at 5.2 minutes. Under setsid the child
+    is a group leader and the group form of kill reaches the whole tree; a host
+    without setsid falls back to the bare form rather than failing to launch."""
+    body = await _staged_launcher("bash run_fea.sh")
+
+    assert "if command -v setsid >/dev/null 2>&1; then RAVEN_SETSID=setsid; else RAVEN_SETSID=; fi" in body
+    assert "$RAVEN_SETSID bash -o pipefail -c" in body
+    assert "$RAVEN_SETSID sh -c" in body
+    assert 'wait "$RAVEN_JOB"' in body, "a group leader is still our child"
+
+
+@pytest.mark.asyncio
+async def test_a_command_that_detaches_itself_is_stopped_and_refused_in_the_result():
+    """Measured 2026-09-03: a launch_job.sh doing `setsid nohup ... &` made
+    the launcher's wait return in 0.4 s; four training runs were recorded
+    succeeded / 0.000 ten seconds after launch, the budget was never debited
+    and the gate released the device while the run was on it. The tell is a
+    pid file naming a live process that is not our child once wait returns.
+    The orphan is stopped (group and pid) and the reason lands in result.json
+    where the next submit reads it; a zombie does not count as alive."""
+    from oncall_flow.process_backend import _ESCAPE_ERROR
+
+    body = await _staged_launcher("./launch_job.sh {config}")
+
+    assert "RAVEN_LEFT=$(cat pid 2>/dev/null)" in body
+    assert '[ "$RAVEN_LEFT" != "$RAVEN_JOB" ] && kill -0 "$RAVEN_LEFT"' in body
+    assert 'ps -o stat= -p "$RAVEN_LEFT"' in body and '!= "Z"' in body, "a zombie is not a live escapee"
+    assert 'kill -s TERM -- -"$RAVEN_LEFT"' in body and 'kill -s KILL -- -"$RAVEN_LEFT"' in body
+    assert '"status": "failed"' in body
+    assert _ESCAPE_ERROR in body
+    assert "run it in the foreground" in _ESCAPE_ERROR
+    assert 'if [ -n "$RAVEN_ESCAPED" ] || [ ! -f result.json ]' in body, (
+        "an escape is written even over a result the orphan may have left"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_launcher_stops_a_child_that_escaped_when_run_in_a_real_shell(tmp_path):
+    """The generated launcher against a real shell, not its text: the command
+    backgrounds a sleep, writes that pid where the owner's scripts do, and
+    exits 0 -- the shape a `launch_job.sh` ending in `nohup ... &` has. The
+    escapee must be gone when the launcher returns and the result must say
+    failed, or the ledger releases the machine while the job is still on it."""
+    import base64 as _b64
+    import os
+    import shutil
+    import subprocess
+
+    if shutil.which("sh") is None:
+        pytest.skip("no POSIX shell")
+    host = FakeHost()
+    exe = ProcessExecutor(host, remote_dir=str(tmp_path), command="sh -c 'sleep 30 & echo $! > pid; exit 0'")
+    await exe.submit(_spec({"lr": 1e-4}))
+    body = None
+    for seen in host.seen:
+        if ".raven-launch.sh" not in seen or "base64 -d" not in seen:
+            continue
+        for piece in seen.split("echo ")[1:]:
+            blob = piece.split(" | base64 -d", 1)[0].strip().strip("'")
+            try:
+                text = _b64.b64decode(blob).decode()
+            except Exception:  # noqa: BLE001 -- the config blob decodes too
+                continue
+            if text.startswith("#!/bin/sh"):
+                body = text
+    assert body is not None, "no launcher was staged"
+    job_dir = tmp_path / "jobs" / "j1"
+    job_dir.mkdir(parents=True)
+    (job_dir / "config.json").write_text('{"lr": 1e-4}')
+    launcher = job_dir / ".raven-launch.sh"
+    launcher.write_text(body)
+
+    subprocess.run(["sh", str(launcher)], cwd=job_dir, timeout=60, check=False)
+
+    result = json.loads((job_dir / "result.json").read_text())
+    assert result["status"] == "failed" and "detached itself" in result["error"]
+    escaped = int((job_dir / "pid").read_text().strip())
+    try:
+        os.kill(escaped, 0)
+        alive = True
+    except ProcessLookupError:
+        alive = False
+    except PermissionError:
+        alive = True
+    if alive:
+        os.kill(escaped, 9)
+    assert not alive, "the escaped child must be gone when the launcher returns"
+
+
+@pytest.mark.asyncio
+async def test_cancel_kills_the_group_before_the_pid():
+    host = FakeHost()
+    exe = _exe(host)
+    handle = await exe.submit(_spec({"lr": 2e-6}))
+    await exe.cancel(handle)
+    kill_cmd = next(c for c in host.seen if "kill -TERM $p" in c)
+    assert "kill -s TERM -- -$p" in kill_cmd
+    assert kill_cmd.index("kill -s TERM -- -$p") < kill_cmd.index("kill -TERM $p")
+    assert "kill -s KILL -- -$p" in kill_cmd
+
+
+@pytest.mark.asyncio
+async def test_cancel_says_the_process_was_alive_and_for_how_long():
+    """Looked at before the kill: killing a healthy job has to read as that in
+    the record, not as cleanup of something already dead."""
+    host = FakeHost()
+    exe = _exe(host)
+    handle = await exe.submit(_spec({"lr": 2e-6}))
+    host.now += 311
+
+    note = await exe.cancel(handle)
+
+    assert note == "process was alive (pid 4242, running 5.2 min) when killed"
+    assert host.killed == ["j1"]
+
+
+@pytest.mark.asyncio
+async def test_cancel_of_a_finished_job_has_nothing_to_say():
+    host = FakeHost()
+    exe = _exe(host)
+    handle = await exe.submit(_spec({"lr": 2e-6}))
+    host.finish("j1")
+
+    assert await exe.cancel(handle) is None
+
+
+# ---- what the gate handed out rides to the launcher ----
+
+
+async def _staged(cmd: str, labels: dict) -> tuple[FakeHost, str, dict]:
+    """(host, launcher body, staged resources) for a submit carrying ``labels``."""
+    import base64 as _b64
+
+    host = FakeHost()
+    await _exe(host, command=cmd).submit(JobSpec(payload={"lr": 1e-4}, idem_key="j1", labels=labels))
+    body, resources = "", {}
+    for seen in host.seen:
+        if ".raven-launch.sh" not in seen or "base64 -d" not in seen:
+            continue
+        for piece in seen.split("echo ")[1:]:
+            blob = piece.split(" | base64 -d", 1)[0].strip().strip("'")
+            try:
+                text = _b64.b64decode(blob).decode()
+            except Exception:  # noqa: BLE001
+                continue
+            if text.startswith("#!/bin/sh"):
+                body = text
+            elif '"width"' in text:
+                resources = json.loads(text)
+    return host, body, resources
+
+
+@pytest.mark.asyncio
+async def test_assigned_devices_are_exported_and_checked_for_a_stranger_before_the_start():
+    """The gate picks the cards; the job never does. The one thing the ledger
+    cannot know is a person on the same machine, so a chosen card already holding
+    someone's memory is not started on, and the result says which and how much."""
+    from oncall_flow.process_backend import _FOREIGN_USE_MIB
+
+    _, body, resources = await _staged("bash run.sh {config}", {"campaign": "c", "device_ids": "0,1", "width": "2"})
+
+    assert "export CUDA_VISIBLE_DEVICES=0,1\n" in body
+    assert body.index("export CUDA_VISIBLE_DEVICES") < body.index("RAVEN_T0="), "bound before the clock starts"
+    assert "nvidia-smi --query-gpu=index,memory.used" in body and "-i 0,1" in body
+    assert f"$2+0 > {_FOREIGN_USE_MIB}" in body
+    assert "held by a process outside the ledger" in body and '"gpu_minutes_used": 0.000' in body
+    assert resources == {"width": 2.0, "device_ids": ["0", "1"]}
+
+
+@pytest.mark.asyncio
+async def test_a_job_with_no_assigned_devices_gets_no_export_and_width_one():
+    _, body, resources = await _staged("bash run.sh {config}", {"campaign": "c"})
+
+    assert "CUDA_VISIBLE_DEVICES" not in body
+    assert "nvidia-smi" not in body
+    assert resources == {"width": 1.0}
+
+
+@pytest.mark.asyncio
+async def test_spend_is_as_wide_as_the_job_was_admitted():
+    """Two devices held for ten minutes are twenty device-minutes; a job staged
+    before widths were written ran one wide, which is what it was billed as."""
+    host = FakeHost()
+    exe = _exe(host)
+    await exe.submit(JobSpec(payload={"lr": 1}, idem_key="wide", labels={"width": "2", "device_ids": "0,1"}))
+    await exe.submit(JobSpec(payload={"lr": 2}, idem_key="old", labels={}))
+    host.now += 600
+    host.finish("wide", minutes=10.0)
+    host.finish("old", minutes=10.0)
+
+    assert await exe.spent_minutes() == pytest.approx(20.0 + 10.0)
+    assert exe._declared_width == {"wide": 2.0, "old": 1.0}
+
+
+@pytest.mark.asyncio
+async def test_two_jobs_on_gate_assigned_cards_each_pay_while_pinned_jobs_share():
+    """The design's budget rule made concrete: jobs the gate handed devices to
+    hold them alone, so an overlap is two cards busy and both pay; jobs a
+    template pins to a device it did not choose keep the campaign's declared
+    overlap, where an overlap really is one card busy once."""
+    host = FakeHost()
+    exe = _exe(host)
+    await exe.submit(JobSpec(payload={"lr": 1}, idem_key="a", labels={"width": "1", "device_ids": "0"}))
+    await exe.submit(JobSpec(payload={"lr": 2}, idem_key="b", labels={"width": "1", "device_ids": "1"}))
+    host.now += 600
+    host.finish("a", minutes=10.0)
+    host.finish("b", minutes=10.0)
+    assert await exe.spent_minutes() == pytest.approx(20.0), "different cards, both busy"
+
+    pinned = FakeHost()
+    exe2 = _exe(pinned)
+    await exe2.submit(JobSpec(payload={"lr": 1}, idem_key="a", labels={}))
+    await exe2.submit(JobSpec(payload={"lr": 2}, idem_key="b", labels={}))
+    pinned.now += 600
+    pinned.finish("a", minutes=10.0)
+    pinned.finish("b", minutes=10.0)
+    assert await exe2.spent_minutes() == pytest.approx(10.0), "the template's one device, busy once"

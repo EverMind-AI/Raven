@@ -661,7 +661,7 @@ class LiteLLMProvider(LLMProvider):
             return True
 
         async def _open():
-            return (await asyncio.wait_for(acompletion(**kwargs), self.generation.stream_idle_timeout)).__aiter__()
+            return (await asyncio.wait_for(acompletion(**kwargs), self.generation.timeout)).__aiter__()
 
         async def _close(target: Any) -> None:
             aclose = getattr(target, "aclose", None)
@@ -670,8 +670,7 @@ class LiteLLMProvider(LLMProvider):
 
         # Per-chunk idle cap: the timer resets on every chunk, so a long but
         # steadily-progressing generation is fine while a mid-stream stall (no
-        # bytes for `stream_idle_timeout` seconds) raises TimeoutError instead
-        # of hanging for the whole-call budget.
+        # bytes for `timeout` seconds) raises TimeoutError instead of hanging.
         # Everything from the open onward sits inside the one try/finally, so the
         # underlying HTTP stream is closed deterministically on any exit -- a
         # first-chunk timeout included, which is the most likely one there is
@@ -689,7 +688,7 @@ class LiteLLMProvider(LLMProvider):
             # that defers the request until the first pull raises there instead.
             try:
                 stream = await _open()
-                first = await asyncio.wait_for(stream.__anext__(), self.generation.stream_idle_timeout)
+                first = await asyncio.wait_for(stream.__anext__(), self.generation.timeout)
             except StopAsyncIteration:
                 first = done
             except Exception as exc:
@@ -701,7 +700,7 @@ class LiteLLMProvider(LLMProvider):
                 await _close(stream)
                 stream = await _open()
                 try:
-                    first = await asyncio.wait_for(stream.__anext__(), self.generation.stream_idle_timeout)
+                    first = await asyncio.wait_for(stream.__anext__(), self.generation.timeout)
                 except StopAsyncIteration:
                     first = done
 
@@ -711,7 +710,7 @@ class LiteLLMProvider(LLMProvider):
                 if delta is not None:
                     yield delta
                 try:
-                    chunk = await asyncio.wait_for(stream.__anext__(), self.generation.stream_idle_timeout)
+                    chunk = await asyncio.wait_for(stream.__anext__(), self.generation.timeout)
                 except StopAsyncIteration:
                     break
         finally:

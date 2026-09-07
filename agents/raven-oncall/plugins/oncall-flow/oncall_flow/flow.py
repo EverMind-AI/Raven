@@ -346,7 +346,64 @@ class WatchedPathHook(AgentHook):
         return HookDecision()
 
 
-# ── Axis 4: the turn close ──────────────────────────────────────────
+# ── Axis 4: work killed at the local exec cap ───────────────────────
+
+# The sandbox executor's kill report, rendered by ExecResult.as_text: the only
+# shape a cap kill produces on the local shell. ops_exec's machine cap writes
+# its own sentence and needs no note here.
+_EXEC_CAP_KILL = re.compile(r"STDERR:\nTimed out after (\d+)(?:\.\d+)?s\b")
+
+
+class ExecCapKillHook(AgentHook):
+    """A local exec kill is a routing signal, not a transient failure.
+
+    A bare "Timed out after 600s" reads as a fault to retry: measured
+    2026-09-02 on the fork, a nine-minute training run was killed at the cap,
+    the result it had computed died with it, and the loop re-ran the same
+    command into the same wall. The work was never going to fit a synchronous
+    shell, and the door that fits it is contributed by this very plugin -- an
+    active flow always has ops_submit on the roster, so the note points there
+    unconditionally (the fork gated the same sentence on its ops surface
+    being present).
+
+    Said as a note under the result rather than a rewrite of it: the fork
+    appended to the tool result text it rendered itself; here the result
+    belongs to the trunk's exec tool, and ``append_note`` is the loop's grant
+    for exactly this line.
+    """
+
+    @property
+    def name(self) -> str:
+        return "OncallExecCapKill"
+
+    async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
+        calls = getattr(ctx.response, "tool_calls", None) or []
+        ids = {getattr(call, "id", None) for call in calls if getattr(call, "name", "") == "exec"}
+        ids.discard(None)
+        if not ids:
+            return HookDecision()
+        for message in reversed(ctx.messages or []):
+            if message.get("role") != "tool" or message.get("tool_call_id") not in ids:
+                continue
+            payload = _tool_payload(message.get("content"))
+            hit = _EXEC_CAP_KILL.search(payload)
+            if hit is None or "Exit code: -1" not in payload:
+                continue
+            cap = int(hit.group(1))
+            _account(ctx)["exec_cap_kill"] = {"cap_s": cap}
+            return HookDecision(
+                append_note=(
+                    f"Killed at the {cap}s exec cap; whatever it computed is gone with it. "
+                    "Re-running it here dies at the same cap. Work that outlives the cap "
+                    "belongs to ops_submit: the job runs detached, logs to disk, and writes "
+                    "result.json to the ledger, so nothing is lost when it finishes after "
+                    "this turn."
+                )
+            )
+        return HookDecision()
+
+
+# ── Axis 5: the turn close ──────────────────────────────────────────
 
 # Every refusal branch of ops_check_later deliberately starts with REFUSED or
 # the budget prose; only a scheduled wake starts with this (part 2b keyed the
@@ -387,12 +444,13 @@ _CHAIN_NOTES = frozenset({"before_iteration", "before_execute_tools", "after_ite
 
 
 class OncallFlowHook(AgentHook):
-    """The one manifest hook: four axes, fixed order, composite semantics.
+    """The one manifest hook: five axes, fixed order, composite semantics.
 
     Order is the contract: context first (everything downstream reads what it
     set), accounting before the close (the closing call is still counted),
-    the judgement before the close (the fork noted results before it read the
-    ends-turn flag). ``_run_phase`` mirrors the kernel CompositeHook's
+    the judgement and the cap-kill note before the close (the fork noted
+    results before it read the ends-turn flag). ``_run_phase`` mirrors the
+    kernel CompositeHook's
     documented behaviour -- first halting state halts and carries the trail,
     notes chain joined by a blank line, content and tool modifications chain
     through the context, a raising axis is a logged no-op -- because the
@@ -404,6 +462,7 @@ class OncallFlowHook(AgentHook):
             TurnContextHook(),
             TurnAccountingHook(),
             WatchedPathHook(provider, judge_model),
+            ExecCapKillHook(),
             TurnCloseHook(),
         )
 
