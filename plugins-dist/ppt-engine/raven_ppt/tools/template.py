@@ -299,7 +299,13 @@ class PptTemplateTool(Tool):
             f"layout '{layout}' carries {len(sizes)} picture(s) ({', '.join(sizes)}), under example page(s) "
             + ", ".join(str(page) for page in pages)
             + " -- on the page you build from one of those: `replace_picture(layout_pictures(slide)[0], "
-            + f"FIGURES / 'x.png', 'cover'{', alpha=0.25' if _page_sized(sizes) else ''})`"
+            + f"FIGURES / 'x.png', 'cover'{', alpha=0.1' if _page_sized(sizes) else ''})`"
+            + (
+                " -- page-sized, so it is the page's background: alpha=0.1 keeps it a texture, and a photograph "
+                "meant to be seen goes in at full strength under a plane of ink with light type, as `backdrop` lays them"
+                if _page_sized(sizes)
+                else ""
+            )
             for layout, (pages, sizes) in layouts_with_photographs(source).items()
         ]
 
@@ -434,11 +440,14 @@ class PptTemplateTool(Tool):
                 "inherits them and `pictures={...}` on a cloned page never reaches them: "
                 + "; ".join(carried)
                 + ". Change one for every page at once with `replace_picture(layout_pictures(slide)[0], "
-                "FIGURES/'x.png', 'cover', alpha=0.25)` after `from ppt_template import layout_pictures` -- a "
-                "picture generated in the deck's own style (`ppt_generate_image`) is the usual replacement, and "
-                "one the size of the page is the page's background, so it takes the `alpha` or every title on "
-                "that layout drowns; `backdrop` does the same for a page whose layout carries none -- or keep it "
-                "if it is the design rather than a stock photograph"
+                "FIGURES/'x.png', 'cover')` after `from ppt_template import layout_pictures`, and keep the rest "
+                "of that layout's art: the chips, marks and rules beside the picture are the cover's design, and "
+                "a cover that dropped them for a full-bleed photograph came out as type on fog. A cut-out slot "
+                "on the page's own ground takes a cut-out in this template's manner (`ppt_generate_image(..., "
+                "transparent=true)`, its palette and outline named in the prompt), even for a real place; a "
+                "photograph slot takes a photograph; one the size of the page is the page's background and wants "
+                "a plane of ink and light type over it, the way `backdrop` lays a photograph for a page whose "
+                "layout carries none -- or keep it if it is the design rather than a stock photograph"
             )
         borrowable = self._borrowable(template.source)
         if borrowable:

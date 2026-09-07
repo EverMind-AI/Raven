@@ -4,7 +4,7 @@ import asyncio
 import time
 import uuid
 from collections import deque
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -13,6 +13,7 @@ from loguru import logger
 
 from raven.agent import workdir
 from raven.agent.subagent import activity
+from raven.agent.subagent.attachments import retarget_note, with_attachment_note, with_undeliverable_note
 from raven.agent.subagent.backends import (
     ABORTED_ACTION_RESULT,
     AgentMeta,
@@ -27,6 +28,7 @@ from raven.agent.subagent.direct_chat import (
     DirectChatError,
     DirectChatRecord,
     DirectTurnMeta,
+    NotAddressableError,
 )
 from raven.agent.subagent.history import SpawnRecord, session_history_root
 from raven.agent.subagent.instance_state import InstanceState, instance_state_path
@@ -49,6 +51,7 @@ from raven.observability import semconv
 from raven.providers.binding import ModelBinding, resolve
 from raven.sandbox import SandboxConfig, build_executor
 from raven.security.trust import wrap_untrusted
+from raven.spine.message import Media
 from raven.tracing import trace
 
 # One hour: a runaway re-injection loop fires fast and trips the limit quickly,
@@ -764,12 +767,12 @@ class SubagentManager:
         """
         row = self.registry.get(agent)
         if row is None or not row.enabled:
-            raise RuntimeError(
+            raise NotAddressableError(
                 f"Cannot {doing}: {agent!r} is disabled or no longer configured, so it cannot "
                 "be addressed. Any records it already has remain on disk."
             )
         if not self.declared_stateful(agent):
-            raise RuntimeError(
+            raise NotAddressableError(
                 f"Cannot {doing}: {agent!r} is stateless, so each turn would start a fresh "
                 "conversation with no memory of this one. Spawn it with a task instead."
             )
@@ -810,6 +813,7 @@ class SubagentManager:
         text: str,
         workspace: Path | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
+        media: Sequence[Media] = (),
     ) -> tuple[str, DirectTurnMeta]:
         """Run one direct-chat turn against an existing instance.
 
@@ -838,8 +842,19 @@ class SubagentManager:
         is what the record stores -- deltas are an observation of a turn, never
         the source of truth for one. A caller that streamed therefore has to not
         deliver the return value a second time.
+
+        ``media`` is the turn's attachments, handed to the backend by path (see
+        ``raven.agent.subagent.attachments``). An agent the roster tags
+        [no-local-files] cannot open a path, so it is told the attachments stayed
+        behind rather than handed a spelling that means nothing where it runs.
         """
         self._require_addressable(agent, doing=f"chat with instance {handle!r}")
+        row = self.registry.get(agent)
+        if media and row is not None and not row.caps.reads_local_files:
+            text = with_undeliverable_note(text, media)
+            media = ()
+        text = retarget_note(text, media, self.workspace)
+        recorded = with_attachment_note(text, media)
 
         session_dir = self.session_dir_for(session_key)
         effective_workspace = workspace or self.workspace
@@ -850,7 +865,7 @@ class SubagentManager:
         if reject_mcp:
             raise RuntimeError(mcp_note)
 
-        record = DirectChatRecord.open(session_dir, agent=agent, handle=handle, task_id=task_id, task=text)
+        record = DirectChatRecord.open(session_dir, agent=agent, handle=handle, task_id=task_id, task=recorded)
         async with self._hold_instance_slot(session_key, agent, handle), hold_handle(session_key, agent, handle):
             await _write_spawn_status(session_key, agent, handle, "running")
             kwargs: dict[str, Any] = {}
@@ -861,6 +876,8 @@ class SubagentManager:
                 kwargs["on_delta"] = on_delta
             if mcp_grant is not None:
                 kwargs["mcp_grant"] = mcp_grant
+            if media:
+                kwargs["media"] = tuple(media)
             # Collected here as the spawn lane does it: a direct turn is a turn of
             # the same instance's conversation, and without this it contributed
             # only a prompt and an answer to the instance log while a spawned
@@ -872,7 +889,7 @@ class SubagentManager:
             # published and unreachable until the log landed at turn end.
             cancelled = False
             with activity.collecting(
-                live_key=record.dir.name, instance=(session_key, agent, handle), prompt=text
+                live_key=record.dir.name, instance=(session_key, agent, handle), prompt=recorded
             ) as did:
                 try:
                     executor = build_executor(

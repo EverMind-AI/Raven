@@ -307,25 +307,56 @@ def _flat(model, prefix: str = "") -> dict[str, object]:
     return out
 
 
+#: Where the twin deliberately leads the vendored checkout. The checkout under
+#: ``subagents/raven-research`` is kept as a record of upstream ``a903a424``
+#: (dr@3.5) and is no longer re-vendored; the twin tracks upstream directly. Each
+#: key names the upstream commit that moved it and why, so the allowance cannot
+#: outlive its reason: an entry whose values no longer differ fails below.
+TWIN_LEADS: dict[str, str] = {
+    "version": "upstream ea19b948 (dr@3.7): dr@3.5's batch was stopped mid-flight and dr@3.6 closed the fetchGate ablation",
+    "fetch_gate.release_after_closed_iterations": (
+        "upstream ea19b948 (dr@3.7): the second release valve, counting iterations spent closed "
+        "rather than fetch attempts; the record's one-valve gate has no such field"
+    ),
+}
+
+
 def test_the_twins_defaults_are_the_forks(probe):
     """Class defaults, not the slice: what a profile gets when it does not pin a knob.
 
     The trunk twin's own docstring promises the fork's defaults, and the slice
     test in the launcher file cannot see them - a value the config writes hides
-    the default underneath. The one difference the twin declares is the four
-    retired LOOP knobs, which is exactly the set of fork fields it may lack.
+    the default underneath. Two differences are declared: the four retired LOOP
+    knobs, which is exactly the set of fork fields the twin may lack, and the
+    ``TWIN_LEADS`` keys, where the twin has moved past the vendored record.
     """
     twin = json.loads(json.dumps(_flat(FlowConfig()), default=str))
     fork = probe["fork_defaults"]
     retired = {snake for snake, _owner in _RETIRED_KEYS.values()}
     missing = {key for key in fork if key not in twin}
     assert {key.split(".", 1)[0] for key in missing} == retired, missing
-    assert not set(twin) - set(fork), set(twin) - set(fork)
-    drift = {key: (twin[key], fork[key]) for key in twin if twin[key] != fork[key]}
-    assert not drift, "twin default != fork default (twin, fork): " + repr(drift)
+    extra = set(twin) - set(fork)
+    assert extra <= set(TWIN_LEADS), "twin-only defaults with no lead reason: " + repr(extra - set(TWIN_LEADS))
+    drift = {key: (twin[key], fork.get(key)) for key in twin if twin[key] != fork.get(key)}
+    unexplained = {key: v for key, v in drift.items() if key not in TWIN_LEADS}
+    assert not unexplained, "twin default != fork default (twin, fork): " + repr(unexplained)
+    stale = set(TWIN_LEADS) - set(drift)
+    assert not stale, "TWIN_LEADS entries that no longer differ from the record: " + repr(stale)
 
 
 def test_the_twins_retired_labels_are_the_forks(probe):
-    """Both launchers refuse the same labels, or a stale one stamps an old distribution."""
-    assert SUPERSEDED_PROFILES == probe["fork_superseded_profiles"]
-    assert list(SUPERSEDED_VERSIONS) == probe["fork_superseded_versions"]
+    """The twin refuses every label the fork refuses, or a stale one stamps an old distribution.
+
+    Superset, not equality: the vendored record stays at dr@3.5 while the twin
+    follows upstream's retirements, so the twin may refuse more, never less.
+    """
+    fork_profiles = probe["fork_superseded_profiles"]
+    for old, new in fork_profiles.items():
+        # A record entry whose base the twin has since retired is dead there - the
+        # base check refuses it first, and the twin's own table test rejects dead
+        # entries - so it may be absent; a live one must be carried as written.
+        dead = old.split("-", 1)[0] in SUPERSEDED_VERSIONS
+        assert dead or SUPERSEDED_PROFILES.get(old) == new, (old, new, SUPERSEDED_PROFILES)
+    fork_versions = probe["fork_superseded_versions"]
+    assert list(SUPERSEDED_VERSIONS)[: len(fork_versions)] == fork_versions
+    assert set(SUPERSEDED_VERSIONS) >= set(fork_versions)

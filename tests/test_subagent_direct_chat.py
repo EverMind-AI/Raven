@@ -42,6 +42,7 @@ def _direct_chat_manager(tmp_path, monkeypatch, *, fail: bool = False):
         history=None,
         on_messages=None,
         on_delta=None,
+        media=(),
     ):
         if fail:
             raise RuntimeError("backend exploded")
@@ -144,6 +145,89 @@ async def test_raven_loop_replays_injected_history(tmp_path):
     # The backend handed back the full list for persistence, ending in the reply.
     assert captured[-1][-1]["role"] == "assistant"
     assert captured[-1][-1]["content"] == "done"
+
+
+async def test_a_streamed_reply_cut_in_transport_is_asked_again_without_the_stream(tmp_path, monkeypatch):
+    """A stream the upstream closed before its terminal chunk comes back from
+    ``stream_llm_call`` as an error reply, not an answer. The backend used to take
+    its text as the sub-agent's result and report success; it asks once more through
+    the waited-for call, which keeps the retry ladder, and hands back what that says.
+    The cut call's tokens are billed too: they were spent, and a cut mid-thought is
+    the expensive kind."""
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.contracts.llm_provider import ChatDelta
+
+    class _CutThenAnswers(_RecordingProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.streams = 0
+
+        async def chat_stream(self, *, messages, tools=None, model=None, **_):
+            self.streams += 1
+            yield ChatDelta(content=None, reasoning_content="thinking about it")
+            yield ChatDelta(
+                content=None,
+                finish_reason="stop",
+                finish_synthesized=True,
+                usage={"prompt_tokens": 4000, "completion_tokens": 12000},
+            )
+
+    billed: list[dict] = []
+    monkeypatch.setattr(activity, "note_usage", lambda usage: billed.append(dict(usage or {})))
+    provider = _CutThenAnswers()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path)
+    rendered: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        rendered.append(text)
+
+    answer = await backend.run("hi", task_id="t1", workspace=tmp_path, executor=None, history=[], on_delta=on_delta)
+
+    assert answer == "done"
+    assert provider.streams == 1 and len(provider.seen) == 1, "one stream, then one waited-for call"
+    assert "cut off" not in answer and rendered == [], "the diagnostic never reached the reply"
+    assert billed[0] == {"prompt_tokens": 4000, "completion_tokens": 12000}, "the cut call is billed first"
+    assert len(billed) == 2, "and the waited-for call after it"
+
+
+async def test_a_streamed_refusal_the_repo_does_not_retry_fails_the_run_without_a_second_ask(tmp_path, monkeypatch):
+    """An oversized image is refused the same way a minute later: the classification
+    says ``retryable=False``, so the same bytes are not sent again and the failure is
+    reported as what it is, not as transport."""
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.contracts.llm_provider import ErrorClassification
+    from raven.contracts.subagent_backend import SubagentNoAnswerError
+
+    class _RefusesTheImage(_RecordingProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.streams = 0
+
+        async def chat_stream(self, *, messages, tools=None, model=None, **_):
+            self.streams += 1
+            raise RuntimeError("Error calling LLM (image_too_large): image exceeds 5 MB limit")
+            yield  # unreachable; it makes this an async generator
+
+        @classmethod
+        def classify_error(cls, exc=None, content=None):
+            return ErrorClassification("image_too_large", retryable=False, strip_images=True)
+
+    billed: list[dict] = []
+    monkeypatch.setattr(activity, "note_usage", lambda usage: billed.append(dict(usage or {})))
+    provider = _RefusesTheImage()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path)
+
+    async def on_delta(text: str) -> None:
+        pass
+
+    with pytest.raises(SubagentNoAnswerError, match=r"image_too_large") as caught:
+        await backend.run("hi", task_id="t1", workspace=tmp_path, executor=None, history=[], on_delta=on_delta)
+
+    assert "transport" not in str(caught.value)
+    assert provider.streams == 1 and provider.seen == [], "no identical waited-for ask after a refusal"
+    assert len(billed) == 1, "the refused call is still billed"
 
 
 async def test_empty_history_still_builds_exactly_one_system_prompt(tmp_path):
@@ -607,7 +691,7 @@ async def test_run_turn_routes_a_direct_target_to_the_subagent(tmp_path, monkeyp
 
     loop = _agent_loop_for_direct_chat(tmp_path, monkeypatch)
 
-    async def fake_chat(*, session_key, agent, handle, text, workspace=None, on_delta=None):
+    async def fake_chat(*, session_key, agent, handle, text, workspace=None, on_delta=None, media=()):
         called.update(session_key=session_key, agent=agent, handle=handle, text=text)
         from raven.agent.subagent.direct_chat import DirectTurnMeta
 
@@ -649,6 +733,151 @@ async def test_run_turn_routes_a_direct_target_to_the_subagent(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_run_turn_hands_the_turns_attachments_to_the_direct_chat(tmp_path, monkeypatch):
+    """What the page uploaded rides the direct turn as media; before this the branch
+    forwarded the text alone and a deck agent was handed a path relative to the
+    host's agent home, which resolved to nothing where it ran."""
+    from raven.spine.message import Media
+
+    loop = _agent_loop_for_direct_chat(tmp_path, monkeypatch)
+    seen: dict[str, Any] = {}
+
+    async def fake_chat(*, session_key, agent, handle, text, workspace=None, on_delta=None, media=()):
+        seen["media"] = tuple(media)
+        from raven.agent.subagent.direct_chat import DirectTurnMeta
+
+        return "ok", DirectTurnMeta(
+            agent=agent,
+            handle=handle,
+            call_id="c1",
+            directory=tmp_path,
+            started_at_ms=1,
+            ended_at_ms=2,
+            status="completed",
+        )
+
+    monkeypatch.setattr(loop.subagents, "chat", fake_chat)
+    attached = (Media(path=str(tmp_path / "uploads" / "house.pptx"), mime="application/octet-stream", kind="file"),)
+
+    from raven.spine import ChatType, Origin, Source, TurnRequest
+
+    req = TurnRequest(
+        origin=Origin.USER,
+        source=Source(channel="tui", chat_id="c", sender_id="u", chat_type=ChatType.DM),
+        text="use my template",
+        media=attached,
+        conversation="s1",
+        direct_target=("Raven-PPT", "deck-1"),
+    )
+    await loop.run_turn(req, _noop_emit_event, lambda: [])
+
+    assert seen["media"] == attached
+
+
+async def _noop_emit_event(event) -> None:
+    return None
+
+
+@pytest.mark.asyncio
+async def test_chat_hands_the_attachments_to_the_backend_and_records_them(tmp_path, monkeypatch):
+    """The backend gets the media as it got the text; the record names the files by
+    absolute path, since the record is the only evidence the turn happened."""
+    from raven.spine.message import Media
+
+    manager = _direct_chat_manager(tmp_path, monkeypatch)
+    seen: dict[str, Any] = {}
+    real_run = manager.registry.backend("raven").run
+
+    async def spying_run(task, **kw):
+        seen["media"] = kw.get("media")
+        seen["task"] = task
+        return await real_run(task, **kw)
+
+    monkeypatch.setattr(manager.registry.backend("raven"), "run", spying_run)
+    deck = tmp_path / "uploads" / "house.pptx"
+    deck.parent.mkdir(parents=True)
+    deck.write_bytes(b"pptx")
+    attached = (Media(path=str(deck), mime="application/octet-stream", kind="file"),)
+
+    reply, meta = await manager.chat(session_key="s1", agent="raven", handle="deck", text="use it", media=attached)
+
+    assert seen["media"] == attached
+    assert seen["task"] == "use it", "the text is the user's own; the transport spells the attachments"
+    assert str(deck.resolve()) in (meta.directory / "prompt.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_chat_retargets_the_pages_note_to_where_the_sub_agent_can_find_the_file(tmp_path, monkeypatch):
+    """The page writes ``- uploads/x.pptx`` under its note, a path relative to the
+    host's agent home. A deck agent handed that spelling looked in its own working
+    directory and reported the file missing, even with the absolute path beside it;
+    the bullet itself now names the absolute path."""
+    from raven.spine.message import Media
+
+    manager = _direct_chat_manager(tmp_path, monkeypatch)
+    deck = tmp_path / "home" / "uploads" / "house.pptx"
+    deck.parent.mkdir(parents=True)
+    deck.write_bytes(b"pptx")
+    seen: dict[str, Any] = {}
+    real_run = manager.registry.backend("raven").run
+
+    async def spying_run(task, **kw):
+        seen["task"] = task
+        return await real_run(task, **kw)
+
+    monkeypatch.setattr(manager.registry.backend("raven"), "run", spying_run)
+    text = "use my template\n\n[attachments, saved in the workspace]\n- uploads/house.pptx"
+
+    await manager.chat(
+        session_key="s1",
+        agent="raven",
+        handle="deck",
+        text=text,
+        media=(Media(path=str(deck), mime="application/octet-stream", kind="file"),),
+    )
+
+    assert seen["task"] == f"use my template\n\n[attachments, saved in the workspace]\n- {deck.resolve()}"
+
+
+@pytest.mark.asyncio
+async def test_chat_tells_a_no_local_files_agent_its_attachments_stayed_behind(tmp_path, monkeypatch):
+    """A path means nothing to an agent that cannot open local files, so it is told
+    by name what was sent and not handed over, and the backend gets no media."""
+    import dataclasses
+
+    from raven.agent.subagent.attachments import UNDELIVERABLE_NOTE
+    from raven.spine.message import Media
+
+    manager = _direct_chat_manager(tmp_path, monkeypatch)
+    real_get = manager.registry.get
+
+    def remote_agent(name):
+        row = real_get(name)
+        return (
+            None
+            if row is None
+            else dataclasses.replace(row, caps=dataclasses.replace(row.caps, reads_local_files=False))
+        )
+
+    monkeypatch.setattr(manager.registry, "get", remote_agent)
+    seen: dict[str, Any] = {}
+    real_run = manager.registry.backend("raven").run
+
+    async def spying_run(task, **kw):
+        seen["media"] = kw.get("media")
+        seen["task"] = task
+        return await real_run(task, **kw)
+
+    monkeypatch.setattr(manager.registry.backend("raven"), "run", spying_run)
+    attached = (Media(path="/somewhere/house.pptx", mime="application/octet-stream", kind="file"),)
+
+    await manager.chat(session_key="s1", agent="raven", handle="deck", text="use it", media=attached)
+
+    assert seen["media"] is None
+    assert seen["task"] == f"use it\n\n{UNDELIVERABLE_NOTE}\n- house.pptx"
+
+
+@pytest.mark.asyncio
 async def test_a_direct_chat_runs_in_the_session_workdir_not_agent_home(tmp_path, monkeypatch):
     """The same directory the turn's own tools get, and that ``spawn`` captures.
 
@@ -678,7 +907,7 @@ async def test_a_direct_chat_runs_in_the_session_workdir_not_agent_home(tmp_path
         ),
     )
 
-    async def fake_chat(*, session_key, agent, handle, text, workspace=None, on_delta=None):
+    async def fake_chat(*, session_key, agent, handle, text, workspace=None, on_delta=None, media=()):
         from raven.agent.subagent.direct_chat import DirectTurnMeta
 
         seen["workspace"] = workspace
@@ -736,7 +965,7 @@ async def test_run_turn_records_a_failed_direct_turn_in_the_handoff_before_rerai
         status="failed",
     )
 
-    async def failing_chat(*, session_key, agent, handle, text, workspace=None, on_delta=None):
+    async def failing_chat(*, session_key, agent, handle, text, workspace=None, on_delta=None, media=()):
         raise DirectChatError(fail_meta) from RuntimeError("backend exploded")
 
     monkeypatch.setattr(loop.subagents, "chat", failing_chat)
@@ -1070,7 +1299,7 @@ async def test_run_turn_streams_a_direct_reply_instead_of_a_closing_text(tmp_pat
     emitted: list[Any] = []
     loop = _agent_loop_for_direct_chat(tmp_path, monkeypatch)
 
-    async def fake_chat(*, session_key, agent, handle, text, workspace=None, on_delta=None):
+    async def fake_chat(*, session_key, agent, handle, text, workspace=None, on_delta=None, media=()):
         from raven.agent.subagent.direct_chat import DirectTurnMeta
 
         assert on_delta is not None
@@ -1114,7 +1343,7 @@ async def test_run_turn_delivers_a_whole_direct_reply_when_nothing_streamed(tmp_
     emitted: list[Any] = []
     loop = _agent_loop_for_direct_chat(tmp_path, monkeypatch)
 
-    async def fake_chat(*, session_key, agent, handle, text, workspace=None, on_delta=None):
+    async def fake_chat(*, session_key, agent, handle, text, workspace=None, on_delta=None, media=()):
         from raven.agent.subagent.direct_chat import DirectTurnMeta
 
         return "sub reply", DirectTurnMeta(
@@ -1155,7 +1384,7 @@ async def test_run_turn_withholds_the_delta_hook_from_a_non_streaming_outlet(tmp
     offered: list[Any] = []
     loop = _agent_loop_for_direct_chat(tmp_path, monkeypatch)
 
-    async def fake_chat(*, session_key, agent, handle, text, workspace=None, on_delta=None):
+    async def fake_chat(*, session_key, agent, handle, text, workspace=None, on_delta=None, media=()):
         from raven.agent.subagent.direct_chat import DirectTurnMeta
 
         offered.append(on_delta)

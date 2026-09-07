@@ -427,8 +427,11 @@ def test_every_check_produces_the_severity_it_declares(sample: Sample, tmp_path:
     # The tenth wears one mark over each of three things, which is the state `same_mark`
     # reads and one no other fixture's pictures, each its own, are in.
     marked = check_deck(DeckUnderReview(pptx_path=_one_mark_over_three_things(tmp_path)))
+    # The eleventh is a page under a photograph washed to 30%, which is the state
+    # `washed_backdrop` reads and one no other fixture's pictures, opaque or absent, are in.
+    fogged = check_deck(DeckUnderReview(pptx_path=_a_page_under_a_washed_photograph(tmp_path)))
 
-    every = (*loaded, *bare, *alike, *banded, *fresh, *footed, *plain, *inherited, *cropped, *marked)
+    every = (*loaded, *bare, *alike, *banded, *fresh, *footed, *plain, *inherited, *cropped, *marked, *fogged)
     assert {finding.kind for finding in every} == set(DISPATCH), "a row nothing produced"
     for finding in every:
         assert finding.severity == DISPATCH[finding.kind], finding.kind
@@ -657,6 +660,20 @@ def _a_banded_table(tmp_path: Path) -> Path:
             cell.fill.solid()
             cell.fill.fore_color.rgb = RGBColor.from_string("E2CEA8")
     return builder.save("banded.pptx")
+
+
+def _a_page_under_a_washed_photograph(tmp_path: Path) -> Path:
+    """One page, one photograph the size of it, washed to 30%: the live cover that read as fog."""
+    from PIL import Image
+
+    from raven_ppt.services.template.compose import wash
+
+    photo = tmp_path / "skyline.png"
+    Image.new("RGB", (800, 450), (20, 40, 80)).save(photo)
+    builder = DeckBuilder(tmp_path)
+    page = builder.page()
+    wash(builder.picture(page, photo, left=0.0, top=0.0, width=13.333, height=7.5), 0.3)
+    return builder.save("fogged.pptx")
 
 
 def _one_composition(tmp_path: Path) -> Path:

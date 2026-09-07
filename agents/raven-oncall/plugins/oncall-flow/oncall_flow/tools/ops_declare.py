@@ -92,6 +92,153 @@ def _copies_the_case(command: str, staged_case: str) -> str | None:
     return None
 
 
+_NPROC = re.compile(r"--nproc[_-]per[_-]node(?:=|\s+)(\d+)")
+
+
+def _whole(value: object) -> int | None:
+    """A positive whole number, or None for anything else (including bool)."""
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    return n if n >= 1 and float(value) == n else None
+
+
+def _resources_words(resources: dict) -> str:
+    parts = []
+    if resources.get("gpus_per_job"):
+        parts.append(f"{resources['gpus_per_job']} device(s)")
+    if resources.get("cores_per_job"):
+        parts.append(f"{resources['cores_per_job']} core(s)")
+    if resources.get("memory_per_job_gb"):
+        parts.append(f"{resources['memory_per_job_gb']} GB")
+    return ", ".join(parts) or "1 unit"
+
+
+def _resources_for(
+    row: dict,
+    machine: str,
+    command: str,
+    *,
+    gpus_per_job: int | None,
+    cores_per_job: int | None,
+    memory_per_job_gb: int | None,
+) -> tuple[str, dict]:
+    """(refusal, resources) for what one job of this campaign holds.
+
+    Owner's rulings, 2026-09-03: a job declares how much of a machine it holds,
+    the machine declares how much it has, and the gate admits by what is free.
+    The number is said here, once, because cards per job is a property of how
+    the job starts and every trial starts the same way. Checked at declare so a
+    campaign that can never run is never created. A row that hands out nothing
+    countable (no gpus, no device count, no cores) keeps the job-count gate and
+    is asked for nothing; so is a campaign that starts no trial.
+    """
+    from oncall_flow.connections import capacity, resource_unit
+
+    unit = resource_unit(row)
+    if not command:
+        return "", {}
+    if not unit:
+        # A row that hands out nothing countable keeps the job-count gate. On a
+        # GPU row with no device count that gate can still stand for one card
+        # per job (a campaign from before this field is read as one), so a
+        # declaration of 1 passes through; more than one cannot be held to a
+        # count the row does not have, and the migration table makes that the
+        # blocking case (reviewed 2026-09-07).
+        n = _whole(gpus_per_job)
+        if n is not None and n > 1 and str(row.get("kind") or "").strip().lower() == "gpu":
+            return (
+                f"REFUSED: this declaration says one job holds {n} devices, but the row for {machine} does "
+                "not say how many devices it has, so nothing can hold that number to a count and the gate "
+                "would admit by job count alone. Fix the row first: write 'gpus: N' (or a device line "
+                "'N x <card>'; `raven ops connection add` probes and writes both), then declare again. "
+                "Nothing was written.",
+                {},
+            )
+        return "", {}
+    cap = capacity(row)
+    res: dict = {}
+    if unit == "gpus":
+        n = _whole(gpus_per_job)
+        if n is None:
+            return (
+                f"REFUSED: {machine} hands out devices ({cap['gpus']} of them), and this declaration does "
+                "not say how many one job holds. Pass gpus_per_job -- read it off how the job starts "
+                "(torchrun --nproc_per_node, or the length of the CUDA_VISIBLE_DEVICES list the code "
+                "side used); a single-card run is 1. Nothing was written.",
+                {},
+            )
+        if n > cap["gpus"]:
+            return (
+                f"REFUSED: {machine} has {cap['gpus']} device(s); one job holding {n} can never start here. "
+                "Declare it on a machine with that many, or split the work. Nothing was written.",
+                {},
+            )
+        if "CUDA_VISIBLE_DEVICES=" in command:
+            return (
+                "REFUSED: the command assigns devices itself (CUDA_VISIBLE_DEVICES=...). The system picks "
+                "the cards a job holds and exports that variable before the command runs; a template that "
+                "sets it too puts two jobs on one card. Take it out of the command. Nothing was written.",
+                {},
+            )
+        m = _NPROC.search(command)
+        if m and int(m.group(1)) != n:
+            return (
+                f"REFUSED: the command starts {m.group(1)} process(es) per node (--nproc_per_node) and "
+                f"gpus_per_job says {n}. They have to agree -- the launcher exports exactly gpus_per_job "
+                "devices. Nothing was written.",
+                {},
+            )
+        res["gpus_per_job"] = n
+    else:
+        n = _whole(cores_per_job)
+        if n is None:
+            return (
+                f"REFUSED: {machine} hands out cores ({cap['cores']} of them), and this declaration does "
+                "not say how many one job holds. Pass cores_per_job -- read it off how the job starts "
+                "(mpirun -np, decomposeParDict numberOfSubdomains); a serial run is 1. Nothing was written.",
+                {},
+            )
+        if n > cap["cores"]:
+            return (
+                f"REFUSED: {machine} has {cap['cores']} core(s); one job holding {n} can never start here. "
+                "Declare it on a machine with that many, or split the work. Nothing was written.",
+                {},
+            )
+        res["cores_per_job"] = n
+    if memory_per_job_gb is not None:
+        mem = _whole(memory_per_job_gb)
+        if mem is None:
+            return (
+                f"REFUSED: memory_per_job_gb must be a whole number of GB, not {memory_per_job_gb!r}. "
+                "Nothing was written.",
+                {},
+            )
+        if cap.get("memory_gb") and mem > cap["memory_gb"]:
+            return (
+                f"REFUSED: {machine} has {cap['memory_gb']} GB of memory; one job holding {mem} GB can "
+                "never start here. Nothing was written.",
+                {},
+            )
+        res["memory_per_job_gb"] = mem
+    return "", res
+
+
+def _device_key_note(meta: dict) -> str:
+    """A config that names a card is telling the system something it does not read."""
+    res = meta.get("resources") if isinstance(meta.get("resources"), dict) else {}
+    seed = meta.get("seed_config") if isinstance(meta.get("seed_config"), dict) else {}
+    if res.get("gpus_per_job") and any(k in seed for k in ("gpu", "CUDA_VISIBLE_DEVICES")):
+        return (
+            "seed_config carries a device key ('gpu' / 'CUDA_VISIBLE_DEVICES'); the system does not read "
+            "it -- devices are assigned at submit and exported to the job"
+        )
+    return ""
+
+
 def _unknown_placeholders(command: str) -> set[str]:
     """Names in ``command`` that nothing will fill in."""
     import string
@@ -416,6 +563,29 @@ class OpsDeclareTool(Tool):
                     "owner installed needs; 'docker' runs an image holding none of "
                     "their software. Defaults to 'process' with a command.",
                 },
+                "gpus_per_job": {
+                    "type": "integer",
+                    "description": (
+                        "How many devices one job holds, on a machine that hands out devices. Read off how "
+                        "the job starts (torchrun --nproc_per_node, the length of the CUDA_VISIBLE_DEVICES "
+                        "list the code side used); the system assigns the ids and exports the variable, the "
+                        "command must not. A config may override with gpus_needed."
+                    ),
+                },
+                "cores_per_job": {
+                    "type": "integer",
+                    "description": (
+                        "How many cores one job holds, on a CPU machine (mpirun -np, decomposeParDict "
+                        "numberOfSubdomains). A config may override with cores_needed."
+                    ),
+                },
+                "memory_per_job_gb": {
+                    "type": "integer",
+                    "description": (
+                        "Optional: memory one job holds, in GB, checked against the machine's memory when "
+                        "declared. A config may override with memory_needed_gb."
+                    ),
+                },
                 "seed_config": {
                     "type": "object",
                     "description": "The configuration round 0 must run. Take it from the case: the "
@@ -536,6 +706,9 @@ class OpsDeclareTool(Tool):
         command: str = "",
         backend: str = "",
         seed_config: dict | None = None,
+        gpus_per_job: int | None = None,
+        cores_per_job: int | None = None,
+        memory_per_job_gb: int | None = None,
         budget_total: float | None = None,
         budget_unit: str = "",
         budget_meter: str = "",
@@ -584,6 +757,16 @@ class OpsDeclareTool(Tool):
             )
         if conn_get(connection) is None:
             return f"REFUSED: there is no connection with id {connection!r}.\n{conn_describe()}"
+        resource_refusal, resources = _resources_for(
+            conn_get(connection) or {},
+            display_name_or_id(connection),
+            command,
+            gpus_per_job=gpus_per_job,
+            cores_per_job=cores_per_job,
+            memory_per_job_gb=memory_per_job_gb,
+        )
+        if resource_refusal:
+            return resource_refusal
         unknown = _unknown_placeholders(command)
         if unknown:
             # Caught here rather than at the first submit, where it surfaced as a
@@ -698,6 +881,8 @@ class OpsDeclareTool(Tool):
             meta["image"] = image
         if isinstance(seed_config, dict) and seed_config:
             meta["seed_config"] = seed_config
+        if resources:
+            meta["resources"] = resources
         table = ops_readings.merge(ops_readings.declared(previous or {}), readings)
         if table:
             meta["readings"] = table
@@ -820,6 +1005,10 @@ class OpsDeclareTool(Tool):
                 "  acts with    nothing -- this campaign only watches and reports. If something "
                 "has to be DONE when the condition holds, declare it again with an actions table."
             )
+        if meta.get("resources"):
+            lines.append(f"  holds        {_resources_words(meta['resources'])} per job")
+        if _device_key_note(meta):
+            lines.append(f"  note         {_device_key_note(meta)}")
         lines.extend(_target_lines(obj, meta.get("objective_words") or ""))
         seed = meta.get("seed_config")
         if seed:

@@ -265,6 +265,34 @@ async def test_kill_with_a_fresh_observation_cancels_and_records(tmp_path: Path)
     assert "kill" in kinds and "basis_accepted" in kinds
 
 
+async def test_kill_records_what_the_backend_saw_at_kill_time(tmp_path: Path) -> None:
+    """A backend that can see the process says whether it was alive and for how
+    long. Measured 2026-09-03: a job at 5m11s was killed on a report that it had
+    died, and "killed early" in the ledger read like cleanup. The note travels
+    into the record's error and into the reply, so the kill of a live job is
+    visible as that."""
+
+    class _Seeing(_Backend):
+        async def cancel(self, handle):
+            self.cancelled.append(handle)
+            return "process was alive (pid 4242, running 5.2 min) when killed"
+
+    cdir = _campaign(tmp_path)
+    backend = _Seeing()
+    register_backend("mock", lambda meta: backend)
+    led = Ledger(cdir / "ledger.json")
+    led.record("t1", campaign="camp-a")
+    led.set_handle("t1", JobHandle("mock", "job-1"))
+    led.set_status("t1", JobStatus.RUNNING)
+    _fresh_probe(cdir)
+
+    out = await OpsKillTool().execute(trials=["t1"], campaign="camp-a", basis="looked again; dead", reason="dead")
+
+    assert "t1: process was alive (pid 4242, running 5.2 min) when killed" in out
+    rec = Ledger(cdir / "ledger.json").get("t1")
+    assert "killed early: dead (process was alive (pid 4242, running 5.2 min) when killed)" == rec.result.error
+
+
 # ── The escalation faces over the guard (D4: model-mediated) ────────
 
 

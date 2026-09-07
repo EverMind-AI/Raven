@@ -61,7 +61,7 @@ from raven_ppt.services.measure.density import (
     unanchored_pages,
     undivided_bodies,
 )
-from raven_ppt.services.measure.figures import figure_findings
+from raven_ppt.services.measure.figures import figure_findings, washed_backdrops
 from raven_ppt.services.measure.fit import overset_copy
 from raven_ppt.services.measure.furniture import footer_findings, grid_findings
 from raven_ppt.services.measure.geometry import slide_count
@@ -236,6 +236,10 @@ DISPATCH: Mapping[str, Severity] = {
     "figure_mark_drift": Severity.WARNING,
     # A small picture parked in the title band, which is the deck's own furniture.
     "title_band_figure": Severity.WARNING,
+    # A picture that is the page, washed to a share between texture and full strength:
+    # type over it reads on fog. The cover that works has the photograph at full
+    # strength under a plane of ink.
+    "washed_backdrop": Severity.WARNING,
     # Two lines the file gives the same left edge and the render does not. The file's
     # own numbers say the author meant them flush, so the drift is a slip rather than
     # an indent -- the inset a text box carries is not visible in the geometry the
@@ -571,6 +575,7 @@ def checks() -> dict[str, Callable[[DeckUnderReview], list[Finding]]]:
         "figure_undersized": lambda deck: _of_kind(figure_findings(deck.pptx_path, deck.bands), "figure_undersized"),
         "figure_mark_drift": lambda deck: _of_kind(figure_findings(deck.pptx_path, deck.bands), "figure_mark_drift"),
         "title_band_figure": lambda deck: _of_kind(figure_findings(deck.pptx_path, deck.bands), "title_band_figure"),
+        "washed_backdrop": lambda deck: washed_backdrops(deck.pptx_path),
         # Only the flush reading is dispatched. Its sibling, which compares the insides
         # of a row of cards, found nothing true and nothing false over five real decks:
         # it has unit tests and no sample, and a check with no sample is a check whose

@@ -333,3 +333,140 @@ async def test_a_name_that_merely_starts_the_same_is_not_inside(home) -> None:
     out = await OpsDeclareTool().execute(**_args(remote_dir="/srv/case-old/runs"))
 
     assert not out.startswith("REFUSED"), out
+
+
+# ---- what one job holds is said at declare (owner's rulings, 2026-09-03) ----
+
+
+@pytest.fixture
+def gpu_home(tmp_path: Path, monkeypatch):
+    d = tmp_path / "ops"
+    d.mkdir()
+    tools_base.set_home(d)
+    rows = {
+        "gpu2": {"host": "h", "port": 1, "kind": "gpu", "gpus": 2},
+        "cpu32": {"host": "h", "port": 1, "kind": "cpu", "cores": 32, "memory": "232 GB"},
+    }
+    monkeypatch.setattr("oncall_flow.connections.get", lambda cid: rows.get(cid))
+    monkeypatch.setattr(
+        "oncall_flow.connections.display_name", lambda cid: {"gpu2": "GPU box", "cpu32": "CPU box"}.get(cid, "")
+    )
+    return d
+
+
+@pytest.mark.asyncio
+async def test_a_declared_gpus_per_job_on_an_uncounted_gpu_row_is_refused_not_dropped(gpu_home, monkeypatch) -> None:
+    """Reviewer's case (2026-09-07): a kind: gpu row with no gpus and no 'N x' device
+    line used to take gpus_per_job=2 and write no resources at all. The number is
+    refused and the row named as the thing to fix; it is not silently forgotten."""
+    monkeypatch.setattr(
+        "oncall_flow.connections.get",
+        lambda cid: {"host": "h", "port": 1, "kind": "gpu", "device": "NVIDIA A800 + NVIDIA A800", "cores": 128},
+    )
+    out = await OpsDeclareTool().execute(
+        **_args(connection="gpu2", gpus_per_job=2, command="torchrun --nproc_per_node=2 train.py {config}")
+    )
+    assert out.startswith("REFUSED") and "gpus: N" in out and "does not say how many devices" in out
+    assert "cores_per_job" not in out, "a GPU box is never advised to count cores"
+    assert not (gpu_home / "beam" / "meta.json").exists()
+    out = await OpsDeclareTool().execute(
+        **_args(connection="gpu2", command="torchrun --nproc_per_node=2 train.py {config}")
+    )
+    assert not out.startswith("REFUSED"), "with no per-job number said, the row keeps its job-count gate"
+    meta = json.loads((gpu_home / "beam" / "meta.json").read_text())
+    assert meta.get("resources", {}) == {}
+
+
+@pytest.mark.asyncio
+async def test_one_device_per_job_and_a_trialless_campaign_pass_an_uncounted_gpu_row(gpu_home, monkeypatch) -> None:
+    """The migration table keeps the job-count gate on such a row and blocks only
+    gpus_per_job > 1 (reviewer, 2026-09-07): one card per job is what that gate
+    already stands for, and a campaign that starts no trial holds nothing."""
+    monkeypatch.setattr(
+        "oncall_flow.connections.get",
+        lambda cid: {"host": "h", "port": 1, "kind": "gpu", "device": "NVIDIA A800 + NVIDIA A800", "cores": 128},
+    )
+    out = await OpsDeclareTool().execute(**_args(connection="gpu2", gpus_per_job=1, command="python train.py {config}"))
+    assert not out.startswith("REFUSED"), out
+    assert json.loads((gpu_home / "beam" / "meta.json").read_text()).get("resources", {}) == {}
+    out = await OpsDeclareTool().execute(
+        **_args(
+            campaign="watch",
+            connection="gpu2",
+            gpus_per_job=2,
+            command="",
+            objective_kind="condition",
+            condition="the queue on the GPU box is empty",
+            metric="",
+            goal="",
+        )
+    )
+    assert not out.startswith("REFUSED"), out
+
+
+@pytest.mark.asyncio
+async def test_a_gpu_machine_asks_how_many_devices_one_job_holds(gpu_home) -> None:
+    out = await OpsDeclareTool().execute(**_args(connection="gpu2"))
+    assert out.startswith("REFUSED") and "gpus_per_job" in out and "2 of them" in out
+    assert not (gpu_home / "beam" / "meta.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_a_job_larger_than_the_machine_is_refused_at_declare(gpu_home) -> None:
+    out = await OpsDeclareTool().execute(**_args(connection="gpu2", gpus_per_job=8))
+    assert out.startswith("REFUSED") and "can never start here" in out
+
+
+@pytest.mark.asyncio
+async def test_a_command_that_picks_its_own_card_is_refused(gpu_home) -> None:
+    out = await OpsDeclareTool().execute(
+        **_args(
+            connection="gpu2", gpus_per_job=1, command="cd {staged_case} && CUDA_VISIBLE_DEVICES=0 ./run.sh {config}"
+        )
+    )
+    assert out.startswith("REFUSED") and "CUDA_VISIBLE_DEVICES" in out and "Take it out of the command" in out
+
+
+@pytest.mark.asyncio
+async def test_nproc_per_node_has_to_agree_with_the_declaration(gpu_home) -> None:
+    disagree = await OpsDeclareTool().execute(
+        **_args(connection="gpu2", gpus_per_job=2, command="torchrun --nproc_per_node=1 train.py {config}")
+    )
+    assert disagree.startswith("REFUSED") and "have to agree" in disagree
+    agree = await OpsDeclareTool().execute(
+        **_args(connection="gpu2", gpus_per_job=2, command="torchrun --nproc_per_node=2 train.py {config}")
+    )
+    assert agree.startswith("Declared"), agree
+    meta = json.loads((gpu_home / "beam" / "meta.json").read_text())
+    assert meta["resources"] == {"gpus_per_job": 2}
+    assert "holds        2 device(s) per job" in agree
+
+
+@pytest.mark.asyncio
+async def test_a_seed_config_naming_a_card_earns_a_note_not_a_refusal(gpu_home) -> None:
+    out = await OpsDeclareTool().execute(**_args(connection="gpu2", gpus_per_job=1, seed_config={"gpu": "0", "lr": 1}))
+    assert out.startswith("Declared"), out
+    assert "the system does not read it" in out
+
+
+@pytest.mark.asyncio
+async def test_a_cpu_machine_asks_for_cores_and_checks_memory(gpu_home) -> None:
+    out = await OpsDeclareTool().execute(**_args(connection="cpu32"))
+    assert out.startswith("REFUSED") and "cores_per_job" in out and "32 of them" in out
+
+    out = await OpsDeclareTool().execute(**_args(connection="cpu32", cores_per_job=8, memory_per_job_gb=500))
+    assert out.startswith("REFUSED") and "232 GB of memory" in out
+
+    out = await OpsDeclareTool().execute(**_args(connection="cpu32", cores_per_job=8, memory_per_job_gb=64))
+    assert out.startswith("Declared"), out
+    meta = json.loads((gpu_home / "beam" / "meta.json").read_text())
+    assert meta["resources"] == {"cores_per_job": 8, "memory_per_job_gb": 64}
+    assert "holds        8 core(s), 64 GB per job" in out
+
+
+@pytest.mark.asyncio
+async def test_a_machine_that_hands_out_nothing_countable_is_asked_for_nothing(home) -> None:
+    """The legacy row: job-count gate, no new field required."""
+    out = await OpsDeclareTool().execute(**_args())
+    assert out.startswith("Declared"), out
+    assert "resources" not in json.loads((home / "beam" / "meta.json").read_text())

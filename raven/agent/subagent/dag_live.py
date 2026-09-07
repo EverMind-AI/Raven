@@ -22,7 +22,7 @@ an exception here would surface from a branch most callers never reach.
 
 from typing import Any
 
-__all__ = ["cancel_run", "live_run_ids", "owning_tool", "resolve_node"]
+__all__ = ["awaiting_decision", "cancel_run", "live_run_ids", "owning_tool", "resolve_node"]
 
 
 def _registered_tool(loop: Any) -> Any:
@@ -89,6 +89,39 @@ def cancel_run(loop: Any, run_id: str) -> bool:
         return bool(fn(run_id))
     except Exception:  # noqa: BLE001 - a failed stop is reported, not raised
         return False
+
+
+def awaiting_decision(loop: Any, run_id: str, node_id: str) -> bool | None:
+    """Whether one node is suspended waiting for an answer. ``None`` when nobody here can say.
+
+    Three-valued on purpose. A caller asks this to avoid paying for an answer
+    nothing will accept, so "no graph tool implements the question" has to be
+    distinguishable from "no, it is not waiting": collapsing them would refuse
+    every such call on a host built before the predicate existed.
+
+    Fans out over every instance for the reason ``resolve_node`` below does --
+    ``WiringMixin.resolve_dag_node`` answers from whichever one holds the run,
+    and a pre-check narrower than the hand-off it guards would refuse a node
+    that the hand-off would have answered.
+
+    Same fact as the ``awaiting_decision`` flag an exception report is announced
+    with, read at a later moment: that flag says the desk was just opened for
+    this node, and this says it is still open.
+    """
+    getter = getattr(loop, "dag_tools", None)
+    tools = getter() if getter is not None else [_registered_tool(loop)]
+    answered = False
+    for tool in tools:
+        fn = getattr(tool, "is_awaiting_decision", None) if tool is not None else None
+        if fn is None:
+            continue
+        try:
+            if fn(run_id, node_id):
+                return True
+        except Exception:  # noqa: BLE001 - liveness is advisory, never fatal
+            continue
+        answered = True
+    return False if answered else None
 
 
 def resolve_node(loop: Any, run_id: str, node_id: str, decision: str, message: str | None, plan: Any = None) -> bool:

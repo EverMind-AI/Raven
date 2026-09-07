@@ -1,7 +1,11 @@
 """FlowConfig: the research flow's knobs, ported from the fork's ``DRFlow*Config`` models.
 
-Same fields, same defaults, same sub-model shapes as the fork's ``raven/config/raven.py``
-(the frozen tree is the oracle); what changed is only the trunk seam it arrives through.
+Same sub-model shapes as the fork's ``raven/config/raven.py``, and the same fields and
+defaults except where this twin has moved past the vendored record: that checkout is kept
+at upstream ``a903a424`` while the twin takes upstream's later changes directly, and every
+such lead is named in ``TWIN_LEADS`` (``tests/test_agents_research_flow_parity.py``), which
+fails on any difference it does not name. What changed otherwise is only the trunk seam
+the config arrives through.
 The slice reaches the plugin as a plain dict with camelCase keys exactly as the product
 writes them in ``config.json`` (``plugins.config["research-flow"]``), so every model here
 accepts both camelCase and snake_case (``alias_generator=to_camel`` +
@@ -139,6 +143,11 @@ class FetchGateConfig(_Base):
     enabled: bool = False
     k: int = 15
     release_after_failed_fetches: int = 2
+    release_after_closed_iterations: int = 2
+    """Iterations spent closed without a page opened before search comes back for
+    the rest of the turn. Counts iterations, not attempts, so it advances when the
+    model's reaction to the closed schema is to stop fetching - upstream's dr@3.6
+    batch stranded two runs with the attempt-counting valve above at zero."""
 
 
 class SufficiencyConfig(_Base):
@@ -239,25 +248,37 @@ SUPERSEDED_VERSIONS: tuple[str, ...] = (
     "dr@3.2",
     "dr@3.3",
     "dr@3.4",
+    # dr@3.5 and dr@3.6 retired together upstream (ea19b948, 2026-09-06): the
+    # first batch was stopped mid-flight, the second closed the fetchGate ablation.
+    # The vendored record under subagents/ stays at dr@3.5 and lacks both.
+    "dr@3.5",
+    "dr@3.6",
 )
 
 # Second, a whole profile label whose distribution moved while its base rung
 # did not - the one case the base match cannot see. Retired label -> successor,
-# so the refusal says where to go. Mirrors the fork's ``_SUPERSEDED_PROFILES``
-# entry for entry: the two launchers load the same twin config.
+# so the refusal says where to go. Carries every live entry of the vendored
+# record's ``_SUPERSEDED_PROFILES`` (an entry whose base this build has retired
+# is dead and may be dropped) and may add its own at newer rungs: the record
+# stays at dr@3.5 while this twin tracks upstream, and
+# ``test_the_twins_retired_labels_are_the_forks`` holds the superset.
 SUPERSEDED_PROFILES: dict[str, str] = {
     # 2026-09-02: the identity gained the derive-and-recommend reply rules and
     # search snippets turned on. Same base rung, different distribution.
-    "dr@3.5-filetools-askuser": "dr@3.5-filetools-askuser-derive",
+    # 2026-09-07: moved from dr@3.5 to dr@3.7 with the base rung (the record's
+    # dr@3.5 entry is dead here, since that base is refused first), so the
+    # profile stays refused after an operator bumps only the number.
+    "dr@3.7-filetools-askuser": "dr@3.7-filetools-askuser-derive",
 }
 
 
 #: Profile labels THIS product retired by diverging from the fork, successor named.
 #:
-#: Separate from ``SUPERSEDED_PROFILES`` above, which is held equal to the fork's table by
-#: ``test_the_twins_retired_labels_are_the_forks`` and must be: both loaders read the same
-#: twin config, so a label one of them refuses and the other accepts is a config that
-#: loads on one launcher and not the other. This table is the other case - a label the
+#: Separate from ``SUPERSEDED_PROFILES`` above, which carries the vendored record's
+#: retirements (``test_the_twins_retired_labels_are_the_forks``: the twin may retire more,
+#: never less): both loaders read the same twin config, so a label one of them refuses and
+#: the other accepts is a config that loads on one launcher and not the other. This table
+#: is the other case - a label the
 #: fork must go on accepting because the fork's own distribution did not change, while
 #: this product's did and the label no longer describes what it runs.
 #:
@@ -275,6 +296,18 @@ PRODUCT_SUPERSEDED_PROFILES: dict[str, str] = {
     # ``config.json`` - so the model input moved and the label has to move with it, or two
     # distributions answer to one published name and no result can be attributed.
     "dr@3.5-filetools-askuser-derive-numeric": "dr@3.5-filetools-askuser-derive-numeric-cite",
+    # 2026-09-07: the deep report clause gained the ranking-order and column rules. Same
+    # reason as the two rows above - the clause is what every shipped run renders - and the
+    # shipped-prompt digest test is what caught the omission before review this time.
+    "dr@3.5-filetools-askuser-derive-numeric-cite": "dr@3.5-filetools-askuser-derive-numeric-cite-rank",
+    # 2026-09-07: the base rung moved to dr@3.7 (the fork retired dr@3.5 and dr@3.6),
+    # and the shipped fetchGate gained its second release valve at the class default,
+    # so the same suffix rides the new rung. The base table refuses the old label
+    # first; this entry is what lets the chain end on a label that loads.
+    "dr@3.5-filetools-askuser-derive-numeric-cite-rank": "dr@3.7-filetools-askuser-derive-numeric-cite-rank",
+    # The fork's live profile at the new rung is not this product's: the deep report
+    # clause and the reviewer rubric carry the numeric, identifier and ranking rules here.
+    "dr@3.7-filetools-askuser-derive": "dr@3.7-filetools-askuser-derive-numeric-cite-rank",
 }
 
 
@@ -385,7 +418,7 @@ class FlowConfig(_Base):
     """
 
     enabled: bool = False
-    version: str = "dr@3.5"
+    version: str = "dr@3.7"
     max_iterations: int | None = None
     context_window_tokens: int | None = None
     think_closing_tag_required: bool = True

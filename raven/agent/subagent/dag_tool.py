@@ -545,6 +545,23 @@ class SubAgentDagTool(Tool):
             outbox.answered(node_id)
         return True
 
+    def is_awaiting_decision(self, run_id: str, node_id: str) -> bool:
+        """Whether ``node_id`` of ``run_id`` is suspended waiting for an answer.
+
+        Exactly the condition :meth:`resolve_node` fails on -- both read this
+        run's desk, and ``AdjudicationDesk.resolve`` refuses for the same reason
+        ``is_open`` answers False -- so asking first refuses nothing the hand-off
+        would have accepted.
+
+        It is asked first because a replan's costs are paid before that hand-off,
+        inside ``prepare_replan``: the confirm question, the dispatch quota and
+        the minted instances, none of which is refunded when the hand-off then
+        finds nobody waiting. See the call site in
+        :mod:`raven.agent.subagent.dag_control_tools`.
+        """
+        desk = self._desks.get(run_id)
+        return desk is not None and desk.is_open(node_id)
+
     def is_foreground(self, run_id: str) -> bool:
         """Whether ``run_id`` is a foreground run still bound to the turn that started it."""
         outbox = self._outboxes.get(run_id)

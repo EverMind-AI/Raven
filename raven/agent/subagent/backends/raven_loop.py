@@ -8,13 +8,14 @@ and ``_build_subagent_prompt``, extracted verbatim so a spawned sub-agent's
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable, Collection
+from collections.abc import Awaitable, Callable, Collection, Sequence
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
 from raven.agent.subagent import activity
+from raven.agent.subagent.attachments import with_attachment_note
 from raven.agent.subagent.backends.base import IN_SUBAGENT_RUN
 from raven.agent.subagent.mcp_grant import (
     McpGrant,
@@ -36,6 +37,7 @@ from raven.memory_engine import filter_by_required_tools
 from raven.providers.streaming import generation_kwargs, stream_llm_call
 from raven.providers.tool_calls import openai_tool_call
 from raven.security.trust import wrap_untrusted
+from raven.spine.message import Media
 from raven.utils.messages import build_assistant_message
 
 _LIVE_CONFIG = LiveConfig()
@@ -204,6 +206,7 @@ class RavenLoopBackend:
         history: list[dict[str, Any]] | None = None,
         on_messages: Callable[[list[dict[str, Any]]], None] | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
+        media: Sequence[Media] = (),
     ) -> str:
         token = IN_SUBAGENT_RUN.set(True)
         grant = self.resolve_mcp_grant(mcps)
@@ -222,6 +225,7 @@ class RavenLoopBackend:
                     history=history,
                     on_messages=on_messages,
                     on_delta=on_delta,
+                    media=media,
                 )
         finally:
             IN_SUBAGENT_RUN.reset(token)
@@ -241,6 +245,7 @@ class RavenLoopBackend:
         history: list[dict[str, Any]] | None = None,
         on_messages: Callable[[list[dict[str, Any]]], None] | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
+        media: Sequence[Media] = (),
     ) -> str:
         # The spawn's snapshot wins over the pair this backend was built with;
         # see ``SubagentBackend.run``. The constructor pair remains the fallback
@@ -324,7 +329,7 @@ class RavenLoopBackend:
                 }
             ]
         )
-        messages.append({"role": "user", "content": task})
+        messages.append({"role": "user", "content": with_attachment_note(task, media)})
         # Where this run's own turns begin. Taken here rather than assumed to be
         # index 2, because a resumed instance arrives with its whole history in
         # front of the task -- slicing from a constant would replay every earlier
@@ -356,6 +361,46 @@ class RavenLoopBackend:
                     on_token_delta=on_delta,
                     **generation_kwargs(provider),
                 )
+                if response.finish_reason == "error" and not response.has_tool_calls:
+                    # The stream ended before anything deliverable arrived
+                    # (``stream_llm_call`` hands that back as an error reply rather
+                    # than raising, for the loop that owns a ladder). Its text is a
+                    # diagnostic, not the answer. The failed call's tokens were still
+                    # spent -- a cut mid-thought is 11-15k reasoning tokens -- so they
+                    # are billed before the reply is replaced.
+                    activity.note_usage(response.usage)
+                    verdict = response.error_classification
+                    if verdict is None and (classify := getattr(provider, "classify_error", None)) is not None:
+                        verdict = classify(content=response.content or None)
+                    if verdict is None or not verdict.retryable:
+                        # A refusal the repo has already decided not to retry -- an
+                        # oversized or unsupported image -- is refused the same way
+                        # a minute later, so asking the same bytes again is waste and
+                        # calling it transport is wrong. The run fails on it.
+                        raise SubagentNoAnswerError(
+                            "sub-agent's model call failed"
+                            + (f" ({verdict.category})" if verdict is not None else "")
+                            + ": "
+                            + (response.content or "")[:200]
+                        )
+                    # Retryable, and nothing of it was rendered: asking again through
+                    # the waited-for call repeats nothing and gets the retry ladder a
+                    # watched reply gave up.
+                    logger.warning(
+                        "Subagent [{}] streamed reply ended in transport ({}); asking again without the stream",
+                        task_id,
+                        (response.content or "")[:160],
+                    )
+                    response = await provider.chat_with_retry(
+                        messages=messages,
+                        tools=tools.get_definitions(),
+                        model=model,
+                    )
+                    if response.finish_reason == "error" and not response.has_tool_calls:
+                        activity.note_usage(response.usage)
+                        raise SubagentNoAnswerError(
+                            "sub-agent's model call failed in transport twice: " + (response.content or "")[:200]
+                        )
             # Per iteration, because that is how the cost accrues: this loop calls
             # the model once per round and the run's cost is their sum, unlike an
             # ACP agent's one cumulative report for the whole turn. Both arms
