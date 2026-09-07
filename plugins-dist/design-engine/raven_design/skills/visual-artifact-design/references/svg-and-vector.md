@@ -48,6 +48,34 @@ Workflow for a logo or icon drawn from a generated concept sheet:
 
 Inkscape 1.2's bitmap tracing is GUI-only; do not attempt it from the CLI.
 
+## Existing marks: three rungs, stop at the first that holds
+
+An existing logo or wordmark is a truth asset. Never redraw it; take it in on the
+lowest rung that works and record the rung in the asset ledger.
+
+1. **Real file.** Look for a vector or lossless raster before touching pixels:
+   the site's `/favicon.svg`, `apple-touch-icon`, `og:image`, a press or brand
+   kit, the GitHub org avatar (`https://github.com/<org>.png`, 460 px). Found ->
+   use it as is.
+2. **Key the original.** Most marks live on a flat colour (README banner, avatar,
+   header). Crop at full resolution and key the background:
+   `convert crop.png -fuzz 8% -transparent '#F3EFE6' -trim +repage mark.png`
+   (sample the exact background colour first; raise `-fuzz` only until the halo
+   goes, never past 15%). Flat one- or few-colour marks then go through the
+   tracers above to become SVG; gradients, bevels, photographic or many-colour
+   marks stay as the keyed PNG at source resolution.
+3. **Reconstruct** only when no flat-background source exists or the source is
+   too small to key cleanly (< 256 px on the mark's long edge). Use
+   `image_generate` in edit mode with the original as `images=[...]` and a prompt
+   that changes nothing but the background ("same mark, unchanged, on pure
+   #00FF00"); key the green out; if edges fringe, run a second pass on pure
+   #FF00FF and take alpha from the difference. Put source and result side by side
+   at the same size before accepting; any drift in letterform, weight or
+   proportion means try again, not ship. Ledger entry says `reconstructed`.
+
+Rung 3 never applies to a mark that rung 1 or 2 could deliver; "tracing was hard"
+is not a reason to regenerate.
+
 ## Output contract
 
 Decide explicitly:
