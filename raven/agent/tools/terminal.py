@@ -116,7 +116,7 @@ class SendTerminalTool(_TerminalTool):
     description = (
         "Send a plain-text task or summary to a uniquely named peer terminal, optionally waiting for content ACK."
     )
-    timeout_seconds = 310
+    timeout_seconds = 435
     parameters = {
         "type": "object",
         "properties": {"to": {"type": "string"}, "text": {"type": "string"}, "require_ack": {"type": "boolean"}},
@@ -158,16 +158,48 @@ class SendTerminalTool(_TerminalTool):
                     "\n\nAfter reading, acknowledge with: "
                     f"raven terminal send --to raven --text 'ack_for={envelope.nonce} received' --json"
                 )
-            result = await self.rpc(
-                "terminal.send",
-                {
-                    "handle": binding["handle"],
-                    "text": envelope.to_text(),
-                    "enter": True,
-                    "require_ack": require_ack,
-                    **self.session_params(),
-                },
-            )
+            params = {
+                "handle": binding["handle"],
+                "text": envelope.to_text(),
+                "enter": True,
+                "require_ack": require_ack,
+                **self.session_params(),
+            }
+            try:
+                result = await self.rpc("terminal.send", params)
+            except TerminalError as blocked:
+                if not (
+                    blocked.code == "agent_prompt_blocked"
+                    and isinstance(blocked.data, dict)
+                    and blocked.data.get("reason") in {"startup_pending", "permission"}
+                ):
+                    raise
+                if blocked.data.get("bytesWritten", 0) != 0:
+                    raise TerminalError(
+                        blocked.code,
+                        "Text may already have been submitted. Ask the human to answer the dialog in the terminal tab "
+                        "and verify delivery before retrying later.",
+                        blocked.data,
+                    ) from blocked
+                waited = await self.rpc(
+                    "terminal.wait", {"handle": binding["handle"], "for": "tui-idle", "timeout_ms": 120000}
+                )
+                if not waited["wait"].get("satisfied"):
+                    raise TerminalError(
+                        "agent_prompt_blocked",
+                        "Ask the human to answer the startup or permission dialog in the terminal tab, then retry later.",
+                        {**blocked.data, "wait": waited["wait"]},
+                    ) from blocked
+                try:
+                    result = await self.rpc("terminal.send", params)
+                except TerminalError as retry_error:
+                    if retry_error.code == "agent_prompt_blocked":
+                        raise TerminalError(
+                            retry_error.code,
+                            "Ask the human to answer the startup or permission dialog in the terminal tab, then retry later.",
+                            retry_error.data,
+                        ) from retry_error
+                    raise
             return json.dumps(result["send"])
         except TerminalError as exc:
             return _failure(exc)

@@ -278,3 +278,94 @@ def test_task_worktree_never_falls_back_to_process_cwd():
     with pytest.raises(TerminalError) as error:
         task_worktree()
     assert error.value.code == "session_cwd_missing"
+
+
+@pytest.mark.parametrize("reason", ["startup_pending", "permission"])
+@pytest.mark.parametrize("outcome", ["success", "timeout", "blocked", "retry_blocked"])
+async def test_send_waits_for_dialog_and_retries_once(reason, outcome):
+    calls = []
+    sends = []
+
+    async def rpc(method, params):
+        calls.append((method, params))
+        if method == "agents.resolve":
+            return {"unique": True, "candidates": [{"agent": candidate()}]}
+        if method == "terminal.show":
+            return {"terminal": {**candidate()["binding"], "connected": True, "writable": True, "orphaned": False}}
+        if method == "terminal.wait":
+            return {"wait": {"satisfied": outcome in {"success", "retry_blocked"}, "timedOut": outcome == "timeout"}}
+        if method == "terminal.send":
+            sends.append(dict(params))
+            if len(sends) == 1 or outcome == "retry_blocked":
+                raise TerminalError("agent_prompt_blocked", "Blocked", {"reason": reason, "bytesWritten": 0})
+            return {"send": {"accepted": True}}
+        raise AssertionError(method)
+
+    tool = SendTerminalTool(rpc)
+    tool.set_context("tui", "selected")
+    result = json.loads(await tool.execute(to="worker", text="hello", require_ack=True))
+    assert [p for m, p in calls if m == "terminal.wait"] == [
+        {"handle": "term_test", "for": "tui-idle", "timeout_ms": 120000}
+    ]
+    if outcome in {"success", "retry_blocked"}:
+        assert len(sends) == 2
+        assert sends[0] == sends[1]
+        assert sends[1]["session_id"] == "tui:selected"
+    else:
+        assert len(sends) == 1
+    if outcome == "success":
+        assert result["accepted"] is True
+    else:
+        assert result["error"]["code"] == "agent_prompt_blocked"
+        assert "human" in result["error"]["message"]
+        assert "terminal tab" in result["error"]["message"]
+        assert "retry later" in result["error"]["message"]
+
+
+@pytest.mark.parametrize(
+    "code,data",
+    [
+        ("agent_prompt_stalled", {"reason": "permission"}),
+        ("agent_prompt_blocked", {"reason": "other"}),
+        ("agent_prompt_blocked", None),
+    ],
+)
+async def test_send_does_not_retry_other_failures(code, data):
+    calls = []
+
+    async def rpc(method, params):
+        calls.append(method)
+        if method == "agents.resolve":
+            return {"unique": True, "candidates": [{"agent": candidate()}]}
+        if method == "terminal.show":
+            return {"terminal": {**candidate()["binding"], "connected": True, "writable": True, "orphaned": False}}
+        if method == "terminal.send":
+            raise TerminalError(code, "Original failure", data)
+        raise AssertionError(method)
+
+    result = json.loads(await SendTerminalTool(rpc).execute(to="worker", text="hello"))
+    assert result["error"]["code"] == code
+    assert result["error"]["message"] == "Original failure"
+    assert calls.count("terminal.send") == 1
+    assert "terminal.wait" not in calls
+
+
+async def test_send_never_retries_dialog_after_partial_write():
+    calls = []
+
+    async def rpc(method, params):
+        calls.append(method)
+        if method == "agents.resolve":
+            return {"unique": True, "candidates": [{"agent": candidate()}]}
+        if method == "terminal.show":
+            return {"terminal": {**candidate()["binding"], "connected": True, "writable": True, "orphaned": False}}
+        if method == "terminal.send":
+            raise TerminalError("agent_prompt_blocked", "Permission", {"reason": "permission", "bytesWritten": 128})
+        raise AssertionError(method)
+
+    result = json.loads(await SendTerminalTool(rpc).execute(to="worker", text="hello"))
+    assert result["error"]["code"] == "agent_prompt_blocked"
+    assert "verify delivery" in result["error"]["message"]
+    assert result["error"]["data"]["bytesWritten"] == 128
+    assert calls.count("terminal.send") == 1
+    assert "terminal.wait" not in calls
