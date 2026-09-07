@@ -84,6 +84,28 @@ describe('skills island', () => {
     expect(screen.getAllByText('gui.hub.install').length).toBe(2)
   })
 
+  /* Structural, not measured: happy-dom lays nothing out, so which row the
+     element is in is what a unit test can hold. */
+  it('puts the rating in the footer, so the name is not the thing that gives way', async () => {
+    install([hubItem({ name: 'openclaw-security-review' })])
+    await mount()
+
+    const card = document.querySelector('.hubcard.pmcard')!
+    expect(card.querySelector('.foot .stars')).not.toBeNull()
+    expect(card.querySelector('.top .stars')).toBeNull()
+    /* Still shown, not traded away: moving it must not become hiding it. */
+    expect(card.querySelector('.foot .stars .sv')!.textContent).toBe('4.5')
+  })
+
+  it('carries the whole identifier for one still too long to fit', async () => {
+    /* Nothing else on the card repeats the identifier. */
+    install([hubItem({ name: 'openclaw-a-very-long-skill-identifier-indeed' })])
+    await mount()
+
+    const nm = document.querySelector('.hubcard.pmcard .pmnm > span')!
+    expect(nm.getAttribute('title')).toBe('openclaw-a-very-long-skill-identifier-indeed')
+  })
+
   /* The wait for a card's body used to be one line of grey text, which left the
      shared panel a thin strip with a word in it that then jumped to a full card.
      A skeleton of the card's own anatomy holds the box instead. */

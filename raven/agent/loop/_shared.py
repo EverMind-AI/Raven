@@ -274,6 +274,20 @@ _SKIP_USER_INBOUND_ORIGINS = frozenset({Origin.SENTINEL, Origin.SUBAGENT})
 # SUBAGENT = the result re-injection (skipped so the announce gets no nudge).
 _SKIP_AFTER_SEND_ORIGINS = frozenset({Origin.SENTINEL, Origin.SUBAGENT})
 
+
+def _appended_by_hook(before: str | None, after: str) -> str:
+    """What an ``after_send`` hook added to the end of the reply, or ``""``.
+
+    Only an appended tail can be sent after the fact: the reply's own text has
+    already gone out as deltas, so a hook that rewrote it wholesale leaves nothing
+    a streaming client can be given without repeating what it has.
+    """
+    head = before or ""
+    if not after.startswith(head):
+        return ""
+    return after[len(head) :]
+
+
 # Marks the synthetic user message that carries images a transport cannot put in
 # a tool result. Not persisted: the tool result above it already names the file
 # path, so the only thing this message would add to the transcript is a user turn
