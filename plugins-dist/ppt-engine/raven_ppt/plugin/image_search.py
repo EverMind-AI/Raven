@@ -14,6 +14,7 @@ usability floor, the 16:9 shortness floor, dimensions and origin on every hit
 
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Any
 
@@ -23,6 +24,12 @@ from raven.contracts.tool import Tool
 
 # Below this a picture is already soft at half-page width on a 1280px canvas.
 _MIN_IMAGE_WIDTH = 640
+# How many of a batch's queries are in flight at once. `ppt_fetch`'s number, for the
+# same reason it has one: this is a courtesy bound on one endpoint, not a tuned figure.
+_SEARCH_CONCURRENCY = 4
+# How many queries one call takes. A deck's pictures are one pass over the outline's
+# `needs`, and twenty pages do not ask for more than this many distinct things.
+MAX_QUERIES = 12
 
 
 class PptImageSearchTool(Tool):
@@ -33,22 +40,30 @@ class PptImageSearchTool(Tool):
         "Search the web for pictures: results carry the direct image URL, its pixel dimensions and the "
         "page it came from, and anything too small to hold up on a screen is dropped rather than "
         "offered. Use it for a real logo, product screen, published plot or other existing evidence; "
-        "ppt_generate_image is for visuals that do not exist. Download what you select with ppt_fetch, "
-        "passing the words its page printed about it as the caption, so the ingest reads it into this "
-        "deck's evidence."
+        "ppt_generate_image is for visuals that do not exist. Pass every picture the deck needs as "
+        "queries=[...] in one call -- they run together and come back grouped by query, so a deck's "
+        "whole picture search is one round rather than one per page. Download what you select with "
+        "ppt_fetch, passing the words its page printed about it as the caption, so the ingest reads "
+        "it into this deck's evidence."
     )
     parameters = {
         "type": "object",
         "properties": {
-            "query": {"type": "string", "description": "Search query"},
-            "count": {"type": "integer", "description": "Results (1-10)", "minimum": 1, "maximum": 10},
+            "queries": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+                "maxItems": MAX_QUERIES,
+                "description": "every picture this deck needs, one query each; they are searched together",
+            },
+            "query": {"type": "string", "description": "one query, for a single follow-up search"},
+            "count": {"type": "integer", "description": "Results per query (1-10)", "minimum": 1, "maximum": 10},
             "min_width": {
                 "type": "integer",
                 "minimum": 1,
                 "description": "drop anything narrower than this in pixels (default 640)",
             },
         },
-        "required": ["query"],
     }
 
     def __init__(self, api_key: str | None = None, max_results: int = 5, proxy: str | None = None):
@@ -63,22 +78,44 @@ class PptImageSearchTool(Tool):
 
     async def execute(
         self,
-        query: str,
+        queries: list[str] | None = None,
+        query: str | None = None,
         count: int | None = None,
         min_width: int | None = None,
         **kwargs: Any,
     ) -> str:
+        """One search or a deck's worth, in one round.
+
+        `query` is kept beside `queries` rather than replaced: a follow-up on one page
+        is a single search, and making the caller wrap it in a list to ask for one
+        picture is a worse tool for the more common of the two calls.
+        """
         if not self.api_key:
             return (
                 "Error: Serper API key not configured. Set it in "
                 'plugins.config["ppt-engine"].imageSearch.apiKey (or export SERPER_API_KEY), '
                 "then restart the agent."
             )
-        return await self._search_images(
-            query,
-            min(max(count or self.max_results, 1), 10),
-            max(min_width or _MIN_IMAGE_WIDTH, 1),
-        )
+        wanted = [said.strip() for said in (queries or ([query] if query else [])) if said and said.strip()]
+        if not wanted:
+            return "Error: pass queries=[...] with the pictures this deck needs, or query='...' for one."
+        if len(wanted) > MAX_QUERIES:
+            return f"Error: {len(wanted)} queries in one call; {MAX_QUERIES} is the most. Split them."
+        per_query = min(max(count or self.max_results, 1), 10)
+        floor = max(min_width or _MIN_IMAGE_WIDTH, 1)
+        gate = asyncio.Semaphore(_SEARCH_CONCURRENCY)
+
+        async def one(said: str) -> str:
+            async with gate:
+                try:
+                    return await self._search_images(said, per_query, floor)
+                except Exception as exc:  # noqa: BLE001 -- one query's failure is not the batch's
+                    return f"Image results for: {said}\n\nThis search failed ({type(exc).__name__}: {exc})."
+
+        found = await asyncio.gather(*(one(said) for said in wanted))
+        if len(found) == 1:
+            return found[0]
+        return ("\n\n" + "-" * 60 + "\n\n").join(found)
 
     async def _search_images(self, query: str, count: int, min_width: int) -> str:
         """Serper's image surface, filtered to what a slide can actually use.

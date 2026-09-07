@@ -144,6 +144,47 @@ async def test_a_deck_longer_than_the_cap_is_covered_by_its_second_round(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_a_page_the_build_could_not_draw_is_not_handed_to_the_reader(tmp_path) -> None:
+    """A `page_failed` page is a stand-in this package wrote, carrying one line -- "Page
+    2 did not draw" and the error. Asking a model what is wrong with how it looks spends
+    a call and a page of the reading's budget to be told what the build's own finding
+    already said. Measured on a live run: the reader was handed six pages, came back
+    with four, and the two it did not answer for were exactly the two the build had
+    reported as `page_failed`.
+
+    The reply says which pages were left out and why, so the count of pages read is
+    explainable; an explicit `pages=` is the caller's own choice and is read as asked.
+    """
+    from raven_ppt.backends.script import page_failures
+    from raven_ppt.backends.script.workspace import page_failures_path
+
+    deck = _deck(tmp_path, pages=3)
+    page_failures_path(deck).write_text(
+        json.dumps({"pages": [{"page": 2, "error": "RuntimeError: grab: nothing matched", "traceback": ""}]}),
+        encoding="utf-8",
+    )
+    assert [entry["page"] for entry in page_failures(deck)] == [2], "the fixture is the record the runner writes"
+    composer = Composer(_ONE)
+    tool = PptReviewTool(tmp_path, Views(3), composer=composer)
+
+    body = _payload(await tool.execute(project="ws"))
+
+    asked = sorted(int(said.split("Page ")[1].split(".")[0]) for said in composer.shown)
+    assert asked == [1, 3], f"the stand-in page was handed to the reader: {asked}"
+    assert body["pages_reviewed"] == 2
+    assert body["stand_ins_not_read"]["pages"] == [2]
+    assert "page_failed" in body["stand_ins_not_read"]["why"]
+    assert "pages_not_reviewed" not in body, "a page left out on purpose is not a page the cap dropped"
+    assert sorted(int(page) for page in body["pages_read"]) == [1, 3]
+
+    composer.shown.clear()
+    body = _payload(await tool.execute(project="ws", pages=[2]))
+    asked = sorted(int(said.split("Page ")[1].split(".")[0]) for said in composer.shown)
+    assert asked == [2], "asked for by number, the stand-in is read like any page"
+    assert "stand_ins_not_read" not in body
+
+
+@pytest.mark.asyncio
 async def test_a_record_written_before_it_kept_versions_still_reads(tmp_path) -> None:
     """A resumed job's `review.json` can be a plain list of page numbers.
 

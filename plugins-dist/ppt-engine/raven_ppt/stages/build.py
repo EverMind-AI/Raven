@@ -42,6 +42,7 @@ what is reported is the count, and the author reads it and decides.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import uuid
 from collections.abc import Callable, Sequence
@@ -49,7 +50,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from raven_ppt.backends.script import blocks_rejection, page_blocks, page_failures, script_path
+from raven_ppt.backends.script import blocks_rejection, page_blocks, page_failures, read_script
 from raven_ppt.contracts import (
     BuildOutcome,
     Finding,
@@ -61,7 +62,7 @@ from raven_ppt.contracts import (
     outline_path,
 )
 from raven_ppt.services import seen
-from raven_ppt.services.measure.geometry import iter_shapes, open_deck, shows_picture
+from raven_ppt.services.measure.geometry import iter_shapes, open_deck, picture_blob, shows_picture
 from raven_ppt.services.measure.type_size import census, rendered_spans
 from raven_ppt.services.publish import PublishRefusedError, publish, stage
 from raven_ppt.services.publish.deliver import published_digests
@@ -253,10 +254,8 @@ def _changed(project: Project, outcome: BuildOutcome, draft: bool) -> str:
 
 def _page_blocks(project: Project, outcome: BuildOutcome) -> dict[int, str] | None:
     """This build's per-page fingerprints, or None when the program cannot be read."""
-    from raven_ppt.backends.script.workspace import script_path
-
     try:
-        script = script_path(project).read_text(encoding="utf-8")
+        script = read_script(project)
     except (OSError, AttributeError):
         return None
     return seen.blocks_of(script, outcome.sources) or None
@@ -406,13 +405,68 @@ def _unseen_pages(project: Project, outcome: BuildOutcome) -> list[int] | None:
     """The pages whose current code has not been rendered back, or None when the
     deck has no page-to-code mapping to keep such a record by."""
     try:
-        script = script_path(project).read_text(encoding="utf-8")
+        script = read_script(project)
     except OSError:
         return None
     blocks = seen.blocks_of(script, outcome.sources)
     if not blocks:
         return None
     return list(seen.unseen(project, blocks))
+
+
+def _own_figures(project: Project) -> dict[str, str]:
+    """sha1 of every figure this deck ingested -> its filename.
+
+    By bytes, because that is what survives the trip: a figure reaches a page through
+    `add_picture` or `replace_picture` and the part that lands in the file is the file
+    that was read. A name would not survive it.
+    """
+    found: dict[str, str] = {}
+    try:
+        entries = sorted(project.figures_dir.glob("*"))
+    except OSError:
+        return found
+    for path in entries:
+        try:
+            found[hashlib.sha1(path.read_bytes(), usedforsecurity=False).hexdigest()] = path.name
+        except OSError:
+            continue
+    return found
+
+
+def _layout_pictures(slide: Any) -> list:
+    """The pictures a page inherits from its layout, or nothing when it cannot be read."""
+    from raven_ppt.services.template.compose import layout_pictures
+
+    try:
+        return list(layout_pictures(slide))
+    except Exception:  # noqa: BLE001 -- a layout that cannot be read shows nothing
+        return []
+
+
+def _figure_on_layout(slide: Any, own: dict[str, str]) -> str | None:
+    """The name of this deck's own figure sitting on the page's layout, if one is.
+
+    Several bundled templates draw their cover art on the layout rather than on the
+    page, and the helper an author writes swaps it there -- so the figure is placed,
+    on the only shape that draws it, while a check that reads the slide alone calls
+    the page bare. A live run sat on that finding across several builds with the
+    figure already on screen: page 1's layout held the ingested cover art byte for
+    byte and the slide held no picture at all.
+
+    Only this deck's own figures count, never any layout picture: a template's stock
+    layout photograph would otherwise answer for every figure every page promised.
+    """
+    if not own:
+        return None
+    for shape in _layout_pictures(slide):
+        blob = picture_blob(shape)
+        if blob is None:
+            continue
+        name = own.get(hashlib.sha1(blob, usedforsecurity=False).hexdigest())
+        if name:
+            return name
+    return None
 
 
 def _unplaced_figure_findings(project: Project, outcome: BuildOutcome) -> list[Finding]:
@@ -446,6 +500,7 @@ def _unplaced_figure_findings(project: Project, outcome: BuildOutcome) -> list[F
         deck = open_deck(outcome.pptx_path)
     except Exception:
         return []
+    own = _own_figures(project)
     findings = []
     for number, slide in enumerate(deck.slides, 1):
         wanted = planned.get(number)
@@ -453,14 +508,38 @@ def _unplaced_figure_findings(project: Project, outcome: BuildOutcome) -> list[F
             continue
         if any(shows_picture(shape) for shape in iter_shapes(slide.shapes)):
             continue
+        # A page can carry its figure without owning a shape: several templates keep the
+        # cover's, the section page's and the closing page's picture on the *layout*,
+        # and `replace_picture` on the layout is then the only place a page can put one
+        # -- `pictures={...}` on the cloned page never reaches it. So a figure swapped
+        # in there is placed, and this check said it was not: a live run spent six
+        # builds on its cover, the layout holding the deck's own cover art byte for
+        # byte while the finding said the page had been built without a picture on it.
+        #
+        # Only this deck's own figures count. Any layout picture counting would let a
+        # template's stock photograph satisfy every figure any page ever promised, which
+        # is the failure this check exists to catch.
+        if _figure_on_layout(slide, own):
+            continue
         listed = ", ".join(wanted)
+        # And when the layout's picture is the template's own, say so: otherwise the
+        # sentence reads as false to an author looking at a render that plainly shows a
+        # picture. The second reader was describing that very illustration in the same
+        # round ("the wheelchair and the door are clipped by the right edge").
+        seen = (
+            " The picture you can see on it is the template layout's, not one this page carries -- "
+            "which is why it cannot be the figure the plan promised."
+            if _layout_pictures(slide)
+            else ""
+        )
         findings.append(
             Finding(
                 kind="unplaced_figure",
                 severity=Severity.WARNING,
                 page=number,
                 message=(
-                    f"the plan gives this page {listed} and the page was built without a picture on it. "
+                    f"the plan gives this page {listed} and the page was built without a picture on it."
+                    f"{seen} "
                     "Place it (`add_picture`, or `picture_fit` to scale it into a box whole), or call "
                     "ppt_outline again for a plan that does not promise it -- a figure gathered and never "
                     "placed is a page arguing from a description of evidence rather than the evidence"
@@ -489,7 +568,7 @@ def _record_shown(project: Project, outcome: BuildOutcome, showing: Sequence[int
     if any(finding.kind == "unrendered" for finding in measured):
         return
     try:
-        script = script_path(project).read_text(encoding="utf-8")
+        script = read_script(project)
     except OSError:
         return
     blocks = seen.blocks_of(script, outcome.sources)
@@ -569,7 +648,7 @@ def _mapping_findings(project: Project, outcome: BuildOutcome) -> list[Finding]:
     if outcome.sources:
         return []
     try:
-        lines = script_path(project).read_text(encoding="utf-8").splitlines(keepends=True)
+        lines = read_script(project).splitlines(keepends=True)
     except OSError:
         return []
     blocks = page_blocks(lines)
