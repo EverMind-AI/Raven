@@ -58,6 +58,7 @@ import * as notifications from './shell/notifications'
 import * as urlAction from './shell/open-url'
 import * as panes from './shell/panes'
 import * as perm from './shell/perm'
+import * as tier from './shell/tier'
 import { md } from './shell/prose'
 import * as resume from './shell/resume'
 import * as scrollbars from './shell/scrollbars'
@@ -90,6 +91,9 @@ declare global {
     drawPerm?: typeof perm.draw
     togglePerm?: typeof perm.toggle
     closePermPop?: typeof perm.close
+    loadTier?: typeof tier.load
+    toggleTier?: typeof tier.toggle
+    closeTierPop?: typeof tier.close
     paneLoad?: typeof panes.load
     drawFoot?: typeof foot.draw
     drawCtx?: typeof ctxchip.draw
@@ -151,6 +155,14 @@ window.openModelPicker = modelPicker.open
 window.drawPerm = perm.draw
 window.togglePerm = perm.toggle
 window.closePermPop = perm.close
+/* The tier chip's three names, mounted the same way and for the same reason: its
+   click, its click-away and its one load all come from layers this migration has
+   not reached. No `drawTier` -- unlike the permission chip, nothing outside can
+   usefully redraw this one, because its label is the catalogue's own text and a
+   language flip does not change it. */
+window.loadTier = tier.load
+window.toggleTier = tier.toggle
+window.closeTierPop = tier.close
 /* The context ring's two names. Both have callers on both sides: setCtx from
    each layer's turn bookkeeping (demo's replay, live's message.complete), and
    drawCtx from the boot sequence and each side's language flip -- the ring's

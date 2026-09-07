@@ -95,3 +95,36 @@ DS.settings ??= {
   checkUpdate: () => notLive(),
   setLang: (v) => langPickDemo(v),
 };
+
+/* The tier fixture: three rungs behind the same interface `session.set_mode`
+   implements, so the design canvas can show the chip and its panel.
+
+   The sentences are `raven/config/schema.py:_TIER_TEXTS` and their entries in
+   `raven/i18n/zh.py`, verbatim in both languages, because ONE PER RUNG is the
+   part of this control worth reviewing: the row draws the description, so a
+   sentence of this file's own invention -- and especially one sentence repeated
+   with the id swapped in -- previews a line height and a wrap the live UI never
+   receives. Keyed to `LANG` for the same reason: raven translates these three
+   itself, so the canvas can only show the Chinese lines by carrying them. */
+let tierDemo = 'high';
+const TIER_SUB = {
+  en: {
+    medium: 'The least effort a sub-agent is asked for.',
+    high: 'The middle amount of effort, between the other two.',
+    max: 'The most effort a sub-agent is asked for.',
+  },
+  zh: {
+    medium: '子代理被要求付出的最少努力。',
+    high: '居中的投入，介于另外两档之间。',
+    max: '子代理被要求付出的最多努力。',
+  },
+};
+const tierMenuDemo = () => ['medium', 'high', 'max'].map((id) => ({
+  id,
+  name: id.charAt(0).toUpperCase() + id.slice(1),
+  description: (TIER_SUB[LANG] || TIER_SUB.en)[id],
+}));
+DS.tier ??= {
+  read: async () => ({ mode: tierDemo, availableModes: tierMenuDemo() }),
+  set: async (mode) => { tierDemo = mode; return { mode: tierDemo, availableModes: tierMenuDemo() }; },
+};
