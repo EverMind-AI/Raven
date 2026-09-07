@@ -337,6 +337,7 @@ class SubAgentDagTool(Tool):
         ask: "Ask | None" = None,
         control_reachable: "Callable[[], bool] | None" = None,
         provider_for: "Callable[[], Any] | None" = None,
+        binding_for: "Callable[[], tuple[Any, str | None]] | None" = None,
         verdict_config: "SubagentDagConfig | None" = None,
     ) -> None:
         # Read through to SubagentManager's flag rather than mirroring it: this
@@ -387,6 +388,10 @@ class SubAgentDagTool(Tool):
         # from the same config as the loop but holds no provider of its own, and an
         # unwired host (tests, offline entry points) simply skips the judgement.
         self._provider_for = provider_for
+        # The running turn's (provider, model), read per dispatch for the reason
+        # `provider_for` is: the loop's binding is a property over the turn, and a
+        # graph dispatched under a switched model has to carry it to its nodes.
+        self._binding_for = binding_for
         self._verdict_config = verdict_config if verdict_config is not None else SubagentDagConfig()
         self._cancels: dict[str, asyncio.Event] = {}
         self._desks: dict[str, AdjudicationDesk] = {}
@@ -1244,31 +1249,15 @@ class SubAgentDagTool(Tool):
         store = DagRunStore(self._backend, self._run_root(self._turn_conversation()), run_id)
         await store.record_replan(entry)
 
-    @staticmethod
-    def _link_entry(plan: "ReplanPlan", *, started: bool, error: str | None = None) -> dict[str, Any]:
-        """The replan link's shape, in the one place that decides it.
-
-        Both writers -- the ordinary hand-off and the interrupted one -- record
-        the same four facts about the decision and differ only in whether the
-        successor started and why not. Written out twice, a field added for one
-        reader silently reaches only half the records that reader will meet.
-        """
+    async def start_replan(self, run_id: str, plan: "ReplanPlan", *, bound: bool = False) -> "str | ToolResult":
+        """Start the successor run and note the link on the run it replaces."""
         entry: dict[str, Any] = {
             "run_id": plan.run_id,
             "from_node": plan.from_node,
             "reason": plan.reason,
             "decided_at": int(time.time() * 1000),
-            "started": started,
+            "started": True,
         }
-        if error is not None:
-            entry["error"] = error
-        return entry
-
-    async def start_replan(self, run_id: str, plan: "ReplanPlan", *, bound: bool = False) -> "str | ToolResult":
-        """Start the successor run and note the link on the run it replaces."""
-        # Built before the submission, so `decided_at` stamps when the decision
-        # was taken rather than when its dispatch happened to return.
-        entry = self._link_entry(plan, started=True)
         try:
             result = await self._submit_replan(plan, bound=bound)
         except DagValidationError as exc:
@@ -1296,7 +1285,15 @@ class SubAgentDagTool(Tool):
         in the hand-off -- escapes both guards and still leaves the link
         unwritten.
         """
-        await self._record_link(run_id, self._link_entry(plan, started=False, error=reason))
+        entry: dict[str, Any] = {
+            "run_id": plan.run_id,
+            "from_node": plan.from_node,
+            "reason": plan.reason,
+            "decided_at": int(time.time() * 1000),
+            "started": False,
+            "error": reason,
+        }
+        await self._record_link(run_id, entry)
 
     async def _emit_replanned(self, run_id: str, plan: "ReplanPlan") -> None:
         origin = self._origin.get() or self._default_origin
@@ -1603,6 +1600,7 @@ class SubAgentDagTool(Tool):
             announce_exception = _to_outbox
             released = outbox.released
         try:
+            provider, model = self._binding_for() if self._binding_for is not None else (None, None)
             result = await run_dag(
                 spec,
                 resolve=lambda node: dispatch_backends.get(node.id),
@@ -1628,6 +1626,8 @@ class SubAgentDagTool(Tool):
                 adjudication_timeout_s=self._verdict_config.adjudication_timeout_seconds,
                 control_reachable=self._control_reachable,
                 released=released,
+                provider=provider,
+                model=model,
             )
         except DagValidationError as exc:
             return self._validation_error(exc)

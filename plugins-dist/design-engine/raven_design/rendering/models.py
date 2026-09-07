@@ -88,6 +88,7 @@ class RenderRequest:
     asset_root: Path | None = None
     internal_output: bool = False
     actions: tuple[dict[str, Any], ...] | None = None
+    scale: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -119,9 +120,9 @@ class RenderConfig:
     timeout_seconds: int = 180
     browser_ready_seconds: float = 10.0
     min_viewport_width: int = 320
-    max_viewport_width: int = 3840
+    max_viewport_width: int = 8192
     min_viewport_height: int = 240
-    max_viewport_height: int = 2160
+    max_viewport_height: int = 8192
     browser_changed_pixel_limit: float = 0.01
     browser_channel_delta_limit: float = 0.005
     spreadsheet_viewport_width: int = 1600

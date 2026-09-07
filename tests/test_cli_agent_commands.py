@@ -138,6 +138,9 @@ def _invoke_agent_capturing_session(
         def set_submit(self, _submit) -> None:
             pass
 
+        def get_running_count(self) -> int:
+            return 0
+
     class _StubAgentLoop:
         def __init__(self, **kwargs):
             self.channels_config = kwargs.get("channels_config")
@@ -307,6 +310,40 @@ def test_agent_continue_without_prior_session_starts_fresh(
     assert "no previous cli session" in r.stdout
 
 
+@pytest.mark.asyncio
+async def test_wait_for_background_work_covers_subagent_follow_up(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One-shot teardown waits for a sub-agent and its submitted follow-up."""
+    from raven.cli import agent_commands
+
+    state = {"subagent_running": True, "follow_up_running": False}
+    sleeps: list[float] = []
+
+    class _Subagents:
+        def get_running_count(self) -> int:
+            return int(state["subagent_running"])
+
+    class _Scheduler:
+        def has_inflight(self, conversation: str) -> bool:
+            return conversation == "cli:direct" and state["follow_up_running"]
+
+    async def _sleep(delay: float) -> None:
+        sleeps.append(delay)
+        if delay == 1.0 and state["subagent_running"]:
+            state["subagent_running"] = False
+            state["follow_up_running"] = True
+        elif delay == 1.0:
+            state["follow_up_running"] = False
+        elif delay == 2.0:
+            state["follow_up_running"] = False
+
+    monkeypatch.setattr(agent_commands.asyncio, "sleep", _sleep)
+    from types import SimpleNamespace
+
+    await agent_commands._wait_for_background_work(SimpleNamespace(subagents=_Subagents()), _Scheduler(), "cli:session")
+
+    assert sleeps == [1.0, 1.0, 2.0]
+
+
 # ============================================================================
 # No cron on the one-shot path
 # ============================================================================
@@ -434,6 +471,9 @@ def test_agent_auth_error_exit_nonzero_with_guidance(
     class _StubSubagents:
         def set_submit(self, _submit) -> None:
             pass
+
+        def get_running_count(self) -> int:
+            return 0
 
     class _AuthFailAgentLoop:
         def __init__(self, **kwargs):
@@ -646,6 +686,9 @@ def _invoke_agent_with_usage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *,
     class _StubSubagents:
         def set_submit(self, _submit) -> None:
             pass
+
+        def get_running_count(self) -> int:
+            return 0
 
     class _StubAgentLoop:
         def __init__(self, **kwargs):

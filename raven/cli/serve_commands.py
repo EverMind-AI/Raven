@@ -321,7 +321,12 @@ async def _serve_main(port: int, open_browser: bool) -> None:
     stack = await build_rpc_stack(gateway.broadcast)
     gateway.dispatcher = stack.dispatcher
 
-    app = build_app(gateway, resolve_ui_dist(), deliverables=stack.deliverables)
+    app = build_app(
+        gateway,
+        resolve_ui_dist(),
+        deliverables=stack.deliverables,
+        agent_loop_factory=lambda: stack.agent_loop,
+    )
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", bound_port)

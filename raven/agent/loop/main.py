@@ -90,28 +90,11 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
     # would mean the failure was never about images.
     _MAX_IMAGE_DEMOTE_RETRIES = 1
 
-    # Max times a request refused for the size of its pictures is asked again with
-    # the image window closed a notch. Two: from a window of two, the second notch
-    # reaches zero, past which no picture is sent and a refusal cannot be about one.
+    # Max times an image the endpoint refused for its size is taken out of the
+    # conversation before the refusal is final. Two: the newest picture first, which
+    # is the one that just arrived; then every picture, in case the limit is on the
+    # request as a whole.
     _MAX_IMAGE_STRIP_RETRIES = 2
-
-    # The image window. Pictures a tool showed stay in the request while all of
-    # them together fit the configured budget (``agents.defaults.imageWindowBudgetBytes``,
-    # decoded bytes, carried on ``RecoveryLimits``); when they do not,
-    # every image-bearing message but the newest ``_IMAGE_WINDOW_RECENT_MESSAGES``
-    # loses its pictures at once, each replaced by a note saying what it showed and
-    # how to see it again. Pictures stay for as long as a turn runs otherwise, and
-    # one deck build reached 75 of them in a single request (26.6 MB decoded) before
-    # OpenRouter refused it with 413, four times across two runs; the refusals were
-    # measured to start at about 26.3 MB decoded, so the default of 12 MB leaves
-    # room for the largest batch seen (21 template pages, 6.06 MB) to land on top
-    # of a full window; 0 turns the standing pass off and leaves the refusal
-    # ladder. A collapse rather than a per-batch slide because every withdrawal
-    # breaks the prefix an upstream cache can match: sliding cost 16 breaks in 60
-    # calls and 20 points of cache hit rate on one measured deck, collapsing costs
-    # one to four per deck on the same sequences. Two kept so the render an edit
-    # was made against stays beside the render that came back from it.
-    _IMAGE_WINDOW_RECENT_MESSAGES = 2
 
     # Most recent tool results kept intact when emergency-shrinking; older ones
     # are elided (their bodies are the bulk of mid-turn context growth).
@@ -474,7 +457,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             max_spawns_per_hour=max_subagent_spawns_per_hour,
             agents=agents,
             session_dir=self.sessions.session_dir,
-            session_tier=self.session_tier,
+            session_tier=lambda key: self.session_policy(key or "").mode or self._default_tier,
         )
         self._direct_handoff = DirectChatHandoff()
         # Kept for hot-applying web config changes and for the operations

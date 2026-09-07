@@ -90,6 +90,8 @@ class RenderService:
             max_pages=tool_config.max_pages,
             max_side_pixels=tool_config.max_side_pixels,
             max_total_pixels=tool_config.max_total_pixels,
+            max_viewport_width=tool_config.max_viewport_width,
+            max_viewport_height=tool_config.max_viewport_height,
             max_inline_preview_bytes=tool_config.max_inline_preview_bytes,
             default_preview_count=tool_config.default_preview_count,
             max_preview_count=tool_config.max_preview_count,
@@ -156,6 +158,7 @@ class RenderService:
         viewport_height: int = DEFAULT_VIEWPORT[1],
         asset_root: Path | None = None,
         actions: tuple[dict[str, Any], ...] | None = None,
+        scale: float = 1.0,
     ) -> list[ContentPart]:
         limit = self.config.default_preview_count if max_previews is None else max_previews
         self._validate_preview_limit(limit)
@@ -185,6 +188,7 @@ class RenderService:
                     asset_root=asset_root,
                     internal_output=internal_output,
                     actions=actions,
+                    scale=scale,
                 ),
                 preview_limit=limit,
             )

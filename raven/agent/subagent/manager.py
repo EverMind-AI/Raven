@@ -30,7 +30,7 @@ from raven.agent.subagent.direct_chat import (
 from raven.agent.subagent.history import SpawnRecord, session_history_root
 from raven.agent.subagent.instance_state import InstanceState, instance_state_path
 from raven.agent.subagent.instances import get_registry, hold_handle, mint_handle
-from raven.agent.subagent.mode_tiers import resolve_tier, turn_tier_in_force
+from raven.agent.subagent.mode_tiers import clamp_tier, turn_tier_in_force
 from raven.agent.subagent.registry import AgentRegistry, AgentRow
 from raven.agent.subagent_memory import (
     TRACE_BUDGET_S,
@@ -1020,20 +1020,13 @@ class SubagentManager:
         if not tier:
             return None
         offered = tuple(getattr(mode, "id", "") for mode in self.agent_modes(agent))
-        landed, decline = resolve_tier(tier, offered)
+        landed = clamp_tier(tier, offered)
         seen = (agent, tier, landed)
-        if decline is not None:
+        if landed is None:
             if seen not in _TIER_MISS_SEEN:
                 _TIER_MISS_SEEN.add(seen)
-                # Rendered, not decided. Re-testing one of the conditions here to pick a
-                # sentence is what let a decline with no branch of its own borrow another
-                # one's wording, which is a diagnostic that names the wrong side.
                 logger.info(
-                    decline.value,
-                    tier=tier,
-                    agent=agent,
-                    ladder="/".join(TIER_LADDER),
-                    menu="/".join(offered) or "nothing",
+                    "sub-agent {}: offers no tier from {}; running on its own default", agent, "/".join(TIER_LADDER)
                 )
         elif landed != tier and seen not in _TIER_MISS_SEEN:
             _TIER_MISS_SEEN.add(seen)

@@ -41,11 +41,33 @@ class SchedulerDrainingError(Exception):
     """
 
 
+class _Unbounded:
+    """The gate a pool sized 0 hands out: every turn enters at once.
+
+    Shaped like the semaphore it stands in for -- an async context manager the
+    lane holds for the turn -- so a lane never learns which kind it was given.
+    """
+
+    async def __aenter__(self) -> "_Unbounded":
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+    def locked(self) -> bool:
+        return False
+
+
+def _gate(size: int) -> "asyncio.Semaphore | _Unbounded":
+    return asyncio.Semaphore(size) if size > 0 else _Unbounded()
+
+
 class OriginPools:
     """Per-origin concurrency gates: a USER pool and a system pool for proactive
     origins, sized independently. No global cap (total concurrency is their sum)
     and no borrowing between them, so a user turn never waits on an LLM slot
-    behind a proactive task.
+    behind a proactive task. A pool sized 0 is unbounded: the deployment has
+    said it does not want that origin's turns queuing on each other.
 
     A direct chat is a third pool rather than a third origin: it *is* a USER
     turn, and inventing an origin for it would need a deliberate home in every
@@ -54,18 +76,18 @@ class OriginPools:
     """
 
     def __init__(self, user: int, system: int, direct: int = 8):
-        self._user = asyncio.Semaphore(user)
-        self._system = asyncio.Semaphore(system)
-        self._direct = asyncio.Semaphore(direct)
+        self._user = _gate(user)
+        self._system = _gate(system)
+        self._direct = _gate(direct)
 
-    def for_request(self, req: TurnRequest) -> asyncio.Semaphore:
+    def for_request(self, req: TurnRequest) -> "asyncio.Semaphore | _Unbounded":
         """The gate this turn waits on, read from the request rather than the
         origin alone -- a direct chat is a USER turn with its own pool."""
         if req.direct_target is not None:
             return self._direct
         return self._for_origin(req.origin)
 
-    def _for_origin(self, origin: Origin) -> asyncio.Semaphore:
+    def _for_origin(self, origin: Origin) -> "asyncio.Semaphore | _Unbounded":
         if origin is Origin.USER:
             return self._user
         if origin in _SYSTEM_ORIGINS:

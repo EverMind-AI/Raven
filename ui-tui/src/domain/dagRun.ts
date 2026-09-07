@@ -20,7 +20,11 @@ import type {
 import type { Msg } from '../types.js'
 
 /** Any of the four progress events a DAG run emits. */
-export type DagEvent = DagNodeUpdatedEvent | DagRunCompletedEvent | DagRunReplannedEvent | DagRunStartedEvent
+export type DagEvent =
+  | DagNodeUpdatedEvent
+  | DagRunCompletedEvent
+  | DagRunReplannedEvent
+  | DagRunStartedEvent
 
 /** The wire vocabulary plus `interrupted`, which the client infers rather than
  * receives: the runner only ever reports the four terminal states, so a node

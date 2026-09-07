@@ -97,7 +97,6 @@ document.addEventListener('contextmenu', (e) => {
    toggle only, never on an outside click. */
 document.addEventListener('pointerdown', (e) => {
   if (!e.target.closest('#permPop') && !e.target.closest('#permChip')) closePermPop();
-  if (!e.target.closest('#tierPop') && !e.target.closest('#tierChip')) closeTierPop();
 }, true);
 
 /* ── the hover pill ────────────────────────────────────────────────────

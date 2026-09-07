@@ -132,10 +132,9 @@ class ChannelsConfig(Base):
 class CompactionConfig(Base):
     """In-turn transcript compaction for long agentic turns.
 
-    Off by default: without it the loop's in-turn shrinks are the standing image
-    window (``_window_images``, bounded by ``image_window_budget_bytes``) and the
-    reactive, deterministic elision it has always run on a provider's overflow
-    error. Enabled, two layers join them, on the same usage readings:
+    Off by default: the loop's only in-turn shrink is then the reactive,
+    deterministic elision it has always run on a provider's overflow error.
+    Enabled, two layers join it, on the same usage readings:
 
     - Proactive: before an LLM call, once the last observed context size
       crosses the trigger, older tool-result bodies are pruned first
@@ -221,14 +220,6 @@ class AgentDefaults(Base):
     # asked again (the output is produced twice for whoever watched the stream). Off for
     # a chat; on for an unattended run whose client is a machine, such as a deck build.
     llm_retry_after_output: bool = False
-    # Decoded bytes of pictures that tools have shown the model which one request may
-    # carry before the older ones are withdrawn: past it, every image-bearing result but
-    # the newest two loses its pictures at once, each replaced by a note saying what it
-    # showed and how to see it again. A bound on what the endpoint is asked to take, not
-    # a guess at its limit; a size refusal is still answered by the reactive ladder. 0
-    # keeps every picture until an endpoint refuses. One deck build reached 75 pictures
-    # and 26.6 MB in a single request before OpenRouter refused it.
-    image_window_budget_bytes: int = Field(default=12_000_000, ge=0)
     # Deprecated compatibility field: accepted from old configs but ignored at runtime.
     memory_window: int | None = Field(default=None, exclude=True)
     reasoning_effort: str | None = None  # low / medium / high — enables LLM thinking mode
@@ -313,6 +304,10 @@ class ProviderConfig(Base):
 
     api_key: str = ""
     api_base: str | None = None
+    # Optional wire default. When omitted, GPT models use Responses and Claude
+    # models use Anthropic Messages; model_protocols can override either rule.
+    protocol: Literal["chat", "responses", "anthropic"] | None = None
+    model_protocols: dict[str, Literal["chat", "responses", "anthropic"]] = Field(default_factory=dict)
     # Custom headers (e.g. APP-Code for AiHubMix) -- can carry a secret, so
     # display faces redact the values (keys stay visible).
     extra_headers: dict[str, str] | None = Field(default=None, json_schema_extra={"secret": True})
@@ -349,6 +344,22 @@ class ProviderConfig(Base):
     # `models` -- that list already lets a model be added, and what was missing
     # was a way to describe one, so no config has to be rewritten to get it.
     model_overlay: dict[str, ModelOverlay] = Field(default_factory=dict)
+
+    @field_validator("protocol", mode="before")
+    @classmethod
+    def _normalize_protocol(cls, value: Any) -> Any:
+        from raven.providers.protocol import normalize_protocol
+
+        return normalize_protocol(value)
+
+    @field_validator("model_protocols", mode="before")
+    @classmethod
+    def _normalize_model_protocols(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        from raven.providers.protocol import normalize_protocol
+
+        return {str(model): normalize_protocol(protocol) for model, protocol in value.items()}
 
     @property
     def effective_api_key(self) -> str:
@@ -690,6 +701,9 @@ class AcpModeConfig(Base):
     description: str = ""
     max_tool_iterations: int | None = None
     """``None`` inherits ``agents.defaults.maxToolIterations``."""
+    reasoning_effort: str | None = None
+    """``None`` inherits ``agents.defaults.reasoningEffort``; set, every call a
+    session in this mode makes asks the provider for this effort instead."""
     overlay: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -708,54 +722,10 @@ class AcpConfig(Base):
 
     modes: dict[str, AcpModeConfig] = Field(default_factory=_builtin_modes)
     default_mode: str | None = None
-    """Which mode a new session starts in. Naming nothing stays unvalidated: a
-    product that declares its own catalogue without naming a default degrades to
-    its first entry (``build_mode_catalogue``) rather than being failed at startup
-    by a value it never chose. Naming something is checked -- see the validator
-    below for why those two are different cases."""
-
-    @model_validator(mode="after")
-    def _resolve_the_named_default(self) -> "AcpConfig":
-        """Match a named default case-insensitively, and refuse one that matches nothing.
-
-        Naming nothing is still fine and still degrades to the first declared entry --
-        that is the documented contract for a deployment bringing its own catalogue.
-        What is refused is a name that resolves to no rung at all, because the old
-        answer for that was to fall through to the catalogue's FIRST entry, which for
-        the built-in ladder is the cheapest one. A one-character slip therefore
-        downgraded every session's sub-agents with nothing logged, and the only symptom
-        was worse answers.
-
-        Refusing at load follows the sibling this repo already has: the raven-research
-        launcher raises on an unknown web vendor, on the argument that the launcher is
-        the one place able to say what is wrong before anything is served.
-
-        The case fold is separate from that: a config file is hand-written, and a shift
-        key is not a decision. `HIGH` is the operator meaning `high`.
-
-        A fold can also match more than once, and then it has no answer: a catalogue
-        declaring both `High` and `high` makes `HIGH` mean either, and a dict-order tie
-        break would hand the same file two different answers depending on which entry
-        the operator typed first. Refused rather than picked -- but only where the fold
-        is what has to decide. An exact spelling is already unambiguous however many
-        neighbours fold onto it, so it is taken before the fold is consulted at all.
-        """
-        if self.default_mode is None:
-            return self
-        if self.default_mode in self.modes:
-            return self
-        wanted = self.default_mode.casefold()
-        matches = [mode_id for mode_id in self.modes if mode_id.casefold() == wanted]
-        if not matches:
-            offered = ", ".join(self.modes) or "none -- this catalogue is empty"
-            raise ValueError(f"defaultMode {self.default_mode!r} is not a mode in this catalogue; it offers {offered}")
-        if len(matches) > 1:
-            raise ValueError(
-                f"defaultMode {self.default_mode!r} matches more than one mode in this catalogue "
-                f"({', '.join(matches)}); name one of them exactly"
-            )
-        self.default_mode = matches[0]
-        return self
+    """Which mode a new session starts in. Deliberately unvalidated: a product
+    that declares its own catalogue without naming a default must degrade to its
+    first entry (``build_mode_catalogue``), not be failed at startup by a value
+    it never chose."""
 
     @property
     def uses_builtin_modes(self) -> bool:
@@ -806,8 +776,11 @@ class GatewayConfig(Base):
 
     host: str = "0.0.0.0"
     port: int = 18790
-    user_pool: int = 4
-    system_pool: int = 2
+    user_pool: int = Field(default=4, ge=0)
+    """Concurrent user turns per process; 0 is unbounded. Read by the channel
+    gateway, ``raven serve``, the page and every ACP worker alike."""
+    system_pool: int = Field(default=2, ge=0)
+    """Concurrent proactive turns (cron, sentinel, sub-agent results); 0 is unbounded."""
     send_max_retries: int = 3
     # Seconds an in-flight turn may finish within on shutdown; 0.0 restores
     # cancel-immediately.
@@ -927,6 +900,7 @@ class ExecToolConfig(Base):
 
     timeout: int = 60
     path_append: str = ""
+    allow_destructive_commands: bool = False
     # Extra regex deny-patterns appended to ExecTool's built-in destructive-command
     # defaults. Empty by default. Operators (or eval harnesses running the agent
     # un-sandboxed) can add host-specific blocks, e.g. osascript / `open -a`.
