@@ -7,6 +7,7 @@ gate that passes its own tests while measuring something other than its name.
 
 from __future__ import annotations
 
+import ast
 import json
 import sys
 from pathlib import Path
@@ -119,7 +120,7 @@ def test_a_success_between_failures_resets_the_release_count():
 
 
 def test_fired_counts_transitions_not_gated_iterations():
-    g = FetchGate(k=1)
+    g = FetchGate(k=1, release_after_closed_iterations=99)
     g.observe_search()
     for _ in range(5):
         assert g.evaluate() is True
@@ -134,6 +135,85 @@ def test_counters_are_emitted_before_the_gate_ever_fires():
     assert c["gate_streak_at_fire"] == []
 
 
+# ── the second valve (dr@3.7): iterations, not attempts ──────────────────────
+# dr@3.6 stranded two runs with the failed-fetch valve at zero: the model made no
+# fetch attempt after the tool was withheld, so the counter that valve reads never
+# moved. Both directions are asserted - the valve must fire on silence AND must
+# not fire on a compliant response that opens a page in time.
+
+
+def test_closed_iterations_release_the_gate_without_any_fetch_attempt():
+    g = FetchGate(k=2, release_after_failed_fetches=99, release_after_closed_iterations=2)
+    g.observe_search()
+    g.observe_search()
+    assert g.evaluate() is True, "fires"
+    assert g.evaluate() is True, "one iteration closed, still withheld"
+    assert g.evaluate() is False, "second closed iteration releases"
+    assert g.released is True
+    assert g.released_by == "closed_iterations"
+    assert g.failed_fetches_while_closed == 0, "no fetch was ever attempted"
+    for _ in range(20):
+        g.observe_search()
+    assert g.evaluate() is False, "release is for the rest of the turn"
+
+
+def test_a_compliant_fetch_inside_the_grace_window_is_not_a_release():
+    """The observed healthy shape on dr@3.6 (24 of 25 surviving notices): fetch on
+    the very next iteration. That must read as a reopen, never as a release."""
+    g = FetchGate(k=2, release_after_closed_iterations=2)
+    g.observe_search()
+    g.observe_search()
+    assert g.evaluate() is True
+    g.observe_fetch(ok=True)
+    assert g.evaluate() is False
+    assert g.released is False
+    assert g.released_by == ""
+    assert g.opened == 1
+    assert g.closed_iterations == 0, "a reopen zeroes the closed-iteration count"
+
+
+def test_a_failed_fetch_inside_the_window_still_counts_the_iteration():
+    """Both valves run at once; the iteration valve does not wait for attempts."""
+    g = FetchGate(k=2, release_after_failed_fetches=99, release_after_closed_iterations=2)
+    g.observe_search()
+    g.observe_search()
+    assert g.evaluate() is True
+    g.observe_fetch(ok=False)
+    assert g.evaluate() is True
+    g.observe_fetch(ok=False)
+    assert g.evaluate() is False
+    assert g.released_by == "closed_iterations"
+
+
+def test_the_two_valves_are_told_apart_in_the_counters():
+    a = FetchGate(k=1, release_after_failed_fetches=1, release_after_closed_iterations=99)
+    a.observe_search()
+    a.evaluate()
+    a.observe_fetch(ok=False)
+    assert a.counters()["gate_released_by"] == "failed_fetches"
+    b = FetchGate(k=1, release_after_failed_fetches=99, release_after_closed_iterations=1)
+    b.observe_search()
+    b.evaluate()
+    b.evaluate()
+    assert b.counters()["gate_released_by"] == "closed_iterations"
+    assert b.counters()["gate_released"] is True
+    assert FetchGate(k=1).counters()["gate_released_by"] == ""
+
+
+def test_a_second_firing_starts_its_own_iteration_count():
+    g = FetchGate(k=1, release_after_closed_iterations=2)
+    g.observe_search()
+    assert g.evaluate() is True
+    assert g.evaluate() is True
+    g.observe_fetch(ok=True)
+    assert g.evaluate() is False
+    g.observe_search()
+    assert g.evaluate() is True, "second firing"
+    assert g.fired == 2
+    assert g.evaluate() is True, "its first closed iteration, not the third overall"
+    assert g.evaluate() is False
+
+
 def test_reset_clears_the_release_flag():
     g = FetchGate(k=1, release_after_failed_fetches=1)
     g.observe_search()
@@ -142,6 +222,8 @@ def test_reset_clears_the_release_flag():
     assert g.released is True
     g.reset()
     assert g.released is False
+    assert g.released_by == ""
+    assert g.closed_iterations == 0
 
 
 # ── hook ─────────────────────────────────────────────────────────────
@@ -388,3 +470,90 @@ async def test_previous_turns_tool_history_does_not_close_the_gate():
     hook2 = FetchGateObserver(FetchGate(k=15))
     decision2 = await hook2.before_iteration(ctx2)
     assert decision2.modified_tools is not None
+
+
+# ── the twin against the vendored record ─────────────────────────────────────
+# ``subagents/raven-research/Raven-X`` is kept as the record of upstream a903a424
+# and is no longer re-vendored, while this twin takes upstream's changes directly.
+# So the two module bodies are allowed to differ - but only by what the twin has
+# deliberately taken, named here member by member. A difference outside this
+# table is drift, and an entry that has stopped differing is a stale allowance.
+# The parity file's TWIN_LEADS table names the same lead at the config level.
+
+#: ``FetchGate`` members the twin has that the record's gate does not.
+TWIN_LEADS_ADDED: frozenset[str] = frozenset(
+    {
+        "release_after_closed_iterations",  # the dr@3.7 valve's knob (upstream ea19b948)
+        "closed_iterations",  # its counter
+        "released_by",  # which valve released, so the two stay separable on disk
+        "_release",  # the one place both valves flip the gate open
+    }
+)
+#: ``FetchGate`` members present in both whose bodies the valve changed.
+TWIN_LEADS_CHANGED: frozenset[str] = frozenset({"reset", "observe_fetch", "evaluate", "counters"})
+
+
+def _members(cls: ast.ClassDef) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for node in cls.body:
+        if isinstance(node, ast.FunctionDef):
+            out[node.name] = ast.unparse(node)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            out[node.target.id] = ast.unparse(node)
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            out[node.targets[0].id] = ast.unparse(node)
+    return out
+
+
+def _top_level(path: Path) -> tuple[dict[str, str], ast.ClassDef]:
+    """Every top-level definition except ``FetchGate``, unparsed, plus that class."""
+
+    class _Strip(ast.NodeTransformer):
+        def generic_visit(self, node):
+            super().generic_visit(node)
+            body = getattr(node, "body", None)
+            if isinstance(body, list):
+                kept = [
+                    b
+                    for b in body
+                    if not (
+                        isinstance(b, ast.Expr) and isinstance(b.value, ast.Constant) and isinstance(b.value.value, str)
+                    )
+                ]
+                node.body = kept or [ast.Pass()]
+            return node
+
+    tree = _Strip().visit(ast.parse(path.read_text(encoding="utf-8")))
+    gate = None
+    rest: dict[str, str] = {}
+    for i, node in enumerate(tree.body):
+        if isinstance(node, ast.ClassDef) and node.name == "FetchGate":
+            gate = node
+        else:
+            rest[f"{i}:{getattr(node, 'name', type(node).__name__)}"] = ast.unparse(node)
+    assert gate is not None, path
+    return rest, gate
+
+
+def test_the_fetch_gate_twin_leads_the_record_by_exactly_the_second_valve():
+    """What the twin and the vendored record are allowed to disagree on, in full.
+
+    An equality pin cannot hold once the record stops moving, and no pin at all
+    is the blind spot the equality pin was written against: the defaults guard
+    reads the config model, not this module, so a twin left on one valve - or a
+    twin that drifted anywhere else - would stay green. This names the lead
+    member by member and refuses everything outside it.
+    """
+    fork = REPO / "subagents" / "raven-research" / "Raven-X" / "raven" / "agent" / "fetch_gate.py"
+    twin = PLUGIN_DIR / "research_flow" / "support" / "fetch_gate_core.py"
+    fork_rest, fork_gate = _top_level(fork)
+    twin_rest, twin_gate = _top_level(twin)
+    assert twin_rest == fork_rest, "the twin differs from the record outside FetchGate"
+
+    f, t = _members(fork_gate), _members(twin_gate)
+    assert set(t) - set(f) == TWIN_LEADS_ADDED, set(t) ^ set(f)
+    assert not (set(f) - set(t)), "the twin dropped a member the record has: " + repr(set(f) - set(t))
+    changed = {name for name in f if f[name] != t[name]}
+    assert changed == TWIN_LEADS_CHANGED, "changed outside the named lead (or a stale entry): " + repr(
+        changed ^ TWIN_LEADS_CHANGED
+    )
