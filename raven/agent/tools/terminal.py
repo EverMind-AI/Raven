@@ -174,6 +174,13 @@ class SendTerminalTool(_TerminalTool):
                     and blocked.data.get("reason") in {"startup_pending", "permission"}
                 ):
                     raise
+                if blocked.data.get("bytesWritten", 0) != 0:
+                    raise TerminalError(
+                        blocked.code,
+                        "Text may already have been submitted. Ask the human to answer the dialog in the terminal tab "
+                        "and verify delivery before retrying later.",
+                        blocked.data,
+                    ) from blocked
                 waited = await self.rpc(
                     "terminal.wait", {"handle": binding["handle"], "for": "tui-idle", "timeout_ms": 120000}
                 )

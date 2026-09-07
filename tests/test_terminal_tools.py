@@ -348,3 +348,24 @@ async def test_send_does_not_retry_other_failures(code, data):
     assert result["error"]["message"] == "Original failure"
     assert calls.count("terminal.send") == 1
     assert "terminal.wait" not in calls
+
+
+async def test_send_never_retries_dialog_after_partial_write():
+    calls = []
+
+    async def rpc(method, params):
+        calls.append(method)
+        if method == "agents.resolve":
+            return {"unique": True, "candidates": [{"agent": candidate()}]}
+        if method == "terminal.show":
+            return {"terminal": {**candidate()["binding"], "connected": True, "writable": True, "orphaned": False}}
+        if method == "terminal.send":
+            raise TerminalError("agent_prompt_blocked", "Permission", {"reason": "permission", "bytesWritten": 128})
+        raise AssertionError(method)
+
+    result = json.loads(await SendTerminalTool(rpc).execute(to="worker", text="hello"))
+    assert result["error"]["code"] == "agent_prompt_blocked"
+    assert "verify delivery" in result["error"]["message"]
+    assert result["error"]["data"]["bytesWritten"] == 128
+    assert calls.count("terminal.send") == 1
+    assert "terminal.wait" not in calls
