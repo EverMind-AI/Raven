@@ -603,20 +603,6 @@ def test_the_progress_event_maps_to_the_wire_event() -> None:
     ) == {"run_id": "r1", "replan_run_id": "r2", "from_node": "a", "reason": "wrong"}
 
 
-def test_the_stall_notice_progress_event_maps_to_the_wire_event() -> None:
-    """The watcher's `dag_node_stalled` used to be absent from the map, and the
-    sink drops unknown names -- so a bound foreground run, whose injected notice
-    is dropped too, had no way to show a stalled node at all."""
-    from raven.rpc.spine import _DAG_WIRE_EVENT, _dag_payload
-
-    assert _DAG_WIRE_EVENT["dag_node_stalled"] == "dag.node_stalled"
-    assert _dag_payload("dag_node_stalled", {"run_id": "r1", "node": "n", "quiet_ms": 600000}) == {
-        "run_id": "r1",
-        "node": "n",
-        "quiet_ms": 600000,
-    }
-
-
 def test_an_unmapped_progress_event_is_still_dropped() -> None:
     from raven.rpc.spine import _DAG_WIRE_EVENT
 

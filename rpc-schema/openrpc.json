@@ -7387,8 +7387,7 @@
             "enum": [
               "ok",
               "error",
-              "exception",
-              "notice"
+              "exception"
             ],
             "type": "string"
           },
@@ -9033,8 +9032,7 @@
                     "enum": [
                       "ok",
                       "error",
-                      "exception",
-                      "notice"
+                      "exception"
                     ]
                   },
                   "node_id": {
@@ -9635,8 +9633,7 @@
                 "enum": [
                   "ok",
                   "error",
-                  "exception",
-                  "notice"
+                  "exception"
                 ]
               },
               "run_id": {
@@ -10084,44 +10081,6 @@
           }
         }
       },
-      "DagNodeStalledEvent": {
-        "description": "A running node has shown no sign of life for quiet_ms. Information only: the node is still running and nothing about the run changed.",
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "type",
-          "payload"
-        ],
-        "properties": {
-          "type": {
-            "type": "string",
-            "const": "dag.node_stalled"
-          },
-          "payload": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "run_id",
-              "node",
-              "quiet_ms"
-            ],
-            "properties": {
-              "run_id": {
-                "type": "string"
-              },
-              "tool_call_id": {
-                "type": "string"
-              },
-              "node": {
-                "type": "string"
-              },
-              "quiet_ms": {
-                "type": "integer"
-              }
-            }
-          }
-        }
-      },
       "DagRunCompletedEvent": {
         "description": "The run finished. Terminal node output text is deliberately absent -- it is already in the tool result.",
         "type": "object",
@@ -10313,9 +10272,6 @@
             "$ref": "#/components/schemas/DagRunReplannedEvent"
           },
           {
-            "$ref": "#/components/schemas/DagNodeStalledEvent"
-          },
-          {
             "$ref": "#/components/schemas/DagRunCompletedEvent"
           },
           {
@@ -10351,7 +10307,6 @@
             "dag.run_started": "#/components/schemas/DagRunStartedEvent",
             "dag.node_updated": "#/components/schemas/DagNodeUpdatedEvent",
             "dag.run_replanned": "#/components/schemas/DagRunReplannedEvent",
-            "dag.node_stalled": "#/components/schemas/DagNodeStalledEvent",
             "dag.run_completed": "#/components/schemas/DagRunCompletedEvent",
             "cron.missed": "#/components/schemas/CronMissedEvent",
             "media": "#/components/schemas/MediaEvent",

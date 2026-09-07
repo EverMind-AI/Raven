@@ -366,13 +366,6 @@ const dispatch = (
       // is what registers its instances into the session.
       turnController.recordDagEvent(event)
       return
-    case 'dag.node_stalled':
-      // A running node has shown no sign of life for quiet_ms. Information
-      // only: the node's status is unchanged and no `dag.node_updated` comes
-      // with it, so neither the fold nor the strip has anything to move. Named
-      // rather than left to `default` for the same reason `turn.started` is;
-      // a surface that wants to badge the row is a change of its own.
-      return
 
     case 'cron.missed': {
       if (sys) {

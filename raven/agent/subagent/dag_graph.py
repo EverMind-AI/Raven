@@ -168,25 +168,6 @@ def parse_dag_spec(data: dict) -> SubAgentDagSpec:
     try:
         return SubAgentDagSpec.model_validate(data)
     except ValidationError as exc:
-        # An invented field gets the full answer in one message: pydantic's own
-        # extra_forbidden rendering names the field but not the closed set it
-        # violated, and the model's recovery was to guess again (measured
-        # 2026-09-01: a node carried `mode`, a field of no schema anywhere).
-        extras = sorted(
-            {
-                "'" + ".".join(str(part) for part in err.get("loc", ())) + "'"
-                for err in exc.errors()
-                if err.get("type") == "extra_forbidden"
-            }
-        )
-        if extras:
-            node_fields = ", ".join(DagNodeSpec.model_fields)
-            raise DagValidationError(
-                f"invalid DAG spec: unknown field(s) {', '.join(extras)}. A node's fields are "
-                f"exactly: {node_fields}. A graph's are: task_summary, nodes, confirm. Remove "
-                f"the unknown field(s) and call run_subagent_dag again -- anything else an agent "
-                f"needs travels in 'inputs' or in the prompt itself."
-            ) from exc
         raise DagValidationError(f"invalid DAG spec: {exc}") from exc
 
 

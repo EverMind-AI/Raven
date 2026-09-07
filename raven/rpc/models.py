@@ -364,7 +364,7 @@ class TurnStartedDelegated(_Strict):
 
     kind: Literal["spawn", "dag"]
     label: str
-    status: Literal["ok", "error", "exception", "notice"]
+    status: Literal["ok", "error", "exception"]
     run_id: str | None = None
     node_id: str | None = Field(
         None,
@@ -589,7 +589,7 @@ class CronDeliveredEvent(_Strict):
 class SubagentDeliveredPayload(_Strict):
     kind: Literal["spawn", "dag"]
     label: str = Field(..., description="The spawn's display label, or the dag's run_id.")
-    status: Literal["ok", "error", "exception", "notice"]
+    status: Literal["ok", "error", "exception"]
     run_id: str | None = Field(default=None, description="Set for kind=dag, so a client can open the run.")
     node_id: str | None = Field(
         default=None,
@@ -723,21 +723,6 @@ class DagRunReplannedPayload(_Strict):
 class DagRunReplannedEvent(_Strict):
     type: Literal["dag.run_replanned"]
     payload: DagRunReplannedPayload
-
-
-class DagNodeStalledPayload(_Strict):
-    """A running node has shown no sign of life for ``quiet_ms``. Information,
-    not a state change: the node is still running and nothing is decided."""
-
-    run_id: str
-    tool_call_id: str | None = None
-    node: str
-    quiet_ms: int
-
-
-class DagNodeStalledEvent(_Strict):
-    type: Literal["dag.node_stalled"]
-    payload: DagNodeStalledPayload
 
 
 class DagRunSummary(_Strict):
@@ -1012,7 +997,6 @@ TurnEvent = Annotated[
         DagRunStartedEvent,
         DagNodeUpdatedEvent,
         DagRunReplannedEvent,
-        DagNodeStalledEvent,
         DagRunCompletedEvent,
         CronMissedEvent,
         MediaEvent,
@@ -2450,7 +2434,7 @@ class TranscriptDelegated(_Strict):
 
     kind: Literal["spawn", "dag"]
     label: str
-    status: Literal["ok", "error", "exception", "notice"]
+    status: Literal["ok", "error", "exception"]
     run_id: str | None = Field(default=None, description="Set for kind=dag, so a client can open the run.")
     node_id: str | None = Field(
         default=None,

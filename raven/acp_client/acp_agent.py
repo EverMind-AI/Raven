@@ -197,11 +197,6 @@ class _TurnCollector:
         return datetime.now().isoformat()
 
     async def __call__(self, method: str, params: dict[str, Any]) -> None:
-        # Any frame from the agent is the run moving, whatever it carries. The
-        # transcript republish further down stamps the run too, but only for
-        # the kinds it renders; a `usage_update` or a permission request would
-        # otherwise leave the stall watcher reading a run that never moved.
-        activity.note_alive(self._run)
         if method == PERMISSION_METHOD:
             # Subject only, never the name: this frame reports `kind: "execute"`
             # even for a call the session update badged `read`, and reading it

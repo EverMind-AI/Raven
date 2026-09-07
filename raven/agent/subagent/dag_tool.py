@@ -269,9 +269,7 @@ _NODE_SCHEMA: dict[str, Any] = {
                 "{{ ref:@nodes/<node>.out.md }} or {{ ref:@nodes/<node>.prompt.md }}. The _path forms need a "
                 "sub-agent the roster tags [local-files]; for a [no-local-files] one use the contents "
                 "forms instead, and every _path form must name a file that already exists. "
-                "Every key in inputs must be referenced by a placeholder. A long prompt belongs in a "
-                "file referenced with {{ ref:<path> }}, so the graph JSON stays small enough to write "
-                "in one reply."
+                "Every key in inputs must be referenced by a placeholder."
             ),
         },
         "depends_on": {
@@ -620,18 +618,11 @@ class SubAgentDagTool(Tool):
         raise TypeError(f"not an outbox event: {event!r}")
 
     def _report_announcer(self, run_id: str, origin: _DagOrigin):
-        async def _announce(node_id: str, text: str, *, awaiting_decision: bool, informational: bool = False) -> None:
+        async def _announce(node_id: str, text: str, *, awaiting_decision: bool) -> None:
             if self._announce_exception is None:
                 logger.info("DAG run {} node {} reported after release with no announcer wired", run_id, node_id)
                 return
-            await self._announce_exception(
-                run_id,
-                node_id,
-                text,
-                origin.as_dict(),
-                awaiting_decision=awaiting_decision,
-                informational=informational,
-            )
+            await self._announce_exception(run_id, node_id, text, origin.as_dict(), awaiting_decision=awaiting_decision)
 
         return _announce
 
@@ -838,21 +829,6 @@ class SubAgentDagTool(Tool):
             "its result is announced to you when it finishes, so do not poll it and do not re-submit it. "
             f"{guide}"
             f"Available sub-agents for the `subagent` field: {names}."
-        )
-
-    @property
-    def incomplete_hint(self) -> str:
-        # The graph JSON is the one tool call whose size scales with prose the
-        # model writes into it. The escape hatch already exists -- a prompt in a
-        # file travels as a reference -- but the generic "smaller form" advice
-        # sent the model toward cutting content instead (measured 2026-09-02: a
-        # graph carrying the task rules verbatim in every node hit the reply cap
-        # mid-write).
-        return (
-            "write each long node prompt to a file first and put {{ ref:<path> }} in "
-            "prompt_template -- the graph then carries the reference, not the text. "
-            "Splitting the work into two runs also works: a later graph may depend on "
-            "this one's nodes by id. Do not shorten prompts by dropping task rules."
         )
 
     @property
@@ -1680,19 +1656,11 @@ class SubAgentDagTool(Tool):
         if outbox is not None:
 
             async def _to_outbox(
-                _run_id: str,
-                node_id: str,
-                report: str,
-                _origin: dict[str, str],
-                *,
-                awaiting_decision: bool,
-                informational: bool = False,
+                _run_id: str, node_id: str, report: str, _origin: dict[str, str], *, awaiting_decision: bool
             ) -> None:
                 # Whether a notification is dropped depends on whether a blocking call is
                 # still there to be handed the summary, which is the outbox's own state.
-                await outbox.put_report(
-                    node_id, report, awaiting_decision=awaiting_decision, informational=informational
-                )
+                await outbox.put_report(node_id, report, awaiting_decision=awaiting_decision)
 
             announce_exception = _to_outbox
             released = outbox.released

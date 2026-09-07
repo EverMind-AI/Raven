@@ -989,12 +989,14 @@ class MediaToolConfig(Base):
 
     Empty fields fall back at call time: ``api_key`` → ``providers.openrouter``
     / ``OPENROUTER_API_KEY``; ``api_base`` → OpenRouter; ``model`` → the tool's
-    default (Nano Banana for images).
+    default (gpt-image-2 for images). Empty quality uses the provider default.
     """
 
     api_key: str = ""
     api_base: str = ""  # defaults to https://openrouter.ai/api/v1
     model: str = ""
+    quality: Literal["", "low", "medium", "high"] = ""
+    selection_config: str = Field(default="", description="Host config path for live model and quality inheritance")
 
 
 class MediaGenConfig(Base):

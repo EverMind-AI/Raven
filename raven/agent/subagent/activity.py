@@ -89,18 +89,6 @@ class RunActivity:
     # one -- the transcript rows a transport publishes carry no clock of their
     # own, and the record's timestamps do not exist until the turn lands.
     started_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
-    # When the run's backend last reported anything about it -- a tool call, a
-    # step, console bytes, a usage report, a transcript republished mid-flight,
-    # or a frame from the agent's process. Any report counts: for a lane whose
-    # liveness is a transcript rather than a discrete event (acp, openai_api),
-    # the transcript being republished IS the sign of life, and a lane that
-    # stamped only on its end-of-turn notes would read as dead for the whole
-    # flight (measured 2026-09-04: a streaming acp node was announced as
-    # stalled after ten healthy minutes). None until the first report;
-    # ``started_at_ms`` is the floor a staleness reader falls back to.
-    # Live-only, like ``steer``: what it answers is "is this run still moving",
-    # which is a question about now.
-    last_event_ms: int | None = None
     # The tail of the run's raw console output, for the lane whose only
     # in-flight signal IS its console (a cli agent that streams no transcript).
     # Live-only, like transcript: the finished record keeps the full output.
@@ -243,33 +231,11 @@ def current() -> RunActivity | None:
     return _current.get()
 
 
-def _touch(activity: "RunActivity") -> None:
-    """Stamp the run's last sign of life.
-
-    Every note_* and set_* below calls it first, without exception: each is
-    the run's backend reporting on the run, and a report is a sign of life
-    whatever it carries. The stall watcher (``dag_runner._watch_stall``) reads
-    nothing else, so a publisher that skipped the stamp would have its lane
-    announced as wedged while it streams.
-    """
-    activity.last_event_ms = int(time.time() * 1000)
-
-
-def note_alive(activity: "RunActivity | None") -> None:
-    """Stamp one named run as alive, for a publisher that saw the agent move
-    but has nothing to record yet -- a frame whose kind no transcript row
-    reads (``usage_update``, an unknown ``sessionUpdate``). Named rather than
-    ambient for the reason ``set_transcript`` is."""
-    if activity is not None:
-        _touch(activity)
-
-
 def note_tool_call(name: str) -> None:
     """Record one tool call, in the order it happened."""
     activity = _current.get()
     if activity is None or not isinstance(name, str) or not name:
         return
-    _touch(activity)
     if len(activity.tool_calls) < _MAX_TOOL_CALLS:
         activity.tool_calls.append(name)
 
@@ -285,7 +251,6 @@ def note_usage(usage: Any) -> None:
     activity = _current.get()
     if activity is None or not isinstance(usage, dict):
         return
-    _touch(activity)
     try:
         for keys, attr in ((_IN_KEYS, "tokens_in"), (_OUT_KEYS, "tokens_out")):
             value = next((usage[k] for k in keys if isinstance(usage.get(k), (int, float))), None)
@@ -300,7 +265,6 @@ def note_frames(frames: dict[str, Any] | None) -> None:
     """Record where this run's wire frames live. Replaced, not merged."""
     activity = _current.get()
     if activity is not None and isinstance(frames, dict) and frames:
-        _touch(activity)
         activity.frames = dict(frames)
 
 
@@ -309,7 +273,6 @@ def note_steps(counts: dict[str, int] | None) -> None:
     activity = _current.get()
     if activity is None or not isinstance(counts, dict):
         return
-    _touch(activity)
     for kind, count in counts.items():
         if isinstance(kind, str) and isinstance(count, int):
             activity.step_counts[kind] = activity.step_counts.get(kind, 0) + count
@@ -318,7 +281,6 @@ def note_steps(counts: dict[str, int] | None) -> None:
 def note_thoughts(chars: int) -> None:
     activity = _current.get()
     if activity is not None and isinstance(chars, int) and chars > 0:
-        _touch(activity)
         activity.thought_chars += chars
 
 
@@ -332,7 +294,6 @@ def note_console(text: str) -> None:
     activity = _current.get()
     if activity is None or not isinstance(text, str) or not text:
         return
-    _touch(activity)
     activity.console = (activity.console + text)[-_MAX_CONSOLE_CHARS:]
 
 
@@ -350,11 +311,6 @@ def set_transcript(activity: "RunActivity | None", messages: list[dict[str, Any]
     """
     if activity is None or not isinstance(messages, list):
         return
-    # A republish is the transcript lane's heartbeat: the acp collector calls
-    # this on every update the agent sends, the openai_api lane on every
-    # reasoning step. Without the stamp neither lane ever moved
-    # ``last_event_ms`` before its end-of-turn notes.
-    _touch(activity)
     activity.transcript = [m for m in messages[:_MAX_TRANSCRIPT_MESSAGES] if isinstance(m, dict)]
 
 
@@ -367,7 +323,6 @@ def note_closing(text: str | None) -> None:
     """
     activity = _current.get()
     if activity is not None and text is not None:
-        _touch(activity)
         activity.closing = text
 
 
@@ -401,7 +356,6 @@ def note_output_truncation(full: str, *, returned: int, reason: str) -> None:
     activity = _current.get()
     if activity is None or not isinstance(full, str):
         return
-    _touch(activity)
     kept = max(0, int(returned))
     activity.full_output = full
     activity.truncation = {
@@ -454,7 +408,6 @@ __all__ = [
     "set_transcript",
     "live",
     "live_instance",
-    "note_alive",
     "note_closing",
     "note_console",
     "note_frames",

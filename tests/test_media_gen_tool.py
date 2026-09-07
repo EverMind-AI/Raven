@@ -330,3 +330,145 @@ def test_a_plain_config_section_stays_a_snapshot() -> None:
 
     tool = ImageGenerateTool(MediaToolConfig(api_key="sk-static"))
     assert tool.api_key == "sk-static"
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bytedance-seed/seedream-5-0-lite",
+        "bytedance-seed/seedream-5-0-pro",
+        "qwen/qwen-image-3",
+        "qwen/qwen-image-3-pro",
+        "x-ai/grok-imagine-image-2.0",
+        "black-forest-labs/flux.2-pro",
+        "recraft/recraft-v4-vector",
+        "vendor/mai-image-2",
+        "vendor/krea-1",
+        "vendor/riverflow-2",
+        "vendor/muse-image",
+    ],
+)
+async def test_image_families_route_directly_without_gpt_quality(monkeypatch, tmp_path, model):
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": _B64}]})
+
+    tool = _image_tool(monkeypatch, handler, model=model, workspace=tmp_path)
+    result = json.loads(await tool.execute("a circle", quality="high", aspect_ratio="9:16"))
+    assert result["success"]
+    assert len(seen) == 1 and seen[0].url.path == "/api/v1/images"
+    body = json.loads(seen[0].content)
+    assert "quality" not in body
+    if any(name in model for name in ("seedream", "qwen-image", "grok-imagine")):
+        assert body["aspect_ratio"] == "9:16"
+    else:
+        assert "aspect_ratio" not in body
+
+
+@pytest.mark.parametrize("chat", [False, True])
+@pytest.mark.parametrize(
+    "mime,extension,data",
+    [
+        ("image/jpeg", ".jpg", b"\xff\xd8\xffpixels"),
+        ("image/svg+xml", ".svg", b'<svg xmlns="http://www.w3.org/2000/svg"/>'),
+        ("image/webp", ".webp", b"RIFFpixelsWEBP"),
+        ("image/png", ".png", _PNG),
+    ],
+)
+async def test_image_output_uses_the_response_mime(monkeypatch, tmp_path, chat, mime, extension, data):
+    encoded = base64.b64encode(data).decode()
+
+    def handler(request):
+        if chat:
+            message = {"images": [{"image_url": {"url": f"data:{mime};base64,{encoded}"}}]}
+            return httpx.Response(200, json={"choices": [{"message": message}]})
+        return httpx.Response(200, json={"data": [{"b64_json": encoded, "media_type": mime}]})
+
+    model = "google/gemini-3.1-flash-image" if chat else "openai/gpt-image-2"
+    tool = _image_tool(monkeypatch, handler, model=model, workspace=tmp_path)
+    result = json.loads(await tool.execute("a circle"))
+    path = Path(result["paths"][0])
+    assert path.suffix == extension and path.read_bytes() == data
+
+
+async def test_image_selection_is_live_and_settings_win(monkeypatch, tmp_path):
+    from raven.config.schema import MediaToolConfig
+
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"data": [{"b64_json": _B64}]})
+
+    tool = _image_tool(monkeypatch, handler, model="", workspace=tmp_path)
+    holder = {"config": MediaToolConfig(api_key="k")}
+    tool._config_source = lambda: holder["config"]
+    await tool.execute("a circle")
+    assert seen[-1]["model"] == "openai/gpt-image-2"
+    assert seen[-1]["quality"] == "medium"
+    holder["config"] = MediaToolConfig(api_key="k", model="openai/gpt-image-2", quality="low")
+    await tool.execute("a circle")
+    assert seen[-1]["quality"] == "low"
+    await tool.execute("a circle", quality="high")
+    assert seen[-1]["quality"] == "low"
+    await tool.execute("a circle", model="qwen/qwen-image-3")
+    assert seen[-1]["model"] == "openai/gpt-image-2"
+    holder["config"] = MediaToolConfig(api_key="k", model="qwen/qwen-image-3")
+    await tool.execute("a circle", model="openai/gpt-image-2", quality="high")
+    assert seen[-1]["model"] == "qwen/qwen-image-3" and "quality" not in seen[-1]
+    holder["config"].quality = ""
+    await tool.execute("a circle")
+    assert "quality" not in seen[-1]
+    holder["config"] = MediaToolConfig(api_key="k", quality="")
+    await tool.execute("a circle")
+    assert seen[-1]["model"] == "openai/gpt-image-2" and "quality" not in seen[-1]
+
+
+async def test_borrowed_image_selection_updates_without_recreating_tool(monkeypatch, tmp_path):
+    from raven.config.schema import MediaToolConfig
+
+    seen = []
+
+    def handler(request):
+        assert request.headers["authorization"] == "Bearer worker-key"
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"data": [{"b64_json": _B64}]})
+
+    source = tmp_path / "host.json"
+    source.write_text(json.dumps({"tools": {"media": {"image": {"model": "openai/gpt-image-2", "quality": "low"}}}}))
+    tool = _image_tool(monkeypatch, handler, model="", workspace=tmp_path)
+    tool._config_static = MediaToolConfig(api_key="worker-key", selection_config=str(source))
+    result = json.loads(await tool.execute("a circle", model="qwen/qwen-image-3", quality="high"))
+    assert result["model"] == "openai/gpt-image-2" and result["quality"] == "low"
+    source.write_text(json.dumps({"tools": {"media": {"image": {"model": "qwen/qwen-image-3", "quality": ""}}}}))
+    result = json.loads(await tool.execute("a circle", model="openai/gpt-image-2", quality="high"))
+    assert result["model"] == "qwen/qwen-image-3" and result["quality"] == ""
+    assert "quality" not in seen[-1]
+    source.write_text("{")
+    await tool.execute("a circle")
+    assert seen[-1]["model"] == "qwen/qwen-image-3"
+
+
+async def test_image_provider_refusal_preserves_reason(monkeypatch, tmp_path):
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {"content": None},
+                        "finish_reason": "content_filter",
+                        "native_finish_reason": "IMAGE_RECITATION",
+                    }
+                ]
+            },
+        )
+
+    tool = _image_tool(monkeypatch, handler, model="google/gemini-3.1-flash-image", workspace=tmp_path)
+    result = json.loads(await tool.execute("a circle"))
+    assert result["error"] == "image generation refused"
+    assert result["native_finish_reason"] == "IMAGE_RECITATION"
+    assert result["retryable"] is False
+    assert not list(tmp_path.iterdir())

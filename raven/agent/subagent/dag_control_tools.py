@@ -218,7 +218,7 @@ class ResolveDagNodeTool(_ControlTool):
                     ),
                 },
             },
-            "required": ["run_id", "node_id"],
+            "required": ["run_id", "node_id", "decision"],
         }
 
     def blocking_for(self, params: dict[str, Any]) -> bool:
@@ -242,18 +242,10 @@ class ResolveDagNodeTool(_ControlTool):
         self,
         run_id: str,
         node_id: str,
-        decision: str | None = None,
+        decision: str,
         message: str | None = None,
         nodes: list[dict] | None = None,
-        action: str | None = None,
     ) -> "str | ToolResult":
-        # `action` is the name the model reaches for -- three runs in a row
-        # (2026-09-03/04) spent a call each on "missing required decision". The
-        # field stays `decision` in the schema; the alias is accepted, not taught.
-        if decision is None and action is not None:
-            decision = action
-        if decision is None:
-            return f"Error: decision is required: '{CONTINUE}', '{ABANDON}' or '{REPLAN}'."
         if decision not in DECISIONS:
             return f"Error: decision must be '{CONTINUE}', '{ABANDON}' or '{REPLAN}', not {decision!r}."
         if decision in (CONTINUE, REPLAN) and not (message or "").strip():

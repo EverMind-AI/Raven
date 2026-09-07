@@ -3199,28 +3199,3 @@ async def test_announce_of_an_ordinary_result_carries_no_hoarding_note():
     )
 
     assert "workspace of the node" not in submitted[0].text
-
-
-async def test_an_informational_node_notice_is_headed_as_a_notice_not_a_failure():
-    """The stall watcher reports a node that is still running. Read through the
-    exception announcer with awaiting_decision=False alone, that turn was headed
-    "has failed" and marked `exception` -- the opposite of what the report said.
-    The informational state keeps it a notice end to end."""
-    mgr = _make_manager(max_concurrent=1)
-    submitted: list = []
-    mgr.set_submit(submitted.append)
-    origin = {"channel": "tui", "chat_id": "default", "session_key": "tui:s1"}
-
-    await mgr.announce_dag_exception(
-        "r1", "n", "no sign of life for 10 minutes", origin, awaiting_decision=False, informational=True
-    )
-
-    assert len(submitted) == 1
-    text = submitted[0].text
-    assert "has failed" not in text
-    assert "still running" in text and "no decision is needed" in text
-    assert submitted[0].delegated["status"] == "notice"
-
-    submitted.clear()
-    await mgr.announce_dag_exception("r1", "n", "gave up", origin, awaiting_decision=False)
-    assert "has failed" in submitted[0].text and submitted[0].delegated["status"] == "exception"

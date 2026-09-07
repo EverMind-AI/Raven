@@ -1200,23 +1200,3 @@ async def test_a_cancelled_await_finalized_still_records_the_link_and_reraises()
         plan,
         "Interrupted between the node hand-off and starting the replan.",
     )
-
-
-async def test_resolve_accepts_action_as_the_name_the_model_reaches_for():
-    # Three runs in a row (2026-09-03/04) the main agent wrote `action` and lost
-    # a call to "missing required decision". The schema keeps `decision`; the
-    # alias is accepted and lands the same resolve.
-    loop = _LoopWithRun()
-    tool = ResolveDagNodeTool(loop=loop)
-    out = await tool.execute(run_id="r1", node_id="a", action="abandon")
-    assert loop.resolved is not None, "the alias must reach resolve_node"
-    assert "abandon" in out
-    assert "decision" not in tool.parameters["required"]
-
-
-async def test_resolve_with_neither_name_says_which_field_is_missing():
-    loop = _LoopWithRun()
-    tool = ResolveDagNodeTool(loop=loop)
-    out = await tool.execute(run_id="r1", node_id="a")
-    assert out == "Error: decision is required: 'continue', 'abandon' or 'replan'."
-    assert loop.resolved is None

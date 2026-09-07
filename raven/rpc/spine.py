@@ -58,7 +58,6 @@ _DAG_WIRE_EVENT = {
     "dag_run_started": "dag.run_started",
     "dag_node_updated": "dag.node_updated",
     "dag_run_replanned": "dag.run_replanned",
-    "dag_node_stalled": "dag.node_stalled",
     "dag_run_completed": "dag.run_completed",
 }
 
@@ -105,11 +104,6 @@ def _dag_payload(name: str, payload: dict) -> dict:
             "from_node": payload.get("from_node"),
             "reason": payload.get("reason"),
         }
-    if name == "dag_node_stalled":
-        # Information, not a node status: the node stays `running` and no
-        # `dag.node_updated` accompanies this. A bound foreground run drops the
-        # injected notice, so this frame is the only place the panel hears it.
-        return {**common, "node": payload.get("node"), "quiet_ms": int(payload.get("quiet_ms") or 0)}
     # dag_run_completed. ``terminal_outputs`` is deliberately dropped: every sink
     # node's full text is already in the tool result, and repeating it here would
     # put an unbounded blob on a progress frame.

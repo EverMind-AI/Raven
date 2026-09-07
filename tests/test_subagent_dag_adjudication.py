@@ -22,7 +22,7 @@ class _Announced:
         self.verdicts: list[bool] = []
         self.finals: list[object] = []
 
-    async def report(self, node_id: str, text: str, *, awaiting_decision: bool, informational: bool = False) -> None:
+    async def report(self, node_id: str, text: str, *, awaiting_decision: bool) -> None:
         self.reports.append((node_id, text))
         self.verdicts.append(awaiting_decision)
 
@@ -631,38 +631,3 @@ def test_the_replanned_answer_is_still_taken_per_node() -> None:
     assert answer is not None
     assert answer.decision == REPLAN
     assert answer.plan is not None
-
-
-async def test_a_released_outbox_carries_the_informational_state_to_the_announcer() -> None:
-    """A stall notice is a third state: the node is still running. Released, it
-    announces like any report, and the announcer has to be told it is a notice,
-    or it heads the injected turn with "has failed" about a live node."""
-    seen: list[tuple[str, bool, bool]] = []
-
-    async def announce(node_id: str, text: str, *, awaiting_decision: bool, informational: bool = False) -> None:
-        seen.append((node_id, awaiting_decision, informational))
-
-    async def final(result) -> None:
-        pass
-
-    box = Outbox(conversation="c1", announce_report=announce, announce_final=final)
-    await box.release(flush=True)
-
-    await box.put_report("a", "no sign of life for 10 minutes", awaiting_decision=False, informational=True)
-    await box.put_report("b", "terminal report", awaiting_decision=False)
-
-    assert seen == [("a", False, True), ("b", False, False)]
-
-
-async def test_a_bound_outbox_drops_a_stall_notice_like_any_notification() -> None:
-    """Bound, the model is inside the waiting call and cannot act on a notice
-    before the call returns; the progress event the watcher publishes beside it
-    is what the panel shows meanwhile. Dropping it here is the documented shape,
-    not an accident of the awaiting_decision flag."""
-    box, announced = _outbox()
-
-    await box.put_report("a", "no sign of life", awaiting_decision=False, informational=True)
-
-    assert announced.reports == []
-    await box.release(flush=True)
-    assert announced.reports == [], "a dropped notice is not owed after release either"
