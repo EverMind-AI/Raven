@@ -73,7 +73,7 @@ class PptTemplateTool(Tool):
         "are this deck's house style. Called with just the project it returns every visible example page "
         "with its role and capacity, a render of each, the measured house style -- title row, body area, "
         "type ladder -- and a palette derived from the file. Called with `pages` it returns those "
-        "example pages as python-pptx source to adapt. Called with `palette` it keeps the colours you "
+        "example pages, and only those, as python-pptx source to adapt. Called with `palette` it keeps the colours you "
         "read off the renders as this deck's own, for every page: what a template declares and what its "
         "pages paint are not the same colours, and only the renders show the second."
     )
@@ -172,14 +172,7 @@ class PptTemplateTool(Tool):
         if self.provision is not None:
             self.provision(deck)
 
-        payload: dict[str, Any] = {
-            "project": project,
-            "template": template.source.name,
-            "canvas_in": f"{template.inventory.width_in:g}x{template.inventory.height_in:g}",
-            "layouts": [layout.summary() for layout in template.inventory.layouts],
-            "example_pages": template.example_pages,
-            "build_from": "os.environ['PPT_TEMPLATE']",
-        }
+        payload: dict[str, Any] = {"project": project, "template": template.source.name}
         if path and rebound is None:
             # Said, not swallowed: an author whose path was ignored would otherwise
             # believe it had bound the file it named.
@@ -187,10 +180,12 @@ class PptTemplateTool(Tool):
                 f"{path} was not usable as a template, so this is the one already bound to the deck. "
                 "A file the user attached goes through ppt_prepare's `files`"
             )
-        if template.inventory.theme_colours:
-            payload["theme_colours"] = dict(template.inventory.theme_colours)
-        if template.inventory.fonts:
-            payload["fonts"] = list(template.inventory.fonts)
+        # The roster rides on the calls that change or first show what it describes -- a
+        # bind, or a look at the renders -- and not on a page read: an author reading a
+        # deck's pages two or three at a time saw it on the bind, and one run carried
+        # the same roster seven times over.
+        if not pages or rebound is not None:
+            payload.update(_roster(template))
         if stated is not None:
             # Echoed, because a palette is merged over what the deck already stated and
             # an author correcting one role should see the seven it is now sitting with.
@@ -641,6 +636,21 @@ class PptTemplateTool(Tool):
         if imports:
             texts[0] = "\n".join(f"# {line}" for line in imports) + "\n" + texts[0]
         return _return.with_images(body, [text_block(text) for text in texts])
+
+
+def _roster(template: Any) -> dict[str, Any]:
+    """What the bound template offers a build: canvas, layouts, example pages, colours, fonts."""
+    roster: dict[str, Any] = {
+        "canvas_in": f"{template.inventory.width_in:g}x{template.inventory.height_in:g}",
+        "layouts": [layout.summary() for layout in template.inventory.layouts],
+        "example_pages": template.example_pages,
+        "build_from": "os.environ['PPT_TEMPLATE']",
+    }
+    if template.inventory.theme_colours:
+        roster["theme_colours"] = dict(template.inventory.theme_colours)
+    if template.inventory.fonts:
+        roster["fonts"] = list(template.inventory.fonts)
+    return roster
 
 
 def _cut(block: str, budget: int) -> tuple[str, dict[str, int]]:
