@@ -2,7 +2,7 @@
 
 import { ds } from '../../shell/bridge'
 
-import type { TerminalOutputFrame, TerminalRow, TerminalSource } from './types'
+import type { TerminalEvent, TerminalOutputFrame, TerminalRow, TerminalSource } from './types'
 
 export const TRANSCRIPT_TAB = 'raven-transcript'
 export const POLL_INTERVAL_MS = 2000
@@ -13,6 +13,12 @@ export interface TerminalState {
   activeTab: string
   loading: boolean
   error: string
+  deliveries: Record<string, TerminalDelivery>
+}
+
+export interface TerminalDelivery {
+  stage: 'delivered' | 'acknowledged'
+  nonce: string
 }
 
 const initial: TerminalState = {
@@ -21,6 +27,7 @@ const initial: TerminalState = {
   activeTab: TRANSCRIPT_TAB,
   loading: false,
   error: '',
+  deliveries: {},
 }
 
 let state: TerminalState = { ...initial }
@@ -59,6 +66,9 @@ export async function refresh(): Promise<void> {
         state.activeTab === TRANSCRIPT_TAB || handles.has(state.activeTab) ? state.activeTab : TRANSCRIPT_TAB,
       loading: false,
       error: '',
+      deliveries: Object.fromEntries(
+        Object.entries(state.deliveries).filter(([handle]) => handles.has(handle)),
+      ),
     })
   } catch (error) {
     if (generation !== requestGeneration || taskId !== state.taskId) return
@@ -69,7 +79,7 @@ export async function refresh(): Promise<void> {
 export function setTask(taskId: string | null): void {
   if (state.taskId === taskId) return
   requestGeneration += 1
-  set({ taskId, terminals: [], activeTab: TRANSCRIPT_TAB, loading: false, error: '' })
+  set({ taskId, terminals: [], activeTab: TRANSCRIPT_TAB, loading: false, error: '', deliveries: {} })
   if (taskId) void refresh()
 }
 
@@ -95,9 +105,27 @@ function receiveOutput(frame: TerminalOutputFrame): void {
   for (const listener of outputListeners.get(frame.handle) ?? []) listener(frame)
 }
 
+function receiveEvent(event: TerminalEvent): void {
+  const payload = event.payload ?? {}
+  const handle = typeof payload.handle === 'string' ? payload.handle : ''
+  if (!handle) return
+  if (event.type === 'a2a.send' && payload.state === 'accepted') {
+    const nonce = typeof payload.nonce === 'string' ? payload.nonce : ''
+    set({ deliveries: { ...state.deliveries, [handle]: { stage: 'delivered', nonce } } })
+    return
+  }
+  if (event.type !== 'a2a.ack.matched') return
+  const current = state.deliveries[handle]
+  if (!current) return
+  const ackFor = typeof payload.ack_for === 'string' ? payload.ack_for : ''
+  if (current.nonce && current.nonce !== ackFor) return
+  set({ deliveries: { ...state.deliveries, [handle]: { ...current, stage: 'acknowledged' } } })
+}
+
 export function start(): void {
   if (pollTimer) return
   source().onOutput = receiveOutput
+  source().onEvent = receiveEvent
   pollTimer = setInterval(() => void refresh(), POLL_INTERVAL_MS)
 }
 
@@ -108,6 +136,7 @@ export function stop(): void {
   }
   const terminalSource = source()
   if (terminalSource.onOutput === receiveOutput) terminalSource.onOutput = null
+  if (terminalSource.onEvent === receiveEvent) terminalSource.onEvent = null
 }
 
 export function _resetForTests(): void {

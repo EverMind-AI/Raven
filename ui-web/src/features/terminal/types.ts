@@ -67,10 +67,16 @@ export interface TerminalSubscribeParams {
   ack?: number
 }
 
+export interface TerminalEvent {
+  type: string
+  payload?: Record<string, unknown>
+}
+
 export interface TerminalSource {
   list(taskId: string): Promise<TerminalListReply>
   input(params: { handle: string; data: string }): Promise<unknown>
   resize(params: { handle: string; cols: number; rows: number }): Promise<unknown>
   subscribe(params: TerminalSubscribeParams): Promise<TerminalSubscribeReply>
   onOutput: ((frame: TerminalOutputFrame) => void) | null
+  onEvent: ((event: TerminalEvent) => void) | null
 }

@@ -727,6 +727,15 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .terminal-name { flex: none; font-size: var(--step--1); }
 .terminal-identity-field { display: flex; align-items: baseline; gap: 5px; min-width: 0; color: var(--faint); }
 .terminal-identity-field code { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.terminal-delivery {
+  display: flex; align-items: center; gap: 16px; padding: 7px 20px;
+  border-bottom: 1px solid var(--line-soft); background: var(--surface);
+  font-family: var(--mono); font-size: 11px;
+}
+.terminal-delivery-state { display: inline-flex; align-items: center; gap: 6px; color: var(--faint); }
+.terminal-delivery-state i { width: 6px; height: 6px; border-radius: 50%; background: var(--line); }
+.terminal-delivery-state.active { color: var(--text); }
+.terminal-delivery-state.active i { background: var(--moss); }
 .terminal-stage {
   position: relative; flex: 1; min-height: 0; padding: 10px 14px;
   color: var(--faint); background: var(--stage-bg); font-family: var(--mono); font-size: var(--step--1);

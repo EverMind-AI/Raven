@@ -12,4 +12,5 @@ DS.terminal ??= {
     subscription: { handle, enabled, seq: 0, ackBytes: 65536, subscription_id: `demo-${handle}` },
   }),
   onOutput: null,
+  onEvent: null,
 };

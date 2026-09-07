@@ -36,7 +36,12 @@ export function TerminalApp(): JSX.Element {
       </div>
       <div className="terminal-panels">
         {state.terminals.map((terminal) => (
-          <TerminalPanel key={terminal.handle} terminal={terminal} active={state.activeTab === terminal.handle} />
+          <TerminalPanel
+            key={terminal.handle}
+            terminal={terminal}
+            active={state.activeTab === terminal.handle}
+            delivery={state.deliveries[terminal.handle]}
+          />
         ))}
       </div>
     </section>
@@ -62,7 +67,15 @@ function Tab({ id, label, active }: { id: string; label: string; active: boolean
   )
 }
 
-function TerminalPanel({ terminal, active }: { terminal: TerminalRow; active: boolean }): JSX.Element {
+function TerminalPanel({
+  terminal,
+  active,
+  delivery,
+}: {
+  terminal: TerminalRow
+  active: boolean
+  delivery?: store.TerminalDelivery
+}): JSX.Element {
   const name = canonicalName(terminal)
   return (
     <div className="terminal-panel" id={`terminal-panel-${terminal.handle}`} role="tabpanel" hidden={!active}>
@@ -72,10 +85,26 @@ function TerminalPanel({ terminal, active }: { terminal: TerminalRow; active: bo
         <Identity label={t('gui.terminal.instance')} value={terminal.handle} />
         <Identity label={t('gui.terminal.incarnation')} value={terminal.incarnationId} />
       </header>
+      {delivery ? <DeliveryStrip stage={delivery.stage} /> : null}
       <div className="terminal-stage">
         <span className="terminal-waiting">{t('gui.terminal.waiting')}</span>
         <TerminalPane terminal={terminal} active={active} />
       </div>
+    </div>
+  )
+}
+
+function DeliveryStrip({ stage }: { stage: store.TerminalDelivery['stage'] }): JSX.Element {
+  return (
+    <div className="terminal-delivery" aria-label={t('gui.terminal.delivery')}>
+      <span className="terminal-delivery-state active" data-state="delivered">
+        <i />
+        {t('gui.terminal.delivered')}
+      </span>
+      <span className={`terminal-delivery-state${stage === 'acknowledged' ? ' active' : ''}`} data-state="acknowledged">
+        <i />
+        {t('gui.terminal.acknowledged')}
+      </span>
     </div>
   )
 }

@@ -107,6 +107,7 @@ function wire(): void {
       subscription: { handle, enabled, seq: 0, ackBytes: 65536, subscription_id: `sub-${handle}` },
     })),
     onOutput: null,
+    onEvent: null,
   }
   const fakeShell: Shell = {
     T: (key) => key,
@@ -228,5 +229,33 @@ describe('hosted terminal tabs', () => {
     })
     expect(xterm.disposed).toBe(true)
     expect(source.subscribe).toHaveBeenCalledWith({ handle: 'term_claude', enabled: false })
+  })
+
+  it('shows delivery and matched acknowledgement without an inbox state', async () => {
+    rows = [terminal()]
+    await mount()
+    fireEvent.click(screen.getByRole('tab', { name: 'rsi-research-imp' }))
+
+    act(() => source.onEvent?.({
+      type: 'a2a.send',
+      payload: { handle: 'term_claude', state: 'accepted', nonce: 'a2a-123456abcdef' },
+    }))
+    const delivered = document.querySelector<HTMLElement>('[data-state="delivered"]')!
+    const acknowledged = document.querySelector<HTMLElement>('[data-state="acknowledged"]')!
+    expect(delivered.classList.contains('active')).toBe(true)
+    expect(acknowledged.classList.contains('active')).toBe(false)
+    expect(document.querySelector('.terminal-delivery')?.textContent).not.toContain('inbox')
+
+    act(() => source.onEvent?.({
+      type: 'a2a.ack.matched',
+      payload: { handle: 'term_claude', nonce: 'a2a-reply', ack_for: 'a2a-other' },
+    }))
+    expect(acknowledged.classList.contains('active')).toBe(false)
+
+    act(() => source.onEvent?.({
+      type: 'a2a.ack.matched',
+      payload: { handle: 'term_claude', nonce: null, ack_for: 'a2a-123456abcdef' },
+    }))
+    expect(acknowledged.classList.contains('active')).toBe(true)
   })
 })
