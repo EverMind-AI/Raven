@@ -59,6 +59,7 @@ class TerminalSendParams(TerminalParams):
     text: str
     enter: bool = False
     require_ack: bool = False
+    force: bool = False
     source_handle: str | None = None
     session_id: str | None = None
 

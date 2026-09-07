@@ -74,7 +74,13 @@ class CreateTerminalTool(_TerminalTool):
             try:
                 await self.rpc(
                     "agents.register",
-                    {"name": name, "kind": kind, "terminal": terminal["handle"], "task_ref": worktree},
+                    {
+                        "name": name,
+                        "kind": kind,
+                        "terminal": terminal["handle"],
+                        "task_ref": worktree,
+                        **({"session_key": self._session_key.get()} if self._session_key.get() else {}),
+                    },
                 )
             except TerminalError as exc:
                 try:
@@ -119,7 +125,16 @@ class SendTerminalTool(_TerminalTool):
     timeout_seconds = 435
     parameters = {
         "type": "object",
-        "properties": {"to": {"type": "string"}, "text": {"type": "string"}, "require_ack": {"type": "boolean"}},
+        "properties": {
+            "to": {"type": "string"},
+            "text": {"type": "string"},
+            "require_ack": {"type": "boolean"},
+            "force": {
+                "type": "boolean",
+                "default": False,
+                "description": "Clear stale composer state only after the human confirms the terminal composer is empty",
+            },
+        },
         "required": ["to", "text"],
         "additionalProperties": False,
     }
@@ -129,7 +144,7 @@ class SendTerminalTool(_TerminalTool):
         self.sender = sender
         self.scope = scope
 
-    async def execute(self, to: str, text: str, require_ack: bool = False, **kwargs: Any) -> str:
+    async def execute(self, to: str, text: str, require_ack: bool = False, force: bool = False, **kwargs: Any) -> str:
         try:
             resolution = await self.rpc("agents.resolve", {"mention": to})
             candidates = resolution.get("candidates", [])
@@ -164,6 +179,7 @@ class SendTerminalTool(_TerminalTool):
                 "enter": True,
                 "require_ack": require_ack,
                 **self.session_params(),
+                **({"force": True} if force else {}),
             }
             try:
                 result = await self.rpc("terminal.send", params)
