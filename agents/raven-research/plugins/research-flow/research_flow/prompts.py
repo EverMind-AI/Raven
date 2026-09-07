@@ -156,7 +156,12 @@ _DR_REPORT_STRUCTURE_CLAUSE_DEEP = """{n}. Write the reply as a research report 
    nothing material is missing, say so in one line.
 {format_override}   Add no other `##` headings, and do not close with a list of sources: every
    finding already carries the page it came from, and the reply is followed by
-   the full record of what was searched and opened. Let the report run as long
+   the full record of what was searched and opened. An identifier is not that
+   page: an arXiv number, an `owner/repo` slug or a dataset name stands for a
+   source without pointing at one, and the record cannot tell whether it was
+   read. Write the URL you opened; where you did not open the page, an
+   identifier may appear only in the sentence that already says so. Let the
+   report run as long
    as the evidence needs - never drop evidence, sources, or caveats to make it
    shorter."""
 
