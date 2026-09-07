@@ -2572,3 +2572,44 @@ async def test_a_registry_that_is_not_a_json_object_also_degrades_to_empty() -> 
 
     assert known.owner == {}
     assert known.state == {}
+
+
+def test_an_invented_node_field_gets_the_closed_set_in_one_message() -> None:
+    """pydantic's extra_forbidden names the field but not the set it violated,
+    and the measured recovery was another guess (a node carried 'mode',
+    2026-09-01). The refusal now lists every legal field once."""
+    with pytest.raises(DagValidationError) as exc:
+        parse_dag_spec(
+            {
+                "task_summary": "an invented field is named and answered",
+                "nodes": [
+                    {
+                        "id": "a",
+                        "subagent": "x",
+                        "node_summary": "go",
+                        "prompt_template": "go",
+                        "mode": "acceptEdits",
+                    }
+                ],
+            }
+        )
+    message = str(exc.value)
+    assert "'nodes.0.mode'" in message
+    assert "instance" in message and "depends_on" in message and "inputs" in message
+    assert "task_summary, nodes, confirm" in message
+
+
+def test_the_oversized_graph_hint_names_the_ref_escape_hatch() -> None:
+    """The graph JSON is the one call whose size scales with prose written into
+    it, and the generic "smaller form" advice sent the model toward cutting
+    content (measured 2026-09-02: a graph carrying the task rules verbatim in
+    every node hit the reply cap mid-write). The tool's own hint has to name
+    the escape hatch that already exists."""
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+
+    hint = SubAgentDagTool.incomplete_hint.fget(None)  # type: ignore[union-attr]
+    assert "{{ ref:<path> }}" in hint
+    assert "carries the reference, not the text" in hint
+    assert "Do not shorten prompts by dropping task rules" in hint
+    prompt_doc = _NODE_SCHEMA["properties"]["prompt_template"]["description"]
+    assert "A long prompt belongs in a file" in prompt_doc

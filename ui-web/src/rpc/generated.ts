@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 162 methods, 90 component schemas.
+// 162 methods, 91 component schemas.
 
 /* eslint-disable */
 /**
@@ -48,6 +48,7 @@ export type TurnEvent =
   | DagRunStartedEvent
   | DagNodeUpdatedEvent
   | DagRunReplannedEvent
+  | DagNodeStalledEvent
   | DagRunCompletedEvent
   | CronMissedEvent
   | MediaEvent
@@ -230,7 +231,7 @@ export interface TranscriptNotice {
 export interface TranscriptDelegated {
   kind: 'spawn' | 'dag';
   label: string;
-  status: 'ok' | 'error' | 'exception';
+  status: 'ok' | 'error' | 'exception' | 'notice';
   /**
    * Set for kind=dag, so a client can open the run.
    */
@@ -894,7 +895,7 @@ export interface TurnStartedEvent {
     delegated?: {
       kind: 'spawn' | 'dag';
       label: string;
-      status: 'ok' | 'error' | 'exception';
+      status: 'ok' | 'error' | 'exception' | 'notice';
       /**
        * Which node of the run this is about. Present only on `kind: dag` with `status: exception`, where the report concerns one node rather than the whole run.
        */
@@ -1095,7 +1096,7 @@ export interface SubagentDeliveredEvent {
      * The spawn's display label, or the dag's run_id.
      */
     label: string;
-    status: 'ok' | 'error' | 'exception';
+    status: 'ok' | 'error' | 'exception' | 'notice';
     /**
      * Set for kind=dag, so a client can open the run.
      */
@@ -1263,6 +1264,18 @@ export interface DagRunReplannedEvent {
     replan_run_id: string;
     from_node: string;
     reason: string;
+  };
+}
+/**
+ * A running node has shown no sign of life for quiet_ms. Information only: the node is still running and nothing about the run changed.
+ */
+export interface DagNodeStalledEvent {
+  type: 'dag.node_stalled';
+  payload: {
+    run_id: string;
+    tool_call_id?: string;
+    node: string;
+    quiet_ms: number;
   };
 }
 /**

@@ -58,6 +58,7 @@ KNOWN_EVENT_TYPES = frozenset(
         "dag.run_started",
         "dag.node_updated",
         "dag.run_replanned",
+        "dag.node_stalled",
         "dag.run_completed",
         "cron.delivered",
         "cron.missed",
