@@ -56,9 +56,13 @@ DS.agents = {
   /* A turn addressed to one instance rather than to the conversation: the same
      `turn.send` the composer uses, with a `target`. An instance's turn runs on
      its own lane, so it is concurrent with the main agent's and with every other
-     instance's, and is refused only by *that* instance still answering. */
+     instance's, and is refused only by *that* instance still answering. The
+     attachment note the instance composer bakes into the text becomes the typed
+     `media` field here, by the one rule the page composer's sends follow
+     (`mediaOf`, above): a direct chat's files reach the sub-agent by path only
+     when this call carries them, and it used to carry none. */
   instanceSend: (agent, handle, text) =>
-    rpc.call('turn.send', { session_key: sessionCurrent(), content: text, target: { agent, handle } })
+    rpc.call('turn.send', { session_key: sessionCurrent(), content: text, target: { agent, handle }, ...mediaOf(text) })
       .then(() => undefined),
   instanceCreate: (agent, sessionKey) =>
     rpc.call('subagents.instance.create', { agent, session_key: sessionKey })

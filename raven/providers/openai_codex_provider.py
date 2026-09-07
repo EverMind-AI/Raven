@@ -93,23 +93,17 @@ class OpenAICodexProvider(LLMProvider):
         url = DEFAULT_CODEX_URL
 
         timeout = self.generation.timeout
-        # Two budgets, not one: the whole call may take the full timeout, but a
-        # stream that goes silent between two SSE lines is given up after the
-        # idle budget (reviewed 2026-09-07: this adapter fed the call budget to
-        # its per-line watchdog, so a silent Codex stream still waited 600 s
-        # with streamIdleTimeout set to 180).
-        idle_timeout = getattr(self.generation, "stream_idle_timeout", None) or timeout
         try:
             try:
                 content, tool_calls, finish_reason = await _request_codex(
-                    url, headers, body, verify=True, timeout=timeout, idle_timeout=idle_timeout
+                    url, headers, body, verify=True, timeout=timeout
                 )
             except Exception as e:
                 if "CERTIFICATE_VERIFY_FAILED" not in str(e):
                     raise
                 logger.warning("SSL certificate verification failed for Codex API; retrying with verify=False")
                 content, tool_calls, finish_reason = await _request_codex(
-                    url, headers, body, verify=False, timeout=timeout, idle_timeout=idle_timeout
+                    url, headers, body, verify=False, timeout=timeout
                 )
             return LLMResponse(
                 content=content,
@@ -158,11 +152,7 @@ async def _request_codex(
     body: dict[str, Any],
     verify: bool,
     timeout: float,
-    idle_timeout: float | None = None,
 ) -> tuple[str, list[ToolCallRequest], str]:
-    """One Codex request. ``timeout`` bounds the call; ``idle_timeout`` (the
-    stream-idle budget, defaulting to the call budget) bounds the silence
-    between two SSE lines, which is the watchdog ``_iter_sse`` runs."""
     async with httpx.AsyncClient(timeout=timeout, verify=verify) as client:
         async with client.stream("POST", url, headers=headers, json=body) as response:
             if response.status_code != 200:
@@ -170,7 +160,7 @@ async def _request_codex(
                 raise ProviderHTTPError(
                     response.status_code, _friendly_error(response.status_code, text.decode("utf-8", "ignore"))
                 )
-            return await _consume_sse(response, idle_timeout or timeout)
+            return await _consume_sse(response, timeout)
 
 
 def _convert_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:

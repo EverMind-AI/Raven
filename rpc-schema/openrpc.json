@@ -2222,11 +2222,7 @@
           }
         }
       },
-      "errors": [
-        {
-          "$ref": "#/components/errors/ConfigValidationError"
-        }
-      ]
+      "errors": []
     },
     {
       "name": "subagents.instance.history",
@@ -2436,11 +2432,7 @@
           }
         }
       },
-      "errors": [
-        {
-          "$ref": "#/components/errors/ConfigValidationError"
-        }
-      ]
+      "errors": []
     },
     {
       "name": "session.set_mode",

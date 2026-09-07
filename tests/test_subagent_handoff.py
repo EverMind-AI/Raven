@@ -280,7 +280,7 @@ async def _run_ordinary_turn(loop, text: str) -> list[dict]:
 async def _run_direct_turn(loop, text: str, *, target: tuple[str, str]) -> None:
     from raven.spine import ChatType, Origin, Source, TurnRequest
 
-    async def fake_chat(*, session_key, agent, handle, text, workspace=None, on_delta=None):
+    async def fake_chat(*, session_key, agent, handle, text, workspace=None, on_delta=None, media=()):
         return "sub reply", DirectTurnMeta(
             agent=agent,
             handle=handle,
