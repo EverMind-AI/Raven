@@ -116,7 +116,6 @@ async def stream_llm_call(
         return reasoning_ms
 
     final_usage: dict[str, Any] | None = None
-    thinking_blocks: list[dict[str, Any]] | None = None
     had_error = False
     error_content: str | None = None
     error_classification: ErrorClassification | None = None
@@ -169,8 +168,6 @@ async def stream_llm_call(
                         )
                     if delta.usage is not None:
                         final_usage = delta.usage
-                    if getattr(delta, "thinking_blocks", None):
-                        thinking_blocks = delta.thinking_blocks
             # Asked inside the attempt loop so the answer can be acted on. The
             # verdict requires that nothing was emitted, so a second attempt
             # duplicates no rendered output -- the same condition the reconnect
@@ -190,7 +187,6 @@ async def stream_llm_call(
                 reasoning_buf.clear()
                 tool_call_slots.clear()
                 final_usage = None
-                thinking_blocks = None
                 upstream_finish_reason = None
                 continue
             break
@@ -237,7 +233,6 @@ async def stream_llm_call(
                 reasoning_buf.clear()
                 tool_call_slots.clear()
                 final_usage = None
-                thinking_blocks = None
                 upstream_finish_reason = None
             if classification.strip_images:
                 # The one recovery this function cannot make: the picture has to
@@ -328,7 +323,6 @@ async def stream_llm_call(
         finish_reason=finish_reason,
         usage=final_usage or {},
         reasoning_content=reasoning_content,
-        thinking_blocks=thinking_blocks,
         truncated=truncated,
         max_tokens=sent_max_tokens,
         reasoning_ms=reasoning_ms,

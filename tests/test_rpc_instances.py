@@ -1552,10 +1552,11 @@ class _ModedManager(_FakeManager):
     def instance_mode(self, session_key, agent, handle):
         return self.held.get((session_key or "", agent, handle))
 
-    def resolve_mode(self, session_key, agent, instance):
-        """The real signature -- it lost its per-dispatch argument when the spawn
-        tool's `mode` was withdrawn. This fake carries no session tier, so an absent
-        override resolves to nothing."""
+    def resolve_mode(self, session_key, agent, instance, requested=None):
+        """The real signature. This fake carries no session tier, so an absent
+        override resolves to nothing -- which is what the pre-tier world did."""
+        if requested:
+            return requested
         return self.instance_mode(session_key, agent, instance) if instance else None
 
     def set_instance_mode(self, session_key, agent, handle, mode):

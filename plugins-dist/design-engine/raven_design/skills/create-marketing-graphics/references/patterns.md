@@ -1,6 +1,6 @@
 # 营销传播领域模式
 
-本文件是 `campaign_full` 档位与 govern / diagnose 模式的深层数据结构（campaign record、渠道合同、权利、失效传播）。日常的单张、系列、社媒套件不需要读它；主 Skill 的判据与骨架优先。
+本文件保存 `create-marketing-graphics` 的领域数据结构与诊断表。七个 gate、共享 assurance 和 promotion 语义以主 Skill、`visual-artifact-design` 与 `CONTRACT.md` 为准；这里不复制它们。
 
 ## 子型路由
 

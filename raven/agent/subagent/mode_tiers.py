@@ -9,8 +9,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
-from enum import Enum
-from typing import Iterable, Iterator, NamedTuple
+from typing import Iterable, Iterator
 
 from raven.config.schema import TIER_LADDER
 
@@ -49,41 +48,13 @@ def turn_tier_in_force() -> str | None:
     return _TURN_TIER.get()
 
 
-class TierDecline(Enum):
-    """Why no tier was asked for, carrying the sentence that says so.
-
-    The reason and its wording live together because they used to be chosen
-    apart: ``clamp_tier`` returned a bare ``None`` and the caller re-tested one
-    of the conditions to pick a message, so a decline it had no branch for
-    borrowed another one's wording. That is how an agent offering the whole
-    ladder came to be blamed for a session on a word the ladder cannot rank, and
-    how an agent offering `low`/`max` is told it "offers no tier" while plainly
-    offering `max`. A caller that renders ``decline.value`` cannot reach the
-    wrong sentence, because there is no longer a decision left for it to make.
-    """
-
-    FOREIGN_TIER = "session tier {tier!r} is not one of {ladder}; sub-agent {agent} runs on its own default"
-    NO_SHARED_RUNG = "sub-agent {agent}: offers no tier from {ladder}; running on its own default"
-    UNRANKABLE_MENU = (
-        "sub-agent {agent}: offers {menu}, which has nothing at or below {tier!r} and a rung "
-        "{ladder} cannot rank; running on its own default"
-    )
-
-
-class TierChoice(NamedTuple):
-    """The rung to ask for, or the reason none was asked for. Exactly one is set."""
-
-    mode: str | None
-    decline: TierDecline | None
-
-
-def resolve_tier(tier: str, offered: Iterable[str]) -> TierChoice:
-    """The rung to ask this agent for, or which of the three declines applies.
+def clamp_tier(tier: str, offered: Iterable[str]) -> str | None:
+    """The rung to ask this agent for, or ``None`` to leave it on its default.
 
     Nearest at or below. Where nothing is below, the cheapest rung on offer --
     but only when every rung on offer is one the ladder can rank.
 
-    No rung in the three cases where a choice would be a guess: a tier outside
+    ``None`` in the three cases where a choice would be a guess: a tier outside
     the ladder (another vocabulary, where "nearest" has no meaning), an agent
     sharing no rung with it at all, and a menu carrying a rung the ladder has no
     word for when the climb is the only move left. That last one is the
@@ -95,16 +66,16 @@ def resolve_tier(tier: str, offered: Iterable[str]) -> TierChoice:
     in any vocabulary that spells the rung the same way.
     """
     if tier not in TIER_LADDER:
-        return TierChoice(None, TierDecline.FOREIGN_TIER)
+        return None
     menu = set(offered)
     have = [rung for rung in TIER_LADDER if rung in menu]
     if not have:
-        return TierChoice(None, TierDecline.NO_SHARED_RUNG)
+        return None
     if tier in have:
-        return TierChoice(tier, None)
+        return tier
     below = [rung for rung in have if TIER_LADDER.index(rung) < TIER_LADDER.index(tier)]
     if below:
-        return TierChoice(below[-1], None)
+        return below[-1]
     # Nothing at or below, so the only way to honour the tier is to raise it --
     # and that is only honest when the whole menu is legible. An agent offering a
     # rung the ladder has no word for may well have something cheaper than
@@ -112,10 +83,5 @@ def resolve_tier(tier: str, offered: Iterable[str]) -> TierChoice:
     # the expensive direction: raven-code offering `low`/`max` would take a
     # `medium` session to `max`. Leave it on its own default instead.
     if menu - set(TIER_LADDER):
-        return TierChoice(None, TierDecline.UNRANKABLE_MENU)
-    return TierChoice(have[0], None)
-
-
-def clamp_tier(tier: str, offered: Iterable[str]) -> str | None:
-    """The rung alone, for a caller with nothing to say about a decline."""
-    return resolve_tier(tier, offered).mode
+        return None
+    return have[0]

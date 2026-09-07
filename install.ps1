@@ -355,7 +355,7 @@ function Install-Raven([string]$UvPath, [string]$NodePath) {
         Build-WebAssets $scriptDir $NodePath $UvPath
         # Pin to the locked dependency set so an install matches what we test.
         $constraints = Join-Path ([IO.Path]::GetTempPath()) ("raven-constraints-" + [guid]::NewGuid().ToString("N") + ".txt")
-        & $UvPath export --directory "$scriptDir" --frozen --all-extras --no-hashes --no-emit-workspace -o "$constraints"
+        & $UvPath export --directory "$scriptDir" --frozen --all-extras --no-hashes --no-emit-project -o "$constraints"
         # Install all channel adapters by default; fall back to base raven if
         # the umbrella extra fails to build on this platform, so one broken
         # channel SDK cannot block the whole install.

@@ -177,13 +177,11 @@ def _concrete_provider_subclasses() -> set[type]:
 
 def test_exactly_seven_concrete_backend_classes() -> None:
     # This asserts class existence only, not the dispatch wiring.
-    from raven.providers.anthropic_messages_provider import AnthropicMessagesProvider
     from raven.providers.azure_openai_provider import AzureOpenAIProvider
     from raven.providers.endpoint_rotor import EndpointRotorProvider
     from raven.providers.litellm_provider import LiteLLMProvider
     from raven.providers.minimax_oauth_provider import MiniMaxOAuthProvider
     from raven.providers.openai_codex_provider import OpenAICodexProvider
-    from raven.providers.openai_responses_provider import OpenAIResponsesProvider
     from raven.providers.per_model_provider import PerModelProvider
     from raven.providers.resolving_provider import ResolvingProvider
 
@@ -198,10 +196,6 @@ def test_exactly_seven_concrete_backend_classes() -> None:
         # terms -- make_provider returns it for a section that resolves to
         # more than one endpoint.
         EndpointRotorProvider,
-        # The two native transports a per-model protocol can select instead of
-        # the LiteLLM chat path (providers.<slug>.protocol / modelProtocols).
-        OpenAIResponsesProvider,
-        AnthropicMessagesProvider,
     }
     assert _concrete_provider_subclasses() == expected
     for cls in expected:

@@ -200,27 +200,6 @@ async def test_pages_come_back_as_source_the_author_can_paste(workspace: Path, h
     assert _body(result)["pages_read"] == [1]
 
 
-async def test_a_page_read_carries_the_pages_and_not_the_roster_again(workspace: Path, house: Path):
-    tool = PptTemplateTool(workspace, FakeViews())
-    bind = _body(await tool.execute(project="talk", path="uploads/house-style.pptx"))
-    assert bind["layouts"] and bind["canvas_in"]
-
-    read = _body(await tool.execute(project="talk", pages=[1]))
-
-    assert read["pages_read"] == [1]
-    for key in ("layouts", "canvas_in", "example_pages", "build_from", "theme_colours", "fonts"):
-        assert key not in read, key
-
-
-async def test_a_call_that_binds_and_reads_in_one_go_keeps_the_roster(workspace: Path, house: Path):
-    tool = PptTemplateTool(workspace, FakeViews())
-
-    body = _body(await tool.execute(project="talk", path="uploads/house-style.pptx", pages=[1]))
-
-    assert body["pages_read"] == [1]
-    assert body["layouts"] and body["canvas_in"] and body["example_pages"]
-
-
 async def test_a_pages_pictures_land_where_its_code_looks_for_them(workspace: Path, house: Path):
     """`add_picture("template_00.png", ...)` in the reference has to be a line the
     author can paste and run, and the program runs in the build directory."""

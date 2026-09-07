@@ -11,7 +11,6 @@ genuinely the ACP surface's own -- which mode each live session is currently on.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -27,7 +26,6 @@ class ModeProfile:
     description: str
     max_iterations: int | None
     overlay: dict[str, Any] = field(default_factory=dict)
-    reasoning_effort: str | None = None
 
 
 @dataclass(frozen=True)
@@ -53,16 +51,6 @@ class ModeCatalogue:
         return self.profiles.get(mode_id)
 
 
-def resolve_default(named: str | None, profiles: Mapping[str, Any]) -> str:
-    """The one rule: the named default where it exists, else the first declared entry.
-
-    Written once because it had drifted into two -- here and in `SessionModes` -- and
-    two copies of "which mode is the catalogue default" is exactly the pair that stops
-    agreeing when one of them learns something.
-    """
-    return named if named in profiles else next(iter(profiles), "")
-
-
 def build_mode_catalogue(config: Any) -> ModeCatalogue:
     """Resolve ``config.acp.modes`` once, at startup."""
     acp = getattr(config, "acp", None)
@@ -79,7 +67,6 @@ def build_mode_catalogue(config: Any) -> ModeCatalogue:
             description=_t(declaration.description) if ours else declaration.description,
             max_iterations=declaration.max_tool_iterations,
             overlay=dict(declaration.overlay),
-            reasoning_effort=getattr(declaration, "reasoning_effort", None),
         )
         for mode_id, declaration in declared.items()
     }
@@ -87,7 +74,7 @@ def build_mode_catalogue(config: Any) -> ModeCatalogue:
     # built-in default from a custom catalogue's unset one); the plain field for
     # anything duck-typed into this function.
     named = getattr(acp, "effective_default_mode", None) or getattr(acp, "default_mode", None)
-    return ModeCatalogue(profiles=profiles, default=resolve_default(named, profiles))
+    return ModeCatalogue(profiles=profiles, default=named if named in profiles else next(iter(profiles), ""))
 
 
-__all__ = ["ModeCatalogue", "ModeProfile", "build_mode_catalogue", "resolve_default"]
+__all__ = ["ModeCatalogue", "ModeProfile", "build_mode_catalogue"]

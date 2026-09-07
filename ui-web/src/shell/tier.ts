@@ -68,6 +68,31 @@ let mode = ''
 let menu: TierOption[] = []
 let loaded = false
 
+/* Who else the tier moves. It is a session-wide setting, and a surface showing
+   what one sub-agent will run at is showing this value clamped -- so it has to
+   hear about a switch, or it goes on naming the rung from before.
+
+   A notification rather than a call into whoever cares, for the reason the
+   composer rack gives for `watchAsking`: this module has no business knowing
+   that an instance pane exists. It says the value moved; what that is worth is
+   the listener's to decide. */
+const WATCHERS = new Set<(next: string) => void>()
+
+export function watch(fn: (next: string) => void): () => void {
+  WATCHERS.add(fn)
+  return () => WATCHERS.delete(fn)
+}
+
+function told(): void {
+  WATCHERS.forEach((fn) => {
+    try {
+      fn(mode)
+    } catch {
+      /* A listener is a courtesy; one that throws must not take the chip down. */
+    }
+  })
+}
+
 export const current = (): string => mode
 export const options = (): readonly TierOption[] => menu
 
@@ -153,10 +178,15 @@ function headings(): void {
 function absorb(reply: TierReply | null | undefined): void {
   if (!reply) return
   const offered = Array.isArray(reply.availableModes) ? reply.availableModes : []
+  const was = mode
   menu = offered.filter((m) => m && typeof m.id === 'string' && m.id)
   mode = typeof reply.mode === 'string' ? reply.mode : ''
   loaded = true
   draw()
+  /* Only on a real move. Every read passes through here, including the one on
+     each conversation change, and telling listeners the value they already hold
+     has changed would have them re-fetch for nothing. */
+  if (mode !== was) told()
 }
 
 /* Asked on every conversation change, including the change to none: a draft is
@@ -294,6 +324,17 @@ function tick(): SVGSVGElement {
 }
 
 /* Test seam: the module's state outlives a test file's DOM. */
+/* Test seam: the module's state outlives a test file's DOM. Watchers are NOT
+   cleared, for the reason `composer/sheets` gives -- one is registered when its
+   own module loads, which happens once per test file, so clearing them would
+   unwire the first reset and leave every case after it listening to nothing. */
+/* Test seam for a listener's side of the contract: the tier moving without a
+   reply to absorb, which is what a caller in another module has to react to. */
+export function _notifyForTests(next: string): void {
+  mode = next
+  told()
+}
+
 export function _resetForTests(): void {
   mode = ''
   menu = []

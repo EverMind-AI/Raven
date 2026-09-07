@@ -1,4 +1,4 @@
-"""One live ACP connection per agent and parent binding, shared by every caller in this process.
+"""One live ACP connection per agent, shared by every caller in this process.
 
 Why a singleton rather than a field on the backend: ``SubagentManager`` and
 ``SubAgentDagTool`` each build their own backend object from the same config
@@ -11,12 +11,6 @@ So the pool is module state keyed by agent name, and a backend is only its
 client. That also matches the transport: ACP sessions live *inside* a
 connection, so sharing the connection is what makes two sessions of the same
 agent possible at all.
-
-Under one name, one connection per parent binding. The binding (the model,
-provider and protocol the invoking session runs on) reaches the worker as
-launch environment, so two bindings are two processes -- but they are not two
-configs, and a second binding must not close the first binding's connection
-the way an operator's config edit does: a turn was running on it.
 """
 
 from __future__ import annotations
@@ -62,12 +56,10 @@ SessionSink = Callable[[str, dict[str, Any]], Awaitable[None]]
 # hold the two in step: a parameter added to `acquire` and not to the key would
 # be silently discarded for the life of the process, which is the exact bug this
 # key exists to prevent.
-LAUNCH_PARAMS = ("command", "cwd", "env", "binding")
+LAUNCH_PARAMS = ("command", "cwd", "env")
 
 
-def launch_key(
-    *, command: str, cwd: str | None, env: dict[str, str] | None, binding: dict[str, str] | None = None
-) -> str:
+def launch_key(*, command: str, cwd: str | None, env: dict[str, str] | None) -> str:
     """A digest of what a connection was launched from.
 
     Deliberately over the *effective* arguments rather than over the agent's
@@ -76,18 +68,9 @@ def launch_key(
     absent for the opposite reason -- it is how long the caller waits for the
     handshake, not something the process is launched with, so changing it must
     not throw away a working connection.
-
-    `binding` is launch environment too, so it is in the key; the pool keeps it
-    apart from `env` because the two are answered differently (see `acquire`).
     """
-    raw = json.dumps(
-        {"command": command, "cwd": cwd, "env": env or {}, "binding": binding or {}}, sort_keys=True, default=str
-    )
+    raw = json.dumps({"command": command, "cwd": cwd, "env": env or {}}, sort_keys=True, default=str)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
-
-
-def _binding_key(binding: dict[str, str] | None) -> str:
-    return json.dumps(binding or {}, sort_keys=True, default=str)
 
 
 class _SessionRouter:
@@ -102,22 +85,6 @@ class _SessionRouter:
         self._agent = agent
         self._sinks: dict[str, SessionSink] = {}
         self._resident: SessionSink | None = None
-        self._reserved: set[str] = set()
-        self._pending: dict[str, list[tuple[str, dict[str, Any]]]] = {}
-        # Every session ever reserved or attached here, kept for the life of the
-        # connection: with one connection per binding under a name, this is how
-        # a `session/delete` finds the process that holds the session.
-        self.seen: set[str] = set()
-
-    def reserve(self, session_id: str) -> None:
-        """Reserve a session before its turn sink is attached.
-
-        ACP agents may emit an update immediately after ``session/new`` or
-        ``session/load`` returns. Keeping that short handoff window explicit
-        prevents the first progress frame from being dropped as unrouted.
-        """
-        self._reserved.add(session_id)
-        self.seen.add(session_id)
 
     def set_resident(self, sink: SessionSink | None) -> None:
         """The sink for updates that belong to no run of raven's own.
@@ -133,7 +100,6 @@ class _SessionRouter:
 
     def attach(self, session_id: str, sink: SessionSink) -> None:
         self._sinks[session_id] = sink
-        self.seen.add(session_id)
 
     async def take_over(self, session_id: str, sink: SessionSink) -> None:
         """Attach ``sink``, after letting the resident one finish what it holds.
@@ -151,10 +117,6 @@ class _SessionRouter:
             except Exception as exc:  # noqa: BLE001 - a record must not block the turn
                 logger.warning("acp agent {!r}: could not flush before takeover: {}", self._agent, exc)
         self.attach(session_id, sink)
-        self._reserved.discard(session_id)
-        pending = self._pending.pop(session_id, [])
-        for method, params in pending:
-            await sink(method, params)
 
     def detach(self, session_id: str, sink: SessionSink) -> None:
         """Remove ``sink`` only if it is still the one attached.
@@ -166,8 +128,6 @@ class _SessionRouter:
         """
         if self._sinks.get(session_id) is sink:
             del self._sinks[session_id]
-        self._reserved.discard(session_id)
-        self._pending.pop(session_id, None)
 
     async def dispatch(self, method: str, params: dict[str, Any]) -> None:
         session_id = params.get("sessionId")
@@ -178,11 +138,6 @@ class _SessionRouter:
             # the same work twice.
             sink = self._resident
         if sink is None:
-            if isinstance(session_id, str) and session_id in self._reserved:
-                pending = self._pending.setdefault(session_id, [])
-                if len(pending) < 128:
-                    pending.append((method, params))
-                return
             # Not an error: an agent may notify about a session raven has already
             # finished with (a late usage_update), and a connection-level
             # notification carries no sessionId at all.
@@ -281,7 +236,6 @@ class _Connection:
         launch: str = "",
         initialize: Any = None,
         handshake_bytes: int = 0,
-        config: str = "",
     ) -> None:
         self.client = client
         self.router = router
@@ -296,9 +250,6 @@ class _Connection:
         # What this process was launched from, so a later dispatch can tell
         # whether the connection it is about to reuse still matches its config.
         self.launch_key = launch
-        # The same, without the binding: what the operator configured. A
-        # connection whose config half moved is stale whatever its binding.
-        self.config_key = config
         self.initialize = initialize
         """What the agent answered to ``initialize`` on this connection.
 
@@ -334,15 +285,11 @@ class _Connection:
 
 
 class AcpConnectionPool:
-    """Process-wide registry of live ACP connections, one per agent name and binding."""
+    """Process-wide registry of live ACP connections, one per agent name."""
 
     def __init__(self) -> None:
-        self._connections: dict[str, dict[str, _Connection]] = {}
+        self._connections: dict[str, _Connection] = {}
         self._locks: dict[str, asyncio.Lock] = {}
-
-    def connections(self, name: str) -> list[_Connection]:
-        """Every connection held under ``name``, live or not."""
-        return list(self._connections.get(name, {}).values())
 
     def _lock_for(self, name: str) -> asyncio.Lock:
         lock = self._locks.get(name)
@@ -358,11 +305,10 @@ class AcpConnectionPool:
         command: str,
         cwd: str | None = None,
         env: dict[str, str] | None = None,
-        binding: dict[str, str] | None = None,
         on_request: Any = None,
         ready_timeout_s: float | None = None,
     ) -> _Connection:
-        """The live connection for ``name`` under ``binding``, starting or restarting it if needed.
+        """The live connection for ``name``, starting or restarting it if needed.
 
         Serialised per agent so two concurrent first tasks cannot each launch a
         server. A connection whose process has exited is replaced rather than
@@ -376,30 +322,17 @@ class AcpConnectionPool:
         which launches its own un-pooled client and therefore handshakes the new
         one -- kept dispatching to the process launched from the old config for
         the life of the raven process.
-
-        ``binding`` is the one launch argument that does NOT replace: it is the
-        invoking session's model/provider/protocol, and two sessions on two
-        bindings dispatch to the same agent at once. Each binding holds its own
-        connection under the name, and a new binding leaves the others' turns
-        running. A change to the config half (`command`, `cwd`, `env`) still
-        retires every connection of the name, as it always did.
         """
-        config = launch_key(command=command, cwd=cwd, env=env)
-        key = launch_key(command=command, cwd=cwd, env=env, binding=binding)
-        bkey = _binding_key(binding)
-        launch_env = {**(env or {}), **binding} if binding else env
+        key = launch_key(command=command, cwd=cwd, env=env)
         async with self._lock_for(name):
-            held = self._connections.setdefault(name, {})
-            existing = held.get(bkey)
+            existing = self._connections.get(name)
             if existing is not None and existing.alive and existing.launch_key == key:
                 return existing
-            for other_key, other in list(held.items()):
-                if other_key != bkey and other.alive and other.config_key == config:
-                    continue
-                reason = "connection is dead" if not other.alive else "launch config changed"
+            if existing is not None:
+                reason = "connection is dead" if not existing.alive else "launch config changed"
                 logger.info("acp agent {!r}: {}, relaunching", name, reason)
-                held.pop(other_key, None)
-                await other.client.close()
+                self._connections.pop(name, None)
+                await existing.client.close()
 
             router = _SessionRouter(name)
             elicitors = _SessionElicitors(name)
@@ -412,7 +345,7 @@ class AcpConnectionPool:
                 name=name,
                 command=command,
                 cwd=cwd,
-                env=launch_env,
+                env=env,
                 # Defaulted here rather than at the caller: answering a
                 # permission request is a property of raven-as-an-ACP-client,
                 # not of whichever backend happens to hold the turn, and every
@@ -460,16 +393,15 @@ class AcpConnectionPool:
                 key,
                 initialize,
                 handshake_bytes=journal.offset if journal is not None else 0,
-                config=config,
             )
-            held[bkey] = connection
+            self._connections[name] = connection
             return connection
 
     async def drop(self, name: str) -> None:
-        """Close and forget one agent's connections, if any."""
+        """Close and forget one agent's connection, if any."""
         async with self._lock_for(name):
-            connections = list((self._connections.pop(name, None) or {}).values())
-        for connection in connections:
+            connection = self._connections.pop(name, None)
+        if connection is not None:
             await connection.client.close()
 
     async def close_all(self) -> None:
@@ -500,15 +432,7 @@ class AcpConnectionPool:
             logger.warning("acp agent {!r}: close failed: {}", name, exc)
 
     def live_agents(self) -> list[str]:
-        return [name for name, held in self._connections.items() if any(conn.alive for conn in held.values())]
-
-    def _holder_of(self, name: str, session_id: str) -> _Connection | None:
-        """The live connection that has routed ``session_id``, else the only live one."""
-        live = [conn for conn in self._connections.get(name, {}).values() if conn.alive]
-        for connection in live:
-            if session_id in connection.router.seen:
-                return connection
-        return live[0] if len(live) == 1 else None
+        return [name for name, conn in self._connections.items() if conn.alive]
 
     async def delete_session(self, name: str, session_id: str, *, timeout: float = _DELETE_TIMEOUT_S) -> bool:
         """Best-effort ``session/delete`` on this agent's live connection.
@@ -523,8 +447,8 @@ class AcpConnectionPool:
         channel to deliver the delete on, and starting one just to delete a
         session would be worse than the leak.
         """
-        connection = self._holder_of(name, session_id)
-        if connection is None:
+        connection = self._connections.get(name)
+        if connection is None or not connection.alive:
             return False
         if not handshake_of(connection.initialize).can_delete:
             logger.debug(

@@ -2091,30 +2091,7 @@ textarea:focus, textarea:focus-visible,
   font: inherit; font-size: 13px; color: var(--text); }
 .mpick .cols { display: grid; grid-template-columns: 168px 1fr; min-height: 0; }
 .mpick .provs { border-right: 1px solid var(--line-soft); overflow-y: auto; padding: 6px; }
-.mpick .model-pane { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); }
-.mpick .model-toolbar {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  min-width: 0; padding: 9px 11px 8px; border-bottom: 1px solid var(--line-soft);
-  background: color-mix(in oklab, var(--raised) 42%, transparent);
-}
-.mpick .model-toolbar-copy { min-width: 0; display: grid; gap: 2px; }
-.mpick .model-toolbar-label {
-  color: var(--faint); font-size: 9.5px; font-weight: 600; letter-spacing: .08em;
-  line-height: 1.2; text-transform: uppercase;
-}
-.mpick .model-toolbar-model {
-  overflow: hidden; color: var(--muted); font-family: var(--mono); font-size: 11px;
-  line-height: 1.25; text-overflow: ellipsis; white-space: nowrap;
-}
-.mpick .protocol-control { display: flex; align-items: center; gap: 7px; flex: none; }
-.mpick .protocol-control select {
-  width: 168px; max-width: 100%; min-height: 28px; padding: 4px 25px 4px 8px; border: 1px solid var(--line);
-  border-radius: 7px; outline: 0; background: var(--ink); color: var(--text); font: inherit;
-  font-size: 11px; cursor: pointer; color-scheme: light dark;
-}
-.mpick .protocol-control select:hover { border-color: var(--faint); }
-.mpick .protocol-control select:focus-visible { border-color: var(--amber); box-shadow: 0 0 0 2px color-mix(in oklab, var(--amber) 22%, transparent); }
-.mpick .models { min-height: 0; overflow-y: auto; padding: 6px; }
+.mpick .models { overflow-y: auto; padding: 6px; }
 .mpick .row {
   display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
   padding: 7px 9px; border-radius: 7px; font-size: 13px; color: var(--text);
@@ -4624,6 +4601,17 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   color: var(--faint); font-size: 16px; cursor: pointer; }
 .desk-pane > header button svg { width: 16px; height: 16px; stroke-linecap: round; stroke-linejoin: round; }
 .desk-pane > header .pane-fullscreen svg { width: 14px; height: 14px; }
+/* The instance's own effort. A text chip, so it has to undo the fixed 26px
+   square the icon buttons above take. Two states worth telling apart at a
+   glance: following the conversation is the ordinary one and stays as quiet as
+   the icons beside it, while an instance set apart from the conversation wears
+   a pill -- that is a fact about this pane the reader did not choose to look
+   for, so it should not need a hover to find. */
+.desk-pane > header .pane-imode { width: auto; height: 22px; padding: 0 8px; font-size: 11.5px;
+  border-radius: 999px; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  display: block; line-height: 22px; }
+.desk-pane > header .pane-imode:not(.auto) { color: var(--text); background: var(--raised);
+  box-shadow: inset 0 0 0 1px var(--line-soft); }
 .desk-pane > header button:hover { color: var(--text); background: var(--raised); }
 /* The header is the handle once there is more than one pane to arrange. */
 .desk-grid[data-can-drag="true"] .desk-pane > header { cursor: grab; touch-action: none; user-select: none;
@@ -5113,3 +5101,4 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .pbtbl .gap { font-family: var(--mono); font-size: 12px; color: var(--faint); }
 .pbtbl .ds { color: var(--muted); line-height: 1.6; }
 .pbtbl .en { display: block; font-family: var(--mono); font-size: 12px; color: var(--faint); margin-top: 2px; }
+

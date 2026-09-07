@@ -214,12 +214,7 @@ def test_the_engine_slice_carries_the_selector_and_render_knobs():
     # workspace fence spelled open for this product (H2): the fork seat read
     # the HOST's tools.restrictToWorkspace (false here); the wheel cannot,
     # so the shipped slice says it outright.
-    assert engine["render"] == {
-        **fork["tools"]["render"],
-        "restrictToWorkspace": False,
-        "rasterDpi": 300,
-        "maxSidePixels": 16384,
-    }
+    assert engine["render"] == {**fork["tools"]["render"], "restrictToWorkspace": False}
     assert "skillForge" not in ours
     assert "render" not in ours["tools"]
 
@@ -240,30 +235,6 @@ def test_the_render_loads_through_trunks_own_loader(grounded):
     assert extensions.plugins.config["design-engine"]["visualDomainSelector"]["enabled"] is True
     mounts = extensions.skill_forge.local_dirs
     assert len(mounts) == 1 and mounts[0].always_enabled and mounts[0].path.endswith("skills")
-
-
-def test_the_render_declares_three_effort_tiers_each_with_its_own_cap_and_effort(grounded):
-    """The built-in tiers are no-ops for a worker: empty overlay, cap inherited.
-    Design declares its own catalogue so the session tier moves what the worker
-    does -- the reasoning effort and the iteration cap -- with config.json as
-    the high baseline and the other two as diffs in modes/."""
-    from raven.config.loader import load_config
-    from raven.config.mode_catalogue import build_mode_catalogue
-
-    data = _render(grounded)
-    modes = data["acp"]["modes"]
-    assert list(modes) == ["medium", "high", "max"]
-    assert data["acp"]["defaultMode"] == "high"
-    assert {m: (e["maxToolIterations"], e["reasoningEffort"]) for m, e in modes.items()} == {
-        "medium": (60, "medium"),
-        "high": (150, "high"),
-        "max": (300, "max"),
-    }
-    # And the trunk reads them as the loop will enforce them.
-    catalogue = build_mode_catalogue(load_config(grounded.render_config(RUN_PY.parent / "config.json")))
-    assert catalogue.default == "high"
-    assert (catalogue.get("max").max_iterations, catalogue.get("max").reasoning_effort) == (300, "max")
-    assert (catalogue.get("medium").max_iterations, catalogue.get("medium").reasoning_effort) == (60, "medium")
 
 
 # --- the render: keys, fallbacks, the image waterfall --------------------------

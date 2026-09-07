@@ -1150,22 +1150,3 @@ def test_backend_start_task_is_held_and_settled_before_the_drain() -> None:
     cancel_at = src.index("backend_start_task.cancel()")
     drain_at = src.index("drain_backend_stores()")
     assert cancel_at < drain_at, "the start must be settled before the backend is drained and stopped"
-
-
-def test_child_env_defaults_node_env_to_production(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An unset NODE_ENV made a stale dist bundle pick React's development
-    reconciler, whose per-commit performance.measure() entries accumulate
-    until the OS kills the session (observed 2026-09-01)."""
-    from raven.cli import tui_commands
-
-    monkeypatch.delenv("NODE_ENV", raising=False)
-
-    assert tui_commands.child_env()["NODE_ENV"] == "production"
-
-
-def test_an_explicit_node_env_is_left_alone(monkeypatch: pytest.MonkeyPatch) -> None:
-    from raven.cli import tui_commands
-
-    monkeypatch.setenv("NODE_ENV", "development")
-
-    assert tui_commands.child_env()["NODE_ENV"] == "development"

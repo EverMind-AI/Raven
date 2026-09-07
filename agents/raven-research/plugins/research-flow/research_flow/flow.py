@@ -232,9 +232,7 @@ class TurnFrame(AgentHook):
         if brief:
             content = f"{brief}\n\n{content}"
         if self._report_reminder:
-            # The turn's own text, not the assembled content: the checklist reads the
-            # request, and the memo and brief prefixed above are ours, not the user's.
-            content = f"{content}\n\n{render_reminder(text)}"
+            content = f"{content}\n\n{render_reminder()}"
         if content != text:
             return HookDecision(modified_content=content)
         return HookDecision()

@@ -1,6 +1,6 @@
 """``model.*`` RPC handlers — backend for the TUI ``/model`` v1 picker.
 
-Nine methods drive the picker:
+Eight methods drive the picker:
 
 * ``model.options`` — current model/provider + one row per provider.
 * ``model.save_key`` — store an api_key (+ optional api_base) for a provider.
@@ -10,7 +10,6 @@ Nine methods drive the picker:
 * ``model.endpoints`` / ``model.add_endpoint`` / ``model.remove_endpoint`` —
   edit the several url/key groups one provider section can carry, each write
   answering with the refreshed (key-redacted) list.
-* ``model.set_protocol`` — set or clear one model's API wire override.
 
 All write helpers live in ``raven.config.update_providers`` (the single
 write path for provider config); the handlers wrap the synchronous calls in
@@ -64,7 +63,6 @@ from raven.rpc.models import (
     ModelRemoveEndpointParams,
     ModelRemoveModelParams,
     ModelSaveKeyParams,
-    ModelSetProtocolParams,
 )
 
 if TYPE_CHECKING:
@@ -216,14 +214,6 @@ def _build_provider_entry(
         warning = f"run `raven provider login {slug.replace('_', '-')}` to authenticate"
 
     models = _provider_models(slug, configured=configured, section=section)
-    from raven.providers.protocol import effective_protocol
-
-    protocols = {model: effective_protocol(section if section is not _UNLOADED else None, model) for model in models}
-    overrides = {}
-    if section is not _UNLOADED:
-        raw_overrides = getattr(section, "model_protocols", {}) or {}
-        if isinstance(raw_overrides, dict):
-            overrides = {str(model): str(protocol) for model, protocol in raw_overrides.items()}
     return {
         # Names and one-liners for the ids above, so the picker shows what a
         # model is rather than only what it is called on the wire. Omitted for
@@ -237,8 +227,6 @@ def _build_provider_entry(
         "auth_type": kind,
         "key_env": (spec.env_key or None) if spec else None,
         "models": models,
-        "protocols": protocols,
-        "protocol_overrides": overrides,
         "total_models": len(models),
         # "An address must be supplied" -- the gate's answer, not the shape's:
         # an endpoint-credential spec that ships a usable default (custom's
@@ -347,28 +335,6 @@ async def model_options(params: dict, *, agent_loop_factory: "AgentLoopFactory |
         "provider": current_provider or "",
         "providers": entries,
     }
-
-
-async def model_set_protocol(params: dict) -> dict:
-    parsed = _parse(ModelSetProtocolParams, params)
-    from raven.config.update_providers import get_provider_config
-
-    section = get_provider_config(parsed.slug, redact_secrets=False)
-    overrides = dict(section.get("model_protocols") or {})
-    if parsed.protocol == "auto":
-        overrides.pop(parsed.model, None)
-    else:
-        overrides[parsed.model] = parsed.protocol
-    try:
-        await asyncio.to_thread(set_provider_fields, parsed.slug, {"model_protocols": overrides})
-    except (KeyError, ValidationError, RuntimeError) as exc:
-        raise ConfigValidationError(str(exc), data={"slug": parsed.slug, "model": parsed.model}) from exc
-    current_model, current_provider = _current_selection()
-    entries = await _entries_off_loop(current_provider)
-    provider = next((entry for entry in entries if entry["slug"] == parsed.slug), None)
-    if provider is None:
-        raise ConfigValidationError(f"unknown provider {parsed.slug!r}")
-    return {"provider": provider}
 
 
 async def model_save_key(params: dict) -> dict:
@@ -533,9 +499,8 @@ def _session_model(agent_loop_factory: "AgentLoopFactory | None", session_id: st
 
 
 def register_model_methods(dispatcher: "Dispatcher", *, agent_loop_factory: "AgentLoopFactory | None" = None) -> None:
-    """Register the nine ``model.*`` handlers on a dispatcher instance."""
+    """Register the eight ``model.*`` handlers on a dispatcher instance."""
     dispatcher.register("model.options", partial(model_options, agent_loop_factory=agent_loop_factory))
-    dispatcher.register("model.set_protocol", model_set_protocol)
     dispatcher.register("model.save_key", model_save_key)
     dispatcher.register("model.disconnect", model_disconnect)
     dispatcher.register("model.add_model", model_add_model)
@@ -547,7 +512,6 @@ def register_model_methods(dispatcher: "Dispatcher", *, agent_loop_factory: "Age
 
 __all__ = [
     "model_options",
-    "model_set_protocol",
     "model_save_key",
     "model_disconnect",
     "model_add_model",

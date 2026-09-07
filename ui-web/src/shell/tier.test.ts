@@ -286,6 +286,28 @@ describe('the sub-agent tier chip', () => {
     expect(chip().getAttribute('aria-expanded')).toBe('false')
   })
 
+  it('tells listeners only when the tier actually moved', async () => {
+    /* Every read passes through the same place, including the one on each
+       conversation change. A listener re-fetches on the news -- an instance pane
+       showing what it inherits is one -- so announcing a value it already holds
+       would have every open pane fetch for nothing. */
+    const heard: string[] = []
+    const off = tier.watch((next) => heard.push(next))
+    try {
+      await tier.load()
+      expect(heard).toEqual(['high'])
+
+      await tier.load()
+      expect(heard).toEqual(['high'])
+
+      answer = async () => ({ mode: 'max', availableModes: MENU })
+      await tier.load()
+      expect(heard).toEqual(['high', 'max'])
+    } finally {
+      off()
+    }
+  })
+
   it('reparents the panel to the body, or it is positioned against the wrong box', async () => {
     /* The composer card's entrance animation makes it a containing block, which
        re-bases `position: fixed` inside it -- the same trap `perm.ts` records. */

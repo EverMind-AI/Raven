@@ -27,7 +27,7 @@ class PdfBackend(Protocol):
         crop_to_content: bool = False,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]: ...
 
-    def image_to_pdf(self, image_path: Path, pdf_path: Path, *, pixels_per_point: float = 2.0) -> None: ...
+    def image_to_pdf(self, image_path: Path, pdf_path: Path) -> None: ...
 
 
 class PyMuPdfBackend:
@@ -52,8 +52,8 @@ class PyMuPdfBackend:
             crop_to_content=crop_to_content,
         )
 
-    def image_to_pdf(self, image_path: Path, pdf_path: Path, *, pixels_per_point: float = 2.0) -> None:
-        image_to_pdf(image_path, pdf_path, pixels_per_point=pixels_per_point)
+    def image_to_pdf(self, image_path: Path, pdf_path: Path) -> None:
+        image_to_pdf(image_path, pdf_path)
 
 
 def parse_page_range(value: str | None, page_count: int) -> list[int]:
@@ -262,14 +262,13 @@ def _visible_rgb(image: Image.Image) -> Image.Image:
     return background.convert("RGB")
 
 
-def image_to_pdf(image_path: Path, pdf_path: Path, *, pixels_per_point: float = 2.0) -> None:
-    # 2.0 = legacy 144 dpi assumption; browser captures pass scale * 96 / 72 so the page keeps its CSS size.
+def image_to_pdf(image_path: Path, pdf_path: Path) -> None:
     with Image.open(image_path) as image:
         width, height = image.size
     document = fitz.open()
     temporary = pdf_path.with_name(f".{pdf_path.stem}.tmp.pdf")
     try:
-        page = document.new_page(width=width / pixels_per_point, height=height / pixels_per_point)
+        page = document.new_page(width=width / 2, height=height / 2)
         page.insert_image(page.rect, filename=str(image_path))
         document.save(temporary, garbage=4, deflate=True)
     finally:

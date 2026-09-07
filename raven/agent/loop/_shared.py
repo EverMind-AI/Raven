@@ -305,18 +305,15 @@ class SessionPolicy:
     """What one session's turns run under beyond the loop-wide defaults.
 
     ``max_iterations`` caps the ReAct loop for this session (``None`` inherits
-    the loop's); ``reasoning_effort`` is the effort every call this session
-    makes asks for (``None`` leaves the provider's configured one); ``mode``
-    and ``mode_overlay`` are the session's operating profile as the transport
-    named it -- the loop does not interpret the overlay, it hands it to the
-    hook chain as ``ctx.metadata`` so a product's own hooks read their own
-    knobs.
+    the loop's); ``mode`` and ``mode_overlay`` are the session's operating
+    profile as the transport named it -- the loop does not interpret the
+    overlay, it hands it to the hook chain as ``ctx.metadata`` so a product's
+    own hooks read their own knobs.
     """
 
     max_iterations: int | None = None
     mode: str = ""
     mode_overlay: dict[str, Any] = field(default_factory=dict)
-    reasoning_effort: str | None = None
 
 
 def append_hook_note(messages: list[dict[str, Any]] | None, note: str) -> bool:

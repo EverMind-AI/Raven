@@ -1,6 +1,6 @@
 ---
 name: subagent-dag-orchestration
-description: Use when a task breaks into several distinct steps that a separate sub-agent could each carry out. A DAG node dispatches to an agent on the roster and cannot call your own tools, so steps that are just your own tool calls (reading files, small edits, running commands) are not a DAG for being many - do those yourself. The bound is about who can carry the work, not what kind of work it is: when the roster carries a specialist for it (a coding agent for code changes, an on-call agent for long runs) and the request assigns the work that way, it clears the bound like any other. For work that clears it, test three things before running the steps one at a time: are two or more steps independent (they can run at once), does a step hand its result to the next (a graph wires that handoff with no turn of yours in between), do the steps want different specialists (the tool lists the roster). If any of the three holds, orchestrate the whole task as one run_subagent_dag call. Iteration is graphs in series, one graph per round, driven by you.
+description: Use when a task breaks into several distinct steps that a separate sub-agent could each carry out. A DAG node dispatches to an agent on the roster and cannot call your own tools, so work whose steps are reading files, editing code or running commands is never a DAG, however many steps it has - do that yourself. For work that does clear that bar, test three things before running the steps one at a time: are two or more steps independent (they can run at once), does a step hand its result to the next (a graph wires that handoff with no turn of yours in between), do the steps want different specialists (the tool lists the roster). If any of the three holds, orchestrate the whole task as one run_subagent_dag call.
 metadata: {"raven":{"emoji":"🕸️","always":true,"inject":"description","requires":{"tools":["run_subagent_dag"]}}}
 ---
 
@@ -12,13 +12,10 @@ The trigger is **a task that breaks into several distinct steps** — not a task
 have already decided needs sub-agents.
 
 **First, the hard bound.** A DAG node dispatches only to a configured third-party
-sub-agent; it cannot call your own tools. So steps that are just your own tool calls
-— reading files, small edits, running commands — are not a DAG for being many or
-independent: do those yourself. The bound is about who can carry the work, not what
-kind of work it is: when the roster carries a specialist for it (a coding agent for
-code changes, an on-call agent for long runs) and the owner's request assigns the
-work that way, it clears the bound like any other. Only work a sub-agent on the
-roster could carry out gets as far as the tests below.
+sub-agent; it cannot call your own tools. So work whose steps are reading files,
+editing code, or running commands is **never** a DAG, however many steps it has and
+however independent they are — do that yourself. Only work a sub-agent on the roster
+could carry out gets as far as the tests below.
 
 For work that clears that bound, test three things before running the steps one at a
 time:
@@ -36,12 +33,6 @@ time:
 If any of the three holds, express the whole task as **one** `run_subagent_dag` call
 rather than dispatching sub-agents one at a time. Persistence is not one of the reasons:
 every node's prompt and output is written to disk, and so is every `spawn`'s.
-
-**Iteration is graphs in series, not a cycle in one graph.** A graph is acyclic and
-runs once. When the work loops — code changes feeding experiment rounds feeding the
-next code change — dispatch one graph per round and drive the loop yourself: each
-graph's outputs come back to you, and the next round's nodes reuse the same
-`instance` handles, so each side keeps its context across rounds.
 
 If none of the three holds, the graph buys you nothing — dispatch the work as a single
 `spawn`, which is the right call exactly when the task is genuinely one sub-agent doing
@@ -239,21 +230,14 @@ read better. `depends_on` is still *required* for a node of *this* graph, since 
 is what makes the upstream node run first.
 
 Only a node that **completed** can be named this way, in a placeholder or in `depends_on`
-alike. Any other node keeps its id — nothing else may take it — but has no output
+alike. A node that failed, was cancelled, was skipped, or belongs to a run still in flight
+keeps its id — nothing else may take it — but has no output
 to read, and naming it is refused before any node of your graph is dispatched. The refusal
-says which case it is, because the fix differs: re-do work that failed, was cancelled or
-was skipped under a **new** id; where the run recorded no outcome for the node at all, read
-its file directly; and for a node of a run still in flight, submit again once that run
-reports its result.
+says which of the four it is, because the fix differs: re-do failed, cancelled, or skipped
+work under a **new** id, and for a run still in flight, submit again once it reports its
+result.
 
-That last one inverts when you are replanning. A replan discards what is left of the run it
-replaces, so a node of that run which has not finished — one still waiting to start, or one
-suspended on a report of its own — will never write an output, and waiting for it is waiting
-for something the replan itself cancels. Those refusals say so, and ask for a new id: the
-same answer this guide already gives for every node of the replaced run except the ones it
-completed.
-
-Note what is *not* an option in any of these: re-creating that node here. Its id is
+Note what is *not* an option in any of the four: re-creating that node here. Its id is
 taken, so a graph that repeats it is refused for the reuse instead. Re-running an upstream
 step *as a node of your own graph* only works for one that does not exist yet — naming the
 taken id in `depends_on` does not re-run anything.

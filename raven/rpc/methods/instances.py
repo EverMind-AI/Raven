@@ -160,10 +160,8 @@ def _graph_of(session_dir: Path, run_id: str) -> dict[str, Any]:
     the three writers that rebuild a registry record wholesale cannot drop them.
     A run's graph is written once and then changes at most once more, when a
     replan notes its successor on it, so the stamp check is what makes a
-    two-second poll cost one ``stat`` per run. Only the two title fields are read
-    here and both are written at init, so today the second write changes nothing
-    this function returns -- the stamp matters for the reader that eventually
-    wants the note, not for this one.
+    two-second poll cost one ``stat`` per run. It is load-bearing rather than
+    belt-and-braces: without it that note would never be seen here.
 
     ``{}`` for a run whose dir is gone or whose id is not one -- a title is not
     worth failing a list over, and the caller falls back to the handle.
