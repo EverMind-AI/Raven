@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from raven.providers.base import GenerationSettings, LLMProvider, LLMResponse, ToolCallRequest
 
 
 class _ChatOnlyProvider(LLMProvider):
@@ -18,6 +18,7 @@ class _ChatOnlyProvider(LLMProvider):
 
     def __init__(self, response: LLMResponse) -> None:
         self._response = response
+        self.calls: list[dict[str, Any]] = []
 
     async def chat(
         self,
@@ -29,6 +30,7 @@ class _ChatOnlyProvider(LLMProvider):
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
     ) -> LLMResponse:
+        self.calls.append({"max_tokens": max_tokens, "temperature": temperature, "reasoning_effort": reasoning_effort})
         return self._response
 
     def get_default_model(self) -> str:
@@ -61,3 +63,26 @@ async def test_fallback_encodes_tool_calls_for_reconstruction() -> None:
     assert tc["id"] == "call_1"
     assert tc["function"]["name"] == "search"
     assert json.loads(tc["function"]["arguments"]) == {"q": "x"}
+
+
+async def test_fallback_forwards_the_configured_generation_settings_to_chat() -> None:
+    """With no explicit arguments the fallback hands ``chat`` the provider's
+    configured settings, the same resolution ``chat_with_retry`` performs. It
+    used to forward only ``max_tokens`` that way and hard-code the rest, so a
+    chat-only provider on the streaming path ran with temperature 0.7 and no
+    reasoning effort whatever the config said."""
+    provider = _ChatOnlyProvider(LLMResponse(content="x"))
+    provider.generation = GenerationSettings(max_tokens=77, temperature=0.2, reasoning_effort="max")
+
+    _ = [d async for d in provider.chat_stream(messages=[])]
+
+    assert provider.calls == [{"max_tokens": 77, "temperature": 0.2, "reasoning_effort": "max"}]
+
+
+async def test_fallback_lets_explicit_arguments_win_over_the_configured_ones() -> None:
+    provider = _ChatOnlyProvider(LLMResponse(content="x"))
+    provider.generation = GenerationSettings(max_tokens=77, temperature=0.2, reasoning_effort="max")
+
+    _ = [d async for d in provider.chat_stream(messages=[], max_tokens=5, temperature=0.9, reasoning_effort="low")]
+
+    assert provider.calls == [{"max_tokens": 5, "temperature": 0.9, "reasoning_effort": "low"}]

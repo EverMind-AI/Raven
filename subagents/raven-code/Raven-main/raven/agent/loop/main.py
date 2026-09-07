@@ -292,6 +292,20 @@ def _loop_break_nudge(tool: str, n: int) -> str:
     )
 
 
+@dataclass(frozen=True)
+class SessionPolicy:
+    """What one session's turns run under beyond the loop-wide defaults.
+
+    Recorded by a transport that speaks session modes (ACP ``session/set_mode``)
+    and read once at the start of each turn, so a switch lands on the session's
+    next turn and never pulls a running turn off the profile it started with.
+    ``None`` inherits the provider's configured value; a session with no policy
+    at all resolves to this empty one and the loop passes nothing.
+    """
+
+    reasoning_effort: str | None = None
+
+
 class AgentLoop:
     """
     The agent loop is the core processing engine.
@@ -635,6 +649,12 @@ class AgentLoop:
         self.workspace = workspace
         self.model = model or provider.get_default_model()
         self.max_iterations = max_iterations
+        # Per-session generation overrides, keyed by session key. Read once per
+        # turn by ``_process_message``; see ``SessionPolicy``.
+        self._session_policies: dict[str, SessionPolicy] = {}
+        # Snapshots frozen at prompt submission, consumed by the turn's start;
+        # see ``pin_session_policy``.
+        self._pinned_policies: dict[str, SessionPolicy] = {}
         # Empty-response recovery budgets. None → enabled defaults.
         self._recovery_limits = empty_recovery if empty_recovery is not None else RecoveryLimits()
         self._tool_args_limits = tool_args if tool_args is not None else ToolArgsLimits()
@@ -1799,6 +1819,39 @@ class AgentLoop:
             session_key=session_key or None,
         )
 
+    def set_session_policy(self, session_key: str, *, reasoning_effort: str | None = None) -> None:
+        """Record the policy this session's next turn runs under.
+
+        Nothing running is touched: a turn reads its policy once at its start.
+        Kept on the loop rather than on the provider, so a provider hot-swap
+        (the model picker rebuilds it from disk) cannot lose it, and so that one
+        session's choice never becomes every session's default.
+        """
+        self._session_policies[session_key] = SessionPolicy(reasoning_effort=reasoning_effort)
+
+    def clear_session_policy(self, session_key: str) -> None:
+        self._session_policies.pop(session_key, None)
+        self._pinned_policies.pop(session_key, None)
+
+    def session_policy(self, session_key: str) -> SessionPolicy:
+        """The session's policy, or the empty one for a session that has none."""
+        return self._session_policies.get(session_key, SessionPolicy())
+
+    def pin_session_policy(self, session_key: str) -> None:
+        """Freeze the live policy for the turn that was just submitted.
+
+        ``session/set_mode`` may land between a prompt's acceptance and its
+        turn reaching the policy read, and the submitted turn must run on the
+        mode it was submitted under. The prompt route pins the snapshot right
+        before ``turn.send``; the turn's start consumes it. One slot per
+        session, because a session admits one running turn at a time.
+        """
+        self._pinned_policies[session_key] = self.session_policy(session_key)
+
+    def unpin_session_policy(self, session_key: str) -> None:
+        """Drop a pin whose turn was refused, so it cannot feed the next turn."""
+        self._pinned_policies.pop(session_key, None)
+
     @trace.instrument("llm.call", extract=semconv.llm_call_stream)
     async def _llm_call_stream(
         self,
@@ -1808,6 +1861,7 @@ class AgentLoop:
         on_token_delta: Callable[[str], Awaitable[None]] | None = None,
         on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
     ) -> LLMResponse:
         """Stream LLM response via ``provider.chat_stream`` + accumulate to LLMResponse.
 
@@ -1838,7 +1892,9 @@ class AgentLoop:
         # of hanging or leaking the connection. The stream path has no retry
         # (see docstring), so the error surfaces as the turn's response.
         try:
-            stream_kwargs = {} if max_tokens is None else {"max_tokens": max_tokens}
+            stream_kwargs: dict[str, Any] = {} if max_tokens is None else {"max_tokens": max_tokens}
+            if reasoning_effort is not None:
+                stream_kwargs["reasoning_effort"] = reasoning_effort
             async with aclosing(
                 self.provider.chat_stream(messages=messages, tools=tools, model=model, **stream_kwargs)
             ) as stream:
@@ -2125,6 +2181,7 @@ class AgentLoop:
         fallback_models: list[str] | None,
         on_token_delta: Callable[[str], Awaitable[None]] | None = None,
         on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
+        reasoning_effort: str | None = None,
     ) -> str:
         """One tools-disabled LLM call to wrap up after the iteration budget runs out.
 
@@ -2140,6 +2197,9 @@ class AgentLoop:
         so a non-streamed wrap-up after an already-streamed turn gets dropped.
         """
         synth_messages = messages + [{"role": "user", "content": _MAX_ITER_SYNTHESIS_PROMPT}]
+        # The turn's own wrap-up call pays the turn's effort; absent, the
+        # provider's configured default stays reachable through its sentinel.
+        effort_kwargs: dict[str, Any] = {} if reasoning_effort is None else {"reasoning_effort": reasoning_effort}
         try:
             if on_token_delta is not None or on_reasoning_delta is not None:
                 response = await self._llm_call_stream(
@@ -2148,6 +2208,7 @@ class AgentLoop:
                     model=model,
                     on_token_delta=on_token_delta,
                     on_reasoning_delta=on_reasoning_delta,
+                    **effort_kwargs,
                 )
             else:
                 response = await self.provider.chat_with_retry(
@@ -2155,6 +2216,7 @@ class AgentLoop:
                     tools=None,
                     model=model,
                     fallback_models=fallback_models,
+                    **effort_kwargs,
                 )
             text = self._strip_think(response.content)
             if response.finish_reason != "error" and text:
@@ -2189,8 +2251,14 @@ class AgentLoop:
         usage_sink: dict[str, Any] | None = None,
         drain: Drain | None = None,
         on_checkpoint: Callable[[list[dict]], None] | None = None,
+        reasoning_effort: str | None = None,
     ) -> tuple[str | None, list[str], list[dict], TurnOutcome]:
         """Run the agent iteration loop.
+
+        ``reasoning_effort`` is the session policy's override for this turn,
+        threaded into the main LLM calls and the exhaustion wrap-up as an
+        explicit argument; ``None`` passes nothing, leaving the provider's
+        configured default in force.
 
         ``on_checkpoint``, when wired, is called with the messages-so-far every
         ``_MID_TURN_CHECKPOINT_ITERS`` iterations so the caller can persist a
@@ -2408,7 +2476,9 @@ class AgentLoop:
                 effective_model,
             )
             call_messages = self._with_todo_reminder(call_messages)
-            budget_kwargs = {} if call_max_tokens is None else {"max_tokens": call_max_tokens}
+            budget_kwargs: dict[str, Any] = {} if call_max_tokens is None else {"max_tokens": call_max_tokens}
+            if reasoning_effort is not None:
+                budget_kwargs["reasoning_effort"] = reasoning_effort
             if on_token_delta is not None or on_reasoning_delta is not None:
                 try:
                     response = await self._llm_call_stream(
@@ -2743,6 +2813,10 @@ class AgentLoop:
                     status = "error"
                     break
 
+                # Duck-typed like classify_error above: providers reaching the
+                # loop are not all LLMProvider subclasses.
+                supports_prefill = getattr(self.provider, "supports_assistant_prefill", None)
+
                 # Empty-response recovery: an empty assistant turn would
                 # otherwise break out here and surface a "no response to give"
                 # dud. Try to recover before giving up. Synthetic scaffolding is
@@ -2757,6 +2831,7 @@ class AgentLoop:
                     empty_retries=empty_retries,
                     limits=self._recovery_limits,
                     length_nudges=length_nudges,
+                    prefill_supported=(supports_prefill is None or supports_prefill(effective_model)),
                 )
                 if action is RecoveryAction.TRUNCATED:
                     length_nudges += 1
@@ -3001,6 +3076,7 @@ class AgentLoop:
                 fallback_models,
                 on_token_delta=on_token_delta,
                 on_reasoning_delta=on_reasoning_delta,
+                reasoning_effort=reasoning_effort,
             )
             # Persist the wrap-up into history like any normal final reply.
             # Persistence downstream reads only the returned ``messages`` list,
@@ -3184,6 +3260,12 @@ class AgentLoop:
 
         key = session_key or msg_session_key
         session = self.sessions.get_or_create(key)
+        # Read once, here. The prompt route pins the policy at submission, so a
+        # mode switched after the prompt was accepted lands on the next turn.
+        # Routes that never pin (channels, cron) submit and start in one step,
+        # for them the live slot is the submission-time truth.
+        pinned = self._pinned_policies.pop(key, None)
+        policy = pinned if pinned is not None else self.session_policy(key)
 
         # Slash commands
         cmd = content.strip().lower()
@@ -3419,6 +3501,7 @@ class AgentLoop:
                 usage_sink=usage_sink,
                 drain=drain,
                 on_checkpoint=_mid_turn_checkpoint,
+                reasoning_effort=policy.reasoning_effort,
             )
         except asyncio.CancelledError:
             self._save_broken_turn(
