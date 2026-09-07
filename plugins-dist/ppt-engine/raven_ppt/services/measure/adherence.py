@@ -462,10 +462,12 @@ def layout_photographs(pptx_path: Path, template: Path | None) -> list[Finding]:
                 f"the template's own picture is on the layout, not the page, so every page on it shows it: {named}. "
                 "`pictures={...}` on the cloned page cannot reach a layout's picture. `layout_pictures(slide)` "
                 "returns them, largest first, and `replace_picture(layout_pictures(slide)[0], FIGURES/'x.png', "
-                "'cover', alpha=0.25)` changes the picture for every page on that layout at once -- a picture "
-                "generated in the deck's own style is the usual replacement, and one the size of the page is the "
-                "page's background, so it takes the `alpha` or the type over it drowns. Keep it if it is the "
-                "design (an illustration) rather than a stock photograph"
+                "'cover')` changes the picture for every page on that layout at once -- a picture generated in "
+                "the deck's own style is the usual replacement. One the size of the page is the page's background "
+                "with type over it: `alpha=0.1` keeps it a texture, and a photograph meant to be seen goes in at "
+                "full strength under a plane of ink with light type, as `backdrop` lays them; a wash between is "
+                "the fog `washed_backdrop` reports. Keep it if it is the design (an illustration) rather than a "
+                "stock photograph"
             ),
             detail={layout: {"pages": pages, "sizes": sizes} for layout, (pages, sizes) in carried.items()},
         )

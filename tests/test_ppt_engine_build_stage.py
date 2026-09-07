@@ -142,6 +142,27 @@ async def test_a_blocking_finding_refuses_the_export_whatever_it_is_about(projec
 
         assert not result.ok, finding.kind
         assert not (project.exports_dir / "deck.pptx").exists()
+        # Said, not implied: the tool's reply carries this note as `not_delivered`, and
+        # a live run got the bare fallback "the deck was not published" with no reason.
+        assert result.note and result.note.startswith("not published: 1 blocking finding(s)"), result.note
+
+
+@pytest.mark.asyncio
+async def test_a_refused_build_leaves_its_reason_where_the_hook_reads_it(project: Project) -> None:
+    """The reason reaches the model once, in the tool reply; the hook that sends a
+    "delivered" reply about a copied build back needs it again, from the directory. A
+    publish clears it: what was refused before no longer stands in the way."""
+    from raven_ppt.services.publish.deliver import last_refusal
+
+    refused = await _stage(project, findings=[_fact()]).run(project)
+    assert not refused.ok
+    reason = last_refusal(project.state_dir)
+    assert reason and reason.startswith(refused.note), reason
+    assert "page 11: fact -- 48.3 is not in the sources" in reason
+
+    delivered = await _stage(project).run(project)
+    assert delivered.ok, delivered.note
+    assert last_refusal(project.state_dir) is None
 
 
 @pytest.mark.asyncio
