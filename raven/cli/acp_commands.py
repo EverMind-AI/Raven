@@ -120,7 +120,7 @@ def acp(
     if config:
         _use_config(config)
     try:
-        bounded_asyncio.run(_serve(verbose=verbose))
+        served = bounded_asyncio.run(_serve(verbose=verbose))
     except Exception as exc:
         # Kept away from Typer's own handler, which renders a rich traceback with
         # ``show_locals`` on -- measured at 228 lines of stderr, with the value of
@@ -131,6 +131,12 @@ def acp(
         logger.exception("acp: exiting on an unhandled failure")
         typer.echo(f"raven acp failed: {exc}", err=True)
         raise typer.Exit(code=1) from None
+    # ACP owns a short-lived process whose native rendering and memory runtimes
+    # can crash during interpreter finalization after async teardown completes.
+    # Only after a real stdio session: a test that stubs ``_serve`` gets None
+    # back and keeps its interpreter.
+    if served:
+        os._exit(0)
 
 
 def _use_config(path: str) -> None:
@@ -169,7 +175,7 @@ def _file_log_level(verbose: bool = False) -> str:
     return os.environ.get("RAVEN_ACP_LOG_LEVEL", "").strip().upper() or "INFO"
 
 
-async def _serve(*, verbose: bool = False) -> None:
+async def _serve(*, verbose: bool = False) -> bool:
     """Own the stdio channel, then serve the protocol until the client closes it.
 
     loguru goes to a file, but fd 2 is deliberately left alone: an ACP client
@@ -188,6 +194,7 @@ async def _serve(*, verbose: bool = False) -> None:
         async with _open_stdin() as reader:
             await serve(reader, out)
         logger.info("acp: exiting")
+    return True
 
 
 @contextlib.asynccontextmanager

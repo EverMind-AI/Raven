@@ -65,6 +65,16 @@ async def test_preview_file_returns_metadata_and_images_without_wrapper_fields()
 
 
 @pytest.mark.asyncio
+async def test_preview_file_forwards_device_scale_factor() -> None:
+    service = _PreviewService()
+    tool = PreviewFileTool(service, 3.0)
+
+    await tool.execute(path="poster.html", scale=2)
+
+    assert service.options["scale"] == 2
+
+
+@pytest.mark.asyncio
 async def test_registry_preserves_media_for_model_and_uses_metadata_for_display() -> None:
     registry = ToolRegistry()
     registry.register(PreviewFileTool(_PreviewService(), 3.0))

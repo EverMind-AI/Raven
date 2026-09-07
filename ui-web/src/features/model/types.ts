@@ -14,7 +14,11 @@ export interface Provider {
      its models would fail on the next turn rather than at the click. */
   on: boolean
   kind?: string
+  protocols?: Record<string, string>
+  protocolOverrides?: Record<string, string>
 }
+
+export type ApiProtocol = 'auto' | 'chat' | 'responses' | 'anthropic'
 
 export interface ModelSource {
   providers(): Provider[]
@@ -27,6 +31,7 @@ export interface ModelSource {
      means the pick was held rather than applied (a draft has no session yet),
      and the picker words its toast accordingly. */
   persist(m: string, provider: string, scope: 'session' | 'default'): Promise<void | 'staged'>
+  setProtocol?(m: string, provider: string, protocol: ApiProtocol): Promise<void>
   /* The settings door, for the picker's own footer. Only offered when the
      picker was opened from the composer chip, since the settings page opening
      itself is not a way out of it. */
