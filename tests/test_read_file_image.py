@@ -410,7 +410,10 @@ def test_emergency_shrink_drops_older_images_and_keeps_the_newest() -> None:
 
     assert elided >= 2
     assert [p["type"] for p in out[1]["content"]] == ["text", "text"]
-    assert out[1]["content"][1]["text"] == "[image elided to fit the context window]"
+    note = out[1]["content"][1]["text"]
+    assert (
+        note.startswith("[image no longer in context: picture 1 of 1.") and "elided to fit the context window" in note
+    )
     # The most recent picture is the one the model is reasoning about.
     assert out[3]["content"][1]["type"] == "image_url"
     # Surrounding text is preserved, so the model still knows what was there.
@@ -424,13 +427,13 @@ def test_emergency_shrink_reaches_images_attached_to_user_messages() -> None:
 
     messages = [
         {"role": "system", "content": "sys"},
-        _img_msg("user", "attached-old"),
-        _img_msg("user", "attached-new"),
+        {**_img_msg("user", "attached-old"), "_attached_image": True},
+        {**_img_msg("user", "attached-new"), "_attached_image": True},
     ]
     out, elided = AgentLoop._emergency_shrink(messages)
 
     assert elided == 1
-    assert out[1]["content"][1]["text"] == "[image elided to fit the context window]"
+    assert "elided to fit the context window" in out[1]["content"][1]["text"]
     assert out[2]["content"][1]["type"] == "image_url"
 
 
@@ -683,10 +686,11 @@ def test_demote_tool_images_produces_the_placeholder_path_shape() -> None:
         {"type": "text", "text": "Read image /w/shot.png (800x600 PNG)."},
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
     ]
+    provenance = [{"tool": "read_file", "iteration": 3, "caption": "Read image /w/shot.png (800x600 PNG)."}]
     messages = [
         {"role": "system", "content": "sys"},
         {"role": "assistant", "content": None, "tool_calls": [{"id": "c1"}]},
-        {"role": "tool", "tool_call_id": "c1", "content": blocks},
+        {"role": "tool", "tool_call_id": "c1", "name": "read_file", "content": blocks, "_image_sources": provenance},
     ]
 
     out, demoted = AgentLoop._demote_tool_images(messages)
@@ -699,7 +703,13 @@ def test_demote_tool_images_produces_the_placeholder_path_shape() -> None:
     assert "base64" not in out[2]["content"]
     # The path survives, so the model can still re-read the file.
     assert "/w/shot.png" in out[2]["content"]
-    assert out[3] == {"role": "user", "content": [blocks[1]], "_attached_image": True}
+    assert "_image_sources" not in out[2], "the provenance moves with the picture"
+    assert out[3] == {"role": "user", "content": [blocks[1]], "_attached_image": True, "_image_sources": provenance}
+
+    # A tool message stamped with nothing still hands over one entry per picture, so
+    # the window's notes stay aligned with the pictures they stand for.
+    bare, _ = AgentLoop._demote_tool_images([dict(messages[2], _image_sources=None)])
+    assert bare[1]["_image_sources"] == [{"tool": "read_file"}]
 
 
 def test_demote_tool_images_is_a_noop_when_no_tool_result_has_an_image() -> None:
