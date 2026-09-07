@@ -31,7 +31,7 @@ from loguru import logger
 
 from raven.contracts.tool import Tool, ToolResult
 from raven.utils.images import image_block, text_block
-from raven_ppt.backends.script import deck_path
+from raven_ppt.backends.script import deck_path, page_failures
 from raven_ppt.contracts import Project, brief_path, load_brief, load_outline, outline_path
 from raven_ppt.services import review_ledger
 from raven_ppt.services.review_ledger import REFUSED_FIGURE_REASON
@@ -49,6 +49,13 @@ MAX_PAGES = 30
 # `blocking.json` beside it exists for the same reason -- what a round concluded has to
 # outlive the round, or the next one cannot tell what it fixed.
 RECORD_FILE = "review.json"
+# Why a page the build stood in for is not read. Such a page is a stand-in this package
+# wrote, carrying one line -- "Page 4 did not draw" and the error -- and asking a model
+# what is wrong with how it looks spends a call and a page of the reading's budget to be
+# told what the build's own `page_failed` finding already said. Measured on a live run: of
+# six pages handed to the reader, the two that came back unread were exactly the two the
+# build had reported as failed.
+STAND_IN_NOT_READ = "a page the build could not draw is a stand-in saying so; its page_failed finding is the reading"
 
 # How many of those requests are in flight at once. A backstop against a whole-deck
 # review opening as many concurrent streaming requests as the deck has pages -- each
@@ -284,10 +291,14 @@ class PptReviewTool(Tool):
         # `pages=` is the caller's own choice and is left in the order it asked for --
         # the build names the pages it just drew first, and a reading that sorted them
         # by number read the backlog while the page the author was waiting on timed out.
+        # A page the build stood in for is not worth a reading, so it does not take a
+        # place in the round either; an explicit `pages=` is the caller's own choice.
+        stood_in = sorted({int(entry["page"]) for entry in page_failures(deck)} & set(renders)) if not wanted else []
         if wanted:
             shown = [number for number in wanted if number in renders][:MAX_PAGES]
         else:
-            shown = sorted(renders, key=lambda number: (number in _already_read(deck), number))[:MAX_PAGES]
+            queue = sorted(renders, key=lambda number: (number in _already_read(deck), number))
+            shown = [number for number in queue if number not in stood_in][:MAX_PAGES]
         read, reads = await self._read(deck, renders, shown)
 
         found = {number: problems for number, problems in read.items() if problems}
@@ -318,8 +329,10 @@ class PptReviewTool(Tool):
                 f"reading budget ran out ({', '.join(str(n) for n in last['over_budget'])}); they stay unread "
                 "and the next build reads them"
             )
-        if len(renders) > len(shown):
-            payload["pages_not_reviewed"] = sorted(set(renders) - set(shown))
+        if stood_in:
+            payload["stand_ins_not_read"] = {"pages": stood_in, "why": STAND_IN_NOT_READ}
+        if len(renders) > len(shown) + len(stood_in):
+            payload["pages_not_reviewed"] = sorted(set(renders) - set(shown) - set(stood_in))
         # What the record is for: the automatic reading runs while a page-version of the
         # deck has not been read, so the pages it covered have to be in it. A deck
         # longer than MAX_PAGES is read across builds rather than truncated silently,
@@ -417,6 +430,14 @@ class PptReviewTool(Tool):
             try:
                 payload = json.loads(reply[reply.index("{") : reply.rindex("}") + 1])
             except (ValueError, AttributeError):
+                # Said, because the caller counts what came back and this page will
+                # simply be missing from it: an unparsed reply and a page nobody asked
+                # about are the same absence, and only one of them is a defect.
+                logger.info(
+                    "ppt_review: page {} came back unreadable ({} chars); it stays unread",
+                    number,
+                    len(reply or "") if isinstance(reply, str) else 0,
+                )
                 return None
             return number, _vetted(payload.get("problems")), str(payload.get("reads") or "").strip()
 

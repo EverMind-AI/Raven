@@ -461,8 +461,11 @@ def add_icon(slide, name, left, top, size, colour, width_pt=1.75):
 
 
 # A shape wider or taller than this is a figure, not an icon, and `swap_icon` refuses it
-# rather than paint a two-inch stroke drawing where a photograph was.
-_ICON_AT_MOST_IN = 1.6
+# rather than paint a two-inch stroke drawing where a photograph was. The same number as
+# the engine's `measure.geometry.ICON_MAX_IN`, which is what names a template's picture
+# slot an icon slot: a slot the bind reply calls an icon has to be one this call takes,
+# and at 1.6 it refused the 1.7in seals the reply had just told an author to swap.
+_ICON_AT_MOST_IN = 1.8
 
 
 def swap_icon(slide, shape, name, colour=None):

@@ -52,7 +52,9 @@ nobody agreed to.
 ## 2. Write the outline before you write the program
 
 **Go looking for the deck's pictures first, and look widely.** Not for a page but for
-the pool the outline gets to choose from. `ppt_image_search` returns each
+the pool the outline gets to choose from. `ppt_image_search` takes every query at once
+-- `queries: ["...", "..."]`, up to twelve, searched together and grouped by query in the
+reply -- so the whole pool is one call, not one call per picture. It returns each
 candidate with its pixel size and the page it came from. Search the things the material
 *names* as well as the things it links — a paper, a benchmark, a product, a release —
 and the ordinary furniture too, the logo and the product shot, which every deck wants and
@@ -92,8 +94,8 @@ edit and an expensive one: what refuses an outline, and what it only reports, is
 
 And `needs` is where gathering belongs — this is the first moment anything knows
 what each page will show. Go through the outline page by page and name the picture
-each one wants, then find it with `ppt_image_search` and bring it in with
-`ppt_fetch`. A fetch joins the deck's own source set and is read on arrival, so there
+each one wants, then find them all in one `ppt_image_search` (`queries: [...]`, one per
+page that wants a picture) and bring in what you pick with one `ppt_fetch`. A fetch joins the deck's own source set and is read on arrival, so there
 is no separate ingest to remember; `ppt_ingest` is for bringing in another directory
 of the user's, or re-reading after you have edited a source by hand.
 
@@ -1659,6 +1661,16 @@ bound template's own.
 Everything above about a cloned page holds for a borrowed one -- `items` fills its units
 and closes up the spares, `texts` names the rest, unnamed text is emptied, and the
 template's own photographs are placeholders to replace.
+
+**Two things do not follow the deck, and ppt_template names both against the pages they
+are true of.** A picture is a bitmap, so a reference page whose drawings are painted in
+its own template's accents arrives in those accents whatever deck it lands in --
+`pictures={...}` them out. And a page's ink is stated on its runs: a reference page
+labels its cards in white because seven of the eight bundled templates have an accent
+dark enough for that, so in a deck whose accent is paler the labels have to be set in
+the deck's own ink instead. Everything else -- fills, type, geometry, the filling
+ports -- comes across in this deck's palette; measured over all 252 cross-template
+clones of these pages, nothing else did not.
 
 ### The pages you compose
 

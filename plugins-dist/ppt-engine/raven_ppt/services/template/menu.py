@@ -29,7 +29,14 @@ from typing import Any
 
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
-from raven_ppt.services.measure.geometry import EMU_PER_INCH, PICTURE, is_filled, iter_shapes
+from raven_ppt.services.measure.geometry import (
+    EMU_PER_INCH,
+    ICON_MAX_IN,
+    PICTURE,
+    is_filled,
+    is_icon_sized,
+    iter_shapes,
+)
 from raven_ppt.services.measure.variety import page_signature
 from raven_ppt.services.template.compose import _all_shapes, _blip_fill, _is_cut_out, _is_drawing, _outermost
 
@@ -85,10 +92,13 @@ class PageEntry:
     template's own timeline, its ring of badges and its figure cards. The run before
     it, whose request happened to list the arrangements in prose, cloned eleven."""
     picture_slots: tuple[str, ...] = ()
-    """Where a picture of the author's can go, each as `[n] WxHin photo|cut-out|drawing` in
-    the numbering `adapt` takes (`# [n]` over the reference, groups opened). A cut-out is a
-    transparent illustration on the page's own ground; its box runs wherever the drawing
-    does, so a photograph wants a box of its own there, or a cut-out of its own.
+    """Where a picture of the author's can go, each as `[n] WxHin photo|cut-out|icon|drawing`
+    in the numbering `adapt` takes (`# [n]` over the reference, groups opened). A cut-out is
+    a transparent illustration on the page's own ground; its box runs wherever the drawing
+    does, so a photograph wants a box of its own there, or a cut-out of its own. An icon is
+    a picture no longer than `ICON_MAX_IN` a side: a mark beside one unit, not a picture of
+    anything, and a live deck kept a template's three seals as the marks on three phases of
+    its own plan -- see ICON_SLOT_NOTE for what that slot asks of an author.
 
     The template's picture placeholders are seldom `p:pic`: the amber template draws
     every photograph as a rounded rectangle *filled* with one, and a section page's
@@ -269,6 +279,20 @@ def _heading(texts: list) -> str:
 # A drawing smaller than this on either side is an icon, not an illustration: the
 # bundled templates' card icons are 0.73in, their cartoons 2.4in and up.
 ILLUSTRATION_MIN_INCHES = 1.0
+
+# What an icon slot asks of an author, said once and quoted wherever the slot is named:
+# the slot table's legend, the caption over the render, and the finding on a built page
+# whose marks still stand for nothing. Measured on a live deck built in the red template:
+# page 4 carried the template's three seals over four things of the author's (one seal
+# twice), page 18 the same three seals over three phases, and nothing on either page
+# told a reader which mark meant what.
+ICON_SLOT_NOTE = (
+    f"an icon slot (a picture at most {ICON_MAX_IN:g}in on a side) is a mark standing for the unit beside it, "
+    "one per unit: on a cloned page give each unit its own -- `swap_icon(slide, shape_at(slide, n), '<icon "
+    "name>', colour=T['accent'])` draws a Tabler icon in the slot's box (section 7 of the skill; "
+    "`find_icons('<what the unit is about>')` names one) -- or drop them all with `drop=[n, ...]`. The "
+    "template's marks kept, or one mark beside several things, mark nothing"
+)
 # A drawing at least this share of the page wide is a band or a backdrop, not a slot.
 PAGE_WIDE = 0.9
 FREEFORM = MSO_SHAPE_TYPE.FREEFORM
@@ -290,7 +314,7 @@ def _picture_slots(slide, page_width: int = 0) -> tuple[str, ...]:
         if _is_photo(shape):
             # A cut-out is named as one: an opaque photograph put in its box lands on
             # whatever the transparent drawing floated over (a live page's title row).
-            found.append(f"[{index}] {_inches(shape)} {'cut-out' if _is_cut_out(shape) else 'photo'}")
+            found.append(f"[{index}] {_inches(shape)} {_picture_kind(shape)}")
             continue
         if not _is_drawing(shape):
             continue
@@ -313,3 +337,14 @@ def _picture_slots(slide, page_width: int = 0) -> tuple[str, ...]:
 
 def _inches(shape) -> str:
     return f"{(shape.width or 0) / EMU_PER_INCH:.1f}x{(shape.height or 0) / EMU_PER_INCH:.1f}in"
+
+
+def _picture_kind(shape) -> str:
+    """`icon`, `cut-out` or `photo`: what an author is being offered a slot for.
+
+    Size before transparency: a small transparent glyph is a mark whichever way it is
+    drawn, and the thing to say about a mark is that each unit wants its own.
+    """
+    if is_icon_sized(shape):
+        return "icon"
+    return "cut-out" if _is_cut_out(shape) else "photo"
