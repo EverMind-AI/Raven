@@ -139,7 +139,13 @@ _DR_REPORT_STRUCTURE_CLAUSE_DEEP = """{n}. Write the reply as a research report 
    the data is time-sensitive; the `web_fetch #...` tag that wraps a tool
    result is a data fence, not a citation, and never appears in the reply. A
    finding no fetched page supports is named as unverified, never given an
-   invented source. When
+   invented source. A number you did not read on a page you opened does not
+   enter a table column of measurements, a score or a ranking: write `not
+   obtained` in that cell and say in one clause what it would have decided,
+   because an estimate standing among measurements is summed and ranked as
+   one of them. A quantity you computed from numbers you did read is not an
+   estimate - give it, mark it derived, and show the arithmetic over its
+   inputs. When
    independent sources disagree on a fact that decides the answer, show both
    values with their sources and say which one the report uses and why,
    preferring primary or official sources. State established facts plainly;

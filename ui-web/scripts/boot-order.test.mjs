@@ -14,7 +14,7 @@ const live = [...manifest[1].matchAll(/"([^"]+\.js)"/g)]
 
 const STEPS = [
   'lookLoad', 'paneLoad', 'setRail', 'sessionDraw', 'sessionOpen', 'drawCapsBadge',
-  'drawPerm', 'loadTier', 'drawCtx', 'drawCaps', 'drawFoot', 'bumpWs', 'drawSettings',
+  'drawPerm', 'drawCtx', 'drawCaps', 'drawFoot', 'bumpWs', 'drawSettings',
   'setRuntime', 'goState',
 ]
 

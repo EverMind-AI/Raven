@@ -196,6 +196,33 @@ def _flat(text: str) -> str:
     return " ".join((text or "").split())
 
 
+def test_only_the_deep_template_carries_the_numeric_discipline_rule():
+    """A number that was not read does not enter a scored column - the product's rule.
+
+    On 2026-09-04 two size cells reading ``(est.)`` were off by an order of magnitude,
+    were summed into a five-criterion total, and moved two candidates in the ranking. The
+    reviewer passed the draft, correctly by its own rules, which is why this lands in the
+    template as well as in the rubric: the cheapest place to stop an estimate is before it
+    is written.
+
+    Deep only. The shipped template is the dr@3.4 contract every stamped state renders,
+    and ``report_depth`` is the one prompt bundle no batch has measured - so this is the
+    surface where a product rule can be added without moving a measured distribution.
+    """
+    from research_flow.prompts import render_parts
+
+    deep = _flat(render_parts(report_depth=True)[1])
+    shipped = _flat(render_parts()[1])
+
+    assert "does not enter a table column of measurements, a score or a ranking" in deep
+    assert "write `not obtained` in that cell" in deep
+    assert "does not enter a table column of measurements" not in shipped
+    # The derive rule is the other half and must travel with it: without it the rule reads
+    # as "leave the cell empty", and the identity already asks for computed quantities.
+    assert "A quantity you computed from numbers you did read is not an estimate" in deep
+    assert "mark it derived, and show the arithmetic over its inputs" in deep
+
+
 def test_both_report_templates_name_the_fence_tag_as_data():
     """The one sentence the twin was missing, pinned in both templates by content.
 
@@ -249,9 +276,12 @@ def test_a_superseded_profile_label_is_refused_by_its_whole_name():
 
     retired = dict(FlowConfig._SUPERSEDED_PROFILES)
     assert retired, "the profile table is empty; this test has nothing to hold"
-    for old, new in retired.items():
+    for old, first_hop in retired.items():
         assert old.split("-", 1)[0] not in FlowConfig._SUPERSEDED_VERSIONS, old
-        assert new not in retired, f"{new!r} is both a successor and superseded"
+        assert first_hop not in retired, f"{first_hop!r} is both a successor and superseded"
+        # Followed to the end of the chain: this product may retire a label the fork's
+        # table names as a successor, and an operator has to be sent somewhere that loads.
+        new = FlowConfig._resolve_successor(first_hop) or first_hop
         assert FlowConfig(enabled=True, version=new).version == new
         with pytest.raises(ValidationError, match="superseded profile label"):
             FlowConfig(enabled=True, version=old)
