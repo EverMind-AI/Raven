@@ -337,7 +337,6 @@ class SubAgentDagTool(Tool):
         ask: "Ask | None" = None,
         control_reachable: "Callable[[], bool] | None" = None,
         provider_for: "Callable[[], Any] | None" = None,
-        binding_for: "Callable[[], tuple[Any, str | None]] | None" = None,
         verdict_config: "SubagentDagConfig | None" = None,
     ) -> None:
         # Read through to SubagentManager's flag rather than mirroring it: this
@@ -388,10 +387,6 @@ class SubAgentDagTool(Tool):
         # from the same config as the loop but holds no provider of its own, and an
         # unwired host (tests, offline entry points) simply skips the judgement.
         self._provider_for = provider_for
-        # The running turn's (provider, model), read per dispatch for the reason
-        # `provider_for` is: the loop's binding is a property over the turn, and a
-        # graph dispatched under a switched model has to carry it to its nodes.
-        self._binding_for = binding_for
         self._verdict_config = verdict_config if verdict_config is not None else SubagentDagConfig()
         self._cancels: dict[str, asyncio.Event] = {}
         self._desks: dict[str, AdjudicationDesk] = {}
@@ -1608,7 +1603,6 @@ class SubAgentDagTool(Tool):
             announce_exception = _to_outbox
             released = outbox.released
         try:
-            provider, model = self._binding_for() if self._binding_for is not None else (None, None)
             result = await run_dag(
                 spec,
                 resolve=lambda node: dispatch_backends.get(node.id),
@@ -1634,8 +1628,6 @@ class SubAgentDagTool(Tool):
                 adjudication_timeout_s=self._verdict_config.adjudication_timeout_seconds,
                 control_reachable=self._control_reachable,
                 released=released,
-                provider=provider,
-                model=model,
             )
         except DagValidationError as exc:
             return self._validation_error(exc)

@@ -1,4 +1,0 @@
-interface:
-  display_name: "反 AI 模式审查"
-  short_description: "按风险读取反模式图鉴、记录 ANTI-SLOP-CHECK 账本，并在交付前做反模板渲染审查"
-  default_prompt: "使用 $review-against-ai-patterns 在方向前读取反模式图鉴标本、制作中命中即停下重构并记账、交付前对完整产物做全局扫描与反模板渲染审查。"

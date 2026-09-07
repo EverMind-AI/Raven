@@ -284,11 +284,6 @@ export interface FoldData {
   steps: StepData[]
 }
 
-export interface AgentHold {
-  segs: Seg[]
-  folds: Array<{ fold: FoldData; steps: StepData[]; time: string | null }>
-}
-
 export type Seg =
   | AskData | StepData | AnswerData | NoteData | QaData | StatusData | DeliveredData
   | ArtsData | FoldData
@@ -317,11 +312,10 @@ export interface Lane {
      key. The conversation's own lane is handed its whole list and starts at zero
      every time, which is why this is not on that path. */
   agentTurn: number
-  /* The segments as they stood before the last paint's provisional draw,
-     put back before the next one. A snapshot rather than a count: the
-     provisional steps get folded into a fold that already exists, which a
-     truncation by length never reached; null means nothing is provisional. */
-  agentHold: AgentHold | null
+  /* How many segments were settled at the end of the last paint. Anything past
+     it is the answer still being written, redrawn from the record on every
+     paint rather than appended to; 0 means nothing is provisional. */
+  agentHold: number
   running: boolean
   empty: string
 }

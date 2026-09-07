@@ -186,26 +186,6 @@ async def test_direct_delete_without_responder_is_denied(tmp_path) -> None:
     assert executor.commands == []
 
 
-async def test_live_destructive_delete_switch_applies_before_next_command(tmp_path) -> None:
-    executor = _RecordingExecutor(sandboxed=False)
-    setting = {"value": False}
-    tool = ExecTool(
-        executor=executor,
-        working_dir=str(tmp_path),
-        allow_destructive_source=lambda: setting["value"],
-    )
-
-    blocked = await tool.execute("rm -rf tmp")
-    assert isinstance(blocked, ToolResult)
-    assert executor.commands == []
-
-    setting["value"] = True
-    allowed = await tool.execute("rm -rf tmp")
-    assert isinstance(allowed, str)
-    assert "Exit code: 0" in allowed
-    assert executor.commands == ["rm -rf tmp"]
-
-
 async def test_denied_command_is_not_prompted_again_in_same_turn(tmp_path) -> None:
     executor = _RecordingExecutor(sandboxed=False)
     responder = _ApprovalResponder([False])
@@ -817,7 +797,3 @@ class TestASandboxContainsSomeThingsAndNotOthers:
     def test_the_same_commands_are_still_refused_unsandboxed(self, command: str) -> None:
         """The other half: nothing above weakens the plain configuration."""
         assert self._asking().evaluate(command) is CommandDecision.HARD_DENY
-
-    def test_explicit_destructive_mode_allows_recursive_delete(self) -> None:
-        policy = ShellCommandPolicy(deny_patterns=[], allow_destructive_commands=True)
-        assert policy.evaluate("rm -rf tmp") is CommandDecision.ALLOW

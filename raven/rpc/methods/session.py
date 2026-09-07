@@ -1098,13 +1098,7 @@ async def session_set_mode(
         raise ConfigValidationError(f"no mode {tier!r}; this build offers {', '.join(modes.ids()) or 'none'}")
     previous = getattr(loop.session_policy(session_key), "mode", "")
     profile = {p.id: p for p in profiles}[tier]
-    loop.set_session_policy(
-        session_key,
-        mode=tier,
-        mode_overlay=profile.overlay,
-        max_iterations=profile.max_iterations,
-        reasoning_effort=profile.reasoning_effort,
-    )
+    loop.set_session_policy(session_key, mode=tier, mode_overlay=profile.overlay, max_iterations=profile.max_iterations)
     if previous != tier:
         logger.info("session {} sub-agent tier {} -> {}", session_key, previous or "<unset>", tier)
     return {"mode": tier, "availableModes": menu}

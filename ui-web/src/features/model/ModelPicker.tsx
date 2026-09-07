@@ -13,7 +13,6 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } fr
 import { t } from '../../shell/bridge'
 import * as store from './store'
 
-import type { ApiProtocol, Provider } from './types'
 import type { JSX } from 'react'
 
 export function ModelPickerApp(): JSX.Element | null {
@@ -45,7 +44,6 @@ function Pick(): JSX.Element {
   const q = query.trim().toLowerCase()
   const hits = narrow(query)
   const list = hits[prov] || []
-  const currentProvider = providers.find((p) => p.models.includes(current))
 
   /* Measured, so it has to run after the paint that gives it a size. Above the
      anchor when it fits, which is where the composer chip wants it; clamped
@@ -145,28 +143,17 @@ function Pick(): JSX.Element {
             </button>
           ))}
         </div>
-        <div className="model-pane">
-          {currentProvider && currentProvider.models.includes(current) ? (
-            <div className="model-toolbar">
-              <div className="model-toolbar-copy">
-                <span className="model-toolbar-label">{t('gui.picker.protocol')}</span>
-                <span className="model-toolbar-model" title={store.short(current)}>{store.short(current)}</span>
-              </div>
-              {sourceProtocolControl(currentProvider, current)}
-            </div>
-          ) : null}
-          <div className="models">
-            {!list.length ? (
-              <div className="empty">{t(q ? 'gui.picker.no_match' : 'gui.picker.empty_provider')}</div>
-            ) : (
-              list.map((m) => (
-                <button key={m} className="row" onClick={() => void store.choose(m, providers[prov]!.id)}>
-                  <span className="nm">{store.short(m)}</span>
-                  {m === current ? <span className="tick">✓</span> : null}
-                </button>
-              ))
-            )}
-          </div>
+        <div className="models">
+          {!list.length ? (
+            <div className="empty">{t(q ? 'gui.picker.no_match' : 'gui.picker.empty_provider')}</div>
+          ) : (
+            list.map((m) => (
+              <button key={m} className="row" onClick={() => void store.choose(m, providers[prov]!.id)}>
+                <span className="nm">{store.short(m)}</span>
+                {m === current ? <span className="tick">✓</span> : null}
+              </button>
+            ))
+          )}
         </div>
       </div>
       {at.footer ? (
@@ -183,31 +170,4 @@ function Pick(): JSX.Element {
       ) : null}
     </div>
   )
-}
-
-function sourceProtocolControl(provider: Provider, model: string): JSX.Element {
-  const effective = store.protocolFor(provider, model)
-  const explicit = provider.protocolOverrides?.[model]
-  return (
-    <label className="protocol-control">
-      <select
-        aria-label={t('gui.picker.protocol')}
-        value={explicit || 'auto'}
-        onChange={(event) => {
-          void store.setProtocol(model, provider.id, event.target.value as ApiProtocol)
-        }}
-      >
-        <option value="auto">{t('gui.picker.protocol_auto', { protocol: protocolName(effective) })}</option>
-        <option value="chat">{t('gui.picker.protocol_chat')}</option>
-        <option value="responses">{t('gui.picker.protocol_responses')}</option>
-        <option value="anthropic">{t('gui.picker.protocol_anthropic')}</option>
-      </select>
-    </label>
-  )
-}
-
-function protocolName(protocol: ApiProtocol): string {
-  if (protocol === 'responses') return 'Responses'
-  if (protocol === 'anthropic') return 'Anthropic'
-  return 'Chat'
 }

@@ -173,11 +173,7 @@ export function pick(tab: string): void {
 
 /* ── file viewing ──────────────────────────────────────────────────── */
 
-export const fileURL = (p: string): string => {
-  const path = String(p)
-  const session = currentSession()
-  return '/file?path=' + encodeURIComponent(path) + (session ? '&session=' + encodeURIComponent(session) : '')
-}
+export const fileURL = (p: string): string => '/file?path=' + encodeURIComponent(String(p))
 
 const TEXT_EXT = new Set(['c', 'cfg', 'conf', 'cpp', 'css', 'diff', 'env', 'go', 'h', 'ini', 'java',
   'js', 'json', 'jsonl', 'jsx', 'kt', 'log', 'lua', 'patch', 'php', 'pl', 'py', 'pyi', 'rb', 'rs',

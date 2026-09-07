@@ -38,6 +38,7 @@ from raven.agent.loop._shared import (
     Origin,
     RecoveryAction,
     Session,
+    ToolOutput,
     _display_label,
     _file_change_payload,
     _first_line,
@@ -995,13 +996,7 @@ class TurnPathMixin:
 
             # TokenWise before-hook: strategies may rewrite messages, tools,
             # or model (e.g. CacheOptimizer marks cache_control blocks).
-            # The session's pinned effort first, a hook's rollback override on
-            # top: a mode that asks for more thinking sets the turn's default,
-            # and a gate re-sampling one call may still move that one call.
-            gen_overrides = {
-                **({"reasoning_effort": policy.reasoning_effort} if policy.reasoning_effort else {}),
-                **(pending_gen_overrides or {}),
-            }
+            gen_overrides = dict(pending_gen_overrides or {})
             pending_gen_overrides = None
             call_messages, call_tools, call_model = await self.strategies.before_llm_call(
                 messages,
@@ -1271,29 +1266,26 @@ class TurnPathMixin:
                     if (setter := getattr(self.tools.get(tool_call.name), "set_tool_call_id", None)) is not None:
                         setter(tool_call.id)
                     tool_t0 = time.monotonic()
-                    preempted = ""
-                    if tool_call.name == "ask_user":
-                        from raven.agent.subagent import watch_work as _ww
-
-                        preempted = _ww.preempt_owner_ask(watch_state, tool_call.arguments)
-                    if preempted:
-                        # The owner registered this answer so they would not be
-                        # asked for it; the question never reaches them, and the
-                        # reply arrives where the model expected the owner's.
-                        result = "This question was not sent to the owner."
-                        watch_note = preempted
-                        duration_ms = int((time.monotonic() - tool_t0) * 1000)
-                    else:
-                        result = await self.tools.execute(
-                            tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta
-                        )
-                        duration_ms = int((time.monotonic() - tool_t0) * 1000)
-                        # The result itself is left alone: the note is the
-                        # system's own line and is placed by add_tool_result AFTER
-                        # the untrusted fence closes, so the model reads it as this
-                        # system speaking rather than as data it must not obey.
-                        watch_note = await self._note_watch_work(
-                            watch_state, tool_call.name, tool_call.arguments, str(result), watch_request
+                    result = await self.tools.execute(tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta)
+                    duration_ms = int((time.monotonic() - tool_t0) * 1000)
+                    # Only the model-facing text is annotated. Rebuilt rather
+                    # than replaced because a plain str here would drop the
+                    # transcript row's display string, the multimodal blocks and
+                    # the control flags with it.
+                    noted = await self._note_watch_work(
+                        watch_state, tool_call.name, tool_call.arguments, str(result), watch_request
+                    )
+                    if noted != str(result):
+                        result = ToolOutput(
+                            noted,
+                            getattr(result, "display_text", None),
+                            retryable=getattr(result, "retryable", True),
+                            blocks_call=getattr(result, "blocks_call", False),
+                            continuation=getattr(result, "continuation", Continuation.CONTINUE),
+                            ok=getattr(result, "ok", True),
+                            blocks=getattr(result, "blocks", None),
+                            diff=getattr(result, "diff", None),
+                            file_change=getattr(result, "file_change", None),
                         )
                     # The registry already unwrapped any ToolResult: `result` is
                     # the model-facing text, with the optional display string
@@ -1354,16 +1346,14 @@ class TurnPathMixin:
                     sources = _image_sources(tool_call.name, result_blocks or [], iteration) if result_blocks else []
                     if blocks:
                         messages = self.context.add_tool_result(
-                            messages, tool_call.id, tool_call.name, model_text, blocks, trusted_note=watch_note
+                            messages, tool_call.id, tool_call.name, model_text, blocks
                         )
                         if sources:
                             messages[-1][_IMAGE_SOURCES_KEY] = sources
                     else:
                         # Keep the long-standing 4-arg call for text results so no
                         # existing caller or test double sees a signature change.
-                        messages = self.context.add_tool_result(
-                            messages, tool_call.id, tool_call.name, model_text, trusted_note=watch_note
-                        )
+                        messages = self.context.add_tool_result(messages, tool_call.id, tool_call.name, model_text)
                     if messages:
                         # Dispatch to result, on the entry that answers the call.
                         # The live tool event was its only carrier, so a restored
@@ -2034,7 +2024,7 @@ class TurnPathMixin:
             # The tier this turn dispatches sub-agents at, frozen here for the
             # same reason the iteration cap is read once: a switch arriving mid-turn
             # lands on the next turn, not on a sub-agent this one has yet to call.
-            with turn_tier(self.session_tier(key)):
+            with turn_tier(self.session_policy(key or "").mode or self._default_tier):
                 final_content, _, all_msgs, outcome = await self._run_agent_loop(
                     initial_messages,
                     on_progress=on_progress,

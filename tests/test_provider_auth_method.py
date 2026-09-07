@@ -506,11 +506,6 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         "raven/rpc/methods/model.py",
         "raven/rpc/methods/setup.py",
         "raven/providers/azure_openai_provider.py",
-        # The two native transports read their key only to put it on the
-        # Authorization header of the request they send, the way the Azure
-        # provider above does; whether the provider is set up is still auth's.
-        "raven/providers/openai_responses_provider.py",
-        "raven/providers/anthropic_messages_provider.py",
         "raven/contracts/llm_provider.py",
         "raven/providers/minimax_oauth_provider.py",
         "raven/providers/per_model_provider.py",

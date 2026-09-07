@@ -326,7 +326,6 @@ def render_config(source: Path) -> Path:
     host = render.host_config()
 
     render.apply_secret_slots(config, host, slots=SECRET_SLOTS, required=REQUIRED_SECRETS, lookup=env_value)
-    render.inherit_exec_policy(config, host)
     if proxy := (env_value(PROXY_ENV) or render.dig(host, PROXY_SLOT)):
         render.put(config, PROXY_SLOT, proxy)
 

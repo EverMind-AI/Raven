@@ -146,8 +146,6 @@ def test_render_factories_cast_seated_tools_with_the_extra_present(monkeypatch):
     assert render_tool.name == "render_file"
     assert preview_tool.name == "preview_file"
     assert preview_tool.parameters["properties"]["max_previews"]["maximum"] == 12
-    assert preview_tool.parameters["properties"]["scale"]["maximum"] == 4
-    assert render_tool.parameters["properties"]["scale"]["minimum"] == 1
     assert render_tool.timeout_seconds > SHIPPED_SLICE["render"]["timeoutSeconds"]
 
 
