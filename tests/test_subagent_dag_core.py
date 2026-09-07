@@ -1792,3 +1792,153 @@ async def test_the_host_side_questions_wait_their_turn_on_the_conversation(tmp_p
     await holder
     assert answer == ""
     assert len(budgets) == 1 and 0.0 < budgets[0] <= 0.6 - 0.25, budgets
+
+
+def test_every_state_unreadable_answers_gets_a_sentence_of_its_own() -> None:
+    """`pending` and `exception` reach `_unreadable` only through a replan.
+
+    Named for the states this function answers, not for the ones the overlay can
+    carry: `interrupted` is a member of the second set and not the first. A run
+    that is unfinalized and held by no tool any more has its nodes reconciled to
+    that value (`dag_resume`), and it falls to the caller's unknown-id fallback
+    here, as it did before these two branches existed. Deliberately not asserted
+    either way, so adding a branch for it later needs no change to this test.
+
+    The overlay reads that run as it stands rather than as it finalized, so it
+    can hand these two through -- states a finalized manifest never records, and
+    which fell past every branch here. The caller's generic fallback then said
+    the id was unknown, while the uniqueness check refuses re-declaring it as
+    already claimed: two messages that cannot both be acted on.
+
+    Reached only from `prepare_replan`, and only to refuse it: every branch here
+    is raised as a `DagValidationError`, which `prepare_replan` returns before
+    `resolve_node` is called, so at the moment any of this is read the old run is
+    still going as submitted. `pending` therefore states the node's state in the
+    present and the loss as what replanning would do, which is what the assertion
+    below pins -- describing a replacement as done would be false every time.
+
+    The five settled states are the control. They are asserted here too, so a
+    regression that flattens this function into one message cannot pass by
+    answering only the two new ones.
+    """
+    from raven.agent.subagent.dag_graph import _unreadable
+
+    def refusal(state: str) -> str:
+        known = SessionNodes(owner={"prev": "run-R"}, state={"prev": state})
+        out = _unreadable("n1", "'prev'", "prev", known)
+        assert out is not None, f"state {state!r} fell through to the unknown-id fallback"
+        return out
+
+    assert "failed in run 'run-R'" in refusal("failed")
+    assert "skipped" in refusal("skipped")
+    assert "stopped mid-run" in refusal("cancelled")
+    assert "has not finished writing" in refusal("running")
+    assert "recorded no outcome" in refusal("unrecorded")
+
+    # Redo, not wait: a replan that lands discards the run these two belong to,
+    # so its remaining nodes never produce anything -- which is why they must not
+    # take RUNNING's "re-submit once that run reports".
+    pending = refusal("pending")
+    assert "has not started, and this replan would discard it unrun" in pending
+    assert "was replaced" not in pending, "nothing has been replaced yet when this is read"
+    assert "Re-do it under a new id" in pending
+    assert "re-submit once that run reports" not in pending
+
+    exception = refusal("exception")
+    assert "could not accomplish its task" in exception
+    assert "Re-do it under a new id" in exception
+    assert "re-submit once that run reports" not in exception
+
+    # An id no run ever claimed is still not a state, and still the caller's to phrase.
+    assert _unreadable("n1", "'prev'", "prev", SessionNodes(owner={}, state={})) is None
+
+
+def test_the_guide_and_the_refusal_agree_about_a_replans_unfinished_nodes() -> None:
+    """The refusal sends the model to this guide, so the two cannot disagree.
+
+    `_validation_error` appends `read_skill(GUIDE_SKILL_ID)` because a validation
+    failure is the one moment the graph shape is known to be wrong, and the guide
+    injects by `description` -- its body reaches the model through that call and
+    nowhere else. So the sentence the refusal gives and the rule the guide gives
+    are read one after the other, in the same breath.
+
+    The guide's rule for a node of a run still in flight is to wait for that run
+    to report. That is right for a fresh graph and wrong inside a replan, which
+    discards the replaced run's unfinished nodes -- which is what `pending` and
+    `exception` are, and why they are refused with a new id instead. Nothing else
+    in the repo catches a disagreement here: `test_living_docs` checks that cited
+    paths exist, not that claims about them hold.
+
+    Whitespace is collapsed before matching so a later rewrap of the guide cannot
+    void these assertions silently.
+    """
+    import raven.memory_engine
+    from raven.agent.subagent.dag_graph import _unreadable
+    from raven.agent.subagent.dag_tool import GUIDE_SKILL_ID
+
+    native = GUIDE_SKILL_ID.split("/", 1)[1]
+    guide = Path(raven.memory_engine.__file__).parent / "skills" / native / "SKILL.md"
+    body = " ".join(guide.read_text(encoding="utf-8").split())
+
+    for state in ("pending", "exception"):
+        known = SessionNodes(owner={"prev": "run-R"}, state={"prev": state})
+        message = _unreadable("n1", "'prev'", "prev", known) or ""
+        assert "Re-do it under a new id" in message, f"{state} no longer asks for a new id"
+
+    assert "submit again once that run reports its result" in body, "the fresh-graph rule is the premise"
+    assert "inverts when you are replanning" in body, "the guide must carry the replan exception"
+    assert "ask for a new id" in body, "and must give the advice the refusal above gives"
+    assert "of the four" not in body, "a closed count over a set that has since grown"
+
+
+async def test_await_finalized_does_not_return_until_the_run_task_has_ended(tmp_path) -> None:
+    """The wait itself, which the replan tests around it could not see.
+
+    Every other test of this call drives a stub that records being called, so
+    they pin where it sits in the sequence and nothing about what it does there.
+    Replacing the body with `return` left all of them green -- and the docstring's
+    whole claim is that the successor's validation needs the predecessor's
+    per-node outcomes on disk first, which is exactly what returning early would
+    take away.
+
+    So this drives the real method against a real pending task and asserts the
+    order of two events, not that a call happened.
+    """
+    import asyncio
+
+    tool, _ = await _replannable_tool(tmp_path)
+    order: list[str] = []
+    release = asyncio.Event()
+
+    async def _run_task() -> None:
+        await release.wait()
+        order.append("run ended")
+
+    tool._runs["run-old"] = asyncio.create_task(_run_task())
+
+    async def _waiter() -> None:
+        await tool.await_finalized("run-old")
+        order.append("await_finalized returned")
+
+    waiter = asyncio.create_task(_waiter())
+    # A real interval, not one loop turn: the point is that it is parked, and a
+    # single `sleep(0)` samples before it could have finished either way.
+    await asyncio.sleep(0.05)
+    assert not waiter.done(), "returned while the run it was told to wait for was still going"
+    assert order == []
+
+    release.set()
+    await waiter
+    assert order == ["run ended", "await_finalized returned"]
+
+
+async def test_await_finalized_returns_at_once_for_a_run_this_instance_never_started(tmp_path) -> None:
+    """The other half of the contract: a run id absent from this instance's own
+    `_runs` is not waited on, because it is either already over or being run by a
+    second graph tool instance -- which is why callers resolve the owner first."""
+    import asyncio
+
+    tool, _ = await _replannable_tool(tmp_path)
+
+    async with asyncio.timeout(1):
+        await tool.await_finalized("a-run-that-was-never-started-here")
