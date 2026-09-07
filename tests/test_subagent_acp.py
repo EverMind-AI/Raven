@@ -664,6 +664,31 @@ async def test_dispatch_returns_the_agents_answer(tmp_path: Path) -> None:
     assert reply == "pong"
 
 
+async def test_a_dispatch_puts_the_attachments_beside_the_text_as_resource_links(tmp_path: Path) -> None:
+    """The block an editor sends for an @-mentioned file, carrying the absolute path
+    the agent's own tools can open; the text block is the task, unchanged."""
+    import json
+
+    from raven.spine.message import Media
+
+    deck = tmp_path / "house style.pptx"
+    deck.write_bytes(b"pptx")
+    backend = build_third_party_backend(stub_config("a", mode="echo_blocks"))
+
+    reply = await backend.run(
+        "use my template",
+        task_id="t1",
+        workspace=tmp_path,
+        executor=None,
+        media=(Media(path=str(deck), mime="application/octet-stream", kind="file"),),
+    )
+
+    assert json.loads(reply) == [
+        {"type": "text", "text": "use my template"},
+        {"type": "resource_link", "uri": deck.resolve().as_uri(), "name": "house style.pptx"},
+    ]
+
+
 async def test_a_dispatch_relearns_the_menu_the_agent_now_serves(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3810,3 +3835,163 @@ async def test_a_resumed_session_is_put_back_in_its_mode(tmp_path: Path, monkeyp
         name="resumer", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
     )
     assert "session/set_mode fast" in connection.client.stderr_tail()
+
+
+async def test_a_turn_that_ends_on_a_failed_call_is_not_reported_as_an_answer() -> None:
+    """The shape a real dispatch produced: a plan, a call, a rejection, silence.
+
+    The agent said what it was about to do, its only tool call was refused for a
+    malformed argument, and it said nothing after. `text` then holds the plan,
+    which was handed back as the run's result and recorded as a completed run.
+    The collector has to be able to say that no answer was produced, and to
+    carry the two things a caller could act on: which call, and what it said.
+    """
+    from raven.acp_client.acp_agent import _TurnCollector
+
+    col = _TurnCollector()
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed(
+        {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": "I will make you a PPT. First, let me initialise the task state."},
+        }
+    )
+    # The frames a real dispatch sent, `kind` and `_meta` included: without them
+    # the dialect names the call after its kind and the assertion below would be
+    # measuring the fixture rather than the transport.
+    await feed(
+        {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "t1",
+            "title": "update_task_state",
+            "kind": "other",
+            "status": "in_progress",
+            "_meta": {"raven.toolName": "update_task_state"},
+        }
+    )
+    await feed(
+        {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "t1",
+            "status": "failed",
+            "content": [{"type": "content", "content": {"type": "text", "text": "Error: operations should be array"}}],
+        }
+    )
+    await feed({"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "let me retry"}})
+
+    assert col.text, "the premise: the turn did say something"
+    assert col.closing_text == "", "and said nothing after its call"
+    failed = col.failed_call_without_answer
+    assert failed is not None
+    named, detail = failed
+    # The call's name alone. Its `label` pairs the name with its subject, which
+    # for a call whose only subject is its own title reads as the title twice.
+    assert named == "update_task_state"
+    assert "operations should be array" in detail
+
+
+async def test_a_turn_that_ends_on_a_call_that_worked_is_left_alone() -> None:
+    """Ending on a successful call and saying nothing is a real outcome.
+
+    `closing_text` is empty for this too, which is why the outcome cannot be
+    read off that alone -- the call's own result is what separates the two.
+    """
+    from raven.acp_client.acp_agent import _TurnCollector
+
+    col = _TurnCollector()
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "writing the file"}})
+    await feed({"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "write_file"})
+    await feed({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"})
+
+    assert col.closing_text == ""
+    assert col.failed_call_without_answer is None
+
+
+async def test_a_failed_call_the_agent_explained_is_the_agents_own_answer() -> None:
+    """An agent that says why it could not proceed has answered.
+
+    Its words are the reply, and replacing them with raven's own sentence would
+    throw away the better explanation of the two.
+    """
+    from raven.acp_client.acp_agent import _TurnCollector
+
+    col = _TurnCollector()
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "update_task_state"})
+    await feed(
+        {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "t1",
+            "status": "failed",
+            "content": [{"type": "content", "content": {"type": "text", "text": "Error: bad shape"}}],
+        }
+    )
+    await feed(
+        {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": "I cannot plan this task; the tool rejected my arguments."},
+        }
+    )
+
+    assert col.failed_call_without_answer is None
+    assert "I cannot plan this task" in col.closing_text
+
+
+async def test_a_call_with_no_verdict_is_not_called_a_failure() -> None:
+    """No `tool_call_update` means nobody said how it went.
+
+    Unknown is not failed, and reporting a run as answerless on a call whose
+    outcome was never published would fail runs for a transport's silence.
+
+    The shape matters: an earlier call that DID fail sits behind this one, so a
+    walk that does not stop at the unresolved call reaches that older failure
+    and blames this turn for it. A trailing call with nothing behind it passes
+    either way and would have measured nothing.
+    """
+    from raven.acp_client.acp_agent import _TurnCollector
+
+    col = _TurnCollector()
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "starting"}})
+    await feed(
+        {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "t1",
+            "title": "first",
+            "kind": "other",
+            "_meta": {"raven.toolName": "first"},
+        }
+    )
+    await feed(
+        {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "t1",
+            "status": "failed",
+            "content": [{"type": "content", "content": {"type": "text", "text": "Error: nope"}}],
+        }
+    )
+    # The turn then opens a second call and ends without its verdict.
+    await feed(
+        {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "t2",
+            "title": "second",
+            "kind": "other",
+            "_meta": {"raven.toolName": "second"},
+        }
+    )
+
+    assert col.failed_call_without_answer is None
