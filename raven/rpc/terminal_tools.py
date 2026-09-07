@@ -17,17 +17,27 @@ def provider_command(provider: str) -> tuple[str, list[str]]:
     from raven.config.loader import load_config
 
     rows = load_config().subagents.agents
-    native = {"codex": ["codex"], "claude": ["claude"], "claude_code": ["claude"]}
+    native = {"codex": ["codex"], "claude_code": ["claude"]}
+    aliases = {"claude": "claude_code", "claude_code": "claude_code", "codex": "codex", "codex_cli": "codex"}
+    provider_kind = aliases.get("_".join(provider.strip().lower().replace("-", " ").replace("_", " ").split()))
     matches = []
     for row in rows:
         values = row.model_dump() if hasattr(row, "model_dump") else row
         name, preset = values.get("name"), values.get("preset")
-        brand = preset or name
-        if provider in {name, preset} or provider == "claude" and brand == "claude_code":
+        brand = aliases.get(preset or name, preset or name)
+        if provider == name or provider_kind is not None and provider_kind == brand:
             if brand in native:
                 matches.append((name, native[brand]))
-    if len(matches) != 1:
-        raise TerminalError("provider_not_unique", "Configure one matching Claude Code or Codex agent kind first")
+    if not matches:
+        raise TerminalError(
+            "no_matching_kind",
+            "No matching agent kind. Open External Agents and add the Claude Code or Codex preset for this provider.",
+        )
+    if len(matches) > 1:
+        raise TerminalError(
+            "provider_not_unique",
+            "Multiple matching agent kinds. Open External Agents and keep one matching preset, or use its exact name.",
+        )
     return matches[0]
 
 

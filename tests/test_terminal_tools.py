@@ -131,3 +131,63 @@ async def test_terminal_prompt_only_appears_when_tools_are_available(tmp_path):
     assert "Plain-text hand-over" in (await builder.build(None)).text
     names.clear()
     assert "Plain-text hand-over" not in (await builder.build(None)).text
+
+
+@pytest.fixture
+def configured_terminal_kinds(monkeypatch):
+    from types import SimpleNamespace
+
+    rows = []
+    monkeypatch.setattr(
+        "raven.config.loader.load_config", lambda: SimpleNamespace(subagents=SimpleNamespace(agents=rows))
+    )
+    return rows
+
+
+@pytest.mark.parametrize("provider", ["claude-code", "claude_code", "claude", "claude code", " Claude Code "])
+def test_provider_command_accepts_claude_aliases(configured_terminal_kinds, provider):
+    from raven.rpc.terminal_tools import provider_command
+
+    configured_terminal_kinds.extend(
+        [{"name": "researcher", "preset": "claude_code"}, {"name": "implementer", "preset": "codex"}]
+    )
+    assert provider_command(provider) == ("researcher", ["claude"])
+
+
+@pytest.mark.parametrize("provider", ["codex", "codex-cli"])
+def test_provider_command_accepts_codex_aliases(configured_terminal_kinds, provider):
+    from raven.rpc.terminal_tools import provider_command
+
+    configured_terminal_kinds.append({"name": "implementer", "preset": "codex"})
+    assert provider_command(provider) == ("implementer", ["codex"])
+
+
+@pytest.mark.parametrize("rows", [[], [{"name": "implementer", "preset": "codex"}]])
+def test_provider_command_explains_missing_kind(configured_terminal_kinds, rows):
+    from raven.rpc.terminal_tools import provider_command
+
+    configured_terminal_kinds.extend(rows)
+    with pytest.raises(TerminalError, match="External Agents.*Claude Code or Codex preset") as error:
+        provider_command("claude-code")
+    assert error.value.code == "no_matching_kind"
+
+
+def test_provider_command_preserves_ambiguity_and_exact_names(configured_terminal_kinds):
+    from raven.rpc.terminal_tools import provider_command
+
+    configured_terminal_kinds.extend(
+        [{"name": "researcher", "preset": "claude_code"}, {"name": "reviewer", "preset": "claude_code"}]
+    )
+    with pytest.raises(TerminalError, match="External Agents.*exact name") as error:
+        provider_command("claude-code")
+    assert error.value.code == "provider_not_unique"
+    assert provider_command("reviewer") == ("reviewer", ["claude"])
+
+
+def test_provider_command_does_not_launch_unsupported_kind(configured_terminal_kinds):
+    from raven.rpc.terminal_tools import provider_command
+
+    configured_terminal_kinds.append({"name": "custom", "preset": "unsupported"})
+    with pytest.raises(TerminalError) as error:
+        provider_command("custom")
+    assert error.value.code == "no_matching_kind"
