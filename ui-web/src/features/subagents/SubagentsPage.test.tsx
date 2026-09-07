@@ -826,6 +826,110 @@ describe('subagents island, an instance detail', () => {
     expect(box.value).toBe('')
   })
 
+  it('hands a staged file to the instance as the note the page composer writes', async () => {
+    /* The server forwards a direct chat's files from `media`, which the live
+       layer derives from this note; the shipped composer had no way to stage a
+       file, so every direct chat reached the sub-agent with none. The tray is
+       this instance's own and uploads through the page composer's seam. */
+    const said: string[] = []
+    const uploaded: string[] = []
+    instances([inst({ handle: 'chatty', status: 'completed', resumable: true })], {
+      instanceHistory: async () => ({ turns: [] }),
+      instanceSend: async (_a, _h, text) => {
+        said.push(text)
+      },
+    })
+    ;(window.DS as { composer?: unknown }).composer = {
+      upload: async (req: { name: string; content_b64: string }) => {
+        uploaded.push(`${req.name}:${req.content_b64}`)
+        return { path: `uploads/${req.name}`, size: 3 }
+      },
+    }
+    await mount()
+    await act(async () => {
+      ;(await screen.findByText('chatty')).closest('.sarow')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    const picker = document.querySelector('.sasend input[type=file]') as HTMLInputElement
+    expect(picker).toBeTruthy()
+    const file = new File(['abc'], 'a.txt', { type: 'text/plain' })
+    Object.defineProperty(picker, 'files', { value: [file], configurable: true })
+    await act(async () => {
+      picker.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    /* The FileReader lands on its own tick; the chip is drawn uploading, then not. */
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    expect(uploaded).toEqual(['a.txt:YWJj'])
+    expect(document.querySelector('.sasend .att .nm')?.textContent).toBe('a.txt')
+    expect(document.querySelector('.sasend .att.up')).toBeNull()
+
+    const box = document.querySelector('.sasend textarea') as HTMLTextAreaElement
+    box.value = 'have a look'
+    await act(async () => {
+      ;(document.querySelector('.sasend .mini') as HTMLButtonElement).click()
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    /* The fake shell's T returns the key: the note is `gui.att.note` itself. */
+    expect(said).toEqual(['have a look\n\ngui.att.note\n- uploads/a.txt'])
+    expect(box.value).toBe('')
+    expect(document.querySelector('.sasend .att')).toBeNull()
+  })
+
+  it('sends a file with nothing typed as the note alone, delimiter kept', async () => {
+    /* The send button is live with a staged file and an empty box. The note then
+       leads the message after a blank line, which is how the live layer finds it;
+       the store's trim used to take that blank line, and the files with it. */
+    const said: string[] = []
+    instances([inst({ handle: 'chatty', status: 'completed', resumable: true })], {
+      instanceHistory: async () => ({ turns: [] }),
+      instanceSend: async (_a, _h, text) => {
+        said.push(text)
+      },
+    })
+    ;(window.DS as { composer?: unknown }).composer = {
+      upload: async (req: { name: string }) => ({ path: `uploads/${req.name}`, size: 3 }),
+    }
+    await mount()
+    await act(async () => {
+      ;(await screen.findByText('chatty')).closest('.sarow')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    const picker = document.querySelector('.sasend input[type=file]') as HTMLInputElement
+    Object.defineProperty(picker, 'files', { value: [new File(['abc'], 'a.txt')], configurable: true })
+    await act(async () => {
+      picker.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    const go = document.querySelector('.sasend .go') as HTMLButtonElement
+    expect(go.disabled).toBe(false)
+    await act(async () => {
+      go.click()
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(said).toEqual(['\n\ngui.att.note\n- uploads/a.txt'])
+    expect(document.querySelector('.sasend .att')).toBeNull()
+  })
+
+  it('offers no tray where nothing can take the bytes', async () => {
+    await openInstance(inst({ handle: 'chatty', status: 'completed', resumable: true }), {
+      instanceSend: async () => {},
+    })
+    expect(document.querySelector('.sasend input[type=file]')).toBeNull()
+    expect(document.querySelector('.sasend .instance-attach')).toBeNull()
+  })
+
   it('sends on enter and breaks the line on shift-enter', async () => {
     const said: string[] = []
     await openInstance(inst({ handle: 'chatty', status: 'completed', resumable: true }), {

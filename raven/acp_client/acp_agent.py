@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -42,6 +42,7 @@ from raven.acp_client.permissions import PERMISSION_METHOD
 from raven.acp_client.pool import get_pool
 from raven.acp_client.protocol import SESSION_MCP_CAPABILITY, STEER_METHOD, AcpError, AcpRemoteError
 from raven.agent.subagent import activity
+from raven.agent.subagent.attachments import attachment_blocks
 from raven.agent.subagent.backends import turn_rows
 from raven.agent.subagent.backends.base import bounded_delta, clamp_output
 from raven.agent.subagent.backends.env import login_shell_env
@@ -56,6 +57,7 @@ from raven.agent.subagent.instances import InstanceRegistry, get_registry
 from raven.agent.subagent.mcp_grant import McpDispatchError, McpGrant, McpSource, acp_target, resolve_grant
 from raven.contracts.subagent_backend import SubagentActionAbortedError
 from raven.mcp.endpoint import McpEndpoints, bridge_command
+from raven.spine.message import Media
 
 if TYPE_CHECKING:
     from raven.contracts.llm_provider import LLMProvider
@@ -85,6 +87,16 @@ _MESSAGE_BREAK = "\n\n"
 # a row per frame would be five near-identical rows. The branch this feeds is
 # dialect-independent: any adapter's plan frame lands here.
 _PLAN_CALL_ID = "acp-plan"
+
+
+def _uploads_root() -> Path | None:
+    """The host's agent home, where the page deposits uploads; None when no config loads."""
+    try:
+        from raven.config import load_config
+
+        return Path(load_config().workspace_path)
+    except Exception:
+        return None
 
 
 class AcpEmptyTurnError(RuntimeError):
@@ -940,6 +952,7 @@ class AcpAgentBackend:
         mcp_grant: McpGrant | None = None,
         mode: str | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
+        media: Sequence[Media] = (),
     ) -> str:
         # The parent binding is forwarded when the pooled ACP worker launches.
         # Without this, a long-lived worker keeps the provider/model captured
@@ -1061,7 +1074,16 @@ class AcpAgentBackend:
                     try:
                         result = await client.request(
                             "session/prompt",
-                            {"sessionId": session_id, "prompt": [{"type": "text", "text": task}]},
+                            {
+                                "sessionId": session_id,
+                                # The attachments ride as resource links beside the
+                                # text, the block an editor sends for an @-mentioned
+                                # file; see raven.agent.subagent.attachments.
+                                "prompt": [
+                                    {"type": "text", "text": task},
+                                    *attachment_blocks(media, root=_uploads_root()),
+                                ],
+                            },
                             timeout=self.timeout,
                             cancel_session=session_id,
                         )

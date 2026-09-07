@@ -42,6 +42,7 @@ def _direct_chat_manager(tmp_path, monkeypatch, *, fail: bool = False):
         history=None,
         on_messages=None,
         on_delta=None,
+        media=(),
     ):
         if fail:
             raise RuntimeError("backend exploded")
@@ -607,7 +608,7 @@ async def test_run_turn_routes_a_direct_target_to_the_subagent(tmp_path, monkeyp
 
     loop = _agent_loop_for_direct_chat(tmp_path, monkeypatch)
 
-    async def fake_chat(*, session_key, agent, handle, text, workspace=None, on_delta=None):
+    async def fake_chat(*, session_key, agent, handle, text, workspace=None, on_delta=None, media=()):
         called.update(session_key=session_key, agent=agent, handle=handle, text=text)
         from raven.agent.subagent.direct_chat import DirectTurnMeta
 
@@ -649,6 +650,151 @@ async def test_run_turn_routes_a_direct_target_to_the_subagent(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_run_turn_hands_the_turns_attachments_to_the_direct_chat(tmp_path, monkeypatch):
+    """What the page uploaded rides the direct turn as media; before this the branch
+    forwarded the text alone and a deck agent was handed a path relative to the
+    host's agent home, which resolved to nothing where it ran."""
+    from raven.spine.message import Media
+
+    loop = _agent_loop_for_direct_chat(tmp_path, monkeypatch)
+    seen: dict[str, Any] = {}
+
+    async def fake_chat(*, session_key, agent, handle, text, workspace=None, on_delta=None, media=()):
+        seen["media"] = tuple(media)
+        from raven.agent.subagent.direct_chat import DirectTurnMeta
+
+        return "ok", DirectTurnMeta(
+            agent=agent,
+            handle=handle,
+            call_id="c1",
+            directory=tmp_path,
+            started_at_ms=1,
+            ended_at_ms=2,
+            status="completed",
+        )
+
+    monkeypatch.setattr(loop.subagents, "chat", fake_chat)
+    attached = (Media(path=str(tmp_path / "uploads" / "house.pptx"), mime="application/octet-stream", kind="file"),)
+
+    from raven.spine import ChatType, Origin, Source, TurnRequest
+
+    req = TurnRequest(
+        origin=Origin.USER,
+        source=Source(channel="tui", chat_id="c", sender_id="u", chat_type=ChatType.DM),
+        text="use my template",
+        media=attached,
+        conversation="s1",
+        direct_target=("Raven-PPT", "deck-1"),
+    )
+    await loop.run_turn(req, _noop_emit_event, lambda: [])
+
+    assert seen["media"] == attached
+
+
+async def _noop_emit_event(event) -> None:
+    return None
+
+
+@pytest.mark.asyncio
+async def test_chat_hands_the_attachments_to_the_backend_and_records_them(tmp_path, monkeypatch):
+    """The backend gets the media as it got the text; the record names the files by
+    absolute path, since the record is the only evidence the turn happened."""
+    from raven.spine.message import Media
+
+    manager = _direct_chat_manager(tmp_path, monkeypatch)
+    seen: dict[str, Any] = {}
+    real_run = manager.registry.backend("raven").run
+
+    async def spying_run(task, **kw):
+        seen["media"] = kw.get("media")
+        seen["task"] = task
+        return await real_run(task, **kw)
+
+    monkeypatch.setattr(manager.registry.backend("raven"), "run", spying_run)
+    deck = tmp_path / "uploads" / "house.pptx"
+    deck.parent.mkdir(parents=True)
+    deck.write_bytes(b"pptx")
+    attached = (Media(path=str(deck), mime="application/octet-stream", kind="file"),)
+
+    reply, meta = await manager.chat(session_key="s1", agent="raven", handle="deck", text="use it", media=attached)
+
+    assert seen["media"] == attached
+    assert seen["task"] == "use it", "the text is the user's own; the transport spells the attachments"
+    assert str(deck.resolve()) in (meta.directory / "prompt.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_chat_retargets_the_pages_note_to_where_the_sub_agent_can_find_the_file(tmp_path, monkeypatch):
+    """The page writes ``- uploads/x.pptx`` under its note, a path relative to the
+    host's agent home. A deck agent handed that spelling looked in its own working
+    directory and reported the file missing, even with the absolute path beside it;
+    the bullet itself now names the absolute path."""
+    from raven.spine.message import Media
+
+    manager = _direct_chat_manager(tmp_path, monkeypatch)
+    deck = tmp_path / "home" / "uploads" / "house.pptx"
+    deck.parent.mkdir(parents=True)
+    deck.write_bytes(b"pptx")
+    seen: dict[str, Any] = {}
+    real_run = manager.registry.backend("raven").run
+
+    async def spying_run(task, **kw):
+        seen["task"] = task
+        return await real_run(task, **kw)
+
+    monkeypatch.setattr(manager.registry.backend("raven"), "run", spying_run)
+    text = "use my template\n\n[attachments, saved in the workspace]\n- uploads/house.pptx"
+
+    await manager.chat(
+        session_key="s1",
+        agent="raven",
+        handle="deck",
+        text=text,
+        media=(Media(path=str(deck), mime="application/octet-stream", kind="file"),),
+    )
+
+    assert seen["task"] == f"use my template\n\n[attachments, saved in the workspace]\n- {deck.resolve()}"
+
+
+@pytest.mark.asyncio
+async def test_chat_tells_a_no_local_files_agent_its_attachments_stayed_behind(tmp_path, monkeypatch):
+    """A path means nothing to an agent that cannot open local files, so it is told
+    by name what was sent and not handed over, and the backend gets no media."""
+    import dataclasses
+
+    from raven.agent.subagent.attachments import UNDELIVERABLE_NOTE
+    from raven.spine.message import Media
+
+    manager = _direct_chat_manager(tmp_path, monkeypatch)
+    real_get = manager.registry.get
+
+    def remote_agent(name):
+        row = real_get(name)
+        return (
+            None
+            if row is None
+            else dataclasses.replace(row, caps=dataclasses.replace(row.caps, reads_local_files=False))
+        )
+
+    monkeypatch.setattr(manager.registry, "get", remote_agent)
+    seen: dict[str, Any] = {}
+    real_run = manager.registry.backend("raven").run
+
+    async def spying_run(task, **kw):
+        seen["media"] = kw.get("media")
+        seen["task"] = task
+        return await real_run(task, **kw)
+
+    monkeypatch.setattr(manager.registry.backend("raven"), "run", spying_run)
+    attached = (Media(path="/somewhere/house.pptx", mime="application/octet-stream", kind="file"),)
+
+    await manager.chat(session_key="s1", agent="raven", handle="deck", text="use it", media=attached)
+
+    assert seen["media"] is None
+    assert seen["task"] == f"use it\n\n{UNDELIVERABLE_NOTE}\n- house.pptx"
+
+
+@pytest.mark.asyncio
 async def test_a_direct_chat_runs_in_the_session_workdir_not_agent_home(tmp_path, monkeypatch):
     """The same directory the turn's own tools get, and that ``spawn`` captures.
 
@@ -678,7 +824,7 @@ async def test_a_direct_chat_runs_in_the_session_workdir_not_agent_home(tmp_path
         ),
     )
 
-    async def fake_chat(*, session_key, agent, handle, text, workspace=None, on_delta=None):
+    async def fake_chat(*, session_key, agent, handle, text, workspace=None, on_delta=None, media=()):
         from raven.agent.subagent.direct_chat import DirectTurnMeta
 
         seen["workspace"] = workspace
@@ -736,7 +882,7 @@ async def test_run_turn_records_a_failed_direct_turn_in_the_handoff_before_rerai
         status="failed",
     )
 
-    async def failing_chat(*, session_key, agent, handle, text, workspace=None, on_delta=None):
+    async def failing_chat(*, session_key, agent, handle, text, workspace=None, on_delta=None, media=()):
         raise DirectChatError(fail_meta) from RuntimeError("backend exploded")
 
     monkeypatch.setattr(loop.subagents, "chat", failing_chat)
@@ -1070,7 +1216,7 @@ async def test_run_turn_streams_a_direct_reply_instead_of_a_closing_text(tmp_pat
     emitted: list[Any] = []
     loop = _agent_loop_for_direct_chat(tmp_path, monkeypatch)
 
-    async def fake_chat(*, session_key, agent, handle, text, workspace=None, on_delta=None):
+    async def fake_chat(*, session_key, agent, handle, text, workspace=None, on_delta=None, media=()):
         from raven.agent.subagent.direct_chat import DirectTurnMeta
 
         assert on_delta is not None
@@ -1114,7 +1260,7 @@ async def test_run_turn_delivers_a_whole_direct_reply_when_nothing_streamed(tmp_
     emitted: list[Any] = []
     loop = _agent_loop_for_direct_chat(tmp_path, monkeypatch)
 
-    async def fake_chat(*, session_key, agent, handle, text, workspace=None, on_delta=None):
+    async def fake_chat(*, session_key, agent, handle, text, workspace=None, on_delta=None, media=()):
         from raven.agent.subagent.direct_chat import DirectTurnMeta
 
         return "sub reply", DirectTurnMeta(
@@ -1155,7 +1301,7 @@ async def test_run_turn_withholds_the_delta_hook_from_a_non_streaming_outlet(tmp
     offered: list[Any] = []
     loop = _agent_loop_for_direct_chat(tmp_path, monkeypatch)
 
-    async def fake_chat(*, session_key, agent, handle, text, workspace=None, on_delta=None):
+    async def fake_chat(*, session_key, agent, handle, text, workspace=None, on_delta=None, media=()):
         from raven.agent.subagent.direct_chat import DirectTurnMeta
 
         offered.append(on_delta)

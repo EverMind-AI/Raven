@@ -8,13 +8,14 @@ and ``_build_subagent_prompt``, extracted verbatim so a spawned sub-agent's
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable, Collection
+from collections.abc import Awaitable, Callable, Collection, Sequence
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
 from raven.agent.subagent import activity
+from raven.agent.subagent.attachments import with_attachment_note
 from raven.agent.subagent.backends.base import IN_SUBAGENT_RUN
 from raven.agent.subagent.mcp_grant import (
     McpGrant,
@@ -36,6 +37,7 @@ from raven.memory_engine import filter_by_required_tools
 from raven.providers.streaming import generation_kwargs, stream_llm_call
 from raven.providers.tool_calls import openai_tool_call
 from raven.security.trust import wrap_untrusted
+from raven.spine.message import Media
 from raven.utils.messages import build_assistant_message
 
 _LIVE_CONFIG = LiveConfig()
@@ -204,6 +206,7 @@ class RavenLoopBackend:
         history: list[dict[str, Any]] | None = None,
         on_messages: Callable[[list[dict[str, Any]]], None] | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
+        media: Sequence[Media] = (),
     ) -> str:
         token = IN_SUBAGENT_RUN.set(True)
         grant = self.resolve_mcp_grant(mcps)
@@ -222,6 +225,7 @@ class RavenLoopBackend:
                     history=history,
                     on_messages=on_messages,
                     on_delta=on_delta,
+                    media=media,
                 )
         finally:
             IN_SUBAGENT_RUN.reset(token)
@@ -241,6 +245,7 @@ class RavenLoopBackend:
         history: list[dict[str, Any]] | None = None,
         on_messages: Callable[[list[dict[str, Any]]], None] | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
+        media: Sequence[Media] = (),
     ) -> str:
         # The spawn's snapshot wins over the pair this backend was built with;
         # see ``SubagentBackend.run``. The constructor pair remains the fallback
@@ -324,7 +329,7 @@ class RavenLoopBackend:
                 }
             ]
         )
-        messages.append({"role": "user", "content": task})
+        messages.append({"role": "user", "content": with_attachment_note(task, media)})
         # Where this run's own turns begin. Taken here rather than assumed to be
         # index 2, because a resumed instance arrives with its whole history in
         # front of the task -- slicing from a constant would replay every earlier

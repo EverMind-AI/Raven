@@ -564,7 +564,7 @@ export function directEvent(
    instance that is still answering the turn before. */
 export function sendToInstance(agent: string, handle: string, text: string): Promise<boolean> {
   const src = source()
-  const said = text.trim()
+  const said = trimmedKeepingNote(text)
   if (!src.instanceSend || !said) return Promise.resolve(false)
   if (state.sendFail) set({ sendFail: null })
   const chat = directOf(agent, handle)
@@ -573,6 +573,19 @@ export function sendToInstance(agent: string, handle: string, text: string): Pro
     return Promise.resolve(true)
   }
   return startDirect(agent, handle, said)
+}
+
+/* The text trimmed, except for the blank line an attachment note needs in front
+   of it. A file-only message is the note alone after "\n\n" -- the page composer
+   writes it that way, and the live layer finds the note by that delimiter to
+   turn its paths into the typed `media` field. A plain trim took the delimiter
+   and the files with it, so a direct chat of one attachment reached the
+   sub-agent as a relative-path note and nothing else. */
+function trimmedKeepingNote(text: string): string {
+  const said = text.trim()
+  if (!said) return ''
+  const note = t('gui.att.note')
+  return said === note || said.startsWith(`${note}\n`) ? `\n\n${said}` : said
 }
 
 /* Why this instance refused a turn, and nothing about any other. */
