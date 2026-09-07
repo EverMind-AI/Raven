@@ -5,7 +5,7 @@ import json
 import httpx
 
 from raven.config.schema import Config
-from raven.providers.anthropic_messages_provider import AnthropicMessagesProvider
+from raven.providers.anthropic_messages_provider import AnthropicMessagesProvider, convert_messages
 from raven.providers.factory import make_provider
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.providers.openai_responses_provider import OpenAIResponsesProvider
@@ -426,3 +426,75 @@ def test_anthropic_sends_no_temperature_to_a_model_that_thinks_by_default() -> N
     assert older["temperature"] == 0.1
     assert rewrite_on_400(older, "temperature may only be set to 1 when thinking is enabled") == "temperature"
     assert "temperature" not in older
+
+
+async def test_the_anthropic_transport_lets_the_cache_optimizer_place_breakpoints() -> None:
+    """The base default says no provider caches; this transport must say yes
+    for a Claude model, or the strategy places no marks and every request of a
+    150k-token design session is billed uncached."""
+    from raven.token_wise.cache_optimizer import CacheOptimizer
+
+    provider = AnthropicMessagesProvider(
+        api_key="k",
+        api_base="https://openrouter.ai/api/v1",
+        default_model="openrouter/claude-opus-5",
+        provider_name="openrouter",
+    )
+    assert provider.supports_prompt_caching("openrouter/claude-opus-5") is True
+    assert provider.supports_prompt_caching("openrouter/gpt-5.6-sol") is False
+
+    optimizer = CacheOptimizer(supports_caching=provider.supports_prompt_caching)
+    messages = [{"role": "system", "content": "rules"}, {"role": "user", "content": "hi"}]
+    tools = [
+        {
+            "type": "function",
+            "function": {"name": "noop", "description": "n", "parameters": {"type": "object", "properties": {}}},
+        }
+    ]
+    messages, tools, model = await optimizer.before_llm_call(messages, tools, "openrouter/claude-opus-5")
+    body = provider._body(
+        messages=messages,
+        tools=tools,
+        model=model,
+        max_tokens=64,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+        stream=False,
+    )
+    assert json.dumps(body).count("cache_control") == 3
+
+
+async def test_tail_breakpoints_survive_the_anthropic_conversion() -> None:
+    """The optimizer marks the last block of the last two messages. On a turn
+    that only called a tool the marked text block is empty and dropped, and a
+    tool result is wrapped in a tool_result block; both used to lose the mark,
+    which left every iteration of a tool loop cached only up to the system
+    prompt (16.8k of a 150k prefix in production)."""
+    from raven.token_wise.cache_optimizer import CacheOptimizer
+
+    messages = [
+        {"role": "system", "content": "rules"},
+        {"role": "user", "content": "go"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "toolu_1", "type": "function", "function": {"name": "exec", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "toolu_1", "content": [{"type": "text", "text": "ok"}]},
+    ]
+    marked, _, _ = await CacheOptimizer(supports_caching=lambda _m: True).before_llm_call(
+        messages, None, "openrouter/claude-opus-5"
+    )
+    system, wire = convert_messages(marked)
+    assert "cache_control" in system[-1]
+    assistant, tool_result = wire[-2], wire[-1]
+    assert assistant["content"][-1]["type"] == "tool_use" and "cache_control" in assistant["content"][-1]
+    assert tool_result["content"][-1]["type"] == "tool_result" and "cache_control" in tool_result["content"][-1]
+    assert not any("cache_control" in inner for inner in tool_result["content"][-1]["content"])
+
+    # The marked turn must render exactly like the same turn once the mark has
+    # moved on, or the cached prefix breaks at every iteration.
+    _, unmarked = convert_messages(messages)
+    assert [b for b in assistant["content"] if "cache_control" not in b] == unmarked[-2]["content"][:-1]
+    assert {k: v for k, v in assistant["content"][-1].items() if k != "cache_control"} == unmarked[-2]["content"][-1]
