@@ -12,7 +12,6 @@ from raven.agent.loop._shared import (
     _ATTACHED_IMAGE_KEY,
     _DELEGATED_KEY,
     _HOOK_INJECTED_KEY,
-    _IMAGE_SOURCES_KEY,
     _MAX_ITER_STATIC_FALLBACK,
     _MAX_ITER_SYNTHESIS_PROMPT,
     _NOTICE_KEY,
@@ -42,12 +41,9 @@ from raven.agent.loop._shared import (
     _display_label,
     _file_change_payload,
     _first_line,
-    _image_sources,
-    _inline_image_bytes,
     _runtime_origin,
     _stamp_reasoning_ms,
     _strip_inline_images,
-    _withdrawn_image_note,
     append_hook_note,
     asyncio,
     autofill_resolver,
@@ -55,10 +51,10 @@ from raven.agent.loop._shared import (
     current_autofill,
     estimate_prompt_tokens,
     failure_class,
-    filed_image_note,
     image_placeholder_text,
     is_hard_tool_failure,
     is_image_part,
+    is_inline_image,
     is_only_think_debris,
     json,
     logger,
@@ -308,7 +304,7 @@ class TurnPathMixin:
         always let ``chat_stream``'s own signature defaults stand here. See
         ``generation_kwargs`` for the callers that cannot.
         """
-        limits = self._recovery_limits
+        limits = getattr(self, "_recovery_limits", None)
         return await stream_llm_call(
             self.provider,
             messages=messages,
@@ -317,8 +313,8 @@ class TurnPathMixin:
             on_token_delta=on_token_delta,
             on_reasoning_delta=on_reasoning_delta,
             max_reconnects=self._MAX_STREAM_RECONNECTS,
-            retry_delays=tuple(limits.llm_error_retry_delays),
-            retry_after_output=bool(limits.llm_retry_after_output),
+            retry_delays=tuple(getattr(limits, "llm_error_retry_delays", ()) or ()),
+            retry_after_output=bool(getattr(limits, "llm_retry_after_output", False)),
             **generation,
         )
 
@@ -332,36 +328,24 @@ class TurnPathMixin:
         system / user / assistant reasoning intact. Deterministic, no extra LLM
         call. Returns ``(new_messages, num_elided)``; ``num_elided == 0`` means
         there was nothing worth eliding (caller should not bother retrying).
-
-        Three passes, cheapest loss first: the pictures tools showed, then older
-        tool bodies, then -- only when those two freed nothing -- the pictures
-        the user sent, all but the newest.
         """
         messages, elided = cls._elide_older_images(messages)
 
         placeholder = "[earlier tool output elided to fit the context window]"
         tool_idxs = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
-        shrunk = messages
-        if len(tool_idxs) > cls._SHRINK_KEEP_RECENT_TOOL_RESULTS:
-            elide = set(tool_idxs[: -cls._SHRINK_KEEP_RECENT_TOOL_RESULTS])
-            shrunk = []
-            for i, m in enumerate(messages):
-                if i in elide and m.get("content") and m.get("content") != placeholder:
-                    clean = dict(m)
-                    clean["content"] = placeholder
-                    shrunk.append(clean)
-                    elided += 1
-                else:
-                    shrunk.append(m)
-        if elided:
-            return shrunk, elided
-        # Nothing a result picture or a tool body could give back. The pictures the
-        # user sent go last, newest kept: a turn that is nothing but pasted
-        # screenshots overflows on them alone, and this path could reach them
-        # before the standing window narrowed the first pass to results.
-        out = list(shrunk)
-        changed, _ = cls._window_images(out, cls._SHRINK_KEEP_RECENT_IMAGES, reason="context", any_role=True)
-        return (out, changed) if changed else (shrunk, 0)
+        if len(tool_idxs) <= cls._SHRINK_KEEP_RECENT_TOOL_RESULTS:
+            return messages, elided
+        elide = set(tool_idxs[: -cls._SHRINK_KEEP_RECENT_TOOL_RESULTS])
+        shrunk: list[dict] = []
+        for i, m in enumerate(messages):
+            if i in elide and m.get("content") and m.get("content") != placeholder:
+                clean = dict(m)
+                clean["content"] = placeholder
+                shrunk.append(clean)
+                elided += 1
+            else:
+                shrunk.append(m)
+        return shrunk, elided
 
     @staticmethod
     def _demote_tool_images(messages: list[dict]) -> tuple[list[dict], int]:
@@ -384,21 +368,12 @@ class TurnPathMixin:
         """
         out: list[dict] = []
         pending: list[dict] = []
-        pending_sources: list[dict] = []
         demoted = 0
 
         def flush() -> None:
             if pending:
-                out.append(
-                    {
-                        "role": "user",
-                        "content": list(pending),
-                        _ATTACHED_IMAGE_KEY: True,
-                        _IMAGE_SOURCES_KEY: list(pending_sources),
-                    }
-                )
+                out.append({"role": "user", "content": list(pending), _ATTACHED_IMAGE_KEY: True})
                 pending.clear()
-                pending_sources.clear()
 
         for m in messages:
             content = m.get("content")
@@ -415,111 +390,93 @@ class TurnPathMixin:
                 continue
             clean = dict(m)
             clean["content"] = image_placeholder_text(content)
-            sources = clean.pop(_IMAGE_SOURCES_KEY, None) or [{"tool": m.get("name")} for _ in images]
             out.append(clean)
             pending.extend(images)
-            pending_sources.extend(sources)
             demoted += len(images)
         flush()
         return out, demoted
 
-    @classmethod
-    def _window_images(
-        cls,
-        messages: list[dict],
-        keep: int,
-        *,
-        budget: int | None = None,
-        reason: str = "superseded",
-        any_role: bool = False,
-    ) -> tuple[int, int]:
-        """Withdraw the pictures the request should no longer carry, in place.
+    @staticmethod
+    def _strip_images(messages: list[dict], *, everything: bool = False) -> tuple[list[dict], int]:
+        """Take images out of the conversation, leaving a note where each one was.
 
-        Two modes. Without ``budget``, every image-bearing message but the newest
-        ``keep`` loses its pictures: the shape the overflow path and the refusal
-        ladder want. With ``budget`` (decoded bytes), nothing happens while the
-        pictures still live in the transcript fit under it, and the moment they
-        do not, every message but the newest ``keep`` loses its pictures at once.
-        A collapse rather than a slide because each withdrawal is a break in the
-        prefix an upstream cache can match: sliding one message out per new batch
-        broke the prefix on 16 of 60 calls in one measured run (19 of 41 in the
-        other) and the hit rate went from 84.5% to 64.7%; collapsing when the
-        budget is hit breaks it once or a handful of times per deck, and the
-        pictures stay in view for longer in between.
+        The newest image-bearing message only, unless `everything`: the picture that
+        just arrived is the one an upstream refused for its size, and the older ones
+        were accepted a call ago. Any role -- a render reaches the model as a user
+        message when the endpoint cannot carry one in a tool result, and it is
+        exactly that message the refusal is about.
 
-        In place: each withdrawn message is replaced in ``messages`` by a copy whose
-        image parts have become notes (:func:`_withdrawn_image_note`), so what the
-        model has been told about a picture it can no longer see is part of the
-        transcript from then on, not something recomputed per request.
-
-        Prefix-stable by construction. A message is touched only while it still
-        carries a picture, so one withdrawn on an earlier iteration is byte for
-        byte what it was; between two iterations either nothing changes or one
-        collapse does. That is the property a cached prefix needs, and the reason
-        this is not a pure function returning a fresh list.
-
-        The pictures tools showed, on either transport: a ``tool`` message where
-        the endpoint carries them there, the following ``user`` message the loop
-        attached where it does not. A picture the user sent is the subject of the
-        turn rather than a result, and stays -- unless ``any_role``, which is for
-        the request the endpoint has already refused, when there is nothing else
-        left to take out. Remote references count toward ``keep`` but weigh
-        nothing in the budget: their size is unknowable without fetching them.
-
-        Returns ``(messages_changed, pictures_withdrawn)``; ``(0, 0)`` means
-        nothing had to go.
+        Returns ``(new_messages, num_removed)``; ``0`` means no message carried an
+        image, so the refusal was about something else and the caller should not
+        retry.
         """
         bearing = [
-            i
-            for i, m in enumerate(messages)
-            if (any_role or m.get("role") == "tool" or m.get(_ATTACHED_IMAGE_KEY))
-            and isinstance(m.get("content"), list)
-            and any(is_image_part(p) for p in m["content"])
+            index
+            for index, message in enumerate(messages)
+            if isinstance(message.get("content"), list) and any(is_image_part(p) for p in message["content"])
         ]
-        if budget is not None:
-            live = sum(_inline_image_bytes(p) for i in bearing for p in messages[i]["content"])
-            if live <= budget:
-                return 0, 0
-        stale = bearing[:-keep] if keep else bearing
-        pictures = 0
-        for i in stale:
-            m = messages[i]
-            sources = m.get(_IMAGE_SOURCES_KEY) or []
-            total = sum(1 for p in m["content"] if is_image_part(p))
-            parts: list[Any] = []
-            seen = 0
-            for p in m["content"]:
-                if not is_image_part(p):
-                    parts.append(p)
-                    continue
-                source = sources[seen] if seen < len(sources) else {}
-                seen += 1
-                note = _withdrawn_image_note(source, index=seen, total=total, reason=reason, keep=keep)
-                parts.append({"type": "text", "text": note})
-            clean = dict(m)
-            clean["content"] = parts
-            messages[i] = clean
-            pictures += total
-        return len(stale), pictures
+        if not bearing:
+            return messages, 0
+        targets = set(bearing) if everything else {bearing[-1]}
+        out: list[dict] = []
+        removed = 0
+        for index, message in enumerate(messages):
+            if index not in targets:
+                out.append(message)
+                continue
+            content = message["content"]
+            kept = [p for p in content if not is_image_part(p)]
+            removed += len(content) - len(kept)
+            kept.append(
+                {
+                    "type": "text",
+                    "text": "[image omitted: the model endpoint refused it as too large; "
+                    "describe the page from the build's findings instead of the render]",
+                }
+            )
+            clean = dict(message)
+            clean["content"] = kept
+            out.append(clean)
+        return out, removed
 
     @classmethod
     def _elide_older_images(cls, messages: list[dict]) -> tuple[list[dict], int]:
-        """Drop pictures from all but the most recent image-bearing message, for the
-        overflow path.
+        """Drop inline images from all but the most recent image-bearing message.
 
         Run before the tool-text pass because an image is by far the densest
         thing in the window -- one costs up to 1568 tokens, which is more than
         most tool outputs -- so dropping a stale picture buys more room than
         eliding several text results, and costs less of what the model still
-        needs. The standing window (``_IMAGE_WINDOW_RECENT_MESSAGES``) has
-        usually already done this; the tighter count here is for the turn whose
-        window was not enough.
+        needs.
 
-        A new list, like the rest of the overflow path: the caller rebinds.
+        Not restricted to ``role="tool"``: when the endpoint cannot carry an
+        image in a tool result the picture is attached to a following ``user``
+        message instead, and that message would otherwise be untouchable here.
         """
-        out = list(messages)
-        changed, _ = cls._window_images(out, cls._SHRINK_KEEP_RECENT_IMAGES, reason="context")
-        return (out, changed) if changed else (messages, 0)
+        bearing = [
+            i
+            for i, m in enumerate(messages)
+            if isinstance(m.get("content"), list) and any(is_inline_image(p) for p in m["content"])
+        ]
+        if len(bearing) <= cls._SHRINK_KEEP_RECENT_IMAGES:
+            return messages, 0
+
+        target = set(bearing[: -cls._SHRINK_KEEP_RECENT_IMAGES] if cls._SHRINK_KEEP_RECENT_IMAGES else bearing)
+        out: list[dict] = []
+        elided = 0
+        for i, m in enumerate(messages):
+            if i not in target:
+                out.append(m)
+                continue
+            clean = dict(m)
+            # New list: the caller's messages may still be referenced elsewhere.
+            clean["content"] = [
+                {"type": "text", "text": "[image elided to fit the context window]"} if is_inline_image(p) else p
+                for p in m["content"]
+            ]
+            out.append(clean)
+            elided += 1
+        return out, elided
 
     async def _summarize_head(self, messages: list[dict], model: str | None) -> tuple[list[dict], str]:
         """Replace the transcript head with one LLM-written handoff brief.
@@ -734,16 +691,8 @@ class TurnPathMixin:
         reactive_summary_tried = False
         # Image-demotion recovery: bound per turn, same reason.
         image_demote_retries = 0
-        # Image-size refusals: the window below closes a notch per refusal; bounded too.
+        # Image-size refusals: the picture comes out rather than moving; bounded too.
         image_strip_retries = 0
-        # The image window: pictures stay while they fit the budget, and collapse
-        # to the newest ``image_window`` messages when they do not. Applied to the
-        # live list every iteration, so a picture withdrawn once stays withdrawn;
-        # a size refusal closes both for the rest of the turn. A budget of 0 in the
-        # settings means no standing pass at all: ``None`` here, and the window
-        # only starts to act once a refusal has closed it a notch.
-        image_window = self._IMAGE_WINDOW_RECENT_MESSAGES
-        image_budget: int | None = self._recovery_limits.image_window_budget_bytes or None
         # Retryable model errors that outlasted the provider's own ladder: how many
         # of the loop's longer waits this turn has spent.
         error_waits = 0
@@ -924,25 +873,6 @@ class TurnPathMixin:
                                 compress_retries,
                                 self._MAX_COMPRESS_RETRIES,
                             )
-
-            # The standing image window. Before the snapshot and the hooks below
-            # so every reader of ``messages`` this iteration sees the same list
-            # the model will; in place so the notes it writes are the transcript
-            # from here on rather than a per-request rewrite (see _window_images).
-            windowed = withdrawn = 0
-            if image_budget is not None or image_window < self._IMAGE_WINDOW_RECENT_MESSAGES:
-                windowed, withdrawn = self._window_images(
-                    messages, image_window, budget=image_budget, reason="budget" if image_budget else "superseded"
-                )
-            if windowed:
-                logger.info(
-                    "Image window: withdrew {} picture(s) from {} older message(s); the newest {} keep theirs "
-                    "(budget {} bytes)",
-                    withdrawn,
-                    windowed,
-                    image_window,
-                    image_budget,
-                )
 
             # Same seam and the same reason as the drain above: only the loop's
             # own task may touch ``messages``, and only here is every tool
@@ -1136,50 +1066,26 @@ class TurnPathMixin:
                     )
                     continue
 
-            # Pictures refused for their size. Moving them keeps the bytes and the
-            # refusal, waiting does not shrink them, and `unknown` would have spent
-            # the whole error ladder on them -- so the window closes a notch and the
-            # same ask goes again. A notch, not a one-off strip: the strip left the
-            # history as it was, and both measured runs refused again a few calls
-            # later once the pictures had built back up (amber 09:59 and 10:05, red
-            # 11:14 and 11:39, 2026-09-05). First notch: the budget goes and only the
-            # newest message keeps its pictures, since that is the one the model has
-            # not read yet; when it alone is over the cap the second notch takes it
-            # too. The closed window then stands for the rest of the turn, so the
-            # refusal cannot recur.
-            #
-            # At zero the model sees no picture for the rest of the turn, and the
-            # notes say so. Accepted rather than papered over with a per-batch byte
-            # budget: reaching zero takes a single batch over the cap on its own,
-            # which at the measured render sizes means a build of thirty-odd pages
-            # returned in one call, and the four measured refusals were all
-            # accumulation (75-80 pictures over 14-19 messages; the window's replay
-            # peak on those same runs is 6.87 MB against a cap measured at ~26.3 MB
-            # decoded). Add the budget when a run actually gets here.
+            # An image refused for its size. Moving it keeps the bytes and the
+            # refusal, waiting does not shrink it, and `unknown` would have spent the
+            # whole error ladder on it -- so the picture comes out, newest first, and
+            # the same ask goes again with a note where it was. Measured twice: a
+            # two-page render sent as pictures, "Downloaded image content cannot
+            # exceed 30MB", and the turn ended on the second attempt both times.
             if (
                 response.finish_reason == "error"
                 and cls_ is not None
                 and cls_.strip_images
                 and image_strip_retries < self._MAX_IMAGE_STRIP_RETRIES
             ):
-                withdrawn = 0
-                while not withdrawn and (image_budget is not None or image_window > 0):
-                    if image_budget is not None or image_window > 1:
-                        image_budget = None
-                        image_window = min(image_window, 1)
-                    else:
-                        image_window = 0
-                    _, withdrawn = self._window_images(
-                        messages, image_window, reason="refused", any_role=image_window == 0
-                    )
-                if withdrawn > 0:
+                stripped_messages, stripped = self._strip_images(messages, everything=image_strip_retries > 0)
+                if stripped > 0:
+                    messages = stripped_messages
                     image_strip_retries += 1
                     iteration -= 1  # the refused call did no work; don't bill it
                     logger.warning(
-                        "Endpoint refused the request's pictures as too large; withdrew {} and closed the "
-                        "image window to {} for the rest of the turn, retrying ({}/{})",
-                        withdrawn,
-                        image_window,
+                        "Endpoint refused an image for its size; removed {} image(s) and retrying ({}/{})",
+                        stripped,
                         image_strip_retries,
                         self._MAX_IMAGE_STRIP_RETRIES,
                     )
@@ -1229,7 +1135,6 @@ class TurnPathMixin:
                 # Anthropic accepts both, so this only bites on Chat Completions
                 # -- which is the only transport that takes this path at all.
                 pending_images: list[dict[str, Any]] = []
-                pending_sources: list[dict[str, Any]] = []
                 tool_call_dicts = [openai_tool_call(tc) for tc in response.tool_calls]
                 messages = self.context.add_assistant_message(
                     messages,
@@ -1336,20 +1241,13 @@ class TurnPathMixin:
                     # misses the whole class (builtin guides in particular).
                     if tool_call.name in ("read_skill", "use_skill") and not model_text.startswith("Error"):
                         await self._report_skill_read(session_key or "", tool_call.name, tool_call.arguments)
-                    result_blocks = getattr(result, "blocks", None)
                     model_text, blocks, attach_blocks = self._route_result_images(
-                        model_text, result_blocks, call_model or effective_model
+                        model_text, getattr(result, "blocks", None), call_model or effective_model
                     )
-                    # Provenance for the pictures, taken here where the tool, the
-                    # round and the captions are all still in one place. The
-                    # window reads it back when it withdraws them.
-                    sources = _image_sources(tool_call.name, result_blocks or [], iteration) if result_blocks else []
                     if blocks:
                         messages = self.context.add_tool_result(
                             messages, tool_call.id, tool_call.name, model_text, blocks
                         )
-                        if sources:
-                            messages[-1][_IMAGE_SOURCES_KEY] = sources
                     else:
                         # Keep the long-standing 4-arg call for text results so no
                         # existing caller or test double sees a signature change.
@@ -1371,7 +1269,6 @@ class TurnPathMixin:
                         messages[-1]["_diff"] = tool_diff
                     if attach_blocks:
                         pending_images.extend(attach_blocks)
-                        pending_sources.extend(sources)
                     if getattr(result, "blocks_call", False):
                         continuation = getattr(result, "continuation", Continuation.ABORT_TURN)
                         # The blocking tool's own words, kept for the reader: the
@@ -1462,14 +1359,7 @@ class TurnPathMixin:
                 # further model call to show a picture to, so an aborted action
                 # deliberately drops it rather than leaving it dangling.
                 if pending_images:
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": pending_images,
-                            _ATTACHED_IMAGE_KEY: True,
-                            _IMAGE_SOURCES_KEY: pending_sources,
-                        }
-                    )
+                    messages.append({"role": "user", "content": pending_images, _ATTACHED_IMAGE_KEY: True})
                 # Dispatched before prev_had_tool_calls is set: a rollback means
                 # this iteration never happened, so the empty-response classifier
                 # must see the pre-iteration state on the re-sample.
@@ -2322,19 +2212,6 @@ class TurnPathMixin:
                 entry["diff"] = tool_diff
             if tool_metadata := entry.pop(_TOOL_METADATA_KEY, None):
                 entry["metadata"] = tool_metadata
-            # Provenance of pictures that lived for this turn only; nothing to file.
-            entry.pop(_IMAGE_SOURCES_KEY, None)
-            # A withdrawn picture's note is filed without this turn's reasons: on
-            # the tool-result transport the message outlives the turn, and a
-            # resumed session would otherwise replay "this turn's pictures outgrew
-            # their budget" as current.
-            if isinstance(content, list):
-                content = entry["content"] = [
-                    {**part, "text": filed_image_note(part["text"])}
-                    if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str)
-                    else part
-                    for part in content
-                ]
             for private_key, stored_key in (
                 (_REASONING_MS_KEY, "reasoning_ms"),
                 (_TOOL_DURATION_MS_KEY, "duration_ms"),
