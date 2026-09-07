@@ -168,6 +168,34 @@ REFERENCE_PAGES: dict[str, tuple[int, ...]] = {
     "warm_bauhaus_quarterly_review": (6, 8, 9, 10, 14),
 }
 
+# How many pictures each reference page carries that are drawings rather than
+# photographs, painted in its own template's accents. Nothing recolours a bitmap, so
+# these arrive in the source's palette whatever deck they land in -- a page of teal
+# cartoons on an amber deck -- while the photographs the other pages carry are
+# placeholders an author replaces anyway. Measured over the 19 images the reference
+# pages hold, by the share of the image its commonest colour covers (0.51 to 0.84 on
+# these, 0.002 to 0.06 on the photographs beside them) and confirmed against the
+# cross-template renders, where the drawings are the one thing that did not follow the
+# deck. Absent means photographs or nothing.
+REFERENCE_ARTWORK: dict[str, dict[int, int]] = {
+    "teal_illustrated_work_analysis": {6: 1, 7: 4, 10: 1, 13: 1},
+}
+
+# Under this, white type on a fill of that colour stops being type. The number is
+# `measure.contrast.UNREADABLE_RATIO`, restated here rather than imported because this
+# module must not depend on the measurement package; the two are checked against each
+# other in the tests.
+#
+# It matters at borrowing time because it is the one thing a borrowed page cannot
+# bring with it. Measured over all 252 cross-template clones of these pages: 28 came
+# out with copy under that ratio that read above it in its own template, and 19 of the
+# 28 landed in the one bundled template whose accent1 renders white at 1.88:1. That
+# template's own pages set dark ink on that fill instead -- its page 8 reads 7.11:1 on
+# the same colour -- so what the clone carries across is a habit that is right in the
+# seven templates whose accent1 is dark and wrong in the eighth. The ink is stated on
+# the run, not derived from the ground, so nothing recolours it.
+ACCENT_READS_WHITE = 2.0
+
 
 def templates_dir() -> Path:
     """Where the bundled templates live on this install."""
@@ -196,6 +224,16 @@ def reference_pages(*, except_stem: str = "") -> list[tuple[str, int]]:
             continue
         found.extend((stem, page) for page in pages)
     return found
+
+
+def reference_artwork(stem: str, page: int) -> int:
+    """How many drawings in `stem`'s own colours that reference page carries.
+
+    0 for the pages that carry photographs or nothing: a photograph is a placeholder
+    the author was going to replace, and saying so about one would spend the caveat
+    on the ordinary case.
+    """
+    return REFERENCE_ARTWORK.get(str(stem or "").removesuffix(".pptx"), {}).get(int(page), 0)
 
 
 def default_template_prompt() -> str:

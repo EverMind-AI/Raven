@@ -19,6 +19,7 @@ multi-turn semantics are per-agent and only documented there.
 | `install.py` | Resolves the entry's placeholders and writes it into the host raven's config |
 | `subagent.json` | The roster entry, with `{SUBAGENT_DIR}` and `{PYTHON}` left unresolved. Exactly one per folder: an agent that offers several effort profiles declares them as `acp.modes` over one row, not as several rows |
 | `config.json` | The agent's run config. Holds **no** secrets, and no absolute path |
+| `modes/<id>.json` | Optional. Per-session effort overlays over `config.json`, which the launcher declares as an ACP mode catalogue (`acp.modes`) for the agent to compose per session over `session/set_mode`; the baseline tier ships no file. raven-research: `medium`/`high`/`max` (research budget); raven-code: `low`/`high`/`max` (reasoning effort). A folder without `modes/` declares none |
 | `.env.example` | Template for the secrets and the path knobs |
 | `.env` | The real secrets. Mode 600, never committed |
 | `.gitignore` | The per-folder exclusion list - the enforceable form of "what ships" |

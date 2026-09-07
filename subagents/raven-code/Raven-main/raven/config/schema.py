@@ -295,6 +295,13 @@ class AgentDefaults(Base):
     # sub-agents). Bounds a stalled backend that trickles bytes without ever
     # finishing, which an httpx per-read timeout never catches.
     llm_call_timeout: int = 600
+    # Streaming stall detector, answering the other question llm_call_timeout
+    # cannot: that one bounds how long a request is worth waiting for, this one
+    # decides when a stream is dead. The timer resets on every chunk, so a slow
+    # but progressing generation is untouched while a stream that stops
+    # producing bytes fails here instead of holding the whole budget.
+    # 0 disables it and falls back to llm_call_timeout.
+    stream_idle_timeout: int = 180
     # Backend health probe between LLM retries: after a hang / 5xx failure the
     # retry waits until a 1-token probe answers within this many seconds
     # before re-sending the full request, so a dead backend costs one
@@ -801,6 +808,42 @@ class ToolsConfig(Base):
     wrap_tool_outputs: Literal["all", "external"] = "all"
 
 
+class AcpModeConfig(Base):
+    """One operating profile an ACP client may switch a session to.
+
+    The stable ACP schema's session modes: a named profile a session runs in,
+    switched with ``session/set_mode``. What a mode moves is declared here and
+    nowhere else; today that is the reasoning effort. ``None`` inherits
+    ``agents.defaults.reasoningEffort``, which is how the default mode stays
+    byte-identical to the connection's own configuration. Strict about unknown
+    keys, because a misspelled knob would otherwise ship as a mode that changes
+    nothing.
+    """
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
+
+    name: str
+    description: str = ""
+    reasoning_effort: str | None = None
+
+
+class AcpConfig(Base):
+    """The ACP surface's session modes.
+
+    None declared means the surface is absent from the wire -- no ``modes`` on a
+    session response and ``session/set_mode`` method-not-found -- exactly as
+    before the block existed. As strict about unknown keys as its entries: a
+    misspelled ``defaultMode`` read as unset would start every session in the
+    first declared mode with nothing reporting the typo.
+    """
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
+
+    modes: dict[str, AcpModeConfig] = Field(default_factory=dict)
+    default_mode: str | None = None
+    """Which mode a new session starts in; the first declared one when unset."""
+
+
 class Config(BaseSettings):
     """Root configuration for raven."""
 
@@ -811,6 +854,7 @@ class Config(BaseSettings):
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
     cron: CronConfig = Field(default_factory=CronConfig)
+    acp: AcpConfig = Field(default_factory=AcpConfig)
     # UI language chosen during onboarding. Drives the wizard/CLI copy and the
     # agent's reply language (injected into the system prompt). "en" | "zh".
     language: Literal["en", "zh"] = "en"

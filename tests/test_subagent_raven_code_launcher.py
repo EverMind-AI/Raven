@@ -43,6 +43,9 @@ def launcher(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     isolated_launcher_home = tmp_path / "launcher-home"
     isolated_launcher_home.mkdir()
     module.HERE = isolated_launcher_home
+    # Computed from HERE at import time, so it has to be repointed too: the
+    # real folder ships a modes/ directory, and a test that wants one builds it.
+    module.MODES_DIR = isolated_launcher_home / "modes"
     return module, host_home
 
 
@@ -328,3 +331,156 @@ def test_acp_start_renders_below_agent_home_without_using_the_working_directory(
         host_home / "workspace" / "subagent_sessions" / "raven-code" / "repos"
     )
     assert child_env["RAVEN_WORKSPACE_STATE_BUCKET"] == "acp"
+
+
+# --- effort modes ---------------------------------------------------------------
+#
+# The three effort tiers reach the agent as an ACP mode catalogue: `config.json`
+# is the baseline (`high`, today's behaviour) and `modes/<id>.json` carries the
+# one knob a tier moves. The launcher declares, the agent composes per session.
+
+_MODES_SOURCE = {
+    "providers": {"custom": {}},
+    "agents": {"defaults": {"provider": "custom", "model": "model", "reasoningEffort": "high"}},
+}
+
+
+def _modes_source(tmp_path: Path) -> Path:
+    source = tmp_path / "source.json"
+    source.write_text(json.dumps(_MODES_SOURCE), encoding="utf-8")
+    return source
+
+
+def _ship_overlays(module, *names: str, body: dict | None = None) -> None:
+    module.MODES_DIR.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        overlay = body if body is not None else {"agents": {"defaults": {"reasoningEffort": name}}}
+        (module.MODES_DIR / f"{name}.json").write_text(json.dumps(overlay), encoding="utf-8")
+
+
+def test_the_modes_are_declared_for_the_agent_to_compose(launcher, tmp_path: Path) -> None:
+    """Diffs, not merged blocks: the baseline stays untouched and is the `high`
+    entry, which is why it needs no overlay file and carries no effort key."""
+    module, _ = launcher
+    _ship_overlays(module, "low", "max")
+
+    rendered = module.render_config(_modes_source(tmp_path), tmp_path / "state", mode="low")
+
+    data = json.loads(rendered.read_text(encoding="utf-8"))
+    assert data["acp"]["defaultMode"] == "low"
+    assert list(data["acp"]["modes"]) == ["low", "high", "max"]
+    assert data["acp"]["modes"]["low"]["reasoningEffort"] == "low"
+    assert data["acp"]["modes"]["max"]["reasoningEffort"] == "max"
+    assert "reasoningEffort" not in data["acp"]["modes"]["high"]
+    for entry in data["acp"]["modes"].values():
+        assert entry["name"] and entry["description"]
+    assert data["agents"]["defaults"]["reasoningEffort"] == "high"
+
+
+def test_without_a_mode_flag_sessions_start_on_the_baseline(launcher, tmp_path: Path) -> None:
+    module, _ = launcher
+    _ship_overlays(module, "low", "max")
+
+    rendered = module.render_config(_modes_source(tmp_path), tmp_path / "state")
+
+    assert json.loads(rendered.read_text(encoding="utf-8"))["acp"]["defaultMode"] == "high"
+
+
+def test_a_folder_with_no_modes_directory_declares_none(launcher, tmp_path: Path) -> None:
+    """The degradation path: no catalogue in the rendered config, which leaves
+    the agent's session/set_mode method-not-found -- and keeps a launcher paired
+    with an older vendored tree, whose schema knows no `acp` key, launchable."""
+    module, _ = launcher
+
+    rendered = module.render_config(_modes_source(tmp_path), tmp_path / "state")
+
+    assert "acp" not in json.loads(rendered.read_text(encoding="utf-8"))
+
+
+def test_a_mode_without_an_overlay_file_refuses_to_launch(launcher, tmp_path: Path) -> None:
+    module, _ = launcher
+    _ship_overlays(module, "low")
+
+    with pytest.raises(SystemExit, match="no overlay for mode"):
+        module.render_config(_modes_source(tmp_path), tmp_path / "state", mode="max")
+
+
+def test_an_overlay_with_a_foreign_top_level_key_refuses_to_launch(launcher, tmp_path: Path) -> None:
+    module, _ = launcher
+    _ship_overlays(module, "low", body={"agents": {"defaults": {"reasoningEffort": "low"}}, "tools": {}})
+
+    with pytest.raises(SystemExit, match="unsupported top-level key"):
+        module.render_config(_modes_source(tmp_path), tmp_path / "state")
+
+
+def test_an_overlay_moving_anything_but_the_effort_refuses_to_launch(launcher, tmp_path: Path) -> None:
+    """The tiers differ in effort and nothing else. A knob the agent's mode
+    profile does not carry would be declared and then silently ignored."""
+    module, _ = launcher
+    _ship_overlays(module, "low", body={"agents": {"defaults": {"reasoningEffort": "low", "maxToolIterations": 60}}})
+
+    with pytest.raises(SystemExit, match="maxToolIterations"):
+        module.render_config(_modes_source(tmp_path), tmp_path / "state")
+
+
+def test_an_overlay_that_moves_nothing_refuses_to_launch(launcher, tmp_path: Path) -> None:
+    module, _ = launcher
+    _ship_overlays(module, "low", body={"agents": {"defaults": {}}})
+
+    with pytest.raises(SystemExit, match="reasoningEffort"):
+        module.render_config(_modes_source(tmp_path), tmp_path / "state")
+
+
+def test_the_shipped_overlays_carry_exactly_the_effort() -> None:
+    """The real modes/ files: one knob each, named after the tier."""
+    for name in ("low", "max"):
+        overlay = json.loads((_LAUNCHER.parent / "modes" / f"{name}.json").read_text(encoding="utf-8"))
+        assert overlay == {"agents": {"defaults": {"reasoningEffort": name}}}, name
+
+
+def test_the_baseline_is_the_high_tier_and_every_tier_is_labelled(launcher) -> None:
+    module, _ = launcher
+    assert module.BASELINE_MODE == "high"
+    assert set(module.MODE_LABELS) == {"low", "high", "max"}
+    baseline = json.loads((_LAUNCHER.parent / "config.json").read_text(encoding="utf-8"))
+    assert baseline["agents"]["defaults"]["reasoningEffort"] == "high"
+
+
+def test_acp_start_passes_the_mode_flag_into_the_rendered_config(
+    launcher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module, _ = launcher
+    _ship_overlays(module, "low", "max")
+    source = _modes_source(tmp_path)
+    checkout = tmp_path / "checkout"
+    raven_bin = checkout / ".venv" / "bin" / "raven"
+    raven_bin.parent.mkdir(parents=True)
+    raven_bin.write_text("", encoding="utf-8")
+    launched: dict[str, object] = {}
+
+    class _Process:
+        def __init__(self, argv, *, cwd, env=None):
+            launched["config"] = json.loads(Path(argv[3]).read_text(encoding="utf-8"))
+
+        def wait(self) -> int:
+            return 0
+
+    monkeypatch.setattr(module.subprocess, "Popen", _Process)
+    monkeypatch.setattr(
+        sys, "argv", ["run.py", "--acp", "--mode", "max", "--checkout", str(checkout), "--config", str(source)]
+    )
+
+    assert module.main() == 0
+    assert launched["config"]["acp"]["defaultMode"] == "max"
+    assert set(launched["config"]["acp"]["modes"]) == {"low", "high", "max"}
+
+
+def test_the_mode_flag_is_refused_off_the_acp_path(launcher, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A tier is a session-level choice the ACP client makes; the one-task CLI
+    path has no session to put it on, and accepting it there would be a flag
+    that silently does nothing."""
+    module, _ = launcher
+    monkeypatch.setattr(sys, "argv", ["run.py", "--task", "x", "--mode", "low"])
+
+    with pytest.raises(SystemExit, match="--mode"):
+        module.main()

@@ -509,3 +509,137 @@ def _rgb(colour: str) -> tuple[int, int, int] | None:
         return (int(text[0:2], 16), int(text[2:4], 16), int(text[4:6], 16))
     except ValueError:
         return None
+
+
+def white_on_accent(inventory: TemplateInventory) -> tuple[str, float] | None:
+    """The accent this template paints that white type cannot be read on, and its ratio.
+
+    None when every accent it declares carries white type, which is the ordinary case:
+    a designer picks an accent dark enough to label. The exception is what this is for.
+    A page cloned from another template brings its own ink stated on the run -- white on
+    accent1 is how seven of the eight bundled templates label a card -- and nothing
+    recolours ink to suit the ground it lands on. So the one template whose accent1 is
+    pale receives, from every page borrowed into it, labels it cannot show; measured,
+    19 of the 31 pages borrowed into it came back under the ratio.
+
+    accent1 alone, not the whole series. The later accents are a chart's series colours
+    and a template is free to make them pale; accent1 is what a card, a pill and a
+    numbered circle are filled with, so it is the one a borrowed page will land on.
+    """
+    from raven_ppt.services.assets.color import contrast_ratio
+    from raven_ppt.services.template.defaults import ACCENT_READS_WHITE
+
+    palette = dict(inventory.theme_colours)
+    mapping = dict(inventory.colour_map)
+    colour = _slot(palette, mapping, "accent1")
+    if not colour or _rgb(colour) is None:
+        return None
+    ratio = contrast_ratio(colour if str(colour).startswith("#") else f"#{colour}", "#FFFFFF")
+    return ("accent1", ratio) if ratio < ACCENT_READS_WHITE else None
+
+
+def labels_accent_in_ink(source: Path, accent: str = "accent1") -> int | None:
+    """A page of this template that sets dark type on an `accent` fill, by page number.
+
+    The evidence half of `white_on_accent`. Telling an author their deck cannot carry
+    white labels leaves them to invent the alternative; naming the page where the
+    template's own designer solved it makes the fix something to copy. None when the
+    template never does it, and the caller then says less rather than claiming a page
+    that does not exist.
+    """
+    from pptx import Presentation
+
+    from raven_ppt.services.assets.color import contrast_ratio
+
+    prs = Presentation(str(source))
+    palette = _palette_of(prs)
+    filled = palette.get(accent)
+    if not filled:
+        return None
+    ground = f"#{filled.lstrip('#')}"
+    for number, slide in enumerate(prs.slides, start=1):
+        for shape in _walk(slide.shapes):
+            if _fill_scheme(shape) != accent:
+                continue
+            for ink in _run_inks(shape, palette):
+                if contrast_ratio(ink, ground) >= 3.0 and contrast_ratio(ink, "#FFFFFF") >= 3.0:
+                    return number
+    return None
+
+
+def _palette_of(presentation) -> dict[str, str]:
+    from raven_ppt.services.template.decompile import _colour_map, _palette
+
+    colours = {name: f"#{value.lstrip('#')}" for name, value in _palette(presentation).items()}
+    for name, slot in _colour_map(presentation).items():
+        if slot in colours:
+            colours[name] = colours[slot]
+    return colours
+
+
+def _walk(shapes):
+    for shape in shapes:
+        yield shape
+        if getattr(shape, "shape_type", None) is not None and hasattr(shape, "shapes"):
+            yield from _walk(shape.shapes)
+
+
+_DML = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+_PML = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
+
+
+def _fill_scheme(shape) -> str | None:
+    """The scheme name this shape is filled with, or None when it states a literal or nothing."""
+    properties = shape._element.find(f"{_PML}spPr")
+    if properties is None:
+        return None
+    for tag in ("solidFill", "gradFill"):
+        node = properties.find(f"{_DML}{tag}")
+        if node is None:
+            continue
+        named = node.find(f".//{_DML}schemeClr")
+        return named.get("val") if named is not None else None
+    return None
+
+
+def _run_inks(shape, palette: dict[str, str]):
+    """Every colour the shape's runs state, resolved through `palette`."""
+    body = shape._element.find(f"{_PML}txBody")
+    if body is None:
+        return
+    for run in body.iter(f"{_DML}r"):
+        fill = run.find(f"{_DML}rPr/{_DML}solidFill")
+        if fill is None:
+            continue
+        literal = fill.find(f"{_DML}srgbClr")
+        if literal is not None:
+            yield f"#{literal.get('val')}"
+            continue
+        named = fill.find(f"{_DML}schemeClr")
+        if named is not None and named.get("val") in palette:
+            yield palette[named.get("val")]
+
+
+def borrow_ink_note(inventory: TemplateInventory, source: Path) -> str:
+    """The one sentence a deck too pale to carry white labels needs, or "".
+
+    Here rather than in the tool that says it because it is a statement about a
+    template, and two tools say it -- the bind reply that first offers the reference
+    pages and the outline reply that names one per page. Two spellings of it would
+    come to disagree about the number.
+    """
+    pale = white_on_accent(inventory)
+    if pale is None:
+        return ""
+    slot, ratio = pale
+    # The example is worth having and not worth a reply for: a template python-pptx
+    # cannot walk still needs to be told its accent will not carry white labels.
+    try:
+        shown = labels_accent_in_ink(Path(source), slot)
+    except Exception:  # noqa: BLE001 -- see above
+        shown = None
+    where = f", the way this template's own page {shown} does" if shown else ""
+    return (
+        f"A borrowed page labels its cards in white on {slot}, which renders white at {ratio:.1f}:1 here, "
+        f"so set those labels in this deck's ink instead{where}."
+    )

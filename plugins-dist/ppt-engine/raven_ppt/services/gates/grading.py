@@ -132,6 +132,9 @@ TIERS: Mapping[str, Tier] = {
     # The template's picture on a layout every page inherits: read off the layout, no
     # tolerance in it.
     "layout_picture": Tier.DECLARED,
+    # The marks beside a page's units against each other and the template's bytes: the
+    # file's own geometry and image parts, nothing rendered.
+    "same_mark": Tier.DECLARED,
     # A cloned prototype page with new boxes laid over it: `adherence.py` finds it by the
     # shape positions that survive the deep copy.
     "template_underlay": Tier.DECLARED,

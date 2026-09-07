@@ -37,7 +37,14 @@ from pathlib import Path
 from typing import Any
 
 from raven_ppt.contracts.findings import Finding, Severity
-from raven_ppt.services.measure.geometry import EMU_PER_INCH, iter_shapes, open_deck, picture_blob
+from raven_ppt.services.measure.geometry import (
+    EMU_PER_INCH,
+    is_icon_sized,
+    iter_shapes,
+    open_deck,
+    page_box,
+    picture_blob,
+)
 
 # A page counts as adapted when this share of its shapes sit where the template puts
 # one. Adapting is *meant* to change things, so the number was measured against a
@@ -283,6 +290,120 @@ def template_pictures(pptx_path: Path, template: Path | None, borrowed: Sequence
     ]
 
 
+# How far above or below a text block a mark may sit and still be the mark on it. The
+# seals on the live page sat 0.3in over their headings; a mark an inch away is in another
+# row.
+MARK_GAP_IN = 1.0
+# A text block at least this share of the page wide is a title or a subtitle band: it runs
+# over every unit and is the mark on none of them. Without it every seal on the live page
+# read as the mark on the page's subtitle, and four marks on four things counted as one.
+BAND_SHARE = 0.5
+# How many things on one page have to wear a mark before the marks are read together: two
+# is the first number at which "the same mark" or "the template's mark" can mean anything.
+MARKED_THINGS = 2
+
+
+def unit_marks(pptx_path: Path, template: Path | None = None, borrowed: Sequence[Path] = ()) -> list[Finding]:
+    """Pages whose marks beside the units do not tell the units apart.
+
+    A mark is a picture no longer than `ICON_MAX_IN` a side that sits within MARK_GAP_IN
+    of one text block narrower than a band, over the block's own span. The marks on a
+    page are read together: each thing wearing one wants a mark of its own, so the marks
+    tell the things apart only when there are as many distinct marks of the author's as
+    there are things -- a mark still the template's is about nothing on this page, and one
+    mark on two things says nothing about either.
+
+    Calibrated over the eight bundled templates, ten built decks and three delivered ones
+    (297 pages): it fires on two pages, both of one delivered deck -- page 4 wore the
+    template's three seals over four things, one seal twice; page 18 the same three seals
+    over three phases -- and on nothing else, the templates' own pages included, because
+    their marks are each their own. Asked as "one image three times" it fired nowhere:
+    the seals are three images, and the fourth unit borrowed one.
+
+    `template_pictures` does not see these: a mark is a fortieth of the page, below the
+    band that check reads as content, and lowering the band would sweep in the corner
+    ornaments the same template puts on every page. Those mark nothing, so they are not
+    here either.
+    """
+    import hashlib
+
+    from raven_ppt.services.template.menu import ICON_SLOT_NOTE
+
+    sources = [Path(template)] if template is not None and Path(template).is_file() else []
+    sources += [Path(other) for other in borrowed if Path(other).is_file()]
+    known: set[str] = set().union(*(_picture_hashes(source, every=True) for source in sources)) if sources else set()
+    try:
+        presentation = open_deck(pptx_path)
+    except Exception:  # noqa: BLE001 -- an unreadable deck is not a measurement
+        return []
+    band = (presentation.slide_width or 0) / EMU_PER_INCH * BAND_SHARE
+    findings: list[Finding] = []
+    for number, slide in enumerate(presentation.slides, start=1):
+        marked = _marked_things(slide, band)
+        if len(marked) < MARKED_THINGS:
+            continue
+        digests = [hashlib.sha1(blob, usedforsecurity=False).hexdigest() for _, blob in marked.values()]
+        theirs = sum(1 for digest in digests if digest in known)
+        repeats = len(digests) - len(set(digests))
+        if len({digest for digest in digests if digest not in known}) >= len(marked):
+            continue
+        things = ", ".join(f"\u201c{words}\u201d" for words in marked)
+        said = []
+        if theirs:
+            said.append(f"{theirs} of the {len(marked)} marks are the template's own")
+        if repeats:
+            said.append(f"{repeats} of them repeat{'s' if repeats == 1 else ''} a mark already beside another thing")
+        findings.append(
+            Finding(
+                kind="same_mark",
+                severity=Severity.WARNING,
+                page=number,
+                message=(
+                    f"page {number} puts a mark beside each of {len(marked)} things ({things}) and the marks do not "
+                    f"tell them apart: {'; '.join(said)}. A" + ICON_SLOT_NOTE[1:]
+                ),
+                detail={"things": list(marked), "template_marks": theirs, "repeated_marks": repeats},
+            )
+        )
+    return findings
+
+
+def _marked_things(slide: Any, band: float) -> dict[str, tuple[Any, bytes]]:
+    """words of the text block -> (the mark's shape, its image), for each block wearing a mark.
+
+    A block wearing two marks keeps the nearer; the far one is decoration between rows.
+    """
+    texts = []
+    marks = []
+    for shape in iter_shapes(slide.shapes):
+        box = page_box(shape)
+        if box is None:
+            continue
+        blob = picture_blob(shape)
+        if blob is not None:
+            if is_icon_sized(shape):
+                marks.append((box, shape, blob))
+            continue
+        if getattr(shape, "has_text_frame", False) and shape.text_frame.text.strip() and box.width < band:
+            texts.append((box, " ".join(shape.text_frame.text.split())[:30]))
+    marked: dict[str, tuple[float, Any, bytes]] = {}
+    for box, shape, blob in marks:
+        centre = (box.x0 + box.x1) / 2
+        nearest = None
+        for text, words in texts:
+            if not text.x0 <= centre <= text.x1:
+                continue
+            gap = max(0.0, max(box.y0, text.y0) - min(box.y1, text.y1))
+            if gap <= MARK_GAP_IN and (nearest is None or gap < nearest[0]):
+                nearest = (gap, words)
+        if nearest is None:
+            continue
+        gap, words = nearest
+        if words not in marked or gap < marked[words][0]:
+            marked[words] = (gap, shape, blob)
+    return {words: (shape, blob) for words, (_, shape, blob) in marked.items()}
+
+
 def layouts_with_photographs(pptx_path: Path) -> dict[str, tuple[list[int], list[str]]]:
     """Each layout carrying a picture big enough to be content, with the pages built on it.
 
@@ -351,12 +472,16 @@ def layout_photographs(pptx_path: Path, template: Path | None) -> list[Finding]:
     ]
 
 
-def _picture_hashes(path: Path) -> set[str]:
-    return {digest for digests in _pictures_by_page(path).values() for digest in digests}
+def _picture_hashes(path: Path, every: bool = False) -> set[str]:
+    return {digest for digests in _pictures_by_page(path, every).values() for digest in digests}
 
 
-def _pictures_by_page(path: Path) -> dict[int, list[str]]:
-    """sha1 of every embedded image big enough to be content, keyed by page."""
+def _pictures_by_page(path: Path, every: bool = False) -> dict[int, list[str]]:
+    """sha1 of every embedded image big enough to be content, keyed by page.
+
+    `every` lifts the size band: `unit_marks` asks whether a mark is the template's, and
+    a mark is by definition under the band.
+    """
     import hashlib
 
     try:
@@ -376,7 +501,7 @@ def _pictures_by_page(path: Path) -> dict[int, list[str]]:
             if blob is None or not shape.width or not shape.height:
                 continue
             area = (shape.width * shape.height) / canvas
-            if PICTURE_IS_DECORATION <= area < PICTURE_IS_BACKGROUND:
+            if every or PICTURE_IS_DECORATION <= area < PICTURE_IS_BACKGROUND:
                 found.append(hashlib.sha1(blob, usedforsecurity=False).hexdigest())
         pages[number] = found
     return pages
