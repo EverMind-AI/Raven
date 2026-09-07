@@ -15,7 +15,7 @@ from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
 from raven.agent.subagent.dag_reader import DagReadError
 from raven.agent.subagent.dag_runner import DagRunResult
 from raven.agent.subagent.dag_tool import SubAgentDagTool
-from raven.agent.subagent.history import dag_root, nodes_root
+from raven.agent.subagent.history import dag_root, spawn_root
 from raven.agent.subagent.manager import SubagentManager
 from raven.agent.workdir import bind
 from raven.config.schema import ThirdPartyCliSubagentConfig
@@ -98,12 +98,11 @@ async def test_spawn_records_its_input_and_output_under_the_session_history(tmp_
         await manager.spawn("do the thing", session_key="web:abc", workspace=session)
     await asyncio.gather(*manager._running_tasks.values())
 
-    (prompt,) = sorted(nodes_root(_sdir(home, "web:abc")).glob("*.prompt.md"))
-    node_id = prompt.name.removesuffix(".prompt.md")
-    files = prompt.parent
-    assert prompt.read_text(encoding="utf-8") == "do the thing"
-    assert (files / f"{node_id}.out.md").read_text(encoding="utf-8") == "done"
-    meta = json.loads((files / f"{node_id}.meta.json").read_text(encoding="utf-8"))
+    calls = sorted(spawn_root(_sdir(home, "web:abc")).iterdir())
+    assert len(calls) == 1
+    assert (calls[0] / "prompt.md").read_text(encoding="utf-8") == "do the thing"
+    assert (calls[0] / "out.md").read_text(encoding="utf-8") == "done"
+    meta = json.loads((calls[0] / "meta.json").read_text(encoding="utf-8"))
     assert meta["status"] == "completed"
     assert meta["session_key"] == "web:abc"
     # The working directory is recorded as a fact about the run, not used to
@@ -125,11 +124,11 @@ async def test_spawn_records_a_failed_call(tmp_path: Path, monkeypatch) -> None:
     await manager.spawn("do the thing", session_key="web:abc")
     await asyncio.gather(*manager._running_tasks.values())
 
-    (prompt,) = sorted(nodes_root(_sdir(home, "web:abc")).glob("*.prompt.md"))
-    node_id = prompt.name.removesuffix(".prompt.md")
-    assert "boom" in (prompt.parent / f"{node_id}.error.md").read_text(encoding="utf-8")
-    assert prompt.read_text(encoding="utf-8") == "do the thing"
-    assert json.loads((prompt.parent / f"{node_id}.meta.json").read_text(encoding="utf-8"))["status"] == "failed"
+    calls = sorted(spawn_root(_sdir(home, "web:abc")).iterdir())
+    assert len(calls) == 1
+    assert "boom" in (calls[0] / "error.md").read_text(encoding="utf-8")
+    assert (calls[0] / "prompt.md").read_text(encoding="utf-8") == "do the thing"
+    assert json.loads((calls[0] / "meta.json").read_text(encoding="utf-8"))["status"] == "failed"
 
 
 @pytest.mark.asyncio
@@ -240,12 +239,9 @@ async def test_dag_node_is_read_back_from_the_session_that_wrote_it(tmp_path: Pa
     home = tmp_path / "home"
     home.mkdir()
     run_id = "20260805T101112Z-abcdef01"
-    session_dir = _sdir(home, "web:chat-1")
-    root = dag_root(session_dir)
+    root = dag_root(_sdir(home, "web:chat-1"))
     _write_run_dir(root, run_id)
-    nodes = nodes_root(session_dir)
-    nodes.mkdir(parents=True)
-    (nodes / "a.prompt.md").write_text("rendered prompt", encoding="utf-8")
+    (root / run_id / "a.prompt.md").write_text("rendered prompt", encoding="utf-8")
 
     tool = SubAgentDagTool(workspace=home, agents=[])
 

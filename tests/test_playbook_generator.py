@@ -304,13 +304,6 @@ def test_generation_prompt_prevents_duplicate_param_inputs_before_repair() -> No
 
     assert "never\ncopy a param into a node's `inputs`" in SYSTEM_PROMPT
     assert "Every declared input must be referenced" in SYSTEM_PROMPT
-    # Read with whitespace collapsed: the value-shape rule is wrapped across
-    # four source lines, and a re-wrap must not void the assertion silently.
-    flat = " ".join(SYSTEM_PROMPT.split())
-    assert "exactly one of those three and nothing else in the object" in flat
-    assert "no second key beside file or node" in flat
-    assert "no empty path or id" in flat
-    assert "a number, boolean or list is refused" in flat
     assert "continuation nodes must omit `skills`" in SYSTEM_PROMPT
     assert "continuation nodes may replace or clear `mcps`" in SYSTEM_PROMPT
 

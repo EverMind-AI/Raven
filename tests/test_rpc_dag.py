@@ -241,7 +241,7 @@ def one_run_on_disk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """A real run dir, in a real session dir, reached the way the handler reaches it."""
     import json
 
-    from raven.agent.subagent.history import dag_root, nodes_root
+    from raven.agent.subagent.history import dag_root
     from raven.session.manager import SessionManager
 
     ws = tmp_path / "ws"
@@ -253,15 +253,12 @@ def one_run_on_disk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     previous = raven_home_module._current_config_path
     loader.set_config_path(cfg)
 
-    session_dir = SessionManager(ws).session_dir("tui:live")
-    run = dag_root(session_dir) / RUN_ID
-    nodes = nodes_root(session_dir)
+    run = dag_root(SessionManager(ws).session_dir("tui:live")) / RUN_ID
     run.mkdir(parents=True)
-    nodes.mkdir(parents=True)
     (run / "graph.json").write_text(json.dumps({"nodes": [{"id": "survey", "subagent": "R"}]}), encoding="utf-8")
-    (nodes / "survey.prompt.md").write_text("look at the notes", encoding="utf-8")
-    (nodes / "survey.out.md").write_text("the notes say yes", encoding="utf-8")
-    yield SimpleNamespace(run=run, nodes=nodes)
+    (run / "survey.prompt.md").write_text("look at the notes", encoding="utf-8")
+    (run / "survey.out.md").write_text("the notes say yes", encoding="utf-8")
+    yield run
     raven_home_module._current_config_path = previous
 
 
@@ -369,7 +366,7 @@ async def test_the_fallback_reads_the_directory_the_run_was_written_to(
     """
     import json
 
-    from raven.agent.subagent.history import dag_root, nodes_root
+    from raven.agent.subagent.history import dag_root
     from raven.session.manager import SessionManager
 
     ws = tmp_path / "ws"
@@ -384,14 +381,11 @@ async def test_the_fallback_reads_the_directory_the_run_was_written_to(
     loader.set_config_path(cfg)
     try:
         live = SessionManager(ws, project_slug="myproject", project_dir=project)
-        session_dir = live.session_dir("tui:live")
-        run = dag_root(session_dir) / RUN_ID
-        nodes = nodes_root(session_dir)
+        run = dag_root(live.session_dir("tui:live")) / RUN_ID
         run.mkdir(parents=True)
-        nodes.mkdir(parents=True)
         (run / "graph.json").write_text(json.dumps({"nodes": [{"id": "survey", "subagent": "R"}]}), encoding="utf-8")
-        (nodes / "survey.prompt.md").write_text("look at the notes", encoding="utf-8")
-        (nodes / "survey.out.md").write_text("the notes say yes", encoding="utf-8")
+        (run / "survey.prompt.md").write_text("look at the notes", encoding="utf-8")
+        (run / "survey.out.md").write_text("the notes say yes", encoding="utf-8")
 
         # No dag tool on the loop, so dag.node takes the off-disk path -- but the
         # loop still carries the manager that knows where the run is.
@@ -509,7 +503,7 @@ async def test_the_fallback_reads_a_nodes_transcript_off_disk(one_run_on_disk) -
     shows the same work after a restart as it did while the run was going.
     A malformed line is skipped rather than losing the rest: the file is
     appended to while the run is still writing it."""
-    (one_run_on_disk.nodes / "survey.transcript.jsonl").write_text(
+    (one_run_on_disk / "survey.transcript.jsonl").write_text(
         '{"role": "tool", "name": "read", "content": "file body"}\nnot json\n',
         encoding="utf-8",
     )

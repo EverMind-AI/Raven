@@ -35,7 +35,7 @@ from typing import TYPE_CHECKING, Any
 from raven.agent.subagent import activity as run_activity
 from raven.agent.subagent.dag_live import live_run_ids
 from raven.agent.subagent.direct_chat import direct_root
-from raven.agent.subagent.history import dag_root, nodes_root
+from raven.agent.subagent.history import dag_root, spawn_root
 from raven.agent.subagent.instance_log import instance_title, message_rows
 from raven.agent.subagent.instance_records import stitched_turns
 from raven.agent.subagent.instances import get_registry, reconcile_instance_rows
@@ -403,11 +403,7 @@ async def instances_history(
         turns = _log_turns(logged)
     else:
         turns = stitched_turns(
-            direct_root(session_dir, agent, handle),
-            dag_root(session_dir),
-            nodes_root(session_dir),
-            agent,
-            handle,
+            direct_root(session_dir, agent, handle), spawn_root(session_dir), dag_root(session_dir), agent, handle
         )
 
     # Whatever this instance is doing right now, which no file holds yet: the

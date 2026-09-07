@@ -3,41 +3,10 @@
 from collections.abc import Mapping
 from typing import Any
 
-from raven.agent.subagent.dag_store import SessionNodes, output_path_in
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.subagent.prompt_paths import check_confined, split_reference
 from raven.agent.subagent.prompt_placeholders import Placeholder, iter_placeholders
 from raven.security.trust import wrap_untrusted
-
-
-async def read_node_output(ph: Placeholder, node_id: str, *, backend: Any, cwd: str, nodes_root: str) -> str:
-    """One node's output, as text or as a path, whichever the form asked for.
-
-    The whole address is the id: every node writes into one flat root, so
-    neither surface needs a run or a graph to find the file. Shared so the two
-    cannot fence, read or name it differently.
-
-    Args:
-        ph (`Placeholder`):
-            The placeholder being resolved, for the error message and to say
-            which of the two forms was written.
-        node_id (`str`):
-            The node whose output is wanted.
-        backend (`BackendBase`):
-            Backend used to read the file.
-        cwd (`str`):
-            Directory relative paths resolve against.
-        nodes_root (`str`):
-            This session's flat node root.
-
-    Returns:
-        `str`:
-            The fenced contents, or the path.
-    """
-    resolved = output_path_in(backend, nodes_root, node_id)
-    if ph.kind in ("output", "input"):
-        return wrap_untrusted(await read_text(backend, resolved, cwd, what=ph.raw), source="subagent")
-    return await require_exists(backend, resolved, ph.raw)
 
 
 async def resolve_file_placeholder(
@@ -46,18 +15,15 @@ async def resolve_file_placeholder(
     *,
     backend: Any,
     cwd: str,
-    nodes_root: str | None,
+    runs_root: str | None,
     roots: tuple[str, ...] | None,
-    known: SessionNodes | None = None,
 ) -> str | None:
     """Resolve one placeholder, or ``None`` when it is not this layer's to resolve.
 
-    ``None`` is the composition seam, and it is narrower than it was: a node id
-    used to need a graph, because turning one into a path meant walking a
-    run-keyed registry. Every node now writes into one flat root, so the id is
-    the whole address and both surfaces resolve it here. What is left for the
-    DAG layer is the graph-local part -- an id belonging to the run being
-    assembled, whose output does not exist yet.
+    ``None`` is the composition seam: the ``output`` forms, and an ``inputs``
+    entry shaped ``{"node": ...}``, name a graph node, which only the DAG layer
+    can resolve. A caller with no graph turns ``None`` into a correctable
+    refusal.
 
     Args:
         ph (`Placeholder`):
@@ -68,19 +34,14 @@ async def resolve_file_placeholder(
             Backend used to read referenced files.
         cwd (`str`):
             Directory that relative reference paths resolve against.
-        nodes_root (`str | None`):
-            Root that a ``@nodes/``-prefixed reference resolves against.
+        runs_root (`str | None`):
+            Root that a ``@runs/``-prefixed reference resolves against.
         roots (`tuple[str, ...] | None`):
             Absolute directories a file reference may resolve into.
-        known (`SessionNodes | None`):
-            What this conversation's earlier tasks did with each node id. Given
-            by a caller with no graph, so an id this history knows resolves
-            here; the DAG layer passes ``None`` and resolves ids itself,
-            because it must also answer for the run it is assembling.
 
     Returns:
         `str | None`:
-            The replacement text, or ``None`` for an id only a graph can answer.
+            The replacement text, or ``None`` for a reference to a graph node.
 
     Raises:
         `DagValidationError`:
@@ -89,22 +50,17 @@ async def resolve_file_placeholder(
             root, or a ``_path`` form naming a file that does not exist.
     """
     if ph.kind in ("output", "output_path"):
-        if nodes_root is None or ph.name not in (known.state if known else {}):
-            return None
-        return await read_node_output(ph, ph.name, backend=backend, cwd=cwd, nodes_root=nodes_root)
+        return None
     if ph.kind == "input":
         spec = inputs.get(ph.name)
         # ``file`` before ``node``: an entry carrying both is a file input to
         # every other pass over the spec, so it has to be one here too.
         if isinstance(spec, dict) and "file" in spec:
             check_confined(str(spec["file"]), what="input file", roots=roots)
-            text = await read_text(backend, str(spec["file"]), cwd, nodes_root, what=f"input '{ph.name}'")
+            text = await read_text(backend, str(spec["file"]), cwd, runs_root, what=f"input '{ph.name}'")
             return wrap_untrusted(text, source="file")
         if isinstance(spec, dict) and "node" in spec:
-            target = str(spec["node"])
-            if nodes_root is None or target not in (known.state if known else {}):
-                return None
-            return await read_node_output(ph, target, backend=backend, cwd=cwd, nodes_root=nodes_root)
+            return None
         if isinstance(spec, dict):
             raise DagValidationError(
                 f"input '{ph.name}' is an object naming neither a file nor a node -- "
@@ -118,20 +74,17 @@ async def resolve_file_placeholder(
     if ph.kind == "input_path":
         spec = inputs.get(ph.name)
         if isinstance(spec, dict) and "node" in spec:
-            target = str(spec["node"])
-            if nodes_root is None or target not in (known.state if known else {}):
-                return None
-            return await read_node_output(ph, target, backend=backend, cwd=cwd, nodes_root=nodes_root)
+            return None
         if not isinstance(spec, dict) or "file" not in spec:
             raise DagValidationError(f"input '{ph.name}' has no file path to reference")
         check_confined(str(spec["file"]), what="input", roots=roots)
-        return await require_exists(backend, abspath(backend, str(spec["file"]), cwd, nodes_root), ph.raw)
+        return await require_exists(backend, abspath(backend, str(spec["file"]), cwd, runs_root), ph.raw)
     if ph.kind == "ref":
         check_confined(ph.name, what="ref", roots=roots)
-        return wrap_untrusted(await read_text(backend, ph.name, cwd, nodes_root, what=ph.raw), source="file")
+        return wrap_untrusted(await read_text(backend, ph.name, cwd, runs_root, what=ph.raw), source="file")
     # ph.kind == "ref_path"
     check_confined(ph.name, what="ref_path", roots=roots)
-    return await require_exists(backend, abspath(backend, ph.name, cwd, nodes_root), ph.raw)
+    return await require_exists(backend, abspath(backend, ph.name, cwd, runs_root), ph.raw)
 
 
 async def render_template(
@@ -140,11 +93,10 @@ async def render_template(
     *,
     backend: Any,
     cwd: str,
-    nodes_root: str | None,
+    runs_root: str | None,
     roots: tuple[str, ...] | None,
-    known: SessionNodes | None = None,
 ) -> str:
-    """Render a template's file, literal and finished-node references.
+    """Render a template that may reference files and literal inputs only.
 
     The template is rebuilt in a single left-to-right pass over the placeholder
     spans, so a resolved value that itself contains ``{{ ... }}`` text is never
@@ -160,14 +112,10 @@ async def render_template(
             Backend used to read referenced files.
         cwd (`str`):
             Directory that relative reference paths resolve against.
-        nodes_root (`str | None`):
-            Root that a ``@nodes/``-prefixed reference resolves against.
+        runs_root (`str | None`):
+            Root that a ``@runs/``-prefixed reference resolves against.
         roots (`tuple[str, ...] | None`):
             Absolute directories a file reference may resolve into.
-        known (`SessionNodes | None`):
-            What this conversation's earlier tasks did with each node id, so an
-            id this history knows resolves. Without it a node reference has no
-            meaning here and is refused.
 
     Returns:
         `str`:
@@ -175,8 +123,9 @@ async def render_template(
 
     Raises:
         `DagValidationError`:
-            When a placeholder cannot be resolved: an id no history answers for,
-            or any of the reasons :func:`resolve_file_placeholder` raises.
+            When a placeholder cannot be resolved. This includes when it names a
+            graph node (which has no meaning without a graph), or for any of the
+            reasons that :func:`resolve_file_placeholder` raises.
     """
     check_input_contract(template, inputs)
     parts: list[str] = []
@@ -190,9 +139,8 @@ async def render_template(
                 inputs,
                 backend=backend,
                 cwd=cwd,
-                nodes_root=nodes_root,
+                runs_root=runs_root,
                 roots=roots,
-                known=known,
             )
             if value is None:
                 raise node_form_refusal(ph.raw)
@@ -299,25 +247,42 @@ def check_input_contract(
                 )
 
 
-def node_form_refusal(raw: str) -> DagValidationError:
-    """The last-resort refusal for a reference nothing here can answer.
+def needs_a_graph(ph: Placeholder, inputs: Mapping[str, Any]) -> bool:
+    """Whether resolving this placeholder needs a graph the caller may not have.
 
-    Both surfaces resolve a node id now, so this no longer means "you need a
-    graph" -- it means this caller was handed no node history to look the id up
-    in. A caller that has one refuses earlier and better, naming what became of
-    the node (`dag_graph.check_node_refs`), so reaching this is a wiring fault
-    rather than something the model did wrong. Kept truthful rather than
-    deleted: a message that asserts the opposite of the truth sends the next
-    reader somewhere there is nothing to find.
+    Both shapes count: a placeholder naming a node outright, and an
+    ``inputs.<key>`` entry whose value names one. A caller with no graph has to
+    refuse either before it says anything else about them -- a capability gate
+    speaking first sends the model to a form this surface also refuses, which
+    costs a turn and arrives as advice that does not work.
+
+    Args:
+        ph (`Placeholder`):
+            The placeholder to judge.
+        inputs (`Mapping[str, Any]`):
+            The call's inputs, for the ``inputs.<key>`` shapes.
+
+    Returns:
+        `bool`:
+            True when only a graph could resolve it.
     """
+    if ph.kind in ("output", "output_path"):
+        return True
+    if ph.kind not in ("input", "input_path"):
+        return False
+    spec = inputs.get(ph.name)
+    return isinstance(spec, dict) and "node" in spec
+
+
+def node_form_refusal(raw: str) -> DagValidationError:
+    """The refusal a graph-only placeholder gets where there is no graph."""
     return DagValidationError(
-        f"{raw} names a task output, and this call was given no record of "
-        "earlier tasks to resolve it against. Reference the file instead: "
-        "{{ ref:<path> }} for its contents."
+        f"{raw} names another task's output, which only run_subagent_dag can "
+        "resolve. Reference the file instead: {{ ref:<path> }} for its contents."
     )
 
 
-def abspath(backend: Any, path: str, cwd: str, nodes_root: str | None) -> str:
+def abspath(backend: Any, path: str, cwd: str, runs_root: str | None) -> str:
     """Resolve a checked reference path against the root its prefix names.
 
     Args:
@@ -327,8 +292,8 @@ def abspath(backend: Any, path: str, cwd: str, nodes_root: str | None) -> str:
             A reference path that already passed :func:`check_confined`.
         cwd (`str`):
             Root for an unprefixed path.
-        nodes_root (`str | None`):
-            Root for a ``@nodes/``-prefixed path.
+        runs_root (`str | None`):
+            Root for a ``@runs/``-prefixed path.
 
     Returns:
         `str`:
@@ -336,18 +301,18 @@ def abspath(backend: Any, path: str, cwd: str, nodes_root: str | None) -> str:
 
     Raises:
         `DagValidationError`:
-            When a ``@nodes/`` reference is used where no node root was
+            When a ``@runs/`` reference is used where no run history root was
             supplied -- falling back to ``cwd`` would silently resolve it to a
             path in the workdir that means something else entirely.
     """
     root, relative = split_reference(path)
-    if root != "nodes":
+    if root != "runs":
         return backend.abspath(relative, cwd=cwd)
-    if nodes_root is None:
+    if runs_root is None:
         raise DagValidationError(
-            f"'{path}' refers to this session's node artifacts, which is not available here",
+            f"'{path}' refers to this session's DAG run history, which is not available here",
         )
-    return backend.abspath(relative, cwd=nodes_root)
+    return backend.abspath(relative, cwd=runs_root)
 
 
 async def require_exists(backend: Any, resolved: str, what: str) -> str:
@@ -386,7 +351,7 @@ async def read_text(
     backend: Any,
     path: str,
     cwd: str,
-    nodes_root: str | None = None,
+    runs_root: str | None = None,
     *,
     what: str | None = None,
 ) -> str:
@@ -399,8 +364,8 @@ async def read_text(
             A relative or absolute path in the backend environment.
         cwd (`str`):
             Directory a relative ``path`` resolves against.
-        nodes_root (`str | None`):
-            Root for a ``@nodes/``-prefixed ``path``.
+        runs_root (`str | None`):
+            Root for a ``@runs/``-prefixed ``path``.
         what (`str | None`):
             How the reference was written. Given, a missing file is reported
             against it rather than as a bare ``FileNotFoundError``.
@@ -415,7 +380,7 @@ async def read_text(
         `DagValidationError`:
             When ``what`` is given and no file exists at the resolved path.
     """
-    resolved = abspath(backend, path, cwd, nodes_root)
+    resolved = abspath(backend, path, cwd, runs_root)
     if what is not None:
         await require_exists(backend, resolved, what)
     try:

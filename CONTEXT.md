@@ -1474,42 +1474,29 @@ outright. The Product state root is untouched by all of this.
 **Subagent history** (`raven/agent/subagent/history.py`):
 The per-session audit trail of every delegation to a Subagent, inside that session's
 metadata directory at
-`<agent home>/sessions/<group>/<chat_id>/subagents/`, holding `mas_dag/<run_id>/` (one per
-`run_subagent_dag` run, holding only that run's own `graph.json` and `manifest.json`) and
-`nodes/` (every node's own artifacts, from either delegation surface, flat and keyed by node
-id alone rather than by the run or call that produced them: `<node>.prompt.md`,
-`<node>.out.md`, `<node>.error.md`, `<node>.meta.json`, `<node>.memory.json`,
-`<node>.transcript.jsonl`, plus `.attempt-<n>` variants of the prompt, output, and
-transcript archiving a continued node's earlier tries). A spawn writes there too and owns no
-directory of its own; only Direct Chat still keeps one per call. Both spawn and
-DAG record what `SubagentBackend.run()` returned, so both are already truncated to the
-sub-agent's `max_output_chars` — not raw stdout. Failed and cancelled calls are recorded
-too. Lives beside the session transcript rather than in the Session workspace: it has the
-transcript's lifetime, while a working directory can be repointed at any project on disk.
-`sessions/` is a protected subtree, so no working directory can be aimed at it and no tool
-write can reach the history. Append-only: no expiry, no size cap, reclaimed only by
-deleting the session.
+`<agent home>/sessions/<group>/<chat_id>/subagents/`, holding `spawn/<call_id>/`
+(one directory per `spawn` call: `prompt.md`, `out.md` or `error.md`, `meta.json`) and
+`mas_dag/<run_id>/` (one per `run_subagent_dag` run: `graph.json`, `manifest.json`,
+`<node>.prompt.md`, `<node>.out.md`, plus a per-session `mas_dag/index.json`). Both record
+what `SubagentBackend.run()` returned, so both are already truncated to the sub-agent's
+`max_output_chars` — not raw stdout. Failed and cancelled calls are recorded too. Lives
+beside the session transcript rather than in the Session workspace: it has the transcript's
+lifetime, while a working directory can be repointed at any project on disk. `sessions/` is
+a protected subtree, so no working directory can be aimed at it and no tool write can reach
+the history. Append-only: no expiry, no size cap, reclaimed only by deleting the session.
 DAG runs dominate its volume — a node's rendered `prompt.md` inlines each dependency's full
 output, so a chain stores the same text once per hop.
-`nodes/`'s flat, id-keyed naming is what makes a **Node id** addressable (below): a
-node's files resolve straight from its id, with no run lookup in between. `nodes.json`
-(sibling to `mas_dag/` and `nodes/`) is the node registry that keeps ids unique instead --
-it carries every claimed id, whether a run or a spawn claimed it (`kind`), the outcome once
-it ends, and whether an output file was actually written (`has_output`, which a `completed`
-status does not promise). No reader locating a node's own files consults it; what it answers
-is whether an id is taken and whether it may be read. Reads and writes are serialized per
-root within a process (`_store.index_guard`); two processes sharing one session still race.
+The `mas_dag/index.json` is not only a discovery list: it carries each run's node
+ids, claimed when the run starts, and their outcome once it ends, which is what makes a
+**DAG node id** addressable (below). Reads and writes of it are serialized per root
+within a process (`_store.index_guard`); two processes sharing one session still race.
 _Avoid_: `.ravenx_dag/` — the previous location, a naming residue from the RavenX port; it
 sat in whatever directory the run happened to use and had no `spawn` counterpart.
-_Avoid_: `spawn/<call_id>/` — the tree a spawn owned before it joined this namespace, and
-`call_id`, the minted stamp that named it. A spawn's id is the model's `node_id` now, and
-the wire field still spelled `call_id` carries it.
 
 **Memory record** (`raven/agent/subagent_memory.py`):
 What one Subagent wrote into everos during one call, written beside that call's own
-`prompt.md` / `out.md` inside Subagent history: `<node>.memory.json` for anything with a node
-id, which is every `spawn` call and every DAG node, and `memory.json` for a Direct Chat turn,
-which still owns a directory. Holds the sub-agent's name, a
+`prompt.md` / `out.md` inside Subagent history: `memory.json` for a `spawn` call and a
+Direct Chat turn, `<node>.memory.json` for a DAG node. Holds the sub-agent's name, a
 `status`, its `instance` handle when the call had one, and a list of `{type, text}` items -- `episode` (its `subject` and `episode`) and
 `agent_case` (its `task_intent`, `approach` and `key_insight`), joined with ` - ` and
 uncapped. Never everos's `summary`, which is a 200-character prefix of `episode` cut
@@ -1558,11 +1545,8 @@ The `{{ ... }}` grammar a dispatched sub-agent's prompt may carry, shared by `sp
 text or as a path, `<node>.output` / `<node>.output_path` read another node's result the
 same two ways, and `ref:<path>` / `ref_path:<path>` do it for an arbitrary file -- the bare
 form always injects content, the `_path` form always injects a location. `output` and
-`output_path` name a node by the id it ran under, and both surfaces resolve them against the
-same flat node root, so a spawn may name a graph's node and a graph may name a spawn's. The
-id must already be readable: a node that failed, was skipped, was cancelled or is still
-running is refused with which of those it was, rather than handed the leftover file a bare
-path would resolve to. A `{{ ... }}` body
+`output_path` name a graph node, so only `run_subagent_dag` resolves them; `spawn` has no
+graph and refuses a template carrying either, pointing at `ref:` instead. A `{{ ... }}` body
 matching none of the six is not a mistyped placeholder -- it is ordinary text, carried
 through untouched, so template syntax from another system (Jinja, Vue, Handlebars) can sit
 in a prompt with no escape form needed. A body that does match a shape still fails
@@ -1578,12 +1562,12 @@ refusal.
 **Reference roots** (`check_confined`, `raven/agent/subagent/prompt_paths.py`):
 The directories a content or path reference may resolve into: the session's working
 directory, and its Subagent history above (`<session_dir>/subagents/`), so a later call in
-the same conversation can name an earlier spawn's own output file, or a DAG run's own
+the same conversation can name an earlier spawn's `Record:` directory, or a DAG run's own
 files, by path. A relative reference resolves against the working directory; either root
-may also be named absolute. `@nodes/<node_id>...` is a third, narrower address -- this
-session's own node artifacts alone, checked lexically against that one prefix rather than
-against these roots -- reaching a node's own prompt file too, which the short
-`{{ <node_id>.output }}` form cannot.
+may also be named absolute. `@runs/<run_id>/...` is a third, narrower address -- this
+session's own DAG run history alone, checked lexically against that one prefix rather than
+against these roots -- for a run recorded before node ids were indexed, or a file under it
+that is not a node's output.
 Stops at Subagent history rather than at Agent home on purpose. Agent home also holds user
 memory, installed skills, and every *other* conversation's transcript and sub-agent history,
 already off limits to a working directory (`workdir.py`'s `_PROTECTED_SUBTREES`) -- and a
@@ -1941,27 +1925,22 @@ the part that is cut. Kept rather than raised because a partial answer is worth 
 noticed rather than returned bare because neither the main agent nor a person in a Direct
 Chat can otherwise tell the text simply stops.
 
-**Node id** (`raven/agent/subagent/dag_graph.py`, `dag_store.py`):
-The model's own name for one delegated task, and the address a *later* task in the same
-conversation uses to read what it produced — `{{ <id>.output }}`, needing no `depends_on`,
-since the task has already finished (naming it there is allowed and orders nothing). Both
-delegation surfaces draw from one namespace: a `spawn` chooses its `node_id` the same way a
-`run_subagent_dag` node declares its `id`, so either may reference the other. That second
-role is why the id is
-**unique per conversation, not per graph**: reusing one an earlier run or spawn took is
-refused, so an id names one task and one output. Compared case-folded, because a node's
-artifacts are files named after it and `Plan` and `plan` are one file on macOS and Windows.
-An id is claimed at dispatch and kept whatever the outcome, but referencing it needs both a
-`completed` status and an output file actually written — a task can finish having written
-nothing, which the status alone does not say. A failed, skipped, cancelled or still-running
-one — or, as a replan validating its replacement sees it, one still pending or awaiting a
-decision — keeps its id and is refused with which of those it is. A run stopped
+**DAG node id** (`raven/agent/subagent/dag_graph.py`, `dag_store.py`):
+A node's name inside a `run_subagent_dag` graph, and the address a *later* graph in the
+same conversation uses to read what that node produced — `{{ <id>.output }}`, needing no
+`depends_on`, since the node has already finished (naming it there is allowed and orders
+nothing). That second role is why the id is
+**unique per conversation, not per graph**: reusing one an earlier run took is refused, so
+an id names one node and one output. An id is claimed for the whole run, whatever the
+outcome, but only a `completed` node can be referenced; one that failed, was skipped or
+cancelled, is still running, or -- as a replan validating its replacement sees it -- is
+still pending or awaiting a decision, keeps
+its id and is refused with which of those it is. A run stopped
 by `/stop` or a shutdown records its still-running nodes as `cancelled` and its pending
 ones as `skipped` on the way out, so "still-running" means what it says rather than
 outliving the run that claimed it. Distinct from an
 `instance` handle, which shares a sub-agent *session* rather than naming an output.
-_Avoid_: "node name" — the id is an address, not a label. _Avoid_: "DAG node id" — the
-name from when only a graph could claim one.
+_Avoid_: "node name" — the id is an address, not a label.
 
 **verdict** -- the judgement on whether a finished DAG node accomplished the task
 its prompt set. Made by one constrained model call over the node's prompt, its
